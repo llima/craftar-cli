@@ -61,6 +61,11 @@ describe("golden: synthetic acme workspaces", () => {
     expect(hasBom(await fs.readFile(path.join(portal, ".claude/rules/backend-node.md")))).toBe(true);
     expect(hasBom(await fs.readFile(path.join(portal, ".kiro/steering/backend-node.md")))).toBe(false);
 
+    // LF golden files stay LF — a lost `-text` attribute would otherwise go unnoticed.
+    for (const rel of [".claude/rules/workflow.md", ".mcp.json"]) {
+      expect((await fs.readFile(path.join(portal, rel))).includes(0x0d), `${rel} has a CR byte`).toBe(false);
+    }
+
     const again = await syncOnce(portal);
     expect(again.r.written).toEqual([]);
     expect(again.r.removed).toEqual([]);
