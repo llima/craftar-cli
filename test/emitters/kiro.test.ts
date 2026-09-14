@@ -67,4 +67,19 @@ describe("kiro emitter", () => {
     const p = await plan(await loadWorkspace(s.wsRoot));
     expect(hasBom(file(p, ".kiro/steering/a.md")!.content)).toBe(false);
   });
+
+  it("warns when it skips a script or a hook", async () => {
+    const p = await planFor([
+      { meta: { type: "script", name: "hello", files: ["hello.ps1"], targets: "*" }, files: { "hello.ps1": "Write-Output hi\n" } },
+      { meta: { type: "hook", name: "fmt", files: ["fmt.py"], targets: "*" }, files: { "fmt.py": "print('x')\n" } },
+    ]);
+    expect(p.warnings).toContain("kiro: script script/hello has no Kiro equivalent \u2014 skipped");
+    expect(p.warnings).toContain("kiro: hook hook/fmt has no Kiro equivalent \u2014 skipped");
+    expect(p.files).toEqual([]);
+  });
+
+  it("does not warn for a script scoped to claude-code", async () => {
+    const p = await planFor([{ meta: { type: "script", name: "hello", files: ["hello.ps1"], targets: ["claude-code"] }, files: { "hello.ps1": "x\n" } }]);
+    expect(p.warnings.filter((w) => w.startsWith("kiro: script"))).toEqual([]);
+  });
 });

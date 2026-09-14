@@ -74,6 +74,7 @@ export const kiro: Emitter = {
           break;
         case "script":
         case "hook":
+          ctx.warn(`kiro: ${m.type} ${ing.ref} has no Kiro equivalent — skipped`);
           break;
       }
     }
