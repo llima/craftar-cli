@@ -57,4 +57,14 @@ describe("kiro emitter", () => {
     const p = await planFor([rule("workflow--acme", "# W\n", { as: "workflow" })]);
     expect(p.files.map((f) => f.path)).toEqual([".kiro/steering/workflow.md"]);
   });
+
+  it("stays BOM-less even when the steering on disk has a BOM", async () => {
+    const s = await scenario(
+      { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+      { config: { profile: "acme" }, files: { ".kiro/steering/a.md": "\uFEFFold\r\n" } },
+    );
+    cleanups.push(s.cleanup);
+    const p = await plan(await loadWorkspace(s.wsRoot));
+    expect(hasBom(file(p, ".kiro/steering/a.md")!.content)).toBe(false);
+  });
 });

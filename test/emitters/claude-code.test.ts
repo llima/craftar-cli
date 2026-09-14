@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkspace, plan, type Plan } from "../../src/core/sync.js";
+import { hasBom } from "../../src/core/text.js";
 import { profile, recipe, rule, scenario, type ForgeSpec, type IngredientSpec, type WorkspaceSpec } from "../helpers/forge.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -49,5 +50,22 @@ describe("claude-code emitter", () => {
       { meta: { type: "mcp", name: "docs", server: { url: "https://mcp.example.com/sse" } } },
     ]);
     expect(text(p, ".mcp.json")).toBe(JSON.stringify({ mcpServers: { pw: { command: "npx", args: ["-y", "pw"] }, docs: { url: "https://mcp.example.com/sse" } } }, null, 2) + "\n");
+  });
+
+  it("keeps the BOM of the file it replaces", async () => {
+    const p = await planFor([rule("a", "# A\n")], { ".claude/rules/a.md": "\uFEFF# old\n" });
+    const f = p.files.find((x) => x.path === ".claude/rules/a.md")!;
+    expect(hasBom(f.content)).toBe(true);
+    expect(f.content.subarray(3).toString("utf8")).toBe("# A\n");
+  });
+
+  it("writes a new file without a BOM", async () => {
+    const p = await planFor([rule("a", "# A\n")]);
+    expect(hasBom(p.files.find((x) => x.path === ".claude/rules/a.md")!.content)).toBe(false);
+  });
+
+  it("agents-md inherits BOM preservation through textFile", async () => {
+    const p = await planFor([rule("a", "# A\n")], { "AGENTS.md": "\uFEFFold\n" }, ["agents-md"]);
+    expect(hasBom(p.files.find((x) => x.path === "AGENTS.md")!.content)).toBe(true);
   });
 });

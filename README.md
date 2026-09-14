@@ -109,7 +109,7 @@ Layer precedence, weakest → strongest: recipe defaults → profile → `crafta
 
 ## Targets
 
-**claude-code** — emits `.claude/rules|agents|commands|skills|scripts|hooks` and `.mcp.json` verbatim from the Forge (frontmatter kept byte-for-byte). Existing files keep their line endings; new files are LF.
+**claude-code** — emits `.claude/rules|agents|commands|skills|scripts|hooks` and `.mcp.json` verbatim from the Forge (frontmatter kept byte-for-byte). Existing files keep their line endings and BOM; new files are LF without a BOM.
 
 **kiro** — reproduces, then extends, the hand-written `sync-steering.ps1` script it replaces:
 steering = `inclusion` frontmatter + `GENERATED` banner + rule body, with `.claude/rules/` rewritten to `.kiro/steering/`, UTF-8 without BOM, CRLF. On top of what the script did, it also generates `.kiro/agents/*.json` (tools mapped to Kiro names, `resources` bound to the agent's stack rule + `repo-discovery`, or `**/*.md` for generic agents), `.kiro/steering/commands/*.md`, `.kiro/skills/*/SKILL.md` and `.kiro/settings/mcp.json`. The banner text is a parameter (`kiro.banner`) so existing workspaces can adopt without a rewrite.
