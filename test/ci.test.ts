@@ -29,4 +29,8 @@ describe("CI contract", () => {
   it("is read-only", () => {
     expect(ci.permissions).toEqual({ contents: "read" });
   });
+
+  it("bounds the job so a hang doesn't burn the runner", () => {
+    expect(ci.jobs.test["timeout-minutes"]).toBe(15);
+  });
 });
