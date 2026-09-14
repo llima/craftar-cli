@@ -75,7 +75,7 @@ export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
   }
   for (const d of disabled) picked.delete(d);
 
-  const targets = (ws.targets ?? profile.targets) as Target[];
+  const targets = [...new Set(ws.targets ?? profile.targets)] as Target[];
   return { profile, recipes: order, targets, params, ingredients: [...picked.values()], disabled, warnings };
 }
 

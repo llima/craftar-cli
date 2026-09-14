@@ -35,14 +35,16 @@ export async function loadWorkspace(root: string): Promise<Workspace> {
   return { root, config, forge: await loadForge(forgeRoot) };
 }
 
+/** Layer merge: objects merge key by key; arrays and scalars from the stronger layer replace the weaker one. */
 function deepMerge(a: any, b: any): any {
-  if (Array.isArray(a) && Array.isArray(b)) return [...a, ...b];
+  if (b === undefined) return a;
+  if (Array.isArray(a) || Array.isArray(b)) return b;
   if (a && b && typeof a === "object" && typeof b === "object") {
     const out = { ...a };
     for (const k of Object.keys(b)) out[k] = k in a ? deepMerge(a[k], b[k]) : b[k];
     return out;
   }
-  return b === undefined ? a : b;
+  return b;
 }
 
 export interface Plan {
