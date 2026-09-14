@@ -41,4 +41,18 @@ describe("cli", () => {
     expect(r.stdout).toContain("rejected mcp/github — secret-like value (github-token) in .mcp.json → mcpServers.github.env.GITHUB_TOKEN");
     expect(r.stdout + r.stderr).not.toContain(token);
   });
+
+  it("import fails on a malformed .mcp.json without echoing its content", async () => {
+    const root = await tmpDir("craftar-cli-import-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const token = "ghp_" + "x".repeat(36);
+    await writeFiles(path.join(root, "api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": '{"mcpServers":{"gh":{"env":{"T":' + token + "}}}}",
+    });
+    const r = runCli(["import", "--from", "claude-code", "--workspace", path.join(root, "api"), "--forge", path.join(root, "forge"), "--profile", "api"]);
+    expect(r.code).toBe(1);
+    expect(r.stdout + r.stderr).toContain(".mcp.json is not valid JSON — fix the file and re-run import");
+    expect(r.stdout + r.stderr).not.toContain("ghp_");
+  });
 });

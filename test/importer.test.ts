@@ -61,6 +61,20 @@ describe("import --from claude-code", () => {
     expect((await yaml(path.join(t.forge, "recipes/base.yaml"))).ingredients).not.toContain("mcp/github");
   });
 
+  it("never echoes .mcp.json content in a parse error, even when it holds a token", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": '{"mcpServers":{"gh":{"env":{"T":' + TOKEN + "}}}}",
+    });
+    await expect(importInto(t.forge, t.ws("api"), "api")).rejects.toThrow(".mcp.json is not valid JSON — fix the file and re-run import");
+    try {
+      await importInto(t.forge, t.ws("api"), "api");
+    } catch (e) {
+      expect(String(e)).not.toContain("ghp_");
+    }
+  });
+
   it("rejects a rule with a token and reports the file line", async () => {
     const t = await setup();
     await writeFiles(t.ws("api"), { ".claude/rules/deploy.md": "# Deploy\n\nkey " + "AKIA" + "ABCDEFGHIJKLMNOP" + "\n" });

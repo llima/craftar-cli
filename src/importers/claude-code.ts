@@ -194,7 +194,12 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
   /* ---- MCP servers ---- */
   const mcpFile = path.join(ws, ".mcp.json");
   if (await exists(mcpFile)) {
-    const json = JSON.parse(stripBom(await fs.readFile(mcpFile, "utf8")));
+    let json: any;
+    try {
+      json = JSON.parse(stripBom(await fs.readFile(mcpFile, "utf8")));
+    } catch {
+      throw new Error(".mcp.json is not valid JSON — fix the file and re-run import");
+    }
     for (const [name, server] of Object.entries<any>(json.mcpServers ?? {})) {
       const meta: Ingredient = { type: "mcp", name, server, targets: "*", tags: [], origin: origin(".mcp.json") };
       addRef(refs.base, await writeIngredient(forge, meta, {}, opts.profileName, report));
