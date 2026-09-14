@@ -56,6 +56,11 @@ export interface Plan {
 export async function plan(ws: Workspace): Promise<Plan> {
   const resolution = resolve(ws.forge, ws.config);
   const warnings = [...resolution.warnings];
+  if (resolution.targets.length === 0) {
+    warnings.push(
+      "no targets resolved — nothing will be emitted and every file in craftar.lock becomes an orphan (an empty list in craftar.local.yaml replaces the workspace's)",
+    );
+  }
   /** Unresolved placeholder → refs of the ingredients citing it. */
   const missingParams = new Map<string, Set<string>>();
   const ctx = {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { loadWorkspace } from "../src/core/sync.js";
+import { loadWorkspace, plan } from "../src/core/sync.js";
 import { resolve } from "../src/core/resolve.js";
 import { profile, recipe, scenario, tmpDir, type WorkspaceSpec } from "./helpers/forge.js";
 
@@ -36,6 +36,16 @@ describe("workspace layers", () => {
   it("deduplicates resolved targets", async () => {
     const w = await ws({ config: { profile: "acme", targets: ["kiro", "kiro"] } });
     expect(resolve(w.forge, w.config).targets).toEqual(["kiro"]);
+  });
+
+  it("an empty targets array in craftar.local.yaml resolves to none, and plan() warns about the orphan risk", async () => {
+    const w = await ws({ config: { profile: "acme" }, local: { targets: [] } });
+    expect(resolve(w.forge, w.config).targets).toEqual([]);
+    const p = await plan(w);
+    expect(p.warnings).toContain(
+      "no targets resolved — nothing will be emitted and every file in craftar.lock becomes an orphan (an empty list in craftar.local.yaml replaces the workspace's)",
+    );
+    expect(p.files).toEqual([]);
   });
 
   it("fails clearly without craftar.yaml", async () => {
