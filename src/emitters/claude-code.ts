@@ -1,6 +1,6 @@
-import { detectEol, withEol, type Eol } from "../core/text.js";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
+import { appliesTo, outName, textFile } from "./shared.js";
 import type { Emitter, EmitContext, PlannedFile } from "./types.js";
 
 /**
@@ -71,25 +71,9 @@ export const claudeCode: Emitter = {
   },
 };
 
-export function appliesTo(targets: "*" | string[], target: string): boolean {
-  return targets === "*" || targets.includes(target);
-}
-
-/** Text file that keeps the EOL of the file it replaces (LF when new). */
-export async function textFile(ctx: EmitContext, relPath: string, text: string, target: PlannedFile["target"], ingredient: string): Promise<PlannedFile> {
-  const existing = await ctx.readExisting(relPath);
-  const eol: Eol = existing ? detectEol(existing.toString("utf8")) : "lf";
-  return { path: relPath, content: Buffer.from(withEol(text, eol), "utf8"), target, ingredient };
-}
-
 const TEXT_EXT = /\.(md|txt|json|ya?ml|ps1|py|sh|js|ts|cjs|mjs|toml|xml|csv)$/i;
 
 async function anyFile(ctx: EmitContext, ing: Parameters<EmitContext["text"]>[0], file: string, relPath: string, target: PlannedFile["target"]): Promise<PlannedFile> {
   if (TEXT_EXT.test(file)) return textFile(ctx, relPath, await ctx.text(ing, file), target, ing.ref);
   return { path: relPath, content: await ctx.bytes(ing, file), target, ingredient: ing.ref };
-}
-
-
-function outName(m: { name: string; as?: string }): string {
-  return m.as ?? m.name;
 }
