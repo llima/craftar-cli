@@ -295,25 +295,48 @@ function secretIn(meta: Ingredient, files: Record<string, string | Buffer>): str
   const texts: { where: string; text: string; offset: number }[] = [];
   if (raw) texts.push({ where: origin, text: raw, offset: 1 });
   for (const [rel, content] of Object.entries(files)) {
-    if (typeof content !== "string") continue;
     const where = meta.type === "skill" && meta.layout === "dir" ? `${origin}${rel}` : origin;
-    texts.push({ where, text: content, offset: bodyOffset });
+    // A Buffer with no NUL byte is treated as text (e.g. non-allowlisted extensions such
+    // as .pem or .bat are still read as Buffer by the importer); a NUL byte marks it binary.
+    if (typeof content === "string") texts.push({ where, text: content, offset: bodyOffset });
+    else if (!content.includes(0)) texts.push({ where, text: content.toString("utf8"), offset: bodyOffset });
   }
   for (const t of texts) {
     const hit = findSecrets(t.text)[0];
     if (hit) return `secret-like value (${hit.kind}) in ${t.where} line ${hit.line + t.offset}`;
   }
   if (meta.type === "mcp") {
-    for (const [key, value] of Object.entries(meta.server.env ?? {})) {
-      const kind = secretValueKind(String(value));
-      if (kind) return `secret-like value (${kind}) in .mcp.json → mcpServers.${meta.name}.env.${key}`;
-    }
-    for (const [i, value] of (meta.server.args ?? []).entries()) {
-      const kind = secretValueKind(String(value));
-      if (kind) return `secret-like value (${kind}) in .mcp.json → mcpServers.${meta.name}.args[${i}]`;
+    // Walk every field of the server config, not just env/args: headers, url, command, etc.
+    // can carry a token too. Entropy stays reserved for env/args; every other field is
+    // checked against known patterns only.
+    const server = meta.server as unknown as Record<string, unknown>;
+    for (const [key, value] of Object.entries(server)) {
+      const hit = secretInServerField(meta.name, key, value, key === "env" || key === "args");
+      if (hit) return hit;
     }
   }
   return null;
+}
+
+/** Recursively scan one MCP server field for a secret-like value, building a dotted/bracketed path. */
+function secretInServerField(server: string, path: string, value: unknown, useEntropy: boolean): string | null {
+  if (Array.isArray(value)) {
+    for (const [i, v] of value.entries()) {
+      const hit = secretInServerField(server, `${path}[${i}]`, v, useEntropy);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const hit = secretInServerField(server, `${path}.${k}`, v, useEntropy);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const kind = useEntropy ? secretValueKind(String(value)) : (findSecrets(String(value))[0]?.kind ?? null);
+  return kind ? `secret-like value (${kind}) in .mcp.json → mcpServers.${server}.${path}` : null;
 }
 
 function splitList(v?: string): string[] {

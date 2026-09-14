@@ -75,4 +75,54 @@ describe("import --from claude-code", () => {
     const r = await importInto(t.forge, t.ws("api"), "api");
     expect(r.rejected).toEqual([{ name: "agent/ops", reason: "secret-like value (github-token) in .claude/agents/ops.md line 6" }]);
   });
+
+  it("rejects a skill-dir file read as a Buffer (non-allowlisted extension) holding a private key", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/skills/deploy-kit/SKILL.md": "# Deploy kit\n",
+      ".claude/skills/deploy-kit/keys/deploy.pem": "-----BEGIN " + "RSA PRIVATE KEY-----\nabc\n",
+    });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([{ name: "skill/deploy-kit", reason: "secret-like value (private-key) in .claude/skills/deploy-kit/keys/deploy.pem line 1" }]);
+    expect(await exists(path.join(t.forge, "ingredients/skills/deploy-kit"))).toBe(false);
+  });
+
+  it("rejects a hook file read as a Buffer (non-allowlisted extension) holding a token", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), { ".claude/hooks/deploy.bat": "set TOKEN=" + TOKEN + "\r\n" });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([{ name: "hook/deploy", reason: "secret-like value (github-token) in .claude/hooks/deploy.bat line 1" }]);
+  });
+
+  it("skips a binary skill-dir file (NUL byte) instead of scanning it as text", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/skills/asset-kit/SKILL.md": "# Asset kit\n",
+      ".claude/skills/asset-kit/data.bin": Buffer.concat([Buffer.from("TOKEN=" + TOKEN), Buffer.from([0]), Buffer.from("tail")]),
+    });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([]);
+    expect(await exists(path.join(t.forge, "ingredients/skills/asset-kit/ingredient.yaml"))).toBe(true);
+  });
+
+  it("rejects an MCP server whose headers hold a token, pattern-scanning fields beyond env/args", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": JSON.stringify({ mcpServers: { remote: { url: "https://mcp.example.com/sse", headers: { Authorization: "Bearer " + TOKEN } } } }),
+    });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([{ name: "mcp/remote", reason: "secret-like value (github-token) in .mcp.json → mcpServers.remote.headers.Authorization" }]);
+  });
+
+  it("does not apply the entropy rule outside env/args (a high-entropy header is not rejected)", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": JSON.stringify({ mcpServers: { remote2: { command: "npx", headers: { "X-Trace": "Xk9f2LmQ7pR4tZ8wB3nV" } } } }),
+    });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([]);
+    expect(await exists(path.join(t.forge, "ingredients/mcp/remote2/ingredient.yaml"))).toBe(true);
+  });
 });
