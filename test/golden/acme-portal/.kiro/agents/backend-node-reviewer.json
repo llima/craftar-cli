@@ -1,0 +1,20 @@
+{
+  "name": "backend-node-reviewer",
+  "description": "Reviews changes in projects/acme-api (Node + TypeScript HTTP service). Use after any .ts edit under src/.",
+  "prompt": "# Backend Node Reviewer\n\nRead the diff, walk the checklist in `.kiro/steering/backend-node.md`, and return a punch list\ngrouped by severity (`blocker` / `should-fix` / `nit`). Cite `file:line` on every finding.",
+  "tools": [
+    "read",
+    "grep",
+    "glob",
+    "shell"
+  ],
+  "allowedTools": [
+    "read",
+    "grep",
+    "glob",
+    "shell"
+  ],
+  "resources": [
+    "file://.kiro/steering/backend-node.md"
+  ]
+}
