@@ -6,7 +6,7 @@
   "type": "module",
   "bin": { "craftar": "./bin/craftar.js" },
   "files": ["dist", "bin", "README.md"],
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=22" },
   "scripts": {
     "dev": "tsx src/cli.ts",
     "build": "tsc -p tsconfig.json",

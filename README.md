@@ -18,7 +18,7 @@ node bin/craftar.js --help
 npx tsx src/cli.ts --help
 ```
 
-Requires Node ≥ 20.
+Requires Node ≥ 22.
 
 ## Quick start: bring an existing workspace into a Forge
 
@@ -127,6 +127,23 @@ These come straight from the workspaces that removed the earlier `nexdev` genera
 3. **Orphans are removed.** When an ingredient leaves a recipe, its generated files disappear in every target — no stale steering loading into Kiro sessions.
 4. **No hand-kept mirrors.** Kiro agents, commands and skills are generated from the same ingredients as their Claude counterparts.
 5. **Reuse, don't clobber.** Importing a second workspace into the same Forge reuses identical ingredients and creates explicit `--<profile>` variants for the ones that differ, listing them so a human unifies or parameterizes.
+
+## Tests
+
+`npm test` runs two layers that need nothing outside the repository, on any OS:
+
+- **Unit tests** build a Forge and a workspace in a temp dir (`test/helpers/forge.ts`) and cover
+  resolution, every file state, apply, each emitter, the importer, the secret guard and the CLI
+  exit codes.
+- **Golden workspaces** — `test/golden/acme-portal` and `test/golden/acme-web`, synthetic — run
+  the oracle script end to end: import → every file `adopt`, sync byte-identical (a CRLF file and a
+  BOM file included), second sync a no-op, Forge edits, drift, orphans, variants.
+  `test/golden/**` is `-text` in `.gitattributes`, so line endings survive checkout. The golden
+  `.kiro/` is a snapshot of the emitter's output: after an intended emitter change, regenerate it
+  with `npx tsx test/helpers/regen-golden.ts` and review the diff.
+
+CI runs typecheck, build and tests on Linux and Windows with Node 22 and 24. The oracle below is
+skipped there — a green CI is not evidence against a real workspace.
 
 ## Oracle
 
