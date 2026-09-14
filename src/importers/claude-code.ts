@@ -3,6 +3,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
+import { findSecrets, secretValueKind } from "../core/secrets.js";
 import { hashNormalized, stripBom, toLf } from "../core/text.js";
 import type { Ingredient, Profile, Recipe, Target } from "../schema/index.js";
 
@@ -18,6 +19,8 @@ export interface ImportReport {
   created: string[];
   reused: string[];
   variants: { name: string; reason: string }[];
+  /** Ingredients not imported because they hold a secret-like value (reason names the location, never the value). */
+  rejected: { name: string; reason: string }[];
   recipes: string[];
   profile: string;
   warnings: string[];
@@ -43,7 +46,7 @@ const GENERATED_BANNER = /<!--\s*GENERATED from /;
 export async function importClaudeCode(opts: ImportOptions): Promise<ImportReport> {
   const ws = path.resolve(opts.workspaceRoot);
   const forge = path.resolve(opts.forgeRoot);
-  const report: ImportReport = { created: [], reused: [], variants: [], recipes: [], profile: opts.profileName, warnings: [] };
+  const report: ImportReport = { created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [] };
   const claudeDir = path.join(ws, ".claude");
   if (!(await exists(claudeDir))) throw new Error(`${claudeDir} not found — is this a Claude Code workspace?`);
 
@@ -93,6 +96,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
       origin: origin(`.claude/rules/${f}`),
     };
     const ref = await writeIngredient(forge, meta, { "rule.md": text }, opts.profileName, report);
+    if (!ref) continue;
     ruleNames.push(ref.split("/")[1]);
     if (meta.inclusion === "fileMatch") scopedRules.set(ref, sm?.fileMatchPattern ?? "");
     else refs.base.push(ref);
@@ -118,6 +122,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
       origin: origin(`.claude/agents/${f}`),
     };
     const ref = await writeIngredient(forge, meta, { "agent.md": body }, opts.profileName, report);
+    if (!ref) continue;
     agentBodies.set(ref, (data.description ?? "") + "\n" + body);
     refs.base.push(ref);
   }
@@ -139,7 +144,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
       tags: [],
       origin: origin(`.claude/commands/${f}`),
     };
-    refs.base.push(await writeIngredient(forge, meta, { "command.md": body }, opts.profileName, report));
+    addRef(refs.base, await writeIngredient(forge, meta, { "command.md": body }, opts.profileName, report));
   }
 
   /* ---- skills ---- */
@@ -158,11 +163,11 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
           continue;
         }
         const meta: Ingredient = { type: "skill", name: e.name, layout: "dir", targets: "*", tags: [], origin: origin(`.claude/skills/${e.name}/`) };
-        refs.base.push(await writeIngredient(forge, meta, files, opts.profileName, report));
+        addRef(refs.base, await writeIngredient(forge, meta, files, opts.profileName, report));
       } else if (e.name.endsWith(".md")) {
         const text = toLf(stripBom(await fs.readFile(path.join(skillsDir, e.name), "utf8")));
         const meta: Ingredient = { type: "skill", name: e.name.replace(/\.md$/, ""), layout: "file", targets: "*", tags: [], origin: origin(`.claude/skills/${e.name}`) };
-        refs.base.push(await writeIngredient(forge, meta, { "SKILL.md": text }, opts.profileName, report));
+        addRef(refs.base, await writeIngredient(forge, meta, { "SKILL.md": text }, opts.profileName, report));
       }
     }
   }
@@ -182,7 +187,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
         tags: [],
         origin: origin(`.claude/${kind}/${f}`),
       } as Ingredient;
-      refs.base.push(await writeIngredient(forge, meta, { [f]: content }, opts.profileName, report));
+      addRef(refs.base, await writeIngredient(forge, meta, { [f]: content }, opts.profileName, report));
     }
   }
 
@@ -192,7 +197,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
     const json = JSON.parse(stripBom(await fs.readFile(mcpFile, "utf8")));
     for (const [name, server] of Object.entries<any>(json.mcpServers ?? {})) {
       const meta: Ingredient = { type: "mcp", name, server, targets: "*", tags: [], origin: origin(".mcp.json") };
-      refs.base.push(await writeIngredient(forge, meta, {}, opts.profileName, report));
+      addRef(refs.base, await writeIngredient(forge, meta, {}, opts.profileName, report));
     }
   }
 
@@ -201,7 +206,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
     if (ruleNames.includes(name) || sm.generated) continue;
     if (name === "commands") continue;
     const meta: Ingredient = { type: "steering", name, file: "steering.md", targets: ["kiro"], tags: ["client"], origin: origin(`.kiro/steering/${name}.md`) };
-    refs.steering.push(await writeIngredient(forge, meta, { "steering.md": sm.text }, opts.profileName, report));
+    addRef(refs.steering, await writeIngredient(forge, meta, { "steering.md": sm.text }, opts.profileName, report));
   }
 
   /* ---- recipes ---- */
@@ -277,6 +282,40 @@ function unique<T>(xs: T[]): T[] {
   return [...new Set(xs)];
 }
 
+function addRef(list: string[], ref: string | null): void {
+  if (ref) list.push(ref);
+}
+
+/** First secret-like value in an ingredient about to be imported, described by location only. */
+function secretIn(meta: Ingredient, files: Record<string, string | Buffer>): string | null {
+  const origin = meta.origin?.path ?? `${meta.type}/${meta.name}`;
+  const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
+  // Bodies of agents and commands start after `---`, the raw block and the closing `---`.
+  const bodyOffset = raw ? raw.split("\n").length + 2 : 0;
+  const texts: { where: string; text: string; offset: number }[] = [];
+  if (raw) texts.push({ where: origin, text: raw, offset: 1 });
+  for (const [rel, content] of Object.entries(files)) {
+    if (typeof content !== "string") continue;
+    const where = meta.type === "skill" && meta.layout === "dir" ? `${origin}${rel}` : origin;
+    texts.push({ where, text: content, offset: bodyOffset });
+  }
+  for (const t of texts) {
+    const hit = findSecrets(t.text)[0];
+    if (hit) return `secret-like value (${hit.kind}) in ${t.where} line ${hit.line + t.offset}`;
+  }
+  if (meta.type === "mcp") {
+    for (const [key, value] of Object.entries(meta.server.env ?? {})) {
+      const kind = secretValueKind(String(value));
+      if (kind) return `secret-like value (${kind}) in .mcp.json → mcpServers.${meta.name}.env.${key}`;
+    }
+    for (const [i, value] of (meta.server.args ?? []).entries()) {
+      const kind = secretValueKind(String(value));
+      if (kind) return `secret-like value (${kind}) in .mcp.json → mcpServers.${meta.name}.args[${i}]`;
+    }
+  }
+  return null;
+}
+
 function splitList(v?: string): string[] {
   if (!v) return [];
   return v
@@ -308,7 +347,12 @@ async function writeIngredient(
   files: Record<string, string | Buffer>,
   profile: string,
   report: ImportReport,
-): Promise<string> {
+): Promise<string | null> {
+  const secret = secretIn(meta, files);
+  if (secret) {
+    report.rejected.push({ name: `${meta.type}/${meta.name}`, reason: secret });
+    return null;
+  }
   const folder = typeFolder(meta.type);
   let name = meta.name;
   let dir = path.join(forge, "ingredients", folder, name);

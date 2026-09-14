@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { profile, recipe, rule, scenario } from "./helpers/forge.js";
+import path from "node:path";
+import { promises as fs } from "node:fs";
+import { profile, recipe, rule, scenario, tmpDir, writeFiles } from "./helpers/forge.js";
 import { runCli } from "./helpers/cli.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -23,5 +25,20 @@ describe("cli", () => {
     const check = runCli(["sync", "--check", "--workspace", s.wsRoot]);
     expect(check.code).toBe(0);
     expect(check.stdout).toContain("workspace in sync");
+  });
+
+  it("import prints a rejection with its location and never the value", async () => {
+    const root = await tmpDir("craftar-cli-import-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const token = "ghp_" + "x".repeat(36);
+    await writeFiles(path.join(root, "api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": JSON.stringify({ mcpServers: { github: { command: "npx", env: { GITHUB_TOKEN: token } } } }),
+    });
+    const r = runCli(["import", "--from", "claude-code", "--workspace", path.join(root, "api"), "--forge", path.join(root, "forge"), "--profile", "api"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("1 rejected");
+    expect(r.stdout).toContain("rejected mcp/github — secret-like value (github-token) in .mcp.json → mcpServers.github.env.GITHUB_TOKEN");
+    expect(r.stdout + r.stderr).not.toContain(token);
   });
 });
