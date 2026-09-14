@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 
-export const BOM = "﻿";
 
 /** Strip a leading UTF-8 BOM, if any. */
 export function stripBom(s: string): string {

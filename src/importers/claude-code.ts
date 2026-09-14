@@ -415,7 +415,7 @@ function fingerprintOf(meta: Ingredient, files: Record<string, string | Buffer>)
   delete m.as;
   const parts = [JSON.stringify(m, Object.keys(m).sort())];
   for (const k of Object.keys(files).sort()) parts.push(k, hashNormalized(files[k]));
-  return hashNormalized(parts.join(" "));
+  return hashNormalized(parts.join("\0"));
 }
 
 async function fingerprintDir(dir: string): Promise<string> {
