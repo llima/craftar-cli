@@ -92,7 +92,7 @@ describe("status", () => {
   it("a CRLF + BOM copy of a synced LF file is unchanged, not drift (FM-2)", async () => {
     const s = await oneRule();
     await sync(s.wsRoot);
-    await fs.writeFile(path.join(s.wsRoot, A), "﻿# A\r\n");
+    await fs.writeFile(path.join(s.wsRoot, A), "\uFEFF# A\r\n");
     expect(await stateOf(s.wsRoot, A)).toBe("unchanged");
   });
 });
