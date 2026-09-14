@@ -1,0 +1,231 @@
+import { Command } from "commander";
+import pc from "picocolors";
+import path from "node:path";
+import { promises as fs } from "node:fs";
+import { importClaudeCode } from "./importers/claude-code.js";
+import { loadWorkspace, plan, readLock, status, apply, type FileStatus } from "./core/sync.js";
+import { hashNormalized, toLf, stripBom } from "./core/text.js";
+
+process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
+
+const program = new Command();
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.0.1");
+
+/* ---------------------------------------------------------------- import */
+program
+  .command("import")
+  .description("Import an existing workspace harness into a Forge (creates ingredients, recipes and a profile)")
+  .requiredOption("--from <tool>", "source tool: claude-code")
+  .requiredOption("--forge <dir>", "Forge directory (created if missing)")
+  .requiredOption("--profile <name>", "client profile name to create")
+  .option("--workspace <dir>", "workspace to import", ".")
+  .option("--write-config", "write craftar.yaml into the workspace", false)
+  .action(async (o) => {
+    if (o.from !== "claude-code") fail(`unsupported source "${o.from}" (only claude-code for now)`);
+    const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig });
+    console.log(pc.bold(`Imported ${path.resolve(o.workspace)} → ${path.resolve(o.forge)} as profile "${r.profile}"`));
+    console.log(`  ${pc.green(String(r.created.length))} created, ${pc.cyan(String(r.reused.length))} reused, ${pc.yellow(String(r.variants.length))} variants`);
+    for (const v of r.variants) console.log(`  ${pc.yellow("variant")} ${v.name} — ${v.reason}`);
+    console.log(`  recipes: ${r.recipes.join(", ")}`);
+    for (const w of r.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+  });
+
+/* ---------------------------------------------------------------- status */
+program
+  .command("status")
+  .description("Show what sync would do: new, update, drift, orphan, collision")
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--json", "machine-readable output", false)
+  .action(async (o) => {
+    const ws = await loadWorkspace(o.workspace);
+    const p = await plan(ws);
+    const st = await status(ws, p, await readLock(ws.root));
+    if (o.json) return console.log(JSON.stringify({ statuses: st.map(({ planned, ...s }) => s), warnings: p.warnings }, null, 2));
+    printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes);
+  });
+
+/* ---------------------------------------------------------------- sync */
+program
+  .command("sync")
+  .description("Generate the harness for every target from the Forge and update craftar.lock")
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--check", "exit 1 when the workspace is out of date or has drift (CI mode)", false)
+  .option("--dry-run", "show the plan, write nothing", false)
+  .option("--overwrite-drift", "regenerate files that were hand-edited (their edits are lost)", false)
+  .action(async (o) => {
+    const ws = await loadWorkspace(o.workspace);
+    const p = await plan(ws);
+    const st = await status(ws, p, await readLock(ws.root));
+    if (o.check) {
+      const bad = st.filter((s) => !["unchanged", "adopt"].includes(s.state));
+      printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true);
+      if (bad.length) {
+        console.log(pc.red(`\n${bad.length} file(s) out of sync`));
+        process.exit(1);
+      }
+      console.log(pc.green("\nworkspace in sync"));
+      return;
+    }
+    const r = await apply(ws, p, st, { dryRun: o.dryRun, overwriteDrift: o.overwriteDrift });
+    const verb = o.dryRun ? "would write" : "wrote";
+    console.log(pc.bold(`craftar sync — profile ${ws.config.profile} · recipes ${p.resolution.recipes.join(" → ")} · targets ${p.resolution.targets.join(", ")}`));
+    console.log(`  ${verb} ${pc.green(String(r.written.length))}, removed ${pc.magenta(String(r.removed.length))} orphan(s), skipped ${pc.yellow(String(r.skipped.length))}`);
+    for (const f of r.written) console.log(`  ${pc.green("+")} ${f}`);
+    for (const f of r.removed) console.log(`  ${pc.magenta("-")} ${f}  (orphan: no longer produced by the Forge)`);
+    for (const s of r.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
+    for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+  });
+
+/* ---------------------------------------------------------------- diff */
+program
+  .command("diff")
+  .description("Unified diff between the files on disk and what the Forge would generate")
+  .option("--workspace <dir>", "workspace root", ".")
+  .argument("[path]", "limit to one file")
+  .action(async (only, o) => {
+    const ws = await loadWorkspace(o.workspace);
+    const p = await plan(ws);
+    const st = await status(ws, p, await readLock(ws.root));
+    let shown = 0;
+    for (const s of st) {
+      if (only && s.path !== only) continue;
+      if (!["update", "drift", "collision", "new"].includes(s.state)) continue;
+      shown++;
+      const disk = await readText(path.join(ws.root, s.path));
+      const next = s.planned ? toLf(stripBom(s.planned.content.toString("utf8"))) : "";
+      console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
+      console.log(pc.bold(`+++ ${s.path} (forge)`));
+      console.log(simpleDiff(disk ?? "", next));
+    }
+    if (!shown) console.log(pc.green("no differences"));
+  });
+
+/* ---------------------------------------------------------------- explain */
+program
+  .command("explain")
+  .description("Why does this file exist? Which ingredient, recipe chain and target produced it")
+  .argument("<path>", "workspace-relative path of a generated file")
+  .option("--workspace <dir>", "workspace root", ".")
+  .action(async (file, o) => {
+    const ws = await loadWorkspace(o.workspace);
+    const p = await plan(ws);
+    const f = p.files.find((x) => x.path === file.replace(/\\/g, "/"));
+    if (!f) fail(`${file} is not produced by the Forge for profile ${ws.config.profile}`);
+    const ing = p.resolution.ingredients.find((i) => i.ref === f.ingredient);
+    console.log(pc.bold(f.path));
+    console.log(`  target      ${f.target}`);
+    console.log(`  ingredient  ${f.ingredient}${ing?.meta.origin ? pc.dim(`  (imported from ${ing.meta.origin.workspace}:${ing.meta.origin.path})`) : ""}`);
+    if (ing) console.log(`  via recipes ${ing.via.join(" → ")}`);
+    console.log(`  profile     ${ws.config.profile}  (recipes: ${p.resolution.recipes.join(", ")})`);
+    console.log(`  hash        ${hashNormalized(f.content)}`);
+  });
+
+/* ---------------------------------------------------------------- forge ls */
+program
+  .command("ls")
+  .description("List recipes and ingredients resolved for this workspace")
+  .option("--workspace <dir>", "workspace root", ".")
+  .action(async (o) => {
+    const ws = await loadWorkspace(o.workspace);
+    const p = await plan(ws);
+    console.log(pc.bold(`Forge ${ws.forge.manifest.name} @ ${ws.forge.commit?.slice(0, 8) ?? "no git"} · profile ${ws.config.profile}`));
+    for (const r of p.resolution.recipes) {
+      const rec = ws.forge.recipes.get(r)!;
+      console.log(`\n${pc.cyan(r)}${rec.slot ? pc.dim(` [slot ${rec.slot}]`) : ""}${rec.description ? pc.dim(" — " + rec.description) : ""}`);
+      for (const ref of rec.ingredients) {
+        const disabled = p.resolution.disabled.includes(ref as never);
+        console.log(`  ${disabled ? pc.strikethrough(ref) : ref}${disabled ? pc.dim(" (disabled by workspace)") : ""}`);
+      }
+    }
+    console.log(`\n${p.files.length} files across targets ${p.resolution.targets.join(", ")}`);
+  });
+
+program.parseAsync().catch((e) => fail(e instanceof Error ? e.message : String(e)));
+
+/* ---------------------------------------------------------------- helpers */
+
+function fail(msg: string): never {
+  console.error(pc.red("error: ") + msg);
+  process.exit(1);
+}
+
+function printStatus(st: FileStatus[], warnings: string[], profile: string, recipes: string[], compact = false) {
+  const counts: Record<string, number> = {};
+  for (const s of st) counts[s.state] = (counts[s.state] ?? 0) + 1;
+  console.log(pc.bold(`craftar status — profile ${profile} · recipes ${recipes.join(" → ")}`));
+  console.log(
+    "  " +
+      Object.entries(counts)
+        .map(([k, v]) => `${color(k)(k)} ${v}`)
+        .join("  "),
+  );
+  for (const s of st) {
+    if (compact && s.state === "unchanged") continue;
+    console.log(`  ${color(s.state)(s.state.padEnd(13))} ${s.path}${s.state === "unchanged" ? "" : "  " + pc.dim(s.ingredient ?? "")}`);
+  }
+  for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+}
+
+function color(state: string) {
+  switch (state) {
+    case "new":
+    case "update":
+      return pc.green;
+    case "drift":
+    case "orphan-drift":
+      return pc.red;
+    case "collision":
+      return pc.yellow;
+    case "orphan":
+      return pc.magenta;
+    case "adopt":
+      return pc.cyan;
+    default:
+      return pc.dim;
+  }
+}
+
+function explainSkip(s: FileStatus): string {
+  switch (s.state) {
+    case "drift":
+      return "hand-edited since last sync — run `craftar diff` and either `--overwrite-drift` or promote the change to the Forge";
+    case "collision":
+      return "exists but was never generated by craftar and differs from the Forge — rename it or import it";
+    case "orphan-drift":
+      return "no longer produced by the Forge but hand-edited — kept; delete it yourself if unwanted";
+    default:
+      return "";
+  }
+}
+
+async function readText(p: string): Promise<string | null> {
+  try {
+    return toLf(stripBom(await fs.readFile(p, "utf8")));
+  } catch {
+    return null;
+  }
+}
+
+/** Small LCS-based line diff; good enough for markdown-sized files. */
+function simpleDiff(a: string, b: string): string {
+  const A = a.split("\n"), B = b.split("\n");
+  const n = A.length, m = B.length;
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out: string[] = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (A[i] === B[j]) { out.push(pc.dim("  " + A[i])); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) out.push(pc.red("- " + A[i++]));
+    else out.push(pc.green("+ " + B[j++]));
+  }
+  while (i < n) out.push(pc.red("- " + A[i++]));
+  while (j < m) out.push(pc.green("+ " + B[j++]));
+  // collapse long unchanged runs
+  const res: string[] = [];
+  let run: string[] = [];
+  const flush = () => { if (run.length > 6) res.push(...run.slice(0, 3), pc.dim(`  … ${run.length - 6} unchanged lines …`), ...run.slice(-3)); else res.push(...run); run = []; };
+  for (const l of out) { if (l.startsWith(pc.dim("  "))) run.push(l); else { flush(); res.push(l); } }
+  flush();
+  return res.join("\n");
+}

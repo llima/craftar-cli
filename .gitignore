@@ -1,0 +1,5 @@
+node_modules/
+dist/
+# private client material used by the oracle test — never publish
+fixtures/
+craftar.local.yaml

@@ -1,0 +1,28 @@
+{
+  "name": "craftar",
+  "version": "0.0.1",
+  "description": "Craft, sync and convert AI-coding workspace harnesses across clients and tools.",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "craftar": "./bin/craftar.js" },
+  "files": ["dist", "bin", "README.md"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "picocolors": "^1.1.1",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.1.1"
+  }
+}
