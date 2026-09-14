@@ -54,7 +54,8 @@ export interface Plan {
 export async function plan(ws: Workspace): Promise<Plan> {
   const resolution = resolve(ws.forge, ws.config);
   const warnings = [...resolution.warnings];
-  const missingParams = new Set<string>();
+  /** Unresolved placeholder → refs of the ingredients citing it. */
+  const missingParams = new Map<string, Set<string>>();
   const ctx = {
     forge: ws.forge,
     resolution,
@@ -68,7 +69,10 @@ export async function plan(ws: Workspace): Promise<Plan> {
     },
     async text(ing: ResolvedIngredient, file: string) {
       const raw = await fs.readFile(path.join(ing.dir, file), "utf8");
-      return substitute(toLf(stripBom(raw)), resolution.params, missingParams);
+      const missing = new Set<string>();
+      const out = substitute(toLf(stripBom(raw)), resolution.params, missing);
+      for (const key of missing) missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ing.ref));
+      return out;
     },
     bytes(ing: ResolvedIngredient, file: string) {
       return fs.readFile(path.join(ing.dir, file));
@@ -85,6 +89,9 @@ export async function plan(ws: Workspace): Promise<Plan> {
       continue;
     }
     files.push(...(await em.emit(ctx)));
+  }
+  for (const [key, refs] of [...missingParams].sort(([a], [b]) => a.localeCompare(b))) {
+    warnings.push(`param "${key}" has no value in any layer — left verbatim (${[...refs].sort().join(", ")})`);
   }
   // Duplicate path guard
   const seen = new Map<string, string>();

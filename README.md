@@ -105,7 +105,7 @@ overrides:
   ingredients: { disable: [] }
 ```
 
-Layer precedence, weakest → strongest: recipe defaults → profile → `craftar.yaml` → `craftar.local.yaml` (personal, git-ignored). Bodies may use `{{param}}` placeholders; unknown placeholders are left untouched (Angular's `{{ 'X' | localize }}` survives).
+Layer precedence, weakest → strongest: recipe defaults → profile → `craftar.yaml` → `craftar.local.yaml` (personal, git-ignored). Bodies may use `{{param}}` placeholders; a placeholder with no value in any layer is left untouched and reported as a warning by `status` and `sync` (Angular's `{{ 'X' | localize }}` does not look like a placeholder and passes silently).
 
 ## Targets
 
