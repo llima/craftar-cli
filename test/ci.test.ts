@@ -35,6 +35,11 @@ describe("CI contract", () => {
   it("bounds the job so a hang doesn't burn the runner", () => {
     expect(ci.jobs.test["timeout-minutes"]).toBe(15);
   });
+
+  it("supersedes runs on feature branches but never on main, where a cancelled run would skip a release", () => {
+    expect(ci.concurrency.group).toBe("ci-${{ github.ref }}");
+    expect(ci.concurrency["cancel-in-progress"]).toBe("${{ github.ref != 'refs/heads/main' }}");
+  });
 });
 
 describe("package publish metadata", () => {
