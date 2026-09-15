@@ -118,6 +118,7 @@ describe("release contract", () => {
     const publish = steps("publish").find((s) => s.name === "Publish");
     expect(publish?.env?.HEAD_SHA).toBe(HEAD_SHA);
     // The step comments GITHUB_SHA too, so assert the comparison and its exit, never the name.
+    // Reformatting the guard means updating this assertion deliberately — not deleting it.
     const code = (publish?.run ?? "")
       .split("\n")
       .filter((l) => !/^\s*#/.test(l))
@@ -128,7 +129,7 @@ describe("release contract", () => {
 
   it("keeps publishing out of every other workflow — only release.yml publishes", () => {
     const dir = path.join(REPO, ".github/workflows");
-    const others = readdirSync(dir).filter((f) => f !== "release.yml");
+    const others = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f) && f !== "release.yml");
     expect(others).toContain("ci.yml");
     for (const f of others) expect(readFileSync(path.join(dir, f), "utf8"), f).not.toMatch(/npm publish|id-token/);
   });
