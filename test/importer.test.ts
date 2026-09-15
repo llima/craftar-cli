@@ -97,6 +97,30 @@ describe("import --from claude-code", () => {
     );
   });
 
+  it("rejects a null MCP server entry instead of throwing a raw TypeError", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": '{"mcpServers":{"a":null}}',
+    });
+    await expect(importInto(t.forge, t.ws("api"), "api")).rejects.toThrow(
+      '.mcp.json server "a" is not an object — fix the file and re-run import',
+    );
+    expect(await exists(path.join(t.forge, "ingredients/mcp"))).toBe(false);
+  });
+
+  it("rejects a non-object (string) MCP server entry", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": '{"mcpServers":{"a":"x"}}',
+    });
+    await expect(importInto(t.forge, t.ws("api"), "api")).rejects.toThrow(
+      '.mcp.json server "a" is not an object — fix the file and re-run import',
+    );
+    expect(await exists(path.join(t.forge, "ingredients/mcp"))).toBe(false);
+  });
+
   it("rejects a rule with a token and reports the file line", async () => {
     const t = await setup();
     await writeFiles(t.ws("api"), { ".claude/rules/deploy.md": "# Deploy\n\nkey " + "AKIA" + "ABCDEFGHIJKLMNOP" + "\n" });

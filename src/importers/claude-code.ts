@@ -207,6 +207,9 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
     }
     type McpServerConfig = Extract<Ingredient, { type: "mcp" }>["server"];
     for (const [name, server] of Object.entries(json.mcpServers ?? {}) as [string, McpServerConfig][]) {
+      if (!isPlainObject(server)) {
+        throw new Error(`.mcp.json server "${name}" is not an object — fix the file and re-run import`);
+      }
       const meta: Ingredient = { type: "mcp", name, server, targets: "*", tags: [], origin: origin(".mcp.json") };
       addRef(refs.base, await writeIngredient(forge, meta, {}, opts.profileName, report));
     }
