@@ -194,11 +194,16 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
   /* ---- MCP servers ---- */
   const mcpFile = path.join(ws, ".mcp.json");
   if (await exists(mcpFile)) {
+    const raw = await fs.readFile(mcpFile, "utf8");
     let json: { mcpServers?: Record<string, unknown> };
     try {
-      json = JSON.parse(stripBom(await fs.readFile(mcpFile, "utf8")));
+      json = JSON.parse(stripBom(raw));
     } catch {
       throw new Error(".mcp.json is not valid JSON — fix the file and re-run import");
+    }
+    const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+    if (!isPlainObject(json) || ("mcpServers" in json && !isPlainObject(json.mcpServers))) {
+      throw new Error(".mcp.json has no valid mcpServers object — fix the file and re-run import");
     }
     type McpServerConfig = Extract<Ingredient, { type: "mcp" }>["server"];
     for (const [name, server] of Object.entries(json.mcpServers ?? {}) as [string, McpServerConfig][]) {
@@ -324,25 +329,25 @@ function secretIn(meta: Ingredient, files: Record<string, string | Buffer>): str
   return null;
 }
 
-/** Recursively scan one MCP server field for a secret-like value, building a dotted/bracketed path. */
-function secretInServerField(server: string, path: string, value: unknown, useEntropy: boolean): string | null {
+/** Recursively scan one MCP server field for a secret-like value, building a dotted/bracketed field path. */
+function secretInServerField(server: string, field: string, value: unknown, useEntropy: boolean): string | null {
   if (Array.isArray(value)) {
     for (const [i, v] of value.entries()) {
-      const hit = secretInServerField(server, `${path}[${i}]`, v, useEntropy);
+      const hit = secretInServerField(server, `${field}[${i}]`, v, useEntropy);
       if (hit) return hit;
     }
     return null;
   }
   if (value !== null && typeof value === "object") {
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      const hit = secretInServerField(server, `${path}.${k}`, v, useEntropy);
+      const hit = secretInServerField(server, `${field}.${k}`, v, useEntropy);
       if (hit) return hit;
     }
     return null;
   }
   if (typeof value !== "string" && typeof value !== "number") return null;
   const kind = useEntropy ? secretValueKind(String(value)) : (findSecrets(String(value))[0]?.kind ?? null);
-  return kind ? `secret-like value (${kind}) in .mcp.json → mcpServers.${server}.${path}` : null;
+  return kind ? `secret-like value (${kind}) in .mcp.json → mcpServers.${server}.${field}` : null;
 }
 
 function splitList(v?: string): string[] {

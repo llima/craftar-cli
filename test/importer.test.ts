@@ -75,6 +75,28 @@ describe("import --from claude-code", () => {
     }
   });
 
+  it("rejects .mcp.json containing only null", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": "null",
+    });
+    await expect(importInto(t.forge, t.ws("api"), "api")).rejects.toThrow(
+      ".mcp.json has no valid mcpServers object — fix the file and re-run import",
+    );
+  });
+
+  it("rejects .mcp.json whose mcpServers is not an object", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": '{"mcpServers":"x"}',
+    });
+    await expect(importInto(t.forge, t.ws("api"), "api")).rejects.toThrow(
+      ".mcp.json has no valid mcpServers object — fix the file and re-run import",
+    );
+  });
+
   it("rejects a rule with a token and reports the file line", async () => {
     const t = await setup();
     await writeFiles(t.ws("api"), { ".claude/rules/deploy.md": "# Deploy\n\nkey " + "AKIA" + "ABCDEFGHIJKLMNOP" + "\n" });
