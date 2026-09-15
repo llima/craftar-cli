@@ -56,11 +56,12 @@ describe("package publish metadata", () => {
 });
 
 describe("release contract", () => {
-  type Step = { name?: string; uses?: string; run?: string; with?: Record<string, unknown> };
+  type Step = { name?: string; uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, unknown> };
   type Job = { steps: Step[]; [key: string]: unknown };
   const raw = read(".github/workflows/release.yml");
   const release = YAML.parse(raw) as { on: unknown; permissions: unknown; jobs: Record<string, Job> };
-  const ci = YAML.parse(read(".github/workflows/ci.yml"));
+  const ciRaw = read(".github/workflows/ci.yml");
+  const ci = YAML.parse(ciRaw);
   const HEAD_SHA = "${{ github.event.workflow_run.head_sha }}";
   const steps = (job: string) => release.jobs[job].steps;
 
@@ -103,6 +104,15 @@ describe("release contract", () => {
     }
   });
 
+  it("tags the commit ci tested, never github.sha at the tip of main", () => {
+    const tag = steps("publish").find((s) => s.name === "Tag and release");
+    expect(tag?.env?.SHA).toBe(HEAD_SHA);
+  });
+
+  it("keeps publishing out of ci.yml — only release.yml publishes", () => {
+    expect(ciRaw).not.toMatch(/npm publish|id-token/);
+  });
+
   it("uses Node 24 and publishes with provenance, without a stored token", () => {
     for (const job of ["check", "publish"]) {
       const setups = steps(job).filter((s) => s.uses?.startsWith("actions/setup-node@"));
@@ -110,7 +120,7 @@ describe("release contract", () => {
     }
     const runs = steps("publish").map((s) => s.run ?? "");
     expect(runs.some((r) => r.includes("npm publish --provenance"))).toBe(true);
-    expect(raw).not.toMatch(/NODE_AUTH_TOKEN|secrets\./);
+    expect(raw).not.toMatch(/NODE_AUTH_TOKEN|secrets[.[]/);
   });
 
   it("turns off setup-node's package-manager cache in both jobs, so no cache reaches the OIDC job", () => {
