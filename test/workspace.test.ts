@@ -56,7 +56,7 @@ describe("workspace layers", () => {
       (e: Error) => e,
     );
     expect(error?.message).toMatch(/craftar\.yaml not found/);
-    expect(error?.message).toContain("craftar import --from claude-code --forge <dir> --profile <name> --write-config");
+    expect(error?.message).toContain(`craftar import --workspace ${dir} --from claude-code --forge <dir> --profile <name> --write-config`);
     expect(error?.message).not.toMatch(/craftar init/);
   });
 
