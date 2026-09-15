@@ -136,6 +136,7 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ needs.check.outputs.version }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           err=$(mktemp)
@@ -150,6 +151,13 @@ jobs:
             exit 1
           fi
           if grep -q 'E404' "$err"; then
+            # npm records GITHUB_SHA in the attestation; in a workflow_run it is the tip of main,
+            # which differs from the tested commit once a newer push lands. Publishing then would
+            # sign provenance for code this run never built.
+            if [ "${GITHUB_SHA:-}" != "$HEAD_SHA" ]; then
+              echo "provenance would name $GITHUB_SHA, not the tested commit $HEAD_SHA — a newer push to main reached this run; release it from that commit's own run"
+              exit 1
+            fi
             npm publish --provenance --access public
             exit 0
           fi

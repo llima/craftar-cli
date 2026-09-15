@@ -114,6 +114,14 @@ describe("release contract", () => {
     expect(tag?.env?.SHA).toBe(HEAD_SHA);
   });
 
+  it("refuses to publish when the attestation would name another commit than the one ci tested", () => {
+    const publish = steps("publish").find((s) => s.name === "Publish");
+    expect(publish?.env?.HEAD_SHA).toBe(HEAD_SHA);
+    const run = publish?.run ?? "";
+    expect(run).toMatch(/GITHUB_SHA/);
+    expect(run.indexOf("GITHUB_SHA")).toBeLessThan(run.indexOf("npm publish --provenance"));
+  });
+
   it("keeps publishing out of ci.yml — only release.yml publishes", () => {
     expect(ciRaw).not.toMatch(/npm publish|id-token/);
   });
@@ -276,7 +284,12 @@ describe.skipIf(process.platform === "win32")("release step scripts under bash -
   const PUBLISH = "Publish";
   const RELEASE = "Tag and release";
   const FAKE_SHA = "0123456789abcdef0123456789abcdef01234567";
+  const MOVED_SHA = "89abcdef0123456789abcdef0123456789abcdef";
   const RELEASE_ENV = { SHA: FAKE_SHA, GITHUB_REPOSITORY: "llima/craftar-cli", GH_TOKEN: "dummy" };
+  // The Publish guard compares GITHUB_SHA with the commit ci tested. The runner exports a
+  // GITHUB_SHA of its own, so every publish case sets both variables explicitly.
+  const PUBLISH_ENV = { GITHUB_SHA: FAKE_SHA, HEAD_SHA: FAKE_SHA };
+  const MOVED_MAIN_ENV = { GITHUB_SHA: MOVED_SHA, HEAD_SHA: FAKE_SHA };
   const publishes = (log: string[]) => log.filter((line) => line.startsWith("npm publish"));
   const creates = (log: string[]) => log.filter((line) => line.startsWith("gh release create"));
 
@@ -341,10 +354,22 @@ describe.skipIf(process.platform === "win32")("release step scripts under bash -
 
   it("publish: E404 publishes with provenance and public access", () => {
     const r = runStep("publish", PUBLISH, {
+      env: PUBLISH_ENV,
       stubs: { STUB_NPM_VIEW_STDERR: "npm error code E404", STUB_NPM_VIEW_EXIT: 1, STUB_NPM_PUBLISH_EXIT: 0 },
     });
     expect(r.status, r.output).toBe(0);
     expect(publishes(r.log)).toEqual(["npm publish --provenance --access public"]);
+  });
+
+  it("publish: a main that moved past the tested commit fails the step without publishing", () => {
+    const r = runStep("publish", PUBLISH, {
+      env: MOVED_MAIN_ENV,
+      stubs: { STUB_NPM_VIEW_STDERR: "npm error code E404", STUB_NPM_VIEW_EXIT: 1, STUB_NPM_PUBLISH_EXIT: 0 },
+    });
+    expect(r.status).not.toBe(0);
+    expect(r.output).toContain(FAKE_SHA);
+    expect(r.output).toContain(MOVED_SHA);
+    expect(publishes(r.log)).toEqual([]);
   });
 
   it("publish: any other npm view error fails without publishing", () => {
@@ -357,6 +382,7 @@ describe.skipIf(process.platform === "win32")("release step scripts under bash -
 
   it("publish: a failed npm publish fails the step", () => {
     const r = runStep("publish", PUBLISH, {
+      env: PUBLISH_ENV,
       stubs: { STUB_NPM_VIEW_STDERR: "npm error code E404", STUB_NPM_VIEW_EXIT: 1, STUB_NPM_PUBLISH_EXIT: 1 },
     });
     expect(r.status).not.toBe(0);
