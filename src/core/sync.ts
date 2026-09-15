@@ -25,7 +25,10 @@ export interface Workspace {
 export async function loadWorkspace(root: string): Promise<Workspace> {
   root = path.resolve(root);
   const file = path.join(root, WORKSPACE_FILE);
-  if (!(await exists(file))) throw new Error(`${WORKSPACE_FILE} not found in ${root} — run \`craftar init\` or \`craftar import\` first`);
+  if (!(await exists(file)))
+    throw new Error(
+      `${WORKSPACE_FILE} not found in ${root} — run \`craftar import --from claude-code --forge <dir> --profile <name> --write-config\` to create it`,
+    );
   const base = YAML.parse(await fs.readFile(file, "utf8")) ?? {};
   const localFile = path.join(root, LOCAL_FILE);
   const local = (await exists(localFile)) ? YAML.parse(await fs.readFile(localFile, "utf8")) ?? {} : {};

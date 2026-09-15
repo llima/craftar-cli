@@ -48,10 +48,16 @@ describe("workspace layers", () => {
     expect(p.files).toEqual([]);
   });
 
-  it("fails clearly without craftar.yaml", async () => {
+  it("without craftar.yaml, points at the command that creates it — never at the unbuilt `craftar init`", async () => {
     const dir = await tmpDir();
     cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
-    await expect(loadWorkspace(dir)).rejects.toThrow(/craftar\.yaml not found/);
+    const error = await loadWorkspace(dir).then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(error?.message).toMatch(/craftar\.yaml not found/);
+    expect(error?.message).toContain("craftar import --from claude-code --forge <dir> --profile <name> --write-config");
+    expect(error?.message).not.toMatch(/craftar init/);
   });
 
   it("fails clearly when the Forge path does not exist", async () => {
