@@ -49,6 +49,10 @@ describe("package publish metadata", () => {
     expect(pkg.homepage).toBe("https://craftar.dev");
     expect(pkg.bugs).toEqual({ url: "https://github.com/llima/craftar-cli/issues" });
   });
+
+  it("declares the bin without a ./ prefix, which npm publish strips as invalid", () => {
+    expect(pkg.bin).toEqual({ craftar: "bin/craftar.js" });
+  });
 });
 
 describe("release contract", () => {
