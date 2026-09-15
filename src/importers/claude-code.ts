@@ -283,7 +283,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
 
 /**
  * A reviewer agent belongs to the stack of a scoped rule when its name is derived from the rule name
- * (`backend-oaf-reviewer` ← `backend-oaf`, `frontend-reviewer` ← `frontend-angular`) and it cites the rule.
+ * (`backend-api-reviewer` ← `backend-api`, `frontend-reviewer` ← `frontend-angular`) and it cites the rule.
  * Generic agents such as `docs-author` stay in `base` even when they mention a stack rule.
  */
 function agentBelongsTo(agentName: string, ruleName: string, body: string): boolean {

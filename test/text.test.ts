@@ -38,11 +38,11 @@ describe("kiro emitter helpers", () => {
     expect(referencedRules(t, new Set(["frontend-angular", "repo-discovery"]))).toEqual(["frontend-angular", "repo-discovery"]);
   });
   it("binds stack reviewers to their rule and gives generic agents the whole tree", () => {
-    const known = new Set(["frontend-angular", "backend-oaf", "repo-discovery"]);
-    expect(agentResources("frontend-reviewer", "uses .claude/rules/frontend-angular.md", known, ["frontend-angular", "backend-oaf"])).toEqual([
+    const known = new Set(["frontend-angular", "backend-api", "repo-discovery"]);
+    expect(agentResources("frontend-reviewer", "uses .claude/rules/frontend-angular.md", known, ["frontend-angular", "backend-api"])).toEqual([
       "file://.kiro/steering/frontend-angular.md",
       "file://.kiro/steering/repo-discovery.md",
     ]);
-    expect(agentResources("docs-author", "mentions .claude/rules/backend-oaf.md", known, ["frontend-angular", "backend-oaf"])).toEqual(["file://.kiro/steering/**/*.md"]);
+    expect(agentResources("docs-author", "mentions .claude/rules/backend-api.md", known, ["frontend-angular", "backend-api"])).toEqual(["file://.kiro/steering/**/*.md"]);
   });
 });
