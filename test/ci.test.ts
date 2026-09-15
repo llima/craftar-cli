@@ -34,3 +34,17 @@ describe("CI contract", () => {
     expect(ci.jobs.test["timeout-minutes"]).toBe(15);
   });
 });
+
+describe("package publish metadata", () => {
+  const pkg = JSON.parse(read("package.json"));
+
+  it("builds before every publish, in CI or by hand", () => {
+    expect(pkg.scripts.prepublishOnly).toBe("npm run build");
+  });
+
+  it("points npm and provenance at the public repository", () => {
+    expect(pkg.repository).toEqual({ type: "git", url: "git+https://github.com/llima/craftar-cli.git" });
+    expect(pkg.homepage).toBe("https://craftar.dev");
+    expect(pkg.bugs).toEqual({ url: "https://github.com/llima/craftar-cli/issues" });
+  });
+});
