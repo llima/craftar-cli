@@ -117,9 +117,13 @@ describe("release contract", () => {
   it("refuses to publish when the attestation would name another commit than the one ci tested", () => {
     const publish = steps("publish").find((s) => s.name === "Publish");
     expect(publish?.env?.HEAD_SHA).toBe(HEAD_SHA);
-    const run = publish?.run ?? "";
-    expect(run).toMatch(/GITHUB_SHA/);
-    expect(run.indexOf("GITHUB_SHA")).toBeLessThan(run.indexOf("npm publish --provenance"));
+    // The step comments GITHUB_SHA too, so assert the comparison and its exit, never the name.
+    const code = (publish?.run ?? "")
+      .split("\n")
+      .filter((l) => !/^\s*#/.test(l))
+      .join("\n");
+    expect(code).toMatch(/if \[ "\$\{GITHUB_SHA:-\}" != "\$HEAD_SHA" \]/);
+    expect(code).toMatch(/!= "\$HEAD_SHA" \][\s\S]*exit 1[\s\S]*npm publish --provenance/);
   });
 
   it("keeps publishing out of every other workflow — only release.yml publishes", () => {
@@ -413,7 +417,7 @@ describe.skipIf(process.platform === "win32")("release step scripts under bash -
   });
 
   it("publish: an answer naming another version fails without publishing", () => {
-    const r = runStep("publish", PUBLISH, { env: PUBLISH_ENV, stubs: { STUB_NPM_VIEW_STDOUT: "0.0.8", STUB_NPM_VIEW_EXIT: 0 } });
+    const r = runStep("publish", PUBLISH, { stubs: { STUB_NPM_VIEW_STDOUT: "0.0.8", STUB_NPM_VIEW_EXIT: 0 } });
     expect(r.status).not.toBe(0);
     expect(r.output).toContain("unexpected npm view output: 0.0.8");
     expect(publishes(r.log)).toEqual([]);
