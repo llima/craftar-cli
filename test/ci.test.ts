@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import YAML from "yaml";
@@ -34,6 +34,11 @@ describe("CI contract", () => {
 
   it("bounds the job so a hang doesn't burn the runner", () => {
     expect(ci.jobs.test["timeout-minutes"]).toBe(15);
+  });
+
+  it("supersedes runs on feature branches but never on main, where a cancelled run would skip a release", () => {
+    expect(ci.concurrency.group).toBe("ci-${{ github.ref }}");
+    expect(ci.concurrency["cancel-in-progress"]).toBe("${{ github.ref != 'refs/heads/main' }}");
   });
 });
 
@@ -109,8 +114,24 @@ describe("release contract", () => {
     expect(tag?.env?.SHA).toBe(HEAD_SHA);
   });
 
-  it("keeps publishing out of ci.yml — only release.yml publishes", () => {
-    expect(ciRaw).not.toMatch(/npm publish|id-token/);
+  it("refuses to publish when the attestation would name another commit than the one ci tested", () => {
+    const publish = steps("publish").find((s) => s.name === "Publish");
+    expect(publish?.env?.HEAD_SHA).toBe(HEAD_SHA);
+    // The step comments GITHUB_SHA too, so assert the comparison and its exit, never the name.
+    // Reformatting the guard means updating this assertion deliberately — not deleting it.
+    const code = (publish?.run ?? "")
+      .split("\n")
+      .filter((l) => !/^\s*#/.test(l))
+      .join("\n");
+    expect(code).toMatch(/if \[ "\$\{GITHUB_SHA:-\}" != "\$HEAD_SHA" \]/);
+    expect(code).toMatch(/!= "\$HEAD_SHA" \][\s\S]*exit 1[\s\S]*npm publish --provenance/);
+  });
+
+  it("keeps publishing out of every other workflow — only release.yml publishes", () => {
+    const dir = path.join(REPO, ".github/workflows");
+    const others = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f) && f !== "release.yml");
+    expect(others).toContain("ci.yml");
+    for (const f of others) expect(readFileSync(path.join(dir, f), "utf8"), f).not.toMatch(/npm publish|id-token/);
   });
 
   it("uses Node 24 and publishes with provenance, without a stored token", () => {
@@ -159,6 +180,7 @@ describe.skipIf(process.platform === "win32")("release step scripts under bash -
     STUB_NPM_VIEW_STDERR?: string;
     STUB_NPM_VIEW_EXIT?: number;
     STUB_NPM_PUBLISH_EXIT?: number;
+    STUB_NPM_VERSION?: string;
     STUB_GH_VIEW_EXIT?: number;
     STUB_GH_CREATE_EXIT?: number;
     STUB_GIT_EXIT?: number;
@@ -181,6 +203,10 @@ describe.skipIf(process.platform === "win32")("release step scripts under bash -
       '    if [ -n "$STUB_NPM_VIEW_STDERR" ]; then printf \'%s\\n\' "$STUB_NPM_VIEW_STDERR" >&2; fi',
       '    exit "${STUB_NPM_VIEW_EXIT:-99}" ;;',
       '  publish) exit "${STUB_NPM_PUBLISH_EXIT:-99}" ;;',
+      '  --version)',
+      '    if [ -z "$STUB_NPM_VERSION" ]; then echo "npm stub: no version configured" >&2; exit 99; fi',
+      '    printf \'%s\\n\' "$STUB_NPM_VERSION"',
+      "    exit 0 ;;",
       "esac",
       'echo "npm stub: unexpected call: $*" >&2',
       "exit 99",
@@ -268,10 +294,16 @@ describe.skipIf(process.platform === "win32")("release step scripts under bash -
   const VERSION_FILES = "Version files agree";
   const REGISTRY = "Is this version already on npm?";
   const TAG = "Tag is free";
+  const NPM_GATE = "npm supports trusted publishing";
   const PUBLISH = "Publish";
   const RELEASE = "Tag and release";
   const FAKE_SHA = "0123456789abcdef0123456789abcdef01234567";
+  const MOVED_SHA = "89abcdef0123456789abcdef0123456789abcdef";
   const RELEASE_ENV = { SHA: FAKE_SHA, GITHUB_REPOSITORY: "llima/craftar-cli", GH_TOKEN: "dummy" };
+  // The Publish guard compares GITHUB_SHA with the commit ci tested. The runner exports a
+  // GITHUB_SHA of its own, so every publish case sets both variables explicitly.
+  const PUBLISH_ENV = { GITHUB_SHA: FAKE_SHA, HEAD_SHA: FAKE_SHA };
+  const MOVED_MAIN_ENV = { GITHUB_SHA: MOVED_SHA, HEAD_SHA: FAKE_SHA };
   const publishes = (log: string[]) => log.filter((line) => line.startsWith("npm publish"));
   const creates = (log: string[]) => log.filter((line) => line.startsWith("gh release create"));
 
@@ -306,6 +338,14 @@ describe.skipIf(process.platform === "win32")("release step scripts under bash -
   it("registry: any other npm error fails without deciding", () => {
     const r = runStep("check", REGISTRY, { stubs: { STUB_NPM_VIEW_STDERR: "npm error code ETIMEDOUT", STUB_NPM_VIEW_EXIT: 1 } });
     expect(r.status).not.toBe(0);
+    expect(r.log).toEqual(["npm view craftar@0.0.9 version"]);
+    expect(r.githubOutput).not.toMatch(/publish=/);
+  });
+
+  it("registry: an answer naming another version fails without deciding", () => {
+    const r = runStep("check", REGISTRY, { stubs: { STUB_NPM_VIEW_STDOUT: "0.0.8", STUB_NPM_VIEW_EXIT: 0 } });
+    expect(r.status).not.toBe(0);
+    expect(r.output).toContain("unexpected npm view output: 0.0.8");
     expect(r.githubOutput).not.toMatch(/publish=/);
   });
 
@@ -327,6 +367,20 @@ describe.skipIf(process.platform === "win32")("release step scripts under bash -
     expect(r.output).toContain("128");
   });
 
+  it("gate: an npm older than 11.5.1 fails before anything publishes", () => {
+    const r = runStep("publish", NPM_GATE, { stubs: { STUB_NPM_VERSION: "11.5.0" } });
+    expect(r.status).not.toBe(0);
+    expect(r.output).toContain("older than 11.5.1");
+    expect(publishes(r.log)).toEqual([]);
+  });
+
+  it("gate: 11.5.1 and anything newer pass", () => {
+    for (const version of ["11.5.1", "12.0.0"]) {
+      const r = runStep("publish", NPM_GATE, { stubs: { STUB_NPM_VERSION: version } });
+      expect(r.status, `${version}: ${r.output}`).toBe(0);
+    }
+  });
+
   it("publish: a version already on npm skips the publish", () => {
     const r = runStep("publish", PUBLISH, { stubs: { STUB_NPM_VIEW_STDOUT: "0.0.9", STUB_NPM_VIEW_EXIT: 0 } });
     expect(r.status, r.output).toBe(0);
@@ -336,10 +390,22 @@ describe.skipIf(process.platform === "win32")("release step scripts under bash -
 
   it("publish: E404 publishes with provenance and public access", () => {
     const r = runStep("publish", PUBLISH, {
+      env: PUBLISH_ENV,
       stubs: { STUB_NPM_VIEW_STDERR: "npm error code E404", STUB_NPM_VIEW_EXIT: 1, STUB_NPM_PUBLISH_EXIT: 0 },
     });
     expect(r.status, r.output).toBe(0);
     expect(publishes(r.log)).toEqual(["npm publish --provenance --access public"]);
+  });
+
+  it("publish: a main that moved past the tested commit fails the step without publishing", () => {
+    const r = runStep("publish", PUBLISH, {
+      env: MOVED_MAIN_ENV,
+      stubs: { STUB_NPM_VIEW_STDERR: "npm error code E404", STUB_NPM_VIEW_EXIT: 1, STUB_NPM_PUBLISH_EXIT: 0 },
+    });
+    expect(r.status).not.toBe(0);
+    expect(r.output).toContain(FAKE_SHA);
+    expect(r.output).toContain(MOVED_SHA);
+    expect(publishes(r.log)).toEqual([]);
   });
 
   it("publish: any other npm view error fails without publishing", () => {
@@ -347,11 +413,20 @@ describe.skipIf(process.platform === "win32")("release step scripts under bash -
       stubs: { STUB_NPM_VIEW_STDERR: "npm error code E500", STUB_NPM_VIEW_EXIT: 1, STUB_NPM_PUBLISH_EXIT: 0 },
     });
     expect(r.status).not.toBe(0);
+    expect(r.log).toEqual(["npm view craftar@0.0.9 version"]);
+    expect(publishes(r.log)).toEqual([]);
+  });
+
+  it("publish: an answer naming another version fails without publishing", () => {
+    const r = runStep("publish", PUBLISH, { stubs: { STUB_NPM_VIEW_STDOUT: "0.0.8", STUB_NPM_VIEW_EXIT: 0 } });
+    expect(r.status).not.toBe(0);
+    expect(r.output).toContain("unexpected npm view output: 0.0.8");
     expect(publishes(r.log)).toEqual([]);
   });
 
   it("publish: a failed npm publish fails the step", () => {
     const r = runStep("publish", PUBLISH, {
+      env: PUBLISH_ENV,
       stubs: { STUB_NPM_VIEW_STDERR: "npm error code E404", STUB_NPM_VIEW_EXIT: 1, STUB_NPM_PUBLISH_EXIT: 1 },
     });
     expect(r.status).not.toBe(0);
