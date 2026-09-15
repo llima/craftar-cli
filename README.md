@@ -173,13 +173,13 @@ Next: `craftar init` from a profile; profile-driven integrations (PM tool → MC
 
 ## Releases
 
-Every change reaches `main` through a pull request that bumps the version in `package.json`,
-`package-lock.json` and `src/cli.ts`. When that merge's CI run is green,
-`.github/workflows/release.yml` checks that the three files agree and that the version is not on
-npm yet, dry-runs the package, and waits for a maintainer to approve the `npm` environment. After
-approval it publishes `craftar@<version>` with npm trusted publishing and provenance — no npm token
-is stored in the repository — and creates the `v<version>` tag and a GitHub Release. A merge that
-does not change the version publishes nothing.
+Merging a pull request that bumps the version in `package.json`, `package-lock.json` and
+`src/cli.ts` starts a release: when that merge's CI run is green, `.github/workflows/release.yml`
+checks that the three files agree and that the version is not on npm yet, dry-runs the package,
+and waits for a maintainer to approve the `npm` environment. After approval it publishes
+`craftar@<version>` with npm trusted publishing and provenance — no npm token is stored in the
+repository — and creates the `v<version>` tag and a GitHub Release. A merge that does not change
+the version publishes nothing.
 
 ## License
 
