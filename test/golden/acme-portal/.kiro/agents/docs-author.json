@@ -1,0 +1,22 @@
+{
+  "name": "docs-author",
+  "description": "Keeps docs/specs/<repo>/ in step with what shipped. Does not review code quality.",
+  "prompt": "# Documentation Author\n\nRead what was shipped (commits + current code) and update the matching spec under\n`docs/specs/<repo>/`. Never document behavior the code doesn't have.",
+  "tools": [
+    "read",
+    "grep",
+    "glob",
+    "shell",
+    "write"
+  ],
+  "allowedTools": [
+    "read",
+    "grep",
+    "glob",
+    "shell",
+    "write"
+  ],
+  "resources": [
+    "file://.kiro/steering/**/*.md"
+  ]
+}

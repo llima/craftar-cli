@@ -22,7 +22,7 @@ const IngredientBase = z.object({
   description: z.string().optional(),
   /** Which targets receive this ingredient. Default: all. */
   targets: z.array(TargetSchema).or(z.literal("*")).default("*"),
-  /** Output basename when it differs from `name` (variants: `workflow--banco` emits as `workflow`). */
+  /** Output basename when it differs from `name` (variants: `workflow--acme` emits as `workflow`). */
   as: z.string().optional(),
   /** Free-form tags used by recipes and `craftar explain`. */
   tags: z.array(z.string()).default([]),

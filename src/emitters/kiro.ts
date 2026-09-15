@@ -1,7 +1,7 @@
 import { toCrlf } from "../core/text.js";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
-import { appliesTo } from "./claude-code.js";
+import { appliesTo, outName } from "./shared.js";
 import type { Emitter, EmitContext, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 
@@ -74,6 +74,7 @@ export const kiro: Emitter = {
           break;
         case "script":
         case "hook":
+          ctx.warn(`kiro: ${m.type} ${ing.ref} has no Kiro equivalent — skipped`);
           break;
       }
     }
@@ -155,9 +156,4 @@ export function referencedRules(text: string, known: Set<string>): string[] {
     if (known.has(name) && !out.includes(name)) out.push(name);
   }
   return out;
-}
-
-
-function outName(m: { name: string; as?: string }): string {
-  return m.as ?? m.name;
 }

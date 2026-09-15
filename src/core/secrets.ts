@@ -1,0 +1,57 @@
+/**
+ * Secret detection for `craftar import` (FM-8: a token must never reach the Forge).
+ * Findings carry a kind and a location, never the matched value.
+ */
+export interface SecretFinding {
+  kind: string;
+  /** 1-based line within the scanned text. */
+  line: number;
+}
+
+const PATTERNS: { kind: string; re: RegExp }[] = [
+  { kind: "github-token", re: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b/ },
+  { kind: "github-token", re: /\bgithub_pat_[A-Za-z0-9_]{22,}\b/ },
+  { kind: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
+  { kind: "slack-token", re: /\bxox[abprs]-[A-Za-z0-9-]{10,}/ },
+  { kind: "api-key", re: /\bsk-(?:ant-)?[A-Za-z0-9_-]{32,}/ },
+  { kind: "private-key", re: /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/ },
+  { kind: "azure-devops-pat", re: /(?<![A-Za-z0-9])[a-z0-9]{52}(?![A-Za-z0-9])/ },
+];
+
+/** Scan text line by line with the known token patterns. */
+export function findSecrets(text: string): SecretFinding[] {
+  const out: SecretFinding[] = [];
+  text.split(/\r?\n/).forEach((line, i) => {
+    const hit = PATTERNS.find((p) => p.re.test(line));
+    if (hit) out.push({ kind: hit.kind, line: i + 1 });
+  });
+  return out;
+}
+
+export function shannonEntropy(s: string): number {
+  if (!s.length) return 0;
+  const counts = new Map<string, number>();
+  for (const ch of s) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  let h = 0;
+  for (const n of counts.values()) {
+    const p = n / s.length;
+    h -= p * Math.log2(p);
+  }
+  return h;
+}
+
+const ENV_REF = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/;
+const TOKEN_CHARS = /^[A-Za-z0-9+/=_-]+$/;
+
+/** Entropy rule for a single config value (MCP `env` / `args`); never used on markdown bodies. */
+export function looksLikeSecretValue(value: string): boolean {
+  if (ENV_REF.test(value)) return false;
+  return value.length >= 20 && TOKEN_CHARS.test(value) && /[A-Za-z]/.test(value) && /[0-9]/.test(value) && shannonEntropy(value) >= 4;
+}
+
+/** Kind of secret a config value looks like: a known pattern first, then the entropy rule. */
+export function secretValueKind(value: string): string | null {
+  const hit = findSecrets(value)[0];
+  if (hit) return hit.kind;
+  return looksLikeSecretValue(value) ? "high-entropy-value" : null;
+}

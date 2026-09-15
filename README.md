@@ -18,7 +18,7 @@ node bin/craftar.js --help
 npx tsx src/cli.ts --help
 ```
 
-Requires Node ≥ 20.
+Requires Node ≥ 22.
 
 ## Quick start: bring an existing workspace into a Forge
 
@@ -44,7 +44,7 @@ From then on, change a rule in `forge/ingredients/rules/<name>/rule.md`, run `cr
 
 | Command | What it does |
 |---|---|
-| `craftar import --from claude-code --forge <dir> --profile <name> [--workspace .] [--write-config]` | Reads `.claude/{rules,agents,commands,skills,scripts,hooks}`, `.mcp.json` and, when present, `.kiro/steering` (for inclusion modes and hand-written steering). Creates ingredients, recipes (`base`, one `stack-*` per scoped rule, `<profile>-steering`) and a profile. Identical ingredients already in the Forge are reused; differing ones become `<name>--<profile>` variants that emit under the original name, so the workspace still round-trips while you decide what to unify. |
+| `craftar import --from claude-code --forge <dir> --profile <name> [--workspace .] [--write-config]` | Reads `.claude/{rules,agents,commands,skills,scripts,hooks}`, `.mcp.json` and, when present, `.kiro/steering` (for inclusion modes and hand-written steering). Creates ingredients, recipes (`base`, one `stack-*` per scoped rule, `<profile>-steering`) and a profile. Identical ingredients already in the Forge are reused; differing ones become `<name>--<profile>` variants that emit under the original name, so the workspace still round-trips while you decide what to unify. Ingredients holding a secret-like value in UTF-8 text (tokens, private keys, high-entropy MCP `env`/`args` values) are rejected and listed by location — the value is never printed. UTF-16 files are not scanned yet. |
 | `craftar status` | Classifies every file the Forge would produce: `new`, `update`, `unchanged`, `adopt`, `drift`, `collision`, `orphan`, `orphan-drift`. `--json` for tooling. |
 | `craftar sync` | Writes the plan and `craftar.lock`. `--dry-run` shows without writing. `--check` exits 1 when anything is out of sync (CI). `--overwrite-drift` regenerates hand-edited files (explicit, never default). |
 | `craftar diff [path]` | Line diff between disk and what the Forge would generate. |
@@ -105,14 +105,14 @@ overrides:
   ingredients: { disable: [] }
 ```
 
-Layer precedence, weakest → strongest: recipe defaults → profile → `craftar.yaml` → `craftar.local.yaml` (personal, git-ignored). Bodies may use `{{param}}` placeholders; unknown placeholders are left untouched (Angular's `{{ 'X' | localize }}` survives).
+Layer precedence, weakest → strongest: recipe defaults → profile → `craftar.yaml` → `craftar.local.yaml` (personal, git-ignored). Bodies may use `{{param}}` placeholders; a placeholder with no value in any layer is left untouched and reported as a warning by `status` and `sync` (Angular's `{{ 'X' | localize }}` does not look like a placeholder and passes silently). Between layers, objects merge key by key while arrays and scalars from the stronger layer replace the weaker one — `targets: [kiro]` in `craftar.local.yaml` means exactly `[kiro]`. Omit a key in `craftar.local.yaml` to inherit it — an empty list there means empty.
 
 ## Targets
 
-**claude-code** — emits `.claude/rules|agents|commands|skills|scripts|hooks` and `.mcp.json` verbatim from the Forge (frontmatter kept byte-for-byte). Existing files keep their line endings; new files are LF.
+**claude-code** — emits `.claude/rules|agents|commands|skills|scripts|hooks` and `.mcp.json` verbatim from the Forge (frontmatter kept byte-for-byte). Existing files keep their line endings and BOM; new files are LF without a BOM.
 
 **kiro** — reproduces, then extends, the hand-written `sync-steering.ps1` script it replaces:
-steering = `inclusion` frontmatter + `GENERATED` banner + rule body, with `.claude/rules/` rewritten to `.kiro/steering/`, UTF-8 without BOM, CRLF. On top of what the script did, it also generates `.kiro/agents/*.json` (tools mapped to Kiro names, `resources` bound to the agent's stack rule + `repo-discovery`, or `**/*.md` for generic agents), `.kiro/steering/commands/*.md`, `.kiro/skills/*/SKILL.md` and `.kiro/settings/mcp.json`. The banner text is a parameter (`kiro.banner`) so existing workspaces can adopt without a rewrite.
+steering = `inclusion` frontmatter + `GENERATED` banner + rule body, with `.claude/rules/` rewritten to `.kiro/steering/`, UTF-8 without BOM, CRLF. On top of what the script did, it also generates `.kiro/agents/*.json` (tools mapped to Kiro names, `resources` bound to the agent's stack rule + `repo-discovery`, or `**/*.md` for generic agents), `.kiro/steering/commands/*.md`, `.kiro/skills/*/SKILL.md` and `.kiro/settings/mcp.json`. The banner text is a parameter (`kiro.banner`) so existing workspaces can adopt without a rewrite. Scripts and hooks have no Kiro equivalent: they are skipped with a warning.
 
 **agents-md** — one `AGENTS.md` with the always-on rules concatenated and the scoped rules listed, for tools that read the open standard (Codex, Cursor, Warp, Copilot, Kimi…).
 
@@ -127,6 +127,23 @@ These come straight from the workspaces that removed the earlier `nexdev` genera
 3. **Orphans are removed.** When an ingredient leaves a recipe, its generated files disappear in every target — no stale steering loading into Kiro sessions.
 4. **No hand-kept mirrors.** Kiro agents, commands and skills are generated from the same ingredients as their Claude counterparts.
 5. **Reuse, don't clobber.** Importing a second workspace into the same Forge reuses identical ingredients and creates explicit `--<profile>` variants for the ones that differ, listing them so a human unifies or parameterizes.
+
+## Tests
+
+`npm test` runs two layers that need nothing outside the repository, on any OS:
+
+- **Unit tests** build a Forge and a workspace in a temp dir (`test/helpers/forge.ts`) and cover
+  resolution, every file state, apply, each emitter, the importer, the secret guard and the CLI
+  exit codes.
+- **Golden workspaces** — `test/golden/acme-portal` and `test/golden/acme-web`, synthetic — run
+  the oracle script end to end: import → every file `adopt`, sync byte-identical (a CRLF file and a
+  BOM file included), second sync a no-op, Forge edits, drift, orphans, variants.
+  `test/golden/**` is `-text` in `.gitattributes`, so line endings survive checkout. The golden
+  `.kiro/` is a snapshot of the emitter's output: after an intended emitter change, regenerate it
+  with `npx tsx test/helpers/regen-golden.ts` and review the diff.
+
+CI runs typecheck, build and tests on Linux and Windows with Node 22 and 24. The oracle below is
+skipped there — a green CI is not evidence against a real workspace.
 
 ## Oracle
 

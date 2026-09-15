@@ -1,4 +1,4 @@
-import { appliesTo, textFile } from "./claude-code.js";
+import { appliesTo, outName, textFile } from "./shared.js";
 import type { Emitter } from "./types.js";
 
 /**
@@ -35,8 +35,3 @@ export const agentsMd: Emitter = {
     return [await textFile(ctx, "AGENTS.md", parts.join("\n"), "agents-md", "rule/*")];
   },
 };
-
-
-function outName(m: { name: string; as?: string }): string {
-  return m.as ?? m.name;
-}

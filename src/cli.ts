@@ -9,7 +9,7 @@ import { hashNormalized, toLf, stripBom } from "./core/text.js";
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.0.1");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.0.2");
 
 /* ---------------------------------------------------------------- import */
 program
@@ -24,8 +24,11 @@ program
     if (o.from !== "claude-code") fail(`unsupported source "${o.from}" (only claude-code for now)`);
     const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig });
     console.log(pc.bold(`Imported ${path.resolve(o.workspace)} → ${path.resolve(o.forge)} as profile "${r.profile}"`));
-    console.log(`  ${pc.green(String(r.created.length))} created, ${pc.cyan(String(r.reused.length))} reused, ${pc.yellow(String(r.variants.length))} variants`);
+    console.log(
+      `  ${pc.green(String(r.created.length))} created, ${pc.cyan(String(r.reused.length))} reused, ${pc.yellow(String(r.variants.length))} variants, ${pc.red(String(r.rejected.length))} rejected`,
+    );
     for (const v of r.variants) console.log(`  ${pc.yellow("variant")} ${v.name} — ${v.reason}`);
+    for (const x of r.rejected) console.log(`  ${pc.red("rejected")} ${x.name} — ${x.reason}`);
     console.log(`  recipes: ${r.recipes.join(", ")}`);
     for (const w of r.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   });

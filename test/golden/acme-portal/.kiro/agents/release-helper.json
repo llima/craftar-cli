@@ -1,0 +1,16 @@
+{
+  "name": "release-helper",
+  "description": "Drafts release notes from the merged range and delegates checks to sub-agents.",
+  "prompt": "# Release Helper\n\nCollect the merged pull requests since the last tag, group them by type, and draft the notes.",
+  "tools": [
+    "read",
+    "shell"
+  ],
+  "allowedTools": [
+    "read",
+    "shell"
+  ],
+  "resources": [
+    "file://.kiro/steering/**/*.md"
+  ]
+}

@@ -1,0 +1,2 @@
+# Golden workspaces are compared byte for byte: git must not rewrite their line endings.
+test/golden/** -text
