@@ -61,7 +61,10 @@ describe.skipIf(!FOUND)("oracle: real workspace (sync-steering.ps1 output)", () 
     expect(collisions).toEqual([]);
     const adopted = st.filter((s) => s.state === "adopt").map((s) => s.path);
     // 13 generated steering + 5 hand-written + README + 3 kiro agents + all .claude files
-    expect(adopted).toEqual(expect.arrayContaining([".kiro/steering/workflow.md", ".kiro/steering/product.md", ".kiro/agents/frontend-reviewer.json", ".claude/rules/backend-oaf.md", ".mcp.json"]));
+    expect(adopted).toEqual(expect.arrayContaining([".kiro/steering/workflow.md", ".kiro/steering/product.md", ".kiro/agents/frontend-reviewer.json", ".mcp.json"]));
+    const rules = (await listFiles(path.join(FIXTURE, ".claude/rules"))).filter((r) => r.endsWith(".md")).map((r) => `.claude/rules/${r}`);
+    expect(rules.length).toBeGreaterThan(0);
+    expect(adopted).toEqual(expect.arrayContaining(rules));
     expect(adopted.length).toBeGreaterThanOrEqual(50);
   });
 

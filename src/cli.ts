@@ -9,7 +9,7 @@ import { hashNormalized, toLf, stripBom } from "./core/text.js";
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.0.2");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.0.3");
 
 /* ---------------------------------------------------------------- import */
 program

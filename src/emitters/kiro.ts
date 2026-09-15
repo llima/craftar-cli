@@ -136,7 +136,7 @@ function mapTools(tools: string[], ctx: EmitContext): string[] {
 
 /**
  * Kiro custom agents do not auto-load steering, so each agent declares what it reads.
- * A stack reviewer (`backend-oaf-reviewer` ← scoped rule `backend-oaf`, `frontend-reviewer` ← `frontend-angular`)
+ * A stack reviewer (`backend-api-reviewer` ← scoped rule `backend-api`, `frontend-reviewer` ← `frontend-angular`)
  * gets its own rule + `repo-discovery`; any other agent gets the whole steering tree.
  */
 export function agentResources(agentName: string, text: string, known: Set<string>, scoped: string[]): string[] {
