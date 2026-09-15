@@ -56,8 +56,11 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          set -uo pipefail
-          if out=$(npm view "craftar@$VERSION" version 2>&1); then
+          set -euo pipefail
+          err=$(mktemp)
+          status=0
+          out=$(npm view "craftar@$VERSION" version 2>"$err") || status=$?
+          if [ "$status" -eq 0 ]; then
             if [ "$out" = "$VERSION" ]; then
               echo "publish=false" >> "$GITHUB_OUTPUT"
               echo "craftar@$VERSION is already published — nothing to release" >> "$GITHUB_STEP_SUMMARY"
@@ -66,12 +69,13 @@ jobs:
             echo "unexpected npm view output: $out"
             exit 1
           fi
-          if printf '%s' "$out" | grep -q 'E404'; then
+          if grep -q 'E404' "$err"; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "craftar@$VERSION is not on npm — it publishes after approval" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          echo "npm view failed: $out"
+          echo "npm view failed with exit code $status:"
+          cat "$err"
           exit 1
       - name: Tag is free
         if: steps.registry.outputs.publish == 'true'
@@ -79,9 +83,9 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          set -uo pipefail
-          git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" > /dev/null
-          code=$?
+          set -euo pipefail
+          code=0
+          git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" > /dev/null || code=$?
           if [ "$code" -eq 0 ]; then
             echo "tag v$VERSION exists but craftar@$VERSION is not on npm — resolve by hand"
             exit 1
@@ -92,7 +96,7 @@ jobs:
           fi
       - name: Install
         if: steps.registry.outputs.publish == 'true'
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Pack dry run
         if: steps.registry.outputs.publish == 'true'
         run: npm publish --dry-run
@@ -125,9 +129,31 @@ jobs:
             echo "npm $v is older than 11.5.1, which trusted publishing requires"
             exit 1
           fi
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - name: Publish
-        run: npm publish --provenance --access public
+        shell: bash
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          err=$(mktemp)
+          status=0
+          out=$(npm view "craftar@$VERSION" version 2>"$err") || status=$?
+          if [ "$status" -eq 0 ]; then
+            if [ "$out" = "$VERSION" ]; then
+              echo "craftar@$VERSION is already on npm — skipping publish"
+              exit 0
+            fi
+            echo "unexpected npm view output: $out"
+            exit 1
+          fi
+          if grep -q 'E404' "$err"; then
+            npm publish --provenance --access public
+            exit 0
+          fi
+          echo "npm view failed with exit code $status:"
+          cat "$err"
+          exit 1
       - name: Tag and release
         shell: bash
         env:
@@ -136,7 +162,11 @@ jobs:
           SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$SHA" --title "v$VERSION" --generate-notes
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "release v$VERSION already exists — skipping"
+          else
+            gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$SHA" --title "v$VERSION" --generate-notes
+          fi
           {
             echo "- npm: https://www.npmjs.com/package/craftar/v/$VERSION"
             echo "- release: https://github.com/$GITHUB_REPOSITORY/releases/tag/v$VERSION"
