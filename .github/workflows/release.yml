@@ -32,6 +32,7 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - name: Version files agree
         id: version
         shell: bash
@@ -120,6 +121,7 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - name: npm supports trusted publishing
         shell: bash
         run: |

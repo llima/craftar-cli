@@ -113,6 +113,14 @@ describe("release contract", () => {
     expect(raw).not.toMatch(/NODE_AUTH_TOKEN|secrets\./);
   });
 
+  it("turns off setup-node's package-manager cache in both jobs, so no cache reaches the OIDC job", () => {
+    for (const job of ["check", "publish"]) {
+      const setups = steps(job).filter((s) => s.uses?.startsWith("actions/setup-node@"));
+      expect(setups.length, job).toBeGreaterThan(0);
+      for (const s of setups) expect(s.with?.["package-manager-cache"], job).toBe(false);
+    }
+  });
+
   it("installs without dependency scripts, before the publish step", () => {
     for (const job of ["check", "publish"]) {
       const installs = steps(job).map((s) => s.run ?? "").filter((r) => /\bnpm ci\b/.test(r));
