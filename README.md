@@ -8,7 +8,16 @@ Craft, sync and convert AI-coding workspace harnesses — rules, agents, command
 
 You write the harness **once**, in a central repository called the **Forge**, as small reusable **ingredients** (a rule, an agent, a command, a skill, an MCP server). **Recipes** bundle ingredients (`base`, `stack-backend-api`, `stack-frontend-angular`…). A **profile** describes a client: which recipes, which targets (Claude Code, Kiro, AGENTS.md…), and the parameters that differ per client. A workspace holds a tiny `craftar.yaml` pointing at the Forge and a profile; `craftar sync` generates `.claude/`, `.kiro/`, `AGENTS.md`… from it and records what it wrote in `craftar.lock`. Generated files are never edited by hand again — you edit the Forge and sync everywhere.
 
-## Install (from source, for now)
+## Install
+
+```bash
+npx craftar --help         # run without installing
+npm install -g craftar     # or install the craftar command
+```
+
+Requires Node ≥ 22.
+
+### From source
 
 ```bash
 npm install
@@ -17,8 +26,6 @@ node bin/craftar.js --help
 # or during development
 npx tsx src/cli.ts --help
 ```
-
-Requires Node ≥ 22.
 
 ## Quick start: bring an existing workspace into a Forge
 
@@ -163,6 +170,16 @@ Copy a workspace with `.claude/` and `.kiro/` into `fixtures/` (keep `local-stac
 
 Phase 0 (this): schema, import, sync/status/diff/explain, claude-code + kiro + agents-md targets, lock, drift, orphans.
 Next: `craftar init` from a profile; profile-driven integrations (PM tool → MCP, IDP → MCP); `service` ingredients with compose fragments (`craftar services up`); `dotnet new` template registration; rulesync bridge for Codex/Kimi/Cursor specifics; remote Forge (git URL + ref); `craftar docs validate`; GitHub Action and Azure Pipelines task around `sync --check`; `craftar ui`; `craftar mcp` + Claude Code / Agent Plugin packaging.
+
+## Releases
+
+Every change reaches `main` through a pull request that bumps the version in `package.json`,
+`package-lock.json` and `src/cli.ts`. When that merge's CI run is green,
+`.github/workflows/release.yml` checks that the three files agree and that the version is not on
+npm yet, dry-runs the package, and waits for a maintainer to approve the `npm` environment. After
+approval it publishes `craftar@<version>` with npm trusted publishing and provenance — no npm token
+is stored in the repository — and creates the `v<version>` tag and a GitHub Release. A merge that
+does not change the version publishes nothing.
 
 ## License
 
