@@ -1,0 +1,175 @@
+name: release
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: check version
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.registry.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Version files agree
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+            const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+            const cli = [...fs.readFileSync("src/cli.ts", "utf8").matchAll(/\.version\("(\d+\.\d+\.\d+)"\)/g)].map((m) => m[1]);
+            const all = [pkg, lock.version, lock.packages[""].version, ...cli];
+            if (cli.length !== 1 || new Set(all).size !== 1) {
+              console.error("version files disagree: " + JSON.stringify(all));
+              process.exit(1);
+            }
+            console.log(pkg);
+          ')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Is this version already on npm?
+        id: registry
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          err=$(mktemp)
+          status=0
+          out=$(npm view "craftar@$VERSION" version 2>"$err") || status=$?
+          if [ "$status" -eq 0 ]; then
+            if [ "$out" = "$VERSION" ]; then
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              echo "craftar@$VERSION is already published — nothing to release" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "unexpected npm view output: $out"
+            exit 1
+          fi
+          if grep -q 'E404' "$err"; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "craftar@$VERSION is not on npm — it publishes after approval" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "npm view failed with exit code $status:"
+          cat "$err"
+          exit 1
+      - name: Tag is free
+        if: steps.registry.outputs.publish == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          code=0
+          git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" > /dev/null || code=$?
+          if [ "$code" -eq 0 ]; then
+            echo "tag v$VERSION exists but craftar@$VERSION is not on npm — resolve by hand"
+            exit 1
+          fi
+          if [ "$code" -ne 2 ]; then
+            echo "git ls-remote failed with exit code $code"
+            exit 1
+          fi
+      - name: Install
+        if: steps.registry.outputs.publish == 'true'
+        run: npm ci --ignore-scripts
+      - name: Pack dry run
+        if: steps.registry.outputs.publish == 'true'
+        run: npm publish --dry-run
+
+  publish:
+    name: publish to npm
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: npm supports trusted publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          v=$(npm --version)
+          if ! node -e 'const [a, b, c] = process.argv[1].split(".").map(Number); process.exit(a > 11 || (a === 11 && (b > 5 || (b === 5 && c >= 1))) ? 0 : 1)' "$v"; then
+            echo "npm $v is older than 11.5.1, which trusted publishing requires"
+            exit 1
+          fi
+      - run: npm ci --ignore-scripts
+      - name: Publish
+        shell: bash
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          err=$(mktemp)
+          status=0
+          out=$(npm view "craftar@$VERSION" version 2>"$err") || status=$?
+          if [ "$status" -eq 0 ]; then
+            if [ "$out" = "$VERSION" ]; then
+              echo "craftar@$VERSION is already on npm — skipping publish"
+              exit 0
+            fi
+            echo "unexpected npm view output: $out"
+            exit 1
+          fi
+          if grep -q 'E404' "$err"; then
+            npm publish --provenance --access public
+            exit 0
+          fi
+          echo "npm view failed with exit code $status:"
+          cat "$err"
+          exit 1
+      - name: Tag and release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "release v$VERSION already exists — skipping"
+          else
+            gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$SHA" --title "v$VERSION" --generate-notes
+          fi
+          {
+            echo "- npm: https://www.npmjs.com/package/craftar/v/$VERSION"
+            echo "- release: https://github.com/$GITHUB_REPOSITORY/releases/tag/v$VERSION"
+          } >> "$GITHUB_STEP_SUMMARY"
