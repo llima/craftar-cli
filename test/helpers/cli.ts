@@ -9,7 +9,7 @@ export function runCli(args: string[]): { code: number | null; stdout: string; s
     cwd: REPO,
     encoding: "utf8",
     env: { ...process.env, NO_COLOR: "1" },
-    timeout: 60_000,
+    timeout: 25_000,
   });
   if (r.error) throw r.error;
   return { code: r.status, stdout: r.stdout, stderr: r.stderr };
