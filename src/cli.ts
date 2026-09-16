@@ -152,7 +152,7 @@ const forge = program.command("forge").description("Operate on the Forge itself 
 forge
   .command("variants")
   .description("List ingredients that have variants, nearest first")
-  .option("--forge <dir>", "Forge directory (wins over --workspace)")
+  .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
   .action(async (o) => {
@@ -167,15 +167,15 @@ forge
       console.log(`  ${g.base.padEnd(24)} ${count.padEnd(11)} ${detail}`);
     }
     const total = groups.reduce((n, g) => n + g.variants.length, 0);
-    console.log(`\n  ${groups.length} bases with variants, ${total} variants total`);
+    console.log(`\n  ${groups.length} base${groups.length === 1 ? "" : "s"} with variants, ${total} variant${total === 1 ? "" : "s"} total`);
   });
 
 forge
   .command("diff")
   .description("Show the differences between a base ingredient and each of its variants")
-  .argument("<ref>", "base ingredient, as type/name (rule/workflow)")
+  .argument("<type/name>", "base ingredient (rule/workflow)")
   .option("--against <profile>", "only this profile's variant")
-  .option("--forge <dir>", "Forge directory (wins over --workspace)")
+  .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
   .action(async (ref: string, o) => {
@@ -190,7 +190,7 @@ forge
         profile !== null &&
         (!o.against || profile === o.against)
       );
-    });
+    }).sort((x, y) => x.ref.localeCompare(y.ref));
     if (!variants.length) fail(o.against ? `${ref} has no variant for profile ${o.against}` : `${ref} has no variants`);
 
     // The same distances `forge variants` reports, so both commands agree about a variant.
@@ -286,5 +286,5 @@ async function readText(p: string): Promise<string | null> {
 function describeDistance(d: Distance): string {
   if (d.identicalAfterNormalization) return "identical after normalization";
   if (d.metaDiffers) return "meta only";
-  return `${d.lines} lines, ${d.hunks} hunks`;
+  return `${d.lines} line${d.lines === 1 ? "" : "s"}, ${d.hunks} hunk${d.hunks === 1 ? "" : "s"}`;
 }

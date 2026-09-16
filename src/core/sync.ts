@@ -43,10 +43,10 @@ export async function loadWorkspace(root: string): Promise<Workspace> {
  * otherwise the workspace's craftar.yaml does. Both at once is ambiguous, so it fails.
  */
 export async function resolveForge(opts: { forge?: string; workspace?: string }): Promise<Forge> {
-  if (opts.forge && opts.workspace) {
+  if (opts.forge !== undefined && opts.workspace !== undefined) {
     throw new Error("pass either --forge or --workspace, not both — two sources for one Forge");
   }
-  if (opts.forge) return loadForge(path.resolve(opts.forge));
+  if (opts.forge !== undefined) return loadForge(path.resolve(opts.forge));
   const root = path.resolve(opts.workspace ?? ".");
   if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
     throw new Error(
