@@ -85,18 +85,18 @@ describe("renderDiff", () => {
 
   it("paints each kind of line, and still collapses when lines are painted", () => {
     const same = Array.from({ length: 10 }, (_, k) => `line ${k}`).join("\n");
-    const paint = { same: (s: string) => "[s]" + s, del: (s: string) => "[d]" + s, add: (s: string) => "[a]" + s };
+    const paint = { same: (s: string) => `[s]${s}[/s]`, del: (s: string) => `[d]${s}[/d]`, add: (s: string) => `[a]${s}[/a]` };
     const out = renderDiff(`x\n${same}`, `y\n${same}`, { paint });
     expect(out.split("\n")).toEqual([
-      "[d]- x",
-      "[a]+ y",
-      "[s]  line 0",
-      "[s]  line 1",
-      "[s]  line 2",
-      "[s]  … 4 unchanged lines …",
-      "[s]  line 7",
-      "[s]  line 8",
-      "[s]  line 9",
+      "[d]- x[/d]",
+      "[a]+ y[/a]",
+      "[s]  line 0[/s]",
+      "[s]  line 1[/s]",
+      "[s]  line 2[/s]",
+      "[s]  … 4 unchanged lines …[/s]",
+      "[s]  line 7[/s]",
+      "[s]  line 8[/s]",
+      "[s]  line 9[/s]",
     ]);
   });
 });
