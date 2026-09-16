@@ -5,8 +5,9 @@ import { promises as fs } from "node:fs";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { loadWorkspace, plan, readLock, status, apply, resolveForge, type FileStatus } from "./core/sync.js";
 import { renderDiff } from "./core/diff.js";
-import { listVariants, type Distance } from "./core/variants.js";
+import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
+import type { IngredientRef } from "./schema/index.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
@@ -167,6 +168,53 @@ forge
     }
     const total = groups.reduce((n, g) => n + g.variants.length, 0);
     console.log(`\n  ${groups.length} bases with variants, ${total} variants total`);
+  });
+
+forge
+  .command("diff")
+  .description("Show the differences between a base ingredient and each of its variants")
+  .argument("<ref>", "base ingredient, as type/name (rule/workflow)")
+  .option("--against <profile>", "only this profile's variant")
+  .option("--forge <dir>", "Forge directory (wins over --workspace)")
+  .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
+  .option("--json", "machine-readable output", false)
+  .action(async (ref: string, o) => {
+    const f = await resolveForge({ forge: o.forge, workspace: o.workspace });
+    const base = f.ingredients.get(ref as IngredientRef);
+    if (!base) fail(`${ref} is not an ingredient of this Forge`);
+    const variants = [...f.ingredients.values()].filter((i) => {
+      const profile = profileOf(i.meta);
+      return (
+        i.meta.type === base.meta.type &&
+        i.meta.as === base.meta.name &&
+        profile !== null &&
+        (!o.against || profile === o.against)
+      );
+    });
+    if (!variants.length) fail(o.against ? `${ref} has no variant for profile ${o.against}` : `${ref} has no variants`);
+
+    // The same distances `forge variants` reports, so both commands agree about a variant.
+    const distances = new Map((await listVariants(f)).flatMap((g) => g.variants.map((v) => [v.ref, v.distance] as const)));
+    const report: Array<{ ref: IngredientRef; profile: string; distance: Distance; diff: IngredientDiff }> = [];
+    for (const v of variants) {
+      report.push({ ref: v.ref, profile: profileOf(v.meta)!, distance: distances.get(v.ref)!, diff: await diffIngredients(base, v) });
+    }
+    if (o.json) return console.log(JSON.stringify(report, null, 2));
+
+    for (const r of report) {
+      console.log(pc.bold(`${ref}  base ↔ ${r.profile} — ${describeDistance(r.distance)}`));
+      for (const file of r.diff.files) {
+        console.log(`  ${file.file}`);
+        file.hunks.forEach((h, k) => {
+          const where = h.a.lines.length ? `lines ${h.a.start}–${h.a.start + h.a.lines.length - 1}` : `after line ${h.a.start - 1}`;
+          console.log(`    hunk ${k + 1}  [${h.kind}]  ${where}`);
+          for (const line of h.a.lines) console.log(pc.red(`      - ${line}`));
+          for (const line of h.b.lines) console.log(pc.green(`      + ${line}`));
+        });
+      }
+      for (const file of r.diff.onlyInBase) console.log(`  only in the base: ${file}`);
+      for (const file of r.diff.onlyInVariant) console.log(`  only in the variant: ${file}`);
+    }
   });
 
 program.parseAsync().catch((e) => fail(e instanceof Error ? e.message : String(e)));

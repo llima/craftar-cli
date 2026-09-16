@@ -134,4 +134,37 @@ describe("cli", () => {
     expect(none.stdout).toContain("no variants");
     expect(none.stdout).not.toContain("bases with variants");
   });
+
+  it("forge diff prints hunks per variant, exits 1 on a bad ref or profile, and writes nothing", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [
+        rule("workflow", "a\nold\n"),
+        rule("workflow--acme", "a\nnew\n", { as: "workflow" }),
+        { meta: { type: "command", name: "workflow--acme", as: "workflow" }, files: { "command.md": "unrelated\n" } },
+      ],
+    });
+    const before = await listFiles(root);
+
+    const ok = runCli(["forge", "diff", "rule/workflow", "--forge", root, "--json"]);
+    expect(ok.code).toBe(0);
+    const report = JSON.parse(ok.stdout);
+    expect(report).toHaveLength(1);
+    expect(report[0].profile).toBe("acme");
+    expect(report[0].distance).toMatchObject({ lines: 2, hunks: 1 });
+    expect(report[0].diff.files[0].hunks[0].kind).toBe("inline");
+
+    const text = runCli(["forge", "diff", "rule/workflow", "--forge", root]);
+    expect(text.code).toBe(0);
+    expect(text.stdout).toMatch(/rule\/workflow {2}base ↔ acme — 2 lines, 1 hunks?/);
+    expect(text.stdout).toContain("hunk 1  [inline]  lines 2–2");
+    expect(text.stdout).toContain("- old");
+    expect(text.stdout).toContain("+ new");
+
+    expect(runCli(["forge", "diff", "rule/nope", "--forge", root]).code).toBe(1);
+    expect(runCli(["forge", "diff", "rule/workflow", "--forge", root, "--against", "other"]).code).toBe(1);
+
+    expect(await listFiles(root)).toEqual(before);
+  });
 });
