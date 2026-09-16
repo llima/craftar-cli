@@ -4,7 +4,7 @@ import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
 import { findSecrets, secretValueKind } from "../core/secrets.js";
-import { hashNormalized, stripBom, toLf } from "../core/text.js";
+import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf } from "../core/fingerprint.js";
 import type { Ingredient, Profile, Recipe, Target } from "../schema/index.js";
 
