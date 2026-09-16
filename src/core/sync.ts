@@ -44,7 +44,7 @@ export async function loadWorkspace(root: string): Promise<Workspace> {
  */
 export async function resolveForge(opts: { forge?: string; workspace?: string }): Promise<Forge> {
   if (opts.forge && opts.workspace) {
-    throw new Error("pass either --forge or --workspace, not both — they name the same Forge twice");
+    throw new Error("pass either --forge or --workspace, not both — two sources for one Forge");
   }
   if (opts.forge) return loadForge(path.resolve(opts.forge));
   const root = path.resolve(opts.workspace ?? ".");

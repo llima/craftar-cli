@@ -93,7 +93,7 @@ describe("cli", () => {
   it("forge commands refuse --forge and --workspace together", () => {
     const r = runCli(["forge", "variants", "--forge", ".", "--workspace", "."]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain("--forge");
+    expect(r.stderr).toContain("not both");
   });
 
   it("forge commands explain how to point at a Forge when there is no craftar.yaml", async () => {
@@ -102,5 +102,36 @@ describe("cli", () => {
     const r = runCli(["forge", "variants", "--workspace", empty]);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("--forge");
+    expect(r.stderr).toContain("--workspace");
+  });
+
+  it("forge variants labels each kind of variant in text mode, and says so when there are none", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [
+        rule("edited", "a\nb\n"),
+        rule("edited--acme", "a\nB\n", { as: "edited" }),
+        rule("meta", "same\n"),
+        rule("meta--acme", "same\n", { as: "meta", targets: ["kiro"] }),
+        rule("eol", "one\ntwo\n"),
+        rule("eol--acme", "one\r\ntwo\r\n", { as: "eol" }),
+      ],
+    });
+
+    const r = runCli(["forge", "variants", "--forge", root]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/acme \(2 lines, 1 hunks?\)/);
+    expect(r.stdout).toContain("acme (meta only)");
+    expect(r.stdout).toContain("acme (identical after normalization)");
+    expect(r.stdout).toContain("3 bases with variants, 3 variants total");
+
+    const empty = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(empty, { recursive: true, force: true }));
+    await makeForge(empty, { ingredients: [rule("alone", "x\n")] });
+    const none = runCli(["forge", "variants", "--forge", empty]);
+    expect(none.code).toBe(0);
+    expect(none.stdout).toContain("no variants");
+    expect(none.stdout).not.toContain("bases with variants");
   });
 });
