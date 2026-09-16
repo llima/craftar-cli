@@ -42,7 +42,9 @@ export interface IngredientDiff {
 export function profileOf(meta: { name: string; as?: string }): string | null {
   if (!meta.as) return null;
   const prefix = `${meta.as}--`;
-  return meta.name.startsWith(prefix) ? meta.name.slice(prefix.length) : null;
+  if (!meta.name.startsWith(prefix)) return null;
+  const rest = meta.name.slice(prefix.length);
+  return rest ? rest : null;
 }
 
 async function filesOf(ing: LoadedIngredient): Promise<Map<string, string>> {
@@ -109,6 +111,9 @@ export async function listVariants(forge: Forge): Promise<VariantGroup[]> {
     groups.set(baseRef, [...(groups.get(baseRef) ?? []), entry]);
   }
   return [...groups]
-    .map(([base, variants]) => ({ base, variants: variants.sort((x, y) => nearest(x.distance, y.distance)) }))
-    .sort((x, y) => nearest(x.variants[0].distance, y.variants[0].distance));
+    .map(([base, variants]) => ({
+      base,
+      variants: variants.sort((x, y) => nearest(x.distance, y.distance) || x.ref.localeCompare(y.ref)),
+    }))
+    .sort((x, y) => nearest(x.variants[0].distance, y.variants[0].distance) || x.base.localeCompare(y.base));
 }

@@ -20,10 +20,21 @@ describe("profileOf", () => {
   it("takes the profile after the base name, even when the profile contains --", () => {
     expect(profileOf({ name: "workflow--acme--eu", as: "workflow" })).toBe("acme--eu");
     expect(profileOf({ name: "workflow" })).toBeNull();
+    expect(profileOf({ name: "workflow--", as: "workflow" })).toBeNull();
   });
 });
 
 describe("listVariants", () => {
+  it("breaks distance ties by ref, so the order does not depend on the filesystem", async () => {
+    const forge = await forgeWith([
+      rule("zeta", "a\nb\n"),
+      rule("zeta--acme", "a\nB\n", { as: "zeta" }),
+      rule("alpha", "a\nb\n"),
+      rule("alpha--acme", "a\nB\n", { as: "alpha" }),
+    ]);
+    expect((await listVariants(forge)).map((g) => g.base)).toEqual(["rule/alpha", "rule/zeta"]);
+  });
+
   it("lists only bases that have variants, sorted by ascending distance", async () => {
     const forge = await forgeWith([
       rule("alone", "only one\n"),
