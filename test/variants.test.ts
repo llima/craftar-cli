@@ -1,0 +1,80 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { promises as fs } from "node:fs";
+import { loadForge } from "../src/core/forge.js";
+import { diffIngredients, listVariants, profileOf } from "../src/core/variants.js";
+import { makeForge, rule, tmpDir, type ForgeSpec } from "./helpers/forge.js";
+
+const cleanups: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  while (cleanups.length) await cleanups.pop()!();
+});
+
+async function forgeWith(ingredients: NonNullable<ForgeSpec["ingredients"]>) {
+  const root = await tmpDir();
+  cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+  await makeForge(root, { ingredients });
+  return loadForge(root);
+}
+
+describe("profileOf", () => {
+  it("takes the profile after the base name, even when the profile contains --", () => {
+    expect(profileOf({ name: "workflow--acme--eu", as: "workflow" })).toBe("acme--eu");
+    expect(profileOf({ name: "workflow" })).toBeNull();
+  });
+});
+
+describe("listVariants", () => {
+  it("lists only bases that have variants, sorted by ascending distance", async () => {
+    const forge = await forgeWith([
+      rule("alone", "only one\n"),
+      rule("small", "a\nb\nc\n"),
+      rule("small--acme", "a\nB\nc\n", { as: "small" }),
+      rule("big", "1\n2\n3\n4\n5\n"),
+      rule("big--acme", "1\nX\nY\nZ\n5\n", { as: "big" }),
+    ]);
+    const groups = await listVariants(forge);
+    expect(groups.map((g) => g.base)).toEqual(["rule/small", "rule/big"]);
+    expect(groups[0].variants[0]).toMatchObject({ ref: "rule/small--acme", profile: "acme" });
+    expect(groups[0].variants[0].distance).toMatchObject({ lines: 2, hunks: 1 });
+  });
+
+  it("flags a body-identical variant whose metadata differs", async () => {
+    const forge = await forgeWith([rule("x", "same\n"), rule("x--acme", "same\n", { as: "x", targets: ["kiro"] })]);
+    const [group] = await listVariants(forge);
+    expect(group.variants[0].distance).toMatchObject({ lines: 0, hunks: 0, metaDiffers: true, identicalAfterNormalization: false });
+  });
+
+  it("flags a variant that differs only in line endings or a BOM", async () => {
+    const forge = await forgeWith([rule("x", "one\ntwo\n"), rule("x--acme", "﻿one\r\ntwo\r\n", { as: "x" })]);
+    const [group] = await listVariants(forge);
+    expect(group.variants[0].distance).toMatchObject({ lines: 0, hunks: 0, metaDiffers: false, identicalAfterNormalization: true });
+  });
+
+  it("does not list an ingredient that has no variant", async () => {
+    const forge = await forgeWith([rule("alone", "x\n")]);
+    expect(await listVariants(forge)).toEqual([]);
+  });
+});
+
+describe("diffIngredients", () => {
+  it("pairs files by relative path and reports one-sided files without diffing them", async () => {
+    const forge = await forgeWith([
+      { meta: { type: "skill", name: "deploy", layout: "dir" }, files: { "SKILL.md": "step one\n", "shared.md": "same\n" } },
+      {
+        meta: { type: "skill", name: "deploy--acme", as: "deploy", layout: "dir" },
+        files: { "SKILL.md": "step ONE\n", "shared.md": "same\n", "extra.md": "only here\n" },
+      },
+    ]);
+    const d = await diffIngredients(forge.ingredients.get("skill/deploy")!, forge.ingredients.get("skill/deploy--acme")!);
+    expect(d.files.map((f) => f.file)).toEqual(["SKILL.md"]);
+    expect(d.files[0].hunks[0].kind).toBe("inline");
+    expect(d.onlyInVariant).toEqual(["extra.md"]);
+    expect(d.onlyInBase).toEqual([]);
+  });
+
+  it("calls an appended paragraph a block", async () => {
+    const forge = await forgeWith([rule("x", "intro\n"), rule("x--acme", "intro\nextra paragraph\n", { as: "x" })]);
+    const d = await diffIngredients(forge.ingredients.get("rule/x")!, forge.ingredients.get("rule/x--acme")!);
+    expect(d.files[0].hunks.map((h) => h.kind)).toEqual(["block"]);
+  });
+});
