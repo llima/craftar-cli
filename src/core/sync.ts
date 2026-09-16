@@ -38,6 +38,24 @@ export async function loadWorkspace(root: string): Promise<Workspace> {
   return { root, config, forge: await loadForge(forgeRoot) };
 }
 
+/**
+ * The Forge a `forge` command operates on (spec 04 §4.3). `--forge` names it directly;
+ * otherwise the workspace's craftar.yaml does. Both at once is ambiguous, so it fails.
+ */
+export async function resolveForge(opts: { forge?: string; workspace?: string }): Promise<Forge> {
+  if (opts.forge !== undefined && opts.workspace !== undefined) {
+    throw new Error("pass either --forge or --workspace, not both — two sources for one Forge");
+  }
+  if (opts.forge !== undefined) return loadForge(path.resolve(opts.forge));
+  const root = path.resolve(opts.workspace ?? ".");
+  if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
+    throw new Error(
+      `no ${WORKSPACE_FILE} in ${root} — run this inside a workspace, pass --workspace <dir>, or point at the Forge with --forge <dir>`,
+    );
+  }
+  return (await loadWorkspace(root)).forge;
+}
+
 /** Layer merge: objects merge key by key; arrays and scalars from the stronger layer replace the weaker one. */
 function deepMerge(a: any, b: any): any {
   if (b === undefined) return a;

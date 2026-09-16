@@ -57,6 +57,8 @@ From then on, change a rule in `forge/ingredients/rules/<name>/rule.md`, run `cr
 | `craftar diff [path]` | Line diff between disk and what the Forge would generate. |
 | `craftar explain <path>` | Which ingredient, recipe chain, target and origin produced a file. |
 | `craftar ls` | Recipes and ingredients resolved for this workspace. |
+| `craftar forge variants [--forge <dir> \| --workspace <dir>] [--json]` | Lists ingredients that have variants, nearest first, with the profile each came from and its distance to the base. Read-only. |
+| `craftar forge diff <type/name> [--against <profile>] [--forge <dir> \| --workspace <dir>] [--json]` | Shows the differences between a base ingredient and each of its variants, hunk by hunk. Read-only. |
 
 All commands take `--workspace <dir>` (default: current directory).
 

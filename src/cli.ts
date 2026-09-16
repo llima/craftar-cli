@@ -3,13 +3,16 @@ import pc from "picocolors";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { importClaudeCode } from "./importers/claude-code.js";
-import { loadWorkspace, plan, readLock, status, apply, type FileStatus } from "./core/sync.js";
+import { loadWorkspace, plan, readLock, status, apply, resolveForge, type FileStatus } from "./core/sync.js";
+import { renderDiff } from "./core/diff.js";
+import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
+import type { IngredientRef } from "./schema/index.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.0.5");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.0.6");
 
 /* ---------------------------------------------------------------- import */
 program
@@ -98,7 +101,7 @@ program
       const next = s.planned ? toLf(stripBom(s.planned.content.toString("utf8"))) : "";
       console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
       console.log(pc.bold(`+++ ${s.path} (forge)`));
-      console.log(simpleDiff(disk ?? "", next));
+      console.log(renderDiff(disk ?? "", next, { paint: { same: pc.dim, del: pc.red, add: pc.green } }));
     }
     if (!shown) console.log(pc.green("no differences"));
   });
@@ -141,6 +144,77 @@ program
       }
     }
     console.log(`\n${p.files.length} files across targets ${p.resolution.targets.join(", ")}`);
+  });
+
+/* ---------------------------------------------------------------- forge */
+const forge = program.command("forge").description("Operate on the Forge itself rather than on a workspace");
+
+forge
+  .command("variants")
+  .description("List ingredients that have variants, nearest first")
+  .option("--forge <dir>", "Forge directory (instead of --workspace)")
+  .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
+  .option("--json", "machine-readable output", false)
+  .action(async (o) => {
+    const f = await resolveForge({ forge: o.forge, workspace: o.workspace });
+    const groups = await listVariants(f);
+    if (o.json) return console.log(JSON.stringify(groups, null, 2));
+    console.log(pc.bold(`craftar forge variants — forge ${f.manifest.name} @ ${f.commit?.slice(0, 8) ?? "no git"}`));
+    if (!groups.length) return console.log("  no variants");
+    for (const g of groups) {
+      const count = `${g.variants.length} variant${g.variants.length > 1 ? "s" : ""}`;
+      const detail = g.variants.map((v) => `${v.profile} (${describeDistance(v.distance)})`).join(", ");
+      console.log(`  ${g.base.padEnd(24)} ${count.padEnd(11)} ${detail}`);
+    }
+    const total = groups.reduce((n, g) => n + g.variants.length, 0);
+    console.log(`\n  ${groups.length} base${groups.length === 1 ? "" : "s"} with variants, ${total} variant${total === 1 ? "" : "s"} total`);
+  });
+
+forge
+  .command("diff")
+  .description("Show the differences between a base ingredient and each of its variants")
+  .argument("<type/name>", "base ingredient (rule/workflow)")
+  .option("--against <profile>", "only this profile's variant")
+  .option("--forge <dir>", "Forge directory (instead of --workspace)")
+  .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
+  .option("--json", "machine-readable output", false)
+  .action(async (ref: string, o) => {
+    const f = await resolveForge({ forge: o.forge, workspace: o.workspace });
+    const base = f.ingredients.get(ref as IngredientRef);
+    if (!base) fail(`${ref} is not an ingredient of this Forge`);
+    const variants = [...f.ingredients.values()].filter((i) => {
+      const profile = profileOf(i.meta);
+      return (
+        i.meta.type === base.meta.type &&
+        i.meta.as === base.meta.name &&
+        profile !== null &&
+        (!o.against || profile === o.against)
+      );
+    }).sort((x, y) => x.ref.localeCompare(y.ref));
+    if (!variants.length) fail(o.against ? `${ref} has no variant for profile ${o.against}` : `${ref} has no variants`);
+
+    // The same distances `forge variants` reports, so both commands agree about a variant.
+    const distances = new Map((await listVariants(f)).flatMap((g) => g.variants.map((v) => [v.ref, v.distance] as const)));
+    const report: Array<{ ref: IngredientRef; profile: string; distance: Distance; diff: IngredientDiff }> = [];
+    for (const v of variants) {
+      report.push({ ref: v.ref, profile: profileOf(v.meta)!, distance: distances.get(v.ref)!, diff: await diffIngredients(base, v) });
+    }
+    if (o.json) return console.log(JSON.stringify(report, null, 2));
+
+    for (const r of report) {
+      console.log(pc.bold(`${ref}  base ↔ ${r.profile} — ${describeDistance(r.distance)}`));
+      for (const file of r.diff.files) {
+        console.log(`  ${file.file}`);
+        file.hunks.forEach((h, k) => {
+          const where = h.a.lines.length ? `lines ${h.a.start}–${h.a.start + h.a.lines.length - 1}` : `after line ${h.a.start - 1}`;
+          console.log(`    hunk ${k + 1}  [${h.kind}]  ${where}`);
+          for (const line of h.a.lines) console.log(pc.red(`      - ${line}`));
+          for (const line of h.b.lines) console.log(pc.green(`      + ${line}`));
+        });
+      }
+      for (const file of r.diff.onlyInBase) console.log(`  only in the base: ${file}`);
+      for (const file of r.diff.onlyInVariant) console.log(`  only in the variant: ${file}`);
+    }
   });
 
 program.parseAsync().catch((e) => fail(e instanceof Error ? e.message : String(e)));
@@ -209,26 +283,8 @@ async function readText(p: string): Promise<string | null> {
   }
 }
 
-/** Small LCS-based line diff; good enough for markdown-sized files. */
-function simpleDiff(a: string, b: string): string {
-  const A = a.split("\n"), B = b.split("\n");
-  const n = A.length, m = B.length;
-  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-  const out: string[] = [];
-  let i = 0, j = 0;
-  while (i < n && j < m) {
-    if (A[i] === B[j]) { out.push(pc.dim("  " + A[i])); i++; j++; }
-    else if (dp[i + 1][j] >= dp[i][j + 1]) out.push(pc.red("- " + A[i++]));
-    else out.push(pc.green("+ " + B[j++]));
-  }
-  while (i < n) out.push(pc.red("- " + A[i++]));
-  while (j < m) out.push(pc.green("+ " + B[j++]));
-  // collapse long unchanged runs
-  const res: string[] = [];
-  let run: string[] = [];
-  const flush = () => { if (run.length > 6) res.push(...run.slice(0, 3), pc.dim(`  … ${run.length - 6} unchanged lines …`), ...run.slice(-3)); else res.push(...run); run = []; };
-  for (const l of out) { if (l.startsWith(pc.dim("  "))) run.push(l); else { flush(); res.push(l); } }
-  flush();
-  return res.join("\n");
+function describeDistance(d: Distance): string {
+  if (d.identicalAfterNormalization) return "identical after normalization";
+  if (d.metaDiffers) return "meta only";
+  return `${d.lines} line${d.lines === 1 ? "" : "s"}, ${d.hunks} hunk${d.hunks === 1 ? "" : "s"}`;
 }

@@ -4,7 +4,8 @@ import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
 import { findSecrets, secretValueKind } from "../core/secrets.js";
-import { hashNormalized, stripBom, toLf } from "../core/text.js";
+import { stripBom, toLf } from "../core/text.js";
+import { fingerprintDir, fingerprintOf } from "../core/fingerprint.js";
 import type { Ingredient, Profile, Recipe, Target } from "../schema/index.js";
 
 export interface ImportOptions {
@@ -420,23 +421,6 @@ async function writeIngredient(
     await fs.writeFile(abs, content);
   }
   return `${meta.type}/${name}`;
-}
-
-function fingerprintOf(meta: Ingredient, files: Record<string, string | Buffer>): string {
-  const m: Record<string, unknown> = { ...meta };
-  delete m.origin;
-  delete m.name;
-  delete m.as;
-  const parts = [JSON.stringify(m, Object.keys(m).sort())];
-  for (const k of Object.keys(files).sort()) parts.push(k, hashNormalized(files[k]));
-  return hashNormalized(parts.join("\0"));
-}
-
-async function fingerprintDir(dir: string): Promise<string> {
-  const meta = YAML.parse(await fs.readFile(path.join(dir, "ingredient.yaml"), "utf8"));
-  const files: Record<string, Buffer> = {};
-  for (const rel of await listFiles(dir)) if (rel !== "ingredient.yaml") files[rel] = await fs.readFile(path.join(dir, rel));
-  return fingerprintOf(meta, files);
 }
 
 async function writeRecipe(dir: string, recipe: Recipe, report: ImportReport): Promise<void> {
