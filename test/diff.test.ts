@@ -70,7 +70,33 @@ describe("renderDiff", () => {
   it("collapses a long unchanged run to three lines, a summary and three lines", () => {
     const same = Array.from({ length: 10 }, (_, k) => `line ${k}`).join("\n");
     const out = renderDiff(`x\n${same}`, `y\n${same}`);
-    expect(out).toContain("… 4 unchanged lines …");
-    expect(out.split("\n")).toHaveLength(9);
+    expect(out.split("\n")).toEqual([
+      "- x",
+      "+ y",
+      "  line 0",
+      "  line 1",
+      "  line 2",
+      "  … 4 unchanged lines …",
+      "  line 7",
+      "  line 8",
+      "  line 9",
+    ]);
+  });
+
+  it("paints each kind of line, and still collapses when lines are painted", () => {
+    const same = Array.from({ length: 10 }, (_, k) => `line ${k}`).join("\n");
+    const paint = { same: (s: string) => "[s]" + s, del: (s: string) => "[d]" + s, add: (s: string) => "[a]" + s };
+    const out = renderDiff(`x\n${same}`, `y\n${same}`, { paint });
+    expect(out.split("\n")).toEqual([
+      "[d]- x",
+      "[a]+ y",
+      "[s]  line 0",
+      "[s]  line 1",
+      "[s]  line 2",
+      "[s]  … 4 unchanged lines …",
+      "[s]  line 7",
+      "[s]  line 8",
+      "[s]  line 9",
+    ]);
   });
 });
