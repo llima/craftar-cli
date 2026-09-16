@@ -54,6 +54,20 @@ describe("listVariants", () => {
     const forge = await forgeWith([rule("alone", "x\n")]);
     expect(await listVariants(forge)).toEqual([]);
   });
+
+  it("counts a one-sided file toward distance and sorts variants within a group", async () => {
+    const forge = await forgeWith([
+      rule("x", "a\nb\nc\n"),
+      rule("x--acme--eu", "a\nB\nc\n", { as: "x" }),
+      { meta: { type: "rule", name: "x--acme", as: "x" }, files: { "rule.md": "a\nb\nc\n", "extra.md": "one\ntwo\nthree\n" } },
+    ]);
+    const groups = await listVariants(forge);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].variants.map((v) => [v.profile, v.distance.lines, v.distance.hunks])).toEqual([
+      ["acme--eu", 2, 1],
+      ["acme", 3, 1],
+    ]);
+  });
 });
 
 describe("diffIngredients", () => {

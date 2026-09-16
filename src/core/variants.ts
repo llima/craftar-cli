@@ -73,9 +73,18 @@ export async function diffIngredients(base: LoadedIngredient, variant: LoadedIng
 
 async function distanceOf(base: LoadedIngredient, variant: LoadedIngredient): Promise<Distance> {
   const d = await diffIngredients(base, variant);
-  const hunks = d.files.reduce((n, f) => n + f.hunks.length, 0);
-  const lines = d.files.reduce((n, f) => n + f.hunks.reduce((k, h) => k + h.a.lines.length + h.b.lines.length, 0), 0);
-  const bodyDiffers = hunks > 0 || d.onlyInBase.length > 0 || d.onlyInVariant.length > 0;
+  const baseFiles = await filesOf(base);
+  const variantFiles = await filesOf(variant);
+  // A file present on one side only counts as one hunk carrying all of its lines, so a variant
+  // that adds or removes a whole file never sorts as nearer than one with a small edit.
+  const oneSided = [
+    ...d.onlyInBase.map((f) => diffLines(baseFiles.get(f)!, "")),
+    ...d.onlyInVariant.map((f) => diffLines("", variantFiles.get(f)!)),
+  ];
+  const lineCount = (hunks: Hunk[]) => hunks.reduce((k, h) => k + h.a.lines.length + h.b.lines.length, 0);
+  const hunks = d.files.reduce((n, f) => n + f.hunks.length, 0) + d.onlyInBase.length + d.onlyInVariant.length;
+  const lines = d.files.reduce((n, f) => n + lineCount(f.hunks), 0) + oneSided.reduce((n, h) => n + lineCount(h), 0);
+  const bodyDiffers = hunks > 0;
   const sameFingerprint = (await fingerprintDir(base.dir)) === (await fingerprintDir(variant.dir));
   return {
     lines,
