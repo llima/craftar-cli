@@ -4,6 +4,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { loadWorkspace, plan, readLock, status, apply, type FileStatus } from "./core/sync.js";
+import { renderDiff } from "./core/diff.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -98,7 +99,7 @@ program
       const next = s.planned ? toLf(stripBom(s.planned.content.toString("utf8"))) : "";
       console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
       console.log(pc.bold(`+++ ${s.path} (forge)`));
-      console.log(simpleDiff(disk ?? "", next));
+      console.log(renderDiff(disk ?? "", next, { paint: { same: pc.dim, del: pc.red, add: pc.green } }));
     }
     if (!shown) console.log(pc.green("no differences"));
   });
@@ -207,28 +208,4 @@ async function readText(p: string): Promise<string | null> {
   } catch {
     return null;
   }
-}
-
-/** Small LCS-based line diff; good enough for markdown-sized files. */
-function simpleDiff(a: string, b: string): string {
-  const A = a.split("\n"), B = b.split("\n");
-  const n = A.length, m = B.length;
-  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-  const out: string[] = [];
-  let i = 0, j = 0;
-  while (i < n && j < m) {
-    if (A[i] === B[j]) { out.push(pc.dim("  " + A[i])); i++; j++; }
-    else if (dp[i + 1][j] >= dp[i][j + 1]) out.push(pc.red("- " + A[i++]));
-    else out.push(pc.green("+ " + B[j++]));
-  }
-  while (i < n) out.push(pc.red("- " + A[i++]));
-  while (j < m) out.push(pc.green("+ " + B[j++]));
-  // collapse long unchanged runs
-  const res: string[] = [];
-  let run: string[] = [];
-  const flush = () => { if (run.length > 6) res.push(...run.slice(0, 3), pc.dim(`  … ${run.length - 6} unchanged lines …`), ...run.slice(-3)); else res.push(...run); run = []; };
-  for (const l of out) { if (l.startsWith(pc.dim("  "))) run.push(l); else { flush(); res.push(l); } }
-  flush();
-  return res.join("\n");
 }

@@ -69,3 +69,44 @@ export function diffLines(a: string, b: string): Hunk[] {
   }
   return hunks;
 }
+
+export interface RenderOptions {
+  /** Wrap each line; the CLI passes picocolors. Identity by default, so the core stays colour-free. */
+  paint?: { same: (s: string) => string; del: (s: string) => string; add: (s: string) => string };
+}
+
+const plain = (s: string) => s;
+
+/** Line-marked rendering with long unchanged runs collapsed. Used by `craftar diff`. */
+export function renderDiff(a: string, b: string, options: RenderOptions = {}): string {
+  const paint = options.paint ?? { same: plain, del: plain, add: plain };
+  const lines: Array<{ context: boolean; text: string }> = [];
+  for (const op of diffOps(a, b)) {
+    if (op.kind === "same") lines.push({ context: true, text: paint.same("  " + op.line) });
+    else if (op.kind === "del") lines.push({ context: false, text: paint.del("- " + op.line) });
+    else lines.push({ context: false, text: paint.add("+ " + op.line) });
+  }
+  const res: string[] = [];
+  let run: Array<{ context: boolean; text: string }> = [];
+  const flush = () => {
+    if (run.length > 6) {
+      res.push(
+        ...run.slice(0, 3).map((r) => r.text),
+        paint.same(`  … ${run.length - 6} unchanged lines …`),
+        ...run.slice(-3).map((r) => r.text),
+      );
+    } else {
+      res.push(...run.map((r) => r.text));
+    }
+    run = [];
+  };
+  for (const line of lines) {
+    if (line.context) run.push(line);
+    else {
+      flush();
+      res.push(line.text);
+    }
+  }
+  flush();
+  return res.join("\n");
+}

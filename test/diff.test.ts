@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffLines, diffOps } from "../src/core/diff.js";
+import { diffLines, diffOps, renderDiff } from "../src/core/diff.js";
 
 describe("diffLines", () => {
   it("reports nothing for identical text", () => {
@@ -58,5 +58,19 @@ describe("diffOps", () => {
       { kind: "add", line: "new" },
       { kind: "same", line: "" },
     ]);
+  });
+});
+
+describe("renderDiff", () => {
+  it("marks each side and keeps unchanged lines as context", () => {
+    const out = renderDiff("a\nold\nc\n", "a\nnew\nc\n");
+    expect(out.split("\n")).toEqual(["  a", "- old", "+ new", "  c", "  "]);
+  });
+
+  it("collapses a long unchanged run to three lines, a summary and three lines", () => {
+    const same = Array.from({ length: 10 }, (_, k) => `line ${k}`).join("\n");
+    const out = renderDiff(`x\n${same}`, `y\n${same}`);
+    expect(out).toContain("… 4 unchanged lines …");
+    expect(out.split("\n")).toHaveLength(9);
   });
 });
