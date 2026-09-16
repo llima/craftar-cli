@@ -3,8 +3,9 @@ import pc from "picocolors";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { importClaudeCode } from "./importers/claude-code.js";
-import { loadWorkspace, plan, readLock, status, apply, type FileStatus } from "./core/sync.js";
+import { loadWorkspace, plan, readLock, status, apply, resolveForge, type FileStatus } from "./core/sync.js";
 import { renderDiff } from "./core/diff.js";
+import { listVariants, type Distance } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -144,6 +145,30 @@ program
     console.log(`\n${p.files.length} files across targets ${p.resolution.targets.join(", ")}`);
   });
 
+/* ---------------------------------------------------------------- forge */
+const forge = program.command("forge").description("Operate on the Forge itself rather than on a workspace");
+
+forge
+  .command("variants")
+  .description("List ingredients that have variants, nearest first")
+  .option("--forge <dir>", "Forge directory (wins over --workspace)")
+  .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
+  .option("--json", "machine-readable output", false)
+  .action(async (o) => {
+    const f = await resolveForge({ forge: o.forge, workspace: o.workspace });
+    const groups = await listVariants(f);
+    if (o.json) return console.log(JSON.stringify(groups, null, 2));
+    console.log(pc.bold(`craftar forge variants — forge ${f.manifest.name} @ ${f.commit?.slice(0, 8) ?? "no git"}`));
+    if (!groups.length) return console.log("  no variants");
+    for (const g of groups) {
+      const count = `${g.variants.length} variant${g.variants.length > 1 ? "s" : ""}`;
+      const detail = g.variants.map((v) => `${v.profile} (${describeDistance(v.distance)})`).join(", ");
+      console.log(`  ${g.base.padEnd(24)} ${count.padEnd(11)} ${detail}`);
+    }
+    const total = groups.reduce((n, g) => n + g.variants.length, 0);
+    console.log(`\n  ${groups.length} bases with variants, ${total} variants total`);
+  });
+
 program.parseAsync().catch((e) => fail(e instanceof Error ? e.message : String(e)));
 
 /* ---------------------------------------------------------------- helpers */
@@ -208,4 +233,10 @@ async function readText(p: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+function describeDistance(d: Distance): string {
+  if (d.identicalAfterNormalization) return "identical after normalization";
+  if (d.metaDiffers) return "meta only";
+  return `${d.lines} lines, ${d.hunks} hunks`;
 }

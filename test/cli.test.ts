@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { profile, recipe, rule, scenario, tmpDir, writeFiles } from "./helpers/forge.js";
+import { makeForge, profile, recipe, rule, scenario, tmpDir, writeFiles } from "./helpers/forge.js";
 import { runCli } from "./helpers/cli.js";
+import { listFiles } from "../src/core/forge.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -54,5 +55,52 @@ describe("cli", () => {
     expect(r.code).toBe(1);
     expect(r.stdout + r.stderr).toContain(".mcp.json is not valid JSON — fix the file and re-run import");
     expect(r.stdout + r.stderr).not.toContain("ghp_");
+  });
+
+  it("forge variants lists variants as JSON and leaves the Forge untouched", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("workflow", "a\nb\n"), rule("workflow--acme", "a\nB\n", { as: "workflow" })] });
+    const before = await listFiles(root);
+
+    const r = runCli(["forge", "variants", "--forge", root, "--json"]);
+
+    expect(r.code).toBe(0);
+    const groups = JSON.parse(r.stdout);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].base).toBe("rule/workflow");
+    expect(groups[0].variants[0].profile).toBe("acme");
+    expect(await listFiles(root)).toEqual(before);
+  });
+
+  it("forge variants finds the Forge through a workspace's craftar.yaml", async () => {
+    const s = await scenario(
+      {
+        ingredients: [rule("workflow", "a\nb\n"), rule("workflow--acme", "a\nB\n", { as: "workflow" })],
+        recipes: [recipe("base", ["rule/workflow"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+
+    const r = runCli(["forge", "variants", "--workspace", s.wsRoot, "--json"]);
+
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)[0].base).toBe("rule/workflow");
+  });
+
+  it("forge commands refuse --forge and --workspace together", () => {
+    const r = runCli(["forge", "variants", "--forge", ".", "--workspace", "."]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("--forge");
+  });
+
+  it("forge commands explain how to point at a Forge when there is no craftar.yaml", async () => {
+    const empty = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(empty, { recursive: true, force: true }));
+    const r = runCli(["forge", "variants", "--workspace", empty]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("--forge");
   });
 });
