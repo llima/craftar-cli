@@ -262,6 +262,27 @@ describe("cli", () => {
     expect(other.stderr).toContain("no variant for profile other");
   });
 
+  it("forge diff marks the side that has no final newline, in text and in JSON", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [rule("eof", "a\nb\n"), rule("eof--acme", "a\nb", { as: "eof" })],
+    });
+
+    const text = runCli(["forge", "diff", "rule/eof", "--forge", root]);
+    expect(text.code).toBe(0);
+    expect(text.stdout).toContain("\\ No newline at end of file");
+
+    const r = runCli(["forge", "diff", "rule/eof", "--forge", root, "--json"]);
+    expect(r.code).toBe(0);
+    const report = JSON.parse(r.stdout);
+    expect(Array.isArray(report)).toBe(true);
+    expect(report[0]).toMatchObject({ ref: "rule/eof--acme", profile: "acme" });
+    expect(report[0].distance).toHaveProperty("sameBodyDifferentMeta");
+    expect(report[0].distance).not.toHaveProperty("metaDiffers");
+    expect(report[0].diff.files[0].hunks[0].b.noEofNewline).toBe(true);
+  });
+
   it("forge diff does not take a name ending in -- for a variant with an empty profile", async () => {
     const root = await tmpDir("craftar-cli-forge-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));

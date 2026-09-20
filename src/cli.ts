@@ -216,7 +216,9 @@ forge
           const where = h.a.lines.length ? `lines ${h.a.start}–${h.a.start + h.a.lines.length - 1}` : `after line ${h.a.start - 1}`;
           console.log(`    hunk ${k + 1}  [${h.kind}]  ${where}`);
           for (const line of h.a.lines) console.log(pc.red(`      - ${line}`));
+          if (h.a.noEofNewline) console.log("      \\ No newline at end of file");
           for (const line of h.b.lines) console.log(pc.green(`      + ${line}`));
+          if (h.b.noEofNewline) console.log("      \\ No newline at end of file");
         });
       }
       for (const file of r.diff.onlyInBase) console.log(`  only in the base: ${file}`);
