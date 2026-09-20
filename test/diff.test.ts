@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffLines, diffOps, renderDiff } from "../src/core/diff.js";
+import { diffLines, diffOps, renderDiff, splitLines } from "../src/core/diff.js";
 
 describe("diffLines", () => {
   it("reports nothing for identical text", () => {
@@ -48,6 +48,56 @@ describe("diffLines", () => {
     expect(h).toHaveLength(1);
     expect(h[0].b.lines).toContain("a");
   });
+
+  it("splits without the phantom element the trailing newline used to leave", () => {
+    expect(splitLines("")).toEqual({ lines: [], eofNewline: false });
+    expect(splitLines("\n")).toEqual({ lines: [""], eofNewline: true });
+    expect(splitLines("a")).toEqual({ lines: ["a"], eofNewline: false });
+    expect(splitLines("a\n")).toEqual({ lines: ["a"], eofNewline: true });
+    expect(splitLines("a\n\nb")).toEqual({ lines: ["a", "", "b"], eofNewline: false });
+  });
+
+  it("shows a final-newline-only difference as the last line, not as an empty line", () => {
+    const h = diffLines("a", "a\n");
+    expect(h).toHaveLength(1);
+    expect(h[0].a).toEqual({ start: 1, lines: ["a"], noEofNewline: true });
+    expect(h[0].b).toEqual({ start: 1, lines: ["a"] });
+  });
+
+  it("marks the unterminated side on the hunk that already shows its last line", () => {
+    const h = diffLines("a\nb", "a\nc\n");
+    expect(h).toHaveLength(1);
+    expect(h[0].a).toEqual({ start: 2, lines: ["b"], noEofNewline: true });
+    expect(h[0].b).toEqual({ start: 2, lines: ["c"] });
+  });
+
+  it("extends the trailing hunk back to the unterminated last line", () => {
+    const h = diffLines("a\nb", "a\nb\nc\n");
+    expect(h).toHaveLength(1);
+    expect(h[0].a).toEqual({ start: 2, lines: ["b"], noEofNewline: true });
+    expect(h[0].b).toEqual({ start: 2, lines: ["b", "c"] });
+  });
+
+  it("marks a removed unterminated file even though the other side has no lines", () => {
+    const h = diffLines("a", "");
+    expect(h).toHaveLength(1);
+    expect(h[0].a).toEqual({ start: 1, lines: ["a"], noEofNewline: true });
+    expect(h[0].b.lines).toEqual([]);
+  });
+
+  it("marks both sides when neither ends in a newline", () => {
+    const h = diffLines("a", "b");
+    expect(h).toHaveLength(1);
+    expect(h[0].a).toEqual({ start: 1, lines: ["a"], noEofNewline: true });
+    expect(h[0].b).toEqual({ start: 1, lines: ["b"], noEofNewline: true });
+  });
+
+  it("does not mark an empty file, which has no last line", () => {
+    const h = diffLines("", "\n");
+    expect(h).toHaveLength(1);
+    expect(h[0].a.noEofNewline).toBeUndefined();
+    expect(h[0].b.noEofNewline).toBeUndefined();
+  });
 });
 
 describe("diffOps", () => {
@@ -56,7 +106,6 @@ describe("diffOps", () => {
       { kind: "same", line: "a" },
       { kind: "del", line: "old" },
       { kind: "add", line: "new" },
-      { kind: "same", line: "" },
     ]);
   });
 });
@@ -64,7 +113,7 @@ describe("diffOps", () => {
 describe("renderDiff", () => {
   it("marks each side and keeps unchanged lines as context", () => {
     const out = renderDiff("a\nold\nc\n", "a\nnew\nc\n");
-    expect(out.split("\n")).toEqual(["  a", "- old", "+ new", "  c", "  "]);
+    expect(out.split("\n")).toEqual(["  a", "- old", "+ new", "  c"]);
   });
 
   it("collapses a long unchanged run to three lines, a summary and three lines", () => {

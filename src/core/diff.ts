@@ -4,8 +4,24 @@ export type DiffOp = { kind: "same" | "del" | "add"; line: string };
 
 export interface Hunk {
   kind: "block" | "inline";
-  a: { start: number; lines: string[] };
-  b: { start: number; lines: string[] };
+  a: { start: number; lines: string[]; noEofNewline?: true };
+  b: { start: number; lines: string[]; noEofNewline?: true };
+}
+
+type Split = { lines: string[]; eofNewline: boolean };
+
+/**
+ * Lines of a normalized text, without the empty element `split("\n")` leaves behind for a
+ * trailing newline. `eofNewline` keeps the fact that element used to stand for, so a difference
+ * that is only a final newline stays visible instead of rendering as an empty line.
+ */
+export function splitLines(s: string): Split {
+  const t = toLf(stripBom(s));
+  if (t === "") return { lines: [], eofNewline: false };
+  const eofNewline = t.endsWith("\n");
+  const lines = t.split("\n");
+  if (eofNewline) lines.pop();
+  return { lines, eofNewline };
 }
 
 /**
@@ -13,8 +29,8 @@ export interface Hunk {
  * that is only line endings or a BOM produces no ops other than "same".
  */
 export function diffOps(a: string, b: string): DiffOp[] {
-  const A = toLf(stripBom(a)).split("\n");
-  const B = toLf(stripBom(b)).split("\n");
+  const A = splitLines(a).lines;
+  const B = splitLines(b).lines;
   const n = A.length;
   const m = B.length;
   const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
@@ -43,6 +59,8 @@ export function diffOps(a: string, b: string): DiffOp[] {
 
 /** The same traversal, grouped: consecutive non-"same" ops form one hunk. */
 export function diffLines(a: string, b: string): Hunk[] {
+  const A = splitLines(a);
+  const B = splitLines(b);
   const hunks: Hunk[] = [];
   let aLine = 1;
   let bLine = 1;
@@ -67,7 +85,59 @@ export function diffLines(a: string, b: string): Hunk[] {
     }
     current.kind = current.a.lines.length > 0 && current.b.lines.length > 0 ? "inline" : "block";
   }
+  markEofNewline(hunks, A, B);
   return hunks;
+}
+
+/** A side is unterminated when it has a last line and that line carries no newline. */
+const unterminated = (s: Split) => s.lines.length > 0 && !s.eofNewline;
+
+const covers = (h: Hunk, side: "a" | "b", lastLine: number) =>
+  h[side].lines.length > 0 && h[side].start + h[side].lines.length - 1 === lastLine;
+
+/**
+ * Bring the unterminated side's last line into a hunk so the difference is visible. Only called
+ * when that line is in no hunk — otherwise the marker already has somewhere to land.
+ */
+function forceTrailingHunk(hunks: Hunk[], A: Split, B: Split): void {
+  const aLast = A.lines.length;
+  const bLast = B.lines.length;
+  if (aLast === 0 || bLast === 0) return;
+  const tail = hunks[hunks.length - 1];
+  if (tail && tail.a.start === aLast + 1) {
+    tail.a.start = aLast;
+    tail.a.lines.unshift(A.lines[aLast - 1]);
+    tail.b.start -= 1;
+    tail.b.lines.unshift(B.lines[tail.b.start - 1]);
+    tail.kind = tail.a.lines.length > 0 && tail.b.lines.length > 0 ? "inline" : "block";
+    return;
+  }
+  hunks.push({
+    kind: "inline",
+    a: { start: aLast, lines: [A.lines[aLast - 1]] },
+    b: { start: bLast, lines: [B.lines[bLast - 1]] },
+  });
+}
+
+function markEofNewline(hunks: Hunk[], A: Split, B: Split): void {
+  const aOpen = unterminated(A);
+  const bOpen = unterminated(B);
+  if (!aOpen && !bOpen) return;
+  const aLast = A.lines.length;
+  const bLast = B.lines.length;
+
+  if (aOpen !== bOpen) {
+    const side = aOpen ? "a" : "b";
+    const last = aOpen ? aLast : bLast;
+    const other = aOpen ? B : A;
+    const otherTerminated = other.lines.length > 0 && other.eofNewline;
+    if (otherTerminated && !hunks.some((h) => covers(h, side, last))) forceTrailingHunk(hunks, A, B);
+  }
+
+  for (const h of hunks) {
+    if (aOpen && covers(h, "a", aLast)) h.a.noEofNewline = true;
+    if (bOpen && covers(h, "b", bLast)) h.b.noEofNewline = true;
+  }
 }
 
 export interface RenderOptions {
