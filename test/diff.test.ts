@@ -155,4 +155,18 @@ describe("renderDiff", () => {
       "[s]  line 9[/s]",
     ]);
   });
+
+  it("prints the git marker under the side that has no final newline", () => {
+    const out = renderDiff("a\nb", "a\nb\n");
+    expect(out.split("\n")).toEqual(["  a", "- b", "\\ No newline at end of file", "+ b"]);
+  });
+
+  it("prints no marker when both sides end the same way", () => {
+    expect(renderDiff("a\nb\n", "a\nc\n")).not.toContain("No newline");
+  });
+
+  it("does not transform the ops when the last op is not same", () => {
+    const out = renderDiff("a\nb", "a\n");
+    expect(out.split("\n")).toEqual(["  a", "- b", "\\ No newline at end of file"]);
+  });
 });

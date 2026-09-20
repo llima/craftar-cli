@@ -153,12 +153,34 @@ const plain = (s: string) => s;
 /** Line-marked rendering with long unchanged runs collapsed. Used by `craftar diff`. */
 export function renderDiff(a: string, b: string, options: RenderOptions = {}): string {
   const paint = options.paint ?? { same: plain, del: plain, add: plain };
+  const A = splitLines(a);
+  const B = splitLines(b);
+  const ops = diffOps(a, b);
+  // diffOps has no equivalent of diffLines' forceTrailingHunk: a same-terminated trailing op
+  // hides which side lacks the final newline. Split it into a del/add pair so the marker below
+  // has a side to attach to (see Task 2 ruling).
+  if (unterminated(A) !== unterminated(B) && ops.length && ops[ops.length - 1].kind === "same") {
+    const last = ops.pop()!;
+    ops.push({ kind: "del", line: last.line }, { kind: "add", line: last.line });
+  }
+  const lastIndexOfKinds = (kinds: Array<DiffOp["kind"]>) => {
+    for (let i = ops.length - 1; i >= 0; i--) if (kinds.includes(ops[i].kind)) return i;
+    return -1;
+  };
+  const aEnd = unterminated(A) ? lastIndexOfKinds(["same", "del"]) : -1;
+  const bEnd = unterminated(B) ? lastIndexOfKinds(["same", "add"]) : -1;
+  // aEnd === bEnd only when both sides are unterminated at the very same shared "same" op —
+  // i.e. both files end the same way. That is not a side to point at, so no marker (mirrors
+  // "prints no marker when both sides end the same way").
+  const markAt = aEnd !== bEnd ? new Set([aEnd, bEnd]) : new Set<number>();
+  const MARKER = "\\ No newline at end of file";
   const lines: Array<{ context: boolean; text: string }> = [];
-  for (const op of diffOps(a, b)) {
+  ops.forEach((op, i) => {
     if (op.kind === "same") lines.push({ context: true, text: paint.same("  " + op.line) });
     else if (op.kind === "del") lines.push({ context: false, text: paint.del("- " + op.line) });
     else lines.push({ context: false, text: paint.add("+ " + op.line) });
-  }
+    if (markAt.has(i)) lines.push({ context: false, text: MARKER });
+  });
   const res: string[] = [];
   let run: Array<{ context: boolean; text: string }> = [];
   const flush = () => {
