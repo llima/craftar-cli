@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { diffLines, type Hunk } from "./diff.js";
+import { diffLines, splitLines, type Hunk } from "./diff.js";
 import { fingerprintDir } from "./fingerprint.js";
 import { listFiles, type Forge, type LoadedIngredient } from "./forge.js";
 import type { IngredientRef } from "../schema/index.js";
@@ -77,15 +77,14 @@ async function distanceOf(base: LoadedIngredient, variant: LoadedIngredient): Pr
   const d = await diffIngredients(base, variant);
   const baseFiles = await filesOf(base);
   const variantFiles = await filesOf(variant);
-  // A file present on one side only counts as one hunk carrying all of its lines, so a variant
-  // that adds or removes a whole file never sorts as nearer than one with a small edit.
-  const oneSided = [
-    ...d.onlyInBase.map((f) => diffLines(baseFiles.get(f)!, "")),
-    ...d.onlyInVariant.map((f) => diffLines("", variantFiles.get(f)!)),
-  ];
+  // A file present on one side only counts as one hunk carrying all of its lines (spec 04,
+  // Ruling 9). Counted directly: diffing against "" mismatches a file with no final newline.
+  const oneSidedLines =
+    d.onlyInBase.reduce((n, f) => n + splitLines(baseFiles.get(f)!).lines.length, 0) +
+    d.onlyInVariant.reduce((n, f) => n + splitLines(variantFiles.get(f)!).lines.length, 0);
   const lineCount = (hunks: Hunk[]) => hunks.reduce((k, h) => k + h.a.lines.length + h.b.lines.length, 0);
   const hunks = d.files.reduce((n, f) => n + f.hunks.length, 0) + d.onlyInBase.length + d.onlyInVariant.length;
-  const lines = d.files.reduce((n, f) => n + lineCount(f.hunks), 0) + oneSided.reduce((n, h) => n + lineCount(h), 0);
+  const lines = d.files.reduce((n, f) => n + lineCount(f.hunks), 0) + oneSidedLines;
   const bodyDiffers = hunks > 0;
   const sameFingerprint = (await fingerprintDir(base.dir)) === (await fingerprintDir(variant.dir));
   return {

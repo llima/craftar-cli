@@ -49,6 +49,18 @@ describe("listVariants", () => {
     expect(groups[0].variants[0].distance).toMatchObject({ lines: 2, hunks: 1 });
   });
 
+  it("counts a one-sided file by its lines, not by diffing it against an empty string", async () => {
+    const forge = await forgeWith([
+      rule("base", "shared\n"),
+      {
+        meta: { type: "rule", name: "base--acme", as: "base" },
+        files: { "rule.md": "shared\n", "extra.md": "one\ntwo" },
+      },
+    ]);
+    const groups = await listVariants(forge);
+    expect(groups[0].variants[0].distance).toMatchObject({ lines: 2, hunks: 1 });
+  });
+
   it("flags a body-identical variant whose metadata differs", async () => {
     const forge = await forgeWith([rule("x", "same\n"), rule("x--acme", "same\n", { as: "x", targets: ["kiro"] })]);
     const [group] = await listVariants(forge);
