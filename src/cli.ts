@@ -4,7 +4,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { loadWorkspace, plan, readLock, status, apply, resolveForge, type FileStatus } from "./core/sync.js";
-import { renderDiff } from "./core/diff.js";
+import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
 import type { IngredientRef } from "./schema/index.js";
@@ -216,9 +216,9 @@ forge
           const where = h.a.lines.length ? `lines ${h.a.start}–${h.a.start + h.a.lines.length - 1}` : `after line ${h.a.start - 1}`;
           console.log(`    hunk ${k + 1}  [${h.kind}]  ${where}`);
           for (const line of h.a.lines) console.log(pc.red(`      - ${line}`));
-          if (h.a.noEofNewline) console.log("      \\ No newline at end of file");
+          if (h.a.noEofNewline) console.log(pc.red(`      ${NO_EOF_NEWLINE_MARKER}`));
           for (const line of h.b.lines) console.log(pc.green(`      + ${line}`));
-          if (h.b.noEofNewline) console.log("      \\ No newline at end of file");
+          if (h.b.noEofNewline) console.log(pc.green(`      ${NO_EOF_NEWLINE_MARKER}`));
         });
       }
       for (const file of r.diff.onlyInBase) console.log(`  only in the base: ${file}`);

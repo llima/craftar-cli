@@ -2,6 +2,10 @@ import { stripBom, toLf } from "./text.js";
 
 export type DiffOp = { kind: "same" | "del" | "add"; line: string };
 
+/** The git-style marker for a side whose text does not end in a newline. One copy: `cli.ts`
+ * prints it under `forge diff`'s hunks and must say exactly what `renderDiff` says. */
+export const NO_EOF_NEWLINE_MARKER = "\\ No newline at end of file";
+
 export interface Hunk {
   kind: "block" | "inline";
   a: { start: number; lines: string[]; noEofNewline?: true };
@@ -182,13 +186,12 @@ export function renderDiff(a: string, b: string, options: RenderOptions = {}): s
   // i.e. both files end on the same unterminated line. That is not a side to point at, so no
   // marker (mirrors "prints no marker when both sides are unterminated on the same last line").
   const markAt = aEnd !== bEnd ? new Set([aEnd, bEnd]) : new Set<number>();
-  const MARKER = "\\ No newline at end of file";
   const lines: Array<{ context: boolean; text: string }> = [];
   ops.forEach((op, i) => {
     if (op.kind === "same") lines.push({ context: true, text: paint.same("  " + op.line) });
     else if (op.kind === "del") lines.push({ context: false, text: paint.del("- " + op.line) });
     else lines.push({ context: false, text: paint.add("+ " + op.line) });
-    if (markAt.has(i)) lines.push({ context: false, text: MARKER });
+    if (markAt.has(i)) lines.push({ context: false, text: NO_EOF_NEWLINE_MARKER });
   });
   const res: string[] = [];
   let run: Array<{ context: boolean; text: string }> = [];
