@@ -179,8 +179,8 @@ export function renderDiff(a: string, b: string, options: RenderOptions = {}): s
   const aEnd = aOpen ? lastIndexOfKinds(["same", "del"]) : -1;
   const bEnd = bOpen ? lastIndexOfKinds(["same", "add"]) : -1;
   // aEnd === bEnd only when both sides are unterminated at the very same shared "same" op —
-  // i.e. both files end the same way. That is not a side to point at, so no marker (mirrors
-  // "prints no marker when both sides end the same way").
+  // i.e. both files end on the same unterminated line. That is not a side to point at, so no
+  // marker (mirrors "prints no marker when both sides are unterminated on the same last line").
   const markAt = aEnd !== bEnd ? new Set([aEnd, bEnd]) : new Set<number>();
   const MARKER = "\\ No newline at end of file";
   const lines: Array<{ context: boolean; text: string }> = [];

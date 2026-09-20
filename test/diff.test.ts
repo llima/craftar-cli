@@ -171,8 +171,10 @@ describe("renderDiff", () => {
     expect(out.split("\n")).toEqual(["  a", "- b", "+ b", "\\ No newline at end of file", "- c"]);
   });
 
-  it("prints no marker when both sides end the same way", () => {
-    expect(renderDiff("a\nb\n", "a\nc\n")).not.toContain("No newline");
+  it("prints no marker when both sides are unterminated on the same last line", () => {
+    const out = renderDiff("x\nb", "y\nb");
+    expect(out.split("\n")).toEqual(["- x", "+ y", "  b"]);
+    expect(out).not.toContain("No newline");
   });
 
   it("does not transform the ops when the last op is not same", () => {
