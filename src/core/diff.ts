@@ -156,19 +156,28 @@ export function renderDiff(a: string, b: string, options: RenderOptions = {}): s
   const A = splitLines(a);
   const B = splitLines(b);
   const ops = diffOps(a, b);
-  // diffOps has no equivalent of diffLines' forceTrailingHunk: a same-terminated trailing op
-  // hides which side lacks the final newline. Split it into a del/add pair so the marker below
-  // has a side to attach to (see Task 2 ruling).
-  if (unterminated(A) !== unterminated(B) && ops.length && ops[ops.length - 1].kind === "same") {
-    const last = ops.pop()!;
-    ops.push({ kind: "del", line: last.line }, { kind: "add", line: last.line });
-  }
   const lastIndexOfKinds = (kinds: Array<DiffOp["kind"]>) => {
     for (let i = ops.length - 1; i >= 0; i--) if (kinds.includes(ops[i].kind)) return i;
     return -1;
   };
-  const aEnd = unterminated(A) ? lastIndexOfKinds(["same", "del"]) : -1;
-  const bEnd = unterminated(B) ? lastIndexOfKinds(["same", "add"]) : -1;
+  // diffOps has no equivalent of diffLines' forceTrailingHunk: when the op the marker would
+  // attach to is a context line, the reader cannot tell which side lacks the final newline.
+  // Split that op — not merely the last one — into a del/add pair so the marker has a side to
+  // attach to (see Task 2 ruling, generalized). Only when exactly one side is unterminated:
+  // with neither side terminated there is no difference in termination to attribute, and
+  // diffLines likewise declines to flag a shared context line.
+  const aOpen = unterminated(A);
+  const bOpen = unterminated(B);
+  if (aOpen !== bOpen) {
+    const kinds: Array<DiffOp["kind"]> = aOpen ? ["same", "del"] : ["same", "add"];
+    const i = lastIndexOfKinds(kinds);
+    if (i >= 0 && ops[i].kind === "same") {
+      ops.splice(i, 1, { kind: "del", line: ops[i].line }, { kind: "add", line: ops[i].line });
+    }
+  }
+  // Recomputed after the splice, so the indices are the ones the loop below will see.
+  const aEnd = aOpen ? lastIndexOfKinds(["same", "del"]) : -1;
+  const bEnd = bOpen ? lastIndexOfKinds(["same", "add"]) : -1;
   // aEnd === bEnd only when both sides are unterminated at the very same shared "same" op —
   // i.e. both files end the same way. That is not a side to point at, so no marker (mirrors
   // "prints no marker when both sides end the same way").

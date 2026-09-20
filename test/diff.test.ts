@@ -161,6 +161,16 @@ describe("renderDiff", () => {
     expect(out.split("\n")).toEqual(["  a", "- b", "\\ No newline at end of file", "+ b"]);
   });
 
+  it("attaches the marker to a changed line when the ops continue past it", () => {
+    const out = renderDiff("a\nb", "a\nb\nc\n");
+    expect(out.split("\n")).toEqual(["  a", "- b", "\\ No newline at end of file", "+ b", "+ c"]);
+  });
+
+  it("attaches the marker to a changed line when the removal is the trailing one", () => {
+    const out = renderDiff("a\nb\nc\n", "a\nb");
+    expect(out.split("\n")).toEqual(["  a", "- b", "+ b", "\\ No newline at end of file", "- c"]);
+  });
+
   it("prints no marker when both sides end the same way", () => {
     expect(renderDiff("a\nb\n", "a\nc\n")).not.toContain("No newline");
   });
