@@ -223,4 +223,23 @@ describe("renderDiff", () => {
     const out = renderDiff("a\nb", "a\n");
     expect(out.split("\n")).toEqual(["  a", "- b", "\\ No newline at end of file"]);
   });
+
+  it("prints exactly as many markers as diffLines flags, on the same sides", () => {
+    const cases: Array<[string, string]> = [
+      ["a\nb", "a"],
+      ["a", "a\nb"],
+      ["x\nb", "y\nb"],
+      ["a", "b"],
+      ["a\nb", "a\nb\nc\n"],
+      ["a\nb\nc\n", "a\nb"],
+    ];
+    for (const [a, b] of cases) {
+      const markers = renderDiff(a, b).split("\n").filter((l) => l.includes("No newline")).length;
+      const flags = diffLines(a, b).reduce(
+        (n, h) => n + (h.a.noEofNewline ? 1 : 0) + (h.b.noEofNewline ? 1 : 0),
+        0,
+      );
+      expect({ a, b, markers }).toEqual({ a, b, markers: flags });
+    }
+  });
 });
