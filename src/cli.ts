@@ -151,7 +151,7 @@ const forge = program.command("forge").description("Operate on the Forge itself 
 
 forge
   .command("variants")
-  .description("List ingredients that have variants, nearest first")
+  .description("List ingredients that have variants, nearest first, and variants whose base is missing. Read-only")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
@@ -179,7 +179,7 @@ forge
 
 forge
   .command("diff")
-  .description("Show the differences between a base ingredient and each of its variants")
+  .description("Show the distance and the differences between a base ingredient and each of its variants. Read-only")
   .argument("<type/name>", "base ingredient (rule/workflow)")
   .option("--against <profile>", "only this profile's variant")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
