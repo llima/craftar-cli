@@ -85,6 +85,25 @@ describe("listVariants", () => {
     expect(group.variants[0].distance).toMatchObject({ lines: 0, hunks: 0, sameBodyDifferentMeta: false, identicalAfterNormalization: true });
   });
 
+  it("costs no lines for a difference that is only the final newline, and sorts it nearest", async () => {
+    const forge = await forgeWith([
+      rule("n", "a\nb\n"),
+      rule("n--acme", "a\nB\n", { as: "n" }),
+      rule("n--zeta", "a\nb", { as: "n" }),
+    ]);
+    const { groups: [group] } = await listVariants(forge);
+    // zeta differs only by the missing final newline, acme by one changed line: distance sorts
+    // zeta first even though the ref tiebreak would put acme there.
+    expect(group.variants.map((v) => v.profile)).toEqual(["zeta", "acme"]);
+    expect(group.variants[0].distance).toEqual({
+      lines: 0,
+      hunks: 1,
+      sameBodyDifferentMeta: false,
+      identicalAfterNormalization: false,
+    });
+    expect(group.variants[1].distance).toMatchObject({ lines: 2, hunks: 1 });
+  });
+
   it("does not list an ingredient that has no variant", async () => {
     const forge = await forgeWith([rule("alone", "x\n")]);
     expect((await listVariants(forge)).groups).toEqual([]);

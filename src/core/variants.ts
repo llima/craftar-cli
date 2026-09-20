@@ -94,7 +94,14 @@ async function distanceOf(base: LoadedIngredient, variant: LoadedIngredient): Pr
   const oneSidedLines =
     d.onlyInBase.reduce((n, f) => n + splitLines(baseFiles.get(f)!).lines.length, 0) +
     d.onlyInVariant.reduce((n, f) => n + splitLines(variantFiles.get(f)!).lines.length, 0);
-  const lineCount = (hunks: Hunk[]) => hunks.reduce((k, h) => k + h.a.lines.length + h.b.lines.length, 0);
+  // A hunk whose two sides carry the same lines exists only to carry the final-newline fact
+  // (diff.ts' forceTrailingHunk): no line content changed, so it costs 0 lines. It still counts
+  // as one hunk — it is a real difference — which keeps a newline-only variant nearer than any
+  // variant with a changed line instead of tied with it.
+  const sameLines = (h: Hunk) =>
+    h.a.lines.length === h.b.lines.length && h.a.lines.every((line, k) => line === h.b.lines[k]);
+  const lineCount = (hunks: Hunk[]) =>
+    hunks.reduce((k, h) => (sameLines(h) ? k : k + h.a.lines.length + h.b.lines.length), 0);
   const hunks = d.files.reduce((n, f) => n + f.hunks.length, 0) + d.onlyInBase.length + d.onlyInVariant.length;
   const lines = d.files.reduce((n, f) => n + lineCount(f.hunks), 0) + oneSidedLines;
   const bodyDiffers = hunks > 0;
