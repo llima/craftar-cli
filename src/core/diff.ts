@@ -97,16 +97,19 @@ const covers = (h: Hunk, side: "a" | "b", lastLine: number) =>
 
 /**
  * Bring the unterminated side's last line into a hunk so the difference is visible. Only called
- * when that line is in no hunk — otherwise the marker already has somewhere to land.
+ * when that line is in no hunk — otherwise the marker already has somewhere to land. `side` is
+ * the side whose last line is not yet covered by any hunk; the merge branch extends the trailing
+ * hunk backwards along that side, whichever side it is.
  */
-function forceTrailingHunk(hunks: Hunk[], A: Split, B: Split): void {
+function forceTrailingHunk(hunks: Hunk[], A: Split, B: Split, side: "a" | "b"): void {
   const aLast = A.lines.length;
   const bLast = B.lines.length;
   if (aLast === 0 || bLast === 0) return;
+  const last = side === "a" ? aLast : bLast;
   const tail = hunks[hunks.length - 1];
-  if (tail && tail.a.start === aLast + 1) {
-    tail.a.start = aLast;
-    tail.a.lines.unshift(A.lines[aLast - 1]);
+  if (tail && tail[side].start === last + 1) {
+    tail.a.start -= 1;
+    tail.a.lines.unshift(A.lines[tail.a.start - 1]);
     tail.b.start -= 1;
     tail.b.lines.unshift(B.lines[tail.b.start - 1]);
     tail.kind = tail.a.lines.length > 0 && tail.b.lines.length > 0 ? "inline" : "block";
@@ -131,7 +134,7 @@ function markEofNewline(hunks: Hunk[], A: Split, B: Split): void {
     const last = aOpen ? aLast : bLast;
     const other = aOpen ? B : A;
     const otherTerminated = other.lines.length > 0 && other.eofNewline;
-    if (otherTerminated && !hunks.some((h) => covers(h, side, last))) forceTrailingHunk(hunks, A, B);
+    if (otherTerminated && !hunks.some((h) => covers(h, side, last))) forceTrailingHunk(hunks, A, B, side);
   }
 
   for (const h of hunks) {

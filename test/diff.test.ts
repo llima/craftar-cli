@@ -78,6 +78,13 @@ describe("diffLines", () => {
     expect(h[0].b).toEqual({ start: 2, lines: ["b", "c"] });
   });
 
+  it("extends the trailing hunk when the terminated side is the one with the extra line", () => {
+    const h = diffLines("a\nb\nc\n", "a\nb");
+    expect(h).toHaveLength(1);
+    expect(h[0].a).toEqual({ start: 2, lines: ["b", "c"] });
+    expect(h[0].b).toEqual({ start: 2, lines: ["b"], noEofNewline: true });
+  });
+
   it("marks a removed unterminated file even though the other side has no lines", () => {
     const h = diffLines("a", "");
     expect(h).toHaveLength(1);
