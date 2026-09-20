@@ -57,10 +57,10 @@ From then on, change a rule in `forge/ingredients/rules/<name>/rule.md`, run `cr
 | `craftar diff [path]` | Line diff between disk and what the Forge would generate. |
 | `craftar explain <path>` | Which ingredient, recipe chain, target and origin produced a file. |
 | `craftar ls` | Recipes and ingredients resolved for this workspace. |
-| `craftar forge variants [--forge <dir> \| --workspace <dir>] [--json]` | Lists ingredients that have variants, nearest first, with the profile each came from and its distance to the base. Read-only. |
-| `craftar forge diff <type/name> [--against <profile>] [--forge <dir> \| --workspace <dir>] [--json]` | Shows the differences between a base ingredient and each of its variants, hunk by hunk. Read-only. |
+| `craftar forge variants [--forge <dir> \| --workspace <dir>] [--json]` | Lists ingredients that have variants, nearest first, with the profile each came from and its distance to the base, then any variant whose base is missing from the Forge. Read-only; exits 0 either way. `--json` prints `{groups, orphans}`. |
+| `craftar forge diff <type/name> [--against <profile>] [--forge <dir> \| --workspace <dir>] [--json]` | Shows the differences between a base ingredient and each of its variants: a header carrying the same distance `forge variants` reports, then hunk by hunk, then the files that exist on only one side. Read-only. `--json` prints an array of `{ref, profile, distance, diff}`. |
 
-All commands take `--workspace <dir>` (default: current directory).
+All commands take `--workspace <dir>` (default: current directory); the `forge` commands also take `--forge <dir>` as an alternative to it.
 
 ## Forge layout
 

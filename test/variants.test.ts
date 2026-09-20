@@ -32,7 +32,7 @@ describe("listVariants", () => {
       rule("alpha", "a\nb\n"),
       rule("alpha--acme", "a\nB\n", { as: "alpha" }),
     ]);
-    expect((await listVariants(forge)).map((g) => g.base)).toEqual(["rule/alpha", "rule/zeta"]);
+    expect((await listVariants(forge)).groups.map((g) => g.base)).toEqual(["rule/alpha", "rule/zeta"]);
   });
 
   it("lists only bases that have variants, sorted by ascending distance", async () => {
@@ -43,27 +43,70 @@ describe("listVariants", () => {
       rule("big", "1\n2\n3\n4\n5\n"),
       rule("big--acme", "1\nX\nY\nZ\n5\n", { as: "big" }),
     ]);
-    const groups = await listVariants(forge);
+    const { groups } = await listVariants(forge);
     expect(groups.map((g) => g.base)).toEqual(["rule/small", "rule/big"]);
     expect(groups[0].variants[0]).toMatchObject({ ref: "rule/small--acme", profile: "acme" });
     expect(groups[0].variants[0].distance).toMatchObject({ lines: 2, hunks: 1 });
   });
 
+  it("counts a one-sided file by its lines, not by diffing it against an empty string", async () => {
+    const forge = await forgeWith([
+      rule("base", "shared\n"),
+      {
+        meta: { type: "rule", name: "base--acme", as: "base" },
+        files: { "rule.md": "shared\n", "extra.md": "one\ntwo" },
+      },
+    ]);
+    const { groups } = await listVariants(forge);
+    expect(groups[0].variants[0].distance).toMatchObject({ lines: 2, hunks: 1 });
+  });
+
+  it("counts a one-sided file with an interior blank line, which the old path undercounted", async () => {
+    const forge = await forgeWith([
+      rule("blank", "shared\n"),
+      {
+        meta: { type: "rule", name: "blank--acme", as: "blank" },
+        files: { "rule.md": "shared\n", "extra.md": "a\n\nb" },
+      },
+    ]);
+    const { groups } = await listVariants(forge);
+    expect(groups[0].variants[0].distance).toMatchObject({ lines: 3, hunks: 1 });
+  });
+
   it("flags a body-identical variant whose metadata differs", async () => {
     const forge = await forgeWith([rule("x", "same\n"), rule("x--acme", "same\n", { as: "x", targets: ["kiro"] })]);
-    const [group] = await listVariants(forge);
-    expect(group.variants[0].distance).toMatchObject({ lines: 0, hunks: 0, metaDiffers: true, identicalAfterNormalization: false });
+    const { groups: [group] } = await listVariants(forge);
+    expect(group.variants[0].distance).toMatchObject({ lines: 0, hunks: 0, sameBodyDifferentMeta: true, identicalAfterNormalization: false });
   });
 
   it("flags a variant that differs only in line endings or a BOM", async () => {
     const forge = await forgeWith([rule("x", "one\ntwo\n"), rule("x--acme", "﻿one\r\ntwo\r\n", { as: "x" })]);
-    const [group] = await listVariants(forge);
-    expect(group.variants[0].distance).toMatchObject({ lines: 0, hunks: 0, metaDiffers: false, identicalAfterNormalization: true });
+    const { groups: [group] } = await listVariants(forge);
+    expect(group.variants[0].distance).toMatchObject({ lines: 0, hunks: 0, sameBodyDifferentMeta: false, identicalAfterNormalization: true });
+  });
+
+  it("costs no lines for a difference that is only the final newline, and sorts it nearest", async () => {
+    const forge = await forgeWith([
+      rule("n", "a\nb\n"),
+      rule("n--acme", "a\nB\n", { as: "n" }),
+      rule("n--zeta", "a\nb", { as: "n" }),
+    ]);
+    const { groups: [group] } = await listVariants(forge);
+    // zeta differs only by the missing final newline, acme by one changed line: distance sorts
+    // zeta first even though the ref tiebreak would put acme there.
+    expect(group.variants.map((v) => v.profile)).toEqual(["zeta", "acme"]);
+    expect(group.variants[0].distance).toEqual({
+      lines: 0,
+      hunks: 1,
+      sameBodyDifferentMeta: false,
+      identicalAfterNormalization: false,
+    });
+    expect(group.variants[1].distance).toMatchObject({ lines: 2, hunks: 1 });
   });
 
   it("does not list an ingredient that has no variant", async () => {
     const forge = await forgeWith([rule("alone", "x\n")]);
-    expect(await listVariants(forge)).toEqual([]);
+    expect((await listVariants(forge)).groups).toEqual([]);
   });
 
   it("counts a one-sided file toward distance and sorts variants within a group", async () => {
@@ -72,12 +115,26 @@ describe("listVariants", () => {
       rule("x--acme--eu", "a\nB\nc\n", { as: "x" }),
       { meta: { type: "rule", name: "x--acme", as: "x" }, files: { "rule.md": "a\nb\nc\n", "extra.md": "one\ntwo\nthree\n" } },
     ]);
-    const groups = await listVariants(forge);
+    const { groups } = await listVariants(forge);
     expect(groups).toHaveLength(1);
     expect(groups[0].variants.map((v) => [v.profile, v.distance.lines, v.distance.hunks])).toEqual([
       ["acme--eu", 2, 1],
       ["acme", 3, 1],
     ]);
+  });
+
+  it("reveals a variant whose base is not in the Forge instead of skipping it", async () => {
+    const forge = await forgeWith([rule("orphan--acme", "body\n", { as: "orphan" })]);
+    const { groups, orphans } = await listVariants(forge);
+    expect(groups).toEqual([]);
+    expect(orphans).toEqual([{ ref: "rule/orphan--acme", profile: "acme", missingBase: "rule/orphan" }]);
+  });
+
+  it("treats an empty profile as no variant, so it is neither a group nor an orphan", async () => {
+    const forge = await forgeWith([rule("y", "body\n"), rule("y--", "other\n", { as: "y" })]);
+    const { groups, orphans } = await listVariants(forge);
+    expect(groups).toEqual([]);
+    expect(orphans).toEqual([]);
   });
 });
 

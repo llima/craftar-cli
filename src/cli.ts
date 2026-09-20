@@ -4,7 +4,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { loadWorkspace, plan, readLock, status, apply, resolveForge, type FileStatus } from "./core/sync.js";
-import { renderDiff } from "./core/diff.js";
+import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
 import type { IngredientRef } from "./schema/index.js";
@@ -12,7 +12,7 @@ import type { IngredientRef } from "./schema/index.js";
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.0.6");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.1.0");
 
 /* ---------------------------------------------------------------- import */
 program
@@ -151,28 +151,35 @@ const forge = program.command("forge").description("Operate on the Forge itself 
 
 forge
   .command("variants")
-  .description("List ingredients that have variants, nearest first")
+  .description("List ingredients that have variants, nearest first, and variants whose base is missing. Read-only")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
   .action(async (o) => {
     const f = await resolveForge({ forge: o.forge, workspace: o.workspace });
-    const groups = await listVariants(f);
-    if (o.json) return console.log(JSON.stringify(groups, null, 2));
+    const report = await listVariants(f);
+    if (o.json) return console.log(JSON.stringify(report, null, 2));
     console.log(pc.bold(`craftar forge variants — forge ${f.manifest.name} @ ${f.commit?.slice(0, 8) ?? "no git"}`));
-    if (!groups.length) return console.log("  no variants");
+    const { groups, orphans } = report;
+    if (!groups.length && !orphans.length) return console.log("  no variants");
     for (const g of groups) {
       const count = `${g.variants.length} variant${g.variants.length > 1 ? "s" : ""}`;
       const detail = g.variants.map((v) => `${v.profile} (${describeDistance(v.distance)})`).join(", ");
       console.log(`  ${g.base.padEnd(24)} ${count.padEnd(11)} ${detail}`);
     }
+    for (const orphan of orphans) {
+      console.log(`  ${orphan.ref.padEnd(24)} variant of ${orphan.missingBase}, which is not in this Forge`);
+    }
     const total = groups.reduce((n, g) => n + g.variants.length, 0);
-    console.log(`\n  ${groups.length} base${groups.length === 1 ? "" : "s"} with variants, ${total} variant${total === 1 ? "" : "s"} total`);
+    const orphanNote = orphans.length ? `, ${orphans.length} orphan${orphans.length === 1 ? "" : "s"}` : "";
+    console.log(
+      `\n  ${groups.length} base${groups.length === 1 ? "" : "s"} with variants, ${total} variant${total === 1 ? "" : "s"} total${orphanNote}`,
+    );
   });
 
 forge
   .command("diff")
-  .description("Show the differences between a base ingredient and each of its variants")
+  .description("Show the distance and the differences between a base ingredient and each of its variants. Read-only")
   .argument("<type/name>", "base ingredient (rule/workflow)")
   .option("--against <profile>", "only this profile's variant")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
@@ -194,7 +201,7 @@ forge
     if (!variants.length) fail(o.against ? `${ref} has no variant for profile ${o.against}` : `${ref} has no variants`);
 
     // The same distances `forge variants` reports, so both commands agree about a variant.
-    const distances = new Map((await listVariants(f)).flatMap((g) => g.variants.map((v) => [v.ref, v.distance] as const)));
+    const distances = new Map((await listVariants(f)).groups.flatMap((g) => g.variants.map((v) => [v.ref, v.distance] as const)));
     const report: Array<{ ref: IngredientRef; profile: string; distance: Distance; diff: IngredientDiff }> = [];
     for (const v of variants) {
       report.push({ ref: v.ref, profile: profileOf(v.meta)!, distance: distances.get(v.ref)!, diff: await diffIngredients(base, v) });
@@ -209,7 +216,9 @@ forge
           const where = h.a.lines.length ? `lines ${h.a.start}–${h.a.start + h.a.lines.length - 1}` : `after line ${h.a.start - 1}`;
           console.log(`    hunk ${k + 1}  [${h.kind}]  ${where}`);
           for (const line of h.a.lines) console.log(pc.red(`      - ${line}`));
+          if (h.a.noEofNewline) console.log(pc.red(`      ${NO_EOF_NEWLINE_MARKER}`));
           for (const line of h.b.lines) console.log(pc.green(`      + ${line}`));
+          if (h.b.noEofNewline) console.log(pc.green(`      ${NO_EOF_NEWLINE_MARKER}`));
         });
       }
       for (const file of r.diff.onlyInBase) console.log(`  only in the base: ${file}`);
@@ -285,6 +294,6 @@ async function readText(p: string): Promise<string | null> {
 
 function describeDistance(d: Distance): string {
   if (d.identicalAfterNormalization) return "identical after normalization";
-  if (d.metaDiffers) return "meta only";
+  if (d.sameBodyDifferentMeta) return "meta only";
   return `${d.lines} line${d.lines === 1 ? "" : "s"}, ${d.hunks} hunk${d.hunks === 1 ? "" : "s"}`;
 }

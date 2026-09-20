@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { diffLines, type Hunk } from "./diff.js";
+import { diffLines, splitLines, type Hunk } from "./diff.js";
 import { fingerprintDir } from "./fingerprint.js";
 import { listFiles, type Forge, type LoadedIngredient } from "./forge.js";
 import type { IngredientRef } from "../schema/index.js";
@@ -8,7 +8,8 @@ import type { IngredientRef } from "../schema/index.js";
 export interface Distance {
   lines: number;
   hunks: number;
-  metaDiffers: boolean;
+  /** The bodies are equal and the metadata differs — not "the metadata differs". */
+  sameBodyDifferentMeta: boolean;
   identicalAfterNormalization: boolean;
 }
 
@@ -21,6 +22,17 @@ export interface VariantEntry {
 export interface VariantGroup {
   base: IngredientRef;
   variants: VariantEntry[];
+}
+
+export interface OrphanVariant {
+  ref: IngredientRef;
+  profile: string;
+  missingBase: IngredientRef;
+}
+
+export interface VariantReport {
+  groups: VariantGroup[];
+  orphans: OrphanVariant[];
 }
 
 export interface FileDiff {
@@ -77,43 +89,58 @@ async function distanceOf(base: LoadedIngredient, variant: LoadedIngredient): Pr
   const d = await diffIngredients(base, variant);
   const baseFiles = await filesOf(base);
   const variantFiles = await filesOf(variant);
-  // A file present on one side only counts as one hunk carrying all of its lines, so a variant
-  // that adds or removes a whole file never sorts as nearer than one with a small edit.
-  const oneSided = [
-    ...d.onlyInBase.map((f) => diffLines(baseFiles.get(f)!, "")),
-    ...d.onlyInVariant.map((f) => diffLines("", variantFiles.get(f)!)),
-  ];
-  const lineCount = (hunks: Hunk[]) => hunks.reduce((k, h) => k + h.a.lines.length + h.b.lines.length, 0);
+  // A file present on one side only counts as one hunk carrying all of its lines (spec 04,
+  // Ruling 9). Counted directly: diffing against "" mismatches a file with no final newline.
+  const oneSidedLines =
+    d.onlyInBase.reduce((n, f) => n + splitLines(baseFiles.get(f)!).lines.length, 0) +
+    d.onlyInVariant.reduce((n, f) => n + splitLines(variantFiles.get(f)!).lines.length, 0);
+  // A hunk whose two sides carry the same lines exists only to carry the final-newline fact
+  // (diff.ts' forceTrailingHunk): no line content changed, so it costs 0 lines. It still counts
+  // as one hunk — it is a real difference — which keeps a newline-only variant nearer than any
+  // variant with a changed line instead of tied with it.
+  const sameLines = (h: Hunk) =>
+    h.a.lines.length === h.b.lines.length && h.a.lines.every((line, k) => line === h.b.lines[k]);
+  const lineCount = (hunks: Hunk[]) =>
+    hunks.reduce((k, h) => (sameLines(h) ? k : k + h.a.lines.length + h.b.lines.length), 0);
   const hunks = d.files.reduce((n, f) => n + f.hunks.length, 0) + d.onlyInBase.length + d.onlyInVariant.length;
-  const lines = d.files.reduce((n, f) => n + lineCount(f.hunks), 0) + oneSided.reduce((n, h) => n + lineCount(h), 0);
+  const lines = d.files.reduce((n, f) => n + lineCount(f.hunks), 0) + oneSidedLines;
   const bodyDiffers = hunks > 0;
   const sameFingerprint = (await fingerprintDir(base.dir)) === (await fingerprintDir(variant.dir));
   return {
     lines,
     hunks,
-    metaDiffers: !bodyDiffers && !sameFingerprint,
+    sameBodyDifferentMeta: !bodyDiffers && !sameFingerprint,
     identicalAfterNormalization: !bodyDiffers && sameFingerprint,
   };
 }
 
 const nearest = (x: Distance, y: Distance) => x.lines - y.lines || x.hunks - y.hunks;
 
-/** Bases that have at least one variant, nearest first. */
-export async function listVariants(forge: Forge): Promise<VariantGroup[]> {
+/** Bases that have at least one variant, nearest first, plus variants whose base is missing. */
+export async function listVariants(forge: Forge): Promise<VariantReport> {
   const groups = new Map<IngredientRef, VariantEntry[]>();
+  const orphans: OrphanVariant[] = [];
   for (const ing of forge.ingredients.values()) {
     const profile = profileOf(ing.meta);
     if (!profile || !ing.meta.as) continue;
     const baseRef = `${ing.meta.type}/${ing.meta.as}` as IngredientRef;
     const base = forge.ingredients.get(baseRef);
-    if (!base) continue;
+    if (!base) {
+      // A recipe including this still emits it under the base name, so silence would hide a
+      // broken Forge — the listing is where that state becomes visible.
+      orphans.push({ ref: ing.ref, profile, missingBase: baseRef });
+      continue;
+    }
     const entry: VariantEntry = { ref: ing.ref, profile, distance: await distanceOf(base, ing) };
     groups.set(baseRef, [...(groups.get(baseRef) ?? []), entry]);
   }
-  return [...groups]
-    .map(([base, variants]) => ({
-      base,
-      variants: variants.sort((x, y) => nearest(x.distance, y.distance) || x.ref.localeCompare(y.ref)),
-    }))
-    .sort((x, y) => nearest(x.variants[0].distance, y.variants[0].distance) || x.base.localeCompare(y.base));
+  return {
+    groups: [...groups]
+      .map(([base, variants]) => ({
+        base,
+        variants: variants.sort((x, y) => nearest(x.distance, y.distance) || x.ref.localeCompare(y.ref)),
+      }))
+      .sort((x, y) => nearest(x.variants[0].distance, y.variants[0].distance) || x.base.localeCompare(y.base)),
+    orphans: orphans.sort((x, y) => x.ref.localeCompare(y.ref)),
+  };
 }
