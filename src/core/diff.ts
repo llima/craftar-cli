@@ -188,8 +188,6 @@ export function renderDiff(a: string, b: string, options: RenderOptions = {}): s
   // With both sides unterminated the shared context line genuinely did not change on either side
   // — splitting it would invent a del/add pair for an unchanged line — so the index is dropped
   // instead, which is also what diffLines does with it.
-  // This leaves aEnd and bEnd unable to coincide (one is a "del", the other an "add", and no op
-  // is both), so the former `aEnd !== bEnd` guard is now unreachable and gone.
   // Painted with the side it follows, the way `forge diff` paints its own copy in `cli.ts`.
   const attachable = (i: number) => i >= 0 && ops[i].kind !== "same";
   const markAt = new Map<number, (s: string) => string>();
