@@ -23,6 +23,17 @@ export interface VariantGroup {
   variants: VariantEntry[];
 }
 
+export interface OrphanVariant {
+  ref: IngredientRef;
+  profile: string;
+  missingBase: IngredientRef;
+}
+
+export interface VariantReport {
+  groups: VariantGroup[];
+  orphans: OrphanVariant[];
+}
+
 export interface FileDiff {
   file: string;
   hunks: Hunk[];
@@ -97,22 +108,31 @@ async function distanceOf(base: LoadedIngredient, variant: LoadedIngredient): Pr
 
 const nearest = (x: Distance, y: Distance) => x.lines - y.lines || x.hunks - y.hunks;
 
-/** Bases that have at least one variant, nearest first. */
-export async function listVariants(forge: Forge): Promise<VariantGroup[]> {
+/** Bases that have at least one variant, nearest first, plus variants whose base is missing. */
+export async function listVariants(forge: Forge): Promise<VariantReport> {
   const groups = new Map<IngredientRef, VariantEntry[]>();
+  const orphans: OrphanVariant[] = [];
   for (const ing of forge.ingredients.values()) {
     const profile = profileOf(ing.meta);
     if (!profile || !ing.meta.as) continue;
     const baseRef = `${ing.meta.type}/${ing.meta.as}` as IngredientRef;
     const base = forge.ingredients.get(baseRef);
-    if (!base) continue;
+    if (!base) {
+      // A recipe including this still emits it under the base name, so silence would hide a
+      // broken Forge — the listing is where that state becomes visible.
+      orphans.push({ ref: ing.ref, profile, missingBase: baseRef });
+      continue;
+    }
     const entry: VariantEntry = { ref: ing.ref, profile, distance: await distanceOf(base, ing) };
     groups.set(baseRef, [...(groups.get(baseRef) ?? []), entry]);
   }
-  return [...groups]
-    .map(([base, variants]) => ({
-      base,
-      variants: variants.sort((x, y) => nearest(x.distance, y.distance) || x.ref.localeCompare(y.ref)),
-    }))
-    .sort((x, y) => nearest(x.variants[0].distance, y.variants[0].distance) || x.base.localeCompare(y.base));
+  return {
+    groups: [...groups]
+      .map(([base, variants]) => ({
+        base,
+        variants: variants.sort((x, y) => nearest(x.distance, y.distance) || x.ref.localeCompare(y.ref)),
+      }))
+      .sort((x, y) => nearest(x.variants[0].distance, y.variants[0].distance) || x.base.localeCompare(y.base)),
+    orphans: orphans.sort((x, y) => x.ref.localeCompare(y.ref)),
+  };
 }

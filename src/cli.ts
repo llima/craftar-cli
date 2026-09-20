@@ -157,17 +157,24 @@ forge
   .option("--json", "machine-readable output", false)
   .action(async (o) => {
     const f = await resolveForge({ forge: o.forge, workspace: o.workspace });
-    const groups = await listVariants(f);
-    if (o.json) return console.log(JSON.stringify(groups, null, 2));
+    const report = await listVariants(f);
+    if (o.json) return console.log(JSON.stringify(report, null, 2));
     console.log(pc.bold(`craftar forge variants — forge ${f.manifest.name} @ ${f.commit?.slice(0, 8) ?? "no git"}`));
-    if (!groups.length) return console.log("  no variants");
+    const { groups, orphans } = report;
+    if (!groups.length && !orphans.length) return console.log("  no variants");
     for (const g of groups) {
       const count = `${g.variants.length} variant${g.variants.length > 1 ? "s" : ""}`;
       const detail = g.variants.map((v) => `${v.profile} (${describeDistance(v.distance)})`).join(", ");
       console.log(`  ${g.base.padEnd(24)} ${count.padEnd(11)} ${detail}`);
     }
+    for (const orphan of orphans) {
+      console.log(`  ${orphan.ref.padEnd(24)} variant of ${orphan.missingBase}, which is not in this Forge`);
+    }
     const total = groups.reduce((n, g) => n + g.variants.length, 0);
-    console.log(`\n  ${groups.length} base${groups.length === 1 ? "" : "s"} with variants, ${total} variant${total === 1 ? "" : "s"} total`);
+    const orphanNote = orphans.length ? `, ${orphans.length} orphan${orphans.length === 1 ? "" : "s"}` : "";
+    console.log(
+      `\n  ${groups.length} base${groups.length === 1 ? "" : "s"} with variants, ${total} variant${total === 1 ? "" : "s"} total${orphanNote}`,
+    );
   });
 
 forge
@@ -194,7 +201,7 @@ forge
     if (!variants.length) fail(o.against ? `${ref} has no variant for profile ${o.against}` : `${ref} has no variants`);
 
     // The same distances `forge variants` reports, so both commands agree about a variant.
-    const distances = new Map((await listVariants(f)).flatMap((g) => g.variants.map((v) => [v.ref, v.distance] as const)));
+    const distances = new Map((await listVariants(f)).groups.flatMap((g) => g.variants.map((v) => [v.ref, v.distance] as const)));
     const report: Array<{ ref: IngredientRef; profile: string; distance: Distance; diff: IngredientDiff }> = [];
     for (const v of variants) {
       report.push({ ref: v.ref, profile: profileOf(v.meta)!, distance: distances.get(v.ref)!, diff: await diffIngredients(base, v) });

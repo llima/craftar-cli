@@ -72,7 +72,7 @@ describe("cli", () => {
     const r = runCli(["forge", "variants", "--forge", root, "--json"]);
 
     expect(r.code).toBe(0);
-    const groups = JSON.parse(r.stdout);
+    const { groups } = JSON.parse(r.stdout);
     expect(groups).toHaveLength(1);
     expect(groups[0].base).toBe("rule/workflow");
     expect(groups[0].variants[0].profile).toBe("acme");
@@ -83,6 +83,24 @@ describe("cli", () => {
     expect(text.stdout).toContain("acme (2 lines, 1 hunk)");
 
     expect(await snapshot(root)).toEqual(before);
+  });
+
+  it("forge variants lists an orphan variant in both modes and still exits 0", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("orphan--acme", "body\n", { as: "orphan" })] });
+
+    const r = runCli(["forge", "variants", "--forge", root, "--json"]);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({
+      groups: [],
+      orphans: [{ ref: "rule/orphan--acme", profile: "acme", missingBase: "rule/orphan" }],
+    });
+
+    const text = runCli(["forge", "variants", "--forge", root]);
+    expect(text.code).toBe(0);
+    expect(text.stdout).toContain("variant of rule/orphan, which is not in this Forge");
+    expect(text.stdout).toContain("1 orphan");
   });
 
   it("forge variants finds the Forge through a workspace's craftar.yaml", async () => {
@@ -99,7 +117,7 @@ describe("cli", () => {
     const r = runCli(["forge", "variants", "--workspace", s.wsRoot, "--json"]);
 
     expect(r.code).toBe(0);
-    expect(JSON.parse(r.stdout)[0].base).toBe("rule/workflow");
+    expect(JSON.parse(r.stdout).groups[0].base).toBe("rule/workflow");
   });
 
   it("forge variants finds the Forge from the craftar.yaml in the current directory when no flag is given", async () => {
@@ -114,7 +132,7 @@ describe("cli", () => {
     cleanups.push(s.cleanup);
     const r = runCli(["forge", "variants", "--json"], { cwd: s.wsRoot });
     expect(r.code).toBe(0);
-    expect(JSON.parse(r.stdout)[0].base).toBe("rule/workflow");
+    expect(JSON.parse(r.stdout).groups[0].base).toBe("rule/workflow");
   });
 
   it("forge commands refuse --forge and --workspace together", () => {
