@@ -182,10 +182,16 @@ export function renderDiff(a: string, b: string, options: RenderOptions = {}): s
   // Recomputed after the splice, so the indices are the ones the loop below will see.
   const aEnd = aOpen ? lastIndexOfKinds(["same", "del"]) : -1;
   const bEnd = bOpen ? lastIndexOfKinds(["same", "add"]) : -1;
-  // aEnd === bEnd only when both sides are unterminated at the very same shared "same" op —
-  // i.e. both files end on the same unterminated line. That is not a side to point at, so no
-  // marker (mirrors "prints no marker when both sides are unterminated on the same last line").
-  const markAt = aEnd !== bEnd ? new Set([aEnd, bEnd]) : new Set<number>();
+  // The marker attaches only to a "del" or an "add", never to a context line: on a "same" op the
+  // reader cannot tell which side lacks the final newline. With exactly one side unterminated the
+  // splice above has already manufactured a del/add pair, so the index is never "same" there.
+  // With both sides unterminated the shared context line genuinely did not change on either side
+  // — splitting it would invent a del/add pair for an unchanged line — so the index is dropped
+  // instead, which is also what diffLines does with it.
+  // This leaves aEnd and bEnd unable to coincide (one is a "del", the other an "add", and no op
+  // is both), so the former `aEnd !== bEnd` guard is now unreachable and gone.
+  const attachable = (i: number) => i >= 0 && ops[i].kind !== "same";
+  const markAt = new Set([aEnd, bEnd].filter(attachable));
   const lines: Array<{ context: boolean; text: string }> = [];
   ops.forEach((op, i) => {
     if (op.kind === "same") lines.push({ context: true, text: paint.same("  " + op.line) });

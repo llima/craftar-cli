@@ -177,6 +177,29 @@ describe("renderDiff", () => {
     expect(out).not.toContain("No newline");
   });
 
+  it("keeps the marker off the context line when both sides end on different last lines", () => {
+    const out = renderDiff("a\nb", "a");
+    expect(out.split("\n")).toEqual(["  a", "- b", "\\ No newline at end of file"]);
+    // The other engine flags side a only — the two must agree about the same input.
+    expect(diffLines("a\nb", "a")[0].b.noEofNewline).toBeUndefined();
+  });
+
+  it("keeps the marker off the context line in the mirror case too", () => {
+    const out = renderDiff("a", "a\nb");
+    expect(out.split("\n")).toEqual(["  a", "+ b", "\\ No newline at end of file"]);
+    expect(diffLines("a", "a\nb")[0].a.noEofNewline).toBeUndefined();
+  });
+
+  it("still prints both markers when each side's last line changed", () => {
+    const out = renderDiff("a", "b");
+    expect(out.split("\n")).toEqual([
+      "- a",
+      "\\ No newline at end of file",
+      "+ b",
+      "\\ No newline at end of file",
+    ]);
+  });
+
   it("does not transform the ops when the last op is not same", () => {
     const out = renderDiff("a\nb", "a\n");
     expect(out.split("\n")).toEqual(["  a", "- b", "\\ No newline at end of file"]);
