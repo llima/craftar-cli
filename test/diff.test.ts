@@ -200,6 +200,25 @@ describe("renderDiff", () => {
     ]);
   });
 
+  it("paints each marker with the painter of the side it follows", () => {
+    const paint = {
+      same: (s: string) => `[s]${s}[/s]`,
+      del: (s: string) => `[d]${s}[/d]`,
+      add: (s: string) => `[a]${s}[/a]`,
+    };
+    expect(renderDiff("a", "b", { paint }).split("\n")).toEqual([
+      "[d]- a[/d]",
+      "[d]\\ No newline at end of file[/d]",
+      "[a]+ b[/a]",
+      "[a]\\ No newline at end of file[/a]",
+    ]);
+    expect(renderDiff("a", "a\nb", { paint }).split("\n")).toEqual([
+      "[s]  a[/s]",
+      "[a]+ b[/a]",
+      "[a]\\ No newline at end of file[/a]",
+    ]);
+  });
+
   it("does not transform the ops when the last op is not same", () => {
     const out = renderDiff("a\nb", "a\n");
     expect(out.split("\n")).toEqual(["  a", "- b", "\\ No newline at end of file"]);

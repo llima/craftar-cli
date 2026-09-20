@@ -190,14 +190,19 @@ export function renderDiff(a: string, b: string, options: RenderOptions = {}): s
   // instead, which is also what diffLines does with it.
   // This leaves aEnd and bEnd unable to coincide (one is a "del", the other an "add", and no op
   // is both), so the former `aEnd !== bEnd` guard is now unreachable and gone.
+  // Painted with the side it follows, the way `forge diff` paints its own copy in `cli.ts`.
   const attachable = (i: number) => i >= 0 && ops[i].kind !== "same";
-  const markAt = new Set([aEnd, bEnd].filter(attachable));
+  const markAt = new Map<number, (s: string) => string>();
+  if (attachable(aEnd)) markAt.set(aEnd, paint.del);
+  if (attachable(bEnd)) markAt.set(bEnd, paint.add);
   const lines: Array<{ context: boolean; text: string }> = [];
   ops.forEach((op, i) => {
     if (op.kind === "same") lines.push({ context: true, text: paint.same("  " + op.line) });
     else if (op.kind === "del") lines.push({ context: false, text: paint.del("- " + op.line) });
     else lines.push({ context: false, text: paint.add("+ " + op.line) });
-    if (markAt.has(i)) lines.push({ context: false, text: NO_EOF_NEWLINE_MARKER });
+    // context: false, so the collapsing run below never swallows the marker.
+    const mark = markAt.get(i);
+    if (mark) lines.push({ context: false, text: mark(NO_EOF_NEWLINE_MARKER) });
   });
   const res: string[] = [];
   let run: Array<{ context: boolean; text: string }> = [];
