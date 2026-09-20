@@ -8,7 +8,8 @@ import type { IngredientRef } from "../schema/index.js";
 export interface Distance {
   lines: number;
   hunks: number;
-  metaDiffers: boolean;
+  /** The bodies are equal and the metadata differs — not "the metadata differs". */
+  sameBodyDifferentMeta: boolean;
   identicalAfterNormalization: boolean;
 }
 
@@ -101,7 +102,7 @@ async function distanceOf(base: LoadedIngredient, variant: LoadedIngredient): Pr
   return {
     lines,
     hunks,
-    metaDiffers: !bodyDiffers && !sameFingerprint,
+    sameBodyDifferentMeta: !bodyDiffers && !sameFingerprint,
     identicalAfterNormalization: !bodyDiffers && sameFingerprint,
   };
 }

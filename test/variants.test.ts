@@ -76,13 +76,13 @@ describe("listVariants", () => {
   it("flags a body-identical variant whose metadata differs", async () => {
     const forge = await forgeWith([rule("x", "same\n"), rule("x--acme", "same\n", { as: "x", targets: ["kiro"] })]);
     const { groups: [group] } = await listVariants(forge);
-    expect(group.variants[0].distance).toMatchObject({ lines: 0, hunks: 0, metaDiffers: true, identicalAfterNormalization: false });
+    expect(group.variants[0].distance).toMatchObject({ lines: 0, hunks: 0, sameBodyDifferentMeta: true, identicalAfterNormalization: false });
   });
 
   it("flags a variant that differs only in line endings or a BOM", async () => {
     const forge = await forgeWith([rule("x", "one\ntwo\n"), rule("x--acme", "﻿one\r\ntwo\r\n", { as: "x" })]);
     const { groups: [group] } = await listVariants(forge);
-    expect(group.variants[0].distance).toMatchObject({ lines: 0, hunks: 0, metaDiffers: false, identicalAfterNormalization: true });
+    expect(group.variants[0].distance).toMatchObject({ lines: 0, hunks: 0, sameBodyDifferentMeta: false, identicalAfterNormalization: true });
   });
 
   it("does not list an ingredient that has no variant", async () => {

@@ -292,6 +292,6 @@ async function readText(p: string): Promise<string | null> {
 
 function describeDistance(d: Distance): string {
   if (d.identicalAfterNormalization) return "identical after normalization";
-  if (d.metaDiffers) return "meta only";
+  if (d.sameBodyDifferentMeta) return "meta only";
   return `${d.lines} line${d.lines === 1 ? "" : "s"}, ${d.hunks} hunk${d.hunks === 1 ? "" : "s"}`;
 }
