@@ -157,6 +157,13 @@ export async function applyPlan(
       continue;
     }
 
+    // A plan entry with neither `hunks` nor `onlyIn` describes nothing to apply — the schema
+    // leaves both optional (a hand-edited plan can drop either), so the engine is where this
+    // contradiction is caught, per spec §6: "it throws on contradiction."
+    if (!pf.onlyIn) {
+      throw new Error(`unify plan: "${pf.file}" has neither hunk decisions nor a side ("onlyIn") — the plan no longer matches this diff.`);
+    }
+
     // One-sided file: present only in the base or only in the variant.
     const take = pf.take ?? "keep";
     if (take === "keep") {

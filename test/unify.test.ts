@@ -273,6 +273,15 @@ describe("applyPlan — paired files", () => {
     expect(r.resolved).toBe(false);
   });
 
+  // Earlier review: `PlanFileSchema` leaves both `hunks` and `onlyIn` optional, so a hand-edited
+  // plan can drop both. Spec §6 puts the contradiction check on the engine, not on zod — it must
+  // throw rather than silently doing nothing (no write, no remove, not even counted unresolved).
+  it("throws on a plan entry with neither hunk decisions nor a side", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "a\nold\nc\n" }, { "rule.md": "a\nnew\nc\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files.push({ file: "mystery.md", take: "variant" });
+    await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow(/mystery\.md/);
+  });
 });
 
 describe("applyPlan — one-sided files", () => {
