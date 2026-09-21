@@ -1,7 +1,7 @@
 import { toCrlf } from "../core/text.js";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
-import { appliesTo, outName } from "./shared.js";
+import { appliesTo, mcpServers, outName } from "./shared.js";
 import type { Emitter, EmitContext, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 
@@ -79,10 +79,8 @@ export const kiro: Emitter = {
       }
     }
 
-    const mcp = ctx.resolution.ingredients.filter((i) => i.meta.type === "mcp" && appliesTo(i.meta.targets, t));
-    if (mcp.length) {
-      const servers: Record<string, unknown> = {};
-      for (const i of mcp) if (i.meta.type === "mcp") servers[i.meta.name] = i.meta.server;
+    const servers = mcpServers(ctx, t, ".kiro/settings/mcp.json");
+    if (Object.keys(servers).length) {
       out.push(crlf(".kiro/settings/mcp.json", JSON.stringify({ mcpServers: servers }, null, 2) + "\n", "mcp/*"));
     }
     return out;

@@ -52,6 +52,20 @@ describe("claude-code emitter", () => {
     expect(text(p, ".mcp.json")).toBe(JSON.stringify({ mcpServers: { pw: { command: "npx", args: ["-y", "pw"] }, docs: { url: "https://mcp.example.com/sse" } } }, null, 2) + "\n");
   });
 
+  it("emits an MCP variant under its original server name", async () => {
+    const p = await planFor([{ meta: { type: "mcp", name: "srv--acme", as: "srv", server: { command: "npx", args: ["acme-server"] } } }]);
+    expect(text(p, ".mcp.json")).toBe(JSON.stringify({ mcpServers: { srv: { command: "npx", args: ["acme-server"] } } }, null, 2) + "\n");
+  });
+
+  it("warns when two MCP ingredients emit the same server name, instead of dropping one silently", async () => {
+    const p = await planFor([
+      { meta: { type: "mcp", name: "srv", server: { command: "npx", args: ["public-server"] } } },
+      { meta: { type: "mcp", name: "srv--acme", as: "srv", server: { command: "npx", args: ["acme-server"] } } },
+    ]);
+    expect(p.warnings).toContain('claude-code: two ingredients write the MCP server "srv" into .mcp.json: mcp/srv and mcp/srv--acme (last wins)');
+    expect(text(p, ".mcp.json")).toBe(JSON.stringify({ mcpServers: { srv: { command: "npx", args: ["acme-server"] } } }, null, 2) + "\n");
+  });
+
   it("keeps the BOM of the file it replaces", async () => {
     const p = await planFor([rule("a", "# A\n")], { ".claude/rules/a.md": "\uFEFF# old\n" });
     const f = p.files.find((x) => x.path === ".claude/rules/a.md")!;

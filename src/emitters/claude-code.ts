@@ -1,6 +1,6 @@
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
-import { appliesTo, outName, textFile } from "./shared.js";
+import { appliesTo, mcpServers, outName, textFile } from "./shared.js";
 import type { Emitter, EmitContext, PlannedFile } from "./types.js";
 
 /**
@@ -11,7 +11,6 @@ export const claudeCode: Emitter = {
   target: "claude-code",
   async emit(ctx) {
     const out: PlannedFile[] = [];
-    const mcp: Record<string, unknown> = {};
     const t = "claude-code";
 
     for (const ing of ctx.resolution.ingredients) {
@@ -56,13 +55,13 @@ export const claudeCode: Emitter = {
           for (const f of m.files) out.push(await anyFile(ctx, ing, f, `.claude/hooks/${f}`, t));
           break;
         case "mcp":
-          mcp[m.name] = m.server;
-          break;
+          break; // collected into .mcp.json below
         case "steering":
           break; // Kiro-only by nature
       }
     }
 
+    const mcp = mcpServers(ctx, t, ".mcp.json");
     if (Object.keys(mcp).length) {
       const json = JSON.stringify({ mcpServers: mcp }, null, 2) + "\n";
       out.push(await textFile(ctx, ".mcp.json", json, t, "mcp/*"));
