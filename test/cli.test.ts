@@ -771,8 +771,6 @@ describe("cli", () => {
     expect(await fs.readFile(path.join(root, "recipes/base.yaml"), "utf8")).toBe(before);
   });
 
-  // Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
-
   // Ruling 30: this test used to check Ruling 25's hint. That hint is gone, so its old assertion
   // (`not.toContain("sits inside the Forge")`) could never fail; it now checks the refusal and the
   // outside plan's content instead.
@@ -894,8 +892,6 @@ describe("cli — forge unify final review", () => {
   });
 });
 
-// Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
-
 function gitStatus(dir: string): string {
   return execFileSync("git", ["-C", dir, "status", "--porcelain"], { encoding: "utf8" });
 }
@@ -915,8 +911,6 @@ describe("cli — forge unify cascade refusals write nothing (Ruling 33)", () =>
     expect(gitStatus(root)).toBe("");
     expect(await fs.readFile(path.join(root, "ingredients/rules/wf/rule.md"), "utf8")).toBe("a\n");
   });
-
-  // Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
 
   // A write that fails after writing began (a read-only recipe here; an I/O error or a locked file
   // on Windows in the wild) cannot be prevented by the dry pass — it must name what was written.
@@ -1002,8 +996,8 @@ describe("cli — forge unify --save-plan never writes into the Forge, never ove
 });
 
 describe("cli — forge unify --save-plan symlink escape (Ruling 30)", () => {
-  // Creating a symlink needs privileges on Windows; this runs on Linux CI.
-  it.skipIf(process.platform === "win32")("refuses a target that reaches inside the Forge through a symlink, and writes nothing", async () => {
+  // On Windows a directory junction needs no privilege, so this runs on both platforms.
+  it("refuses a target that reaches inside the Forge through a symlink, and writes nothing", async () => {
     const root = await tmpDir("craftar-cli-forge-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
     // A real `recipes/` directory, so the link below resolves inside the Forge — without a recipe
@@ -1018,7 +1012,7 @@ describe("cli — forge unify --save-plan symlink escape (Ruling 30)", () => {
     const outside = await tmpDir("craftar-cli-plan-");
     cleanups.push(() => fs.rm(outside, { recursive: true, force: true }));
     const link = path.join(outside, "into-forge");
-    await fs.symlink(path.join(root, "recipes"), link, "dir");
+    await fs.symlink(path.join(root, "recipes"), link, process.platform === "win32" ? "junction" : "dir");
 
     const before = await snapshot(root);
     const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", path.join(link, "plan.yaml"), "--forge", root]);
@@ -1134,8 +1128,6 @@ describe("cli — forge unify refuses index-flagged paths (Ruling 39)", () => {
 });
 
 describe("cli — forge unify checks the cascade's own files are held by git (Ruling 37)", () => {
-  // Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
-
   it("refuses when only a recipe the cascade would rewrite is untracked (showUntrackedFiles=no), and leaves it unchanged", async () => {
     const root = await tmpDir("craftar-cli-forge-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
@@ -1187,8 +1179,6 @@ describe("cli — forge unify's held-by-git refusal names every path, Forge-rela
     expect(r.stderr).not.toContain("nested/forge/ingredients");
   });
 });
-
-// Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
 
 describe("cli — forge unify's held-by-git refusal caps its list (docs-author nit)", () => {
   it("lists the first ten paths git does not hold and counts the rest", async () => {
@@ -1316,8 +1306,8 @@ describe("cli — forge unify's cascade rewrites ingredients only (Ruling 42)", 
 });
 
 describe("cli — forge unify --save-plan through a dangling symlink (Ruling 30, CI round)", () => {
-  // Creating a symlink needs privileges on Windows; this runs on Linux CI.
-  it.skipIf(process.platform === "win32")("refuses a target whose path passes through a dangling symlink, and writes nothing", async () => {
+  // On Windows a directory junction needs no privilege, so this runs on both platforms.
+  it("refuses a target whose path passes through a dangling symlink, and writes nothing", async () => {
     const root = await tmpDir("craftar-cli-forge-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
     await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
@@ -1327,7 +1317,7 @@ describe("cli — forge unify --save-plan through a dangling symlink (Ruling 30,
     const outside = await tmpDir("craftar-cli-plan-");
     cleanups.push(() => fs.rm(outside, { recursive: true, force: true }));
     const link = path.join(outside, "dangling");
-    await fs.symlink(path.join(root, "not-there-yet"), link, "dir"); // points into the Forge, at nothing
+    await fs.symlink(path.join(root, "not-there-yet"), link, process.platform === "win32" ? "junction" : "dir"); // points into the Forge, at nothing
 
     const before = await snapshot(root);
     const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", path.join(link, "plan.yaml"), "--forge", root]);
@@ -1335,6 +1325,30 @@ describe("cli — forge unify --save-plan through a dangling symlink (Ruling 30,
     expect(r.stderr).toContain("cannot be resolved");
     expect(r.stderr).toContain("cannot prove the target lies outside the Forge");
     expect(r.stderr).not.toContain("ENOENT: no such file");
+    expect(await snapshot(root)).toEqual(before);
+  });
+
+  it("refuses a target whose path passes through a symlink loop, and writes nothing", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const outside = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(outside, { recursive: true, force: true }));
+    const type = process.platform === "win32" ? "junction" : "dir";
+    await fs.symlink(path.join(outside, "loopb"), path.join(outside, "loopa"), type);
+    await fs.symlink(path.join(outside, "loopa"), path.join(outside, "loopb"), type);
+
+    const before = await snapshot(root);
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", path.join(outside, "loopa", "plan.yaml"), "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("cannot prove the target lies outside the Forge");
+    // `lstat` through a symlink loop fails with ELOOP on Linux, so the path cannot even be
+    // inspected; on Windows `lstat` sees the junction and `realpath` fails, the other branch.
+    if (process.platform !== "win32") expect(r.stderr).toContain("cannot be inspected (ELOOP)");
+    else expect(r.stderr).toContain("exists but cannot be resolved");
     expect(await snapshot(root)).toEqual(before);
   });
 });

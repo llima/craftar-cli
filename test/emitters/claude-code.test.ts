@@ -57,6 +57,19 @@ describe("claude-code emitter", () => {
     expect(text(p, ".mcp.json")).toBe(JSON.stringify({ mcpServers: { srv: { command: "npx", args: ["acme-server"] } } }, null, 2) + "\n");
   });
 
+  it("names each dropped writer once when three MCP ingredients emit the same server name", async () => {
+    const p = await planFor([
+      { meta: { type: "mcp", name: "srv", server: { command: "a" } } },
+      { meta: { type: "mcp", name: "srv--b", as: "srv", server: { command: "b" } } },
+      { meta: { type: "mcp", name: "srv--c", as: "srv", server: { command: "c" } } },
+    ]);
+    expect(p.warnings.filter((w) => w.includes('MCP server "srv"'))).toEqual([
+      'claude-code: two ingredients write the MCP server "srv" into .mcp.json: mcp/srv and mcp/srv--b (last wins)',
+      'claude-code: two ingredients write the MCP server "srv" into .mcp.json: mcp/srv--b and mcp/srv--c (last wins)',
+    ]);
+    expect(text(p, ".mcp.json")).toBe(JSON.stringify({ mcpServers: { srv: { command: "c" } } }, null, 2) + "\n");
+  });
+
   it("warns when two MCP ingredients emit the same server name, instead of dropping one silently", async () => {
     const p = await planFor([
       { meta: { type: "mcp", name: "srv", server: { command: "npx", args: ["public-server"] } } },
