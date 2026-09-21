@@ -3,11 +3,11 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { exists, gitDirty } from "../src/core/forge.js";
-import { applyPlan, planFrom, writeUnified } from "../src/core/unify.js";
+import { exists, gitDirty, loadForge, type Forge } from "../src/core/forge.js";
+import { applyPlan, planFrom, rewriteRecipes, writeUnified } from "../src/core/unify.js";
 import { diffIngredients } from "../src/core/variants.js";
 import { UnifyPlanSchema } from "../src/schema/index.js";
-import { tmpDir, writeFiles } from "./helpers/forge.js";
+import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 
 const execFileP = promisify(execFile);
 
@@ -345,5 +345,70 @@ describe("writeUnified", () => {
     const before = await fs.readFile(path.join(base.dir, "ingredient.yaml"), "utf8");
     await writeUnified(base, { write: { "rule.md": "y\n" }, remove: [], resolved: true, unresolved: 0 });
     expect(await fs.readFile(path.join(base.dir, "ingredient.yaml"), "utf8")).toBe(before);
+  });
+});
+
+/** A Forge built from a spec and loaded for real, so the test can reload after a rewrite. */
+async function forgeWith(spec: ForgeSpec): Promise<Forge> {
+  const root = await tmpDir();
+  cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+  await makeForge(root, spec);
+  return loadForge(root);
+}
+
+describe("rewriteRecipes", () => {
+  it("replaces the variant reference with the base in every recipe", async () => {
+    const forge = await forgeWith({
+      ingredients: [rule("workflow", "a\n"), rule("workflow--acme", "b\n", { as: "workflow" })],
+      recipes: [recipe("base--acme", ["rule/workflow--acme", "rule/other"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
+    expect(out.rewritten).toEqual(["base--acme"]);
+    const reloaded = await loadForge(forge.root);
+    expect(reloaded.recipes.get("base--acme")!.ingredients).toEqual(["rule/workflow", "rule/other"]);
+  });
+
+  it("deletes a suffixed recipe that became identical to its sibling and repoints the profile", async () => {
+    const forge = await forgeWith({
+      ingredients: [rule("workflow", "a\n"), rule("workflow--acme", "b\n", { as: "workflow" })],
+      recipes: [
+        recipe("base", ["rule/workflow", "rule/other"]),
+        recipe("base--acme", ["rule/workflow--acme", "rule/other"]),
+      ],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
+    expect(out.deleted).toEqual(["base--acme"]);
+    expect(out.profileRepointed).toEqual(["base--acme -> base"]);
+    const reloaded = await loadForge(forge.root);
+    expect(reloaded.recipes.has("base--acme")).toBe(false);
+    expect(reloaded.profiles.get("acme")!.recipes).toEqual(["base"]);
+  });
+
+  it("leaves a suffixed recipe alone when it has no unsuffixed sibling", async () => {
+    const forge = await forgeWith({
+      ingredients: [rule("workflow", "a\n"), rule("workflow--acme", "b\n", { as: "workflow" })],
+      recipes: [recipe("solo--acme", ["rule/workflow--acme"])],
+      profiles: [profile("acme", ["solo--acme"])],
+    });
+    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
+    expect(out.deleted).toEqual([]);
+    const reloaded = await loadForge(forge.root);
+    expect(reloaded.recipes.get("solo--acme")!.ingredients).toEqual(["rule/workflow"]);
+    expect(reloaded.profiles.get("acme")!.recipes).toEqual(["solo--acme"]);
+  });
+
+  it("does not delete a sibling whose ingredients differ beyond the variant", async () => {
+    const forge = await forgeWith({
+      ingredients: [rule("workflow", "a\n"), rule("workflow--acme", "b\n", { as: "workflow" })],
+      recipes: [
+        recipe("base", ["rule/workflow"]),
+        recipe("base--acme", ["rule/workflow--acme", "rule/extra"]),
+      ],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
+    expect(out.deleted).toEqual([]);
   });
 });

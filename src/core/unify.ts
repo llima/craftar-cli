@@ -1,11 +1,13 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import YAML from "yaml";
 import { fingerprintDir } from "./fingerprint.js";
-import { readIngredientText, type LoadedIngredient } from "./forge.js";
+import { loadForge, readIngredientText, type Forge, type LoadedIngredient } from "./forge.js";
 import { splitLines, type Hunk } from "./diff.js";
 import { detectEol, withEol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
-import type { UnifyPlan, PlanFile, Take } from "../schema/index.js";
+import type { IngredientRef, UnifyPlan, PlanFile, Take } from "../schema/index.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
 // fidelity, correctness should not hinge on a glyph no diff viewer, editor or re-encoding shows.
@@ -203,4 +205,125 @@ export async function writeUnified(base: LoadedIngredient, result: UnifyResult):
   }
   for (const rel of result.remove) await fs.rm(path.join(base.dir, rel), { force: true });
   return [...Object.keys(result.write), ...result.remove].sort();
+}
+
+export interface RecipeCascadeResult {
+  /** Recipes whose `ingredients` referenced the variant and were repointed at the base. */
+  rewritten: string[];
+  /** Suffixed recipes deleted because they became duplicates of their unsuffixed sibling. */
+  deleted: string[];
+  /** One `"<r>--<profile> -> <r>"` per deleted recipe, however many profiles it was repointed in. */
+  profileRepointed: string[];
+}
+
+/**
+ * Find the recipe file under `recipes/` whose `name` field matches, by scanning rather than
+ * assuming `<name>.yaml` — `loadForge` keys `forge.recipes` by the `name` field *inside* the
+ * YAML, never by filename, so a recipe can legally live in a file named after something else.
+ */
+async function findRecipeFile(recipesDir: string, name: string): Promise<string> {
+  let entries: string[] = [];
+  try {
+    entries = await fs.readdir(recipesDir);
+  } catch {
+    entries = [];
+  }
+  for (const f of entries) {
+    if (!/\.ya?ml$/.test(f)) continue;
+    const abs = path.join(recipesDir, f);
+    let parsed: unknown;
+    try {
+      parsed = YAML.parse(await fs.readFile(abs, "utf8"));
+    } catch {
+      continue;
+    }
+    if (parsed && typeof parsed === "object" && (parsed as { name?: unknown }).name === name) return abs;
+  }
+  throw new Error(`recipe "${name}" not found under ${recipesDir}`);
+}
+
+/**
+ * Replace every scalar entry equal to `from` with `to` inside the sequence at `key`, matched by
+ * value — never by rebuilding the sequence, so untouched entries, comments and formatting survive
+ * the round trip.
+ */
+function replaceSeqEntry(doc: ReturnType<typeof YAML.parseDocument>, key: string, from: string, to: string): void {
+  const seq = doc.get(key, true);
+  if (!(seq instanceof YAML.YAMLSeq)) return;
+  seq.items.forEach((item, i) => {
+    const value = item instanceof YAML.Scalar ? item.value : item;
+    if (value === from) seq.set(i, to);
+  });
+}
+
+/**
+ * Follow the recipe cascade a resolved variant causes (spec §7.2 items 2–4).
+ *
+ * Pass 1 rewrites every recipe whose `ingredients` holds `variantRef` to hold `baseRef` instead,
+ * writing each file back through `YAML.parseDocument` so only that one sequence entry changes —
+ * `RecipeSchema` materializes defaults (`extends`, `ingredients`, `params`) that a re-serialized
+ * schema object would write into a file that may have had far fewer keys, dropping comments too.
+ *
+ * Pass 2 runs against a *reload* of the Forge, so it sees pass 1's writes on disk. The importer
+ * suffixes a recipe `--<profile>` when any of its ingredients is a variant; once the variant is
+ * gone, a suffixed recipe `<r>--<profile>` may now be identical to its unsuffixed sibling `<r>` —
+ * compared as `ingredients` (sorted), `extends`, `slot` and `params`, never `description`, which
+ * is prose. On a match the suffixed recipe is deleted and every profile that lists it is
+ * repointed at `<r>` (not only the `profile` argument — another profile may still reference it).
+ * A suffixed recipe with no matching sibling is left alone: spec §7.2 item 4, never rename.
+ */
+export async function rewriteRecipes(
+  forge: Forge,
+  baseRef: IngredientRef,
+  variantRef: IngredientRef,
+  profile: string,
+): Promise<RecipeCascadeResult> {
+  const recipesDir = path.join(forge.root, "recipes");
+  const rewritten: string[] = [];
+
+  for (const [name, r] of forge.recipes) {
+    if (!r.ingredients.includes(variantRef)) continue;
+    const file = await findRecipeFile(recipesDir, name);
+    const doc = YAML.parseDocument(await fs.readFile(file, "utf8"));
+    replaceSeqEntry(doc, "ingredients", variantRef, baseRef);
+    await fs.writeFile(file, String(doc));
+    rewritten.push(name);
+  }
+
+  const deleted: string[] = [];
+  const profileRepointed: string[] = [];
+  if (rewritten.length === 0) return { rewritten, deleted, profileRepointed };
+
+  const reloaded = await loadForge(forge.root);
+  const suffix = `--${profile}`;
+
+  for (const rn of rewritten) {
+    if (!rn.endsWith(suffix)) continue;
+    const r = rn.slice(0, -suffix.length);
+    const suffixed = reloaded.recipes.get(rn);
+    const sibling = reloaded.recipes.get(r);
+    if (!suffixed || !sibling) continue;
+
+    const same =
+      isDeepStrictEqual([...suffixed.ingredients].sort(), [...sibling.ingredients].sort()) &&
+      isDeepStrictEqual(suffixed.extends, sibling.extends) &&
+      suffixed.slot === sibling.slot &&
+      isDeepStrictEqual(suffixed.params, sibling.params);
+    if (!same) continue;
+
+    const suffixedFile = await findRecipeFile(path.join(reloaded.root, "recipes"), rn);
+    await fs.rm(suffixedFile, { force: true });
+    deleted.push(rn);
+    profileRepointed.push(`${rn} -> ${r}`);
+
+    for (const [pname, p] of reloaded.profiles) {
+      if (!p.recipes.includes(rn)) continue;
+      const profileFile = path.join(reloaded.root, "profiles", pname, "profile.yaml");
+      const pdoc = YAML.parseDocument(await fs.readFile(profileFile, "utf8"));
+      replaceSeqEntry(pdoc, "recipes", rn, r);
+      await fs.writeFile(profileFile, String(pdoc));
+    }
+  }
+
+  return { rewritten, deleted, profileRepointed };
 }
