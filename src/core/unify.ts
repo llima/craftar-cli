@@ -376,6 +376,14 @@ export interface RecipeCascadeResult {
   profileRepointed: string[];
   /** One `"<recipe>: <r>--<profile> -> <r>"` per recipe whose `extends` named a deleted recipe. */
   extendsRepointed: string[];
+  /**
+   * Ruling 41: suffixed recipes left in place although now identical to their sibling, because
+   * some list names both — a profile's `recipes` or a recipe's `extends` (`lists`, e.g.
+   * `profile "acme"`, `recipe "stack"`). Collapsing such a list would move either the recipe's
+   * first occurrence (ingredient order) or its last (param precedence, last-wins), so it is left
+   * for a human.
+   */
+  kept: Array<{ recipe: string; sibling: string; lists: string[] }>;
 }
 
 /**
@@ -467,30 +475,20 @@ function serializeYamlEdit(doc: ReturnType<typeof YAML.parseDocument>, eol: Eol,
  * no-op apart from a real edit — e.g. `key` resolving to an alias/anchor node rather than a plain
  * `YAMLSeq`, which this function cannot rewrite safely and reports as zero.
  *
- * With `dedupe`, every `from` is first renamed to `to` in place, then every `to` after the
- * first is removed — so a profile listing both `base` and `base--acme` ends with one `base`, not
- * two (N2). Keeping the *first* occurrence is what makes this purely cosmetic (Ruling 40):
- * `resolve()` applies a recipe once, at its first occurrence, so the deduplicated sequence
- * resolves in exactly the order the plain swap would. Pass 1's `ingredients` edit does not
- * dedupe: the dry pass simulates that edit as a plain value swap, and the two must agree.
+ * It never collapses entries (Ruling 41): a list that would end up naming the same recipe twice
+ * is not repointed at all — see `listsHoldingBoth`.
  */
-function replaceSeqEntry(doc: ReturnType<typeof YAML.parseDocument>, key: string, from: string, to: string, dedupe = false): number {
+function replaceSeqEntry(doc: ReturnType<typeof YAML.parseDocument>, key: string, from: string, to: string): number {
   const seq = doc.get(key, true);
   if (!(seq instanceof YAML.YAMLSeq)) return 0;
-  const valueOf = (item: unknown) => (item instanceof YAML.Scalar ? item.value : item);
   let count = 0;
   seq.items.forEach((item, i) => {
-    if (valueOf(item) === from) {
+    const value = item instanceof YAML.Scalar ? item.value : item;
+    if (value === from) {
       seq.set(i, to);
       count++;
     }
   });
-  if (dedupe && count > 0) {
-    const first = seq.items.findIndex((item) => valueOf(item) === to);
-    for (let i = seq.items.length - 1; i > first; i--) {
-      if (valueOf(seq.items[i]) === to) seq.delete(i);
-    }
-  }
   return count;
 }
 
@@ -511,7 +509,7 @@ interface SeqEdit {
  */
 async function renderSeqEdit(e: SeqEdit): Promise<string> {
   const { doc, eol, bom } = await readYamlEdit(e.file);
-  if (replaceSeqEntry(doc, e.key, e.from, e.to, e.key !== "ingredients") === 0) {
+  if (replaceSeqEntry(doc, e.key, e.from, e.to) === 0) {
     throw new Error(
       `unify: ${e.owner} (${e.file}) is recorded as naming ${e.from} in its "${e.key}", ` +
         `but no matching entry was found to rewrite (it may reach "${e.key}" through a YAML alias/anchor) — refusing to report it as rewritten.`,
@@ -570,6 +568,31 @@ function duplicatesAfterRewrite(recipes: Map<string, Recipe>, rewritten: string[
  * The edits deleting `rn` requires first: each profile listing it (Ruling 12) and each recipe
  * extending it (Ruling 32), repointed at `r`. Recipes in `gone` were deleted by an earlier step.
  */
+/**
+ * Ruling 41: every list in the Forge — a profile's `recipes`, a recipe's `extends` — that names
+ * both `rn` and `r`. Repointing such a list would name `r` twice, and no collapse of it is safe:
+ * `resolve()` applies recipes at their first occurrence but lets param defaults win at their last,
+ * so dropping either copy changes one or the other. When any list holds both, `rn` is kept (and no
+ * list is repointed away from it), which leaves resolution exactly as it was. Recipes in `gone`
+ * were deleted by an earlier step.
+ */
+function listsHoldingBoth(
+  view: { recipes: Map<string, Recipe>; profiles: Map<string, Profile> },
+  rn: string,
+  r: string,
+  gone: Set<string>,
+): string[] {
+  const out: string[] = [];
+  for (const [pname, p] of view.profiles) {
+    if (p.recipes.includes(rn) && p.recipes.includes(r)) out.push(`profile "${pname}"`);
+  }
+  for (const [xname, x] of view.recipes) {
+    if (gone.has(xname)) continue;
+    if (x.extends.includes(rn) && x.extends.includes(r)) out.push(`recipe "${xname}"`);
+  }
+  return out;
+}
+
 async function repointEdits(
   view: { root: string; recipes: Map<string, Recipe>; profiles: Map<string, Profile> },
   rn: string,
@@ -619,6 +642,8 @@ export async function checkRecipeCascade(forge: Forge, baseRef: IngredientRef, v
   const gone = new Set<string>();
   const rewritten = pass1.map((p) => p.name);
   for (const { rn, r } of duplicatesAfterRewrite(after, rewritten, profile)) {
+    // Ruling 41: the same decision the real pass makes, so both agree on which files change.
+    if (listsHoldingBoth(view, rn, r, gone).length > 0) continue;
     const edits = await repointEdits(view, rn, r, gone);
     for (const e of edits.profiles) {
       await renderSeqEdit(e);
@@ -680,11 +705,18 @@ export async function rewriteRecipes(
   const deleted: string[] = [];
   const profileRepointed: string[] = [];
   const extendsRepointed: string[] = [];
-  if (rewritten.length === 0) return { rewritten, deleted, profileRepointed, extendsRepointed };
+  const kept: RecipeCascadeResult["kept"] = [];
+  if (rewritten.length === 0) return { rewritten, deleted, profileRepointed, extendsRepointed, kept };
 
   const reloaded = await loadForge(forge.root);
   const gone = new Set<string>();
   for (const { rn, r } of duplicatesAfterRewrite(reloaded.recipes, rewritten, profile)) {
+    // Ruling 41: never collapse a list that names both — keep `rn`, repoint nothing away from it.
+    const both = listsHoldingBoth(reloaded, rn, r, gone);
+    if (both.length > 0) {
+      kept.push({ recipe: rn, sibling: r, lists: both });
+      continue;
+    }
     const edits = await repointEdits(reloaded, rn, r, gone);
     for (const e of edits.profiles) await applySeqEdit(e, journal);
     for (const x of edits.extends) {
@@ -700,5 +732,5 @@ export async function rewriteRecipes(
     if (edits.profiles.length > 0) profileRepointed.push(`${rn} -> ${r}`);
   }
 
-  return { rewritten, deleted, profileRepointed, extendsRepointed };
+  return { rewritten, deleted, profileRepointed, extendsRepointed, kept };
 }

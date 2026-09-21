@@ -358,7 +358,7 @@ forge
     // (Ruling 21) — a late failure leaves the variant in place, never a recipe naming a deleted one.
     const journal: WriteJournal = [];
     let touched: string[] = [];
-    let cascade: RecipeCascadeResult = { rewritten: [], deleted: [], profileRepointed: [], extendsRepointed: [] };
+    let cascade: RecipeCascadeResult = { rewritten: [], deleted: [], profileRepointed: [], extendsRepointed: [], kept: [] };
     let variantRemoved: string | null = null;
     try {
       touched = await writeUnified(base, result, journal);
@@ -389,6 +389,14 @@ forge
       warnings.push(
         `recipe ${rn} was deleted — a workspace that lists it in recipes.add or recipes.remove (craftar.yaml or craftar.local.yaml) ` +
           `needs a manual edit to name ${rn.slice(0, -suffix.length)}; unify cannot reach workspaces`,
+      );
+    }
+    // Ruling 41: a suffixed recipe some list names alongside its sibling is kept, never collapsed.
+    for (const k of cascade.kept) {
+      warnings.push(
+        `recipe ${k.recipe} is now identical to ${k.sibling} but was kept, because ${k.lists.join(", ")} ` +
+          `list${k.lists.length === 1 ? "s" : ""} both — collapsing them could change recipe order or param precedence; ` +
+          `review those lists and remove ${k.recipe} by hand`,
       );
     }
     // Ruling 38: `resolve()` matches overrides.ingredients.disable by ref, so once the variant ref

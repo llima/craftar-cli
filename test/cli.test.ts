@@ -1266,3 +1266,87 @@ describe("cli — forge unify's held-by-git refusal names every path, Forge-rela
     expect(r.stderr).not.toContain("nested/forge/ingredients");
   });
 });
+
+// Ruling 41: a list naming both `base` and `base--acme` is never collapsed. Recipes apply at their
+// first occurrence but param defaults win at their last, so the reviewer's case below — `extra`
+// sitting between the two — changed `x` from `from-base` to `from-extra` under any collapse.
+describe("cli — forge unify never collapses a list naming both recipes (Ruling 41)", () => {
+  const recipes = [
+    recipe("base", ["rule/wf"], { params: { x: { default: "from-base" } } }),
+    recipe("base--acme", ["rule/wf--acme"], { params: { x: { default: "from-base" } } }),
+    recipe("extra", ["rule/other"], { params: { x: { default: "from-extra" } } }),
+  ];
+  const ingredients = [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" }), rule("other", "o\n")];
+
+  async function resolvedX(root: string): Promise<unknown> {
+    const { loadForge } = await import("../src/core/forge.js");
+    const { resolve } = await import("../src/core/resolve.js");
+    const { WorkspaceConfigSchema } = await import("../src/schema/index.js");
+    return resolve(await loadForge(root), WorkspaceConfigSchema.parse({ forge: root, profile: "acme" })).params.x;
+  }
+
+  async function run(root: string) {
+    gitInit(root);
+    gitCommitAll(root, "init");
+    expect(await resolvedX(root)).toBe("from-base");
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--forge", root, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    return JSON.parse(r.stdout);
+  }
+
+  for (const order of [
+    ["base--acme", "extra", "base"],
+    ["base", "extra", "base--acme"],
+  ]) {
+    it(`keeps x at from-base for a profile listing [${order.join(", ")}]`, async () => {
+      const root = await tmpDir("craftar-cli-forge-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      await makeForge(root, { ingredients, recipes, profiles: [profile("acme", order)] });
+
+      const out = await run(root);
+      expect(out.recipes.deleted).toEqual([]);
+      expect(out.recipes.profileRepointed).toEqual([]);
+      expect(await resolvedX(root)).toBe("from-base");
+      expect(await exists(path.join(root, "recipes/base--acme.yaml"))).toBe(true);
+      const kept = out.warnings.find((w: string) => w.startsWith("recipe base--acme is now identical to base"));
+      expect(kept).toBeDefined();
+      expect(kept).toContain('profile "acme"');
+    });
+
+    it(`keeps x at from-base for a recipe whose extends lists [${order.join(", ")}]`, async () => {
+      const root = await tmpDir("craftar-cli-forge-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      await makeForge(root, {
+        ingredients,
+        recipes: [...recipes, recipe("stack", [], { extends: order })],
+        profiles: [profile("acme", ["stack"])],
+      });
+      const stackBefore = await fs.readFile(path.join(root, "recipes/stack.yaml"), "utf8");
+
+      const out = await run(root);
+      expect(out.recipes.deleted).toEqual([]);
+      expect(out.recipes.extendsRepointed).toEqual([]);
+      expect(await resolvedX(root)).toBe("from-base");
+      expect(await exists(path.join(root, "recipes/base--acme.yaml"))).toBe(true);
+      expect(await fs.readFile(path.join(root, "recipes/stack.yaml"), "utf8")).toBe(stackBefore);
+      const kept = out.warnings.find((w: string) => w.startsWith("recipe base--acme is now identical to base"));
+      expect(kept).toBeDefined();
+      expect(kept).toContain('recipe "stack"');
+    });
+  }
+
+  it("still repoints in place, and deletes base--acme, when a profile lists only base--acme (control)", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients, recipes, profiles: [profile("acme", ["extra", "base--acme"])] });
+
+    const out = await run(root);
+    expect(out.recipes.deleted).toEqual(["base--acme"]);
+    expect(out.recipes.profileRepointed).toEqual(["base--acme -> base"]);
+    expect(out.warnings.some((w: string) => w.includes("is now identical to"))).toBe(false);
+    expect(await exists(path.join(root, "recipes/base--acme.yaml"))).toBe(false);
+    const p = YAML.parse(await fs.readFile(path.join(root, "profiles/acme/profile.yaml"), "utf8"));
+    expect(p.recipes).toEqual(["extra", "base"]);
+    expect(await resolvedX(root)).toBe("from-base");
+  });
+});

@@ -657,55 +657,45 @@ describe("rewriteRecipes — the whole cascade lands, or throws (Ruling 32)", ()
   });
 });
 
-// PR-gate N2: a profile that already lists the unsuffixed recipe loses the suffixed entry rather
-// than gaining a second copy of the unsuffixed one.
-describe("rewriteRecipes — no duplicate after a profile repoint (N2)", () => {
-  it("deletes the suffixed entry when the profile already lists its sibling, and still records the repoint", async () => {
+// Ruling 41 supersedes N2 and Ruling 40, and replaces their tests here: a list that names both
+// `base` and `base--acme` is never collapsed, in either order. `resolve()` applies recipes at their
+// first occurrence but lets param defaults win at their last, so no collapse keeps both — the
+// suffixed recipe is kept (now identical to its sibling) and the list is left exactly as it was.
+describe("rewriteRecipes — never collapse a list naming both recipes (Ruling 41)", () => {
+  for (const order of [
+    ["base--acme", "extra", "base"],
+    ["base", "extra", "base--acme"],
+  ]) {
+    it(`keeps base--acme and leaves a profile listing [${order.join(", ")}] untouched`, async () => {
+      const profileText = `name: acme\nrecipes:\n${order.map((r) => `  - ${r}\n`).join("")}`;
+      const forge = await bareForge({
+        "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
+        "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
+        "recipes/extra.yaml": "name: extra\ningredients:\n  - rule/other\n",
+        "profiles/acme/profile.yaml": profileText,
+      });
+      const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
+      expect(out.rewritten).toEqual(["base--acme"]);
+      expect(out.deleted).toEqual([]);
+      expect(out.profileRepointed).toEqual([]);
+      expect(out.kept).toEqual([{ recipe: "base--acme", sibling: "base", lists: ['profile "acme"'] }]);
+      expect(await fs.readFile(path.join(forge.root, "profiles/acme/profile.yaml"), "utf8")).toBe(profileText);
+      const reloaded = await loadForge(forge.root);
+      expect(reloaded.recipes.get("base--acme")!.ingredients).toEqual(["rule/workflow"]);
+    });
+  }
+
+  it("keeps base--acme for every list when only one list names both, repointing none of them", async () => {
     const forge = await bareForge({
       "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
       "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
-      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base\n  - base--acme\n  - extra\n",
+      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\n",
+      "profiles/beta/profile.yaml": "name: beta\nrecipes:\n  - base\n  - base--acme\n",
     });
     const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
-    expect(out.deleted).toEqual(["base--acme"]);
-    expect(out.profileRepointed).toEqual(["base--acme -> base"]);
-    const raw = await fs.readFile(path.join(forge.root, "profiles/acme/profile.yaml"), "utf8");
-    expect((YAML.parse(raw) as { recipes: string[] }).recipes).toEqual(["base", "extra"]);
+    expect(out.deleted).toEqual([]);
+    expect(out.kept).toEqual([{ recipe: "base--acme", sibling: "base", lists: ['profile "beta"'] }]);
+    // `acme` names only base--acme, but base--acme survives, so it is not repointed away either.
+    expect(await fs.readFile(path.join(forge.root, "profiles/acme/profile.yaml"), "utf8")).toBe("name: acme\nrecipes:\n  - base--acme\n");
   });
-});
-
-// Ruling 40: the dedupe keeps the FIRST occurrence, so the profile resolves in exactly the order
-// a plain swap would — `resolve()` applies each recipe once, at its first occurrence, and
-// AGENTS.md emits rules in that order.
-describe("rewriteRecipes — the profile dedupe keeps resolution order (Ruling 40)", () => {
-  const cases: Array<{ before: string[]; after: string[] }> = [
-    { before: ["base--acme", "extra", "base"], after: ["base", "extra"] },
-    { before: ["base", "extra", "base--acme"], after: ["base", "extra"] },
-  ];
-  for (const { before, after } of cases) {
-    it(`turns [${before.join(", ")}] into [${after.join(", ")}] and resolves in the same order as before`, async () => {
-      const { resolve } = await import("../src/core/resolve.js");
-      const { WorkspaceConfigSchema } = await import("../src/schema/index.js");
-      const forge = await forgeWith({
-        ingredients: [rule("workflow", "a\n"), rule("workflow--acme", "b\n", { as: "workflow" }), rule("other", "o\n")],
-        recipes: [
-          recipe("base", ["rule/workflow"]),
-          recipe("base--acme", ["rule/workflow--acme"]),
-          recipe("extra", ["rule/other"]),
-        ],
-        profiles: [profile("acme", before)],
-      });
-      const ws = WorkspaceConfigSchema.parse({ forge: forge.root, profile: "acme" });
-      // Before unify, with the suffixed name read as the name it will become and each recipe
-      // counted at its first occurrence — exactly how a plain swap would resolve.
-      const orderBefore = resolve(forge, ws)
-        .recipes.map((r) => (r === "base--acme" ? "base" : r))
-        .filter((r, i, all) => all.indexOf(r) === i);
-
-      await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
-      const reloaded = await loadForge(forge.root);
-      expect(reloaded.profiles.get("acme")!.recipes).toEqual(after);
-      expect(resolve(reloaded, ws).recipes).toEqual(orderBefore);
-    });
-  }
 });
