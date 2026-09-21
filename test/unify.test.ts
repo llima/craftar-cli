@@ -656,3 +656,20 @@ describe("rewriteRecipes — the whole cascade lands, or throws (Ruling 32)", ()
     expect(await exists(path.join(forge.root, "recipes/base--acme.yaml"))).toBe(true);
   });
 });
+
+// PR-gate N2: a profile that already lists the unsuffixed recipe loses the suffixed entry rather
+// than gaining a second copy of the unsuffixed one.
+describe("rewriteRecipes — no duplicate after a profile repoint (N2)", () => {
+  it("deletes the suffixed entry when the profile already lists its sibling, and still records the repoint", async () => {
+    const forge = await bareForge({
+      "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
+      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
+      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base\n  - base--acme\n  - extra\n",
+    });
+    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
+    expect(out.deleted).toEqual(["base--acme"]);
+    expect(out.profileRepointed).toEqual(["base--acme -> base"]);
+    const raw = await fs.readFile(path.join(forge.root, "profiles/acme/profile.yaml"), "utf8");
+    expect((YAML.parse(raw) as { recipes: string[] }).recipes).toEqual(["base", "extra"]);
+  });
+});

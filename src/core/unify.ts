@@ -466,18 +466,24 @@ function serializeYamlEdit(doc: ReturnType<typeof YAML.parseDocument>, eol: Eol,
  * (because the schema-parsed value it read off `loadForge` already contained `from`) can tell a
  * no-op apart from a real edit — e.g. `key` resolving to an alias/anchor node rather than a plain
  * `YAMLSeq`, which this function cannot rewrite safely and reports as zero.
+ *
+ * With `dedupe`, a `from` entry in a sequence that already lists `to` is deleted rather than
+ * replaced, so a profile listing both `base` and `base--acme` ends with one `base`, not two
+ * (N2). It counts as a replacement either way. Pass 1's `ingredients` edit does not dedupe: the
+ * dry pass simulates that edit as a plain value swap, and the two must agree.
  */
-function replaceSeqEntry(doc: ReturnType<typeof YAML.parseDocument>, key: string, from: string, to: string): number {
+function replaceSeqEntry(doc: ReturnType<typeof YAML.parseDocument>, key: string, from: string, to: string, dedupe = false): number {
   const seq = doc.get(key, true);
   if (!(seq instanceof YAML.YAMLSeq)) return 0;
+  const valueOf = (item: unknown) => (item instanceof YAML.Scalar ? item.value : item);
+  const hasTo = dedupe && seq.items.some((item) => valueOf(item) === to);
   let count = 0;
-  seq.items.forEach((item, i) => {
-    const value = item instanceof YAML.Scalar ? item.value : item;
-    if (value === from) {
-      seq.set(i, to);
-      count++;
-    }
-  });
+  for (let i = seq.items.length - 1; i >= 0; i--) {
+    if (valueOf(seq.items[i]) !== from) continue;
+    if (hasTo) seq.delete(i);
+    else seq.set(i, to);
+    count++;
+  }
   return count;
 }
 
@@ -498,7 +504,7 @@ interface SeqEdit {
  */
 async function renderSeqEdit(e: SeqEdit): Promise<string> {
   const { doc, eol, bom } = await readYamlEdit(e.file);
-  if (replaceSeqEntry(doc, e.key, e.from, e.to) === 0) {
+  if (replaceSeqEntry(doc, e.key, e.from, e.to, e.key !== "ingredients") === 0) {
     throw new Error(
       `unify: ${e.owner} (${e.file}) is recorded as naming ${e.from} in its "${e.key}", ` +
         `but no matching entry was found to rewrite (it may reach "${e.key}" through a YAML alias/anchor) — refusing to report it as rewritten.`,
