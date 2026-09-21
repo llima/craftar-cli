@@ -1191,3 +1191,45 @@ describe("cli — forge unify refuses index-flagged paths (Ruling 39)", () => {
     });
   }
 });
+
+describe("cli — forge unify checks the cascade's own files are held by git (Ruling 37)", () => {
+  it("refuses when only a profile the cascade would repoint is ignored, and leaves it unchanged", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
+      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+    });
+    await fs.writeFile(path.join(root, ".gitignore"), "profiles/\n");
+    gitInit(root);
+    gitCommitAll(root, "init");
+    // Written after the commit, into an ignored directory: git holds no copy of it.
+    const profileFile = path.join(root, "profiles/acme/profile.yaml");
+    await writeFiles(root, { "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\n" });
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("profiles/acme/profile.yaml");
+    expect(r.stderr).toContain("(ignored)");
+    expect(await fs.readFile(profileFile, "utf8")).toBe("name: acme\nrecipes:\n  - base--acme\n");
+    expect(await exists(path.join(root, "ingredients/rules/wf--acme"))).toBe(true);
+  });
+
+  it("refuses when only a recipe the cascade would rewrite is untracked (showUntrackedFiles=no), and leaves it unchanged", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+    execFileSync("git", ["-C", root, "config", "status.showUntrackedFiles", "no"]);
+    const recipeFile = path.join(root, "recipes/local.yaml");
+    await writeFiles(root, { "recipes/local.yaml": "name: local\ningredients:\n  - rule/wf--acme\n" });
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("recipes/local.yaml");
+    expect(r.stderr).toContain("(untracked)");
+    expect(await fs.readFile(recipeFile, "utf8")).toBe("name: local\ningredients:\n  - rule/wf--acme\n");
+    expect(await fs.readFile(path.join(root, "ingredients/rules/wf/rule.md"), "utf8")).toBe("a\n");
+  });
+});
