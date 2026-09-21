@@ -14,9 +14,28 @@ export function fingerprintOf(meta: unknown, files: Record<string, string | Buff
   delete m.origin;
   delete m.name;
   delete m.as;
-  const parts = [JSON.stringify(m, Object.keys(m).sort())];
+  const parts = [JSON.stringify(sortedDeep(m))];
   for (const k of Object.keys(files).sort()) parts.push(k, hashNormalized(files[k]));
   return hashNormalized(parts.join("\0"));
+}
+
+/**
+ * A copy of `v` with object keys sorted at every depth, so `JSON.stringify` of it is canonical.
+ * Not `JSON.stringify(v, sortedKeys)`: a replacer array filters keys at every depth, which hashed
+ * an MCP `server: { command, args, env }` as `{}` and made two different servers look identical.
+ * For metadata with no nested object the output is byte-identical to that form, so those
+ * fingerprints — and the unify plans that record them — do not move.
+ */
+function sortedDeep(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(sortedDeep);
+  if (v !== null && typeof v === "object") {
+    const proto = Object.getPrototypeOf(v);
+    if (proto !== Object.prototype && proto !== null) return v; // Date and friends keep their toJSON
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(v).sort()) out[k] = sortedDeep((v as Record<string, unknown>)[k]);
+    return out;
+  }
+  return v;
 }
 
 export async function fingerprintDir(dir: string): Promise<string> {
