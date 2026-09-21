@@ -981,7 +981,12 @@ describe("cli — forge unify --save-plan symlink escape (Ruling 30)", () => {
   it.skipIf(process.platform === "win32")("refuses a target that reaches inside the Forge through a symlink, and writes nothing", async () => {
     const root = await tmpDir("craftar-cli-forge-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    // A real `recipes/` directory, so the link below resolves inside the Forge — without a recipe
+    // `makeForge` creates no `recipes/`, and the link would dangle instead (a separate case).
+    await makeForge(root, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
+      recipes: [recipe("base", ["rule/wf"])],
+    });
     gitInit(root);
     gitCommitAll(root, "init");
 
