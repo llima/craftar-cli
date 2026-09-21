@@ -1,0 +1,18 @@
+schema: 1
+base: rule/workflow
+profile: acme
+variant: rule/workflow--acme
+baseFingerprint: sha256:2d6c2141b3f044bedff13a0a0d514ef32e5623fb9fc810fa25d7095b6f828b2f
+variantFingerprint: sha256:b04c0f0c262a46970a72c416c76104ad425567767d169b26a015b36e9ba43e23
+files:
+  - file: rule.md
+    hunks:
+      - hunk: 1
+        at: lines 4–4
+        take: variant
+  - file: notes.md
+    onlyIn: base
+    take: base
+  - file: extra.md
+    onlyIn: variant
+    take: variant

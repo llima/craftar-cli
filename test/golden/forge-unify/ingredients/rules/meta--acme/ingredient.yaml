@@ -1,0 +1,4 @@
+type: rule
+name: meta--acme
+as: meta
+targets: [kiro]

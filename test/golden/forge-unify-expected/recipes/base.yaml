@@ -1,0 +1,5 @@
+name: base
+ingredients:
+  - rule/workflow
+  - rule/eof
+  - rule/meta
