@@ -113,6 +113,21 @@ async function gitHead(dir: string): Promise<string | null> {
 }
 
 /**
+ * Whether `dir` sits inside a git working tree at all — true even for a freshly `git init`-ed
+ * repository with no commits yet, unlike `gitHead`/`Forge.commit`, which is `null` in both that
+ * case and the no-`.git`-at-all case. A caller that needs to tell the two apart (a refusal whose
+ * wording depends on which is true) calls this in addition to checking `commit === null`.
+ */
+export async function gitIsRepo(dir: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileP("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"]);
+    return stdout.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * True when the Forge has uncommitted changes — and also when `git status` cannot be run at all.
  * By the time this is called the directory is known to be a git repository (`forge.commit !== null`
  * is checked first), so a failure here is anomalous, and an anomaly is not evidence of a clean

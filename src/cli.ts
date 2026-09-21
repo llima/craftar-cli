@@ -8,7 +8,7 @@ import { loadWorkspace, plan, readLock, status, apply, resolveForge, type FileSt
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
-import { gitDirty } from "./core/forge.js";
+import { gitDirty, gitIsRepo } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import { hunkAt, planFrom, applyPlan, writeUnified, rewriteRecipes, type RecipeCascadeResult } from "./core/unify.js";
 import { UnifyPlanSchema, type IngredientRef, type Take, type UnifyPlan } from "./schema/index.js";
@@ -256,7 +256,14 @@ forge
 
     // Only when about to write — --save-plan touches nothing inside the Forge, so it is exempt.
     if (!o.savePlan) {
-      if (f.commit === null) fail(`${f.root} is not a git repository — unify writes to the Forge and needs git as the undo`);
+      if (f.commit === null) {
+        // `gitHead` (and so `f.commit`) is also `null` for a real git repo with no commits yet —
+        // that is not "not a git repository" (Ruling 22), so tell the two apart before wording it.
+        if (await gitIsRepo(f.root)) {
+          fail(`${f.root} has no commits yet — unify writes to the Forge and needs git as the undo`);
+        }
+        fail(`${f.root} is not a git repository — unify writes to the Forge and needs git as the undo`);
+      }
       if (await gitDirty(f.root)) fail(`${f.root} is not a clean git checkout — commit or stash your changes first`);
     }
 
