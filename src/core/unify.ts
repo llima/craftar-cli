@@ -124,6 +124,30 @@ export async function applyPlan(
   const onlyInBase = new Set(diff.onlyInBase);
   const onlyInVariant = new Set(diff.onlyInVariant);
 
+  // Ruling 29 (spec §8 refusal 7, in both directions): the plan must cover every file the diff
+  // has — paired, base-only and variant-only — each exactly once. The walk below only visits the
+  // plan's own entries, so without this a plan stripped of an entry would apply as "resolved" and
+  // the caller would delete the variant together with the one copy of whatever was left out; two
+  // entries for the same file would let the last one silently win. Checked before any decision is
+  // read, so a contradiction never gets half-applied.
+  const planned = new Set<string>();
+  for (const pf of plan.files) {
+    if (pf.hunks && pf.onlyIn) {
+      throw new Error(
+        `unify plan: "${pf.file}" carries both hunk decisions and a side ("onlyIn: ${pf.onlyIn}") — the plan no longer matches this diff.`,
+      );
+    }
+    if (planned.has(pf.file)) {
+      throw new Error(`unify plan: "${pf.file}" has more than one entry — each file in the diff must be decided exactly once.`);
+    }
+    planned.add(pf.file);
+  }
+  for (const file of [...hunksByFile.keys(), ...onlyInBase, ...onlyInVariant]) {
+    if (!planned.has(file)) {
+      throw new Error(`unify plan: "${file}" differs between the base and the variant but has no entry in the plan — the plan no longer matches this diff.`);
+    }
+  }
+
   for (const pf of plan.files) {
     if (pf.hunks) {
       const hunks = hunksByFile.get(pf.file);

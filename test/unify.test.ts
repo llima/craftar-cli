@@ -522,3 +522,47 @@ describe("rewriteRecipes — file identity, byte fidelity and safety (Rulings 9,
     expect(untouched).toBe(aliased);
   });
 });
+
+// Final review, C2 (Ruling 29 — spec §8 refusal 7 in both directions): a plan must cover every
+// file the diff has — paired, base-only and variant-only — each exactly once. Before this, a plan
+// stripped of its entries applied as "resolved" and the variant, with its only copy of a
+// variant-only file, was deleted.
+describe("applyPlan — the plan covers the diff exactly once (Ruling 29)", () => {
+  function coverageScenario() {
+    return scenario({ "rule.md": "a\nold\nc\n" }, { "rule.md": "a\nnew\nc\n", "extra.md": "only here\n" });
+  }
+
+  it("refuses a plan with no entries at all, naming a file the diff has", async () => {
+    const { base, variant, diff } = await coverageScenario();
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files = [];
+    await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow(/rule\.md|extra\.md/);
+  });
+
+  it("refuses a plan missing the entry for one file, and names it", async () => {
+    const { base, variant, diff } = await coverageScenario();
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files[0].hunks![0].take = "variant";
+    plan.files = plan.files.filter((f) => f.file !== "extra.md");
+    await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow(/extra\.md/);
+  });
+
+  it("refuses a plan with two entries for the same file, instead of letting the last one win", async () => {
+    const { base, variant, diff } = await coverageScenario();
+    const plan = await planFrom(base, variant, diff, "acme");
+    const extra = plan.files.find((f) => f.file === "extra.md")!;
+    extra.take = "base";
+    plan.files.push({ ...extra, take: "variant" });
+    plan.files[0].hunks![0].take = "variant";
+    await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow(/extra\.md/);
+  });
+
+  it("refuses an entry carrying both hunk decisions and a side", async () => {
+    const { base, variant, diff } = await coverageScenario();
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files[0].hunks![0].take = "variant";
+    plan.files[0].onlyIn = "base";
+    plan.files.find((f) => f.file === "extra.md")!.take = "variant";
+    await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow(/rule\.md/);
+  });
+});
