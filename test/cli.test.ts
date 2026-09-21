@@ -86,6 +86,31 @@ describe("cli", () => {
     expect(r.stdout + r.stderr).not.toContain("ghp_");
   });
 
+  it("a second workspace whose MCP server differs imports as a variant and syncs back to its own .mcp.json", async () => {
+    // Adopt, don't collide: since 0.2.1 the differing server becomes mcp/srv--b; it must be
+    // emitted under its original name, or the workspace's own .mcp.json reads as a collision.
+    const root = await tmpDir("craftar-cli-import-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const ws = (name: string, args: string[]) =>
+      writeFiles(path.join(root, name), {
+        ".claude/rules/workflow.md": "# Workflow\n",
+        ".mcp.json": JSON.stringify({ mcpServers: { srv: { command: "npx", args } } }, null, 2) + "\n",
+      });
+    await ws("a", ["public-server"]);
+    await ws("b", ["acme-server"]);
+    expect(runCli(["import", "--from", "claude-code", "--workspace", path.join(root, "a"), "--forge", forge, "--profile", "a"]).code).toBe(0);
+    const imp = runCli(["import", "--from", "claude-code", "--workspace", path.join(root, "b"), "--forge", forge, "--profile", "b", "--write-config"]);
+    expect(imp.code).toBe(0);
+    expect(await exists(path.join(forge, "ingredients/mcp/srv--b"))).toBe(true);
+
+    const st = runCli(["status", "--workspace", path.join(root, "b"), "--json"]);
+    expect(st.code).toBe(0);
+    const mcp = JSON.parse(st.stdout).statuses.find((s: { path: string }) => s.path === ".mcp.json");
+    expect(mcp.state).not.toBe("collision");
+    expect(["adopt", "unchanged"]).toContain(mcp.state);
+  });
+
   it("forge variants lists variants as JSON and leaves the Forge untouched", async () => {
     const root = await tmpDir("craftar-cli-forge-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
