@@ -259,4 +259,65 @@ describe("applyPlan — paired files", () => {
     const r = await applyPlan(base, variant, diff, plan);
     expect(r.write).toEqual({});
   });
+
+  // Earlier review: the fix that skips merging a paired file with no `variant` decision moved the
+  // merge itself inside an `if`, but the `unresolved` count sits outside it. Pin both counters so
+  // a future refactor that moves the counter inside the skip regresses loudly, not silently —
+  // `resolved` is what gates deleting the variant's directory.
+  it("reports unresolved equal to the hunk count, and resolved: false, when a paired file is left entirely at keep", async () => {
+    const { base, variant, diff } = await twoHunkScenario();
+    const plan = await planFrom(base, variant, diff, "acme"); // every decision defaults to keep
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write).toEqual({});
+    expect(r.unresolved).toBe(2);
+    expect(r.resolved).toBe(false);
+  });
+
+});
+
+describe("applyPlan — one-sided files", () => {
+  it("copies a variant-only file into the base when taken", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "x\n" }, { "rule.md": "x\n", "extra.md": "hello\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files.find((f) => f.file === "extra.md")!.take = "variant";
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write["extra.md"]).toBe("hello\n");
+    expect(r.remove).toEqual([]);
+  });
+
+  it("discards a variant-only file when the base is taken", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "x\n" }, { "rule.md": "x\n", "extra.md": "hello\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files.find((f) => f.file === "extra.md")!.take = "base";
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write).toEqual({});
+    expect(r.remove).toEqual([]);
+    expect(r.resolved).toBe(true);
+  });
+
+  it("removes a base-only file when the variant is taken", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "x\n", "gone.md": "bye\n" }, { "rule.md": "x\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files.find((f) => f.file === "gone.md")!.take = "variant";
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.remove).toEqual(["gone.md"]);
+    expect(r.write).toEqual({});
+  });
+
+  it("leaves a base-only file alone when the base is taken", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "x\n", "gone.md": "bye\n" }, { "rule.md": "x\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files.find((f) => f.file === "gone.md")!.take = "base";
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.remove).toEqual([]);
+    expect(r.write).toEqual({});
+  });
+
+  it("stays unresolved while any one-sided file is still keep", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "x\n" }, { "rule.md": "x\n", "extra.md": "hello\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.unresolved).toBe(1);
+    expect(r.resolved).toBe(false);
+  });
 });
