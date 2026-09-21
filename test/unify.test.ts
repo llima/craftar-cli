@@ -11,6 +11,10 @@ import { tmpDir, writeFiles } from "./helpers/forge.js";
 
 const execFileP = promisify(execFile);
 
+// Spelled out rather than embedded as a raw character: a glyph no diff viewer, editor or
+// re-encoding shows should not be load-bearing in a test for byte fidelity.
+const BOM = String.fromCharCode(0xfeff);
+
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   while (cleanups.length) await cleanups.pop()!();
@@ -181,11 +185,11 @@ describe("applyPlan — paired files", () => {
   });
 
   it("keeps the base's BOM", async () => {
-    const { base, variant, diff } = await scenario({ "rule.md": "﻿a\nold\n" }, { "rule.md": "a\nnew\n" });
+    const { base, variant, diff } = await scenario({ "rule.md": `${BOM}a\nold\n` }, { "rule.md": "a\nnew\n" });
     const plan = await planFrom(base, variant, diff, "acme");
     plan.files[0].hunks![0].take = "variant";
     const r = await applyPlan(base, variant, diff, plan);
-    expect(r.write["rule.md"]).toBe("﻿a\nnew\n");
+    expect(r.write["rule.md"]).toBe(`${BOM}a\nnew\n`);
   });
 
   it("does not let a middle hunk decide the final newline when the base itself has none", async () => {

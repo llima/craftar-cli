@@ -5,6 +5,10 @@ import { detectEol, withEol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
 import type { UnifyPlan, PlanFile, Take } from "../schema/index.js";
 
+// Spelled out rather than embedded as a raw character: in the one function whose job is byte
+// fidelity, correctness should not hinge on a glyph no diff viewer, editor or re-encoding shows.
+const BOM = String.fromCharCode(0xfeff);
+
 /** Where a hunk sits, worded exactly as `forge diff` prints it. */
 export function hunkAt(h: Hunk): string {
   return h.a.lines.length ? `lines ${h.a.start}–${h.a.start + h.a.lines.length - 1}` : `after line ${h.a.start - 1}`;
@@ -61,7 +65,7 @@ export interface UnifyResult {
  * a hunk in the middle of the file never decided.
  */
 function mergeFile(baseText: string, hunks: Hunk[], takes: Take[]): string {
-  const bom = baseText.charCodeAt(0) === 0xfeff;
+  const bom = baseText.charCodeAt(0) === BOM.charCodeAt(0);
   const A = splitLines(baseText);
   const out: string[] = [];
   let i = 0; // 0-based index into A.lines
@@ -85,7 +89,7 @@ function mergeFile(baseText: string, hunks: Hunk[], takes: Take[]): string {
   const endsAtTail = hunks.length > 0 && iAfterLastHunk >= A.lines.length;
   const eofNewline = endsAtTail && eofFromWinner !== null ? !eofFromWinner : A.eofNewline;
   const body = out.join("\n") + (eofNewline ? "\n" : "");
-  return (bom ? "﻿" : "") + withEol(body, detectEol(baseText));
+  return (bom ? BOM : "") + withEol(body, detectEol(baseText));
 }
 
 /**
