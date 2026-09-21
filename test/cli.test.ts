@@ -876,3 +876,50 @@ describe("cli — forge unify final review", () => {
     expect(await exists(path.join(root, "ingredients/agents/rev--acme"))).toBe(true);
   });
 });
+
+describe("cli — forge unify cascade (Ruling 32)", () => {
+  it("repoints a dangling extends, claims no profile repoint no profile had, and warns about workspaces", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
+      recipes: [
+        recipe("base", ["rule/wf"]),
+        recipe("base--acme", ["rule/wf--acme"]),
+        recipe("stack--acme", ["rule/other"], { extends: ["base--acme"] }),
+      ],
+      profiles: [profile("acme", ["stack--acme"])],
+    });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.recipes.deleted).toEqual(["base--acme"]);
+    expect(out.recipes.profileRepointed).toEqual([]);
+    expect(out.recipes.extendsRepointed).toEqual(["stack--acme: base--acme -> base"]);
+    expect(out.warnings.join("\n")).toContain("recipes.add");
+    expect(out.warnings.join("\n")).toContain("base--acme");
+
+    const stack = YAML.parse(await fs.readFile(path.join(root, "recipes/stack--acme.yaml"), "utf8"));
+    expect(stack.extends).toEqual(["base"]);
+  });
+
+  it("names the workspace follow-up in the text report when a recipe is deleted", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
+      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("profiles repointed: base--acme -> base");
+    expect(r.stdout).toContain("recipes.add");
+  });
+});

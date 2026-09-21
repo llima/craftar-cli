@@ -348,8 +348,13 @@ export interface RecipeCascadeResult {
   rewritten: string[];
   /** Suffixed recipes deleted because they became duplicates of their unsuffixed sibling. */
   deleted: string[];
-  /** One `"<r>--<profile> -> <r>"` per deleted recipe, however many profiles it was repointed in. */
+  /**
+   * One `"<r>--<profile> -> <r>"` per deleted recipe that at least one profile listed, however
+   * many profiles it was repointed in. A deleted recipe no profile listed records nothing here.
+   */
   profileRepointed: string[];
+  /** One `"<recipe>: <r>--<profile> -> <r>"` per recipe whose `extends` named a deleted recipe. */
+  extendsRepointed: string[];
 }
 
 /**
@@ -483,6 +488,12 @@ function replaceSeqEntry(doc: ReturnType<typeof YAML.parseDocument>, key: string
  * only the `profile` argument — another profile may still reference it) *before* the suffixed
  * recipe's file is removed: if the profile scan fails, nothing has been deleted yet either.
  * A suffixed recipe with no matching sibling is left alone: spec §7.2 item 4, never rename.
+ *
+ * Ruling 32 extends the same rule to the rest of the cascade: every recipe whose `extends` names
+ * the suffixed recipe is repointed at `<r>` too, before the deletion, so no recipe is left
+ * extending a file that no longer exists. A profile or `extends` repoint that replaces nothing,
+ * when the loaded data says it should (an alias/anchor again), throws — and only repoints that
+ * actually happened are recorded.
  */
 export async function rewriteRecipes(
   forge: Forge,
@@ -510,7 +521,8 @@ export async function rewriteRecipes(
 
   const deleted: string[] = [];
   const profileRepointed: string[] = [];
-  if (rewritten.length === 0) return { rewritten, deleted, profileRepointed };
+  const extendsRepointed: string[] = [];
+  if (rewritten.length === 0) return { rewritten, deleted, profileRepointed, extendsRepointed };
 
   const reloaded = await loadForge(forge.root);
   const profilesRoot = path.join(reloaded.root, "profiles");
@@ -532,19 +544,41 @@ export async function rewriteRecipes(
 
     // Repoint every profile that lists the suffixed recipe before removing its file (Ruling 12):
     // if the profile scan throws, nothing has been deleted yet.
+    let profilesRepointed = 0;
     for (const [pname, p] of reloaded.profiles) {
       if (!p.recipes.includes(rn)) continue;
       const profileFile = await findProfileFile(profilesRoot, pname);
       const { doc: pdoc, eol: peol, bom: pbom } = await readYamlEdit(profileFile);
-      replaceSeqEntry(pdoc, "recipes", rn, r);
+      if (replaceSeqEntry(pdoc, "recipes", rn, r) === 0) {
+        throw new Error(
+          `unify: profile "${pname}" (${profileFile}) is recorded as listing recipe ${rn} in its "recipes", ` +
+            `but no matching entry was found to rewrite (it may reach "recipes" through a YAML alias/anchor) — refusing to report it as repointed.`,
+        );
+      }
       await fs.writeFile(profileFile, serializeYamlEdit(pdoc, peol, pbom));
+      profilesRepointed++;
+    }
+
+    // Ruling 32: every recipe that extends the suffixed one would dangle once it is deleted.
+    for (const [xname, x] of reloaded.recipes) {
+      if (xname === rn || !x.extends.includes(rn)) continue;
+      const xfile = await findRecipeFile(path.join(reloaded.root, "recipes"), xname);
+      const { doc: xdoc, eol: xeol, bom: xbom } = await readYamlEdit(xfile);
+      if (replaceSeqEntry(xdoc, "extends", rn, r) === 0) {
+        throw new Error(
+          `unify: recipe "${xname}" (${xfile}) is recorded as extending ${rn}, ` +
+            `but no matching entry was found to rewrite (it may reach "extends" through a YAML alias/anchor) — refusing to report it as repointed.`,
+        );
+      }
+      await fs.writeFile(xfile, serializeYamlEdit(xdoc, xeol, xbom));
+      extendsRepointed.push(`${xname}: ${rn} -> ${r}`);
     }
 
     const suffixedFile = await findRecipeFile(path.join(reloaded.root, "recipes"), rn);
     await fs.rm(suffixedFile, { force: true });
     deleted.push(rn);
-    profileRepointed.push(`${rn} -> ${r}`);
+    if (profilesRepointed > 0) profileRepointed.push(`${rn} -> ${r}`);
   }
 
-  return { rewritten, deleted, profileRepointed };
+  return { rewritten, deleted, profileRepointed, extendsRepointed };
 }

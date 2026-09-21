@@ -611,3 +611,48 @@ describe("unify — non-UTF-8 content (Ruling 31)", () => {
     expect(r.write["rule.md"]).toBe(`${BOM}a\nnew\n`);
   });
 });
+
+// Final review, C5 (Ruling 32): the cascade leaves no dangling reference and records only the
+// repoints that happened.
+describe("rewriteRecipes — the whole cascade lands, or throws (Ruling 32)", () => {
+  it("repoints another recipe's `extends` at the unsuffixed recipe before deleting the suffixed one", async () => {
+    const forge = await bareForge({
+      "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
+      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
+      "recipes/stack--acme.yaml": "name: stack--acme\nextends:\n  - base--acme # layered\ningredients:\n  - rule/other\n",
+      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - stack--acme\n",
+    });
+    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
+    expect(out.deleted).toEqual(["base--acme"]);
+    expect(out.extendsRepointed).toEqual(["stack--acme: base--acme -> base"]);
+    // No profile listed base--acme: nothing was repointed there, so nothing is claimed.
+    expect(out.profileRepointed).toEqual([]);
+
+    const reloaded = await loadForge(forge.root);
+    expect(reloaded.recipes.has("base--acme")).toBe(false);
+    expect(reloaded.recipes.get("stack--acme")!.extends).toEqual(["base"]);
+    expect(await fs.readFile(path.join(forge.root, "recipes/stack--acme.yaml"), "utf8")).toContain("# layered");
+    expect(reloaded.profiles.get("acme")!.recipes).toEqual(["stack--acme"]);
+  });
+
+  it("throws, naming the profile, when a profile reaches `recipes` through a YAML alias", async () => {
+    const forge = await bareForge({
+      "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
+      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
+      "profiles/acme/profile.yaml": "name: acme\nmine: &r [base--acme]\nrecipes: *r\n",
+    });
+    await expect(rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme")).rejects.toThrow(/profile "acme"/);
+    // The suffixed recipe is still there: a throw never leaves the profile naming a deleted recipe.
+    expect(await exists(path.join(forge.root, "recipes/base--acme.yaml"))).toBe(true);
+  });
+
+  it("throws when a recipe reaches `extends` through a YAML alias", async () => {
+    const forge = await bareForge({
+      "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
+      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
+      "recipes/stack--acme.yaml": "name: stack--acme\nx: &e [base--acme]\nextends: *e\n",
+    });
+    await expect(rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme")).rejects.toThrow(/stack--acme/);
+    expect(await exists(path.join(forge.root, "recipes/base--acme.yaml"))).toBe(true);
+  });
+});

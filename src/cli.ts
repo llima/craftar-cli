@@ -328,7 +328,7 @@ forge
     const result = await applyPlan(base, variant, diff, toApply, { discardVariantMeta: o.take === "base" });
     const touched = await writeUnified(base, result);
 
-    let cascade: RecipeCascadeResult = { rewritten: [], deleted: [], profileRepointed: [] };
+    let cascade: RecipeCascadeResult = { rewritten: [], deleted: [], profileRepointed: [], extendsRepointed: [] };
     let variantRemoved: string | null = null;
     if (result.resolved) {
       // Cascade before removal (Ruling 21): if `rewriteRecipes` throws (an aliased reference it
@@ -348,6 +348,15 @@ forge
           `resolve it by hand, or use --take base to discard the variant`,
       );
     }
+    // Ruling 32: unify has no registry of workspaces, so it cannot reach a craftar.yaml that names
+    // a recipe it just deleted — say so rather than leave that workspace failing to resolve.
+    const suffix = `--${o.profile}`;
+    for (const rn of cascade.deleted) {
+      warnings.push(
+        `recipe ${rn} was deleted — a workspace that lists it in recipes.add (craftar.yaml or craftar.local.yaml) ` +
+          `needs a manual edit to name ${rn.slice(0, -suffix.length)}; unify cannot reach workspaces`,
+      );
+    }
 
     if (o.json) {
       return console.log(
@@ -360,7 +369,13 @@ forge
             removed: [...result.remove].sort(),
             unresolved: result.unresolved,
             variantRemoved,
-            recipes: cascade,
+            // `extendsRepointed` joins the recipes object only when non-empty, like the keys below.
+            recipes: {
+              rewritten: cascade.rewritten,
+              deleted: cascade.deleted,
+              profileRepointed: cascade.profileRepointed,
+              ...(cascade.extendsRepointed.length ? { extendsRepointed: cascade.extendsRepointed } : {}),
+            },
             // Present only when non-empty, so every run that hits none of these keeps the shape
             // tooling already reads.
             ...(result.metaDiffers.length ? { metaDiffers: result.metaDiffers } : {}),
@@ -379,6 +394,7 @@ forge
     if (cascade.rewritten.length) console.log(`  recipes rewritten: ${cascade.rewritten.join(", ")}`);
     if (cascade.deleted.length) console.log(`  recipes deleted: ${cascade.deleted.join(", ")}`);
     if (cascade.profileRepointed.length) console.log(`  profiles repointed: ${cascade.profileRepointed.join(", ")}`);
+    if (cascade.extendsRepointed.length) console.log(`  recipe extends repointed: ${cascade.extendsRepointed.join(", ")}`);
     for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
     console.log(`  next: run \`craftar status --workspace <dir>\` in a workspace on profile ${o.profile} to see what moved`);
   });
