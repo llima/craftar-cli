@@ -467,22 +467,29 @@ function serializeYamlEdit(doc: ReturnType<typeof YAML.parseDocument>, eol: Eol,
  * no-op apart from a real edit — e.g. `key` resolving to an alias/anchor node rather than a plain
  * `YAMLSeq`, which this function cannot rewrite safely and reports as zero.
  *
- * With `dedupe`, a `from` entry in a sequence that already lists `to` is deleted rather than
- * replaced, so a profile listing both `base` and `base--acme` ends with one `base`, not two
- * (N2). It counts as a replacement either way. Pass 1's `ingredients` edit does not dedupe: the
- * dry pass simulates that edit as a plain value swap, and the two must agree.
+ * With `dedupe`, every `from` is first renamed to `to` in place, then every `to` after the
+ * first is removed — so a profile listing both `base` and `base--acme` ends with one `base`, not
+ * two (N2). Keeping the *first* occurrence is what makes this purely cosmetic (Ruling 40):
+ * `resolve()` applies a recipe once, at its first occurrence, so the deduplicated sequence
+ * resolves in exactly the order the plain swap would. Pass 1's `ingredients` edit does not
+ * dedupe: the dry pass simulates that edit as a plain value swap, and the two must agree.
  */
 function replaceSeqEntry(doc: ReturnType<typeof YAML.parseDocument>, key: string, from: string, to: string, dedupe = false): number {
   const seq = doc.get(key, true);
   if (!(seq instanceof YAML.YAMLSeq)) return 0;
   const valueOf = (item: unknown) => (item instanceof YAML.Scalar ? item.value : item);
-  const hasTo = dedupe && seq.items.some((item) => valueOf(item) === to);
   let count = 0;
-  for (let i = seq.items.length - 1; i >= 0; i--) {
-    if (valueOf(seq.items[i]) !== from) continue;
-    if (hasTo) seq.delete(i);
-    else seq.set(i, to);
-    count++;
+  seq.items.forEach((item, i) => {
+    if (valueOf(item) === from) {
+      seq.set(i, to);
+      count++;
+    }
+  });
+  if (dedupe && count > 0) {
+    const first = seq.items.findIndex((item) => valueOf(item) === to);
+    for (let i = seq.items.length - 1; i > first; i--) {
+      if (valueOf(seq.items[i]) === to) seq.delete(i);
+    }
   }
   return count;
 }

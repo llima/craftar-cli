@@ -673,3 +673,39 @@ describe("rewriteRecipes — no duplicate after a profile repoint (N2)", () => {
     expect((YAML.parse(raw) as { recipes: string[] }).recipes).toEqual(["base", "extra"]);
   });
 });
+
+// Ruling 40: the dedupe keeps the FIRST occurrence, so the profile resolves in exactly the order
+// a plain swap would — `resolve()` applies each recipe once, at its first occurrence, and
+// AGENTS.md emits rules in that order.
+describe("rewriteRecipes — the profile dedupe keeps resolution order (Ruling 40)", () => {
+  const cases: Array<{ before: string[]; after: string[] }> = [
+    { before: ["base--acme", "extra", "base"], after: ["base", "extra"] },
+    { before: ["base", "extra", "base--acme"], after: ["base", "extra"] },
+  ];
+  for (const { before, after } of cases) {
+    it(`turns [${before.join(", ")}] into [${after.join(", ")}] and resolves in the same order as before`, async () => {
+      const { resolve } = await import("../src/core/resolve.js");
+      const { WorkspaceConfigSchema } = await import("../src/schema/index.js");
+      const forge = await forgeWith({
+        ingredients: [rule("workflow", "a\n"), rule("workflow--acme", "b\n", { as: "workflow" }), rule("other", "o\n")],
+        recipes: [
+          recipe("base", ["rule/workflow"]),
+          recipe("base--acme", ["rule/workflow--acme"]),
+          recipe("extra", ["rule/other"]),
+        ],
+        profiles: [profile("acme", before)],
+      });
+      const ws = WorkspaceConfigSchema.parse({ forge: forge.root, profile: "acme" });
+      // Before unify, with the suffixed name read as the name it will become and each recipe
+      // counted at its first occurrence — exactly how a plain swap would resolve.
+      const orderBefore = resolve(forge, ws)
+        .recipes.map((r) => (r === "base--acme" ? "base" : r))
+        .filter((r, i, all) => all.indexOf(r) === i);
+
+      await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
+      const reloaded = await loadForge(forge.root);
+      expect(reloaded.profiles.get("acme")!.recipes).toEqual(after);
+      expect(resolve(reloaded, ws).recipes).toEqual(orderBefore);
+    });
+  }
+});
