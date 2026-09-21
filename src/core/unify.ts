@@ -347,8 +347,14 @@ function replaceSeqEntry(doc: ReturnType<typeof YAML.parseDocument>, key: string
  * still replaces nothing (an alias/anchor, for instance), that is a Forge unify cannot safely
  * rewrite — throw rather than record a rewrite that did not happen, since a caller trusting
  * `rewritten` would otherwise remove the variant's directory next (spec §7.2 step 1) and leave a
- * live reference to a deleted ingredient on disk. Pass 1 has deleted nothing yet, so throwing here
- * is safe: the clean-git-tree refusal (spec §8 rule 2) is the documented undo.
+ * live reference to a deleted ingredient on disk. This function itself has deleted nothing by the
+ * time it throws — but that is a fact about this function, not a safety guarantee about the whole
+ * operation. The guarantee the caller must hold up is ordering: run this cascade *before* removing
+ * the variant's directory, so a throw here still leaves an orphan variant (visible to `forge
+ * variants`, resolvable by a re-run) rather than a base already merged, a variant already gone, and
+ * a recipe still naming it — a state only `git checkout` can undo. The clean-git-tree refusal
+ * (spec §8 rule 2) is still the documented undo for whatever the caller had already written to the
+ * base by the time this throws.
  *
  * Pass 2 runs against a *reload* of the Forge, so it sees pass 1's writes on disk. The importer
  * suffixes a recipe `--<profile>` when any of its ingredients is a variant; once the variant is

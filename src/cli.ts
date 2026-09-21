@@ -306,9 +306,13 @@ forge
     let cascade: RecipeCascadeResult = { rewritten: [], deleted: [], profileRepointed: [] };
     let variantRemoved: string | null = null;
     if (result.resolved) {
+      // Cascade before removal (Ruling 21): if `rewriteRecipes` throws (an aliased reference it
+      // cannot safely rewrite), the variant directory must still be standing — an orphan variant
+      // is visible to `forge variants` and a re-run resolves it; a variant deleted first would
+      // leave a recipe naming a directory that no longer exists, recoverable only by `git checkout`.
+      cascade = await rewriteRecipes(f, base.ref, variant.ref, o.profile);
       await fs.rm(variant.dir, { recursive: true, force: true });
       variantRemoved = variant.ref;
-      cascade = await rewriteRecipes(f, base.ref, variant.ref, o.profile);
     }
 
     if (o.json) {
