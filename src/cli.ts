@@ -325,7 +325,7 @@ forge
       }
     }
 
-    const result = await applyPlan(base, variant, diff, toApply);
+    const result = await applyPlan(base, variant, diff, toApply, { discardVariantMeta: o.take === "base" });
     const touched = await writeUnified(base, result);
 
     let cascade: RecipeCascadeResult = { rewritten: [], deleted: [], profileRepointed: [] };
@@ -340,6 +340,15 @@ forge
       variantRemoved = variant.ref;
     }
 
+    // Ruling 28: a metadata difference leaves the variant in place; say which fields and why.
+    const warnings: string[] = [];
+    if (result.metaDiffers.length) {
+      warnings.push(
+        `ingredient.yaml differs in ${result.metaDiffers.join(", ")} — unify cannot merge ingredient.yaml, so ${variant.ref} stays; ` +
+          `resolve it by hand, or use --take base to discard the variant`,
+      );
+    }
+
     if (o.json) {
       return console.log(
         JSON.stringify(
@@ -352,6 +361,10 @@ forge
             unresolved: result.unresolved,
             variantRemoved,
             recipes: cascade,
+            // Present only when non-empty, so every run that hits none of these keeps the shape
+            // tooling already reads.
+            ...(result.metaDiffers.length ? { metaDiffers: result.metaDiffers } : {}),
+            ...(warnings.length ? { warnings } : {}),
           },
           null,
           2,
@@ -366,6 +379,7 @@ forge
     if (cascade.rewritten.length) console.log(`  recipes rewritten: ${cascade.rewritten.join(", ")}`);
     if (cascade.deleted.length) console.log(`  recipes deleted: ${cascade.deleted.join(", ")}`);
     if (cascade.profileRepointed.length) console.log(`  profiles repointed: ${cascade.profileRepointed.join(", ")}`);
+    for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
     console.log(`  next: run \`craftar status --workspace <dir>\` in a workspace on profile ${o.profile} to see what moved`);
   });
 

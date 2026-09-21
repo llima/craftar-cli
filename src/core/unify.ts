@@ -8,7 +8,7 @@ import { listFiles, loadForge, readIngredientText, type Forge, type LoadedIngred
 import { splitLines, type Hunk } from "./diff.js";
 import { detectEol, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
-import type { IngredientRef, UnifyPlan, PlanFile, Take } from "../schema/index.js";
+import type { Ingredient, IngredientRef, UnifyPlan, PlanFile, Take } from "../schema/index.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
 // fidelity, correctness should not hinge on a glyph no diff viewer, editor or re-encoding shows.
@@ -90,6 +90,37 @@ export async function planFrom(
   };
 }
 
+/** Metadata the two sides may legitimately disagree on: identity and provenance, not behaviour. */
+function comparableMeta(meta: Ingredient): Record<string, unknown> {
+  const rest: Record<string, unknown> = { ...meta };
+  delete rest.name;
+  delete rest.as;
+  delete rest.origin;
+  return rest;
+}
+
+/**
+ * Ruling 28: the top-level `ingredient.yaml` fields on which base and variant differ, sorted.
+ * `diffIngredients` leaves `ingredient.yaml` out, so without this a variant that differs only in
+ * its metadata (an MCP `server`, an agent's `model` or `tools`) would resolve with zero decisions
+ * and be deleted. Compared on the zod-validated `meta` with a real deep equality — never through
+ * `fingerprintOf` or `JSON.stringify(x, keys)`, whose key-array replacer filters at every depth
+ * and would see two different nested `server` objects as the same `{}`.
+ */
+export function metaDifferences(base: LoadedIngredient, variant: LoadedIngredient): string[] {
+  const a = comparableMeta(base.meta);
+  const b = comparableMeta(variant.meta);
+  return [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => !isDeepStrictEqual(a[k], b[k])).sort();
+}
+
+export interface ApplyOptions {
+  /**
+   * `--take base`: discarding the variant is what was asked, its metadata included, so a
+   * metadata difference does not hold the variant back (Ruling 28).
+   */
+  discardVariantMeta?: boolean;
+}
+
 export interface UnifyResult {
   /**
    * Base-relative path → new content. Only files whose bytes change appear. A one-sided file
@@ -98,10 +129,15 @@ export interface UnifyResult {
   write: Record<string, string | Buffer>;
   /** Base-relative paths to delete. */
   remove: string[];
-  /** No decision was left at `keep`. */
+  /** No decision was left at `keep`, and no `ingredient.yaml` difference holds the variant back. */
   resolved: boolean;
   /** Hunks and one-sided files still at `keep`. */
   unresolved: number;
+  /**
+   * Top-level `ingredient.yaml` fields that differ (`name`, `as`, `origin` aside) and that unify
+   * cannot merge; non-empty means not resolved. Always empty under `discardVariantMeta`.
+   */
+  metaDiffers: string[];
 }
 
 /**
@@ -165,6 +201,7 @@ export async function applyPlan(
   variant: LoadedIngredient,
   diff: IngredientDiff,
   plan: UnifyPlan,
+  opts: ApplyOptions = {},
 ): Promise<UnifyResult> {
   await assertTextMergeable(base, variant);
   const write: Record<string, string | Buffer> = {};
@@ -283,7 +320,8 @@ export async function applyPlan(
     }
   }
 
-  return { write, remove, resolved: unresolved === 0, unresolved };
+  const metaDiffers = opts.discardVariantMeta ? [] : metaDifferences(base, variant);
+  return { write, remove, resolved: unresolved === 0 && metaDiffers.length === 0, unresolved, metaDiffers };
 }
 
 /**

@@ -790,3 +790,89 @@ describe("cli", () => {
     expect(outside.stdout).not.toContain("sits inside the Forge");
   });
 });
+
+describe("cli — forge unify final review", () => {
+  // C1 (Ruling 28): `ingredient.yaml` never enters the diff, so a variant that differs only in
+  // its metadata resolved with zero decisions and was deleted. The nested MCP `server` is the case
+  // that was reported: a comparison that filters keys at every depth sees both servers as `{}`.
+  const mcpBase = { type: "mcp", name: "srv", server: { command: "npx", args: ["public-server"] } };
+  const mcpVariant = {
+    type: "mcp",
+    name: "srv--acme",
+    as: "srv",
+    server: { command: "npx", args: ["acme-private-server"], env: { TOKEN_VAR: "ACME_TOKEN" } },
+  };
+
+  async function mcpForge(): Promise<string> {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [{ meta: mcpBase }, { meta: mcpVariant }] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+    return root;
+  }
+
+  it("forge unify --take variant leaves a variant whose nested MCP server differs unresolved, and names the field (Ruling 28)", async () => {
+    const root = await mcpForge();
+    const variantYaml = await fs.readFile(path.join(root, "ingredients/mcp/srv--acme/ingredient.yaml"), "utf8");
+
+    const r = runCli(["forge", "unify", "mcp/srv", "--profile", "acme", "--take", "variant", "--forge", root, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.resolved).toBe(false);
+    expect(out.variantRemoved).toBeNull();
+    expect(out.metaDiffers).toEqual(["server"]);
+    expect(await fs.readFile(path.join(root, "ingredients/mcp/srv--acme/ingredient.yaml"), "utf8")).toBe(variantYaml);
+
+    const text = runCli(["forge", "unify", "mcp/srv", "--profile", "acme", "--take", "variant", "--forge", root]);
+    expect(text.code, text.stderr).toBe(0);
+    expect(text.stdout).toContain("resolved no");
+    expect(text.stdout).toContain("server");
+    expect(text.stdout).toContain("ingredient.yaml");
+    expect(text.stdout).toContain("--take base");
+    expect(await exists(path.join(root, "ingredients/mcp/srv--acme"))).toBe(true);
+  });
+
+  it("forge unify --take base resolves the same MCP variant, discarding its metadata (Ruling 28)", async () => {
+    const root = await mcpForge();
+    const baseYaml = await fs.readFile(path.join(root, "ingredients/mcp/srv/ingredient.yaml"), "utf8");
+    const r = runCli(["forge", "unify", "mcp/srv", "--profile", "acme", "--take", "base", "--forge", root, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.resolved).toBe(true);
+    expect(out.variantRemoved).toBe("mcp/srv--acme");
+    expect(await exists(path.join(root, "ingredients/mcp/srv--acme"))).toBe(false);
+    expect(await fs.readFile(path.join(root, "ingredients/mcp/srv/ingredient.yaml"), "utf8")).toBe(baseYaml);
+  });
+
+  it("forge unify --plan leaves an agent whose model and tools differ unresolved, while still writing the resolved hunks (Ruling 28)", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [
+        { meta: { type: "agent", name: "rev" }, files: { "agent.md": "a\n" } },
+        { meta: { type: "agent", name: "rev--acme", as: "rev", model: "opus", tools: ["Read", "Bash"] }, files: { "agent.md": "b\n" } },
+      ],
+    });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const planDir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(planDir, { recursive: true, force: true }));
+    const planPath = path.join(planDir, "plan.yaml");
+    expect(runCli(["forge", "unify", "agent/rev", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+    const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+    plan.files[0].hunks[0].take = "variant";
+    await fs.writeFile(planPath, YAML.stringify(plan));
+
+    const r = runCli(["forge", "unify", "agent/rev", "--profile", "acme", "--plan", planPath, "--forge", root, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.resolved).toBe(false);
+    expect(out.unresolved).toBe(0);
+    expect(out.written).toEqual(["agent.md"]);
+    expect(out.metaDiffers).toEqual(["model", "tools"]);
+    expect(await fs.readFile(path.join(root, "ingredients/agents/rev/agent.md"), "utf8")).toBe("b\n");
+    expect(await exists(path.join(root, "ingredients/agents/rev--acme"))).toBe(true);
+  });
+});
