@@ -112,6 +112,16 @@ async function gitHead(dir: string): Promise<string | null> {
   }
 }
 
+/** True when the Forge is a git checkout with uncommitted changes. False when it is not a repo. */
+export async function gitDirty(dir: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileP("git", ["-C", dir, "status", "--porcelain"]);
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /** Plural folder name for an ingredient type (rules/, agents/, …). */
 export function typeFolder(type: Ingredient["type"]): string {
   return type === "mcp" ? "mcp" : `${type}s`;
