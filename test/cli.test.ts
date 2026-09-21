@@ -1168,3 +1168,26 @@ describe("cli — forge unify acceptance criterion 2", () => {
     expect(execFileSync("git", ["-C", root, "status", "--porcelain"], { encoding: "utf8" })).toBe("");
   });
 });
+
+describe("cli — forge unify refuses index-flagged paths (Ruling 39)", () => {
+  for (const [flag, reason] of [
+    ["--skip-worktree", "skip-worktree"],
+    ["--assume-unchanged", "assume-unchanged"],
+  ] as const) {
+    it(`refuses a variant file marked ${flag} whose local edit git cannot restore`, async () => {
+      const root = await tmpDir("craftar-cli-forge-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+      gitInit(root);
+      gitCommitAll(root, "init");
+      execFileSync("git", ["-C", root, "update-index", flag, "ingredients/rules/wf--acme/rule.md"]);
+      const flagged = path.join(root, "ingredients/rules/wf--acme/rule.md");
+      await fs.writeFile(flagged, "b\nlocal edit only here\n");
+
+      const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--forge", root]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain(`(${reason})`);
+      expect(await fs.readFile(flagged, "utf8")).toBe("b\nlocal edit only here\n");
+    });
+  }
+});

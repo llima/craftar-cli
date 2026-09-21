@@ -146,12 +146,12 @@ export async function gitDirty(dir: string): Promise<boolean> {
 export interface UnheldPath {
   /** Repo-relative path as git reports it (or the path asked about, when git itself failed). */
   path: string;
-  reason: "ignored" | "untracked" | "modified" | "git failed";
+  reason: "ignored" | "untracked" | "modified" | "skip-worktree" | "assume-unchanged" | "git failed";
 }
 
 /**
  * Ruling 37: the entries under `paths` (absolute, all inside the Forge `root`) that git does not
- * fully hold — ignored, untracked or modified — where an overwrite or a deletion could not be
+ * fully hold — ignored, untracked, modified, or index-flagged — where an overwrite or a deletion could not be
  * undone. `gitDirty` alone is not enough: plain `git status --porcelain` omits ignored files and
  * obeys `status.showUntrackedFiles=no`, so a Forge ignored by its enclosing repo, or an ignored
  * file inside a variant, passes it. `--ignored --untracked-files=all` surfaces both. Fails closed
@@ -175,6 +175,19 @@ export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPa
       out.push({ path: e.slice(3), reason: xy === "!!" ? "ignored" : xy === "??" ? "untracked" : "modified" });
       // A rename or copy carries its original path as the next NUL-separated field.
       if (xy[0] === "R" || xy[0] === "C") i++;
+    }
+    // Ruling 39: `git status` trusts the index flags, so an entry marked skip-worktree or
+    // assume-unchanged reports clean however much its file was edited — and that edit exists
+    // nowhere git can restore it from. `ls-files -v` shows the flag: `S` for skip-worktree, a
+    // lowercase tag for assume-unchanged.
+    const { stdout: listed } = await execFileP("git", ["-C", root, "ls-files", "-v", "-z", "--", ...rel], {
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    for (const e of listed.split("\0")) {
+      if (e.length < 3) continue;
+      const tag = e[0];
+      if (tag === "S" || tag === "s") out.push({ path: e.slice(2), reason: "skip-worktree" });
+      else if (tag !== tag.toUpperCase()) out.push({ path: e.slice(2), reason: "assume-unchanged" });
     }
     return out;
   } catch {
