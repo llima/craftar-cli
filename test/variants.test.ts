@@ -73,6 +73,15 @@ describe("listVariants", () => {
     expect(groups[0].variants[0].distance).toMatchObject({ lines: 3, hunks: 1 });
   });
 
+  it("flags an MCP variant that differs only inside `server` as meta-only, not identical", async () => {
+    const mcp = (name: string, args: string[], extra: Record<string, unknown> = {}) => ({
+      meta: { type: "mcp", name, server: { command: "npx", args }, ...extra },
+    });
+    const forge = await forgeWith([mcp("srv", ["public-server"]), mcp("srv--acme", ["acme-server"], { as: "srv" })]);
+    const { groups: [group] } = await listVariants(forge);
+    expect(group.variants[0].distance).toMatchObject({ sameBodyDifferentMeta: true, identicalAfterNormalization: false });
+  });
+
   it("flags a body-identical variant whose metadata differs", async () => {
     const forge = await forgeWith([rule("x", "same\n"), rule("x--acme", "same\n", { as: "x", targets: ["kiro"] })]);
     const { groups: [group] } = await listVariants(forge);
