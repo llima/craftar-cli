@@ -121,6 +121,8 @@ export async function applyPlan(
   let unresolved = 0;
 
   const hunksByFile = new Map(diff.files.map((f) => [f.file, f.hunks]));
+  const onlyInBase = new Set(diff.onlyInBase);
+  const onlyInVariant = new Set(diff.onlyInVariant);
 
   for (const pf of plan.files) {
     if (pf.hunks) {
@@ -169,7 +171,21 @@ export async function applyPlan(
       throw new Error(`unify plan: "${pf.file}" has neither hunk decisions nor a side ("onlyIn") — the plan no longer matches this diff.`);
     }
 
-    // One-sided file: present only in the base or only in the variant.
+    // One-sided file: present only in the base or only in the variant. Checked against the diff
+    // the same way a paired file's hunk count is checked above (spec §8 refusal 7: "names a file
+    // ... the diff does not have") — a hand-edited plan can name a file that is shared and
+    // identical (so the diff never lists it as one-sided at all, on either side) or has simply
+    // moved sides since the plan was saved. Left unchecked, `take: "variant"` on such an entry
+    // would fall through to `writeUnified`'s `fs.rm(..., { force: true })`, which deletes or
+    // silently no-ops on a path the engine never proposed touching — a Forge with no lock cannot
+    // afford that.
+    const onlySet = pf.onlyIn === "base" ? onlyInBase : onlyInVariant;
+    if (!onlySet.has(pf.file)) {
+      throw new Error(
+        `unify plan: "${pf.file}" is recorded as present only in the ${pf.onlyIn}, but the diff does not have it there — the plan no longer matches this diff.`,
+      );
+    }
+
     const take = pf.take ?? "keep";
     if (take === "keep") {
       unresolved += 1;
