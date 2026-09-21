@@ -121,7 +121,29 @@ export async function applyPlan(
     if (pf.hunks) {
       const hunks = hunksByFile.get(pf.file);
       if (!hunks) throw new Error(`unify plan: no diff hunks recorded for paired file "${pf.file}"`);
-      const takes = pf.hunks.map((h) => h.take);
+
+      // A plan is hand-edited YAML: bind each decision by its own `hunk` field, never by array
+      // position, so a reordered entry still lands on the hunk it names. A length mismatch, or a
+      // `hunk` value outside 1..n or repeated, means the plan no longer describes this diff —
+      // refuse rather than silently misapplying a decision to the wrong hunk or defaulting a gap
+      // to "base".
+      if (pf.hunks.length !== hunks.length) {
+        throw new Error(
+          `unify plan: "${pf.file}" carries ${pf.hunks.length} hunk decision(s), but the diff has ${hunks.length} — the plan no longer matches this diff.`,
+        );
+      }
+      const takes: Take[] = new Array(hunks.length);
+      const seen = new Set<number>();
+      for (const ph of pf.hunks) {
+        if (ph.hunk < 1 || ph.hunk > hunks.length || seen.has(ph.hunk)) {
+          throw new Error(
+            `unify plan: "${pf.file}" hunk index ${ph.hunk} is out of range or duplicated — expected each of 1..${hunks.length} exactly once.`,
+          );
+        }
+        seen.add(ph.hunk);
+        takes[ph.hunk - 1] = ph.take;
+      }
+
       unresolved += takes.filter((t) => t === "keep").length;
       const baseText = await readIngredientText(base, pf.file);
       const variantText = await readIngredientText(variant, pf.file);

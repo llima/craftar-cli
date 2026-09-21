@@ -223,4 +223,31 @@ describe("applyPlan — paired files", () => {
     const r = await applyPlan(base, variant, diff, plan);
     expect(r.write["rule.md"]).toBe("");
   });
+
+  // Fix round 1, Finding 3: two separate hunks in the same file, used by both tests below.
+  function twoHunkScenario() {
+    return scenario({ "rule.md": "a\nold1\nb\nold2\nc\n" }, { "rule.md": "a\nnew1\nb\nnew2\nc\n" });
+  }
+
+  it("refuses a plan whose hunk decisions no longer match the diff's hunk count", async () => {
+    const { base, variant, diff } = await twoHunkScenario();
+    const plan = await planFrom(base, variant, diff, "acme");
+    // Hand-edited down to one decision for a file the diff still says has two hunks.
+    plan.files[0].hunks = [{ hunk: 2, at: plan.files[0].hunks![1].at, take: "variant" }];
+    await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow();
+  });
+
+  it("binds each decision to the hunk index it names, even listed out of order", async () => {
+    const { base, variant, diff } = await twoHunkScenario();
+    const plan = await planFrom(base, variant, diff, "acme");
+    // Reordered in the array: hunk 2's decision comes first, hunk 1's second.
+    plan.files[0].hunks = [
+      { hunk: 2, at: plan.files[0].hunks![1].at, take: "variant" },
+      { hunk: 1, at: plan.files[0].hunks![0].at, take: "base" },
+    ];
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write["rule.md"]).toBe("a\nold1\nb\nnew2\nc\n");
+    expect(r.resolved).toBe(true);
+    expect(r.unresolved).toBe(0);
+  });
 });
