@@ -112,13 +112,19 @@ async function gitHead(dir: string): Promise<string | null> {
   }
 }
 
-/** True when the Forge is a git checkout with uncommitted changes. False when it is not a repo. */
+/**
+ * True when the Forge has uncommitted changes — and also when `git status` cannot be run at all.
+ * By the time this is called the directory is known to be a git repository (`forge.commit !== null`
+ * is checked first), so a failure here is anomalous, and an anomaly is not evidence of a clean
+ * tree. Failing closed costs a confusing refusal; failing open costs a deletion from a Forge with
+ * no lock.
+ */
 export async function gitDirty(dir: string): Promise<boolean> {
   try {
     const { stdout } = await execFileP("git", ["-C", dir, "status", "--porcelain"]);
     return stdout.trim().length > 0;
   } catch {
-    return false;
+    return true;
   }
 }
 

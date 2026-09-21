@@ -1,5 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { promisify } from "node:util";
+import { afterEach, describe, expect, it } from "vitest";
+import { gitDirty } from "../src/core/forge.js";
 import { UnifyPlanSchema } from "../src/schema/index.js";
+import { tmpDir } from "./helpers/forge.js";
+
+const execFileP = promisify(execFile);
+
+const cleanups: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  while (cleanups.length) await cleanups.pop()!();
+});
 
 const valid = {
   schema: 1,
@@ -29,5 +42,24 @@ describe("UnifyPlanSchema", () => {
 
   it("rejects a schema version it does not know", () => {
     expect(() => UnifyPlanSchema.parse({ ...valid, schema: 2 })).toThrow();
+  });
+});
+
+describe("gitDirty", () => {
+  it("is false for a committed tree and true once a file changes", async () => {
+    const dir = await tmpDir("craftar-git-");
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    await fs.writeFile(path.join(dir, "a.txt"), "one\n");
+    await execFileP("git", ["-C", dir, "init", "-q"]);
+    await execFileP("git", ["-C", dir, "add", "-A"]);
+    await execFileP("git", ["-C", dir, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"]);
+    expect(await gitDirty(dir)).toBe(false);
+    await fs.writeFile(path.join(dir, "a.txt"), "two\n");
+    expect(await gitDirty(dir)).toBe(true);
+  });
+
+  it("reports dirty when git cannot report at all", async () => {
+    const missing = path.join(await tmpDir("craftar-git-"), "does-not-exist");
+    expect(await gitDirty(missing)).toBe(true);
   });
 });
