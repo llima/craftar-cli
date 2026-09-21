@@ -351,7 +351,7 @@ forge
     }
 
     // Order: merged files, then the recipe cascade, then removal of the variant directory
-    // (Ruling 21) — a late failure leaves an orphan variant, never a recipe naming a deleted one.
+    // (Ruling 21) — a late failure leaves the variant in place, never a recipe naming a deleted one.
     const journal: WriteJournal = [];
     let touched: string[] = [];
     let cascade: RecipeCascadeResult = { rewritten: [], deleted: [], profileRepointed: [], extendsRepointed: [] };

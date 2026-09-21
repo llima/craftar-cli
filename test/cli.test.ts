@@ -627,7 +627,7 @@ describe("cli", () => {
     expect(apply.stderr).toContain("nope.md");
   });
 
-  it("forge unify leaves the variant standing (an orphan, not a dangling reference) when the recipe cascade cannot rewrite an aliased reference (Ruling 21)", async () => {
+  it("forge unify leaves the variant in place (not a dangling reference) when the recipe cascade cannot rewrite an aliased reference (Ruling 21)", async () => {
     const root = await tmpDir("craftar-cli-forge-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
     await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });

@@ -643,8 +643,8 @@ export async function checkRecipeCascade(forge: Forge, baseRef: IngredientRef, v
  * `RecipeSchema` materializes defaults (`extends`, `ingredients`, `params`) that a re-serialized
  * schema object would write into a file that may have had far fewer keys, dropping comments too.
  * The caller still orders this cascade *before* removing the variant's directory, so a late
- * failure leaves an orphan variant (visible to `forge variants`) rather than a recipe naming a
- * directory that no longer exists.
+ * failure leaves the variant in place (its base still exists, so `forge variants` lists it as
+ * an ordinary variant) rather than a recipe naming a directory that no longer exists.
  *
  * Pass 2 runs against a *reload* of the Forge, so it sees pass 1's writes on disk. The importer
  * suffixes a recipe `--<profile>` when any of its ingredients is a variant; once the variant is
