@@ -1,11 +1,12 @@
 import { promises as fs } from "node:fs";
+import type { Dirent } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { fingerprintDir } from "./fingerprint.js";
 import { loadForge, readIngredientText, type Forge, type LoadedIngredient } from "./forge.js";
 import { splitLines, type Hunk } from "./diff.js";
-import { detectEol, withEol } from "./text.js";
+import { detectEol, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
 import type { IngredientRef, UnifyPlan, PlanFile, Take } from "../schema/index.js";
 
@@ -220,6 +221,10 @@ export interface RecipeCascadeResult {
  * Find the recipe file under `recipes/` whose `name` field matches, by scanning rather than
  * assuming `<name>.yaml` — `loadForge` keys `forge.recipes` by the `name` field *inside* the
  * YAML, never by filename, so a recipe can legally live in a file named after something else.
+ * When two files declare the same `name`, the *last* one `readdir` returns wins — matching
+ * `loadForge`'s `recipes.set(r.name, r)`, which overwrites on every later match in the same
+ * directory order. There is no duplicate-name refusal for recipes the way there is for
+ * ingredients, so agreeing with `loadForge` is the only consistency this can offer.
  */
 async function findRecipeFile(recipesDir: string, name: string): Promise<string> {
   let entries: string[] = [];
@@ -228,6 +233,7 @@ async function findRecipeFile(recipesDir: string, name: string): Promise<string>
   } catch {
     entries = [];
   }
+  let found: string | undefined;
   for (const f of entries) {
     if (!/\.ya?ml$/.test(f)) continue;
     const abs = path.join(recipesDir, f);
@@ -237,23 +243,81 @@ async function findRecipeFile(recipesDir: string, name: string): Promise<string>
     } catch {
       continue;
     }
-    if (parsed && typeof parsed === "object" && (parsed as { name?: unknown }).name === name) return abs;
+    if (parsed && typeof parsed === "object" && (parsed as { name?: unknown }).name === name) found = abs;
   }
-  throw new Error(`recipe "${name}" not found under ${recipesDir}`);
+  if (!found) throw new Error(`recipe "${name}" not found under ${recipesDir}`);
+  return found;
+}
+
+/**
+ * Find the profile file under `profiles/` whose `name` field matches, by scanning rather than
+ * assuming `profiles/<name>/profile.yaml` — `loadForge` keys `forge.profiles` by the `name` field
+ * *inside* `profile.yaml`, not by the directory name (`src/core/forge.ts`'s profile-loading loop
+ * reads every `profiles/<dir>/profile.yaml` and sets by `p.name`), so a profile can legally live
+ * in a directory named after something else. Last match wins, matching `loadForge` the same way
+ * `findRecipeFile` does for recipes.
+ */
+async function findProfileFile(profilesRoot: string, name: string): Promise<string> {
+  let entries: Dirent[] = [];
+  try {
+    entries = await fs.readdir(profilesRoot, { withFileTypes: true });
+  } catch {
+    entries = [];
+  }
+  let found: string | undefined;
+  for (const d of entries) {
+    if (!d.isDirectory()) continue;
+    const abs = path.join(profilesRoot, d.name, "profile.yaml");
+    let parsed: unknown;
+    try {
+      parsed = YAML.parse(await fs.readFile(abs, "utf8"));
+    } catch {
+      continue;
+    }
+    if (parsed && typeof parsed === "object" && (parsed as { name?: unknown }).name === name) found = abs;
+  }
+  if (!found) throw new Error(`profile "${name}" not found under ${profilesRoot}`);
+  return found;
+}
+
+/**
+ * Read a YAML file for an in-place edit, capturing the EOL and BOM of the bytes on disk so the
+ * edit can restore them — `YAML.parseDocument` / `doc.toString()` always emit LF without a BOM,
+ * so a one-token change would otherwise turn into a whole-file diff in the git repo the user
+ * reviews. The BOM check mirrors the one `mergeFile` already does on `baseText` in this file:
+ * `charCodeAt(0)` against `﻿`, rather than reading the file again as a `Buffer` for
+ * `hasBom`.
+ */
+async function readYamlEdit(file: string): Promise<{ doc: ReturnType<typeof YAML.parseDocument>; eol: Eol; bom: boolean }> {
+  const raw = await fs.readFile(file, "utf8");
+  return { doc: YAML.parseDocument(raw), eol: detectEol(raw), bom: raw.charCodeAt(0) === BOM.charCodeAt(0) };
+}
+
+/** Serialize an edited document back with the original file's EOL and BOM, flow collections unpadded. */
+function serializeYamlEdit(doc: ReturnType<typeof YAML.parseDocument>, eol: Eol, bom: boolean): string {
+  return (bom ? BOM : "") + withEol(doc.toString({ flowCollectionPadding: false }), eol);
 }
 
 /**
  * Replace every scalar entry equal to `from` with `to` inside the sequence at `key`, matched by
  * value — never by rebuilding the sequence, so untouched entries, comments and formatting survive
- * the round trip.
+ * the round trip. Returns how many entries were replaced, so a caller that expected at least one
+ * (because the schema-parsed value it read off `loadForge` already contained `from`) can tell a
+ * no-op apart from a real edit — e.g. `key` resolving to an alias/anchor node rather than a plain
+ * `YAMLSeq`, which this function cannot rewrite safely and reports as zero.
  */
-function replaceSeqEntry(doc: ReturnType<typeof YAML.parseDocument>, key: string, from: string, to: string): void {
+function replaceSeqEntry(doc: ReturnType<typeof YAML.parseDocument>, key: string, from: string, to: string): number {
   const seq = doc.get(key, true);
-  if (!(seq instanceof YAML.YAMLSeq)) return;
+  if (!(seq instanceof YAML.YAMLSeq)) return 0;
+  let count = 0;
   seq.items.forEach((item, i) => {
     const value = item instanceof YAML.Scalar ? item.value : item;
-    if (value === from) seq.set(i, to);
+    if (value === from) {
+      seq.set(i, to);
+      count++;
+    }
   });
+  return count;
 }
 
 /**
@@ -263,13 +327,20 @@ function replaceSeqEntry(doc: ReturnType<typeof YAML.parseDocument>, key: string
  * writing each file back through `YAML.parseDocument` so only that one sequence entry changes —
  * `RecipeSchema` materializes defaults (`extends`, `ingredients`, `params`) that a re-serialized
  * schema object would write into a file that may have had far fewer keys, dropping comments too.
+ * `loadForge` already said this recipe's `ingredients` contains `variantRef`; if the sequence edit
+ * still replaces nothing (an alias/anchor, for instance), that is a Forge unify cannot safely
+ * rewrite — throw rather than record a rewrite that did not happen, since a caller trusting
+ * `rewritten` would otherwise remove the variant's directory next (spec §7.2 step 1) and leave a
+ * live reference to a deleted ingredient on disk. Pass 1 has deleted nothing yet, so throwing here
+ * is safe: the clean-git-tree refusal (spec §8 rule 2) is the documented undo.
  *
  * Pass 2 runs against a *reload* of the Forge, so it sees pass 1's writes on disk. The importer
  * suffixes a recipe `--<profile>` when any of its ingredients is a variant; once the variant is
  * gone, a suffixed recipe `<r>--<profile>` may now be identical to its unsuffixed sibling `<r>` —
  * compared as `ingredients` (sorted), `extends`, `slot` and `params`, never `description`, which
- * is prose. On a match the suffixed recipe is deleted and every profile that lists it is
- * repointed at `<r>` (not only the `profile` argument — another profile may still reference it).
+ * is prose. On a match, every profile that lists the suffixed recipe is repointed at `<r>` (not
+ * only the `profile` argument — another profile may still reference it) *before* the suffixed
+ * recipe's file is removed: if the profile scan fails, nothing has been deleted yet either.
  * A suffixed recipe with no matching sibling is left alone: spec §7.2 item 4, never rename.
  */
 export async function rewriteRecipes(
@@ -284,9 +355,15 @@ export async function rewriteRecipes(
   for (const [name, r] of forge.recipes) {
     if (!r.ingredients.includes(variantRef)) continue;
     const file = await findRecipeFile(recipesDir, name);
-    const doc = YAML.parseDocument(await fs.readFile(file, "utf8"));
-    replaceSeqEntry(doc, "ingredients", variantRef, baseRef);
-    await fs.writeFile(file, String(doc));
+    const { doc, eol, bom } = await readYamlEdit(file);
+    const count = replaceSeqEntry(doc, "ingredients", variantRef, baseRef);
+    if (count === 0) {
+      throw new Error(
+        `unify: recipe "${name}" (${file}) is recorded as referencing ${variantRef} in its "ingredients", ` +
+          `but no matching entry was found to rewrite (it may reach "ingredients" through a YAML alias/anchor) — refusing to report it as rewritten.`,
+      );
+    }
+    await fs.writeFile(file, serializeYamlEdit(doc, eol, bom));
     rewritten.push(name);
   }
 
@@ -295,6 +372,7 @@ export async function rewriteRecipes(
   if (rewritten.length === 0) return { rewritten, deleted, profileRepointed };
 
   const reloaded = await loadForge(forge.root);
+  const profilesRoot = path.join(reloaded.root, "profiles");
   const suffix = `--${profile}`;
 
   for (const rn of rewritten) {
@@ -311,18 +389,20 @@ export async function rewriteRecipes(
       isDeepStrictEqual(suffixed.params, sibling.params);
     if (!same) continue;
 
+    // Repoint every profile that lists the suffixed recipe before removing its file (Ruling 12):
+    // if the profile scan throws, nothing has been deleted yet.
+    for (const [pname, p] of reloaded.profiles) {
+      if (!p.recipes.includes(rn)) continue;
+      const profileFile = await findProfileFile(profilesRoot, pname);
+      const { doc: pdoc, eol: peol, bom: pbom } = await readYamlEdit(profileFile);
+      replaceSeqEntry(pdoc, "recipes", rn, r);
+      await fs.writeFile(profileFile, serializeYamlEdit(pdoc, peol, pbom));
+    }
+
     const suffixedFile = await findRecipeFile(path.join(reloaded.root, "recipes"), rn);
     await fs.rm(suffixedFile, { force: true });
     deleted.push(rn);
     profileRepointed.push(`${rn} -> ${r}`);
-
-    for (const [pname, p] of reloaded.profiles) {
-      if (!p.recipes.includes(rn)) continue;
-      const profileFile = path.join(reloaded.root, "profiles", pname, "profile.yaml");
-      const pdoc = YAML.parseDocument(await fs.readFile(profileFile, "utf8"));
-      replaceSeqEntry(pdoc, "recipes", rn, r);
-      await fs.writeFile(profileFile, String(pdoc));
-    }
   }
 
   return { rewritten, deleted, profileRepointed };
