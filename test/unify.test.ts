@@ -250,4 +250,13 @@ describe("applyPlan — paired files", () => {
     expect(r.resolved).toBe(true);
     expect(r.unresolved).toBe(0);
   });
+
+  // Fix round 1, Finding 4: an all-`keep` plan must not round-trip the base through
+  // splitLines/withEol — that silently re-terminates a base with mixed line endings.
+  it("leaves a mixed-EOL base untouched when every hunk is left at keep", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "a\r\nold\nc\n" }, { "rule.md": "a\nnew\nc\n" });
+    const plan = await planFrom(base, variant, diff, "acme"); // every decision defaults to keep
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write).toEqual({});
+  });
 });

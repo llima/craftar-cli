@@ -145,10 +145,15 @@ export async function applyPlan(
       }
 
       unresolved += takes.filter((t) => t === "keep").length;
-      const baseText = await readIngredientText(base, pf.file);
-      const variantText = await readIngredientText(variant, pf.file);
-      const merged = mergeFile(baseText, variantText, hunks, takes);
-      if (merged !== baseText) write[pf.file] = merged;
+      // A plan with no `variant` decision cannot change this file's bytes — skip the merge
+      // entirely rather than round-tripping the base through `splitLines`/`withEol` for nothing,
+      // which would re-terminate a base with mixed line endings even though no decision moved it.
+      if (takes.includes("variant")) {
+        const baseText = await readIngredientText(base, pf.file);
+        const variantText = await readIngredientText(variant, pf.file);
+        const merged = mergeFile(baseText, variantText, hunks, takes);
+        if (merged !== baseText) write[pf.file] = merged;
+      }
       continue;
     }
 
