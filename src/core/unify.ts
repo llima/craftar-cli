@@ -585,11 +585,18 @@ async function repointEdits(
  * as it was. Pass 2's input is simulated rather than reloaded: pass 1 only swaps `variantRef` for
  * `baseRef` inside `ingredients`, so a reload would read back the same recipes with that one value
  * replaced. It validates; it does not replace the two-pass-with-reload design of `rewriteRecipes`.
+ *
+ * Returns every recipe and profile file the cascade will rewrite or delete, absolute and
+ * de-duplicated — the set the caller checks git actually holds before writing (Ruling 37).
  */
-export async function checkRecipeCascade(forge: Forge, baseRef: IngredientRef, variantRef: IngredientRef, profile: string): Promise<void> {
+export async function checkRecipeCascade(forge: Forge, baseRef: IngredientRef, variantRef: IngredientRef, profile: string): Promise<string[]> {
+  const files = new Set<string>();
   const pass1 = await ingredientEdits(forge, baseRef, variantRef);
-  for (const { edit } of pass1) await renderSeqEdit(edit);
-  if (pass1.length === 0) return;
+  for (const { edit } of pass1) {
+    await renderSeqEdit(edit);
+    files.add(edit.file);
+  }
+  if (pass1.length === 0) return [...files];
 
   const after = new Map<string, Recipe>();
   for (const [n, rc] of forge.recipes) {
@@ -600,11 +607,18 @@ export async function checkRecipeCascade(forge: Forge, baseRef: IngredientRef, v
   const rewritten = pass1.map((p) => p.name);
   for (const { rn, r } of duplicatesAfterRewrite(after, rewritten, profile)) {
     const edits = await repointEdits(view, rn, r, gone);
-    for (const e of edits.profiles) await renderSeqEdit(e);
-    for (const x of edits.extends) await renderSeqEdit(x.edit);
-    await findRecipeFile(path.join(forge.root, "recipes"), rn);
+    for (const e of edits.profiles) {
+      await renderSeqEdit(e);
+      files.add(e.file);
+    }
+    for (const x of edits.extends) {
+      await renderSeqEdit(x.edit);
+      files.add(x.edit.file);
+    }
+    files.add(await findRecipeFile(path.join(forge.root, "recipes"), rn));
     gone.add(rn);
   }
+  return [...files];
 }
 
 /**

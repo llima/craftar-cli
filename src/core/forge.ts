@@ -143,6 +143,45 @@ export async function gitDirty(dir: string): Promise<boolean> {
   }
 }
 
+export interface UnheldPath {
+  /** Repo-relative path as git reports it (or the path asked about, when git itself failed). */
+  path: string;
+  reason: "ignored" | "untracked" | "modified" | "git failed";
+}
+
+/**
+ * Ruling 37: the entries under `paths` (absolute, all inside the Forge `root`) that git does not
+ * fully hold — ignored, untracked or modified — where an overwrite or a deletion could not be
+ * undone. `gitDirty` alone is not enough: plain `git status --porcelain` omits ignored files and
+ * obeys `status.showUntrackedFiles=no`, so a Forge ignored by its enclosing repo, or an ignored
+ * file inside a variant, passes it. `--ignored --untracked-files=all` surfaces both. Fails closed
+ * like `gitDirty`: when git cannot answer, every path counts as not held.
+ */
+export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPath[]> {
+  if (paths.length === 0) return [];
+  const rel = paths.map((p) => path.relative(root, p).split(path.sep).join("/") || ".");
+  try {
+    const { stdout } = await execFileP(
+      "git",
+      ["-C", root, "status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--", ...rel],
+      { maxBuffer: 64 * 1024 * 1024 },
+    );
+    const out: UnheldPath[] = [];
+    const entries = stdout.split("\0");
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      if (e.length < 4) continue;
+      const xy = e.slice(0, 2);
+      out.push({ path: e.slice(3), reason: xy === "!!" ? "ignored" : xy === "??" ? "untracked" : "modified" });
+      // A rename or copy carries its original path as the next NUL-separated field.
+      if (xy[0] === "R" || xy[0] === "C") i++;
+    }
+    return out;
+  } catch {
+    return rel.map((p) => ({ path: p, reason: "git failed" as const }));
+  }
+}
+
 /** Plural folder name for an ingredient type (rules/, agents/, …). */
 export function typeFolder(type: Ingredient["type"]): string {
   return type === "mcp" ? "mcp" : `${type}s`;

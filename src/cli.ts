@@ -8,7 +8,7 @@ import { loadWorkspace, plan, readLock, status, apply, resolveForge, type FileSt
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
-import { gitDirty, gitIsRepo } from "./core/forge.js";
+import { gitDirty, gitIsRepo, gitUnheld } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
   hunkAt,
@@ -338,7 +338,17 @@ forge
     const result = await applyPlan(base, variant, diff, toApply, { discardVariantMeta: o.take === "base" });
     // Ruling 33, dry pass: every recipe and profile edit the cascade will make is checked before
     // the first byte is written, so a refusal (an aliased reference) leaves the Forge untouched.
-    if (result.resolved) await checkRecipeCascade(f, base.ref, variant.ref, o.profile);
+    const cascadeFiles = result.resolved ? await checkRecipeCascade(f, base.ref, variant.ref, o.profile) : [];
+
+    // Ruling 37: "git is the undo" only holds for files git actually has. The whole-repo clean
+    // check above cannot see ignored files (a Forge its enclosing repo ignores, an ignored file in
+    // a variant) nor untracked ones under `status.showUntrackedFiles=no` — so every path this run
+    // will overwrite or delete is checked on its own, before the first write.
+    const mustHold = [base.dir, ...(result.resolved ? [variant.dir, ...cascadeFiles] : [])];
+    const unheld = await gitUnheld(f.root, mustHold);
+    if (unheld.length) {
+      fail(`${unheld[0].path} is not held by git (${unheld[0].reason}) — unify can only change files git can restore`);
+    }
 
     // Order: merged files, then the recipe cascade, then removal of the variant directory
     // (Ruling 21) — a late failure leaves an orphan variant, never a recipe naming a deleted one.

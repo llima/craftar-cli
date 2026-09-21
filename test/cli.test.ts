@@ -1070,3 +1070,54 @@ describe("cli — forge unify --save-plan symlink escape (Ruling 30)", () => {
     expect(await exists(path.join(root, "recipes/plan.yaml"))).toBe(false);
   });
 });
+
+describe("cli — forge unify refuses paths git does not hold (Ruling 37)", () => {
+  it("refuses a Forge that its enclosing repository ignores, changing nothing", async () => {
+    const repo = await tmpDir("craftar-cli-repo-");
+    cleanups.push(() => fs.rm(repo, { recursive: true, force: true }));
+    gitInit(repo);
+    await fs.writeFile(path.join(repo, ".gitignore"), "forge/\n");
+    gitCommitAll(repo, "init");
+    const root = path.join(repo, "forge");
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("not held by git (ignored)");
+    expect(await fs.readFile(path.join(root, "ingredients/rules/wf/rule.md"), "utf8")).toBe("a\n");
+    expect(await exists(path.join(root, "ingredients/rules/wf--acme"))).toBe(true);
+  });
+
+  it("refuses when the variant directory holds a file .gitignore matches, and keeps that file", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    await fs.writeFile(path.join(root, ".gitignore"), "*.local.md\n");
+    gitInit(root);
+    gitCommitAll(root, "init");
+    const ignored = path.join(root, "ingredients/rules/wf--acme/notes.local.md");
+    await fs.writeFile(ignored, "only copy\n");
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("notes.local.md");
+    expect(r.stderr).toContain("ignored");
+    expect(await fs.readFile(ignored, "utf8")).toBe("only copy\n");
+  });
+
+  it("refuses an untracked file in the variant even under status.showUntrackedFiles=no", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+    execFileSync("git", ["-C", root, "config", "status.showUntrackedFiles", "no"]);
+    const untracked = path.join(root, "ingredients/rules/wf--acme/scratch.md");
+    await fs.writeFile(untracked, "not committed\n");
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("not held by git (untracked)");
+    expect(await exists(untracked)).toBe(true);
+  });
+});
