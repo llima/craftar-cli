@@ -1350,3 +1350,25 @@ describe("cli — forge unify never collapses a list naming both recipes (Ruling
     expect(await resolvedX(root)).toBe("from-base");
   });
 });
+
+describe("cli — forge unify's held-by-git refusal caps its list (docs-author nit)", () => {
+  it("lists the first ten paths git does not hold and counts the rest", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+    execFileSync("git", ["-C", root, "config", "status.showUntrackedFiles", "no"]);
+    const names = Array.from({ length: 13 }, (_, i) => `n${String(i).padStart(2, "0")}.md`); // sorts as git lists them
+    await writeFiles(root, Object.fromEntries(names.map((n) => [`ingredients/rules/wf--acme/${n}`, "x\n"])));
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("13 path(s)");
+    const listed = r.stderr.split(/\r?\n/).filter((l) => l.includes("is not held by git ("));
+    expect(listed).toHaveLength(10);
+    for (const n of names.slice(0, 10)) expect(r.stderr).toContain(`ingredients/rules/wf--acme/${n} is not held by git (untracked)`);
+    for (const n of names.slice(10)) expect(r.stderr).not.toContain(n);
+    expect(r.stderr).toContain("… and 3 more");
+  });
+});
