@@ -1138,3 +1138,33 @@ describe("cli — forge unify refuses paths git does not hold (Ruling 37)", () =
     expect(await exists(untracked)).toBe(true);
   });
 });
+
+describe("cli — forge unify acceptance criterion 2", () => {
+  it("applies an unmodified plan (every decision at keep): nothing changes and the variant stays", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [rule("wf", "a\nc\ne\n"), rule("wf--acme", "b\nc\nf\n", { as: "wf" })],
+      recipes: [recipe("base", ["rule/wf--acme"])],
+    });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const planDir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(planDir, { recursive: true, force: true }));
+    const planPath = path.join(planDir, "plan.yaml");
+    expect(runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+
+    const before = await snapshot(root);
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--plan", planPath, "--forge", root, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.resolved).toBe(false);
+    expect(out.unresolved).toBe(2);
+    expect(out.written).toEqual([]);
+    expect(out.removed).toEqual([]);
+    expect(out.variantRemoved).toBeNull();
+    expect(await snapshot(root)).toEqual(before);
+    expect(execFileSync("git", ["-C", root, "status", "--porcelain"], { encoding: "utf8" })).toBe("");
+  });
+});
