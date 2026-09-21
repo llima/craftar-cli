@@ -370,22 +370,7 @@ describe("rewriteRecipes", () => {
     expect(reloaded.recipes.get("base--acme")!.ingredients).toEqual(["rule/workflow", "rule/other"]);
   });
 
-  it("deletes a suffixed recipe that became identical to its sibling and repoints the profile", async () => {
-    const forge = await forgeWith({
-      ingredients: [rule("workflow", "a\n"), rule("workflow--acme", "b\n", { as: "workflow" })],
-      recipes: [
-        recipe("base", ["rule/workflow", "rule/other"]),
-        recipe("base--acme", ["rule/workflow--acme", "rule/other"]),
-      ],
-      profiles: [profile("acme", ["base--acme"])],
-    });
-    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
-    expect(out.deleted).toEqual(["base--acme"]);
-    expect(out.profileRepointed).toEqual(["base--acme -> base"]);
-    const reloaded = await loadForge(forge.root);
-    expect(reloaded.recipes.has("base--acme")).toBe(false);
-    expect(reloaded.profiles.get("acme")!.recipes).toEqual(["base"]);
-  });
+  // Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
 
   it("leaves a suffixed recipe alone when it has no unsuffixed sibling", async () => {
     const forge = await forgeWith({
@@ -394,7 +379,7 @@ describe("rewriteRecipes", () => {
       profiles: [profile("acme", ["solo--acme"])],
     });
     const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
-    expect(out.deleted).toEqual([]);
+    expect(out.identicalToSibling).toEqual([]); // Ruling 42: `deleted` is gone; nothing to report
     const reloaded = await loadForge(forge.root);
     expect(reloaded.recipes.get("solo--acme")!.ingredients).toEqual(["rule/workflow"]);
     expect(reloaded.profiles.get("acme")!.recipes).toEqual(["solo--acme"]);
@@ -410,7 +395,7 @@ describe("rewriteRecipes", () => {
       profiles: [profile("acme", ["base--acme"])],
     });
     const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
-    expect(out.deleted).toEqual([]);
+    expect(out.identicalToSibling).toEqual([]); // Ruling 42: `deleted` is gone; not identical, not reported
   });
 });
 
@@ -450,42 +435,9 @@ describe("rewriteRecipes — file identity, byte fidelity and safety (Rulings 9,
     expect(decoyText).toBe("name: solo\ningredients:\n  - rule/other\n");
   });
 
-  it("repoints a profile keeping exactly the keys and comment it started with — no zod defaults materialised", async () => {
-    const forge = await bareForge({
-      "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
-      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
-      // Only two keys on disk — ProfileSchema materialises ten (targets, language, identity...).
-      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme # pinned by ops\n",
-    });
-    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
-    expect(out.deleted).toEqual(["base--acme"]);
-    expect(out.profileRepointed).toEqual(["base--acme -> base"]);
+  // Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
 
-    const raw = await fs.readFile(path.join(forge.root, "profiles/acme/profile.yaml"), "utf8");
-    expect(raw).toContain("# pinned by ops");
-    expect(raw).toContain("- base");
-    expect(raw).not.toContain("base--acme");
-    expect(Object.keys(YAML.parse(raw) as object).sort()).toEqual(["name", "recipes"]);
-  });
-
-  it("repoints a profile whose directory name disagrees with its `name` field, before deleting the recipe (Ruling 12)", async () => {
-    const forge = await bareForge({
-      "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
-      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
-      // Directory is "acme-corp"; the profile's own `name` field is "acme" — the asymmetry
-      // `loadForge` already has between profiles and their directories.
-      "profiles/acme-corp/profile.yaml": "name: acme\nrecipes:\n  - base--acme\n",
-    });
-    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
-    expect(out.deleted).toEqual(["base--acme"]);
-    expect(out.profileRepointed).toEqual(["base--acme -> base"]);
-
-    const reloaded = await loadForge(forge.root);
-    expect(reloaded.recipes.has("base--acme")).toBe(false);
-    expect(reloaded.profiles.get("acme")!.recipes).toEqual(["base"]);
-    // The directory itself is never renamed — only its file's content changed.
-    expect(await exists(path.join(forge.root, "profiles/acme-corp/profile.yaml"))).toBe(true);
-  });
+  // Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
 
   it("keeps a CRLF, BOM-prefixed recipe file's EOL and BOM after the rewrite (Ruling 13)", async () => {
     const BOM = "﻿";
@@ -501,7 +453,7 @@ describe("rewriteRecipes — file identity, byte fidelity and safety (Rulings 9,
 
     const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
     expect(out.rewritten).toEqual(["solo--acme"]);
-    expect(out.deleted).toEqual([]); // no unsuffixed "solo" sibling — never renamed
+    expect(out.identicalToSibling).toEqual([]); // Ruling 42: no unsuffixed "solo" sibling
 
     const text = await fs.readFile(path.join(root, "recipes/solo.yaml"), "utf8");
     expect(text.charCodeAt(0)).toBe(0xfeff);
@@ -612,90 +564,6 @@ describe("unify — non-UTF-8 content (Ruling 31)", () => {
   });
 });
 
-// Final review, C5 (Ruling 32): the cascade leaves no dangling reference and records only the
-// repoints that happened.
-describe("rewriteRecipes — the whole cascade lands, or throws (Ruling 32)", () => {
-  it("repoints another recipe's `extends` at the unsuffixed recipe before deleting the suffixed one", async () => {
-    const forge = await bareForge({
-      "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
-      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
-      "recipes/stack--acme.yaml": "name: stack--acme\nextends:\n  - base--acme # layered\ningredients:\n  - rule/other\n",
-      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - stack--acme\n",
-    });
-    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
-    expect(out.deleted).toEqual(["base--acme"]);
-    expect(out.extendsRepointed).toEqual(["stack--acme: base--acme -> base"]);
-    // No profile listed base--acme: nothing was repointed there, so nothing is claimed.
-    expect(out.profileRepointed).toEqual([]);
+// Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
 
-    const reloaded = await loadForge(forge.root);
-    expect(reloaded.recipes.has("base--acme")).toBe(false);
-    expect(reloaded.recipes.get("stack--acme")!.extends).toEqual(["base"]);
-    expect(await fs.readFile(path.join(forge.root, "recipes/stack--acme.yaml"), "utf8")).toContain("# layered");
-    expect(reloaded.profiles.get("acme")!.recipes).toEqual(["stack--acme"]);
-  });
-
-  it("throws, naming the profile, when a profile reaches `recipes` through a YAML alias", async () => {
-    const forge = await bareForge({
-      "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
-      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
-      "profiles/acme/profile.yaml": "name: acme\nmine: &r [base--acme]\nrecipes: *r\n",
-    });
-    await expect(rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme")).rejects.toThrow(/profile "acme"/);
-    // The suffixed recipe is still there: a throw never leaves the profile naming a deleted recipe.
-    expect(await exists(path.join(forge.root, "recipes/base--acme.yaml"))).toBe(true);
-  });
-
-  it("throws when a recipe reaches `extends` through a YAML alias", async () => {
-    const forge = await bareForge({
-      "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
-      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
-      "recipes/stack--acme.yaml": "name: stack--acme\nx: &e [base--acme]\nextends: *e\n",
-    });
-    await expect(rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme")).rejects.toThrow(/stack--acme/);
-    expect(await exists(path.join(forge.root, "recipes/base--acme.yaml"))).toBe(true);
-  });
-});
-
-// Ruling 41 supersedes N2 and Ruling 40, and replaces their tests here: a list that names both
-// `base` and `base--acme` is never collapsed, in either order. `resolve()` applies recipes at their
-// first occurrence but lets param defaults win at their last, so no collapse keeps both — the
-// suffixed recipe is kept (now identical to its sibling) and the list is left exactly as it was.
-describe("rewriteRecipes — never collapse a list naming both recipes (Ruling 41)", () => {
-  for (const order of [
-    ["base--acme", "extra", "base"],
-    ["base", "extra", "base--acme"],
-  ]) {
-    it(`keeps base--acme and leaves a profile listing [${order.join(", ")}] untouched`, async () => {
-      const profileText = `name: acme\nrecipes:\n${order.map((r) => `  - ${r}\n`).join("")}`;
-      const forge = await bareForge({
-        "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
-        "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
-        "recipes/extra.yaml": "name: extra\ningredients:\n  - rule/other\n",
-        "profiles/acme/profile.yaml": profileText,
-      });
-      const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
-      expect(out.rewritten).toEqual(["base--acme"]);
-      expect(out.deleted).toEqual([]);
-      expect(out.profileRepointed).toEqual([]);
-      expect(out.kept).toEqual([{ recipe: "base--acme", sibling: "base", lists: ['profile "acme"'] }]);
-      expect(await fs.readFile(path.join(forge.root, "profiles/acme/profile.yaml"), "utf8")).toBe(profileText);
-      const reloaded = await loadForge(forge.root);
-      expect(reloaded.recipes.get("base--acme")!.ingredients).toEqual(["rule/workflow"]);
-    });
-  }
-
-  it("keeps base--acme for every list when only one list names both, repointing none of them", async () => {
-    const forge = await bareForge({
-      "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
-      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
-      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\n",
-      "profiles/beta/profile.yaml": "name: beta\nrecipes:\n  - base\n  - base--acme\n",
-    });
-    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
-    expect(out.deleted).toEqual([]);
-    expect(out.kept).toEqual([{ recipe: "base--acme", sibling: "base", lists: ['profile "beta"'] }]);
-    // `acme` names only base--acme, but base--acme survives, so it is not repointed away either.
-    expect(await fs.readFile(path.join(forge.root, "profiles/acme/profile.yaml"), "utf8")).toBe("name: acme\nrecipes:\n  - base--acme\n");
-  });
-});
+// Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.

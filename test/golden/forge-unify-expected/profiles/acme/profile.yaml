@@ -1,5 +1,5 @@
 name: acme
 recipes:
-  - base
+  - base--acme
 targets:
   - claude-code

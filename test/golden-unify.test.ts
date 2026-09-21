@@ -20,9 +20,9 @@ import { runCli } from "./helpers/cli.js";
  *   3. rule/workflow --plan <committed plan>  (a hunk merge, a one-sided copy, a one-sided no-op)
  * Steps 1 and 2 use the trivial `--take` front end and need no plan file of their own. Step 3 is
  * last on purpose: only once every variant of `base--acme` is resolved does its `ingredients`
- * list become identical to `recipes/base.yaml`'s, which is what triggers the recipe-cascade
- * dedup (spec forge-unify-spine.md §7.2 step 3) — `recipes/base--acme.yaml` deleted and
- * `profiles/acme/profile.yaml` repointed at `base`. `test/helpers/regen-golden-unify.ts` runs the
+ * list become identical to `recipes/base.yaml`'s. Since Ruling 42 the cascade only reports that
+ * (`recipes/base--acme.yaml` is kept, its `ingredients` rewritten to the base refs, and
+ * `profiles/acme/profile.yaml` is left unchanged). `test/helpers/regen-golden-unify.ts` runs the
  * same three steps to produce the committed plan and expected tree, so a change to either the
  * input Forge or the engine surfaces here as a diff to review, not a hand-edit to match.
  */
@@ -89,8 +89,9 @@ describe("golden: forge unify writes exact bytes into a Forge", () => {
     // by the two runs above, so the plan is still fresh here.
     const workflow = runCli(["forge", "unify", "rule/workflow", "--profile", "acme", "--plan", PLAN, "--forge", forge]);
     expect(workflow.code, workflow.stderr).toBe(0);
-    expect(workflow.stdout).toContain("recipes deleted: base--acme");
-    expect(workflow.stdout).toContain("profiles repointed: base--acme -> base");
+    // Ruling 42: reported, not deleted; the profile is never edited.
+    expect(workflow.stdout).toContain("recipes now identical to a sibling: base--acme");
+    expect(workflow.stdout).not.toContain("profiles repointed");
 
     const expectedFiles = await forgeFiles(EXPECTED);
     const actualFiles = await forgeFiles(forge);

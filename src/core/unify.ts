@@ -1,5 +1,4 @@
 import { promises as fs } from "node:fs";
-import type { Dirent } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
@@ -8,7 +7,7 @@ import { exists, listFiles, loadForge, readIngredientText, type Forge, type Load
 import { splitLines, type Hunk } from "./diff.js";
 import { detectEol, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
-import type { Ingredient, IngredientRef, Profile, Recipe, UnifyPlan, PlanFile, Take } from "../schema/index.js";
+import type { Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile, Take } from "../schema/index.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
 // fidelity, correctness should not hinge on a glyph no diff viewer, editor or re-encoding shows.
@@ -365,25 +364,13 @@ export async function writeUnified(base: LoadedIngredient, result: UnifyResult, 
 }
 
 export interface RecipeCascadeResult {
-  /** Recipes whose `ingredients` referenced the variant and were repointed at the base. */
+  /** Recipes whose `ingredients` referenced the variant and now reference the base instead. */
   rewritten: string[];
-  /** Suffixed recipes deleted because they became duplicates of their unsuffixed sibling. */
-  deleted: string[];
   /**
-   * One `"<r>--<profile> -> <r>"` per deleted recipe that at least one profile listed, however
-   * many profiles it was repointed in. A deleted recipe no profile listed records nothing here.
+   * Ruling 42: rewritten recipes `<r>--<profile>` that are now identical to their unsuffixed
+   * sibling `<r>`. Reported, never deleted — see `identicalToSibling`.
    */
-  profileRepointed: string[];
-  /** One `"<recipe>: <r>--<profile> -> <r>"` per recipe whose `extends` named a deleted recipe. */
-  extendsRepointed: string[];
-  /**
-   * Ruling 41: suffixed recipes left in place although now identical to their sibling, because
-   * some list names both — a profile's `recipes` or a recipe's `extends` (`lists`, e.g.
-   * `profile "acme"`, `recipe "stack"`). Collapsing such a list would move either the recipe's
-   * first occurrence (ingredient order) or its last (param precedence, last-wins), so it is left
-   * for a human.
-   */
-  kept: Array<{ recipe: string; sibling: string; lists: string[] }>;
+  identicalToSibling: string[];
 }
 
 /**
@@ -419,43 +406,12 @@ async function findRecipeFile(recipesDir: string, name: string): Promise<string>
 }
 
 /**
- * Find the profile file under `profiles/` whose `name` field matches, by scanning rather than
- * assuming `profiles/<name>/profile.yaml` — `loadForge` keys `forge.profiles` by the `name` field
- * *inside* `profile.yaml`, not by the directory name (`src/core/forge.ts`'s profile-loading loop
- * reads every `profiles/<dir>/profile.yaml` and sets by `p.name`), so a profile can legally live
- * in a directory named after something else. Last match wins, matching `loadForge` the same way
- * `findRecipeFile` does for recipes.
- */
-async function findProfileFile(profilesRoot: string, name: string): Promise<string> {
-  let entries: Dirent[] = [];
-  try {
-    entries = await fs.readdir(profilesRoot, { withFileTypes: true });
-  } catch {
-    entries = [];
-  }
-  let found: string | undefined;
-  for (const d of entries) {
-    if (!d.isDirectory()) continue;
-    const abs = path.join(profilesRoot, d.name, "profile.yaml");
-    let parsed: unknown;
-    try {
-      parsed = YAML.parse(await fs.readFile(abs, "utf8"));
-    } catch {
-      continue;
-    }
-    if (parsed && typeof parsed === "object" && (parsed as { name?: unknown }).name === name) found = abs;
-  }
-  if (!found) throw new Error(`profile "${name}" not found under ${profilesRoot}`);
-  return found;
-}
-
-/**
  * Read a YAML file for an in-place edit, capturing the EOL and BOM of the bytes on disk so the
  * edit can restore them — `YAML.parseDocument` / `doc.toString()` always emit LF without a BOM,
  * so a one-token change would otherwise turn into a whole-file diff in the git repo the user
  * reviews. The BOM check mirrors the one `mergeFile` already does on `baseText` in this file:
- * `charCodeAt(0)` against `﻿`, rather than reading the file again as a `Buffer` for
- * `hasBom`.
+ * `charCodeAt(0)` against the BOM code point, rather than reading the file again as a `Buffer`
+ * for `hasBom`.
  */
 async function readYamlEdit(file: string): Promise<{ doc: ReturnType<typeof YAML.parseDocument>; eol: Eol; bom: boolean }> {
   const raw = await fs.readFile(file, "utf8");
@@ -474,9 +430,6 @@ function serializeYamlEdit(doc: ReturnType<typeof YAML.parseDocument>, eol: Eol,
  * (because the schema-parsed value it read off `loadForge` already contained `from`) can tell a
  * no-op apart from a real edit — e.g. `key` resolving to an alias/anchor node rather than a plain
  * `YAMLSeq`, which this function cannot rewrite safely and reports as zero.
- *
- * It never collapses entries (Ruling 41): a list that would end up naming the same recipe twice
- * is not repointed at all — see `listsHoldingBoth`.
  */
 function replaceSeqEntry(doc: ReturnType<typeof YAML.parseDocument>, key: string, from: string, to: string): number {
   const seq = doc.get(key, true);
@@ -492,200 +445,108 @@ function replaceSeqEntry(doc: ReturnType<typeof YAML.parseDocument>, key: string
   return count;
 }
 
-/** One sequence entry the cascade replaces, in one file: `from` becomes `to` under `key`. */
-interface SeqEdit {
-  /** How the owner is named in a refusal: `recipe "base--acme"`, `profile "acme"`. */
-  owner: string;
+/** One recipe's `ingredients` edit: the variant's ref becomes the base's, in one file. */
+interface IngredientEdit {
+  name: string;
   file: string;
-  key: "ingredients" | "recipes" | "extends";
-  from: string;
-  to: string;
+  from: IngredientRef;
+  to: IngredientRef;
 }
 
 /**
- * Render an edit without writing it. `loadForge` already said the owner's `key` holds `from`; if
- * the sequence edit still replaces nothing (an alias/anchor, for instance), that is a file unify
- * cannot safely rewrite — throw rather than record a rewrite that did not happen (Rulings 14, 32).
+ * Render an edit without writing it. `loadForge` already said the recipe's `ingredients` holds
+ * `from`; if the sequence edit still replaces nothing (an alias/anchor, for instance), that is a
+ * file unify cannot safely rewrite — throw rather than record a rewrite that did not happen
+ * (Ruling 14).
  */
-async function renderSeqEdit(e: SeqEdit): Promise<string> {
+async function renderIngredientEdit(e: IngredientEdit): Promise<string> {
   const { doc, eol, bom } = await readYamlEdit(e.file);
-  if (replaceSeqEntry(doc, e.key, e.from, e.to) === 0) {
+  if (replaceSeqEntry(doc, "ingredients", e.from, e.to) === 0) {
     throw new Error(
-      `unify: ${e.owner} (${e.file}) is recorded as naming ${e.from} in its "${e.key}", ` +
-        `but no matching entry was found to rewrite (it may reach "${e.key}" through a YAML alias/anchor) — refusing to report it as rewritten.`,
+      `unify: recipe "${e.name}" (${e.file}) is recorded as naming ${e.from} in its "ingredients", ` +
+        `but no matching entry was found to rewrite (it may reach "ingredients" through a YAML alias/anchor) — refusing to report it as rewritten.`,
     );
   }
   return serializeYamlEdit(doc, eol, bom);
 }
 
-async function applySeqEdit(e: SeqEdit, journal?: WriteJournal): Promise<void> {
-  const content = await renderSeqEdit(e);
-  await note(journal, e.file);
-  await fs.writeFile(e.file, content);
-}
-
-/** Pass 1's edits: every recipe whose `ingredients` holds the variant, repointed at the base. */
-async function ingredientEdits(
-  forge: Forge,
-  baseRef: IngredientRef,
-  variantRef: IngredientRef,
-): Promise<Array<{ name: string; edit: SeqEdit }>> {
+/** Every recipe whose `ingredients` holds the variant, found by its `name` field (Ruling 9). */
+async function ingredientEdits(forge: Forge, baseRef: IngredientRef, variantRef: IngredientRef): Promise<IngredientEdit[]> {
   const recipesDir = path.join(forge.root, "recipes");
-  const out: Array<{ name: string; edit: SeqEdit }> = [];
+  const out: IngredientEdit[] = [];
   for (const [name, r] of forge.recipes) {
     if (!r.ingredients.includes(variantRef)) continue;
-    const file = await findRecipeFile(recipesDir, name);
-    out.push({ name, edit: { owner: `recipe "${name}"`, file, key: "ingredients", from: variantRef, to: baseRef } });
+    out.push({ name, file: await findRecipeFile(recipesDir, name), from: variantRef, to: baseRef });
   }
   return out;
 }
 
 /**
- * The suffixed recipes pass 2 deletes, in order: each `<r>--<profile>` among the rewritten ones
- * that is now identical to its sibling `<r>` — compared as `ingredients` (sorted), `extends`,
- * `slot` and `params`, never `description`, which is prose.
+ * Ruling 42: among the rewritten recipes, each `<r>--<profile>` that is now identical to its
+ * unsuffixed sibling `<r>` — compared as `ingredients` (sorted), `extends`, `slot` and `params`,
+ * never `description`, which is prose. It is only reported: deleting it and repointing the lists
+ * that name it is safe only if `<r>` takes part in no other resolution — a transitive `extends`, a
+ * workspace's `recipes.add` — and param defaults are last-wins while recipes apply at their first
+ * occurrence, so either could shift. That cannot be proven from inside the Forge.
  */
-function duplicatesAfterRewrite(recipes: Map<string, Recipe>, rewritten: string[], profile: string): Array<{ rn: string; r: string }> {
+function identicalToSibling(recipes: Map<string, Recipe>, rewritten: string[], profile: string): string[] {
   const suffix = `--${profile}`;
-  const out: Array<{ rn: string; r: string }> = [];
+  const out: string[] = [];
   for (const rn of rewritten) {
     if (!rn.endsWith(suffix)) continue;
-    const r = rn.slice(0, -suffix.length);
     const suffixed = recipes.get(rn);
-    const sibling = recipes.get(r);
+    const sibling = recipes.get(rn.slice(0, -suffix.length));
     if (!suffixed || !sibling) continue;
     const same =
       isDeepStrictEqual([...suffixed.ingredients].sort(), [...sibling.ingredients].sort()) &&
       isDeepStrictEqual(suffixed.extends, sibling.extends) &&
       suffixed.slot === sibling.slot &&
       isDeepStrictEqual(suffixed.params, sibling.params);
-    if (same) out.push({ rn, r });
+    if (same) out.push(rn);
   }
   return out;
 }
 
 /**
- * The edits deleting `rn` requires first: each profile listing it (Ruling 12) and each recipe
- * extending it (Ruling 32), repointed at `r`. Recipes in `gone` were deleted by an earlier step.
- */
-/**
- * Ruling 41: every list in the Forge — a profile's `recipes`, a recipe's `extends` — that names
- * both `rn` and `r`. Repointing such a list would name `r` twice, and no collapse of it is safe:
- * `resolve()` applies recipes at their first occurrence but lets param defaults win at their last,
- * so dropping either copy changes one or the other. When any list holds both, `rn` is kept (and no
- * list is repointed away from it), which leaves resolution exactly as it was. Recipes in `gone`
- * were deleted by an earlier step.
- */
-function listsHoldingBoth(
-  view: { recipes: Map<string, Recipe>; profiles: Map<string, Profile> },
-  rn: string,
-  r: string,
-  gone: Set<string>,
-): string[] {
-  const out: string[] = [];
-  for (const [pname, p] of view.profiles) {
-    if (p.recipes.includes(rn) && p.recipes.includes(r)) out.push(`profile "${pname}"`);
-  }
-  for (const [xname, x] of view.recipes) {
-    if (gone.has(xname)) continue;
-    if (x.extends.includes(rn) && x.extends.includes(r)) out.push(`recipe "${xname}"`);
-  }
-  return out;
-}
-
-async function repointEdits(
-  view: { root: string; recipes: Map<string, Recipe>; profiles: Map<string, Profile> },
-  rn: string,
-  r: string,
-  gone: Set<string>,
-): Promise<{ profiles: SeqEdit[]; extends: Array<{ recipe: string; edit: SeqEdit }> }> {
-  const profiles: SeqEdit[] = [];
-  for (const [pname, p] of view.profiles) {
-    if (!p.recipes.includes(rn)) continue;
-    const file = await findProfileFile(path.join(view.root, "profiles"), pname);
-    profiles.push({ owner: `profile "${pname}"`, file, key: "recipes", from: rn, to: r });
-  }
-  const ext: Array<{ recipe: string; edit: SeqEdit }> = [];
-  for (const [xname, x] of view.recipes) {
-    if (xname === rn || gone.has(xname) || !x.extends.includes(rn)) continue;
-    const file = await findRecipeFile(path.join(view.root, "recipes"), xname);
-    ext.push({ recipe: xname, edit: { owner: `recipe "${xname}"`, file, key: "extends", from: rn, to: r } });
-  }
-  return { profiles, extends: ext };
-}
-
-/**
- * The cascade's dry pass (Ruling 33): compute every recipe and profile edit `rewriteRecipes` will
+ * The cascade's dry pass (Ruling 33): render every `ingredients` rewrite `rewriteRecipes` will
  * make and check that each one lands — alias checks included — writing nothing. A caller runs it
  * before the first write of the whole operation, so a refusal found here leaves the Forge exactly
- * as it was. Pass 2's input is simulated rather than reloaded: pass 1 only swaps `variantRef` for
- * `baseRef` inside `ingredients`, so a reload would read back the same recipes with that one value
- * replaced. It validates; it does not replace the two-pass-with-reload design of `rewriteRecipes`.
+ * as it was.
  *
- * Returns every recipe and profile file the cascade will rewrite or delete, absolute and
- * de-duplicated — the set the caller checks git actually holds before writing (Ruling 37).
+ * Returns the recipe files the cascade will rewrite, absolute — the set the caller checks git
+ * actually holds before writing (Ruling 37). Since Ruling 42 that is all the cascade ever touches:
+ * it deletes no recipe and edits no profile or `extends`.
  */
-export async function checkRecipeCascade(forge: Forge, baseRef: IngredientRef, variantRef: IngredientRef, profile: string): Promise<string[]> {
-  const files = new Set<string>();
-  const pass1 = await ingredientEdits(forge, baseRef, variantRef);
-  for (const { edit } of pass1) {
-    await renderSeqEdit(edit);
-    files.add(edit.file);
+export async function checkRecipeCascade(forge: Forge, baseRef: IngredientRef, variantRef: IngredientRef): Promise<string[]> {
+  const files: string[] = [];
+  for (const edit of await ingredientEdits(forge, baseRef, variantRef)) {
+    await renderIngredientEdit(edit);
+    files.push(edit.file);
   }
-  if (pass1.length === 0) return [...files];
-
-  const after = new Map<string, Recipe>();
-  for (const [n, rc] of forge.recipes) {
-    after.set(n, rc.ingredients.includes(variantRef) ? { ...rc, ingredients: rc.ingredients.map((i) => (i === variantRef ? baseRef : i)) } : rc);
-  }
-  const view = { root: forge.root, recipes: after, profiles: forge.profiles };
-  const gone = new Set<string>();
-  const rewritten = pass1.map((p) => p.name);
-  for (const { rn, r } of duplicatesAfterRewrite(after, rewritten, profile)) {
-    // Ruling 41: the same decision the real pass makes, so both agree on which files change.
-    if (listsHoldingBoth(view, rn, r, gone).length > 0) continue;
-    const edits = await repointEdits(view, rn, r, gone);
-    for (const e of edits.profiles) {
-      await renderSeqEdit(e);
-      files.add(e.file);
-    }
-    for (const x of edits.extends) {
-      await renderSeqEdit(x.edit);
-      files.add(x.edit.file);
-    }
-    files.add(await findRecipeFile(path.join(forge.root, "recipes"), rn));
-    gone.add(rn);
-  }
-  return [...files];
+  return files;
 }
 
 /**
- * Follow the recipe cascade a resolved variant causes (spec §7.2 items 2–4).
+ * Follow the recipe cascade a resolved variant causes. Since Ruling 42 (a product decision) it is
+ * one pass: every recipe whose `ingredients` holds `variantRef` is rewritten to hold `baseRef`,
+ * which is required because the variant ingredient is about to be removed. It never deletes a
+ * recipe and never edits a profile or an `extends` list.
  *
- * It starts with `checkRecipeCascade`, the dry pass: every edit below is rendered and checked
- * before the first one is written, so an edit that would not land (an alias/anchor) throws with
- * nothing written by this function (Ruling 33). A caller that writes before calling this — the
- * merged base, in `forge unify` — runs the dry pass itself first, for the same guarantee over the
- * whole operation. What a dry pass cannot foresee (an I/O error, a file locked on Windows) can
- * still fail midway; every path is noted in `journal`, when given, before it is touched, so the
- * caller can say what was written.
+ * It starts with `checkRecipeCascade`, the dry pass, so a rewrite that would not land throws with
+ * nothing written (Ruling 33). A caller that writes before calling this — the merged base, in
+ * `forge unify` — runs the dry pass itself first, for the same guarantee over the whole
+ * operation. What a dry pass cannot foresee (an I/O error, a file locked on Windows) can still
+ * fail midway; every path is noted in `journal`, when given, before it is touched.
  *
- * Pass 1 rewrites every recipe whose `ingredients` holds `variantRef` to hold `baseRef` instead,
- * writing each file back through `YAML.parseDocument` so only that one sequence entry changes —
- * `RecipeSchema` materializes defaults (`extends`, `ingredients`, `params`) that a re-serialized
- * schema object would write into a file that may have had far fewer keys, dropping comments too.
- * The caller still orders this cascade *before* removing the variant's directory, so a late
- * failure leaves the variant in place (its base still exists, so `forge variants` lists it as
- * an ordinary variant) rather than a recipe naming a directory that no longer exists.
+ * Each file is written back through `YAML.parseDocument` so only that one sequence entry changes
+ * (Ruling 10) — `RecipeSchema` materializes defaults a re-serialized schema object would write
+ * into a file that may have had far fewer keys, dropping comments too — with its EOL and BOM kept
+ * (Ruling 13). The caller orders this cascade *before* removing the variant's directory, so a late
+ * failure leaves the variant in place rather than a recipe naming a directory that no longer
+ * exists.
  *
- * Pass 2 runs against a *reload* of the Forge, so it sees pass 1's writes on disk. The importer
- * suffixes a recipe `--<profile>` when any of its ingredients is a variant; once the variant is
- * gone, a suffixed recipe `<r>--<profile>` may now be identical to its unsuffixed sibling `<r>`
- * (see `duplicatesAfterRewrite`). On a match, every profile that lists the suffixed recipe (not
- * only the `profile` argument — another profile may still reference it) and every recipe whose
- * `extends` names it (Ruling 32) is repointed at `<r>` *before* the suffixed recipe's file is
- * removed. A suffixed recipe with no matching sibling is left alone: spec §7.2 item 4, never
- * rename. Only repoints that actually happened are recorded.
+ * Afterwards, against a reload of the Forge, it reports each rewritten `<r>--<profile>` now
+ * identical to its sibling `<r>` (see `identicalToSibling`) for a human to remove.
  */
 export async function rewriteRecipes(
   forge: Forge,
@@ -694,43 +555,17 @@ export async function rewriteRecipes(
   profile: string,
   journal?: WriteJournal,
 ): Promise<RecipeCascadeResult> {
-  await checkRecipeCascade(forge, baseRef, variantRef, profile);
+  await checkRecipeCascade(forge, baseRef, variantRef);
 
   const rewritten: string[] = [];
-  for (const { name, edit } of await ingredientEdits(forge, baseRef, variantRef)) {
-    await applySeqEdit(edit, journal);
-    rewritten.push(name);
+  for (const edit of await ingredientEdits(forge, baseRef, variantRef)) {
+    const content = await renderIngredientEdit(edit);
+    await note(journal, edit.file);
+    await fs.writeFile(edit.file, content);
+    rewritten.push(edit.name);
   }
-
-  const deleted: string[] = [];
-  const profileRepointed: string[] = [];
-  const extendsRepointed: string[] = [];
-  const kept: RecipeCascadeResult["kept"] = [];
-  if (rewritten.length === 0) return { rewritten, deleted, profileRepointed, extendsRepointed, kept };
+  if (rewritten.length === 0) return { rewritten, identicalToSibling: [] };
 
   const reloaded = await loadForge(forge.root);
-  const gone = new Set<string>();
-  for (const { rn, r } of duplicatesAfterRewrite(reloaded.recipes, rewritten, profile)) {
-    // Ruling 41: never collapse a list that names both — keep `rn`, repoint nothing away from it.
-    const both = listsHoldingBoth(reloaded, rn, r, gone);
-    if (both.length > 0) {
-      kept.push({ recipe: rn, sibling: r, lists: both });
-      continue;
-    }
-    const edits = await repointEdits(reloaded, rn, r, gone);
-    for (const e of edits.profiles) await applySeqEdit(e, journal);
-    for (const x of edits.extends) {
-      await applySeqEdit(x.edit, journal);
-      extendsRepointed.push(`${x.recipe}: ${rn} -> ${r}`);
-    }
-
-    const suffixedFile = await findRecipeFile(path.join(reloaded.root, "recipes"), rn);
-    await note(journal, suffixedFile);
-    await fs.rm(suffixedFile, { force: true });
-    deleted.push(rn);
-    gone.add(rn);
-    if (edits.profiles.length > 0) profileRepointed.push(`${rn} -> ${r}`);
-  }
-
-  return { rewritten, deleted, profileRepointed, extendsRepointed, kept };
+  return { rewritten, identicalToSibling: identicalToSibling(reloaded.recipes, rewritten, profile) };
 }

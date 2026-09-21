@@ -338,7 +338,7 @@ forge
     const result = await applyPlan(base, variant, diff, toApply, { discardVariantMeta: o.take === "base" });
     // Ruling 33, dry pass: every recipe and profile edit the cascade will make is checked before
     // the first byte is written, so a refusal (an aliased reference) leaves the Forge untouched.
-    const cascadeFiles = result.resolved ? await checkRecipeCascade(f, base.ref, variant.ref, o.profile) : [];
+    const cascadeFiles = result.resolved ? await checkRecipeCascade(f, base.ref, variant.ref) : [];
 
     // Ruling 37: "git is the undo" only holds for files git actually has. The whole-repo clean
     // check above cannot see ignored files (a Forge its enclosing repo ignores, an ignored file in
@@ -355,10 +355,10 @@ forge
     }
 
     // Order: merged files, then the recipe cascade, then removal of the variant directory
-    // (Ruling 21) — a late failure leaves the variant in place, never a recipe naming a deleted one.
+    // (Ruling 21) — a late failure leaves the variant in place, never a recipe naming a removed ingredient.
     const journal: WriteJournal = [];
     let touched: string[] = [];
-    let cascade: RecipeCascadeResult = { rewritten: [], deleted: [], profileRepointed: [], extendsRepointed: [], kept: [] };
+    let cascade: RecipeCascadeResult = { rewritten: [], identicalToSibling: [] };
     let variantRemoved: string | null = null;
     try {
       touched = await writeUnified(base, result, journal);
@@ -382,21 +382,16 @@ forge
           `resolve it by hand, or use --take base to discard the variant`,
       );
     }
-    // Ruling 32: unify has no registry of workspaces, so it cannot reach a craftar.yaml that names
-    // a recipe it just deleted — say so rather than leave that workspace failing to resolve.
+    // Ruling 42: a suffixed recipe left identical to its sibling is reported, never deleted — a
+    // workspace's recipes.add or an extends chain may name the sibling, and removing the suffixed
+    // one would shift recipe order or param precedence there.
     const suffix = `--${o.profile}`;
-    for (const rn of cascade.deleted) {
+    for (const rn of cascade.identicalToSibling) {
+      const sibling = rn.slice(0, -suffix.length);
       warnings.push(
-        `recipe ${rn} was deleted — a workspace that lists it in recipes.add or recipes.remove (craftar.yaml or craftar.local.yaml) ` +
-          `needs a manual edit to name ${rn.slice(0, -suffix.length)}; unify cannot reach workspaces`,
-      );
-    }
-    // Ruling 41: a suffixed recipe some list names alongside its sibling is kept, never collapsed.
-    for (const k of cascade.kept) {
-      warnings.push(
-        `recipe ${k.recipe} is now identical to ${k.sibling} but was kept, because ${k.lists.join(", ")} ` +
-          `list${k.lists.length === 1 ? "s" : ""} both — collapsing them could change recipe order or param precedence; ` +
-          `review those lists and remove ${k.recipe} by hand`,
+        `recipe ${rn} is now identical to ${sibling} — it can be removed by hand after repointing the profiles, extends and ` +
+          `workspace recipes lists that name it; unify does not, because a workspace or an extends chain may also name ` +
+          `${sibling} and the recipe order or param precedence would change`,
       );
     }
     // Ruling 38: `resolve()` matches overrides.ingredients.disable by ref, so once the variant ref
@@ -423,9 +418,7 @@ forge
             // consumer has to test whether a key exists.
             recipes: {
               rewritten: cascade.rewritten,
-              deleted: cascade.deleted,
-              profileRepointed: cascade.profileRepointed,
-              extendsRepointed: cascade.extendsRepointed,
+              identicalToSibling: cascade.identicalToSibling,
             },
             metaDiffers: result.metaDiffers,
             warnings,
@@ -441,9 +434,9 @@ forge
     console.log(`  resolved ${result.resolved ? pc.green("yes") : pc.yellow("no")} · unresolved ${result.unresolved}`);
     if (variantRemoved) console.log(`  ${pc.magenta("removed variant")} ${variantRemoved}`);
     if (cascade.rewritten.length) console.log(`  recipes rewritten: ${cascade.rewritten.join(", ")}`);
-    if (cascade.deleted.length) console.log(`  recipes deleted: ${cascade.deleted.join(", ")}`);
-    if (cascade.profileRepointed.length) console.log(`  profiles repointed: ${cascade.profileRepointed.join(", ")}`);
-    if (cascade.extendsRepointed.length) console.log(`  recipe extends repointed: ${cascade.extendsRepointed.join(", ")}`);
+    if (cascade.identicalToSibling.length) {
+      console.log(`  recipes now identical to a sibling: ${cascade.identicalToSibling.join(", ")}`);
+    }
     for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
     console.log(`  next: run \`craftar status --workspace <dir>\` in a workspace on profile ${o.profile} to see what moved`);
   });

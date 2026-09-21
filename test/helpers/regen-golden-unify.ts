@@ -102,8 +102,9 @@ try {
   await fs.writeFile(PLAN, planYaml);
 
   // Resolve eof and meta directly (--take), so the workflow run below is the one that completes
-  // every variant of recipe base--acme and triggers its dedup against recipes/base.yaml (spec
-  // §7.2 step 3). Each run needs a clean git tree, so commit in between.
+  // every variant of recipe base--acme and leaves it identical to recipes/base.yaml — which the
+  // cascade reports and, since Ruling 42, never deletes. Each run needs a clean git tree, so
+  // commit in between.
   const eof = runCli(["forge", "unify", "rule/eof", "--profile", "acme", "--take", "variant", "--forge", forge]);
   if (eof.code !== 0) throw new Error(`rule/eof unify failed: ${eof.stderr}`);
   gitCommitAll(forge, "resolve eof");

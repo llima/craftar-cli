@@ -668,7 +668,8 @@ describe("cli", () => {
       removed: [],
       unresolved: 0,
       variantRemoved: "rule/wf--acme",
-      recipes: { rewritten: ["base"], deleted: [], profileRepointed: [], extendsRepointed: [] },
+      // Ruling 42: the cascade reports `rewritten` and `identicalToSibling`, and nothing else.
+      recipes: { rewritten: ["base"], identicalToSibling: [] },
       metaDiffers: [],
       // Ruling 38: a removed variant always warns about overrides.ingredients.disable.
       warnings: [
@@ -745,30 +746,7 @@ describe("cli", () => {
     expect(await fs.readFile(path.join(root, "recipes/base.yaml"), "utf8")).toBe(before);
   });
 
-  it("forge unify's full resolution rewrites a recipe and deletes its now-duplicate suffixed sibling (spec AC8)", async () => {
-    const root = await tmpDir("craftar-cli-forge-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    await makeForge(root, {
-      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
-      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
-      profiles: [profile("acme", ["base--acme"])],
-    });
-    gitInit(root);
-    gitCommitAll(root, "init");
-
-    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root, "--json"]);
-    expect(r.code).toBe(0);
-    const out = JSON.parse(r.stdout);
-    expect(out.resolved).toBe(true);
-    expect(out.recipes.rewritten).toEqual(["base--acme"]);
-    expect(out.recipes.deleted).toEqual(["base--acme"]);
-    expect(out.recipes.profileRepointed).toEqual(["base--acme -> base"]);
-
-    expect(await exists(path.join(root, "recipes/base--acme.yaml"))).toBe(false);
-    const profileText = await fs.readFile(path.join(root, "profiles/acme/profile.yaml"), "utf8");
-    expect(profileText).not.toContain("base--acme");
-    expect(profileText).toContain("base");
-  });
+  // Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
 
   // Ruling 30: this test used to check Ruling 25's hint. That hint is gone, so its old assertion
   // (`not.toContain("sits inside the Forge")`) could never fail; it now checks the refusal and the
@@ -891,59 +869,7 @@ describe("cli — forge unify final review", () => {
   });
 });
 
-describe("cli — forge unify cascade (Ruling 32)", () => {
-  it("repoints a dangling extends, claims no profile repoint no profile had, and warns about workspaces", async () => {
-    const root = await tmpDir("craftar-cli-forge-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    await makeForge(root, {
-      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
-      recipes: [
-        recipe("base", ["rule/wf"]),
-        recipe("base--acme", ["rule/wf--acme"]),
-        recipe("stack--acme", ["rule/other"], { extends: ["base--acme"] }),
-      ],
-      profiles: [profile("acme", ["stack--acme"])],
-    });
-    gitInit(root);
-    gitCommitAll(root, "init");
-
-    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root, "--json"]);
-    expect(r.code, r.stderr).toBe(0);
-    const out = JSON.parse(r.stdout);
-    expect(out.recipes.deleted).toEqual(["base--acme"]);
-    expect(out.recipes.profileRepointed).toEqual([]);
-    expect(out.recipes.extendsRepointed).toEqual(["stack--acme: base--acme -> base"]);
-    expect(out.warnings.join("\n")).toContain("recipes.add");
-    // Ruling 38: the deleted recipe also names recipes.remove, and the removed variant warns about
-    // overrides.ingredients.disable, naming the ref a workspace must switch to.
-    expect(out.warnings.join("\n")).toContain("recipes.remove");
-    expect(out.warnings.join("\n")).toContain("overrides.ingredients.disable");
-    expect(out.warnings.join("\n")).toContain("must now name rule/wf");
-    expect(out.warnings.join("\n")).toContain("base--acme");
-
-    const stack = YAML.parse(await fs.readFile(path.join(root, "recipes/stack--acme.yaml"), "utf8"));
-    expect(stack.extends).toEqual(["base"]);
-  });
-
-  it("names the workspace follow-up in the text report when a recipe is deleted", async () => {
-    const root = await tmpDir("craftar-cli-forge-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    await makeForge(root, {
-      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
-      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
-      profiles: [profile("acme", ["base--acme"])],
-    });
-    gitInit(root);
-    gitCommitAll(root, "init");
-
-    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
-    expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout).toContain("profiles repointed: base--acme -> base");
-    expect(r.stdout).toContain("recipes.add");
-    expect(r.stdout).toContain("recipes.remove"); // Ruling 38
-    expect(r.stdout).toContain("overrides.ingredients.disable"); // Ruling 38
-  });
-});
+// Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
 
 function gitStatus(dir: string): string {
   return execFileSync("git", ["-C", dir, "status", "--porcelain"], { encoding: "utf8" });
@@ -965,22 +891,7 @@ describe("cli — forge unify cascade refusals write nothing (Ruling 33)", () =>
     expect(await fs.readFile(path.join(root, "ingredients/rules/wf/rule.md"), "utf8")).toBe("a\n");
   });
 
-  it("refuses an aliased profile reference before writing anything: git status stays clean", async () => {
-    const root = await tmpDir("craftar-cli-forge-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    await makeForge(root, {
-      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
-      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
-    });
-    await writeFiles(root, { "profiles/acme/profile.yaml": "name: acme\nmine: &r [base--acme]\nrecipes: *r\n" });
-    gitInit(root);
-    gitCommitAll(root, "init");
-
-    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain('profile "acme"');
-    expect(gitStatus(root)).toBe("");
-  });
+  // Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
 
   // A write that fails after writing began (a read-only recipe here; an I/O error or a locked file
   // on Windows in the wild) cannot be prevented by the dry pass — it must name what was written.
@@ -1193,27 +1104,7 @@ describe("cli — forge unify refuses index-flagged paths (Ruling 39)", () => {
 });
 
 describe("cli — forge unify checks the cascade's own files are held by git (Ruling 37)", () => {
-  it("refuses when only a profile the cascade would repoint is ignored, and leaves it unchanged", async () => {
-    const root = await tmpDir("craftar-cli-forge-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    await makeForge(root, {
-      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
-      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
-    });
-    await fs.writeFile(path.join(root, ".gitignore"), "profiles/\n");
-    gitInit(root);
-    gitCommitAll(root, "init");
-    // Written after the commit, into an ignored directory: git holds no copy of it.
-    const profileFile = path.join(root, "profiles/acme/profile.yaml");
-    await writeFiles(root, { "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\n" });
-
-    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("profiles/acme/profile.yaml");
-    expect(r.stderr).toContain("(ignored)");
-    expect(await fs.readFile(profileFile, "utf8")).toBe("name: acme\nrecipes:\n  - base--acme\n");
-    expect(await exists(path.join(root, "ingredients/rules/wf--acme"))).toBe(true);
-  });
+  // Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
 
   it("refuses when only a recipe the cascade would rewrite is untracked (showUntrackedFiles=no), and leaves it unchanged", async () => {
     const root = await tmpDir("craftar-cli-forge-");
@@ -1267,89 +1158,7 @@ describe("cli — forge unify's held-by-git refusal names every path, Forge-rela
   });
 });
 
-// Ruling 41: a list naming both `base` and `base--acme` is never collapsed. Recipes apply at their
-// first occurrence but param defaults win at their last, so the reviewer's case below — `extra`
-// sitting between the two — changed `x` from `from-base` to `from-extra` under any collapse.
-describe("cli — forge unify never collapses a list naming both recipes (Ruling 41)", () => {
-  const recipes = [
-    recipe("base", ["rule/wf"], { params: { x: { default: "from-base" } } }),
-    recipe("base--acme", ["rule/wf--acme"], { params: { x: { default: "from-base" } } }),
-    recipe("extra", ["rule/other"], { params: { x: { default: "from-extra" } } }),
-  ];
-  const ingredients = [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" }), rule("other", "o\n")];
-
-  async function resolvedX(root: string): Promise<unknown> {
-    const { loadForge } = await import("../src/core/forge.js");
-    const { resolve } = await import("../src/core/resolve.js");
-    const { WorkspaceConfigSchema } = await import("../src/schema/index.js");
-    return resolve(await loadForge(root), WorkspaceConfigSchema.parse({ forge: root, profile: "acme" })).params.x;
-  }
-
-  async function run(root: string) {
-    gitInit(root);
-    gitCommitAll(root, "init");
-    expect(await resolvedX(root)).toBe("from-base");
-    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--forge", root, "--json"]);
-    expect(r.code, r.stderr).toBe(0);
-    return JSON.parse(r.stdout);
-  }
-
-  for (const order of [
-    ["base--acme", "extra", "base"],
-    ["base", "extra", "base--acme"],
-  ]) {
-    it(`keeps x at from-base for a profile listing [${order.join(", ")}]`, async () => {
-      const root = await tmpDir("craftar-cli-forge-");
-      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-      await makeForge(root, { ingredients, recipes, profiles: [profile("acme", order)] });
-
-      const out = await run(root);
-      expect(out.recipes.deleted).toEqual([]);
-      expect(out.recipes.profileRepointed).toEqual([]);
-      expect(await resolvedX(root)).toBe("from-base");
-      expect(await exists(path.join(root, "recipes/base--acme.yaml"))).toBe(true);
-      const kept = out.warnings.find((w: string) => w.startsWith("recipe base--acme is now identical to base"));
-      expect(kept).toBeDefined();
-      expect(kept).toContain('profile "acme"');
-    });
-
-    it(`keeps x at from-base for a recipe whose extends lists [${order.join(", ")}]`, async () => {
-      const root = await tmpDir("craftar-cli-forge-");
-      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-      await makeForge(root, {
-        ingredients,
-        recipes: [...recipes, recipe("stack", [], { extends: order })],
-        profiles: [profile("acme", ["stack"])],
-      });
-      const stackBefore = await fs.readFile(path.join(root, "recipes/stack.yaml"), "utf8");
-
-      const out = await run(root);
-      expect(out.recipes.deleted).toEqual([]);
-      expect(out.recipes.extendsRepointed).toEqual([]);
-      expect(await resolvedX(root)).toBe("from-base");
-      expect(await exists(path.join(root, "recipes/base--acme.yaml"))).toBe(true);
-      expect(await fs.readFile(path.join(root, "recipes/stack.yaml"), "utf8")).toBe(stackBefore);
-      const kept = out.warnings.find((w: string) => w.startsWith("recipe base--acme is now identical to base"));
-      expect(kept).toBeDefined();
-      expect(kept).toContain('recipe "stack"');
-    });
-  }
-
-  it("still repoints in place, and deletes base--acme, when a profile lists only base--acme (control)", async () => {
-    const root = await tmpDir("craftar-cli-forge-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    await makeForge(root, { ingredients, recipes, profiles: [profile("acme", ["extra", "base--acme"])] });
-
-    const out = await run(root);
-    expect(out.recipes.deleted).toEqual(["base--acme"]);
-    expect(out.recipes.profileRepointed).toEqual(["base--acme -> base"]);
-    expect(out.warnings.some((w: string) => w.includes("is now identical to"))).toBe(false);
-    expect(await exists(path.join(root, "recipes/base--acme.yaml"))).toBe(false);
-    const p = YAML.parse(await fs.readFile(path.join(root, "profiles/acme/profile.yaml"), "utf8"));
-    expect(p.recipes).toEqual(["extra", "base"]);
-    expect(await resolvedX(root)).toBe("from-base");
-  });
-});
+// Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
 
 describe("cli — forge unify's held-by-git refusal caps its list (docs-author nit)", () => {
   it("lists the first ten paths git does not hold and counts the rest", async () => {
@@ -1371,4 +1180,107 @@ describe("cli — forge unify's held-by-git refusal caps its list (docs-author n
     for (const n of names.slice(10)) expect(r.stderr).not.toContain(n);
     expect(r.stderr).toContain("… and 3 more");
   });
+});
+
+// Ruling 42 (a product decision): the recipe cascade only rewrites `ingredients` from the variant
+// to the base. It never deletes a recipe and never edits a profile or an `extends`, and it reports
+// a suffixed recipe left identical to its sibling instead of removing it.
+describe("cli — forge unify's cascade rewrites ingredients only (Ruling 42)", () => {
+  const ingredients = [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" }), rule("other", "o\n")];
+  const base = recipe("base", ["rule/wf"], { params: { x: { default: "from-base" } } });
+  const baseAcme = recipe("base--acme", ["rule/wf--acme"], { params: { x: { default: "from-base" } } });
+  const extra = recipe("extra", ["rule/other"], { params: { x: { default: "from-extra" } } });
+
+  async function committedForge(spec: Parameters<typeof makeForge>[1]): Promise<string> {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, spec);
+    gitInit(root);
+    gitCommitAll(root, "init");
+    return root;
+  }
+
+  function unify(root: string) {
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    return JSON.parse(r.stdout);
+  }
+
+  /** The source text of a recipe's `extends` node, exactly as written on disk ("" when absent). */
+  async function extendsText(file: string): Promise<string> {
+    const text = await fs.readFile(file, "utf8");
+    const node = YAML.parseDocument(text).get("extends", true) as { range?: [number, number, number] } | undefined;
+    return node?.range ? text.slice(node.range[0], node.range[1]) : "";
+  }
+
+  it("deletes no recipe and leaves every profile and every recipe's extends byte-identical", async () => {
+    const root = await committedForge({
+      ingredients,
+      recipes: [base, baseAcme, extra, recipe("stack--acme", ["rule/other"], { extends: ["base--acme", "extra"] })],
+      profiles: [profile("acme", ["stack--acme", "base--acme"]), profile("beta", ["base", "extra"])],
+    });
+    const recipeFiles = (await fs.readdir(path.join(root, "recipes"))).sort();
+    const profilesBefore = await snapshot(path.join(root, "profiles"));
+    const extendsBefore = Object.fromEntries(
+      await Promise.all(recipeFiles.map(async (f) => [f, await extendsText(path.join(root, "recipes", f))] as const)),
+    );
+
+    const out = unify(root);
+    expect(out.resolved).toBe(true);
+    expect(out.variantRemoved).toBe("rule/wf--acme");
+    expect((await fs.readdir(path.join(root, "recipes"))).sort()).toEqual(recipeFiles);
+    expect(await snapshot(path.join(root, "profiles"))).toEqual(profilesBefore);
+    for (const f of recipeFiles) expect(await extendsText(path.join(root, "recipes", f)), f).toBe(extendsBefore[f]);
+    // The one edit the cascade makes: the variant's ref, rewritten to the base's.
+    const rewritten = YAML.parse(await fs.readFile(path.join(root, "recipes/base--acme.yaml"), "utf8"));
+    expect(rewritten.ingredients).toEqual(["rule/wf"]);
+  });
+
+  it("reports a recipe left identical to its sibling in identicalToSibling and in the warnings", async () => {
+    const root = await committedForge({ ingredients, recipes: [base, baseAcme], profiles: [profile("acme", ["base--acme"])] });
+    const out = unify(root);
+    expect(out.recipes).toEqual({ rewritten: ["base--acme"], identicalToSibling: ["base--acme"] });
+    expect(out.warnings.join("\n")).toContain("recipe base--acme is now identical to base");
+    expect(await exists(path.join(root, "recipes/base--acme.yaml"))).toBe(true);
+
+    const text = runCli(["forge", "variants", "--forge", root]); // the Forge still loads and lists no variant
+    expect(text.code).toBe(0);
+  });
+
+  it("prints the identical-recipe report in the text output", async () => {
+    const root = await committedForge({ ingredients, recipes: [base, baseAcme], profiles: [profile("acme", ["base--acme"])] });
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("recipes now identical to a sibling: base--acme");
+    expect(r.stdout).toContain("recipe base--acme is now identical to base");
+  });
+
+  // The reviewer's shapes: each must resolve to the same recipe order and the same param values
+  // before and after unify. Only the variant ingredient's ref changes, by design.
+  const shapes: Array<{ name: string; recipes: ReturnType<typeof recipe>[]; profile: string[]; add?: string[] }> = [
+    { name: "E: transitive extends [x, base--acme], x.extends [base]", recipes: [base, baseAcme, recipe("x", [], { extends: ["base"], params: { x: { default: "from-x" } } })], profile: ["x", "base--acme"] },
+    { name: "E2: [stack, base], stack.extends [base--acme]", recipes: [base, baseAcme, recipe("stack", [], { extends: ["base--acme"] })], profile: ["stack", "base"] },
+    { name: "A1: profile [base--acme, extra, base]", recipes: [base, baseAcme, extra], profile: ["base--acme", "extra", "base"] },
+    { name: "A2: profile [base, extra, base--acme]", recipes: [base, baseAcme, extra], profile: ["base", "extra", "base--acme"] },
+    { name: "B1: extends [base--acme, extra, base]", recipes: [base, baseAcme, extra, recipe("stack", [], { extends: ["base--acme", "extra", "base"] })], profile: ["stack"] },
+    { name: "B2: extends [base, extra, base--acme]", recipes: [base, baseAcme, extra, recipe("stack", [], { extends: ["base", "extra", "base--acme"] })], profile: ["stack"] },
+    { name: "G: workspace recipes.add [base] on a profile using base--acme", recipes: [base, baseAcme, extra], profile: ["base--acme", "extra"], add: ["base"] },
+  ];
+  for (const shape of shapes) {
+    it(`resolves exactly as before — ${shape.name}`, async () => {
+      const { loadForge } = await import("../src/core/forge.js");
+      const { resolve } = await import("../src/core/resolve.js");
+      const { WorkspaceConfigSchema } = await import("../src/schema/index.js");
+      const root = await committedForge({ ingredients, recipes: shape.recipes, profiles: [profile("acme", shape.profile)] });
+      const ws = WorkspaceConfigSchema.parse({ forge: root, profile: "acme", recipes: { add: shape.add ?? [] } });
+      const view = async () => {
+        const r = resolve(await loadForge(root), ws);
+        return { recipes: r.recipes, params: r.params };
+      };
+
+      const before = await view();
+      unify(root);
+      expect(await view()).toEqual(before);
+    });
+  }
 });
