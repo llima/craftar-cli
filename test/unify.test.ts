@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import YAML from "yaml";
 import { exists, gitDirty, loadForge, type Forge } from "../src/core/forge.js";
 import { applyPlan, planFrom, rewriteRecipes, writeUnified } from "../src/core/unify.js";
 import { diffIngredients } from "../src/core/variants.js";
@@ -410,5 +411,114 @@ describe("rewriteRecipes", () => {
     });
     const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
     expect(out.deleted).toEqual([]);
+  });
+});
+
+/**
+ * Loads a Forge from hand-written files rather than `makeForge`, so a test can put a recipe or
+ * profile under a filename/dirname that disagrees with its own `name` field, or control raw
+ * bytes (comments, EOL, BOM) precisely. `rewriteRecipes` never touches `ingredients/`, so these
+ * scenarios skip writing ingredient directories entirely.
+ */
+async function bareForge(files: Record<string, string>): Promise<Forge> {
+  const root = await tmpDir();
+  cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+  await writeFiles(root, { "craftar.forge.yaml": "name: test-forge\nschema: 1\n", ...files });
+  return loadForge(root);
+}
+
+describe("rewriteRecipes — file identity, byte fidelity and safety (Rulings 9, 10, 12, 13, 14)", () => {
+  it("finds a recipe by its `name` field, not its filename, and never touches a same-named decoy", async () => {
+    const forge = await bareForge({
+      // The real "base--acme" recipe lives in a file named after something else (Ruling 9).
+      "recipes/team.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n  - rule/other # kept\n",
+      // A decoy file *named* base--acme.yaml but declaring a different `name` — a filename-based
+      // lookup (`<name>.yaml`) would find and misuse this one instead of scanning for the field.
+      "recipes/base--acme.yaml": "name: solo\ningredients:\n  - rule/other\n",
+      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\n",
+    });
+    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
+    expect(out.rewritten).toEqual(["base--acme"]);
+
+    const teamText = await fs.readFile(path.join(forge.root, "recipes/team.yaml"), "utf8");
+    expect(teamText).toContain("rule/workflow\n");
+    expect(teamText).not.toContain("rule/workflow--acme");
+    // The comment on the untouched sibling entry, in the same file, survives the edit.
+    expect(teamText).toContain("# kept");
+
+    const decoyText = await fs.readFile(path.join(forge.root, "recipes/base--acme.yaml"), "utf8");
+    expect(decoyText).toBe("name: solo\ningredients:\n  - rule/other\n");
+  });
+
+  it("repoints a profile keeping exactly the keys and comment it started with — no zod defaults materialised", async () => {
+    const forge = await bareForge({
+      "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
+      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
+      // Only two keys on disk — ProfileSchema materialises ten (targets, language, identity...).
+      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme # pinned by ops\n",
+    });
+    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
+    expect(out.deleted).toEqual(["base--acme"]);
+    expect(out.profileRepointed).toEqual(["base--acme -> base"]);
+
+    const raw = await fs.readFile(path.join(forge.root, "profiles/acme/profile.yaml"), "utf8");
+    expect(raw).toContain("# pinned by ops");
+    expect(raw).toContain("- base");
+    expect(raw).not.toContain("base--acme");
+    expect(Object.keys(YAML.parse(raw) as object).sort()).toEqual(["name", "recipes"]);
+  });
+
+  it("repoints a profile whose directory name disagrees with its `name` field, before deleting the recipe (Ruling 12)", async () => {
+    const forge = await bareForge({
+      "recipes/base.yaml": "name: base\ningredients:\n  - rule/workflow\n",
+      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/workflow--acme\n",
+      // Directory is "acme-corp"; the profile's own `name` field is "acme" — the asymmetry
+      // `loadForge` already has between profiles and their directories.
+      "profiles/acme-corp/profile.yaml": "name: acme\nrecipes:\n  - base--acme\n",
+    });
+    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
+    expect(out.deleted).toEqual(["base--acme"]);
+    expect(out.profileRepointed).toEqual(["base--acme -> base"]);
+
+    const reloaded = await loadForge(forge.root);
+    expect(reloaded.recipes.has("base--acme")).toBe(false);
+    expect(reloaded.profiles.get("acme")!.recipes).toEqual(["base"]);
+    // The directory itself is never renamed — only its file's content changed.
+    expect(await exists(path.join(forge.root, "profiles/acme-corp/profile.yaml"))).toBe(true);
+  });
+
+  it("keeps a CRLF, BOM-prefixed recipe file's EOL and BOM after the rewrite (Ruling 13)", async () => {
+    const BOM = "﻿";
+    const crlf = `${BOM}name: solo--acme\r\ningredients:\r\n  - rule/workflow--acme\r\n  - rule/other\r\n`;
+    const root = await tmpDir();
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.mkdir(path.join(root, "recipes"), { recursive: true });
+    await fs.mkdir(path.join(root, "profiles/acme"), { recursive: true });
+    await fs.writeFile(path.join(root, "craftar.forge.yaml"), "name: test-forge\nschema: 1\n");
+    await fs.writeFile(path.join(root, "recipes/solo.yaml"), crlf);
+    await fs.writeFile(path.join(root, "profiles/acme/profile.yaml"), "name: acme\nrecipes:\n  - solo--acme\n");
+    const forge = await loadForge(root);
+
+    const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
+    expect(out.rewritten).toEqual(["solo--acme"]);
+    expect(out.deleted).toEqual([]); // no unsuffixed "solo" sibling — never renamed
+
+    const text = await fs.readFile(path.join(root, "recipes/solo.yaml"), "utf8");
+    expect(text.charCodeAt(0)).toBe(0xfeff);
+    expect(text).toContain("rule/workflow\r\n");
+    expect(text).not.toContain("rule/workflow--acme");
+    expect(/(?<!\r)\n/.test(text.slice(1))).toBe(false); // every \n is still preceded by \r
+  });
+
+  it("throws rather than record a rewrite that never touched the file, when the reference sits behind a YAML alias (Ruling 14)", async () => {
+    const aliased = "name: base--acme\nx: &shared\n  - rule/workflow--acme\n  - rule/other\ningredients: *shared\n";
+    const forge = await bareForge({
+      "recipes/base--acme.yaml": aliased,
+      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\n",
+    });
+    await expect(rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme")).rejects.toThrow(/base--acme/);
+
+    const untouched = await fs.readFile(path.join(forge.root, "recipes/base--acme.yaml"), "utf8");
+    expect(untouched).toBe(aliased);
   });
 });
