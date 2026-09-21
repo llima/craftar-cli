@@ -370,8 +370,6 @@ describe("rewriteRecipes", () => {
     expect(reloaded.recipes.get("base--acme")!.ingredients).toEqual(["rule/workflow", "rule/other"]);
   });
 
-  // Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
-
   it("leaves a suffixed recipe alone when it has no unsuffixed sibling", async () => {
     const forge = await forgeWith({
       ingredients: [rule("workflow", "a\n"), rule("workflow--acme", "b\n", { as: "workflow" })],
@@ -385,7 +383,7 @@ describe("rewriteRecipes", () => {
     expect(reloaded.profiles.get("acme")!.recipes).toEqual(["solo--acme"]);
   });
 
-  it("does not delete a sibling whose ingredients differ beyond the variant", async () => {
+  it("does not report a sibling whose ingredients differ beyond the variant as identical", async () => {
     const forge = await forgeWith({
       ingredients: [rule("workflow", "a\n"), rule("workflow--acme", "b\n", { as: "workflow" })],
       recipes: [
@@ -395,14 +393,14 @@ describe("rewriteRecipes", () => {
       profiles: [profile("acme", ["base--acme"])],
     });
     const out = await rewriteRecipes(forge, "rule/workflow", "rule/workflow--acme", "acme");
-    expect(out.identicalToSibling).toEqual([]); // Ruling 42: `deleted` is gone; not identical, not reported
+    expect(out.identicalToSibling).toEqual([]);
   });
 });
 
 /**
- * Loads a Forge from hand-written files rather than `makeForge`, so a test can put a recipe or
- * profile under a filename/dirname that disagrees with its own `name` field, or control raw
- * bytes (comments, EOL, BOM) precisely. `rewriteRecipes` never touches `ingredients/`, so these
+ * Loads a Forge from hand-written files rather than `makeForge`, so a test can put a recipe under
+ * a filename that disagrees with its own `name` field, or control the raw bytes (comments, EOL,
+ * BOM) of recipes and profiles precisely. `rewriteRecipes` never touches `ingredients/`, so these
  * scenarios skip writing ingredient directories entirely.
  */
 async function bareForge(files: Record<string, string>): Promise<Forge> {
@@ -412,7 +410,7 @@ async function bareForge(files: Record<string, string>): Promise<Forge> {
   return loadForge(root);
 }
 
-describe("rewriteRecipes — file identity, byte fidelity and safety (Rulings 9, 10, 12, 13, 14)", () => {
+describe("rewriteRecipes — file identity, byte fidelity and safety (Rulings 9, 10, 13, 14)", () => {
   it("finds a recipe by its `name` field, not its filename, and never touches a same-named decoy", async () => {
     const forge = await bareForge({
       // The real "base--acme" recipe lives in a file named after something else (Ruling 9).
@@ -434,10 +432,6 @@ describe("rewriteRecipes — file identity, byte fidelity and safety (Rulings 9,
     const decoyText = await fs.readFile(path.join(forge.root, "recipes/base--acme.yaml"), "utf8");
     expect(decoyText).toBe("name: solo\ningredients:\n  - rule/other\n");
   });
-
-  // Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
-
-  // Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
 
   it("keeps a CRLF, BOM-prefixed recipe file's EOL and BOM after the rewrite (Ruling 13)", async () => {
     const BOM = "﻿";
@@ -563,7 +557,3 @@ describe("unify — non-UTF-8 content (Ruling 31)", () => {
     expect(r.write["rule.md"]).toBe(`${BOM}a\nnew\n`);
   });
 });
-
-// Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.
-
-// Ruling 42 withdrew this behaviour (the cascade no longer deletes recipes or edits profiles or extends); its test was removed.

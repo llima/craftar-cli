@@ -85,8 +85,8 @@ describe("kiro emitter", () => {
 
   it("emits an MCP variant under its original server name", async () => {
     const p = await planFor([{ meta: { type: "mcp", name: "srv--acme", as: "srv", server: { command: "npx", args: ["acme-server"] } } }]);
-    const json = JSON.parse(file(p, ".kiro/settings/mcp.json")!.content.toString("utf8"));
-    expect(Object.keys(json.mcpServers)).toEqual(["srv"]);
+    const f = file(p, ".kiro/settings/mcp.json")!;
+    expect(f.content.toString("utf8")).toBe(JSON.stringify({ mcpServers: { srv: { command: "npx", args: ["acme-server"] } } }, null, 2).replace(/\n/g, "\r\n") + "\r\n");
   });
 
   it("warns when two MCP ingredients emit the same server name, instead of dropping one silently", async () => {
@@ -95,5 +95,6 @@ describe("kiro emitter", () => {
       { meta: { type: "mcp", name: "srv--acme", as: "srv", server: { command: "npx", args: ["acme-server"] } } },
     ]);
     expect(p.warnings).toContain('kiro: two ingredients write the MCP server "srv" into .kiro/settings/mcp.json: mcp/srv and mcp/srv--acme (last wins)');
+    expect(JSON.parse(file(p, ".kiro/settings/mcp.json")!.content.toString("utf8")).mcpServers).toEqual({ srv: { command: "npx", args: ["acme-server"] } });
   });
 });

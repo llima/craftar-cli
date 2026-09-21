@@ -342,7 +342,7 @@ forge
     }
 
     const result = await applyPlan(base, variant, diff, toApply, { discardVariantMeta: o.take === "base" });
-    // Ruling 33, dry pass: every recipe and profile edit the cascade will make is checked before
+    // Ruling 33, dry pass: every recipe `ingredients` rewrite the cascade will make is checked before
     // the first byte is written, so a refusal (an aliased reference) leaves the Forge untouched.
     const cascadeFiles = result.resolved ? await checkRecipeCascade(f, base.ref, variant.ref) : [];
 
@@ -541,16 +541,17 @@ async function realpathOfNearest(abs: string): Promise<string> {
           head = parent;
           continue;
         }
-        throw cannotResolve(head, lstatError);
+        throw cannotResolve(head, lstatError, "cannot be inspected");
       }
-      throw cannotResolve(head, realpathError);
+      throw cannotResolve(head, realpathError, "exists but cannot be resolved");
     }
   }
 }
 
-function cannotResolve(p: string, e: unknown): Error {
-  const code = (e as NodeJS.ErrnoException).code ?? (e instanceof Error ? e.message : String(e));
-  return new Error(`${p} exists but cannot be resolved (${code}) — unify cannot prove the target lies outside the Forge`);
+/** `lstat` failing means the path could not even be inspected, so it is not known to exist. */
+function cannotResolve(p: string, e: unknown, what: "cannot be inspected" | "exists but cannot be resolved"): Error {
+  const code = (e as NodeJS.ErrnoException | null)?.code ?? (e instanceof Error ? e.message : String(e));
+  return new Error(`${p} ${what} (${code}) — unify cannot prove the target lies outside the Forge`);
 }
 
 /** Whether anything — a file, a directory, even a dangling symlink — already sits at `p`. */
