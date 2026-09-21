@@ -63,14 +63,20 @@ export interface UnifyResult {
  * `A.lines.length`, so testing position after it would call every last hunk "at the tail" even
  * when a common suffix follows it untouched — silently forcing (or dropping) a trailing newline
  * a hunk in the middle of the file never decided.
+ *
+ * The decision itself is read off the whole file each side came from (`A.eofNewline` /
+ * `B.eofNewline`), not reconstructed from the winning hunk's own `noEofNewline` flag — that flag
+ * has nothing to say when the winning side contributes no lines (a pure removal taken as the
+ * winner), so `variantText` is passed in alongside the hunks for exactly this reason.
  */
-function mergeFile(baseText: string, hunks: Hunk[], takes: Take[]): string {
+function mergeFile(baseText: string, variantText: string, hunks: Hunk[], takes: Take[]): string {
   const bom = baseText.charCodeAt(0) === BOM.charCodeAt(0);
   const A = splitLines(baseText);
+  const B = splitLines(variantText);
   const out: string[] = [];
   let i = 0; // 0-based index into A.lines
   let iAfterLastHunk = 0;
-  let eofFromWinner: boolean | null = null;
+  let lastWinnerIsVariant = false;
   hunks.forEach((h, k) => {
     const start = h.a.start - 1; // a.start is 1-based and marks where the hunk applies
     while (i < start) out.push(A.lines[i++]);
@@ -80,15 +86,17 @@ function mergeFile(baseText: string, hunks: Hunk[], takes: Take[]): string {
     i += h.a.lines.length; // the base's lines for this hunk are consumed either way
     if (k === hunks.length - 1) {
       iAfterLastHunk = i;
-      if (side.lines.length) eofFromWinner = takeVariant ? !!h.b.noEofNewline : !!h.a.noEofNewline;
+      lastWinnerIsVariant = takeVariant;
     }
   });
   while (i < A.lines.length) out.push(A.lines[i++]);
 
   // The tail decides the final newline only when the last hunk reaches the end of the file.
   const endsAtTail = hunks.length > 0 && iAfterLastHunk >= A.lines.length;
-  const eofNewline = endsAtTail && eofFromWinner !== null ? !eofFromWinner : A.eofNewline;
-  const body = out.join("\n") + (eofNewline ? "\n" : "");
+  const eofNewline = endsAtTail ? (lastWinnerIsVariant ? B.eofNewline : A.eofNewline) : A.eofNewline;
+  // An empty result is the empty string, not a lone newline — `out.join("\n")` on an empty array
+  // is already "", but the `+ eofNewline` term must not turn that into a false "\n" on its own.
+  const body = out.length ? out.join("\n") + (eofNewline ? "\n" : "") : "";
   return (bom ? BOM : "") + withEol(body, detectEol(baseText));
 }
 
@@ -116,7 +124,8 @@ export async function applyPlan(
       const takes = pf.hunks.map((h) => h.take);
       unresolved += takes.filter((t) => t === "keep").length;
       const baseText = await readIngredientText(base, pf.file);
-      const merged = mergeFile(baseText, hunks, takes);
+      const variantText = await readIngredientText(variant, pf.file);
+      const merged = mergeFile(baseText, variantText, hunks, takes);
       if (merged !== baseText) write[pf.file] = merged;
       continue;
     }

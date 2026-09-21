@@ -203,4 +203,24 @@ describe("applyPlan — paired files", () => {
     const r = await applyPlan(base, variant, diff, plan);
     expect(r.write["rule.md"]).toBe("a\nX\nc");
   });
+
+  // Fix round 1, Finding 1 (Ruling 7): the final newline comes from the winning side's own file,
+  // not from the winning hunk's `noEofNewline` flag — that flag has nothing to say when the
+  // winning side contributes no lines, as here: a pure removal taken as `variant`.
+  it("takes the final newline from the winning side's own text when that side contributes no lines", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "a\nb\nc" }, { "rule.md": "a\nb\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files[0].hunks![0].take = "variant";
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write["rule.md"]).toBe("a\nb\n");
+  });
+
+  // Fix round 1, Finding 2: an all-lines-removed merge is the empty string, not a lone "\n".
+  it("leaves an emptied file empty, not a lone newline", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "x\n" }, { "rule.md": "" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files[0].hunks![0].take = "variant";
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write["rule.md"]).toBe("");
+  });
 });
