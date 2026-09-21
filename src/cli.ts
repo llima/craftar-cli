@@ -245,7 +245,7 @@ forge
   .requiredOption("--profile <p>", "which variant to resolve")
   .option("--take <side>", "resolve every decision to base or variant")
   .option("--plan <file>", "apply the decisions in this plan file")
-  .option("--save-plan <file>", "write a plan with every decision deferred, and stop")
+  .option("--save-plan <file>", "write a plan with every decision deferred to a new file outside the Forge, and stop")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
@@ -297,27 +297,28 @@ forge
     const diff = await diffIngredients(base, variant);
 
     if (o.savePlan) {
-      const saved = await planFrom(base, variant, diff, o.profile);
+      // Ruling 30: --save-plan skips the clean-tree check because the plan lives outside the
+      // Forge — so that is enforced, not assumed, and a plan never overwrites anything. Both
+      // refusals come before any write; the comparison runs on real paths, so neither a `..`
+      // segment nor a symlink can carry the target back into the Forge.
       const savePlanAbs = path.resolve(o.savePlan);
+      const [targetReal, rootReal] = await Promise.all([realpathOfNearest(savePlanAbs), fs.realpath(path.resolve(f.root))]);
+      const rel = path.relative(rootReal, targetReal);
+      if (rel === "" || !(rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))) {
+        fail(`refusing to write the plan to ${o.savePlan}: it resolves inside the Forge (${f.root}) — save plans outside the Forge`);
+      }
+      if (await pathTaken(savePlanAbs)) {
+        fail(`refusing to write the plan to ${o.savePlan}: the file already exists — unify never overwrites; choose a new path`);
+      }
+      const saved = await planFrom(base, variant, diff, o.profile);
       await fs.mkdir(path.dirname(savePlanAbs), { recursive: true });
-      await fs.writeFile(savePlanAbs, YAML.stringify(saved));
+      await fs.writeFile(savePlanAbs, YAML.stringify(saved), { flag: "wx" });
       const deferred = saved.files.reduce((n: number, pf) => n + (pf.hunks ? pf.hunks.length : 1), 0);
       if (o.json) {
         console.log(JSON.stringify({ base: base.ref, profile: o.profile, plan: o.savePlan, unresolved: deferred }, null, 2));
       } else {
         console.log(pc.bold(`craftar forge unify ${ref} ↔ ${o.profile}`));
         console.log(`  wrote plan ${o.savePlan} — ${deferred} decision(s) deferred`);
-        // Ruling 25: never carve the plan file out of the dirty-tree check — instead warn, here,
-        // when it would trip it. `path.relative` escapes the Forge root with a leading ".." (or is
-        // absolute on Windows across drives) when the plan sits outside it.
-        const rel = path.relative(f.root, savePlanAbs);
-        if (rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel)) {
-          console.log(
-            pc.yellow(
-              `  note: ${o.savePlan} sits inside the Forge — the next --plan run refuses until it is committed or git-ignored; keeping plans outside the Forge avoids this`,
-            ),
-          );
-        }
       }
       return;
     }
@@ -481,6 +482,36 @@ async function readText(p: string): Promise<string | null> {
     return toLf(stripBom(await fs.readFile(p, "utf8")));
   } catch {
     return null;
+  }
+}
+
+/**
+ * The real path of `abs`, resolved through its nearest existing ancestor: `fs.realpath` needs the
+ * path to exist, and a plan target usually does not yet — so the part that exists is resolved
+ * (symlinks and all) and the part that does not is appended as written.
+ */
+async function realpathOfNearest(abs: string): Promise<string> {
+  let head = abs;
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return path.join(await fs.realpath(head), ...tail);
+    } catch {
+      const parent = path.dirname(head);
+      if (parent === head) return abs;
+      tail.unshift(path.basename(head));
+      head = parent;
+    }
+  }
+}
+
+/** Whether anything — a file, a directory, even a dangling symlink — already sits at `p`. */
+async function pathTaken(p: string): Promise<boolean> {
+  try {
+    await fs.lstat(p);
+    return true;
+  } catch {
+    return false;
   }
 }
 

@@ -769,9 +769,10 @@ describe("cli", () => {
     gitInit(root);
     gitCommitAll(root, "init");
 
+    // Ruling 30 supersedes Ruling 25's hint: a target inside the Forge is now refused, not noted.
     const inside = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", path.join(root, "plan.yaml"), "--forge", root]);
-    expect(inside.code).toBe(0);
-    expect(inside.stdout).toContain("sits inside the Forge");
+    expect(inside.code).toBe(1);
+    expect(inside.stderr).toContain("inside the Forge");
 
     const planDir = await tmpDir("craftar-cli-plan-");
     cleanups.push(() => fs.rm(planDir, { recursive: true, force: true }));
@@ -990,4 +991,56 @@ describe("cli — forge unify cascade refusals write nothing (Ruling 33)", () =>
       expect(await exists(path.join(root, "ingredients/rules/wf--acme"))).toBe(true);
     },
   );
+});
+
+describe("cli — forge unify --save-plan never writes into the Forge, never overwrites (Ruling 30)", () => {
+  async function committedForge(): Promise<string> {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+    return root;
+  }
+
+  it("refuses a target inside the Forge and writes nothing", async () => {
+    const root = await committedForge();
+    const before = await snapshot(root);
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", path.join(root, "plan.yaml"), "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("inside the Forge");
+    expect(await snapshot(root)).toEqual(before);
+  });
+
+  it("refuses a target that reaches back into the Forge through a `..` segment", async () => {
+    const root = await committedForge();
+    const before = await snapshot(root);
+    // Leaves the Forge and walks back in: only a resolved path shows where it lands.
+    const sneaky = [root, "..", path.basename(root), "recipes", "plan.yaml"].join(path.sep);
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", sneaky, "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("inside the Forge");
+    expect(await snapshot(root)).toEqual(before);
+  });
+
+  it("refuses to overwrite a Forge file with uncommitted edits, which git could not bring back", async () => {
+    const root = await committedForge();
+    const ruleFile = path.join(root, "ingredients/rules/wf/rule.md");
+    await fs.writeFile(ruleFile, "a\nuncommitted work\n");
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", ruleFile, "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(await fs.readFile(ruleFile, "utf8")).toBe("a\nuncommitted work\n");
+  });
+
+  it("refuses a target that already exists outside the Forge, keeping the plan the user edited", async () => {
+    const root = await committedForge();
+    const planDir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(planDir, { recursive: true, force: true }));
+    const planPath = path.join(planDir, "plan.yaml");
+    await fs.writeFile(planPath, "edited by hand\n");
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("already exists");
+    expect(await fs.readFile(planPath, "utf8")).toBe("edited by hand\n");
+  });
 });
