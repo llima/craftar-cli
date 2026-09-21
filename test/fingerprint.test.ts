@@ -70,4 +70,23 @@ describe("fingerprintOf — nested metadata", () => {
     const flat = { type: "rule", name: "workflow", inclusion: "always", targets: ["kiro", "claude-code"], description: undefined };
     expect(fingerprintOf(flat, body)).toBe("sha256:0926dd41158b87f1291c922101bd040fd52c8b1b497c8ae3a624195b39c64e22");
   });
+
+  it("sees a `__proto__` key as an ordinary key", () => {
+    const a = fingerprintOf(mcp({ command: "x", env: JSON.parse('{"__proto__":"A"}') }), files);
+    const b = fingerprintOf(mcp({ command: "x", env: JSON.parse('{"__proto__":"B"}') }), files);
+    expect(b).not.toBe(a);
+  });
+
+  it("refuses cyclic metadata with a clear error instead of overflowing the stack", () => {
+    const server: Record<string, unknown> = { command: "a" };
+    server.self = server;
+    expect(() => fingerprintOf(mcp(server), files)).toThrow(/cyclic/);
+  });
+
+  it("accepts the same object referenced twice when there is no cycle", () => {
+    const shared = { A: "1" };
+    const a = fingerprintOf({ type: "mcp", name: "srv", server: { command: "x", env: shared, extra: shared } }, files);
+    const b = fingerprintOf({ type: "mcp", name: "srv", server: { command: "x", env: { A: "1" }, extra: { A: "1" } } }, files);
+    expect(b).toBe(a);
+  });
 });
