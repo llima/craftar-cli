@@ -102,9 +102,9 @@ function comparableMeta(meta: Ingredient): Record<string, unknown> {
  * Ruling 28: the top-level `ingredient.yaml` fields on which base and variant differ, sorted.
  * `diffIngredients` leaves `ingredient.yaml` out, so without this a variant that differs only in
  * its metadata (an MCP `server`, an agent's `model` or `tools`) would resolve with zero decisions
- * and be deleted. Compared on the zod-validated `meta` with a real deep equality — never through
- * `fingerprintOf` or `JSON.stringify(x, keys)`, whose key-array replacer filters at every depth
- * and would see two different nested `server` objects as the same `{}`.
+ * and be deleted. Compared on the zod-validated `meta` with a real deep equality, field by field so
+ * the differing fields can be named — never through `JSON.stringify(x, keys)`, whose key-array
+ * replacer filters at every depth and sees two different nested `server` objects as the same `{}`.
  */
 export function metaDifferences(base: LoadedIngredient, variant: LoadedIngredient): string[] {
   const a = comparableMeta(base.meta);

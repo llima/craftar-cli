@@ -186,3 +186,34 @@ describe("import --from claude-code", () => {
     expect(await exists(path.join(t.forge, "ingredients/mcp/remote2/ingredient.yaml"))).toBe(true);
   });
 });
+
+describe("import --from claude-code — nested MCP configuration", () => {
+  it("turns an MCP server that differs only inside its config into a variant, instead of reusing the first", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": JSON.stringify({ mcpServers: { srv: { command: "npx", args: ["public-server"] } } }),
+    });
+    await writeFiles(t.ws("b"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": JSON.stringify({ mcpServers: { srv: { command: "npx", args: ["acme-server"] } } }),
+    });
+    await importInto(t.forge, t.ws("a"), "a");
+    const b = await importInto(t.forge, t.ws("b"), "b");
+    expect(b.reused).not.toContain("mcp/srv");
+    expect(b.variants.map((v) => v.name)).toContain("mcp/srv--b");
+    expect((await yaml(path.join(t.forge, "ingredients/mcp/srv--b/ingredient.yaml"))).server.args).toEqual(["acme-server"]);
+    expect((await yaml(path.join(t.forge, "ingredients/mcp/srv/ingredient.yaml"))).server.args).toEqual(["public-server"]);
+  });
+
+  it("still reuses an MCP server whose config is identical", async () => {
+    const t = await setup();
+    const same = JSON.stringify({ mcpServers: { srv: { command: "npx", args: ["public-server"], env: { TOKEN_VAR: "T" } } } });
+    await writeFiles(t.ws("a"), { ".claude/rules/workflow.md": "# Workflow\n", ".mcp.json": same });
+    await writeFiles(t.ws("b"), { ".claude/rules/workflow.md": "# Workflow\n", ".mcp.json": same });
+    await importInto(t.forge, t.ws("a"), "a");
+    const b = await importInto(t.forge, t.ws("b"), "b");
+    expect(b.reused).toContain("mcp/srv");
+    expect(await exists(path.join(t.forge, "ingredients/mcp/srv--b"))).toBe(false);
+  });
+});
