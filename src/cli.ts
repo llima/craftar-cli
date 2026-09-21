@@ -389,17 +389,16 @@ forge
             removed: [...result.remove].sort(),
             unresolved: result.unresolved,
             variantRemoved,
-            // `extendsRepointed` joins the recipes object only when non-empty, like the keys below.
+            // Ruling 35: every key is always present, `[]` when empty — a stable shape, so no
+            // consumer has to test whether a key exists.
             recipes: {
               rewritten: cascade.rewritten,
               deleted: cascade.deleted,
               profileRepointed: cascade.profileRepointed,
-              ...(cascade.extendsRepointed.length ? { extendsRepointed: cascade.extendsRepointed } : {}),
+              extendsRepointed: cascade.extendsRepointed,
             },
-            // Present only when non-empty, so every run that hits none of these keeps the shape
-            // tooling already reads.
-            ...(result.metaDiffers.length ? { metaDiffers: result.metaDiffers } : {}),
-            ...(warnings.length ? { warnings } : {}),
+            metaDiffers: result.metaDiffers,
+            warnings,
           },
           null,
           2,

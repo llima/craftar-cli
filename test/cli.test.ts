@@ -658,6 +658,7 @@ describe("cli", () => {
 
     const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root, "--json"]);
     expect(r.code).toBe(0);
+    // Ruling 35: the full shape, every key always present — `[]` when empty.
     expect(JSON.parse(r.stdout)).toEqual({
       base: "rule/wf",
       profile: "acme",
@@ -666,7 +667,9 @@ describe("cli", () => {
       removed: [],
       unresolved: 0,
       variantRemoved: "rule/wf--acme",
-      recipes: { rewritten: ["base"], deleted: [], profileRepointed: [] },
+      recipes: { rewritten: ["base"], deleted: [], profileRepointed: [], extendsRepointed: [] },
+      metaDiffers: [],
+      warnings: [],
     });
   });
 
@@ -1042,5 +1045,28 @@ describe("cli — forge unify --save-plan never writes into the Forge, never ove
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("already exists");
     expect(await fs.readFile(planPath, "utf8")).toBe("edited by hand\n");
+  });
+});
+
+describe("cli — forge unify --save-plan symlink escape (Ruling 30)", () => {
+  // Creating a symlink needs privileges on Windows; this runs on Linux CI.
+  it.skipIf(process.platform === "win32")("refuses a target that reaches inside the Forge through a symlink, and writes nothing", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const outside = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(outside, { recursive: true, force: true }));
+    const link = path.join(outside, "into-forge");
+    await fs.symlink(path.join(root, "recipes"), link, "dir");
+
+    const before = await snapshot(root);
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", path.join(link, "plan.yaml"), "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("inside the Forge");
+    expect(await snapshot(root)).toEqual(before);
+    expect(await exists(path.join(root, "recipes/plan.yaml"))).toBe(false);
   });
 });
