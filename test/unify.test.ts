@@ -566,3 +566,48 @@ describe("applyPlan — the plan covers the diff exactly once (Ruling 29)", () =
     await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow(/rule\.md/);
   });
 });
+
+// Final review, C4 (Ruling 31): the merge engine is text-only. A one-sided file is copied as the
+// raw bytes on disk, and a file present on both sides whose bytes differ while either side is not
+// valid UTF-8 is refused by name — decoding both as UTF-8 would fold every invalid byte to U+FFFD,
+// so the diff could not even see that the two differ.
+describe("unify — non-UTF-8 content (Ruling 31)", () => {
+  /** Like `scenario`, but the files may be raw bytes. */
+  async function rawScenario(baseFiles: Record<string, string | Buffer>, variantFiles: Record<string, string | Buffer>) {
+    return scenario(baseFiles as Record<string, string>, variantFiles as Record<string, string>);
+  }
+
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0xff, 0xfe, 0x80]);
+
+  it("copies a variant-only binary file into the base byte for byte", async () => {
+    const { base, variant, diff } = await rawScenario({ "rule.md": "x\n" }, { "rule.md": "x\n", "logo.png": PNG });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files.find((f) => f.file === "logo.png")!.take = "variant";
+    const r = await applyPlan(base, variant, diff, plan);
+    await writeUnified(base, r);
+    const written = await fs.readFile(path.join((base as { dir: string }).dir, "logo.png"));
+    expect(written.equals(PNG)).toBe(true);
+  });
+
+  it("refuses, naming the file, a pair whose bytes differ while one side is not valid UTF-8 — even when both decode alike", async () => {
+    const latinE = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]); // "café\n" in Latin-1
+    const latinEGrave = Buffer.from([0x63, 0x61, 0x66, 0xe8, 0x0a]); // "cafè\n" in Latin-1
+    const { base, variant, diff } = await rawScenario(
+      { "rule.md": "x\n", "latin.txt": latinE },
+      { "rule.md": "x\n", "latin.txt": latinEGrave },
+    );
+    // Both decode to "caf\uFFFD\n": the text diff alone cannot see the difference.
+    expect(diff.files).toEqual([]);
+    await expect(planFrom(base, variant, diff, "acme")).rejects.toThrow(/latin\.txt/);
+    const plan = { schema: 1 as const, base: "rule/workflow", profile: "acme", variant: "rule/workflow--acme", baseFingerprint: "", variantFingerprint: "", files: [] };
+    await expect(applyPlan(base, variant, diff, plan as never)).rejects.toThrow(/latin\.txt/);
+  });
+
+  it("accepts a pair that differs only in text when one side carries a UTF-8 BOM", async () => {
+    const { base, variant, diff } = await rawScenario({ "rule.md": `${BOM}a\nold\n` }, { "rule.md": "a\nnew\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files[0].hunks![0].take = "variant";
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write["rule.md"]).toBe(`${BOM}a\nnew\n`);
+  });
+});

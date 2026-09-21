@@ -4,7 +4,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { fingerprintDir } from "./fingerprint.js";
-import { loadForge, readIngredientText, type Forge, type LoadedIngredient } from "./forge.js";
+import { listFiles, loadForge, readIngredientText, type Forge, type LoadedIngredient } from "./forge.js";
 import { splitLines, type Hunk } from "./diff.js";
 import { detectEol, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
@@ -19,6 +19,52 @@ export function hunkAt(h: Hunk): string {
   return h.a.lines.length ? `lines ${h.a.start}–${h.a.start + h.a.lines.length - 1}` : `after line ${h.a.start - 1}`;
 }
 
+const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
+
+/** Valid UTF-8, BOM included (a BOM is a valid UTF-8 sequence). */
+function isUtf8(bytes: Buffer): boolean {
+  try {
+    strictUtf8.decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Every file of an ingredient but `ingredient.yaml`, as the raw bytes on disk. */
+async function rawFilesOf(ing: LoadedIngredient): Promise<Map<string, Buffer>> {
+  const out = new Map<string, Buffer>();
+  for (const rel of await listFiles(ing.dir)) {
+    if (rel === "ingredient.yaml") continue;
+    out.set(rel, await fs.readFile(path.join(ing.dir, rel)));
+  }
+  return out;
+}
+
+/**
+ * Ruling 31: the merge engine is text-only, and `diffIngredients` decodes every file as UTF-8 —
+ * which folds each invalid byte to U+FFFD, so two different non-UTF-8 files can look identical to
+ * it (and to every decision built on it). Compare the raw bytes of every file present on both
+ * sides instead; when they differ and either side is not valid UTF-8, refuse by name rather than
+ * merge or drop what the text view cannot see. `diffIngredients` itself is left alone: it also
+ * serves `forge diff` and `forge variants`.
+ */
+export async function assertTextMergeable(base: LoadedIngredient, variant: LoadedIngredient): Promise<void> {
+  const a = await rawFilesOf(base);
+  const b = await rawFilesOf(variant);
+  for (const [rel, bytes] of a) {
+    const other = b.get(rel);
+    if (other === undefined || bytes.equals(other)) continue;
+    const bad = [!isUtf8(bytes) && "base", !isUtf8(other) && "variant"].filter(Boolean).join(" and ");
+    if (bad) {
+      throw new Error(
+        `unify: "${rel}" differs between the base and the variant and is not valid UTF-8 in the ${bad} — ` +
+          `the merge engine is text-only and cannot merge it; resolve it by hand.`,
+      );
+    }
+  }
+}
+
 /** A plan with every decision deferred. The human edits it; nothing is assumed. */
 export async function planFrom(
   base: LoadedIngredient,
@@ -26,6 +72,7 @@ export async function planFrom(
   diff: IngredientDiff,
   profile: string,
 ): Promise<UnifyPlan> {
+  await assertTextMergeable(base, variant);
   const files: PlanFile[] = [];
   for (const f of diff.files) {
     files.push({ file: f.file, hunks: f.hunks.map((h, i) => ({ hunk: i + 1, at: hunkAt(h), take: "keep" as const })) });
@@ -44,8 +91,11 @@ export async function planFrom(
 }
 
 export interface UnifyResult {
-  /** Base-relative path → new content. Only files whose bytes change appear. */
-  write: Record<string, string>;
+  /**
+   * Base-relative path → new content. Only files whose bytes change appear. A one-sided file
+   * copied from the variant that is not valid UTF-8 is carried as its raw bytes (Ruling 31).
+   */
+  write: Record<string, string | Buffer>;
   /** Base-relative paths to delete. */
   remove: string[];
   /** No decision was left at `keep`. */
@@ -116,7 +166,8 @@ export async function applyPlan(
   diff: IngredientDiff,
   plan: UnifyPlan,
 ): Promise<UnifyResult> {
-  const write: Record<string, string> = {};
+  await assertTextMergeable(base, variant);
+  const write: Record<string, string | Buffer> = {};
   const remove: string[] = [];
   let unresolved = 0;
 
@@ -221,8 +272,14 @@ export async function applyPlan(
       if (take === "variant") remove.push(pf.file);
     } else if (pf.onlyIn === "variant") {
       // take === "base" already matches the base's absence of the file; take === "variant"
-      // brings the variant's copy in.
-      if (take === "variant") write[pf.file] = await readIngredientText(variant, pf.file);
+      // brings the variant's copy in — read without an encoding, so the bytes written are the
+      // bytes on disk (Ruling 31). Valid UTF-8 round-trips exactly through a string, BOM
+      // included, so it is carried as text; anything else stays a Buffer, which a UTF-8
+      // decode/encode would corrupt.
+      if (take === "variant") {
+        const bytes = await fs.readFile(path.join(variant.dir, pf.file));
+        write[pf.file] = isUtf8(bytes) ? bytes.toString("utf8") : bytes;
+      }
     }
   }
 
