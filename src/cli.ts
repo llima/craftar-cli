@@ -25,7 +25,7 @@ import { UnifyPlanSchema, type IngredientRef, type Take, type UnifyPlan } from "
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.2.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.2.1");
 
 /* ---------------------------------------------------------------- import */
 program
