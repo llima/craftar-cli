@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import path from "node:path";
 import { promises as fs } from "node:fs";
+import { execFileSync } from "node:child_process";
+import YAML from "yaml";
 import { makeForge, profile, recipe, rule, scenario, tmpDir, writeFiles } from "./helpers/forge.js";
 import { runCli } from "./helpers/cli.js";
-import { listFiles } from "../src/core/forge.js";
+import { exists, listFiles } from "../src/core/forge.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -14,6 +16,26 @@ afterEach(async () => {
 async function snapshot(root: string): Promise<Record<string, string>> {
   const files = await listFiles(root);
   return Object.fromEntries(await Promise.all(files.map(async (f) => [f, await fs.readFile(path.join(root, f), "utf8")] as const)));
+}
+
+/** A fake but stable identity, so `git commit` never depends on the host's ambient config. */
+function gitEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_AUTHOR_NAME: "craftar-test",
+    GIT_AUTHOR_EMAIL: "test@example.invalid",
+    GIT_COMMITTER_NAME: "craftar-test",
+    GIT_COMMITTER_EMAIL: "test@example.invalid",
+  };
+}
+
+function gitInit(dir: string): void {
+  execFileSync("git", ["init", "-q", dir]);
+}
+
+function gitCommitAll(dir: string, message: string): void {
+  execFileSync("git", ["-C", dir, "add", "-A"]);
+  execFileSync("git", ["-C", dir, "commit", "-q", "-m", message], { env: gitEnv() });
 }
 
 describe("cli", () => {
@@ -291,5 +313,191 @@ describe("cli", () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("has no variants");
     expect(r.stderr).not.toContain("TypeError");
+  });
+
+  it("forge unify refuses a Forge that is not a git repository", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("not a git repository");
+  });
+
+  it("forge unify refuses a Forge with uncommitted changes", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+    await fs.writeFile(path.join(root, "ingredients/rules/wf/rule.md"), "a-dirty\n");
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("is not a clean git checkout");
+  });
+
+  it("forge unify refuses an unknown base ingredient", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+
+    const r = runCli(["forge", "unify", "rule/nope", "--profile", "acme", "--take", "variant", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("rule/nope is not an ingredient of this Forge");
+  });
+
+  it("forge unify refuses a profile with no variant", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n")] });
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("rule/wf has no variant for profile acme");
+  });
+
+  it("forge unify refuses zero or several front ends", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+
+    const zero = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--forge", root]);
+    expect(zero.code).toBe(1);
+    expect(zero.stderr).toContain("pass exactly one of --take, --plan or --save-plan");
+
+    const two = runCli([
+      "forge",
+      "unify",
+      "rule/wf",
+      "--profile",
+      "acme",
+      "--take",
+      "variant",
+      "--save-plan",
+      path.join(root, "plan.yaml"),
+      "--forge",
+      root,
+    ]);
+    expect(two.code).toBe(1);
+    expect(two.stderr).toContain("pass exactly one of --take, --plan or --save-plan");
+  });
+
+  it("forge unify refuses a plan that fails its schema", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const planDir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(planDir, { recursive: true, force: true }));
+    const planPath = path.join(planDir, "plan.yaml");
+    await fs.writeFile(planPath, YAML.stringify({ schema: 1, base: "rule/wf" }));
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--plan", planPath, "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(planPath);
+  });
+
+  it("forge unify refuses a --plan whose base changed since it was saved", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const planDir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(planDir, { recursive: true, force: true }));
+    const planPath = path.join(planDir, "plan.yaml");
+
+    const save = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]);
+    expect(save.code).toBe(0);
+
+    // A meta field other than name/as/origin — description is hashed, so the base's fingerprint moves.
+    await fs.writeFile(
+      path.join(root, "ingredients/rules/wf/ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "wf", description: "edited" }),
+    );
+    gitCommitAll(root, "edit base");
+
+    const apply = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--plan", planPath, "--forge", root]);
+    expect(apply.code).toBe(1);
+    expect(apply.stderr).toContain("the plan is stale: the base changed since it was saved");
+  });
+
+  it("forge unify refuses a --plan whose variant changed since it was saved", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const planDir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(planDir, { recursive: true, force: true }));
+    const planPath = path.join(planDir, "plan.yaml");
+
+    const save = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]);
+    expect(save.code).toBe(0);
+
+    await fs.writeFile(path.join(root, "ingredients/rules/wf--acme/rule.md"), "b-edited\n");
+    gitCommitAll(root, "edit variant");
+
+    const apply = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--plan", planPath, "--forge", root]);
+    expect(apply.code).toBe(1);
+    expect(apply.stderr).toContain("the plan is stale: the variant changed since it was saved");
+  });
+
+  it("forge unify --take variant makes the base identical to the variant and removes it", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
+    expect(r.code).toBe(0);
+    expect(await fs.readFile(path.join(root, "ingredients/rules/wf/rule.md"), "utf8")).toBe("b\n");
+    expect(await exists(path.join(root, "ingredients/rules/wf--acme"))).toBe(false);
+  });
+
+  it("forge unify --take base discards the variant without changing the base", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const before = await fs.readFile(path.join(root, "ingredients/rules/wf/rule.md"), "utf8");
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--forge", root]);
+    expect(r.code).toBe(0);
+    expect(await fs.readFile(path.join(root, "ingredients/rules/wf/rule.md"), "utf8")).toBe(before);
+    expect(await exists(path.join(root, "ingredients/rules/wf--acme"))).toBe(false);
+  });
+
+  it("forge unify saves a plan, applies an edited one, and leaves the Forge untouched until then", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const planDir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(planDir, { recursive: true, force: true }));
+    const planPath = path.join(planDir, "plan.yaml");
+
+    const before = await snapshot(root);
+    const save = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]);
+    expect(save.code).toBe(0);
+    expect(await snapshot(root)).toEqual(before); // --save-plan writes nothing into the Forge
+
+    const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+    plan.files[0].hunks[0].take = "variant";
+    await fs.writeFile(planPath, YAML.stringify(plan));
+
+    const apply = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--plan", planPath, "--forge", root]);
+    expect(apply.code).toBe(0);
+    expect(await fs.readFile(path.join(root, "ingredients/rules/wf/rule.md"), "utf8")).toBe("b\n");
+    expect(await exists(path.join(root, "ingredients/rules/wf--acme"))).toBe(false);
   });
 });
