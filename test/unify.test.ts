@@ -4,7 +4,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { gitDirty } from "../src/core/forge.js";
-import { planFrom } from "../src/core/unify.js";
+import { applyPlan, planFrom } from "../src/core/unify.js";
+import { diffIngredients } from "../src/core/variants.js";
 import { UnifyPlanSchema } from "../src/schema/index.js";
 import { tmpDir, writeFiles } from "./helpers/forge.js";
 
@@ -105,5 +106,97 @@ describe("planFrom", () => {
     expect(paired.hunks![1].at).toBe("after line 4");
     expect(plan.files.find((f) => f.file === "gone.md")).toMatchObject({ onlyIn: "base", take: "keep" });
     expect(plan.files.find((f) => f.file === "extra.md")).toMatchObject({ onlyIn: "variant", take: "keep" });
+  });
+});
+
+/** Two temp ingredient directories (base + variant--profile), loaded and diffed for real. */
+async function scenario(baseFiles: Record<string, string>, variantFiles: Record<string, string>) {
+  const baseDir = await tmpDir();
+  cleanups.push(() => fs.rm(baseDir, { recursive: true, force: true }));
+  await writeFiles(baseDir, { "ingredient.yaml": "type: rule\nname: workflow\n", ...baseFiles });
+
+  const variantDir = await tmpDir();
+  cleanups.push(() => fs.rm(variantDir, { recursive: true, force: true }));
+  await writeFiles(variantDir, { "ingredient.yaml": "type: rule\nname: workflow--acme\nas: workflow\n", ...variantFiles });
+
+  const base = { ref: "rule/workflow", dir: baseDir, meta: { type: "rule", name: "workflow" } } as never;
+  const variant = { ref: "rule/workflow--acme", dir: variantDir, meta: { type: "rule", name: "workflow--acme", as: "workflow" } } as never;
+  const diff = await diffIngredients(base, variant);
+  return { base, variant, diff };
+}
+
+describe("applyPlan — paired files", () => {
+  it("takes the variant's side for a chosen hunk and the base's for the rest", async () => {
+    // base   rule.md: "a\nold\nc\n"
+    // variant rule.md: "a\nnew\nc\n"
+    const { base, variant, diff } = await scenario({ "rule.md": "a\nold\nc\n" }, { "rule.md": "a\nnew\nc\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files[0].hunks![0].take = "variant";
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write["rule.md"]).toBe("a\nnew\nc\n");
+    expect(r.unresolved).toBe(0);
+    expect(r.resolved).toBe(true);
+  });
+
+  it("writes nothing for a hunk left at keep, and stays unresolved", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "a\nold\nc\n" }, { "rule.md": "a\nnew\nc\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write).toEqual({});
+    expect(r.unresolved).toBe(1);
+    expect(r.resolved).toBe(false);
+  });
+
+  it("keeps the base's line endings even when the variant's differ", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "a\r\nold\r\n" }, { "rule.md": "a\nnew\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files[0].hunks![0].take = "variant";
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write["rule.md"]).toBe("a\r\nnew\r\n");
+  });
+
+  it("takes the final-newline state from whichever side won the last hunk", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "a\nb\n" }, { "rule.md": "a\nb" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files[0].hunks![0].take = "variant";
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write["rule.md"]).toBe("a\nb");
+  });
+
+  it("keeps the base's final newline when the base wins the last hunk", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "a\nb\n" }, { "rule.md": "a\nb" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files[0].hunks![0].take = "base";
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write).toEqual({}); // taking the base changes nothing
+    expect(r.resolved).toBe(true);
+  });
+
+  it("applies a pure addition at a.start without dropping a base line", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "a\nb\n" }, { "rule.md": "a\nb\nc\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files[0].hunks![0].take = "variant";
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write["rule.md"]).toBe("a\nb\nc\n");
+  });
+
+  it("keeps the base's BOM", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "﻿a\nold\n" }, { "rule.md": "a\nnew\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files[0].hunks![0].take = "variant";
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write["rule.md"]).toBe("﻿a\nnew\n");
+  });
+
+  it("does not let a middle hunk decide the final newline when the base itself has none", async () => {
+    // The changed line (2) sits between two unchanged lines; line 3 ("c") is identical on both
+    // sides and neither side terminates it with a newline. The winning hunk never touches line
+    // 3, so the merge must fall back to the base's own eofNewline instead of treating "the last
+    // hunk in the array" as "the hunk that reaches the end of the file".
+    const { base, variant, diff } = await scenario({ "rule.md": "a\nb\nc" }, { "rule.md": "a\nX\nc" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files[0].hunks![0].take = "variant";
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write["rule.md"]).toBe("a\nX\nc");
   });
 });
