@@ -3,8 +3,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { gitDirty } from "../src/core/forge.js";
-import { applyPlan, planFrom } from "../src/core/unify.js";
+import { exists, gitDirty } from "../src/core/forge.js";
+import { applyPlan, planFrom, writeUnified } from "../src/core/unify.js";
 import { diffIngredients } from "../src/core/variants.js";
 import { UnifyPlanSchema } from "../src/schema/index.js";
 import { tmpDir, writeFiles } from "./helpers/forge.js";
@@ -328,5 +328,22 @@ describe("applyPlan — one-sided files", () => {
     const r = await applyPlan(base, variant, diff, plan);
     expect(r.unresolved).toBe(1);
     expect(r.resolved).toBe(false);
+  });
+});
+
+describe("writeUnified", () => {
+  it("writes changed files and removes the ones the plan deleted", async () => {
+    const { base } = await scenario({ "rule.md": "x\n", "gone.md": "bye\n" }, { "rule.md": "x\n" });
+    const touched = await writeUnified(base, { write: { "rule.md": "y\n" }, remove: ["gone.md"], resolved: true, unresolved: 0 });
+    expect(touched).toEqual(["gone.md", "rule.md"]);
+    expect(await fs.readFile(path.join(base.dir, "rule.md"), "utf8")).toBe("y\n");
+    expect(await exists(path.join(base.dir, "gone.md"))).toBe(false);
+  });
+
+  it("never touches ingredient.yaml", async () => {
+    const { base } = await scenario({ "rule.md": "x\n" }, { "rule.md": "x\n" });
+    const before = await fs.readFile(path.join(base.dir, "ingredient.yaml"), "utf8");
+    await writeUnified(base, { write: { "rule.md": "y\n" }, remove: [], resolved: true, unresolved: 0 });
+    expect(await fs.readFile(path.join(base.dir, "ingredient.yaml"), "utf8")).toBe(before);
   });
 });

@@ -1,3 +1,5 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { fingerprintDir } from "./fingerprint.js";
 import { readIngredientText, type LoadedIngredient } from "./forge.js";
 import { splitLines, type Hunk } from "./diff.js";
@@ -182,4 +184,23 @@ export async function applyPlan(
   }
 
   return { write, remove, resolved: unresolved === 0, unresolved };
+}
+
+/**
+ * Put a `UnifyResult` on disk: write the merged files, delete the ones the plan resolved away.
+ * `ingredient.yaml` can never appear in either list — `diffIngredients` excludes it from both
+ * sides of the diff a plan is built from — so this function never touches an ingredient's
+ * metadata.
+ *
+ * Returns every base-relative path touched, written or removed, sorted — what the CLI reports as
+ * "what changed."
+ */
+export async function writeUnified(base: LoadedIngredient, result: UnifyResult): Promise<string[]> {
+  for (const [rel, content] of Object.entries(result.write)) {
+    const abs = path.join(base.dir, rel);
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, content);
+  }
+  for (const rel of result.remove) await fs.rm(path.join(base.dir, rel), { force: true });
+  return [...Object.keys(result.write), ...result.remove].sort();
 }
