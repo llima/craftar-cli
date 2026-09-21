@@ -10,7 +10,16 @@ import { diffIngredients, listVariants, profileOf, type Distance, type Ingredien
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
 import { gitDirty, gitIsRepo } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
-import { hunkAt, planFrom, applyPlan, writeUnified, rewriteRecipes, type RecipeCascadeResult } from "./core/unify.js";
+import {
+  hunkAt,
+  planFrom,
+  applyPlan,
+  writeUnified,
+  checkRecipeCascade,
+  rewriteRecipes,
+  type RecipeCascadeResult,
+  type WriteJournal,
+} from "./core/unify.js";
 import { UnifyPlanSchema, type IngredientRef, type Take, type UnifyPlan } from "./schema/index.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -326,18 +335,28 @@ forge
     }
 
     const result = await applyPlan(base, variant, diff, toApply, { discardVariantMeta: o.take === "base" });
-    const touched = await writeUnified(base, result);
+    // Ruling 33, dry pass: every recipe and profile edit the cascade will make is checked before
+    // the first byte is written, so a refusal (an aliased reference) leaves the Forge untouched.
+    if (result.resolved) await checkRecipeCascade(f, base.ref, variant.ref, o.profile);
 
+    // Order: merged files, then the recipe cascade, then removal of the variant directory
+    // (Ruling 21) — a late failure leaves an orphan variant, never a recipe naming a deleted one.
+    const journal: WriteJournal = [];
+    let touched: string[] = [];
     let cascade: RecipeCascadeResult = { rewritten: [], deleted: [], profileRepointed: [], extendsRepointed: [] };
     let variantRemoved: string | null = null;
-    if (result.resolved) {
-      // Cascade before removal (Ruling 21): if `rewriteRecipes` throws (an aliased reference it
-      // cannot safely rewrite), the variant directory must still be standing — an orphan variant
-      // is visible to `forge variants` and a re-run resolves it; a variant deleted first would
-      // leave a recipe naming a directory that no longer exists, recoverable only by `git checkout`.
-      cascade = await rewriteRecipes(f, base.ref, variant.ref, o.profile);
-      await fs.rm(variant.dir, { recursive: true, force: true });
-      variantRemoved = variant.ref;
+    try {
+      touched = await writeUnified(base, result, journal);
+      if (result.resolved) {
+        cascade = await rewriteRecipes(f, base.ref, variant.ref, o.profile, journal);
+        journal.push({ abs: variant.dir, created: false });
+        await fs.rm(variant.dir, { recursive: true, force: true });
+        variantRemoved = variant.ref;
+      }
+    } catch (e) {
+      // What the dry pass cannot foresee (an I/O error, a file locked on Windows) fails here, after
+      // writing began: name what was touched and how git undoes it, and still exit 1.
+      throw new Error(lateFailure(e, f.root, journal), { cause: e });
     }
 
     // Ruling 28: a metadata difference leaves the variant in place; say which fields and why.
@@ -463,6 +482,26 @@ async function readText(p: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * The message for a `forge unify` failure after writing began (Ruling 33): the original error, the
+ * Forge-relative paths already touched, and the git commands that undo them — `checkout` for what
+ * git tracks, `clean` for files unify created (checkout refuses a path git does not know).
+ */
+function lateFailure(e: unknown, root: string, journal: WriteJournal): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (journal.length === 0) return msg;
+  const rel = (abs: string) => path.relative(root, abs).split(path.sep).join("/");
+  const quote = (p: string) => (/^[\w./-]+$/.test(p) ? p : `"${p}"`);
+  const restore = [...new Set(journal.filter((j) => !j.created).map((j) => rel(j.abs)))];
+  const created = [...new Set(journal.filter((j) => j.created).map((j) => rel(j.abs)))];
+  const lines = [msg, `unify had already started changing the Forge (${root}) when this failed:`];
+  for (const p of [...restore, ...created]) lines.push(`  ${p}`);
+  lines.push("recover with:");
+  if (restore.length) lines.push(`  git -C ${quote(root)} checkout -- ${restore.map(quote).join(" ")}`);
+  if (created.length) lines.push(`  git -C ${quote(root)} clean -f -- ${created.map(quote).join(" ")}`);
+  return lines.join("\n");
 }
 
 function describeDistance(d: Distance): string {

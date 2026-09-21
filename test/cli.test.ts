@@ -639,10 +639,10 @@ describe("cli", () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("aliased");
 
-    // The merge already ran (writes happen before the cascade), but the cascade's throw stopped
-    // before the variant directory was removed: an orphan `forge variants` already reports and a
-    // re-run resolves, not an invisible dangling reference only `git checkout` can undo.
-    expect(await fs.readFile(path.join(root, "ingredients/rules/wf/rule.md"), "utf8")).toBe("b\n");
+    // Ruling 33 supersedes the original expectation here (the merge used to run before the
+    // cascade refused): the cascade's dry pass now refuses before anything is written, so the
+    // base is untouched and the variant directory still stands.
+    expect(await fs.readFile(path.join(root, "ingredients/rules/wf/rule.md"), "utf8")).toBe("a\n");
     expect(await exists(path.join(root, "ingredients/rules/wf--acme"))).toBe(true);
   });
 
@@ -922,4 +922,72 @@ describe("cli — forge unify cascade (Ruling 32)", () => {
     expect(r.stdout).toContain("profiles repointed: base--acme -> base");
     expect(r.stdout).toContain("recipes.add");
   });
+});
+
+function gitStatus(dir: string): string {
+  return execFileSync("git", ["-C", dir, "status", "--porcelain"], { encoding: "utf8" });
+}
+
+describe("cli — forge unify cascade refusals write nothing (Ruling 33)", () => {
+  it("refuses an aliased recipe reference before writing anything: git status stays clean", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    await writeFiles(root, { "recipes/aliased.yaml": "name: aliased\nx: &shared\n  - rule/wf--acme\ningredients: *shared\n" });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("aliased");
+    expect(gitStatus(root)).toBe("");
+    expect(await fs.readFile(path.join(root, "ingredients/rules/wf/rule.md"), "utf8")).toBe("a\n");
+  });
+
+  it("refuses an aliased profile reference before writing anything: git status stays clean", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
+      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+    });
+    await writeFiles(root, { "profiles/acme/profile.yaml": "name: acme\nmine: &r [base--acme]\nrecipes: *r\n" });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('profile "acme"');
+    expect(gitStatus(root)).toBe("");
+  });
+
+  // A write that fails after writing began (a read-only recipe here; an I/O error or a locked file
+  // on Windows in the wild) cannot be prevented by the dry pass — it must name what was written.
+  // Root ignores the read-only bit on POSIX, so the scenario cannot fail there.
+  it.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+    "names the paths already written and the git recovery when a write fails midway",
+    async () => {
+      const root = await tmpDir("craftar-cli-forge-");
+      const recipeFile = path.join(root, "recipes/base.yaml");
+      cleanups.push(async () => {
+        await fs.chmod(recipeFile, 0o644).catch(() => undefined);
+        await fs.rm(root, { recursive: true, force: true });
+      });
+      await makeForge(root, {
+        ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
+        recipes: [recipe("base", ["rule/wf--acme"])],
+      });
+      gitInit(root);
+      gitCommitAll(root, "init");
+      await fs.chmod(recipeFile, 0o444);
+
+      const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("ingredients/rules/wf/rule.md");
+      expect(r.stderr).toContain("git -C");
+      expect(r.stderr).toContain("checkout --");
+      // The variant is still there: removal comes last.
+      expect(await exists(path.join(root, "ingredients/rules/wf--acme"))).toBe(true);
+    },
+  );
 });
