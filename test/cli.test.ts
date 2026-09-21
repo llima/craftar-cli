@@ -669,7 +669,11 @@ describe("cli", () => {
       variantRemoved: "rule/wf--acme",
       recipes: { rewritten: ["base"], deleted: [], profileRepointed: [], extendsRepointed: [] },
       metaDiffers: [],
-      warnings: [],
+      // Ruling 38: a removed variant always warns about overrides.ingredients.disable.
+      warnings: [
+        "rule/wf--acme was removed — a workspace that disables it in overrides.ingredients.disable (craftar.yaml or craftar.local.yaml) " +
+          "must now name rule/wf, or the base comes back enabled; unify cannot reach workspaces",
+      ],
     });
   });
 
@@ -904,6 +908,11 @@ describe("cli — forge unify cascade (Ruling 32)", () => {
     expect(out.recipes.profileRepointed).toEqual([]);
     expect(out.recipes.extendsRepointed).toEqual(["stack--acme: base--acme -> base"]);
     expect(out.warnings.join("\n")).toContain("recipes.add");
+    // Ruling 38: the deleted recipe also names recipes.remove, and the removed variant warns about
+    // overrides.ingredients.disable, naming the ref a workspace must switch to.
+    expect(out.warnings.join("\n")).toContain("recipes.remove");
+    expect(out.warnings.join("\n")).toContain("overrides.ingredients.disable");
+    expect(out.warnings.join("\n")).toContain("must now name rule/wf");
     expect(out.warnings.join("\n")).toContain("base--acme");
 
     const stack = YAML.parse(await fs.readFile(path.join(root, "recipes/stack--acme.yaml"), "utf8"));
@@ -925,6 +934,8 @@ describe("cli — forge unify cascade (Ruling 32)", () => {
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toContain("profiles repointed: base--acme -> base");
     expect(r.stdout).toContain("recipes.add");
+    expect(r.stdout).toContain("recipes.remove"); // Ruling 38
+    expect(r.stdout).toContain("overrides.ingredients.disable"); // Ruling 38
   });
 });
 

@@ -383,8 +383,16 @@ forge
     const suffix = `--${o.profile}`;
     for (const rn of cascade.deleted) {
       warnings.push(
-        `recipe ${rn} was deleted — a workspace that lists it in recipes.add (craftar.yaml or craftar.local.yaml) ` +
+        `recipe ${rn} was deleted — a workspace that lists it in recipes.add or recipes.remove (craftar.yaml or craftar.local.yaml) ` +
           `needs a manual edit to name ${rn.slice(0, -suffix.length)}; unify cannot reach workspaces`,
+      );
+    }
+    // Ruling 38: `resolve()` matches overrides.ingredients.disable by ref, so once the variant ref
+    // is gone a workspace that disabled it gets the base back, enabled, with no error.
+    if (variantRemoved) {
+      warnings.push(
+        `${variant.ref} was removed — a workspace that disables it in overrides.ingredients.disable (craftar.yaml or craftar.local.yaml) ` +
+          `must now name ${base.ref}, or the base comes back enabled; unify cannot reach workspaces`,
       );
     }
 
