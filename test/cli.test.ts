@@ -1327,4 +1327,28 @@ describe("cli — forge unify --save-plan through a dangling symlink (Ruling 30,
     expect(r.stderr).not.toContain("ENOENT: no such file");
     expect(await snapshot(root)).toEqual(before);
   });
+
+  it("refuses a target whose path passes through a symlink loop, and writes nothing", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const outside = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(outside, { recursive: true, force: true }));
+    const type = process.platform === "win32" ? "junction" : "dir";
+    await fs.symlink(path.join(outside, "loopb"), path.join(outside, "loopa"), type);
+    await fs.symlink(path.join(outside, "loopa"), path.join(outside, "loopb"), type);
+
+    const before = await snapshot(root);
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", path.join(outside, "loopa", "plan.yaml"), "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("cannot prove the target lies outside the Forge");
+    // `lstat` through a symlink loop fails with ELOOP on Linux, so the path cannot even be
+    // inspected; on Windows `lstat` sees the junction and `realpath` fails, the other branch.
+    if (process.platform !== "win32") expect(r.stderr).toContain("cannot be inspected (ELOOP)");
+    else expect(r.stderr).toContain("exists but cannot be resolved");
+    expect(await snapshot(root)).toEqual(before);
+  });
 });

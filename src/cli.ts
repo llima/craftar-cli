@@ -518,10 +518,12 @@ async function readText(p: string): Promise<string | null> {
  * path to exist, and a plan target usually does not yet — so the part that exists is resolved
  * (symlinks and all) and the part that does not is appended as written.
  *
- * It walks up only past a component that truly does not exist (`lstat` says ENOENT/ENOTDIR). A
- * component that exists but will not resolve — a dangling symlink, a symlink loop, a permission
- * error — throws instead: resolving the rest lexically would let a link that points into the Forge
- * pass the containment check, so unify fails closed rather than guess where the target lands.
+ * It walks up only past a component that truly does not exist (`lstat` says ENOENT/ENOTDIR). Any
+ * other outcome throws instead. A component `lstat` cannot inspect (a symlink loop or a permission
+ * error on Linux) "cannot be inspected"; one it can inspect but `realpath` cannot follow (a
+ * dangling symlink or junction, a loop on Windows) "exists but cannot be resolved". Resolving the
+ * rest lexically would let a link that points into the Forge pass the containment check, so unify
+ * fails closed rather than guess where the target lands.
  */
 async function realpathOfNearest(abs: string): Promise<string> {
   let head = abs;
@@ -548,7 +550,11 @@ async function realpathOfNearest(abs: string): Promise<string> {
   }
 }
 
-/** `lstat` failing means the path could not even be inspected, so it is not known to exist. */
+/**
+ * The refusal for a `--save-plan` target that cannot be resolved. `what` is "cannot be inspected"
+ * when `lstat` itself failed, so the path is not known to exist, and "exists but cannot be
+ * resolved" when `lstat` succeeded and `realpath` did not.
+ */
 function cannotResolve(p: string, e: unknown, what: "cannot be inspected" | "exists but cannot be resolved"): Error {
   const code = (e as NodeJS.ErrnoException | null)?.code ?? (e instanceof Error ? e.message : String(e));
   return new Error(`${p} ${what} (${code}) — unify cannot prove the target lies outside the Forge`);

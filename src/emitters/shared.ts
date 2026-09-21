@@ -38,7 +38,8 @@ export function mcpServers(ctx: EmitContext, target: string, file: string): Reco
     if (prev) ctx.warn(`${target}: two ingredients write the MCP server "${key}" into ${file}: ${prev} and ${ing.ref} (last wins)`);
     // Last wins on the value, but a reassigned key keeps the slot where it was first written, so
     // after a collision the surviving server can sit in the dropped one's position. It is warned
-    // about above; `sameJson` compares key order, so such a file may read as `update`.
+    // about above. Such a file does not adopt: `sameJson` is key-order sensitive, so a workspace
+    // file with no lock entry reads as `collision`.
     servers[key] = ing.meta.server;
     writtenBy.set(key, ing.ref);
   }
