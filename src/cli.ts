@@ -274,6 +274,12 @@ forge
       } catch (e) {
         fail(`${o.plan}: ${e instanceof Error ? e.message : String(e)}`);
       }
+      // The plan must be for this exact invocation (Ruling 23) — checked before staleness, so a
+      // right-ingredient-wrong-profile plan is named for what it is rather than misdiagnosed as
+      // "stale" (its fingerprints may well still match; they were never for this profile).
+      if (loadedPlan.base !== base.ref || loadedPlan.variant !== variant.ref || loadedPlan.profile !== o.profile) {
+        fail(`the plan is for ${loadedPlan.base} (profile ${loadedPlan.profile}), not ${ref} (profile ${o.profile})`);
+      }
       const [baseFp, variantFp] = await Promise.all([fingerprintDir(base.dir), fingerprintDir(variant.dir)]);
       if (loadedPlan.baseFingerprint !== baseFp) fail(`the plan is stale: the base changed since it was saved`);
       if (loadedPlan.variantFingerprint !== variantFp) fail(`the plan is stale: the variant changed since it was saved`);
