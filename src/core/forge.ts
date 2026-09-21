@@ -112,6 +112,95 @@ async function gitHead(dir: string): Promise<string | null> {
   }
 }
 
+/**
+ * Whether `dir` sits inside a git working tree at all — true even for a freshly `git init`-ed
+ * repository with no commits yet, unlike `gitHead`/`Forge.commit`, which is `null` in both that
+ * case and the no-`.git`-at-all case. A caller that needs to tell the two apart (a refusal whose
+ * wording depends on which is true) calls this in addition to checking `commit === null`.
+ */
+export async function gitIsRepo(dir: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileP("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"]);
+    return stdout.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when the Forge has uncommitted changes — and also when `git status` cannot be run at all.
+ * By the time this is called the directory is known to be a git repository (`forge.commit !== null`
+ * is checked first), so a failure here is anomalous, and an anomaly is not evidence of a clean
+ * tree. Failing closed costs a confusing refusal; failing open costs a deletion from a Forge with
+ * no lock.
+ */
+export async function gitDirty(dir: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileP("git", ["-C", dir, "status", "--porcelain"]);
+    return stdout.trim().length > 0;
+  } catch {
+    return true;
+  }
+}
+
+export interface UnheldPath {
+  /** Forge-relative POSIX path (the path asked about, when git itself failed). */
+  path: string;
+  reason: "ignored" | "untracked" | "modified" | "skip-worktree" | "assume-unchanged" | "git failed";
+}
+
+/**
+ * Ruling 37: the entries under `paths` (absolute, all inside the Forge `root`) that git does not
+ * fully hold — ignored, untracked, modified, or index-flagged — where an overwrite or a deletion could not be
+ * undone. `gitDirty` alone is not enough: plain `git status --porcelain` omits ignored files and
+ * obeys `status.showUntrackedFiles=no`, so a Forge ignored by its enclosing repo, or an ignored
+ * file inside a variant, passes it. `--ignored --untracked-files=all` surfaces both. Fails closed
+ * like `gitDirty`: when git cannot answer, every path counts as not held.
+ */
+export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPath[]> {
+  if (paths.length === 0) return [];
+  const rel = paths.map((p) => path.relative(root, p).split(path.sep).join("/") || ".");
+  try {
+    const { stdout } = await execFileP(
+      "git",
+      ["-C", root, "status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--", ...rel],
+      { maxBuffer: 64 * 1024 * 1024 },
+    );
+    // `status --porcelain` names paths from the repository root, which is not the Forge root when
+    // the Forge sits inside a larger repo; strip the Forge's prefix so every path unify prints —
+    // here and in the late-failure message — is Forge-relative. `ls-files` below already is.
+    const { stdout: prefixOut } = await execFileP("git", ["-C", root, "rev-parse", "--show-prefix"]);
+    const prefix = prefixOut.trim();
+    const forgeRel = (p: string) => (prefix && p.startsWith(prefix) ? p.slice(prefix.length) : p) || ".";
+    const out: UnheldPath[] = [];
+    const entries = stdout.split("\0");
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      if (e.length < 4) continue;
+      const xy = e.slice(0, 2);
+      out.push({ path: forgeRel(e.slice(3)), reason: xy === "!!" ? "ignored" : xy === "??" ? "untracked" : "modified" });
+      // A rename or copy carries its original path as the next NUL-separated field.
+      if (xy[0] === "R" || xy[0] === "C") i++;
+    }
+    // Ruling 39: `git status` trusts the index flags, so an entry marked skip-worktree or
+    // assume-unchanged reports clean however much its file was edited — and that edit exists
+    // nowhere git can restore it from. `ls-files -v` shows the flag: `S` for skip-worktree, a
+    // lowercase tag for assume-unchanged.
+    const { stdout: listed } = await execFileP("git", ["-C", root, "ls-files", "-v", "-z", "--", ...rel], {
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    for (const e of listed.split("\0")) {
+      if (e.length < 3) continue;
+      const tag = e[0];
+      if (tag === "S" || tag === "s") out.push({ path: e.slice(2), reason: "skip-worktree" });
+      else if (tag !== tag.toUpperCase()) out.push({ path: e.slice(2), reason: "assume-unchanged" });
+    }
+    return out;
+  } catch {
+    return rel.map((p) => ({ path: p, reason: "git failed" as const }));
+  }
+}
+
 /** Plural folder name for an ingredient type (rules/, agents/, …). */
 export function typeFolder(type: Ingredient["type"]): string {
   return type === "mcp" ? "mcp" : `${type}s`;

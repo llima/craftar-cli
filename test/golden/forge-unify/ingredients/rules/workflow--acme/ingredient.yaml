@@ -1,0 +1,4 @@
+type: rule
+name: workflow--acme
+as: workflow
+inclusion: always

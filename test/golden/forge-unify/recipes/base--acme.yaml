@@ -1,0 +1,5 @@
+name: base--acme
+ingredients:
+  - rule/workflow--acme
+  - rule/eof--acme
+  - rule/meta--acme

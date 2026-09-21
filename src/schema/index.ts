@@ -105,6 +105,8 @@ export type Ingredient = z.infer<typeof IngredientSchema>;
 
 /** `type/name`, the way recipes refer to ingredients. */
 export type IngredientRef = `${IngredientType}/${string}`;
+/** Loose on purpose: a later stage validates against the Forge's actual ingredients with a better message. */
+export const IngredientRefSchema = z.custom<IngredientRef>((v) => typeof v === "string" && v.includes("/"));
 
 /* ------------------------------------------------------------------ */
 /* Recipes                                                              */
@@ -206,3 +208,37 @@ export const LockSchema = z.object({
 });
 export type Lock = z.infer<typeof LockSchema>;
 export type LockEntry = z.infer<typeof LockEntrySchema>;
+
+/* ------------------------------------------------------------------ */
+/* Unify plan — external input, so it is parsed, never trusted         */
+/* ------------------------------------------------------------------ */
+
+export const TakeSchema = z.enum(["base", "variant", "keep"]);
+export type Take = z.infer<typeof TakeSchema>;
+
+export const PlanHunkSchema = z.object({
+  hunk: z.number().int().positive(),
+  /** Human echo of what `forge diff` printed. Never read back. */
+  at: z.string().default(""),
+  take: TakeSchema,
+});
+export type PlanHunk = z.infer<typeof PlanHunkSchema>;
+
+export const PlanFileSchema = z.object({
+  file: z.string(),
+  hunks: z.array(PlanHunkSchema).optional(),
+  onlyIn: z.enum(["base", "variant"]).optional(),
+  take: TakeSchema.optional(),
+});
+export type PlanFile = z.infer<typeof PlanFileSchema>;
+
+export const UnifyPlanSchema = z.object({
+  schema: z.literal(1),
+  base: IngredientRefSchema,
+  profile: z.string(),
+  variant: IngredientRefSchema,
+  baseFingerprint: z.string(),
+  variantFingerprint: z.string(),
+  files: z.array(PlanFileSchema).default([]),
+});
+export type UnifyPlan = z.infer<typeof UnifyPlanSchema>;

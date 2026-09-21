@@ -1,0 +1,5 @@
+name: acme
+recipes:
+  - base--acme
+targets:
+  - claude-code
