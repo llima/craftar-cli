@@ -4,8 +4,9 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { gitDirty } from "../src/core/forge.js";
+import { planFrom } from "../src/core/unify.js";
 import { UnifyPlanSchema } from "../src/schema/index.js";
-import { tmpDir } from "./helpers/forge.js";
+import { tmpDir, writeFiles } from "./helpers/forge.js";
 
 const execFileP = promisify(execFile);
 
@@ -61,5 +62,48 @@ describe("gitDirty", () => {
   it("reports dirty when git cannot report at all", async () => {
     const missing = path.join(await tmpDir("craftar-git-"), "does-not-exist");
     expect(await gitDirty(missing)).toBe(true);
+  });
+});
+
+function fakeDiff() {
+  return {
+    files: [
+      { file: "rule.md", hunks: [
+        { kind: "inline" as const, a: { start: 2, lines: ["old"] }, b: { start: 2, lines: ["new"] } },
+        { kind: "block" as const, a: { start: 5, lines: [] }, b: { start: 5, lines: ["added"] } },
+      ] },
+    ],
+    onlyInBase: ["gone.md"],
+    onlyInVariant: ["extra.md"],
+  };
+}
+
+describe("planFrom", () => {
+  it("defaults every decision to keep and echoes where each hunk is", async () => {
+    const BASE_DIR = await tmpDir();
+    cleanups.push(() => fs.rm(BASE_DIR, { recursive: true, force: true }));
+    await writeFiles(BASE_DIR, { "ingredient.yaml": "type: rule\nname: workflow\n" });
+
+    const VARIANT_DIR = await tmpDir();
+    cleanups.push(() => fs.rm(VARIANT_DIR, { recursive: true, force: true }));
+    await writeFiles(VARIANT_DIR, { "ingredient.yaml": "type: rule\nname: workflow--acme\nas: workflow\n" });
+
+    const plan = await planFrom(
+      { ref: "rule/workflow", dir: BASE_DIR, meta: { type: "rule", name: "workflow" } } as never,
+      { ref: "rule/workflow--acme", dir: VARIANT_DIR, meta: { type: "rule", name: "workflow--acme", as: "workflow" } } as never,
+      fakeDiff() as never,
+      "acme",
+    );
+    expect(plan.schema).toBe(1);
+    expect(plan.base).toBe("rule/workflow");
+    expect(plan.variant).toBe("rule/workflow--acme");
+    expect(plan.profile).toBe("acme");
+    const paired = plan.files.find((f) => f.file === "rule.md")!;
+    expect(paired.hunks!.map((h) => h.take)).toEqual(["keep", "keep"]);
+    expect(paired.hunks!.map((h) => h.hunk)).toEqual([1, 2]);
+    expect(paired.hunks![0].at).toBe("lines 2–2");
+    expect(paired.hunks![1].at).toBe("after line 4");
+    expect(plan.files.find((f) => f.file === "gone.md")).toMatchObject({ onlyIn: "base", take: "keep" });
+    expect(plan.files.find((f) => f.file === "extra.md")).toMatchObject({ onlyIn: "variant", take: "keep" });
   });
 });
