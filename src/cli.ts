@@ -289,14 +289,26 @@ forge
 
     if (o.savePlan) {
       const saved = await planFrom(base, variant, diff, o.profile);
-      await fs.mkdir(path.dirname(o.savePlan), { recursive: true });
-      await fs.writeFile(o.savePlan, YAML.stringify(saved));
+      const savePlanAbs = path.resolve(o.savePlan);
+      await fs.mkdir(path.dirname(savePlanAbs), { recursive: true });
+      await fs.writeFile(savePlanAbs, YAML.stringify(saved));
       const deferred = saved.files.reduce((n: number, pf) => n + (pf.hunks ? pf.hunks.length : 1), 0);
       if (o.json) {
         console.log(JSON.stringify({ base: base.ref, profile: o.profile, plan: o.savePlan, unresolved: deferred }, null, 2));
       } else {
         console.log(pc.bold(`craftar forge unify ${ref} ↔ ${o.profile}`));
         console.log(`  wrote plan ${o.savePlan} — ${deferred} decision(s) deferred`);
+        // Ruling 25: never carve the plan file out of the dirty-tree check — instead warn, here,
+        // when it would trip it. `path.relative` escapes the Forge root with a leading ".." (or is
+        // absolute on Windows across drives) when the plan sits outside it.
+        const rel = path.relative(f.root, savePlanAbs);
+        if (rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+          console.log(
+            pc.yellow(
+              `  note: ${o.savePlan} sits inside the Forge — the next --plan run refuses until it is committed or git-ignored; keeping plans outside the Forge avoids this`,
+            ),
+          );
+        }
       }
       return;
     }
