@@ -6,6 +6,7 @@ import YAML from "yaml";
 import { makeForge, profile, recipe, rule, scenario, tmpDir, writeFiles } from "./helpers/forge.js";
 import { runCli } from "./helpers/cli.js";
 import { exists, listFiles } from "../src/core/forge.js";
+import { UnifyPlanSchema } from "../src/schema/index.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -769,7 +770,10 @@ describe("cli", () => {
     expect(profileText).toContain("base");
   });
 
-  it("forge unify prints a hint when --save-plan's target sits inside the Forge (Ruling 25)", async () => {
+  // Ruling 30: this test used to check Ruling 25's hint. That hint is gone, so its old assertion
+  // (`not.toContain("sits inside the Forge")`) could never fail; it now checks the refusal and the
+  // outside plan's content instead.
+  it("refuses a --save-plan target inside the Forge (Ruling 30)", async () => {
     const root = await tmpDir("craftar-cli-forge-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
     await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
@@ -780,6 +784,7 @@ describe("cli", () => {
     const inside = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", path.join(root, "plan.yaml"), "--forge", root]);
     expect(inside.code).toBe(1);
     expect(inside.stderr).toContain("inside the Forge");
+    expect(await exists(path.join(root, "plan.yaml"))).toBe(false);
 
     const planDir = await tmpDir("craftar-cli-plan-");
     cleanups.push(() => fs.rm(planDir, { recursive: true, force: true }));
@@ -795,7 +800,8 @@ describe("cli", () => {
       root,
     ]);
     expect(outside.code).toBe(0);
-    expect(outside.stdout).not.toContain("sits inside the Forge");
+    const saved = UnifyPlanSchema.parse(YAML.parse(await fs.readFile(path.join(planDir, "plan.yaml"), "utf8")));
+    expect(saved.base).toBe("rule/wf");
   });
 });
 
