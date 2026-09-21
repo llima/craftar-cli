@@ -347,7 +347,11 @@ forge
     const mustHold = [base.dir, ...(result.resolved ? [variant.dir, ...cascadeFiles] : [])];
     const unheld = await gitUnheld(f.root, mustHold);
     if (unheld.length) {
-      fail(`${unheld[0].path} is not held by git (${unheld[0].reason}) — unify can only change files git can restore`);
+      // Name every such path (the first few, then a count), so one run shows the whole problem.
+      const SHOWN = 10;
+      const lines = unheld.slice(0, SHOWN).map((u) => `  ${u.path} is not held by git (${u.reason})`);
+      if (unheld.length > SHOWN) lines.push(`  … and ${unheld.length - SHOWN} more`);
+      fail(`unify can only change files git can restore — ${unheld.length} path(s) under ${f.root} are not:\n${lines.join("\n")}`);
     }
 
     // Order: merged files, then the recipe cascade, then removal of the variant directory

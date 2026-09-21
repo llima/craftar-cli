@@ -144,7 +144,7 @@ export async function gitDirty(dir: string): Promise<boolean> {
 }
 
 export interface UnheldPath {
-  /** Repo-relative path as git reports it (or the path asked about, when git itself failed). */
+  /** Forge-relative POSIX path (the path asked about, when git itself failed). */
   path: string;
   reason: "ignored" | "untracked" | "modified" | "skip-worktree" | "assume-unchanged" | "git failed";
 }
@@ -166,13 +166,19 @@ export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPa
       ["-C", root, "status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--", ...rel],
       { maxBuffer: 64 * 1024 * 1024 },
     );
+    // `status --porcelain` names paths from the repository root, which is not the Forge root when
+    // the Forge sits inside a larger repo; strip the Forge's prefix so every path unify prints —
+    // here and in the late-failure message — is Forge-relative. `ls-files` below already is.
+    const { stdout: prefixOut } = await execFileP("git", ["-C", root, "rev-parse", "--show-prefix"]);
+    const prefix = prefixOut.trim();
+    const forgeRel = (p: string) => (prefix && p.startsWith(prefix) ? p.slice(prefix.length) : p) || ".";
     const out: UnheldPath[] = [];
     const entries = stdout.split("\0");
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i];
       if (e.length < 4) continue;
       const xy = e.slice(0, 2);
-      out.push({ path: e.slice(3), reason: xy === "!!" ? "ignored" : xy === "??" ? "untracked" : "modified" });
+      out.push({ path: forgeRel(e.slice(3)), reason: xy === "!!" ? "ignored" : xy === "??" ? "untracked" : "modified" });
       // A rename or copy carries its original path as the next NUL-separated field.
       if (xy[0] === "R" || xy[0] === "C") i++;
     }

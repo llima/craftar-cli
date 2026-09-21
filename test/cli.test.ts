@@ -1233,3 +1233,36 @@ describe("cli — forge unify checks the cascade's own files are held by git (Ru
     expect(await fs.readFile(path.join(root, "ingredients/rules/wf/rule.md"), "utf8")).toBe("a\n");
   });
 });
+
+describe("cli — forge unify's held-by-git refusal names every path, Forge-relative (Ruling 37 nits)", () => {
+  it("lists every path git does not hold, not just the first", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+    execFileSync("git", ["-C", root, "config", "status.showUntrackedFiles", "no"]);
+    await writeFiles(root, { "ingredients/rules/wf--acme/one.md": "1\n", "ingredients/rules/wf--acme/two.md": "2\n" });
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("ingredients/rules/wf--acme/one.md is not held by git (untracked)");
+    expect(r.stderr).toContain("ingredients/rules/wf--acme/two.md is not held by git (untracked)");
+  });
+
+  it("prints paths relative to the Forge, not to an enclosing repository", async () => {
+    const repo = await tmpDir("craftar-cli-repo-");
+    cleanups.push(() => fs.rm(repo, { recursive: true, force: true }));
+    const root = path.join(repo, "nested", "forge");
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(repo);
+    gitCommitAll(repo, "init");
+    execFileSync("git", ["-C", repo, "config", "status.showUntrackedFiles", "no"]);
+    await writeFiles(root, { "ingredients/rules/wf--acme/scratch.md": "x\n" });
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("  ingredients/rules/wf--acme/scratch.md is not held by git (untracked)");
+    expect(r.stderr).not.toContain("nested/forge/ingredients");
+  });
+});
