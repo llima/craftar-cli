@@ -1289,3 +1289,27 @@ describe("cli — forge unify's cascade rewrites ingredients only (Ruling 42)", 
     });
   }
 });
+
+describe("cli — forge unify --save-plan through a dangling symlink (Ruling 30, CI round)", () => {
+  // Creating a symlink needs privileges on Windows; this runs on Linux CI.
+  it.skipIf(process.platform === "win32")("refuses a target whose path passes through a dangling symlink, and writes nothing", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const outside = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(outside, { recursive: true, force: true }));
+    const link = path.join(outside, "dangling");
+    await fs.symlink(path.join(root, "not-there-yet"), link, "dir"); // points into the Forge, at nothing
+
+    const before = await snapshot(root);
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", path.join(link, "plan.yaml"), "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("cannot be resolved");
+    expect(r.stderr).toContain("cannot prove the target lies outside the Forge");
+    expect(r.stderr).not.toContain("ENOENT: no such file");
+    expect(await snapshot(root)).toEqual(before);
+  });
+});

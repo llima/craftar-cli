@@ -302,7 +302,13 @@ forge
       // refusals come before any write; the comparison runs on real paths, so neither a `..`
       // segment nor a symlink can carry the target back into the Forge.
       const savePlanAbs = path.resolve(o.savePlan);
-      const [targetReal, rootReal] = await Promise.all([realpathOfNearest(savePlanAbs), fs.realpath(path.resolve(f.root))]);
+      let targetReal: string;
+      try {
+        targetReal = await realpathOfNearest(savePlanAbs);
+      } catch (e) {
+        fail(`refusing to write the plan to ${o.savePlan}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      const rootReal = await fs.realpath(path.resolve(f.root));
       const rel = path.relative(rootReal, targetReal);
       if (rel === "" || !(rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))) {
         fail(`refusing to write the plan to ${o.savePlan}: it resolves inside the Forge (${f.root}) — save plans outside the Forge`);
@@ -511,6 +517,11 @@ async function readText(p: string): Promise<string | null> {
  * The real path of `abs`, resolved through its nearest existing ancestor: `fs.realpath` needs the
  * path to exist, and a plan target usually does not yet — so the part that exists is resolved
  * (symlinks and all) and the part that does not is appended as written.
+ *
+ * It walks up only past a component that truly does not exist (`lstat` says ENOENT/ENOTDIR). A
+ * component that exists but will not resolve — a dangling symlink, a symlink loop, a permission
+ * error — throws instead: resolving the rest lexically would let a link that points into the Forge
+ * pass the containment check, so unify fails closed rather than guess where the target lands.
  */
 async function realpathOfNearest(abs: string): Promise<string> {
   let head = abs;
@@ -518,13 +529,28 @@ async function realpathOfNearest(abs: string): Promise<string> {
   for (;;) {
     try {
       return path.join(await fs.realpath(head), ...tail);
-    } catch {
-      const parent = path.dirname(head);
-      if (parent === head) return abs;
-      tail.unshift(path.basename(head));
-      head = parent;
+    } catch (realpathError) {
+      try {
+        await fs.lstat(head);
+      } catch (lstatError) {
+        const code = (lstatError as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          const parent = path.dirname(head);
+          if (parent === head) return abs;
+          tail.unshift(path.basename(head));
+          head = parent;
+          continue;
+        }
+        throw cannotResolve(head, lstatError);
+      }
+      throw cannotResolve(head, realpathError);
     }
   }
+}
+
+function cannotResolve(p: string, e: unknown): Error {
+  const code = (e as NodeJS.ErrnoException).code ?? (e instanceof Error ? e.message : String(e));
+  return new Error(`${p} exists but cannot be resolved (${code}) — unify cannot prove the target lies outside the Forge`);
 }
 
 /** Whether anything — a file, a directory, even a dangling symlink — already sits at `p`. */
