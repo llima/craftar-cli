@@ -15,7 +15,12 @@ const PATTERNS: { kind: string; re: RegExp }[] = [
   { kind: "slack-token", re: /\bxox[abprs]-[A-Za-z0-9-]{10,}/ },
   { kind: "api-key", re: /\bsk-(?:ant-)?[A-Za-z0-9_-]{32,}/ },
   { kind: "private-key", re: /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/ },
-  { kind: "azure-devops-pat", re: /(?<![A-Za-z0-9])[a-z0-9]{52}(?![A-Za-z0-9])/ },
+  // Azure DevOps PATs, both formats. `_` bounds both sides so a run inside a snake_case
+  // identifier is not read as a standalone token. The legacy 52-char form must hold a digit,
+  // so a 52-letter lowercase run is not flagged. The 84-char form (Azure DevOps release notes,
+  // sprint 241) carries the fixed signature `AZDO` at 0-based index 76.
+  { kind: "azure-devops-pat", re: /(?<![A-Za-z0-9_])(?=[a-z]*[0-9])[a-z0-9]{52}(?![A-Za-z0-9_])/ },
+  { kind: "azure-devops-pat", re: /(?<![A-Za-z0-9_])[A-Za-z0-9]{76}AZDO[A-Za-z0-9]{4}(?![A-Za-z0-9_])/ },
 ];
 
 /** Scan text line by line with the known token patterns. */

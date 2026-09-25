@@ -10,6 +10,7 @@ const fake = {
   apiKey: "sk-ant-" + "a1B2".repeat(10),
   pem: "-----BEGIN " + "RSA PRIVATE KEY-----",
   azure: "a1b2c3d4".repeat(6) + "a1b2",
+  azure84: "Ab1".repeat(25) + "c" + "AZDO" + "x9Y8",
 };
 
 describe("findSecrets", () => {
@@ -21,6 +22,7 @@ describe("findSecrets", () => {
     ["api-key", fake.apiKey],
     ["private-key", fake.pem],
     ["azure-devops-pat", fake.azure],
+    ["azure-devops-pat", fake.azure84],
   ])("detects %s", (kind, value) => {
     expect(findSecrets(`# Title\n\nvalue: ${value}\n`)).toEqual([{ kind, line: 3 }]);
   });
@@ -33,6 +35,27 @@ describe("findSecrets", () => {
       "tokens are referenced as ${GITHUB_TOKEN}",
     ].join("\n");
     expect(findSecrets(text)).toEqual([]);
+  });
+});
+
+describe("azure-devops-pat precision", () => {
+  it("has the lengths the patterns expect", () => {
+    expect(fake.azure).toHaveLength(52);
+    expect(fake.azure84).toHaveLength(84);
+    expect(fake.azure84.indexOf("AZDO")).toBe(76);
+  });
+
+  it("does not flag a 52-char lowercase run with no digit", () => {
+    expect(findSecrets(`value: ${"abcd".repeat(13)}\n`)).toEqual([]);
+  });
+
+  it("does not flag a 52-char token embedded in a snake_case identifier", () => {
+    expect(findSecrets(`word_${fake.azure}_suffix\n`)).toEqual([]);
+    expect(findSecrets(`word_${fake.azure84}_suffix\n`)).toEqual([]);
+  });
+
+  it("does not flag an 84-char run without the AZDO signature", () => {
+    expect(findSecrets(`value: ${"Ab1".repeat(28)}\n`)).toEqual([]);
   });
 });
 
