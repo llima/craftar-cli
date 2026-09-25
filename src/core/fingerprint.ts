@@ -74,6 +74,6 @@ export async function fingerprintDir(dir: string, io: DirReader = diskReader): P
   try {
     return fingerprintOf(meta, files);
   } catch (e) {
-    throw new Error(`${metaFile}: ${(e as Error).message}`);
+    throw new Error(`invalid ${path.relative(process.cwd(), metaFile)}: ${(e as Error).message}`);
   }
 }

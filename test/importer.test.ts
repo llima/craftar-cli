@@ -277,6 +277,7 @@ describe("import --from claude-code — all checks before the first write", () =
       (e: Error) => e,
     );
     expect(err?.message).toContain("ingredient metadata is cyclic");
+    expect(err?.message).toContain("ingredients/mcp/srv/ingredient.yaml");
     expect(err?.message).toContain("The Forge was left untouched.");
     expect(await snapshot(t.forge)).toEqual(before);
   });
