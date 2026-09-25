@@ -1,5 +1,9 @@
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { fingerprintOf } from "../src/core/fingerprint.js";
+import { fingerprintDir, fingerprintOf } from "../src/core/fingerprint.js";
+import { IngredientSchema } from "../src/schema/index.js";
 
 const base = { type: "rule", name: "workflow", targets: "*" };
 
@@ -88,5 +92,40 @@ describe("fingerprintOf — nested metadata", () => {
     const a = fingerprintOf({ type: "mcp", name: "srv", server: { command: "x", env: shared, extra: shared } }, files);
     const b = fingerprintOf({ type: "mcp", name: "srv", server: { command: "x", env: { A: "1" }, extra: { A: "1" } } }, files);
     expect(b).toBe(a);
+  });
+});
+
+describe("fingerprintDir — validated metadata (spec 07)", () => {
+  async function ingredientDir(yaml: string): Promise<string> {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-fp-"));
+    await fs.writeFile(path.join(dir, "ingredient.yaml"), yaml);
+    await fs.writeFile(path.join(dir, "rule.md"), "body\n");
+    return dir;
+  }
+
+  it("hashes the metadata with its schema defaults applied, as the other side of every comparison is", async () => {
+    const dir = await ingredientDir("type: rule\nname: x\n");
+    expect(await fingerprintDir(dir)).toBe(fingerprintOf(IngredientSchema.parse({ type: "rule", name: "x" }), { "rule.md": "body\n" }));
+  });
+
+  it("refuses an unknown key, naming the file and the key", async () => {
+    const dir = await ingredientDir("type: rule\nname: x\nfoo: 1\n");
+    const err = await fingerprintDir(dir).then(() => null, (e: Error) => e);
+    expect(err?.message).toContain("ingredient.yaml");
+    expect(err?.message).toContain("foo");
+  });
+
+  it("names the file on a YAML syntax error", async () => {
+    const dir = await ingredientDir("type: rule\nname: [x\n");
+    const err = await fingerprintDir(dir).then(() => null, (e: Error) => e);
+    expect(err?.message).toContain("ingredient.yaml");
+  });
+
+  it("ignores the key order of an MCP server and its env (AC 19)", async () => {
+    const a = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-fp-"));
+    const b = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-fp-"));
+    await fs.writeFile(path.join(a, "ingredient.yaml"), "type: mcp\nname: p\nserver:\n  command: npx\n  type: stdio\n  env: { A: '1', B: '2' }\n");
+    await fs.writeFile(path.join(b, "ingredient.yaml"), "type: mcp\nname: p\nserver:\n  type: stdio\n  env: { B: '2', A: '1' }\n  command: npx\n");
+    expect(await fingerprintDir(b)).toBe(await fingerprintDir(a));
   });
 });

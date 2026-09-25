@@ -5,8 +5,8 @@ import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
 import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../core/secrets.js";
 import { stripBom, toLf } from "../core/text.js";
-import { fingerprintDir, fingerprintOf } from "../core/fingerprint.js";
-import type { Ingredient, Profile, Recipe, Target } from "../schema/index.js";
+import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
+import { IngredientSchema, type Ingredient, type McpServer, type Profile, type Recipe, type Target } from "../schema/index.js";
 
 export interface ImportOptions {
   workspaceRoot: string;
@@ -242,8 +242,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     if (!isPlainObject(json) || ("mcpServers" in json && !isPlainObject(json.mcpServers))) {
       throw new Error(".mcp.json has no valid mcpServers object — fix the file and re-run import");
     }
-    type McpServerConfig = Extract<Ingredient, { type: "mcp" }>["server"];
-    for (const [name, server] of Object.entries(json.mcpServers ?? {}) as [string, McpServerConfig][]) {
+    for (const [name, server] of Object.entries(json.mcpServers ?? {}) as [string, McpServer][]) {
       if (!isPlainObject(server)) {
         throw new Error(`.mcp.json server "${name}" is not an object — fix the file and re-run import`);
       }
@@ -315,7 +314,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
  * Reads go through the overlay so that a later step sees an earlier step's output exactly as the
  * write-as-you-go importer did (two scripts that map to one ingredient name, for instance).
  */
-class ForgeStage {
+export class ForgeStage {
   private readonly files = new Map<string, string | Buffer>();
   constructor(readonly root: string) {}
 
@@ -333,26 +332,21 @@ class ForgeStage {
     return Buffer.isBuffer(staged) ? staged.toString("utf8") : staged;
   }
 
-  /** `fingerprintDir` over the overlay: staged files win over files on disk at the same path. */
-  async fingerprintDir(dir: string): Promise<string> {
-    const prefix = dir + path.sep;
-    const stagedRels = [...this.files.keys()].filter((k) => k.startsWith(prefix)).map((k) => path.relative(dir, k).split(path.sep).join("/"));
-    if (stagedRels.length === 0) return fingerprintDir(dir);
-    const metaFile = path.join(dir, "ingredient.yaml");
-    const meta = YAML.parse(await this.readText(metaFile));
-    const rels = new Set([...stagedRels, ...((await exists(dir)) ? await listFiles(dir) : [])]);
-    const files: Record<string, Buffer> = {};
-    for (const rel of rels) {
-      if (rel === "ingredient.yaml") continue;
-      const abs = path.join(dir, rel);
-      const staged = this.files.get(abs);
-      files[rel] = staged === undefined ? await fs.readFile(abs) : Buffer.isBuffer(staged) ? staged : Buffer.from(staged, "utf8");
-    }
-    try {
-      return fingerprintOf(meta, files);
-    } catch (e) {
-      throw new Error(`${metaFile}: ${(e as Error).message}`);
-    }
+  /** A `fingerprintDir` reader over the overlay: staged files win over files on disk at the same path. */
+  reader(): DirReader {
+    return {
+      readText: (abs) => this.readText(abs),
+      readBytes: async (abs) => {
+        const staged = this.files.get(abs);
+        if (staged === undefined) return fs.readFile(abs);
+        return Buffer.isBuffer(staged) ? staged : Buffer.from(staged, "utf8");
+      },
+      list: async (dir) => {
+        const prefix = dir + path.sep;
+        const staged = [...this.files.keys()].filter((k) => k.startsWith(prefix)).map((k) => path.relative(dir, k).split(path.sep).join("/"));
+        return [...new Set([...staged, ...((await exists(dir)) ? await listFiles(dir) : [])])].sort();
+      },
+    };
   }
 
   /** Write every staged file. A failure here names what was already written, since the Forge is no longer untouched. */
@@ -423,7 +417,7 @@ function secretIn(meta: Ingredient, files: Record<string, string | Buffer>, scan
     // Walk every field of the server config, not just env/args: headers, url, command, etc.
     // can carry a token too. Entropy stays reserved for env/args; every other field is
     // checked against known patterns only.
-    const server = meta.server as unknown as Record<string, unknown>;
+    const server: Record<string, unknown> = meta.server;
     for (const [key, value] of Object.entries(server)) {
       const hit = secretInServerField(meta.name, key, value, key === "env" || key === "args");
       if (hit) return hit;
@@ -510,10 +504,11 @@ async function writeIngredient(
   const folder = typeFolder(meta.type);
   let name = meta.name;
   let dir = path.join(forge, "ingredients", folder, name);
-  const fingerprint = fingerprintOf(meta, files);
+  // Hash what the Forge will load back, the way fingerprintDir hashes the other side.
+  const fingerprint = fingerprintOf(validateImported(meta), files);
 
   if (await stage.exists(path.join(dir, "ingredient.yaml"))) {
-    const existing = await stage.fingerprintDir(dir);
+    const existing = await fingerprintDir(dir, stage.reader());
     if (existing === fingerprint) {
       report.reused.push(`${meta.type}/${name}`);
       return `${meta.type}/${name}`;
@@ -523,6 +518,7 @@ async function writeIngredient(
     dir = path.join(forge, "ingredients", folder, name);
     report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge` });
     meta = { ...meta, name, as } as Ingredient;
+    validateImported(meta); // the variant name must be slug-like too (a `--profile` with a space is not)
   } else {
     report.created.push(`${meta.type}/${name}`);
   }
@@ -532,6 +528,18 @@ async function writeIngredient(
   stage.write(path.join(dir, "ingredient.yaml"), YAML.stringify(yamlMeta, { lineWidth: 0 }));
   for (const [rel, content] of Object.entries(files)) stage.write(path.join(dir, rel), content);
   return `${meta.type}/${name}`;
+}
+
+/**
+ * The ingredient as the Forge will load it back. An ingredient that would not load (a non-string MCP
+ * `env` value, a name that is not slug-like) fails the whole import, naming its source, before the
+ * first write — 0.2.4 wrote a Forge no command could load (spec 07, Ruling 6).
+ */
+function validateImported(meta: Ingredient): Ingredient {
+  const r = IngredientSchema.safeParse(meta);
+  if (r.success) return r.data;
+  const source = meta.origin?.path ?? `${meta.type}/${meta.name}`;
+  throw new Error(`${source} (${meta.type}/${meta.name}) does not fit the ingredient schema: ${r.error.message}`);
 }
 
 async function writeRecipe(stage: ForgeStage, dir: string, recipe: Recipe, report: ImportReport): Promise<void> {

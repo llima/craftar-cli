@@ -57,6 +57,39 @@ describe("cli", () => {
     expect(check.stdout).toContain("workspace in sync");
   });
 
+  it("every Forge command refuses unknown ingredient keys, naming the file and every key, and writes nothing (spec 07, AC 1)", async () => {
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "# A\n", { incluson: "always", origin: { workspace: "acme", path: "a.md", line: 3 } })],
+        recipes: [recipe("base", ["rule/a"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const before = { forge: await snapshot(s.forgeRoot), ws: await snapshot(s.wsRoot) };
+    for (const args of [["status"], ["sync"], ["forge", "variants"], ["forge", "unify", "rule/a", "--profile", "acme", "--take", "base"]]) {
+      const r = runCli([...args, "--workspace", s.wsRoot]);
+      expect(r.code, args.join(" ")).toBe(1);
+      expect(r.stderr, args.join(" ")).toContain(path.join("ingredients", "rules", "a", "ingredient.yaml"));
+      expect(r.stderr, args.join(" ")).toContain("incluson");
+      expect(r.stderr, args.join(" ")).toContain("line");
+    }
+    expect({ forge: await snapshot(s.forgeRoot), ws: await snapshot(s.wsRoot) }).toEqual(before);
+  });
+
+  it("sync --check fails once the Forge carries an MCP key the locked .mcp.json lacks (spec 07, AC 5)", async () => {
+    const meta = (server: Record<string, unknown>) => ({ type: "mcp", name: "r", server });
+    const s = await scenario(
+      { ingredients: [{ meta: meta({ url: "https://mcp.acme.dev" }) }], recipes: [recipe("base", ["mcp/r"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.writeFile(path.join(s.forgeRoot, "ingredients/mcp/r/ingredient.yaml"), YAML.stringify(meta({ url: "https://mcp.acme.dev", headers: { "X-Team": "acme" } })));
+    expect(runCli(["sync", "--check", "--workspace", s.wsRoot]).code).toBe(1);
+  });
+
   it("sync --check keeps failing on a hand-edited orphan after a sync has already reported it", async () => {
     const s = await scenario(
       { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
@@ -858,6 +891,35 @@ describe("cli — forge unify final review", () => {
     gitCommitAll(root, "init");
     return root;
   }
+
+  it("forge unify --take variant keeps a variant that differs only in an undeclared server key (spec 07, AC 6)", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [
+        { meta: { type: "mcp", name: "srv", server: { url: "https://mcp.acme.dev" } } },
+        { meta: { type: "mcp", name: "srv--acme", as: "srv", server: { url: "https://mcp.acme.dev", headers: { "X-Team": "acme" } } } },
+      ],
+    });
+    gitInit(root);
+    gitCommitAll(root, "init");
+    const r = runCli(["forge", "unify", "mcp/srv", "--profile", "acme", "--take", "variant", "--forge", root, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.metaDiffers).toEqual(["server"]);
+    expect(out.resolved).toBe(false);
+    expect(await exists(path.join(root, "ingredients/mcp/srv--acme"))).toBe(true);
+  });
+
+  it("forge variants refuses a Forge with an unknown ingredient key, naming the file and the key (spec 07, AC 1)", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("workflow", "a\n", { incluson: "always" })] });
+    const r = runCli(["forge", "variants", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(path.join("ingredients", "rules", "workflow", "ingredient.yaml"));
+    expect(r.stderr).toContain("incluson");
+  });
 
   it("forge unify --take variant leaves a variant whose nested MCP server differs unresolved, and names the field (Ruling 28)", async () => {
     const root = await mcpForge();

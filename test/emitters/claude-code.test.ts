@@ -44,6 +44,17 @@ describe("claude-code emitter", () => {
     expect(p.files.map((f) => f.path)).toEqual([".claude/rules/workflow.md"]);
   });
 
+  it("writes an MCP server exactly as the Forge holds it: undeclared keys, in its own key order (spec 07)", async () => {
+    const server = { type: "http", url: "https://mcp.acme.dev", headers: { "X-Team": "acme" }, timeout: 30 };
+    const p = await planFor([{ meta: { type: "mcp", name: "r", server } }]);
+    expect(text(p, ".mcp.json")).toBe(JSON.stringify({ mcpServers: { r: server } }, null, 2) + "\n");
+  });
+
+  it("emits a server with only declared keys, in schema order, byte for byte as 0.2.4 did (AC 18)", async () => {
+    const p = await planFor([{ meta: { type: "mcp", name: "pw", server: { command: "npx", args: ["-y", "pw"] } } }]);
+    expect(text(p, ".mcp.json")).toBe('{\n  "mcpServers": {\n    "pw": {\n      "command": "npx",\n      "args": [\n        "-y",\n        "pw"\n      ]\n    }\n  }\n}\n');
+  });
+
   it("collects MCP ingredients into .mcp.json", async () => {
     const p = await planFor([
       { meta: { type: "mcp", name: "pw", server: { command: "npx", args: ["-y", "pw"] } } },

@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { importClaudeCode } from "../src/importers/claude-code.js";
-import { exists } from "../src/core/forge.js";
+import { ForgeStage, importClaudeCode } from "../src/importers/claude-code.js";
+import { fingerprintDir } from "../src/core/fingerprint.js";
+import { exists, loadForge } from "../src/core/forge.js";
+import { apply, loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
 import { tmpDir, writeFiles } from "./helpers/forge.js";
 
 const TOKEN = "ghp_" + "x".repeat(36); // assembled at runtime on purpose
@@ -276,6 +278,7 @@ describe("import --from claude-code — all checks before the first write", () =
       (e: Error) => e,
     );
     expect(err?.message).toContain("ingredient metadata is cyclic");
+    expect(err?.message).toContain(path.join("ingredients", "mcp", "srv", "ingredient.yaml"));
     expect(err?.message).toContain("The Forge was left untouched.");
     expect(await snapshot(t.forge)).toEqual(before);
   });
@@ -285,6 +288,43 @@ describe("import --from claude-code — all checks before the first write", () =
     await writeFiles(t.ws("api"), { ".claude/rules/workflow.md": "# Workflow\n", ".mcp.json": "{ not json" });
     await expect(importInto(t.forge, t.ws("api"), "api")).rejects.toThrow("The Forge was left untouched.");
     expect(await exists(t.forge)).toBe(false);
+  });
+
+  it("fingerprints a staged ingredient the same way as the flushed one (one fingerprintDir)", async () => {
+    // hook/guard is compared while still staged; a second import of the same workspace compares it on
+    // disk. Both paths go through the core fingerprintDir, so the re-import reuses instead of forking.
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".claude/hooks/guard.sh": "echo sh\n",
+      ".claude/hooks/guard.ps1": "Write-Output ps1\n",
+    });
+    const first = await importInto(t.forge, t.ws("api"), "api");
+    const again = await importInto(t.forge, t.ws("api"), "api");
+    // The two guard files still differ from each other, so the variant is reported again; what matters
+    // is that the base compared on disk matches what was compared while staged.
+    expect(again.variants).toEqual(first.variants);
+    expect(again.reused).toEqual(expect.arrayContaining(["hook/guard", "rule/workflow"]));
+    expect(again.created).not.toContain("rule/workflow");
+    expect(again.created).not.toContain("hook/guard");
+  });
+
+  it("refuses an existing Forge ingredient with an unknown key, naming the file and the key", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/workflow.md": "# Workflow\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    const meta = path.join(t.forge, "ingredients/rules/workflow/ingredient.yaml");
+    await fs.writeFile(meta, (await fs.readFile(meta, "utf8")) + "foo: 1\n");
+    const before = await snapshot(t.forge);
+    await writeFiles(t.ws("b"), { ".claude/rules/workflow.md": "# Workflow\n" });
+    const err = await importInto(t.forge, t.ws("b"), "b").then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(err?.message).toContain(path.join("ingredients", "rules", "workflow", "ingredient.yaml"));
+    expect(err?.message).toContain("foo");
+    expect(err?.message).toContain("The Forge was left untouched.");
+    expect(await snapshot(t.forge)).toEqual(before);
   });
 
   it("compares a later ingredient against one staged earlier in the same run", async () => {
@@ -319,3 +359,114 @@ async function snapshot(root: string): Promise<Record<string, string>> {
   await walk("");
   return out;
 }
+
+describe("import --from claude-code — the schema before the first write (spec 07)", () => {
+  const fail = (p: Promise<unknown>) => p.then(() => null, (e: Error) => e);
+  const mcp = (servers: Record<string, unknown>) => JSON.stringify({ mcpServers: servers });
+
+  it("refuses a non-string MCP env value, naming the source, and leaves the Forge untouched", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/workflow.md": "# W\n", ".mcp.json": mcp({ p: { command: "npx", env: { PORT: 8080 } } }) });
+    const err = await fail(importInto(t.forge, t.ws("a"), "a"));
+    expect(err?.message).toContain(".mcp.json");
+    expect(err?.message).toContain("mcp/p");
+    expect(err?.message).toMatch(/The Forge was left untouched\.$/);
+    expect(await exists(t.forge)).toBe(false);
+  });
+
+  it("refuses a script whose name is not slug-like, naming its source", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/scripts/_setup.sh": "echo setup\n" });
+    const err = await fail(importInto(t.forge, t.ws("a"), "a"));
+    expect(err?.message).toContain(".claude/scripts/_setup.sh");
+    expect(err?.message).toContain("script/_setup");
+    expect(err?.message).toContain("The Forge was left untouched.");
+  });
+
+  it("refuses a variant whose profile makes the name not slug-like (spec 07 edge case 3)", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/workflow.md": "# W1\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    const before = await snapshot(t.forge);
+    await writeFiles(t.ws("b"), { ".claude/rules/workflow.md": "# W2\n" });
+    const err = await fail(importInto(t.forge, t.ws("b"), "Acme Corp"));
+    expect(err?.message).toContain("rule/workflow--Acme Corp");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+
+  it("still lists a secret as rejected when the same server also has a non-string env value", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/w.md": "# W\n", ".mcp.json": mcp({ p: { command: "npx", args: [TOKEN], env: { PORT: 8080 } } }) });
+    const r = await importInto(t.forge, t.ws("a"), "a");
+    expect(r.rejected.map((x) => x.name)).toEqual(["mcp/p"]);
+  });
+
+  it("reuses a hand-written ingredient that omits defaulted fields (AC 9)", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/x.md": "# X\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/x/ingredient.yaml"), "type: rule\nname: x\n");
+    const again = await importInto(t.forge, t.ws("a"), "a");
+    expect(again.reused).toContain("rule/x");
+    expect(again.variants).toEqual([]);
+  });
+
+  it("keeps undeclared MCP server keys, in source order, in ingredient.yaml and after loading", async () => {
+    const t = await setup();
+    const server = { type: "http", url: "https://mcp.acme.dev", headers: { "X-Team": "acme" }, timeout: 30 };
+    await writeFiles(t.ws("a"), { ".claude/rules/w.md": "# W\n", ".mcp.json": mcp({ r: server }) });
+    await importInto(t.forge, t.ws("a"), "a");
+    const onDisk = await yaml(path.join(t.forge, "ingredients/mcp/r/ingredient.yaml"));
+    expect(Object.keys(onDisk.server)).toEqual(["type", "url", "headers", "timeout"]);
+    const loaded = (await loadForge(t.forge)).ingredients.get("mcp/r")!.meta;
+    if (loaded.type !== "mcp") throw new Error("expected an mcp ingredient");
+    expect(loaded.server).toEqual(server);
+    expect(Object.keys(loaded.server)).toEqual(["type", "url", "headers", "timeout"]);
+  });
+
+  it("pins spec 07 edge case 8 (pre-existing): a reordered server reuses the first one and reads as collision", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/w.md": "# W\n", ".mcp.json": mcp({ p: { command: "npx", args: ["srv"], type: "stdio" } }) });
+    await importInto(t.forge, t.ws("a"), "a");
+    const reordered = mcp({ p: { type: "stdio", command: "npx", args: ["srv"] } });
+    await writeFiles(t.ws("b"), { ".claude/rules/w.md": "# W\n", ".mcp.json": reordered });
+    const b = await importClaudeCode({ workspaceRoot: t.ws("b"), forgeRoot: t.forge, profileName: "b", writeWorkspaceConfig: true });
+    expect(b.reused).toContain("mcp/p");
+    const w = await loadWorkspace(t.ws("b"));
+    const st = await status(w, await plan(w), await readLock(w.root));
+    expect(st.find((s) => s.path === ".mcp.json")?.state).toBe("collision");
+  });
+});
+
+describe("ForgeStage — one fingerprintDir for staged and flushed ingredients (spec 07)", () => {
+  it("fingerprints a staged directory, overlaid on disk, exactly as the same directory once flushed", async () => {
+    const t = await setup();
+    const dir = path.join(t.forge, "ingredients/hooks/guard");
+    await writeFiles(dir, { "ingredient.yaml": "type: hook\nname: guard\nfiles: [guard.sh]\n", "guard.sh": "echo old\n", "extra.txt": "kept\n" });
+    const stage = new ForgeStage(t.forge);
+    stage.write(path.join(dir, "ingredient.yaml"), "type: hook\nname: guard\nfiles: [guard.sh, guard.ps1]\ntargets: [claude-code]\n");
+    stage.write(path.join(dir, "guard.sh"), "echo new\n");
+    stage.write(path.join(dir, "guard.ps1"), Buffer.from("Write-Output ps1\n"));
+    const staged = await fingerprintDir(dir, stage.reader());
+    expect(staged).not.toBe(await fingerprintDir(dir));
+    await stage.flush();
+    expect(await fingerprintDir(dir)).toBe(staged);
+  });
+});
+
+describe("import --from claude-code — end to end with sync (spec 07 §9.1)", () => {
+  it("imports an MCP server with undeclared keys, type first, and the workspace adopts it byte for byte", async () => {
+    const t = await setup();
+    const original = JSON.stringify({ mcpServers: { r: { type: "http", url: "https://mcp.acme.dev", headers: { "X-Team": "acme" }, timeout: 30 } } }, null, 2) + "\n";
+    await writeFiles(t.ws("a"), { ".claude/rules/w.md": "# W\n", ".mcp.json": original });
+    await importClaudeCode({ workspaceRoot: t.ws("a"), forgeRoot: t.forge, profileName: "a", writeWorkspaceConfig: true });
+    const w = await loadWorkspace(t.ws("a"));
+    const p = await plan(w);
+    const st = await status(w, p, await readLock(w.root));
+    expect(st.find((s) => s.path === ".mcp.json")?.state).toBe("adopt");
+    await apply(w, p, st, {});
+    expect(await fs.readFile(path.join(t.ws("a"), ".mcp.json"), "utf8")).toBe(original);
+    const after = await status(w, await plan(w), await readLock(w.root));
+    expect(after.find((s) => s.path === ".mcp.json")?.state).toBe("unchanged");
+  });
+});

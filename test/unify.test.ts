@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import YAML from "yaml";
 import { exists, gitDirty, loadForge, type Forge } from "../src/core/forge.js";
-import { applyPlan, planFrom, rewriteRecipes, writeUnified } from "../src/core/unify.js";
+import { applyPlan, metaDifferences, planFrom, rewriteRecipes, writeUnified } from "../src/core/unify.js";
 import { diffIngredients } from "../src/core/variants.js";
 import { UnifyPlanSchema } from "../src/schema/index.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
@@ -555,5 +555,17 @@ describe("unify — non-UTF-8 content (Ruling 31)", () => {
     plan.files[0].hunks![0].take = "variant";
     const r = await applyPlan(base, variant, diff, plan);
     expect(r.write["rule.md"]).toBe(`${BOM}a\nnew\n`);
+  });
+});
+
+describe("metaDifferences — MCP server key order (spec 07, AC 19)", () => {
+  it("does not treat a reordered server as a metadata difference", async () => {
+    const forge = await forgeWith({
+      ingredients: [
+        { meta: { type: "mcp", name: "p", server: { command: "npx", type: "stdio", env: { A: "1", B: "2" } } } },
+        { meta: { type: "mcp", name: "p--acme", as: "p", server: { type: "stdio", env: { B: "2", A: "1" }, command: "npx" } } },
+      ],
+    });
+    expect(metaDifferences(forge.ingredients.get("mcp/p")!, forge.ingredients.get("mcp/p--acme")!)).toEqual([]);
   });
 });

@@ -2,8 +2,8 @@ schema: 1
 base: rule/workflow
 profile: acme
 variant: rule/workflow--acme
-baseFingerprint: sha256:2d6c2141b3f044bedff13a0a0d514ef32e5623fb9fc810fa25d7095b6f828b2f
-variantFingerprint: sha256:b04c0f0c262a46970a72c416c76104ad425567767d169b26a015b36e9ba43e23
+baseFingerprint: sha256:1726c2a9f67b3a2f920d9aead39b5af3d1e5595de72b8447055ec224cef241c8
+variantFingerprint: sha256:f15ac8d6b87ef0e490038982263f8e8f17c2d74e8a54285f7f1703a94c976111
 files:
   - file: rule.md
     hunks:
