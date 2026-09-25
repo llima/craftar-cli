@@ -314,7 +314,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
  * Reads go through the overlay so that a later step sees an earlier step's output exactly as the
  * write-as-you-go importer did (two scripts that map to one ingredient name, for instance).
  */
-class ForgeStage {
+export class ForgeStage {
   private readonly files = new Map<string, string | Buffer>();
   constructor(readonly root: string) {}
 

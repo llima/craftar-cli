@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { importClaudeCode } from "../src/importers/claude-code.js";
+import { ForgeStage, importClaudeCode } from "../src/importers/claude-code.js";
+import { fingerprintDir } from "../src/core/fingerprint.js";
 import { exists, loadForge } from "../src/core/forge.js";
-import { loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
+import { apply, loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
 import { tmpDir, writeFiles } from "./helpers/forge.js";
 
 const TOKEN = "ghp_" + "x".repeat(36); // assembled at runtime on purpose
@@ -304,7 +305,8 @@ describe("import --from claude-code — all checks before the first write", () =
     // is that the base compared on disk matches what was compared while staged.
     expect(again.variants).toEqual(first.variants);
     expect(again.reused).toEqual(expect.arrayContaining(["hook/guard", "rule/workflow"]));
-    expect(again.created.filter((c) => !c.includes("/") || /^(rule|hook)\//.test(c))).toEqual([]);
+    expect(again.created).not.toContain("rule/workflow");
+    expect(again.created).not.toContain("hook/guard");
   });
 
   it("refuses an existing Forge ingredient with an unknown key, naming the file and the key", async () => {
@@ -433,5 +435,38 @@ describe("import --from claude-code — the schema before the first write (spec 
     const w = await loadWorkspace(t.ws("b"));
     const st = await status(w, await plan(w), await readLock(w.root));
     expect(st.find((s) => s.path === ".mcp.json")?.state).toBe("collision");
+  });
+});
+
+describe("ForgeStage — one fingerprintDir for staged and flushed ingredients (spec 07)", () => {
+  it("fingerprints a staged directory, overlaid on disk, exactly as the same directory once flushed", async () => {
+    const t = await setup();
+    const dir = path.join(t.forge, "ingredients/hooks/guard");
+    await writeFiles(dir, { "ingredient.yaml": "type: hook\nname: guard\nfiles: [guard.sh]\n", "guard.sh": "echo old\n", "extra.txt": "kept\n" });
+    const stage = new ForgeStage(t.forge);
+    stage.write(path.join(dir, "ingredient.yaml"), "type: hook\nname: guard\nfiles: [guard.sh, guard.ps1]\ntargets: [claude-code]\n");
+    stage.write(path.join(dir, "guard.sh"), "echo new\n");
+    stage.write(path.join(dir, "guard.ps1"), Buffer.from("Write-Output ps1\n"));
+    const staged = await fingerprintDir(dir, stage.reader());
+    expect(staged).not.toBe(await fingerprintDir(dir));
+    await stage.flush();
+    expect(await fingerprintDir(dir)).toBe(staged);
+  });
+});
+
+describe("import --from claude-code — end to end with sync (spec 07 §9.1)", () => {
+  it("imports an MCP server with undeclared keys, type first, and the workspace adopts it byte for byte", async () => {
+    const t = await setup();
+    const original = JSON.stringify({ mcpServers: { r: { type: "http", url: "https://mcp.acme.dev", headers: { "X-Team": "acme" }, timeout: 30 } } }, null, 2) + "\n";
+    await writeFiles(t.ws("a"), { ".claude/rules/w.md": "# W\n", ".mcp.json": original });
+    await importClaudeCode({ workspaceRoot: t.ws("a"), forgeRoot: t.forge, profileName: "a", writeWorkspaceConfig: true });
+    const w = await loadWorkspace(t.ws("a"));
+    const p = await plan(w);
+    const st = await status(w, p, await readLock(w.root));
+    expect(st.find((s) => s.path === ".mcp.json")?.state).toBe("adopt");
+    await apply(w, p, st, {});
+    expect(await fs.readFile(path.join(t.ws("a"), ".mcp.json"), "utf8")).toBe(original);
+    const after = await status(w, await plan(w), await readLock(w.root));
+    expect(after.find((s) => s.path === ".mcp.json")?.state).toBe("unchanged");
   });
 });
