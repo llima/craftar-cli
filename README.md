@@ -51,7 +51,7 @@ From then on, change a rule in `forge/ingredients/rules/<name>/rule.md`, run `cr
 
 | Command | What it does |
 |---|---|
-| `craftar import --from claude-code --forge <dir> --profile <name> [--workspace .] [--write-config]` | Reads `.claude/{rules,agents,commands,skills,scripts,hooks}`, `.mcp.json` and, when present, `.kiro/steering` (for inclusion modes and hand-written steering). Creates ingredients, recipes (`base`, one `stack-*` per scoped rule, `<profile>-steering`) and a profile. Identical ingredients already in the Forge are reused; differing ones become `<name>--<profile>` variants that emit under the original name, so the workspace still round-trips while you decide what to unify. Ingredients holding a secret-like value (tokens, private keys, high-entropy MCP `env`/`args` values) are rejected and listed by location — the value is never printed. A UTF-16 file with a byte-order mark is decoded for the scan; UTF-16 without one is not detected. An ingredient that would not load back into the Forge (a key the schema does not declare, a name that is not slug-like, a non-string MCP `env` value) refuses the import, naming its source. Every read and check runs before the first write, so an import that fails leaves the Forge untouched and says so. |
+| `craftar import --from claude-code --forge <dir> --profile <name> [--workspace .] [--write-config]` | Reads `.claude/{rules,agents,commands,skills,scripts,hooks}`, `.mcp.json` and, when present, `.kiro/steering` (for inclusion modes and hand-written steering). Creates ingredients, recipes (`base`, one `stack-*` per scoped rule, `<profile>-steering`) and a profile. Identical ingredients already in the Forge are reused; differing ones become `<name>--<profile>` variants that emit under the original name, so the workspace still round-trips while you decide what to unify. Ingredients holding a secret-like value (tokens, private keys, high-entropy MCP `env`/`args` values) are rejected and listed by location — the value is never printed. A UTF-16 file with a byte-order mark is decoded for the scan; UTF-16 without one is not detected. An ingredient that would not load back into the Forge (a name that is not slug-like, a non-string MCP `env` value) refuses the import, naming its source; so does an ingredient already in the Forge whose `ingredient.yaml` has an unknown key or a YAML syntax error, naming that file. Every read and check runs before the first write, so an import that fails leaves the Forge untouched and says so. |
 | `craftar status` | Classifies every file the Forge would produce: `new`, `update`, `unchanged`, `adopt`, `drift`, `collision`, `orphan`, `orphan-drift`. `--json` for tooling. |
 | `craftar sync` | Writes the plan and `craftar.lock`. `--dry-run` shows without writing. `--check` exits 1 when anything is out of sync (CI). `--overwrite-drift` regenerates hand-edited files (explicit, never default). |
 | `craftar diff [path]` | Line diff between disk and what the Forge would generate. |
@@ -105,7 +105,7 @@ tags: []
 server:
   type: http
   url: https://mcp.acme.dev/docs
-  headers: { X-Team: acme }          # not declared by Craftar: passed through to .mcp.json
+  headers: { X-Team: acme }          # not declared by Craftar: passed through to both MCP files
   timeout: 30
 ```
 
@@ -194,10 +194,10 @@ Next: `craftar init` from a profile; profile-driven integrations (PM tool → MC
 
 ### to 0.3.0
 
-- **Unknown `ingredient.yaml` keys are refused.** A Forge with a key the schema does not declare stops loading; the error names the file and every unknown key. Fix the typo or remove the key, then re-run. MCP `server` keys are the exception: they pass through.
-- **MCP files may show `update`.** `.mcp.json` and `.kiro/settings/mcp.json` now carry every key of a server as the Forge holds it (`headers`, `timeout`, `disabled`…) in its own key order. Workspaces whose servers have undeclared keys, or keys stored out of `command`/`args`/`url`/`env`/`type` order, see `update` on those files once; a `.mcp.json` that lists `type` first now adopts.
+- **Unknown `ingredient.yaml` keys are refused.** A Forge with a key the schema does not declare stops loading; the error names the file and every unknown key. Rename or remove the key and commit the Forge (`forge unify` refuses paths git does not hold), then re-run. MCP `server` keys are the exception: they pass through.
+- **MCP files may show `update`.** `.mcp.json` and `.kiro/settings/mcp.json` now carry every key of a server as the Forge holds it (`headers`, `timeout`, `disabled`…) in its own key order. Workspaces whose servers have undeclared keys, or keys stored out of `command`/`args`/`url`/`env`/`type` order, see `update` on those files once; an unlocked `.mcp.json` that read `collision` because of undeclared keys or `type` first now adopts.
 - **Saved `forge unify` plans may go stale.** Fingerprints now hash validated metadata, so a hand-written `ingredient.yaml` that omits defaulted fields fingerprints differently. `--plan` refuses a stale plan; re-run `--save-plan`.
-- **`import` is stricter and reuses more.** An ingredient that would not load back (a non-string MCP `env` value, a name that is not slug-like) refuses the import, naming its source. A re-import may now reuse an ingredient where it used to create a variant.
+- **`import` is stricter and reuses more.** An ingredient that would not load back (a non-string MCP `env` value, a name that is not slug-like) refuses the import, naming its source, and so does an existing Forge ingredient with an unknown key or a YAML syntax error (0.2.4 made a variant or an error naming no file). A re-import may now reuse an ingredient where it used to create a variant.
 
 ## Releases
 
