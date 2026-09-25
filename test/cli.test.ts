@@ -71,7 +71,7 @@ describe("cli", () => {
     for (const args of [["status"], ["sync"], ["forge", "variants"], ["forge", "unify", "rule/a", "--profile", "acme", "--take", "base"]]) {
       const r = runCli([...args, "--workspace", s.wsRoot]);
       expect(r.code, args.join(" ")).toBe(1);
-      expect(r.stderr, args.join(" ")).toContain("ingredients/rules/a/ingredient.yaml");
+      expect(r.stderr, args.join(" ")).toContain(path.join("ingredients", "rules", "a", "ingredient.yaml"));
       expect(r.stderr, args.join(" ")).toContain("incluson");
       expect(r.stderr, args.join(" ")).toContain("line");
     }
@@ -917,7 +917,7 @@ describe("cli — forge unify final review", () => {
     await makeForge(root, { ingredients: [rule("workflow", "a\n", { incluson: "always" })] });
     const r = runCli(["forge", "variants", "--forge", root]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain("ingredients/rules/workflow/ingredient.yaml");
+    expect(r.stderr).toContain(path.join("ingredients", "rules", "workflow", "ingredient.yaml"));
     expect(r.stderr).toContain("incluson");
   });
 
