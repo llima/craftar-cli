@@ -18,6 +18,12 @@ async function setup() {
   return { root, forge: path.join(root, "forge"), ws: (name: string) => path.join(root, name) };
 }
 const importInto = (forge: string, workspaceRoot: string, profileName: string) => importClaudeCode({ workspaceRoot, forgeRoot: forge, profileName });
+const utf16le = (text: string) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]);
+const utf16be = (text: string) => {
+  const le = Buffer.from(text, "utf16le");
+  le.swap16();
+  return Buffer.concat([Buffer.from([0xfe, 0xff]), le]);
+};
 const yaml = async (file: string) => YAML.parse(await fs.readFile(file, "utf8"));
 
 describe("import --from claude-code", () => {
@@ -152,6 +158,41 @@ describe("import --from claude-code", () => {
     await writeFiles(t.ws("api"), { ".claude/hooks/deploy.bat": "set TOKEN=" + TOKEN + "\r\n" });
     const r = await importInto(t.forge, t.ws("api"), "api");
     expect(r.rejected).toEqual([{ name: "hook/deploy", reason: "secret-like value (github-token) in .claude/hooks/deploy.bat line 1" }]);
+  });
+
+  it("rejects an allowlisted script saved as UTF-16LE with a BOM holding a token", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), { ".claude/scripts/deploy.ps1": utf16le("# deploy\r\n$token = '" + TOKEN + "'\r\n") });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([{ name: "script/deploy", reason: "secret-like value (github-token) in .claude/scripts/deploy.ps1 line 2" }]);
+    expect(await exists(path.join(t.forge, "ingredients/scripts/deploy"))).toBe(false);
+  });
+
+  it("rejects a non-allowlisted hook saved as UTF-16LE with a BOM holding a token", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), { ".claude/hooks/deploy.bat": utf16le("set TOKEN=" + TOKEN + "\r\n") });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([{ name: "hook/deploy", reason: "secret-like value (github-token) in .claude/hooks/deploy.bat line 1" }]);
+    expect(await exists(path.join(t.forge, "ingredients/hooks/deploy"))).toBe(false);
+  });
+
+  it("rejects a rule saved as UTF-16BE with a BOM holding a token", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), { ".claude/rules/deploy.md": utf16be("# Deploy\n\nkey " + "AKIA" + "ABCDEFGHIJKLMNOP" + "\n") });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([{ name: "rule/deploy", reason: "secret-like value (aws-access-key) in .claude/rules/deploy.md line 3" }]);
+  });
+
+  it("stores a clean UTF-16 file exactly as before (the decode is for scanning only)", async () => {
+    const t = await setup();
+    const script = utf16le("Write-Host 'hello'\r\n");
+    const hook = utf16le("echo hello\r\n");
+    await writeFiles(t.ws("api"), { ".claude/scripts/hello.ps1": script, ".claude/hooks/hello.bat": hook });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([]);
+    const stored = await fs.readFile(path.join(t.forge, "ingredients/scripts/hello/hello.ps1"), "utf8");
+    expect(stored).toBe(script.toString("utf8").replace(/\r\n?/g, "\n"));
+    expect(await fs.readFile(path.join(t.forge, "ingredients/hooks/hello/hello.bat"))).toEqual(hook);
   });
 
   it("skips a binary skill-dir file (NUL byte) instead of scanning it as text", async () => {

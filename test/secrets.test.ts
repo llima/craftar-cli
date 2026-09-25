@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findSecrets, looksLikeSecretValue, secretValueKind, shannonEntropy } from "../src/core/secrets.js";
+import { decodeForScan, findSecrets, hasUtf16Bom, looksLikeSecretValue, secretValueKind, shannonEntropy } from "../src/core/secrets.js";
 
 // Token-shaped values are assembled at runtime so no scanner ever sees a literal token in this file.
 const fake = {
@@ -56,6 +56,32 @@ describe("azure-devops-pat precision", () => {
 
   it("does not flag an 84-char run without the AZDO signature", () => {
     expect(findSecrets(`value: ${"Ab1".repeat(28)}\n`)).toEqual([]);
+  });
+});
+
+describe("decodeForScan", () => {
+  const le = (t: string) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(t, "utf16le")]);
+  const be = (t: string) => {
+    const b = Buffer.from(t, "utf16le");
+    b.swap16();
+    return Buffer.concat([Buffer.from([0xfe, 0xff]), b]);
+  };
+
+  it("decodes UTF-16LE and UTF-16BE by their BOM, dropping the BOM", () => {
+    expect(hasUtf16Bom(le("x"))).toBe(true);
+    expect(hasUtf16Bom(be("x"))).toBe(true);
+    expect(decodeForScan(le("key " + fake.github + "\n"))).toBe("key " + fake.github + "\n");
+    expect(decodeForScan(be("key é " + fake.aws))).toBe("key é " + fake.aws);
+  });
+
+  it("reads BOM-less bytes as UTF-8 and treats a NUL byte as binary", () => {
+    expect(hasUtf16Bom(Buffer.from("plain"))).toBe(false);
+    expect(decodeForScan(Buffer.from("plain text"))).toBe("plain text");
+    expect(decodeForScan(Buffer.from([0x61, 0x00, 0x62]))).toBeNull();
+  });
+
+  it("ignores a dangling odd byte after a UTF-16 BOM", () => {
+    expect(decodeForScan(Buffer.concat([le("ab"), Buffer.from([0x63])]))).toBe("ab");
   });
 });
 

@@ -33,6 +33,28 @@ export function findSecrets(text: string): SecretFinding[] {
   return out;
 }
 
+/** True when the bytes open with a UTF-16 byte-order mark (`FF FE` little-endian, `FE FF` big-endian). */
+export function hasUtf16Bom(bytes: Buffer): boolean {
+  return bytes.length >= 2 && ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff));
+}
+
+/**
+ * Text to run the secret scan over, from raw bytes. A UTF-16 BOM is sniffed first and the
+ * bytes decoded with the matching encoding — UTF-16 text is full of NUL bytes and would
+ * otherwise be taken for binary. Without a BOM, a NUL byte marks the content binary (null);
+ * anything else is read as UTF-8. Used for scanning only: it never changes what is stored.
+ */
+export function decodeForScan(bytes: Buffer): string | null {
+  if (hasUtf16Bom(bytes)) {
+    const body = bytes.subarray(2, bytes.length - (bytes.length % 2));
+    if (bytes[0] === 0xff) return body.toString("utf16le");
+    const swapped = Buffer.from(body);
+    swapped.swap16();
+    return swapped.toString("utf16le");
+  }
+  return bytes.includes(0) ? null : bytes.toString("utf8");
+}
+
 export function shannonEntropy(s: string): number {
   if (!s.length) return 0;
   const counts = new Map<string, number>();

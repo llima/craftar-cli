@@ -3,7 +3,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
-import { findSecrets, secretValueKind } from "../core/secrets.js";
+import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../core/secrets.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf } from "../core/fingerprint.js";
 import type { Ingredient, Profile, Recipe, Target } from "../schema/index.js";
@@ -65,17 +65,19 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
 
   /* ---- Kiro steering gives us inclusion modes and hand-written steering ---- */
   const steeringDir = path.join(ws, ".kiro", "steering");
-  const steeringMeta = new Map<string, { inclusion: string; fileMatchPattern?: string; generated: boolean; text: string }>();
+  const steeringMeta = new Map<string, { inclusion: string; fileMatchPattern?: string; generated: boolean; text: string; scan?: string }>();
   if (await exists(steeringDir)) {
     for (const f of await fs.readdir(steeringDir)) {
       if (!f.endsWith(".md")) continue;
-      const text = toLf(stripBom(await fs.readFile(path.join(steeringDir, f), "utf8")));
+      const src = await readSource(path.join(steeringDir, f));
+      const text = toLf(stripBom(src.text));
       const { data, body } = parseFrontmatter<{ inclusion?: string; fileMatchPattern?: string }>(text);
       steeringMeta.set(f.replace(/\.md$/, ""), {
         inclusion: data.inclusion ?? "always",
         fileMatchPattern: data.fileMatchPattern,
         generated: GENERATED_BANNER.test(body.slice(0, 300)),
         text,
+        scan: src.scan,
       });
     }
   }
@@ -84,7 +86,8 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
   for (const f of await safeList(path.join(claudeDir, "rules"))) {
     if (!f.endsWith(".md")) continue;
     const name = f.replace(/\.md$/, "");
-    const text = toLf(stripBom(await fs.readFile(path.join(claudeDir, "rules", f), "utf8")));
+    const src = await readSource(path.join(claudeDir, "rules", f));
+    const text = toLf(stripBom(src.text));
     const sm = steeringMeta.get(name);
     const meta: Ingredient = {
       type: "rule",
@@ -96,7 +99,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
       tags: [],
       origin: origin(`.claude/rules/${f}`),
     };
-    const ref = await writeIngredient(forge, meta, { "rule.md": text }, opts.profileName, report);
+    const ref = await writeIngredient(forge, meta, { "rule.md": text }, opts.profileName, report, scanOf("rule.md", src));
     if (!ref) continue;
     ruleNames.push(ref.split("/")[1]);
     if (meta.inclusion === "fileMatch") scopedRules.set(ref, sm?.fileMatchPattern ?? "");
@@ -107,7 +110,8 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
   const agentBodies = new Map<string, string>();
   for (const f of await safeList(path.join(claudeDir, "agents"))) {
     if (!f.endsWith(".md")) continue;
-    const text = await fs.readFile(path.join(claudeDir, "agents", f), "utf8");
+    const src = await readSource(path.join(claudeDir, "agents", f));
+    const text = src.text;
     const { data, body, raw } = parseFrontmatter<Record<string, string>>(text, { loose: true });
     const name = (data.name || f.replace(/\.md$/, "")).trim();
     const meta: Ingredient = {
@@ -122,7 +126,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
       tags: [],
       origin: origin(`.claude/agents/${f}`),
     };
-    const ref = await writeIngredient(forge, meta, { "agent.md": body }, opts.profileName, report);
+    const ref = await writeIngredient(forge, meta, { "agent.md": body }, opts.profileName, report, scanOf("agent.md", src));
     if (!ref) continue;
     agentBodies.set(ref, (data.description ?? "") + "\n" + body);
     refs.base.push(ref);
@@ -131,7 +135,8 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
   /* ---- commands ---- */
   for (const f of await safeList(path.join(claudeDir, "commands"))) {
     if (!f.endsWith(".md")) continue;
-    const text = await fs.readFile(path.join(claudeDir, "commands", f), "utf8");
+    const src = await readSource(path.join(claudeDir, "commands", f));
+    const text = src.text;
     const { data, body, raw } = parseFrontmatter<Record<string, string>>(text, { loose: true });
     const meta: Ingredient = {
       type: "command",
@@ -145,7 +150,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
       tags: [],
       origin: origin(`.claude/commands/${f}`),
     };
-    addRef(refs.base, await writeIngredient(forge, meta, { "command.md": body }, opts.profileName, report));
+    addRef(refs.base, await writeIngredient(forge, meta, { "command.md": body }, opts.profileName, report, scanOf("command.md", src)));
   }
 
   /* ---- skills ---- */
@@ -155,20 +160,26 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
       if (e.name === ".gitkeep") continue;
       if (e.isDirectory()) {
         const files: Record<string, string | Buffer> = {};
+        const scan: Record<string, string> = {};
         for (const rel of await listFiles(path.join(skillsDir, e.name))) {
           const abs = path.join(skillsDir, e.name, rel);
-          files[rel] = /\.(md|txt|json|ya?ml|ps1|py|sh|js|ts)$/i.test(rel) ? toLf(stripBom(await fs.readFile(abs, "utf8"))) : await fs.readFile(abs);
+          if (/\.(md|txt|json|ya?ml|ps1|py|sh|js|ts)$/i.test(rel)) {
+            const src = await readSource(abs);
+            files[rel] = toLf(stripBom(src.text));
+            Object.assign(scan, scanOf(rel, src));
+          } else files[rel] = await fs.readFile(abs);
         }
         if (!files["SKILL.md"]) {
           report.warnings.push(`skill dir ${e.name} has no SKILL.md; skipped`);
           continue;
         }
         const meta: Ingredient = { type: "skill", name: e.name, layout: "dir", targets: "*", tags: [], origin: origin(`.claude/skills/${e.name}/`) };
-        addRef(refs.base, await writeIngredient(forge, meta, files, opts.profileName, report));
+        addRef(refs.base, await writeIngredient(forge, meta, files, opts.profileName, report, scan));
       } else if (e.name.endsWith(".md")) {
-        const text = toLf(stripBom(await fs.readFile(path.join(skillsDir, e.name), "utf8")));
+        const src = await readSource(path.join(skillsDir, e.name));
+        const text = toLf(stripBom(src.text));
         const meta: Ingredient = { type: "skill", name: e.name.replace(/\.md$/, ""), layout: "file", targets: "*", tags: [], origin: origin(`.claude/skills/${e.name}`) };
-        addRef(refs.base, await writeIngredient(forge, meta, { "SKILL.md": text }, opts.profileName, report));
+        addRef(refs.base, await writeIngredient(forge, meta, { "SKILL.md": text }, opts.profileName, report, scanOf("SKILL.md", src)));
       }
     }
   }
@@ -179,7 +190,8 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
       if (f === ".gitkeep" || f.startsWith("__pycache__") || f.endsWith(".pyc")) continue;
       const abs = path.join(claudeDir, kind, f);
       if (!(await fs.stat(abs)).isFile()) continue;
-      const content = /\.(ps1|py|sh|js|ts|cjs|mjs|json|md|txt|ya?ml)$/i.test(f) ? toLf(stripBom(await fs.readFile(abs, "utf8"))) : await fs.readFile(abs);
+      const src = /\.(ps1|py|sh|js|ts|cjs|mjs|json|md|txt|ya?ml)$/i.test(f) ? await readSource(abs) : null;
+      const content = src ? toLf(stripBom(src.text)) : await fs.readFile(abs);
       const meta: Ingredient = {
         type: kind === "scripts" ? "script" : "hook",
         name: f.replace(/\.[^.]+$/, "").toLowerCase(),
@@ -188,7 +200,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
         tags: [],
         origin: origin(`.claude/${kind}/${f}`),
       } as Ingredient;
-      addRef(refs.base, await writeIngredient(forge, meta, { [f]: content }, opts.profileName, report));
+      addRef(refs.base, await writeIngredient(forge, meta, { [f]: content }, opts.profileName, report, src ? scanOf(f, src) : {}));
     }
   }
 
@@ -221,7 +233,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
     if (ruleNames.includes(name) || sm.generated) continue;
     if (name === "commands") continue;
     const meta: Ingredient = { type: "steering", name, file: "steering.md", targets: ["kiro"], tags: ["client"], origin: origin(`.kiro/steering/${name}.md`) };
-    addRef(refs.steering, await writeIngredient(forge, meta, { "steering.md": sm.text }, opts.profileName, report));
+    addRef(refs.steering, await writeIngredient(forge, meta, { "steering.md": sm.text }, opts.profileName, report, scanOf("steering.md", sm)));
   }
 
   /* ---- recipes ---- */
@@ -302,7 +314,7 @@ function addRef(list: string[], ref: string | null): void {
 }
 
 /** First secret-like value in an ingredient about to be imported, described by location only. */
-function secretIn(meta: Ingredient, files: Record<string, string | Buffer>): string | null {
+function secretIn(meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string> = {}): string | null {
   const origin = meta.origin?.path ?? `${meta.type}/${meta.name}`;
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
   // Bodies of agents and commands start after `---`, the raw block and the closing `---`.
@@ -311,10 +323,19 @@ function secretIn(meta: Ingredient, files: Record<string, string | Buffer>): str
   if (raw) texts.push({ where: origin, text: raw, offset: 1 });
   for (const [rel, content] of Object.entries(files)) {
     const where = meta.type === "skill" && meta.layout === "dir" ? `${origin}${rel}` : origin;
-    // A Buffer with no NUL byte is treated as text (e.g. non-allowlisted extensions such
-    // as .pem or .bat are still read as Buffer by the importer); a NUL byte marks it binary.
+    // A Buffer (non-allowlisted extensions such as .pem or .bat) goes through decodeForScan:
+    // a UTF-16 BOM is decoded as UTF-16, otherwise a NUL byte marks it binary and unscanned.
     if (typeof content === "string") texts.push({ where, text: content, offset: bodyOffset });
-    else if (!content.includes(0)) texts.push({ where, text: content.toString("utf8"), offset: bodyOffset });
+    else {
+      const text = decodeForScan(content);
+      if (text !== null) texts.push({ where, text, offset: 0 });
+    }
+  }
+  // UTF-16 sources read on the text path: their stored text is mojibake no pattern matches,
+  // so the whole source file, decoded correctly, is scanned too (lines count from its top).
+  for (const [rel, text] of Object.entries(scan)) {
+    const where = meta.type === "skill" && meta.layout === "dir" ? `${origin}${rel}` : origin;
+    texts.push({ where, text, offset: 0 });
   }
   for (const t of texts) {
     const hit = findSecrets(t.text)[0];
@@ -354,6 +375,21 @@ function secretInServerField(server: string, field: string, value: unknown, useE
   return kind ? `secret-like value (${kind}) in .mcp.json → mcpServers.${server}.${field}` : null;
 }
 
+/**
+ * Read a source file as UTF-8 text, exactly as import always has — the stored text does not
+ * change. When the bytes carry a UTF-16 BOM, that UTF-8 read is mojibake no secret pattern can
+ * match, so the correctly decoded text comes back alongside, for the secret scan only.
+ */
+async function readSource(abs: string): Promise<{ text: string; scan?: string }> {
+  const bytes = await fs.readFile(abs);
+  return { text: bytes.toString("utf8"), scan: hasUtf16Bom(bytes) ? (decodeForScan(bytes) ?? undefined) : undefined };
+}
+
+/** The extra scan entry for one stored file, when its source needed a UTF-16 decode. */
+function scanOf(rel: string, src: { scan?: string }): Record<string, string> {
+  return src.scan === undefined ? {} : { [rel]: src.scan };
+}
+
 function splitList(v?: string): string[] {
   if (!v) return [];
   return v
@@ -385,8 +421,9 @@ async function writeIngredient(
   files: Record<string, string | Buffer>,
   profile: string,
   report: ImportReport,
+  scan: Record<string, string> = {},
 ): Promise<string | null> {
-  const secret = secretIn(meta, files);
+  const secret = secretIn(meta, files, scan);
   if (secret) {
     report.rejected.push({ name: `${meta.type}/${meta.name}`, reason: secret });
     return null;
