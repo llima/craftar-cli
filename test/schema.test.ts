@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import YAML from "yaml";
 import { IngredientSchema, INGREDIENT_TYPES } from "../src/schema/index.js";
 
 /** A minimal valid ingredient of each type. */
@@ -46,5 +47,39 @@ describe("strict ingredient keys", () => {
     expect(r.success).toBe(false);
     if (r.success) return;
     expect(r.error.issues).toEqual([expect.objectContaining({ code: "unrecognized_keys", keys: ["__proto__"] })]);
+  });
+});
+
+describe("MCP server: validated, loaded as the original object (spec 07, Ruling 7)", () => {
+  it("returns the same object, undeclared keys and source key order included", () => {
+    const server = { type: "http", url: "https://mcp.acme.dev", headers: { "X-Team": "acme" }, timeout: 30, disabled: false };
+    const parsed = IngredientSchema.parse({ type: "mcp", name: "r", server });
+    if (parsed.type !== "mcp") throw new Error("expected an mcp ingredient");
+    expect(parsed.server).toBe(server);
+    expect(Object.keys(parsed.server)).toEqual(["type", "url", "headers", "timeout", "disabled"]);
+  });
+
+  it("keeps a __proto__ key under server and under env as an own property", () => {
+    const meta = YAML.parse("type: mcp\nname: r\nserver:\n  command: npx\n  __proto__: { a: 1 }\n  env:\n    __proto__: x\n");
+    const parsed = IngredientSchema.parse(meta);
+    if (parsed.type !== "mcp") throw new Error("expected an mcp ingredient");
+    expect(Object.hasOwn(parsed.server, "__proto__")).toBe(true);
+    expect(Object.hasOwn(parsed.server.env ?? {}, "__proto__")).toBe(true);
+  });
+
+  it("still validates the declared keys, with their paths", () => {
+    const r = IngredientSchema.safeParse({ type: "mcp", name: "r", server: { command: "npx", env: { PORT: 8080 } } });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues.map((i) => i.path)).toEqual([["server", "env", "PORT"]]);
+  });
+
+  it("refuses a missing server and a non-object server", () => {
+    for (const server of [undefined, []]) {
+      const r = IngredientSchema.safeParse({ type: "mcp", name: "r", server });
+      expect(r.success).toBe(false);
+      if (r.success) return;
+      expect(r.error.issues[0].path).toEqual(["server"]);
+    }
   });
 });

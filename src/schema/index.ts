@@ -65,15 +65,29 @@ export const SkillIngredient = IngredientBase.extend({
   layout: z.enum(["dir", "file"]).default("dir"),
 });
 
-export const McpIngredient = IngredientBase.extend({
-  type: z.literal("mcp"),
-  server: z.object({
+/** The MCP server keys Craftar reads. Anything else is the tool's own config and passes through. */
+const McpServerShape = z
+  .object({
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
     url: z.string().optional(),
     env: z.record(z.string()).optional(),
     type: z.string().optional(),
-  }),
+  })
+  .passthrough();
+export type McpServer = z.infer<typeof McpServerShape>;
+
+export const McpIngredient = IngredientBase.extend({
+  type: z.literal("mcp"),
+  // Checked against the declared shape, then returned as the very object the Forge holds: zod would
+  // rebuild it in schema order and drop a `__proto__` key, and the emitters write it verbatim (spec 07 §5.3).
+  server: z
+    .unknown()
+    .superRefine((v, ctx) => {
+      const r = McpServerShape.safeParse(v);
+      if (!r.success) for (const issue of r.error.issues) ctx.addIssue(issue);
+    })
+    .transform((v) => v as McpServer),
 });
 
 export const ScriptIngredient = IngredientBase.extend({
