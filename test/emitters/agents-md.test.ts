@@ -93,4 +93,31 @@ describe("agents-md emitter", () => {
     const p = await planFor([rule("a", "# A\n\nbody\n")], { "AGENTS.md": "# old\r\n" });
     expect(agentsMd(p)).toBe([...HEADER, "<!-- rule: a -->", "# A", "", "body", ""].join("\r\n"));
   });
+
+  it("warns for a script aimed at agents-md instead of dropping it silently, and emits the same bytes", async () => {
+    const script: IngredientSpec = { meta: { type: "script", name: "lint", files: ["lint.sh"], targets: ["agents-md"] }, files: { "lint.sh": "echo lint\n" } };
+    const p = await planFor([rule("a", "# A\n\nbody\n"), script]);
+    expect(p.warnings).toContain("agents-md: script script/lint has no AGENTS.md equivalent — skipped");
+    expect(agentsMd(p)).toBe([...HEADER, "<!-- rule: a -->", "# A", "", "body", ""].join("\n"));
+    expect(p.files.map((f) => f.path)).toEqual(["AGENTS.md"]);
+  });
+
+  it("warns for a non-rule aimed at agents-md even when there is no rule to emit", async () => {
+    const p = await planFor([{ meta: { type: "mcp", name: "pw", server: { command: "npx" } } }]);
+    expect(p.warnings).toContain("agents-md: mcp mcp/pw has no AGENTS.md equivalent — skipped");
+    expect(p.files).toEqual([]);
+  });
+
+  it("does not warn for ingredients aimed away from agents-md", async () => {
+    const p = await planFor(
+      [
+        rule("a", "# A\n"),
+        { meta: { type: "script", name: "lint", files: ["lint.sh"], targets: ["claude-code"] }, files: { "lint.sh": "echo lint\n" } },
+        { meta: { type: "steering", name: "product", file: "steering.md" }, files: { "steering.md": "# P\n" } },
+      ],
+      undefined,
+      ["claude-code", "kiro", "agents-md"],
+    );
+    expect(p.warnings.filter((w) => w.startsWith("agents-md:"))).toEqual([]);
+  });
 });
