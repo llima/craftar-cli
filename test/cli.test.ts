@@ -57,6 +57,39 @@ describe("cli", () => {
     expect(check.stdout).toContain("workspace in sync");
   });
 
+  it("every Forge command refuses unknown ingredient keys, naming the file and every key, and writes nothing (spec 07, AC 1)", async () => {
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "# A\n", { incluson: "always", origin: { workspace: "acme", path: "a.md", line: 3 } })],
+        recipes: [recipe("base", ["rule/a"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const before = { forge: await snapshot(s.forgeRoot), ws: await snapshot(s.wsRoot) };
+    for (const args of [["status"], ["sync"], ["forge", "variants"], ["forge", "unify", "rule/a", "--profile", "acme", "--take", "base"]]) {
+      const r = runCli([...args, "--workspace", s.wsRoot]);
+      expect(r.code, args.join(" ")).toBe(1);
+      expect(r.stderr, args.join(" ")).toContain("ingredients/rules/a/ingredient.yaml");
+      expect(r.stderr, args.join(" ")).toContain("incluson");
+      expect(r.stderr, args.join(" ")).toContain("line");
+    }
+    expect({ forge: await snapshot(s.forgeRoot), ws: await snapshot(s.wsRoot) }).toEqual(before);
+  });
+
+  it("sync --check fails once the Forge carries an MCP key the locked .mcp.json lacks (spec 07, AC 5)", async () => {
+    const meta = (server: Record<string, unknown>) => ({ type: "mcp", name: "r", server });
+    const s = await scenario(
+      { ingredients: [{ meta: meta({ url: "https://mcp.acme.dev" }) }], recipes: [recipe("base", ["mcp/r"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.writeFile(path.join(s.forgeRoot, "ingredients/mcp/r/ingredient.yaml"), YAML.stringify(meta({ url: "https://mcp.acme.dev", headers: { "X-Team": "acme" } })));
+    expect(runCli(["sync", "--check", "--workspace", s.wsRoot]).code).toBe(1);
+  });
+
   it("sync --check keeps failing on a hand-edited orphan after a sync has already reported it", async () => {
     const s = await scenario(
       { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
