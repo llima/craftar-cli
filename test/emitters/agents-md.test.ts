@@ -97,15 +97,29 @@ describe("agents-md emitter", () => {
   it("warns for a script aimed at agents-md instead of dropping it silently, and emits the same bytes", async () => {
     const script: IngredientSpec = { meta: { type: "script", name: "lint", files: ["lint.sh"], targets: ["agents-md"] }, files: { "lint.sh": "echo lint\n" } };
     const p = await planFor([rule("a", "# A\n\nbody\n"), script]);
-    expect(p.warnings).toContain("agents-md: script script/lint has no AGENTS.md equivalent — skipped");
+    expect(p.warnings).toContain("agents-md: 1 script ingredient(s) have no AGENTS.md equivalent — skipped: script/lint");
     expect(agentsMd(p)).toBe([...HEADER, "<!-- rule: a -->", "# A", "", "body", ""].join("\n"));
     expect(p.files.map((f) => f.path)).toEqual(["AGENTS.md"]);
   });
 
   it("warns for a non-rule aimed at agents-md even when there is no rule to emit", async () => {
     const p = await planFor([{ meta: { type: "mcp", name: "pw", server: { command: "npx" } } }]);
-    expect(p.warnings).toContain("agents-md: mcp mcp/pw has no AGENTS.md equivalent — skipped");
+    expect(p.warnings).toContain("agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/pw");
     expect(p.files).toEqual([]);
+  });
+
+  it("summarises skipped ingredients in one line per type, naming every ref", async () => {
+    const p = await planFor([
+      rule("a", "# A\n"),
+      { meta: { type: "agent", name: "x", file: "agent.md" }, files: { "agent.md": "x\n" } },
+      { meta: { type: "agent", name: "y", file: "agent.md" }, files: { "agent.md": "y\n" } },
+      { meta: { type: "mcp", name: "pw", server: { command: "npx" } } },
+    ]);
+    const lines = p.warnings.filter((w) => w.startsWith("agents-md:"));
+    expect(lines).toEqual([
+      "agents-md: 2 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/x, agent/y",
+      "agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/pw",
+    ]);
   });
 
   it("does not warn for ingredients aimed away from agents-md", async () => {

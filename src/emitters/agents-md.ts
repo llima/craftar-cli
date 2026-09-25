@@ -11,8 +11,14 @@ export const agentsMd: Emitter = {
   async emit(ctx) {
     const aimed = ctx.resolution.ingredients.filter((i) => appliesTo(i.meta.targets, "agents-md"));
     // AGENTS.md renders rules only; anything else aimed at this target is said out loud, never dropped silently.
+    // One line per type, naming every ref: the default `targets: "*"` aims a whole profile here, and one
+    // line per ingredient would bury the warnings that matter.
+    const skipped = new Map<string, string[]>();
     for (const ing of aimed) {
-      if (ing.meta.type !== "rule") ctx.warn(`agents-md: ${ing.meta.type} ${ing.ref} has no AGENTS.md equivalent — skipped`);
+      if (ing.meta.type !== "rule") skipped.set(ing.meta.type, [...(skipped.get(ing.meta.type) ?? []), ing.ref]);
+    }
+    for (const [type, refs] of skipped) {
+      ctx.warn(`agents-md: ${refs.length} ${type} ingredient(s) have no AGENTS.md equivalent — skipped: ${refs.join(", ")}`);
     }
     const rules = aimed.filter((i) => i.meta.type === "rule");
     if (!rules.length) return [];
