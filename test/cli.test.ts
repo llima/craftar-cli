@@ -108,6 +108,16 @@ describe("cli", () => {
     expect(r.stdout + r.stderr).not.toContain("ghp_");
   });
 
+  it("import that fails says the Forge was left untouched and writes nothing into it", async () => {
+    const root = await tmpDir("craftar-cli-import-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await writeFiles(path.join(root, "api"), { ".claude/rules/workflow.md": "# Workflow\n", ".mcp.json": "{ not json" });
+    const r = runCli(["import", "--from", "claude-code", "--workspace", path.join(root, "api"), "--forge", path.join(root, "forge"), "--profile", "api"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("The Forge was left untouched.");
+    expect(await exists(path.join(root, "forge"))).toBe(false);
+  });
+
   it("a second workspace whose MCP server differs imports as a variant and syncs back to its own .mcp.json", async () => {
     // Adopt, don't collide: since 0.2.1 the differing server becomes mcp/srv--b; it must be
     // emitted under its original name, or the workspace's own .mcp.json reads as a collision.

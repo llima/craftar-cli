@@ -258,3 +258,64 @@ describe("import --from claude-code — nested MCP configuration", () => {
     expect(await exists(path.join(t.forge, "ingredients/mcp/srv--b"))).toBe(false);
   });
 });
+
+describe("import --from claude-code — all checks before the first write", () => {
+  it("leaves the Forge byte-identical when a late step fails on a malformed existing ingredient", async () => {
+    const t = await setup();
+    const server = { mcpServers: { srv: { command: "npx", args: ["srv"] } } };
+    await writeFiles(t.ws("a"), { ".claude/rules/workflow.md": "# Workflow\n", ".mcp.json": JSON.stringify(server) });
+    await importInto(t.forge, t.ws("a"), "a");
+    // A self-referencing alias makes the existing MCP ingredient's metadata cyclic.
+    await fs.writeFile(path.join(t.forge, "ingredients/mcp/srv/ingredient.yaml"), "type: mcp\nname: srv\nserver: &s\n  self: *s\n");
+    const before = await snapshot(t.forge);
+
+    // `other` is read (rules run before MCP) and would be created; the MCP comparison then throws.
+    await writeFiles(t.ws("b"), { ".claude/rules/other.md": "# Other\n", ".mcp.json": JSON.stringify(server) });
+    const err = await importInto(t.forge, t.ws("b"), "b").then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(err?.message).toContain("ingredient metadata is cyclic");
+    expect(err?.message).toContain("The Forge was left untouched.");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+
+  it("does not create the Forge directory when the import fails", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), { ".claude/rules/workflow.md": "# Workflow\n", ".mcp.json": "{ not json" });
+    await expect(importInto(t.forge, t.ws("api"), "api")).rejects.toThrow("The Forge was left untouched.");
+    expect(await exists(t.forge)).toBe(false);
+  });
+
+  it("compares a later ingredient against one staged earlier in the same run", async () => {
+    // Two hook files that map to one ingredient name: the second sees the first as already in the
+    // Forge, exactly as it did when the importer wrote as it went.
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".claude/hooks/guard.sh": "echo sh\n",
+      ".claude/hooks/guard.ps1": "Write-Output ps1\n",
+    });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.created).toContain("hook/guard");
+    expect(r.variants).toEqual([{ name: "hook/guard--api", reason: "differs from hook/guard already in the Forge" }]);
+    expect(await fs.readFile(path.join(t.forge, "ingredients/hooks/guard/guard.ps1"), "utf8")).toBe("Write-Output ps1\n");
+    expect(await fs.readFile(path.join(t.forge, "ingredients/hooks/guard--api/guard.sh"), "utf8")).toBe("echo sh\n");
+  });
+});
+
+/** Every file under `root`, POSIX-relative, with its bytes. */
+async function snapshot(root: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const walk = async (rel: string): Promise<void> => {
+    for (const e of await fs.readdir(path.join(root, rel), { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        out[`${r}/`] = "";
+        await walk(r);
+      } else out[r] = (await fs.readFile(path.join(root, r))).toString("base64");
+    }
+  };
+  await walk("");
+  return out;
+}
