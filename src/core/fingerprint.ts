@@ -1,15 +1,15 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import YAML from "yaml";
+import { IngredientSchema, type Ingredient } from "../schema/index.js";
 import { hashNormalized } from "./text.js";
-import { listFiles } from "./forge.js";
+import { listFiles, parseYaml } from "./forge.js";
 
 /**
  * Identity of an ingredient's content: metadata minus the fields a variant
  * necessarily changes, plus every file hashed through `hashNormalized`.
  * Shared by `craftar import` (reuse or variant) and `forge variants` (distance).
  */
-export function fingerprintOf(meta: unknown, files: Record<string, string | Buffer>): string {
+export function fingerprintOf(meta: Ingredient, files: Record<string, string | Buffer>): string {
   const m: Record<string, unknown> = { ...(meta as Record<string, unknown>) };
   delete m.origin;
   delete m.name;
@@ -48,11 +48,29 @@ function sortedDeep(v: unknown, ancestors: Set<object> = new Set()): unknown {
   return out;
 }
 
-export async function fingerprintDir(dir: string): Promise<string> {
+/** How `fingerprintDir` reads an ingredient directory; the importer passes one that sees its staged writes. */
+export interface DirReader {
+  readText(abs: string): Promise<string>;
+  readBytes(abs: string): Promise<Buffer>;
+  /** Every file under `dir`, as sorted POSIX paths relative to it. */
+  list(dir: string): Promise<string[]>;
+}
+
+const diskReader: DirReader = {
+  readText: (abs) => fs.readFile(abs, "utf8"),
+  readBytes: (abs) => fs.readFile(abs),
+  list: (dir) => listFiles(dir),
+};
+
+/**
+ * Fingerprint of an ingredient directory. Its `ingredient.yaml` goes through `IngredientSchema`,
+ * like every other side a fingerprint is compared with, so defaults and refusals are the same on both.
+ */
+export async function fingerprintDir(dir: string, io: DirReader = diskReader): Promise<string> {
   const metaFile = path.join(dir, "ingredient.yaml");
-  const meta = YAML.parse(await fs.readFile(metaFile, "utf8"));
+  const meta = parseYaml(metaFile, await io.readText(metaFile), IngredientSchema);
   const files: Record<string, Buffer> = {};
-  for (const rel of await listFiles(dir)) if (rel !== "ingredient.yaml") files[rel] = await fs.readFile(path.join(dir, rel));
+  for (const rel of await io.list(dir)) if (rel !== "ingredient.yaml") files[rel] = await io.readBytes(path.join(dir, rel));
   try {
     return fingerprintOf(meta, files);
   } catch (e) {

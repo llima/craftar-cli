@@ -44,13 +44,17 @@ export async function exists(p: string): Promise<boolean> {
   }
 }
 
-async function readYaml<T>(file: string, schema: { parse: (v: unknown) => T }): Promise<T> {
-  const text = await fs.readFile(file, "utf8");
+/** Parse YAML `text` read from `file` through `schema`; a syntax or schema error names the file. */
+export function parseYaml<T>(file: string, text: string, schema: { parse: (v: unknown) => T }): T {
   try {
     return schema.parse(YAML.parse(text) ?? {});
   } catch (e) {
     throw new Error(`invalid ${path.relative(process.cwd(), file)}: ${(e as Error).message}`);
   }
+}
+
+async function readYaml<T>(file: string, schema: { parse: (v: unknown) => T }): Promise<T> {
+  return parseYaml(file, await fs.readFile(file, "utf8"), schema);
 }
 
 export async function loadForge(root: string): Promise<Forge> {
