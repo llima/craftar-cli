@@ -18,9 +18,10 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { listFiles } from "../../src/core/forge.js";
+import { TSX_LOADER } from "./tsx-loader.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -32,10 +33,10 @@ const PLAN = path.join(GOLDEN_ROOT, "forge-unify-plan.yaml");
 // A local copy of test/helpers/cli.ts' `runCli`, not imported from it: that module reads
 // `__dirname`, which Node refuses to resolve once a top-level `await` (this script has one)
 // makes it ambiguous whether the entry module is CJS or ESM. `import.meta.url` is ESM-native and
-// carries no such ambiguity. Same behaviour — real process, colours off, `src/cli.ts` from source.
-const TSX = pathToFileURL(path.join(REPO, "node_modules", "tsx", "dist", "loader.mjs")).href;
+// carries no such ambiguity. Same behaviour — real process, colours off, `src/cli.ts` from source,
+// and the same resolved tsx loader (`./tsx-loader.ts` uses `import.meta.url`, not `__dirname`).
 function runCli(args: string[]): { code: number | null; stdout: string; stderr: string } {
-  const r = spawnSync(process.execPath, ["--import", TSX, path.join(REPO, "src/cli.ts"), ...args], {
+  const r = spawnSync(process.execPath, ["--import", TSX_LOADER, path.join(REPO, "src/cli.ts"), ...args], {
     cwd: REPO,
     encoding: "utf8",
     env: { ...process.env, NO_COLOR: "1" },
