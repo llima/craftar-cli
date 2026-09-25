@@ -27,8 +27,10 @@ const IngredientBase = z.object({
   /** Free-form tags used by recipes and `craftar explain`. */
   tags: z.array(z.string()).default([]),
   /** Where this ingredient came from (set by `craftar import`). */
-  origin: z.object({ workspace: z.string(), path: z.string() }).optional(),
-});
+  origin: z.object({ workspace: z.string(), path: z.string() }).strict().optional(),
+  // Strict: an unknown key is a typo or a field no command reads. Stripping it hid it from `forge unify`,
+  // which could then resolve and delete a variant that differed only there (spec 07, Ruling 1).
+}).strict();
 
 export const RuleIngredient = IngredientBase.extend({
   type: z.literal("rule"),
