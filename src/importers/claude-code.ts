@@ -6,7 +6,7 @@ import { exists, listFiles, typeFolder, FORGE_MANIFEST } from "../core/forge.js"
 import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../core/secrets.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
-import type { Ingredient, Profile, Recipe, Target } from "../schema/index.js";
+import { IngredientSchema, type Ingredient, type McpServer, type Profile, type Recipe, type Target } from "../schema/index.js";
 
 export interface ImportOptions {
   workspaceRoot: string;
@@ -242,8 +242,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     if (!isPlainObject(json) || ("mcpServers" in json && !isPlainObject(json.mcpServers))) {
       throw new Error(".mcp.json has no valid mcpServers object — fix the file and re-run import");
     }
-    type McpServerConfig = Extract<Ingredient, { type: "mcp" }>["server"];
-    for (const [name, server] of Object.entries(json.mcpServers ?? {}) as [string, McpServerConfig][]) {
+    for (const [name, server] of Object.entries(json.mcpServers ?? {}) as [string, McpServer][]) {
       if (!isPlainObject(server)) {
         throw new Error(`.mcp.json server "${name}" is not an object — fix the file and re-run import`);
       }
@@ -418,7 +417,7 @@ function secretIn(meta: Ingredient, files: Record<string, string | Buffer>, scan
     // Walk every field of the server config, not just env/args: headers, url, command, etc.
     // can carry a token too. Entropy stays reserved for env/args; every other field is
     // checked against known patterns only.
-    const server = meta.server as unknown as Record<string, unknown>;
+    const server: Record<string, unknown> = meta.server;
     for (const [key, value] of Object.entries(server)) {
       const hit = secretInServerField(meta.name, key, value, key === "env" || key === "args");
       if (hit) return hit;
@@ -505,7 +504,8 @@ async function writeIngredient(
   const folder = typeFolder(meta.type);
   let name = meta.name;
   let dir = path.join(forge, "ingredients", folder, name);
-  const fingerprint = fingerprintOf(meta, files);
+  // Hash what the Forge will load back, the way fingerprintDir hashes the other side.
+  const fingerprint = fingerprintOf(validateImported(meta), files);
 
   if (await stage.exists(path.join(dir, "ingredient.yaml"))) {
     const existing = await fingerprintDir(dir, stage.reader());
@@ -518,6 +518,7 @@ async function writeIngredient(
     dir = path.join(forge, "ingredients", folder, name);
     report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge` });
     meta = { ...meta, name, as } as Ingredient;
+    validateImported(meta); // the variant name must be slug-like too (a `--profile` with a space is not)
   } else {
     report.created.push(`${meta.type}/${name}`);
   }
@@ -527,6 +528,18 @@ async function writeIngredient(
   stage.write(path.join(dir, "ingredient.yaml"), YAML.stringify(yamlMeta, { lineWidth: 0 }));
   for (const [rel, content] of Object.entries(files)) stage.write(path.join(dir, rel), content);
   return `${meta.type}/${name}`;
+}
+
+/**
+ * The ingredient as the Forge will load it back. An ingredient that would not load (a non-string MCP
+ * `env` value, a name that is not slug-like) fails the whole import, naming its source, before the
+ * first write — 0.2.4 wrote a Forge no command could load (spec 07, Ruling 6).
+ */
+function validateImported(meta: Ingredient): Ingredient {
+  const r = IngredientSchema.safeParse(meta);
+  if (r.success) return r.data;
+  const source = meta.origin?.path ?? `${meta.type}/${meta.name}`;
+  throw new Error(`${source} (${meta.type}/${meta.name}) does not fit the ingredient schema: ${r.error.message}`);
 }
 
 async function writeRecipe(stage: ForgeStage, dir: string, recipe: Recipe, report: ImportReport): Promise<void> {

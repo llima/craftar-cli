@@ -3,7 +3,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { importClaudeCode } from "../src/importers/claude-code.js";
-import { exists } from "../src/core/forge.js";
+import { exists, loadForge } from "../src/core/forge.js";
+import { loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
 import { tmpDir, writeFiles } from "./helpers/forge.js";
 
 const TOKEN = "ghp_" + "x".repeat(36); // assembled at runtime on purpose
@@ -355,3 +356,81 @@ async function snapshot(root: string): Promise<Record<string, string>> {
   await walk("");
   return out;
 }
+
+describe("import --from claude-code — the schema before the first write (spec 07)", () => {
+  const fail = (p: Promise<unknown>) => p.then(() => null, (e: Error) => e);
+  const mcp = (servers: Record<string, unknown>) => JSON.stringify({ mcpServers: servers });
+
+  it("refuses a non-string MCP env value, naming the source, and leaves the Forge untouched", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/workflow.md": "# W\n", ".mcp.json": mcp({ p: { command: "npx", env: { PORT: 8080 } } }) });
+    const err = await fail(importInto(t.forge, t.ws("a"), "a"));
+    expect(err?.message).toContain(".mcp.json");
+    expect(err?.message).toContain("mcp/p");
+    expect(err?.message).toMatch(/The Forge was left untouched\.$/);
+    expect(await exists(t.forge)).toBe(false);
+  });
+
+  it("refuses a script whose name is not slug-like, naming its source", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/scripts/_setup.sh": "echo setup\n" });
+    const err = await fail(importInto(t.forge, t.ws("a"), "a"));
+    expect(err?.message).toContain(".claude/scripts/_setup.sh");
+    expect(err?.message).toContain("script/_setup");
+    expect(err?.message).toContain("The Forge was left untouched.");
+  });
+
+  it("refuses a variant whose profile makes the name not slug-like (spec 07 edge case 3)", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/workflow.md": "# W1\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    const before = await snapshot(t.forge);
+    await writeFiles(t.ws("b"), { ".claude/rules/workflow.md": "# W2\n" });
+    const err = await fail(importInto(t.forge, t.ws("b"), "Acme Corp"));
+    expect(err?.message).toContain("rule/workflow--Acme Corp");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+
+  it("still lists a secret as rejected when the same server also has a non-string env value", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/w.md": "# W\n", ".mcp.json": mcp({ p: { command: "npx", args: [TOKEN], env: { PORT: 8080 } } }) });
+    const r = await importInto(t.forge, t.ws("a"), "a");
+    expect(r.rejected.map((x) => x.name)).toEqual(["mcp/p"]);
+  });
+
+  it("reuses a hand-written ingredient that omits defaulted fields (AC 9)", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/x.md": "# X\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/x/ingredient.yaml"), "type: rule\nname: x\n");
+    const again = await importInto(t.forge, t.ws("a"), "a");
+    expect(again.reused).toContain("rule/x");
+    expect(again.variants).toEqual([]);
+  });
+
+  it("keeps undeclared MCP server keys, in source order, in ingredient.yaml and after loading", async () => {
+    const t = await setup();
+    const server = { type: "http", url: "https://mcp.acme.dev", headers: { "X-Team": "acme" }, timeout: 30 };
+    await writeFiles(t.ws("a"), { ".claude/rules/w.md": "# W\n", ".mcp.json": mcp({ r: server }) });
+    await importInto(t.forge, t.ws("a"), "a");
+    const onDisk = await yaml(path.join(t.forge, "ingredients/mcp/r/ingredient.yaml"));
+    expect(Object.keys(onDisk.server)).toEqual(["type", "url", "headers", "timeout"]);
+    const loaded = (await loadForge(t.forge)).ingredients.get("mcp/r")!.meta;
+    if (loaded.type !== "mcp") throw new Error("expected an mcp ingredient");
+    expect(loaded.server).toEqual(server);
+    expect(Object.keys(loaded.server)).toEqual(["type", "url", "headers", "timeout"]);
+  });
+
+  it("pins spec 07 edge case 8 (pre-existing): a reordered server reuses the first one and reads as collision", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/w.md": "# W\n", ".mcp.json": mcp({ p: { command: "npx", args: ["srv"], type: "stdio" } }) });
+    await importInto(t.forge, t.ws("a"), "a");
+    const reordered = mcp({ p: { type: "stdio", command: "npx", args: ["srv"] } });
+    await writeFiles(t.ws("b"), { ".claude/rules/w.md": "# W\n", ".mcp.json": reordered });
+    const b = await importClaudeCode({ workspaceRoot: t.ws("b"), forgeRoot: t.forge, profileName: "b", writeWorkspaceConfig: true });
+    expect(b.reused).toContain("mcp/p");
+    const w = await loadWorkspace(t.ws("b"));
+    const st = await status(w, await plan(w), await readLock(w.root));
+    expect(st.find((s) => s.path === ".mcp.json")?.state).toBe("collision");
+  });
+});
