@@ -271,6 +271,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
         break;
       case "orphan-drift":
         skipped.push(s);
+        entries.push(s.lock!); // keep the old entry so the hand-edited orphan stays visible until deleted
         break;
     }
   }

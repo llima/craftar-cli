@@ -15,7 +15,12 @@ const PATTERNS: { kind: string; re: RegExp }[] = [
   { kind: "slack-token", re: /\bxox[abprs]-[A-Za-z0-9-]{10,}/ },
   { kind: "api-key", re: /\bsk-(?:ant-)?[A-Za-z0-9_-]{32,}/ },
   { kind: "private-key", re: /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/ },
-  { kind: "azure-devops-pat", re: /(?<![A-Za-z0-9])[a-z0-9]{52}(?![A-Za-z0-9])/ },
+  // Azure DevOps PATs, both formats. `_` bounds both sides so a run inside a snake_case
+  // identifier is not read as a standalone token. The legacy 52-char form must hold a digit,
+  // so a 52-letter lowercase run is not flagged. The 84-char form (Azure DevOps release notes,
+  // sprint 241) carries the fixed signature `AZDO` at 0-based index 76.
+  { kind: "azure-devops-pat", re: /(?<![A-Za-z0-9_])(?=[a-z]*[0-9])[a-z0-9]{52}(?![A-Za-z0-9_])/ },
+  { kind: "azure-devops-pat", re: /(?<![A-Za-z0-9_])[A-Za-z0-9]{76}AZDO[A-Za-z0-9]{4}(?![A-Za-z0-9_])/ },
 ];
 
 /** Scan text line by line with the known token patterns. */
@@ -26,6 +31,28 @@ export function findSecrets(text: string): SecretFinding[] {
     if (hit) out.push({ kind: hit.kind, line: i + 1 });
   });
   return out;
+}
+
+/** True when the bytes open with a UTF-16 byte-order mark (`FF FE` little-endian, `FE FF` big-endian). */
+export function hasUtf16Bom(bytes: Buffer): boolean {
+  return bytes.length >= 2 && ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff));
+}
+
+/**
+ * Text to run the secret scan over, from raw bytes. A UTF-16 BOM is sniffed first and the
+ * bytes decoded with the matching encoding — UTF-16 text is full of NUL bytes and would
+ * otherwise be taken for binary. Without a BOM, a NUL byte marks the content binary (null);
+ * anything else is read as UTF-8. Used for scanning only: it never changes what is stored.
+ */
+export function decodeForScan(bytes: Buffer): string | null {
+  if (hasUtf16Bom(bytes)) {
+    const body = bytes.subarray(2, bytes.length - (bytes.length % 2));
+    if (bytes[0] === 0xff) return body.toString("utf16le");
+    const swapped = Buffer.from(body);
+    swapped.swap16();
+    return swapped.toString("utf16le");
+  }
+  return bytes.includes(0) ? null : bytes.toString("utf8");
 }
 
 export function shannonEntropy(s: string): number {

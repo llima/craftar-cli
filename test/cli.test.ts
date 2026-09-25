@@ -57,6 +57,28 @@ describe("cli", () => {
     expect(check.stdout).toContain("workspace in sync");
   });
 
+  it("sync --check keeps failing on a hand-edited orphan after a sync has already reported it", async () => {
+    const s = await scenario(
+      { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const A = ".claude/rules/a.md";
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.appendFile(path.join(s.wsRoot, A), "hand edit\n");
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), YAML.stringify(recipe("base", [])));
+
+    const first = runCli(["sync", "--workspace", s.wsRoot]);
+    expect(first.code).toBe(0);
+    expect(first.stdout).toContain("no longer produced by the Forge but hand-edited");
+
+    const check = runCli(["sync", "--check", "--workspace", s.wsRoot]);
+    expect(check.code).toBe(1);
+    expect(check.stdout).toContain("orphan-drift");
+    const st = runCli(["status", "--workspace", s.wsRoot]);
+    expect(st.stdout).toContain("orphan-drift");
+  });
+
   it("import prints a rejection with its location and never the value", async () => {
     const root = await tmpDir("craftar-cli-import-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
@@ -84,6 +106,16 @@ describe("cli", () => {
     expect(r.code).toBe(1);
     expect(r.stdout + r.stderr).toContain(".mcp.json is not valid JSON — fix the file and re-run import");
     expect(r.stdout + r.stderr).not.toContain("ghp_");
+  });
+
+  it("import that fails says the Forge was left untouched and writes nothing into it", async () => {
+    const root = await tmpDir("craftar-cli-import-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await writeFiles(path.join(root, "api"), { ".claude/rules/workflow.md": "# Workflow\n", ".mcp.json": "{ not json" });
+    const r = runCli(["import", "--from", "claude-code", "--workspace", path.join(root, "api"), "--forge", path.join(root, "forge"), "--profile", "api"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("The Forge was left untouched.");
+    expect(await exists(path.join(root, "forge"))).toBe(false);
   });
 
   it("a second workspace whose MCP server differs imports as a variant and syncs back to its own .mcp.json", async () => {

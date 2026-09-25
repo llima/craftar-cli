@@ -78,6 +78,34 @@ describe("apply", () => {
     expect(await exists(path.join(s.wsRoot, A))).toBe(true);
   });
 
+  it("keeps a hand-edited orphan in the lock so every later sync still reports it", async () => {
+    const s = await oneRule();
+    await sync(s.wsRoot);
+    const original = (await readLock(s.wsRoot))!.files[0];
+    await fs.appendFile(path.join(s.wsRoot, A), "hand edit\n");
+    await dropFromRecipe(s.forgeRoot);
+    const first = await sync(s.wsRoot);
+    expect(first.skipped.map((x) => [x.path, x.state])).toEqual([[A, "orphan-drift"]]);
+    expect((await readLock(s.wsRoot))!.files).toEqual([original]);
+    const second = await sync(s.wsRoot);
+    expect(second.skipped.map((x) => [x.path, x.state])).toEqual([[A, "orphan-drift"]]);
+    expect((await readLock(s.wsRoot))!.files).toEqual([original]);
+    expect(await read(s.wsRoot, A)).toContain("hand edit");
+  });
+
+  it("forgets a hand-edited orphan once the user deletes it", async () => {
+    const s = await oneRule();
+    await sync(s.wsRoot);
+    await fs.appendFile(path.join(s.wsRoot, A), "hand edit\n");
+    await dropFromRecipe(s.forgeRoot);
+    await sync(s.wsRoot);
+    await fs.rm(path.join(s.wsRoot, A));
+    const r = await sync(s.wsRoot);
+    expect(r.skipped).toEqual([]);
+    expect(r.removed).toEqual([]);
+    expect((await readLock(s.wsRoot))!.files).toEqual([]);
+  });
+
   it("never touches a collision", async () => {
     const s = await oneRule({ [A]: "# mine\n" });
     const r = await sync(s.wsRoot);

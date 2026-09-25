@@ -95,4 +95,16 @@ describe("claude-code emitter", () => {
     const p = await planFor([rule("a", "# A\n")], { "AGENTS.md": "\uFEFFold\n" }, ["agents-md"]);
     expect(hasBom(p.files.find((x) => x.path === "AGENTS.md")!.content)).toBe(true);
   });
+
+  it("warns for a steering ingredient aimed at claude-code with targets \"*\", and emits nothing for it", async () => {
+    const p = await planFor([rule("a", "# A\n"), { meta: { type: "steering", name: "product", file: "steering.md", targets: "*" }, files: { "steering.md": "# P\n" } }]);
+    expect(p.warnings).toContain("claude-code: steering steering/product has no Claude Code equivalent — skipped");
+    expect(p.files.map((f) => f.path)).toEqual([".claude/rules/a.md"]);
+  });
+
+  it("does not warn for a steering ingredient left at its kiro-only default", async () => {
+    const p = await planFor([{ meta: { type: "steering", name: "product", file: "steering.md" }, files: { "steering.md": "# P\n" } }]);
+    expect(p.warnings.filter((w) => w.startsWith("claude-code:"))).toEqual([]);
+    expect(p.files).toEqual([]);
+  });
 });

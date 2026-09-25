@@ -57,7 +57,10 @@ export const claudeCode: Emitter = {
         case "mcp":
           break; // collected into .mcp.json below
         case "steering":
-          break; // Kiro-only by nature
+          // Kiro-only by nature: the schema defaults steering to `targets: ["kiro"]`, so reaching
+          // here means the Forge aimed it at claude-code explicitly (`"*"` or a list naming it).
+          ctx.warn(`claude-code: steering ${ing.ref} has no Claude Code equivalent — skipped`);
+          break;
       }
     }
 

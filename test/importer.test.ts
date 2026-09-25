@@ -18,6 +18,12 @@ async function setup() {
   return { root, forge: path.join(root, "forge"), ws: (name: string) => path.join(root, name) };
 }
 const importInto = (forge: string, workspaceRoot: string, profileName: string) => importClaudeCode({ workspaceRoot, forgeRoot: forge, profileName });
+const utf16le = (text: string) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]);
+const utf16be = (text: string) => {
+  const le = Buffer.from(text, "utf16le");
+  le.swap16();
+  return Buffer.concat([Buffer.from([0xfe, 0xff]), le]);
+};
 const yaml = async (file: string) => YAML.parse(await fs.readFile(file, "utf8"));
 
 describe("import --from claude-code", () => {
@@ -154,6 +160,41 @@ describe("import --from claude-code", () => {
     expect(r.rejected).toEqual([{ name: "hook/deploy", reason: "secret-like value (github-token) in .claude/hooks/deploy.bat line 1" }]);
   });
 
+  it("rejects an allowlisted script saved as UTF-16LE with a BOM holding a token", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), { ".claude/scripts/deploy.ps1": utf16le("# deploy\r\n$token = '" + TOKEN + "'\r\n") });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([{ name: "script/deploy", reason: "secret-like value (github-token) in .claude/scripts/deploy.ps1 line 2" }]);
+    expect(await exists(path.join(t.forge, "ingredients/scripts/deploy"))).toBe(false);
+  });
+
+  it("rejects a non-allowlisted hook saved as UTF-16LE with a BOM holding a token", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), { ".claude/hooks/deploy.bat": utf16le("set TOKEN=" + TOKEN + "\r\n") });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([{ name: "hook/deploy", reason: "secret-like value (github-token) in .claude/hooks/deploy.bat line 1" }]);
+    expect(await exists(path.join(t.forge, "ingredients/hooks/deploy"))).toBe(false);
+  });
+
+  it("rejects a rule saved as UTF-16BE with a BOM holding a token", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), { ".claude/rules/deploy.md": utf16be("# Deploy\n\nkey " + "AKIA" + "ABCDEFGHIJKLMNOP" + "\n") });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([{ name: "rule/deploy", reason: "secret-like value (aws-access-key) in .claude/rules/deploy.md line 3" }]);
+  });
+
+  it("stores a clean UTF-16 file exactly as before (the decode is for scanning only)", async () => {
+    const t = await setup();
+    const script = utf16le("Write-Host 'hello'\r\n");
+    const hook = utf16le("echo hello\r\n");
+    await writeFiles(t.ws("api"), { ".claude/scripts/hello.ps1": script, ".claude/hooks/hello.bat": hook });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([]);
+    const stored = await fs.readFile(path.join(t.forge, "ingredients/scripts/hello/hello.ps1"), "utf8");
+    expect(stored).toBe(script.toString("utf8").replace(/\r\n?/g, "\n"));
+    expect(await fs.readFile(path.join(t.forge, "ingredients/hooks/hello/hello.bat"))).toEqual(hook);
+  });
+
   it("skips a binary skill-dir file (NUL byte) instead of scanning it as text", async () => {
     const t = await setup();
     await writeFiles(t.ws("api"), {
@@ -217,3 +258,64 @@ describe("import --from claude-code — nested MCP configuration", () => {
     expect(await exists(path.join(t.forge, "ingredients/mcp/srv--b"))).toBe(false);
   });
 });
+
+describe("import --from claude-code — all checks before the first write", () => {
+  it("leaves the Forge byte-identical when a late step fails on a malformed existing ingredient", async () => {
+    const t = await setup();
+    const server = { mcpServers: { srv: { command: "npx", args: ["srv"] } } };
+    await writeFiles(t.ws("a"), { ".claude/rules/workflow.md": "# Workflow\n", ".mcp.json": JSON.stringify(server) });
+    await importInto(t.forge, t.ws("a"), "a");
+    // A self-referencing alias makes the existing MCP ingredient's metadata cyclic.
+    await fs.writeFile(path.join(t.forge, "ingredients/mcp/srv/ingredient.yaml"), "type: mcp\nname: srv\nserver: &s\n  self: *s\n");
+    const before = await snapshot(t.forge);
+
+    // `other` is read (rules run before MCP) and would be created; the MCP comparison then throws.
+    await writeFiles(t.ws("b"), { ".claude/rules/other.md": "# Other\n", ".mcp.json": JSON.stringify(server) });
+    const err = await importInto(t.forge, t.ws("b"), "b").then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(err?.message).toContain("ingredient metadata is cyclic");
+    expect(err?.message).toContain("The Forge was left untouched.");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+
+  it("does not create the Forge directory when the import fails", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), { ".claude/rules/workflow.md": "# Workflow\n", ".mcp.json": "{ not json" });
+    await expect(importInto(t.forge, t.ws("api"), "api")).rejects.toThrow("The Forge was left untouched.");
+    expect(await exists(t.forge)).toBe(false);
+  });
+
+  it("compares a later ingredient against one staged earlier in the same run", async () => {
+    // Two hook files that map to one ingredient name: the second sees the first as already in the
+    // Forge, exactly as it did when the importer wrote as it went.
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".claude/hooks/guard.sh": "echo sh\n",
+      ".claude/hooks/guard.ps1": "Write-Output ps1\n",
+    });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.created).toContain("hook/guard");
+    expect(r.variants).toEqual([{ name: "hook/guard--api", reason: "differs from hook/guard already in the Forge" }]);
+    expect(await fs.readFile(path.join(t.forge, "ingredients/hooks/guard/guard.ps1"), "utf8")).toBe("Write-Output ps1\n");
+    expect(await fs.readFile(path.join(t.forge, "ingredients/hooks/guard--api/guard.sh"), "utf8")).toBe("echo sh\n");
+  });
+});
+
+/** Every file under `root`, POSIX-relative, with its bytes. */
+async function snapshot(root: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const walk = async (rel: string): Promise<void> => {
+    for (const e of await fs.readdir(path.join(root, rel), { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        out[`${r}/`] = "";
+        await walk(r);
+      } else out[r] = (await fs.readFile(path.join(root, r))).toString("base64");
+    }
+  };
+  await walk("");
+  return out;
+}
