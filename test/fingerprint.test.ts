@@ -120,4 +120,12 @@ describe("fingerprintDir — validated metadata (spec 07)", () => {
     const err = await fingerprintDir(dir).then(() => null, (e: Error) => e);
     expect(err?.message).toContain("ingredient.yaml");
   });
+
+  it("ignores the key order of an MCP server and its env (AC 19)", async () => {
+    const a = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-fp-"));
+    const b = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-fp-"));
+    await fs.writeFile(path.join(a, "ingredient.yaml"), "type: mcp\nname: p\nserver:\n  command: npx\n  type: stdio\n  env: { A: '1', B: '2' }\n");
+    await fs.writeFile(path.join(b, "ingredient.yaml"), "type: mcp\nname: p\nserver:\n  type: stdio\n  env: { B: '2', A: '1' }\n  command: npx\n");
+    expect(await fingerprintDir(b)).toBe(await fingerprintDir(a));
+  });
 });

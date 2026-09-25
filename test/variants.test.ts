@@ -88,6 +88,13 @@ describe("listVariants", () => {
     expect(group.variants[0].distance).toMatchObject({ lines: 0, hunks: 0, sameBodyDifferentMeta: true, identicalAfterNormalization: false });
   });
 
+  it("sees a hand-written base and a variant carrying its defaults as identical (spec 07)", async () => {
+    const full = { as: "w", inclusion: "always", file: "rule.md", targets: "*", tags: [] };
+    const forge = await forgeWith([rule("w", "same\n"), rule("w--acme", "same\n", full)]);
+    const { groups: [group] } = await listVariants(forge);
+    expect(group.variants[0].distance).toMatchObject({ identicalAfterNormalization: true });
+  });
+
   it("flags a variant that differs only in line endings or a BOM", async () => {
     const forge = await forgeWith([rule("x", "one\ntwo\n"), rule("x--acme", "﻿one\r\ntwo\r\n", { as: "x" })]);
     const { groups: [group] } = await listVariants(forge);

@@ -859,6 +859,35 @@ describe("cli — forge unify final review", () => {
     return root;
   }
 
+  it("forge unify --take variant keeps a variant that differs only in an undeclared server key (spec 07, AC 6)", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [
+        { meta: { type: "mcp", name: "srv", server: { url: "https://mcp.acme.dev" } } },
+        { meta: { type: "mcp", name: "srv--acme", as: "srv", server: { url: "https://mcp.acme.dev", headers: { "X-Team": "acme" } } } },
+      ],
+    });
+    gitInit(root);
+    gitCommitAll(root, "init");
+    const r = runCli(["forge", "unify", "mcp/srv", "--profile", "acme", "--take", "variant", "--forge", root, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.metaDiffers).toEqual(["server"]);
+    expect(out.resolved).toBe(false);
+    expect(await exists(path.join(root, "ingredients/mcp/srv--acme"))).toBe(true);
+  });
+
+  it("forge variants refuses a Forge with an unknown ingredient key, naming the file and the key (spec 07, AC 1)", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("workflow", "a\n", { incluson: "always" })] });
+    const r = runCli(["forge", "variants", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("ingredients/rules/workflow/ingredient.yaml");
+    expect(r.stderr).toContain("incluson");
+  });
+
   it("forge unify --take variant leaves a variant whose nested MCP server differs unresolved, and names the field (Ruling 28)", async () => {
     const root = await mcpForge();
     const variantYaml = await fs.readFile(path.join(root, "ingredients/mcp/srv--acme/ingredient.yaml"), "utf8");

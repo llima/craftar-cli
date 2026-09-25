@@ -83,6 +83,17 @@ describe("kiro emitter", () => {
     expect(p.warnings.filter((w) => w.startsWith("kiro: script"))).toEqual([]);
   });
 
+  it("writes an MCP server exactly as the Forge holds it, Claude-only keys included (spec 07)", async () => {
+    const server = { type: "http", url: "https://mcp.acme.dev", headers: { "X-Team": "acme" }, timeout: 30 };
+    const p = await planFor([{ meta: { type: "mcp", name: "r", server } }]);
+    expect(file(p, ".kiro/settings/mcp.json")!.content.toString("utf8")).toBe(JSON.stringify({ mcpServers: { r: server } }, null, 2).replace(/\n/g, "\r\n") + "\r\n");
+  });
+
+  it("emits a server with only declared keys, in schema order, byte for byte as 0.2.4 did (AC 18)", async () => {
+    const p = await planFor([{ meta: { type: "mcp", name: "pw", server: { command: "npx", args: ["pw"] } } }]);
+    expect(file(p, ".kiro/settings/mcp.json")!.content.toString("utf8")).toBe('{\r\n  "mcpServers": {\r\n    "pw": {\r\n      "command": "npx",\r\n      "args": [\r\n        "pw"\r\n      ]\r\n    }\r\n  }\r\n}\r\n');
+  });
+
   it("emits an MCP variant under its original server name", async () => {
     const p = await planFor([{ meta: { type: "mcp", name: "srv--acme", as: "srv", server: { command: "npx", args: ["acme-server"] } } }]);
     const f = file(p, ".kiro/settings/mcp.json")!;
