@@ -44,17 +44,41 @@ const BASE_RULES = new Set([
 
 const GENERATED_BANNER = /<!--\s*GENERATED from /;
 
+/**
+ * Import a Claude Code workspace into a Forge. The run happens in two phases: every read,
+ * comparison and check that can throw runs first against an in-memory stage, and only then are the
+ * staged files written. A failure in the first phase therefore leaves the Forge untouched, and the
+ * error says so; a failure while writing names the paths already written.
+ */
 export async function importClaudeCode(opts: ImportOptions): Promise<ImportReport> {
+  const stage = new ForgeStage(path.resolve(opts.forgeRoot));
+  let planned: { report: ImportReport; targets: Target[] };
+  try {
+    planned = await planImport(opts, stage);
+  } catch (e) {
+    throw new Error(`${e instanceof Error ? e.message : String(e)}\nThe Forge was left untouched.`, { cause: e });
+  }
+  await stage.flush();
+  const { report, targets } = planned;
+  if (opts.writeWorkspaceConfig) {
+    const ws = path.resolve(opts.workspaceRoot);
+    const rel = path.relative(ws, stage.root).replace(/\\/g, "/") || ".";
+    await fs.writeFile(path.join(ws, "craftar.yaml"), YAML.stringify({ forge: rel, profile: opts.profileName, targets }));
+    report.created.push("craftar.yaml (workspace)");
+  }
+  return report;
+}
+
+async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ report: ImportReport; targets: Target[] }> {
   const ws = path.resolve(opts.workspaceRoot);
-  const forge = path.resolve(opts.forgeRoot);
+  const forge = stage.root;
   const report: ImportReport = { created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [] };
   const claudeDir = path.join(ws, ".claude");
   if (!(await exists(claudeDir))) throw new Error(`${claudeDir} not found — is this a Claude Code workspace?`);
 
-  await fs.mkdir(forge, { recursive: true });
   const manifest = path.join(forge, FORGE_MANIFEST);
-  if (!(await exists(manifest))) {
-    await fs.writeFile(manifest, YAML.stringify({ name: path.basename(forge), schema: 1, description: "Craftar Forge — shared harness ingredients, recipes and client profiles." }));
+  if (!(await stage.exists(manifest))) {
+    stage.write(manifest, YAML.stringify({ name: path.basename(forge), schema: 1, description: "Craftar Forge — shared harness ingredients, recipes and client profiles." }));
     report.created.push(FORGE_MANIFEST);
   }
 
@@ -99,7 +123,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
       tags: [],
       origin: origin(`.claude/rules/${f}`),
     };
-    const ref = await writeIngredient(forge, meta, { "rule.md": text }, opts.profileName, report, scanOf("rule.md", src));
+    const ref = await writeIngredient(stage, meta, { "rule.md": text }, opts.profileName, report, scanOf("rule.md", src));
     if (!ref) continue;
     ruleNames.push(ref.split("/")[1]);
     if (meta.inclusion === "fileMatch") scopedRules.set(ref, sm?.fileMatchPattern ?? "");
@@ -126,7 +150,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
       tags: [],
       origin: origin(`.claude/agents/${f}`),
     };
-    const ref = await writeIngredient(forge, meta, { "agent.md": body }, opts.profileName, report, scanOf("agent.md", src));
+    const ref = await writeIngredient(stage, meta, { "agent.md": body }, opts.profileName, report, scanOf("agent.md", src));
     if (!ref) continue;
     agentBodies.set(ref, (data.description ?? "") + "\n" + body);
     refs.base.push(ref);
@@ -150,7 +174,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
       tags: [],
       origin: origin(`.claude/commands/${f}`),
     };
-    addRef(refs.base, await writeIngredient(forge, meta, { "command.md": body }, opts.profileName, report, scanOf("command.md", src)));
+    addRef(refs.base, await writeIngredient(stage, meta, { "command.md": body }, opts.profileName, report, scanOf("command.md", src)));
   }
 
   /* ---- skills ---- */
@@ -174,12 +198,12 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
           continue;
         }
         const meta: Ingredient = { type: "skill", name: e.name, layout: "dir", targets: "*", tags: [], origin: origin(`.claude/skills/${e.name}/`) };
-        addRef(refs.base, await writeIngredient(forge, meta, files, opts.profileName, report, scan));
+        addRef(refs.base, await writeIngredient(stage, meta, files, opts.profileName, report, scan));
       } else if (e.name.endsWith(".md")) {
         const src = await readSource(path.join(skillsDir, e.name));
         const text = toLf(stripBom(src.text));
         const meta: Ingredient = { type: "skill", name: e.name.replace(/\.md$/, ""), layout: "file", targets: "*", tags: [], origin: origin(`.claude/skills/${e.name}`) };
-        addRef(refs.base, await writeIngredient(forge, meta, { "SKILL.md": text }, opts.profileName, report, scanOf("SKILL.md", src)));
+        addRef(refs.base, await writeIngredient(stage, meta, { "SKILL.md": text }, opts.profileName, report, scanOf("SKILL.md", src)));
       }
     }
   }
@@ -200,7 +224,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
         tags: [],
         origin: origin(`.claude/${kind}/${f}`),
       } as Ingredient;
-      addRef(refs.base, await writeIngredient(forge, meta, { [f]: content }, opts.profileName, report, src ? scanOf(f, src) : {}));
+      addRef(refs.base, await writeIngredient(stage, meta, { [f]: content }, opts.profileName, report, src ? scanOf(f, src) : {}));
     }
   }
 
@@ -224,7 +248,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
         throw new Error(`.mcp.json server "${name}" is not an object — fix the file and re-run import`);
       }
       const meta: Ingredient = { type: "mcp", name, server, targets: "*", tags: [], origin: origin(".mcp.json") };
-      addRef(refs.base, await writeIngredient(forge, meta, {}, opts.profileName, report));
+      addRef(refs.base, await writeIngredient(stage, meta, {}, opts.profileName, report));
     }
   }
 
@@ -233,12 +257,11 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
     if (ruleNames.includes(name) || sm.generated) continue;
     if (name === "commands") continue;
     const meta: Ingredient = { type: "steering", name, file: "steering.md", targets: ["kiro"], tags: ["client"], origin: origin(`.kiro/steering/${name}.md`) };
-    addRef(refs.steering, await writeIngredient(forge, meta, { "steering.md": sm.text }, opts.profileName, report, scanOf("steering.md", sm)));
+    addRef(refs.steering, await writeIngredient(stage, meta, { "steering.md": sm.text }, opts.profileName, report, scanOf("steering.md", sm)));
   }
 
   /* ---- recipes ---- */
   const recipesDir = path.join(forge, "recipes");
-  await fs.mkdir(recipesDir, { recursive: true });
   const isVariant = (ref: string) => report.variants.some((v) => v.name === ref);
   const suffixIf = (name: string, ingredients: string[]) => (ingredients.some(isVariant) ? `${name}--${opts.profileName}` : name);
 
@@ -249,17 +272,17 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
     for (const a of agents) refs.base = refs.base.filter((r) => r !== a);
     const ingredients = [ruleRef, ...agents];
     const recipeName = suffixIf(`stack-${ruleName}`, ingredients);
-    await writeRecipe(recipesDir, { name: recipeName, description: `Conventions + reviewer for repos matching ${pattern}`, extends: [], ingredients, params: {} }, report);
+    await writeRecipe(stage, recipesDir, { name: recipeName, description: `Conventions + reviewer for repos matching ${pattern}`, extends: [], ingredients, params: {} }, report);
     stackRecipes.push(recipeName);
   }
 
   const baseIngredients = unique(refs.base);
   const baseName = suffixIf("base", baseIngredients);
-  await writeRecipe(recipesDir, { name: baseName, description: "Always-on conventions, commands, agents, scripts and MCP servers.", extends: [], ingredients: baseIngredients, params: {} }, report);
+  await writeRecipe(stage, recipesDir, { name: baseName, description: "Always-on conventions, commands, agents, scripts and MCP servers.", extends: [], ingredients: baseIngredients, params: {} }, report);
   const profileRecipes = [baseName, ...stackRecipes];
   if (refs.steering.length) {
     const n = `${opts.profileName}-steering`;
-    await writeRecipe(recipesDir, { name: n, description: `Hand-written Kiro steering specific to ${opts.profileName}.`, extends: [], ingredients: refs.steering, params: {} }, report);
+    await writeRecipe(stage, recipesDir, { name: n, description: `Hand-written Kiro steering specific to ${opts.profileName}.`, extends: [], ingredients: refs.steering, params: {} }, report);
     profileRecipes.push(n);
   }
 
@@ -281,17 +304,72 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
     params: {},
     repos: [],
   };
-  const profDir = path.join(forge, "profiles", opts.profileName);
-  await fs.mkdir(profDir, { recursive: true });
-  await fs.writeFile(path.join(profDir, "profile.yaml"), YAML.stringify(profile));
+  stage.write(path.join(forge, "profiles", opts.profileName, "profile.yaml"), YAML.stringify(profile));
   report.created.push(`profiles/${opts.profileName}/profile.yaml`);
+  return { report, targets };
+}
 
-  if (opts.writeWorkspaceConfig) {
-    const rel = path.relative(ws, forge).replace(/\\/g, "/") || ".";
-    await fs.writeFile(path.join(ws, "craftar.yaml"), YAML.stringify({ forge: rel, profile: opts.profileName, targets }));
-    report.created.push("craftar.yaml (workspace)");
+/**
+ * The Forge as the import run sees it: the files on disk overlaid with the files this run has staged.
+ * Nothing touches the disk until `flush()`, so every check that can throw runs before the first write.
+ * Reads go through the overlay so that a later step sees an earlier step's output exactly as the
+ * write-as-you-go importer did (two scripts that map to one ingredient name, for instance).
+ */
+class ForgeStage {
+  private readonly files = new Map<string, string | Buffer>();
+  constructor(readonly root: string) {}
+
+  write(abs: string, content: string | Buffer): void {
+    this.files.set(abs, content);
   }
-  return report;
+
+  async exists(abs: string): Promise<boolean> {
+    return this.files.has(abs) || (await exists(abs));
+  }
+
+  async readText(abs: string): Promise<string> {
+    const staged = this.files.get(abs);
+    if (staged === undefined) return fs.readFile(abs, "utf8");
+    return Buffer.isBuffer(staged) ? staged.toString("utf8") : staged;
+  }
+
+  /** `fingerprintDir` over the overlay: staged files win over files on disk at the same path. */
+  async fingerprintDir(dir: string): Promise<string> {
+    const prefix = dir + path.sep;
+    const stagedRels = [...this.files.keys()].filter((k) => k.startsWith(prefix)).map((k) => path.relative(dir, k).split(path.sep).join("/"));
+    if (stagedRels.length === 0) return fingerprintDir(dir);
+    const metaFile = path.join(dir, "ingredient.yaml");
+    const meta = YAML.parse(await this.readText(metaFile));
+    const rels = new Set([...stagedRels, ...((await exists(dir)) ? await listFiles(dir) : [])]);
+    const files: Record<string, Buffer> = {};
+    for (const rel of rels) {
+      if (rel === "ingredient.yaml") continue;
+      const abs = path.join(dir, rel);
+      const staged = this.files.get(abs);
+      files[rel] = staged === undefined ? await fs.readFile(abs) : Buffer.isBuffer(staged) ? staged : Buffer.from(staged, "utf8");
+    }
+    try {
+      return fingerprintOf(meta, files);
+    } catch (e) {
+      throw new Error(`${metaFile}: ${(e as Error).message}`);
+    }
+  }
+
+  /** Write every staged file. A failure here names what was already written, since the Forge is no longer untouched. */
+  async flush(): Promise<void> {
+    const written: string[] = [];
+    try {
+      await fs.mkdir(this.root, { recursive: true });
+      for (const [abs, content] of this.files) {
+        await fs.mkdir(path.dirname(abs), { recursive: true });
+        await fs.writeFile(abs, content);
+        written.push(path.relative(this.root, abs).split(path.sep).join("/"));
+      }
+    } catch (e) {
+      const already = written.length ? `already written: ${written.join(", ")}` : "nothing was written yet";
+      throw new Error(`${e instanceof Error ? e.message : String(e)}\nThe import failed while writing into the Forge (${already}); restore or remove those paths before re-running.`, { cause: e });
+    }
+  }
 }
 
 /**
@@ -416,7 +494,7 @@ async function sniffScm(claudeDir: string): Promise<Profile["scm"]> {
  * so the human decides whether to parameterize or keep a client-specific copy.
  */
 async function writeIngredient(
-  forge: string,
+  stage: ForgeStage,
   meta: Ingredient,
   files: Record<string, string | Buffer>,
   profile: string,
@@ -428,13 +506,14 @@ async function writeIngredient(
     report.rejected.push({ name: `${meta.type}/${meta.name}`, reason: secret });
     return null;
   }
+  const forge = stage.root;
   const folder = typeFolder(meta.type);
   let name = meta.name;
   let dir = path.join(forge, "ingredients", folder, name);
   const fingerprint = fingerprintOf(meta, files);
 
-  if (await exists(path.join(dir, "ingredient.yaml"))) {
-    const existing = await fingerprintDir(dir);
+  if (await stage.exists(path.join(dir, "ingredient.yaml"))) {
+    const existing = await stage.fingerprintDir(dir);
     if (existing === fingerprint) {
       report.reused.push(`${meta.type}/${name}`);
       return `${meta.type}/${name}`;
@@ -448,25 +527,20 @@ async function writeIngredient(
     report.created.push(`${meta.type}/${name}`);
   }
 
-  await fs.mkdir(dir, { recursive: true });
   const yamlMeta: Record<string, unknown> = { ...meta };
   if (yamlMeta.targets === "*") yamlMeta.targets = "*";
-  await fs.writeFile(path.join(dir, "ingredient.yaml"), YAML.stringify(yamlMeta, { lineWidth: 0 }));
-  for (const [rel, content] of Object.entries(files)) {
-    const abs = path.join(dir, rel);
-    await fs.mkdir(path.dirname(abs), { recursive: true });
-    await fs.writeFile(abs, content);
-  }
+  stage.write(path.join(dir, "ingredient.yaml"), YAML.stringify(yamlMeta, { lineWidth: 0 }));
+  for (const [rel, content] of Object.entries(files)) stage.write(path.join(dir, rel), content);
   return `${meta.type}/${name}`;
 }
 
-async function writeRecipe(dir: string, recipe: Recipe, report: ImportReport): Promise<void> {
+async function writeRecipe(stage: ForgeStage, dir: string, recipe: Recipe, report: ImportReport): Promise<void> {
   const file = path.join(dir, `${recipe.name}.yaml`);
   const clean = JSON.parse(JSON.stringify(recipe)); // drop undefined
-  if (await exists(file)) {
-    const prev = YAML.parse(await fs.readFile(file, "utf8"));
+  if (await stage.exists(file)) {
+    const prev = YAML.parse(await stage.readText(file));
     clean.ingredients = unique([...(prev.ingredients ?? []), ...clean.ingredients]);
   }
-  await fs.writeFile(file, YAML.stringify(clean));
+  stage.write(file, YAML.stringify(clean));
   report.recipes.push(recipe.name);
 }
