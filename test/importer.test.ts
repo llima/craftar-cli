@@ -287,6 +287,42 @@ describe("import --from claude-code — all checks before the first write", () =
     expect(await exists(t.forge)).toBe(false);
   });
 
+  it("fingerprints a staged ingredient the same way as the flushed one (one fingerprintDir)", async () => {
+    // hook/guard is compared while still staged; a second import of the same workspace compares it on
+    // disk. Both paths go through the core fingerprintDir, so the re-import reuses instead of forking.
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".claude/hooks/guard.sh": "echo sh\n",
+      ".claude/hooks/guard.ps1": "Write-Output ps1\n",
+    });
+    const first = await importInto(t.forge, t.ws("api"), "api");
+    const again = await importInto(t.forge, t.ws("api"), "api");
+    // The two guard files still differ from each other, so the variant is reported again; what matters
+    // is that the base compared on disk matches what was compared while staged.
+    expect(again.variants).toEqual(first.variants);
+    expect(again.reused).toEqual(expect.arrayContaining(["hook/guard", "rule/workflow"]));
+    expect(again.created.filter((c) => !c.includes("/") || /^(rule|hook)\//.test(c))).toEqual([]);
+  });
+
+  it("refuses an existing Forge ingredient with an unknown key, naming the file and the key", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/workflow.md": "# Workflow\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    const meta = path.join(t.forge, "ingredients/rules/workflow/ingredient.yaml");
+    await fs.writeFile(meta, (await fs.readFile(meta, "utf8")) + "foo: 1\n");
+    const before = await snapshot(t.forge);
+    await writeFiles(t.ws("b"), { ".claude/rules/workflow.md": "# Workflow\n" });
+    const err = await importInto(t.forge, t.ws("b"), "b").then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(err?.message).toContain("ingredients/rules/workflow/ingredient.yaml");
+    expect(err?.message).toContain("foo");
+    expect(err?.message).toContain("The Forge was left untouched.");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+
   it("compares a later ingredient against one staged earlier in the same run", async () => {
     // Two hook files that map to one ingredient name: the second sees the first as already in the
     // Forge, exactly as it did when the importer wrote as it went.

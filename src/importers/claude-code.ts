@@ -5,7 +5,7 @@ import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
 import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../core/secrets.js";
 import { stripBom, toLf } from "../core/text.js";
-import { fingerprintDir, fingerprintOf } from "../core/fingerprint.js";
+import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
 import type { Ingredient, Profile, Recipe, Target } from "../schema/index.js";
 
 export interface ImportOptions {
@@ -333,26 +333,21 @@ class ForgeStage {
     return Buffer.isBuffer(staged) ? staged.toString("utf8") : staged;
   }
 
-  /** `fingerprintDir` over the overlay: staged files win over files on disk at the same path. */
-  async fingerprintDir(dir: string): Promise<string> {
-    const prefix = dir + path.sep;
-    const stagedRels = [...this.files.keys()].filter((k) => k.startsWith(prefix)).map((k) => path.relative(dir, k).split(path.sep).join("/"));
-    if (stagedRels.length === 0) return fingerprintDir(dir);
-    const metaFile = path.join(dir, "ingredient.yaml");
-    const meta = YAML.parse(await this.readText(metaFile));
-    const rels = new Set([...stagedRels, ...((await exists(dir)) ? await listFiles(dir) : [])]);
-    const files: Record<string, Buffer> = {};
-    for (const rel of rels) {
-      if (rel === "ingredient.yaml") continue;
-      const abs = path.join(dir, rel);
-      const staged = this.files.get(abs);
-      files[rel] = staged === undefined ? await fs.readFile(abs) : Buffer.isBuffer(staged) ? staged : Buffer.from(staged, "utf8");
-    }
-    try {
-      return fingerprintOf(meta, files);
-    } catch (e) {
-      throw new Error(`${metaFile}: ${(e as Error).message}`);
-    }
+  /** A `fingerprintDir` reader over the overlay: staged files win over files on disk at the same path. */
+  reader(): DirReader {
+    return {
+      readText: (abs) => this.readText(abs),
+      readBytes: async (abs) => {
+        const staged = this.files.get(abs);
+        if (staged === undefined) return fs.readFile(abs);
+        return Buffer.isBuffer(staged) ? staged : Buffer.from(staged, "utf8");
+      },
+      list: async (dir) => {
+        const prefix = dir + path.sep;
+        const staged = [...this.files.keys()].filter((k) => k.startsWith(prefix)).map((k) => path.relative(dir, k).split(path.sep).join("/"));
+        return [...new Set([...staged, ...((await exists(dir)) ? await listFiles(dir) : [])])].sort();
+      },
+    };
   }
 
   /** Write every staged file. A failure here names what was already written, since the Forge is no longer untouched. */
@@ -513,7 +508,7 @@ async function writeIngredient(
   const fingerprint = fingerprintOf(meta, files);
 
   if (await stage.exists(path.join(dir, "ingredient.yaml"))) {
-    const existing = await stage.fingerprintDir(dir);
+    const existing = await fingerprintDir(dir, stage.reader());
     if (existing === fingerprint) {
       report.reused.push(`${meta.type}/${name}`);
       return `${meta.type}/${name}`;
