@@ -337,7 +337,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- recipes ---- */
   const recipesDir = path.join(forge, "recipes");
   const isVariant = (ref: string) => report.variants.some((v) => v.name === ref);
-  const recipeOpts = { stage, dir: recipesDir, profile: opts.profileName, forge: ctx.forge, report, profileIsNew: !ctx.forge?.profiles.has(opts.profileName) };
+  const recipeOpts: RecipeOptions = { stage, dir: recipesDir, profile: opts.profileName, forge: ctx.forge, report, currentRules: currentRuleOrder(ctx.forge, opts.profileName) };
 
   const stackRecipes: string[] = [];
   for (const [ruleRef, pattern] of scopedRules) {
@@ -650,7 +650,17 @@ interface RecipeOptions {
   profile: string;
   forge: import("../core/forge.js").Forge | null;
   report: ImportReport;
-  profileIsNew: boolean;
+  /** The rules the profile resolves today, in resolution order; null for a new profile (spec 10 §14 Q10). */
+  currentRules: string[] | null;
+}
+
+function currentRuleOrder(forge: import("../core/forge.js").Forge | null, profile: string): string[] | null {
+  if (!forge?.profiles.has(profile)) return null;
+  try {
+    return resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile })).ingredients.map((i) => i.ref).filter((r) => r.startsWith("rule/"));
+  } catch {
+    return null;
+  }
 }
 
 const recipeText = (name: string, description: string, ingredients: string[]) =>
@@ -675,7 +685,8 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
   const rules = (xs: string[]) => xs.filter((x) => x.startsWith("rule/"));
   const lacks = existing.find((x) => !list.includes(x));
   const extra = list.find((x) => !existing.includes(x));
-  const reorders = !o.profileIsNew && JSON.stringify(rules(list)) !== JSON.stringify(rules(existing));
+  // Q10: an existing profile moves to R only if R orders its rules as the profile resolves them today, so AGENTS.md keeps its order.
+  const reorders = o.currentRules !== null && JSON.stringify(rules(existing)) !== JSON.stringify(o.currentRules.filter((r) => existing.includes(r)));
   if (!lacks && !extra && !reorders) {
     o.report.recipes.push(name);
     return name;
