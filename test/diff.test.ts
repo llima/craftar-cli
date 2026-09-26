@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffLines, diffOps, renderDiff, splitLines } from "../src/core/diff.js";
+import { diffLines, diffOps, lcsOps, renderDiff, splitLines } from "../src/core/diff.js";
 
 describe("diffLines", () => {
   it("reports nothing for identical text", () => {
@@ -241,5 +241,16 @@ describe("renderDiff", () => {
       );
       expect({ a, b, markers }).toEqual({ a, b, markers: flags });
     }
+  });
+});
+
+describe("lcsOps", () => {
+  it("diffs two token lists with the line diff's tie-break", () => {
+    expect(lcsOps(["a", " ", "b"], ["a", " ", "c"])).toEqual([
+      { kind: "same", line: "a" },
+      { kind: "same", line: " " },
+      { kind: "del", line: "b" },
+      { kind: "add", line: "c" },
+    ]);
   });
 });
