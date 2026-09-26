@@ -1610,3 +1610,128 @@ describe("cli — forge unify take: param (spec 09)", () => {
     expect(r.stderr).toContain("profile.yaml is not held by git");
   });
 });
+
+describe("cli — forge unify take: param, review follow-ups (spec 09)", () => {
+  const EXTRACTED = path.resolve(__dirname, "golden/forge-param-expected");
+  async function committedCopy(src: string, extra: Record<string, string> = {}): Promise<string> {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(async () => {
+      await fs.chmod(path.join(root, "ingredients/rules"), 0o755).catch(() => {});
+      await fs.rm(root, { recursive: true, force: true });
+    });
+    for (const rel of await listFiles(src)) {
+      await fs.mkdir(path.dirname(path.join(root, rel)), { recursive: true });
+      await fs.copyFile(path.join(src, rel), path.join(root, rel));
+    }
+    await writeFiles(root, extra);
+    gitInit(root);
+    gitCommitAll(root, "init");
+    return root;
+  }
+  async function planFor(root: string, name: string, profileName: string, edit: (plan: any) => void): Promise<string> {
+    const dir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    const saved = path.join(dir, "saved.yaml");
+    const s = runCli(["forge", "unify", `rule/${name}`, "--profile", profileName, "--save-plan", saved, "--forge", root]);
+    expect(s.code, s.stderr).toBe(0);
+    const plan = YAML.parse(await fs.readFile(saved, "utf8"));
+    edit(plan);
+    const edited = path.join(dir, "edited.yaml");
+    await fs.writeFile(edited, YAML.stringify(plan));
+    return edited;
+  }
+
+  it("reuses a key already extracted: the second variant writes only its profile (edge case 6, AC 14)", async () => {
+    const root = await committedCopy(EXTRACTED, {
+      "ingredients/rules/deploy--initech/ingredient.yaml": "type: rule\nname: deploy--initech\nas: deploy\n",
+      "ingredients/rules/deploy--initech/rule.md": "# Deploy\n\nBuild `initech-api` first.\nKeep the pipeline green.\nDeploy `initech-api` and `initech-web` together.\n",
+      "recipes/base--initech.yaml": "name: base--initech\ningredients:\n  - rule/deploy--initech\n  - rule/ports\n  - rule/notes\n",
+      "profiles/initech/profile.yaml": "name: initech\nrecipes:\n  - base--initech\n",
+    });
+    const before = { body: await fs.readFile(path.join(root, "ingredients/rules/deploy/rule.md"), "utf8"), meta: await fs.readFile(path.join(root, "ingredients/rules/deploy/ingredient.yaml"), "utf8") };
+    const plan = await planFor(root, "deploy", "initech", (p) => {
+      const [h1, h2] = p.files[0].hunks;
+      Object.assign(h1, { take: "param", params: [{ token: "{{deploy.api}}", key: "deploy.api" }] });
+      Object.assign(h2, { take: "param", params: [{ token: "{{deploy.api}}", key: "deploy.api" }, { token: "{{deploy.web}}", key: "deploy.web" }] });
+    });
+    const r = runCli(["forge", "unify", "rule/deploy", "--profile", "initech", "--plan", plan, "--forge", root, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.written).toEqual([]);
+    expect(out.params).toEqual([
+      { key: "deploy.api", default: "globex-api", value: "initech-api" },
+      { key: "deploy.web", default: "globex-web", value: "initech-web" },
+    ]);
+    expect(out.profileEdited).toBe("profiles/initech/profile.yaml");
+    expect(out.variantRemoved).toBe("rule/deploy--initech");
+    expect(await fs.readFile(path.join(root, "ingredients/rules/deploy/rule.md"), "utf8")).toBe(before.body);
+    expect(await fs.readFile(path.join(root, "ingredients/rules/deploy/ingredient.yaml"), "utf8")).toBe(before.meta);
+    expect(YAML.parse(await fs.readFile(path.join(root, "profiles/initech/profile.yaml"), "utf8")).params).toEqual({ "deploy.api": "initech-api", "deploy.web": "initech-web" });
+  });
+
+  it("--json written lists ingredient.yaml when the declarations were written", async () => {
+    const root = await committedCopy(path.resolve(__dirname, "golden/forge-param"));
+    const plan = await planFor(root, "ports", "acme", (p) => Object.assign(p.files[0].hunks[0], { take: "param", params: [{ token: "8080", key: "ports.api" }] }));
+    const out = JSON.parse(runCli(["forge", "unify", "rule/ports", "--profile", "acme", "--plan", plan, "--forge", root, "--json"]).stdout);
+    expect(out.written).toEqual(["ingredient.yaml", "rule.md"]);
+  });
+
+  it("refuses when the profile it would edit is ignored, or untracked and hidden from git status (AC 10)", async () => {
+    const ignored = await committedCopy(path.resolve(__dirname, "golden/forge-param"));
+    execFileSync("git", ["-C", ignored, "rm", "-q", "--cached", "profiles/acme/profile.yaml"]);
+    await fs.writeFile(path.join(ignored, ".gitignore"), "profiles/acme/profile.yaml\n");
+    gitCommitAll(ignored, "ignore the acme profile");
+    const p1 = await planFor(ignored, "ports", "acme", (p) => Object.assign(p.files[0].hunks[0], { take: "param", params: [{ token: "8080", key: "ports.api" }] }));
+    const r1 = runCli(["forge", "unify", "rule/ports", "--profile", "acme", "--plan", p1, "--forge", ignored]);
+    expect(r1.code).toBe(1);
+    expect(r1.stderr).toContain("profiles/acme/profile.yaml is not held by git");
+
+    const untracked = await committedCopy(path.resolve(__dirname, "golden/forge-param"));
+    execFileSync("git", ["-C", untracked, "rm", "-q", "--cached", "profiles/acme/profile.yaml"]);
+    execFileSync("git", ["-C", untracked, "commit", "-q", "-m", "untrack the acme profile"], { env: gitEnv() }); // no add -A: it would re-add the file
+    execFileSync("git", ["-C", untracked, "config", "status.showUntrackedFiles", "no"]);
+    const p2 = await planFor(untracked, "ports", "acme", (p) => Object.assign(p.files[0].hunks[0], { take: "param", params: [{ token: "8080", key: "ports.api" }] }));
+    const r2 = runCli(["forge", "unify", "rule/ports", "--profile", "acme", "--plan", p2, "--forge", untracked]);
+    expect(r2.code).toBe(1);
+    expect(r2.stderr).toContain("profiles/acme/profile.yaml is not held by git");
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a late failure names the profile it already wrote (AC 11)", async () => {
+    const root = await committedCopy(path.resolve(__dirname, "golden/forge-param"));
+    const plan = await planFor(root, "ports", "acme", (p) => Object.assign(p.files[0].hunks[0], { take: "param", params: [{ token: "8080", key: "ports.api" }] }));
+    // Removing the variant's directory is the last step; a read-only parent makes it fail after every other write.
+    await fs.chmod(path.join(root, "ingredients/rules"), 0o555);
+    const r = runCli(["forge", "unify", "rule/ports", "--profile", "acme", "--plan", plan, "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("profiles/acme/profile.yaml");
+  });
+
+  it("a mixed plan: a workspace on the base sees update only where the evolution hunk moved it", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [rule("deploy", "use globex-api\nshared\nStep 6\n"), rule("deploy--acme", "use acme-api\nshared\nStep 5\n", { as: "deploy" })],
+      recipes: [recipe("base", ["rule/deploy"]), recipe("base--acme", ["rule/deploy--acme"])],
+      profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"])],
+    });
+    gitInit(root);
+    gitCommitAll(root, "init");
+    const ws: Record<string, string> = {};
+    for (const p of ["acme", "globex"]) {
+      ws[p] = await tmpDir(`craftar-cli-ws-${p}-`);
+      cleanups.push(() => fs.rm(ws[p], { recursive: true, force: true }));
+      await fs.writeFile(path.join(ws[p], "craftar.yaml"), YAML.stringify({ forge: root, profile: p }));
+      expect(runCli(["sync", "--workspace", ws[p]]).code).toBe(0);
+    }
+    const plan = await planFor(root, "deploy", "acme", (p) => {
+      Object.assign(p.files[0].hunks[0], { take: "param", params: [{ token: "globex-api", key: "deploy.api" }] });
+      p.files[0].hunks[1].take = "variant";
+    });
+    expect(runCli(["forge", "unify", "rule/deploy", "--profile", "acme", "--plan", plan, "--forge", root]).code).toBe(0);
+    const states = (w: string) => JSON.parse(runCli(["status", "--workspace", w, "--json"]).stdout).statuses.filter((s: { state: string }) => s.state !== "unchanged");
+    expect(states(ws.acme)).toEqual([]);
+    expect(states(ws.globex).map((s: { path: string; state: string }) => [s.path, s.state])).toEqual([[".claude/rules/deploy.md", "update"]]);
+    expect(runCli(["sync", "--workspace", ws.globex]).code).toBe(0);
+    expect(await fs.readFile(path.join(ws.globex, ".claude/rules/deploy.md"), "utf8")).toBe("use globex-api\nshared\nStep 5\n");
+  });
+});

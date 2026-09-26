@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import YAML from "yaml";
 import { exists, gitDirty, loadForge, type Forge } from "../src/core/forge.js";
 import { applyPlan, metaDifferences, planFrom, rewriteRecipes, writeUnified } from "../src/core/unify.js";
+import { prove } from "../src/core/extract.js";
 import { diffIngredients } from "../src/core/variants.js";
 import { HunkSuggestionSchema, UnifyPlanSchema, type UnifyPlan } from "../src/schema/index.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
@@ -675,7 +676,7 @@ describe("take: param — the engine (spec 09 §6.1, §6.2)", () => {
     expect(await err(run("x globex-api\n", "x acme-api\n", one([{ token: "globex-api", key: "k" }, { token: "x", key: "j" }])))).toContain("is not a changed region");
     expect(await err(run("x globex-api y globex-web\n", "x acme-api y acme-web\n", one([{ token: "globex-api", key: "k" }])))).toContain("is not covered by params");
     expect(await err(run("| globex-api   |\n", "| acme-api |\n", one([{ token: "globex-api", key: "k" }])))).toContain("whitespace only");
-    expect(await err(run("x a{b\n", "x c}d\n", one([{ token: "a{b", key: "k" }])))).toMatch(/not a changed region|placeholders/);
+    expect(await err(run("x {{globex}}\n", "x {{acme}}\n", one([{ token: "globex", key: "k" }])))).toContain("would change which {{…}} placeholders");
     expect(await err(run("x globex-api\nsame\ny globex-api\n", "x acme-api\nsame\ny initech-api\n", (hs: any[]) => {
       for (const h of hs) Object.assign(h, { take: "param", params: [{ token: "globex-api", key: "k" }] });
     }))).toContain("would need two values");
@@ -699,5 +700,38 @@ describe("take: param — the engine (spec 09 §6.1, §6.2)", () => {
     expect(metaDifferences(base, variant)).toEqual([]);
     (variant as any).meta = { ...(variant as any).meta, params: { k: { default: "y" } } };
     expect(metaDifferences(base, variant)).toEqual(["params"]);
+  });
+});
+
+describe("take: param — the remaining engine rows (spec 09 AC 9)", () => {
+  const err = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => e.message);
+
+  it("P3: a file a target copies as raw bytes cannot hold a parameter", async () => {
+    const baseDir = await tmpDir();
+    const variantDir = await tmpDir();
+    cleanups.push(() => fs.rm(baseDir, { recursive: true, force: true }), () => fs.rm(variantDir, { recursive: true, force: true }));
+    await writeFiles(baseDir, { "ingredient.yaml": "type: skill\nname: run\n", "run.sh": "echo globex-api\n" });
+    await writeFiles(variantDir, { "ingredient.yaml": "type: skill\nname: run--acme\nas: run\n", "run.sh": "echo acme-api\n" });
+    const base = { ref: "skill/run", dir: baseDir, meta: { type: "skill", name: "run", layout: "dir" } } as never;
+    const variant = { ref: "skill/run--acme", dir: variantDir, meta: { type: "skill", name: "run--acme", as: "run", layout: "dir" } } as never;
+    const diff = await diffIngredients(base, variant);
+    const plan = await planFrom(base, variant, diff, "acme");
+    Object.assign(plan.files[0].hunks![0], { take: "param", params: [{ token: "globex-api", key: "k" }] });
+    expect(await err(applyPlan(base, variant, diff, plan))).toContain("is copied without substitution");
+  });
+
+  it("P10: a param plan refuses a variant held back by a metadata difference", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "x globex-api\n" }, { "rule.md": "x acme-api\n" });
+    (variant as any).meta = { ...(variant as any).meta, targets: ["kiro"] };
+    const plan = await planFrom(base, variant, diff, "acme");
+    Object.assign(plan.files[0].hunks![0], { take: "param", params: [{ token: "globex-api", key: "k" }] });
+    expect(await err(applyPlan(base, variant, diff, plan))).toContain("ingredient.yaml differs in targets");
+  });
+
+  it("P20: the proof refuses a template that does not render a side back", () => {
+    const e = (f: () => void) => { try { f(); return "no error"; } catch (x) { return (x as Error).message; } };
+    const ext = [{ key: "k", default: "globex-api", value: "acme-api", sites: [], reused: false }];
+    expect(e(() => prove("rule.md", "x {{k}}\n", "x globex-web\n", "x acme-api\n", ext))).toContain("would not reproduce the base side of \"rule.md\"");
+    expect(e(() => prove("rule.md", "x {{k}}\n", "x globex-api\n", "x acme-web\n", ext))).toContain("would not reproduce the variant side of \"rule.md\"");
   });
 });

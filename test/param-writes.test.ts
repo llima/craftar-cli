@@ -50,8 +50,15 @@ describe("checkParamWrites — the YAML edits (spec 09 §6.4)", () => {
     expect(w.profile!.content).toBe("name: acme\r\nrecipes:\r\n  - base--acme\r\nparams:\r\n  k: acme-api\r\n");
   });
 
+  it("keeps a comment and a BOM through the profile edit", async () => {
+    const bom = String.fromCharCode(0xfeff);
+    const forge = await forgeOf(spec(), { "profiles/acme/profile.yaml": `${bom}# the acme client\nname: acme\nrecipes:\n  - base--acme # its own recipe\n` });
+    const w = await check(forge, [ext("k", "globex-api", "acme-api")]);
+    expect(w.profile!.content).toBe(`${bom}# the acme client\nname: acme\nrecipes:\n  - base--acme # its own recipe\nparams:\n  k: acme-api\n`);
+  });
+
   it("keeps a long untouched line on one line", async () => {
-    const long = "x".repeat(120);
+    const long = "x".repeat(160);
     const forge = await forgeOf(spec({ ingredients: [] }), { "ingredients/rules/deploy/ingredient.yaml": `type: rule\nname: deploy\ndescription: ${long}\n` });
     const w = await check(forge, [ext("k", "globex-api", "acme-api")]);
     expect(w.ingredientYaml!.content).toContain(`description: ${long}\n`);
@@ -113,6 +120,6 @@ describe("checkParamWrites — Forge-level refusals (spec 09 §6.3)", () => {
     const aligned = await forgeOf(spec(), { "profiles/acme/profile.yaml": "name: acme      # the client\nrecipes:\n    - base--acme\n" });
     expect(await err(check(aligned, [ext("k", "globex-api", "acme-api")]))).toContain("does not round-trip");
     const alias = await forgeOf(spec(), { "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\nx: &p {}\nparams: *p\n" });
-    expect(await err(check(alias, [ext("k", "globex-api", "acme-api")]))).toMatch(/alias|round-trip/);
+    expect(await err(check(alias, [ext("k", "globex-api", "acme-api")]))).toContain("params is an alias");
   });
 });
