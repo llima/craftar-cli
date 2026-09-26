@@ -17,7 +17,8 @@ export interface Resolution {
 }
 
 /**
- * Layer order (weak → strong): base recipes → stack recipes → profile → workspace → local.
+ * Layer order (weak → strong): ingredient defaults (scoped to that ingredient, see `paramsFor`) →
+ * base recipes → stack recipes → profile → workspace → local.
  * Recipes are expanded depth-first through `extends`, each recipe applied once.
  */
 export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
@@ -77,6 +78,17 @@ export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
 
   const targets = [...new Set(ws.targets ?? profile.targets)] as Target[];
   return { profile, recipes: order, targets, params, ingredients: [...picked.values()], disabled, warnings };
+}
+
+/**
+ * The params one ingredient's files resolve against: its declared defaults, then every global
+ * layer (spec 09 §5.4). Scoped — another ingredient never sees these defaults.
+ */
+export function paramsFor(ing: LoadedIngredient, resolution: Resolution): Record<string, unknown> {
+  const out: Record<string, unknown> = Object.create(null);
+  for (const [k, v] of Object.entries(ing.meta.params ?? {})) if (v.default !== undefined) out[k] = v.default;
+  for (const [k, v] of Object.entries(resolution.params)) out[k] = v;
+  return out;
 }
 
 /** Substitute `{{param}}` placeholders. Unknown placeholders are left untouched (and reported by the caller). */

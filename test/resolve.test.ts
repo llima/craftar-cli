@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { loadWorkspace } from "../src/core/sync.js";
+import { loadWorkspace, plan } from "../src/core/sync.js";
 import { resolve } from "../src/core/resolve.js";
 import { profile, recipe, rule, scenario, type ForgeSpec, type WorkspaceSpec } from "./helpers/forge.js";
 
@@ -74,5 +74,39 @@ describe("resolve", () => {
 
   it("fails on an unknown profile", async () => {
     await expect(resolved({ profiles: [profile("other", [])] })).rejects.toThrow(/profile "acme" not found/);
+  });
+});
+
+describe("the ingredient default layer (spec 09 §5.4)", () => {
+  async function rendered(extra: { recipeParams?: object; profileParams?: object; config?: object; local?: object } = {}) {
+    const s = await scenario(
+      {
+        ingredients: [
+          rule("a", "api: {{deploy.api}}\n", { params: { "deploy.api": { default: "ingredient" } } }),
+          rule("b", "api: {{deploy.api}}\n"),
+        ],
+        recipes: [recipe("base", ["rule/a", "rule/b"], extra.recipeParams ? { params: extra.recipeParams } : {})],
+        profiles: [profile("acme", ["base"], ["claude-code"], extra.profileParams ? { params: extra.profileParams } : {})],
+      },
+      { config: { profile: "acme", ...(extra.config ?? {}) }, local: extra.local },
+    );
+    cleanups.push(s.cleanup);
+    const p = await plan(await loadWorkspace(s.wsRoot));
+    const text = (rel: string) => p.files.find((f) => f.path === rel)!.content.toString("utf8");
+    return { a: text(".claude/rules/a.md"), b: text(".claude/rules/b.md"), warnings: p.warnings };
+  }
+
+  it("fills the declaring ingredient only; another ingredient's placeholder stays literal and warned", async () => {
+    const r = await rendered();
+    expect(r.a).toBe("api: ingredient\n");
+    expect(r.b).toBe("api: {{deploy.api}}\n");
+    expect(r.warnings.join("\n")).toContain('param "deploy.api" has no value in any layer — left verbatim (rule/b)');
+  });
+
+  it("is the weakest layer: recipe, profile, workspace and local each override it", async () => {
+    expect((await rendered({ recipeParams: { "deploy.api": { default: "recipe" } } })).a).toBe("api: recipe\n");
+    expect((await rendered({ profileParams: { "deploy.api": "profile" } })).a).toBe("api: profile\n");
+    expect((await rendered({ profileParams: { "deploy.api": "profile" }, config: { overrides: { params: { "deploy.api": "workspace" } } } })).a).toBe("api: workspace\n");
+    expect((await rendered({ config: { overrides: { params: { "deploy.api": "workspace" } } }, local: { overrides: { params: { "deploy.api": "local" } } } })).a).toBe("api: local\n");
   });
 });
