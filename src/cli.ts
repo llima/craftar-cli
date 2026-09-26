@@ -46,7 +46,17 @@ program
     );
     for (const v of r.variants) console.log(`  ${pc.yellow("variant")} ${v.name} — ${v.reason}`);
     for (const x of r.rejected) console.log(`  ${pc.red("rejected")} ${x.name} — ${x.reason}`);
-    console.log(`  recipes: ${r.recipes.join(", ")}`);
+    // Spec 10 §4.2: how a templated base was reused, and what the profile gained.
+    for (const x of r.rendered) console.log(`  ${pc.cyan("rendered")} ${x.name} — ${x.keys.join(", ")}`);
+    for (const x of r.inferred) {
+      console.log(`  ${pc.cyan("inferred")} ${x.name} — ${Object.entries(x.values).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join(", ")}`);
+    }
+    for (const x of r.params) console.log(`  param ${x.key}: ${x.old === null ? "(unset)" : JSON.stringify(x.old)} → ${JSON.stringify(x.value)}`);
+    const w = r.profileWrite;
+    console.log(`  profile ${w.path} ${w.action}${w.fields.length ? ` (${w.fields.join(", ")})` : ""}`);
+    const split = new Map(r.recipeSplits.map((x) => [x.owned, x.reason]));
+    console.log(`  recipes: ${r.recipes.map((n) => (split.has(n) ? `${n} (${split.get(n)})` : n)).join(", ")}`);
+    if (r.configWrite === "edited") console.log(`  workspace craftar.yaml edited (forge, profile, targets)`);
     for (const w of r.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   });
 
@@ -414,12 +424,6 @@ forge
       warnings.push(
         `${e.key} is now a parameter of ${base.ref} — a workspace that sets overrides.params.${e.key} (craftar.yaml or ` +
           `craftar.local.yaml) now overrides ${base.ref} too; unify cannot reach workspaces`,
-      );
-    }
-    if (result.params.length) {
-      warnings.push(
-        `craftar import does not recognise a templated ingredient yet — re-importing a workspace into this Forge creates a new ` +
-          `variant of ${base.ref} and rewrites profiles/${o.profile}/profile.yaml without ${result.params.map((e) => `params.${e.key}`).join(", ")}`,
       );
     }
     if (variantRemoved) {
