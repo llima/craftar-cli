@@ -33,8 +33,11 @@ export function splitLines(s: string): Split {
  * that is only line endings or a BOM produces no ops other than "same".
  */
 export function diffOps(a: string, b: string): DiffOp[] {
-  const A = splitLines(a).lines;
-  const B = splitLines(b).lines;
+  return lcsOps(splitLines(a).lines, splitLines(b).lines);
+}
+
+/** LCS over two lists of strings, compared exactly; shared by the line diff and the word diff (spec 08 §6.2). */
+export function lcsOps(A: string[], B: string[]): DiffOp[] {
   const n = A.length;
   const m = B.length;
   const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));

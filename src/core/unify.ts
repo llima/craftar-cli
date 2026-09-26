@@ -74,7 +74,7 @@ export async function planFrom(
   await assertTextMergeable(base, variant);
   const files: PlanFile[] = [];
   for (const f of diff.files) {
-    files.push({ file: f.file, hunks: f.hunks.map((h, i) => ({ hunk: i + 1, at: hunkAt(h), take: "keep" as const })) });
+    files.push({ file: f.file, hunks: f.hunks.map((h, i) => ({ hunk: i + 1, at: hunkAt(h), take: "keep" as const, suggestion: h.suggestion })) });
   }
   for (const file of diff.onlyInBase) files.push({ file, onlyIn: "base", take: "keep" });
   for (const file of diff.onlyInVariant) files.push({ file, onlyIn: "variant", take: "keep" });

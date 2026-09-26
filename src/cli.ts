@@ -20,12 +20,12 @@ import {
   type RecipeCascadeResult,
   type WriteJournal,
 } from "./core/unify.js";
-import { UnifyPlanSchema, type IngredientRef, type Take, type UnifyPlan } from "./schema/index.js";
+import { HUNK_CLASSES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type Take, type UnifyPlan } from "./schema/index.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.3.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.4.0");
 
 /* ---------------------------------------------------------------- import */
 program
@@ -164,7 +164,7 @@ const forge = program.command("forge").description("Operate on the Forge itself 
 
 forge
   .command("variants")
-  .description("List ingredients that have variants, nearest first, and variants whose base is missing. Read-only")
+  .description("List ingredients that have variants, nearest first, with hunks counted by suggested class, and variants whose base is missing. Read-only")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
@@ -177,7 +177,7 @@ forge
     if (!groups.length && !orphans.length) return console.log("  no variants");
     for (const g of groups) {
       const count = `${g.variants.length} variant${g.variants.length > 1 ? "s" : ""}`;
-      const detail = g.variants.map((v) => `${v.profile} (${describeDistance(v.distance)})`).join(", ");
+      const detail = g.variants.map((v) => `${v.profile} (${describeDistance(v.distance)})${describeClasses(v.classes)}`).join(", ");
       console.log(`  ${g.base.padEnd(24)} ${count.padEnd(11)} ${detail}`);
     }
     for (const orphan of orphans) {
@@ -192,7 +192,7 @@ forge
 
 forge
   .command("diff")
-  .description("Show the distance and the differences between a base ingredient and each of its variants. Read-only")
+  .description("Show the distance and the differences between a base ingredient and each of its variants, each hunk with a suggested class (evolution, value, block) that never decides anything. Read-only")
   .argument("<type/name>", "base ingredient (rule/workflow)")
   .option("--against <profile>", "only this profile's variant")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
@@ -226,7 +226,7 @@ forge
       for (const file of r.diff.files) {
         console.log(`  ${file.file}`);
         file.hunks.forEach((h, k) => {
-          console.log(`    hunk ${k + 1}  [${h.kind}]  ${hunkAt(h)}`);
+          console.log(`    hunk ${k + 1}  [${h.kind}]  ${hunkAt(h)}  ${describeSuggestion(h.suggestion)}`);
           for (const line of h.a.lines) console.log(pc.red(`      - ${line}`));
           if (h.a.noEofNewline) console.log(pc.red(`      ${NO_EOF_NEWLINE_MARKER}`));
           for (const line of h.b.lines) console.log(pc.green(`      + ${line}`));
@@ -245,7 +245,7 @@ forge
   .requiredOption("--profile <p>", "which variant to resolve")
   .option("--take <side>", "resolve every decision to base or variant")
   .option("--plan <file>", "apply the decisions in this plan file")
-  .option("--save-plan <file>", "write a plan with every decision deferred to a new file outside the Forge, and stop")
+  .option("--save-plan <file>", "write a plan with every decision deferred, each hunk annotated with its suggested class (which --plan ignores), to a new file outside the Forge, and stop")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
@@ -588,6 +588,18 @@ function lateFailure(e: unknown, root: string, journal: WriteJournal): string {
   if (restore.length) lines.push(`  git -C ${quote(root)} checkout -- ${restore.map(quote).join(" ")}`);
   if (created.length) lines.push(`  git -C ${quote(root)} clean -f -- ${created.map(quote).join(" ")}`);
   return lines.join("\n");
+}
+
+/** ` [1 evolution · 2 block]` in the fixed class order, zero counts omitted; empty for a variant without hunks (spec 08 §4.2). */
+function describeClasses(classes: Record<HunkClass, number>): string {
+  const parts = HUNK_CLASSES.filter((c) => classes[c] > 0).map((c) => `${classes[c]} ${c}`);
+  return parts.length ? ` [${parts.join(" · ")}]` : "";
+}
+
+/** `<class>: <reason>`, and ` → <params>` for a value (spec 08 §4.1). */
+function describeSuggestion(s: HunkSuggestion): string {
+  const params = s.tokens?.length ? ` → ${s.tokens.map((t) => t.param).join(", ")}` : "";
+  return `${s.class}: ${s.reason}${params}`;
 }
 
 function describeDistance(d: Distance): string {

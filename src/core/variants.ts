@@ -1,9 +1,10 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { classifyHunk, type ClassifiedHunk } from "./classify.js";
 import { diffLines, splitLines, type Hunk } from "./diff.js";
 import { fingerprintDir } from "./fingerprint.js";
 import { listFiles, type Forge, type LoadedIngredient } from "./forge.js";
-import type { IngredientRef } from "../schema/index.js";
+import type { HunkClass, IngredientRef } from "../schema/index.js";
 
 export interface Distance {
   lines: number;
@@ -17,6 +18,8 @@ export interface VariantEntry {
   ref: IngredientRef;
   profile: string;
   distance: Distance;
+  /** Hunks by suggested class; a file present on one side only counts as one `block` (spec 08 §4.2). */
+  classes: Record<HunkClass, number>;
 }
 
 export interface VariantGroup {
@@ -37,7 +40,7 @@ export interface VariantReport {
 
 export interface FileDiff {
   file: string;
-  hunks: Hunk[];
+  hunks: ClassifiedHunk[];
 }
 
 export interface IngredientDiff {
@@ -75,7 +78,8 @@ export async function diffIngredients(base: LoadedIngredient, variant: LoadedIng
   for (const rel of [...a.keys()].sort()) {
     const other = b.get(rel);
     if (other === undefined) continue;
-    const hunks = diffLines(a.get(rel)!, other);
+    // Classified here and nowhere else, so forge diff, forge variants and --save-plan agree (spec 08 §5.2).
+    const hunks = diffLines(a.get(rel)!, other).map((h) => ({ ...h, suggestion: classifyHunk(h) }));
     if (hunks.length) files.push({ file: rel, hunks });
   }
   return {
@@ -85,7 +89,7 @@ export async function diffIngredients(base: LoadedIngredient, variant: LoadedIng
   };
 }
 
-async function distanceOf(base: LoadedIngredient, variant: LoadedIngredient): Promise<Distance> {
+async function measure(base: LoadedIngredient, variant: LoadedIngredient): Promise<{ distance: Distance; classes: Record<HunkClass, number> }> {
   const d = await diffIngredients(base, variant);
   const baseFiles = await filesOf(base);
   const variantFiles = await filesOf(variant);
@@ -106,11 +110,16 @@ async function distanceOf(base: LoadedIngredient, variant: LoadedIngredient): Pr
   const lines = d.files.reduce((n, f) => n + lineCount(f.hunks), 0) + oneSidedLines;
   const bodyDiffers = hunks > 0;
   const sameFingerprint = (await fingerprintDir(base.dir)) === (await fingerprintDir(variant.dir));
+  const classes: Record<HunkClass, number> = { evolution: 0, value: 0, block: d.onlyInBase.length + d.onlyInVariant.length };
+  for (const f of d.files) for (const h of f.hunks) classes[h.suggestion.class]++;
   return {
-    lines,
-    hunks,
-    sameBodyDifferentMeta: !bodyDiffers && !sameFingerprint,
-    identicalAfterNormalization: !bodyDiffers && sameFingerprint,
+    distance: {
+      lines,
+      hunks,
+      sameBodyDifferentMeta: !bodyDiffers && !sameFingerprint,
+      identicalAfterNormalization: !bodyDiffers && sameFingerprint,
+    },
+    classes,
   };
 }
 
@@ -131,7 +140,7 @@ export async function listVariants(forge: Forge): Promise<VariantReport> {
       orphans.push({ ref: ing.ref, profile, missingBase: baseRef });
       continue;
     }
-    const entry: VariantEntry = { ref: ing.ref, profile, distance: await distanceOf(base, ing) };
+    const entry: VariantEntry = { ref: ing.ref, profile, ...(await measure(base, ing)) };
     groups.set(baseRef, [...(groups.get(baseRef) ?? []), entry]);
   }
   return {

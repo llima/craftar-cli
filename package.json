@@ -1,6 +1,6 @@
 {
   "name": "craftar",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Craft, sync and convert AI-coding workspace harnesses across clients and tools.",
   "license": "MIT",
   "type": "module",

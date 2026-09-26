@@ -7,7 +7,7 @@ import YAML from "yaml";
 import { exists, gitDirty, loadForge, type Forge } from "../src/core/forge.js";
 import { applyPlan, metaDifferences, planFrom, rewriteRecipes, writeUnified } from "../src/core/unify.js";
 import { diffIngredients } from "../src/core/variants.js";
-import { UnifyPlanSchema } from "../src/schema/index.js";
+import { HunkSuggestionSchema, UnifyPlanSchema } from "../src/schema/index.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 
 const execFileP = promisify(execFile);
@@ -75,8 +75,8 @@ function fakeDiff() {
   return {
     files: [
       { file: "rule.md", hunks: [
-        { kind: "inline" as const, a: { start: 2, lines: ["old"] }, b: { start: 2, lines: ["new"] } },
-        { kind: "block" as const, a: { start: 5, lines: [] }, b: { start: 5, lines: ["added"] } },
+        { kind: "inline" as const, a: { start: 2, lines: ["old"] }, b: { start: 2, lines: ["new"] }, suggestion: { class: "evolution" as const, reason: "prose differs" } },
+        { kind: "block" as const, a: { start: 5, lines: [] }, b: { start: 5, lines: ["added"] }, suggestion: { class: "block" as const, reason: "only in the variant" } },
       ] },
     ],
     onlyInBase: ["gone.md"],
@@ -109,6 +109,8 @@ describe("planFrom", () => {
     expect(paired.hunks!.map((h) => h.hunk)).toEqual([1, 2]);
     expect(paired.hunks![0].at).toBe("lines 2–2");
     expect(paired.hunks![1].at).toBe("after line 4");
+    expect(paired.hunks!.map((h) => h.suggestion?.class)).toEqual(["evolution", "block"]);
+    for (const f of plan.files.filter((f) => f.onlyIn)) expect(f).not.toHaveProperty("suggestion");
     expect(plan.files.find((f) => f.file === "gone.md")).toMatchObject({ onlyIn: "base", take: "keep" });
     expect(plan.files.find((f) => f.file === "extra.md")).toMatchObject({ onlyIn: "variant", take: "keep" });
   });
@@ -129,6 +131,21 @@ async function scenario(baseFiles: Record<string, string>, variantFiles: Record<
   const diff = await diffIngredients(base, variant);
   return { base, variant, diff };
 }
+
+describe("applyPlan ignores the suggestion (spec 08 §4.3)", () => {
+  it("gives the same result with the suggestions, without them, and with a mangled one", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "a\nuse acme-api\nc\n" }, { "rule.md": "a\nuse globex-api\nc\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files[0].hunks![0].take = "variant";
+    expect(plan.files[0].hunks![0].suggestion?.class).toBe("value");
+    const stripped = structuredClone(plan);
+    delete stripped.files[0].hunks![0].suggestion;
+    const mangled = UnifyPlanSchema.parse({ ...structuredClone(plan), files: [{ ...plan.files[0], hunks: [{ ...plan.files[0].hunks![0], suggestion: { class: "bogus" } }] }] });
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(await applyPlan(base, variant, diff, stripped)).toEqual(r);
+    expect(await applyPlan(base, variant, diff, mangled)).toEqual(r);
+  });
+});
 
 describe("applyPlan — paired files", () => {
   it("takes the variant's side for a chosen hunk and the base's for the rest", async () => {
@@ -567,5 +584,31 @@ describe("metaDifferences — MCP server key order (spec 07, AC 19)", () => {
       ],
     });
     expect(metaDifferences(forge.ingredients.get("mcp/p")!, forge.ingredients.get("mcp/p--acme")!)).toEqual([]);
+  });
+});
+
+describe("the hunk suggestion in a plan (spec 08 §5.1)", () => {
+  const plan = (hunk: Record<string, unknown>) => ({
+    schema: 1,
+    base: "rule/w",
+    profile: "acme",
+    variant: "rule/w--acme",
+    baseFingerprint: "sha256:a",
+    variantFingerprint: "sha256:b",
+    files: [{ file: "rule.md", hunks: [{ hunk: 1, at: "lines 1–1", take: "keep", ...hunk }] }],
+  });
+  const value = { class: "value", reason: "1 token differs", tokens: [{ a: "acme-api", b: "globex-api", param: "param.acme_api" }] };
+
+  it("accepts the three classes and refuses any other", () => {
+    expect(HunkSuggestionSchema.safeParse(value).success).toBe(true);
+    expect(HunkSuggestionSchema.safeParse({ class: "evolution", reason: "prose differs" }).success).toBe(true);
+    expect(HunkSuggestionSchema.safeParse({ class: "bogus", reason: "x" }).success).toBe(false);
+  });
+
+  it("keeps a valid suggestion, drops a malformed one without failing, and accepts a plan without one", () => {
+    expect(UnifyPlanSchema.parse(plan({ suggestion: value })).files[0].hunks![0].suggestion).toEqual(value);
+    const mangled = UnifyPlanSchema.parse(plan({ suggestion: { class: "bogus" } })).files[0].hunks![0];
+    expect(mangled.suggestion).toBeUndefined();
+    expect(UnifyPlanSchema.parse(plan({})).files[0].hunks![0]).toEqual({ hunk: 1, at: "lines 1–1", take: "keep" });
   });
 });

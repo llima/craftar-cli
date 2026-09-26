@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import { loadForge } from "../src/core/forge.js";
 import { diffIngredients, listVariants, profileOf } from "../src/core/variants.js";
+import { classifyHunk } from "../src/core/classify.js";
 import { makeForge, rule, tmpDir, type ForgeSpec } from "./helpers/forge.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -174,5 +175,30 @@ describe("diffIngredients", () => {
     const forge = await forgeWith([rule("x", "intro\n"), rule("x--acme", "intro\nextra paragraph\n", { as: "x" })]);
     const d = await diffIngredients(forge.ingredients.get("rule/x")!, forge.ingredients.get("rule/x--acme")!);
     expect(d.files[0].hunks.map((h) => h.kind)).toEqual(["block"]);
+  });
+});
+
+describe("hunk classes (spec 08 §4.2, §5.2)", () => {
+  it("classifies every hunk diffIngredients returns", async () => {
+    const forge = await forgeWith([rule("x", "a\nuse acme-api\n"), rule("x--acme", "a\nuse globex-api\nmore\n", { as: "x" })]);
+    const d = await diffIngredients(forge.ingredients.get("rule/x")!, forge.ingredients.get("rule/x--acme")!);
+    for (const f of d.files) for (const h of f.hunks) expect(h.suggestion).toEqual(classifyHunk(h));
+  });
+
+  it("counts the classes per variant, a one-sided file as block, and the counts add up to distance.hunks", async () => {
+    const forge = await forgeWith([
+      { meta: { type: "rule", name: "x" }, files: { "rule.md": "Bump `package.json`.\nshared\nStep 6.\nkeep\n" } },
+      { meta: { type: "rule", name: "x--acme", as: "x" }, files: { "rule.md": "Bump `a.props`.\nshared\nStep 5.\nkeep\nnew\n", "extra.md": "only here\n" } },
+      rule("y", "same\n"),
+      rule("y--acme", "same\n", { as: "y", targets: ["kiro"] }),
+      rule("z", "one\ntwo\n"),
+      rule("z--acme", "one\r\ntwo\r\n", { as: "z" }),
+    ]);
+    const { groups } = await listVariants(forge);
+    const entry = (ref: string) => groups.flatMap((g) => g.variants).find((v) => v.ref === ref)!;
+    expect(entry("rule/x--acme").classes).toEqual({ evolution: 1, value: 1, block: 2 });
+    expect(entry("rule/y--acme").classes).toEqual({ evolution: 0, value: 0, block: 0 });
+    expect(entry("rule/z--acme").classes).toEqual({ evolution: 0, value: 0, block: 0 });
+    for (const v of groups.flatMap((g) => g.variants)) expect(v.classes.evolution + v.classes.value + v.classes.block).toBe(v.distance.hunks);
   });
 });

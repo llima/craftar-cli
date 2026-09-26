@@ -10,6 +10,9 @@ files:
       - hunk: 1
         at: lines 4–4
         take: variant
+        suggestion:
+          class: evolution
+          reason: prose differs
   - file: notes.md
     onlyIn: base
     take: base
