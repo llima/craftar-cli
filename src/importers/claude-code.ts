@@ -69,6 +69,15 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
   return report;
 }
 
+/** One ingredient read from the workspace, not yet decided (spec 10 §3, *Source*). */
+interface Source {
+  meta: Ingredient;
+  files: Record<string, string | Buffer>;
+  scan: Record<string, string>;
+  after: (ref: string) => void;
+  skip?: () => boolean;
+}
+
 async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ report: ImportReport; targets: Target[] }> {
   const ws = path.resolve(opts.workspaceRoot);
   const forge = stage.root;
@@ -83,6 +92,11 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   }
 
   const origin = (rel: string) => ({ workspace: path.basename(ws), path: rel.replace(/\\/g, "/") });
+  // Two passes (spec 10 §6.8): every source is read first, in today's order, then decided in that
+  // order. `after` does the bookkeeping today's code did right after each decision.
+  const queue: Source[] = [];
+  const read = (meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string>, after: (ref: string) => void, skip?: () => boolean) =>
+    queue.push({ meta, files, scan, after, skip });
   const refs = { base: [] as string[], stacks: new Map<string, string[]>(), steering: [] as string[] };
   const ruleNames: string[] = [];
   const scopedRules = new Map<string, string>(); // rule name → fileMatchPattern
@@ -123,11 +137,11 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       tags: [],
       origin: origin(`.claude/rules/${f}`),
     };
-    const ref = await writeIngredient(stage, meta, { "rule.md": text }, opts.profileName, report, scanOf("rule.md", src));
-    if (!ref) continue;
-    ruleNames.push(ref.split("/")[1]);
-    if (meta.inclusion === "fileMatch") scopedRules.set(ref, sm?.fileMatchPattern ?? "");
-    else refs.base.push(ref);
+    read(meta, { "rule.md": text }, scanOf("rule.md", src), (ref) => {
+      ruleNames.push(ref.split("/")[1]);
+      if (meta.inclusion === "fileMatch") scopedRules.set(ref, sm?.fileMatchPattern ?? "");
+      else refs.base.push(ref);
+    });
   }
 
   /* ---- agents ---- */
@@ -150,10 +164,10 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       tags: [],
       origin: origin(`.claude/agents/${f}`),
     };
-    const ref = await writeIngredient(stage, meta, { "agent.md": body }, opts.profileName, report, scanOf("agent.md", src));
-    if (!ref) continue;
-    agentBodies.set(ref, (data.description ?? "") + "\n" + body);
-    refs.base.push(ref);
+    read(meta, { "agent.md": body }, scanOf("agent.md", src), (ref) => {
+      agentBodies.set(ref, (data.description ?? "") + "\n" + body);
+      refs.base.push(ref);
+    });
   }
 
   /* ---- commands ---- */
@@ -174,7 +188,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       tags: [],
       origin: origin(`.claude/commands/${f}`),
     };
-    addRef(refs.base, await writeIngredient(stage, meta, { "command.md": body }, opts.profileName, report, scanOf("command.md", src)));
+    read(meta, { "command.md": body }, scanOf("command.md", src), (ref) => addRef(refs.base, ref));
   }
 
   /* ---- skills ---- */
@@ -198,12 +212,12 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
           continue;
         }
         const meta: Ingredient = { type: "skill", name: e.name, layout: "dir", targets: "*", tags: [], origin: origin(`.claude/skills/${e.name}/`) };
-        addRef(refs.base, await writeIngredient(stage, meta, files, opts.profileName, report, scan));
+        read(meta, files, scan, (ref) => addRef(refs.base, ref));
       } else if (e.name.endsWith(".md")) {
         const src = await readSource(path.join(skillsDir, e.name));
         const text = toLf(stripBom(src.text));
         const meta: Ingredient = { type: "skill", name: e.name.replace(/\.md$/, ""), layout: "file", targets: "*", tags: [], origin: origin(`.claude/skills/${e.name}`) };
-        addRef(refs.base, await writeIngredient(stage, meta, { "SKILL.md": text }, opts.profileName, report, scanOf("SKILL.md", src)));
+        read(meta, { "SKILL.md": text }, scanOf("SKILL.md", src), (ref) => addRef(refs.base, ref));
       }
     }
   }
@@ -224,7 +238,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
         tags: [],
         origin: origin(`.claude/${kind}/${f}`),
       } as Ingredient;
-      addRef(refs.base, await writeIngredient(stage, meta, { [f]: content }, opts.profileName, report, src ? scanOf(f, src) : {}));
+      read(meta, { [f]: content }, src ? scanOf(f, src) : {}, (ref) => addRef(refs.base, ref));
     }
   }
 
@@ -247,16 +261,22 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
         throw new Error(`.mcp.json server "${name}" is not an object — fix the file and re-run import`);
       }
       const meta: Ingredient = { type: "mcp", name, server, targets: "*", tags: [], origin: origin(".mcp.json") };
-      addRef(refs.base, await writeIngredient(stage, meta, {}, opts.profileName, report));
+      read(meta, {}, {}, (ref) => addRef(refs.base, ref));
     }
   }
 
   /* ---- hand-written Kiro steering (no Claude counterpart) ---- */
+  // Whether a steering file is hand-written depends on the rules decided before it, so the check runs at decision time.
   for (const [name, sm] of steeringMeta) {
-    if (ruleNames.includes(name) || sm.generated) continue;
-    if (name === "commands") continue;
     const meta: Ingredient = { type: "steering", name, file: "steering.md", targets: ["kiro"], tags: ["client"], origin: origin(`.kiro/steering/${name}.md`) };
-    addRef(refs.steering, await writeIngredient(stage, meta, { "steering.md": sm.text }, opts.profileName, report, scanOf("steering.md", sm)));
+    read(meta, { "steering.md": sm.text }, scanOf("steering.md", sm), (ref) => addRef(refs.steering, ref), () => ruleNames.includes(name) || sm.generated || name === "commands");
+  }
+
+  /* ---- decide, in read order ---- */
+  for (const src of queue) {
+    if (src.skip?.()) continue;
+    const ref = await writeIngredient(stage, src.meta, src.files, opts.profileName, report, src.scan);
+    if (ref) src.after(ref);
   }
 
   /* ---- recipes ---- */
