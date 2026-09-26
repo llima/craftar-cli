@@ -41,6 +41,8 @@ export interface ImportReport {
   recipeSplits: { shared: string; owned: string; reason: string }[];
   /** What happened to profiles/<p>/profile.yaml. */
   profileWrite: { path: string; action: "created" | "edited" | "unchanged"; fields: string[] };
+  /** What happened to the workspace's craftar.yaml; null without --write-config. */
+  configWrite: "created" | "edited" | "unchanged" | null;
 }
 
 /** Rules that every workspace shares by intent — they seed the `base` recipe. */
@@ -68,20 +70,26 @@ const GENERATED_BANNER = /<!--\s*GENERATED from /;
  */
 export async function importClaudeCode(opts: ImportOptions): Promise<ImportReport> {
   const stage = new ForgeStage(path.resolve(opts.forgeRoot));
-  let planned: { report: ImportReport; targets: Target[] };
+  let planned: { report: ImportReport; targets: Target[]; config: PlannedConfig | null };
   try {
     planned = await planImport(opts, stage);
   } catch (e) {
     throw new Error(`${e instanceof Error ? e.message : String(e)}\nThe Forge was left untouched.`, { cause: e });
   }
   await stage.flush();
-  const { report, targets } = planned;
-  if (opts.writeWorkspaceConfig) {
-    const ws = path.resolve(opts.workspaceRoot);
-    const rel = path.relative(ws, stage.root).replace(/\\/g, "/") || ".";
-    await fs.writeFile(path.join(ws, "craftar.yaml"), YAML.stringify({ forge: rel, profile: opts.profileName, targets }));
-    report.created.push("craftar.yaml (workspace)");
+  const { report, config } = planned;
+  if (config && config.action !== "unchanged") {
+    try {
+      await fs.writeFile(config.abs, config.content);
+    } catch (e) {
+      throw new Error(
+        `The Forge was written in full and the import succeeded; writing craftar.yaml failed (${e instanceof Error ? e.message : String(e)}) — ` +
+          `fix the cause and re-run with --write-config, or edit craftar.yaml by hand.`,
+        { cause: e },
+      );
+    }
   }
+  if (config?.action === "created") report.created.push("craftar.yaml (workspace)");
   return report;
 }
 
@@ -94,12 +102,19 @@ interface Source {
   skip?: () => boolean;
 }
 
-async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ report: ImportReport; targets: Target[] }> {
+interface PlannedConfig {
+  abs: string;
+  content: string;
+  action: "created" | "edited" | "unchanged";
+}
+
+async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ report: ImportReport; targets: Target[]; config: PlannedConfig | null }> {
   const ws = path.resolve(opts.workspaceRoot);
   const forge = stage.root;
   const report: ImportReport = {
     created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [], rendered: [], inferred: [], params: [], recipeSplits: [],
     profileWrite: { path: `profiles/${opts.profileName}/profile.yaml`, action: "unchanged", fields: [] },
+    configWrite: null,
   };
   const claudeDir = path.join(ws, ".claude");
   if (!(await exists(claudeDir))) throw new Error(`${claudeDir} not found — is this a Claude Code workspace?`);
@@ -362,7 +377,9 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     repos: [],
   };
   await writeProfile(stage, forge, opts.profileName, profile, ctx, report);
-  return { report, targets };
+  const config = opts.writeWorkspaceConfig ? await planConfig(ws, forge, opts.profileName, targets) : null;
+  report.configWrite = config?.action ?? null;
+  return { report, targets, config };
 }
 
 /**
@@ -803,4 +820,35 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
     const was = before.params[x.key] === undefined ? "" : ` (was ${JSON.stringify(String(before.params[x.key]))})`;
     report.warnings.push(`profile ${name} now sets ${x.key} to ${JSON.stringify(values[x.key])}${was} — every workspace on ${name} renders it at its next sync; import cannot reach them`);
   }
+}
+
+/**
+ * `--write-config` (spec 10 §6.9, Ruling 8): a new or empty craftar.yaml is written as today; an
+ * existing one is edited in place — `forge`, `profile` and `targets` set, everything else, comments
+ * included, kept. Checked here, before the Forge flush; I9 when it cannot be edited in place.
+ */
+async function planConfig(ws: string, forge: string, profile: string, targets: Target[]): Promise<PlannedConfig> {
+  const abs = path.join(ws, "craftar.yaml");
+  const rel = path.relative(ws, forge).replace(/\\/g, "/") || ".";
+  const fresh = YAML.stringify({ forge: rel, profile, targets });
+  const raw = (await exists(abs)) ? await fs.readFile(abs, "utf8") : null;
+  const before = raw === null ? null : YAML.parse(stripBom(raw));
+  if (raw === null || before === null || before === undefined) return { abs, content: fresh, action: "created" };
+  const i9 = (why: string) => new Error(`import: cannot edit craftar.yaml in place (${why}) — reformat it by hand and re-run`);
+  if (typeof before !== "object" || Array.isArray(before)) throw i9("it is not a YAML mapping");
+  let content: string;
+  try {
+    content = editYamlText(raw, { command: "import", label: "craftar.yaml", keys: [] }, (doc) => {
+      doc.set("forge", rel);
+      doc.set("profile", profile);
+      if (JSON.stringify(before.targets) !== JSON.stringify(targets)) doc.set("targets", targets);
+    });
+  } catch (e) {
+    throw i9((e as Error).message.replace(/^.*in place \((.*)\) — .*$/s, "$1"));
+  }
+  const after = YAML.parse(stripBom(content));
+  if (!isDeepStrictEqual(after, { ...before, forge: rel, profile, targets })) throw i9("the edit does not read back as exactly forge, profile and targets set");
+  const loaded = WorkspaceConfigSchema.safeParse(after);
+  if (!loaded.success) throw i9(`it no longer loads: ${loaded.error.message}`);
+  return { abs, content, action: content === raw ? "unchanged" : "edited" };
 }

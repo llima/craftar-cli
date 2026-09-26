@@ -730,3 +730,47 @@ describe("template-aware import — the profile (spec 10 §6.6, Rulings 2 and 3)
     expect(await snapshot(t.forge)).toEqual(before);
   });
 });
+
+describe("template-aware import — --write-config merges craftar.yaml (spec 10 §6.9, Ruling 8)", () => {
+  const fail = (p: Promise<unknown>) => p.then(() => null, (e: Error) => e);
+  const imp = (t: Awaited<ReturnType<typeof setup>>, ws: string, profile: string) =>
+    importClaudeCode({ workspaceRoot: t.ws(ws), forgeRoot: t.forge, profileName: profile, writeWorkspaceConfig: true });
+
+  it("writes a new craftar.yaml exactly as before", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n" });
+    const r = await imp(t, "a", "a");
+    expect(await fs.readFile(path.join(t.ws("a"), "craftar.yaml"), "utf8")).toBe("forge: ../forge\nprofile: a\ntargets:\n  - claude-code\n");
+    expect(r.configWrite).toBe("created");
+    expect(r.created).toContain("craftar.yaml (workspace)");
+  });
+
+  it("keeps comments, ref, recipes and overrides of an existing craftar.yaml, setting forge, profile and targets", async () => {
+    const t = await setup();
+    const existing = "# acme workspace\nforge: ../old-forge\nref: v1\nprofile: old\nrecipes:\n  add:\n    - extra\noverrides:\n  params:\n    k: v # local value\n  ingredients:\n    disable: []\n";
+    await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n", "craftar.yaml": existing });
+    const r = await imp(t, "a", "a");
+    expect(r.configWrite).toBe("edited");
+    expect(await fs.readFile(path.join(t.ws("a"), "craftar.yaml"), "utf8")).toBe(
+      existing.replace("forge: ../old-forge", "forge: ../forge").replace("profile: old", "profile: a") + "targets:\n  - claude-code\n",
+    );
+  });
+
+  it("I9: a craftar.yaml that does not round-trip fails the whole import with the Forge untouched", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n", "craftar.yaml": "forge: x      # aligned\nprofile: a\n" });
+    const err = await fail(imp(t, "a", "a"));
+    expect(err?.message).toContain("import: cannot edit craftar.yaml in place (it does not round-trip unchanged through the YAML writer) — reformat it by hand and re-run");
+    expect(err?.message).toContain("The Forge was left untouched.");
+    expect(await exists(t.forge)).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a write failure after the flush says the Forge was written", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n", "craftar.yaml": "forge: x\nprofile: a\n" });
+    await fs.chmod(path.join(t.ws("a"), "craftar.yaml"), 0o444);
+    const err = await fail(imp(t, "a", "a"));
+    expect(err?.message).toContain("The Forge was written in full and the import succeeded; writing craftar.yaml failed");
+    expect(await exists(path.join(t.forge, "recipes/base.yaml"))).toBe(true);
+  });
+});
