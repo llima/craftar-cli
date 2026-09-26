@@ -20,6 +20,7 @@ import {
   type RecipeCascadeResult,
   type WriteJournal,
 } from "./core/unify.js";
+import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
 import { HUNK_CLASSES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type Take, type UnifyPlan } from "./schema/index.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -345,12 +346,14 @@ forge
     // Ruling 33, dry pass: every recipe `ingredients` rewrite the cascade will make is checked before
     // the first byte is written, so a refusal (an aliased reference) leaves the Forge untouched.
     const cascadeFiles = result.resolved ? await checkRecipeCascade(f, base.ref, variant.ref) : [];
+    // Spec 09: the Forge-level rows and both YAML edits of a parameter extraction, rendered before any write.
+    const paramWrites = result.params.length ? await checkParamWrites(f, base, variant, o.profile, result.params) : null;
 
     // Ruling 37: "git is the undo" only holds for files git actually has. The whole-repo clean
     // check above cannot see ignored files (a Forge its enclosing repo ignores, an ignored file in
     // a variant) nor untracked ones under `status.showUntrackedFiles=no` — so every path this run
     // will overwrite or delete is checked on its own, before the first write.
-    const mustHold = [base.dir, ...(result.resolved ? [variant.dir, ...cascadeFiles] : [])];
+    const mustHold = [base.dir, ...(result.resolved ? [variant.dir, ...cascadeFiles] : []), ...(paramWrites?.mustHold ?? [])];
     const unheld = await gitUnheld(f.root, mustHold);
     if (unheld.length) {
       // Name every such path (the first few, then a count), so one run shows the whole problem.
@@ -367,7 +370,11 @@ forge
     let cascade: RecipeCascadeResult = { rewritten: [], identicalToSibling: [] };
     let variantRemoved: string | null = null;
     try {
+      // Spec 09 §6.5: declarations, then the template, then the profile's values — each prefix emission-neutral.
+      if (paramWrites?.ingredientYaml) await writeParamFile(paramWrites.ingredientYaml, journal);
       touched = await writeUnified(base, result, journal);
+      if (paramWrites?.ingredientYaml) touched = [...touched, "ingredient.yaml"].sort();
+      if (paramWrites?.profile) await writeParamFile(paramWrites.profile, journal);
       if (result.resolved) {
         cascade = await rewriteRecipes(f, base.ref, variant.ref, o.profile, journal);
         journal.push({ abs: variant.dir, created: false });
@@ -402,6 +409,19 @@ forge
     }
     // Ruling 38: `resolve()` matches overrides.ingredients.disable by ref, so once the variant ref
     // is gone a workspace that disabled it gets the base back, enabled, with no error.
+    // Spec 09 W1, W2: what a parameter extraction cannot check from inside the Forge.
+    for (const e of result.params.filter((p) => !p.reused)) {
+      warnings.push(
+        `${e.key} is now a parameter of ${base.ref} — a workspace that sets overrides.params.${e.key} (craftar.yaml or ` +
+          `craftar.local.yaml) now overrides ${base.ref} too; unify cannot reach workspaces`,
+      );
+    }
+    if (result.params.length) {
+      warnings.push(
+        `craftar import does not recognise a templated ingredient yet — re-importing a workspace into this Forge creates a new ` +
+          `variant of ${base.ref} and rewrites profiles/${o.profile}/profile.yaml without ${result.params.map((e) => `params.${e.key}`).join(", ")}`,
+      );
+    }
     if (variantRemoved) {
       warnings.push(
         `${variant.ref} was removed — a workspace that disables it in overrides.ingredients.disable (craftar.yaml or craftar.local.yaml) ` +
@@ -427,6 +447,8 @@ forge
               identicalToSibling: cascade.identicalToSibling,
             },
             metaDiffers: result.metaDiffers,
+            params: result.params.map((e) => ({ key: e.key, default: e.default, value: e.value })),
+            profileEdited: paramWrites?.profile ? path.relative(f.root, paramWrites.profile.abs).split(path.sep).join("/") : null,
             warnings,
           },
           null,
@@ -436,7 +458,11 @@ forge
     }
 
     console.log(pc.bold(`craftar forge unify ${ref} ↔ ${o.profile}`));
-    for (const p of touched) console.log(`  ${result.write[p] !== undefined ? pc.green("~") : pc.magenta("-")} ${p}`);
+    for (const p of touched) console.log(`  ${result.write[p] !== undefined || p === "ingredient.yaml" ? pc.green("~") : pc.magenta("-")} ${p}`);
+    for (const e of result.params) {
+      console.log(`  param ${e.key} — default ${JSON.stringify(e.default)} (${base.ref}) · ${JSON.stringify(e.value)} (profile ${o.profile})`);
+    }
+    if (paramWrites?.profile) console.log(`  ${pc.green("~")} ${path.relative(f.root, paramWrites.profile.abs).split(path.sep).join("/")}`);
     console.log(`  resolved ${result.resolved ? pc.green("yes") : pc.yellow("no")} · unresolved ${result.unresolved}`);
     if (variantRemoved) console.log(`  ${pc.magenta("removed variant")} ${variantRemoved}`);
     if (cascade.rewritten.length) console.log(`  recipes rewritten: ${cascade.rewritten.join(", ")}`);

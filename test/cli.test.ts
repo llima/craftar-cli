@@ -761,6 +761,9 @@ describe("cli", () => {
       // Ruling 42: the cascade reports `rewritten` and `identicalToSibling`, and nothing else.
       recipes: { rewritten: ["base"], identicalToSibling: [] },
       metaDiffers: [],
+      // Spec 09 §4.5: always present, [] / null when the plan extracts nothing.
+      params: [],
+      profileEdited: null,
       // Ruling 38: a removed variant always warns about overrides.ingredients.disable.
       warnings: [
         "rule/wf--acme was removed — a workspace that disables it in overrides.ingredients.disable (craftar.yaml or craftar.local.yaml) " +
@@ -1523,5 +1526,87 @@ describe("cli — suggested hunk classes (spec 08)", () => {
     }
     expect(results.mangled).toEqual(results.edited);
     expect(results.removed).toEqual(results.edited);
+  });
+});
+
+describe("cli — forge unify take: param (spec 09)", () => {
+  async function paramForge(extra: Record<string, string> = {}): Promise<string> {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [rule("deploy", "use globex-api\nshared\nport 8080\n"), rule("deploy--acme", "use acme-api\nshared\nport 9090\n", { as: "deploy" })],
+      recipes: [recipe("base", ["rule/deploy"]), recipe("base--acme", ["rule/deploy--acme"])],
+      profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"])],
+    });
+    await writeFiles(root, extra);
+    gitInit(root);
+    gitCommitAll(root, "init");
+    return root;
+  }
+  async function savedPlan(root: string, edit: (plan: any) => void): Promise<string> {
+    const dir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    const planPath = path.join(dir, "plan.yaml");
+    expect(runCli(["forge", "unify", "rule/deploy", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+    const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+    edit(plan);
+    const edited = path.join(dir, "edited.yaml");
+    await fs.writeFile(edited, YAML.stringify(plan));
+    return edited;
+  }
+  const asParams = (plan: any, keys: string[]) =>
+    plan.files[0].hunks.forEach((h: any, i: number) => Object.assign(h, { take: "param", params: [{ ...h.params[0], key: keys[i] }] }));
+
+  it("saves pre-filled params, applies an edited plan, and writes the base, its declarations and the profile", async () => {
+    const root = await paramForge();
+    const planPath = await savedPlan(root, (plan) => {
+      expect(plan.files[0].hunks.map((h: any) => h.params)).toEqual([[{ token: "globex-api", key: "param.globex_api" }], [{ token: "8080", key: "param.8080" }]]);
+      asParams(plan, ["deploy.api", "deploy.port"]);
+    });
+    const r = runCli(["forge", "unify", "rule/deploy", "--profile", "acme", "--plan", planPath, "--forge", root, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.params).toEqual([
+      { key: "deploy.api", default: "globex-api", value: "acme-api" },
+      { key: "deploy.port", default: "8080", value: "9090" },
+    ]);
+    expect(out.profileEdited).toBe("profiles/acme/profile.yaml");
+    expect(out.variantRemoved).toBe("rule/deploy--acme");
+    expect(out.warnings.join("\n")).toContain("deploy.api is now a parameter of rule/deploy");
+    expect(out.warnings.join("\n")).toContain("craftar import does not recognise a templated ingredient yet");
+    expect(await fs.readFile(path.join(root, "ingredients/rules/deploy/rule.md"), "utf8")).toBe("use {{deploy.api}}\nshared\nport {{deploy.port}}\n");
+    expect(YAML.parse(await fs.readFile(path.join(root, "ingredients/rules/deploy/ingredient.yaml"), "utf8")).params).toEqual({
+      "deploy.api": { default: "globex-api" },
+      "deploy.port": { default: "8080" },
+    });
+    expect(YAML.parse(await fs.readFile(path.join(root, "profiles/acme/profile.yaml"), "utf8")).params).toEqual({ "deploy.api": "acme-api", "deploy.port": "9090" });
+  });
+
+  it("prints the param and profile lines in text mode", async () => {
+    const root = await paramForge();
+    const planPath = await savedPlan(root, (plan) => asParams(plan, ["deploy.api", "deploy.port"]));
+    const r = runCli(["forge", "unify", "rule/deploy", "--profile", "acme", "--plan", planPath, "--forge", root]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('param deploy.api — default "globex-api" (rule/deploy) · "acme-api" (profile acme)');
+    expect(r.stdout).toContain("~ ingredient.yaml");
+    expect(r.stdout).toContain("~ profiles/acme/profile.yaml");
+  });
+
+  it("a Forge-level refusal writes nothing", async () => {
+    const root = await paramForge({ "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\nparams:\n  deploy.api: other\n" });
+    const planPath = await savedPlan(root, (plan) => asParams(plan, ["deploy.api", "deploy.port"]));
+    const r = runCli(["forge", "unify", "rule/deploy", "--profile", "acme", "--plan", planPath, "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("profile acme already sets deploy.api");
+    expect(gitStatus(root)).toBe("");
+  });
+
+  it("refuses when the profile it would edit is not held by git", async () => {
+    const root = await paramForge();
+    const planPath = await savedPlan(root, (plan) => asParams(plan, ["deploy.api", "deploy.port"]));
+    execFileSync("git", ["-C", root, "update-index", "--skip-worktree", "profiles/acme/profile.yaml"]);
+    const r = runCli(["forge", "unify", "rule/deploy", "--profile", "acme", "--plan", planPath, "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("profile.yaml is not held by git");
   });
 });
