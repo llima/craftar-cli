@@ -241,12 +241,12 @@ forge
 
 forge
   .command("unify")
-  .description("Resolve one variant back into its base through a reviewable plan. Writes to the Forge")
+  .description("Resolve one variant back into its base through a reviewable plan, taking each hunk from a side or turning it into a {{param}}. Writes to the Forge")
   .argument("<type/name>", "base ingredient (rule/workflow)")
   .requiredOption("--profile <p>", "which variant to resolve")
   .option("--take <side>", "resolve every decision to base or variant")
-  .option("--plan <file>", "apply the decisions in this plan file")
-  .option("--save-plan <file>", "write a plan with every decision deferred, each hunk annotated with its suggested class (which --plan ignores), to a new file outside the Forge, and stop")
+  .option("--plan <file>", "apply the decisions in this plan file (a hunk may be take: param with its params list)")
+  .option("--save-plan <file>", "write a plan with every decision deferred, each hunk annotated with its suggested class (which --plan ignores) and value hunks pre-filled with params, to a new file outside the Forge, and stop")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
