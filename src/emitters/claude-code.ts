@@ -73,7 +73,8 @@ export const claudeCode: Emitter = {
   },
 };
 
-const TEXT_EXT = /\.(md|txt|json|ya?ml|ps1|py|sh|js|ts|cjs|mjs|toml|xml|csv)$/i;
+/** Files claude-code emits as text, through `ctx.text` (substituted); anything else is copied as raw bytes. */
+export const TEXT_EXT = /\.(md|txt|json|ya?ml|ps1|py|sh|js|ts|cjs|mjs|toml|xml|csv)$/i;
 
 async function anyFile(ctx: EmitContext, ing: Parameters<EmitContext["text"]>[0], file: string, relPath: string, target: PlannedFile["target"]): Promise<PlannedFile> {
   if (TEXT_EXT.test(file)) return textFile(ctx, relPath, await ctx.text(ing, file), target, ing.ref);

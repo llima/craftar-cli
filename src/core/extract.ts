@@ -1,5 +1,7 @@
 import type { Ingredient, PlanParam } from "../schema/index.js";
 import { changedRegions } from "./classify.js";
+import { TEXT_EXT } from "../emitters/claude-code.js";
+import { KIRO_TEXT_EXT } from "../emitters/kiro.js";
 import type { Hunk } from "./diff.js";
 import { stripBom, toLf } from "./text.js";
 
@@ -37,11 +39,11 @@ export function substitutedFile(meta: Ingredient, file: string): boolean {
     case "command":
     case "steering":
     case "skill":
-      if (meta.type === "skill" && meta.layout === "dir") return /\.(md|txt|json|ya?ml)$/i.test(file); // kiro's narrower set
+      if (meta.type === "skill" && meta.layout === "dir") return KIRO_TEXT_EXT.test(file) && TEXT_EXT.test(file); // both emit skill dirs
       return true;
     case "script":
     case "hook":
-      return /\.(md|txt|json|ya?ml|ps1|py|sh|js|ts|cjs|mjs|toml|xml|csv)$/i.test(file); // claude-code's TEXT_EXT
+      return TEXT_EXT.test(file); // kiro emits neither type
     case "mcp":
       return false;
   }
@@ -123,6 +125,8 @@ export function deriveHunk(
       out = out.slice(0, r.a.start) + `{{${entry.key}}}` + out.slice(r.a.end);
     }
     // Whitespace runs compare equal in the word diff, so padding that differs is no region;
+    // A reused key keeps `{{key}}` on the base side, so only the value side is rendered here;
+    // the file-level `prove` still checks both sides.
     // rendering the line back is what catches it, with a message a human can act on (P6).
     const render = (field: "default" | "value") => substituteKeys(out, new Map(linePairs.map((p) => [p.key, p[field]])));
     if (render("value") !== bLine || (!linePairs.some((p) => p.reused) && render("default") !== aLine)) {

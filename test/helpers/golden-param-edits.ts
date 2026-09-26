@@ -11,7 +11,6 @@ export const RENAME: Record<string, string> = {
 };
 
 // A plan is parsed YAML here, typed loosely on purpose: this is test data, not the engine.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function asParamPlan(plan: any): any {
   for (const f of plan.files) {
     for (const h of f.hunks ?? []) {
