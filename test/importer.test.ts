@@ -471,8 +471,8 @@ describe("import --from claude-code — end to end with sync (spec 07 §9.1)", (
   });
 });
 
-describe("import over a templated base — known limitation (spec 09 §9)", () => {
-  it("re-importing a workspace whose text the base now renders through a default creates a variant", async () => {
+describe("import over a templated base (spec 09 §9, resolved by spec 10)", () => {
+  it("re-importing a workspace whose text the base renders through a default reuses the base", async () => {
     const t = await setup();
     await writeFiles(t.ws("a"), { ".claude/rules/deploy.md": "use globex-api\n" });
     await importInto(t.forge, t.ws("a"), "a");
@@ -481,7 +481,139 @@ describe("import over a templated base — known limitation (spec 09 §9)", () =
     const meta = path.join(t.forge, "ingredients/rules/deploy/ingredient.yaml");
     await fs.writeFile(meta, (await fs.readFile(meta, "utf8")) + "params:\n  deploy.api:\n    default: globex-api\n");
     const again = await importInto(t.forge, t.ws("a"), "a");
-    // Pinned so the day import becomes template-aware (the next slice) this test says so.
-    expect(again.variants.map((v) => v.name)).toEqual(["rule/deploy--a"]);
+    // Spec 10 flipped this pin: the base renders the workspace text through its default, so it is reused.
+    expect(again.variants).toEqual([]);
+    expect(again.reused).toContain("rule/deploy");
+    expect(again.rendered).toEqual([{ name: "rule/deploy", keys: ["deploy.api"] }]);
+  });
+});
+
+describe("template-aware import — decisions (spec 10 §6.1–§6.5)", () => {
+  const fail = (p: Promise<unknown>) => p.then(() => null, (e: Error) => e);
+  /** A Forge whose rule/<name> holds `template` and declares `params` with those defaults, imported first from workspace `a`. */
+  async function templated(t: Awaited<ReturnType<typeof setup>>, rules: Record<string, { template: string; params: Record<string, string>; literal: string }>) {
+    const files: Record<string, string> = {};
+    for (const [n, r] of Object.entries(rules)) files[`.claude/rules/${n}.md`] = r.literal;
+    await writeFiles(t.ws("a"), files);
+    await importInto(t.forge, t.ws("a"), "a");
+    for (const [n, r] of Object.entries(rules)) {
+      await fs.writeFile(path.join(t.forge, `ingredients/rules/${n}/rule.md`), r.template);
+      const meta = path.join(t.forge, `ingredients/rules/${n}/ingredient.yaml`);
+      const decl = Object.entries(r.params).map(([k, v]) => `  ${k}:\n    default: ${v}\n`).join("");
+      await fs.writeFile(meta, (await fs.readFile(meta, "utf8")) + `params:\n${decl}`);
+    }
+  }
+  const deploy = { template: "use {{deploy.api}} here\n", params: { "deploy.api": "globex-api" }, literal: "use globex-api here\n" };
+
+  it("infers a new client's value and reuses the base", async () => {
+    const t = await setup();
+    await templated(t, { deploy });
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "use initech-api here\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.variants).toEqual([]);
+    expect(r.inferred).toEqual([{ name: "rule/deploy", values: { "deploy.api": "initech-api" } }]);
+    expect(r.params).toEqual([{ key: "deploy.api", old: null, value: "initech-api", from: "rule/deploy" }]);
+  });
+
+  it("proves but does not record a value equal to the declared default", async () => {
+    const t = await setup();
+    await templated(t, { deploy });
+    await writeFiles(t.ws("c"), { ".claude/rules/deploy.md": "use globex-api here\n" });
+    const r = await importInto(t.forge, t.ws("c"), "c");
+    expect(r.reused).toContain("rule/deploy");
+    expect(r.params).toEqual([]);
+  });
+
+  it("falls back to a variant, naming why, when the prose around the value changed (F5) or the split is ambiguous (F6)", async () => {
+    const t = await setup();
+    await templated(t, { deploy, pair: { template: "use {{a}} and {{b}}\n", params: { a: "x", b: "y" }, literal: "use x and y\n" } });
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "ship initech-api here\n", ".claude/rules/pair.md": "use p and q and r\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.variants.map((v) => v.reason)).toEqual([
+      "differs from rule/deploy already in the Forge (the template does not match line 1 of rule.md)",
+      "differs from rule/pair already in the Forge (inference ambiguous on line 1 of rule.md)",
+    ]);
+  });
+
+  it("one key, one value per run: the later source becomes a variant (F8, Ruling 5)", async () => {
+    const t = await setup();
+    await templated(t, { deploy, notes: { template: "see {{deploy.api}} docs\n", params: { "deploy.api": "globex-api" }, literal: "see globex-api docs\n" } });
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "use initech-api here\n", ".claude/rules/notes.md": "see umbrella-api docs\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.reused).toContain("rule/deploy");
+    expect(r.variants).toEqual([{ name: "rule/notes--b", reason: 'differs from rule/notes already in the Forge (deploy.api is "initech-api" in this import; rule/notes implies "umbrella-api")' }]);
+  });
+
+  it("refuses a profile change another Forge ingredient would feel (F9, §6.5 (b))", async () => {
+    const t = await setup();
+    await templated(t, { deploy });
+    await writeFiles(path.join(t.forge, "ingredients/rules/deploy-notes"), { "ingredient.yaml": "type: rule\nname: deploy-notes\n", "rule.md": "see {{deploy.api}}\n" });
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "use initech-api here\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.variants[0].reason).toContain("setting deploy.api would change rule/deploy-notes");
+    expect(r.params).toEqual([]);
+  });
+
+  it("refuses a profile change another source of the run cites literally (F9, §6.5 (c))", async () => {
+    const t = await setup();
+    await templated(t, { deploy });
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "use initech-api here\n", ".claude/rules/zeta.md": "raw {{deploy.api}}\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.variants[0].reason).toContain("setting deploy.api would change rule/zeta");
+  });
+
+  it("G1: a recipe default for a cited key means a literal comparison and a warning", async () => {
+    const t = await setup();
+    await templated(t, { deploy });
+    const base = path.join(t.forge, "recipes/base.yaml");
+    await fs.writeFile(base, (await fs.readFile(base, "utf8")).replace("params: {}", "params:\n  deploy.api:\n    default: recipe-api"));
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "use initech-api here\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.warnings).toContain("rule/deploy cites {{deploy.api}}, which recipe base defaults — compared literally");
+    expect(r.variants.map((v) => v.name)).toEqual(["rule/deploy--b"]);
+  });
+
+  it("a workspace override renders and is never inferred into the profile", async () => {
+    const t = await setup();
+    await templated(t, { deploy });
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "use local-api here\n", "craftar.local.yaml": "overrides:\n  params:\n    deploy.api: local-api\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.reused).toContain("rule/deploy");
+    expect(r.rendered).toEqual([{ name: "rule/deploy", keys: ["deploy.api"] }]);
+    expect(r.params).toEqual([]);
+  });
+
+  it("I3, I4, I5, I6: refusals leave the Forge untouched", async () => {
+    const t = await setup();
+    await templated(t, { deploy });
+    const profileA = path.join(t.forge, "profiles/a/profile.yaml");
+    await fs.writeFile(profileA, (await fs.readFile(profileA, "utf8")).replace("params: {}", "params:\n  deploy.api: acme-api"));
+    const before = await snapshot(t.forge);
+
+    await writeFiles(t.ws("i3"), { ".claude/rules/deploy.md": "use acme-api here\n", ".claude/rules/fresh.md": "raw {{deploy.api}}\n" });
+    expect((await fail(importInto(t.forge, t.ws("i3"), "a")))?.message).toContain("import: .claude/rules/fresh.md holds {{deploy.api}} literally, but profile a sets deploy.api");
+
+    await writeFiles(t.ws("i6"), { ".claude/rules/deploy.md": "use x here\n", "craftar.yaml": "forge: ../forge\nprofile: z\noverrides:\n  params: [1]\n" });
+    expect((await fail(importInto(t.forge, t.ws("i6"), "z")))?.message).toContain("import: craftar.yaml does not load");
+    expect(await snapshot(t.forge)).toEqual(before);
+
+    await fs.mkdir(path.join(t.forge, "profiles/elsewhere"), { recursive: true });
+    await fs.writeFile(path.join(t.forge, "profiles/elsewhere/profile.yaml"), "name: q\n");
+    await writeFiles(t.ws("i4"), { ".claude/rules/deploy.md": "use x here\n" });
+    expect((await fail(importInto(t.forge, t.ws("i4"), "q")))?.message).toContain("import: profile q is profiles/elsewhere/profile.yaml");
+
+    await fs.writeFile(path.join(t.forge, "recipes/broken.yaml"), "name: [\n");
+    expect((await fail(importInto(t.forge, t.ws("i4"), "z")))?.message).toContain("import: the Forge does not load");
+  });
+
+  it("I8: a variant another profile resolves is not rewritten", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/deploy.md": "one\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "two\n" });
+    await importInto(t.forge, t.ws("b"), "b");
+    await fs.writeFile(path.join(t.forge, "profiles/a/profile.yaml"), "name: a\nrecipes:\n  - base--b\n");
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "three\n" });
+    expect((await fail(importInto(t.forge, t.ws("b"), "b")))?.message).toContain("import: rule/deploy--b is also used by profile a — its files would change there");
   });
 });

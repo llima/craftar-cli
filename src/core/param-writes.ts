@@ -55,7 +55,7 @@ async function findProfileFile(root: string, name: string): Promise<string | nul
 }
 
 /** The ingredient refs a profile resolves inside the Forge, with no workspace layer (the part decidable here). */
-function resolvedBy(forge: Forge, profile: string): Set<string> {
+export function resolvedBy(forge: Forge, profile: string): Set<string> {
   const r = resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile }));
   return new Set(r.ingredients.map((i) => i.ref));
 }

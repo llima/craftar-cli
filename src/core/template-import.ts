@@ -25,7 +25,7 @@ export function renderMap(meta: Ingredient, profileParams: Record<string, unknow
 }
 
 /** An ingredient directory as the comparison sees it: its validated metadata and its files, admitted ones as normalized text. */
-export async function readBase(dir: string, io: DirReader): Promise<{ meta: Ingredient; texts: Map<string, string>; bytes: Map<string, Buffer> }> {
+export async function readBase(dir: string, io: DirReader): Promise<{ meta: Ingredient; texts: Map<string, string>; bytes: Map<string, Buffer>; metaFile: string }> {
   const metaFile = path.join(dir, "ingredient.yaml");
   const meta = parseYaml(metaFile, await io.readText(metaFile), IngredientSchema);
   const texts = new Map<string, string>();
@@ -35,7 +35,7 @@ export async function readBase(dir: string, io: DirReader): Promise<{ meta: Ingr
     if (substitutedFile(meta, rel)) texts.set(rel, norm(await io.readText(path.join(dir, rel))));
     else bytes.set(rel, await io.readBytes(path.join(dir, rel)));
   }
-  return { meta, texts, bytes };
+  return { meta, texts, bytes, metaFile };
 }
 
 /** The keys every admitted file of a base cites (`C(X)`). */
@@ -56,7 +56,12 @@ export function renderedFingerprint(base: Awaited<ReturnType<typeof readBase>>, 
   const files: Record<string, string | Buffer> = {};
   for (const [rel, text] of base.texts) files[rel] = substitute(text, map);
   for (const [rel, b] of base.bytes) files[rel] = b;
-  return fingerprintOf(meta as Ingredient, files);
+  try {
+    return fingerprintOf(meta as Ingredient, files);
+  } catch (e) {
+    // Named the way fingerprintDir names it: a cyclic alias is a fact about this file.
+    throw new Error(`invalid ${path.relative(process.cwd(), base.metaFile)}: ${(e as Error).message}`);
+  }
 }
 
 export type Inference =

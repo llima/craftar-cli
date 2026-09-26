@@ -7,6 +7,9 @@ import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../cor
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
 import { IngredientSchema, type Ingredient, type McpServer, type Profile, type Recipe, type Target } from "../schema/index.js";
+import { resolvedBy } from "../core/param-writes.js";
+import { decide, forgeBefore, pin, sourceKeys, workspaceParams, type RunContext } from "./decide.js";
+import { renderMap } from "../core/template-import.js";
 
 export interface ImportOptions {
   workspaceRoot: string;
@@ -25,6 +28,12 @@ export interface ImportReport {
   recipes: string[];
   profile: string;
   warnings: string[];
+  /** Reused because the render matched and used at least one value (spec 10 §6.2). */
+  rendered: { name: string; keys: string[] }[];
+  /** Reused through an inference: every hole's proved value (spec 10 §6.3). */
+  inferred: { name: string; values: Record<string, string> }[];
+  /** The profile change, in the order it was accepted; `old` is null for an added key. */
+  params: { key: string; old: string | null; value: string; from: string }[];
 }
 
 /** Rules that every workspace shares by intent — they seed the `base` recipe. */
@@ -81,11 +90,14 @@ interface Source {
 async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ report: ImportReport; targets: Target[] }> {
   const ws = path.resolve(opts.workspaceRoot);
   const forge = stage.root;
-  const report: ImportReport = { created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [] };
+  const report: ImportReport = {
+    created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [], rendered: [], inferred: [], params: [],
+  };
   const claudeDir = path.join(ws, ".claude");
   if (!(await exists(claudeDir))) throw new Error(`${claudeDir} not found — is this a Claude Code workspace?`);
 
   const manifest = path.join(forge, FORGE_MANIFEST);
+  const manifestOnDisk = manifest;
   if (!(await stage.exists(manifest))) {
     stage.write(manifest, YAML.stringify({ name: path.basename(forge), schema: 1, description: "Craftar Forge — shared harness ingredients, recipes and client profiles." }));
     report.created.push(FORGE_MANIFEST);
@@ -272,11 +284,30 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     read(meta, { "steering.md": sm.text }, scanOf("steering.md", sm), (ref) => addRef(refs.steering, ref), () => ruleNames.includes(name) || sm.generated || name === "commands");
   }
 
+  /* ---- what the importing profile renders (spec 10 §6.1, §6.8 step 2) ---- */
+  const loaded = await forgeBefore(forge, manifestOnDisk);
+  const ctx: RunContext = {
+    P: Object.assign(Object.create(null), await existingProfileParams(forge, opts.profileName, loaded)),
+    W: await workspaceParams(ws, (abs) => fs.readFile(abs, "utf8")),
+    pinned: new Map(),
+    forge: loaded,
+  };
+  const runBases = new Set(queue.map((q) => `${q.meta.type}/${q.meta.name}`));
+  const literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer> }> = [];
+
   /* ---- decide, in read order ---- */
   for (const src of queue) {
     if (src.skip?.()) continue;
-    const ref = await writeIngredient(stage, src.meta, src.files, opts.profileName, report, src.scan);
+    const others = queue.filter((q) => q !== src).map((q) => ({ ref: `${q.meta.type}/${q.meta.name}`, meta: q.meta, files: q.files }));
+    const ref = await writeIngredient(stage, src.meta, src.files, opts.profileName, report, src.scan, { ctx, others, runBases, literal });
     if (ref) src.after(ref);
+  }
+
+  // I3: a created or variant ingredient is the workspace text itself; a key the profile now sets would change it at sync.
+  for (const l of literal) {
+    const map = renderMap(l.meta, ctx.P, ctx.W);
+    const key = [...sourceKeys(l.meta, l.files)].find((k) => Object.hasOwn(map, k));
+    if (key) throw new Error(`import: ${l.source} holds {{${key}}} literally, but profile ${opts.profileName} sets ${key} — sync would render it`);
   }
 
   /* ---- recipes ---- */
@@ -514,6 +545,7 @@ async function writeIngredient(
   profile: string,
   report: ImportReport,
   scan: Record<string, string> = {},
+  run?: { ctx: RunContext; others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>; runBases: Set<string>; literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer> }> },
 ): Promise<string | null> {
   const secret = secretIn(meta, files, scan);
   if (secret) {
@@ -527,20 +559,47 @@ async function writeIngredient(
   // Hash what the Forge will load back, the way fingerprintDir hashes the other side.
   const fingerprint = fingerprintOf(validateImported(meta), files);
 
+  const ref = `${meta.type}/${name}`;
+  const source = meta.origin?.path ?? ref;
+  const sourceMeta = validateImported(meta);
   if (await stage.exists(path.join(dir, "ingredient.yaml"))) {
-    const existing = await fingerprintDir(dir, stage.reader());
-    if (existing === fingerprint) {
-      report.reused.push(`${meta.type}/${name}`);
-      return `${meta.type}/${name}`;
+    let why: string | undefined;
+    const d = run ? await decide(run.ctx, dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases) : { kind: "literal" as const, warn: "" };
+    if (d.kind === "literal") {
+      if (d.warn) report.warnings.push(d.warn);
+      if ((await fingerprintDir(dir, stage.reader())) === fingerprint) {
+        report.reused.push(ref);
+        return ref;
+      }
+    } else if (d.kind === "reuse") {
+      report.reused.push(ref);
+      if (d.rendered) report.rendered.push({ name: ref, keys: d.rendered });
+      if (d.inferred) report.inferred.push({ name: ref, values: d.inferred });
+      for (const x of d.delta ?? []) report.params.push({ ...x, from: ref });
+      return ref;
+    } else {
+      why = d.why;
     }
     const as = meta.name;
     name = `${meta.name}--${profile}`;
     dir = path.join(forge, "ingredients", folder, name);
-    report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge` });
+    report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge${why ? ` (${why})` : ""}` });
     meta = { ...meta, name, as } as Ingredient;
     validateImported(meta); // the variant name must be slug-like too (a `--profile` with a space is not)
+    // I8: rewriting an existing variant another profile resolves would change its files there.
+    if (run?.ctx.forge && (await stage.exists(path.join(dir, "ingredient.yaml"))) && (await fingerprintDir(dir, stage.reader())) !== fingerprintOf(validateImported(meta), files)) {
+      for (const q of run.ctx.forge.profiles.keys()) {
+        if (q !== profile && resolvedBy(run.ctx.forge, q).has(`${meta.type}/${name}`)) {
+          throw new Error(`import: ${meta.type}/${name} is also used by profile ${q} — its files would change there`);
+        }
+      }
+    }
   } else {
     report.created.push(`${meta.type}/${name}`);
+  }
+  if (run) {
+    pin(run.ctx, sourceKeys(sourceMeta, files), renderMap(sourceMeta, run.ctx.P, run.ctx.W));
+    run.literal.push({ ref: `${meta.type}/${name}`, source, meta: sourceMeta, files });
   }
 
   const yamlMeta: Record<string, unknown> = { ...meta };
@@ -571,4 +630,24 @@ async function writeRecipe(stage: ForgeStage, dir: string, recipe: Recipe, repor
   }
   stage.write(file, YAML.stringify(clean));
   report.recipes.push(recipe.name);
+}
+
+/**
+ * The importing profile's params before the run (`P`, spec 10 §6.1), and I4: import writes
+ * `profiles/<p>/profile.yaml`, so a profile named `<p>` elsewhere, or that file naming another
+ * profile, would leave two files for one name.
+ */
+async function existingProfileParams(forge: string, profile: string, loaded: import("../core/forge.js").Forge | null): Promise<Record<string, unknown>> {
+  if (!loaded) return {};
+  const dir = path.join(forge, "profiles");
+  for (const d of (await exists(dir)) ? await fs.readdir(dir, { withFileTypes: true }) : []) {
+    if (!d.isDirectory()) continue;
+    const abs = path.join(dir, d.name, "profile.yaml");
+    if (!(await exists(abs))) continue;
+    const name = (YAML.parse(stripBom(await fs.readFile(abs, "utf8"))) ?? {}).name;
+    if ((name === profile) !== (d.name === profile)) {
+      throw new Error(`import: profile ${profile} is profiles/${d.name}/profile.yaml — import writes profiles/${profile}/profile.yaml`);
+    }
+  }
+  return { ...(loaded.profiles.get(profile)?.params ?? {}) };
 }
