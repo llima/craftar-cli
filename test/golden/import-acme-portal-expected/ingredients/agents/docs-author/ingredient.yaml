@@ -1,0 +1,20 @@
+type: agent
+name: docs-author
+description: Keeps docs/specs/<repo>/ in step with what shipped. Does not review code quality.
+tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
+  - Edit
+  - Write
+file: agent.md
+frontmatterRaw: |-
+  name: docs-author
+  description: Keeps docs/specs/<repo>/ in step with what shipped. Does not review code quality.
+  tools: Read, Grep, Glob, Bash, Edit, Write
+targets: "*"
+tags: []
+origin:
+  workspace: acme-portal
+  path: .claude/agents/docs-author.md

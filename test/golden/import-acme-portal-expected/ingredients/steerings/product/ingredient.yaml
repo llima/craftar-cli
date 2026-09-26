@@ -1,0 +1,10 @@
+type: steering
+name: product
+file: steering.md
+targets:
+  - kiro
+tags:
+  - client
+origin:
+  workspace: acme-portal
+  path: .kiro/steering/product.md

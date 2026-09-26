@@ -1,0 +1,10 @@
+type: rule
+name: backend-node
+inclusion: fileMatch
+fileMatchPattern: projects/acme-api/**
+file: rule.md
+targets: "*"
+tags: []
+origin:
+  workspace: acme-portal
+  path: .claude/rules/backend-node.md

@@ -1,0 +1,13 @@
+name: base
+description: Always-on conventions, commands, agents, scripts and MCP servers.
+extends: []
+ingredients:
+  - rule/commit-conventions
+  - rule/workflow
+  - agent/docs-author
+  - agent/release-helper
+  - command/commit-push
+  - skill/spec-driven
+  - script/check-branch
+  - mcp/playwright
+params: {}

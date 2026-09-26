@@ -1,0 +1,6 @@
+name: acme-portal-steering
+description: Hand-written Kiro steering specific to acme-portal.
+extends: []
+ingredients:
+  - steering/product
+params: {}

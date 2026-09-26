@@ -1,0 +1,15 @@
+type: command
+name: commit-push
+description: Commit and push a project repo's local work to its feature branch. No review, no PR.
+argumentHint: "[project-name]"
+allowedTools: Bash(git:*)
+file: command.md
+frontmatterRaw: |-
+  description: Commit and push a project repo's local work to its feature branch. No review, no PR.
+  argument-hint: [project-name]
+  allowed-tools: Bash(git:*)
+targets: "*"
+tags: []
+origin:
+  workspace: acme-portal
+  path: .claude/commands/commit-push.md

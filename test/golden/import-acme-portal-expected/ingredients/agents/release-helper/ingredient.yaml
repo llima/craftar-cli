@@ -1,0 +1,17 @@
+type: agent
+name: release-helper
+description: Drafts release notes from the merged range and delegates checks to sub-agents.
+tools:
+  - Read
+  - Bash
+  - Task
+file: agent.md
+frontmatterRaw: |-
+  name: release-helper
+  description: Drafts release notes from the merged range and delegates checks to sub-agents.
+  tools: Read, Bash, Task
+targets: "*"
+tags: []
+origin:
+  workspace: acme-portal
+  path: .claude/agents/release-helper.md
