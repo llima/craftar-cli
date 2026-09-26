@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { loadForge, exists, type Forge } from "./forge.js";
-import { resolve, substitute, type Resolution, type ResolvedIngredient } from "./resolve.js";
+import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFor } from "./resolve.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
 import { LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { claudeCode } from "../emitters/claude-code.js";
@@ -98,7 +98,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
     async text(ing: ResolvedIngredient, file: string) {
       const raw = await fs.readFile(path.join(ing.dir, file), "utf8");
       const missing = new Set<string>();
-      const out = substitute(toLf(stripBom(raw)), resolution.params, missing);
+      const out = substitute(toLf(stripBom(raw)), paramsFor(ing, resolution), missing);
       for (const key of missing) missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ing.ref));
       return out;
     },

@@ -470,3 +470,18 @@ describe("import --from claude-code — end to end with sync (spec 07 §9.1)", (
     expect(after.find((s) => s.path === ".mcp.json")?.state).toBe("unchanged");
   });
 });
+
+describe("import over a templated base — known limitation (spec 09 §9)", () => {
+  it("re-importing a workspace whose text the base now renders through a default creates a variant", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/deploy.md": "use globex-api\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    // What an extraction leaves behind: {{key}} in the body, the base's text as the declared default.
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/deploy/rule.md"), "use {{deploy.api}}\n");
+    const meta = path.join(t.forge, "ingredients/rules/deploy/ingredient.yaml");
+    await fs.writeFile(meta, (await fs.readFile(meta, "utf8")) + "params:\n  deploy.api:\n    default: globex-api\n");
+    const again = await importInto(t.forge, t.ws("a"), "a");
+    // Pinned so the day import becomes template-aware (the next slice) this test says so.
+    expect(again.variants.map((v) => v.name)).toEqual(["rule/deploy--a"]);
+  });
+});

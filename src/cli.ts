@@ -20,12 +20,13 @@ import {
   type RecipeCascadeResult,
   type WriteJournal,
 } from "./core/unify.js";
+import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
 import { HUNK_CLASSES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type Take, type UnifyPlan } from "./schema/index.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.4.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.5.0");
 
 /* ---------------------------------------------------------------- import */
 program
@@ -240,12 +241,12 @@ forge
 
 forge
   .command("unify")
-  .description("Resolve one variant back into its base through a reviewable plan. Writes to the Forge")
+  .description("Resolve one variant back into its base through a reviewable plan, taking each hunk from a side or turning it into a {{param}}. Writes to the Forge")
   .argument("<type/name>", "base ingredient (rule/workflow)")
   .requiredOption("--profile <p>", "which variant to resolve")
   .option("--take <side>", "resolve every decision to base or variant")
-  .option("--plan <file>", "apply the decisions in this plan file")
-  .option("--save-plan <file>", "write a plan with every decision deferred, each hunk annotated with its suggested class (which --plan ignores), to a new file outside the Forge, and stop")
+  .option("--plan <file>", "apply the decisions in this plan file (a hunk may be take: param with its params list)")
+  .option("--save-plan <file>", "write a plan with every decision deferred, each hunk annotated with its suggested class (which --plan ignores) and value hunks pre-filled with params, to a new file outside the Forge, and stop")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
@@ -345,12 +346,14 @@ forge
     // Ruling 33, dry pass: every recipe `ingredients` rewrite the cascade will make is checked before
     // the first byte is written, so a refusal (an aliased reference) leaves the Forge untouched.
     const cascadeFiles = result.resolved ? await checkRecipeCascade(f, base.ref, variant.ref) : [];
+    // Spec 09: the Forge-level rows and both YAML edits of a parameter extraction, rendered before any write.
+    const paramWrites = result.params.length ? await checkParamWrites(f, base, variant, o.profile, result.params) : null;
 
     // Ruling 37: "git is the undo" only holds for files git actually has. The whole-repo clean
     // check above cannot see ignored files (a Forge its enclosing repo ignores, an ignored file in
     // a variant) nor untracked ones under `status.showUntrackedFiles=no` — so every path this run
     // will overwrite or delete is checked on its own, before the first write.
-    const mustHold = [base.dir, ...(result.resolved ? [variant.dir, ...cascadeFiles] : [])];
+    const mustHold = [base.dir, ...(result.resolved ? [variant.dir, ...cascadeFiles] : []), ...(paramWrites?.mustHold ?? [])];
     const unheld = await gitUnheld(f.root, mustHold);
     if (unheld.length) {
       // Name every such path (the first few, then a count), so one run shows the whole problem.
@@ -367,7 +370,11 @@ forge
     let cascade: RecipeCascadeResult = { rewritten: [], identicalToSibling: [] };
     let variantRemoved: string | null = null;
     try {
+      // Spec 09 §6.5: declarations, then the template, then the profile's values — each prefix emission-neutral.
+      if (paramWrites?.ingredientYaml) await writeParamFile(paramWrites.ingredientYaml, journal);
       touched = await writeUnified(base, result, journal);
+      if (paramWrites?.ingredientYaml) touched = [...touched, "ingredient.yaml"].sort();
+      if (paramWrites?.profile) await writeParamFile(paramWrites.profile, journal);
       if (result.resolved) {
         cascade = await rewriteRecipes(f, base.ref, variant.ref, o.profile, journal);
         journal.push({ abs: variant.dir, created: false });
@@ -402,6 +409,19 @@ forge
     }
     // Ruling 38: `resolve()` matches overrides.ingredients.disable by ref, so once the variant ref
     // is gone a workspace that disabled it gets the base back, enabled, with no error.
+    // Spec 09 W1, W2: what a parameter extraction cannot check from inside the Forge.
+    for (const e of result.params.filter((p) => !p.reused)) {
+      warnings.push(
+        `${e.key} is now a parameter of ${base.ref} — a workspace that sets overrides.params.${e.key} (craftar.yaml or ` +
+          `craftar.local.yaml) now overrides ${base.ref} too; unify cannot reach workspaces`,
+      );
+    }
+    if (result.params.length) {
+      warnings.push(
+        `craftar import does not recognise a templated ingredient yet — re-importing a workspace into this Forge creates a new ` +
+          `variant of ${base.ref} and rewrites profiles/${o.profile}/profile.yaml without ${result.params.map((e) => `params.${e.key}`).join(", ")}`,
+      );
+    }
     if (variantRemoved) {
       warnings.push(
         `${variant.ref} was removed — a workspace that disables it in overrides.ingredients.disable (craftar.yaml or craftar.local.yaml) ` +
@@ -416,7 +436,7 @@ forge
             base: base.ref,
             profile: o.profile,
             resolved: result.resolved,
-            written: Object.keys(result.write).sort(),
+            written: [...Object.keys(result.write), ...(paramWrites?.ingredientYaml ? ["ingredient.yaml"] : [])].sort(),
             removed: [...result.remove].sort(),
             unresolved: result.unresolved,
             variantRemoved,
@@ -427,6 +447,9 @@ forge
               identicalToSibling: cascade.identicalToSibling,
             },
             metaDiffers: result.metaDiffers,
+            // Spec 09 §4.5: only what this run wrote — [] when every key was already declared and valued.
+            params: result.params.filter((e) => paramWrites?.written.includes(e.key)).map((e) => ({ key: e.key, default: e.default, value: e.value })),
+            profileEdited: paramWrites?.profile ? path.relative(f.root, paramWrites.profile.abs).split(path.sep).join("/") : null,
             warnings,
           },
           null,
@@ -436,7 +459,13 @@ forge
     }
 
     console.log(pc.bold(`craftar forge unify ${ref} ↔ ${o.profile}`));
-    for (const p of touched) console.log(`  ${result.write[p] !== undefined ? pc.green("~") : pc.magenta("-")} ${p}`);
+    for (const p of touched) console.log(`  ${result.write[p] !== undefined || p === "ingredient.yaml" ? pc.green("~") : pc.magenta("-")} ${p}`);
+    for (const e of result.params) {
+      const line = `param ${e.key} — default ${JSON.stringify(e.default)} (${base.ref}) · ${JSON.stringify(e.value)} (profile ${o.profile})`;
+      // Same filter as --json params: a key already declared and valued is named as such, not as written.
+      console.log(`  ${line}${paramWrites?.written.includes(e.key) ? "" : " — already in place"}`);
+    }
+    if (paramWrites?.profile) console.log(`  ${pc.green("~")} ${path.relative(f.root, paramWrites.profile.abs).split(path.sep).join("/")}`);
     console.log(`  resolved ${result.resolved ? pc.green("yes") : pc.yellow("no")} · unresolved ${result.unresolved}`);
     if (variantRemoved) console.log(`  ${pc.magenta("removed variant")} ${variantRemoved}`);
     if (cascade.rewritten.length) console.log(`  recipes rewritten: ${cascade.rewritten.join(", ")}`);

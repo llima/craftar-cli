@@ -50,25 +50,56 @@ interface Region {
   b: string[];
 }
 
-/** Maximal runs of changed tokens between two lines; whitespace runs compare equal whatever their length. */
-function regions(a: string[], b: string[]): Region[] {
+/** One side of a changed region: its raw tokens and its character span in the line. */
+export interface RegionSide {
+  tokens: string[];
+  start: number;
+  end: number;
+}
+
+/** A maximal run of changed tokens between two lines, with where it sits on each side (spec 09 §6.1). */
+export interface ChangedRegion {
+  a: RegionSide;
+  b: RegionSide;
+}
+
+/** Maximal runs of changed tokens between two tokenized lines; whitespace runs compare equal whatever their length. */
+function spannedRegions(a: string[], b: string[]): ChangedRegion[] {
   const key = (t: string) => (WHITESPACE.test(t) ? " " : t);
-  const out: Region[] = [];
-  let current: Region | null = null;
+  const out: ChangedRegion[] = [];
+  let current: ChangedRegion | null = null;
   let i = 0;
   let j = 0;
+  let ai = 0; // character offset of a[i]
+  let bj = 0; // character offset of b[j]
   for (const op of lcsOps(a.map(key), b.map(key))) {
     if (op.kind === "same") {
       current = null;
-      i++;
-      j++;
+      ai += a[i++].length;
+      bj += b[j++].length;
       continue;
     }
-    if (!current) out.push((current = { a: [], b: [] }));
-    if (op.kind === "del") current.a.push(a[i++]);
-    else current.b.push(b[j++]);
+    if (!current) out.push((current = { a: { tokens: [], start: ai, end: ai }, b: { tokens: [], start: bj, end: bj } }));
+    if (op.kind === "del") {
+      current.a.tokens.push(a[i]);
+      ai += a[i++].length;
+      current.a.end = ai;
+    } else {
+      current.b.tokens.push(b[j]);
+      bj += b[j++].length;
+      current.b.end = bj;
+    }
   }
   return out;
+}
+
+/** The changed regions of one line pair, with their spans (the shape `classifyHunk` reasons about). */
+export function changedRegions(aLine: string, bLine: string): ChangedRegion[] {
+  return spannedRegions(tokenize(aLine), tokenize(bLine));
+}
+
+function regions(a: string[], b: string[]): Region[] {
+  return spannedRegions(a, b).map((r) => ({ a: r.a.tokens, b: r.b.tokens }));
 }
 
 const text = (tokens: string[]) => tokens.join("").replace(/\s+/g, " ").trim();

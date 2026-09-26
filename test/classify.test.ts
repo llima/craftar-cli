@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyHunk, isIdentifierLike, paramSlug, tokenize } from "../src/core/classify.js";
+import { changedRegions, classifyHunk, isIdentifierLike, paramSlug, tokenize } from "../src/core/classify.js";
 import { diffLines } from "../src/core/diff.js";
 import type { HunkSuggestion } from "../src/schema/index.js";
 
@@ -230,5 +230,28 @@ describe("classifyHunk — contract (spec 08 AC 2)", () => {
       expect(s.tokens !== undefined, s.reason).toBe(s.class === "value");
       for (const t of s.tokens ?? []) expect(t.param).toMatch(/^param\.[a-z0-9_]+$/);
     }
+  });
+});
+
+describe("changedRegions — spans (spec 09 §6.1)", () => {
+  const slice = (line: string, side: { start: number; end: number }) => line.slice(side.start, side.end);
+
+  it("gives each region's exact span on both sides", () => {
+    const a = "Use `globex-api` and globex-web here.";
+    const b = "Use `acme-api` and acme-web here.";
+    const rs = changedRegions(a, b);
+    expect(rs.map((r) => [slice(a, r.a), slice(b, r.b)])).toEqual([
+      ["globex-api", "acme-api"],
+      ["globex-web", "acme-web"],
+    ]);
+  });
+
+  it("gives an empty span at the insertion point when one side has no tokens", () => {
+    const a = "use globex-api now";
+    const b = "use now";
+    const [r] = changedRegions(a, b);
+    expect(slice(a, r.a)).toBe("globex-api ");
+    expect(r.b.start).toBe(r.b.end);
+    expect(b.slice(0, r.b.start) + b.slice(r.b.end)).toBe(b);
   });
 });

@@ -5,6 +5,9 @@ import { appliesTo, mcpServers, outName } from "./shared.js";
 import type { Emitter, EmitContext, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 
+/** Files kiro copies as text, through `ctx.text` (substituted); anything else is copied as raw bytes. */
+export const KIRO_TEXT_EXT = /\.(md|txt|json|ya?ml)$/i;
+
 /**
  * Kiro target. Reproduces, then extends, the behaviour of the hand-written
  * `.claude/scripts/sync-steering.ps1` this target was extracted from:
@@ -96,7 +99,7 @@ function crlf(path: string, text: string, ingredient: string): PlannedFile {
 }
 
 async function copy(ctx: EmitContext, ing: ResolvedIngredient, file: string, relPath: string): Promise<PlannedFile> {
-  if (/\.(md|txt|json|ya?ml)$/i.test(file)) return crlf(relPath, rewrite(await ctx.text(ing, file)), ing.ref);
+  if (KIRO_TEXT_EXT.test(file)) return crlf(relPath, rewrite(await ctx.text(ing, file)), ing.ref);
   return { path: relPath, content: await ctx.bytes(ing, file), target: "kiro", ingredient: ing.ref };
 }
 

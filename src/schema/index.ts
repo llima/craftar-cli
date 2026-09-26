@@ -17,6 +17,16 @@ export type IngredientType = (typeof INGREDIENT_TYPES)[number];
 
 const Inclusion = z.enum(["always", "fileMatch", "manual", "auto"]);
 
+/** A parameter an ingredient declares (spec 09). `default` is the weakest layer, scoped to this ingredient. */
+const IngredientParam = z
+  .object({
+    // A scalar: `substitute` renders values with String(), and an object would render "[object Object]".
+    default: z.union([z.string(), z.number(), z.boolean()]).optional(),
+    description: z.string().optional(),
+    example: z.unknown().optional(),
+  })
+  .strict();
+
 const IngredientBase = z.object({
   name: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/i, "ingredient names are slug-like"),
   description: z.string().optional(),
@@ -28,6 +38,8 @@ const IngredientBase = z.object({
   tags: z.array(z.string()).default([]),
   /** Where this ingredient came from (set by `craftar import`). */
   origin: z.object({ workspace: z.string(), path: z.string() }).strict().optional(),
+  /** Declared parameters (spec 09). Optional without a default, so fingerprints of existing ingredients do not move. */
+  params: z.record(IngredientParam).optional(),
   // Strict: an unknown key is a typo or a field no command reads. Stripping it hid it from `forge unify`,
   // which could then resolve and delete a variant that differed only there (spec 07, Ruling 1).
 }).strict();
@@ -250,11 +262,25 @@ export const HunkSuggestionSchema = z.object({
 });
 export type HunkSuggestion = z.infer<typeof HunkSuggestionSchema>;
 
+/** `substitute`'s key syntax (src/core/resolve.ts). */
+export const PARAM_KEY = /^[A-Za-z0-9_.]+$/;
+
+/** A hunk may also become a parameter (spec 09); a one-sided file entry keeps TakeSchema. */
+export const HunkTakeSchema = z.enum(["base", "variant", "param", "keep"]);
+export type HunkTake = z.infer<typeof HunkTakeSchema>;
+
+export const PlanParamSchema = z
+  .object({ token: z.string().min(1), key: z.string().regex(PARAM_KEY, "a param key is letters, digits, _ and .") })
+  .strict();
+export type PlanParam = z.infer<typeof PlanParamSchema>;
+
 export const PlanHunkSchema = z.object({
   hunk: z.number().int().positive(),
   /** Human echo of what `forge diff` printed. Never read back. */
   at: z.string().default(""),
-  take: TakeSchema,
+  take: HunkTakeSchema,
+  /** Read only when take is "param" (spec 09 §4.1). */
+  params: z.array(PlanParamSchema).optional(),
   /** Echo of the suggested class when the plan was saved. Never read back; a malformed one is dropped. */
   suggestion: HunkSuggestionSchema.optional().catch(undefined),
 });

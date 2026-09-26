@@ -1,0 +1,8 @@
+name: acme
+recipes:
+  - base--acme
+targets:
+  - claude-code
+  - kiro
+  - agents-md
+params: {}

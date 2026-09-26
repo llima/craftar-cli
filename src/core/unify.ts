@@ -7,7 +7,8 @@ import { exists, listFiles, loadForge, readIngredientText, type Forge, type Load
 import { splitLines, type Hunk } from "./diff.js";
 import { detectEol, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
-import type { Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile, Take } from "../schema/index.js";
+import type { HunkTake, Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile } from "../schema/index.js";
+import { collect, deriveHunk, prove, substitutedFile, type Extraction } from "./extract.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
 // fidelity, correctness should not hinge on a glyph no diff viewer, editor or re-encoding shows.
@@ -74,7 +75,17 @@ export async function planFrom(
   await assertTextMergeable(base, variant);
   const files: PlanFile[] = [];
   for (const f of diff.files) {
-    files.push({ file: f.file, hunks: f.hunks.map((h, i) => ({ hunk: i + 1, at: hunkAt(h), take: "keep" as const, suggestion: h.suggestion })) });
+    files.push({
+      file: f.file,
+      hunks: f.hunks.map((h, i) => ({
+        hunk: i + 1,
+        at: hunkAt(h),
+        take: "keep" as const,
+        // Pre-filled for a value hunk, read only once the human sets take: param (spec 09 §4.2).
+        ...(h.suggestion.class === "value" && h.suggestion.tokens ? { params: h.suggestion.tokens.map((t) => ({ token: t.a, key: t.param })) } : {}),
+        suggestion: h.suggestion,
+      })),
+    });
   }
   for (const file of diff.onlyInBase) files.push({ file, onlyIn: "base", take: "keep" });
   for (const file of diff.onlyInVariant) files.push({ file, onlyIn: "variant", take: "keep" });
@@ -109,6 +120,8 @@ function comparableMeta(meta: Ingredient): Record<string, unknown> {
 export function metaDifferences(base: LoadedIngredient, variant: LoadedIngredient): string[] {
   const a = comparableMeta(base.meta);
   const b = comparableMeta(variant.meta);
+  // A variant never needs declarations of its own; the base's are what an extraction added (spec 09 §6.6).
+  if (b.params === undefined) delete a.params;
   return [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => !isDeepStrictEqual(a[k], b[k])).sort();
 }
 
@@ -137,6 +150,8 @@ export interface UnifyResult {
    * cannot merge; non-empty means not resolved. Always empty under `discardVariantMeta`.
    */
   metaDiffers: string[];
+  /** The keys a `take: param` plan extracts (spec 09); [] when it has no param hunk. */
+  params: Extraction[];
 }
 
 /**
@@ -159,7 +174,7 @@ export interface UnifyResult {
  * has nothing to say when the winning side contributes no lines (a pure removal taken as the
  * winner), so `variantText` is passed in alongside the hunks for exactly this reason.
  */
-function mergeFile(baseText: string, variantText: string, hunks: Hunk[], takes: Take[]): string {
+function mergeFile(baseText: string, variantText: string, hunks: Hunk[], takes: HunkTake[], templates: (string[] | undefined)[] = []): string {
   const bom = baseText.charCodeAt(0) === BOM.charCodeAt(0);
   const A = splitLines(baseText);
   const B = splitLines(variantText);
@@ -172,7 +187,8 @@ function mergeFile(baseText: string, variantText: string, hunks: Hunk[], takes: 
     while (i < start) out.push(A.lines[i++]);
     const takeVariant = takes[k] === "variant";
     const side = takeVariant ? h.b : h.a;
-    out.push(...side.lines);
+    // A param hunk contributes its template; its sides pair line by line and agree on the final newline (P2).
+    out.push(...(takes[k] === "param" ? templates[k]! : side.lines));
     i += h.a.lines.length; // the base's lines for this hunk are consumed either way
     if (k === hunks.length - 1) {
       iAfterLastHunk = i;
@@ -206,6 +222,8 @@ export async function applyPlan(
   const write: Record<string, string | Buffer> = {};
   const remove: string[] = [];
   let unresolved = 0;
+  const extractions = new Map<string, Extraction>();
+  const proofs: Array<{ file: string; template: string; mBase: string; mVar: string }> = [];
 
   const hunksByFile = new Map(diff.files.map((f) => [f.file, f.hunks]));
   const onlyInBase = new Set(diff.onlyInBase);
@@ -250,7 +268,8 @@ export async function applyPlan(
           `unify plan: "${pf.file}" carries ${pf.hunks.length} hunk decision(s), but the diff has ${hunks.length} — the plan no longer matches this diff.`,
         );
       }
-      const takes: Take[] = new Array(hunks.length);
+      const takes: HunkTake[] = new Array(hunks.length);
+      const paramOf = new Map<number, (typeof pf.hunks)[number]>();
       const seen = new Set<number>();
       for (const ph of pf.hunks) {
         if (ph.hunk < 1 || ph.hunk > hunks.length || seen.has(ph.hunk)) {
@@ -260,12 +279,36 @@ export async function applyPlan(
         }
         seen.add(ph.hunk);
         takes[ph.hunk - 1] = ph.take;
+        if (ph.take === "param") paramOf.set(ph.hunk - 1, ph);
       }
 
       unresolved += takes.filter((t) => t === "keep").length;
       // A plan with no `variant` decision cannot change this file's bytes — skip the merge
       // entirely rather than round-tripping the base through `splitLines`/`withEol` for nothing,
       // which would re-terminate a base with mixed line endings even though no decision moved it.
+      if (paramOf.size) {
+        if (!substitutedFile(base.meta, pf.file)) {
+          throw new Error(`unify plan: "${pf.file}" is copied without substitution by a target that emits it — a {{param}} there would be emitted literally`);
+        }
+        const templates: (string[] | undefined)[] = new Array(hunks.length);
+        for (const [k, ph] of paramOf) {
+          const { lines, pairs } = deriveHunk(pf.file, k + 1, hunks[k], ph.params, base.meta.params);
+          templates[k] = lines;
+          collect(extractions, pf.file, k + 1, pairs);
+        }
+        const baseText = await readIngredientText(base, pf.file);
+        const variantText = await readIngredientText(variant, pf.file);
+        const as = (side: HunkTake) => takes.map((t) => (t === "param" ? side : t));
+        const template = mergeFile(baseText, variantText, hunks, takes, templates);
+        proofs.push({
+          file: pf.file,
+          template,
+          mBase: mergeFile(baseText, variantText, hunks, as("base")),
+          mVar: mergeFile(baseText, variantText, hunks, as("variant")),
+        });
+        if (template !== baseText) write[pf.file] = template;
+        continue;
+      }
       if (takes.includes("variant")) {
         const baseText = await readIngredientText(base, pf.file);
         const variantText = await readIngredientText(variant, pf.file);
@@ -320,7 +363,14 @@ export async function applyPlan(
   }
 
   const metaDiffers = opts.discardVariantMeta ? [] : metaDifferences(base, variant);
-  return { write, remove, resolved: unresolved === 0 && metaDiffers.length === 0, unresolved, metaDiffers };
+  const params = [...extractions.values()];
+  if (params.length) {
+    // P10: the base now holds {{key}}; left unresolved, the next diff would show the same hunk as placeholder versus literal.
+    if (unresolved) throw new Error(`unify plan: take: param needs the variant resolved in the same plan — ${unresolved} decision(s) still keep`);
+    if (metaDiffers.length) throw new Error(`unify plan: take: param needs the variant resolved in the same plan — ingredient.yaml differs in ${metaDiffers.join(", ")}`);
+    for (const p of proofs) prove(p.file, p.template, p.mBase, p.mVar, params);
+  }
+  return { write, remove, resolved: unresolved === 0 && metaDiffers.length === 0, unresolved, metaDiffers, params };
 }
 
 /**
