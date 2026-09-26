@@ -7,7 +7,7 @@ import YAML from "yaml";
 import { exists, gitDirty, loadForge, type Forge } from "../src/core/forge.js";
 import { applyPlan, metaDifferences, planFrom, rewriteRecipes, writeUnified } from "../src/core/unify.js";
 import { diffIngredients } from "../src/core/variants.js";
-import { HunkSuggestionSchema, UnifyPlanSchema } from "../src/schema/index.js";
+import { HunkSuggestionSchema, UnifyPlanSchema, type UnifyPlan } from "../src/schema/index.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 
 const execFileP = promisify(execFile);
@@ -610,5 +610,94 @@ describe("the hunk suggestion in a plan (spec 08 §5.1)", () => {
     const mangled = UnifyPlanSchema.parse(plan({ suggestion: { class: "bogus" } })).files[0].hunks![0];
     expect(mangled.suggestion).toBeUndefined();
     expect(UnifyPlanSchema.parse(plan({})).files[0].hunks![0]).toEqual({ hunk: 1, at: "lines 1–1", take: "keep" });
+  });
+});
+
+describe("take: param — the engine (spec 09 §6.1, §6.2)", () => {
+  async function paramPlan(baseRule: string, variantRule: string, edit: (hunks: NonNullable<UnifyPlan["files"][number]["hunks"]>) => void) {
+    const { base, variant, diff } = await scenario({ "rule.md": baseRule }, { "rule.md": variantRule });
+    const plan = await planFrom(base, variant, diff, "acme");
+    edit(plan.files[0].hunks!);
+    return { base, variant, diff, plan };
+  }
+  const run = async (b: string, v: string, edit: Parameters<typeof paramPlan>[2]) => {
+    const { base, variant, diff, plan } = await paramPlan(b, v, edit);
+    return applyPlan(base, variant, diff, plan);
+  };
+  const err = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => e.message);
+
+  it("pre-fills params on a value hunk from its suggestion, and on no other hunk", async () => {
+    const { plan } = await paramPlan("a\nuse globex-api\nb\nStep 6.\n", "a\nuse acme-api\nb\nStep 5.\n", () => {});
+    const [value, evolution] = plan.files[0].hunks!;
+    expect(value.take).toBe("keep");
+    expect(value.params).toEqual([{ token: "globex-api", key: "param.globex_api" }]);
+    expect(evolution).not.toHaveProperty("params");
+  });
+
+  it("templates the base, and carries the default and the value, one key over two hunks", async () => {
+    const r = await run("use globex-api\nshared\nalso globex-api\n", "use acme-api\nshared\nalso acme-api\n", (hs) => {
+      for (const h of hs) Object.assign(h, { take: "param", params: [{ token: "globex-api", key: "deploy.api" }] });
+    });
+    expect(r.write["rule.md"]).toBe("use {{deploy.api}}\nshared\nalso {{deploy.api}}\n");
+    expect(r.params).toEqual([
+      { key: "deploy.api", default: "globex-api", value: "acme-api", reused: false, sites: [{ file: "rule.md", hunk: 1 }, { file: "rule.md", hunk: 2 }] },
+    ]);
+    expect(r.resolved).toBe(true);
+  });
+
+  it("replaces only the changed occurrence, never the same text in unchanged context (edge case 3)", async () => {
+    const r = await run("globex-api: see globex-api docs\n", "acme-api: see globex-api docs\n", (hs) => {
+      Object.assign(hs[0], { take: "param", params: [{ token: "globex-api", key: "deploy.api" }] });
+    });
+    expect(r.write["rule.md"]).toBe("{{deploy.api}}: see globex-api docs\n");
+  });
+
+  it("keeps a CRLF + BOM base's line endings and BOM in the template", async () => {
+    const r = await run("﻿port 8080\r\nend\r\n", "﻿port 9090\r\nend\r\n", (hs) => {
+      Object.assign(hs[0], { take: "param", params: [{ token: "8080", key: "port" }] });
+    });
+    expect(r.write["rule.md"]).toBe("﻿port {{port}}\r\nend\r\n");
+  });
+
+  it("carries an adjacent space into the default when the variant removed a word (edge case 18)", async () => {
+    const r = await run("use globex-api now\n", "use now\n", (hs) => {
+      Object.assign(hs[0], { take: "param", params: [{ token: "globex-api", key: "k" }] });
+    });
+    expect(r.params[0]).toMatchObject({ default: "globex-api ", value: "" });
+    expect(r.write["rule.md"]).toBe("use {{k}}now\n");
+  });
+
+  it("refuses P1, P2, P4, P5, P6, P7, P8, P9 and P10 with the Forge-independent messages", async () => {
+    const one = (params: unknown) => (hs: any[]) => Object.assign(hs[0], { take: "param", params });
+    expect(await err(run("a globex-api\n", "a acme-api\n", one([])))).toContain("names no params");
+    expect(await err(run("a\n", "a\nb\n", one([{ token: "a", key: "k" }])))).toContain("its lines do not pair");
+    expect(await err(run("x globex-api\n", "x acme-api\n", one([{ token: "globex-api", key: "k" }, { token: "globex-api", key: "j" }])))).toContain("names token \"globex-api\" twice");
+    expect(await err(run("x globex-api\n", "x acme-api\n", one([{ token: "globex-api", key: "k" }, { token: "x", key: "j" }])))).toContain("is not a changed region");
+    expect(await err(run("x globex-api y globex-web\n", "x acme-api y acme-web\n", one([{ token: "globex-api", key: "k" }])))).toContain("is not covered by params");
+    expect(await err(run("| globex-api   |\n", "| acme-api |\n", one([{ token: "globex-api", key: "k" }])))).toContain("whitespace only");
+    expect(await err(run("x a{b\n", "x c}d\n", one([{ token: "a{b", key: "k" }])))).toMatch(/not a changed region|placeholders/);
+    expect(await err(run("x globex-api\nsame\ny globex-api\n", "x acme-api\nsame\ny initech-api\n", (hs: any[]) => {
+      for (const h of hs) Object.assign(h, { take: "param", params: [{ token: "globex-api", key: "k" }] });
+    }))).toContain("would need two values");
+    expect(await err(run("x globex-api\n", "x acme-api\n", one([{ token: "globex-api", key: "constructor" }])))).toContain("is reserved");
+    expect(await err(run("x globex-api\n", "x acme-api\n", one([{ token: "globex-api", key: "kiro.banner" }])))).toContain("is reserved");
+    expect(await err(run("x globex-api\nsame\nStep 6\n", "x acme-api\nsame\nStep 5\n", one([{ token: "globex-api", key: "k" }])))).toContain("needs the variant resolved");
+  });
+
+  it("a mixed plan: a param hunk next to hunks taken from either side", async () => {
+    const r = await run("x globex-api\nsame\nStep 6\n", "x acme-api\nsame\nStep 5\n", (hs: any[]) => {
+      Object.assign(hs[0], { take: "param", params: [{ token: "globex-api", key: "k" }] });
+      hs[1].take = "variant";
+    });
+    expect(r.write["rule.md"]).toBe("x {{k}}\nsame\nStep 5\n");
+    expect(r.resolved).toBe(true);
+  });
+
+  it("ignores params in metaDifferences when the variant declares none (§6.6)", async () => {
+    const { base, variant } = await scenario({ "rule.md": "a\n" }, { "rule.md": "a\n" });
+    (base as any).meta = { ...(base as any).meta, params: { k: { default: "x" } } };
+    expect(metaDifferences(base, variant)).toEqual([]);
+    (variant as any).meta = { ...(variant as any).meta, params: { k: { default: "y" } } };
+    expect(metaDifferences(base, variant)).toEqual(["params"]);
   });
 });
