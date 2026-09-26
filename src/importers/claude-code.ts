@@ -681,7 +681,7 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
     o.report.recipes.push(name);
     return name;
   }
-  const existing: string[] = (YAML.parse(stripBom(await o.stage.readText(file)))?.ingredients ?? []).map(String);
+  const existing = RecipeSchema.parse(YAML.parse(stripBom(await o.stage.readText(file))) ?? {}).ingredients;
   const rules = (xs: string[]) => xs.filter((x) => x.startsWith("rule/"));
   const lacks = existing.find((x) => !list.includes(x));
   const extra = list.find((x) => !existing.includes(x));
@@ -761,7 +761,7 @@ async function existingProfileParams(forge: string, profile: string, loaded: imp
     if (!d.isDirectory()) continue;
     const abs = path.join(dir, d.name, "profile.yaml");
     if (!(await exists(abs))) continue;
-    const name = (YAML.parse(stripBom(await fs.readFile(abs, "utf8"))) ?? {}).name;
+    const name = ProfileSchema.parse(YAML.parse(stripBom(await fs.readFile(abs, "utf8"))) ?? {}).name;
     if ((name === profile) !== (d.name === profile)) {
       throw new Error(`import: profile ${profile} is profiles/${d.name}/profile.yaml — import writes profiles/${profile}/profile.yaml`);
     }
