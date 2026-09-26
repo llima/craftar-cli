@@ -680,3 +680,53 @@ describe("template-aware import — shared and owned recipes (spec 10 §6.7, Rul
     expect((await fail(importInto(t.forge, t.ws("b"), "b")))?.message).toContain("import: recipe base--b is also used by profile a — its ingredients would change there");
   });
 });
+
+describe("template-aware import — the profile (spec 10 §6.6, Rulings 2 and 3)", () => {
+  const fail = (p: Promise<unknown>) => p.then(() => null, (e: Error) => e);
+  async function templatedDeploy(t: Awaited<ReturnType<typeof setup>>) {
+    await writeFiles(t.ws("a"), { ".claude/rules/deploy.md": "use acme-api here\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/deploy/rule.md"), "use {{deploy.api}} here\n");
+    const meta = path.join(t.forge, "ingredients/rules/deploy/ingredient.yaml");
+    await fs.writeFile(meta, (await fs.readFile(meta, "utf8")) + "params:\n  deploy.api:\n    default: globex-api\n");
+    const prof = path.join(t.forge, "profiles/a/profile.yaml");
+    await fs.writeFile(prof, "# acme, by hand\n" + (await fs.readFile(prof, "utf8")).replace("params: {}", "params:\n  deploy.api: acme-api"));
+    return prof;
+  }
+
+  it("a new client's profile holds the inferred values", async () => {
+    const t = await setup();
+    await templatedDeploy(t);
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "use initech-api here\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.profileWrite).toEqual({ path: "profiles/b/profile.yaml", action: "created", fields: [] });
+    expect((await yaml(path.join(t.forge, "profiles/b/profile.yaml"))).params).toEqual({ "deploy.api": "initech-api" });
+  });
+
+  it("re-import of an unchanged workspace edits nothing; a changed value updates the profile in place and warns (Ruling 3)", async () => {
+    const t = await setup();
+    const prof = await templatedDeploy(t);
+    const before = await fs.readFile(prof, "utf8");
+    const same = await importInto(t.forge, t.ws("a"), "a");
+    expect(same.profileWrite.action).toBe("unchanged");
+    expect(same.created).not.toContain("profiles/a/profile.yaml");
+    expect(await fs.readFile(prof, "utf8")).toBe(before);
+
+    await writeFiles(t.ws("a"), { ".claude/rules/deploy.md": "use acme-api-v2 here\n" });
+    const r = await importInto(t.forge, t.ws("a"), "a");
+    expect(r.params).toEqual([{ key: "deploy.api", old: "acme-api", value: "acme-api-v2", from: "rule/deploy" }]);
+    expect(r.profileWrite).toEqual({ path: "profiles/a/profile.yaml", action: "edited", fields: ["params"] });
+    expect(r.warnings).toContain('profile a now sets deploy.api to "acme-api-v2" (was "acme-api") — every workspace on a renders it at its next sync; import cannot reach them');
+    expect(await fs.readFile(prof, "utf8")).toBe(before.replace("deploy.api: acme-api", "deploy.api: acme-api-v2"));
+  });
+
+  it("I1: a hand-formatted profile is refused with the Forge untouched", async () => {
+    const t = await setup();
+    const prof = await templatedDeploy(t);
+    await fs.writeFile(prof, (await fs.readFile(prof, "utf8")).replace("name: a", "name: a        # aligned"));
+    const before = await snapshot(t.forge);
+    await writeFiles(t.ws("a"), { ".claude/rules/deploy.md": "use acme-api-v2 here\n" });
+    expect((await fail(importInto(t.forge, t.ws("a"), "a")))?.message).toContain("import: cannot edit profiles/a/profile.yaml in place");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+});

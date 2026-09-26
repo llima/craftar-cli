@@ -6,7 +6,7 @@ import { exists, listFiles, typeFolder, FORGE_MANIFEST } from "../core/forge.js"
 import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../core/secrets.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
-import { IngredientSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Target } from "../schema/index.js";
+import { IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { resolve } from "../core/resolve.js";
 import { editYamlText } from "../core/yaml-edit.js";
@@ -39,6 +39,8 @@ export interface ImportReport {
   params: { key: string; old: string | null; value: string; from: string }[];
   /** Shared recipes this run did not use for the profile, and the owned recipe it used instead (spec 10 §6.7). */
   recipeSplits: { shared: string; owned: string; reason: string }[];
+  /** What happened to profiles/<p>/profile.yaml. */
+  profileWrite: { path: string; action: "created" | "edited" | "unchanged"; fields: string[] };
 }
 
 /** Rules that every workspace shares by intent — they seed the `base` recipe. */
@@ -97,6 +99,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const forge = stage.root;
   const report: ImportReport = {
     created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [], rendered: [], inferred: [], params: [], recipeSplits: [],
+    profileWrite: { path: `profiles/${opts.profileName}/profile.yaml`, action: "unchanged", fields: [] },
   };
   const claudeDir = path.join(ws, ".claude");
   if (!(await exists(claudeDir))) throw new Error(`${claudeDir} not found — is this a Claude Code workspace?`);
@@ -354,11 +357,11 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     frontend: {},
     executor: (await exists(path.join(claudeDir, "rules", "kiro-execution.md"))) ? { kind: "kiro", terminal: "orca" } : {},
     integrations: {},
-    params: {},
+    // A new profile holds the values this run inferred, in acceptance order (spec 10 §6.6).
+    params: Object.fromEntries(report.params.map((x) => [x.key, ctx.P[x.key]])),
     repos: [],
   };
-  stage.write(path.join(forge, "profiles", opts.profileName, "profile.yaml"), YAML.stringify(profile));
-  report.created.push(`profiles/${opts.profileName}/profile.yaml`);
+  await writeProfile(stage, forge, opts.profileName, profile, ctx, report);
   return { report, targets };
 }
 
@@ -736,4 +739,68 @@ async function existingProfileParams(forge: string, profile: string, loaded: imp
     }
   }
   return { ...(loaded.profiles.get(profile)?.params ?? {}) };
+}
+
+/** Recipe entries import owns in a profile's `recipes`: the ones it computes and replaces (spec 10 §6.6, §14 Q4). */
+const importOwned = (name: string, profile: string) =>
+  name === "base" || name === `base--${profile}` || name === `${profile}-steering` || (/^stack-/.test(name) && (!name.includes("--") || name.endsWith(`--${profile}`)));
+
+/**
+ * Write `profiles/<p>/profile.yaml` (spec 10 §6.6, Ruling 2): a new profile as today; an existing
+ * one edited in place — `params` gains this run's values, `recipes` gets the computed entries in
+ * place of the ones import owns, `targets` gains missing ones — every other field, comment and
+ * line kept. I1 when it cannot be edited in place.
+ */
+async function writeProfile(stage: ForgeStage, forge: string, name: string, computed: Profile, ctx: RunContext, report: ImportReport): Promise<void> {
+  const file = path.join(forge, "profiles", name, "profile.yaml");
+  const label = `profiles/${name}/profile.yaml`;
+  if (!(await stage.exists(file))) {
+    stage.write(file, YAML.stringify(computed));
+    report.created.push(label);
+    report.profileWrite = { path: label, action: "created", fields: [] };
+    return;
+  }
+  const raw = await stage.readText(file);
+  const before = ProfileSchema.parse(YAML.parse(stripBom(raw)) ?? {});
+  const values = Object.fromEntries(report.params.map((x) => [x.key, String(ctx.P[x.key])]));
+  const firstOwned = before.recipes.findIndex((r) => importOwned(r, name));
+  const kept = before.recipes.filter((r) => !importOwned(r, name));
+  const at = firstOwned === -1 ? kept.length : before.recipes.slice(0, firstOwned).filter((r) => !importOwned(r, name)).length;
+  const recipes = [...kept.slice(0, at), ...computed.recipes, ...kept.slice(at)];
+  const targets = [...before.targets, ...computed.targets.filter((t) => !before.targets.includes(t))];
+  const fields = [
+    ...(Object.keys(values).length ? ["params"] : []),
+    ...(JSON.stringify(recipes) !== JSON.stringify(before.recipes) ? ["recipes"] : []),
+    ...(targets.length !== before.targets.length ? ["targets"] : []),
+  ];
+  if (!fields.length) {
+    report.profileWrite = { path: label, action: "unchanged", fields: [] };
+    return;
+  }
+  const content = editYamlText(raw, { command: "import", label, keys: ["params", "recipes", "targets"] }, (doc) => {
+    for (const [k, v] of Object.entries(values)) doc.setIn(["params", k], v);
+    if (fields.includes("recipes")) {
+      const seq = doc.get("recipes", true);
+      if (YAML.isSeq(seq)) {
+        const nodes = seq.items.filter((it) => !importOwned(String(YAML.isScalar(it) ? it.value : it), name));
+        seq.items = [...nodes.slice(0, at), ...computed.recipes.map((r) => doc.createNode(r)), ...nodes.slice(at)];
+      } else doc.set("recipes", recipes);
+    }
+    if (fields.includes("targets")) {
+      const seq = doc.get("targets", true);
+      if (YAML.isSeq(seq)) for (const t of targets.slice(before.targets.length)) seq.items.push(doc.createNode(t));
+      else doc.set("targets", targets);
+    }
+  });
+  const after = ProfileSchema.safeParse(YAML.parse(stripBom(content)) ?? {});
+  const expected = { ...before, recipes, targets, params: { ...before.params, ...values } };
+  if (!after.success || !isDeepStrictEqual(after.data, expected)) {
+    throw new Error(`import: cannot edit ${label} in place (the edit does not read back as exactly the intended change) — reformat it by hand, commit, and re-run`);
+  }
+  stage.write(file, content);
+  report.profileWrite = { path: label, action: "edited", fields };
+  for (const x of report.params) {
+    const was = before.params[x.key] === undefined ? "" : ` (was ${JSON.stringify(String(before.params[x.key]))})`;
+    report.warnings.push(`profile ${name} now sets ${x.key} to ${JSON.stringify(values[x.key])}${was} — every workspace on ${name} renders it at its next sync; import cannot reach them`);
+  }
 }
