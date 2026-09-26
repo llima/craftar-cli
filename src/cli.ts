@@ -461,7 +461,9 @@ forge
     console.log(pc.bold(`craftar forge unify ${ref} ↔ ${o.profile}`));
     for (const p of touched) console.log(`  ${result.write[p] !== undefined || p === "ingredient.yaml" ? pc.green("~") : pc.magenta("-")} ${p}`);
     for (const e of result.params) {
-      console.log(`  param ${e.key} — default ${JSON.stringify(e.default)} (${base.ref}) · ${JSON.stringify(e.value)} (profile ${o.profile})`);
+      const line = `param ${e.key} — default ${JSON.stringify(e.default)} (${base.ref}) · ${JSON.stringify(e.value)} (profile ${o.profile})`;
+      // Same filter as --json params: a key already declared and valued is named as such, not as written.
+      console.log(`  ${line}${paramWrites?.written.includes(e.key) ? "" : " — already in place"}`);
     }
     if (paramWrites?.profile) console.log(`  ${pc.green("~")} ${path.relative(f.root, paramWrites.profile.abs).split(path.sep).join("/")}`);
     console.log(`  resolved ${result.resolved ? pc.green("yes") : pc.yellow("no")} · unresolved ${result.unresolved}`);
