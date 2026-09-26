@@ -669,6 +669,20 @@ describe("template-aware import — shared and owned recipes (spec 10 §6.7, Rul
     expect(back.recipeSplits).toEqual([]);
   });
 
+  it("I2: an owned recipe that does not round-trip is refused with the Forge untouched", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    await writeFiles(t.ws("b"), { ".claude/rules/a.md": "# A\n", ".claude/rules/z.md": "# Z\n" });
+    await importInto(t.forge, t.ws("b"), "b");
+    const owned = path.join(t.forge, "recipes/base--b.yaml");
+    await fs.writeFile(owned, (await fs.readFile(owned, "utf8")).replace("name: base--b", "name: base--b      # aligned"));
+    const before = await snapshot(t.forge);
+    await writeFiles(t.ws("b"), { ".claude/rules/w.md": "# W\n" });
+    expect((await fail(importInto(t.forge, t.ws("b"), "b")))?.message).toContain("import: cannot edit recipes/base--b.yaml in place");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+
   it("I7: an owned recipe another profile resolves is not changed", async () => {
     const t = await setup();
     await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n" });
