@@ -1734,4 +1734,27 @@ describe("cli — forge unify take: param, review follow-ups (spec 09)", () => {
     expect(runCli(["sync", "--workspace", ws.globex]).code).toBe(0);
     expect(await fs.readFile(path.join(ws.globex, ".claude/rules/deploy.md"), "utf8")).toBe("use globex-api\nshared\nStep 5\n");
   });
+
+  it("a key with a reused site and a literal site is not treated as reused: P16 still guards another profile", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [
+        rule("deploy", "use {{deploy.api}} here\nshared\nalso globex-api there\n", { params: { "deploy.api": { default: "globex-api" } } }),
+        rule("deploy--initech", "use initech-api here\nshared\nalso initech-api there\n", { as: "deploy" }),
+      ],
+      recipes: [recipe("base", ["rule/deploy"]), recipe("base--initech", ["rule/deploy--initech"])],
+      profiles: [profile("initech", ["base--initech"]), profile("globex", ["base"], ["claude-code"], { params: { "deploy.api": "other-api" } })],
+    });
+    gitInit(root);
+    gitCommitAll(root, "init");
+    const plan = await planFor(root, "deploy", "initech", (p) => {
+      Object.assign(p.files[0].hunks[0], { take: "param", params: [{ token: "{{deploy.api}}", key: "deploy.api" }] });
+      Object.assign(p.files[0].hunks[1], { take: "param", params: [{ token: "globex-api", key: "deploy.api" }] });
+    });
+    const r = runCli(["forge", "unify", "rule/deploy", "--profile", "initech", "--plan", plan, "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("profile globex sets deploy.api");
+    expect(gitStatus(root)).toBe("");
+  });
 });

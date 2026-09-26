@@ -125,9 +125,9 @@ export function deriveHunk(
       out = out.slice(0, r.a.start) + `{{${entry.key}}}` + out.slice(r.a.end);
     }
     // Whitespace runs compare equal in the word diff, so padding that differs is no region;
+    // rendering the line back is what catches it, with a message a human can act on (P6).
     // A reused key keeps `{{key}}` on the base side, so only the value side is rendered here;
     // the file-level `prove` still checks both sides.
-    // rendering the line back is what catches it, with a message a human can act on (P6).
     const render = (field: "default" | "value") => substituteKeys(out, new Map(linePairs.map((p) => [p.key, p[field]])));
     if (render("value") !== bLine || (!linePairs.some((p) => p.reused) && render("default") !== aLine)) {
       throw new Error(`${where}, line ${k + 1} differs in whitespace only outside its tokens, which a parameter cannot reproduce`);
@@ -154,6 +154,9 @@ export function collect(extractions: Map<string, Extraction>, file: string, hunk
         `unify plan: key ${p.key} would need two values: "${prev.default}" → "${prev.value}" and "${p.default}" → "${p.value}"`,
       );
     }
+    // Reused only when every site is: one literal site means the base gains new text under the key,
+    // so the layers above the ingredient default (P15, P16) must be checked like for a new key.
+    prev.reused = prev.reused && p.reused;
     if (!prev.sites.some((s) => s.file === file && s.hunk === hunk)) prev.sites.push({ file, hunk });
   }
 }
