@@ -105,16 +105,19 @@ export function classifyHunk(h: Hunk): HunkSuggestion {
   if (!changed.length) return evolution("whitespace only");
 
   const seen = new Set<string>();
-  const slugCount = new Map<string, number>();
+  const used = new Set<string>();
   const tokens: NonNullable<HunkSuggestion["tokens"]> = [];
   for (const c of changed) {
     const id = JSON.stringify([c.a, c.b]);
     if (seen.has(id)) continue;
     seen.add(id);
+    // A suffixed name can equal another token's natural slug (`acme_api` → `_2` vs `acme_api_2`),
+    // so the suffix grows until the name is free: every distinct pair gets its own parameter.
     const slug = paramSlug(c.a);
-    const n = (slugCount.get(slug) ?? 0) + 1;
-    slugCount.set(slug, n);
-    tokens.push({ a: c.a, b: c.b, param: n === 1 ? slug : `${slug}_${n}` });
+    let param = slug;
+    for (let n = 2; used.has(param); n++) param = `${slug}_${n}`;
+    used.add(param);
+    tokens.push({ a: c.a, b: c.b, param });
   }
   return { class: "value", reason: tokens.length === 1 ? "1 token differs" : `${tokens.length} tokens differ`, tokens };
 }

@@ -9,7 +9,14 @@ function hunkOf(a: string, b: string) {
   expect(hunks).toHaveLength(1);
   return hunks[0];
 }
-const classify = (a: string, b: string) => classifyHunk(hunkOf(a, b));
+/** Every suggestion any test in this file produced, so the contract test covers the whole corpus (AC 2). */
+const produced: HunkSuggestion[] = [];
+const classifyOne = (h: ReturnType<typeof hunkOf>) => {
+  const s = classifyHunk(h);
+  produced.push(s);
+  return s;
+};
+const classify = (a: string, b: string) => classifyOne(hunkOf(a, b));
 const brief = (s: HunkSuggestion) => `${s.class}: ${s.reason}`;
 
 const REASONS = new Set([
@@ -24,7 +31,7 @@ const REASONS = new Set([
   "prose differs",
   "whitespace only",
 ]);
-const allowed = (s: HunkSuggestion) => REASONS.has(s.reason) || /^(1 token differs|[0-9]+ tokens differ)$/.test(s.reason);
+const allowed = (s: HunkSuggestion) => REASONS.has(s.reason) || /^(1 token differs|([2-9]|[1-9][0-9]+) tokens differ)$/.test(s.reason);
 
 describe("tokenize", () => {
   it("splits whitespace runs, words and single other characters", () => {
@@ -120,7 +127,7 @@ describe("classifyHunk — edge cases (spec 08 §7)", () => {
   it("2. a line appended after an unterminated last line is a block, whatever the structural kind", () => {
     const h = hunkOf("a\nb", "a\nb\nc\n");
     expect(h.kind).toBe("inline");
-    expect(brief(classifyHunk(h))).toBe("block: only in the variant");
+    expect(brief(classifyOne(h))).toBe("block: only in the variant");
   });
 
   it("3. a token swap plus a final-newline change is evolution", () => {
@@ -143,6 +150,7 @@ describe("classifyHunk — edge cases (spec 08 §7)", () => {
   it("7. a changed row plus added rows is evolution; added rows alone are a block", () => {
     const base = "| a | acme-api |\n";
     expect(brief(classify(base, "| a | globex-api |\n| b | globex-web |\n"))).toBe("evolution: line counts differ");
+    expect(brief(classify(base, base + "| b | globex-web |\n"))).toBe("block: only in the variant");
   });
 
   it("8. known false positives: hyphenated words, abbreviations and years", () => {
@@ -170,6 +178,17 @@ describe("classifyHunk — edge cases (spec 08 §7)", () => {
 
   it("12. an over-long token is not a client identifier", () => {
     expect(brief(classify(`Use a-${"x".repeat(39)} here.\n`, "Use acme-api here.\n"))).toBe("evolution: prose differs");
+  });
+
+  it("11b. a suffixed name never collides with another token's own slug", () => {
+    const s = classify("acme-api x acme_api y acme_api_2\n", "p-1 x p-2 y p-3\n");
+    expect(s.tokens?.map((t) => t.param)).toEqual(["param.acme_api", "param.acme_api_2", "param.acme_api_2_2"]);
+  });
+
+  it("13a. a line of exactly 400 tokens is still compared", () => {
+    const line = (w: string) => Array.from({ length: 200 }, () => w).join(" ") + "."; // 200 words, 199 spaces, "."
+    expect(tokenize(line("acme-api"))).toHaveLength(400);
+    expect(brief(classify(line("acme-api") + "\n", line("globex-api") + "\n"))).toBe("value: 1 token differs");
   });
 
   it("13. an over-long line is not compared word by word", () => {
@@ -204,24 +223,12 @@ describe("classifyHunk — whitespace and markdown (spec 08 §6.2 consequences)"
 });
 
 describe("classifyHunk — contract (spec 08 AC 2)", () => {
-  it("returns only reasons from the closed set, and tokens only for a value", () => {
-    const corpus: Array<[string, string]> = [
-      ["_TODO_: decide.\n", "See `x.md`.\n"],
-      ["Bump `package.json`.\n", "Bump `a.props`.\n"],
-      ["r\n", "r\nq\n"],
-      ["a\nb\n", "a\nb"],
-      ["Step 6.\n", "Step 5.\n"],
-      ["a\tb\n", "a b\n"],
-      ["x\nacme-api", "x\nglobex-api\n"],
-      ["one\n", "one\ntwo\nthree\n"],
-    ];
-    for (const [a, b] of corpus) {
-      for (const h of diffLines(a, b)) {
-        const s = classifyHunk(h);
-        expect(allowed(s), s.reason).toBe(true);
-        expect(s.tokens !== undefined, s.reason).toBe(s.class === "value");
-        for (const t of s.tokens ?? []) expect(t.param).toMatch(/^param\.[a-z0-9_]+$/);
-      }
+  it("every suggestion the corpus above produced uses a reason from the closed set, and tokens only for a value", () => {
+    expect(produced.length).toBeGreaterThan(30);
+    for (const s of produced) {
+      expect(allowed(s), s.reason).toBe(true);
+      expect(s.tokens !== undefined, s.reason).toBe(s.class === "value");
+      for (const t of s.tokens ?? []) expect(t.param).toMatch(/^param\.[a-z0-9_]+$/);
     }
   });
 });
