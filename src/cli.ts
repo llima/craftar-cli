@@ -31,12 +31,12 @@ program.name("craftar").description("Craft, sync and convert AI-coding workspace
 /* ---------------------------------------------------------------- import */
 program
   .command("import")
-  .description("Import an existing workspace harness into a Forge (creates ingredients, recipes and a profile)")
+  .description("Import an existing workspace harness into a Forge: creates or updates ingredients, recipes and a profile, reusing a templated base when it renders or infers the workspace text")
   .requiredOption("--from <tool>", "source tool: claude-code")
   .requiredOption("--forge <dir>", "Forge directory (created if missing)")
-  .requiredOption("--profile <name>", "client profile name to create")
+  .requiredOption("--profile <name>", "client profile to create or update")
   .option("--workspace <dir>", "workspace to import", ".")
-  .option("--write-config", "write craftar.yaml into the workspace", false)
+  .option("--write-config", "write craftar.yaml into the workspace, merging an existing one (forge, profile, targets)", false)
   .action(async (o) => {
     if (o.from !== "claude-code") fail(`unsupported source "${o.from}" (only claude-code for now)`);
     const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig });
