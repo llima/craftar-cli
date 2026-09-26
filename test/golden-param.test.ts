@@ -125,3 +125,100 @@ describe("two-profile sync proof (spec 09 §11.4)", () => {
     expect(moved).toEqual(expect.arrayContaining([".claude/rules/deploy.md", ".kiro/steering/deploy.md", "AGENTS.md"]));
   });
 });
+
+describe("golden import round trip (spec 10 §10.3, §10.5)", () => {
+  async function syncedWorkspaces(tmp: string, forge: string, profiles: string[]) {
+    const ws: Record<string, string> = {};
+    for (const p of profiles) {
+      ws[p] = path.join(tmp, `ws-${p}`);
+      await fs.mkdir(ws[p], { recursive: true });
+      await fs.writeFile(path.join(ws[p], "craftar.yaml"), YAML.stringify({ forge: path.relative(ws[p], forge).split(path.sep).join("/"), profile: p }));
+      const r = runCli(["sync", "--workspace", ws[p]]);
+      expect(r.code, r.stderr).toBe(0);
+    }
+    return ws;
+  }
+  const importCli = (forge: string, profile: string, ws: string, ...extra: string[]) =>
+    runCli(["import", "--from", "claude-code", "--forge", forge, "--profile", profile, "--workspace", ws, ...extra]);
+  const statesOf = (ws: string) =>
+    (JSON.parse(runCli(["status", "--workspace", ws, "--json"]).stdout).statuses as Array<{ path: string; state: string }>).map((s) => [s.path, s.state] as const);
+  const gitStatus = (dir: string) => execFileSync("git", ["-C", dir, "status", "--porcelain"], { encoding: "utf8" });
+
+  it("re-importing both clients after the extractions reuses every base and moves no workspace byte (AC 4)", async () => {
+    const { tmp, forge } = await freshForge();
+    const ws = await syncedWorkspaces(tmp, forge, ["acme", "globex"]);
+    const before = { acme: await snapshot(ws.acme), globex: await snapshot(ws.globex) };
+    await unifyBoth(forge);
+    for (const p of ["acme", "globex"]) {
+      const r = importCli(forge, p, ws[p]);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout, p).toContain("0 created, 3 reused, 0 variants, 0 rejected");
+      expect(r.stdout, p).toMatch(/rendered rule\/deploy — deploy\.api, deploy\.web/);
+      expect(r.stdout, p).toMatch(/rendered rule\/ports — ports\.api/);
+    }
+    // import re-points acme at the shared base, which lists the same rules in the same order.
+    expect(gitStatus(forge)).toBe(" M profiles/acme/profile.yaml\n");
+    expect(YAML.parse(await fs.readFile(path.join(forge, "profiles/acme/profile.yaml"), "utf8")).recipes).toEqual(["base"]);
+    for (const p of ["acme", "globex"] as const) {
+      expect(statesOf(ws[p]).filter(([, s]) => s !== "unchanged"), p).toEqual([]);
+      expect(runCli(["sync", "--check", "--workspace", ws[p]]).code, p).toBe(0);
+      expect(await snapshot(ws[p]), p).toEqual(before[p]);
+    }
+  });
+
+  it("a changed value updates the profile, not the Forge's text, and only what renders it moves (AC 5)", async () => {
+    const { tmp, forge } = await freshForge();
+    const ws = await syncedWorkspaces(tmp, forge, ["acme"]);
+    await unifyBoth(forge);
+    expect(importCli(forge, "acme", ws.acme).code).toBe(0);
+    gitCommitAll(forge, "re-import acme");
+    const rule = path.join(ws.acme, ".claude/rules/deploy.md");
+    await fs.writeFile(rule, (await fs.readFile(rule, "utf8")).replaceAll("acme-api", "acme-api-v2"));
+    const r = importCli(forge, "acme", ws.acme);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('param deploy.api: "acme-api" → "acme-api-v2"');
+    expect(r.stdout).toContain("0 variants");
+    expect(gitStatus(forge)).toBe(" M profiles/acme/profile.yaml\n");
+    const moved = statesOf(ws.acme).filter(([, s]) => s !== "unchanged");
+    expect(moved.map(([p]) => p).sort()).toEqual([".kiro/steering/deploy.md", "AGENTS.md"]);
+  });
+
+  it("a new client's values are inferred into its new profile, and its workspace adopts (AC 6, 7)", async () => {
+    const { tmp, forge } = await freshForge();
+    await unifyBoth(forge);
+    // A workspace rendered for a client the Forge has never seen, with no trace of Craftar.
+    const scratch = path.join(tmp, "scratch-forge");
+    await copyTree(forge, scratch);
+    await fs.mkdir(path.join(scratch, "profiles/initech"), { recursive: true });
+    await fs.writeFile(
+      path.join(scratch, "profiles/initech/profile.yaml"),
+      YAML.stringify({ name: "initech", recipes: ["base"], targets: ["claude-code", "kiro", "agents-md"], params: { "deploy.api": "initech-api", "deploy.web": "initech-web", "ports.api": "7070" } }),
+    );
+    const [init] = Object.values(await syncedWorkspaces(tmp, scratch, ["initech"]));
+    await fs.rm(path.join(init, "craftar.yaml"));
+    await fs.rm(path.join(init, "craftar.lock"));
+
+    const twin = path.join(tmp, "ws-twin");
+    await copyTree(init, twin);
+    const r = importCli(forge, "initech", init, "--write-config");
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("0 variants");
+    expect(r.stdout.split("\n").filter((l) => l.includes("inferred "))).toHaveLength(2);
+    expect(YAML.parse(await fs.readFile(path.join(forge, "profiles/initech/profile.yaml"), "utf8")).params).toEqual({
+      "deploy.api": "initech-api",
+      "deploy.web": "initech-web",
+      "ports.api": "7070",
+    });
+    expect(await fs.readFile(path.join(forge, "profiles/initech/profile.yaml"), "utf8")).toContain('ports.api: "7070"');
+    const states = statesOf(init);
+    expect(states.length).toBeGreaterThan(0);
+    expect(states.filter(([, s]) => s !== "adopt")).toEqual([]);
+
+    // The ambiguous twin: a line two splits can explain becomes a variant, naming why.
+    const deploy = path.join(twin, ".claude/rules/deploy.md");
+    await fs.writeFile(deploy, (await fs.readFile(deploy, "utf8")).replace("`initech-api` and `initech-web`", "`initech-api` and `x` and `initech-web`"));
+    const t = importCli(forge, "umbrella", twin);
+    expect(t.code, t.stderr).toBe(0);
+    expect(t.stdout).toContain("variant rule/deploy--umbrella — differs from rule/deploy already in the Forge (inference ambiguous on line 5 of rule.md)");
+  });
+});
