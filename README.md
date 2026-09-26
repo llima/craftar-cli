@@ -198,7 +198,7 @@ Next: `craftar init` from a profile; profile-driven integrations (PM tool → MC
 
 - **Re-import is template-aware.** A workspace whose text an extracted base renders (through its defaults or the profile's `params`) is reused instead of becoming a variant, and a new client's values are inferred into its profile.
 - **A second client no longer widens `base`.** A profile whose ingredients differ from a shared recipe gets its own `<recipe>--<profile>`. Profiles that already resolve a widened `base` keep it until their next re-import.
-- **An existing profile, owned recipe and `craftar.yaml` are edited in place.** Their comments and hand edits survive; one that does not round-trip through the YAML writer is refused (reformat it and re-run). The `created` count no longer lists an existing profile.
+- **An existing profile, owned recipe and `craftar.yaml` are edited in place.** Their comments and every other field survive, but the lists import computes are set to this workspace's: an owned recipe's `ingredients`, the import-owned entries of the profile's `recipes` (`base`, `stack-*`, their `--<profile>` recipes and `<profile>-steering`) and `craftar.yaml`'s `targets`. A file that does not round-trip through the YAML writer is refused (reformat it and re-run). The `created` count no longer lists an existing profile.
 - **A profile value can change on re-import.** When a workspace shows another value for a key its profile sets, the profile is updated and the report says `param <key>: <old> → <new>` — every workspace on that profile renders it at its next sync.
 - **`import` now loads an existing Forge first**, and refuses one that does not load.
 
