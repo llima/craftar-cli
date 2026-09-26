@@ -164,7 +164,7 @@ const forge = program.command("forge").description("Operate on the Forge itself 
 
 forge
   .command("variants")
-  .description("List ingredients that have variants, nearest first, and variants whose base is missing. Read-only")
+  .description("List ingredients that have variants, nearest first, with hunks counted by suggested class, and variants whose base is missing. Read-only")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
@@ -192,7 +192,7 @@ forge
 
 forge
   .command("diff")
-  .description("Show the distance and the differences between a base ingredient and each of its variants. Read-only")
+  .description("Show the distance and the differences between a base ingredient and each of its variants, each hunk with a suggested class (evolution, value, block) that never decides anything. Read-only")
   .argument("<type/name>", "base ingredient (rule/workflow)")
   .option("--against <profile>", "only this profile's variant")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
@@ -245,7 +245,7 @@ forge
   .requiredOption("--profile <p>", "which variant to resolve")
   .option("--take <side>", "resolve every decision to base or variant")
   .option("--plan <file>", "apply the decisions in this plan file")
-  .option("--save-plan <file>", "write a plan with every decision deferred to a new file outside the Forge, and stop")
+  .option("--save-plan <file>", "write a plan with every decision deferred, each hunk annotated with its suggested class, to a new file outside the Forge, and stop")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
