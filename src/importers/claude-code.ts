@@ -117,7 +117,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const steeringDir = path.join(ws, ".kiro", "steering");
   const steeringMeta = new Map<string, { inclusion: string; fileMatchPattern?: string; generated: boolean; text: string; scan?: string }>();
   if (await exists(steeringDir)) {
-    for (const f of await fs.readdir(steeringDir)) {
+    for (const f of (await fs.readdir(steeringDir)).sort()) {
       if (!f.endsWith(".md")) continue;
       const src = await readSource(path.join(steeringDir, f));
       const text = toLf(stripBom(src.text));
@@ -206,7 +206,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- skills ---- */
   const skillsDir = path.join(claudeDir, "skills");
   if (await exists(skillsDir)) {
-    for (const e of await fs.readdir(skillsDir, { withFileTypes: true })) {
+    // Sorted, so the decision order — and which of two sources is "the later one" — is reproducible (spec 10 §14 Q6).
+    for (const e of (await fs.readdir(skillsDir, { withFileTypes: true })).sort((x, y) => x.name.localeCompare(y.name))) {
       if (e.name === ".gitkeep") continue;
       if (e.isDirectory()) {
         const files: Record<string, string | Buffer> = {};
