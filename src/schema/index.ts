@@ -232,11 +232,31 @@ export type LockEntry = z.infer<typeof LockEntrySchema>;
 export const TakeSchema = z.enum(["base", "variant", "keep"]);
 export type Take = z.infer<typeof TakeSchema>;
 
+/** The class `forge diff` suggests for a hunk (spec 08). A suggestion never decides anything. */
+export const HUNK_CLASSES = ["evolution", "value", "block"] as const;
+export const HunkClassSchema = z.enum(HUNK_CLASSES);
+export type HunkClass = z.infer<typeof HunkClassSchema>;
+
+export const SuggestedTokenSchema = z.object({
+  a: z.string(), // the base side's text for this change
+  b: z.string(), // the variant side's text
+  param: z.string(), // "param.<slug>"
+});
+
+export const HunkSuggestionSchema = z.object({
+  class: HunkClassSchema,
+  reason: z.string(),
+  tokens: z.array(SuggestedTokenSchema).optional(),
+});
+export type HunkSuggestion = z.infer<typeof HunkSuggestionSchema>;
+
 export const PlanHunkSchema = z.object({
   hunk: z.number().int().positive(),
   /** Human echo of what `forge diff` printed. Never read back. */
   at: z.string().default(""),
   take: TakeSchema,
+  /** Echo of the suggested class when the plan was saved. Never read back; a malformed one is dropped. */
+  suggestion: HunkSuggestionSchema.optional().catch(undefined),
 });
 export type PlanHunk = z.infer<typeof PlanHunkSchema>;
 

@@ -7,7 +7,7 @@ import YAML from "yaml";
 import { exists, gitDirty, loadForge, type Forge } from "../src/core/forge.js";
 import { applyPlan, metaDifferences, planFrom, rewriteRecipes, writeUnified } from "../src/core/unify.js";
 import { diffIngredients } from "../src/core/variants.js";
-import { UnifyPlanSchema } from "../src/schema/index.js";
+import { HunkSuggestionSchema, UnifyPlanSchema } from "../src/schema/index.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 
 const execFileP = promisify(execFile);
@@ -567,5 +567,31 @@ describe("metaDifferences — MCP server key order (spec 07, AC 19)", () => {
       ],
     });
     expect(metaDifferences(forge.ingredients.get("mcp/p")!, forge.ingredients.get("mcp/p--acme")!)).toEqual([]);
+  });
+});
+
+describe("the hunk suggestion in a plan (spec 08 §5.1)", () => {
+  const plan = (hunk: Record<string, unknown>) => ({
+    schema: 1,
+    base: "rule/w",
+    profile: "acme",
+    variant: "rule/w--acme",
+    baseFingerprint: "sha256:a",
+    variantFingerprint: "sha256:b",
+    files: [{ file: "rule.md", hunks: [{ hunk: 1, at: "lines 1–1", take: "keep", ...hunk }] }],
+  });
+  const value = { class: "value", reason: "1 token differs", tokens: [{ a: "acme-api", b: "globex-api", param: "param.acme_api" }] };
+
+  it("accepts the three classes and refuses any other", () => {
+    expect(HunkSuggestionSchema.safeParse(value).success).toBe(true);
+    expect(HunkSuggestionSchema.safeParse({ class: "evolution", reason: "prose differs" }).success).toBe(true);
+    expect(HunkSuggestionSchema.safeParse({ class: "bogus", reason: "x" }).success).toBe(false);
+  });
+
+  it("keeps a valid suggestion, drops a malformed one without failing, and accepts a plan without one", () => {
+    expect(UnifyPlanSchema.parse(plan({ suggestion: value })).files[0].hunks![0].suggestion).toEqual(value);
+    const mangled = UnifyPlanSchema.parse(plan({ suggestion: { class: "bogus" } })).files[0].hunks![0];
+    expect(mangled.suggestion).toBeUndefined();
+    expect(UnifyPlanSchema.parse(plan({})).files[0].hunks![0]).toEqual({ hunk: 1, at: "lines 1–1", take: "keep" });
   });
 });
