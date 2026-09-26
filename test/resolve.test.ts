@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkspace, plan } from "../src/core/sync.js";
-import { resolve } from "../src/core/resolve.js";
+import { resolve, substitute } from "../src/core/resolve.js";
 import { profile, recipe, rule, scenario, type ForgeSpec, type WorkspaceSpec } from "./helpers/forge.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -108,5 +108,14 @@ describe("the ingredient default layer (spec 09 §5.4)", () => {
     expect((await rendered({ profileParams: { "deploy.api": "profile" } })).a).toBe("api: profile\n");
     expect((await rendered({ profileParams: { "deploy.api": "profile" }, config: { overrides: { params: { "deploy.api": "workspace" } } } })).a).toBe("api: workspace\n");
     expect((await rendered({ config: { overrides: { params: { "deploy.api": "workspace" } } }, local: { overrides: { params: { "deploy.api": "local" } } } })).a).toBe("api: local\n");
+  });
+});
+
+describe("substitute — own properties only", () => {
+  it("leaves {{constructor}}, {{toString}} and {{__proto__}} literal and reports them missing", () => {
+    const missing = new Set<string>();
+    const text = "{{constructor}} {{toString}} {{__proto__}} {{k}}";
+    expect(substitute(text, { k: "v" }, missing)).toBe("{{constructor}} {{toString}} {{__proto__}} v");
+    expect([...missing].sort()).toEqual(["__proto__", "constructor", "toString"]);
   });
 });

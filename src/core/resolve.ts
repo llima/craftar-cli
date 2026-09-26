@@ -94,7 +94,8 @@ export function paramsFor(ing: LoadedIngredient, resolution: Resolution): Record
 /** Substitute `{{param}}` placeholders. Unknown placeholders are left untouched (and reported by the caller). */
 export function substitute(text: string, params: Record<string, unknown>, missing?: Set<string>): string {
   return text.replace(/\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g, (m, key: string) => {
-    if (key in params) return String(params[key]);
+    // Own properties only: `key in params` resolved {{constructor}} to Object.prototype.constructor.
+    if (Object.hasOwn(params, key)) return String(params[key]);
     missing?.add(key);
     return m;
   });
