@@ -6,7 +6,10 @@ import { exists, listFiles, typeFolder, FORGE_MANIFEST } from "../core/forge.js"
 import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../core/secrets.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
-import { IngredientSchema, type Ingredient, type McpServer, type Profile, type Recipe, type Target } from "../schema/index.js";
+import { IngredientSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Target } from "../schema/index.js";
+import { isDeepStrictEqual } from "node:util";
+import { resolve } from "../core/resolve.js";
+import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
 import { decide, forgeBefore, pin, sourceKeys, workspaceParams, type RunContext } from "./decide.js";
 import { renderMap } from "../core/template-import.js";
@@ -34,6 +37,8 @@ export interface ImportReport {
   inferred: { name: string; values: Record<string, string> }[];
   /** The profile change, in the order it was accepted; `old` is null for an added key. */
   params: { key: string; old: string | null; value: string; from: string }[];
+  /** Shared recipes this run did not use for the profile, and the owned recipe it used instead (spec 10 §6.7). */
+  recipeSplits: { shared: string; owned: string; reason: string }[];
 }
 
 /** Rules that every workspace shares by intent — they seed the `base` recipe. */
@@ -91,7 +96,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const ws = path.resolve(opts.workspaceRoot);
   const forge = stage.root;
   const report: ImportReport = {
-    created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [], rendered: [], inferred: [], params: [],
+    created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [], rendered: [], inferred: [], params: [], recipeSplits: [],
   };
   const claudeDir = path.join(ws, ".claude");
   if (!(await exists(claudeDir))) throw new Error(`${claudeDir} not found — is this a Claude Code workspace?`);
@@ -314,7 +319,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- recipes ---- */
   const recipesDir = path.join(forge, "recipes");
   const isVariant = (ref: string) => report.variants.some((v) => v.name === ref);
-  const suffixIf = (name: string, ingredients: string[]) => (ingredients.some(isVariant) ? `${name}--${opts.profileName}` : name);
+  const recipeOpts = { stage, dir: recipesDir, profile: opts.profileName, forge: ctx.forge, report, profileIsNew: !ctx.forge?.profiles.has(opts.profileName) };
 
   const stackRecipes: string[] = [];
   for (const [ruleRef, pattern] of scopedRules) {
@@ -322,18 +327,15 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     const agents = [...agentBodies].filter(([ref, body]) => agentBelongsTo(ref.split("/")[1], ruleName, body)).map(([ref]) => ref);
     for (const a of agents) refs.base = refs.base.filter((r) => r !== a);
     const ingredients = [ruleRef, ...agents];
-    const recipeName = suffixIf(`stack-${ruleName}`, ingredients);
-    await writeRecipe(stage, recipesDir, { name: recipeName, description: `Conventions + reviewer for repos matching ${pattern}`, extends: [], ingredients, params: {} }, report);
-    stackRecipes.push(recipeName);
+    stackRecipes.push(await placeRecipe(recipeOpts, `stack-${ruleName}`, ingredients, `Conventions + reviewer for repos matching ${pattern}`, ingredients.some(isVariant)));
   }
 
   const baseIngredients = unique(refs.base);
-  const baseName = suffixIf("base", baseIngredients);
-  await writeRecipe(stage, recipesDir, { name: baseName, description: "Always-on conventions, commands, agents, scripts and MCP servers.", extends: [], ingredients: baseIngredients, params: {} }, report);
+  const baseName = await placeRecipe(recipeOpts, "base", baseIngredients, "Always-on conventions, commands, agents, scripts and MCP servers.", baseIngredients.some(isVariant));
   const profileRecipes = [baseName, ...stackRecipes];
   if (refs.steering.length) {
     const n = `${opts.profileName}-steering`;
-    await writeRecipe(stage, recipesDir, { name: n, description: `Hand-written Kiro steering specific to ${opts.profileName}.`, extends: [], ingredients: refs.steering, params: {} }, report);
+    await writeOwnedRecipe(recipeOpts, n, refs.steering, `Hand-written Kiro steering specific to ${opts.profileName}.`);
     profileRecipes.push(n);
   }
 
@@ -622,15 +624,98 @@ function validateImported(meta: Ingredient): Ingredient {
   throw new Error(`${source} (${meta.type}/${meta.name}) does not fit the ingredient schema: ${r.error.message}`);
 }
 
-async function writeRecipe(stage: ForgeStage, dir: string, recipe: Recipe, report: ImportReport): Promise<void> {
-  const file = path.join(dir, `${recipe.name}.yaml`);
-  const clean = JSON.parse(JSON.stringify(recipe)); // drop undefined
-  if (await stage.exists(file)) {
-    const prev = YAML.parse(await stage.readText(file));
-    clean.ingredients = unique([...(prev.ingredients ?? []), ...clean.ingredients]);
+interface RecipeOptions {
+  stage: ForgeStage;
+  dir: string;
+  profile: string;
+  forge: import("../core/forge.js").Forge | null;
+  report: ImportReport;
+  profileIsNew: boolean;
+}
+
+const recipeText = (name: string, description: string, ingredients: string[]) =>
+  YAML.stringify(JSON.parse(JSON.stringify({ name, description, extends: [], ingredients, params: {} }))); // today's bytes
+
+/**
+ * Where a shared recipe's computed list goes (spec 10 §6.7, Ruling 7): a shared recipe is never
+ * edited and never widened for one client. It is used only when its ingredients equal the list as
+ * a set — and, for a profile that already exists, in the same relative rule order, so AGENTS.md
+ * does not reorder (Q10). Otherwise the profile gets its own `<name>--<profile>`.
+ */
+async function placeRecipe(o: RecipeOptions, name: string, list: string[], description: string, holdsVariant: boolean): Promise<string> {
+  const owned = `${name}--${o.profile}`;
+  if (holdsVariant) return writeOwnedRecipe(o, owned, list, description);
+  const file = path.join(o.dir, `${name}.yaml`);
+  if (!(await o.stage.exists(file))) {
+    o.stage.write(file, recipeText(name, description, list));
+    o.report.recipes.push(name);
+    return name;
   }
-  stage.write(file, YAML.stringify(clean));
-  report.recipes.push(recipe.name);
+  const existing: string[] = (YAML.parse(stripBom(await o.stage.readText(file)))?.ingredients ?? []).map(String);
+  const rules = (xs: string[]) => xs.filter((x) => x.startsWith("rule/"));
+  const lacks = existing.find((x) => !list.includes(x));
+  const extra = list.find((x) => !existing.includes(x));
+  const reorders = !o.profileIsNew && JSON.stringify(rules(list)) !== JSON.stringify(rules(existing));
+  if (!lacks && !extra && !reorders) {
+    o.report.recipes.push(name);
+    return name;
+  }
+  const reason = lacks
+    ? `${name} lists ${lacks}, which this workspace lacks`
+    : extra
+      ? `this workspace has ${extra}, which ${name} lacks`
+      : `${name} orders its rules differently`;
+  o.report.recipeSplits.push({ shared: name, owned, reason });
+  return writeOwnedRecipe(o, owned, list, description);
+}
+
+/**
+ * A recipe the importing profile owns holds exactly this workspace's list: a new one is written
+ * as today; an existing one is edited in place — entries kept in their order, dropped ones
+ * removed, new ones appended — refused if another profile resolves it (I7) or it cannot be
+ * edited in place (I2).
+ */
+async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], description: string): Promise<string> {
+  const file = path.join(o.dir, `${name}.yaml`);
+  o.report.recipes.push(name);
+  if (!(await o.stage.exists(file))) {
+    o.stage.write(file, recipeText(name, description, list));
+    return name;
+  }
+  const raw = await o.stage.readText(file);
+  const before = RecipeSchema.parse(YAML.parse(stripBom(raw)) ?? {});
+  const next = [...before.ingredients.filter((x) => list.includes(x)), ...list.filter((x) => !before.ingredients.includes(x))];
+  if (JSON.stringify(next) === JSON.stringify(before.ingredients)) return name;
+  if (o.forge) {
+    for (const q of o.forge.profiles.keys()) {
+      if (q !== o.profile && recipesOf(o.forge, q).has(name)) throw new Error(`import: recipe ${name} is also used by profile ${q} — its ingredients would change there`);
+    }
+  }
+  const label = `recipes/${name}.yaml`;
+  const content = editYamlText(raw, { command: "import", label, keys: ["ingredients"] }, (doc) => {
+    const seq = doc.get("ingredients", true);
+    if (!YAML.isSeq(seq)) {
+      doc.set("ingredients", next);
+      return;
+    }
+    seq.items = seq.items.filter((it) => list.includes(String(YAML.isScalar(it) ? it.value : it)));
+    for (const x of list) if (!before.ingredients.includes(x)) seq.items.push(doc.createNode(x));
+  });
+  const after = RecipeSchema.safeParse(YAML.parse(stripBom(content)) ?? {});
+  if (!after.success || !isDeepStrictEqual(after.data, { ...before, ingredients: next })) {
+    throw new Error(`import: cannot edit ${label} in place (the edit does not read back as exactly the new ingredients) — reformat it by hand, commit, and re-run`);
+  }
+  o.stage.write(file, content);
+  return name;
+}
+
+/** The recipes a profile resolves inside the Forge; fails closed — a profile that does not resolve counts as using everything. */
+function recipesOf(forge: import("../core/forge.js").Forge, profile: string): { has(name: string): boolean } {
+  try {
+    return new Set(resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile })).recipes);
+  } catch {
+    return { has: () => true };
+  }
 }
 
 /**

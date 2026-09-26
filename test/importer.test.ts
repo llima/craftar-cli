@@ -617,3 +617,66 @@ describe("template-aware import — decisions (spec 10 §6.1–§6.5)", () => {
     expect((await fail(importInto(t.forge, t.ws("b"), "b")))?.message).toContain("import: rule/deploy--b is also used by profile a — its files would change there");
   });
 });
+
+describe("template-aware import — shared and owned recipes (spec 10 §6.7, Ruling 7)", () => {
+  const fail = (p: Promise<unknown>) => p.then(() => null, (e: Error) => e);
+  async function resolvedRefs(forgeRoot: string, profile: string): Promise<string[]> {
+    const { resolve } = await import("../src/core/resolve.js");
+    const { WorkspaceConfigSchema } = await import("../src/schema/index.js");
+    return resolve(await loadForge(forgeRoot), WorkspaceConfigSchema.parse({ forge: ".", profile })).ingredients.map((i) => i.ref).sort();
+  }
+
+  it("a second client with an extra rule does not widen the shared base (AC 19, first direction)", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    await writeFiles(t.ws("b"), { ".claude/rules/a.md": "# A\n", ".claude/rules/z.md": "# Z\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.recipeSplits).toEqual([{ shared: "base", owned: "base--b", reason: "this workspace has rule/z, which base lacks" }]);
+    expect((await yaml(path.join(t.forge, "recipes/base.yaml"))).ingredients).toEqual(["rule/a"]);
+    expect(await resolvedRefs(t.forge, "a")).toEqual(["rule/a"]);
+    expect(await resolvedRefs(t.forge, "b")).toEqual(["rule/a", "rule/z"]);
+  });
+
+  it("a second client lacking a rule does not inherit it (AC 19, other direction)", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n", ".claude/rules/y.md": "# Y\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    await writeFiles(t.ws("b"), { ".claude/rules/a.md": "# A\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.recipeSplits[0]).toMatchObject({ shared: "base", owned: "base--b", reason: "base lists rule/y, which this workspace lacks" });
+    expect(await resolvedRefs(t.forge, "b")).toEqual(["rule/a"]);
+    expect(await resolvedRefs(t.forge, "a")).toEqual(["rule/a", "rule/y"]);
+  });
+
+  it("an owned recipe holds exactly the workspace's list, edited in place, and a set-equal shared recipe is reused", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    await writeFiles(t.ws("b"), { ".claude/rules/a.md": "# A\n", ".claude/rules/z.md": "# Z\n" });
+    await importInto(t.forge, t.ws("b"), "b");
+    const owned = path.join(t.forge, "recipes/base--b.yaml");
+    await fs.writeFile(owned, "# b's own recipe\n" + (await fs.readFile(owned, "utf8")));
+    await writeFiles(t.ws("b"), { ".claude/rules/w.md": "# W\n" });
+    await fs.rm(path.join(t.ws("b"), ".claude/rules/z.md"));
+    await importInto(t.forge, t.ws("b"), "b");
+    const text = await fs.readFile(owned, "utf8");
+    expect(text.startsWith("# b's own recipe\n")).toBe(true);
+    expect(YAML.parse(text).ingredients).toEqual(["rule/a", "rule/w"]);
+    await fs.rm(path.join(t.ws("b"), ".claude/rules/w.md"));
+    const back = await importInto(t.forge, t.ws("b"), "b");
+    expect(back.recipes).toContain("base");
+    expect(back.recipeSplits).toEqual([]);
+  });
+
+  it("I7: an owned recipe another profile resolves is not changed", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    await writeFiles(t.ws("b"), { ".claude/rules/a.md": "# A\n", ".claude/rules/z.md": "# Z\n" });
+    await importInto(t.forge, t.ws("b"), "b");
+    await fs.writeFile(path.join(t.forge, "profiles/a/profile.yaml"), "name: a\nrecipes:\n  - base--b\n");
+    await writeFiles(t.ws("b"), { ".claude/rules/w.md": "# W\n" });
+    expect((await fail(importInto(t.forge, t.ws("b"), "b")))?.message).toContain("import: recipe base--b is also used by profile a — its ingredients would change there");
+  });
+});
