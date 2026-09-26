@@ -436,7 +436,7 @@ forge
             base: base.ref,
             profile: o.profile,
             resolved: result.resolved,
-            written: Object.keys(result.write).sort(),
+            written: [...Object.keys(result.write), ...(paramWrites?.ingredientYaml ? ["ingredient.yaml"] : [])].sort(),
             removed: [...result.remove].sort(),
             unresolved: result.unresolved,
             variantRemoved,
@@ -447,7 +447,8 @@ forge
               identicalToSibling: cascade.identicalToSibling,
             },
             metaDiffers: result.metaDiffers,
-            params: result.params.map((e) => ({ key: e.key, default: e.default, value: e.value })),
+            // Spec 09 §4.5: only what this run wrote — [] when every key was already declared and valued.
+            params: result.params.filter((e) => paramWrites?.written.includes(e.key)).map((e) => ({ key: e.key, default: e.default, value: e.value })),
             profileEdited: paramWrites?.profile ? path.relative(f.root, paramWrites.profile.abs).split(path.sep).join("/") : null,
             warnings,
           },
