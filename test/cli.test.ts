@@ -1446,3 +1446,82 @@ describe("cli — forge unify --save-plan through a dangling symlink (Ruling 30,
     expect(await snapshot(root)).toEqual(before);
   });
 });
+
+describe("cli — suggested hunk classes (spec 08)", () => {
+  const BASE = "# W\nBump `package.json` before the PR.\nshared\nStep 6: open the PR.\nend\n";
+  const VARIANT = "# W\nBump `Directory.Build.props` before the PR.\nshared\nStep 5: open the PR.\nend\nonly here\n";
+  async function classForge(): Promise<string> {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [
+        rule("wf", BASE),
+        { meta: { type: "rule", name: "wf--acme", as: "wf" }, files: { "rule.md": VARIANT, "extra.md": "x\n" } },
+        rule("m", "same\n"),
+        rule("m--acme", "same\n", { as: "m", targets: ["kiro"] }),
+      ],
+    });
+    gitInit(root);
+    gitCommitAll(root, "init");
+    return root;
+  }
+
+  it("forge diff prints the class and reason after the unchanged prefix, and --json carries suggestion next to kind", async () => {
+    const root = await classForge();
+    const text = runCli(["forge", "diff", "rule/wf", "--forge", root]);
+    expect(text.code, text.stderr).toBe(0);
+    expect(text.stdout).toContain("hunk 1  [inline]  lines 2–2  value: 1 token differs → param.package_json");
+    expect(text.stdout).toContain("hunk 2  [inline]  lines 4–4  evolution: numbering differs");
+    expect(text.stdout).toContain("block: only in the variant");
+    const json = runCli(["forge", "diff", "rule/wf", "--forge", root, "--json"]);
+    const hunks = JSON.parse(json.stdout)[0].diff.files[0].hunks;
+    expect(hunks[0].kind).toBe("inline");
+    expect(hunks[0].suggestion).toEqual({ class: "value", reason: "1 token differs", tokens: [{ a: "package.json", b: "Directory.Build.props", param: "param.package_json" }] });
+    for (const h of hunks) expect("tokens" in h.suggestion).toBe(h.suggestion.class === "value");
+  });
+
+  it("forge variants appends the class counts, none for a variant without hunks, and --json carries classes", async () => {
+    const root = await classForge();
+    const text = runCli(["forge", "variants", "--forge", root]);
+    expect(text.code, text.stderr).toBe(0);
+    expect(text.stdout).toMatch(/acme \([^)]*\) \[1 evolution · 1 value · 2 block\]/);
+    expect(text.stdout).toMatch(/acme \(meta only\)(?! \[)/);
+    const { groups } = JSON.parse(runCli(["forge", "variants", "--forge", root, "--json"]).stdout);
+    const wf = groups.find((g: { base: string }) => g.base === "rule/wf").variants[0];
+    expect(wf.classes).toEqual({ evolution: 1, value: 1, block: 2 });
+    expect(wf.classes.evolution + wf.classes.value + wf.classes.block).toBe(wf.distance.hunks);
+  });
+
+  it("--save-plan writes a suggestion per hunk and none on one-sided entries; --plan ignores it", async () => {
+    const planDir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(planDir, { recursive: true, force: true }));
+    const root = await classForge();
+    const planPath = path.join(planDir, "plan.yaml");
+    expect(runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+    const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+    const paired = plan.files.find((f: { file: string }) => f.file === "rule.md");
+    expect(paired.hunks.map((h: { suggestion: { class: string } }) => h.suggestion.class)).toEqual(["value", "evolution", "block"]);
+    expect(paired.hunks.every((h: { take: string }) => h.take === "keep")).toBe(true);
+    for (const f of plan.files.filter((f: { onlyIn?: string }) => f.onlyIn)) expect(f).not.toHaveProperty("suggestion");
+
+    for (const h of paired.hunks) h.take = "variant";
+    for (const f of plan.files.filter((f: { onlyIn?: string }) => f.onlyIn)) f.take = "variant";
+    const variants = {
+      edited: plan,
+      mangled: { ...plan, files: plan.files.map((f: { hunks?: object[] }) => (f.hunks ? { ...f, hunks: f.hunks.map((h) => ({ ...h, suggestion: { class: "bogus" } })) } : f)) },
+      removed: { ...plan, files: plan.files.map((f: { hunks?: object[] }) => (f.hunks ? { ...f, hunks: f.hunks.map(({ suggestion: _, ...h }: { suggestion?: unknown }) => h) } : f)) },
+    };
+    const results: Record<string, Record<string, string>> = {};
+    for (const [name, p] of Object.entries(variants)) {
+      const forgeRoot = await classForge();
+      const file = path.join(planDir, `${name}.yaml`);
+      await fs.writeFile(file, YAML.stringify(p));
+      const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--plan", file, "--forge", forgeRoot]);
+      expect(r.code, `${name}: ${r.stderr}`).toBe(0);
+      const snap = await snapshot(forgeRoot);
+      results[name] = Object.fromEntries(Object.entries(snap).filter(([k]) => !k.startsWith(".git/")));
+    }
+    expect(results.mangled).toEqual(results.edited);
+    expect(results.removed).toEqual(results.edited);
+  });
+});

@@ -20,7 +20,7 @@ import {
   type RecipeCascadeResult,
   type WriteJournal,
 } from "./core/unify.js";
-import { UnifyPlanSchema, type IngredientRef, type Take, type UnifyPlan } from "./schema/index.js";
+import { HUNK_CLASSES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type Take, type UnifyPlan } from "./schema/index.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
@@ -177,7 +177,7 @@ forge
     if (!groups.length && !orphans.length) return console.log("  no variants");
     for (const g of groups) {
       const count = `${g.variants.length} variant${g.variants.length > 1 ? "s" : ""}`;
-      const detail = g.variants.map((v) => `${v.profile} (${describeDistance(v.distance)})`).join(", ");
+      const detail = g.variants.map((v) => `${v.profile} (${describeDistance(v.distance)})${describeClasses(v.classes)}`).join(", ");
       console.log(`  ${g.base.padEnd(24)} ${count.padEnd(11)} ${detail}`);
     }
     for (const orphan of orphans) {
@@ -226,7 +226,7 @@ forge
       for (const file of r.diff.files) {
         console.log(`  ${file.file}`);
         file.hunks.forEach((h, k) => {
-          console.log(`    hunk ${k + 1}  [${h.kind}]  ${hunkAt(h)}`);
+          console.log(`    hunk ${k + 1}  [${h.kind}]  ${hunkAt(h)}  ${describeSuggestion(h.suggestion)}`);
           for (const line of h.a.lines) console.log(pc.red(`      - ${line}`));
           if (h.a.noEofNewline) console.log(pc.red(`      ${NO_EOF_NEWLINE_MARKER}`));
           for (const line of h.b.lines) console.log(pc.green(`      + ${line}`));
@@ -588,6 +588,18 @@ function lateFailure(e: unknown, root: string, journal: WriteJournal): string {
   if (restore.length) lines.push(`  git -C ${quote(root)} checkout -- ${restore.map(quote).join(" ")}`);
   if (created.length) lines.push(`  git -C ${quote(root)} clean -f -- ${created.map(quote).join(" ")}`);
   return lines.join("\n");
+}
+
+/** ` [1 evolution · 2 block]` in the fixed class order, zero counts omitted; empty for a variant without hunks (spec 08 §4.2). */
+function describeClasses(classes: Record<HunkClass, number>): string {
+  const parts = HUNK_CLASSES.filter((c) => classes[c] > 0).map((c) => `${classes[c]} ${c}`);
+  return parts.length ? ` [${parts.join(" · ")}]` : "";
+}
+
+/** `<class>: <reason>`, and ` → <params>` for a value (spec 08 §4.1). */
+function describeSuggestion(s: HunkSuggestion): string {
+  const params = s.tokens?.length ? ` → ${s.tokens.map((t) => t.param).join(", ")}` : "";
+  return `${s.class}: ${s.reason}${params}`;
 }
 
 function describeDistance(d: Distance): string {
