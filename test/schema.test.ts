@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
-import { IngredientSchema, INGREDIENT_TYPES } from "../src/schema/index.js";
+import { IngredientSchema, INGREDIENT_TYPES, UnifyPlanSchema } from "../src/schema/index.js";
 
 /** A minimal valid ingredient of each type. */
 const MINIMAL: Record<(typeof INGREDIENT_TYPES)[number], Record<string, unknown>> = {
@@ -81,5 +81,31 @@ describe("MCP server: validated, loaded as the original object (spec 07, Ruling 
       if (r.success) return;
       expect(r.error.issues[0].path).toEqual(["server"]);
     }
+  });
+});
+
+describe("ingredient params and the param hunk decision (spec 09 §5.3)", () => {
+  it("accepts declared params with a scalar default, and refuses an unknown field or an object default", () => {
+    expect(IngredientSchema.safeParse({ ...MINIMAL.rule, params: { "deploy.api": { default: "globex-api", description: "API repo" } } }).success).toBe(true);
+    expect(IngredientSchema.safeParse({ ...MINIMAL.rule, params: { port: { default: 8080 } } }).success).toBe(true);
+    expect(IngredientSchema.safeParse({ ...MINIMAL.rule, params: { k: { default: "x", deflt: "y" } } }).success).toBe(false);
+    expect(IngredientSchema.safeParse({ ...MINIMAL.rule, params: { k: { default: { a: 1 } } } }).success).toBe(false);
+  });
+
+  it("leaves an ingredient without params exactly as before (no default added)", () => {
+    expect(IngredientSchema.parse(MINIMAL.rule)).not.toHaveProperty("params");
+  });
+
+  it("accepts take: param with params on a hunk, and refuses a bad key or an empty token", () => {
+    const plan = (params: unknown) => ({
+      schema: 1, base: "rule/w", profile: "acme", variant: "rule/w--acme", baseFingerprint: "a", variantFingerprint: "b",
+      files: [{ file: "rule.md", hunks: [{ hunk: 1, take: "param", params }] }],
+    });
+    expect(UnifyPlanSchema.safeParse(plan([{ token: "globex-api", key: "deploy.api" }])).success).toBe(true);
+    expect(UnifyPlanSchema.safeParse(plan([{ token: "globex-api", key: "deploy-api" }])).success).toBe(false);
+    expect(UnifyPlanSchema.safeParse(plan([{ token: "", key: "k" }])).success).toBe(false);
+    expect(UnifyPlanSchema.safeParse(plan([{ token: "t", key: "k", extra: 1 }])).success).toBe(false);
+    const oneSided = { ...plan([]), files: [{ file: "x.md", onlyIn: "variant", take: "param" }] };
+    expect(UnifyPlanSchema.safeParse(oneSided).success).toBe(false);
   });
 });

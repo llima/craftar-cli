@@ -259,6 +259,7 @@ export async function applyPlan(
           );
         }
         seen.add(ph.hunk);
+        if (ph.take === "param") throw new Error(`unify plan: "${pf.file}" hunk ${ph.hunk} is take: param, which this build does not apply yet.`);
         takes[ph.hunk - 1] = ph.take;
       }
 
