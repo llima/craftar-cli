@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import YAML from "yaml";
 import { listFiles } from "../src/core/forge.js";
 import { runCli } from "./helpers/cli.js";
 
@@ -102,5 +103,23 @@ describe("golden: forge unify writes exact bytes into a Forge", () => {
       const got = await fs.readFile(path.join(forge, rel));
       expect(got.equals(want), `${rel} differs`).toBe(true);
     }
+  });
+
+  it("a fresh --save-plan over the input Forge reproduces the committed plan, suggestions included (spec 08 §9.4)", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-golden-plan-"));
+    cleanups.push(() => fs.rm(tmp, { recursive: true, force: true }));
+    const forge = path.join(tmp, "forge");
+    await copyTree(INPUT, forge);
+    gitInit(forge);
+    gitCommitAll(forge, "init");
+    const planTmp = path.join(tmp, "plan.yaml");
+    const save = runCli(["forge", "unify", "rule/workflow", "--profile", "acme", "--save-plan", planTmp, "--forge", forge]);
+    expect(save.code, save.stderr).toBe(0);
+    // The same three decisions test/helpers/regen-golden-unify.ts sets before writing the golden.
+    const plan = YAML.parse(await fs.readFile(planTmp, "utf8"));
+    plan.files.find((f: { file: string }) => f.file === "rule.md").hunks[0].take = "variant";
+    plan.files.find((f: { file: string }) => f.file === "extra.md").take = "variant";
+    plan.files.find((f: { file: string }) => f.file === "notes.md").take = "base";
+    expect(YAML.stringify(plan)).toBe(await fs.readFile(PLAN, "utf8"));
   });
 });
