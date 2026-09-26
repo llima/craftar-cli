@@ -1,0 +1,5 @@
+name: base
+ingredients:
+  - rule/deploy
+  - rule/ports
+  - rule/notes

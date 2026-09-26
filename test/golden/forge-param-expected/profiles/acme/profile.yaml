@@ -1,0 +1,11 @@
+name: acme
+recipes:
+  - base--acme
+targets:
+  - claude-code
+  - kiro
+  - agents-md
+params:
+  deploy.api: acme-api
+  deploy.web: acme-web
+  ports.api: "9090"

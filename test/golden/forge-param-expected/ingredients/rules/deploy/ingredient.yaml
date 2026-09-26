@@ -1,0 +1,7 @@
+type: rule
+name: deploy
+params:
+  deploy.api:
+    default: globex-api
+  deploy.web:
+    default: globex-web

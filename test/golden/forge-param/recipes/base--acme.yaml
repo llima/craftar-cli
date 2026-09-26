@@ -1,0 +1,5 @@
+name: base--acme
+ingredients:
+  - rule/deploy--acme
+  - rule/ports--acme
+  - rule/notes

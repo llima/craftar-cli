@@ -1,0 +1,5 @@
+type: rule
+name: ports
+params:
+  ports.api:
+    default: "8080"

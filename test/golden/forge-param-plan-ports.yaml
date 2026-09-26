@@ -1,0 +1,22 @@
+schema: 1
+base: rule/ports
+profile: acme
+variant: rule/ports--acme
+baseFingerprint: sha256:d3c7308590ef34811692af27c230a0808ed1536a54b49b2a09d42d27899a5c08
+variantFingerprint: sha256:54cabe9d7c422d5a4d725fc465e8d1d3d9e908048f079287aab84adea2cf0697
+files:
+  - file: rule.md
+    hunks:
+      - hunk: 1
+        at: lines 3–3
+        take: param
+        params:
+          - token: "8080"
+            key: ports.api
+        suggestion:
+          class: value
+          reason: 1 token differs
+          tokens:
+            - a: "8080"
+              b: "9090"
+              param: param.8080

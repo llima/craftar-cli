@@ -1,0 +1,40 @@
+schema: 1
+base: rule/deploy
+profile: acme
+variant: rule/deploy--acme
+baseFingerprint: sha256:3d9b9135ffd748ea787778b067cdf87a4d62cda66182047a82e4a3d7edeb2554
+variantFingerprint: sha256:1c4045e3110cd4123d2e2c59a9547771edfcbbe2f6aef6e8f6f7f2cc1e97799a
+files:
+  - file: rule.md
+    hunks:
+      - hunk: 1
+        at: lines 3–3
+        take: param
+        params:
+          - token: globex-api
+            key: deploy.api
+        suggestion:
+          class: value
+          reason: 1 token differs
+          tokens:
+            - a: globex-api
+              b: acme-api
+              param: param.globex_api
+      - hunk: 2
+        at: lines 5–5
+        take: param
+        params:
+          - token: globex-api
+            key: deploy.api
+          - token: globex-web
+            key: deploy.web
+        suggestion:
+          class: value
+          reason: 2 tokens differ
+          tokens:
+            - a: globex-api
+              b: acme-api
+              param: param.globex_api
+            - a: globex-web
+              b: acme-web
+              param: param.globex_web
