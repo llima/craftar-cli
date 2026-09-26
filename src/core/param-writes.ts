@@ -23,6 +23,8 @@ export interface ParamWrites {
   profile: { abs: string; content: string } | null;
   /** Paths git must hold before anything is written (spec 06 row 17). */
   mustHold: string[];
+  /** The keys this run declares in `ingredient.yaml` or sets in the profile; the others were already in place. */
+  written: string[];
 }
 
 const BOM = String.fromCharCode(0xfeff);
@@ -32,14 +34,16 @@ const OPTIONS = { flowCollectionPadding: false, lineWidth: 0 } as const;
 async function findProfileFile(root: string, name: string): Promise<string | null> {
   const dir = path.join(root, "profiles");
   let found: string | null = null;
-  let entries: string[] = [];
+  let entries: import("node:fs").Dirent[] = [];
   try {
-    entries = await fs.readdir(dir);
+    entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
     return null;
   }
   for (const d of entries) {
-    const abs = path.join(dir, d, "profile.yaml");
+    // Directories only, exactly as loadForge reads profiles: a symlinked one is never loaded, so never edited.
+    if (!d.isDirectory()) continue;
+    const abs = path.join(dir, d.name, "profile.yaml");
     if (!(await exists(abs))) continue;
     try {
       const parsed = YAML.parse(await fs.readFile(abs, "utf8"));
@@ -117,14 +121,15 @@ export async function checkParamWrites(
     // P14: an undeclared {{key}} already in the base, or any in the variant, would start resolving.
     if (!decl && (await cites(base, e.key))) throw new Error(`unify: ${base.ref} already uses {{${e.key}}}`);
     if (await cites(variant, e.key)) throw new Error(`unify: ${variant.ref} already uses {{${e.key}}}`);
-    // P15, P16: a stronger layer that sets the key would override the base's default.
-    for (const [name, r] of forge.recipes) {
+    // P15, P16: a stronger layer that sets the key would override the base's default. Not for a
+    // reused key: the base already renders {{key}} through every layer, so nothing it sees moves.
+    for (const [name, r] of e.reused ? [] : forge.recipes) {
       const d = r.params[e.key]?.default;
       if (d !== undefined && !same(d, e.default)) {
         throw new Error(`unify: recipe ${name} declares ${e.key} (default ${JSON.stringify(d)}), which would override ${base.ref}'s default`);
       }
     }
-    for (const [q, p] of forge.profiles) {
+    for (const [q, p] of e.reused ? [] : forge.profiles) {
       if (q === profile) continue;
       const v = p.params[e.key];
       if (v !== undefined && !same(v, e.default)) {
@@ -176,7 +181,8 @@ export async function checkParamWrites(
     profileWrite = { abs: profileAbs, content };
   }
 
-  return { ingredientYaml, profile: profileWrite, mustHold: profileWrite ? [profileWrite.abs] : [] };
+  const written = new Set([...declare, ...assign].map((e) => e.key));
+  return { ingredientYaml, profile: profileWrite, mustHold: profileWrite ? [profileWrite.abs] : [], written: extractions.map((e) => e.key).filter((k) => written.has(k)) };
 }
 
 function parseOr<T>(label: string, parse: () => T): T {
