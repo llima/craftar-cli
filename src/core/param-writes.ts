@@ -6,7 +6,8 @@ import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema } from "../schem
 import { placeholders, substitutedFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, type Forge, type LoadedIngredient } from "./forge.js";
 import { resolve } from "./resolve.js";
-import { detectEol, stripBom, toLf, withEol } from "./text.js";
+import { stripBom } from "./text.js";
+import { editYamlText } from "./yaml-edit.js";
 import type { WriteJournal } from "./unify.js";
 
 /**
@@ -27,8 +28,6 @@ export interface ParamWrites {
   written: string[];
 }
 
-const BOM = String.fromCharCode(0xfeff);
-const OPTIONS = { flowCollectionPadding: false, lineWidth: 0 } as const;
 
 /** The profile file whose `name` field is `name`; last match wins, as `loadForge` keys profiles. */
 async function findProfileFile(root: string, name: string): Promise<string | null> {
@@ -72,23 +71,9 @@ async function cites(ing: LoadedIngredient, key: string): Promise<boolean> {
 
 const same = (a: unknown, b: string) => a !== undefined && String(a) === b;
 
-/**
- * Edit a YAML file in place: refuse one that does not round-trip byte for byte (an edit never
- * reformats a line it did not decide), apply `edit`, restore EOL and BOM. P19 on any doubt.
- */
+/** The spec 09 edit of one Forge file, through the shared in-place YAML editor. */
 async function editYaml(abs: string, label: string, edit: (doc: YAML.Document) => void): Promise<string> {
-  const raw = await fs.readFile(abs, "utf8");
-  const eol = detectEol(raw);
-  const bom = raw.charCodeAt(0) === BOM.charCodeAt(0);
-  const doc = YAML.parseDocument(raw);
-  if (doc.errors.length || toLf(stripBom(raw)) !== doc.toString(OPTIONS)) {
-    throw new Error(`unify: cannot edit ${label} in place (it does not round-trip unchanged through the YAML writer) — reformat it by hand, commit, and re-run`);
-  }
-  const params = doc.get("params", true);
-  if (YAML.isAlias(params)) throw new Error(`unify: cannot edit ${label} in place (params is an alias) — expand it by hand, commit, and re-run`);
-  if (YAML.isMap(params) && params.flow && params.items.length === 0) params.flow = false;
-  edit(doc);
-  return (bom ? BOM : "") + withEol(doc.toString(OPTIONS), eol);
+  return editYamlText(await fs.readFile(abs, "utf8"), { command: "unify", label, keys: ["params"] }, edit);
 }
 
 export async function checkParamWrites(
