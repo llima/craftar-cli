@@ -554,6 +554,17 @@ describe("template-aware import — decisions (spec 10 §6.1–§6.5)", () => {
     expect(r.params).toEqual([]);
   });
 
+  it("keeps a Forge base in the F9 scan when its workspace source is rejected for a secret (§6.5 (b))", async () => {
+    const t = await setup();
+    await templated(t, { deploy });
+    await writeFiles(path.join(t.forge, "ingredients/rules/deploy-notes"), { "ingredient.yaml": "type: rule\nname: deploy-notes\n", "rule.md": "see {{deploy.api}}\n" });
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "use initech-api here\n", ".claude/rules/deploy-notes.md": `token ${TOKEN}\n` });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.rejected.map((x) => x.name)).toEqual(["rule/deploy-notes"]);
+    expect(r.variants[0].reason).toContain("setting deploy.api would change rule/deploy-notes");
+    expect(r.params).toEqual([]);
+  });
+
   it("refuses a profile change another source of the run cites literally (F9, §6.5 (c))", async () => {
     const t = await setup();
     await templated(t, { deploy });

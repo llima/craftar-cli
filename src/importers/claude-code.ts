@@ -316,13 +316,16 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     pinned: new Map(),
     forge: loaded,
   };
-  const runBases = new Set(queue.map((q) => `${q.meta.type}/${q.meta.name}`));
+  // Only sources this run decides stand in for their Forge base in F9 (§6.5 (b), (c)): a skipped steering file or a
+  // source rejected for a secret is never decided, so its base stays in the Forge-wide scan. Both checks are pure here.
+  const decided = queue.filter((q) => !q.skip?.() && !secretIn(q.meta, q.files, q.scan));
+  const runBases = new Set(decided.map((q) => `${q.meta.type}/${q.meta.name}`));
   const literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer> }> = [];
 
   /* ---- decide, in read order ---- */
   for (const src of queue) {
     if (src.skip?.()) continue;
-    const others = queue.filter((q) => q !== src).map((q) => ({ ref: `${q.meta.type}/${q.meta.name}`, meta: q.meta, files: q.files }));
+    const others = decided.filter((q) => q !== src).map((q) => ({ ref: `${q.meta.type}/${q.meta.name}`, meta: q.meta, files: q.files }));
     const ref = await writeIngredient(stage, src.meta, src.files, opts.profileName, report, src.scan, { ctx, others, runBases, literal });
     if (ref) src.after(ref);
   }
