@@ -6,7 +6,9 @@ import { detectEol, stripBom, toLf, withEol } from "./text.js";
  * does not round-trip byte for byte — an edit never reformats a line it did not decide — apply
  * `edit`, and restore the EOL and BOM. The width the file was written with decides the width of
  * the edit: `unify` writes with no folding, `import` with yaml's default 80 columns, so both are
- * tried, and the first that reproduces the text is the one the edit is serialized with.
+ * tried, and the first that reproduces the text is the one the edit is serialized with. Both set
+ * `flowCollectionPadding: false`, so a file that spells a flow collection `[a, b]`, the common
+ * hand-written form, still round-trips; yaml's default would write it back as `[ a, b ]`.
  */
 
 const BOM = String.fromCharCode(0xfeff);

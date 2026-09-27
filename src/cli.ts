@@ -419,7 +419,7 @@ forge
     }
     // Ruling 38: `resolve()` matches overrides.ingredients.disable by ref, so once the variant ref
     // is gone a workspace that disabled it gets the base back, enabled, with no error.
-    // Spec 09 W1, W2: what a parameter extraction cannot check from inside the Forge.
+    // Spec 09 W1: what a parameter extraction cannot check from inside the Forge (W2 went with spec 10).
     for (const e of result.params.filter((p) => !p.reused)) {
       warnings.push(
         `${e.key} is now a parameter of ${base.ref} — a workspace that sets overrides.params.${e.key} (craftar.yaml or ` +
