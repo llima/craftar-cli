@@ -23,7 +23,7 @@ export interface RunContext {
   W: Record<string, unknown>;
   /**
    * Keys this run has relied on, with the first value (or absence) it relied on (§6.5). Decisions read only
-   * membership; the value is kept for the report and for a later relaxation (every reliance at one value).
+   * membership; the value is kept for a later relaxation (every reliance at one value).
    */
   pinned: Map<string, string | undefined>;
   /** The Forge as it stood before the run; null for an empty Forge. */
@@ -52,9 +52,10 @@ export function pin(ctx: RunContext, keys: Iterable<string>, map: Record<string,
 }
 
 /**
- * Decide an existing base against one source. `others` are the run's other sources, for the
- * literal-citation check (§6.5 (c)); `runBases` are the refs of every source's base, which the
- * Forge-wide check excludes (§6.5 (b)).
+ * Decide an existing base against one source. `others` are the run's other sources that may be
+ * decided, for the literal-citation check (§6.5 (c)); `runBases` are the refs of the sources it
+ * will certainly decide, which the Forge-wide check excludes (§6.5 (b)). See the F9 comment in
+ * `importClaudeCode` for how each set errs on its safe side.
  */
 export async function decide(
   ctx: RunContext,
