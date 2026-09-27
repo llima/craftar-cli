@@ -196,9 +196,9 @@ Next: `craftar init` from a profile; profile-driven integrations (PM tool → MC
 
 ### to 0.6.1
 
-- **`import` refuses a recipe it writes whose file and `name` disagree.** With `recipes/shared.yaml` declaring `name: base`, 0.6.0 wrote a second `base` next to it and the Forge then loaded only one of the two; with `recipes/base.yaml` declaring another name, it read that recipe as `base`. Rename the file after the `name` it declares and re-run. In a Forge with no manifest yet, a recipe or profile that does not load now refuses the import too, naming the file.
+- **`import` refuses a recipe it writes whose file and `name` disagree.** With `recipes/shared.yaml` declaring `name: base`, 0.6.0 wrote a second `base` next to it and the Forge then loaded only one of the two; with `recipes/base.yaml` declaring another name, it read that recipe as `base`. Rename the file after the `name` it declares and re-run. In a Forge with no manifest yet, a recipe that does not load refuses the import too, even one import does not write, and a profile that does not load now names its file.
 - **A key a run already relied on renders at its current value.** Import no longer infers it again, so a line that was ambiguous only through it can now be reused.
-- **Some sources 0.6.0 reused become variants.** A profile value is no longer set when it would move a Forge ingredient whose workspace copy was skipped or rejected for a secret, nor over a default an earlier ingredient of the run rendered with (0.6.0 set it, and that ingredient changed at the next `sync`).
+- **Some sources 0.6.0 reused become variants.** A profile value is no longer set when it would move a Forge ingredient whose workspace copy was skipped or rejected for a secret, nor over a default an earlier ingredient of the run rendered with (0.6.0 set it; when another earlier ingredient rendered the key at a different default, that one changed at the next `sync`).
 
 ### to 0.6.0
 
