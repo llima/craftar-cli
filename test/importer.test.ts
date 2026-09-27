@@ -643,6 +643,19 @@ describe("template-aware import — decisions (spec 10 §6.1–§6.5)", () => {
     expect(r.params).toEqual([]);
   });
 
+  it("a steering file that may be shadowed still counts for the literal check when its rule is rejected (§6.5 (c))", async () => {
+    const t = await setup();
+    await templated(t, { deploy });
+    await writeFiles(t.ws("b"), {
+      ".claude/rules/deploy.md": "use initech-api here\n",
+      ".claude/rules/zeta.md": `token ${TOKEN}\n`,
+      ".kiro/steering/zeta.md": "raw {{deploy.api}}\n",
+    });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.variants[0].reason).toContain("setting deploy.api would change steering/zeta");
+    expect(r.params).toEqual([]);
+  });
+
   it("refuses a profile change another source of the run cites literally (F9, §6.5 (c))", async () => {
     const t = await setup();
     await templated(t, { deploy });

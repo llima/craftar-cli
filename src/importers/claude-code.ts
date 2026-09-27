@@ -316,20 +316,20 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     pinned: new Map(),
     forge: loaded,
   };
-  // Only sources this run decides stand in for their Forge base in F9 (§6.5 (b), (c)): a skipped steering file or a
-  // source rejected for a secret is never decided, so its base stays in the Forge-wide scan. `ruleNames` fills only as
-  // rules are decided, so a steering file a rule of its name may shadow counts as skipped here — at worst F9 checks
-  // one base too many and the source falls back, never the reverse.
+  // F9 (§6.5): a source rejected for a secret or skipped is never decided. Its base stays in the Forge-wide scan (b),
+  // and its text leaves the literal check (c). `ruleNames` fills only as rules are decided, so each set errs on its
+  // safe side for a steering file a rule of its name may shadow: out of `runBases`, still in `others`.
   const queuedRules = new Set(queue.filter((q) => q.meta.type === "rule").map((q) => q.meta.name));
   const mayBeSkipped = (q: Source) => q.skip?.() || (q.meta.type === "steering" && queuedRules.has(q.meta.name));
-  const decided = queue.filter((q) => !mayBeSkipped(q) && !secretIn(q.meta, q.files, q.scan));
-  const runBases = new Set(decided.map((q) => `${q.meta.type}/${q.meta.name}`));
+  const clean = queue.filter((q) => !secretIn(q.meta, q.files, q.scan));
+  const runBases = new Set(clean.filter((q) => !mayBeSkipped(q)).map((q) => `${q.meta.type}/${q.meta.name}`));
+  const mayBeDecided = clean.filter((q) => !q.skip?.());
   const literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer> }> = [];
 
   /* ---- decide, in read order ---- */
   for (const src of queue) {
     if (src.skip?.()) continue;
-    const others = decided.filter((q) => q !== src).map((q) => ({ ref: `${q.meta.type}/${q.meta.name}`, meta: q.meta, files: q.files }));
+    const others = mayBeDecided.filter((q) => q !== src).map((q) => ({ ref: `${q.meta.type}/${q.meta.name}`, meta: q.meta, files: q.files }));
     const ref = await writeIngredient(stage, src.meta, src.files, opts.profileName, report, src.scan, { ctx, others, runBases, literal });
     if (ref) src.after(ref);
   }
@@ -755,10 +755,10 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
  */
 async function recipeFile(o: RecipeOptions, name: string): Promise<string> {
   const file = path.join(o.dir, `${name}.yaml`);
-  for (const f of (await exists(o.dir)) ? await fs.readdir(o.dir) : []) {
-    if (!/\.ya?ml$/.test(f)) continue;
+  for (const f of await o.stage.reader().list(o.dir)) {
+    if (f.includes("/") || !/\.ya?ml$/.test(f)) continue;
     const abs = path.join(o.dir, f);
-    const declared = parseYaml(abs, stripBom(await fs.readFile(abs, "utf8")), RecipeSchema).name;
+    const declared = parseYaml(abs, stripBom(await o.stage.readText(abs)), RecipeSchema).name;
     if (abs === file && declared !== name) throw new Error(`import: recipes/${f} is recipe ${declared} — import writes recipe ${name} there`);
     if (abs !== file && declared === name) throw new Error(`import: recipe ${name} is recipes/${f} — import writes recipes/${name}.yaml`);
   }
