@@ -5,6 +5,7 @@ import { placeholders, reservedKey, substitutedFile } from "../core/extract.js";
 import { fingerprintOf } from "../core/fingerprint.js";
 import { exists, listFiles, loadForge, readIngredientText, type Forge } from "../core/forge.js";
 import { hashNormalized, stripBom, toLf } from "../core/text.js";
+import { deepMerge } from "../core/sync.js";
 import { citedKeys, infer, readBase, renderMap, renderedFingerprint } from "../core/template-import.js";
 import type { DirReader } from "../core/fingerprint.js";
 import type { Ingredient } from "../schema/index.js";
@@ -145,14 +146,14 @@ const OverridesParams = z.record(z.unknown());
 
 /** `W`: overrides.params of craftar.yaml and craftar.local.yaml, merged as loadWorkspace merges them (I6). */
 export async function workspaceParams(ws: string, read: (abs: string) => Promise<string>): Promise<Record<string, unknown>> {
-  const out: Record<string, unknown> = Object.create(null);
+  let out: Record<string, unknown> = Object.create(null);
   for (const f of ["craftar.yaml", "craftar.local.yaml"]) {
     const abs = path.join(ws, f);
     if (!(await exists(abs))) continue;
     try {
       const doc = YAML.parse(stripBom(await read(abs))) ?? {};
       const params = OverridesParams.parse(doc?.overrides?.params ?? {});
-      for (const [k, v] of Object.entries(params)) out[k] = v;
+      out = deepMerge(out, params);
     } catch (e) {
       throw new Error(`import: ${f} does not load (${(e as Error).message})`);
     }

@@ -57,7 +57,7 @@ export async function resolveForge(opts: { forge?: string; workspace?: string })
 }
 
 /** Layer merge: objects merge key by key; arrays and scalars from the stronger layer replace the weaker one. */
-function deepMerge(a: any, b: any): any {
+export function deepMerge(a: any, b: any): any {
   if (b === undefined) return a;
   if (Array.isArray(a) || Array.isArray(b)) return b;
   if (a && b && typeof a === "object" && typeof b === "object") {
