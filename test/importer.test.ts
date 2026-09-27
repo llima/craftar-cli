@@ -695,6 +695,24 @@ describe("template-aware import — shared and owned recipes (spec 10 §6.7, Rul
     expect(await snapshot(t.forge)).toEqual(before);
   });
 
+  it("a recipe whose name and file disagree is refused with the Forge untouched, instead of writing a second recipe", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    await fs.rename(path.join(t.forge, "recipes/base.yaml"), path.join(t.forge, "recipes/shared.yaml"));
+    const before = await snapshot(t.forge);
+    await writeFiles(t.ws("b"), { ".claude/rules/a.md": "# A\n" });
+    expect((await fail(importInto(t.forge, t.ws("b"), "b")))?.message).toContain("import: recipe base is recipes/shared.yaml — import writes recipes/base.yaml");
+    expect(await snapshot(t.forge)).toEqual(before);
+
+    await fs.writeFile(path.join(t.forge, "recipes/base.yaml"), "name: other\ningredients: []\n");
+    await fs.rm(path.join(t.forge, "recipes/shared.yaml"));
+    await fs.writeFile(path.join(t.forge, "profiles/a/profile.yaml"), "name: a\nrecipes:\n  - other\n");
+    const before2 = await snapshot(t.forge);
+    expect((await fail(importInto(t.forge, t.ws("b"), "b")))?.message).toContain("import: recipes/base.yaml is recipe other — import writes recipe base there");
+    expect(await snapshot(t.forge)).toEqual(before2);
+  });
+
   it("I7: an owned recipe another profile resolves is not changed", async () => {
     const t = await setup();
     await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n" });

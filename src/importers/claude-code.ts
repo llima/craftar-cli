@@ -675,7 +675,7 @@ const recipeText = (name: string, description: string, ingredients: string[]) =>
 async function placeRecipe(o: RecipeOptions, name: string, list: string[], description: string, holdsVariant: boolean): Promise<string> {
   const owned = `${name}--${o.profile}`;
   if (holdsVariant) return writeOwnedRecipe(o, owned, list, description);
-  const file = path.join(o.dir, `${name}.yaml`);
+  const file = await recipeFile(o, name);
   if (!(await o.stage.exists(file))) {
     o.stage.write(file, recipeText(name, description, list));
     o.report.recipes.push(name);
@@ -707,7 +707,7 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
  * edited in place (I2).
  */
 async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], description: string): Promise<string> {
-  const file = path.join(o.dir, `${name}.yaml`);
+  const file = await recipeFile(o, name);
   o.report.recipes.push(name);
   if (!(await o.stage.exists(file))) {
     o.stage.write(file, recipeText(name, description, list));
@@ -738,6 +738,24 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
   }
   o.stage.write(file, content);
   return name;
+}
+
+/**
+ * `recipes/<name>.yaml`, the file import reads and writes for recipe `<name>`. loadForge keys
+ * recipes by their `name` field, not by file, so a recipe `<name>` in another file, or that file
+ * declaring another name, would leave two recipes under one name and loadForge would keep one.
+ * Refused before the first write, as I4 refuses the same split for a profile.
+ */
+async function recipeFile(o: RecipeOptions, name: string): Promise<string> {
+  const file = path.join(o.dir, `${name}.yaml`);
+  for (const f of (await exists(o.dir)) ? await fs.readdir(o.dir) : []) {
+    if (!/\.ya?ml$/.test(f)) continue;
+    const abs = path.join(o.dir, f);
+    const declared = parseYaml(abs, stripBom(await fs.readFile(abs, "utf8")), RecipeSchema).name;
+    if (abs === file && declared !== name) throw new Error(`import: recipes/${f} is recipe ${declared} — import writes recipe ${name} there`);
+    if (abs !== file && declared === name) throw new Error(`import: recipe ${name} is recipes/${f} — import writes recipes/${name}.yaml`);
+  }
+  return file;
 }
 
 /** The recipes a profile resolves inside the Forge; fails closed — a profile that does not resolve counts as using everything. */
