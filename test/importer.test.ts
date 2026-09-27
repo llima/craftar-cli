@@ -567,6 +567,36 @@ describe("template-aware import — decisions (spec 10 §6.1–§6.5)", () => {
     expect(r.variants).toEqual([{ name: "rule/notes--b", reason: "differs from rule/notes already in the Forge (the template does not match line 1 of rule.md)" }]);
   });
 
+  it("F1, F2: what no value can explain falls back before inference", async () => {
+    const t = await setup();
+    await templated(t, { deploy, notes: { template: "see {{deploy.api}} docs\n", params: { "deploy.api": "globex-api" }, literal: "see globex-api docs\n" } });
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/notes/extra.bin"), Buffer.from([0, 1, 2]));
+    await writeFiles(t.ws("b"), {
+      ".claude/rules/deploy.md": "use initech-api here\n",
+      ".kiro/steering/deploy.md": "---\ninclusion: manual\n---\nuse initech-api here\n",
+      ".claude/rules/notes.md": "see initech-api docs\n",
+    });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.variants.map((v) => v.reason)).toEqual([
+      "differs from rule/deploy already in the Forge (metadata differs)",
+      "differs from rule/notes already in the Forge (extra.bin differs)",
+    ]);
+  });
+
+  it("F4, F7 through the importer: adjacent holes and a value a parameter cannot carry", async () => {
+    const t = await setup();
+    await templated(t, {
+      adj: { template: "use {{a}}{{b}} here\n", params: { a: "x", b: "y" }, literal: "use xy here\n" },
+      pad: { template: "use {{c}} here\n", params: { c: "z" }, literal: "use z here\n" },
+    });
+    await writeFiles(t.ws("b"), { ".claude/rules/adj.md": "use pq here\n", ".claude/rules/pad.md": "use  w here\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.variants.map((v) => v.reason)).toEqual([
+      "differs from rule/adj already in the Forge (inference ambiguous: {{a}}{{b}} are adjacent on line 1 of rule.md)",
+      'differs from rule/pad already in the Forge (c would be " w", which a parameter cannot carry)',
+    ]);
+  });
+
   it("refuses a profile change another Forge ingredient would feel (F9, §6.5 (b))", async () => {
     const t = await setup();
     await templated(t, { deploy });
@@ -701,6 +731,23 @@ describe("template-aware import — shared and owned recipes (spec 10 §6.7, Rul
     const back = await importInto(t.forge, t.ws("b"), "b");
     expect(back.recipes).toContain("base");
     expect(back.recipeSplits).toEqual([]);
+  });
+
+  it("Q10: an existing profile does not move to a set-equal shared recipe that orders its rules differently", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n", ".claude/rules/b.md": "# B\n" });
+    await importInto(t.forge, t.ws("a"), "a");
+    await writeFiles(t.ws("b"), { ".claude/rules/a.md": "# A\n", ".claude/rules/b.md": "# B\n", ".claude/rules/z.md": "# Z\n" });
+    await importInto(t.forge, t.ws("b"), "b");
+    const shared = path.join(t.forge, "recipes/base.yaml");
+    const text = await fs.readFile(shared, "utf8");
+    expect(text).toContain("  - rule/a\n  - rule/b\n");
+    await fs.writeFile(shared, text.replace("  - rule/a\n  - rule/b\n", "  - rule/b\n  - rule/a\n"));
+    await fs.rm(path.join(t.ws("b"), ".claude/rules/z.md"));
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.recipeSplits).toEqual([{ shared: "base", owned: "base--b", reason: "base orders its rules differently" }]);
+    expect((await yaml(path.join(t.forge, "recipes/base--b.yaml"))).ingredients).toEqual(["rule/a", "rule/b"]);
+    expect((await yaml(shared)).ingredients).toEqual(["rule/b", "rule/a"]);
   });
 
   it("I2: an owned recipe that does not round-trip is refused with the Forge untouched", async () => {
