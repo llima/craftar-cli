@@ -5,7 +5,7 @@ import { placeholders, reservedKey, substitutedFile } from "../core/extract.js";
 import { fingerprintOf } from "../core/fingerprint.js";
 import { exists, listFiles, loadForge, readIngredientText, type Forge } from "../core/forge.js";
 import { hashNormalized, stripBom, toLf } from "../core/text.js";
-import { deepMerge } from "../core/sync.js";
+import { deepMerge } from "../core/merge.js";
 import { citedKeys, infer, readBase, renderMap, renderedFingerprint } from "../core/template-import.js";
 import type { DirReader } from "../core/fingerprint.js";
 import type { Ingredient } from "../schema/index.js";
@@ -21,7 +21,10 @@ export interface RunContext {
   P: Record<string, unknown>;
   /** The workspace layer: overrides.params of craftar.yaml and craftar.local.yaml (`W`). */
   W: Record<string, unknown>;
-  /** Keys this run has relied on, with the value (or absence) it relied on (§6.5). */
+  /**
+   * Keys this run has relied on, with the first value (or absence) it relied on (§6.5). Decisions read only
+   * membership; the value is kept for the report and for a later relaxation (every reliance at one value).
+   */
   pinned: Map<string, string | undefined>;
   /** The Forge as it stood before the run; null for an empty Forge. */
   forge: Forge | null;
