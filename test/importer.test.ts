@@ -633,6 +633,16 @@ describe("template-aware import — decisions (spec 10 §6.1–§6.5)", () => {
     expect(r.params).toEqual([]);
   });
 
+  it("keeps a Forge base in the F9 scan when its steering source is shadowed by a rule of the same name (§6.5 (b))", async () => {
+    const t = await setup();
+    await templated(t, { deploy });
+    await writeFiles(path.join(t.forge, "ingredients/steerings/deploy"), { "ingredient.yaml": "type: steering\nname: deploy\n", "steering.md": "see {{deploy.api}}\n" });
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "use initech-api here\n", ".kiro/steering/deploy.md": "use initech-api here\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.variants[0].reason).toContain("setting deploy.api would change steering/deploy");
+    expect(r.params).toEqual([]);
+  });
+
   it("refuses a profile change another source of the run cites literally (F9, §6.5 (c))", async () => {
     const t = await setup();
     await templated(t, { deploy });

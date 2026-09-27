@@ -317,8 +317,12 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     forge: loaded,
   };
   // Only sources this run decides stand in for their Forge base in F9 (§6.5 (b), (c)): a skipped steering file or a
-  // source rejected for a secret is never decided, so its base stays in the Forge-wide scan. Both checks are pure here.
-  const decided = queue.filter((q) => !q.skip?.() && !secretIn(q.meta, q.files, q.scan));
+  // source rejected for a secret is never decided, so its base stays in the Forge-wide scan. `ruleNames` fills only as
+  // rules are decided, so a steering file a rule of its name may shadow counts as skipped here — at worst F9 checks
+  // one base too many and the source falls back, never the reverse.
+  const queuedRules = new Set(queue.filter((q) => q.meta.type === "rule").map((q) => q.meta.name));
+  const mayBeSkipped = (q: Source) => q.skip?.() || (q.meta.type === "steering" && queuedRules.has(q.meta.name));
+  const decided = queue.filter((q) => !mayBeSkipped(q) && !secretIn(q.meta, q.files, q.scan));
   const runBases = new Set(decided.map((q) => `${q.meta.type}/${q.meta.name}`));
   const literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer> }> = [];
 
