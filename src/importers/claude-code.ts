@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
-import { exists, listFiles, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
+import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
 import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../core/secrets.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
@@ -681,7 +681,7 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
     o.report.recipes.push(name);
     return name;
   }
-  const existing = RecipeSchema.parse(YAML.parse(stripBom(await o.stage.readText(file))) ?? {}).ingredients;
+  const existing = parseYaml(file, stripBom(await o.stage.readText(file)), RecipeSchema).ingredients;
   const rules = (xs: string[]) => xs.filter((x) => x.startsWith("rule/"));
   const lacks = existing.find((x) => !list.includes(x));
   const extra = list.find((x) => !existing.includes(x));
@@ -714,7 +714,7 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
     return name;
   }
   const raw = await o.stage.readText(file);
-  const before = RecipeSchema.parse(YAML.parse(stripBom(raw)) ?? {});
+  const before = parseYaml(file, stripBom(raw), RecipeSchema);
   const next = [...before.ingredients.filter((x) => list.includes(x)), ...list.filter((x) => !before.ingredients.includes(x))];
   if (JSON.stringify(next) === JSON.stringify(before.ingredients)) return name;
   if (o.forge) {
@@ -761,7 +761,7 @@ async function existingProfileParams(forge: string, profile: string, loaded: imp
     if (!d.isDirectory()) continue;
     const abs = path.join(dir, d.name, "profile.yaml");
     if (!(await exists(abs))) continue;
-    const name = ProfileSchema.parse(YAML.parse(stripBom(await fs.readFile(abs, "utf8"))) ?? {}).name;
+    const name = parseYaml(abs, stripBom(await fs.readFile(abs, "utf8")), ProfileSchema).name;
     if ((name === profile) !== (d.name === profile)) {
       throw new Error(`import: profile ${profile} is profiles/${d.name}/profile.yaml — import writes profiles/${profile}/profile.yaml`);
     }
@@ -789,7 +789,7 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
     return;
   }
   const raw = await stage.readText(file);
-  const before = ProfileSchema.parse(YAML.parse(stripBom(raw)) ?? {});
+  const before = parseYaml(file, stripBom(raw), ProfileSchema);
   const values = Object.fromEntries(report.params.map((x) => [x.key, String(ctx.P[x.key])]));
   const firstOwned = before.recipes.findIndex((r) => importOwned(r, name));
   const kept = before.recipes.filter((r) => !importOwned(r, name));

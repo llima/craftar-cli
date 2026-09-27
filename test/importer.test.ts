@@ -683,6 +683,18 @@ describe("template-aware import — shared and owned recipes (spec 10 §6.7, Rul
     expect(await snapshot(t.forge)).toEqual(before);
   });
 
+  it("an existing recipe that does not load is refused, naming its file, with the Forge untouched (754d7b9)", async () => {
+    const t = await setup();
+    // No manifest, so forgeBefore() does not load the Forge and placeRecipe is the first to read the recipe.
+    await writeFiles(t.forge, { "recipes/base.yaml": "name: base\ningredients: rule/a\n" });
+    const before = await snapshot(t.forge);
+    await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n" });
+    const e = await fail(importInto(t.forge, t.ws("a"), "a"));
+    expect(e?.message).toMatch(/invalid .*recipes[\\/]base\.yaml: /);
+    expect(e?.message).toContain("The Forge was left untouched.");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+
   it("I7: an owned recipe another profile resolves is not changed", async () => {
     const t = await setup();
     await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n" });
