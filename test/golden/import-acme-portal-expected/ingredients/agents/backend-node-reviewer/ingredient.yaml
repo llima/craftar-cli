@@ -1,0 +1,18 @@
+type: agent
+name: backend-node-reviewer
+description: Reviews changes in projects/acme-api (Node + TypeScript HTTP service). Use after any .ts edit under src/.
+tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
+file: agent.md
+frontmatterRaw: |-
+  name: backend-node-reviewer
+  description: Reviews changes in projects/acme-api (Node + TypeScript HTTP service). Use after any .ts edit under src/.
+  tools: Read, Grep, Glob, Bash
+targets: "*"
+tags: []
+origin:
+  workspace: acme-portal
+  path: .claude/agents/backend-node-reviewer.md

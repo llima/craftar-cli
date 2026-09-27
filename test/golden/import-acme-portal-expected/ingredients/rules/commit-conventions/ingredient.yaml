@@ -1,0 +1,9 @@
+type: rule
+name: commit-conventions
+inclusion: always
+file: rule.md
+targets: "*"
+tags: []
+origin:
+  workspace: acme-portal
+  path: .claude/rules/commit-conventions.md

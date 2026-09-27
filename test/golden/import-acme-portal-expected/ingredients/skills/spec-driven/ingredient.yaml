@@ -1,0 +1,8 @@
+type: skill
+name: spec-driven
+layout: dir
+targets: "*"
+tags: []
+origin:
+  workspace: acme-portal
+  path: .claude/skills/spec-driven/

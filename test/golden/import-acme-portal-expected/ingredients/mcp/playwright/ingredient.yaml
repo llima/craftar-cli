@@ -1,0 +1,14 @@
+type: mcp
+name: playwright
+server:
+  command: npx
+  args:
+    - -y
+    - "@playwright/mcp@0.0.80"
+    - --browser
+    - chrome
+targets: "*"
+tags: []
+origin:
+  workspace: acme-portal
+  path: .mcp.json

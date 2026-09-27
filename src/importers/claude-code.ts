@@ -6,7 +6,13 @@ import { exists, listFiles, typeFolder, FORGE_MANIFEST } from "../core/forge.js"
 import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../core/secrets.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
-import { IngredientSchema, type Ingredient, type McpServer, type Profile, type Recipe, type Target } from "../schema/index.js";
+import { IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Target } from "../schema/index.js";
+import { isDeepStrictEqual } from "node:util";
+import { resolve } from "../core/resolve.js";
+import { editYamlText } from "../core/yaml-edit.js";
+import { resolvedBy } from "../core/param-writes.js";
+import { decide, forgeBefore, pin, sourceKeys, workspaceParams, type RunContext } from "./decide.js";
+import { renderMap } from "../core/template-import.js";
 
 export interface ImportOptions {
   workspaceRoot: string;
@@ -25,6 +31,18 @@ export interface ImportReport {
   recipes: string[];
   profile: string;
   warnings: string[];
+  /** Reused because the render matched and used at least one value (spec 10 §6.2). */
+  rendered: { name: string; keys: string[] }[];
+  /** Reused through an inference: every hole's proved value (spec 10 §6.3). */
+  inferred: { name: string; values: Record<string, string> }[];
+  /** The profile change, in the order it was accepted; `old` is null for an added key. */
+  params: { key: string; old: string | null; value: string; from: string }[];
+  /** Shared recipes this run did not use for the profile, and the owned recipe it used instead (spec 10 §6.7). */
+  recipeSplits: { shared: string; owned: string; reason: string }[];
+  /** What happened to profiles/<p>/profile.yaml. */
+  profileWrite: { path: string; action: "created" | "edited" | "unchanged"; fields: string[] };
+  /** What happened to the workspace's craftar.yaml; null without --write-config. */
+  configWrite: "created" | "edited" | "unchanged" | null;
 }
 
 /** Rules that every workspace shares by intent — they seed the `base` recipe. */
@@ -52,37 +70,68 @@ const GENERATED_BANNER = /<!--\s*GENERATED from /;
  */
 export async function importClaudeCode(opts: ImportOptions): Promise<ImportReport> {
   const stage = new ForgeStage(path.resolve(opts.forgeRoot));
-  let planned: { report: ImportReport; targets: Target[] };
+  let planned: { report: ImportReport; targets: Target[]; config: PlannedConfig | null };
   try {
     planned = await planImport(opts, stage);
   } catch (e) {
     throw new Error(`${e instanceof Error ? e.message : String(e)}\nThe Forge was left untouched.`, { cause: e });
   }
   await stage.flush();
-  const { report, targets } = planned;
-  if (opts.writeWorkspaceConfig) {
-    const ws = path.resolve(opts.workspaceRoot);
-    const rel = path.relative(ws, stage.root).replace(/\\/g, "/") || ".";
-    await fs.writeFile(path.join(ws, "craftar.yaml"), YAML.stringify({ forge: rel, profile: opts.profileName, targets }));
-    report.created.push("craftar.yaml (workspace)");
+  const { report, config } = planned;
+  if (config && config.action !== "unchanged") {
+    try {
+      await fs.writeFile(config.abs, config.content);
+    } catch (e) {
+      throw new Error(
+        `The Forge was written in full and the import succeeded; writing craftar.yaml failed (${e instanceof Error ? e.message : String(e)}) — ` +
+          `fix the cause and re-run with --write-config, or edit craftar.yaml by hand.`,
+        { cause: e },
+      );
+    }
   }
+  if (config?.action === "created") report.created.push("craftar.yaml (workspace)");
   return report;
 }
 
-async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ report: ImportReport; targets: Target[] }> {
+/** One ingredient read from the workspace, not yet decided (spec 10 §3, *Source*). */
+interface Source {
+  meta: Ingredient;
+  files: Record<string, string | Buffer>;
+  scan: Record<string, string>;
+  after: (ref: string) => void;
+  skip?: () => boolean;
+}
+
+interface PlannedConfig {
+  abs: string;
+  content: string;
+  action: "created" | "edited" | "unchanged";
+}
+
+async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ report: ImportReport; targets: Target[]; config: PlannedConfig | null }> {
   const ws = path.resolve(opts.workspaceRoot);
   const forge = stage.root;
-  const report: ImportReport = { created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [] };
+  const report: ImportReport = {
+    created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [], rendered: [], inferred: [], params: [], recipeSplits: [],
+    profileWrite: { path: `profiles/${opts.profileName}/profile.yaml`, action: "unchanged", fields: [] },
+    configWrite: null,
+  };
   const claudeDir = path.join(ws, ".claude");
   if (!(await exists(claudeDir))) throw new Error(`${claudeDir} not found — is this a Claude Code workspace?`);
 
   const manifest = path.join(forge, FORGE_MANIFEST);
+  const manifestOnDisk = manifest;
   if (!(await stage.exists(manifest))) {
     stage.write(manifest, YAML.stringify({ name: path.basename(forge), schema: 1, description: "Craftar Forge — shared harness ingredients, recipes and client profiles." }));
     report.created.push(FORGE_MANIFEST);
   }
 
   const origin = (rel: string) => ({ workspace: path.basename(ws), path: rel.replace(/\\/g, "/") });
+  // Two passes (spec 10 §6.8): every source is read first, in today's order, then decided in that
+  // order. `after` does the bookkeeping today's code did right after each decision.
+  const queue: Source[] = [];
+  const read = (meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string>, after: (ref: string) => void, skip?: () => boolean) =>
+    queue.push({ meta, files, scan, after, skip });
   const refs = { base: [] as string[], stacks: new Map<string, string[]>(), steering: [] as string[] };
   const ruleNames: string[] = [];
   const scopedRules = new Map<string, string>(); // rule name → fileMatchPattern
@@ -91,7 +140,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const steeringDir = path.join(ws, ".kiro", "steering");
   const steeringMeta = new Map<string, { inclusion: string; fileMatchPattern?: string; generated: boolean; text: string; scan?: string }>();
   if (await exists(steeringDir)) {
-    for (const f of await fs.readdir(steeringDir)) {
+    for (const f of (await fs.readdir(steeringDir)).sort()) {
       if (!f.endsWith(".md")) continue;
       const src = await readSource(path.join(steeringDir, f));
       const text = toLf(stripBom(src.text));
@@ -123,11 +172,11 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       tags: [],
       origin: origin(`.claude/rules/${f}`),
     };
-    const ref = await writeIngredient(stage, meta, { "rule.md": text }, opts.profileName, report, scanOf("rule.md", src));
-    if (!ref) continue;
-    ruleNames.push(ref.split("/")[1]);
-    if (meta.inclusion === "fileMatch") scopedRules.set(ref, sm?.fileMatchPattern ?? "");
-    else refs.base.push(ref);
+    read(meta, { "rule.md": text }, scanOf("rule.md", src), (ref) => {
+      ruleNames.push(ref.split("/")[1]);
+      if (meta.inclusion === "fileMatch") scopedRules.set(ref, sm?.fileMatchPattern ?? "");
+      else refs.base.push(ref);
+    });
   }
 
   /* ---- agents ---- */
@@ -150,10 +199,10 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       tags: [],
       origin: origin(`.claude/agents/${f}`),
     };
-    const ref = await writeIngredient(stage, meta, { "agent.md": body }, opts.profileName, report, scanOf("agent.md", src));
-    if (!ref) continue;
-    agentBodies.set(ref, (data.description ?? "") + "\n" + body);
-    refs.base.push(ref);
+    read(meta, { "agent.md": body }, scanOf("agent.md", src), (ref) => {
+      agentBodies.set(ref, (data.description ?? "") + "\n" + body);
+      refs.base.push(ref);
+    });
   }
 
   /* ---- commands ---- */
@@ -174,13 +223,14 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       tags: [],
       origin: origin(`.claude/commands/${f}`),
     };
-    addRef(refs.base, await writeIngredient(stage, meta, { "command.md": body }, opts.profileName, report, scanOf("command.md", src)));
+    read(meta, { "command.md": body }, scanOf("command.md", src), (ref) => addRef(refs.base, ref));
   }
 
   /* ---- skills ---- */
   const skillsDir = path.join(claudeDir, "skills");
   if (await exists(skillsDir)) {
-    for (const e of await fs.readdir(skillsDir, { withFileTypes: true })) {
+    // Sorted, so the decision order — and which of two sources is "the later one" — is reproducible (spec 10 §14 Q6).
+    for (const e of (await fs.readdir(skillsDir, { withFileTypes: true })).sort((x, y) => x.name.localeCompare(y.name))) {
       if (e.name === ".gitkeep") continue;
       if (e.isDirectory()) {
         const files: Record<string, string | Buffer> = {};
@@ -198,12 +248,12 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
           continue;
         }
         const meta: Ingredient = { type: "skill", name: e.name, layout: "dir", targets: "*", tags: [], origin: origin(`.claude/skills/${e.name}/`) };
-        addRef(refs.base, await writeIngredient(stage, meta, files, opts.profileName, report, scan));
+        read(meta, files, scan, (ref) => addRef(refs.base, ref));
       } else if (e.name.endsWith(".md")) {
         const src = await readSource(path.join(skillsDir, e.name));
         const text = toLf(stripBom(src.text));
         const meta: Ingredient = { type: "skill", name: e.name.replace(/\.md$/, ""), layout: "file", targets: "*", tags: [], origin: origin(`.claude/skills/${e.name}`) };
-        addRef(refs.base, await writeIngredient(stage, meta, { "SKILL.md": text }, opts.profileName, report, scanOf("SKILL.md", src)));
+        read(meta, { "SKILL.md": text }, scanOf("SKILL.md", src), (ref) => addRef(refs.base, ref));
       }
     }
   }
@@ -224,7 +274,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
         tags: [],
         origin: origin(`.claude/${kind}/${f}`),
       } as Ingredient;
-      addRef(refs.base, await writeIngredient(stage, meta, { [f]: content }, opts.profileName, report, src ? scanOf(f, src) : {}));
+      read(meta, { [f]: content }, src ? scanOf(f, src) : {}, (ref) => addRef(refs.base, ref));
     }
   }
 
@@ -247,22 +297,47 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
         throw new Error(`.mcp.json server "${name}" is not an object — fix the file and re-run import`);
       }
       const meta: Ingredient = { type: "mcp", name, server, targets: "*", tags: [], origin: origin(".mcp.json") };
-      addRef(refs.base, await writeIngredient(stage, meta, {}, opts.profileName, report));
+      read(meta, {}, {}, (ref) => addRef(refs.base, ref));
     }
   }
 
   /* ---- hand-written Kiro steering (no Claude counterpart) ---- */
+  // Whether a steering file is hand-written depends on the rules decided before it, so the check runs at decision time.
   for (const [name, sm] of steeringMeta) {
-    if (ruleNames.includes(name) || sm.generated) continue;
-    if (name === "commands") continue;
     const meta: Ingredient = { type: "steering", name, file: "steering.md", targets: ["kiro"], tags: ["client"], origin: origin(`.kiro/steering/${name}.md`) };
-    addRef(refs.steering, await writeIngredient(stage, meta, { "steering.md": sm.text }, opts.profileName, report, scanOf("steering.md", sm)));
+    read(meta, { "steering.md": sm.text }, scanOf("steering.md", sm), (ref) => addRef(refs.steering, ref), () => ruleNames.includes(name) || sm.generated || name === "commands");
+  }
+
+  /* ---- what the importing profile renders (spec 10 §6.1, §6.8 step 2) ---- */
+  const loaded = await forgeBefore(forge, manifestOnDisk);
+  const ctx: RunContext = {
+    P: Object.assign(Object.create(null), await existingProfileParams(forge, opts.profileName, loaded)),
+    W: await workspaceParams(ws, (abs) => fs.readFile(abs, "utf8")),
+    pinned: new Map(),
+    forge: loaded,
+  };
+  const runBases = new Set(queue.map((q) => `${q.meta.type}/${q.meta.name}`));
+  const literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer> }> = [];
+
+  /* ---- decide, in read order ---- */
+  for (const src of queue) {
+    if (src.skip?.()) continue;
+    const others = queue.filter((q) => q !== src).map((q) => ({ ref: `${q.meta.type}/${q.meta.name}`, meta: q.meta, files: q.files }));
+    const ref = await writeIngredient(stage, src.meta, src.files, opts.profileName, report, src.scan, { ctx, others, runBases, literal });
+    if (ref) src.after(ref);
+  }
+
+  // I3: a created or variant ingredient is the workspace text itself; a key the profile now sets would change it at sync.
+  for (const l of literal) {
+    const map = renderMap(l.meta, ctx.P, ctx.W);
+    const key = [...sourceKeys(l.meta, l.files)].find((k) => Object.hasOwn(map, k));
+    if (key) throw new Error(`import: ${l.source} holds {{${key}}} literally, but profile ${opts.profileName} sets ${key} — sync would render it`);
   }
 
   /* ---- recipes ---- */
   const recipesDir = path.join(forge, "recipes");
   const isVariant = (ref: string) => report.variants.some((v) => v.name === ref);
-  const suffixIf = (name: string, ingredients: string[]) => (ingredients.some(isVariant) ? `${name}--${opts.profileName}` : name);
+  const recipeOpts: RecipeOptions = { stage, dir: recipesDir, profile: opts.profileName, forge: ctx.forge, report, currentRules: currentRuleOrder(ctx.forge, opts.profileName) };
 
   const stackRecipes: string[] = [];
   for (const [ruleRef, pattern] of scopedRules) {
@@ -270,18 +345,15 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     const agents = [...agentBodies].filter(([ref, body]) => agentBelongsTo(ref.split("/")[1], ruleName, body)).map(([ref]) => ref);
     for (const a of agents) refs.base = refs.base.filter((r) => r !== a);
     const ingredients = [ruleRef, ...agents];
-    const recipeName = suffixIf(`stack-${ruleName}`, ingredients);
-    await writeRecipe(stage, recipesDir, { name: recipeName, description: `Conventions + reviewer for repos matching ${pattern}`, extends: [], ingredients, params: {} }, report);
-    stackRecipes.push(recipeName);
+    stackRecipes.push(await placeRecipe(recipeOpts, `stack-${ruleName}`, ingredients, `Conventions + reviewer for repos matching ${pattern}`, ingredients.some(isVariant)));
   }
 
   const baseIngredients = unique(refs.base);
-  const baseName = suffixIf("base", baseIngredients);
-  await writeRecipe(stage, recipesDir, { name: baseName, description: "Always-on conventions, commands, agents, scripts and MCP servers.", extends: [], ingredients: baseIngredients, params: {} }, report);
+  const baseName = await placeRecipe(recipeOpts, "base", baseIngredients, "Always-on conventions, commands, agents, scripts and MCP servers.", baseIngredients.some(isVariant));
   const profileRecipes = [baseName, ...stackRecipes];
   if (refs.steering.length) {
     const n = `${opts.profileName}-steering`;
-    await writeRecipe(stage, recipesDir, { name: n, description: `Hand-written Kiro steering specific to ${opts.profileName}.`, extends: [], ingredients: refs.steering, params: {} }, report);
+    await writeOwnedRecipe(recipeOpts, n, refs.steering, `Hand-written Kiro steering specific to ${opts.profileName}.`);
     profileRecipes.push(n);
   }
 
@@ -300,12 +372,14 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     frontend: {},
     executor: (await exists(path.join(claudeDir, "rules", "kiro-execution.md"))) ? { kind: "kiro", terminal: "orca" } : {},
     integrations: {},
-    params: {},
+    // A new profile holds the values this run inferred, in acceptance order (spec 10 §6.6).
+    params: Object.fromEntries(report.params.map((x) => [x.key, ctx.P[x.key]])),
     repos: [],
   };
-  stage.write(path.join(forge, "profiles", opts.profileName, "profile.yaml"), YAML.stringify(profile));
-  report.created.push(`profiles/${opts.profileName}/profile.yaml`);
-  return { report, targets };
+  await writeProfile(stage, forge, opts.profileName, profile, ctx, report);
+  const config = opts.writeWorkspaceConfig ? await planConfig(ws, forge, opts.profileName, targets) : null;
+  report.configWrite = config?.action ?? null;
+  return { report, targets, config };
 }
 
 /**
@@ -494,6 +568,7 @@ async function writeIngredient(
   profile: string,
   report: ImportReport,
   scan: Record<string, string> = {},
+  run?: { ctx: RunContext; others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>; runBases: Set<string>; literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer> }> },
 ): Promise<string | null> {
   const secret = secretIn(meta, files, scan);
   if (secret) {
@@ -507,20 +582,47 @@ async function writeIngredient(
   // Hash what the Forge will load back, the way fingerprintDir hashes the other side.
   const fingerprint = fingerprintOf(validateImported(meta), files);
 
+  const ref = `${meta.type}/${name}`;
+  const source = meta.origin?.path ?? ref;
+  const sourceMeta = validateImported(meta);
   if (await stage.exists(path.join(dir, "ingredient.yaml"))) {
-    const existing = await fingerprintDir(dir, stage.reader());
-    if (existing === fingerprint) {
-      report.reused.push(`${meta.type}/${name}`);
-      return `${meta.type}/${name}`;
+    let why: string | undefined;
+    const d = run ? await decide(run.ctx, dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases) : { kind: "literal" as const, warn: "" };
+    if (d.kind === "literal") {
+      if (d.warn) report.warnings.push(d.warn);
+      if ((await fingerprintDir(dir, stage.reader())) === fingerprint) {
+        report.reused.push(ref);
+        return ref;
+      }
+    } else if (d.kind === "reuse") {
+      report.reused.push(ref);
+      if (d.rendered) report.rendered.push({ name: ref, keys: d.rendered });
+      if (d.inferred) report.inferred.push({ name: ref, values: d.inferred });
+      for (const x of d.delta ?? []) report.params.push({ ...x, from: ref });
+      return ref;
+    } else {
+      why = d.why;
     }
     const as = meta.name;
     name = `${meta.name}--${profile}`;
     dir = path.join(forge, "ingredients", folder, name);
-    report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge` });
+    report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge${why ? ` (${why})` : ""}` });
     meta = { ...meta, name, as } as Ingredient;
     validateImported(meta); // the variant name must be slug-like too (a `--profile` with a space is not)
+    // I8: rewriting an existing variant another profile resolves would change its files there.
+    if (run?.ctx.forge && (await stage.exists(path.join(dir, "ingredient.yaml"))) && (await fingerprintDir(dir, stage.reader())) !== fingerprintOf(validateImported(meta), files)) {
+      for (const q of run.ctx.forge.profiles.keys()) {
+        if (q !== profile && resolvedBy(run.ctx.forge, q).has(`${meta.type}/${name}`)) {
+          throw new Error(`import: ${meta.type}/${name} is also used by profile ${q} — its files would change there`);
+        }
+      }
+    }
   } else {
     report.created.push(`${meta.type}/${name}`);
+  }
+  if (run) {
+    pin(run.ctx, sourceKeys(sourceMeta, files), renderMap(sourceMeta, run.ctx.P, run.ctx.W));
+    run.literal.push({ ref: `${meta.type}/${name}`, source, meta: sourceMeta, files });
   }
 
   const yamlMeta: Record<string, unknown> = { ...meta };
@@ -542,13 +644,222 @@ function validateImported(meta: Ingredient): Ingredient {
   throw new Error(`${source} (${meta.type}/${meta.name}) does not fit the ingredient schema: ${r.error.message}`);
 }
 
-async function writeRecipe(stage: ForgeStage, dir: string, recipe: Recipe, report: ImportReport): Promise<void> {
-  const file = path.join(dir, `${recipe.name}.yaml`);
-  const clean = JSON.parse(JSON.stringify(recipe)); // drop undefined
-  if (await stage.exists(file)) {
-    const prev = YAML.parse(await stage.readText(file));
-    clean.ingredients = unique([...(prev.ingredients ?? []), ...clean.ingredients]);
+interface RecipeOptions {
+  stage: ForgeStage;
+  dir: string;
+  profile: string;
+  forge: import("../core/forge.js").Forge | null;
+  report: ImportReport;
+  /** The rules the profile resolves today, in resolution order; null for a new profile (spec 10 §14 Q10). */
+  currentRules: string[] | null;
+}
+
+function currentRuleOrder(forge: import("../core/forge.js").Forge | null, profile: string): string[] | null {
+  if (!forge?.profiles.has(profile)) return null;
+  try {
+    return resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile })).ingredients.map((i) => i.ref).filter((r) => r.startsWith("rule/"));
+  } catch {
+    return null;
   }
-  stage.write(file, YAML.stringify(clean));
-  report.recipes.push(recipe.name);
+}
+
+const recipeText = (name: string, description: string, ingredients: string[]) =>
+  YAML.stringify(JSON.parse(JSON.stringify({ name, description, extends: [], ingredients, params: {} }))); // today's bytes
+
+/**
+ * Where a shared recipe's computed list goes (spec 10 §6.7, Ruling 7): a shared recipe is never
+ * edited and never widened for one client. It is used only when its ingredients equal the list as
+ * a set — and, for a profile that already exists, in the same relative rule order, so AGENTS.md
+ * does not reorder (Q10). Otherwise the profile gets its own `<name>--<profile>`.
+ */
+async function placeRecipe(o: RecipeOptions, name: string, list: string[], description: string, holdsVariant: boolean): Promise<string> {
+  const owned = `${name}--${o.profile}`;
+  if (holdsVariant) return writeOwnedRecipe(o, owned, list, description);
+  const file = path.join(o.dir, `${name}.yaml`);
+  if (!(await o.stage.exists(file))) {
+    o.stage.write(file, recipeText(name, description, list));
+    o.report.recipes.push(name);
+    return name;
+  }
+  const existing = RecipeSchema.parse(YAML.parse(stripBom(await o.stage.readText(file))) ?? {}).ingredients;
+  const rules = (xs: string[]) => xs.filter((x) => x.startsWith("rule/"));
+  const lacks = existing.find((x) => !list.includes(x));
+  const extra = list.find((x) => !existing.includes(x));
+  // Q10: an existing profile moves to R only if R orders its rules as the profile resolves them today, so AGENTS.md keeps its order.
+  const reorders = o.currentRules !== null && JSON.stringify(rules(existing)) !== JSON.stringify(o.currentRules.filter((r) => existing.includes(r)));
+  if (!lacks && !extra && !reorders) {
+    o.report.recipes.push(name);
+    return name;
+  }
+  const reason = lacks
+    ? `${name} lists ${lacks}, which this workspace lacks`
+    : extra
+      ? `this workspace has ${extra}, which ${name} lacks`
+      : `${name} orders its rules differently`;
+  o.report.recipeSplits.push({ shared: name, owned, reason });
+  return writeOwnedRecipe(o, owned, list, description);
+}
+
+/**
+ * A recipe the importing profile owns holds exactly this workspace's list: a new one is written
+ * as today; an existing one is edited in place — entries kept in their order, dropped ones
+ * removed, new ones appended — refused if another profile resolves it (I7) or it cannot be
+ * edited in place (I2).
+ */
+async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], description: string): Promise<string> {
+  const file = path.join(o.dir, `${name}.yaml`);
+  o.report.recipes.push(name);
+  if (!(await o.stage.exists(file))) {
+    o.stage.write(file, recipeText(name, description, list));
+    return name;
+  }
+  const raw = await o.stage.readText(file);
+  const before = RecipeSchema.parse(YAML.parse(stripBom(raw)) ?? {});
+  const next = [...before.ingredients.filter((x) => list.includes(x)), ...list.filter((x) => !before.ingredients.includes(x))];
+  if (JSON.stringify(next) === JSON.stringify(before.ingredients)) return name;
+  if (o.forge) {
+    for (const q of o.forge.profiles.keys()) {
+      if (q !== o.profile && recipesOf(o.forge, q).has(name)) throw new Error(`import: recipe ${name} is also used by profile ${q} — its ingredients would change there`);
+    }
+  }
+  const label = `recipes/${name}.yaml`;
+  const content = editYamlText(raw, { command: "import", label, keys: ["ingredients"] }, (doc) => {
+    const seq = doc.get("ingredients", true);
+    if (!YAML.isSeq(seq)) {
+      doc.set("ingredients", next);
+      return;
+    }
+    seq.items = seq.items.filter((it) => list.includes(String(YAML.isScalar(it) ? it.value : it)));
+    for (const x of list) if (!before.ingredients.includes(x)) seq.items.push(doc.createNode(x));
+  });
+  const after = RecipeSchema.safeParse(YAML.parse(stripBom(content)) ?? {});
+  if (!after.success || !isDeepStrictEqual(after.data, { ...before, ingredients: next })) {
+    throw new Error(`import: cannot edit ${label} in place (the edit does not read back as exactly the new ingredients) — reformat it by hand, commit, and re-run`);
+  }
+  o.stage.write(file, content);
+  return name;
+}
+
+/** The recipes a profile resolves inside the Forge; fails closed — a profile that does not resolve counts as using everything. */
+function recipesOf(forge: import("../core/forge.js").Forge, profile: string): { has(name: string): boolean } {
+  try {
+    return new Set(resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile })).recipes);
+  } catch {
+    return { has: () => true };
+  }
+}
+
+/**
+ * The importing profile's params before the run (`P`, spec 10 §6.1), and I4: import writes
+ * `profiles/<p>/profile.yaml`, so a profile named `<p>` elsewhere, or that file naming another
+ * profile, would leave two files for one name.
+ */
+async function existingProfileParams(forge: string, profile: string, loaded: import("../core/forge.js").Forge | null): Promise<Record<string, unknown>> {
+  if (!loaded) return {};
+  const dir = path.join(forge, "profiles");
+  for (const d of (await exists(dir)) ? await fs.readdir(dir, { withFileTypes: true }) : []) {
+    if (!d.isDirectory()) continue;
+    const abs = path.join(dir, d.name, "profile.yaml");
+    if (!(await exists(abs))) continue;
+    const name = ProfileSchema.parse(YAML.parse(stripBom(await fs.readFile(abs, "utf8"))) ?? {}).name;
+    if ((name === profile) !== (d.name === profile)) {
+      throw new Error(`import: profile ${profile} is profiles/${d.name}/profile.yaml — import writes profiles/${profile}/profile.yaml`);
+    }
+  }
+  return { ...(loaded.profiles.get(profile)?.params ?? {}) };
+}
+
+/** Recipe entries import owns in a profile's `recipes`: the ones it computes and replaces (spec 10 §6.6, §14 Q4). */
+const importOwned = (name: string, profile: string) =>
+  name === "base" || name === `base--${profile}` || name === `${profile}-steering` || (/^stack-/.test(name) && (!name.includes("--") || name.endsWith(`--${profile}`)));
+
+/**
+ * Write `profiles/<p>/profile.yaml` (spec 10 §6.6, Ruling 2): a new profile as today; an existing
+ * one edited in place — `params` gains this run's values, `recipes` gets the computed entries in
+ * place of the ones import owns, `targets` gains missing ones — every other field, comment and
+ * line kept. I1 when it cannot be edited in place.
+ */
+async function writeProfile(stage: ForgeStage, forge: string, name: string, computed: Profile, ctx: RunContext, report: ImportReport): Promise<void> {
+  const file = path.join(forge, "profiles", name, "profile.yaml");
+  const label = `profiles/${name}/profile.yaml`;
+  if (!(await stage.exists(file))) {
+    stage.write(file, YAML.stringify(computed));
+    report.created.push(label);
+    report.profileWrite = { path: label, action: "created", fields: [] };
+    return;
+  }
+  const raw = await stage.readText(file);
+  const before = ProfileSchema.parse(YAML.parse(stripBom(raw)) ?? {});
+  const values = Object.fromEntries(report.params.map((x) => [x.key, String(ctx.P[x.key])]));
+  const firstOwned = before.recipes.findIndex((r) => importOwned(r, name));
+  const kept = before.recipes.filter((r) => !importOwned(r, name));
+  const at = firstOwned === -1 ? kept.length : before.recipes.slice(0, firstOwned).filter((r) => !importOwned(r, name)).length;
+  const recipes = [...kept.slice(0, at), ...computed.recipes, ...kept.slice(at)];
+  const targets = [...before.targets, ...computed.targets.filter((t) => !before.targets.includes(t))];
+  const fields = [
+    ...(Object.keys(values).length ? ["params"] : []),
+    ...(JSON.stringify(recipes) !== JSON.stringify(before.recipes) ? ["recipes"] : []),
+    ...(targets.length !== before.targets.length ? ["targets"] : []),
+  ];
+  if (!fields.length) {
+    report.profileWrite = { path: label, action: "unchanged", fields: [] };
+    return;
+  }
+  const content = editYamlText(raw, { command: "import", label, keys: ["params", "recipes", "targets"] }, (doc) => {
+    for (const [k, v] of Object.entries(values)) doc.setIn(["params", k], v);
+    if (fields.includes("recipes")) {
+      const seq = doc.get("recipes", true);
+      if (YAML.isSeq(seq)) {
+        const nodes = seq.items.filter((it) => !importOwned(String(YAML.isScalar(it) ? it.value : it), name));
+        seq.items = [...nodes.slice(0, at), ...computed.recipes.map((r) => doc.createNode(r)), ...nodes.slice(at)];
+      } else doc.set("recipes", recipes);
+    }
+    if (fields.includes("targets")) {
+      const seq = doc.get("targets", true);
+      if (YAML.isSeq(seq)) for (const t of targets.slice(before.targets.length)) seq.items.push(doc.createNode(t));
+      else doc.set("targets", targets);
+    }
+  });
+  const after = ProfileSchema.safeParse(YAML.parse(stripBom(content)) ?? {});
+  const expected = { ...before, recipes, targets, params: { ...before.params, ...values } };
+  if (!after.success || !isDeepStrictEqual(after.data, expected)) {
+    throw new Error(`import: cannot edit ${label} in place (the edit does not read back as exactly the intended change) — reformat it by hand, commit, and re-run`);
+  }
+  stage.write(file, content);
+  report.profileWrite = { path: label, action: "edited", fields };
+  for (const x of report.params) {
+    const was = before.params[x.key] === undefined ? "" : ` (was ${JSON.stringify(String(before.params[x.key]))})`;
+    report.warnings.push(`profile ${name} now sets ${x.key} to ${JSON.stringify(values[x.key])}${was} — every workspace on ${name} renders it at its next sync; import cannot reach them`);
+  }
+}
+
+/**
+ * `--write-config` (spec 10 §6.9, Ruling 8): a new or empty craftar.yaml is written as today; an
+ * existing one is edited in place — `forge`, `profile` and `targets` set, everything else, comments
+ * included, kept. Checked here, before the Forge flush; I9 when it cannot be edited in place.
+ */
+async function planConfig(ws: string, forge: string, profile: string, targets: Target[]): Promise<PlannedConfig> {
+  const abs = path.join(ws, "craftar.yaml");
+  const rel = path.relative(ws, forge).replace(/\\/g, "/") || ".";
+  const fresh = YAML.stringify({ forge: rel, profile, targets });
+  const raw = (await exists(abs)) ? await fs.readFile(abs, "utf8") : null;
+  const before = raw === null ? null : YAML.parse(stripBom(raw));
+  if (raw === null || before === null || before === undefined) return { abs, content: fresh, action: "created" };
+  const i9 = (why: string) => new Error(`import: cannot edit craftar.yaml in place (${why}) — reformat it by hand and re-run`);
+  if (typeof before !== "object" || Array.isArray(before)) throw i9("it is not a YAML mapping");
+  let content: string;
+  try {
+    content = editYamlText(raw, { command: "import", label: "craftar.yaml", keys: [] }, (doc) => {
+      doc.set("forge", rel);
+      doc.set("profile", profile);
+      if (JSON.stringify(before.targets) !== JSON.stringify(targets)) doc.set("targets", targets);
+    });
+  } catch (e) {
+    throw i9((e as Error).message.replace(/^.*in place \((.*)\) — .*$/s, "$1"));
+  }
+  const after = YAML.parse(stripBom(content));
+  if (!isDeepStrictEqual(after, { ...before, forge: rel, profile, targets })) throw i9("the edit does not read back as exactly forge, profile and targets set");
+  const loaded = WorkspaceConfigSchema.safeParse(after);
+  if (!loaded.success) throw i9(`it no longer loads: ${loaded.error.message}`);
+  return { abs, content, action: content === raw ? "unchanged" : "edited" };
 }

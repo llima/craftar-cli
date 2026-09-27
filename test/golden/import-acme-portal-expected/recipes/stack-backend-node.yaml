@@ -1,0 +1,7 @@
+name: stack-backend-node
+description: Conventions + reviewer for repos matching projects/acme-api/**
+extends: []
+ingredients:
+  - rule/backend-node
+  - agent/backend-node-reviewer
+params: {}

@@ -1,0 +1,10 @@
+type: script
+name: check-branch
+files:
+  - check-branch.ps1
+targets:
+  - claude-code
+tags: []
+origin:
+  workspace: acme-portal
+  path: .claude/scripts/check-branch.ps1

@@ -1573,7 +1573,8 @@ describe("cli — forge unify take: param (spec 09)", () => {
     expect(out.profileEdited).toBe("profiles/acme/profile.yaml");
     expect(out.variantRemoved).toBe("rule/deploy--acme");
     expect(out.warnings.join("\n")).toContain("deploy.api is now a parameter of rule/deploy");
-    expect(out.warnings.join("\n")).toContain("craftar import does not recognise a templated ingredient yet");
+    // Spec 10 removed W2: import now recognises a templated base.
+    expect(out.warnings.join("\n")).not.toContain("craftar import does not recognise a templated ingredient yet");
     expect(await fs.readFile(path.join(root, "ingredients/rules/deploy/rule.md"), "utf8")).toBe("use {{deploy.api}}\nshared\nport {{deploy.port}}\n");
     expect(YAML.parse(await fs.readFile(path.join(root, "ingredients/rules/deploy/ingredient.yaml"), "utf8")).params).toEqual({
       "deploy.api": { default: "globex-api" },
@@ -1756,5 +1757,26 @@ describe("cli — forge unify take: param, review follow-ups (spec 09)", () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("profile globex sets deploy.api");
     expect(gitStatus(root)).toBe("");
+  });
+});
+
+describe("cli — import prints how a templated base was reused (spec 10 §4.2)", () => {
+  it("prints the inferred, param, profile and split lines once each", async () => {
+    const root = await tmpDir("craftar-cli-import-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    await writeFiles(path.join(root, "a"), { ".claude/rules/deploy.md": "use globex-api here\n" });
+    expect(runCli(["import", "--from", "claude-code", "--forge", forge, "--profile", "a", "--workspace", path.join(root, "a")]).code).toBe(0);
+    await fs.writeFile(path.join(forge, "ingredients/rules/deploy/rule.md"), "use {{deploy.api}} here\n");
+    const meta = path.join(forge, "ingredients/rules/deploy/ingredient.yaml");
+    await fs.writeFile(meta, (await fs.readFile(meta, "utf8")) + "params:\n  deploy.api:\n    default: globex-api\n");
+    await writeFiles(path.join(root, "b"), { ".claude/rules/deploy.md": "use initech-api here\n", ".claude/rules/z.md": "# Z\n" });
+    const r = runCli(["import", "--from", "claude-code", "--forge", forge, "--profile", "b", "--workspace", path.join(root, "b")]);
+    expect(r.code, r.stderr).toBe(0);
+    const count = (needle: string) => r.stdout.split(needle).length - 1;
+    expect(count('inferred rule/deploy — deploy.api = "initech-api"')).toBe(1);
+    expect(count('param deploy.api: (unset) → "initech-api"')).toBe(1);
+    expect(count("profile profiles/b/profile.yaml created")).toBe(1);
+    expect(count("recipes: base--b (this workspace has rule/z, which base lacks)")).toBe(1);
   });
 });
