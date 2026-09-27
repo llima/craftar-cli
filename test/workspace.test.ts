@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import { resolve } from "../src/core/resolve.js";
+import { workspaceParams } from "../src/importers/decide.js";
 import { profile, recipe, scenario, tmpDir, type WorkspaceSpec } from "./helpers/forge.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -31,6 +32,16 @@ describe("workspace layers", () => {
   it("objects still merge key by key", async () => {
     const w = await ws({ config: { profile: "acme", overrides: { params: { a: "1" } } }, local: { overrides: { params: { b: "2" } } } });
     expect(w.config.overrides.params).toEqual({ a: "1", b: "2" });
+  });
+
+  it("import's workspace layer merges overrides.params exactly as loadWorkspace does, nested values included", async () => {
+    const spec = { config: { profile: "acme", overrides: { params: { a: "1", db: { host: "h", port: 1 } } } }, local: { overrides: { params: { db: { port: 2 } } } } };
+    const s = await scenario({ recipes: [recipe("base", [])], profiles: [profile("acme", ["base"])] }, spec);
+    cleanups.push(s.cleanup);
+    const w = await loadWorkspace(s.wsRoot);
+    const read = (abs: string) => fs.readFile(abs, "utf8");
+    expect(w.config.overrides.params).toEqual({ a: "1", db: { host: "h", port: 2 } });
+    expect({ ...(await workspaceParams(s.wsRoot, read)) }).toEqual(w.config.overrides.params);
   });
 
   it("deduplicates resolved targets", async () => {

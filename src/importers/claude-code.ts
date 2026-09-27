@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
-import { exists, listFiles, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
+import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
 import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../core/secrets.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
@@ -316,13 +316,20 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     pinned: new Map(),
     forge: loaded,
   };
-  const runBases = new Set(queue.map((q) => `${q.meta.type}/${q.meta.name}`));
+  // F9 (§6.5): a source rejected for a secret or skipped is never decided. Its base stays in the Forge-wide scan (b),
+  // and its text leaves the literal check (c). `ruleNames` fills only as rules are decided, so each set errs on its
+  // safe side for a steering file a rule of its name may shadow: out of `runBases`, still in `others`.
+  const queuedRules = new Set(queue.filter((q) => q.meta.type === "rule").map((q) => q.meta.name));
+  const mayBeSkipped = (q: Source) => q.skip?.() || (q.meta.type === "steering" && queuedRules.has(q.meta.name));
+  const clean = queue.filter((q) => !secretIn(q.meta, q.files, q.scan));
+  const runBases = new Set(clean.filter((q) => !mayBeSkipped(q)).map((q) => `${q.meta.type}/${q.meta.name}`));
+  const mayBeDecided = clean.filter((q) => !q.skip?.());
   const literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer> }> = [];
 
   /* ---- decide, in read order ---- */
   for (const src of queue) {
     if (src.skip?.()) continue;
-    const others = queue.filter((q) => q !== src).map((q) => ({ ref: `${q.meta.type}/${q.meta.name}`, meta: q.meta, files: q.files }));
+    const others = mayBeDecided.filter((q) => q !== src).map((q) => ({ ref: `${q.meta.type}/${q.meta.name}`, meta: q.meta, files: q.files }));
     const ref = await writeIngredient(stage, src.meta, src.files, opts.profileName, report, src.scan, { ctx, others, runBases, literal });
     if (ref) src.after(ref);
   }
@@ -675,13 +682,13 @@ const recipeText = (name: string, description: string, ingredients: string[]) =>
 async function placeRecipe(o: RecipeOptions, name: string, list: string[], description: string, holdsVariant: boolean): Promise<string> {
   const owned = `${name}--${o.profile}`;
   if (holdsVariant) return writeOwnedRecipe(o, owned, list, description);
-  const file = path.join(o.dir, `${name}.yaml`);
+  const file = await recipeFile(o, name);
   if (!(await o.stage.exists(file))) {
     o.stage.write(file, recipeText(name, description, list));
     o.report.recipes.push(name);
     return name;
   }
-  const existing = RecipeSchema.parse(YAML.parse(stripBom(await o.stage.readText(file))) ?? {}).ingredients;
+  const existing = parseYaml(file, stripBom(await o.stage.readText(file)), RecipeSchema).ingredients;
   const rules = (xs: string[]) => xs.filter((x) => x.startsWith("rule/"));
   const lacks = existing.find((x) => !list.includes(x));
   const extra = list.find((x) => !existing.includes(x));
@@ -707,14 +714,14 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
  * edited in place (I2).
  */
 async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], description: string): Promise<string> {
-  const file = path.join(o.dir, `${name}.yaml`);
+  const file = await recipeFile(o, name);
   o.report.recipes.push(name);
   if (!(await o.stage.exists(file))) {
     o.stage.write(file, recipeText(name, description, list));
     return name;
   }
   const raw = await o.stage.readText(file);
-  const before = RecipeSchema.parse(YAML.parse(stripBom(raw)) ?? {});
+  const before = parseYaml(file, stripBom(raw), RecipeSchema);
   const next = [...before.ingredients.filter((x) => list.includes(x)), ...list.filter((x) => !before.ingredients.includes(x))];
   if (JSON.stringify(next) === JSON.stringify(before.ingredients)) return name;
   if (o.forge) {
@@ -740,6 +747,24 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
   return name;
 }
 
+/**
+ * `recipes/<name>.yaml`, the file import reads and writes for recipe `<name>`. loadForge keys
+ * recipes by their `name` field, not by file, so a recipe `<name>` in another file, or that file
+ * declaring another name, would leave two recipes under one name and loadForge would keep one.
+ * Refused before the first write, as I4 refuses the same split for a profile.
+ */
+async function recipeFile(o: RecipeOptions, name: string): Promise<string> {
+  const file = path.join(o.dir, `${name}.yaml`);
+  for (const f of await o.stage.reader().list(o.dir)) {
+    if (f.includes("/") || !/\.ya?ml$/.test(f)) continue;
+    const abs = path.join(o.dir, f);
+    const declared = parseYaml(abs, stripBom(await o.stage.readText(abs)), RecipeSchema).name;
+    if (abs === file && declared !== name) throw new Error(`import: recipes/${f} is recipe ${declared} — import writes recipe ${name} there`);
+    if (abs !== file && declared === name) throw new Error(`import: recipe ${name} is recipes/${f} — import writes recipes/${name}.yaml`);
+  }
+  return file;
+}
+
 /** The recipes a profile resolves inside the Forge; fails closed — a profile that does not resolve counts as using everything. */
 function recipesOf(forge: import("../core/forge.js").Forge, profile: string): { has(name: string): boolean } {
   try {
@@ -761,7 +786,7 @@ async function existingProfileParams(forge: string, profile: string, loaded: imp
     if (!d.isDirectory()) continue;
     const abs = path.join(dir, d.name, "profile.yaml");
     if (!(await exists(abs))) continue;
-    const name = ProfileSchema.parse(YAML.parse(stripBom(await fs.readFile(abs, "utf8"))) ?? {}).name;
+    const name = parseYaml(abs, stripBom(await fs.readFile(abs, "utf8")), ProfileSchema).name;
     if ((name === profile) !== (d.name === profile)) {
       throw new Error(`import: profile ${profile} is profiles/${d.name}/profile.yaml — import writes profiles/${profile}/profile.yaml`);
     }
@@ -789,7 +814,7 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
     return;
   }
   const raw = await stage.readText(file);
-  const before = ProfileSchema.parse(YAML.parse(stripBom(raw)) ?? {});
+  const before = parseYaml(file, stripBom(raw), ProfileSchema);
   const values = Object.fromEntries(report.params.map((x) => [x.key, String(ctx.P[x.key])]));
   const firstOwned = before.recipes.findIndex((r) => importOwned(r, name));
   const kept = before.recipes.filter((r) => !importOwned(r, name));

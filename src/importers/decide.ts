@@ -5,6 +5,7 @@ import { placeholders, reservedKey, substitutedFile } from "../core/extract.js";
 import { fingerprintOf } from "../core/fingerprint.js";
 import { exists, listFiles, loadForge, readIngredientText, type Forge } from "../core/forge.js";
 import { hashNormalized, stripBom, toLf } from "../core/text.js";
+import { deepMerge } from "../core/merge.js";
 import { citedKeys, infer, readBase, renderMap, renderedFingerprint } from "../core/template-import.js";
 import type { DirReader } from "../core/fingerprint.js";
 import type { Ingredient } from "../schema/index.js";
@@ -20,7 +21,10 @@ export interface RunContext {
   P: Record<string, unknown>;
   /** The workspace layer: overrides.params of craftar.yaml and craftar.local.yaml (`W`). */
   W: Record<string, unknown>;
-  /** Keys this run has relied on, with the value (or absence) it relied on (§6.5). */
+  /**
+   * Keys this run has relied on, with the first value (or absence) it relied on (§6.5). Decisions read only
+   * membership; the value is kept for a later relaxation (every reliance at one value).
+   */
   pinned: Map<string, string | undefined>;
   /** The Forge as it stood before the run; null for an empty Forge. */
   forge: Forge | null;
@@ -48,9 +52,10 @@ export function pin(ctx: RunContext, keys: Iterable<string>, map: Record<string,
 }
 
 /**
- * Decide an existing base against one source. `others` are the run's other sources, for the
- * literal-citation check (§6.5 (c)); `runBases` are the refs of every source's base, which the
- * Forge-wide check excludes (§6.5 (b)).
+ * Decide an existing base against one source. `others` are the run's other sources that may be
+ * decided, for the literal-citation check (§6.5 (c)); `runBases` are the refs of the sources it
+ * will certainly decide, which the Forge-wide check excludes (§6.5 (b)). See the F9 comment in
+ * `importClaudeCode` for how each set errs on its safe side.
  */
 export async function decide(
   ctx: RunContext,
@@ -83,8 +88,12 @@ export async function decide(
     return { kind: "reuse", rendered: changed.length ? changed.sort() : undefined };
   }
 
-  const holes = new Set([...cited].filter((k) => base.meta.params?.[k] !== undefined && !reservedKey(k) && !Object.hasOwn(ctx.W, k)));
-  if (!holes.size) return { kind: "variant" };
+  // Holes (§3): declared, not reserved, not set by the workspace layer, and not pinned — a key this run already relied
+  // on renders at its current value, like any fixed key (§6.5, §14 Q13).
+  const inferable = [...cited].filter((k) => base.meta.params?.[k] !== undefined && !reservedKey(k) && !Object.hasOwn(ctx.W, k));
+  const holes = new Set(inferable.filter((k) => !ctx.pinned.has(k)));
+  const pinnedHoles = inferable.filter((k) => ctx.pinned.has(k));
+  if (!holes.size && !pinnedHoles.length) return { kind: "variant" };
 
   // F1, F2: what no value can explain.
   const metaOnly = { ...base.meta } as Record<string, unknown>;
@@ -100,16 +109,24 @@ export async function decide(
   for (const [k, v] of Object.entries(map)) if (!holes.has(k)) fixed[k] = v;
   const sources = new Map([...base.texts.keys()].map((rel) => [rel, textOf(files[rel])]));
   const r = infer(base.texts, sources, holes, fixed);
-  if ("fallback" in r) return { kind: "variant", why: r.reason };
-  const sigma = r.values;
-
-  // F8: a key this run already relied on keeps its value (Ruling 5).
-  for (const [k, v] of Object.entries(sigma)) {
-    if (ctx.pinned.has(k) && ctx.pinned.get(k) !== v) {
-      const was = ctx.pinned.get(k);
-      return { kind: "variant", why: `${k} is ${was === undefined ? "unset" : JSON.stringify(was)} in this import; ${ref} implies ${JSON.stringify(v)}` };
+  if ("fallback" in r) {
+    // F8 (Ruling 5): when the source matches only with another value for a pinned key, name that key rather than the
+    // line. The value it keeps is the one this base renders — P's or W's, which the run relied on, or, when neither
+    // sets the key, this base's own default: an inference may not set it, or an earlier reuse at its default would move.
+    if (pinnedHoles.length) {
+      const open = new Set([...holes, ...pinnedHoles]);
+      const wide = infer(base.texts, sources, open, Object.fromEntries(Object.entries(fixed).filter(([k]) => !open.has(k))));
+      if (!("fallback" in wide)) {
+        const k = pinnedHoles.find((x) => wide.values[x] !== valueOf(map, x));
+        if (k !== undefined) {
+          const is = valueOf(map, k);
+          return { kind: "variant", why: `${k} is ${is === undefined ? "unset" : JSON.stringify(is)} in this import; ${ref} implies ${JSON.stringify(wide.values[k])}` };
+        }
+      }
     }
+    return { kind: "variant", why: r.reason };
   }
+  const sigma = r.values;
   const delta = Object.entries(sigma)
     .filter(([k, v]) => valueOf(map, k) !== v)
     .map(([key, value]) => ({ key, old: valueOf(ctx.P, key) ?? null, value }));
@@ -145,14 +162,14 @@ const OverridesParams = z.record(z.unknown());
 
 /** `W`: overrides.params of craftar.yaml and craftar.local.yaml, merged as loadWorkspace merges them (I6). */
 export async function workspaceParams(ws: string, read: (abs: string) => Promise<string>): Promise<Record<string, unknown>> {
-  const out: Record<string, unknown> = Object.create(null);
+  let out: Record<string, unknown> = {};
   for (const f of ["craftar.yaml", "craftar.local.yaml"]) {
     const abs = path.join(ws, f);
     if (!(await exists(abs))) continue;
     try {
       const doc = YAML.parse(stripBom(await read(abs))) ?? {};
       const params = OverridesParams.parse(doc?.overrides?.params ?? {});
-      for (const [k, v] of Object.entries(params)) out[k] = v;
+      out = deepMerge(out, params);
     } catch (e) {
       throw new Error(`import: ${f} does not load (${(e as Error).message})`);
     }

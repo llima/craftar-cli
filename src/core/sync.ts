@@ -4,6 +4,7 @@ import YAML from "yaml";
 import { loadForge, exists, type Forge } from "./forge.js";
 import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFor } from "./resolve.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
+import { deepMerge } from "./merge.js";
 import { LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
@@ -54,18 +55,6 @@ export async function resolveForge(opts: { forge?: string; workspace?: string })
     );
   }
   return (await loadWorkspace(root)).forge;
-}
-
-/** Layer merge: objects merge key by key; arrays and scalars from the stronger layer replace the weaker one. */
-function deepMerge(a: any, b: any): any {
-  if (b === undefined) return a;
-  if (Array.isArray(a) || Array.isArray(b)) return b;
-  if (a && b && typeof a === "object" && typeof b === "object") {
-    const out = { ...a };
-    for (const k of Object.keys(b)) out[k] = k in a ? deepMerge(a[k], b[k]) : b[k];
-    return out;
-  }
-  return b;
 }
 
 export interface Plan {
