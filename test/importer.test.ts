@@ -559,6 +559,21 @@ describe("template-aware import — decisions (spec 10 §6.1–§6.5)", () => {
     ]);
   });
 
+  it("a key relied on at a base's own default is never set by a later inference (§6.5 (a)), so no earlier reuse drifts", async () => {
+    const t = await setup();
+    await templated(t, {
+      aa: { template: "one {{k}}\n", params: { k: "alpha" }, literal: "one alpha\n" },
+      bb: { template: "two {{k}}\n", params: { k: "zeta" }, literal: "two zeta\n" },
+      cc: { template: "three {{k}}\n", params: { k: "gamma" }, literal: "three gamma\n" },
+    });
+    await writeFiles(t.ws("b"), { ".claude/rules/aa.md": "one alpha\n", ".claude/rules/bb.md": "two zeta\n", ".claude/rules/cc.md": "three alpha\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.reused).toEqual(expect.arrayContaining(["rule/aa", "rule/bb"]));
+    // Setting k: alpha in the profile would render rule/bb as "two alpha" at the next sync.
+    expect(r.params).toEqual([]);
+    expect(r.variants).toEqual([{ name: "rule/cc--b", reason: 'differs from rule/cc already in the Forge (k is "gamma" in this import; rule/cc implies "alpha")' }]);
+  });
+
   it("a pinned key that the source cannot match falls back as F5 when no other value would explain it", async () => {
     const t = await setup();
     await templated(t, { deploy, notes: { template: "see {{deploy.api}} docs\n", params: { "deploy.api": "globex-api" }, literal: "see globex-api docs\n" } });

@@ -106,14 +106,18 @@ export async function decide(
   const sources = new Map([...base.texts.keys()].map((rel) => [rel, textOf(files[rel])]));
   const r = infer(base.texts, sources, holes, fixed);
   if ("fallback" in r) {
-    // F8 (Ruling 5): when the source matches only with another value for a pinned key, name that key rather than the line.
+    // F8 (Ruling 5): when the source matches only with another value for a pinned key, name that key rather than the
+    // line. The value it keeps is the one this base renders — P's or W's, which the run relied on, or, when neither
+    // sets the key, this base's own default: an inference may not set it, or an earlier reuse at its default would move.
     if (pinnedHoles.length) {
       const open = new Set([...holes, ...pinnedHoles]);
       const wide = infer(base.texts, sources, open, Object.fromEntries(Object.entries(fixed).filter(([k]) => !open.has(k))));
-      const k = "fallback" in wide ? undefined : pinnedHoles.find((x) => wide.values[x] !== ctx.pinned.get(x));
-      if (k !== undefined && !("fallback" in wide)) {
-        const was = ctx.pinned.get(k);
-        return { kind: "variant", why: `${k} is ${was === undefined ? "unset" : JSON.stringify(was)} in this import; ${ref} implies ${JSON.stringify(wide.values[k])}` };
+      if (!("fallback" in wide)) {
+        const k = pinnedHoles.find((x) => wide.values[x] !== valueOf(map, x));
+        if (k !== undefined) {
+          const is = valueOf(map, k);
+          return { kind: "variant", why: `${k} is ${is === undefined ? "unset" : JSON.stringify(is)} in this import; ${ref} implies ${JSON.stringify(wide.values[k])}` };
+        }
       }
     }
     return { kind: "variant", why: r.reason };
@@ -154,7 +158,7 @@ const OverridesParams = z.record(z.unknown());
 
 /** `W`: overrides.params of craftar.yaml and craftar.local.yaml, merged as loadWorkspace merges them (I6). */
 export async function workspaceParams(ws: string, read: (abs: string) => Promise<string>): Promise<Record<string, unknown>> {
-  let out: Record<string, unknown> = Object.create(null);
+  let out: Record<string, unknown> = {};
   for (const f of ["craftar.yaml", "craftar.local.yaml"]) {
     const abs = path.join(ws, f);
     if (!(await exists(abs))) continue;
