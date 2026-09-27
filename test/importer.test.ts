@@ -544,6 +544,29 @@ describe("template-aware import — decisions (spec 10 §6.1–§6.5)", () => {
     expect(r.variants).toEqual([{ name: "rule/notes--b", reason: 'differs from rule/notes already in the Forge (deploy.api is "initech-api" in this import; rule/notes implies "umbrella-api")' }]);
   });
 
+  it("a pinned key is not a hole: it renders at its value, so a line ambiguous only through it is reused (§3, §14 Q13)", async () => {
+    const t = await setup();
+    await templated(t, {
+      first: { template: "one {{a}}\n", params: { a: "x" }, literal: "one x\n" },
+      pair: { template: "use {{a}} and {{b}}\n", params: { a: "x", b: "y" }, literal: "use x and y\n" },
+    });
+    await writeFiles(t.ws("b"), { ".claude/rules/first.md": "one p and q\n", ".claude/rules/pair.md": "use p and q and r\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.variants).toEqual([]);
+    expect(r.inferred).toEqual([
+      { name: "rule/first", values: { a: "p and q" } },
+      { name: "rule/pair", values: { b: "r" } },
+    ]);
+  });
+
+  it("a pinned key that the source cannot match falls back as F5 when no other value would explain it", async () => {
+    const t = await setup();
+    await templated(t, { deploy, notes: { template: "see {{deploy.api}} docs\n", params: { "deploy.api": "globex-api" }, literal: "see globex-api docs\n" } });
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "use initech-api here\n", ".claude/rules/notes.md": "read initech-api docs\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.variants).toEqual([{ name: "rule/notes--b", reason: "differs from rule/notes already in the Forge (the template does not match line 1 of rule.md)" }]);
+  });
+
   it("refuses a profile change another Forge ingredient would feel (F9, §6.5 (b))", async () => {
     const t = await setup();
     await templated(t, { deploy });

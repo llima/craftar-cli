@@ -84,8 +84,12 @@ export async function decide(
     return { kind: "reuse", rendered: changed.length ? changed.sort() : undefined };
   }
 
-  const holes = new Set([...cited].filter((k) => base.meta.params?.[k] !== undefined && !reservedKey(k) && !Object.hasOwn(ctx.W, k)));
-  if (!holes.size) return { kind: "variant" };
+  // Holes (§3): declared, not reserved, not set by the workspace layer, and not pinned — a key this run already relied
+  // on renders at its current value, like any fixed key (§6.5, §14 Q13).
+  const inferable = [...cited].filter((k) => base.meta.params?.[k] !== undefined && !reservedKey(k) && !Object.hasOwn(ctx.W, k));
+  const holes = new Set(inferable.filter((k) => !ctx.pinned.has(k)));
+  const pinnedHoles = inferable.filter((k) => ctx.pinned.has(k));
+  if (!holes.size && !pinnedHoles.length) return { kind: "variant" };
 
   // F1, F2: what no value can explain.
   const metaOnly = { ...base.meta } as Record<string, unknown>;
@@ -101,16 +105,20 @@ export async function decide(
   for (const [k, v] of Object.entries(map)) if (!holes.has(k)) fixed[k] = v;
   const sources = new Map([...base.texts.keys()].map((rel) => [rel, textOf(files[rel])]));
   const r = infer(base.texts, sources, holes, fixed);
-  if ("fallback" in r) return { kind: "variant", why: r.reason };
-  const sigma = r.values;
-
-  // F8: a key this run already relied on keeps its value (Ruling 5).
-  for (const [k, v] of Object.entries(sigma)) {
-    if (ctx.pinned.has(k) && ctx.pinned.get(k) !== v) {
-      const was = ctx.pinned.get(k);
-      return { kind: "variant", why: `${k} is ${was === undefined ? "unset" : JSON.stringify(was)} in this import; ${ref} implies ${JSON.stringify(v)}` };
+  if ("fallback" in r) {
+    // F8 (Ruling 5): when the source matches only with another value for a pinned key, name that key rather than the line.
+    if (pinnedHoles.length) {
+      const open = new Set([...holes, ...pinnedHoles]);
+      const wide = infer(base.texts, sources, open, Object.fromEntries(Object.entries(fixed).filter(([k]) => !open.has(k))));
+      const k = "fallback" in wide ? undefined : pinnedHoles.find((x) => wide.values[x] !== ctx.pinned.get(x));
+      if (k !== undefined && !("fallback" in wide)) {
+        const was = ctx.pinned.get(k);
+        return { kind: "variant", why: `${k} is ${was === undefined ? "unset" : JSON.stringify(was)} in this import; ${ref} implies ${JSON.stringify(wide.values[k])}` };
+      }
     }
+    return { kind: "variant", why: r.reason };
   }
+  const sigma = r.values;
   const delta = Object.entries(sigma)
     .filter(([k, v]) => valueOf(map, k) !== v)
     .map(([key, value]) => ({ key, old: valueOf(ctx.P, key) ?? null, value }));
