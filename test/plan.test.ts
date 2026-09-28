@@ -136,6 +136,16 @@ describe("sections — plan warnings (Ruling 12)", () => {
     expect(out(p, ".kiro/skills/tool/run.sh")).toBe(run);
     expect(p.warnings).toContain("profile acme sets section x of skill/tool, which has no such marker");
   });
+
+  it("warns on markers in a copied file whatever its extension (an .html in a skill dir)", async () => {
+    const page = [OPEN("x"), "<p>hi</p>", CLOSE, ""].join("\n");
+    const p = await sectionPlan({
+      ingredients: [{ meta: { type: "skill", name: "tool" }, files: { "SKILL.md": "# Tool\n", "page.html": page } }],
+      targets: ["claude-code", "kiro"],
+    });
+    expect(p.warnings.filter((w) => w.includes("page.html"))).toEqual(["skill/tool page.html: section markers are read only in files every target renders as text — copied with them"]);
+    expect(out(p, ".claude/skills/tool/page.html")).toBe(page);
+  });
 });
 
 describe("sections — parse errors and the output guard", () => {

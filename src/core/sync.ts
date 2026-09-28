@@ -8,7 +8,7 @@ import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
 import { placeholders, substitutedFile } from "./extract.js";
 import { LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Target, type WorkspaceConfig } from "../schema/index.js";
-import { claudeCode, TEXT_EXT } from "../emitters/claude-code.js";
+import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
 import { agentsMd } from "../emitters/agents-md.js";
 import type { Emitter, PlannedFile } from "../emitters/types.js";
@@ -115,7 +115,8 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
         parsed.set(abs, p);
         files.push({ rel, p });
         if (p.sections.length && firstMarker === null) firstMarker = `${p.file}:${p.sections[0].line}`;
-      } else if (TEXT_EXT.test(rel)) {
+      } else {
+        // Any other file is copied as bytes; a marker line in it, whatever its extension, is warned, never dropped silently.
         const text = toLf(stripBom(await fs.readFile(abs, "utf8")));
         if (text.split("\n").some((l) => markerLine(l) !== null)) {
           warnings.push(`${ing.ref} ${rel}: section markers are read only in files every target renders as text — copied with them`);
