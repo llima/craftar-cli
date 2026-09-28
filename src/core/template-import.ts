@@ -4,6 +4,7 @@ import { placeholders, substitutedFile } from "./extract.js";
 import { fingerprintOf, type DirReader } from "./fingerprint.js";
 import { parseYaml } from "./forge.js";
 import { substitute } from "./resolve.js";
+import { checkDeclaredOnce, expandSections, parseSections, SectionMarkerError, type ParsedSections } from "./sections.js";
 import { stripBom, toLf } from "./text.js";
 
 /**
@@ -25,20 +26,60 @@ export function renderMap(meta: Ingredient, profileParams: Record<string, unknow
 }
 
 /** An ingredient directory as the comparison sees it: its validated metadata and its files, admitted ones as normalized text. */
-export async function readBase(dir: string, io: DirReader): Promise<{ meta: Ingredient; texts: Map<string, string>; bytes: Map<string, Buffer>; metaFile: string }> {
+export interface ImportBase {
+  meta: Ingredient;
+  texts: Map<string, string>;
+  bytes: Map<string, Buffer>;
+  metaFile: string;
+  /** Each admitted text parsed for section markers (spec 11 §6.7); a file with none is one outside segment. */
+  parsed: Map<string, ParsedSections>;
+}
+
+/**
+ * Read a base. Every admitted text is parsed for section markers; a malformed one, or a name
+ * declared twice across the ingredient's files, is I12 (spec 11 §4.5). `forgeRoot`, when given,
+ * makes the file the error names Forge-relative.
+ */
+export async function readBase(dir: string, io: DirReader, forgeRoot?: string): Promise<ImportBase> {
   const metaFile = path.join(dir, "ingredient.yaml");
   const meta = parseYaml(metaFile, await io.readText(metaFile), IngredientSchema);
   const texts = new Map<string, string>();
   const bytes = new Map<string, Buffer>();
-  for (const rel of await io.list(dir)) {
-    if (rel === "ingredient.yaml") continue;
-    if (substitutedFile(meta, rel)) texts.set(rel, norm(await io.readText(path.join(dir, rel))));
-    else bytes.set(rel, await io.readBytes(path.join(dir, rel)));
+  const parsed = new Map<string, ParsedSections>();
+  const label = (rel: string) => (forgeRoot ? path.relative(forgeRoot, path.join(dir, rel)) : path.join(dir, rel)).split(path.sep).join("/");
+  try {
+    for (const rel of await io.list(dir)) {
+      if (rel === "ingredient.yaml") continue;
+      if (substitutedFile(meta, rel)) {
+        const text = norm(await io.readText(path.join(dir, rel)));
+        texts.set(rel, text);
+        parsed.set(rel, parseSections(text, label(rel), `${meta.type}/${meta.name}`));
+      } else bytes.set(rel, await io.readBytes(path.join(dir, rel)));
+    }
+    checkDeclaredOnce(`${meta.type}/${meta.name}`, [...parsed.values()]);
+  } catch (e) {
+    if (e instanceof SectionMarkerError) throw new Error(`import: ${e.file}:${e.line}: ${e.problem} — fix the Forge and re-run`);
+    throw e;
   }
-  return { meta, texts, bytes, metaFile };
+  return { meta, texts, bytes, metaFile, parsed };
 }
 
-/** The keys every admitted file of a base cites (`C(X)`). */
+/** The names of the sections a base declares, across its admitted files. */
+export function sectionNames(base: ImportBase): string[] {
+  return [...base.parsed.values()].flatMap((p) => p.sections.map((s) => s.name));
+}
+
+/** The base's admitted texts with their sections expanded by `values` (spec 11 §6.2) — what sync substitutes into. */
+export function expandedTexts(base: ImportBase, values: Record<string, string> = {}): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [rel, text] of base.texts) {
+    const p = base.parsed.get(rel);
+    out.set(rel, p ? expandSections(p, values) : text);
+  }
+  return out;
+}
+
+/** The keys every admitted file of a base cites (`C(X)`); pass `expandedTexts` for what the importing profile renders (spec 11 §6.7). */
 export function citedKeys(texts: Map<string, string>): Set<string> {
   const out = new Set<string>();
   for (const t of texts.values()) for (const k of placeholders(t)) out.add(k);
@@ -47,14 +88,15 @@ export function citedKeys(texts: Map<string, string>): Set<string> {
 
 /**
  * The fingerprint of a base rendered through `map` (spec 10 §6.2): its metadata without `params`
- * (a workspace cannot express a declaration), admitted files substituted exactly as `ctx.text`
- * does, every other file as bytes. With no declaration and nothing set, this is `fingerprintDir`.
+ * (a workspace cannot express a declaration), admitted files expanded with the section values
+ * `sections` and then substituted, exactly as `ctx.text` does (spec 11 §6.4, §6.7), every other file
+ * as bytes. With no declaration, no marker and nothing set, this is `fingerprintDir`.
  */
-export function renderedFingerprint(base: Awaited<ReturnType<typeof readBase>>, map: Record<string, unknown>): string {
+export function renderedFingerprint(base: ImportBase, map: Record<string, unknown>, sections: Record<string, string> = {}): string {
   const meta: Record<string, unknown> = { ...base.meta };
   delete meta.params;
   const files: Record<string, string | Buffer> = {};
-  for (const [rel, text] of base.texts) files[rel] = substitute(text, map);
+  for (const [rel, text] of expandedTexts(base, sections)) files[rel] = substitute(text, map);
   for (const [rel, b] of base.bytes) files[rel] = b;
   try {
     return fingerprintOf(meta as Ingredient, files);

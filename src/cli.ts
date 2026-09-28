@@ -4,7 +4,8 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
-import { loadWorkspace, plan, readLock, status, apply, resolveForge, type FileStatus } from "./core/sync.js";
+import { loadWorkspace, plan, readLock, status, apply, resolveForge, type FileStatus, type SectionLayer } from "./core/sync.js";
+import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
@@ -26,12 +27,12 @@ import { HUNK_CLASSES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, typ
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.6.2");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.7.0");
 
 /* ---------------------------------------------------------------- import */
 program
   .command("import")
-  .description("Import an existing workspace harness into a Forge: creates or updates ingredients, recipes and a profile, reusing a templated base when it renders or infers the workspace text")
+  .description("Import an existing workspace harness into a Forge: creates or updates ingredients, recipes and a profile, reusing a templated base when it renders the workspace text or infers it into params or sections")
   .requiredOption("--from <tool>", "source tool: claude-code")
   .requiredOption("--forge <dir>", "Forge directory (created if missing)")
   .requiredOption("--profile <name>", "client profile to create or update")
@@ -47,11 +48,20 @@ program
     for (const v of r.variants) console.log(`  ${pc.yellow("variant")} ${v.name} — ${v.reason}`);
     for (const x of r.rejected) console.log(`  ${pc.red("rejected")} ${x.name} — ${x.reason}`);
     // Spec 10 §4.2: how a templated base was reused, and what the profile gained.
-    for (const x of r.rendered) console.log(`  ${pc.cyan("rendered")} ${x.name} — ${x.keys.join(", ")}`);
+    // Spec 11 §4.3: `; sections …` when a section value filled the render.
+    for (const x of r.rendered) {
+      const keys = x.keys.length ? x.keys.join(", ") : "";
+      const secs = x.sections?.length ? `${keys ? "; " : ""}sections ${x.sections.join(", ")}` : "";
+      console.log(`  ${pc.cyan("rendered")} ${x.name} — ${keys}${secs}`);
+    }
     for (const x of r.inferred) {
       console.log(`  ${pc.cyan("inferred")} ${x.name} — ${Object.entries(x.values).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join(", ")}`);
     }
+    for (const x of r.sectioned) console.log(`  ${pc.cyan("sectioned")} ${x.name} — ${x.sections.join(", ")}`);
     for (const x of r.params) console.log(`  param ${x.key}: ${x.old === null ? "(unset)" : JSON.stringify(x.old)} → ${JSON.stringify(x.value)}`);
+    // Line counts, never the content: it is several lines, and it is in profile.yaml (Ruling 18).
+    for (const x of r.sections) console.log(`  section ${x.key} ${x.name}: ${x.old === null ? "(default)" : lineCount(x.old)} → ${lineCount(x.value)}`);
+    if (r.manifestWrite === "edited") console.log(`  forge craftar.forge.yaml edited (schema: 2)`);
     const w = r.profileWrite;
     console.log(`  profile ${w.path} ${w.action}${w.fields.length ? ` (${w.fields.join(", ")})` : ""}`);
     const split = new Map(r.recipeSplits.map((x) => [x.owned, x.reason]));
@@ -133,7 +143,7 @@ program
 /* ---------------------------------------------------------------- explain */
 program
   .command("explain")
-  .description("Why does this file exist? Which ingredient, recipe chain and target produced it")
+  .description("Why does this file exist? Which ingredient, recipe chain and target produced it, and which layer filled each section")
   .argument("<path>", "workspace-relative path of a generated file")
   .option("--workspace <dir>", "workspace root", ".")
   .action(async (file, o) => {
@@ -146,6 +156,12 @@ program
     console.log(`  target      ${f.target}`);
     console.log(`  ingredient  ${f.ingredient}${ing?.meta.origin ? pc.dim(`  (imported from ${ing.meta.origin.workspace}:${ing.meta.origin.path})`) : ""}`);
     if (ing) console.log(`  via recipes ${ing.via.join(" → ")}`);
+    // Spec 11 §4.2 (Ruling 15): which layer filled each section. AGENTS.md (rule/*) is not one ingredient.
+    const sections = p.sections.get(f.ingredient);
+    if (sections?.length) {
+      const layer = (l: SectionLayer) => (l === "profile" ? `profile ${p.resolution.profile.name}` : l);
+      console.log(`  sections    ${sections.map((x) => `${x.name} (${layer(x.layer)})`).join(", ")}`);
+    }
     console.log(`  profile     ${ws.config.profile}  (recipes: ${p.resolution.recipes.join(", ")})`);
     console.log(`  hash        ${hashNormalized(f.content)}`);
   });
@@ -633,6 +649,12 @@ function describeClasses(classes: Record<HunkClass, number>): string {
 function describeSuggestion(s: HunkSuggestion): string {
   const params = s.tokens?.length ? ` → ${s.tokens.map((t) => t.param).join(", ")}` : "";
   return `${s.class}: ${s.reason}${params}`;
+}
+
+/** A section value as the import report shows it: `empty`, or its line count once canonical (spec 11 §4.3). */
+function lineCount(value: string): string {
+  const n = canonicalValue(value).split("\n").length - 1;
+  return n === 0 ? "empty" : `${n} line${n === 1 ? "" : "s"}`;
 }
 
 function describeDistance(d: Distance): string {

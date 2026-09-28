@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkspace, plan, type Plan } from "../../src/core/sync.js";
 import { hasBom } from "../../src/core/text.js";
-import { profile, recipe, rule, scenario, type ForgeSpec, type IngredientSpec, type WorkspaceSpec } from "../helpers/forge.js";
+import { profile, recipe, rule, scenario, writeFiles, type ForgeSpec, type IngredientSpec, type WorkspaceSpec } from "../helpers/forge.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -117,5 +117,46 @@ describe("claude-code emitter", () => {
     const p = await planFor([{ meta: { type: "steering", name: "product", file: "steering.md" }, files: { "steering.md": "# P\n" } }]);
     expect(p.warnings.filter((w) => w.startsWith("claude-code:"))).toEqual([]);
     expect(p.files).toEqual([]);
+  });
+});
+
+describe("claude-code emitter — sections (spec 11 §10.2, AC 2)", () => {
+  const SEC = "# T\n<!-- craftar:section s -->\ndefault\n<!-- /craftar:section -->\nend\n";
+  async function sectionPlan(files?: WorkspaceSpec["files"]): Promise<Plan> {
+    const ingredients: IngredientSpec[] = [
+      rule("r", SEC),
+      { meta: { type: "agent", name: "a", description: "An agent", frontmatterRaw: "name: a\ndescription: An agent" }, files: { "agent.md": SEC } },
+      { meta: { type: "command", name: "c", description: "A command" }, files: { "command.md": SEC } },
+      { meta: { type: "skill", name: "fs", layout: "file" }, files: { "SKILL.md": SEC } },
+      { meta: { type: "skill", name: "ds" }, files: { "SKILL.md": SEC, "ref.md": SEC.replace("section s", "section t") } },
+      { meta: { type: "script", name: "go", files: ["go.md"] }, files: { "go.md": SEC } },
+    ];
+    const refs = ingredients.map((i) => `${i.meta.type}/${i.meta.name}`);
+    const values = Object.fromEntries(refs.map((r) => [r, { s: "value", t: "tvalue" }]));
+    const s = await scenario(
+      { ingredients, recipes: [recipe("base", refs)], profiles: [profile("acme", ["base"], ["claude-code"], { sections: values })] },
+      { config: { profile: "acme" }, files },
+    );
+    cleanups.push(s.cleanup);
+    await writeFiles(s.forgeRoot, { "craftar.forge.yaml": "name: test-forge\nschema: 2\n" });
+    return plan(await loadWorkspace(s.wsRoot));
+  }
+
+  it("no output holds a marker: rule, agent, command, file skill, dir skill, script", async () => {
+    const p = await sectionPlan();
+    const paths = [".claude/rules/r.md", ".claude/agents/a.md", ".claude/commands/c.md", ".claude/skills/fs.md", ".claude/skills/ds/SKILL.md", ".claude/skills/ds/ref.md", ".claude/scripts/go.md"];
+    for (const rel of paths) {
+      const t = text(p, rel)!;
+      expect(t, rel).not.toContain("craftar:section");
+      expect(t, rel).toMatch(/# T\nt?value\nend\n$/);
+    }
+    expect(text(p, ".claude/skills/ds/ref.md")).toBe("# T\ntvalue\nend\n");
+  });
+
+  it("keeps a CRLF/BOM existing file's framing around the expanded text", async () => {
+    const p = await sectionPlan({ ".claude/rules/r.md": Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("# old\r\n")]) });
+    const f = p.files.find((x) => x.path === ".claude/rules/r.md")!;
+    expect(hasBom(f.content)).toBe(true);
+    expect(f.content.subarray(3).toString("utf8")).toBe("# T\r\nvalue\r\nend\r\n");
   });
 });

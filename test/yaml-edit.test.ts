@@ -31,6 +31,28 @@ describe("editYamlText (spec 10 §6.6)", () => {
     expect(editYamlText(raw, opts, (d) => d.setIn(["params", "k"], "v"))).toBe(`${bom}# client\r\nname: acme # the name\r\nparams:\r\n  k: v\r\n`);
   });
 
+  it("keeps an empty flow collection the edit does not touch on its line (params: {} survives a recipes edit)", () => {
+    const raw = "name: acme\nrecipes:\n  - base--acme\ntargets: []\nparams: {}\nsections: {}\n";
+    const o = { ...opts, keys: ["params", "sections", "recipes", "targets"] };
+    const out = editYamlText(raw, o, (d) => {
+      const seq = d.get("recipes", true) as YAML.YAMLSeq;
+      seq.items = [d.createNode("base")];
+    });
+    expect(out).toBe("name: acme\nrecipes:\n  - base\ntargets: []\nparams: {}\nsections: {}\n");
+    expect(editYamlText(raw, o, () => {})).toBe(raw);
+  });
+
+  it("turns an empty flow collection the edit fills into block form, as before", () => {
+    const raw = "name: acme\ntargets: []\nparams: {}\nsections: {}\n";
+    const o = { ...opts, keys: ["params", "sections", "targets"] };
+    const out = editYamlText(raw, o, (d) => {
+      d.setIn(["params", "k"], "v");
+      d.setIn(["sections", "rule/review-posture", "flavors"], "| a |\n");
+      (d.get("targets", true) as YAML.YAMLSeq).items.push(d.createNode("kiro"));
+    });
+    expect(out).toBe("name: acme\ntargets:\n  - kiro\nparams:\n  k: v\nsections:\n  rule/review-posture:\n    flavors: |\n      | a |\n");
+  });
+
   it("refuses a document that round-trips under neither width, and an aliased key, naming the command", () => {
     expect(err(() => editYamlText("name: acme      # aligned\n", opts, () => {}))).toBe(
       "import: cannot edit profiles/acme/profile.yaml in place (it does not round-trip unchanged through the YAML writer) — reformat it by hand, commit, and re-run",

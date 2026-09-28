@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import { resolve, substitute } from "../src/core/resolve.js";
-import { profile, recipe, rule, scenario, type ForgeSpec, type WorkspaceSpec } from "./helpers/forge.js";
+import { profile, recipe, rule, scenario, writeFiles, type ForgeSpec, type WorkspaceSpec } from "./helpers/forge.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -117,5 +117,46 @@ describe("substitute — own properties only", () => {
     const text = "{{constructor}} {{toString}} {{__proto__}} {{k}}";
     expect(substitute(text, { k: "v" }, missing)).toBe("{{constructor}} {{toString}} {{__proto__}} v");
     expect([...missing].sort()).toEqual(["__proto__", "constructor", "toString"]);
+  });
+});
+
+describe("section layers (spec 11 §6.3)", () => {
+  const SEC = "A\n<!-- craftar:section a -->\nda\n<!-- /craftar:section -->\n<!-- craftar:section b -->\ndb\n<!-- /craftar:section -->\nB\n";
+  async function sectioned(ws: Partial<WorkspaceSpec> = {}, profileSections: Record<string, unknown> = {}) {
+    const s = await scenario(
+      { ingredients: [rule("x", SEC)], recipes: [recipe("base", ["rule/x"])], profiles: [profile("acme", ["base"], ["claude-code"], { sections: profileSections })] },
+      { config: { profile: "acme", ...(ws.config ?? {}) }, local: ws.local },
+    );
+    cleanups.push(s.cleanup);
+    await writeFiles(s.forgeRoot, { "craftar.forge.yaml": "name: test-forge\nschema: 2\n" });
+    const w = await loadWorkspace(s.wsRoot);
+    const p = await plan(w);
+    return { r: p.resolution, out: p.files.find((f) => f.path === ".claude/rules/x.md")!.content.toString("utf8") };
+  }
+
+  it("profile → craftar.yaml → craftar.local.yaml, merged at (key, name) granularity (P4)", async () => {
+    const { r, out } = await sectioned(
+      { config: { overrides: { sections: { "rule/x": { b: "wb" } } } }, local: { overrides: { sections: { "rule/x": { a: "la" } } } } },
+      { "rule/x": { a: "pa", b: "pb" } },
+    );
+    expect(r.sections).toEqual({ "rule/x": { a: "la", b: "wb" } });
+    expect(r.sectionLayers.profile).toEqual({ "rule/x": { a: "pa", b: "pb" } });
+    expect(out).toBe("A\nla\nwb\nB\n");
+  });
+
+  it("the profile's value applies when no workspace sets it, and the default otherwise", async () => {
+    expect((await sectioned({}, { "rule/x": { a: "pa" } })).out).toBe("A\npa\ndb\nB\n");
+    expect((await sectioned()).out).toBe("A\nda\ndb\nB\n");
+  });
+
+  it('"" empties a section, from any layer', async () => {
+    expect((await sectioned({}, { "rule/x": { a: "" } })).out).toBe("A\ndb\nB\n");
+    expect((await sectioned({ local: { overrides: { sections: { "rule/x": { b: "" } } } } }, { "rule/x": { b: "pb" } })).out).toBe("A\nda\nB\n");
+  });
+
+  it("a wrong-shape key fails the load, naming the file", async () => {
+    await expect(sectioned({}, { "x.a": "v" })).rejects.toThrow(/invalid .*profiles.acme.profile\.yaml/);
+    await expect(sectioned({ config: { overrides: { sections: { "x.a": "v" } } } })).rejects.toThrow(/^invalid craftar\.yaml:/);
+    await expect(sectioned({ local: { overrides: { sections: { "x.a": "v" } } } })).rejects.toThrow(/^invalid craftar\.yaml \(merged with craftar\.local\.yaml\):/);
   });
 });

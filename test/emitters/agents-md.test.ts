@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkspace, plan, type Plan } from "../../src/core/sync.js";
-import { profile, recipe, rule, scenario, type ForgeSpec, type IngredientSpec, type WorkspaceSpec } from "../helpers/forge.js";
+import { profile, recipe, rule, scenario, writeFiles, type ForgeSpec, type IngredientSpec, type WorkspaceSpec } from "../helpers/forge.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -133,5 +133,24 @@ describe("agents-md emitter", () => {
       ["claude-code", "kiro", "agents-md"],
     );
     expect(p.warnings.filter((w) => w.startsWith("agents-md:"))).toEqual([]);
+  });
+});
+
+describe("agents-md emitter — sections (spec 11 §10.2, AC 2)", () => {
+  it("concatenates the expanded rule bodies, no marker left; an emptied last section changes nothing but its lines (edge case 16)", async () => {
+    const SEC = "# R\n\nbody\n<!-- craftar:section s -->\ndefault\n<!-- /craftar:section -->\n";
+    const s = await scenario(
+      {
+        ingredients: [rule("r", SEC), rule("q", SEC)],
+        recipes: [recipe("base", ["rule/r", "rule/q"])],
+        profiles: [profile("acme", ["base"], ["agents-md"], { sections: { "rule/r": { s: "value" }, "rule/q": { s: "" } } })],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await writeFiles(s.forgeRoot, { "craftar.forge.yaml": "name: test-forge\nschema: 2\n" });
+    const md = agentsMd(await plan(await loadWorkspace(s.wsRoot)))!;
+    expect(md).not.toContain("craftar:section");
+    expect(md).toBe([...HEADER, "<!-- rule: r -->", "# R\n\nbody\nvalue", "", "<!-- rule: q -->", "# R\n\nbody", ""].join("\n"));
   });
 });

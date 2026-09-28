@@ -1,0 +1,17 @@
+name: acme
+description: Imported from acme on 2026-09-28.
+recipes:
+  - base
+targets:
+  - claude-code
+  - kiro
+  - agents-md
+language: {}
+identity: {}
+scm: {}
+naming: {}
+frontend: {}
+executor: {}
+integrations: {}
+params: {}
+repos: []

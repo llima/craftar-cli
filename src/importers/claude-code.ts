@@ -6,13 +6,16 @@ import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST } from "../cor
 import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../core/secrets.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
-import { IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Target } from "../schema/index.js";
+import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { resolve } from "../core/resolve.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
-import { decide, forgeBefore, pin, sourceKeys, workspaceParams, type RunContext } from "./decide.js";
+import { decide, forgeBefore, pin, sourceKeys, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
 import { renderMap } from "../core/template-import.js";
+import { firstMarkerLine } from "../core/sections.js";
+import { substitutedFile } from "../core/extract.js";
+import { deepMerge } from "../core/merge.js";
 
 export interface ImportOptions {
   workspaceRoot: string;
@@ -31,16 +34,22 @@ export interface ImportReport {
   recipes: string[];
   profile: string;
   warnings: string[];
-  /** Reused because the render matched and used at least one value (spec 10 §6.2). */
-  rendered: { name: string; keys: string[] }[];
+  /** Reused because the render matched and used at least one value (spec 10 §6.2); `sections`, the ones a value filled (spec 11 §4.3). */
+  rendered: { name: string; keys: string[]; sections?: string[] }[];
   /** Reused through an inference: every hole's proved value (spec 10 §6.3). */
   inferred: { name: string; values: Record<string, string> }[];
   /** The profile change, in the order it was accepted; `old` is null for an added key. */
   params: { key: string; old: string | null; value: string; from: string }[];
+  /** Reused through a section inference: every open section it assigned (spec 11 §6.8). */
+  sectioned: { name: string; sections: string[] }[];
+  /** The section change `Δs`, in the order it was accepted; `old` is null when the profile did not set it (spec 11 §6.9). */
+  sections: { key: string; name: string; old: string | null; value: string; from: string }[];
   /** Shared recipes this run did not use for the profile, and the owned recipe it used instead (spec 10 §6.7). */
   recipeSplits: { shared: string; owned: string; reason: string }[];
   /** What happened to profiles/<p>/profile.yaml. */
   profileWrite: { path: string; action: "created" | "edited" | "unchanged"; fields: string[] };
+  /** What happened to craftar.forge.yaml: created, bumped to `schema: 2`, or left alone (spec 11 §6.14). */
+  manifestWrite: "created" | "edited" | "unchanged";
   /** What happened to the workspace's craftar.yaml; null without --write-config. */
   configWrite: "created" | "edited" | "unchanged" | null;
 }
@@ -112,19 +121,16 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const ws = path.resolve(opts.workspaceRoot);
   const forge = stage.root;
   const report: ImportReport = {
-    created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [], rendered: [], inferred: [], params: [], recipeSplits: [],
+    created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [], rendered: [], inferred: [], params: [], sectioned: [], sections: [], recipeSplits: [],
     profileWrite: { path: `profiles/${opts.profileName}/profile.yaml`, action: "unchanged", fields: [] },
+    manifestWrite: "unchanged",
     configWrite: null,
   };
   const claudeDir = path.join(ws, ".claude");
   if (!(await exists(claudeDir))) throw new Error(`${claudeDir} not found — is this a Claude Code workspace?`);
 
-  const manifest = path.join(forge, FORGE_MANIFEST);
-  const manifestOnDisk = manifest;
-  if (!(await stage.exists(manifest))) {
-    stage.write(manifest, YAML.stringify({ name: path.basename(forge), schema: 1, description: "Craftar Forge — shared harness ingredients, recipes and client profiles." }));
-    report.created.push(FORGE_MANIFEST);
-  }
+  // The manifest is staged after the decisions (spec 11 §6.13 step 7): its schema depends on them.
+  const manifestOnDisk = path.join(forge, FORGE_MANIFEST);
 
   const origin = (rel: string) => ({ workspace: path.basename(ws), path: rel.replace(/\\/g, "/") });
   // Two passes (spec 10 §6.8): every source is read first, in today's order, then decided in that
@@ -310,11 +316,16 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
 
   /* ---- what the importing profile renders (spec 10 §6.1, §6.8 step 2) ---- */
   const loaded = await forgeBefore(forge, manifestOnDisk);
+  const existing = await existingProfile(forge, opts.profileName, loaded);
+  const readWs = (abs: string) => fs.readFile(abs, "utf8");
   const ctx: RunContext = {
-    P: Object.assign(Object.create(null), await existingProfileParams(forge, opts.profileName, loaded)),
-    W: await workspaceParams(ws, (abs) => fs.readFile(abs, "utf8")),
+    P: Object.assign(Object.create(null), existing.params),
+    W: await workspaceParams(ws, readWs),
+    PS: structuredClone(existing.sections),
+    WS: await workspaceSections(ws, readWs),
     pinned: new Map(),
     forge: loaded,
+    markedBase: false,
   };
   // F9 (§6.5): a source rejected for a secret or skipped is never decided. Its base stays in the Forge-wide scan (b),
   // and its text leaves the literal check (c). `ruleNames` fills only as rules are decided, so each set errs on its
@@ -335,7 +346,10 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   }
 
   // I3: a created or variant ingredient is the workspace text itself; a key the profile now sets would change it at sync.
+  // I11 first (spec 11 §6.9): a column-0 marker in that text would be read as structure, so sync could not reproduce it.
   for (const l of literal) {
+    const marker = markerIn(l.meta, l.files, l.source);
+    if (marker) throw new Error(`import: ${marker.where} holds a section marker on line ${marker.line} — sync would not reproduce it; indent it or remove it, and re-run`);
     const map = renderMap(l.meta, ctx.P, ctx.W);
     const key = [...sourceKeys(l.meta, l.files)].find((k) => Object.hasOwn(map, k));
     if (key) throw new Error(`import: ${l.source} holds {{${key}}} literally, but profile ${opts.profileName} sets ${key} — sync would render it`);
@@ -367,7 +381,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- profile ---- */
   const targets: Target[] = ["claude-code"];
   if (await exists(path.join(ws, ".kiro"))) targets.push("kiro");
-  const profile: Profile = {
+  const profile: ImportedProfile = {
     name: opts.profileName,
     description: `Imported from ${path.basename(ws)} on ${new Date().toISOString().slice(0, 10)}.`,
     recipes: profileRecipes,
@@ -381,9 +395,14 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     integrations: {},
     // A new profile holds the values this run inferred, in acceptance order (spec 10 §6.6).
     params: Object.fromEntries(report.params.map((x) => [x.key, ctx.P[x.key]])),
+    // …and the section values it inferred, only when there are some: a profile without them keeps today's bytes (spec 11 §6.10).
+    ...(report.sections.length ? { sections: sectionChange(report, ctx) } : {}),
     repos: [],
   };
   await writeProfile(stage, forge, opts.profileName, profile, ctx, report);
+  report.manifestWrite = await stageManifest(stage, forge, report.sections.length > 0 || ctx.markedBase);
+  // Listed first, where it was when the manifest was staged at the start of the run.
+  if (report.manifestWrite === "created") report.created.unshift(FORGE_MANIFEST);
   const config = opts.writeWorkspaceConfig ? await planConfig(ws, forge, opts.profileName, targets) : null;
   report.configWrite = config?.action ?? null;
   return { report, targets, config };
@@ -603,9 +622,11 @@ async function writeIngredient(
       }
     } else if (d.kind === "reuse") {
       report.reused.push(ref);
-      if (d.rendered) report.rendered.push({ name: ref, keys: d.rendered });
+      if (d.rendered || d.renderedSections) report.rendered.push({ name: ref, keys: d.rendered ?? [], ...(d.renderedSections ? { sections: d.renderedSections } : {}) });
       if (d.inferred) report.inferred.push({ name: ref, values: d.inferred });
       for (const x of d.delta ?? []) report.params.push({ ...x, from: ref });
+      if (d.sectioned) report.sectioned.push({ name: ref, sections: d.sectioned });
+      for (const x of d.sectionDelta ?? []) report.sections.push({ ...x, from: ref });
       return ref;
     } else {
       why = d.why;
@@ -670,6 +691,19 @@ function currentRuleOrder(forge: import("../core/forge.js").Forge | null, profil
   }
 }
 
+/**
+ * `swap(p)` (spec 11 §6.15, Rulings 9 and 23): a variant ref of the importing profile, `T/N--<p>`,
+ * read as its base `T/N` when the run's computed list holds the base and not the variant — the
+ * re-import replaced the variant by its base, which therefore takes the variant's slot. Another
+ * profile's variant is never swapped.
+ */
+function swapRef(ref: string, profile: string, list: string[]): string {
+  const suffix = `--${profile}`;
+  if (!ref.endsWith(suffix)) return ref;
+  const base = ref.slice(0, -suffix.length);
+  return list.includes(base) && !list.includes(ref) ? base : ref;
+}
+
 const recipeText = (name: string, description: string, ingredients: string[]) =>
   YAML.stringify(JSON.parse(JSON.stringify({ name, description, extends: [], ingredients, params: {} }))); // today's bytes
 
@@ -693,7 +727,9 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
   const lacks = existing.find((x) => !list.includes(x));
   const extra = list.find((x) => !existing.includes(x));
   // Q10: an existing profile moves to R only if R orders its rules as the profile resolves them today, so AGENTS.md keeps its order.
-  const reorders = o.currentRules !== null && JSON.stringify(rules(existing)) !== JSON.stringify(o.currentRules.filter((r) => existing.includes(r)));
+  // A variant this run replaced by its base is compared as that base, in its slot (spec 11 §6.15).
+  const current = o.currentRules?.map((r) => swapRef(r, o.profile, list)) ?? null;
+  const reorders = current !== null && JSON.stringify(rules(existing)) !== JSON.stringify(current.filter((r) => existing.includes(r)));
   if (!lacks && !extra && !reorders) {
     o.report.recipes.push(name);
     return name;
@@ -709,9 +745,9 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
 
 /**
  * A recipe the importing profile owns holds exactly this workspace's list: a new one is written
- * as today; an existing one is edited in place — entries kept in their order, dropped ones
- * removed, new ones appended — refused if another profile resolves it (I7) or it cannot be
- * edited in place (I2).
+ * as today; an existing one is edited in place — entries kept in their order, a variant this run
+ * replaced by its base swapped for the base where it stands (spec 11 §6.15), dropped ones removed,
+ * new ones appended — refused if another profile resolves it (I7) or it cannot be edited in place (I2).
  */
 async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], description: string): Promise<string> {
   const file = await recipeFile(o, name);
@@ -722,7 +758,14 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
   }
   const raw = await o.stage.readText(file);
   const before = parseYaml(file, stripBom(raw), RecipeSchema);
-  const next = [...before.ingredients.filter((x) => list.includes(x)), ...list.filter((x) => !before.ingredients.includes(x))];
+  // Each existing entry in order: kept, swapped for its base in place, or dropped; then the rest of the list appended.
+  const inPlace = (x: string): string | null => {
+    if (list.includes(x)) return x;
+    const b = swapRef(x, o.profile, list);
+    return b !== x && !before.ingredients.includes(b) ? b : null;
+  };
+  const kept = before.ingredients.map(inPlace).filter((x): x is string => x !== null);
+  const next = [...kept, ...list.filter((x) => !kept.includes(x))];
   if (JSON.stringify(next) === JSON.stringify(before.ingredients)) return name;
   if (o.forge) {
     for (const q of o.forge.profiles.keys()) {
@@ -736,8 +779,19 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
       doc.set("ingredients", next);
       return;
     }
-    seq.items = seq.items.filter((it) => list.includes(String(YAML.isScalar(it) ? it.value : it)));
-    for (const x of list) if (!before.ingredients.includes(x)) seq.items.push(doc.createNode(x));
+    // The scalar node is replaced where it stands (unify's replaceSeqEntry), so a comment on it stays.
+    seq.items = seq.items.flatMap((it) => {
+      const v = String(YAML.isScalar(it) ? it.value : it);
+      const to = inPlace(v);
+      if (to === null) return [];
+      if (to === v) return [it];
+      if (YAML.isScalar(it)) {
+        it.value = to;
+        return [it];
+      }
+      return [doc.createNode(to)];
+    });
+    for (const x of next.slice(kept.length)) seq.items.push(doc.createNode(x));
   });
   const after = RecipeSchema.safeParse(YAML.parse(stripBom(content)) ?? {});
   if (!after.success || !isDeepStrictEqual(after.data, { ...before, ingredients: next })) {
@@ -775,12 +829,16 @@ function recipesOf(forge: import("../core/forge.js").Forge, profile: string): { 
 }
 
 /**
- * The importing profile's params before the run (`P`, spec 10 §6.1), and I4: import writes
+ * The importing profile's params and sections before the run (`P`, `PS`; spec 10 §6.1, spec 11 §6.7), and I4: import writes
  * `profiles/<p>/profile.yaml`, so a profile named `<p>` elsewhere, or that file naming another
  * profile, would leave two files for one name.
  */
-async function existingProfileParams(forge: string, profile: string, loaded: import("../core/forge.js").Forge | null): Promise<Record<string, unknown>> {
-  if (!loaded) return {};
+async function existingProfile(
+  forge: string,
+  profile: string,
+  loaded: import("../core/forge.js").Forge | null,
+): Promise<{ params: Record<string, unknown>; sections: Sections }> {
+  if (!loaded) return { params: {}, sections: {} };
   const dir = path.join(forge, "profiles");
   for (const d of (await exists(dir)) ? await fs.readdir(dir, { withFileTypes: true }) : []) {
     if (!d.isDirectory()) continue;
@@ -791,7 +849,37 @@ async function existingProfileParams(forge: string, profile: string, loaded: imp
       throw new Error(`import: profile ${profile} is profiles/${d.name}/profile.yaml — import writes profiles/${profile}/profile.yaml`);
     }
   }
-  return { ...(loaded.profiles.get(profile)?.params ?? {}) };
+  const p = loaded.profiles.get(profile);
+  return { params: { ...(p?.params ?? {}) }, sections: p?.sections ?? {} };
+}
+
+/**
+ * I11 (spec 11 §4.5): the first column-0 section marker (or near miss) in an admitted file of a
+ * created or variant source, which sync would read as structure. The line counts from the top of
+ * the workspace file, as the secret scan's does: an agent or command body starts after its frontmatter.
+ */
+function markerIn(meta: Ingredient, files: Record<string, string | Buffer>, source: string): { where: string; line: number } | null {
+  const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
+  const offset = raw ? raw.split("\n").length + 2 : 0;
+  for (const [rel, content] of Object.entries(files)) {
+    if (!substitutedFile(meta, rel)) continue;
+    const line = firstMarkerLine(toLf(stripBom(typeof content === "string" ? content : content.toString("utf8"))));
+    if (line !== null) return { where: meta.type === "skill" && meta.layout === "dir" ? `${source}${rel}` : source, line: line + offset };
+  }
+  return null;
+}
+
+/**
+ * The profile a run computes. `sections` is optional: a profile import creates holds the key only
+ * when the run wrote a section value, so a new profile keeps today's bytes (spec 11 §5.2).
+ */
+type ImportedProfile = Omit<Profile, "sections"> & { sections?: Profile["sections"] };
+
+/** `Δs` as a sections map, each value the run's final one, in acceptance order (spec 11 §6.10). */
+function sectionChange(report: ImportReport, ctx: RunContext): Sections {
+  const out: Sections = {};
+  for (const x of report.sections) out[x.key] = { ...(out[x.key] ?? {}), [x.name]: ctx.PS[x.key][x.name] };
+  return out;
 }
 
 /** Recipe entries import owns in a profile's `recipes`: the ones it computes and replaces (spec 10 §6.6, §14 Q4). */
@@ -804,7 +892,7 @@ const importOwned = (name: string, profile: string) =>
  * place of the ones import owns, `targets` gains missing ones — every other field, comment and
  * line kept. I1 when it cannot be edited in place.
  */
-async function writeProfile(stage: ForgeStage, forge: string, name: string, computed: Profile, ctx: RunContext, report: ImportReport): Promise<void> {
+async function writeProfile(stage: ForgeStage, forge: string, name: string, computed: ImportedProfile, ctx: RunContext, report: ImportReport): Promise<void> {
   const file = path.join(forge, "profiles", name, "profile.yaml");
   const label = `profiles/${name}/profile.yaml`;
   if (!(await stage.exists(file))) {
@@ -816,6 +904,7 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
   const raw = await stage.readText(file);
   const before = parseYaml(file, stripBom(raw), ProfileSchema);
   const values = Object.fromEntries(report.params.map((x) => [x.key, String(ctx.P[x.key])]));
+  const sectionValues = sectionChange(report, ctx);
   const firstOwned = before.recipes.findIndex((r) => importOwned(r, name));
   const kept = before.recipes.filter((r) => !importOwned(r, name));
   const at = firstOwned === -1 ? kept.length : before.recipes.slice(0, firstOwned).filter((r) => !importOwned(r, name)).length;
@@ -823,6 +912,7 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
   const targets = [...before.targets, ...computed.targets.filter((t) => !before.targets.includes(t))];
   const fields = [
     ...(Object.keys(values).length ? ["params"] : []),
+    ...(report.sections.length ? ["sections"] : []),
     ...(JSON.stringify(recipes) !== JSON.stringify(before.recipes) ? ["recipes"] : []),
     ...(targets.length !== before.targets.length ? ["targets"] : []),
   ];
@@ -830,8 +920,9 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
     report.profileWrite = { path: label, action: "unchanged", fields: [] };
     return;
   }
-  const content = editYamlText(raw, { command: "import", label, keys: ["params", "recipes", "targets"] }, (doc) => {
+  const content = editYamlText(raw, { command: "import", label, keys: ["params", "sections", "recipes", "targets"] }, (doc) => {
     for (const [k, v] of Object.entries(values)) doc.setIn(["params", k], v);
+    for (const [key, byName] of Object.entries(sectionValues)) for (const [n, v] of Object.entries(byName)) doc.setIn(["sections", key, n], v);
     if (fields.includes("recipes")) {
       const seq = doc.get("recipes", true);
       if (YAML.isSeq(seq)) {
@@ -846,7 +937,7 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
     }
   });
   const after = ProfileSchema.safeParse(YAML.parse(stripBom(content)) ?? {});
-  const expected = { ...before, recipes, targets, params: { ...before.params, ...values } };
+  const expected = { ...before, recipes, targets, params: { ...before.params, ...values }, sections: deepMerge(before.sections, sectionValues) };
   if (!after.success || !isDeepStrictEqual(after.data, expected)) {
     throw new Error(`import: cannot edit ${label} in place (the edit does not read back as exactly the intended change) — reformat it by hand, commit, and re-run`);
   }
@@ -856,6 +947,49 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
     const was = before.params[x.key] === undefined ? "" : ` (was ${JSON.stringify(String(before.params[x.key]))})`;
     report.warnings.push(`profile ${name} now sets ${x.key} to ${JSON.stringify(values[x.key])}${was} — every workspace on ${name} renders it at its next sync; import cannot reach them`);
   }
+  for (const x of report.sections) {
+    report.warnings.push(`profile ${name} now sets section ${x.name} of ${x.key} — every workspace on ${name} renders it at its next sync; import cannot reach them`);
+  }
+}
+
+/**
+ * `craftar.forge.yaml` (spec 11 §6.14, Rulings 7 and 22). A run that writes a section value, or
+ * decides a source against a base holding a marker, leaves a Forge an older CLI must refuse, so it
+ * needs `schema: 2`. A missing manifest is staged with the schema the run needs — with `1`, today's
+ * bytes. An existing `schema: 1` (or none) is bumped in place through the round-trip gate, checked
+ * before the flush like the profile and the recipes; I13 when it cannot be. Nothing lowers a schema.
+ */
+async function stageManifest(stage: ForgeStage, forge: string, needs: boolean): Promise<ImportReport["manifestWrite"]> {
+  const abs = path.join(forge, FORGE_MANIFEST);
+  if (!(await stage.exists(abs))) {
+    const schema = needs ? FORGE_SCHEMA_SECTIONS : 1;
+    stage.write(abs, YAML.stringify({ name: path.basename(forge), schema, description: "Craftar Forge — shared harness ingredients, recipes and client profiles." }));
+    return "created";
+  }
+  if (!needs) return "unchanged";
+  const i13 = (why: string) => new Error(`import: cannot edit ${FORGE_MANIFEST} in place (${why}) — set schema: ${FORGE_SCHEMA_SECTIONS} by hand, commit, and re-run`);
+  const raw = await stage.readText(abs);
+  let before: unknown;
+  try {
+    before = YAML.parse(stripBom(raw));
+  } catch (e) {
+    throw i13(`it does not parse: ${(e as Error).message}`);
+  }
+  // Unreachable while forgeBefore loads the manifest through its schema first (I5); kept so the edit never assumes it.
+  if (before === null || typeof before !== "object" || Array.isArray(before)) throw i13("it is not a YAML mapping");
+  if ((before as { schema?: unknown }).schema === FORGE_SCHEMA_SECTIONS) return "unchanged";
+  let content: string;
+  try {
+    content = editYamlText(raw, { command: "import", label: FORGE_MANIFEST, keys: ["schema"] }, (doc) => doc.set("schema", FORGE_SCHEMA_SECTIONS));
+  } catch (e) {
+    throw i13((e as Error).message.replace(/^.*in place \((.*)\) — .*$/s, "$1"));
+  }
+  const after = YAML.parse(stripBom(content));
+  if (!ForgeManifestSchema.safeParse(after).success || !isDeepStrictEqual(after, { ...before, schema: FORGE_SCHEMA_SECTIONS })) {
+    throw i13(`the edit does not read back as the original with exactly schema: ${FORGE_SCHEMA_SECTIONS}`);
+  }
+  stage.write(abs, content);
+  return "edited";
 }
 
 /**

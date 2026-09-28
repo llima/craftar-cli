@@ -10,6 +10,7 @@ import { prove } from "../src/core/extract.js";
 import { diffIngredients } from "../src/core/variants.js";
 import { HunkSuggestionSchema, UnifyPlanSchema, type UnifyPlan } from "../src/schema/index.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
+import { runCli } from "./helpers/cli.js";
 
 const execFileP = promisify(execFile);
 
@@ -733,5 +734,88 @@ describe("take: param — the remaining engine rows (spec 09 AC 9)", () => {
     const ext = [{ key: "k", default: "globex-api", value: "acme-api", sites: [], reused: false }];
     expect(e(() => prove("rule.md", "x {{k}}\n", "x globex-web\n", "x acme-api\n", ext))).toContain("would not reproduce the base side of \"rule.md\"");
     expect(e(() => prove("rule.md", "x {{k}}\n", "x globex-api\n", "x acme-web\n", ext))).toContain("would not reproduce the variant side of \"rule.md\"");
+  });
+});
+
+describe("U1 — a merge never changes section markers (spec 11 §6.12, Ruling 8)", () => {
+  const TABLE_ACME = "| Repo | Reviewer |\n|---|---|\n| `acme-api` | backend-reviewer |\n| `acme-web` | frontend-reviewer |\n";
+  const TABLE_GLOBEX = "| Repo | Reviewer |\n|---|---|\n| `globex-api` | backend-reviewer |\n| `globex-web` | frontend-reviewer |\n| `globex-desktop` | desktop-reviewer |\n";
+  const HEAD = "# Review posture\n\nDispatch reviewers after every commit.\n\n";
+  const TAIL = "\nNever edit what a reviewer reads.\n";
+  const BASE = `${HEAD}<!-- craftar:section flavors -->\n${TABLE_ACME}<!-- /craftar:section -->\n${TAIL}`;
+  const VARIANT = `${HEAD}${TABLE_GLOBEX}${TAIL}`;
+  const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" };
+
+  // P6's Forge: the base's table wrapped in markers, a globex variant without them; committed.
+  async function p6Forge() {
+    const root = await tmpDir("craftar-u1-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [rule("review-posture", BASE), rule("review-posture--globex", VARIANT, { as: "review-posture" })],
+      recipes: [recipe("base", ["rule/review-posture"]), recipe("base--globex", ["rule/review-posture--globex"])],
+      profiles: [profile("acme", ["base"]), profile("globex", ["base--globex"])],
+    });
+    await fs.writeFile(path.join(root, "craftar.forge.yaml"), "name: test-forge\nschema: 2\n");
+    await execFileP("git", ["-C", root, "init", "-q"]);
+    await execFileP("git", ["-C", root, "add", "-A"]);
+    await execFileP("git", ["-C", root, "commit", "-qm", "init"], { env: gitEnv });
+    return root;
+  }
+  const porcelain = async (root: string) => (await execFileP("git", ["-C", root, "status", "--porcelain"])).stdout;
+
+  it("P6: the diff splits the markers across two hunks — the opener alone, then the rows with the closer", async () => {
+    const forge = await loadForge(await p6Forge());
+    const diff = await diffIngredients(forge.ingredients.get("rule/review-posture")!, forge.ingredients.get("rule/review-posture--globex")!);
+    const hunks = diff.files[0].hunks;
+    expect(hunks).toHaveLength(2);
+    expect(hunks[0].a.lines).toEqual(["<!-- craftar:section flavors -->"]);
+    expect(hunks[1].a.lines).toContain("<!-- /craftar:section -->");
+  });
+
+  it("refuses a plan taking the variant for the closing marker's hunk and the base for the opener's, the Forge untouched", async () => {
+    const root = await p6Forge();
+    const planDir = await tmpDir("craftar-u1-plan-");
+    cleanups.push(() => fs.rm(planDir, { recursive: true, force: true }));
+    const planPath = path.join(planDir, "plan.yaml");
+    expect(runCli(["forge", "unify", "rule/review-posture", "--profile", "globex", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+    const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+    plan.files[0].hunks[0].take = "base";
+    plan.files[0].hunks[1].take = "variant";
+    await fs.writeFile(planPath, YAML.stringify(plan));
+
+    const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "globex", "--plan", planPath, "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(
+      "unify: ingredients/rules/review-posture/rule.md would lose or change section markers (the result has malformed markers — line 5: section flavors is never closed) — take base for the marker lines; editing sections through unify is not supported yet",
+    );
+    expect(await porcelain(root)).toBe("");
+  });
+
+  it("refuses --take variant, which drops the section, the Forge untouched", async () => {
+    const root = await p6Forge();
+    const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "globex", "--take", "variant", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("would lose or change section markers (sections flavors would become none)");
+    expect(await porcelain(root)).toBe("");
+  });
+
+  it("passes --take base: the markers stay and the variant goes", async () => {
+    const root = await p6Forge();
+    const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "globex", "--take", "base", "--forge", root]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(await fs.readFile(path.join(root, "ingredients/rules/review-posture/rule.md"), "utf8")).toBe(BASE);
+    expect(await exists(path.join(root, "ingredients/rules/review-posture--globex"))).toBe(false);
+  });
+
+  it("refuses a variant-only file that would bring markers in, and a base-only file removed with its sections", async () => {
+    const e = (p: Promise<unknown>) => p.then(() => "no error", (x: Error) => x.message);
+    const add = await scenario({ "rule.md": "a\n" }, { "rule.md": "a\n", "notes.md": "<!-- craftar:section n -->\nx\n<!-- /craftar:section -->\n" });
+    const addPlan = await planFrom(add.base, add.variant, add.diff, "acme");
+    addPlan.files[0].take = "variant";
+    expect(await e(applyPlan(add.base, add.variant, add.diff, addPlan))).toContain("sections none would become n");
+    const rm = await scenario({ "rule.md": "a\n", "notes.md": "<!-- craftar:section n -->\nx\n<!-- /craftar:section -->\n" }, { "rule.md": "a\n" });
+    const rmPlan = await planFrom(rm.base, rm.variant, rm.diff, "acme");
+    rmPlan.files[0].take = "variant";
+    expect(await e(applyPlan(rm.base, rm.variant, rm.diff, rmPlan))).toContain("the file would be removed with sections n");
   });
 });

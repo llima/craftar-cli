@@ -9,6 +9,7 @@ import { detectEol, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
 import type { HunkTake, Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile } from "../schema/index.js";
 import { collect, deriveHunk, prove, substitutedFile, type Extraction } from "./extract.js";
+import { parseSections, SectionMarkerError } from "./sections.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
 // fidelity, correctness should not hinge on a glyph no diff viewer, editor or re-encoding shows.
@@ -362,6 +363,8 @@ export async function applyPlan(
     }
   }
 
+  await checkMarkers(base, write, remove);
+
   const metaDiffers = opts.discardVariantMeta ? [] : metaDifferences(base, variant);
   const params = [...extractions.values()];
   if (params.length) {
@@ -371,6 +374,43 @@ export async function applyPlan(
     for (const p of proofs) prove(p.file, p.template, p.mBase, p.mVar, params);
   }
   return { write, remove, resolved: unresolved === 0 && metaDiffers.length === 0, unresolved, metaDiffers, params };
+}
+
+/** The sequence of section names a text declares, or the parse problem. */
+function markerStructure(text: string, label: string): { names: string[] } | { problem: string } {
+  try {
+    return { names: parseSections(text, label).sections.map((s) => s.name) };
+  } catch (e) {
+    if (e instanceof SectionMarkerError) return { problem: `line ${e.line}: ${e.problem}` };
+    throw e;
+  }
+}
+
+/**
+ * U1 (spec 11 §6.12, Ruling 8): a merge never adds, removes or changes a section marker. Taking the
+ * variant's side of a hunk that holds a marker would leave an unterminated section, which every later
+ * sync refuses, or drop a section whose profile values would then silently stop applying. Each file
+ * the result writes or removes is compared, as the sequence of its section names, with the base's —
+ * before anything is written. Editing sections through unify is not supported yet.
+ */
+async function checkMarkers(base: LoadedIngredient, write: Record<string, string | Buffer>, remove: string[]): Promise<void> {
+  const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
+  const touched = [...Object.keys(write), ...remove].filter((rel) => substitutedFile(base.meta, rel)).sort();
+  for (const rel of touched) {
+    const abs = path.join(base.dir, rel);
+    const before = (await exists(abs)) ? markerStructure(await fs.readFile(abs, "utf8"), label(rel)) : { names: [] };
+    const merged = write[rel];
+    const after = merged === undefined ? { names: [] } : markerStructure(Buffer.isBuffer(merged) ? merged.toString("utf8") : merged, label(rel));
+    let why: string | null = null;
+    if ("problem" in after) why = `the result has malformed markers — ${after.problem}`;
+    else if ("problem" in before) why = `the base has malformed markers — ${before.problem}`;
+    else if (merged === undefined && before.names.length) why = `the file would be removed with sections ${before.names.join(", ")}`;
+    else if (JSON.stringify(before.names) !== JSON.stringify(after.names)) {
+      const show = (xs: string[]) => (xs.length ? xs.join(", ") : "none");
+      why = `sections ${show(before.names)} would become ${show(after.names)}`;
+    }
+    if (why) throw new Error(`unify: ${label(rel)} would lose or change section markers (${why}) — take base for the marker lines; editing sections through unify is not supported yet`);
+  }
 }
 
 /**
