@@ -409,7 +409,7 @@ async function checkMarkers(base: LoadedIngredient, write: Record<string, string
       const show = (xs: string[]) => (xs.length ? xs.join(", ") : "none");
       why = `sections ${show(before.names)} would become ${show(after.names)}`;
     }
-    if (why) throw new Error(`unify: ${label(rel)} would lose or change section markers (${why}) — take base for the marker lines; sections are edited by take: section (0.8.0)`);
+    if (why) throw new Error(`unify: ${label(rel)} would lose or change section markers (${why}) — take base for the marker lines; editing sections through unify is not supported yet`);
   }
 }
 

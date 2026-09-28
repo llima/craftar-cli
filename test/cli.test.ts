@@ -1868,7 +1868,7 @@ describe("cli — sections (spec 11 §4.2, §4.3)", () => {
     const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "globex", "--take", "variant", "--forge", root]);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain(
-      "error: unify: ingredients/rules/review-posture/rule.md would lose or change section markers (sections flavors would become none) — take base for the marker lines; sections are edited by take: section (0.8.0)",
+      "error: unify: ingredients/rules/review-posture/rule.md would lose or change section markers (sections flavors would become none) — take base for the marker lines; editing sections through unify is not supported yet",
     );
     expect(await snapshot(root)).toEqual(before);
     expect(gitStatus(root)).toBe("");

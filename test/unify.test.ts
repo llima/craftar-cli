@@ -786,7 +786,7 @@ describe("U1 — a merge never changes section markers (spec 11 §6.12, Ruling 8
     const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "globex", "--plan", planPath, "--forge", root]);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain(
-      "unify: ingredients/rules/review-posture/rule.md would lose or change section markers (the result has malformed markers — line 5: section flavors is never closed) — take base for the marker lines; sections are edited by take: section (0.8.0)",
+      "unify: ingredients/rules/review-posture/rule.md would lose or change section markers (the result has malformed markers — line 5: section flavors is never closed) — take base for the marker lines; editing sections through unify is not supported yet",
     );
     expect(await porcelain(root)).toBe("");
   });
