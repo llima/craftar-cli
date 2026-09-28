@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { promises as fs } from "node:fs";
 import YAML from "yaml";
-import { IngredientSchema, INGREDIENT_TYPES, UnifyPlanSchema } from "../src/schema/index.js";
+import { loadForge } from "../src/core/forge.js";
+import { ForgeManifestSchema, FORGE_SCHEMA_SECTIONS, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
+import { makeForge, tmpDir, writeFiles } from "./helpers/forge.js";
 
 /** A minimal valid ingredient of each type. */
 const MINIMAL: Record<(typeof INGREDIENT_TYPES)[number], Record<string, unknown>> = {
@@ -107,5 +110,60 @@ describe("ingredient params and the param hunk decision (spec 09 §5.3)", () => 
     expect(UnifyPlanSchema.safeParse(plan([{ token: "t", key: "k", extra: 1 }])).success).toBe(false);
     const oneSided = { ...plan([]), files: [{ file: "x.md", onlyIn: "variant", take: "param" }] };
     expect(UnifyPlanSchema.safeParse(oneSided).success).toBe(false);
+  });
+});
+
+describe("sections and the manifest schema (spec 11 §5.2)", () => {
+  const cleanups: string[] = [];
+  afterEach(async () => {
+    while (cleanups.length) await fs.rm(cleanups.pop()!, { recursive: true, force: true });
+  });
+
+  it("loads a manifest at schema 1, at schema 2 and with no schema (read as 1); refuses schema 3", () => {
+    expect(FORGE_SCHEMA_SECTIONS).toBe(2);
+    expect(ForgeManifestSchema.parse({ name: "f", schema: 1 }).schema).toBe(1);
+    expect(ForgeManifestSchema.parse({ name: "f", schema: 2 }).schema).toBe(2);
+    expect(ForgeManifestSchema.parse({ name: "f" }).schema).toBe(1);
+    expect(ForgeManifestSchema.safeParse({ name: "f", schema: 3 }).success).toBe(false);
+  });
+
+  it("a Forge whose manifest says schema: 3 fails the load, naming the file", async () => {
+    const root = await tmpDir();
+    cleanups.push(root);
+    await writeFiles(root, { "craftar.forge.yaml": "name: f\nschema: 3\n" });
+    await expect(loadForge(root)).rejects.toThrow(/craftar\.forge\.yaml/);
+  });
+
+  it("defaults sections to {} in a profile and in a workspace's overrides", () => {
+    expect(ProfileSchema.parse({ name: "acme" }).sections).toEqual({});
+    expect(WorkspaceConfigSchema.parse({ forge: ".", profile: "acme" }).overrides.sections).toEqual({});
+    expect(WorkspaceConfigSchema.parse({ forge: ".", profile: "acme", overrides: {} }).overrides.sections).toEqual({});
+  });
+
+  it("accepts nested sections keyed <type>/<name>, strings only, and an empty string", () => {
+    const sections = { "rule/review-posture": { flavors: "| a |\n", extra: "" }, "skill/pdf-tools": { notes: "x" } };
+    expect(ProfileSchema.parse({ name: "acme", sections }).sections).toEqual(sections);
+    expect(WorkspaceConfigSchema.parse({ forge: ".", profile: "acme", overrides: { sections } }).overrides.sections).toEqual(sections);
+  });
+
+  it("refuses a key of the wrong shape (spec 01's flat form), an unknown type and a bad section name", () => {
+    expect(ProfileSchema.safeParse({ name: "acme", sections: { "review-posture.flavors": "x" } }).success).toBe(false);
+    expect(ProfileSchema.safeParse({ name: "acme", sections: { "review-posture": { flavors: "x" } } }).success).toBe(false);
+    expect(ProfileSchema.safeParse({ name: "acme", sections: { "widget/x": { flavors: "x" } } }).success).toBe(false);
+    expect(ProfileSchema.safeParse({ name: "acme", sections: { "rule/x": { "Flavors Table": "x" } } }).success).toBe(false);
+    expect(WorkspaceConfigSchema.safeParse({ forge: ".", profile: "acme", overrides: { sections: { "review-posture.flavors": "x" } } }).success).toBe(false);
+  });
+
+  it("refuses a non-string value: a number, null, a list (Ruling 20)", () => {
+    for (const v of [3, null, ["a"], { a: "b" }]) {
+      expect(ProfileSchema.safeParse({ name: "acme", sections: { "rule/x": { flavors: v } } }).success).toBe(false);
+    }
+  });
+
+  it("a profile.yaml with a wrong-shape sections key fails the Forge load, naming the file", async () => {
+    const root = await tmpDir();
+    cleanups.push(root);
+    await makeForge(root, { profiles: [{ name: "acme", sections: { "review-posture.flavors": "x" } }] });
+    await expect(loadForge(root)).rejects.toThrow(/invalid .*acme.profile\.yaml/);
   });
 });

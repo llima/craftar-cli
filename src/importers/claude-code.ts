@@ -367,7 +367,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- profile ---- */
   const targets: Target[] = ["claude-code"];
   if (await exists(path.join(ws, ".kiro"))) targets.push("kiro");
-  const profile: Profile = {
+  const profile: ImportedProfile = {
     name: opts.profileName,
     description: `Imported from ${path.basename(ws)} on ${new Date().toISOString().slice(0, 10)}.`,
     recipes: profileRecipes,
@@ -794,6 +794,12 @@ async function existingProfileParams(forge: string, profile: string, loaded: imp
   return { ...(loaded.profiles.get(profile)?.params ?? {}) };
 }
 
+/**
+ * The profile a run computes. `sections` is optional: a profile import creates holds the key only
+ * when the run wrote a section value, so a new profile keeps today's bytes (spec 11 §5.2).
+ */
+type ImportedProfile = Omit<Profile, "sections"> & { sections?: Profile["sections"] };
+
 /** Recipe entries import owns in a profile's `recipes`: the ones it computes and replaces (spec 10 §6.6, §14 Q4). */
 const importOwned = (name: string, profile: string) =>
   name === "base" || name === `base--${profile}` || name === `${profile}-steering` || (/^stack-/.test(name) && (!name.includes("--") || name.endsWith(`--${profile}`)));
@@ -804,7 +810,7 @@ const importOwned = (name: string, profile: string) =>
  * place of the ones import owns, `targets` gains missing ones — every other field, comment and
  * line kept. I1 when it cannot be edited in place.
  */
-async function writeProfile(stage: ForgeStage, forge: string, name: string, computed: Profile, ctx: RunContext, report: ImportReport): Promise<void> {
+async function writeProfile(stage: ForgeStage, forge: string, name: string, computed: ImportedProfile, ctx: RunContext, report: ImportReport): Promise<void> {
   const file = path.join(forge, "profiles", name, "profile.yaml");
   const label = `profiles/${name}/profile.yaml`;
   if (!(await stage.exists(file))) {

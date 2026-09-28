@@ -137,6 +137,18 @@ export type IngredientRef = `${IngredientType}/${string}`;
 export const IngredientRefSchema = z.custom<IngredientRef>((v) => typeof v === "string" && v.includes("/"));
 
 /* ------------------------------------------------------------------ */
+/* Sections (spec 11)                                                   */
+/* ------------------------------------------------------------------ */
+
+/** A section name: the ingredient-name grammar (spec 11 §6.1). */
+export const SECTION_NAME = /^[a-z0-9][a-z0-9._-]*$/i;
+/** A section key: `<type>/<outName>` (spec 11 §3). A key of another shape fails the load; one that names nothing is warned by `plan()`. */
+const SectionKey = z.string().regex(new RegExp(`^(${INGREDIENT_TYPES.join("|")})/[a-z0-9][a-z0-9._-]*$`, "i"), "a section key is <type>/<name>, e.g. rule/review-posture");
+/** Section values by key, then by name. Strings only (spec 11 Ruling 20); `""` empties the section. */
+export const SectionsSchema = z.record(SectionKey, z.record(z.string().regex(SECTION_NAME, "a section name is slug-like"), z.string())).default({});
+export type Sections = z.infer<typeof SectionsSchema>;
+
+/* ------------------------------------------------------------------ */
 /* Recipes                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -183,6 +195,8 @@ export const ProfileSchema = z.object({
   /** Values substituted into `{{param}}` placeholders inside ingredient bodies. */
   params: z.record(z.unknown()).default({}),
   repos: z.array(z.record(z.unknown())).default([]),
+  /** Section values for this profile, keyed `<type>/<outName>` then section name (spec 11 §5.1). */
+  sections: SectionsSchema,
 });
 export type Profile = z.infer<typeof ProfileSchema>;
 
@@ -190,9 +204,12 @@ export type Profile = z.infer<typeof ProfileSchema>;
 /* Forge                                                                */
 /* ------------------------------------------------------------------ */
 
+/** The manifest schema a Forge must declare once a body holds a section marker (spec 11 §6.14, Ruling 7): craftar ≤ 0.6.2 refuses it at load. */
+export const FORGE_SCHEMA_SECTIONS = 2;
+
 export const ForgeManifestSchema = z.object({
   name: z.string(),
-  schema: z.literal(1).default(1),
+  schema: z.union([z.literal(1), z.literal(FORGE_SCHEMA_SECTIONS)]).default(1),
   description: z.string().optional(),
 });
 export type ForgeManifest = z.infer<typeof ForgeManifestSchema>;
@@ -211,6 +228,8 @@ export const WorkspaceConfigSchema = z.object({
   overrides: z
     .object({
       params: z.record(z.unknown()).default({}),
+      /** Section values for this workspace, same shape as a profile's (spec 11 §5.1). */
+      sections: SectionsSchema,
       ingredients: z.object({ disable: z.array(z.string()).default([]) }).default({}),
     })
     .default({}),
