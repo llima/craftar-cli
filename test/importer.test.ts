@@ -937,3 +937,235 @@ describe("template-aware import — --write-config merges craftar.yaml (spec 10 
     expect(await exists(path.join(t.forge, "recipes/base.yaml"))).toBe(true);
   });
 });
+
+describe("section-aware import — decisions (spec 11 §6.7–§6.10)", () => {
+  const fail = (p: Promise<unknown>) => p.then(() => null, (e: Error) => e);
+  const OPEN = (n: string) => `<!-- craftar:section ${n} -->\n`;
+  const CLOSE = "<!-- /craftar:section -->\n";
+  const HEAD = "# Review posture\n\nDispatch reviewers after every commit.\n\n";
+  const TAIL = "\nNever edit what a reviewer reads.\n";
+  const table = (...repos: string[]) => `| Repo | Reviewer |\n|---|---|\n${repos.map((r) => `| \`${r}\` | reviewer |\n`).join("")}`;
+  const ACME = table("acme-api", "acme-web");
+  const GLOBEX = table("globex-api", "globex-web", "globex-desktop");
+  const plain = (t: string) => `${HEAD}${t}${TAIL}`;
+  const MARKED = `${HEAD}${OPEN("flavors")}${ACME}${CLOSE}${TAIL}`;
+
+  /** Import `acme` (one rule, plus `extra` files), then replace the base's body by `body` — the hand-made section of edge case 1. */
+  async function marked(t: Awaited<ReturnType<typeof setup>>, body = MARKED, acme = plain(ACME), extra: Record<string, string> = {}) {
+    await writeFiles(t.ws("acme"), { ".claude/rules/review-posture.md": acme, ...extra });
+    await importInto(t.forge, t.ws("acme"), "acme");
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/review-posture/rule.md"), body);
+  }
+  const profileOf = (t: Awaited<ReturnType<typeof setup>>, p: string) => yaml(path.join(t.forge, `profiles/${p}/profile.yaml`));
+
+  it("the hand-made section: acme renders with its default (rendered reuse), a new globex is inferred into its profile", async () => {
+    const t = await setup();
+    await marked(t);
+    const acme = await importInto(t.forge, t.ws("acme"), "acme");
+    expect(acme.reused).toEqual(["rule/review-posture"]);
+    expect(acme.rendered).toEqual([]);
+    expect(acme.sections).toEqual([]);
+
+    await writeFiles(t.ws("globex"), { ".claude/rules/review-posture.md": plain(GLOBEX) });
+    const g = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(g.variants).toEqual([]);
+    expect(g.sectioned).toEqual([{ name: "rule/review-posture", sections: ["flavors"] }]);
+    expect(g.sections).toEqual([{ key: "rule/review-posture", name: "flavors", old: null, value: GLOBEX, from: "rule/review-posture" }]);
+    // A new profile holds `sections` after `params` (spec 11 §6.10), and it is not warned: no workspace was on it.
+    const text = await fs.readFile(path.join(t.forge, "profiles/globex/profile.yaml"), "utf8");
+    expect(Object.keys(YAML.parse(text)).slice(-3)).toEqual(["params", "sections", "repos"]);
+    expect(YAML.parse(text).sections).toEqual({ "rule/review-posture": { flavors: GLOBEX } });
+    expect(g.warnings.filter((w) => w.includes("now sets section"))).toEqual([]);
+  });
+
+  it("a new profile without Δs has no `sections` key", async () => {
+    const t = await setup();
+    await marked(t);
+    await writeFiles(t.ws("globex"), { ".claude/rules/review-posture.md": plain(ACME) });
+    await importInto(t.forge, t.ws("globex"), "globex");
+    expect(await fs.readFile(path.join(t.forge, "profiles/globex/profile.yaml"), "utf8")).not.toContain("sections");
+  });
+
+  it("rendered reuse through PS, and through WS — neither writes a section value", async () => {
+    const t = await setup();
+    await marked(t);
+    await writeFiles(t.ws("globex"), { ".claude/rules/review-posture.md": plain(GLOBEX) });
+    await importInto(t.forge, t.ws("globex"), "globex");
+    const prof = path.join(t.forge, "profiles/globex/profile.yaml");
+    const before = await fs.readFile(prof, "utf8");
+    const again = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(again.rendered).toEqual([{ name: "rule/review-posture", keys: [], sections: ["flavors"] }]);
+    expect(again.sections).toEqual([]);
+    expect(await fs.readFile(prof, "utf8")).toBe(before);
+
+    const local = table("initech-api");
+    await writeFiles(t.ws("initech"), {
+      ".claude/rules/review-posture.md": plain(local),
+      "craftar.local.yaml": YAML.stringify({ overrides: { sections: { "rule/review-posture": { flavors: local } } } }),
+    });
+    const i = await importInto(t.forge, t.ws("initech"), "initech");
+    expect(i.rendered).toEqual([{ name: "rule/review-posture", keys: [], sections: ["flavors"] }]);
+    expect(i.sections).toEqual([]);
+    expect(await fs.readFile(path.join(t.forge, "profiles/initech/profile.yaml"), "utf8")).not.toContain("sections");
+  });
+
+  it("two separated sections, one emptied; a workspace-fixed section never enters Δs (edge case 5)", async () => {
+    const t = await setup();
+    await marked(t, `A\n${OPEN("a")}x\n${CLOSE}sep\n${OPEN("b")}y\n${CLOSE}B\n`, "A\nx\nsep\ny\nB\n");
+    await writeFiles(t.ws("globex"), { ".claude/rules/review-posture.md": "A\nsep\nr\nB\n" });
+    const g = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(g.sectioned).toEqual([{ name: "rule/review-posture", sections: ["a", "b"] }]);
+    expect(g.sections.map((x) => [x.name, x.value])).toEqual([["a", ""], ["b", "r\n"]]);
+
+    await writeFiles(t.ws("initech"), {
+      ".claude/rules/review-posture.md": "A\nq\nsep\nlocal\nB\n",
+      "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "initech", overrides: { sections: { "rule/review-posture": { b: "local" } } } }),
+    });
+    const i = await importInto(t.forge, t.ws("initech"), "initech");
+    expect(i.sectioned).toEqual([{ name: "rule/review-posture", sections: ["a"] }]);
+    expect(i.sections.map((x) => [x.name, x.value])).toEqual([["a", "q\n"]]);
+  });
+
+  it("F11, F12, F13: each falls back to a variant naming why, and the run continues", async () => {
+    const t = await setup();
+    await marked(t, `A\n${OPEN("a")}x\n${CLOSE}${OPEN("b")}y\n${CLOSE}B\n`, "A\nx\ny\nB\n", { ".claude/rules/shared.md": "shared\n" });
+    const f11 = await (async () => {
+      await writeFiles(t.ws("f11"), { ".claude/rules/review-posture.md": "C\nq\nB\n", ".claude/rules/shared.md": "shared\n" });
+      return importInto(t.forge, t.ws("f11"), "f11");
+    })();
+    expect(f11.variants).toEqual([{ name: "rule/review-posture--f11", reason: "differs from rule/review-posture already in the Forge (the text outside the sections of ingredients/rules/review-posture/rule.md differs (line 1))" }]);
+    expect(f11.reused).toContain("rule/shared");
+
+    await writeFiles(t.ws("f12"), { ".claude/rules/review-posture.md": "A\nq\nB\n" });
+    const f12 = await importInto(t.forge, t.ws("f12"), "f12");
+    expect(f12.variants[0].reason).toContain("(section inference ambiguous in ingredients/rules/review-posture/rule.md: a, b)");
+
+  });
+
+  it("F13: an inferred value may not cite a {{k}} the render sets (E10)", async () => {
+    const t = await setup();
+    await marked(t);
+    const meta = path.join(t.forge, "ingredients/rules/review-posture/ingredient.yaml");
+    await fs.writeFile(meta, (await fs.readFile(meta, "utf8")) + "params:\n  deploy.api:\n    default: globex-api\n");
+    await writeFiles(t.ws("f13"), { ".claude/rules/review-posture.md": plain(table("{{deploy.api}}")) });
+    const f13 = await importInto(t.forge, t.ws("f13"), "f13");
+    expect(f13.variants[0].reason).toContain("(section flavors would cite {{deploy.api}}, which this profile renders)");
+  });
+
+  it("F13: an inferred value that would hold a marker line is refused as a value — the source then fails I11 as a variant", async () => {
+    const t = await setup();
+    await marked(t);
+    await writeFiles(t.ws("globex"), { ".claude/rules/review-posture.md": plain(`${ACME}<!-- craftar:section inner -->\n`) });
+    const e = await fail(importInto(t.forge, t.ws("globex"), "globex"));
+    expect(e?.message).toContain("import: .claude/rules/review-posture.md holds a section marker on line 9 — sync would not reproduce it; indent it or remove it, and re-run");
+  });
+
+  it("F14: the proof is the gate — a placeholder straddling a value and the text after it renders differently whole", async () => {
+    const t = await setup();
+    await marked(t, `A\n${OPEN("a")}x\n${CLOSE}deploy.api}} end\n`, "A\nx\ndeploy.api}} end\n");
+    const meta = path.join(t.forge, "ingredients/rules/review-posture/ingredient.yaml");
+    await fs.writeFile(meta, (await fs.readFile(meta, "utf8")) + "params:\n  deploy.api:\n    default: D\n");
+    await writeFiles(t.ws("globex"), { ".claude/rules/review-posture.md": "A\nsee {{\ndeploy.api}} end\n" });
+    const g = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(g.variants).toEqual([{ name: "rule/review-posture--globex", reason: "differs from rule/review-posture already in the Forge (section inference not proved for rule/review-posture)" }]);
+  });
+
+  it("I11: a created source with a column-0 marker is refused, the Forge byte-identical; an indented one is literal", async () => {
+    const t = await setup();
+    await marked(t);
+    const before = await snapshot(t.forge);
+    await writeFiles(t.ws("globex"), { ".claude/rules/fresh.md": "Intro\n<!-- /craftar:section -->\n" });
+    expect((await fail(importInto(t.forge, t.ws("globex"), "globex")))?.message).toContain("import: .claude/rules/fresh.md holds a section marker on line 2");
+    expect(await snapshot(t.forge)).toEqual(before);
+    await writeFiles(t.ws("globex"), { ".claude/rules/fresh.md": "Intro\n    <!-- /craftar:section -->\n" });
+    expect((await importInto(t.forge, t.ws("globex"), "globex")).created).toContain("rule/fresh");
+  });
+
+  it("I12: a base with malformed markers is refused, the Forge byte-identical", async () => {
+    const t = await setup();
+    await marked(t, `${HEAD}${OPEN("flavors")}${ACME}${TAIL}`);
+    const before = await snapshot(t.forge);
+    const e = await fail(importInto(t.forge, t.ws("acme"), "acme"));
+    expect(e?.message).toContain("import: ingredients/rules/review-posture/rule.md:5: section flavors is never closed — fix the Forge and re-run");
+    expect(e?.message).toContain("The Forge was left untouched.");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+
+  it("param inference is preferred for a {{k}} inside a default (Ruling 16); a source that differs in both is a variant", async () => {
+    const t = await setup();
+    await marked(t, `Deploy {{deploy.api}}.\n${OPEN("rows")}| {{owner}} |\n${CLOSE}`, "Deploy globex-api.\n| ann |\n");
+    const meta = path.join(t.forge, "ingredients/rules/review-posture/ingredient.yaml");
+    await fs.writeFile(meta, (await fs.readFile(meta, "utf8")) + "params:\n  deploy.api:\n    default: globex-api\n  owner:\n    default: ann\n");
+    await writeFiles(t.ws("globex"), { ".claude/rules/review-posture.md": "Deploy globex-api.\n| bob |\n" });
+    const g = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(g.inferred).toEqual([{ name: "rule/review-posture", values: { "deploy.api": "globex-api", owner: "bob" } }]);
+    expect(g.sectioned).toEqual([]);
+
+    await writeFiles(t.ws("initech"), { ".claude/rules/review-posture.md": "Deploy initech-api.\n| a |\n| b |\n" });
+    const i = await importInto(t.forge, t.ws("initech"), "initech");
+    expect(i.variants.map((v) => v.name)).toEqual(["rule/review-posture--initech"]);
+    expect(i.variants[0].reason).toContain("the text outside the sections");
+  });
+
+  it("an inferred value citing {{title}} unset pins it: a later param inference setting it is refused (edge case 7)", async () => {
+    const t = await setup();
+    await marked(t, `${OPEN("rows")}x\n${CLOSE}`, "x\n", { ".claude/rules/zeta.md": "Hello world\n" });
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/zeta/rule.md"), "Hello {{title}}\n");
+    const zmeta = path.join(t.forge, "ingredients/rules/zeta/ingredient.yaml");
+    await fs.writeFile(zmeta, (await fs.readFile(zmeta, "utf8")) + "params:\n  title:\n    default: world\n");
+    await writeFiles(t.ws("globex"), { ".claude/rules/review-posture.md": "{{ 'Save' | localize }} {{title}}\n", ".claude/rules/zeta.md": "Hello globex\n" });
+    const g = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(g.sections.map((x) => x.value)).toEqual(["{{ 'Save' | localize }} {{title}}\n"]);
+    // F8's wording names the value zeta renders (its own default); the pin itself came from the section value.
+    expect(g.variants).toEqual([{ name: "rule/zeta--globex", reason: 'differs from rule/zeta already in the Forge (title is "world" in this import; rule/zeta implies "globex")' }]);
+    // Control: the same run without {{title}} in the section value infers title for zeta.
+    await writeFiles(t.ws("initech"), { ".claude/rules/review-posture.md": "no title here\n", ".claude/rules/zeta.md": "Hello initech\n" });
+    const i = await importInto(t.forge, t.ws("initech"), "initech");
+    expect(i.inferred).toEqual([{ name: "rule/zeta", values: { title: "initech" } }]);
+  });
+
+  it("I6: a wrong-shape overrides.sections key fails the import, naming the file, the Forge untouched", async () => {
+    const t = await setup();
+    await marked(t);
+    const before = await snapshot(t.forge);
+    await writeFiles(t.ws("globex"), { ".claude/rules/review-posture.md": plain(ACME), "craftar.local.yaml": "overrides:\n  sections:\n    review-posture.flavors: x\n" });
+    const e = await fail(importInto(t.forge, t.ws("globex"), "globex"));
+    expect(e?.message).toContain("import: craftar.local.yaml does not load");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+
+  it("F9 (b): a param change is refused when the profile's section value for an ingredient outside the run cites the key", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("acme"), { ".claude/rules/deploy.md": "use globex-api here\n", ".claude/rules/notes.md": "Notes.\n" });
+    await importInto(t.forge, t.ws("acme"), "acme");
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/deploy/rule.md"), "use {{deploy.api}} here\n");
+    const meta = path.join(t.forge, "ingredients/rules/deploy/ingredient.yaml");
+    await fs.writeFile(meta, (await fs.readFile(meta, "utf8")) + "params:\n  deploy.api:\n    default: globex-api\n");
+    await writeFiles(t.forge, { "profiles/globex/profile.yaml": 'name: globex\nrecipes:\n  - base\nsections:\n  rule/notes:\n    extra: "see {{deploy.api}}"\n' });
+    await writeFiles(t.ws("globex"), { ".claude/rules/deploy.md": "use initech-api here\n" });
+    const g = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(g.variants).toEqual([{ name: "rule/deploy--globex", reason: "differs from rule/deploy already in the Forge (setting deploy.api would change rule/notes)" }]);
+  });
+
+  it("an existing profile gains `sections` in place — comments and a folded description kept — and is warned; an aliased `sections` is I1", async () => {
+    const t = await setup();
+    await marked(t);
+    const long = "Globex, the client whose reviewer table grew a desktop row, imported by hand before sections existed at all.";
+    const hand = `# globex, by hand\nname: globex\n${YAML.stringify({ description: long })}recipes:\n  - base # shared\ntargets:\n  - claude-code\n`;
+    expect(hand.split("\n").length).toBeGreaterThan(8); // the description is folded over two lines
+    await writeFiles(t.forge, { "profiles/globex/profile.yaml": hand });
+    await writeFiles(t.ws("globex"), { ".claude/rules/review-posture.md": plain(GLOBEX) });
+    const g = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(g.profileWrite).toEqual({ path: "profiles/globex/profile.yaml", action: "edited", fields: ["sections"] });
+    const after = await fs.readFile(path.join(t.forge, "profiles/globex/profile.yaml"), "utf8");
+    expect(after.startsWith(hand)).toBe(true);
+    expect(YAML.parse(after).sections).toEqual({ "rule/review-posture": { flavors: GLOBEX } });
+    expect(g.warnings).toContain("profile globex now sets section flavors of rule/review-posture — every workspace on globex renders it at its next sync; import cannot reach them");
+
+    await writeFiles(t.forge, { "profiles/initech/profile.yaml": "name: initech\nrecipes:\n  - base\nx: &s {}\nsections: *s\n" });
+    await writeFiles(t.ws("initech"), { ".claude/rules/review-posture.md": plain(GLOBEX) });
+    const before = await snapshot(t.forge);
+    expect((await fail(importInto(t.forge, t.ws("initech"), "initech")))?.message).toContain("import: cannot edit profiles/initech/profile.yaml in place (sections is an alias)");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+});

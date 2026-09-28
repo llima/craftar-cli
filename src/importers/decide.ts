@@ -6,9 +6,11 @@ import { fingerprintOf } from "../core/fingerprint.js";
 import { exists, listFiles, loadForge, readIngredientText, type Forge } from "../core/forge.js";
 import { hashNormalized, stripBom, toLf } from "../core/text.js";
 import { deepMerge } from "../core/merge.js";
-import { citedKeys, infer, readBase, renderMap, renderedFingerprint } from "../core/template-import.js";
+import { citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
+import { canonicalValue, inferSections } from "../core/sections.js";
+import { sectionKey } from "../core/resolve.js";
 import type { DirReader } from "../core/fingerprint.js";
-import type { Ingredient } from "../schema/index.js";
+import { SectionsSchema, type Ingredient, type Sections } from "../schema/index.js";
 
 /**
  * The decision half of template-aware import (spec 10 §6.1–§6.5): what the importing profile
@@ -21,6 +23,10 @@ export interface RunContext {
   P: Record<string, unknown>;
   /** The workspace layer: overrides.params of craftar.yaml and craftar.local.yaml (`W`). */
   W: Record<string, unknown>;
+  /** The importing profile's `sections`, overlaid by every accepted section change (`PS`, spec 11 §6.7). */
+  PS: Sections;
+  /** The workspace layer's sections: overrides.sections of craftar.yaml and craftar.local.yaml (`WS`). */
+  WS: Sections;
   /**
    * Keys this run has relied on, with the first value (or absence) it relied on (§6.5). Decisions read only
    * membership; the value is kept for a later relaxation (every reliance at one value).
@@ -30,8 +36,26 @@ export interface RunContext {
   forge: Forge | null;
 }
 
+/** One entry of a section change `Δs` (spec 11 §3); `old` is the profile's value before, or null when it did not set it. */
+export interface SectionChange {
+  key: string;
+  name: string;
+  old: string | null;
+  value: string;
+}
+
 export type Decision =
-  | { kind: "reuse"; rendered?: string[]; inferred?: Record<string, string>; delta?: Array<{ key: string; old: string | null; value: string }> }
+  | {
+      kind: "reuse";
+      rendered?: string[];
+      /** Sections the render filled with a value rather than the default (spec 11 §4.3). */
+      renderedSections?: string[];
+      inferred?: Record<string, string>;
+      delta?: Array<{ key: string; old: string | null; value: string }>;
+      /** Every open section a section inference assigned, in declaration order (spec 11 §6.8). */
+      sectioned?: string[];
+      sectionDelta?: SectionChange[];
+    }
   | { kind: "variant"; why?: string }
   | { kind: "literal"; warn: string };
 
@@ -68,8 +92,15 @@ export async function decide(
   others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>,
   runBases: Set<string>,
 ): Promise<Decision> {
-  const base = await readBase(dir, reader);
-  const cited = citedKeys(base.texts);
+  // The Forge root, for the file an I12 names: every base lives at <forge>/ingredients/<folder>/<name>.
+  const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."));
+  const key = sectionKey(base.meta);
+  const PSk = valuesAt(ctx.PS, key);
+  const WSk = valuesAt(ctx.WS, key);
+  // S(X): the profile's values under the workspace's, at (key, name) granularity (spec 11 §6.3, §6.7).
+  const S: Record<string, string> = { ...PSk, ...WSk };
+  const names = sectionNames(base);
+  const cited = citedKeys(expandedTexts(base, S));
 
   // G1: a recipe default the render cannot see — compare literally, as 0.5.0 did.
   if (ctx.forge) {
@@ -82,12 +113,50 @@ export async function decide(
   }
 
   const map = renderMap(base.meta, ctx.P, ctx.W);
-  if (renderedFingerprint(base, map) === fingerprint) {
+  if (renderedFingerprint(base, map, S) === fingerprint) {
     pin(ctx, cited, map);
     const changed = [...cited].filter((k) => Object.hasOwn(map, k));
-    return { kind: "reuse", rendered: changed.length ? changed.sort() : undefined };
+    const filled = names.filter((n) => Object.hasOwn(S, n));
+    return { kind: "reuse", rendered: changed.length ? changed.sort() : undefined, renderedSections: filled.length ? filled : undefined };
   }
 
+  // Param inference first (Ruling 16): the narrower claim. A base with no open section stops there, as in 0.6.2.
+  const param = await inferParams(ctx, base, S, map, cited, ref, meta, files, fingerprint, others, runBases);
+  const open = names.filter((n) => !Object.hasOwn(WSk, n));
+  if (param.kind === "reuse" || !open.length) return param;
+  return inferSectionValues(ctx, base, key, PSk, WSk, map, ref, meta, files, fingerprint);
+}
+
+/** A key's section values in a layer, or none. */
+const valuesAt = (layer: Sections, key: string): Record<string, string> => (Object.hasOwn(layer, key) ? layer[key] : {});
+
+/** F1, F2 (spec 10 §6.3): what no value can explain — metadata, the file set, a file compared as bytes. */
+function shapeDiffers(base: ImportBase, meta: Ingredient, files: Record<string, string | Buffer>): string | null {
+  const metaOnly = { ...base.meta } as Record<string, unknown>;
+  delete metaOnly.params;
+  if (fingerprintOf(metaOnly as Ingredient, {}) !== fingerprintOf(meta, {})) return "metadata differs";
+  const baseFiles = [...base.texts.keys(), ...base.bytes.keys()].sort();
+  const srcFiles = Object.keys(files).sort();
+  const missing = baseFiles.find((f) => !srcFiles.includes(f)) ?? srcFiles.find((f) => !baseFiles.includes(f));
+  if (missing) return `${missing} differs`;
+  for (const [rel, b] of base.bytes) if (hashNormalized(b) !== hashNormalized(files[rel])) return `${rel} differs`;
+  return null;
+}
+
+/** Spec 10 §6.3–§6.5, over the template expanded with `S` (spec 11 §6.7). */
+async function inferParams(
+  ctx: RunContext,
+  base: ImportBase,
+  S: Record<string, string>,
+  map: Record<string, unknown>,
+  cited: Set<string>,
+  ref: string,
+  meta: Ingredient,
+  files: Record<string, string | Buffer>,
+  fingerprint: string,
+  others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>,
+  runBases: Set<string>,
+): Promise<Decision> {
   // Holes (§3): declared, not reserved, not set by the workspace layer, and not pinned — a key this run already relied
   // on renders at its current value, like any fixed key (§6.5, §14 Q13).
   const inferable = [...cited].filter((k) => base.meta.params?.[k] !== undefined && !reservedKey(k) && !Object.hasOwn(ctx.W, k));
@@ -95,27 +164,21 @@ export async function decide(
   const pinnedHoles = inferable.filter((k) => ctx.pinned.has(k));
   if (!holes.size && !pinnedHoles.length) return { kind: "variant" };
 
-  // F1, F2: what no value can explain.
-  const metaOnly = { ...base.meta } as Record<string, unknown>;
-  delete metaOnly.params;
-  if (fingerprintOf(metaOnly as Ingredient, {}) !== fingerprintOf(meta, {})) return { kind: "variant", why: "metadata differs" };
-  const baseFiles = [...base.texts.keys(), ...base.bytes.keys()].sort();
-  const srcFiles = Object.keys(files).sort();
-  const missing = baseFiles.find((f) => !srcFiles.includes(f)) ?? srcFiles.find((f) => !baseFiles.includes(f));
-  if (missing) return { kind: "variant", why: `${missing} differs` };
-  for (const [rel, b] of base.bytes) if (hashNormalized(b) !== hashNormalized(files[rel])) return { kind: "variant", why: `${rel} differs` };
+  const shape = shapeDiffers(base, meta, files);
+  if (shape) return { kind: "variant", why: shape };
 
   const fixed: Record<string, unknown> = Object.create(null);
   for (const [k, v] of Object.entries(map)) if (!holes.has(k)) fixed[k] = v;
+  const templates = expandedTexts(base, S);
   const sources = new Map([...base.texts.keys()].map((rel) => [rel, textOf(files[rel])]));
-  const r = infer(base.texts, sources, holes, fixed);
+  const r = infer(templates, sources, holes, fixed);
   if ("fallback" in r) {
     // F8 (Ruling 5): when the source matches only with another value for a pinned key, name that key rather than the
     // line. The value it keeps is the one this base renders — P's or W's, which the run relied on, or, when neither
     // sets the key, this base's own default: an inference may not set it, or an earlier reuse at its default would move.
     if (pinnedHoles.length) {
       const open = new Set([...holes, ...pinnedHoles]);
-      const wide = infer(base.texts, sources, open, Object.fromEntries(Object.entries(fixed).filter(([k]) => !open.has(k))));
+      const wide = infer(templates, sources, open, Object.fromEntries(Object.entries(fixed).filter(([k]) => !open.has(k))));
       if (!("fallback" in wide)) {
         const k = pinnedHoles.find((x) => wide.values[x] !== valueOf(map, x));
         if (k !== undefined) {
@@ -131,16 +194,21 @@ export async function decide(
     .filter(([k, v]) => valueOf(map, k) !== v)
     .map(([key, value]) => ({ key, old: valueOf(ctx.P, key) ?? null, value }));
 
-  // F10: the proof, through the same substitution ctx.text uses.
-  if (renderedFingerprint(base, { ...map, ...sigma }) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
+  // F10: the proof, through the same expansion and substitution ctx.text uses.
+  if (renderedFingerprint(base, { ...map, ...sigma }, S) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
 
-  // F9: a profile change must not move anything else the profile renders.
+  // F9: a profile change must not move anything else the profile renders — its files, or a section value
+  // that applies to it under this profile or workspace (spec 11 §6.11).
+  const values = deepMerge(ctx.PS, ctx.WS) as Sections;
   for (const { key } of delta) {
     if (ctx.forge) {
       for (const ing of ctx.forge.ingredients.values()) {
         if (ing.ref === ref || runBases.has(ing.ref)) continue;
         for (const rel of await listAdmitted(ing)) {
           if (placeholders(norm(await readIngredientText(ing, rel))).includes(key)) return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
+        }
+        for (const v of Object.values(valuesAt(values, sectionKey(ing.meta)))) {
+          if (placeholders(v).includes(key)) return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
         }
       }
     }
@@ -152,6 +220,52 @@ export async function decide(
   for (const d of delta) ctx.P[d.key] = d.value;
   pin(ctx, cited, { ...map, ...sigma });
   return { kind: "reuse", inferred: sigma, delta };
+}
+
+/**
+ * Section inference (spec 11 §6.8, §6.9): the unique assignment of the base's open sections that
+ * spells the source, proved by rendering the base with it. `Δs` holds each value that differs from
+ * what the profile, or the default, gave; it goes into `PS` for the rest of the run.
+ */
+function inferSectionValues(
+  ctx: RunContext,
+  base: ImportBase,
+  key: string,
+  PSk: Record<string, string>,
+  WSk: Record<string, string>,
+  map: Record<string, unknown>,
+  ref: string,
+  meta: Ingredient,
+  files: Record<string, string | Buffer>,
+  fingerprint: string,
+): Decision {
+  const shape = shapeDiffers(base, meta, files);
+  if (shape) return { kind: "variant", why: shape };
+  const sigma: Record<string, string> = {};
+  const defaults = new Map<string, string>();
+  for (const [rel, parsed] of base.parsed) {
+    const r = inferSections(parsed, textOf(files[rel]), WSk, map);
+    if ("fallback" in r) return { kind: "variant", why: r.reason };
+    Object.assign(sigma, r.values);
+    for (const s of parsed.sections) defaults.set(s.name, s.default);
+  }
+  const S = { ...PSk, ...WSk, ...sigma };
+  // F14: the proof, through the same expansion and substitution ctx.text uses.
+  if (renderedFingerprint(base, map, S) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
+
+  const assigned = sectionNames(base).filter((n) => Object.hasOwn(sigma, n));
+  const sectionDelta: SectionChange[] = [];
+  for (const name of assigned) {
+    const given = Object.hasOwn(PSk, name) ? canonicalValue(PSk[name]) : defaults.get(name);
+    if (sigma[name] !== given) sectionDelta.push({ key, name, old: Object.hasOwn(PSk, name) ? PSk[name] : null, value: sigma[name] });
+  }
+  if (sectionDelta.length) {
+    const next = { ...valuesAt(ctx.PS, key) };
+    for (const d of sectionDelta) next[d.name] = d.value;
+    ctx.PS[key] = next;
+  }
+  pin(ctx, citedKeys(expandedTexts(base, S)), map);
+  return { kind: "reuse", sectioned: assigned, sectionDelta };
 }
 
 async function listAdmitted(ing: { dir: string; meta: Ingredient }): Promise<string[]> {
@@ -170,6 +284,22 @@ export async function workspaceParams(ws: string, read: (abs: string) => Promise
       const doc = YAML.parse(stripBom(await read(abs))) ?? {};
       const params = OverridesParams.parse(doc?.overrides?.params ?? {});
       out = deepMerge(out, params);
+    } catch (e) {
+      throw new Error(`import: ${f} does not load (${(e as Error).message})`);
+    }
+  }
+  return out;
+}
+
+/** `WS`: overrides.sections of craftar.yaml and craftar.local.yaml, merged as loadWorkspace merges them (I6, spec 11 §6.7). */
+export async function workspaceSections(ws: string, read: (abs: string) => Promise<string>): Promise<Sections> {
+  let out: Sections = {};
+  for (const f of ["craftar.yaml", "craftar.local.yaml"]) {
+    const abs = path.join(ws, f);
+    if (!(await exists(abs))) continue;
+    try {
+      const doc = YAML.parse(stripBom(await read(abs))) ?? {};
+      out = deepMerge(out, SectionsSchema.parse(doc?.overrides?.sections ?? {}));
     } catch (e) {
       throw new Error(`import: ${f} does not load (${(e as Error).message})`);
     }
