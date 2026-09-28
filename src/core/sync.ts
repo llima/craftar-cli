@@ -205,7 +205,9 @@ export async function plan(ws: Workspace): Promise<Plan> {
       const missing = new Set<string>();
       const params = paramsFor(ing, resolution);
       // Sections first, then params (spec 11 §6.4), in admitted files only (§6.5).
-      const parsed = substitutedFile(ing.meta, file) ? (sections.parsed.get(abs) ?? parseSections(raw, forgeRel(ws.forge, abs), ing.ref)) : null;
+      const parsed = substitutedFile(ing.meta, file) ? sections.parsed.get(abs) : null;
+      // Every admitted file of a resolved ingredient was parsed and gated in the section pass; a miss here would skip the schema gate.
+      if (parsed === undefined) throw new Error(`internal: ${forgeRel(ws.forge, abs)} was not parsed by the section pass`);
       const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution)) : toLf(stripBom(raw));
       const out = substitute(expanded, params, missing);
       if (parsed) guardOutput(ing, file, out, parsed, resolution, params);
