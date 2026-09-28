@@ -391,7 +391,7 @@ function markerStructure(text: string, label: string): { names: string[] } | { p
  * variant's side of a hunk that holds a marker would leave an unterminated section, which every later
  * sync refuses, or drop a section whose profile values would then silently stop applying. Each file
  * the result writes or removes is compared, as the sequence of its section names, with the base's —
- * before anything is written. Sections are changed by `take: section` (0.8.0), not by a merge.
+ * before anything is written. Editing sections through unify is not supported yet.
  */
 async function checkMarkers(base: LoadedIngredient, write: Record<string, string | Buffer>, remove: string[]): Promise<void> {
   const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
