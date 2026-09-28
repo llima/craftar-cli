@@ -116,9 +116,10 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
         files.push({ rel, p });
         if (p.sections.length && firstMarker === null) firstMarker = `${p.file}:${p.sections[0].line}`;
       } else {
-        // Any other file is copied as bytes; a marker line in it, whatever its extension, is warned, never dropped silently.
-        const text = toLf(stripBom(await fs.readFile(abs, "utf8")));
-        if (text.split("\n").some((l) => markerLine(l) !== null)) {
+        // A file not every target renders as text keeps its markers; one, whatever its extension, is warned, never dropped
+        // silently. Every marker form contains "craftar:section", so a file without it is not decoded.
+        const bytes = await fs.readFile(abs);
+        if (bytes.includes("craftar:section") && toLf(stripBom(bytes.toString("utf8"))).split("\n").some((l) => markerLine(l) !== null)) {
           warnings.push(`${ing.ref} ${rel}: section markers are read only in files every target renders as text — copied with them`);
         }
       }
