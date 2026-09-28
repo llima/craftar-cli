@@ -32,7 +32,7 @@ program.name("craftar").description("Craft, sync and convert AI-coding workspace
 /* ---------------------------------------------------------------- import */
 program
   .command("import")
-  .description("Import an existing workspace harness into a Forge: creates or updates ingredients, recipes and a profile, reusing a templated base when it renders or infers the workspace text")
+  .description("Import an existing workspace harness into a Forge: creates or updates ingredients, recipes and a profile, reusing a templated base when it renders the workspace text or infers it into params or sections")
   .requiredOption("--from <tool>", "source tool: claude-code")
   .requiredOption("--forge <dir>", "Forge directory (created if missing)")
   .requiredOption("--profile <name>", "client profile to create or update")
@@ -143,7 +143,7 @@ program
 /* ---------------------------------------------------------------- explain */
 program
   .command("explain")
-  .description("Why does this file exist? Which ingredient, recipe chain and target produced it")
+  .description("Why does this file exist? Which ingredient, recipe chain and target produced it, and which layer filled each section")
   .argument("<path>", "workspace-relative path of a generated file")
   .option("--workspace <dir>", "workspace root", ".")
   .action(async (file, o) => {
