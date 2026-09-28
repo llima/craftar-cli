@@ -1169,3 +1169,117 @@ describe("section-aware import — decisions (spec 11 §6.7–§6.10)", () => {
     expect(await snapshot(t.forge)).toEqual(before);
   });
 });
+
+describe("section-aware import — the manifest's schema (spec 11 §6.14, Rulings 7 and 22)", () => {
+  const fail = (p: Promise<unknown>) => p.then(() => null, (e: Error) => e);
+  const DESC = "description: Craftar Forge — shared harness ingredients, recipes and client profiles.\n";
+  const V1 = `name: forge\nschema: 1\n${DESC}`;
+  const V2 = `name: forge\nschema: 2\n${DESC}`;
+  const BODY = "# Review\n\n<!-- craftar:section flavors -->\n| acme |\n<!-- /craftar:section -->\n";
+  const manifestOf = (t: Awaited<ReturnType<typeof setup>>) => fs.readFile(path.join(t.forge, "craftar.forge.yaml"), "utf8");
+  async function acmeWithMarkers(t: Awaited<ReturnType<typeof setup>>) {
+    await writeFiles(t.ws("acme"), { ".claude/rules/review.md": "# Review\n\n| acme |\n", ".claude/rules/plain.md": "plain\n" });
+    const first = await importInto(t.forge, t.ws("acme"), "acme");
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/review/rule.md"), BODY);
+    return first;
+  }
+
+  it("absent, not needed: a new Forge gets today's bytes, schema: 1, listed first in created (AC 3)", async () => {
+    const t = await setup();
+    const r = await acmeWithMarkers(t);
+    expect(await manifestOf(t)).toBe(V1);
+    expect(r.manifestWrite).toBe("created");
+    expect(r.created[0]).toBe("craftar.forge.yaml");
+  });
+
+  it("schema: 1, needed by a rendered reuse of a marked base with no Δs: bumped in place, byte for byte, LF and CRLF", async () => {
+    for (const eol of ["\n", "\r\n"]) {
+      const t = await setup();
+      await acmeWithMarkers(t);
+      await fs.writeFile(path.join(t.forge, "craftar.forge.yaml"), V1.replace(/\n/g, eol));
+      const r = await importInto(t.forge, t.ws("acme"), "acme");
+      expect(r.sections).toEqual([]);
+      expect(r.manifestWrite).toBe("edited");
+      expect(r.created).not.toContain("craftar.forge.yaml");
+      expect(await manifestOf(t)).toBe(V2.replace(/\n/g, eol));
+    }
+  });
+
+  it("schema: 1, needed by a Δs: bumped the same way; a manifest with no schema key gains one", async () => {
+    const t = await setup();
+    await acmeWithMarkers(t);
+    await writeFiles(t.ws("globex"), { ".claude/rules/review.md": "# Review\n\n| globex |\n", ".claude/rules/plain.md": "plain\n" });
+    const g = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(g.sections).toHaveLength(1);
+    expect(g.manifestWrite).toBe("edited");
+    expect(await manifestOf(t)).toBe(V2);
+
+    const u = await setup();
+    await acmeWithMarkers(u);
+    await fs.writeFile(path.join(u.forge, "craftar.forge.yaml"), `name: forge\n${DESC}`);
+    await importInto(u.forge, u.ws("acme"), "acme");
+    expect(await manifestOf(u)).toBe(`name: forge\n${DESC}schema: 2\n`);
+  });
+
+  it("schema: 1, needed by a variant cut against a marked base: the Forge still holds the markers (Ruling 22)", async () => {
+    const t = await setup();
+    await acmeWithMarkers(t);
+    await writeFiles(t.ws("globex"), { ".claude/rules/review.md": "# Other\n\n| globex |\n" });
+    const g = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(g.variants.map((v) => v.name)).toEqual(["rule/review--globex"]);
+    expect(g.manifestWrite).toBe("edited");
+    expect(await manifestOf(t)).toBe(V2);
+  });
+
+  it("schema: 1, not needed: a run that never meets a marked base does not stage the manifest", async () => {
+    const t = await setup();
+    await acmeWithMarkers(t);
+    await writeFiles(t.ws("globex"), { ".claude/rules/plain.md": "plain\n" });
+    const r = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(r.manifestWrite).toBe("unchanged");
+    expect(await manifestOf(t)).toBe(V1);
+  });
+
+  it("schema: 2: never staged, needed or not", async () => {
+    const t = await setup();
+    await acmeWithMarkers(t);
+    const hand = "name: forge # by hand\nschema: 2\n";
+    await fs.writeFile(path.join(t.forge, "craftar.forge.yaml"), hand);
+    expect((await importInto(t.forge, t.ws("acme"), "acme")).manifestWrite).toBe("unchanged");
+    expect(await manifestOf(t)).toBe(hand);
+  });
+
+  it("absent, needed: a directory holding marked ingredients and no manifest gets schema: 2 staged directly, the bumped file's bytes (P11)", async () => {
+    const t = await setup();
+    await acmeWithMarkers(t);
+    await fs.rm(path.join(t.forge, "craftar.forge.yaml"));
+    const r = await importInto(t.forge, t.ws("acme"), "acme");
+    expect(r.manifestWrite).toBe("created");
+    expect(r.created[0]).toBe("craftar.forge.yaml");
+    expect(await manifestOf(t)).toBe(V2);
+  });
+
+  it("I13: a manifest that does not round-trip is refused with the Forge byte-identical; setting schema: 2 by hand lets the re-run pass", async () => {
+    const t = await setup();
+    await acmeWithMarkers(t);
+    await fs.writeFile(path.join(t.forge, "craftar.forge.yaml"), "name: forge      # aligned\nschema: 1        # by hand\n");
+    const before = await snapshot(t.forge);
+    const e = await fail(importInto(t.forge, t.ws("acme"), "acme"));
+    expect(e?.message).toContain(
+      "import: cannot edit craftar.forge.yaml in place (it does not round-trip unchanged through the YAML writer) — set schema: 2 by hand, commit, and re-run",
+    );
+    expect(e?.message).toContain("The Forge was left untouched.");
+    expect(await snapshot(t.forge)).toEqual(before);
+    await fs.writeFile(path.join(t.forge, "craftar.forge.yaml"), "name: forge      # aligned\nschema: 2        # by hand\n");
+    expect((await importInto(t.forge, t.ws("acme"), "acme")).manifestWrite).toBe("unchanged");
+  });
+
+  it("a manifest that is not a mapping never reaches I13: the Forge does not load (I5), and stays byte-identical", async () => {
+    const t = await setup();
+    await acmeWithMarkers(t);
+    await fs.writeFile(path.join(t.forge, "craftar.forge.yaml"), "- forge\n");
+    const before = await snapshot(t.forge);
+    expect((await fail(importInto(t.forge, t.ws("acme"), "acme")))?.message).toContain("import: the Forge does not load");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+});

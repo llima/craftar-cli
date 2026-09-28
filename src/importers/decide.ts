@@ -34,6 +34,8 @@ export interface RunContext {
   pinned: Map<string, string | undefined>;
   /** The Forge as it stood before the run; null for an empty Forge. */
   forge: Forge | null;
+  /** Whether a source was decided against a base holding a section marker — the run then needs `schema: 2` (spec 11 §6.14, Ruling 22). */
+  markedBase: boolean;
 }
 
 /** One entry of a section change `Δs` (spec 11 §3); `old` is the profile's value before, or null when it did not set it. */
@@ -100,6 +102,8 @@ export async function decide(
   // S(X): the profile's values under the workspace's, at (key, name) granularity (spec 11 §6.3, §6.7).
   const S: Record<string, string> = { ...PSk, ...WSk };
   const names = sectionNames(base);
+  // Whatever the outcome — reuse, section inference, variant or a G1 literal comparison — the Forge holds these markers after the run.
+  if (names.length) ctx.markedBase = true;
   const cited = citedKeys(expandedTexts(base, S));
 
   // G1: a recipe default the render cannot see — compare literally, as 0.5.0 did.

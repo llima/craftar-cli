@@ -6,7 +6,7 @@ import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST } from "../cor
 import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../core/secrets.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
-import { IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
+import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { resolve } from "../core/resolve.js";
 import { editYamlText } from "../core/yaml-edit.js";
@@ -48,6 +48,8 @@ export interface ImportReport {
   recipeSplits: { shared: string; owned: string; reason: string }[];
   /** What happened to profiles/<p>/profile.yaml. */
   profileWrite: { path: string; action: "created" | "edited" | "unchanged"; fields: string[] };
+  /** What happened to craftar.forge.yaml: created, bumped to `schema: 2`, or left alone (spec 11 §6.14). */
+  manifestWrite: "created" | "edited" | "unchanged";
   /** What happened to the workspace's craftar.yaml; null without --write-config. */
   configWrite: "created" | "edited" | "unchanged" | null;
 }
@@ -121,17 +123,14 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const report: ImportReport = {
     created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [], rendered: [], inferred: [], params: [], sectioned: [], sections: [], recipeSplits: [],
     profileWrite: { path: `profiles/${opts.profileName}/profile.yaml`, action: "unchanged", fields: [] },
+    manifestWrite: "unchanged",
     configWrite: null,
   };
   const claudeDir = path.join(ws, ".claude");
   if (!(await exists(claudeDir))) throw new Error(`${claudeDir} not found — is this a Claude Code workspace?`);
 
-  const manifest = path.join(forge, FORGE_MANIFEST);
-  const manifestOnDisk = manifest;
-  if (!(await stage.exists(manifest))) {
-    stage.write(manifest, YAML.stringify({ name: path.basename(forge), schema: 1, description: "Craftar Forge — shared harness ingredients, recipes and client profiles." }));
-    report.created.push(FORGE_MANIFEST);
-  }
+  // The manifest is staged after the decisions (spec 11 §6.13 step 7): its schema depends on them.
+  const manifestOnDisk = path.join(forge, FORGE_MANIFEST);
 
   const origin = (rel: string) => ({ workspace: path.basename(ws), path: rel.replace(/\\/g, "/") });
   // Two passes (spec 10 §6.8): every source is read first, in today's order, then decided in that
@@ -326,6 +325,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     WS: await workspaceSections(ws, readWs),
     pinned: new Map(),
     forge: loaded,
+    markedBase: false,
   };
   // F9 (§6.5): a source rejected for a secret or skipped is never decided. Its base stays in the Forge-wide scan (b),
   // and its text leaves the literal check (c). `ruleNames` fills only as rules are decided, so each set errs on its
@@ -400,6 +400,9 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     repos: [],
   };
   await writeProfile(stage, forge, opts.profileName, profile, ctx, report);
+  report.manifestWrite = await stageManifest(stage, forge, report.sections.length > 0 || ctx.markedBase);
+  // Listed first, where it was when the manifest was staged at the start of the run.
+  if (report.manifestWrite === "created") report.created.unshift(FORGE_MANIFEST);
   const config = opts.writeWorkspaceConfig ? await planConfig(ws, forge, opts.profileName, targets) : null;
   report.configWrite = config?.action ?? null;
   return { report, targets, config };
@@ -914,6 +917,46 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
   for (const x of report.sections) {
     report.warnings.push(`profile ${name} now sets section ${x.name} of ${x.key} — every workspace on ${name} renders it at its next sync; import cannot reach them`);
   }
+}
+
+/**
+ * `craftar.forge.yaml` (spec 11 §6.14, Rulings 7 and 22). A run that writes a section value, or
+ * decides a source against a base holding a marker, leaves a Forge an older CLI must refuse, so it
+ * needs `schema: 2`. A missing manifest is staged with the schema the run needs — with `1`, today's
+ * bytes. An existing `schema: 1` (or none) is bumped in place through the round-trip gate, checked
+ * before the flush like the profile and the recipes; I13 when it cannot be. Nothing lowers a schema.
+ */
+async function stageManifest(stage: ForgeStage, forge: string, needs: boolean): Promise<ImportReport["manifestWrite"]> {
+  const abs = path.join(forge, FORGE_MANIFEST);
+  if (!(await stage.exists(abs))) {
+    const schema = needs ? FORGE_SCHEMA_SECTIONS : 1;
+    stage.write(abs, YAML.stringify({ name: path.basename(forge), schema, description: "Craftar Forge — shared harness ingredients, recipes and client profiles." }));
+    return "created";
+  }
+  if (!needs) return "unchanged";
+  const i13 = (why: string) => new Error(`import: cannot edit ${FORGE_MANIFEST} in place (${why}) — set schema: ${FORGE_SCHEMA_SECTIONS} by hand, commit, and re-run`);
+  const raw = await stage.readText(abs);
+  let before: unknown;
+  try {
+    before = YAML.parse(stripBom(raw));
+  } catch (e) {
+    throw i13(`it does not parse: ${(e as Error).message}`);
+  }
+  // Unreachable while forgeBefore loads the manifest through its schema first (I5); kept so the edit never assumes it.
+  if (before === null || typeof before !== "object" || Array.isArray(before)) throw i13("it is not a YAML mapping");
+  if ((before as { schema?: unknown }).schema === FORGE_SCHEMA_SECTIONS) return "unchanged";
+  let content: string;
+  try {
+    content = editYamlText(raw, { command: "import", label: FORGE_MANIFEST, keys: ["schema"] }, (doc) => doc.set("schema", FORGE_SCHEMA_SECTIONS));
+  } catch (e) {
+    throw i13((e as Error).message.replace(/^.*in place \((.*)\) — .*$/s, "$1"));
+  }
+  const after = YAML.parse(stripBom(content));
+  if (!ForgeManifestSchema.safeParse(after).success || !isDeepStrictEqual(after, { ...before, schema: FORGE_SCHEMA_SECTIONS })) {
+    throw i13(`the edit does not read back as the original with exactly schema: ${FORGE_SCHEMA_SECTIONS}`);
+  }
+  stage.write(abs, content);
+  return "edited";
 }
 
 /**
