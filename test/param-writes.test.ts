@@ -123,3 +123,46 @@ describe("checkParamWrites — Forge-level refusals (spec 09 §6.3)", () => {
     expect(await err(check(alias, [ext("k", "globex-api", "acme-api")]))).toContain("params is an alias");
   });
 });
+
+describe("checkParamWrites — section values cite keys too (spec 11 §6.11)", () => {
+  it("P14: another profile's section value for the base's key cites the undeclared key — the default would start rendering it", async () => {
+    const forge = await forgeOf(
+      spec({
+        profiles: [
+          profile("acme", ["base--acme"]),
+          profile("globex", ["base"], ["claude-code"], { sections: { "rule/deploy": { flavors: "| `{{k}}` | backend |\n" } } }),
+        ],
+      }),
+    );
+    expect(await err(check(forge, [ext("k", "globex-api", "acme-api")]))).toContain("unify: profile globex section flavors of rule/deploy already uses {{k}}");
+  });
+
+  it("P14 stays quiet when the key is already declared: the value already renders its default", async () => {
+    const forge = await forgeOf(
+      spec({ profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"], ["claude-code"], { sections: { "rule/deploy": { flavors: "{{k}}\n" } } })] }),
+      { "ingredients/rules/deploy/ingredient.yaml": "type: rule\nname: deploy\nparams:\n  k:\n    default: globex-api\n" },
+    );
+    expect(await err(check(forge, [ext("k", "globex-api", "acme-api")]))).toBe("no error");
+  });
+
+  it("P18: the profile's section value for another ingredient cites the key — its text would change", async () => {
+    const forge = await forgeOf(
+      spec({
+        ingredients: [rule("notes", "Notes.\n")],
+        recipes: [recipe("base", ["rule/deploy"]), recipe("base--acme", ["rule/deploy--acme", "rule/notes"])],
+        profiles: [profile("acme", ["base--acme"], ["claude-code"], { sections: { "rule/notes": { extra: "see {{k}}\n" } } }), profile("globex", ["base"])],
+      }),
+    );
+    expect(await err(check(forge, [ext("k", "globex-api", "acme-api")]))).toContain("unify: profile acme section extra of rule/notes also uses {{k}} — its text would change");
+  });
+
+  it("P18 reads only the unifying profile's values: another profile citing the key elsewhere is not its business", async () => {
+    const forge = await forgeOf(
+      spec({
+        ingredients: [rule("notes", "Notes.\n")],
+        profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"], ["claude-code"], { sections: { "rule/notes": { extra: "see {{k}}\n" } } })],
+      }),
+    );
+    expect(await err(check(forge, [ext("k", "globex-api", "acme-api")]))).toBe("no error");
+  });
+});

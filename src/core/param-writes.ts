@@ -5,7 +5,7 @@ import YAML from "yaml";
 import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema } from "../schema/index.js";
 import { placeholders, substitutedFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, type Forge, type LoadedIngredient } from "./forge.js";
-import { resolve } from "./resolve.js";
+import { resolve, sectionKey } from "./resolve.js";
 import { stripBom } from "./text.js";
 import { editYamlText } from "./yaml-edit.js";
 import type { WriteJournal } from "./unify.js";
@@ -69,6 +69,17 @@ async function cites(ing: LoadedIngredient, key: string): Promise<boolean> {
   return false;
 }
 
+/**
+ * Spec 11 §6.11: a section value can cite `{{key}}` (sections expand before params), so a scan over
+ * ingredient files alone can miss a citation. The first section value of `profile` for `ingKey` that
+ * cites `key`, as `section <name> of <ingKey>`, or null.
+ */
+function citingSection(profile: { sections: Record<string, Record<string, string>> }, ingKey: string, key: string): string | null {
+  const values = Object.hasOwn(profile.sections, ingKey) ? profile.sections[ingKey] : {};
+  for (const [name, v] of Object.entries(values)) if (placeholders(v).includes(key)) return `section ${name} of ${ingKey}`;
+  return null;
+}
+
 const same = (a: unknown, b: string) => a !== undefined && String(a) === b;
 
 /** The spec 09 edit of one Forge file, through the shared in-place YAML editor. */
@@ -105,6 +116,11 @@ export async function checkParamWrites(
     if (!decl) declare.push(e);
     // P14: an undeclared {{key}} already in the base, or any in the variant, would start resolving.
     if (!decl && (await cites(base, e.key))) throw new Error(`unify: ${base.ref} already uses {{${e.key}}}`);
+    // …and so would one in any profile's section value for the base's key: the default reaches every profile (spec 11 §6.11).
+    for (const [q, p] of decl ? [] : forge.profiles) {
+      const where = citingSection(p, sectionKey(base.meta), e.key);
+      if (where) throw new Error(`unify: profile ${q} ${where} already uses {{${e.key}}}`);
+    }
     if (await cites(variant, e.key)) throw new Error(`unify: ${variant.ref} already uses {{${e.key}}}`);
     // P15, P16: a stronger layer that sets the key would override the base's default. Not for a
     // reused key: the base already renders {{key}} through every layer, so nothing it sees moves.
@@ -131,6 +147,13 @@ export async function checkParamWrites(
     for (const ing of forge.ingredients.values()) {
       if (ing.ref === base.ref || ing.ref === variant.ref) continue;
       if (await cites(ing, e.key)) throw new Error(`unify: ${ing.ref} also uses {{${e.key}}} under profile ${profile} — its text would change`);
+    }
+    // …and so would the profile's own section values (spec 11 §6.11). Every key a Forge ingredient
+    // has, the base's included: a value of this profile for the base that cites the key renders
+    // literally today and would start rendering the new value (conservative, toward a refusal).
+    for (const k of new Set([...forge.ingredients.values()].map((i) => sectionKey(i.meta)))) {
+      const where = citingSection(current, k, e.key);
+      if (where) throw new Error(`unify: profile ${profile} ${where} also uses {{${e.key}}} — its text would change`);
     }
     assign.push(e);
   }
