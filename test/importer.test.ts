@@ -1283,3 +1283,93 @@ describe("section-aware import — the manifest's schema (spec 11 §6.14, Ruling
     expect(await snapshot(t.forge)).toEqual(before);
   });
 });
+
+describe("the variant's slot (spec 11 §6.15, Rulings 9 and 23)", () => {
+  const RP_ACME = "# Review posture\n\n| acme-api |\n";
+  const RP_GLOBEX = "# Review posture\n\n| globex-api |\n| globex-desktop |\n";
+  const SHARED = "# Shared\n\nAlways.\n";
+
+  /**
+   * acme, then globex (whose review-posture differs → rule/review-posture--globex in base--globex),
+   * with `agents-md` added to globex's targets; globex's workspace synced. Returns a sync helper.
+   */
+  async function variantScenario(t: Awaited<ReturnType<typeof setup>>) {
+    await writeFiles(t.ws("acme"), { ".claude/rules/review-posture.md": RP_ACME, ".claude/rules/shared.md": SHARED });
+    await importInto(t.forge, t.ws("acme"), "acme");
+    await writeFiles(t.ws("globex"), { ".claude/rules/review-posture.md": RP_GLOBEX, ".claude/rules/shared.md": SHARED });
+    const g = await importClaudeCode({ workspaceRoot: t.ws("globex"), forgeRoot: t.forge, profileName: "globex", writeWorkspaceConfig: true });
+    expect(g.variants.map((v) => v.name)).toEqual(["rule/review-posture--globex"]);
+    const prof = path.join(t.forge, "profiles/globex/profile.yaml");
+    await fs.writeFile(prof, (await fs.readFile(prof, "utf8")).replace("targets:\n  - claude-code\n", "targets:\n  - claude-code\n  - agents-md\n"));
+    await fs.writeFile(path.join(t.ws("globex"), "craftar.yaml"), "forge: ../forge\nprofile: globex\n");
+    const sync = async () => {
+      const w = await loadWorkspace(t.ws("globex"));
+      const p = await plan(w);
+      const st = await status(w, p, await readLock(w.root));
+      await apply(w, p, st, {});
+      return st;
+    };
+    const first = await sync();
+    expect(first.find((s) => s.path === "AGENTS.md")?.state).toBe("new");
+    const agents = await fs.readFile(path.join(t.ws("globex"), "AGENTS.md"), "utf8");
+    expect(agents.indexOf("globex-api")).toBeLessThan(agents.indexOf("# Shared"));
+    return { sync, agents, owned: path.join(t.forge, "recipes/base--globex.yaml"), prof };
+  }
+  const states = async (t: Awaited<ReturnType<typeof setup>>) => {
+    const w = await loadWorkspace(t.ws("globex"));
+    return Object.fromEntries((await status(w, await plan(w), await readLock(w.root))).map((s) => [s.path, s.state]));
+  };
+
+  it("the shared recipe orders the base where the variant was: the profile is re-pointed to it, no owned recipe is written, AGENTS.md unchanged", async () => {
+    const t = await setup();
+    const s = await variantScenario(t);
+    // The base evolves to globex's text (as unify --take variant would), so re-importing globex reuses it.
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/review-posture/rule.md"), RP_GLOBEX);
+    const ownedBefore = await fs.readFile(s.owned, "utf8");
+    const r = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(r.reused).toContain("rule/review-posture");
+    expect(r.variants).toEqual([]);
+    expect(r.recipeSplits).toEqual([]);
+    expect(r.recipes).toEqual(["base"]);
+    expect((await yaml(s.prof)).recipes).toEqual(["base"]);
+    expect(await fs.readFile(s.owned, "utf8")).toBe(ownedBefore);
+    const st = await states(t);
+    expect(st["AGENTS.md"]).toBe("unchanged");
+    expect(Object.values(st).every((x) => x === "unchanged")).toBe(true);
+  });
+
+  it("edge case 22: the shared recipe orders the base elsewhere — the owned recipe gets the base in the variant's slot, a comment kept, AGENTS.md unchanged", async () => {
+    const t = await setup();
+    const s = await variantScenario(t);
+    const shared = path.join(t.forge, "recipes/base.yaml");
+    const text = await fs.readFile(shared, "utf8");
+    expect(text).toContain("  - rule/review-posture\n  - rule/shared\n");
+    await fs.writeFile(shared, text.replace("  - rule/review-posture\n  - rule/shared\n", "  - rule/shared\n  - rule/review-posture\n"));
+    const ownedText = await fs.readFile(s.owned, "utf8");
+    expect(ownedText).toContain("  - rule/review-posture--globex\n");
+    await fs.writeFile(s.owned, ownedText.replace("  - rule/review-posture--globex\n", "  # globex's reviewer table\n  - rule/review-posture--globex\n"));
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/review-posture/rule.md"), RP_GLOBEX);
+
+    const r = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(r.recipeSplits).toEqual([{ shared: "base", owned: "base--globex", reason: "base orders its rules differently" }]);
+    const after = await fs.readFile(s.owned, "utf8");
+    expect(after).toBe(ownedText.replace("  - rule/review-posture--globex\n", "  # globex's reviewer table\n  - rule/review-posture\n"));
+    expect(YAML.parse(after).ingredients).toEqual(["rule/review-posture", "rule/shared"]);
+    expect((await states(t))["AGENTS.md"]).toBe("unchanged");
+  });
+
+  it("another profile's variant in the owned recipe is not swapped: it is dropped and the base appended, as before", async () => {
+    const t = await setup();
+    const s = await variantScenario(t);
+    const ownedText = await fs.readFile(s.owned, "utf8");
+    await fs.writeFile(s.owned, ownedText.replace("  - rule/review-posture--globex\n", "  - rule/review-posture--initech\n"));
+    await fs.cp(path.join(t.forge, "ingredients/rules/review-posture--globex"), path.join(t.forge, "ingredients/rules/review-posture--initech"), { recursive: true });
+    const meta = path.join(t.forge, "ingredients/rules/review-posture--initech/ingredient.yaml");
+    await fs.writeFile(meta, (await fs.readFile(meta, "utf8")).replace("name: review-posture--globex", "name: review-posture--initech"));
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/review-posture/rule.md"), RP_GLOBEX);
+
+    const r = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(r.recipeSplits.map((x) => x.reason)).toEqual(["base orders its rules differently"]);
+    expect((await yaml(s.owned)).ingredients).toEqual(["rule/shared", "rule/review-posture"]);
+  });
+});

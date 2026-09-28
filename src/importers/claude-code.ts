@@ -691,6 +691,19 @@ function currentRuleOrder(forge: import("../core/forge.js").Forge | null, profil
   }
 }
 
+/**
+ * `swap(p)` (spec 11 §6.15, Rulings 9 and 23): a variant ref of the importing profile, `T/N--<p>`,
+ * read as its base `T/N` when the run's computed list holds the base and not the variant — the
+ * re-import replaced the variant by its base, which therefore takes the variant's slot. Another
+ * profile's variant is never swapped.
+ */
+function swapRef(ref: string, profile: string, list: string[]): string {
+  const suffix = `--${profile}`;
+  if (!ref.endsWith(suffix)) return ref;
+  const base = ref.slice(0, -suffix.length);
+  return list.includes(base) && !list.includes(ref) ? base : ref;
+}
+
 const recipeText = (name: string, description: string, ingredients: string[]) =>
   YAML.stringify(JSON.parse(JSON.stringify({ name, description, extends: [], ingredients, params: {} }))); // today's bytes
 
@@ -714,7 +727,9 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
   const lacks = existing.find((x) => !list.includes(x));
   const extra = list.find((x) => !existing.includes(x));
   // Q10: an existing profile moves to R only if R orders its rules as the profile resolves them today, so AGENTS.md keeps its order.
-  const reorders = o.currentRules !== null && JSON.stringify(rules(existing)) !== JSON.stringify(o.currentRules.filter((r) => existing.includes(r)));
+  // A variant this run replaced by its base is compared as that base, in its slot (spec 11 §6.15).
+  const current = o.currentRules?.map((r) => swapRef(r, o.profile, list)) ?? null;
+  const reorders = current !== null && JSON.stringify(rules(existing)) !== JSON.stringify(current.filter((r) => existing.includes(r)));
   if (!lacks && !extra && !reorders) {
     o.report.recipes.push(name);
     return name;
@@ -730,9 +745,9 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
 
 /**
  * A recipe the importing profile owns holds exactly this workspace's list: a new one is written
- * as today; an existing one is edited in place — entries kept in their order, dropped ones
- * removed, new ones appended — refused if another profile resolves it (I7) or it cannot be
- * edited in place (I2).
+ * as today; an existing one is edited in place — entries kept in their order, a variant this run
+ * replaced by its base swapped for the base where it stands (spec 11 §6.15), dropped ones removed,
+ * new ones appended — refused if another profile resolves it (I7) or it cannot be edited in place (I2).
  */
 async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], description: string): Promise<string> {
   const file = await recipeFile(o, name);
@@ -743,7 +758,14 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
   }
   const raw = await o.stage.readText(file);
   const before = parseYaml(file, stripBom(raw), RecipeSchema);
-  const next = [...before.ingredients.filter((x) => list.includes(x)), ...list.filter((x) => !before.ingredients.includes(x))];
+  // Each existing entry in order: kept, swapped for its base in place, or dropped; then the rest of the list appended.
+  const inPlace = (x: string): string | null => {
+    if (list.includes(x)) return x;
+    const b = swapRef(x, o.profile, list);
+    return b !== x && !before.ingredients.includes(b) ? b : null;
+  };
+  const kept = before.ingredients.map(inPlace).filter((x): x is string => x !== null);
+  const next = [...kept, ...list.filter((x) => !kept.includes(x))];
   if (JSON.stringify(next) === JSON.stringify(before.ingredients)) return name;
   if (o.forge) {
     for (const q of o.forge.profiles.keys()) {
@@ -757,8 +779,19 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
       doc.set("ingredients", next);
       return;
     }
-    seq.items = seq.items.filter((it) => list.includes(String(YAML.isScalar(it) ? it.value : it)));
-    for (const x of list) if (!before.ingredients.includes(x)) seq.items.push(doc.createNode(x));
+    // The scalar node is replaced where it stands (unify's replaceSeqEntry), so a comment on it stays.
+    seq.items = seq.items.flatMap((it) => {
+      const v = String(YAML.isScalar(it) ? it.value : it);
+      const to = inPlace(v);
+      if (to === null) return [];
+      if (to === v) return [it];
+      if (YAML.isScalar(it)) {
+        it.value = to;
+        return [it];
+      }
+      return [doc.createNode(to)];
+    });
+    for (const x of next.slice(kept.length)) seq.items.push(doc.createNode(x));
   });
   const after = RecipeSchema.safeParse(YAML.parse(stripBom(content)) ?? {});
   if (!after.success || !isDeepStrictEqual(after.data, { ...before, ingredients: next })) {
