@@ -2,7 +2,7 @@
 
 Craft, sync and convert AI-coding workspace harnesses — rules, agents, commands, skills, MCP servers — across every client workspace you maintain and every AI coder each team uses.
 
-> Status: **phase 0 prototype**. `import`, `sync`, `status`, `diff`, `explain`, `ls` work end-to-end for the `claude-code` and `kiro` targets and are validated byte-for-byte against a real workspace (see *Oracle*). The Forge commands `forge variants`, `forge diff` (with a suggested class per hunk) and `forge unify` (`--take base|variant`, and `take: param` to turn a value into a `{{key}}` parameter) work too, and `import` is template-aware: re-importing a workspace reuses a base that renders to it and edits Forge YAML in place. Everything else in the spec (profiles with IDP/PM-tool integrations, local services, templates, `craftar ui`, `craftar mcp`) is not built yet.
+> Status: **phase 0 prototype**. `import`, `sync`, `status`, `diff`, `explain`, `ls` work end-to-end for the `claude-code` and `kiro` targets and are validated byte-for-byte against a real workspace (see *Oracle*). The Forge commands `forge variants`, `forge diff` (with a suggested class per hunk) and `forge unify` (`--take base|variant`, and `take: param` to turn a value into a `{{key}}` parameter) also work, covered by the unit and golden suites rather than the oracle, and `import` is render-aware: importing into an existing Forge reuses a base whose render equals the workspace file, and edits an existing profile and the recipes it owns in place. Everything else in the spec (profiles with IDP/PM-tool integrations, local services, `dotnet new` project templates, `craftar ui`, `craftar mcp`) is not built yet.
 
 ## The idea in one paragraph
 
