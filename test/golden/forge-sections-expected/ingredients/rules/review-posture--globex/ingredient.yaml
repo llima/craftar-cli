@@ -1,0 +1,10 @@
+type: rule
+name: review-posture--globex
+inclusion: always
+file: rule.md
+targets: "*"
+tags: []
+origin:
+  workspace: globex
+  path: .claude/rules/review-posture.md
+as: review-posture

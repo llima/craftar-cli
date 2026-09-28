@@ -1,0 +1,7 @@
+name: base--globex
+description: Always-on conventions, commands, agents, scripts and MCP servers.
+extends: []
+ingredients:
+  - rule/review-posture--globex
+  - rule/shared
+params: {}

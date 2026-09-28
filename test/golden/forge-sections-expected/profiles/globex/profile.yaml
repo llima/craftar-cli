@@ -1,0 +1,25 @@
+name: globex
+description: Imported from globex on 2026-09-28.
+recipes:
+  - base
+targets:
+  - claude-code
+  - kiro
+  - agents-md
+language: {}
+identity: {}
+scm: {}
+naming: {}
+frontend: {}
+executor: {}
+integrations: {}
+params: {}
+repos: []
+sections:
+  rule/review-posture:
+    flavors: |
+      | Repo | Reviewer |
+      |---|---|
+      | `globex-api` | backend-reviewer |
+      | `globex-web` | frontend-reviewer |
+      | `globex-desktop` | desktop-reviewer |
