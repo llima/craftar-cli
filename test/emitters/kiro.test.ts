@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkspace, plan, type Plan } from "../../src/core/sync.js";
 import { hasBom } from "../../src/core/text.js";
-import { profile, recipe, rule, scenario, type IngredientSpec } from "../helpers/forge.js";
+import { profile, recipe, rule, scenario, writeFiles, type IngredientSpec } from "../helpers/forge.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -107,5 +107,37 @@ describe("kiro emitter", () => {
     ]);
     expect(p.warnings).toContain('kiro: two ingredients write the MCP server "srv" into .kiro/settings/mcp.json: mcp/srv and mcp/srv--acme (last wins)');
     expect(JSON.parse(file(p, ".kiro/settings/mcp.json")!.content.toString("utf8")).mcpServers).toEqual({ srv: { command: "npx", args: ["acme-server"] } });
+  });
+});
+
+describe("kiro emitter — sections (spec 11 §10.2, AC 2)", () => {
+  const SEC = "# T\n<!-- craftar:section s -->\ndefault\n<!-- /craftar:section -->\nsee .claude/rules/r.md\n";
+  it("no output holds a marker: steering, rule steering, agent prompt, command, skill; all CRLF", async () => {
+    const ingredients: IngredientSpec[] = [
+      rule("r", SEC),
+      { meta: { type: "steering", name: "st" }, files: { "steering.md": SEC } },
+      { meta: { type: "agent", name: "a", description: "An agent" }, files: { "agent.md": SEC } },
+      { meta: { type: "command", name: "c", description: "A command" }, files: { "command.md": SEC } },
+      { meta: { type: "skill", name: "fs", layout: "file" }, files: { "SKILL.md": SEC } },
+      { meta: { type: "skill", name: "ds" }, files: { "SKILL.md": SEC } },
+    ];
+    const refs = ingredients.map((i) => `${i.meta.type}/${i.meta.name}`);
+    const s = await scenario(
+      { ingredients, recipes: [recipe("base", refs)], profiles: [profile("acme", ["base"], ["kiro"], { sections: Object.fromEntries(refs.map((r) => [r, { s: "value" }])) })] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await writeFiles(s.forgeRoot, { "craftar.forge.yaml": "name: test-forge\nschema: 2\n" });
+    const p = await plan(await loadWorkspace(s.wsRoot));
+    const paths = [".kiro/steering/r.md", ".kiro/steering/st.md", ".kiro/agents/a.json", ".kiro/steering/commands/c.md", ".kiro/skills/fs/SKILL.md", ".kiro/skills/ds/SKILL.md"];
+    for (const rel of paths) {
+      const f = file(p, rel)!;
+      const t = f.content.toString("utf8");
+      expect(t, rel).not.toContain("craftar:section");
+      expect(t, rel).not.toMatch(/(?<!\r)\n/);
+      expect(hasBom(f.content), rel).toBe(false);
+    }
+    expect(file(p, ".kiro/steering/r.md")!.content.toString("utf8")).toContain("# T\r\nvalue\r\nsee .kiro/steering/r.md\r\n");
+    expect(JSON.parse(file(p, ".kiro/agents/a.json")!.content.toString("utf8")).prompt).toBe("# T\nvalue\nsee .kiro/steering/r.md");
   });
 });

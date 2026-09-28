@@ -1,5 +1,7 @@
 import type { Forge, LoadedIngredient } from "./forge.js";
-import type { IngredientRef, Profile, Target, WorkspaceConfig } from "../schema/index.js";
+import type { IngredientRef, Profile, Sections, Target, WorkspaceConfig } from "../schema/index.js";
+import { deepMerge } from "./merge.js";
+import { outName } from "../emitters/shared.js";
 
 export interface ResolvedIngredient extends LoadedIngredient {
   /** Recipe chain that brought this ingredient in (last one wins). */
@@ -11,6 +13,10 @@ export interface Resolution {
   recipes: string[]; // in application order
   targets: Target[];
   params: Record<string, unknown>;
+  /** Section values by `<type>/<outName>`, then name: the profile's deep-merged under the workspace's (spec 11 §6.3). */
+  sections: Sections;
+  /** The two layers `sections` was merged from, kept so `plan()` can name the one that set a value. */
+  sectionLayers: { profile: Sections; workspace: Sections };
   ingredients: ResolvedIngredient[];
   disabled: IngredientRef[];
   warnings: string[];
@@ -59,6 +65,10 @@ export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
   }
   Object.assign(params, profile.params, ws.overrides.params);
 
+  // Sections: body default → profile → workspace (craftar.yaml under craftar.local.yaml, merged by
+  // loadWorkspace). Deep, so a workspace setting one section of a key keeps the profile's others (P4).
+  const sections: Sections = deepMerge(profile.sections, ws.overrides.sections);
+
   // Ingredients
   const disabled = ws.overrides.ingredients.disable as IngredientRef[];
   const picked = new Map<IngredientRef, ResolvedIngredient>();
@@ -77,7 +87,28 @@ export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
   for (const d of disabled) picked.delete(d);
 
   const targets = [...new Set(ws.targets ?? profile.targets)] as Target[];
-  return { profile, recipes: order, targets, params, ingredients: [...picked.values()], disabled, warnings };
+  return {
+    profile,
+    recipes: order,
+    targets,
+    params,
+    sections,
+    sectionLayers: { profile: profile.sections, workspace: ws.overrides.sections },
+    ingredients: [...picked.values()],
+    disabled,
+    warnings,
+  };
+}
+
+/** The key an ingredient's section values live under: `<type>/<outName>`, shared by a base and its variants (spec 11 §3, §6.3). */
+export function sectionKey(meta: { type: string; name: string; as?: string }): string {
+  return `${meta.type}/${outName(meta)}`;
+}
+
+/** The section values that apply to one ingredient's files for this workspace (spec 11 §6.3). */
+export function sectionsFor(ing: LoadedIngredient, resolution: Resolution): Record<string, string> {
+  const key = sectionKey(ing.meta);
+  return Object.hasOwn(resolution.sections, key) ? resolution.sections[key] : {};
 }
 
 /**

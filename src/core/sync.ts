@@ -1,12 +1,14 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { loadForge, exists, type Forge } from "./forge.js";
-import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFor } from "./resolve.js";
+import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
+import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
 import { deepMerge } from "./merge.js";
+import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
+import { placeholders, substitutedFile } from "./extract.js";
 import { LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Target, type WorkspaceConfig } from "../schema/index.js";
-import { claudeCode } from "../emitters/claude-code.js";
+import { claudeCode, TEXT_EXT } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
 import { agentsMd } from "../emitters/agents-md.js";
 import type { Emitter, PlannedFile } from "../emitters/types.js";
@@ -32,8 +34,12 @@ export async function loadWorkspace(root: string): Promise<Workspace> {
     );
   const base = YAML.parse(await fs.readFile(file, "utf8")) ?? {};
   const localFile = path.join(root, LOCAL_FILE);
-  const local = (await exists(localFile)) ? YAML.parse(await fs.readFile(localFile, "utf8")) ?? {} : {};
-  const config = WorkspaceConfigSchema.parse(deepMerge(base, local));
+  const hasLocal = await exists(localFile);
+  const local = hasLocal ? YAML.parse(await fs.readFile(localFile, "utf8")) ?? {} : {};
+  const parsed = WorkspaceConfigSchema.safeParse(deepMerge(base, local));
+  // Named, as a Forge file is: a wrong-shape `overrides.sections` key fails here (spec 11 §5.2).
+  if (!parsed.success) throw new Error(`invalid ${WORKSPACE_FILE}${hasLocal ? ` (merged with ${LOCAL_FILE})` : ""}: ${parsed.error.message}`);
+  const config = parsed.data;
   const forgeRoot = /^[a-z]+:\/\/|^git@/.test(config.forge) ? config.forge : path.resolve(root, config.forge);
   if (!(await exists(forgeRoot))) throw new Error(`Forge not found at ${forgeRoot} (remote Forges are not supported yet — clone it and point \`forge:\` at the path)`);
   return { root, config, forge: await loadForge(forgeRoot) };
@@ -57,10 +63,118 @@ export async function resolveForge(opts: { forge?: string; workspace?: string })
   return (await loadWorkspace(root)).forge;
 }
 
+export type SectionLayer = "default" | "profile" | "workspace";
+
 export interface Plan {
   resolution: Resolution;
   files: PlannedFile[];
   warnings: string[];
+  /** Per ingredient ref, each section it declares, with the layer that filled it (spec 11 §5.3, for `explain`). */
+  sections: Map<string, Array<{ file: string; name: string; layer: SectionLayer }>>;
+}
+
+/** A path as the Forge names it: relative to its root, POSIX separators. */
+function forgeRel(forge: Forge, abs: string): string {
+  return path.relative(forge.root, abs).split(path.sep).join("/");
+}
+
+/** `profile <p>` or `the workspace`: the strongest layer that sets section `name` of `key` (Ruling 15). */
+function layerOf(resolution: Resolution, key: string, name: string): SectionLayer {
+  const has = (m: Record<string, Record<string, string>>) => Object.hasOwn(m, key) && Object.hasOwn(m[key], name);
+  if (has(resolution.sectionLayers.workspace)) return "workspace";
+  if (has(resolution.sectionLayers.profile)) return "profile";
+  return "default";
+}
+
+function layerLabel(resolution: Resolution, layer: SectionLayer): string {
+  return layer === "workspace" ? "the workspace" : `profile ${resolution.profile.name}`;
+}
+
+/**
+ * The section pass of `plan()` (spec 11 §6.6 steps 1–5): parse every admitted file of every resolved
+ * ingredient (a malformed marker throws, whichever targets resolve), warn on marker lines in files
+ * not every target renders, fail a `schema: 1` Forge that holds a marker (Ruling 7/21), and warn on
+ * section values that apply to nothing.
+ */
+async function sectionPass(forge: Forge, resolution: Resolution, warnings: string[]) {
+  const parsed = new Map<string, ParsedSections>(); // abs path → parse
+  const declared = new Map<string, Set<string>>(); // section key → names declared by resolved ingredients
+  const byRef: Plan["sections"] = new Map();
+  let firstMarker: string | null = null;
+  for (const ing of resolution.ingredients) {
+    const key = sectionKey(ing.meta);
+    const names = declared.get(key) ?? new Set<string>();
+    declared.set(key, names);
+    if (ing.meta.type === "mcp") continue; // no file, so no marker: a value keyed mcp/<name> is warned below
+    const files: Array<{ rel: string; p: ParsedSections }> = [];
+    for (const rel of await listFiles(ing.dir)) {
+      if (rel === "ingredient.yaml") continue;
+      const abs = path.join(ing.dir, rel);
+      if (substitutedFile(ing.meta, rel)) {
+        const p = parseSections(await fs.readFile(abs, "utf8"), forgeRel(forge, abs), ing.ref);
+        parsed.set(abs, p);
+        files.push({ rel, p });
+        if (p.sections.length && firstMarker === null) firstMarker = `${p.file}:${p.sections[0].line}`;
+      } else if (TEXT_EXT.test(rel)) {
+        const text = toLf(stripBom(await fs.readFile(abs, "utf8")));
+        if (text.split("\n").some((l) => markerLine(l) !== null)) {
+          warnings.push(`${ing.ref} ${rel}: section markers are read only in files every target renders as text — copied with them`);
+        }
+      }
+    }
+    checkDeclaredOnce(ing.ref, files.map((f) => f.p));
+    const list: Array<{ file: string; name: string; layer: SectionLayer }> = [];
+    for (const { rel, p } of files) {
+      for (const s of p.sections) {
+        names.add(s.name);
+        list.push({ file: rel, name: s.name, layer: layerOf(resolution, key, s.name) });
+      }
+    }
+    if (list.length) byRef.set(ing.ref, list);
+  }
+
+  // The schema gate (Ruling 7, §6.14): only the bodies this workspace resolves, after every parse error.
+  if (firstMarker !== null && forge.manifest.schema === 1) {
+    throw new Error(
+      `${FORGE_MANIFEST} declares schema: 1, but ${firstMarker} holds a section marker — set schema: 2 in ${FORGE_MANIFEST}, ` +
+        `so that craftar 0.6.2 and older refuse this Forge instead of emitting the markers`,
+    );
+  }
+
+  // Values that apply to nothing (Ruling 12): an unknown key always; an unknown name only on a resolved key.
+  const forgeKeys = new Set([...forge.ingredients.values()].map((i) => sectionKey(i.meta)));
+  const said = new Set<string>();
+  const say = (w: string) => {
+    if (!said.has(w)) warnings.push(w);
+    said.add(w);
+  };
+  for (const [key, values] of Object.entries(resolution.sections)) {
+    for (const name of Object.keys(values)) {
+      const layer = layerLabel(resolution, layerOf(resolution, key, name));
+      if (!forgeKeys.has(key)) say(`section key ${key} in ${layer} names no ingredient in the Forge`);
+      else if (declared.has(key) && !declared.get(key)!.has(name)) say(`${layer} sets section ${name} of ${key}, which has no such marker`);
+    }
+  }
+  return { parsed, byRef };
+}
+
+/**
+ * The output guard (spec 11 §6.6 step 6, Ruling 19): a rendered admitted file never holds a marker
+ * line. When one does, it came from a value; name the first value that carries one.
+ */
+function guardOutput(ing: ResolvedIngredient, file: string, out: string, p: ParsedSections, resolution: Resolution, params: Record<string, unknown>): void {
+  const line = firstMarkerLine(out);
+  if (line === null) return;
+  const key = sectionKey(ing.meta);
+  const values = sectionsFor(ing, resolution);
+  let from = "a section or param value";
+  const section = p.sections.find((s) => Object.hasOwn(values, s.name) && firstMarkerLine(substitute(canonicalValue(values[s.name]), params)) !== null);
+  if (section) from = `${layerLabel(resolution, layerOf(resolution, key, section.name))}, section ${section.name}`;
+  else {
+    const k = placeholders(expandSections(p, values)).find((x) => Object.hasOwn(params, x) && /<!--[ \t]*\/?[ \t]*craftar:section/.test(String(params[x])));
+    if (k !== undefined) from = `param ${k}`;
+  }
+  throw new Error(`${ing.ref} ${file}: the rendered text holds a section marker on line ${line} (from ${from}) — a value cannot open or close a section`);
 }
 
 export async function plan(ws: Workspace): Promise<Plan> {
@@ -71,6 +185,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
       "no targets resolved — nothing will be emitted and every file in craftar.lock becomes an orphan (an empty list in craftar.local.yaml replaces the workspace's)",
     );
   }
+  const sections = await sectionPass(ws.forge, resolution, warnings);
   /** Unresolved placeholder → refs of the ingredients citing it. */
   const missingParams = new Map<string, Set<string>>();
   const ctx = {
@@ -85,9 +200,15 @@ export async function plan(ws: Workspace): Promise<Plan> {
       }
     },
     async text(ing: ResolvedIngredient, file: string) {
-      const raw = await fs.readFile(path.join(ing.dir, file), "utf8");
+      const abs = path.join(ing.dir, file);
+      const raw = await fs.readFile(abs, "utf8");
       const missing = new Set<string>();
-      const out = substitute(toLf(stripBom(raw)), paramsFor(ing, resolution), missing);
+      const params = paramsFor(ing, resolution);
+      // Sections first, then params (spec 11 §6.4), in admitted files only (§6.5).
+      const parsed = substitutedFile(ing.meta, file) ? (sections.parsed.get(abs) ?? parseSections(raw, forgeRel(ws.forge, abs), ing.ref)) : null;
+      const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution)) : toLf(stripBom(raw));
+      const out = substitute(expanded, params, missing);
+      if (parsed) guardOutput(ing, file, out, parsed, resolution, params);
       for (const key of missing) missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ing.ref));
       return out;
     },
@@ -117,7 +238,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
     if (prev) warnings.push(`two ingredients write ${f.path}: ${prev} and ${f.ingredient} (last wins)`);
     seen.set(f.path, f.ingredient);
   }
-  return { resolution, files: dedupeLastWins(files), warnings };
+  return { resolution, files: dedupeLastWins(files), warnings, sections: sections.byRef };
 }
 
 function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {
