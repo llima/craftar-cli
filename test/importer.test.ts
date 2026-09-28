@@ -1338,6 +1338,18 @@ describe("the variant's slot (spec 11 §6.15, Rulings 9 and 23)", () => {
     expect(Object.values(st).every((x) => x === "unchanged")).toBe(true);
   });
 
+  it("a re-point edits only recipes: an untouched params: {} keeps its line (the user's ruling of 2026-09-28)", async () => {
+    const t = await setup();
+    const s = await variantScenario(t);
+    const before = await fs.readFile(s.prof, "utf8");
+    expect(before).toContain("\nparams: {}\n");
+    expect(before).toContain("recipes:\n  - base--globex\n");
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/review-posture/rule.md"), RP_GLOBEX);
+    const r = await importInto(t.forge, t.ws("globex"), "globex");
+    expect(r.profileWrite).toEqual({ path: "profiles/globex/profile.yaml", action: "edited", fields: ["recipes"] });
+    expect(await fs.readFile(s.prof, "utf8")).toBe(before.replace("recipes:\n  - base--globex\n", "recipes:\n  - base\n"));
+  });
+
   it("edge case 22: the shared recipe orders the base elsewhere — the owned recipe gets the base in the variant's slot, a comment kept, AGENTS.md unchanged", async () => {
     const t = await setup();
     const s = await variantScenario(t);

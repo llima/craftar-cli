@@ -22,7 +22,10 @@ export interface YamlEditOptions {
   command: string;
   /** The file as the message names it, Forge- or workspace-relative. */
   label: string;
-  /** Top-level keys the edit touches: an alias there is refused, an empty flow map becomes a block map. */
+  /**
+   * Top-level keys the edit may touch: an alias there is refused, and an empty flow collection
+   * (`{}` / `[]`) the edit fills becomes block form. One the edit leaves empty keeps its bytes.
+   */
   keys: string[];
 }
 
@@ -35,11 +38,14 @@ export function editYamlText(raw: string, o: YamlEditOptions, edit: (doc: YAML.D
   const text = toLf(stripBom(raw));
   const width = doc.errors.length ? undefined : WIDTHS.find((w) => doc.toString(w) === text);
   if (!width) throw refuse("it does not round-trip unchanged through the YAML writer");
+  const emptyFlow: Array<[string, YAML.YAMLMap | YAML.YAMLSeq]> = [];
   for (const key of o.keys) {
     const node = doc.get(key, true);
     if (YAML.isAlias(node)) throw refuse(`${key} is an alias`, "expand it by hand, commit, and re-run");
-    if ((YAML.isMap(node) || YAML.isSeq(node)) && node.flow && node.items.length === 0) node.flow = false;
+    if ((YAML.isMap(node) || YAML.isSeq(node)) && node.flow && node.items.length === 0) emptyFlow.push([key, node]);
   }
   edit(doc);
+  // Only a collection the edit filled changes form; an untouched `params: {}` stays on its line.
+  for (const [key, node] of emptyFlow) if (doc.get(key, true) === node && node.items.length > 0) node.flow = false;
   return (bom ? BOM : "") + withEol(doc.toString(width), eol);
 }
