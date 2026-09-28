@@ -1197,7 +1197,7 @@ describe("cli — forge unify acceptance criterion 2", () => {
     expect(out.removed).toEqual([]);
     expect(out.variantRemoved).toBeNull();
     expect(await snapshot(root)).toEqual(before);
-    expect(execFileSync("git", ["-C", root, "status", "--porcelain"], { encoding: "utf8" })).toBe("");
+    expect(gitStatus(root)).toBe("");
   });
 });
 
@@ -1778,5 +1778,99 @@ describe("cli — import prints how a templated base was reused (spec 10 §4.2)"
     expect(count('param deploy.api: (unset) → "initech-api"')).toBe(1);
     expect(count("profile profiles/b/profile.yaml created")).toBe(1);
     expect(count("recipes: base--b (this workspace has rule/z, which base lacks)")).toBe(1);
+  });
+});
+
+describe("cli — sections (spec 11 §4.2, §4.3)", () => {
+  const RP = (table: string) => `# Review posture\n\nDispatch reviewers after every commit.\n\n${table}\nNever edit what a reviewer reads.\n`;
+  const ACME = "| Repo | Reviewer |\n|---|---|\n| `acme-api` | backend-reviewer |\n";
+  const GLOBEX = "| Repo | Reviewer |\n|---|---|\n| `globex-api` | backend-reviewer |\n| `globex-web` | frontend-reviewer |\n| `globex-desktop` | desktop-reviewer |\n";
+  const MARKED = (table: string) => RP(`<!-- craftar:section flavors -->\n${table}<!-- /craftar:section -->\n`);
+
+  it("explain prints the sections line once, with each layer, and none for AGENTS.md (AC 10)", async () => {
+    const body = "# R\n\n<!-- craftar:section flavors -->\nshared\n<!-- /craftar:section -->\n<!-- craftar:section extra -->\nmore\n<!-- /craftar:section -->\n<!-- craftar:section note -->\nn\n<!-- /craftar:section -->\n";
+    const s = await scenario(
+      {
+        ingredients: [rule("review-posture", body, { inclusion: "always" })],
+        recipes: [recipe("base", ["rule/review-posture"])],
+        profiles: [profile("globex", ["base"], ["claude-code", "agents-md"], { sections: { "rule/review-posture": { flavors: "globex\n" } } })],
+      },
+      { config: { profile: "globex", overrides: { sections: { "rule/review-posture": { note: "" } } } } },
+    );
+    cleanups.push(s.cleanup);
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), "name: test-forge\nschema: 2\n");
+    const r = runCli(["explain", ".claude/rules/review-posture.md", "--workspace", s.wsRoot]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split("  sections    flavors (profile globex), extra (default), note (workspace)\n").length - 1).toBe(1);
+    expect(r.stdout.indexOf("via recipes")).toBeLessThan(r.stdout.indexOf("sections"));
+    expect(r.stdout.indexOf("sections")).toBeLessThan(r.stdout.indexOf("profile     globex"));
+    const agents = runCli(["explain", "AGENTS.md", "--workspace", s.wsRoot]);
+    expect(agents.code, agents.stderr).toBe(0);
+    expect(agents.stdout).not.toContain("sections");
+  });
+
+  it("explain prints no sections line for an ingredient without markers", async () => {
+    const s = await scenario(
+      { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const r = runCli(["explain", ".claude/rules/a.md", "--workspace", s.wsRoot]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).not.toContain("sections");
+  });
+
+  it("import prints the forge, sectioned, section, profile and recipes lines once each, and rendered with its sections", async () => {
+    const root = await tmpDir("craftar-cli-import-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const imp = (p: string) => runCli(["import", "--from", "claude-code", "--forge", forge, "--profile", p, "--workspace", path.join(root, p)]);
+    await writeFiles(path.join(root, "acme"), { ".claude/rules/review-posture.md": RP(ACME) });
+    await writeFiles(path.join(root, "globex"), { ".claude/rules/review-posture.md": RP(GLOBEX) });
+    expect(imp("acme").code).toBe(0);
+    expect(imp("globex").stdout).toContain("variant rule/review-posture--globex");
+    await fs.writeFile(path.join(forge, "ingredients/rules/review-posture/rule.md"), MARKED(ACME));
+
+    const a = imp("acme");
+    expect(a.code, a.stderr).toBe(0);
+    const count = (out: string, needle: string) => out.split(needle).length - 1;
+    expect(count(a.stdout, "forge craftar.forge.yaml edited (schema: 2)\n")).toBe(1);
+
+    const g = imp("globex");
+    expect(g.code, g.stderr).toBe(0);
+    expect(count(g.stdout, "0 created, 1 reused, 0 variants, 0 rejected")).toBe(1);
+    expect(count(g.stdout, "sectioned rule/review-posture — flavors\n")).toBe(1);
+    expect(count(g.stdout, "section rule/review-posture flavors: (default) → 5 lines\n")).toBe(1);
+    expect(count(g.stdout, "profile profiles/globex/profile.yaml edited (sections, recipes)\n")).toBe(1);
+    expect(count(g.stdout, "recipes: base\n")).toBe(1);
+    expect(count(g.stdout, "warn profile globex now sets section flavors of rule/review-posture — every workspace on globex renders it at its next sync; import cannot reach them")).toBe(1);
+    expect(g.stdout).not.toContain("forge craftar.forge.yaml edited");
+    expect(g.stdout).not.toContain("globex-desktop");
+
+    const again = imp("globex");
+    expect(again.code, again.stderr).toBe(0);
+    expect(count(again.stdout, "rendered rule/review-posture — sections flavors\n")).toBe(1);
+    expect(again.stdout).not.toContain("sectioned");
+    expect(again.stdout).not.toContain("section rule/review-posture flavors:");
+  });
+
+  it("forge unify prints U1 and exits 1 with the Forge untouched", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [rule("review-posture", MARKED(ACME)), rule("review-posture--globex", RP(GLOBEX), { as: "review-posture" })],
+      recipes: [recipe("base", ["rule/review-posture"]), recipe("base--globex", ["rule/review-posture--globex"])],
+      profiles: [profile("acme", ["base"]), profile("globex", ["base--globex"])],
+    });
+    gitInit(root);
+    gitCommitAll(root, "init");
+    const before = await snapshot(root);
+    const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "globex", "--take", "variant", "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(
+      "error: unify: ingredients/rules/review-posture/rule.md would lose or change section markers (sections flavors would become none) — take base for the marker lines; sections are edited by take: section (0.8.0)",
+    );
+    expect(await snapshot(root)).toEqual(before);
+    expect(gitStatus(root)).toBe("");
   });
 });
