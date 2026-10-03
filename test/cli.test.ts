@@ -1538,7 +1538,7 @@ describe("cli — suggested hunk classes (spec 08)", () => {
       const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--plan", file, "--forge", forgeRoot]);
       expect(r.code, `${name}: ${r.stderr}`).toBe(0);
       const snap = await snapshot(forgeRoot);
-      results[name] = Object.fromEntries(Object.entries(snap).filter(([k]) => !k.startsWith(".git/")));
+      results[name] = snap;
     }
     expect(results.mangled).toEqual(results.edited);
     expect(results.removed).toEqual(results.edited);
