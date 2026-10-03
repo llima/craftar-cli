@@ -405,8 +405,9 @@ export function deriveSections(args: {
       overlaps = prev.to >= curr.to;
     } else {
       // Both empty: [prevFrom=M+1, prevTo=M] and [currFrom=N+1, currTo=N]
-      // They touch if M === N (same position) or M+1 === N (adjacent positions)
-      overlaps = prev.to === curr.to || prev.from === curr.to;
+      // They overlap only if M === N (same position, i.e. both insert after the same line).
+      // Adjacent positions (M+1 === N, i.e. one base line apart) do NOT overlap.
+      overlaps = prev.to === curr.to;
     }
 
     if (overlaps) {

@@ -1281,4 +1281,52 @@ f
     // Value is variant lines between anchors (inserted, b, c, d, E)
     expect(result.sections[0].value).toBe("inserted\nb\nc\nd\nE\n");
   });
+
+  it("Case C: two empty sections one base line apart — accepted via applyPlan", async () => {
+    // Case C: base a b c d, variant a X b Y c d (two pure insertions)
+    // Two sections: x after line 1 (empty span), y after line 2 (empty span)
+    // These are one base line apart and should NOT overlap.
+    const baseBody = "a\nb\nc\nd\n";
+    const variantBody = "a\nX\nb\nY\nc\nd\n";
+    const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
+
+    // Should have 2 hunks: insertion after line 1, insertion after line 2
+    expect(diff.files[0].hunks.length).toBe(2);
+
+    const planObj = await planFrom(base, variant, diff, "acme");
+    // First hunk: section x
+    planObj.files[0].hunks![0].take = "section";
+    (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "x" };
+    // Second hunk: section y
+    planObj.files[0].hunks![1].take = "section";
+    (planObj.files[0].hunks![1] as Record<string, unknown>).section = { name: "y" };
+
+    const result = await applyPlan(base, variant, diff, planObj);
+    expect(result.resolved).toBe(true);
+    expect(result.sections).toHaveLength(2);
+
+    const sectionX = result.sections.find((s) => s.name === "x");
+    const sectionY = result.sections.find((s) => s.name === "y");
+
+    expect(sectionX).toBeDefined();
+    expect(sectionX!.default).toBe("");
+    expect(sectionX!.value).toBe("X\n");
+
+    expect(sectionY).toBeDefined();
+    expect(sectionY!.default).toBe("");
+    expect(sectionY!.value).toBe("Y\n");
+
+    const merged = result.write["rule.md"] as string;
+    // Markers: open x, close x before line 2; open y, close y before line 3
+    const expected = `a
+<!-- craftar:section x -->
+<!-- /craftar:section -->
+b
+<!-- craftar:section y -->
+<!-- /craftar:section -->
+c
+d
+`;
+    expect(merged).toBe(expected);
+  });
 });
