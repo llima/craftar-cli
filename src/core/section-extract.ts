@@ -1,5 +1,5 @@
 import type { Hunk } from "./diff.js";
-import type { PlanHunk } from "../schema/index.js";
+import { SECTION_NAME, type PlanHunk } from "../schema/index.js";
 import { splitLines } from "./diff.js";
 import { canonicalValue, expandSections, firstMarkerLine, parseSections, SectionMarkerError, type ParsedSections } from "./sections.js";
 import { stripBom, toLf } from "./text.js";
@@ -646,4 +646,221 @@ export function proveSections(args: {
   if (JSON.stringify(othersTV) !== JSON.stringify(othersMV)) {
     throw new Error(`unify: extracting into "${file}" would change which {{…}} placeholders the text holds`);
   }
+}
+
+
+/**
+ * A Markdown heading line: `/^#{1,6}[ \t]+(.+?)[ \t#]*$/` at column 0.
+ * The capture group is the heading text, trimmed of trailing spaces and `#`.
+ */
+const HEADING_RE = /^#{1,6}[ \t]+(.+?)[ \t#]*$/;
+
+/**
+ * Turn a heading text into a slug for a section name (spec 12 §4.2):
+ * NFD, strip combining marks (`\p{M}`), lower-case, non-`[a-z0-9]` → `-`, trim `-`, cut at 40 chars, trim `-` again.
+ */
+function headingSlug(text: string): string {
+  // NFD decomposition, strip combining marks
+  const decomposed = text.normalize("NFD").replace(/\p{M}/gu, "");
+  // Lower-case
+  const lower = decomposed.toLowerCase();
+  // Non-[a-z0-9] → -
+  const dashed = lower.replace(/[^a-z0-9]+/g, "-");
+  // Trim leading/trailing -
+  const trimmed = dashed.replace(/^-+|-+$/g, "");
+  // Cut at 40 chars
+  const cut = trimmed.slice(0, 40);
+  // Trim trailing - again (in case cut ended mid-run)
+  return cut.replace(/-+$/, "");
+}
+
+export interface HunkWithSuggestion {
+  a: { start: number; lines: string[] };
+  suggestion: { class: string };
+}
+
+/**
+ * The section name `--save-plan` pre-fills for each hunk of one file, or undefined (spec 12 §4.2).
+ * Index = hunk index (0-based).
+ *
+ * Rules (in this order, per hunk):
+ * 1. Touches an existing section → that section's exact name.
+ * 2. Suggestion class `block` → a slug from the nearest heading above, or `section-<n>`.
+ * 3. Otherwise → undefined.
+ *
+ * Uniqueness (rule 2 names only): a candidate name that is in `declared`, or that an earlier
+ * non-consecutive hunk of this file got, gets `-2`, `-3`, … appended until it is free.
+ * Consecutive block hunks keep the same name (they form one run if the human sets them all to `take: section`).
+ *
+ * A parse error in the base → return all undefined (pre-fill never blocks `--save-plan`).
+ */
+export function prefillSections(args: {
+  baseText: string;
+  label: string;
+  ref: string;
+  hunks: HunkWithSuggestion[];
+  /** Every section name the ingredient already declares, in any admitted file. */
+  declared: Set<string>;
+}): Array<string | undefined> {
+  const { baseText, label, ref, hunks, declared } = args;
+  const result: Array<string | undefined> = new Array(hunks.length).fill(undefined);
+
+  // Parse base sections; on error, return all undefined
+  let parsed: ParsedSections;
+  try {
+    parsed = parseSections(baseText, label, ref);
+  } catch (e) {
+    if (e instanceof SectionMarkerError) return result;
+    throw e;
+  }
+
+  // Build base section spans: opener..closer inclusive (line numbers, 1-based)
+  const baseSections = parsed.sections.map((s) => {
+    const defaultLines = s.default.split("\n");
+    // s.line is the opener; closer is opener + number of "\n" in default
+    const closer = s.line + defaultLines.length - (s.default.endsWith("\n") ? 0 : 0);
+    // Actually: lines between markers = split("\n") gives N+1 elements for N newlines, minus 1 for trailing
+    // s.default is verbatim lines between markers, each with its \n. So split("\n") on "a\nb\n" gives ["a","b",""]
+    // So closer = opener + count of non-empty lines = opener + (split.length - 1 if ends with \n)
+    // Let's recalculate: if default is "a\nb\n", split gives ["a","b",""], length=3, actual lines=2
+    // closer = opener + 2 (for the two content lines) = opener + (split.length - 1)
+    // But wait, the closer marker is at line opener + 1 + number_of_content_lines
+    // Since opener line is the `<!-- craftar:section X -->` and default starts on next line
+    // closer = opener + (number of default lines) + 1 - 1 = opener + defaultLines
+    // Actually re-read sections.ts: s.line is the line of the opener marker
+    // s.default is the text between opener and closer (not including markers)
+    // So if opener is line 5, default has 2 lines, closer is line 5 + 2 + 1 = line 8
+    // Wait, let me think again. If opener is line 5:
+    // line 5: <!-- craftar:section X -->
+    // line 6: first default line
+    // line 7: second default line
+    // line 8: <!-- /craftar:section -->
+    // So closer = opener + count_of_default_lines + 1
+    // If default is "a\nb\n", that's 2 lines, closer = 5 + 2 + 1 = 8
+    // Actually looking at deriveSections: closer: s.line + s.default.split("\n").length
+    // "a\nb\n".split("\n") = ["a", "b", ""], length = 3
+    // So closer = opener + 3. For opener=5, closer=8. That matches!
+    return {
+      name: s.name,
+      opener: s.line,
+      closer: s.line + defaultLines.length,
+    };
+  });
+
+  // Split base into lines for heading search
+  const baseLines = splitLines(baseText).lines;
+
+  // Helper: does a hunk touch a section? (spec 12 §4.2's "touches" definition)
+  const hunkTouchesSection = (h: HunkWithSuggestion, sec: { opener: number; closer: number }): boolean => {
+    const { opener: o, closer: c } = sec;
+    if (h.a.lines.length > 0) {
+      // Hunk with base lines: any line j in start..start+length-1 satisfies o <= j <= c
+      for (let j = h.a.start; j < h.a.start + h.a.lines.length; j++) {
+        if (o <= j && j <= c) return true;
+      }
+      return false;
+    } else {
+      // No base lines: position N = h.a.start - 1 satisfies o <= N < c
+      const N = h.a.start - 1;
+      return o <= N && N < c;
+    }
+  };
+
+  // Find the nearest heading above a given position (line number, 1-based)
+  const nearestHeadingAbove = (pos: number): string | null => {
+    // pos is the line we're looking above
+    // For hunks with base lines: above h.a.start means lines < h.a.start
+    // For hunks without: "at or above line N" where N = h.a.start - 1, means lines <= N
+    // Actually spec says: "above the hunk's position in the base (for a hunk with base lines, above a.start;
+    // for one without, at or above line N)"
+    // So: with lines → lines strictly < start; without → lines <= N (i.e., <= start - 1)
+    for (let i = pos - 1; i >= 0; i--) {
+      const line = baseLines[i];
+      const match = HEADING_RE.exec(line);
+      if (match) return match[1];
+    }
+    return null;
+  };
+
+  // Track used names for uniqueness
+  const usedNames = new Map<string, number>(); // name → last hunk index that used it
+  // Also track what was declared
+  const declaredSet = new Set(declared);
+
+  // Process each hunk
+  for (let i = 0; i < hunks.length; i++) {
+    const h = hunks[i];
+
+    // Rule 1: Touches existing section → that section's exact name
+    let touchedSection: string | null = null;
+    for (const sec of baseSections) {
+      if (hunkTouchesSection(h, sec)) {
+        touchedSection = sec.name;
+        break;
+      }
+    }
+
+    if (touchedSection !== null) {
+      result[i] = touchedSection;
+      continue;
+    }
+
+    // Rule 2: Block suggestion → slug from heading or section-<n>
+    if (h.suggestion.class === "block") {
+      // Find position for heading search
+      let searchPos: number;
+      if (h.a.lines.length > 0) {
+        // Above a.start means < a.start, so search starting from a.start - 1 (0-indexed: a.start - 2)
+        searchPos = h.a.start - 1; // This will search lines [0, a.start-2] in 0-indexed terms
+      } else {
+        // At or above N where N = a.start - 1, means lines <= N, so search from N (0-indexed: N-1)
+        const N = h.a.start - 1;
+        searchPos = N; // This will search lines [0, N-1] in 0-indexed, i.e., lines 1..N in 1-indexed
+      }
+
+      const heading = nearestHeadingAbove(searchPos);
+      let candidate: string;
+
+      if (heading !== null) {
+        const slug = headingSlug(heading);
+        // Check if slug is valid (matches SECTION_NAME) and non-empty
+        if (slug.length > 0 && SECTION_NAME.test(slug)) {
+          candidate = slug;
+        } else {
+          // Fallback: section-<n> with n = 1-based hunk number
+          candidate = `section-${i + 1}`;
+        }
+      } else {
+        // Fallback: section-<n>
+        candidate = `section-${i + 1}`;
+      }
+
+      // Uniqueness check: consecutive block hunks with the same name keep it
+      const prevIndex = usedNames.get(candidate);
+      const isConsecutive = prevIndex !== undefined && prevIndex === i - 1;
+
+      if (isConsecutive) {
+        // Same name as directly preceding hunk, keep it
+        result[i] = candidate;
+        usedNames.set(candidate, i);
+      } else if (declaredSet.has(candidate) || (prevIndex !== undefined && !isConsecutive)) {
+        // Need to find a unique suffix
+        let suffix = 2;
+        let uniqueName = `${candidate}-${suffix}`;
+        while (declaredSet.has(uniqueName) || usedNames.has(uniqueName)) {
+          suffix++;
+          uniqueName = `${candidate}-${suffix}`;
+        }
+        result[i] = uniqueName;
+        usedNames.set(uniqueName, i);
+      } else {
+        // Name is free
+        result[i] = candidate;
+        usedNames.set(candidate, i);
+      }
+    }
+    // Rule 3: Otherwise → undefined (already the default)
+  }
+
+  return result;
 }

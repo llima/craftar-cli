@@ -116,6 +116,38 @@ describe("planFrom", () => {
     expect(plan.files.find((f) => f.file === "gone.md")).toMatchObject({ onlyIn: "base", take: "keep" });
     expect(plan.files.find((f) => f.file === "extra.md")).toMatchObject({ onlyIn: "variant", take: "keep" });
   });
+
+  it("pre-fills a section name from a heading for a block hunk (spec 12 §4.2)", async () => {
+    // Base has a heading "## Reviewer Table" above the table rows
+    // Variant adds extra rows (block hunk)
+    const baseDir = await tmpDir();
+    cleanups.push(() => fs.rm(baseDir, { recursive: true, force: true }));
+    await writeFiles(baseDir, {
+      "ingredient.yaml": "type: rule\nname: review-posture\n",
+      "rule.md": "# Rules\n\n## Reviewer Table\n| a |\n",
+    });
+
+    const variantDir = await tmpDir();
+    cleanups.push(() => fs.rm(variantDir, { recursive: true, force: true }));
+    await writeFiles(variantDir, {
+      "ingredient.yaml": "type: rule\nname: review-posture--acme\nas: review-posture\n",
+      "rule.md": "# Rules\n\n## Reviewer Table\n| a |\n| b |\n",
+    });
+
+    const base = { ref: "rule/review-posture", dir: baseDir, meta: { type: "rule", name: "review-posture" } } as never;
+    const variant = { ref: "rule/review-posture--acme", dir: variantDir, meta: { type: "rule", name: "review-posture--acme", as: "review-posture" } } as never;
+    const diff = await diffIngredients(base, variant);
+
+    const plan = await planFrom(base, variant, diff, "acme");
+    const paired = plan.files.find((f) => f.file === "rule.md")!;
+
+    // The hunk should be classified as "block" (only in variant)
+    expect(paired.hunks![0].suggestion?.class).toBe("block");
+    // The section name should be pre-filled from the heading "Reviewer Table" → "reviewer-table"
+    expect(paired.hunks![0].section).toEqual({ name: "reviewer-table" });
+    // take should still be "keep"
+    expect(paired.hunks![0].take).toBe("keep");
+  });
 });
 
 /** Two temp ingredient directories (base + variant--profile), loaded and diffed for real. */

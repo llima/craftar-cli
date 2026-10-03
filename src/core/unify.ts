@@ -11,7 +11,7 @@ import type { HunkTake, Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile, 
 import { collect, deriveHunk, prove, substitutedFile, type Extraction } from "./extract.js";
 import { firstMarkerLine, parseSections, SectionMarkerError } from "./sections.js";
 import { sectionKey } from "./resolve.js";
-import { deriveSections, proveSections, type MarkerInsertion, type SectionRun } from "./section-extract.js";
+import { deriveSections, prefillSections, proveSections, type MarkerInsertion, type SectionRun } from "./section-extract.js";
 import { stripBom, toLf } from "./text.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
@@ -77,8 +77,43 @@ export async function planFrom(
   profile: string,
 ): Promise<UnifyPlan> {
   await assertTextMergeable(base, variant);
+
+  // Build `declared`: every section name the ingredient already declares, in any admitted file (spec 12 §4.2).
+  const declared = new Set<string>();
+  const baseFiles = await listFiles(base.dir);
+  const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
+  for (const rel of baseFiles) {
+    if (rel === "ingredient.yaml") continue;
+    if (!substitutedFile(base.meta, rel)) continue;
+    try {
+      const text = await readIngredientText(base, rel);
+      const parsed = parseSections(text, label(rel), base.ref);
+      for (const s of parsed.sections) declared.add(s.name);
+    } catch (e) {
+      // Ignore parse errors — the check that matters runs later (spec 12 §4.2)
+      if (!(e instanceof SectionMarkerError)) throw e;
+    }
+  }
+
   const files: PlanFile[] = [];
   for (const f of diff.files) {
+    // Pre-fill section names only when the file is admitted (substitutedFile) (spec 12 §4.2)
+    let sectionNames: Array<string | undefined> = [];
+    if (substitutedFile(base.meta, f.file)) {
+      try {
+        const baseText = await readIngredientText(base, f.file);
+        sectionNames = prefillSections({
+          baseText,
+          label: label(f.file),
+          ref: base.ref,
+          hunks: f.hunks,
+          declared,
+        });
+      } catch {
+        // On any error, leave all undefined (spec 12 §4.2: "pre-fill never blocks --save-plan")
+      }
+    }
+
     files.push({
       file: f.file,
       hunks: f.hunks.map((h, i) => ({
@@ -87,6 +122,8 @@ export async function planFrom(
         take: "keep" as const,
         // Pre-filled for a value hunk, read only once the human sets take: param (spec 09 §4.2).
         ...(h.suggestion.class === "value" && h.suggestion.tokens ? { params: h.suggestion.tokens.map((t) => ({ token: t.a, key: t.param })) } : {}),
+        // Pre-filled section name for --save-plan (spec 12 §4.2). Only when defined.
+        ...(sectionNames[i] !== undefined ? { section: { name: sectionNames[i] } } : {}),
         suggestion: h.suggestion,
       })),
     });

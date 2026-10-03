@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { diffLines, type Hunk } from "../src/core/diff.js";
-import { deriveSections, type SectionRun, type MarkerInsertion } from "../src/core/section-extract.js";
+import { deriveSections, prefillSections, type SectionRun, type MarkerInsertion, type HunkWithSuggestion } from "../src/core/section-extract.js";
 import type { PlanHunk } from "../src/schema/index.js";
 
 /**
@@ -1218,6 +1218,320 @@ describe("proveSections (spec 12 §6.5)", () => {
           extractions: [],
         }),
       ).toThrow(/would not reproduce the base side/);
+    });
+  });
+});
+
+
+/* ------------------------------------------------------------------ */
+/* prefillSections (spec 12 §4.2)                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Helper to create a minimal hunk for prefillSections testing.
+ * When `baseLines` is empty, the hunk is a pure addition (no base lines).
+ */
+function prefillHunk(
+  start: number,
+  baseLines: string[],
+  suggestionClass: "evolution" | "value" | "block",
+): HunkWithSuggestion {
+  return {
+    a: { start, lines: baseLines },
+    suggestion: { class: suggestionClass },
+  };
+}
+
+describe("prefillSections (spec 12 §4.2)", () => {
+  describe("heading slug", () => {
+    it("slugifies `## Reviewer flavors — São Paulo` to `reviewer-flavors-sao-paulo`", () => {
+      // Heading: "Reviewer flavors — São Paulo" (with em-dash and accented char)
+      const text = lines("## Reviewer flavors — São Paulo", "", "| a | b |");
+      const hunks = [prefillHunk(3, [], "block")]; // after line 2 (blank line)
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(),
+      });
+      expect(result[0]).toBe("reviewer-flavors-sao-paulo");
+    });
+
+    it("cuts the slug at 40 characters", () => {
+      // Create a heading that will produce a slug > 40 chars
+      const heading = "## This Is A Very Long Heading That Should Be Cut At Forty Characters";
+      const text = lines(heading, "body");
+      const hunks = [prefillHunk(2, ["body"], "block")];
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(),
+      });
+      // Expected slug: "this-is-a-very-long-heading-that-should" (39 chars, then cut)
+      const slug = result[0]!;
+      expect(slug.length).toBeLessThanOrEqual(40);
+      expect(slug).toMatch(/^[a-z0-9-]+$/);
+      expect(slug).not.toMatch(/-$/); // no trailing dash
+    });
+
+    it("fallbacks to `section-<n>` when no heading above", () => {
+      const text = lines("body line");
+      const hunks = [prefillHunk(1, ["body line"], "block")];
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(),
+      });
+      expect(result[0]).toBe("section-1");
+    });
+
+    it("fallbacks to `section-<n>` when heading produces empty or invalid slug (only symbols)", () => {
+      // Heading with only symbols that all become "-"
+      const text = lines("## ---???---", "body");
+      const hunks = [prefillHunk(2, ["body"], "block")];
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(),
+      });
+      // "---???---" → "-" repeated → trimmed → empty
+      expect(result[0]).toBe("section-1");
+    });
+  });
+
+  describe("existing section name wins over block", () => {
+    it("returns the existing section's name when a hunk touches it", () => {
+      const text = lines("# Heading", "", OPEN("flavors"), "| table |", CLOSE, "");
+      // Hunk touching lines 3-5 (the section area)
+      const hunks = [prefillHunk(4, ["| table |"], "block")];
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(["flavors"]),
+      });
+      expect(result[0]).toBe("flavors");
+    });
+
+    it("returns the existing section's name for a pure-addition hunk inside a section", () => {
+      const text = lines("# Heading", "", OPEN("flavors"), "| a |", CLOSE, "");
+      // Pure addition after line 3 (opener is line 3, closer is line 5)
+      // Position N = 4 - 1 = 3, opener=3, closer=5: opener <= 3 < closer? 3 <= 3 < 5 → yes
+      const hunks = [prefillHunk(4, [], "block")];
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(["flavors"]),
+      });
+      expect(result[0]).toBe("flavors");
+    });
+  });
+
+  describe("value and evolution hunks get nothing", () => {
+    it("returns undefined for a `value` hunk", () => {
+      const text = lines("## Config", "key = acme-api");
+      const hunks = [prefillHunk(2, ["key = acme-api"], "value")];
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(),
+      });
+      expect(result[0]).toBeUndefined();
+    });
+
+    it("returns undefined for an `evolution` hunk", () => {
+      const text = lines("## Intro", "Old text here");
+      const hunks = [prefillHunk(2, ["Old text here"], "evolution")];
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(),
+      });
+      expect(result[0]).toBeUndefined();
+    });
+  });
+
+  describe("uniqueness suffixes", () => {
+    it("appends `-2` when the name is in `declared`", () => {
+      const text = lines("## Flavors", "| a |");
+      const hunks = [prefillHunk(2, ["| a |"], "block")];
+      const declared = new Set(["flavors"]);
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared,
+      });
+      expect(result[0]).toBe("flavors-2");
+    });
+
+    it("appends `-2` for a non-consecutive repeat", () => {
+      const text = lines("## Table", "row1", "middle", "row2");
+      // Two block hunks under the same heading, but with a gap (hunk 2 is evolution)
+      const hunks = [
+        prefillHunk(2, ["row1"], "block"),
+        prefillHunk(3, ["middle"], "evolution"),
+        prefillHunk(4, ["row2"], "block"),
+      ];
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(),
+      });
+      // hunk 0: "table"
+      // hunk 1: undefined (evolution)
+      // hunk 2: "table" is already used and not consecutive → "table-2"
+      expect(result[0]).toBe("table");
+      expect(result[1]).toBeUndefined();
+      expect(result[2]).toBe("table-2");
+    });
+
+    it("consecutive block hunks keep the same name", () => {
+      const text = lines("## Table", "row1", "row2");
+      const hunks = [
+        prefillHunk(2, ["row1"], "block"),
+        prefillHunk(3, ["row2"], "block"),
+      ];
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(),
+      });
+      expect(result[0]).toBe("table");
+      expect(result[1]).toBe("table");
+    });
+  });
+
+  describe("probe Q3 (edge case 4)", () => {
+    it("both touching hunks get the existing section's name", () => {
+      // Base: section `flavors` around rows `a`, `b`
+      // Two hunks: one holding opener, one holding closer against row c
+      const text = lines("# Heading", OPEN("flavors"), "| a |", "| b |", CLOSE, "footer");
+      // Hunk 1: touches opener (line 2) - this is the marker line itself
+      // Hunk 2: touches closer (line 5) with variant having extra row
+      const hunks = [
+        prefillHunk(2, [OPEN("flavors")], "block"), // touches opener line 2
+        prefillHunk(5, [CLOSE], "block"), // touches closer line 5
+      ];
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(["flavors"]),
+      });
+      // Both hunks touch the `flavors` section (opener=2, closer=5)
+      expect(result[0]).toBe("flavors");
+      expect(result[1]).toBe("flavors");
+    });
+  });
+
+  describe("parse error handling", () => {
+    it("returns all undefined when base has malformed markers", () => {
+      // Near miss: will cause a parse error
+      const text = lines("## Heading", "<!-- craftar:section -->", "body");
+      const hunks = [prefillHunk(3, ["body"], "block")];
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(),
+      });
+      expect(result[0]).toBeUndefined();
+    });
+
+    it("returns all undefined when section is never closed", () => {
+      const text = lines("## Heading", OPEN("broken"), "body");
+      const hunks = [prefillHunk(3, ["body"], "block")];
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(),
+      });
+      expect(result[0]).toBeUndefined();
+    });
+  });
+
+  describe("heading search position", () => {
+    it("for a hunk with base lines, searches above a.start", () => {
+      // Heading on line 2, hunk starts at line 4
+      const text = lines("intro", "## My Section", "blank", "content");
+      const hunks = [prefillHunk(4, ["content"], "block")];
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(),
+      });
+      expect(result[0]).toBe("my-section");
+    });
+
+    it("for a pure-addition hunk, searches at or above line N", () => {
+      // Heading on line 2, pure addition after line 2 (N=2)
+      const text = lines("intro", "## Config");
+      const hunks = [prefillHunk(3, [], "block")]; // after line 2
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(),
+      });
+      expect(result[0]).toBe("config");
+    });
+
+    it("finds the nearest heading, not the first one", () => {
+      const text = lines("## First", "a", "## Second", "b");
+      const hunks = [prefillHunk(4, ["b"], "block")]; // under Second
+      const result = prefillSections({
+        baseText: text,
+        label: LABEL,
+        ref: REF,
+        hunks,
+        declared: new Set(),
+      });
+      expect(result[0]).toBe("second");
+    });
+  });
+
+  describe("multiple heading levels", () => {
+    it("recognizes H1 through H6", () => {
+      for (let level = 1; level <= 6; level++) {
+        const prefix = "#".repeat(level);
+        const text = lines(`${prefix} Level ${level}`, "body");
+        const hunks = [prefillHunk(2, ["body"], "block")];
+        const result = prefillSections({
+          baseText: text,
+          label: LABEL,
+          ref: REF,
+          hunks,
+          declared: new Set(),
+        });
+        expect(result[0]).toBe(`level-${level}`);
+      }
     });
   });
 });
