@@ -4,6 +4,7 @@ recipes:
   - base--initech
 targets:
   - claude-code
+  - kiro
   - agents-md
 language: {}
 identity: {}

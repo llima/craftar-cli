@@ -71,9 +71,9 @@ const statesOf = (ws: string) => {
 const importCli = (forge: string, profile: P, ws: string) =>
   runCli(["import", "--from", "claude-code", "--forge", forge, "--profile", profile, "--workspace", ws, "--write-config"]);
 
-/** Appends `agents-md` to a block `targets` list. */
-function addAgentsMd(yaml: string): string {
-  const out = yaml.replace(/^(targets:\n(?: {2}- .*\n)+)/m, "$1  - agents-md\n");
+/** Appends `kiro` and `agents-md` to a block `targets` list. */
+function addKiroAndAgentsMd(yaml: string): string {
+  const out = yaml.replace(/^(targets:\n(?: {2}- .*\n)+)/m, "$1  - kiro\n  - agents-md\n");
   if (out === yaml) throw new Error("expected a block targets list");
   return out;
 }
@@ -122,8 +122,8 @@ async function step1_importAndSync(): Promise<RoundTrip> {
 
   // Append agents-md to profiles and workspaces.
   for (const p of PROFILES) {
-    await edit(path.join(forge, "profiles", p, "profile.yaml"), addAgentsMd);
-    await edit(path.join(ws[p], "craftar.yaml"), addAgentsMd);
+    await edit(path.join(forge, "profiles", p, "profile.yaml"), addKiroAndAgentsMd);
+    await edit(path.join(ws[p], "craftar.yaml"), addKiroAndAgentsMd);
   }
 
   execFileSync("git", ["init", "-q", forge]);
@@ -318,9 +318,7 @@ describe("golden: take-section round trip (spec 12 §10.5)", () => {
     const states = statesOf(t.ws.globex);
     expect(states[".claude/rules/review-posture.md"]).toBe("update");
     expect(states["AGENTS.md"]).toBe("update");
-    // If kiro is a target, the steering file should also update.
-    if (".kiro/steering/review-posture.md" in states) {
-      expect(states[".kiro/steering/review-posture.md"]).toBe("update");
-    }
+    // kiro is always a target, so the steering file must update.
+    expect(states[".kiro/steering/review-posture.md"]).toBe("update");
   });
 });

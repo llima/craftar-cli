@@ -65,8 +65,8 @@ async function edit(file: string, f: (text: string) => string): Promise<void> {
   await fs.writeFile(file, f(await fs.readFile(file, "utf8")));
 }
 
-function addAgentsMd(yaml: string): string {
-  const out = yaml.replace(/^(targets:\n(?: {2}- .*\n)+)/m, "$1  - agents-md\n");
+function addKiroAndAgentsMd(yaml: string): string {
+  const out = yaml.replace(/^(targets:\n(?: {2}- .*\n)+)/m, "$1  - kiro\n  - agents-md\n");
   if (out === yaml) throw new Error("expected a block targets list");
   return out;
 }
@@ -88,10 +88,10 @@ try {
     if (r.rejected.length > 0) throw new Error(`Import ${p} rejected: ${JSON.stringify(r.rejected)}`);
   }
 
-  // Append agents-md to profiles and workspaces.
+  // Append kiro and agents-md to profiles and workspaces.
   for (const p of PROFILES) {
-    await edit(path.join(forge, "profiles", p, "profile.yaml"), addAgentsMd);
-    await edit(path.join(ws[p], "craftar.yaml"), addAgentsMd);
+    await edit(path.join(forge, "profiles", p, "profile.yaml"), addKiroAndAgentsMd);
+    await edit(path.join(ws[p], "craftar.yaml"), addKiroAndAgentsMd);
   }
 
   execFileSync("git", ["init", "-q", forge]);

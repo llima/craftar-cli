@@ -4,6 +4,7 @@ recipes:
   - base
 targets:
   - claude-code
+  - kiro
   - agents-md
 language: {}
 identity: {}

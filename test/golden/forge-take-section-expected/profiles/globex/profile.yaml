@@ -4,6 +4,7 @@ recipes:
   - base--globex
 targets:
   - claude-code
+  - kiro
   - agents-md
 language: {}
 identity: {}
