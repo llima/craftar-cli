@@ -62,6 +62,8 @@ function gitEnv(): NodeJS.ProcessEnv {
 
 function gitInit(dir: string): void {
   execFileSync("git", ["init", "-q", dir]);
+  execFileSync("git", ["-C", dir, "config", "maintenance.auto", "false"]);
+  execFileSync("git", ["-C", dir, "config", "gc.auto", "0"]);
 }
 
 function gitCommitAll(dir: string, message: string): void {

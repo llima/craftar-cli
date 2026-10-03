@@ -95,6 +95,8 @@ async function roundTrip(): Promise<RoundTrip> {
     await edit(path.join(ws[p], "craftar.yaml"), addAgentsMd);
   }
   execFileSync("git", ["init", "-q", forge]);
+  execFileSync("git", ["-C", forge, "config", "maintenance.auto", "false"]);
+  execFileSync("git", ["-C", forge, "config", "gc.auto", "0"]);
   gitCommitAll(forge, "import acme and globex");
 
   // 2. Sync both: the workspace's own files adopt, AGENTS.md is new.

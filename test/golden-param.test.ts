@@ -55,6 +55,8 @@ async function freshForge(): Promise<{ tmp: string; forge: string }> {
   const forge = path.join(tmp, "forge");
   await copyTree(INPUT, forge);
   execFileSync("git", ["init", "-q", forge]);
+  execFileSync("git", ["-C", forge, "config", "maintenance.auto", "false"]);
+  execFileSync("git", ["-C", forge, "config", "gc.auto", "0"]);
   gitCommitAll(forge, "init");
   return { tmp, forge };
 }

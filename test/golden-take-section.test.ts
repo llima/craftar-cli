@@ -127,6 +127,8 @@ async function step1_importAndSync(): Promise<RoundTrip> {
   }
 
   execFileSync("git", ["init", "-q", forge]);
+  execFileSync("git", ["-C", forge, "config", "maintenance.auto", "false"]);
+  execFileSync("git", ["-C", forge, "config", "gc.auto", "0"]);
   gitCommitAll(forge, "import acme, globex and initech");
 
   // Sync and snapshot all three.
