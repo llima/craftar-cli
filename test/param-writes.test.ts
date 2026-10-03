@@ -166,3 +166,162 @@ describe("checkParamWrites — section values cite keys too (spec 11 §6.11)", (
     expect(await err(check(forge, [ext("k", "globex-api", "acme-api")]))).toBe("no error");
   });
 });
+
+describe("checkParamWrites — sections (spec 12 §6.6)", () => {
+  const sectionExt = (name: string, existing: boolean, value: string, key = "rule/deploy", file = "rule.md"): import("../src/core/unify.js").SectionExtraction => ({
+    key,
+    name,
+    file,
+    existing,
+    default: existing ? null : "default content\n",
+    value,
+  });
+
+  async function checkWithSections(
+    forge: Awaited<ReturnType<typeof forgeOf>>,
+    sections: import("../src/core/unify.js").SectionExtraction[],
+    extractions: Extraction[] = [],
+    p = "acme",
+  ) {
+    return checkParamWrites(forge, forge.ingredients.get("rule/deploy")!, forge.ingredients.get("rule/deploy--acme")!, p, extractions, sections);
+  }
+
+  it("a new section: the profile gains sections.<key>.<name>, sectionsWritten names it", async () => {
+    const forge = await forgeOf(spec());
+    const w = await checkWithSections(forge, [sectionExt("flavors", false, "| row |\n")]);
+    expect(w.profile).not.toBeNull();
+    expect(YAML.parse(w.profile!.content).sections).toEqual({ "rule/deploy": { flavors: "| row |\n" } });
+    expect(w.sectionsWritten).toEqual(["flavors"]);
+  });
+
+  it("a new section appended at end for a profile without sections (D8)", async () => {
+    const forge = await forgeOf(spec());
+    const w = await checkWithSections(forge, [sectionExt("flavors", false, "row\n")]);
+    // The sections block is appended at the end
+    expect(w.profile!.content).toContain("sections:\n  rule/deploy:\n    flavors: |\n      row\n");
+  });
+
+  it("a new section into a profile with an existing sections block (block map)", async () => {
+    const forge = await forgeOf(
+      spec({ profiles: [profile("acme", ["base--acme"], ["claude-code"], { sections: { "rule/other": { x: "y\n" } } }), profile("globex", ["base"])] }),
+    );
+    const w = await checkWithSections(forge, [sectionExt("flavors", false, "row\n")]);
+    const parsed = YAML.parse(w.profile!.content);
+    expect(parsed.sections).toEqual({ "rule/other": { x: "y\n" }, "rule/deploy": { flavors: "row\n" } });
+  });
+
+  it("the manifest is rendered with schema: 2 for a new section (LF)", async () => {
+    const forge = await forgeOf(spec());
+    const w = await checkWithSections(forge, [sectionExt("flavors", false, "row\n")]);
+    expect(w.manifest).not.toBeNull();
+    expect(w.manifest!.content).toBe("name: test-forge\nschema: 2\n");
+    expect(w.mustHold).toContain(w.manifest!.abs);
+  });
+
+  it("the manifest is rendered with schema: 2 for a new section (CRLF)", async () => {
+    const forge = await forgeOf(spec(), { "craftar.forge.yaml": "name: test-forge\r\nschema: 1\r\n" });
+    const w = await checkWithSections(forge, [sectionExt("flavors", false, "row\n")]);
+    expect(w.manifest).not.toBeNull();
+    expect(w.manifest!.content).toBe("name: test-forge\r\nschema: 2\r\n");
+  });
+
+  it("params + a section in one call: one profile edit holding both", async () => {
+    const forge = await forgeOf(spec());
+    const w = await checkWithSections(forge, [sectionExt("flavors", false, "row\n")], [ext("k", "globex", "acme")]);
+    expect(w.profile).not.toBeNull();
+    const parsed = YAML.parse(w.profile!.content);
+    expect(parsed.params).toEqual({ k: "acme" });
+    expect(parsed.sections).toEqual({ "rule/deploy": { flavors: "row\n" } });
+  });
+
+  it("S13 (another profile sets the name)", async () => {
+    const forge = await forgeOf(
+      spec({ profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"], ["claude-code"], { sections: { "rule/deploy": { flavors: "other\n" } } })] }),
+    );
+    expect(await err(checkWithSections(forge, [sectionExt("flavors", false, "row\n")]))).toContain(
+      "profile globex already sets section flavors of rule/deploy — it names no marker today and would start to apply",
+    );
+  });
+
+  it("S14 for a new section (profile sets other content)", async () => {
+    const forge = await forgeOf(
+      spec({ profiles: [profile("acme", ["base--acme"], ["claude-code"], { sections: { "rule/deploy": { flavors: "other\n" } } }), profile("globex", ["base"])] }),
+    );
+    expect(await err(checkWithSections(forge, [sectionExt("flavors", false, "row\n")]))).toContain("profile acme already sets section flavors of rule/deploy to other content");
+  });
+
+  it("S14 for an existing section (profile sets other content)", async () => {
+    const forge = await forgeOf(
+      spec({ profiles: [profile("acme", ["base--acme"], ["claude-code"], { sections: { "rule/deploy": { flavors: "other\n" } } }), profile("globex", ["base"])] }),
+    );
+    expect(await err(checkWithSections(forge, [sectionExt("flavors", true, "row\n")]))).toContain("profile acme already sets section flavors of rule/deploy to other content");
+  });
+
+  it("equal case for new section: nothing written, not in sectionsWritten", async () => {
+    const forge = await forgeOf(
+      spec({ profiles: [profile("acme", ["base--acme"], ["claude-code"], { sections: { "rule/deploy": { flavors: "row\n" } } }), profile("globex", ["base"])] }),
+    );
+    const w = await checkWithSections(forge, [sectionExt("flavors", false, "row\n")]);
+    expect(w.sectionsWritten).toEqual([]);
+    // When nothing else changes, no profile edit
+    expect(w.profile).toBeNull();
+  });
+
+  it("equal case for existing section: nothing written, not in sectionsWritten", async () => {
+    const forge = await forgeOf(
+      spec({ profiles: [profile("acme", ["base--acme"], ["claude-code"], { sections: { "rule/deploy": { flavors: "row\n" } } }), profile("globex", ["base"])] }),
+    );
+    const w = await checkWithSections(forge, [sectionExt("flavors", true, "row\n")]);
+    expect(w.sectionsWritten).toEqual([]);
+  });
+
+  it("S15: value cites {{k}} where base declares default and variant does not", async () => {
+    const forge = await forgeOf(spec({ ingredients: [] }), {
+      "ingredients/rules/deploy/ingredient.yaml": "type: rule\nname: deploy\nparams:\n  k:\n    default: x\n",
+      "ingredients/rules/deploy/rule.md": "use globex-api\n",
+      "ingredients/rules/deploy--acme/ingredient.yaml": "type: rule\nname: deploy--acme\nas: deploy\n",
+      "ingredients/rules/deploy--acme/rule.md": "use acme-api\n",
+    });
+    expect(await err(checkWithSections(forge, [sectionExt("flavors", false, "see {{k}}\n")]))).toContain(
+      "unify: section flavors would render {{k}} through rule/deploy's default, where rule/deploy--acme renders it without",
+    );
+  });
+
+  it("aliased sections → S16 via editYamlText alias refusal", async () => {
+    const forge = await forgeOf(spec(), { "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\nx: &s {}\nsections: *s\n" });
+    expect(await err(checkWithSections(forge, [sectionExt("flavors", false, "row\n")]))).toContain("sections is an alias");
+  });
+
+  it("hand-aligned manifest → S16 via manifestWithSections", async () => {
+    const forge = await forgeOf(spec(), { "craftar.forge.yaml": "name:   test-forge     # aligned\nschema:   1\n" });
+    expect(await err(checkWithSections(forge, [sectionExt("flavors", false, "row\n")]))).toContain("cannot edit craftar.forge.yaml in place");
+  });
+
+  it("schema: 2 already: no manifest edit", async () => {
+    const forge = await forgeOf(spec(), { "craftar.forge.yaml": "name: test-forge\nschema: 2\ndescription: d\n" });
+    const w = await checkWithSections(forge, [sectionExt("flavors", false, "row\n")]);
+    expect(w.manifest).toBeNull();
+  });
+
+  it("existing section only (no new section): no manifest edit even on schema: 1 Forge", async () => {
+    const forge = await forgeOf(spec());
+    const w = await checkWithSections(forge, [sectionExt("flavors", true, "row\n")]);
+    expect(w.manifest).toBeNull();
+  });
+
+  it("new section with value already in place: no profile edit, sectionsWritten empty, but manifest IS rendered with schema: 2", async () => {
+    // The bug: a NEW section (adding markers) whose value is already in the profile was not bumping the manifest.
+    // The manifest bump depends on whether the run ADDS markers (sections.some(!existing)), not on what is written to the profile.
+    const forge = await forgeOf(
+      spec({ profiles: [profile("acme", ["base--acme"], ["claude-code"], { sections: { "rule/deploy": { flavors: "row\n" } } }), profile("globex", ["base"])] }),
+    );
+    const w = await checkWithSections(forge, [sectionExt("flavors", false, "row\n")]);
+    // No profile edit — the value is already in place
+    expect(w.profile).toBeNull();
+    expect(w.sectionsWritten).toEqual([]);
+    // But the manifest IS edited, because the body gains markers → the Forge needs schema: 2
+    expect(w.manifest).not.toBeNull();
+    expect(w.manifest!.content).toContain("schema: 2");
+    expect(w.mustHold).toContain(w.manifest!.abs);
+  });
+});

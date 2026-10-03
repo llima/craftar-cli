@@ -1,0 +1,7 @@
+name: base--initech
+description: Always-on conventions, commands, agents, scripts and MCP servers.
+extends: []
+ingredients:
+  - rule/review-posture--initech
+  - rule/shared
+params: {}

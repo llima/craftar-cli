@@ -9,7 +9,7 @@ import { applyPlan, metaDifferences, planFrom, rewriteRecipes, writeUnified } fr
 import { prove } from "../src/core/extract.js";
 import { diffIngredients } from "../src/core/variants.js";
 import { HunkSuggestionSchema, UnifyPlanSchema, type UnifyPlan } from "../src/schema/index.js";
-import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
+import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec, type IngredientSpec } from "./helpers/forge.js";
 import { runCli } from "./helpers/cli.js";
 
 const execFileP = promisify(execFile);
@@ -115,6 +115,38 @@ describe("planFrom", () => {
     for (const f of plan.files.filter((f) => f.onlyIn)) expect(f).not.toHaveProperty("suggestion");
     expect(plan.files.find((f) => f.file === "gone.md")).toMatchObject({ onlyIn: "base", take: "keep" });
     expect(plan.files.find((f) => f.file === "extra.md")).toMatchObject({ onlyIn: "variant", take: "keep" });
+  });
+
+  it("pre-fills a section name from a heading for a block hunk (spec 12 §4.2)", async () => {
+    // Base has a heading "## Reviewer Table" above the table rows
+    // Variant adds extra rows (block hunk)
+    const baseDir = await tmpDir();
+    cleanups.push(() => fs.rm(baseDir, { recursive: true, force: true }));
+    await writeFiles(baseDir, {
+      "ingredient.yaml": "type: rule\nname: review-posture\n",
+      "rule.md": "# Rules\n\n## Reviewer Table\n| a |\n",
+    });
+
+    const variantDir = await tmpDir();
+    cleanups.push(() => fs.rm(variantDir, { recursive: true, force: true }));
+    await writeFiles(variantDir, {
+      "ingredient.yaml": "type: rule\nname: review-posture--acme\nas: review-posture\n",
+      "rule.md": "# Rules\n\n## Reviewer Table\n| a |\n| b |\n",
+    });
+
+    const base = { ref: "rule/review-posture", dir: baseDir, meta: { type: "rule", name: "review-posture" } } as never;
+    const variant = { ref: "rule/review-posture--acme", dir: variantDir, meta: { type: "rule", name: "review-posture--acme", as: "review-posture" } } as never;
+    const diff = await diffIngredients(base, variant);
+
+    const plan = await planFrom(base, variant, diff, "acme");
+    const paired = plan.files.find((f) => f.file === "rule.md")!;
+
+    // The hunk should be classified as "block" (only in variant)
+    expect(paired.hunks![0].suggestion?.class).toBe("block");
+    // The section name should be pre-filled from the heading "Reviewer Table" → "reviewer-table"
+    expect(paired.hunks![0].section).toEqual({ name: "reviewer-table" });
+    // take should still be "keep"
+    expect(paired.hunks![0].take).toBe("keep");
   });
 });
 
@@ -786,7 +818,7 @@ describe("U1 — a merge never changes section markers (spec 11 §6.12, Ruling 8
     const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "globex", "--plan", planPath, "--forge", root]);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain(
-      "unify: ingredients/rules/review-posture/rule.md would lose or change section markers (the result has malformed markers — line 5: section flavors is never closed) — take base for the marker lines; editing sections through unify is not supported yet",
+      "unify: ingredients/rules/review-posture/rule.md would lose or change section markers (the result has malformed markers — line 5: section flavors is never closed) — take base for the marker lines, or take: section to fill the section",
     );
     expect(await porcelain(root)).toBe("");
   });
@@ -817,5 +849,484 @@ describe("U1 — a merge never changes section markers (spec 11 §6.12, Ruling 8
     const rmPlan = await planFrom(rm.base, rm.variant, rm.diff, "acme");
     rmPlan.files[0].take = "variant";
     expect(await e(applyPlan(rm.base, rm.variant, rm.diff, rmPlan))).toContain("the file would be removed with sections n");
+  });
+});
+
+describe("take: section (spec 12)", () => {
+  // Helper to create a basic Forge scenario for section tests
+  const sectionScenario = async (baseBody: string, variantBody: string) => {
+    const root = await tmpDir("craftar-section-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [
+        rule("review-posture", baseBody),
+        rule("review-posture--acme", variantBody, { as: "review-posture" }),
+      ],
+      recipes: [recipe("base", ["rule/review-posture"]), recipe("base--acme", ["rule/review-posture--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const forge = await loadForge(root);
+    const base = forge.ingredients.get("rule/review-posture")!;
+    const variant = forge.ingredients.get("rule/review-posture--acme")!;
+    const diffResult = await diffIngredients(base, variant);
+    return { root, forge, base, variant, diff: diffResult };
+  };
+
+  it("a new section over a table whose variant has extra rows: template holds markers", async () => {
+    const baseBody = "# Review\n\nDispatch reviewers.\n\n| Repo | Reviewer |\n|---|---|\n| `api` | bob |\n\nDone.\n";
+    const variantBody = "# Review\n\nDispatch reviewers.\n\n| Repo | Reviewer |\n|---|---|\n| `api` | bob |\n| `web` | alice |\n\nDone.\n";
+    const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
+    // variant has extra row; the hunk is a block hunk (lines only in variant)
+    const planObj = await planFrom(base, variant, diff, "acme");
+    // Set take: section with lines covering the whole table (lines 5-7)
+    planObj.files[0].hunks![0].take = "section";
+    (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "flavors", lines: "5-7" };
+
+    const result = await applyPlan(base, variant, diff, planObj);
+    expect(result.resolved).toBe(true);
+
+    const merged = result.write["rule.md"] as string;
+    expect(merged).toContain("<!-- craftar:section flavors -->");
+    expect(merged).toContain("<!-- /craftar:section -->");
+    // The markers should wrap the table
+    const expected = `# Review
+
+Dispatch reviewers.
+
+<!-- craftar:section flavors -->
+| Repo | Reviewer |
+|---|---|
+| \`api\` | bob |
+<!-- /craftar:section -->
+
+Done.
+`;
+    expect(merged).toBe(expected);
+
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0].key).toBe("rule/review-posture");
+    expect(result.sections[0].name).toBe("flavors");
+    expect(result.sections[0].existing).toBe(false);
+    expect(result.sections[0].default).toBe("| Repo | Reviewer |\n|---|---|\n| `api` | bob |\n");
+    expect(result.sections[0].value).toBe("| Repo | Reviewer |\n|---|---|\n| `api` | bob |\n| `web` | alice |\n");
+  });
+
+  it("CRLF + BOM base: markers written with CRLF, BOM kept", async () => {
+    const BOM = String.fromCharCode(0xfeff);
+    const baseBody = BOM + "# Review\r\n\r\nTable:\r\n\r\n| a |\r\n\r\nDone.\r\n";
+    const variantBody = BOM + "# Review\r\n\r\nTable:\r\n\r\n| b |\r\n\r\nDone.\r\n";
+    const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
+    const planObj = await planFrom(base, variant, diff, "acme");
+    planObj.files[0].hunks![0].take = "section";
+    (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "t" };
+
+    const result = await applyPlan(base, variant, diff, planObj);
+    const merged = result.write["rule.md"] as string;
+
+    // Check BOM is kept
+    expect(merged.charCodeAt(0)).toBe(0xfeff);
+    // Check CRLF is used for markers
+    expect(merged).toContain("<!-- craftar:section t -->\r\n");
+    expect(merged).toContain("<!-- /craftar:section -->\r\n");
+  });
+
+  it("reuse of an existing section (probe Q3 shape): result.write has no rule.md, existing=true", async () => {
+    // Base already has the section markers
+    const baseBody = "# Review\n\n<!-- craftar:section flavors -->\n| a |\n| b |\n<!-- /craftar:section -->\n\nDone.\n";
+    // Variant has no markers, but content is a|b|c
+    const variantBody = "# Review\n\n| a |\n| b |\n| c |\n\nDone.\n";
+    const { root, base, variant, diff } = await sectionScenario(baseBody, variantBody);
+    // The variant's text differs from the base in the rows, resulting in hunks touching the section
+    const planObj = await planFrom(base, variant, diff, "acme");
+    // Both hunks touch the existing section, set them to take: section
+    for (const h of planObj.files[0].hunks!) {
+      h.take = "section";
+      (h as Record<string, unknown>).section = { name: "flavors" };
+    }
+
+    const result = await applyPlan(base, variant, diff, planObj);
+
+    // Body unchanged (only value is written to profile, not the file)
+    expect(result.write["rule.md"]).toBeUndefined();
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0].existing).toBe(true);
+    expect(result.sections[0].value).toBe("| a |\n| b |\n| c |\n");
+  });
+
+  // SF1: a reuse-only plan on a mixed-EOL base must not round-trip through mergeFile, which would
+  // normalize the line endings even though the body does not change (spec 12 §6.7 step 3).
+  it("leaves a mixed-EOL base untouched on a reuse-only section plan", async () => {
+    // Base has mixed EOL (CRLF first line, then LF) with existing section markers
+    const baseBody = "# T\r\n\n<!-- craftar:section flavors -->\n| a |\n<!-- /craftar:section -->\n\nEnd.\n";
+    // Variant has no markers, different content
+    const variantBody = "# T\r\n\n| b |\n\nEnd.\n";
+    const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
+    const planObj = await planFrom(base, variant, diff, "acme");
+    // Set take: section on all hunks (reuse, no new section)
+    for (const h of planObj.files[0].hunks!) {
+      h.take = "section";
+      (h as Record<string, unknown>).section = { name: "flavors" };
+    }
+
+    const result = await applyPlan(base, variant, diff, planObj);
+
+    // Body unchanged: write has no rule.md (spec 12 §6.7 step 3)
+    expect(result.write["rule.md"]).toBeUndefined();
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0].existing).toBe(true);
+  });
+
+  it("a plan mixing take: param and take: section in one file: both proved", async () => {
+    const baseBody = "# Review\n\nDeploy to acme-api.\n\n| Repo |\n|---|\n| x |\n\nEnd.\n";
+    const variantBody = "# Review\n\nDeploy to globex-api.\n\n| Repo |\n|---|\n| y |\n\nEnd.\n";
+    const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
+    const planObj = await planFrom(base, variant, diff, "acme");
+
+    // First hunk is "acme-api" -> "globex-api" (param)
+    planObj.files[0].hunks![0].take = "param";
+    (planObj.files[0].hunks![0] as Record<string, unknown>).params = [{ token: "acme-api", key: "deploy.api" }];
+
+    // Second hunk is table row change (section)
+    planObj.files[0].hunks![1].take = "section";
+    (planObj.files[0].hunks![1] as Record<string, unknown>).section = { name: "repos" };
+
+    const result = await applyPlan(base, variant, diff, planObj);
+    expect(result.resolved).toBe(true);
+    expect(result.params).toHaveLength(1);
+    expect(result.params[0].key).toBe("deploy.api");
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0].name).toBe("repos");
+
+    const merged = result.write["rule.md"] as string;
+    expect(merged).toContain("{{deploy.api}}");
+    expect(merged).toContain("<!-- craftar:section repos -->");
+  });
+
+  it("S2: section hunk on file not expanded by emitter is refused", async () => {
+    // Use a script with a non-TEXT_EXT file extension (.bin is not in the regex)
+    const root = await tmpDir("craftar-s2-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+
+    // Create script ingredients manually with proper structure
+    // Scripts require `files` to list the file names
+    // Using .bin which is NOT in TEXT_EXT (/\.(md|txt|json|ya?ml|ps1|py|sh|js|ts|cjs|mjs|toml|xml|csv)$/i)
+    const script = (name: string, body: Record<string, string>, extra: Record<string, unknown> = {}): IngredientSpec => ({
+      meta: { type: "script", name, files: Object.keys(body), ...extra },
+      files: body,
+    });
+
+    await makeForge(root, {
+      ingredients: [
+        script("deploy", { "run.bin": "echo a\n" }),
+        script("deploy--acme", { "run.bin": "echo b\n" }, { as: "deploy" }),
+      ],
+      recipes: [recipe("base", ["script/deploy"]), recipe("base--acme", ["script/deploy--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const forge = await loadForge(root);
+    const base = forge.ingredients.get("script/deploy")!;
+    const variant = forge.ingredients.get("script/deploy--acme")!;
+    const diffResult = await diffIngredients(base, variant);
+    const planObj = await planFrom(base, variant, diffResult, "acme");
+    planObj.files[0].hunks![0].take = "section";
+    (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "s" };
+
+    await expect(applyPlan(base, variant, diffResult, planObj)).rejects.toThrow(
+      'unify plan: "run.bin" is copied without expansion by a target that emits it — a section marker there would be emitted literally',
+    );
+  });
+
+  it("S3 second form: one name in two files is refused", async () => {
+    const root = await tmpDir("craftar-s3-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+
+    // Create skill ingredients manually with proper structure
+    const skill = (name: string, body: Record<string, string>, extra: Record<string, unknown> = {}): IngredientSpec => ({
+      meta: { type: "skill", name, layout: "dir", ...extra },
+      files: body,
+    });
+
+    await makeForge(root, {
+      ingredients: [
+        skill("analyze", { "SKILL.md": "a\n", "notes.md": "x\n" }),
+        skill("analyze--acme", { "SKILL.md": "b\n", "notes.md": "y\n" }, { as: "analyze" }),
+      ],
+      recipes: [recipe("base", ["skill/analyze"]), recipe("base--acme", ["skill/analyze--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const forge = await loadForge(root);
+    const base = forge.ingredients.get("skill/analyze")!;
+    const variant = forge.ingredients.get("skill/analyze--acme")!;
+    const diffResult = await diffIngredients(base, variant);
+    const planObj = await planFrom(base, variant, diffResult, "acme");
+
+    // Set both files to use section with the same name
+    for (const pf of planObj.files) {
+      if (pf.hunks) {
+        pf.hunks[0].take = "section";
+        (pf.hunks[0] as Record<string, unknown>).section = { name: "same-name" };
+      }
+    }
+
+    await expect(applyPlan(base, variant, diffResult, planObj)).rejects.toThrow(
+      /section same-name is named in ".*" and ".*"/,
+    );
+  });
+
+  it("S11: a keep left with section hunk is refused", async () => {
+    // Need a base with two differences so we get two hunks
+    const baseBody = "# Review\n\na\nb\nc\nd\n";
+    const variantBody = "# Review\n\nx\nb\nc\ny\n";
+    const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
+    const planObj = await planFrom(base, variant, diff, "acme");
+
+    // Ensure we have at least 2 hunks
+    expect(planObj.files[0].hunks!.length).toBeGreaterThanOrEqual(2);
+
+    // First hunk is section, second is keep
+    planObj.files[0].hunks![0].take = "section";
+    (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "s" };
+    planObj.files[0].hunks![1].take = "keep";
+
+    await expect(applyPlan(base, variant, diff, planObj)).rejects.toThrow(
+      "unify plan: take: section needs the variant resolved in the same plan — 1 decision(s) still keep",
+    );
+  });
+
+  it("S11: ingredient.yaml differs with section hunk is refused", async () => {
+    const root = await tmpDir("craftar-s11-meta-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [
+        rule("review-posture", "a\n", { tags: ["x"] }),
+        rule("review-posture--acme", "b\n", { as: "review-posture", tags: ["y"] }),
+      ],
+      recipes: [recipe("base", ["rule/review-posture"]), recipe("base--acme", ["rule/review-posture--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const forge = await loadForge(root);
+    const base = forge.ingredients.get("rule/review-posture")!;
+    const variant = forge.ingredients.get("rule/review-posture--acme")!;
+    const diffResult = await diffIngredients(base, variant);
+    const planObj = await planFrom(base, variant, diffResult, "acme");
+    planObj.files[0].hunks![0].take = "section";
+    (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "s" };
+
+    await expect(applyPlan(base, variant, diffResult, planObj)).rejects.toThrow(
+      /unify plan: take: section needs the variant resolved in the same plan — ingredient.yaml differs in/,
+    );
+  });
+
+  it("S12: variant with a marker in another admitted file is refused", async () => {
+    const root = await tmpDir("craftar-s12-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+
+    // Create skill ingredients manually with proper structure
+    const skill = (name: string, body: Record<string, string>, extra: Record<string, unknown> = {}): IngredientSpec => ({
+      meta: { type: "skill", name, layout: "dir", ...extra },
+      files: body,
+    });
+
+    await makeForge(root, {
+      ingredients: [
+        skill("analyze", { "SKILL.md": "a\n", "notes.md": "x\n" }),
+        skill("analyze--acme", {
+          "SKILL.md": "b\n",
+          "notes.md": "<!-- craftar:section n -->\ny\n<!-- /craftar:section -->\n",
+        }, { as: "analyze" }),
+      ],
+      recipes: [recipe("base", ["skill/analyze"]), recipe("base--acme", ["skill/analyze--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const forge = await loadForge(root);
+    const base = forge.ingredients.get("skill/analyze")!;
+    const variant = forge.ingredients.get("skill/analyze--acme")!;
+    const diffResult = await diffIngredients(base, variant);
+    const planObj = await planFrom(base, variant, diffResult, "acme");
+    // Set section on SKILL.md only
+    for (const pf of planObj.files) {
+      if (pf.file === "SKILL.md" && pf.hunks) {
+        pf.hunks[0].take = "section";
+        (pf.hunks[0] as Record<string, unknown>).section = { name: "s" };
+      } else if (pf.hunks) {
+        pf.hunks[0].take = "base"; // resolve the other file
+      }
+    }
+
+    await expect(applyPlan(base, variant, diffResult, planObj)).rejects.toThrow(
+      /skill\/analyze--acme holds a section marker on notes.md:1/,
+    );
+  });
+
+  it("U1: --take variant over a marked base is still refused", async () => {
+    // This test ensures that taking variant on a file with markers is still refused
+    const baseBody = "# Review\n\n<!-- craftar:section flavors -->\n| a |\n<!-- /craftar:section -->\n\nDone.\n";
+    const variantBody = "# Review\n\n| b |\n\nDone.\n";
+    const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
+    const planObj = await planFrom(base, variant, diff, "acme");
+    // Take variant on all hunks (no section declaration)
+    for (const h of planObj.files[0].hunks!) {
+      h.take = "variant";
+    }
+
+    await expect(applyPlan(base, variant, diff, planObj)).rejects.toThrow(
+      /would lose or change section markers.*take base for the marker lines, or take: section to fill the section/,
+    );
+  });
+
+  it("U1: plan with section hunk that also takes variant on an existing marker hunk is refused", async () => {
+    // Base has two sections
+    const baseBody = "# Review\n\n<!-- craftar:section s1 -->\na\n<!-- /craftar:section -->\n\n<!-- craftar:section s2 -->\nb\n<!-- /craftar:section -->\n";
+    // Variant has neither marker
+    const variantBody = "# Review\n\nc\n\nd\n";
+    const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
+    const planObj = await planFrom(base, variant, diff, "acme");
+    // There should be hunks touching both sections
+    // Take section on one, take variant on the other (dropping its markers)
+    if (planObj.files[0].hunks!.length >= 2) {
+      planObj.files[0].hunks![0].take = "section";
+      (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "s1" };
+      planObj.files[0].hunks![1].take = "variant";
+    }
+
+    await expect(applyPlan(base, variant, diff, planObj)).rejects.toThrow(
+      /would lose or change section markers/,
+    );
+  });
+
+  it("a plan with no section hunk behaves exactly as before", async () => {
+    // Simple base/variant diff with take: base
+    const baseBody = "a\nb\nc\n";
+    const variantBody = "a\nx\nc\n";
+    const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
+    const planObj = await planFrom(base, variant, diff, "acme");
+    planObj.files[0].hunks![0].take = "base";
+
+    const result = await applyPlan(base, variant, diff, planObj);
+    expect(result.resolved).toBe(true);
+    expect(result.sections).toEqual([]);
+    // No changes when taking base on a simple diff
+    expect(result.write["rule.md"]).toBeUndefined();
+  });
+
+  it("P7 via section proof: a param that wraps a placeholder in more braces is refused at the proof (step 5)", async () => {
+    // SF-A: The reviewer's scenario that reaches proveSections step 5.
+    // Base has {{k}} which the param hunk extracts as token "k" → key "who".
+    // deriveHunk produces `Hello {{{{who}}}}.` because the tokenizer splits `{{k}}` and
+    // only the changed region `k` is templated. The section proof then sees that the
+    // template has `{{{{who}}}}` which is a different placeholder set than the original.
+    const baseBody = "Hello {{k}}.\n\n| a |\n\nEnd.\n";
+    const variantBody = "Hello {{y}}.\n\n| b |\n\nEnd.\n";
+    const { root, base, variant, diff } = await sectionScenario(baseBody, variantBody);
+
+    const planObj = await planFrom(base, variant, diff, "acme");
+
+    // Hunk 1: param extraction for {{k}} → {{y}}
+    planObj.files[0].hunks![0].take = "param";
+    (planObj.files[0].hunks![0] as Record<string, unknown>).params = [{ token: "k", key: "who" }];
+
+    // Hunk 2: section extraction for the table
+    planObj.files[0].hunks![1].take = "section";
+    (planObj.files[0].hunks![1] as Record<string, unknown>).section = { name: "t" };
+
+    // This should fail at step 5 of proveSections: placeholders differ
+    await expect(applyPlan(base, variant, diff, planObj)).rejects.toThrow(
+      /would change which \{\{…\}\} placeholders the text holds/,
+    );
+
+    // Verify Forge is untouched
+    const ruleFile = path.join(root, "ingredients/rules/review-posture/rule.md");
+    expect(await fs.readFile(ruleFile, "utf8")).toBe(baseBody);
+  });
+
+  it("D1: insertion-first run computes span correctly — markers wrap b..e", async () => {
+    // D1 bug: insertion-first case where run starts with pure insertion and ends with a change
+    // Base: a b c d e f (lines 1-6)
+    // Variant: a [inserted] b c d E f — insertion after a, change at e
+    // Span should be 2-5 (b..e), markers around b through e
+    const baseBody = "a\nb\nc\nd\ne\nf\n";
+    const variantBody = "a\ninserted\nb\nc\nd\nE\nf\n";
+    const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
+
+    // Should have 2 hunks: hunk 1 = insertion after line 1, hunk 2 = line 5 changed
+    expect(diff.files[0].hunks.length).toBe(2);
+
+    const planObj = await planFrom(base, variant, diff, "acme");
+    // Set both hunks to section with same name
+    planObj.files[0].hunks![0].take = "section";
+    (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "t" };
+    planObj.files[0].hunks![1].take = "section";
+    (planObj.files[0].hunks![1] as Record<string, unknown>).section = { name: "t" };
+
+    const result = await applyPlan(base, variant, diff, planObj);
+    expect(result.resolved).toBe(true);
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0].name).toBe("t");
+
+    const merged = result.write["rule.md"] as string;
+    // Markers should wrap lines b, c, d, e (span 2-5)
+    const expected = `a
+<!-- craftar:section t -->
+b
+c
+d
+e
+<!-- /craftar:section -->
+f
+`;
+    expect(merged).toBe(expected);
+
+    // Default is base lines 2-5 (b, c, d, e)
+    expect(result.sections[0].default).toBe("b\nc\nd\ne\n");
+    // Value is variant lines between anchors (inserted, b, c, d, E)
+    expect(result.sections[0].value).toBe("inserted\nb\nc\nd\nE\n");
+  });
+
+  it("Case C: two empty sections one base line apart — accepted via applyPlan", async () => {
+    // Case C: base a b c d, variant a X b Y c d (two pure insertions)
+    // Two sections: x after line 1 (empty span), y after line 2 (empty span)
+    // These are one base line apart and should NOT overlap.
+    const baseBody = "a\nb\nc\nd\n";
+    const variantBody = "a\nX\nb\nY\nc\nd\n";
+    const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
+
+    // Should have 2 hunks: insertion after line 1, insertion after line 2
+    expect(diff.files[0].hunks.length).toBe(2);
+
+    const planObj = await planFrom(base, variant, diff, "acme");
+    // First hunk: section x
+    planObj.files[0].hunks![0].take = "section";
+    (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "x" };
+    // Second hunk: section y
+    planObj.files[0].hunks![1].take = "section";
+    (planObj.files[0].hunks![1] as Record<string, unknown>).section = { name: "y" };
+
+    const result = await applyPlan(base, variant, diff, planObj);
+    expect(result.resolved).toBe(true);
+    expect(result.sections).toHaveLength(2);
+
+    const sectionX = result.sections.find((s) => s.name === "x");
+    const sectionY = result.sections.find((s) => s.name === "y");
+
+    expect(sectionX).toBeDefined();
+    expect(sectionX!.default).toBe("");
+    expect(sectionX!.value).toBe("X\n");
+
+    expect(sectionY).toBeDefined();
+    expect(sectionY!.default).toBe("");
+    expect(sectionY!.value).toBe("Y\n");
+
+    const merged = result.write["rule.md"] as string;
+    // Markers: open x, close x before line 2; open y, close y before line 3
+    const expected = `a
+<!-- craftar:section x -->
+<!-- /craftar:section -->
+b
+<!-- craftar:section y -->
+<!-- /craftar:section -->
+c
+d
+`;
+    expect(merged).toBe(expected);
   });
 });

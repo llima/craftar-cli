@@ -763,6 +763,9 @@ describe("cli", () => {
       metaDiffers: [],
       // Spec 09 §4.5: always present, [] / null when the plan extracts nothing.
       params: [],
+      // Spec 12 §4.5: always present, [] / false when no section hunk.
+      sections: [],
+      manifestEdited: false,
       profileEdited: null,
       // Ruling 38: a removed variant always warns about overrides.ingredients.disable.
       warnings: [
@@ -1868,9 +1871,461 @@ describe("cli — sections (spec 11 §4.2, §4.3)", () => {
     const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "globex", "--take", "variant", "--forge", root]);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain(
-      "error: unify: ingredients/rules/review-posture/rule.md would lose or change section markers (sections flavors would become none) — take base for the marker lines; editing sections through unify is not supported yet",
+      "error: unify: ingredients/rules/review-posture/rule.md would lose or change section markers (sections flavors would become none) — take base for the marker lines, or take: section to fill the section",
     );
     expect(await snapshot(root)).toEqual(before);
     expect(gitStatus(root)).toBe("");
+  });
+});
+
+describe("forge unify take: section (spec 12)", () => {
+  // Helper functions for section extraction tests
+  async function sectionForge(extra: Record<string, string> = {}): Promise<string> {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    // Base and variant with only the table differing — creates a block hunk
+    const baseBody = "# Review posture\n\nDispatch reviewers.\n\nshared line\n";
+    const variantBody = "# Review posture\n\nDispatch reviewers.\n\n| Repo | Reviewer |\n|---|---|\n| `acme-api` | backend |\n\nshared line\n";
+    await makeForge(root, {
+      ingredients: [
+        rule("review-posture", baseBody),
+        rule("review-posture--acme", variantBody, { as: "review-posture" }),
+      ],
+      recipes: [recipe("base", ["rule/review-posture"]), recipe("base--acme", ["rule/review-posture--acme"])],
+      profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"])],
+    });
+    await writeFiles(root, extra);
+    gitInit(root);
+    gitCommitAll(root, "init");
+    return root;
+  }
+
+  async function savedSectionPlan(root: string, edit: (plan: any) => void): Promise<string> {
+    const dir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    const planPath = path.join(dir, "plan.yaml");
+    expect(runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+    const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+    edit(plan);
+    const edited = path.join(dir, "edited.yaml");
+    await fs.writeFile(edited, YAML.stringify(plan));
+    return edited;
+  }
+
+  it("a full run: --save-plan → edit → --plan exits 0, writes manifest, body with markers, profile with value, removes variant", async () => {
+    const root = await sectionForge();
+    const planPath = await savedSectionPlan(root, (plan) => {
+      // The hunk should have a pre-filled section (from the heading slug or as block)
+      expect(plan.files[0].hunks.length).toBe(1);
+      expect(plan.files[0].hunks[0].suggestion.class).toBe("block");
+      expect(plan.files[0].hunks[0].section).toBeDefined();
+      // Set take: section and use the pre-filled name or a custom one
+      plan.files[0].hunks[0].take = "section";
+      plan.files[0].hunks[0].section = { name: "flavors" }; // No lines needed for a block hunk
+    });
+
+    const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", planPath, "--forge", root]);
+    expect(r.code, r.stderr).toBe(0);
+
+    // Text report checks
+    expect(r.stdout).toContain("forge craftar.forge.yaml edited (schema: 2)");
+    expect(r.stdout).toContain("section rule/review-posture flavors — default");
+    expect(r.stdout).toContain("(profile acme)");
+    expect(r.stdout).toContain("~ profiles/acme/profile.yaml");
+    expect(r.stdout).toContain("removed variant rule/review-posture--acme");
+    // W3 warning
+    expect(r.stdout).toContain("warn flavors is now a section of rule/review-posture");
+    expect(r.stdout).toContain("overrides.sections.rule/review-posture.flavors");
+
+    // Verify files on disk
+    const body = await fs.readFile(path.join(root, "ingredients/rules/review-posture/rule.md"), "utf8");
+    expect(body).toContain("<!-- craftar:section flavors -->");
+    expect(body).toContain("<!-- /craftar:section -->");
+
+    const profileYaml = YAML.parse(await fs.readFile(path.join(root, "profiles/acme/profile.yaml"), "utf8"));
+    expect(profileYaml.sections?.["rule/review-posture"]?.flavors).toBeDefined();
+
+    const manifest = YAML.parse(await fs.readFile(path.join(root, "craftar.forge.yaml"), "utf8"));
+    expect(manifest.schema).toBe(2);
+
+    // Variant directory is gone
+    expect(await fs.access(path.join(root, "ingredients/rules/review-posture--acme")).then(() => true, () => false)).toBe(false);
+  });
+
+  it("--json includes sections array and manifestEdited: true", async () => {
+    const root = await sectionForge();
+    const planPath = await savedSectionPlan(root, (plan) => {
+      plan.files[0].hunks[0].take = "section";
+      plan.files[0].hunks[0].section = { name: "flavors" };
+    });
+
+    const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", planPath, "--forge", root, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+
+    const out = JSON.parse(r.stdout);
+    expect(out.manifestEdited).toBe(true);
+    expect(out.sections).toHaveLength(1);
+    expect(out.sections[0]).toMatchObject({
+      key: "rule/review-posture",
+      name: "flavors",
+      file: "rule.md",
+      existing: false,
+      written: true,
+    });
+    expect(typeof out.sections[0].defaultLines).toBe("number");
+    expect(typeof out.sections[0].valueLines).toBe("number");
+    expect(out.profileEdited).toBe("profiles/acme/profile.yaml");
+  });
+
+  it("a plan without section hunks has sections: [] and manifestEdited: false", async () => {
+    const root = await sectionForge();
+    // Use --take base to resolve without sections
+    const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--take", "base", "--forge", root, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.sections).toEqual([]);
+    expect(out.manifestEdited).toBe(false);
+  });
+
+  it("an existing section: shows '— existing ·', no manifest line, no W3", async () => {
+    // Create a Forge where the base already has markers
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const baseBody = "# Review posture\n\n<!-- craftar:section flavors -->\n| globex |\n<!-- /craftar:section -->\n";
+    const variantBody = "# Review posture\n\n| acme |\n| acme-web |\n";
+    await makeForge(root, {
+      manifest: { schema: 2 },
+      ingredients: [
+        rule("review-posture", baseBody),
+        rule("review-posture--acme", variantBody, { as: "review-posture" }),
+      ],
+      recipes: [recipe("base", ["rule/review-posture"]), recipe("base--acme", ["rule/review-posture--acme"])],
+      profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"])],
+    });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const dir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    const planPath = path.join(dir, "plan.yaml");
+    expect(runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+    const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+    // Hunks touching existing section should have pre-filled name
+    for (const h of plan.files[0].hunks) {
+      h.take = "section";
+      h.section = { name: "flavors" };
+    }
+    const edited = path.join(dir, "edited.yaml");
+    await fs.writeFile(edited, YAML.stringify(plan));
+
+    const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", edited, "--forge", root]);
+    expect(r.code, r.stderr).toBe(0);
+
+    // Text report: existing section format
+    expect(r.stdout).toContain("— existing ·");
+    // No manifest line (already schema: 2)
+    expect(r.stdout).not.toContain("forge craftar.forge.yaml edited");
+    // No W3 warning for existing section
+    expect(r.stdout).not.toContain("is now a section of");
+  });
+
+  it("an already-in-place value: line ends with ' — already in place'", async () => {
+    // Forge A: run a full extraction to learn the exact value
+    const rootA = await sectionForge();
+    const planA = await savedSectionPlan(rootA, (plan) => {
+      plan.files[0].hunks[0].take = "section";
+      plan.files[0].hunks[0].section = { name: "flavors" };
+    });
+    expect(runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", planA, "--forge", rootA]).code).toBe(0);
+    const profileA = YAML.parse(await fs.readFile(path.join(rootA, "profiles/acme/profile.yaml"), "utf8"));
+    const extractedValue = profileA.sections["rule/review-posture"].flavors;
+
+    // Forge B: identical structure, but pre-write the value into the profile
+    const rootB = await sectionForge({
+      "profiles/acme/profile.yaml": YAML.stringify({
+        name: "acme",
+        recipes: ["base--acme"],
+        params: {},
+        sections: { "rule/review-posture": { flavors: extractedValue } },
+      }),
+    });
+    const profileBefore = await fs.readFile(path.join(rootB, "profiles/acme/profile.yaml"), "utf8");
+    const planB = await savedSectionPlan(rootB, (plan) => {
+      plan.files[0].hunks[0].take = "section";
+      plan.files[0].hunks[0].section = { name: "flavors" };
+    });
+
+    const rText = runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", planB, "--forge", rootB]);
+    expect(rText.code, rText.stderr).toBe(0);
+    // The section line ends with "— already in place"
+    expect(rText.stdout).toMatch(/section rule\/review-posture flavors.*— already in place/);
+    // No profile edit line (the value is in place, so the profile is not touched)
+    expect(rText.stdout).not.toContain("~ profiles/acme/profile.yaml");
+    // Profile bytes unchanged
+    expect(await fs.readFile(path.join(rootB, "profiles/acme/profile.yaml"), "utf8")).toBe(profileBefore);
+    // But the manifest IS bumped (pinning fix 21d4f5d — a new section adds markers, so schema: 2 is required)
+    expect(rText.stdout).toContain("forge craftar.forge.yaml edited (schema: 2)");
+    const manifestB = YAML.parse(await fs.readFile(path.join(rootB, "craftar.forge.yaml"), "utf8"));
+    expect(manifestB.schema).toBe(2);
+
+    // --json: sections[0].written === false and manifestEdited === true
+    const rootC = await sectionForge({
+      "profiles/acme/profile.yaml": YAML.stringify({
+        name: "acme",
+        recipes: ["base--acme"],
+        params: {},
+        sections: { "rule/review-posture": { flavors: extractedValue } },
+      }),
+    });
+    const planC = await savedSectionPlan(rootC, (plan) => {
+      plan.files[0].hunks[0].take = "section";
+      plan.files[0].hunks[0].section = { name: "flavors" };
+    });
+    const rJson = runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", planC, "--forge", rootC, "--json"]);
+    expect(rJson.code, rJson.stderr).toBe(0);
+    const out = JSON.parse(rJson.stdout);
+    expect(out.sections[0].written).toBe(false);
+    expect(out.manifestEdited).toBe(true);
+  });
+
+  it("mustHold: an untracked manifest makes the run exit 1 naming it, Forge untouched", async () => {
+    const root = await sectionForge();
+    // Untrack the manifest
+    execFileSync("git", ["-C", root, "rm", "-q", "--cached", "craftar.forge.yaml"]);
+    execFileSync("git", ["-C", root, "config", "status.showUntrackedFiles", "no"]);
+    execFileSync("git", ["-C", root, "commit", "-q", "-m", "untrack manifest"], { env: gitEnv() });
+
+    const planPath = await savedSectionPlan(root, (plan) => {
+      plan.files[0].hunks[0].take = "section";
+      plan.files[0].hunks[0].section = { name: "flavors" };
+    });
+
+    const before = await snapshot(root);
+    const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", planPath, "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("craftar.forge.yaml is not held by git");
+    expect(await snapshot(root)).toEqual(before);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a late failure after the manifest write names craftar.forge.yaml in the recovery commands", async () => {
+    // Use a helper that restores the permission in cleanup so the temp dir can be removed
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(async () => {
+      await fs.chmod(path.join(root, "ingredients/rules"), 0o755).catch(() => {});
+      await fs.rm(root, { recursive: true, force: true });
+    });
+    // Build the same Forge structure as sectionForge
+    const baseBody = "# Review posture\n\nDispatch reviewers.\n\nshared line\n";
+    const variantBody = "# Review posture\n\nDispatch reviewers.\n\n| Repo | Reviewer |\n|---|---|\n| `acme-api` | backend |\n\nshared line\n";
+    await makeForge(root, {
+      ingredients: [
+        rule("review-posture", baseBody),
+        rule("review-posture--acme", variantBody, { as: "review-posture" }),
+      ],
+      recipes: [recipe("base", ["rule/review-posture"]), recipe("base--acme", ["rule/review-posture--acme"])],
+      profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"])],
+    });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    // Save and edit the plan
+    const dir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    const planPath = path.join(dir, "plan.yaml");
+    expect(runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+    const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+    plan.files[0].hunks[0].take = "section";
+    plan.files[0].hunks[0].section = { name: "flavors" };
+    const edited = path.join(dir, "edited.yaml");
+    await fs.writeFile(edited, YAML.stringify(plan));
+
+    // Make ingredients/rules read-only: the variant removal (last write) will fail
+    await fs.chmod(path.join(root, "ingredients/rules"), 0o555);
+
+    const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", edited, "--forge", root]);
+    expect(r.code).toBe(1);
+    // stderr names craftar.forge.yaml (the manifest was touched)
+    expect(r.stderr).toContain("craftar.forge.yaml");
+    // stderr names the profile (it was edited)
+    expect(r.stderr).toContain("profiles/acme/profile.yaml");
+    // stderr names the body file (it was written with markers)
+    expect(r.stderr).toContain("ingredients/rules/review-posture/rule.md");
+    // The recovery line shows git checkout for those paths
+    expect(r.stderr).toContain("git -C");
+    expect(r.stderr).toContain("checkout --");
+  });
+
+  // Table-driven refusal tests: each scenario exits 1, emits the fragment, and leaves the Forge untouched.
+  const refusalCases: Array<{
+    name: string;
+    fragment: string;
+    setup: () => Promise<{ root: string; planPath: string }>;
+  }> = [
+    {
+      name: "S5: lines out of range",
+      fragment: "out of range",
+      setup: async () => {
+        const root = await tmpDir("craftar-cli-s5-");
+        cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+        // Base and variant with a block hunk
+        await makeForge(root, {
+          ingredients: [
+            rule("wf", "a\nb\nc\n"),
+            rule("wf--acme", "a\nB\nc\n", { as: "wf" }),
+          ],
+          recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+          profiles: [profile("acme", ["base--acme"])],
+        });
+        gitInit(root);
+        gitCommitAll(root, "init");
+        const dir = await tmpDir("craftar-cli-plan-");
+        cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+        const planPath = path.join(dir, "plan.yaml");
+        expect(runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+        const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+        plan.files[0].hunks[0].take = "section";
+        plan.files[0].hunks[0].section = { name: "data", lines: "1-100" }; // out of range
+        const edited = path.join(dir, "edited.yaml");
+        await fs.writeFile(edited, YAML.stringify(plan));
+        return { root, planPath: edited };
+      },
+    },
+    {
+      name: "S5 without lines: existing section covers take: base hunk (Case D)",
+      fragment: "section flavors (lines ",
+      setup: async () => {
+        const root = await tmpDir("craftar-cli-s5-");
+        cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+        // Base with markers at lines 3-7: opener, a, b, c, closer
+        // Variant without markers: a, B, C (b and c changed)
+        const baseBody = "H\n\n<!-- craftar:section flavors -->\na\nb\nc\n<!-- /craftar:section -->\n\nF\n";
+        const variantBody = "H\n\na\nB\nC\n\nF\n";
+        await makeForge(root, {
+          ingredients: [
+            rule("wf", baseBody),
+            rule("wf--acme", variantBody, { as: "wf" }),
+          ],
+          recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+          profiles: [profile("acme", ["base--acme"])],
+        });
+        gitInit(root);
+        gitCommitAll(root, "init");
+        const dir = await tmpDir("craftar-cli-plan-");
+        cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+        const planPath = path.join(dir, "plan.yaml");
+        expect(runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+        const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+        // Hunk 1: section flavors, hunk 2: base (covers hunk 2, which is inside span 3-7)
+        plan.files[0].hunks[0].take = "section";
+        plan.files[0].hunks[0].section = { name: "flavors" };
+        plan.files[0].hunks[1].take = "base";
+        const edited = path.join(dir, "edited.yaml");
+        await fs.writeFile(edited, YAML.stringify(plan));
+        return { root, planPath: edited };
+      },
+    },
+    {
+      name: "S12: variant holds a section marker",
+      fragment: "holds a section marker",
+      setup: async () => {
+        const root = await tmpDir("craftar-cli-s12-");
+        cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+        // Variant has a marker
+        await makeForge(root, {
+          ingredients: [
+            rule("wf", "a\nb\n"),
+            rule("wf--acme", "a\n<!-- craftar:section x -->\ny\n<!-- /craftar:section -->\n", { as: "wf" }),
+          ],
+          recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+          profiles: [profile("acme", ["base--acme"])],
+        });
+        gitInit(root);
+        gitCommitAll(root, "init");
+        const dir = await tmpDir("craftar-cli-plan-");
+        cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+        const planPath = path.join(dir, "plan.yaml");
+        expect(runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+        const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+        // Set take: section on hunks
+        for (const h of plan.files[0].hunks) {
+          h.take = "section";
+          h.section = { name: "s" };
+        }
+        const edited = path.join(dir, "edited.yaml");
+        await fs.writeFile(edited, YAML.stringify(plan));
+        return { root, planPath: edited };
+      },
+    },
+    {
+      name: "S13: another profile sets the section",
+      fragment: "it names no marker today and would start to apply",
+      setup: async () => {
+        const root = await tmpDir("craftar-cli-s13-");
+        cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+        await makeForge(root, {
+          ingredients: [
+            rule("wf", "a\nb\n"),
+            rule("wf--acme", "a\nB\n", { as: "wf" }),
+          ],
+          recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+          profiles: [
+            profile("acme", ["base--acme"]),
+            // globex sets section 'data' on rule/wf — this would start to apply after acme's extraction
+            { name: "globex", recipes: ["base"], targets: ["claude-code"], params: {}, sections: { "rule/wf": { data: "other\n" } } },
+          ],
+        });
+        gitInit(root);
+        gitCommitAll(root, "init");
+        const dir = await tmpDir("craftar-cli-plan-");
+        cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+        const planPath = path.join(dir, "plan.yaml");
+        expect(runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+        const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+        plan.files[0].hunks[0].take = "section";
+        plan.files[0].hunks[0].section = { name: "data" }; // same name globex already sets
+        const edited = path.join(dir, "edited.yaml");
+        await fs.writeFile(edited, YAML.stringify(plan));
+        return { root, planPath: edited };
+      },
+    },
+    {
+      name: "S16: profile sections is an alias",
+      fragment: "sections is an alias",
+      setup: async () => {
+        const root = await tmpDir("craftar-cli-s16-");
+        cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+        await makeForge(root, {
+          ingredients: [
+            rule("wf", "a\nb\n"),
+            rule("wf--acme", "a\nB\n", { as: "wf" }),
+          ],
+          recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+          profiles: [profile("acme", ["base--acme"])],
+        });
+        // Overwrite the profile with a YAML alias
+        await fs.writeFile(path.join(root, "profiles/acme/profile.yaml"), "name: acme\nrecipes:\n  - base--acme\nx: &s {}\nsections: *s\n");
+        gitInit(root);
+        gitCommitAll(root, "init");
+        const dir = await tmpDir("craftar-cli-plan-");
+        cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+        const planPath = path.join(dir, "plan.yaml");
+        expect(runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+        const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+        plan.files[0].hunks[0].take = "section";
+        plan.files[0].hunks[0].section = { name: "data" };
+        const edited = path.join(dir, "edited.yaml");
+        await fs.writeFile(edited, YAML.stringify(plan));
+        return { root, planPath: edited };
+      },
+    },
+  ];
+
+  it.each(refusalCases)("$name: exits 1, emits fragment, Forge untouched", async ({ fragment, setup }) => {
+    const { root, planPath } = await setup();
+    const before = await snapshot(root);
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--plan", planPath, "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(fragment);
+    expect(await snapshot(root)).toEqual(before);
   });
 });

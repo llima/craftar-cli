@@ -7,9 +7,12 @@ import { exists, listFiles, loadForge, readIngredientText, type Forge, type Load
 import { splitLines, type Hunk } from "./diff.js";
 import { detectEol, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
-import type { HunkTake, Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile } from "../schema/index.js";
+import type { HunkTake, Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile, PlanHunk } from "../schema/index.js";
 import { collect, deriveHunk, prove, substitutedFile, type Extraction } from "./extract.js";
-import { parseSections, SectionMarkerError } from "./sections.js";
+import { firstMarkerLine, parseSections, SectionMarkerError } from "./sections.js";
+import { sectionKey } from "./resolve.js";
+import { deriveSections, prefillSections, proveSections, type MarkerInsertion, type SectionRun } from "./section-extract.js";
+import { stripBom, toLf } from "./text.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
 // fidelity, correctness should not hinge on a glyph no diff viewer, editor or re-encoding shows.
@@ -74,8 +77,43 @@ export async function planFrom(
   profile: string,
 ): Promise<UnifyPlan> {
   await assertTextMergeable(base, variant);
+
+  // Build `declared`: every section name the ingredient already declares, in any admitted file (spec 12 §4.2).
+  const declared = new Set<string>();
+  const baseFiles = await listFiles(base.dir);
+  const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
+  for (const rel of baseFiles) {
+    if (rel === "ingredient.yaml") continue;
+    if (!substitutedFile(base.meta, rel)) continue;
+    try {
+      const text = await readIngredientText(base, rel);
+      const parsed = parseSections(text, label(rel), base.ref);
+      for (const s of parsed.sections) declared.add(s.name);
+    } catch (e) {
+      // Ignore parse errors — the check that matters runs later (spec 12 §4.2)
+      if (!(e instanceof SectionMarkerError)) throw e;
+    }
+  }
+
   const files: PlanFile[] = [];
   for (const f of diff.files) {
+    // Pre-fill section names only when the file is admitted (substitutedFile) (spec 12 §4.2)
+    let sectionNames: Array<string | undefined> = [];
+    if (substitutedFile(base.meta, f.file)) {
+      try {
+        const baseText = await readIngredientText(base, f.file);
+        sectionNames = prefillSections({
+          baseText,
+          label: label(f.file),
+          ref: base.ref,
+          hunks: f.hunks,
+          declared,
+        });
+      } catch {
+        // On any error, leave all undefined (spec 12 §4.2: "pre-fill never blocks --save-plan")
+      }
+    }
+
     files.push({
       file: f.file,
       hunks: f.hunks.map((h, i) => ({
@@ -84,6 +122,8 @@ export async function planFrom(
         take: "keep" as const,
         // Pre-filled for a value hunk, read only once the human sets take: param (spec 09 §4.2).
         ...(h.suggestion.class === "value" && h.suggestion.tokens ? { params: h.suggestion.tokens.map((t) => ({ token: t.a, key: t.param })) } : {}),
+        // Pre-filled section name for --save-plan (spec 12 §4.2). Only when defined.
+        ...(sectionNames[i] !== undefined ? { section: { name: sectionNames[i] } } : {}),
         suggestion: h.suggestion,
       })),
     });
@@ -132,6 +172,27 @@ export interface ApplyOptions {
    * metadata difference does not hold the variant back (Ruling 28).
    */
   discardVariantMeta?: boolean;
+  /**
+   * Profile `<p>`'s current `sections` for the base's key (spec 12 §6.5); the CLI passes it in
+   * step 7. Default `{}`.
+   */
+  profileSections?: Record<string, string>;
+}
+
+/** One section a plan run creates or fills (spec 12 §4.5, §5.5). */
+export interface SectionExtraction {
+  /** `<type>/<outName>` of the base. */
+  key: string;
+  /** The section name. */
+  name: string;
+  /** The base-relative file. */
+  file: string;
+  /** True for an existing section whose markers were already in the base (Ruling 2). */
+  existing: boolean;
+  /** The base's lines inside the span; `null` for an existing section. */
+  default: string | null;
+  /** The variant's lines between the anchors, canonical (`` or ending with `\n`). */
+  value: string;
 }
 
 export interface UnifyResult {
@@ -153,6 +214,8 @@ export interface UnifyResult {
   metaDiffers: string[];
   /** The keys a `take: param` plan extracts (spec 09); [] when it has no param hunk. */
   params: Extraction[];
+  /** The sections a `take: section` plan extracts (spec 12); [] when it has no section hunk. */
+  sections: SectionExtraction[];
 }
 
 /**
@@ -174,8 +237,20 @@ export interface UnifyResult {
  * `B.eofNewline`), not reconstructed from the winning hunk's own `noEofNewline` flag — that flag
  * has nothing to say when the winning side contributes no lines (a pure removal taken as the
  * winner), so `variantText` is passed in alongside the hunks for exactly this reason.
+ *
+ * The optional `markers` parameter (spec 12 §6.4) inserts section marker lines at their base line
+ * indices: before base line index `at`, in array order, so the template holds them at the positions
+ * §6.1's span described. A `take: "section"` hunk contributes its **base** lines, never the
+ * variant's, so the default text sits between the markers.
  */
-function mergeFile(baseText: string, variantText: string, hunks: Hunk[], takes: HunkTake[], templates: (string[] | undefined)[] = []): string {
+function mergeFile(
+  baseText: string,
+  variantText: string,
+  hunks: Hunk[],
+  takes: HunkTake[],
+  templates: (string[] | undefined)[] = [],
+  markers: MarkerInsertion[] = [],
+): string {
   const bom = baseText.charCodeAt(0) === BOM.charCodeAt(0);
   const A = splitLines(baseText);
   const B = splitLines(variantText);
@@ -183,20 +258,38 @@ function mergeFile(baseText: string, variantText: string, hunks: Hunk[], takes: 
   let i = 0; // 0-based index into A.lines
   let iAfterLastHunk = 0;
   let lastWinnerIsVariant = false;
+  let mi = 0; // index into markers
+
+  /** Push all markers with `at === idx` before copying any lines at that index. */
+  const flushMarkers = (idx: number) => {
+    while (mi < markers.length && markers[mi].at === idx) out.push(markers[mi++].line);
+  };
+
   hunks.forEach((h, k) => {
     const start = h.a.start - 1; // a.start is 1-based and marks where the hunk applies
-    while (i < start) out.push(A.lines[i++]);
+    while (i < start) {
+      flushMarkers(i);
+      out.push(A.lines[i++]);
+    }
+    flushMarkers(i);
     const takeVariant = takes[k] === "variant";
+    const takeSection = takes[k] === "section";
     const side = takeVariant ? h.b : h.a;
-    // A param hunk contributes its template; its sides pair line by line and agree on the final newline (P2).
-    out.push(...(takes[k] === "param" ? templates[k]! : side.lines));
+    // A param hunk contributes its template; a section hunk contributes the base (the default inside
+    // the markers); its sides pair line by line and agree on the final newline (P2, §6.4).
+    out.push(...(takes[k] === "param" ? templates[k]! : takeSection ? h.a.lines : side.lines));
     i += h.a.lines.length; // the base's lines for this hunk are consumed either way
     if (k === hunks.length - 1) {
       iAfterLastHunk = i;
       lastWinnerIsVariant = takeVariant;
     }
   });
-  while (i < A.lines.length) out.push(A.lines[i++]);
+  while (i < A.lines.length) {
+    flushMarkers(i);
+    out.push(A.lines[i++]);
+  }
+  // Markers at the end of the file (at === A.lines.length)
+  flushMarkers(A.lines.length);
 
   // The tail decides the final newline only when the last hunk reaches the end of the file.
   const endsAtTail = hunks.length > 0 && iAfterLastHunk >= A.lines.length;
@@ -225,10 +318,28 @@ export async function applyPlan(
   let unresolved = 0;
   const extractions = new Map<string, Extraction>();
   const proofs: Array<{ file: string; template: string; mBase: string; mVar: string }> = [];
+  const sectionExtractions: SectionExtraction[] = [];
+  const sectionProofs: Array<{
+    file: string;
+    label: string;
+    template: string;
+    mBase: string;
+    mVar: string;
+    newNames: string[];
+    values: Record<string, string>;
+  }> = [];
+  /** The new section names for each file, for U1's expected structure. */
+  const newSectionNames = new Map<string, string[]>();
+  /** Tracks which files have section hunks, for the S11 check. */
+  const filesWithSectionHunks = new Set<string>();
+  /** Names used across all files, for S3 second form. */
+  const globalNameUsage = new Map<string, string>(); // name → file
 
   const hunksByFile = new Map(diff.files.map((f) => [f.file, f.hunks]));
   const onlyInBase = new Set(diff.onlyInBase);
   const onlyInVariant = new Set(diff.onlyInVariant);
+
+  const profileSections = opts.profileSections ?? {};
 
   // Ruling 29 (spec §8 refusal 7, in both directions): the plan must cover every file the diff
   // has — paired, base-only and variant-only — each exactly once. The walk below only visits the
@@ -254,6 +365,29 @@ export async function applyPlan(
     }
   }
 
+  // S12 first part: When the plan has at least one section hunk, every admitted file of the VARIANT
+  // (not only the files with runs) is checked for markers.
+  const planHasSectionHunk = plan.files.some((pf) => pf.hunks?.some((h) => h.take === "section"));
+  if (planHasSectionHunk) {
+    const variantFiles = await listFiles(variant.dir);
+    for (const rel of variantFiles) {
+      if (rel === "ingredient.yaml") continue;
+      if (!substitutedFile(variant.meta, rel)) continue;
+      const variantText = await readIngredientText(variant, rel);
+      const markerLine = firstMarkerLine(toLf(stripBom(variantText)));
+      if (markerLine !== null) {
+        throw new Error(
+          `unify: ${variant.ref} holds a section marker on ${rel}:${markerLine} — remove it by hand and save the plan again, or re-import the workspace`,
+        );
+      }
+    }
+  }
+
+  // Build declaredElsewhere: section names declared in the base's OTHER admitted files.
+  // This is needed for S6 (new section name already declared).
+  const baseFiles = await listFiles(base.dir);
+  const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
+
   for (const pf of plan.files) {
     if (pf.hunks) {
       const hunks = hunksByFile.get(pf.file);
@@ -270,7 +404,8 @@ export async function applyPlan(
         );
       }
       const takes: HunkTake[] = new Array(hunks.length);
-      const paramOf = new Map<number, (typeof pf.hunks)[number]>();
+      const paramOf = new Map<number, PlanHunk>();
+      const sectionOf = new Map<number, PlanHunk>();
       const seen = new Set<number>();
       for (const ph of pf.hunks) {
         if (ph.hunk < 1 || ph.hunk > hunks.length || seen.has(ph.hunk)) {
@@ -281,9 +416,123 @@ export async function applyPlan(
         seen.add(ph.hunk);
         takes[ph.hunk - 1] = ph.take;
         if (ph.take === "param") paramOf.set(ph.hunk - 1, ph);
+        if (ph.take === "section") sectionOf.set(ph.hunk - 1, ph);
       }
 
+      // Section hunks are not counted as unresolved decisions (spec 12 §6.1 step 5: "A section hunk is a decision")
       unresolved += takes.filter((t) => t === "keep").length;
+
+      // Files with section hunks
+      if (sectionOf.size > 0) {
+        filesWithSectionHunks.add(pf.file);
+
+        // S2: the file must be substituted
+        if (!substitutedFile(base.meta, pf.file)) {
+          throw new Error(
+            `unify plan: "${pf.file}" is copied without expansion by a target that emits it — a section marker there would be emitted literally`,
+          );
+        }
+
+        // Build declaredElsewhere for this file
+        const declaredElsewhere = new Map<string, string>();
+        for (const otherFile of baseFiles) {
+          if (otherFile === "ingredient.yaml" || otherFile === pf.file) continue;
+          if (!substitutedFile(base.meta, otherFile)) continue;
+          const otherText = await readIngredientText(base, otherFile);
+          const parsed = parseSections(otherText, label(otherFile), base.ref);
+          for (const s of parsed.sections) {
+            declaredElsewhere.set(s.name, `${otherFile}:${s.line}`);
+          }
+        }
+
+        // Derive sections
+        const baseText = await readIngredientText(base, pf.file);
+        const variantText = await readIngredientText(variant, pf.file);
+        const { runs, markers } = deriveSections({
+          file: pf.file,
+          label: label(pf.file),
+          ref: base.ref,
+          baseText,
+          variantText,
+          hunks,
+          entries: pf.hunks,
+          declaredElsewhere,
+        });
+
+        // S3 second form: a name used in two different files
+        for (const run of runs) {
+          const existingFile = globalNameUsage.get(run.name);
+          if (existingFile !== undefined && existingFile !== pf.file) {
+            throw new Error(`unify plan: section ${run.name} is named in "${existingFile}" and "${pf.file}"`);
+          }
+          globalNameUsage.set(run.name, pf.file);
+        }
+
+        // Collect new section names for U1
+        const newNames = runs.filter((r) => !r.existing).map((r) => r.name);
+        if (newNames.length > 0) {
+          newSectionNames.set(pf.file, newNames);
+        }
+
+        // Build values map for this file's runs
+        const values: Record<string, string> = {};
+        for (const run of runs) {
+          values[run.name] = run.value;
+        }
+
+        // Create the three merges: template with markers, all-base, all-variant
+        // as(side) maps BOTH "param" and "section" to side
+        const as = (side: HunkTake) => takes.map((t) => (t === "param" || t === "section" ? side : t));
+
+        // Handle param hunks in the same file
+        const templates: (string[] | undefined)[] = new Array(hunks.length);
+        for (const [k, ph] of paramOf) {
+          const { lines, pairs } = deriveHunk(pf.file, k + 1, hunks[k], ph.params, base.meta.params);
+          templates[k] = lines;
+          collect(extractions, pf.file, k + 1, pairs);
+        }
+
+        const template = mergeFile(baseText, variantText, hunks, takes, templates, markers);
+        const mBase = mergeFile(baseText, variantText, hunks, as("base"), templates);
+        const mVar = mergeFile(baseText, variantText, hunks, as("variant"), templates);
+
+        // Record proof for proveSections (not prove)
+        sectionProofs.push({
+          file: pf.file,
+          label: label(pf.file),
+          template,
+          mBase,
+          mVar,
+          newNames,
+          values,
+        });
+
+        // Push section extractions
+        const key = sectionKey(base.meta);
+        for (const run of runs) {
+          sectionExtractions.push({
+            key,
+            name: run.name,
+            file: run.file,
+            existing: run.existing,
+            default: run.default,
+            value: run.value,
+          });
+        }
+
+        // A reuse-only plan (only existing sections, no new sections, no variant takes, no param
+        // takes) does not change the body by spec 12 §6.7 step 3: "For an existing section, nothing
+        // (unless param or variant hunks in the same file change it)." Skip mergeFile entirely
+        // rather than round-tripping a mixed-EOL base through splitLines/withEol.
+        const hasNewSection = newNames.length > 0;
+        const hasVariantTake = takes.includes("variant");
+        const hasParamTake = paramOf.size > 0;
+        if (hasNewSection || hasVariantTake || hasParamTake) {
+          if (template !== baseText) write[pf.file] = template;
+        }
+        continue;
+      }
+
       // A plan with no `variant` decision cannot change this file's bytes — skip the merge
       // entirely rather than round-tripping the base through `splitLines`/`withEol` for nothing,
       // which would re-terminate a base with mixed line endings even though no decision moved it.
@@ -363,17 +612,47 @@ export async function applyPlan(
     }
   }
 
-  await checkMarkers(base, write, remove);
+  await checkMarkers(base, write, remove, newSectionNames);
 
   const metaDiffers = opts.discardVariantMeta ? [] : metaDifferences(base, variant);
   const params = [...extractions.values()];
+  const sections = sectionExtractions;
+
+  // S11: when the plan has a section hunk, the variant must be resolved in the same plan
+  if (sections.length) {
+    if (unresolved) {
+      throw new Error(`unify plan: take: section needs the variant resolved in the same plan — ${unresolved} decision(s) still keep`);
+    }
+    if (metaDiffers.length) {
+      throw new Error(`unify plan: take: section needs the variant resolved in the same plan — ingredient.yaml differs in ${metaDiffers.join(", ")}`);
+    }
+  }
+
+  // P10: the base now holds {{key}}; left unresolved, the next diff would show the same hunk as placeholder versus literal.
+  // When both params and sections are present, report the param wording (P10).
   if (params.length) {
-    // P10: the base now holds {{key}}; left unresolved, the next diff would show the same hunk as placeholder versus literal.
     if (unresolved) throw new Error(`unify plan: take: param needs the variant resolved in the same plan — ${unresolved} decision(s) still keep`);
     if (metaDiffers.length) throw new Error(`unify plan: take: param needs the variant resolved in the same plan — ingredient.yaml differs in ${metaDiffers.join(", ")}`);
-    for (const p of proofs) prove(p.file, p.template, p.mBase, p.mVar, params);
   }
-  return { write, remove, resolved: unresolved === 0 && metaDiffers.length === 0, unresolved, metaDiffers, params };
+
+  // Run proofs: param-only files use prove, files with section runs use proveSections
+  for (const p of proofs) prove(p.file, p.template, p.mBase, p.mVar, params);
+  for (const p of sectionProofs) {
+    proveSections({
+      file: p.file,
+      label: p.label,
+      ref: base.ref,
+      template: p.template,
+      mBase: p.mBase,
+      mVar: p.mVar,
+      newNames: p.newNames,
+      values: p.values,
+      profileValues: profileSections,
+      extractions: params,
+    });
+  }
+
+  return { write, remove, resolved: unresolved === 0 && metaDiffers.length === 0, unresolved, metaDiffers, params, sections };
 }
 
 /** The sequence of section names a text declares, or the parse problem. */
@@ -387,13 +666,19 @@ function markerStructure(text: string, label: string): { names: string[] } | { p
 }
 
 /**
- * U1 (spec 11 §6.12, Ruling 8): a merge never adds, removes or changes a section marker. Taking the
- * variant's side of a hunk that holds a marker would leave an unterminated section, which every later
- * sync refuses, or drop a section whose profile values would then silently stop applying. Each file
- * the result writes or removes is compared, as the sequence of its section names, with the base's —
- * before anything is written. Editing sections through unify is not supported yet.
+ * U1 (spec 11 §6.12, spec 12 §6.8): a merge never adds, removes or changes a section marker unless
+ * the plan declares it. Taking the variant's side of a hunk that holds a marker would leave an
+ * unterminated section, which every later sync refuses, or drop a section whose profile values would
+ * then silently stop applying. Each file the result writes or removes is compared, as the sequence
+ * of its section names, with the **expected** sequence: the base's, plus the plan's new sections
+ * inserted in span order. A plan without section hunks expects the base's sequence, as in 0.7.x.
  */
-async function checkMarkers(base: LoadedIngredient, write: Record<string, string | Buffer>, remove: string[]): Promise<void> {
+async function checkMarkers(
+  base: LoadedIngredient,
+  write: Record<string, string | Buffer>,
+  remove: string[],
+  newNames: Map<string, string[]> = new Map(),
+): Promise<void> {
   const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
   const touched = [...Object.keys(write), ...remove].filter((rel) => substitutedFile(base.meta, rel)).sort();
   for (const rel of touched) {
@@ -405,11 +690,36 @@ async function checkMarkers(base: LoadedIngredient, write: Record<string, string
     if ("problem" in after) why = `the result has malformed markers — ${after.problem}`;
     else if ("problem" in before) why = `the base has malformed markers — ${before.problem}`;
     else if (merged === undefined && before.names.length) why = `the file would be removed with sections ${before.names.join(", ")}`;
-    else if (JSON.stringify(before.names) !== JSON.stringify(after.names)) {
-      const show = (xs: string[]) => (xs.length ? xs.join(", ") : "none");
-      why = `sections ${show(before.names)} would become ${show(after.names)}`;
+    else {
+      // Compute expected names: base's names plus new names from the plan
+      // For a file in newNames, the comparison becomes: `after` names with the new names removed must
+      // equal `before` names, and each new name must occur exactly once in `after`.
+      const fileNewNames = newNames.get(rel);
+      if (fileNewNames && fileNewNames.length > 0) {
+        const newNamesSet = new Set(fileNewNames);
+        // Check each new name occurs exactly once in after
+        for (const name of fileNewNames) {
+          const count = after.names.filter((n) => n === name).length;
+          if (count !== 1) {
+            const show = (xs: string[]) => (xs.length ? xs.join(", ") : "none");
+            why = `sections ${show(before.names)} would become ${show(after.names)}`;
+            break;
+          }
+        }
+        if (!why) {
+          // after names with new names removed must equal before names
+          const afterFiltered = after.names.filter((n) => !newNamesSet.has(n));
+          if (JSON.stringify(before.names) !== JSON.stringify(afterFiltered)) {
+            const show = (xs: string[]) => (xs.length ? xs.join(", ") : "none");
+            why = `sections ${show(before.names)} would become ${show(after.names)}`;
+          }
+        }
+      } else if (JSON.stringify(before.names) !== JSON.stringify(after.names)) {
+        const show = (xs: string[]) => (xs.length ? xs.join(", ") : "none");
+        why = `sections ${show(before.names)} would become ${show(after.names)}`;
+      }
     }
-    if (why) throw new Error(`unify: ${label(rel)} would lose or change section markers (${why}) — take base for the marker lines; editing sections through unify is not supported yet`);
+    if (why) throw new Error(`unify: ${label(rel)} would lose or change section markers (${why}) — take base for the marker lines, or take: section to fill the section`);
   }
 }
 

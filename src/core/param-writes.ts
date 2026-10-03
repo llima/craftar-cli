@@ -4,11 +4,14 @@ import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema } from "../schema/index.js";
 import { placeholders, substitutedFile, type Extraction } from "./extract.js";
-import { exists, listFiles, readIngredientText, type Forge, type LoadedIngredient } from "./forge.js";
+import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
+import { manifestWithSections } from "./manifest-edit.js";
 import { resolve, sectionKey } from "./resolve.js";
+import { canonicalValue } from "./sections.js";
 import { stripBom } from "./text.js";
+import type { SectionExtraction, WriteJournal } from "./unify.js";
 import { editYamlText } from "./yaml-edit.js";
-import type { WriteJournal } from "./unify.js";
+import { deepMerge } from "./merge.js";
 
 /**
  * The Forge-level half of a parameter extraction (spec 09 §6.3–§6.5): the rows only the whole
@@ -22,10 +25,14 @@ export interface ParamWrites {
   ingredientYaml: { abs: string; content: string } | null;
   /** Profile `<p>`'s `profile.yaml`, rendered, or null when it already holds every value. */
   profile: { abs: string; content: string } | null;
+  /** `craftar.forge.yaml` with `schema: 2`, or null (already 2, or no new section). */
+  manifest: { abs: string; content: string } | null;
   /** Paths git must hold before anything is written (spec 06 row 17). */
   mustHold: string[];
   /** The keys this run declares in `ingredient.yaml` or sets in the profile; the others were already in place. */
   written: string[];
+  /** The section names this run writes into the profile (not listed when already in place). */
+  sectionsWritten: string[];
 }
 
 
@@ -82,10 +89,8 @@ function citingSection(profile: { sections: Record<string, Record<string, string
 
 const same = (a: unknown, b: string) => a !== undefined && String(a) === b;
 
-/** The spec 09 edit of one Forge file, through the shared in-place YAML editor. */
-async function editYaml(abs: string, label: string, edit: (doc: YAML.Document) => void): Promise<string> {
-  return editYamlText(await fs.readFile(abs, "utf8"), { command: "unify", label, keys: ["params"] }, edit);
-}
+/** Equality of canonical section values (spec 12 §6.6). */
+const eq = (a: string, b: string) => canonicalValue(a) === canonicalValue(b);
 
 export async function checkParamWrites(
   forge: Forge,
@@ -93,6 +98,7 @@ export async function checkParamWrites(
   variant: LoadedIngredient,
   profile: string,
   extractions: Extraction[],
+  sections: SectionExtraction[] = [],
 ): Promise<ParamWrites> {
   const profileAbs = await findProfileFile(forge.root, profile);
   const current = forge.profiles.get(profile);
@@ -158,11 +164,56 @@ export async function checkParamWrites(
     assign.push(e);
   }
 
+  // Section checks (spec 12 §6.6): S13–S16
+  const sectionAssign: SectionExtraction[] = [];
+  for (const s of sections) {
+    // S15: check that a value citing {{k}} where base declares k with a default and variant doesn't is refused
+    for (const k of placeholders(s.value)) {
+      const baseDecl = base.meta.params?.[k]?.default;
+      const variantDecl = variant.meta.params?.[k];
+      if (baseDecl !== undefined && variantDecl === undefined) {
+        throw new Error(`unify: section ${s.name} would render {{${k}}} through ${base.ref}'s default, where ${variant.ref} renders it without`);
+      }
+    }
+
+    // Get the profile's current value for this section (if any)
+    const profileSections = Object.hasOwn(current.sections, s.key) ? current.sections[s.key] : {};
+    const profileValue = Object.hasOwn(profileSections, s.name) ? profileSections[s.name] : undefined;
+
+    if (!s.existing) {
+      // New section: check S13 — no other profile sets this section
+      for (const [q, prof] of forge.profiles) {
+        const otherSections = Object.hasOwn(prof.sections, s.key) ? prof.sections[s.key] : {};
+        if (!Object.hasOwn(otherSections, s.name)) continue;
+        const v = otherSections[s.name];
+        if (q === profile) {
+          // The unifying profile: if equal, nothing to write; if different, S14
+          if (eq(v, s.value)) continue; // already in place, skip assign
+          throw new Error(`unify: profile ${profile} already sets section ${s.name} of ${s.key} to other content`);
+        } else {
+          // Another profile: S13
+          throw new Error(`unify: profile ${q} already sets section ${s.name} of ${s.key} — it names no marker today and would start to apply`);
+        }
+      }
+      // If we get here and the profile already has exactly the value, skip assign
+      if (profileValue !== undefined && eq(profileValue, s.value)) continue;
+      sectionAssign.push(s);
+    } else {
+      // Existing section: only check the unifying profile
+      if (profileValue !== undefined) {
+        if (eq(profileValue, s.value)) continue; // already in place
+        throw new Error(`unify: profile ${profile} already sets section ${s.name} of ${s.key} to other content`);
+      }
+      // Undefined → write
+      sectionAssign.push(s);
+    }
+  }
+
   let ingredientYaml: ParamWrites["ingredientYaml"] = null;
   if (declare.length) {
     const abs = path.join(base.dir, "ingredient.yaml");
     const label = path.relative(forge.root, abs).split(path.sep).join("/");
-    const content = await editYaml(abs, label, (doc) => {
+    const content = await editYamlText(await fs.readFile(abs, "utf8"), { command: "unify", label, keys: ["params"] }, (doc) => {
       for (const e of declare) doc.setIn(["params", e.key, "default"], e.default);
     });
     const before = IngredientSchema.parse(YAML.parse(await fs.readFile(abs, "utf8")));
@@ -174,23 +225,71 @@ export async function checkParamWrites(
     ingredientYaml = { abs, content };
   }
 
+  // Profile edit: ONE editYamlText call with both params and sections (spec 12 §6.7 step 4)
   let profileWrite: ParamWrites["profile"] = null;
-  if (assign.length) {
+  if (assign.length || sectionAssign.length) {
     const label = path.relative(forge.root, profileAbs).split(path.sep).join("/");
-    const content = await editYaml(profileAbs, label, (doc) => {
+    const content = await editYamlText(await fs.readFile(profileAbs, "utf8"), { command: "unify", label, keys: ["params", "sections"] }, (doc) => {
       for (const e of assign) doc.setIn(["params", e.key], e.value);
+      for (const s of sectionAssign) doc.setIn(["sections", s.key, s.name], s.value);
     });
     const before = ProfileSchema.parse(YAML.parse(await fs.readFile(profileAbs, "utf8")));
     const after = parseOr(label, () => ProfileSchema.parse(YAML.parse(stripBom(content))));
-    const expected = { ...before, params: { ...before.params, ...Object.fromEntries(assign.map((e) => [e.key, e.value])) } };
-    if (!isDeepStrictEqual(after, expected) || assign.some((e) => !same(after.params[e.key], e.value))) {
+    // Build expected sections: deep-merge the before sections with the new ones
+    const expectedSections = deepMerge(
+      before.sections,
+      Object.fromEntries(sectionAssign.map((s) => [s.key, { [s.name]: s.value }]))
+    );
+    const expected = {
+      ...before,
+      params: { ...before.params, ...Object.fromEntries(assign.map((e) => [e.key, e.value])) },
+      sections: expectedSections,
+    };
+    if (!isDeepStrictEqual(after, expected)) {
       throw new Error(`unify: cannot edit ${label} in place (the edit does not read back as exactly the new values)`);
+    }
+    // Also verify each value reads back exactly (string equality)
+    if (assign.some((e) => !same(after.params[e.key], e.value))) {
+      throw new Error(`unify: cannot edit ${label} in place (the edit does not read back as exactly the new values)`);
+    }
+    // For sections, verify each value reads back exactly
+    for (const s of sectionAssign) {
+      const afterVal = after.sections[s.key]?.[s.name];
+      if (afterVal !== s.value) {
+        throw new Error(`unify: cannot edit ${label} in place (the edit does not read back as exactly the new values)`);
+      }
     }
     profileWrite = { abs: profileAbs, content };
   }
 
+  // Manifest edit (spec 12 §6.7 step 1): when at least one section is NEW and schema is 1
+  // Use the full `sections` list, not `sectionAssign`: a new section adds markers to the body
+  // even when its value is already in place in the profile, so the Forge needs schema: 2.
+  let manifestWrite: ParamWrites["manifest"] = null;
+  const hasNewSection = sections.some((s) => !s.existing);
+  if (hasNewSection && forge.manifest.schema === 1) {
+    const manifestAbs = path.join(forge.root, FORGE_MANIFEST);
+    const raw = await fs.readFile(manifestAbs, "utf8");
+    const content = manifestWithSections(raw, "unify");
+    if (content !== null) {
+      manifestWrite = { abs: manifestAbs, content };
+    }
+  }
+
   const written = new Set([...declare, ...assign].map((e) => e.key));
-  return { ingredientYaml, profile: profileWrite, mustHold: profileWrite ? [profileWrite.abs] : [], written: extractions.map((e) => e.key).filter((k) => written.has(k)) };
+  const sectionsWritten = sectionAssign.map((s) => s.name);
+  const mustHold: string[] = [];
+  if (profileWrite) mustHold.push(profileWrite.abs);
+  if (manifestWrite) mustHold.push(manifestWrite.abs);
+
+  return {
+    ingredientYaml,
+    profile: profileWrite,
+    manifest: manifestWrite,
+    mustHold,
+    written: extractions.map((e) => e.key).filter((k) => written.has(k)),
+    sectionsWritten,
+  };
 }
 
 function parseOr<T>(label: string, parse: () => T): T {
