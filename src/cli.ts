@@ -5,6 +5,7 @@ import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { loadWorkspace, plan, readLock, status, apply, resolveForge, type FileStatus, type SectionLayer } from "./core/sync.js";
+import { sectionKey } from "./core/resolve.js";
 import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
@@ -267,12 +268,12 @@ forge
 
 forge
   .command("unify")
-  .description("Resolve one variant back into its base through a reviewable plan, taking each hunk from a side or turning it into a {{param}}. Writes to the Forge")
+  .description("Resolve one variant back into its base through a reviewable plan, taking each hunk from a side or turning it into a {{param}} or a section. Writes to the Forge")
   .argument("<type/name>", "base ingredient (rule/workflow)")
   .requiredOption("--profile <p>", "which variant to resolve")
   .option("--take <side>", "resolve every decision to base or variant")
-  .option("--plan <file>", "apply the decisions in this plan file (a hunk may be take: param with its params list)")
-  .option("--save-plan <file>", "write a plan with every decision deferred, each hunk annotated with its suggested class (which --plan ignores) and value hunks pre-filled with params, to a new file outside the Forge, and stop")
+  .option("--plan <file>", "apply the decisions in this plan file (a hunk may be take: param with its params list, or take: section with its section name)")
+  .option("--save-plan <file>", "write a plan with every decision deferred, each hunk annotated with its suggested class (which --plan ignores), value hunks pre-filled with params and block hunks pre-filled with a section name, to a new file outside the Forge, and stop")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
@@ -368,12 +369,21 @@ forge
       }
     }
 
-    const result = await applyPlan(base, variant, diff, toApply, { discardVariantMeta: o.take === "base" });
+    // Get the profile's current sections for the base's key (spec 12 §6.5).
+    const baseKey = sectionKey(base.meta);
+    const profileSections = (() => {
+      const p = f.profiles.get(o.profile);
+      return p && Object.hasOwn(p.sections, baseKey) ? p.sections[baseKey] : {};
+    })();
+
+    const result = await applyPlan(base, variant, diff, toApply, { discardVariantMeta: o.take === "base", profileSections });
     // Ruling 33, dry pass: every recipe `ingredients` rewrite the cascade will make is checked before
     // the first byte is written, so a refusal (an aliased reference) leaves the Forge untouched.
     const cascadeFiles = result.resolved ? await checkRecipeCascade(f, base.ref, variant.ref) : [];
-    // Spec 09: the Forge-level rows and both YAML edits of a parameter extraction, rendered before any write.
-    const paramWrites = result.params.length ? await checkParamWrites(f, base, variant, o.profile, result.params) : null;
+    // Spec 09 & 12: the Forge-level rows and YAML edits for parameter and section extractions, rendered before any write.
+    const paramWrites = result.params.length || result.sections.length
+      ? await checkParamWrites(f, base, variant, o.profile, result.params, result.sections)
+      : null;
 
     // Ruling 37: "git is the undo" only holds for files git actually has. The whole-repo clean
     // check above cannot see ignored files (a Forge its enclosing repo ignores, an ignored file in
@@ -391,12 +401,15 @@ forge
 
     // Order: merged files, then the recipe cascade, then removal of the variant directory
     // (Ruling 21) — a late failure leaves the variant in place, never a recipe naming a removed ingredient.
+    // Spec 12 §6.7: the manifest is first when it moves to schema: 2; each prefix is emission-neutral.
     const journal: WriteJournal = [];
     let touched: string[] = [];
     let cascade: RecipeCascadeResult = { rewritten: [], identicalToSibling: [] };
     let variantRemoved: string | null = null;
     try {
-      // Spec 09 §6.5: declarations, then the template, then the profile's values — each prefix emission-neutral.
+      // Spec 12 §6.7 step 1: the manifest (schema: 2), FIRST when it needs to move.
+      if (paramWrites?.manifest) await writeParamFile(paramWrites.manifest, journal);
+      // Spec 09 §6.5 / Spec 12 §6.7 step 2: declarations, then the template, then the profile's values — each prefix emission-neutral.
       if (paramWrites?.ingredientYaml) await writeParamFile(paramWrites.ingredientYaml, journal);
       touched = await writeUnified(base, result, journal);
       if (paramWrites?.ingredientYaml) touched = [...touched, "ingredient.yaml"].sort();
@@ -442,6 +455,13 @@ forge
           `craftar.local.yaml) now overrides ${base.ref} too; unify cannot reach workspaces`,
       );
     }
+    // Spec 12 W3: a new section's name may be cited by a workspace's overrides.sections that was inert until now.
+    for (const s of result.sections.filter((sec) => !sec.existing)) {
+      warnings.push(
+        `${s.name} is now a section of ${base.ref} — a workspace that sets overrides.sections.${s.key}.${s.name} (craftar.yaml or ` +
+          `craftar.local.yaml) now applies there; unify cannot reach workspaces`,
+      );
+    }
     if (variantRemoved) {
       warnings.push(
         `${variant.ref} was removed — a workspace that disables it in overrides.ingredients.disable (craftar.yaml or craftar.local.yaml) ` +
@@ -469,6 +489,17 @@ forge
             metaDiffers: result.metaDiffers,
             // Spec 09 §4.5: only what this run wrote — [] when every key was already declared and valued.
             params: result.params.filter((e) => paramWrites?.written.includes(e.key)).map((e) => ({ key: e.key, default: e.default, value: e.value })),
+            // Spec 12 §4.5: sections with line counts; [] when no section hunk.
+            sections: result.sections.map((s) => ({
+              key: s.key,
+              name: s.name,
+              file: s.file,
+              existing: s.existing,
+              defaultLines: s.default === null ? null : numLines(s.default),
+              valueLines: numLines(s.value),
+              written: paramWrites?.sectionsWritten.includes(s.name) ?? false,
+            })),
+            manifestEdited: paramWrites?.manifest !== null && paramWrites?.manifest !== undefined,
             profileEdited: paramWrites?.profile ? path.relative(f.root, paramWrites.profile.abs).split(path.sep).join("/") : null,
             warnings,
           },
@@ -479,11 +510,20 @@ forge
     }
 
     console.log(pc.bold(`craftar forge unify ${ref} ↔ ${o.profile}`));
+    // Spec 12 §4.4: manifest line first, if edited
+    if (paramWrites?.manifest) console.log(`  forge craftar.forge.yaml edited (schema: 2)`);
     for (const p of touched) console.log(`  ${result.write[p] !== undefined || p === "ingredient.yaml" ? pc.green("~") : pc.magenta("-")} ${p}`);
     for (const e of result.params) {
       const line = `param ${e.key} — default ${JSON.stringify(e.default)} (${base.ref}) · ${JSON.stringify(e.value)} (profile ${o.profile})`;
       // Same filter as --json params: a key already declared and valued is named as such, not as written.
       console.log(`  ${line}${paramWrites?.written.includes(e.key) ? "" : " — already in place"}`);
+    }
+    // Spec 12 §4.4: one line per section, after the params
+    for (const s of result.sections) {
+      const defCount = s.existing ? "existing" : `default ${lineCount(s.default!)} (${base.ref})`;
+      const valCount = `${lineCount(s.value)} (profile ${o.profile})`;
+      const inPlace = paramWrites?.sectionsWritten.includes(s.name) ? "" : " — already in place";
+      console.log(`  section ${s.key} ${s.name} — ${defCount} · ${valCount}${inPlace}`);
     }
     if (paramWrites?.profile) console.log(`  ${pc.green("~")} ${path.relative(f.root, paramWrites.profile.abs).split(path.sep).join("/")}`);
     console.log(`  resolved ${result.resolved ? pc.green("yes") : pc.yellow("no")} · unresolved ${result.unresolved}`);
@@ -653,8 +693,13 @@ function describeSuggestion(s: HunkSuggestion): string {
 
 /** A section value as the import report shows it: `empty`, or its line count once canonical (spec 11 §4.3). */
 function lineCount(value: string): string {
-  const n = canonicalValue(value).split("\n").length - 1;
+  const n = numLines(value);
   return n === 0 ? "empty" : `${n} line${n === 1 ? "" : "s"}`;
+}
+
+/** Numeric line count of a canonical section value, for --json output. */
+function numLines(value: string): number {
+  return canonicalValue(value).split("\n").length - 1;
 }
 
 function describeDistance(d: Distance): string {
