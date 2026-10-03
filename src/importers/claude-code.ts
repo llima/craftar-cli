@@ -3,6 +3,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
+import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../core/secrets.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
@@ -967,27 +968,9 @@ async function stageManifest(stage: ForgeStage, forge: string, needs: boolean): 
     return "created";
   }
   if (!needs) return "unchanged";
-  const i13 = (why: string) => new Error(`import: cannot edit ${FORGE_MANIFEST} in place (${why}) — set schema: ${FORGE_SCHEMA_SECTIONS} by hand, commit, and re-run`);
   const raw = await stage.readText(abs);
-  let before: unknown;
-  try {
-    before = YAML.parse(stripBom(raw));
-  } catch (e) {
-    throw i13(`it does not parse: ${(e as Error).message}`);
-  }
-  // Unreachable while forgeBefore loads the manifest through its schema first (I5); kept so the edit never assumes it.
-  if (before === null || typeof before !== "object" || Array.isArray(before)) throw i13("it is not a YAML mapping");
-  if ((before as { schema?: unknown }).schema === FORGE_SCHEMA_SECTIONS) return "unchanged";
-  let content: string;
-  try {
-    content = editYamlText(raw, { command: "import", label: FORGE_MANIFEST, keys: ["schema"] }, (doc) => doc.set("schema", FORGE_SCHEMA_SECTIONS));
-  } catch (e) {
-    throw i13((e as Error).message.replace(/^.*in place \((.*)\) — .*$/s, "$1"));
-  }
-  const after = YAML.parse(stripBom(content));
-  if (!ForgeManifestSchema.safeParse(after).success || !isDeepStrictEqual(after, { ...before, schema: FORGE_SCHEMA_SECTIONS })) {
-    throw i13(`the edit does not read back as the original with exactly schema: ${FORGE_SCHEMA_SECTIONS}`);
-  }
+  const content = manifestWithSections(raw, "import");
+  if (content === null) return "unchanged";
   stage.write(abs, content);
   return "edited";
 }
