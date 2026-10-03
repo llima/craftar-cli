@@ -167,3 +167,104 @@ describe("sections and the manifest schema (spec 11 §5.2)", () => {
     await expect(loadForge(root)).rejects.toThrow(/invalid .*acme.profile\.yaml/);
   });
 });
+
+describe("plan section (spec 12)", () => {
+  /** Helper to build a plan with a hunk entry for testing. */
+  const plan = (hunk: Record<string, unknown>) => ({
+    schema: 1,
+    base: "rule/w",
+    profile: "acme",
+    variant: "rule/w--acme",
+    baseFingerprint: "sha256:a",
+    variantFingerprint: "sha256:b",
+    files: [{ file: "rule.md", hunks: [{ hunk: 1, at: "lines 1–5", take: "section", ...hunk }] }],
+  });
+
+  it("accepts take: section with section: { name } and with lines: '<from>-<to>'", () => {
+    expect(UnifyPlanSchema.safeParse(plan({ section: { name: "flavors" } })).success).toBe(true);
+    expect(UnifyPlanSchema.safeParse(plan({ section: { name: "flavors", lines: "5-10" } })).success).toBe(true);
+    expect(UnifyPlanSchema.safeParse(plan({ section: { name: "flavors", lines: "1-1" } })).success).toBe(true);
+    expect(UnifyPlanSchema.safeParse(plan({ section: { name: "review-table-2", lines: "12-99" } })).success).toBe(true);
+  });
+
+  it("accepts take: section with no section object (S1 is the engine's refusal)", () => {
+    const noSection = plan({});
+    delete (noSection.files[0].hunks[0] as Record<string, unknown>).section;
+    expect(UnifyPlanSchema.safeParse(noSection).success).toBe(true);
+  });
+
+  it("accepts take: keep with a section field (the engine ignores it, the schema does not strip it)", () => {
+    const withKeep = plan({ take: "keep", section: { name: "flavors" } });
+    const parsed = UnifyPlanSchema.parse(withKeep);
+    expect(parsed.files[0].hunks![0].take).toBe("keep");
+    expect(parsed.files[0].hunks![0].section).toEqual({ name: "flavors" });
+  });
+
+  it("refuses a name with a space", () => {
+    const r = UnifyPlanSchema.safeParse(plan({ section: { name: "Flavors Table" } }));
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues.some((i) => i.message.includes("slug-like"))).toBe(true);
+  });
+
+  it("refuses lines: '5' (no range)", () => {
+    const r = UnifyPlanSchema.safeParse(plan({ section: { name: "flavors", lines: "5" } }));
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues.some((i) => i.message.includes("<from>-<to>"))).toBe(true);
+  });
+
+  it("refuses lines: '0-3' (zero-based start)", () => {
+    const r = UnifyPlanSchema.safeParse(plan({ section: { name: "flavors", lines: "0-3" } }));
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues.some((i) => i.message.includes("<from>-<to>"))).toBe(true);
+  });
+
+  it("refuses lines: 'a-b' (non-numeric)", () => {
+    const r = UnifyPlanSchema.safeParse(plan({ section: { name: "flavors", lines: "a-b" } }));
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues.some((i) => i.message.includes("<from>-<to>"))).toBe(true);
+  });
+
+  it("refuses an unknown field inside section (PlanSectionSchema is strict)", () => {
+    const r = UnifyPlanSchema.safeParse(plan({ section: { name: "x", extra: 1 } }));
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues.some((i) => i.code === "unrecognized_keys")).toBe(true);
+  });
+
+  it("refuses a one-sided file entry with take: section (TakeSchema unchanged)", () => {
+    const oneSided = {
+      schema: 1,
+      base: "rule/w",
+      profile: "acme",
+      variant: "rule/w--acme",
+      baseFingerprint: "sha256:a",
+      variantFingerprint: "sha256:b",
+      files: [{ file: "x.md", onlyIn: "variant", take: "section" }],
+    };
+    const r = UnifyPlanSchema.safeParse(oneSided);
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    // TakeSchema is base | variant | keep — "section" is not valid there.
+    expect(r.error.issues.some((i) => i.path.includes("take"))).toBe(true);
+  });
+
+  it("an existing plan with take: param and params still parses exactly as before", () => {
+    const paramPlan = {
+      schema: 1,
+      base: "rule/w",
+      profile: "acme",
+      variant: "rule/w--acme",
+      baseFingerprint: "sha256:a",
+      variantFingerprint: "sha256:b",
+      files: [{ file: "rule.md", hunks: [{ hunk: 1, take: "param", params: [{ token: "globex-api", key: "deploy.api" }] }] }],
+    };
+    const parsed = UnifyPlanSchema.parse(paramPlan);
+    expect(parsed.files[0].hunks![0].take).toBe("param");
+    expect(parsed.files[0].hunks![0].params).toEqual([{ token: "globex-api", key: "deploy.api" }]);
+    expect(parsed.files[0].hunks![0]).not.toHaveProperty("section");
+  });
+});

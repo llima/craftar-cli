@@ -819,3 +819,20 @@ describe("U1 — a merge never changes section markers (spec 11 §6.12, Ruling 8
     expect(await e(applyPlan(rm.base, rm.variant, rm.diff, rmPlan))).toContain("the file would be removed with sections n");
   });
 });
+
+describe("take: section placeholder (spec 12 §4.1)", () => {
+  it("refuses a plan with take: section and leaves the Forge untouched", async () => {
+    const { base, variant, diff } = await scenario({ "rule.md": "a\nold\nc\n" }, { "rule.md": "a\nnew\nc\n" });
+    const plan = await planFrom(base, variant, diff, "acme");
+    plan.files[0].hunks![0].take = "section";
+    (plan.files[0].hunks![0] as Record<string, unknown>).section = { name: "flavors" };
+    // Read base content before applying plan
+    const baseBefore = await fs.readFile(path.join((base as { dir: string }).dir, "rule.md"), "utf8");
+    await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow(
+      'unify plan: "rule.md" hunk 1: take: section is not supported yet',
+    );
+    // The Forge must be untouched
+    const baseAfter = await fs.readFile(path.join((base as { dir: string }).dir, "rule.md"), "utf8");
+    expect(baseAfter).toBe(baseBefore);
+  });
+});

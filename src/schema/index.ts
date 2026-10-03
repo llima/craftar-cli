@@ -284,14 +284,24 @@ export type HunkSuggestion = z.infer<typeof HunkSuggestionSchema>;
 /** `substitute`'s key syntax (src/core/resolve.ts). */
 export const PARAM_KEY = /^[A-Za-z0-9_.]+$/;
 
-/** A hunk may also become a parameter (spec 09); a one-sided file entry keeps TakeSchema. */
-export const HunkTakeSchema = z.enum(["base", "variant", "param", "keep"]);
+/** A hunk may also become a parameter (spec 09) or a section (spec 12); a one-sided file entry keeps TakeSchema. */
+export const HunkTakeSchema = z.enum(["base", "variant", "param", "section", "keep"]);
 export type HunkTake = z.infer<typeof HunkTakeSchema>;
 
 export const PlanParamSchema = z
   .object({ token: z.string().min(1), key: z.string().regex(PARAM_KEY, "a param key is letters, digits, _ and .") })
   .strict();
 export type PlanParam = z.infer<typeof PlanParamSchema>;
+
+/** A section a hunk becomes (spec 12 §4.1). Read only when take is "section". */
+export const PlanSectionSchema = z
+  .object({
+    name: z.string().regex(SECTION_NAME, "a section name is slug-like"),
+    /** Base line numbers, 1-based and inclusive: widens the section over equal base lines (spec 12 §6.2). */
+    lines: z.string().regex(/^[1-9][0-9]*-[1-9][0-9]*$/, 'lines is "<from>-<to>"').optional(),
+  })
+  .strict();
+export type PlanSection = z.infer<typeof PlanSectionSchema>;
 
 export const PlanHunkSchema = z.object({
   hunk: z.number().int().positive(),
@@ -300,6 +310,8 @@ export const PlanHunkSchema = z.object({
   take: HunkTakeSchema,
   /** Read only when take is "param" (spec 09 §4.1). */
   params: z.array(PlanParamSchema).optional(),
+  /** Read only when take is "section" (spec 12 §4.1). */
+  section: PlanSectionSchema.optional(),
   /** Echo of the suggested class when the plan was saved. Never read back; a malformed one is dropped. */
   suggestion: HunkSuggestionSchema.optional().catch(undefined),
 });

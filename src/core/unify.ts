@@ -280,6 +280,9 @@ export async function applyPlan(
         }
         seen.add(ph.hunk);
         takes[ph.hunk - 1] = ph.take;
+        if (ph.take === "section") {
+          throw new Error(`unify plan: "${pf.file}" hunk ${ph.hunk}: take: section is not supported yet`);
+        }
         if (ph.take === "param") paramOf.set(ph.hunk - 1, ph);
       }
 
