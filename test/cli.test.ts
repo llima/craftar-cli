@@ -15,7 +15,7 @@ afterEach(async () => {
 
 /** Every file under root with its content, so a before/after comparison catches an in-place edit. */
 async function snapshot(root: string): Promise<Record<string, string>> {
-  const files = await listFiles(root);
+  const files = (await listFiles(root)).filter((f) => f !== ".git" && !f.startsWith(".git/"));
   return Object.fromEntries(await Promise.all(files.map(async (f) => [f, await fs.readFile(path.join(root, f), "utf8")] as const)));
 }
 
@@ -32,6 +32,8 @@ function gitEnv(): NodeJS.ProcessEnv {
 
 function gitInit(dir: string): void {
   execFileSync("git", ["init", "-q", dir]);
+  execFileSync("git", ["-C", dir, "config", "maintenance.auto", "false"]);
+  execFileSync("git", ["-C", dir, "config", "gc.auto", "0"]);
 }
 
 function gitCommitAll(dir: string, message: string): void {
@@ -40,6 +42,17 @@ function gitCommitAll(dir: string, message: string): void {
 }
 
 describe("cli", () => {
+  it("snapshot() never reads .git/ — git's background maintenance races it (0.8.1)", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.writeFile(path.join(root, "a.txt"), "a\n");
+    gitInit(root);
+    gitCommitAll(root, "init");
+    const keys = Object.keys(await snapshot(root));
+    expect(keys).toContain("a.txt");
+    expect(keys.filter((k) => k === ".git" || k.startsWith(".git/"))).toEqual([]);
+  });
+
   it("status prints the unresolved-param warning and exits 0; sync --check still passes", async () => {
     const s = await scenario(
       { ingredients: [rule("a", "Org: {{missing}}\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
