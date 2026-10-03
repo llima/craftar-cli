@@ -471,6 +471,46 @@ describe("deriveSections — S5: lines issues", () => {
       }),
     )).toContain("lines 3-5 of section data cuts hunk 1");
   });
+
+  it("S5 without lines: existing section covers a take: base hunk (Case D)", () => {
+    // Case D: existing section `flavors` in base (lines 3-7: opener, a, b, c, closer)
+    // Variant without markers: a, B, C (b and c changed)
+    // 2 hunks: hunk 1 removes opener, hunk 2 changes b→B, c→C and removes closer
+    // Plan: hunk 1 take: section name `flavors`, hunk 2 take: base
+    // Error: S5 "section flavors (lines 3-7) covers hunk 2, which is take: base"
+    const base = lines("H", "", OPEN("flavors"), "a", "b", "c", CLOSE, "", "F");
+    const variant = lines("H", "", "a", "B", "C", "", "F");
+    const hunks = getHunks(base, variant);
+
+    // Should have 2 hunks
+    expect(hunks.length).toBe(2);
+
+    // Hunk 1: removes opener (line 3)
+    // Hunk 2: changes b→B, c→C and removes closer (lines 5-7 in base)
+
+    // Plan: hunk 1 section (name flavors), hunk 2 base
+    const entries = [
+      entry(1, "section", { name: "flavors" }),
+      entry(2, "base"),
+    ];
+
+    const msg = err(() =>
+      deriveSections({
+        file: FILE,
+        label: LABEL,
+        ref: REF,
+        baseText: base,
+        variantText: variant,
+        hunks,
+        entries,
+        declaredElsewhere: new Map(),
+      }),
+    );
+
+    // S5 without lines: "section flavors (lines 3-7) covers hunk 2, which is take: base"
+    expect(msg).toContain("section flavors (lines ");
+    expect(msg).toContain("covers hunk");
+  });
 });
 
 describe("deriveSections — S6: name already declared", () => {

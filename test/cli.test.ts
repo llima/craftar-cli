@@ -2190,9 +2190,40 @@ describe("forge unify take: section (spec 12)", () => {
         return { root, planPath: edited };
       },
     },
-    // Note: The S5 no-lines wording ("section <n> (lines a-b) covers hunk <m>") is tested
-    // at the unit level in test/section-extract.test.ts. A command-level test would require
-    // a diff that produces overlapping hunks, which the line-diff algorithm doesn't do.
+    {
+      name: "S5 without lines: existing section covers take: base hunk (Case D)",
+      fragment: "section flavors (lines ",
+      setup: async () => {
+        const root = await tmpDir("craftar-cli-s5-");
+        cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+        // Base with markers at lines 3-7: opener, a, b, c, closer
+        // Variant without markers: a, B, C (b and c changed)
+        const baseBody = "H\n\n<!-- craftar:section flavors -->\na\nb\nc\n<!-- /craftar:section -->\n\nF\n";
+        const variantBody = "H\n\na\nB\nC\n\nF\n";
+        await makeForge(root, {
+          ingredients: [
+            rule("wf", baseBody),
+            rule("wf--acme", variantBody, { as: "wf" }),
+          ],
+          recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+          profiles: [profile("acme", ["base--acme"])],
+        });
+        gitInit(root);
+        gitCommitAll(root, "init");
+        const dir = await tmpDir("craftar-cli-plan-");
+        cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+        const planPath = path.join(dir, "plan.yaml");
+        expect(runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+        const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+        // Hunk 1: section flavors, hunk 2: base (covers hunk 2, which is inside span 3-7)
+        plan.files[0].hunks[0].take = "section";
+        plan.files[0].hunks[0].section = { name: "flavors" };
+        plan.files[0].hunks[1].take = "base";
+        const edited = path.join(dir, "edited.yaml");
+        await fs.writeFile(edited, YAML.stringify(plan));
+        return { root, planPath: edited };
+      },
+    },
     {
       name: "S12: variant holds a section marker",
       fragment: "holds a section marker",
