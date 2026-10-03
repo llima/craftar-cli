@@ -436,7 +436,12 @@ export function deriveSections(args: {
 
   // Sort markers: by `at`, then by type (closer before opener for different sections,
   // opener before closer for same section), then by name for stability.
-  // This is a total order: at → isOpener → name covers all cases.
+  //
+  // This is a total order because S7 refuses every empty span sharing a position with
+  // another span's marker. After S7 passes, at any `at` value we have either:
+  // - One section's opener and closer (empty span) → opener before closer
+  // - Different sections' openers or closers → closer before opener, then by name
+  // No two empty spans share an `at`, and no empty span shares `at` with another marker.
   markersWithMeta.sort((a, b) => {
     if (a.at !== b.at) return a.at - b.at;
 
