@@ -2190,6 +2190,9 @@ describe("forge unify take: section (spec 12)", () => {
         return { root, planPath: edited };
       },
     },
+    // Note: The S5 no-lines wording ("section <n> (lines a-b) covers hunk <m>") is tested
+    // at the unit level in test/section-extract.test.ts. A command-level test would require
+    // a diff that produces overlapping hunks, which the line-diff algorithm doesn't do.
     {
       name: "S12: variant holds a section marker",
       fragment: "holds a section marker",

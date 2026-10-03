@@ -82,6 +82,20 @@ function pureAdditionPos(h: Hunk): number {
 }
 
 /**
+ * S5 error message: wording differs based on whether the plan gave explicit `lines`.
+ * When the plan gave `lines`, the user meant to override the computed span, so we say
+ * "lines <range> of section <name>". Otherwise the span was computed from hunks, so we say
+ * "section <name> (lines <range>)".
+ */
+function s5CoverageError(name: string, rangeStr: string, hunkNum: number, take: string, linesSpecified: boolean): Error {
+  if (linesSpecified) {
+    return new Error(`unify plan: lines ${rangeStr} of section ${name} covers hunk ${hunkNum}, which is take: ${take}`);
+  } else {
+    return new Error(`unify plan: section ${name} (lines ${rangeStr}) covers hunk ${hunkNum}, which is take: ${take}`);
+  }
+}
+
+/**
  * Compute the section runs, their spans, defaults and values from a file's diff and plan entries.
  * Throws with spec 12 §4.6 messages (S1–S10, S12) on any contradiction.
  */
@@ -346,32 +360,17 @@ export function deriveSections(args: {
         // Hunk with base lines: none in [from, to]
         for (let j = h.a.start; j < h.a.start + h.a.lines.length; j++) {
           if (!isEmptySpan && from <= j && j <= to) {
-            // S5: wording differs based on whether the plan gave explicit `lines`
-            if (linesSpecified) {
-              throw new Error(`unify plan: lines ${rangeStr} of section ${name} covers hunk ${hunkNum}, which is take: ${take}`);
-            } else {
-              throw new Error(`unify plan: section ${name} (lines ${rangeStr}) covers hunk ${hunkNum}, which is take: ${take}`);
-            }
+            throw s5CoverageError(name, rangeStr, hunkNum, take, linesSpecified);
           }
         }
       } else {
         // No base lines: N must satisfy N < from - 1 or N > to
         const N = pureAdditionPos(h);
         if (!isEmptySpan && !(N < from - 1 || N > to)) {
-          // S5: wording differs based on whether the plan gave explicit `lines`
-          if (linesSpecified) {
-            throw new Error(`unify plan: lines ${rangeStr} of section ${name} covers hunk ${hunkNum}, which is take: ${take}`);
-          } else {
-            throw new Error(`unify plan: section ${name} (lines ${rangeStr}) covers hunk ${hunkNum}, which is take: ${take}`);
-          }
+          throw s5CoverageError(name, rangeStr, hunkNum, take, linesSpecified);
         } else if (isEmptySpan && N === to) {
           // Empty span: N cannot equal to (the position)
-          // S5: wording differs based on whether the plan gave explicit `lines`
-          if (linesSpecified) {
-            throw new Error(`unify plan: lines ${rangeStr} of section ${name} covers hunk ${hunkNum}, which is take: ${take}`);
-          } else {
-            throw new Error(`unify plan: section ${name} (lines ${rangeStr}) covers hunk ${hunkNum}, which is take: ${take}`);
-          }
+          throw s5CoverageError(name, rangeStr, hunkNum, take, linesSpecified);
         }
       }
     }
