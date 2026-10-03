@@ -1,0 +1,25 @@
+name: globex
+description: Imported from globex on 2026-10-02.
+recipes:
+  - base--globex
+targets:
+  - claude-code
+  - agents-md
+language: {}
+identity: {}
+scm: {}
+naming: {}
+frontend: {}
+executor: {}
+integrations: {}
+params: {}
+repos: []
+sections:
+  rule/review-posture:
+    reviewer-flavors: |
+      | Repo | Reviewer |
+      |---|---|
+      | `acme-api` | backend-reviewer |
+      | `acme-web` | frontend-reviewer |
+      | `globex-desktop` | desktop-reviewer |
+      | `globex-worker` | worker-reviewer |

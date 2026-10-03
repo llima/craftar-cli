@@ -1,0 +1,9 @@
+type: rule
+name: shared
+inclusion: always
+file: rule.md
+targets: "*"
+tags: []
+origin:
+  workspace: acme
+  path: .claude/rules/shared.md

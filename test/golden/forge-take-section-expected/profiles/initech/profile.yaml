@@ -1,0 +1,16 @@
+name: initech
+description: Imported from initech on 2026-10-02.
+recipes:
+  - base--initech
+targets:
+  - claude-code
+  - agents-md
+language: {}
+identity: {}
+scm: {}
+naming: {}
+frontend: {}
+executor: {}
+integrations: {}
+params: {}
+repos: []
