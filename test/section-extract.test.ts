@@ -795,6 +795,151 @@ describe("deriveSections — marker insertion order", () => {
   });
 });
 
+describe("deriveSections — D1: insertion-first and insertion-last cases (spec 12 §6.2, Ruling 1)", () => {
+  // Example from spec: base a b c d e f (one per line), variant with line inserted after a and e changed
+  // → hunks: 1 (insertion after line 1) and 2 (line 5), both take: section
+  // → span 2-5 (lines b..e), per spec 12 §6.2 and Ruling 1
+
+  it("insertion-first: pure insertion at N=1, change at line 5 → span 2-5", () => {
+    // Base: a, b, c, d, e, f (lines 1-6)
+    const base = lines("a", "b", "c", "d", "e", "f");
+    // Variant: a, [inserted], b, c, d, E, f — insertion after a, change at e
+    const variant = lines("a", "inserted", "b", "c", "d", "E", "f");
+    const hunks = getHunks(base, variant);
+
+    // Expect two hunks: one pure insertion after line 1, one change at line 5
+    expect(hunks.length).toBe(2);
+    // Hunk 1: pure insertion after line 1
+    expect(hunks[0].a.lines.length).toBe(0);
+    // Hunk 2: line 5 changed
+    expect(hunks[1].a.start).toBe(5);
+    expect(hunks[1].a.lines.length).toBe(1);
+
+    const entries = [entry(1, "section", { name: "t" }), entry(2, "section", { name: "t" })];
+    const result = deriveSections({
+      file: FILE,
+      label: LABEL,
+      ref: REF,
+      baseText: base,
+      variantText: variant,
+      hunks,
+      entries,
+      declaredElsewhere: new Map(),
+    });
+
+    expect(result.runs).toHaveLength(1);
+    const run = result.runs[0];
+    // Spec 12 §6.2: insertion at N=1 contributes N+1=2 for 'from', N=1 for 'to'
+    // Hunk at line 5 contributes 5 for 'from' and 5 for 'to'
+    // min(2,5)=2, max(1,5)=5 → span 2-5
+    expect(run.from).toBe(2);
+    expect(run.to).toBe(5);
+    // Default is base lines 2-5 (b, c, d, e)
+    expect(run.default).toBe("b\nc\nd\ne\n");
+    // Value is variant lines between anchors (line 1 = a, line 6+offset = f)
+    // Anchors are base line 1 (before span) and base line 6 (after span)
+    // Variant segment is lines between a and f counterparts = inserted, b, c, d, E
+    expect(run.value).toBe("inserted\nb\nc\nd\nE\n");
+  });
+
+  it("insertion-last: change at line 2, pure insertion after line 5 → span 2-5", () => {
+    // Base: a, b, c, d, e, f (lines 1-6)
+    const base = lines("a", "b", "c", "d", "e", "f");
+    // Variant: a, B, c, d, e, [inserted], f — change at b, insertion after e
+    const variant = lines("a", "B", "c", "d", "e", "inserted", "f");
+    const hunks = getHunks(base, variant);
+
+    // Expect two hunks: one change at line 2, one pure insertion after line 5
+    expect(hunks.length).toBe(2);
+    // Hunk 1: line 2 changed
+    expect(hunks[0].a.start).toBe(2);
+    expect(hunks[0].a.lines.length).toBe(1);
+    // Hunk 2: pure insertion after line 5
+    expect(hunks[1].a.lines.length).toBe(0);
+
+    const entries = [entry(1, "section", { name: "t" }), entry(2, "section", { name: "t" })];
+    const result = deriveSections({
+      file: FILE,
+      label: LABEL,
+      ref: REF,
+      baseText: base,
+      variantText: variant,
+      hunks,
+      entries,
+      declaredElsewhere: new Map(),
+    });
+
+    expect(result.runs).toHaveLength(1);
+    const run = result.runs[0];
+    // Hunk at line 2 contributes 2 for 'from' and 2 for 'to'
+    // Insertion at N=5 contributes N+1=6 for 'from', N=5 for 'to'
+    // min(2,6)=2, max(2,5)=5 → span 2-5
+    expect(run.from).toBe(2);
+    expect(run.to).toBe(5);
+    // Default is base lines 2-5 (b, c, d, e)
+    expect(run.default).toBe("b\nc\nd\ne\n");
+    // Value is variant lines between anchors
+    expect(run.value).toBe("B\nc\nd\ne\ninserted\n");
+  });
+
+  it("linesSpecified field is set correctly in runs", () => {
+    // Test that the linesSpecified field is correctly set on section runs.
+    // When lines are explicitly specified: linesSpecified=true
+    // When span is computed from hunks: linesSpecified=false
+
+    // Case 1: No explicit lines, span computed from hunks
+    const base1 = lines("a", "b", "c", "d", "e");
+    const variant1 = lines("a", "B", "c", "D", "e");
+    const hunks1 = getHunks(base1, variant1);
+
+    // Expect 2 hunks at lines 2 and 4
+    expect(hunks1.length).toBe(2);
+
+    const entries1 = [
+      entry(1, "section", { name: "t" }),
+      entry(2, "section", { name: "t" }),
+    ];
+    const result1 = deriveSections({
+      file: FILE,
+      label: LABEL,
+      ref: REF,
+      baseText: base1,
+      variantText: variant1,
+      hunks: hunks1,
+      entries: entries1,
+      declaredElsewhere: new Map(),
+    });
+
+    expect(result1.runs).toHaveLength(1);
+    expect(result1.runs[0].linesSpecified).toBe(false);
+    // Span computed from hunks at 2 and 4: from=2, to=4
+    expect(result1.runs[0].from).toBe(2);
+    expect(result1.runs[0].to).toBe(4);
+
+    // Case 2: Explicit lines specified
+    const entries2 = [
+      entry(1, "section", { name: "t", lines: "1-5" }),
+      entry(2, "section", { name: "t", lines: "1-5" }),
+    ];
+    const result2 = deriveSections({
+      file: FILE,
+      label: LABEL,
+      ref: REF,
+      baseText: base1,
+      variantText: variant1,
+      hunks: hunks1,
+      entries: entries2,
+      declaredElsewhere: new Map(),
+    });
+
+    expect(result2.runs).toHaveLength(1);
+    expect(result2.runs[0].linesSpecified).toBe(true);
+    // Span explicitly set to 1-5
+    expect(result2.runs[0].from).toBe(1);
+    expect(result2.runs[0].to).toBe(5);
+  });
+});
+
 
 // ====================================================================
 // proveSections tests (spec 12 §6.5)

@@ -55,6 +55,8 @@ export interface SectionRun {
   file: string; // base-relative, as the plan names it
   hunks: number[]; // the run's 1-based hunk numbers, ascending
   existing: boolean;
+  /** True when the plan gave explicit `lines`, false when the span was computed from hunks. */
+  linesSpecified: boolean;
   /** Inclusive base line range; for an empty span, `from === to + 1` (the markers go between line `to` and line `from`). */
   from: number;
   to: number;
@@ -209,13 +211,14 @@ export function deriveSections(args: {
       const to = sec.closer;
 
       // Compute value from variant segment
-      const value = computeValue(A, B, hunks, from, to, name, file);
+      const value = computeValue(A, B, hunks, from, to, name, file, !!linesStr);
 
       runs.push({
         name,
         file,
         hunks: group.hunkNums,
         existing: true,
+        linesSpecified: !!linesStr,
         from,
         to,
         default: null,
@@ -262,43 +265,31 @@ export function deriveSections(args: {
         from = a;
         to = b;
       } else {
-        // Without lines
-        const baseLines: number[] = [];
-        const positions: number[] = [];
+        // Without lines: spec 12 §6.2 — a pure insertion at position N contributes N+1 for 'from'
+        // and N for 'to'; Ruling 1 includes equal lines between hunks.
+        const fromCandidates: number[] = [];
+        const toCandidates: number[] = [];
         for (const h of runHunks) {
           if (h.a.lines.length > 0) {
-            for (let j = h.a.start; j < h.a.start + h.a.lines.length; j++) {
-              baseLines.push(j);
-            }
+            fromCandidates.push(h.a.start);
+            toCandidates.push(h.a.start + h.a.lines.length - 1);
           } else {
-            positions.push(pureAdditionPos(h));
+            const N = pureAdditionPos(h);
+            fromCandidates.push(N + 1);
+            toCandidates.push(N);
           }
         }
 
-        if (baseLines.length > 0) {
-          from = Math.min(...baseLines);
-          to = Math.max(...baseLines);
-          // Every no-base-line hunk must have from - 1 <= N <= to
-          for (let i = 0; i < runHunks.length; i++) {
-            const h = runHunks[i];
-            if (h.a.lines.length === 0) {
-              const N = pureAdditionPos(h);
-              if (N < from - 1 || N > to) {
-                throw new Error(`unify plan: lines ${from}-${to} of section ${name} does not contain hunk ${group.hunkNums[i]}`);
-              }
-            }
-          }
+        // All pure insertions at one position → empty span (from > to)
+        const uniqueFrom = new Set(fromCandidates);
+        const uniqueTo = new Set(toCandidates);
+        if (uniqueFrom.size === 1 && uniqueTo.size === 1 && Math.min(...fromCandidates) > Math.max(...toCandidates)) {
+          // Empty span: all hunks are pure insertions at the same position
+          from = fromCandidates[0];
+          to = toCandidates[0];
         } else {
-          // All hunks have no base lines
-          if (positions.length === 1 || new Set(positions).size === 1) {
-            // All at same N: empty span
-            const N = positions[0];
-            from = N + 1;
-            to = N;
-          } else {
-            from = Math.min(...positions) + 1;
-            to = Math.max(...positions);
-          }
+          from = Math.min(...fromCandidates);
+          to = Math.max(...toCandidates);
         }
       }
 
@@ -314,13 +305,14 @@ export function deriveSections(args: {
 
       // Compute default and value
       const defaultText = computeDefault(A, from, to, name, file);
-      const value = computeValue(A, B, hunks, from, to, name, file);
+      const value = computeValue(A, B, hunks, from, to, name, file, !!linesStr);
 
       runs.push({
         name,
         file,
         hunks: group.hunkNums,
         existing: false,
+        linesSpecified: !!linesStr,
         from,
         to,
         default: defaultText,
@@ -346,27 +338,40 @@ export function deriveSections(args: {
     const take = entry?.take ?? "keep";
 
     for (const run of runs) {
-      const { from, to, name } = run;
+      const { from, to, name, linesSpecified } = run;
       const isEmptySpan = from === to + 1;
+      const rangeStr = `${from}-${to}`;
 
       if (h.a.lines.length > 0) {
         // Hunk with base lines: none in [from, to]
         for (let j = h.a.start; j < h.a.start + h.a.lines.length; j++) {
           if (!isEmptySpan && from <= j && j <= to) {
-            const linesStr = `${from}-${to}`;
-            throw new Error(`unify plan: lines ${linesStr} of section ${name} covers hunk ${hunkNum}, which is take: ${take}`);
+            // S5: wording differs based on whether the plan gave explicit `lines`
+            if (linesSpecified) {
+              throw new Error(`unify plan: lines ${rangeStr} of section ${name} covers hunk ${hunkNum}, which is take: ${take}`);
+            } else {
+              throw new Error(`unify plan: section ${name} (lines ${rangeStr}) covers hunk ${hunkNum}, which is take: ${take}`);
+            }
           }
         }
       } else {
         // No base lines: N must satisfy N < from - 1 or N > to
         const N = pureAdditionPos(h);
         if (!isEmptySpan && !(N < from - 1 || N > to)) {
-          const linesStr = `${from}-${to}`;
-          throw new Error(`unify plan: lines ${linesStr} of section ${name} covers hunk ${hunkNum}, which is take: ${take}`);
+          // S5: wording differs based on whether the plan gave explicit `lines`
+          if (linesSpecified) {
+            throw new Error(`unify plan: lines ${rangeStr} of section ${name} covers hunk ${hunkNum}, which is take: ${take}`);
+          } else {
+            throw new Error(`unify plan: section ${name} (lines ${rangeStr}) covers hunk ${hunkNum}, which is take: ${take}`);
+          }
         } else if (isEmptySpan && N === to) {
           // Empty span: N cannot equal to (the position)
-          const linesStr = `${from}-${to}`;
-          throw new Error(`unify plan: lines ${linesStr} of section ${name} covers hunk ${hunkNum}, which is take: ${take}`);
+          // S5: wording differs based on whether the plan gave explicit `lines`
+          if (linesSpecified) {
+            throw new Error(`unify plan: lines ${rangeStr} of section ${name} covers hunk ${hunkNum}, which is take: ${take}`);
+          } else {
+            throw new Error(`unify plan: section ${name} (lines ${rangeStr}) covers hunk ${hunkNum}, which is take: ${take}`);
+          }
         }
       }
     }
@@ -456,6 +461,7 @@ function computeDefault(A: ReturnType<typeof splitLines>, from: number, to: numb
  * Compute the value for a section (variant lines between anchors).
  * S10: check for missing final newline.
  * S5: anchors must be equal lines (not inside any hunk).
+ * @param linesSpecified true when the plan gave explicit `lines`, false when span was computed from hunks
  */
 function computeValue(
   A: ReturnType<typeof splitLines>,
@@ -465,6 +471,7 @@ function computeValue(
   to: number,
   name: string,
   file: string,
+  linesSpecified: boolean,
 ): string {
   const isEmptySpan = from === to + 1;
 
@@ -492,14 +499,24 @@ function computeValue(
   if (startAnchor !== null) {
     const hunkNum = lineInHunk(startAnchor);
     if (hunkNum !== null) {
-      throw new Error(`unify plan: lines ${from}-${to} of section ${name} cuts hunk ${hunkNum}`);
+      // S5: wording differs based on whether the plan gave explicit `lines`
+      if (linesSpecified) {
+        throw new Error(`unify plan: lines ${from}-${to} of section ${name} cuts hunk ${hunkNum}`);
+      } else {
+        throw new Error(`unify plan: section ${name} (lines ${from}-${to}) cuts hunk ${hunkNum}`);
+      }
     }
   }
 
   if (endAnchor !== null) {
     const hunkNum = lineInHunk(endAnchor);
     if (hunkNum !== null) {
-      throw new Error(`unify plan: lines ${from}-${to} of section ${name} cuts hunk ${hunkNum}`);
+      // S5: wording differs based on whether the plan gave explicit `lines`
+      if (linesSpecified) {
+        throw new Error(`unify plan: lines ${from}-${to} of section ${name} cuts hunk ${hunkNum}`);
+      } else {
+        throw new Error(`unify plan: section ${name} (lines ${from}-${to}) cuts hunk ${hunkNum}`);
+      }
     }
   }
 

@@ -1185,4 +1185,47 @@ Done.
     // No changes when taking base on a simple diff
     expect(result.write["rule.md"]).toBeUndefined();
   });
+
+  it("D1: insertion-first run computes span correctly — markers wrap b..e", async () => {
+    // D1 bug: insertion-first case where run starts with pure insertion and ends with a change
+    // Base: a b c d e f (lines 1-6)
+    // Variant: a [inserted] b c d E f — insertion after a, change at e
+    // Span should be 2-5 (b..e), markers around b through e
+    const baseBody = "a\nb\nc\nd\ne\nf\n";
+    const variantBody = "a\ninserted\nb\nc\nd\nE\nf\n";
+    const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
+
+    // Should have 2 hunks: hunk 1 = insertion after line 1, hunk 2 = line 5 changed
+    expect(diff.files[0].hunks.length).toBe(2);
+
+    const planObj = await planFrom(base, variant, diff, "acme");
+    // Set both hunks to section with same name
+    planObj.files[0].hunks![0].take = "section";
+    (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "t" };
+    planObj.files[0].hunks![1].take = "section";
+    (planObj.files[0].hunks![1] as Record<string, unknown>).section = { name: "t" };
+
+    const result = await applyPlan(base, variant, diff, planObj);
+    expect(result.resolved).toBe(true);
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0].name).toBe("t");
+
+    const merged = result.write["rule.md"] as string;
+    // Markers should wrap lines b, c, d, e (span 2-5)
+    const expected = `a
+<!-- craftar:section t -->
+b
+c
+d
+e
+<!-- /craftar:section -->
+f
+`;
+    expect(merged).toBe(expected);
+
+    // Default is base lines 2-5 (b, c, d, e)
+    expect(result.sections[0].default).toBe("b\nc\nd\ne\n");
+    // Value is variant lines between anchors (inserted, b, c, d, E)
+    expect(result.sections[0].value).toBe("inserted\nb\nc\nd\nE\n");
+  });
 });

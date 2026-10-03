@@ -273,7 +273,7 @@ forge
   .requiredOption("--profile <p>", "which variant to resolve")
   .option("--take <side>", "resolve every decision to base or variant")
   .option("--plan <file>", "apply the decisions in this plan file (a hunk may be take: param with its params list, or take: section with its section name)")
-  .option("--save-plan <file>", "write a plan with every decision deferred, each hunk annotated with its suggested class (which --plan ignores), value hunks pre-filled with params and block hunks pre-filled with a section name, to a new file outside the Forge, and stop")
+  .option("--save-plan <file>", "write a plan with every decision deferred, each hunk annotated with its suggested class (which --plan ignores), value hunks pre-filled with params, block hunks pre-filled with a section name, and hunks touching an existing section with its name, to a new file outside the Forge, and stop")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
