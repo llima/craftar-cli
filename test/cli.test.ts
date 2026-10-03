@@ -2154,4 +2154,144 @@ describe("forge unify take: section (spec 12)", () => {
     expect(r.stderr).toContain("git -C");
     expect(r.stderr).toContain("checkout --");
   });
+
+  // Table-driven refusal tests: each scenario exits 1, emits the fragment, and leaves the Forge untouched.
+  const refusalCases: Array<{
+    name: string;
+    fragment: string;
+    setup: () => Promise<{ root: string; planPath: string }>;
+  }> = [
+    {
+      name: "S5: lines out of range",
+      fragment: "out of range",
+      setup: async () => {
+        const root = await tmpDir("craftar-cli-s5-");
+        cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+        // Base and variant with a block hunk
+        await makeForge(root, {
+          ingredients: [
+            rule("wf", "a\nb\nc\n"),
+            rule("wf--acme", "a\nB\nc\n", { as: "wf" }),
+          ],
+          recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+          profiles: [profile("acme", ["base--acme"])],
+        });
+        gitInit(root);
+        gitCommitAll(root, "init");
+        const dir = await tmpDir("craftar-cli-plan-");
+        cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+        const planPath = path.join(dir, "plan.yaml");
+        expect(runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+        const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+        plan.files[0].hunks[0].take = "section";
+        plan.files[0].hunks[0].section = { name: "data", lines: "1-100" }; // out of range
+        const edited = path.join(dir, "edited.yaml");
+        await fs.writeFile(edited, YAML.stringify(plan));
+        return { root, planPath: edited };
+      },
+    },
+    {
+      name: "S12: variant holds a section marker",
+      fragment: "holds a section marker",
+      setup: async () => {
+        const root = await tmpDir("craftar-cli-s12-");
+        cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+        // Variant has a marker
+        await makeForge(root, {
+          ingredients: [
+            rule("wf", "a\nb\n"),
+            rule("wf--acme", "a\n<!-- craftar:section x -->\ny\n<!-- /craftar:section -->\n", { as: "wf" }),
+          ],
+          recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+          profiles: [profile("acme", ["base--acme"])],
+        });
+        gitInit(root);
+        gitCommitAll(root, "init");
+        const dir = await tmpDir("craftar-cli-plan-");
+        cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+        const planPath = path.join(dir, "plan.yaml");
+        expect(runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+        const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+        // Set take: section on hunks
+        for (const h of plan.files[0].hunks) {
+          h.take = "section";
+          h.section = { name: "s" };
+        }
+        const edited = path.join(dir, "edited.yaml");
+        await fs.writeFile(edited, YAML.stringify(plan));
+        return { root, planPath: edited };
+      },
+    },
+    {
+      name: "S13: another profile sets the section",
+      fragment: "it names no marker today and would start to apply",
+      setup: async () => {
+        const root = await tmpDir("craftar-cli-s13-");
+        cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+        await makeForge(root, {
+          ingredients: [
+            rule("wf", "a\nb\n"),
+            rule("wf--acme", "a\nB\n", { as: "wf" }),
+          ],
+          recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+          profiles: [
+            profile("acme", ["base--acme"]),
+            // globex sets section 'data' on rule/wf — this would start to apply after acme's extraction
+            { name: "globex", recipes: ["base"], targets: ["claude-code"], params: {}, sections: { "rule/wf": { data: "other\n" } } },
+          ],
+        });
+        gitInit(root);
+        gitCommitAll(root, "init");
+        const dir = await tmpDir("craftar-cli-plan-");
+        cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+        const planPath = path.join(dir, "plan.yaml");
+        expect(runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+        const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+        plan.files[0].hunks[0].take = "section";
+        plan.files[0].hunks[0].section = { name: "data" }; // same name globex already sets
+        const edited = path.join(dir, "edited.yaml");
+        await fs.writeFile(edited, YAML.stringify(plan));
+        return { root, planPath: edited };
+      },
+    },
+    {
+      name: "S16: profile sections is an alias",
+      fragment: "sections is an alias",
+      setup: async () => {
+        const root = await tmpDir("craftar-cli-s16-");
+        cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+        await makeForge(root, {
+          ingredients: [
+            rule("wf", "a\nb\n"),
+            rule("wf--acme", "a\nB\n", { as: "wf" }),
+          ],
+          recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+          profiles: [profile("acme", ["base--acme"])],
+        });
+        // Overwrite the profile with a YAML alias
+        await fs.writeFile(path.join(root, "profiles/acme/profile.yaml"), "name: acme\nrecipes:\n  - base--acme\nx: &s {}\nsections: *s\n");
+        gitInit(root);
+        gitCommitAll(root, "init");
+        const dir = await tmpDir("craftar-cli-plan-");
+        cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+        const planPath = path.join(dir, "plan.yaml");
+        expect(runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+        const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+        plan.files[0].hunks[0].take = "section";
+        plan.files[0].hunks[0].section = { name: "data" };
+        const edited = path.join(dir, "edited.yaml");
+        await fs.writeFile(edited, YAML.stringify(plan));
+        return { root, planPath: edited };
+      },
+    },
+  ];
+
+  it.each(refusalCases)("$name: exits 1, emits fragment, Forge untouched", async ({ fragment, setup }) => {
+    const { root, planPath } = await setup();
+    const before = await snapshot(root);
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--plan", planPath, "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(fragment);
+    expect(await snapshot(root)).toEqual(before);
+  });
 });
