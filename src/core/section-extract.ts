@@ -1,7 +1,7 @@
 import type { Hunk } from "./diff.js";
 import { SECTION_NAME, type PlanHunk } from "../schema/index.js";
 import { splitLines } from "./diff.js";
-import { canonicalValue, expandSections, firstMarkerLine, parseSections, SectionMarkerError, type ParsedSections } from "./sections.js";
+import { expandSections, firstMarkerLine, parseSections, SectionMarkerError, type ParsedSections } from "./sections.js";
 import { stripBom, toLf } from "./text.js";
 import type { Extraction } from "./extract.js";
 import { placeholders, substituteKeys } from "./extract.js";
@@ -11,6 +11,43 @@ import { placeholders, substituteKeys } from "./extract.js";
  * to the base and whose value goes into the profile. Pure — the Forge-level gates and the YAML
  * edits live elsewhere.
  */
+
+/** A section's span: opener and closer line numbers (1-based, both inclusive). */
+interface SectionSpan {
+  name: string;
+  opener: number;
+  closer: number;
+}
+
+/**
+ * Compute the opener/closer span for each section of a parsed file (spec 12 §4.2).
+ * `closer = opener + s.default.split("\n").length` — the opener line, plus one line per `\n` in the default.
+ */
+function sectionSpans(parsed: ParsedSections): SectionSpan[] {
+  return parsed.sections.map((s) => ({
+    name: s.name,
+    opener: s.line,
+    closer: s.line + s.default.split("\n").length,
+  }));
+}
+
+/**
+ * Does a hunk "touch" a section span? (spec 12 §4.2's definition)
+ * - With base lines: at least one line j in [start, start + length - 1] satisfies opener <= j <= closer.
+ * - Without base lines: position N = h.a.start - 1 satisfies opener <= N < closer.
+ */
+function touches(h: { a: { start: number; lines: string[] } }, span: SectionSpan): boolean {
+  const { opener: o, closer: c } = span;
+  if (h.a.lines.length > 0) {
+    for (let j = h.a.start; j < h.a.start + h.a.lines.length; j++) {
+      if (o <= j && j <= c) return true;
+    }
+    return false;
+  } else {
+    const N = h.a.start - 1;
+    return o <= N && N < c;
+  }
+}
 
 /** A section a plan run creates or fills (spec 12 §3). Lines are base line numbers, 1-based. */
 export interface SectionRun {
@@ -70,27 +107,7 @@ export function deriveSections(args: {
 
   // Step 2: Base sections
   const parsed = parseSections(baseText, label, ref);
-  const baseSections = parsed.sections.map((s) => ({
-    name: s.name,
-    opener: s.line,
-    closer: s.line + s.default.split("\n").length, // number of "\n" in default + 1
-  }));
-
-  // Step 3: Helper — does a hunk touch a section?
-  const hunkTouchesSection = (h: Hunk, sec: { opener: number; closer: number }): boolean => {
-    const { opener: o, closer: c } = sec;
-    if (h.a.lines.length > 0) {
-      // Hunk with base lines: any line j in start..start+length-1 satisfies o <= j <= c
-      for (let j = h.a.start; j < h.a.start + h.a.lines.length; j++) {
-        if (o <= j && j <= c) return true;
-      }
-      return false;
-    } else {
-      // No base lines: position N = h.a.start - 1 satisfies o <= N < c
-      const N = pureAdditionPos(h);
-      return o <= N && N < c;
-    }
-  };
+  const baseSections = sectionSpans(parsed);
 
   // Step 4: Group section entries
   const sectionEntries = entries.filter((e) => e.take === "section");
@@ -138,7 +155,7 @@ export function deriveSections(args: {
     const touchedSections = new Set<(typeof baseSections)[number]>();
     for (const h of runHunks) {
       for (const sec of baseSections) {
-        if (hunkTouchesSection(h, sec)) touchedSections.add(sec);
+        if (touches(h, sec)) touchedSections.add(sec);
       }
     }
 
@@ -159,7 +176,7 @@ export function deriveSections(args: {
 
       // Check all run hunks touch this section (S7 for partial touch)
       for (const h of runHunks) {
-        const touchesThis = hunkTouchesSection(h, sec);
+        const touchesThis = touches(h, sec);
         if (!touchesThis) {
           throw new Error(`unify plan: section ${name} would overlap section ${sec.name} (${file}:${sec.opener})`);
         }
@@ -714,66 +731,14 @@ export function prefillSections(args: {
     throw e;
   }
 
-  // Build base section spans: opener..closer inclusive (line numbers, 1-based)
-  const baseSections = parsed.sections.map((s) => {
-    const defaultLines = s.default.split("\n");
-    // s.line is the opener; closer is opener + number of "\n" in default
-    const closer = s.line + defaultLines.length - (s.default.endsWith("\n") ? 0 : 0);
-    // Actually: lines between markers = split("\n") gives N+1 elements for N newlines, minus 1 for trailing
-    // s.default is verbatim lines between markers, each with its \n. So split("\n") on "a\nb\n" gives ["a","b",""]
-    // So closer = opener + count of non-empty lines = opener + (split.length - 1 if ends with \n)
-    // Let's recalculate: if default is "a\nb\n", split gives ["a","b",""], length=3, actual lines=2
-    // closer = opener + 2 (for the two content lines) = opener + (split.length - 1)
-    // But wait, the closer marker is at line opener + 1 + number_of_content_lines
-    // Since opener line is the `<!-- craftar:section X -->` and default starts on next line
-    // closer = opener + (number of default lines) + 1 - 1 = opener + defaultLines
-    // Actually re-read sections.ts: s.line is the line of the opener marker
-    // s.default is the text between opener and closer (not including markers)
-    // So if opener is line 5, default has 2 lines, closer is line 5 + 2 + 1 = line 8
-    // Wait, let me think again. If opener is line 5:
-    // line 5: <!-- craftar:section X -->
-    // line 6: first default line
-    // line 7: second default line
-    // line 8: <!-- /craftar:section -->
-    // So closer = opener + count_of_default_lines + 1
-    // If default is "a\nb\n", that's 2 lines, closer = 5 + 2 + 1 = 8
-    // Actually looking at deriveSections: closer: s.line + s.default.split("\n").length
-    // "a\nb\n".split("\n") = ["a", "b", ""], length = 3
-    // So closer = opener + 3. For opener=5, closer=8. That matches!
-    return {
-      name: s.name,
-      opener: s.line,
-      closer: s.line + defaultLines.length,
-    };
-  });
+  // Build base section spans using the shared helper
+  const baseSections = sectionSpans(parsed);
 
   // Split base into lines for heading search
   const baseLines = splitLines(baseText).lines;
 
-  // Helper: does a hunk touch a section? (spec 12 §4.2's "touches" definition)
-  const hunkTouchesSection = (h: HunkWithSuggestion, sec: { opener: number; closer: number }): boolean => {
-    const { opener: o, closer: c } = sec;
-    if (h.a.lines.length > 0) {
-      // Hunk with base lines: any line j in start..start+length-1 satisfies o <= j <= c
-      for (let j = h.a.start; j < h.a.start + h.a.lines.length; j++) {
-        if (o <= j && j <= c) return true;
-      }
-      return false;
-    } else {
-      // No base lines: position N = h.a.start - 1 satisfies o <= N < c
-      const N = h.a.start - 1;
-      return o <= N && N < c;
-    }
-  };
-
   // Find the nearest heading above a given position (line number, 1-based)
   const nearestHeadingAbove = (pos: number): string | null => {
-    // pos is the line we're looking above
-    // For hunks with base lines: above h.a.start means lines < h.a.start
-    // For hunks without: "at or above line N" where N = h.a.start - 1, means lines <= N
-    // Actually spec says: "above the hunk's position in the base (for a hunk with base lines, above a.start;
-    // for one without, at or above line N)"
-    // So: with lines → lines strictly < start; without → lines <= N (i.e., <= start - 1)
     for (let i = pos - 1; i >= 0; i--) {
       const line = baseLines[i];
       const match = HEADING_RE.exec(line);
@@ -794,7 +759,7 @@ export function prefillSections(args: {
     // Rule 1: Touches existing section → that section's exact name
     let touchedSection: string | null = null;
     for (const sec of baseSections) {
-      if (hunkTouchesSection(h, sec)) {
+      if (touches(h, sec)) {
         touchedSection = sec.name;
         break;
       }
