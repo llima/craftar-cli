@@ -263,8 +263,10 @@ export async function checkParamWrites(
   }
 
   // Manifest edit (spec 12 §6.7 step 1): when at least one section is NEW and schema is 1
+  // Use the full `sections` list, not `sectionAssign`: a new section adds markers to the body
+  // even when its value is already in place in the profile, so the Forge needs schema: 2.
   let manifestWrite: ParamWrites["manifest"] = null;
-  const hasNewSection = sectionAssign.some((s) => !s.existing);
+  const hasNewSection = sections.some((s) => !s.existing);
   if (hasNewSection && forge.manifest.schema === 1) {
     const manifestAbs = path.join(forge.root, FORGE_MANIFEST);
     const raw = await fs.readFile(manifestAbs, "utf8");

@@ -308,4 +308,20 @@ describe("checkParamWrites — sections (spec 12 §6.6)", () => {
     const w = await checkWithSections(forge, [sectionExt("flavors", true, "row\n")]);
     expect(w.manifest).toBeNull();
   });
+
+  it("new section with value already in place: no profile edit, sectionsWritten empty, but manifest IS rendered with schema: 2", async () => {
+    // The bug: a NEW section (adding markers) whose value is already in the profile was not bumping the manifest.
+    // The manifest bump depends on whether the run ADDS markers (sections.some(!existing)), not on what is written to the profile.
+    const forge = await forgeOf(
+      spec({ profiles: [profile("acme", ["base--acme"], ["claude-code"], { sections: { "rule/deploy": { flavors: "row\n" } } }), profile("globex", ["base"])] }),
+    );
+    const w = await checkWithSections(forge, [sectionExt("flavors", false, "row\n")]);
+    // No profile edit — the value is already in place
+    expect(w.profile).toBeNull();
+    expect(w.sectionsWritten).toEqual([]);
+    // But the manifest IS edited, because the body gains markers → the Forge needs schema: 2
+    expect(w.manifest).not.toBeNull();
+    expect(w.manifest!.content).toContain("schema: 2");
+    expect(w.mustHold).toContain(w.manifest!.abs);
+  });
 });
