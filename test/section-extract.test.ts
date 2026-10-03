@@ -408,6 +408,69 @@ describe("deriveSections — S5: lines issues", () => {
       }),
     )).toContain("covers hunk 3, which is take: base");
   });
+
+  it("end anchor cuts a hunk → S5 (lines ends directly before a changed line)", () => {
+    // base: lines 1-10, where line 9 is equal and line 10 is changed
+    // Create a scenario: hunk 1 at line 5 (in section), hunk 2 at lines 10 (not in section)
+    const base = lines("a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k");
+    const variant = lines("a", "b", "c", "d", "E", "f", "g", "h", "i", "J", "k");
+    const hunks = getHunks(base, variant);
+
+    // Hunk 1 at line 5, hunk 2 at line 10
+    expect(hunks.length).toBe(2);
+    expect(hunks[0].a.start).toBe(5);
+    expect(hunks[1].a.start).toBe(10);
+
+    // Section spans lines 5-9, so end anchor is line 10 which is inside hunk 2
+    const entries = [
+      entry(1, "section", { name: "data", lines: "5-9" }),
+      entry(2, "base"),
+    ];
+
+    expect(err(() =>
+      deriveSections({
+        file: FILE,
+        label: LABEL,
+        ref: REF,
+        baseText: base,
+        variantText: variant,
+        hunks,
+        entries,
+        declaredElsewhere: new Map(),
+      }),
+    )).toContain("lines 5-9 of section data cuts hunk 2");
+  });
+
+  it("start anchor cuts a hunk → S5 (lines starts directly after a changed line)", () => {
+    // Create a scenario: hunk 1 at line 2 (not in section), hunk 2 at line 5 (in section)
+    const base = lines("a", "b", "c", "d", "e", "f", "g", "h");
+    const variant = lines("a", "B", "c", "d", "E", "f", "g", "h");
+    const hunks = getHunks(base, variant);
+
+    // Hunk 1 at line 2, hunk 2 at line 5
+    expect(hunks.length).toBe(2);
+    expect(hunks[0].a.start).toBe(2);
+    expect(hunks[1].a.start).toBe(5);
+
+    // Section spans lines 3-5, so start anchor is line 2 which is inside hunk 1
+    const entries = [
+      entry(1, "base"),
+      entry(2, "section", { name: "data", lines: "3-5" }),
+    ];
+
+    expect(err(() =>
+      deriveSections({
+        file: FILE,
+        label: LABEL,
+        ref: REF,
+        baseText: base,
+        variantText: variant,
+        hunks,
+        entries,
+        declaredElsewhere: new Map(),
+      }),
+    )).toContain("lines 3-5 of section data cuts hunk 1");
+  });
 });
 
 describe("deriveSections — S6: name already declared", () => {

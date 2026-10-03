@@ -436,6 +436,7 @@ function computeDefault(A: ReturnType<typeof splitLines>, from: number, to: numb
 /**
  * Compute the value for a section (variant lines between anchors).
  * S10: check for missing final newline.
+ * S5: anchors must be equal lines (not inside any hunk).
  */
 function computeValue(
   A: ReturnType<typeof splitLines>,
@@ -452,6 +453,36 @@ function computeValue(
   // Anchors are base lines from - 1 and to + 1 (absent when < 1 or > A.lines.length)
   const startAnchor = from - 1 >= 1 ? from - 1 : null;
   const endAnchor = to + 1 <= A.lines.length ? to + 1 : null;
+
+  // Step 7 assert: anchors must lie in no hunk (they must be equal lines)
+  // If an anchor is inside a hunk's base lines, the value would be read from wrong variant lines
+  const lineInHunk = (line: number): number | null => {
+    for (let i = 0; i < hunks.length; i++) {
+      const h = hunks[i];
+      if (h.a.lines.length > 0) {
+        const first = h.a.start;
+        const last = h.a.start + h.a.lines.length - 1;
+        if (first <= line && line <= last) {
+          return i + 1; // 1-based hunk number
+        }
+      }
+    }
+    return null;
+  };
+
+  if (startAnchor !== null) {
+    const hunkNum = lineInHunk(startAnchor);
+    if (hunkNum !== null) {
+      throw new Error(`unify plan: lines ${from}-${to} of section ${name} cuts hunk ${hunkNum}`);
+    }
+  }
+
+  if (endAnchor !== null) {
+    const hunkNum = lineInHunk(endAnchor);
+    if (hunkNum !== null) {
+      throw new Error(`unify plan: lines ${from}-${to} of section ${name} cuts hunk ${hunkNum}`);
+    }
+  }
 
   // Map anchor line i to variant: i' = i + Σ(h.b.lines.length - h.a.lines.length) for hunks before i
   const mapToVariant = (i: number): number => {
