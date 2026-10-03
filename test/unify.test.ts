@@ -1209,6 +1209,36 @@ Done.
     expect(result.write["rule.md"]).toBeUndefined();
   });
 
+  it("P7 via section proof: a param that wraps a placeholder in more braces is refused at the proof (step 5)", async () => {
+    // SF-A: The reviewer's scenario that reaches proveSections step 5.
+    // Base has {{k}} which the param hunk extracts as token "k" → key "who".
+    // deriveHunk produces `Hello {{{{who}}}}.` because the tokenizer splits `{{k}}` and
+    // only the changed region `k` is templated. The section proof then sees that the
+    // template has `{{{{who}}}}` which is a different placeholder set than the original.
+    const baseBody = "Hello {{k}}.\n\n| a |\n\nEnd.\n";
+    const variantBody = "Hello {{y}}.\n\n| b |\n\nEnd.\n";
+    const { root, base, variant, diff } = await sectionScenario(baseBody, variantBody);
+
+    const planObj = await planFrom(base, variant, diff, "acme");
+
+    // Hunk 1: param extraction for {{k}} → {{y}}
+    planObj.files[0].hunks![0].take = "param";
+    (planObj.files[0].hunks![0] as Record<string, unknown>).params = [{ token: "k", key: "who" }];
+
+    // Hunk 2: section extraction for the table
+    planObj.files[0].hunks![1].take = "section";
+    (planObj.files[0].hunks![1] as Record<string, unknown>).section = { name: "t" };
+
+    // This should fail at step 5 of proveSections: placeholders differ
+    await expect(applyPlan(base, variant, diff, planObj)).rejects.toThrow(
+      /would change which \{\{…\}\} placeholders the text holds/,
+    );
+
+    // Verify Forge is untouched
+    const ruleFile = path.join(root, "ingredients/rules/review-posture/rule.md");
+    expect(await fs.readFile(ruleFile, "utf8")).toBe(baseBody);
+  });
+
   it("D1: insertion-first run computes span correctly — markers wrap b..e", async () => {
     // D1 bug: insertion-first case where run starts with pure insertion and ends with a change
     // Base: a b c d e f (lines 1-6)
