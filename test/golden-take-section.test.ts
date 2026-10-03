@@ -262,17 +262,32 @@ describe("golden: take-section round trip (spec 12 §10.5)", () => {
     await assertNothingMoved(t);
 
     // Step 6: Re-import all three — 0 created, 0 variants.
-    // Note: Re-import may re-point profiles from their owned recipe to the shared base recipe
-    // when they become identical (spec 11 §6.15, Ruling 9). This is expected behavior.
+    // Per spec 11 §6.15, Ruling 9: a re-import may re-point a profile from its owned recipe
+    // (base--<p>) to the shared recipe (base) when they become identical. Only profile.yaml
+    // may change; nothing else may move.
+    // Note: we do NOT use --write-config here because the workspace config is already set up
+    // and --write-config would overwrite the targets with only what import auto-detects (losing
+    // agents-md which was added manually in step 1).
+    const expectedStatus: Record<P, string[]> = {
+      acme: [], // acme was already on base, nothing changes
+      globex: ["M profiles/globex/profile.yaml"], // re-points from base--globex to base
+      initech: ["M profiles/initech/profile.yaml"], // re-points from base--initech to base
+    };
     for (const p of PROFILES) {
-      const r = importCli(t.forge, p, t.ws[p]);
+      // Don't use --write-config on re-import: the workspace config already exists.
+      const r = runCli(["import", "--from", "claude-code", "--forge", t.forge, "--profile", p, "--workspace", t.ws[p]]);
       expect(r.code, r.stderr).toBe(0);
       expect(r.stdout).toContain("0 created");
       expect(r.stdout).toContain("0 variants");
+      // Assert exactly what git status reports for this profile's re-import.
+      const statusLines = gitStatus(t.forge).trim().split("\n").filter(Boolean);
+      expect(statusLines, `re-import ${p} should only change profile.yaml or nothing`).toEqual(expectedStatus[p]);
       // Commit any profile re-pointing changes before the next re-import.
-      const status = gitStatus(t.forge).trim();
-      if (status) gitCommitAll(t.forge, `re-import ${p}`);
+      if (statusLines.length) gitCommitAll(t.forge, `re-import ${p}`);
     }
+
+    // After all three re-imports, all workspaces must still be unchanged.
+    await assertNothingMoved(t);
   });
 
   it("step 7, negative control: without globex's section value its files would change", { timeout: 180_000 }, async () => {
