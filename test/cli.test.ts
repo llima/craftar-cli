@@ -2030,12 +2030,62 @@ describe("forge unify take: section (spec 12)", () => {
   });
 
   it("an already-in-place value: line ends with ' — already in place'", async () => {
-    // This tests that when the profile already has the exact section value,
-    // the CLI reports "— already in place" and doesn't rewrite the profile.
-    // Note: This is a complex scenario that requires the value derived from the diff
-    // to match what's already in the profile. We skip this test as it requires
-    // very specific setup that depends on internal diff behavior.
-    // The underlying functionality is tested in param-writes.test.ts.
+    // Forge A: run a full extraction to learn the exact value
+    const rootA = await sectionForge();
+    const planA = await savedSectionPlan(rootA, (plan) => {
+      plan.files[0].hunks[0].take = "section";
+      plan.files[0].hunks[0].section = { name: "flavors" };
+    });
+    expect(runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", planA, "--forge", rootA]).code).toBe(0);
+    const profileA = YAML.parse(await fs.readFile(path.join(rootA, "profiles/acme/profile.yaml"), "utf8"));
+    const extractedValue = profileA.sections["rule/review-posture"].flavors;
+
+    // Forge B: identical structure, but pre-write the value into the profile
+    const rootB = await sectionForge({
+      "profiles/acme/profile.yaml": YAML.stringify({
+        name: "acme",
+        recipes: ["base--acme"],
+        params: {},
+        sections: { "rule/review-posture": { flavors: extractedValue } },
+      }),
+    });
+    const profileBefore = await fs.readFile(path.join(rootB, "profiles/acme/profile.yaml"), "utf8");
+    const planB = await savedSectionPlan(rootB, (plan) => {
+      plan.files[0].hunks[0].take = "section";
+      plan.files[0].hunks[0].section = { name: "flavors" };
+    });
+
+    const rText = runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", planB, "--forge", rootB]);
+    expect(rText.code, rText.stderr).toBe(0);
+    // The section line ends with "— already in place"
+    expect(rText.stdout).toMatch(/section rule\/review-posture flavors.*— already in place/);
+    // No profile edit line (the value is in place, so the profile is not touched)
+    expect(rText.stdout).not.toContain("~ profiles/acme/profile.yaml");
+    // Profile bytes unchanged
+    expect(await fs.readFile(path.join(rootB, "profiles/acme/profile.yaml"), "utf8")).toBe(profileBefore);
+    // But the manifest IS bumped (pinning fix 21d4f5d — a new section adds markers, so schema: 2 is required)
+    expect(rText.stdout).toContain("forge craftar.forge.yaml edited (schema: 2)");
+    const manifestB = YAML.parse(await fs.readFile(path.join(rootB, "craftar.forge.yaml"), "utf8"));
+    expect(manifestB.schema).toBe(2);
+
+    // --json: sections[0].written === false and manifestEdited === true
+    const rootC = await sectionForge({
+      "profiles/acme/profile.yaml": YAML.stringify({
+        name: "acme",
+        recipes: ["base--acme"],
+        params: {},
+        sections: { "rule/review-posture": { flavors: extractedValue } },
+      }),
+    });
+    const planC = await savedSectionPlan(rootC, (plan) => {
+      plan.files[0].hunks[0].take = "section";
+      plan.files[0].hunks[0].section = { name: "flavors" };
+    });
+    const rJson = runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", planC, "--forge", rootC, "--json"]);
+    expect(rJson.code, rJson.stderr).toBe(0);
+    const out = JSON.parse(rJson.stdout);
+    expect(out.sections[0].written).toBe(false);
+    expect(out.manifestEdited).toBe(true);
   });
 
   it("mustHold: an untracked manifest makes the run exit 1 naming it, Forge untouched", async () => {
@@ -2058,11 +2108,50 @@ describe("forge unify take: section (spec 12)", () => {
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a late failure after the manifest write names craftar.forge.yaml in the recovery commands", async () => {
-    // This test requires making a directory read-only to cause a late failure.
-    // The exact failure point depends on the file system and may not reliably fail
-    // at the right point (after manifest write but before other writes).
-    // The late failure mechanism is tested in other tests; here we just verify
-    // the manifest is in the journal when it would be written.
-    // Skipping because the test requires precise control over which write fails.
+    // Use a helper that restores the permission in cleanup so the temp dir can be removed
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(async () => {
+      await fs.chmod(path.join(root, "ingredients/rules"), 0o755).catch(() => {});
+      await fs.rm(root, { recursive: true, force: true });
+    });
+    // Build the same Forge structure as sectionForge
+    const baseBody = "# Review posture\n\nDispatch reviewers.\n\nshared line\n";
+    const variantBody = "# Review posture\n\nDispatch reviewers.\n\n| Repo | Reviewer |\n|---|---|\n| `acme-api` | backend |\n\nshared line\n";
+    await makeForge(root, {
+      ingredients: [
+        rule("review-posture", baseBody),
+        rule("review-posture--acme", variantBody, { as: "review-posture" }),
+      ],
+      recipes: [recipe("base", ["rule/review-posture"]), recipe("base--acme", ["rule/review-posture--acme"])],
+      profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"])],
+    });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    // Save and edit the plan
+    const dir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    const planPath = path.join(dir, "plan.yaml");
+    expect(runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--save-plan", planPath, "--forge", root]).code).toBe(0);
+    const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+    plan.files[0].hunks[0].take = "section";
+    plan.files[0].hunks[0].section = { name: "flavors" };
+    const edited = path.join(dir, "edited.yaml");
+    await fs.writeFile(edited, YAML.stringify(plan));
+
+    // Make ingredients/rules read-only: the variant removal (last write) will fail
+    await fs.chmod(path.join(root, "ingredients/rules"), 0o555);
+
+    const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", edited, "--forge", root]);
+    expect(r.code).toBe(1);
+    // stderr names craftar.forge.yaml (the manifest was touched)
+    expect(r.stderr).toContain("craftar.forge.yaml");
+    // stderr names the profile (it was edited)
+    expect(r.stderr).toContain("profiles/acme/profile.yaml");
+    // stderr names the body file (it was written with markers)
+    expect(r.stderr).toContain("ingredients/rules/review-posture/rule.md");
+    // The recovery line shows git checkout for those paths
+    expect(r.stderr).toContain("git -C");
+    expect(r.stderr).toContain("checkout --");
   });
 });
