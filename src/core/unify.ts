@@ -559,7 +559,7 @@ export async function applyPlan(
         if (template !== baseText) write[pf.file] = template;
         continue;
       }
-      if (takes.includes("variant") || takes.includes("section")) {
+      if (takes.includes("variant")) {
         const baseText = await readIngredientText(base, pf.file);
         const variantText = await readIngredientText(variant, pf.file);
         const merged = mergeFile(baseText, variantText, hunks, takes);

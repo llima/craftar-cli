@@ -1259,6 +1259,12 @@ describe("proveSections (spec 12 §6.5)", () => {
       // The placeholder check in step 5 guards against cases where text matches but
       // placeholders differ, which happens when a param key substitution masks the difference.
     });
+
+    // The placeholder branch (step 5 of proveSections) is unreachable with the current architecture:
+    // D, V, and K all derive from the same `extractions` array. Any placeholder that D or V
+    // substitutes is also in K, so `others` (which filters out K) excludes it. Any placeholder
+    // NOT in K won't be substituted, so text differences are caught in steps 3-4 before step 5.
+    // The check is a defensive measure for future architecture changes.
   });
 
   describe("case that passes earlier rows and fails only at S17", () => {
