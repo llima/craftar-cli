@@ -953,6 +953,29 @@ Done.
     expect(result.sections[0].value).toBe("| a |\n| b |\n| c |\n");
   });
 
+  // SF1: a reuse-only plan on a mixed-EOL base must not round-trip through mergeFile, which would
+  // normalize the line endings even though the body does not change (spec 12 §6.7 step 3).
+  it("leaves a mixed-EOL base untouched on a reuse-only section plan", async () => {
+    // Base has mixed EOL (CRLF first line, then LF) with existing section markers
+    const baseBody = "# T\r\n\n<!-- craftar:section flavors -->\n| a |\n<!-- /craftar:section -->\n\nEnd.\n";
+    // Variant has no markers, different content
+    const variantBody = "# T\r\n\n| b |\n\nEnd.\n";
+    const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
+    const planObj = await planFrom(base, variant, diff, "acme");
+    // Set take: section on all hunks (reuse, no new section)
+    for (const h of planObj.files[0].hunks!) {
+      h.take = "section";
+      (h as Record<string, unknown>).section = { name: "flavors" };
+    }
+
+    const result = await applyPlan(base, variant, diff, planObj);
+
+    // Body unchanged: write has no rule.md (spec 12 §6.7 step 3)
+    expect(result.write["rule.md"]).toBeUndefined();
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0].existing).toBe(true);
+  });
+
   it("a plan mixing take: param and take: section in one file: both proved", async () => {
     const baseBody = "# Review\n\nDeploy to acme-api.\n\n| Repo |\n|---|\n| x |\n\nEnd.\n";
     const variantBody = "# Review\n\nDeploy to globex-api.\n\n| Repo |\n|---|\n| y |\n\nEnd.\n";

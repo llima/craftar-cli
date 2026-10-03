@@ -520,7 +520,16 @@ export async function applyPlan(
           });
         }
 
-        if (template !== baseText) write[pf.file] = template;
+        // A reuse-only plan (only existing sections, no new sections, no variant takes, no param
+        // takes) does not change the body by spec 12 §6.7 step 3: "For an existing section, nothing
+        // (unless param or variant hunks in the same file change it)." Skip mergeFile entirely
+        // rather than round-tripping a mixed-EOL base through splitLines/withEol.
+        const hasNewSection = newNames.length > 0;
+        const hasVariantTake = takes.includes("variant");
+        const hasParamTake = paramOf.size > 0;
+        if (hasNewSection || hasVariantTake || hasParamTake) {
+          if (template !== baseText) write[pf.file] = template;
+        }
         continue;
       }
 
