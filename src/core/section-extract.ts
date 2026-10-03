@@ -400,9 +400,9 @@ export function deriveSections(args: {
       // prev.from is the "after line N" position = N + 1
       overlaps = curr.from === prev.from;
     } else if (!prevEmpty && currEmpty) {
-      // Empty curr: [from=N+1, to=N] touches prev if prev.to === N
-      // curr.to is N
-      overlaps = prev.to === curr.to;
+      // Empty curr: [from=N+1, to=N] is inside or touching prev if prev.to >= N.
+      // The sort guarantees prev.from <= curr.from, so >= covers both touching and containing.
+      overlaps = prev.to >= curr.to;
     } else {
       // Both empty: [prevFrom=M+1, prevTo=M] and [currFrom=N+1, currTo=N]
       // They touch if M === N (same position) or M+1 === N (adjacent positions)

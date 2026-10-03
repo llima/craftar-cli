@@ -554,6 +554,61 @@ describe("deriveSections — S7: overlapping sections", () => {
   });
 });
 
+describe("deriveSections — S7: empty span INSIDE another span (Case A)", () => {
+  // Case A: an empty span fully inside a non-empty span must be refused.
+  // base L1..L8, variant L1 L2 V3 L4 X L5 L6 L7 L8
+  // Hunk 1 (line 3 change) section `p` with lines: "3-7" → span [3,7]
+  // Hunk 2 (insertion after line 4) section `e` without lines → empty span [5,4]
+  // The empty span [5,4] is INSIDE [3,7], not just touching. Should be S7.
+
+  it("empty span inside non-empty span → S7 in both plan orders", () => {
+    const base = lines("L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8");
+    const variant = lines("L1", "L2", "V3", "L4", "X", "L5", "L6", "L7", "L8");
+    const hunks = getHunks(base, variant);
+
+    // Should have 2 hunks: line 3 change, insertion after line 4
+    expect(hunks.length).toBe(2);
+
+    // Plan with p first, e second
+    const entries1 = [
+      entry(1, "section", { name: "p", lines: "3-7" }),
+      entry(2, "section", { name: "e" }),
+    ];
+    const msg1 = err(() =>
+      deriveSections({
+        file: FILE,
+        label: LABEL,
+        ref: REF,
+        baseText: base,
+        variantText: variant,
+        hunks,
+        entries: entries1,
+        declaredElsewhere: new Map(),
+      }),
+    );
+    expect(msg1).toContain("would overlap section");
+
+    // Plan with e first, p second (swapped order)
+    const entries2 = [
+      entry(2, "section", { name: "e" }),
+      entry(1, "section", { name: "p", lines: "3-7" }),
+    ];
+    const msg2 = err(() =>
+      deriveSections({
+        file: FILE,
+        label: LABEL,
+        ref: REF,
+        baseText: base,
+        variantText: variant,
+        hunks,
+        entries: entries2,
+        declaredElsewhere: new Map(),
+      }),
+    );
+    expect(msg2).toContain("would overlap section");
+  });
+});
+
 describe("deriveSections — S7: empty span adjacent to another span (SF-B)", () => {
   // SF-B bug: an empty span adjacent to another new span reaches S17 instead of S7,
   // and the result depends on plan order. Fix: treat a shared boundary as overlap
