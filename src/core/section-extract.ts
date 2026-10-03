@@ -378,12 +378,39 @@ export function deriveSections(args: {
   }
 
   // Check two runs don't overlap (S7)
-  const sortedRuns = [...runs].sort((a, b) => a.from - b.from);
+  // Sort deterministically: by from, then by to, then by name
+  const sortedRuns = [...runs].sort((a, b) => {
+    if (a.from !== b.from) return a.from - b.from;
+    if (a.to !== b.to) return a.to - b.to;
+    return a.name.localeCompare(b.name);
+  });
   for (let i = 1; i < sortedRuns.length; i++) {
     const prev = sortedRuns[i - 1];
     const curr = sortedRuns[i];
-    // prev.to must be < curr.from for no overlap
-    if (prev.to >= curr.from) {
+    const prevEmpty = prev.from === prev.to + 1;
+    const currEmpty = curr.from === curr.to + 1;
+
+    // Non-empty vs non-empty: prev.to must be < curr.from
+    // Empty span [N+1, N] overlaps a neighbor whose to === N or whose from === N + 1
+    let overlaps = false;
+    if (!prevEmpty && !currEmpty) {
+      // Both non-empty: standard check
+      overlaps = prev.to >= curr.from;
+    } else if (prevEmpty && !currEmpty) {
+      // Empty prev: [from=N+1, to=N] touches curr if curr.from === N + 1
+      // prev.from is the "after line N" position = N + 1
+      overlaps = curr.from === prev.from;
+    } else if (!prevEmpty && currEmpty) {
+      // Empty curr: [from=N+1, to=N] touches prev if prev.to === N
+      // curr.to is N
+      overlaps = prev.to === curr.to;
+    } else {
+      // Both empty: [prevFrom=M+1, prevTo=M] and [currFrom=N+1, currTo=N]
+      // They touch if M === N (same position) or M+1 === N (adjacent positions)
+      overlaps = prev.to === curr.to || prev.from === curr.to;
+    }
+
+    if (overlaps) {
       throw new Error(`unify plan: section ${curr.name} would overlap section ${prev.name} (${file}:${prev.from})`);
     }
   }
@@ -407,18 +434,24 @@ export function deriveSections(args: {
     markersWithMeta.push({ at: closerAt, line: closer, name: run.name, isOpener: false });
   }
 
-  // Sort markers: by `at`, opener-before-closer at same `at` for same section,
-  // closer-before-opener when one section's closer and next one's opener share an `at`
+  // Sort markers: by `at`, then by type (closer before opener for different sections,
+  // opener before closer for same section), then by name for stability.
+  // This is a total order: at → isOpener → name covers all cases.
   markersWithMeta.sort((a, b) => {
     if (a.at !== b.at) return a.at - b.at;
 
     if (a.name === b.name) {
       // Same section: opener before closer
       return a.isOpener ? -1 : 1;
-    } else {
-      // Different sections at same position: closer before opener
+    }
+
+    // Different sections at same position: closer before opener
+    if (a.isOpener !== b.isOpener) {
       return a.isOpener ? 1 : -1;
     }
+
+    // Both same type (both openers or both closers), different names: sort by name
+    return a.name.localeCompare(b.name);
   });
 
   const markers: MarkerInsertion[] = markersWithMeta.map(({ at, line }) => ({ at, line }));
