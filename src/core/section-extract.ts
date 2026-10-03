@@ -1,8 +1,10 @@
 import type { Hunk } from "./diff.js";
 import type { PlanHunk } from "../schema/index.js";
 import { splitLines } from "./diff.js";
-import { canonicalValue, firstMarkerLine, parseSections, type ParsedSections } from "./sections.js";
+import { canonicalValue, expandSections, firstMarkerLine, parseSections, SectionMarkerError, type ParsedSections } from "./sections.js";
 import { stripBom, toLf } from "./text.js";
+import type { Extraction } from "./extract.js";
+import { placeholders, substituteKeys } from "./extract.js";
 
 /**
  * Section extraction (spec 12): turn a `take: section` run into a section whose markers are added
@@ -532,4 +534,116 @@ function computeValue(
   }
 
   return value;
+}
+
+/**
+ * The section half of the equivalence proof (spec 12 §6.5), for one file that has at least one
+ * section run. It also carries the plan's param keys K (spec 09 §6.2), because a file can hold both:
+ * for such a file this replaces `prove`. Throws S17 naming the file.
+ */
+export function proveSections(args: {
+  file: string; // base-relative, for messages
+  label: string; // Forge-relative, for parseSections
+  ref: string;
+  template: string; // T: section hunks as base lines, param hunks as templates, new markers inserted
+  mBase: string; // every param and section hunk taken base, others as the plan says
+  mVar: string; // every param and section hunk taken variant, others as the plan says
+  newNames: string[]; // the names of the NEW runs in this file
+  values: Record<string, string>; // σ: run name → value, for every run (new and existing) in this file
+  profileValues: Record<string, string>; // S_p: profile <p>'s current sections for the base's key ({} when none)
+  extractions: Extraction[]; // the plan's param keys (may be empty)
+}): void {
+  const { file, label, ref, template, mBase, mVar, newNames, values, profileValues, extractions } = args;
+  const n = (x: string) => toLf(stripBom(x));
+
+  // Build D and V from extractions
+  const D = new Map(extractions.map((e) => [e.key, e.default]));
+  const V = new Map(extractions.map((e) => [e.key, e.value]));
+  const K = new Set(extractions.map((e) => e.key));
+
+  const names = (p: ParsedSections) => p.sections.map((s) => s.name);
+
+  // Step 1: Parse all three
+  let pT: ParsedSections;
+  let pB: ParsedSections;
+  let pV: ParsedSections;
+
+  const runNames = Object.keys(values).join(", ") || newNames.join(", ");
+
+  try {
+    pT = parseSections(template, label, ref);
+  } catch (e) {
+    if (e instanceof SectionMarkerError) {
+      throw new Error(`unify: section ${runNames} would not reproduce the base side of "${file}" (${e.problem})`);
+    }
+    throw e;
+  }
+
+  try {
+    pB = parseSections(mBase, label, ref);
+  } catch (e) {
+    if (e instanceof SectionMarkerError) {
+      throw new Error(`unify: section ${runNames} would not reproduce the base side of "${file}" (${e.problem})`);
+    }
+    throw e;
+  }
+
+  try {
+    pV = parseSections(mVar, label, ref);
+  } catch (e) {
+    if (e instanceof SectionMarkerError) {
+      throw new Error(`unify: section ${runNames} would not reproduce the variant side of "${file}" (${e.problem})`);
+    }
+    throw e;
+  }
+
+  // Step 2: Structure check
+  // names(pT) with every name of newNames removed must equal names(pB)
+  const tNames = names(pT);
+  const bNames = names(pB);
+  const newNamesSet = new Set(newNames);
+
+  // Check every newNames entry appears exactly once in tNames
+  for (const name of newNames) {
+    const count = tNames.filter((n) => n === name).length;
+    if (count !== 1) {
+      throw new Error(`unify: section ${runNames} would not reproduce the base side of "${file}"`);
+    }
+  }
+
+  // names(pT) - newNames must equal names(pB)
+  const tNamesFiltered = tNames.filter((name) => !newNamesSet.has(name));
+  if (tNamesFiltered.length !== bNames.length || !tNamesFiltered.every((name, i) => name === bNames[i])) {
+    throw new Error(`unify: section ${runNames} would not reproduce the base side of "${file}"`);
+  }
+
+  // Step 3: Base side proof
+  const tB = expandSections(pT, {});
+  const mB = expandSections(pB, {});
+  if (n(substituteKeys(tB, D)) !== n(substituteKeys(mB, D))) {
+    throw new Error(`unify: section ${runNames} would not reproduce the base side of "${file}"`);
+  }
+
+  // Step 4: Variant side proof
+  const combinedValues = { ...profileValues, ...values };
+  const tV = expandSections(pT, combinedValues);
+  const mV = expandSections(pV, profileValues);
+  if (n(substituteKeys(tV, V)) !== n(substituteKeys(mV, V))) {
+    throw new Error(`unify: section ${runNames} would not reproduce the variant side of "${file}"`);
+  }
+
+  // Step 5: Placeholders check (spec 09 §6.2 (b))
+  const others = (t: string) => placeholders(n(t)).filter((k) => !K.has(k));
+
+  const othersTB = others(tB);
+  const othersMB = others(mB);
+  if (JSON.stringify(othersTB) !== JSON.stringify(othersMB)) {
+    throw new Error(`unify: extracting into "${file}" would change which {{…}} placeholders the text holds`);
+  }
+
+  const othersTV = others(tV);
+  const othersMV = others(mV);
+  if (JSON.stringify(othersTV) !== JSON.stringify(othersMV)) {
+    throw new Error(`unify: extracting into "${file}" would change which {{…}} placeholders the text holds`);
+  }
 }

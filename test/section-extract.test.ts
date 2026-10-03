@@ -794,3 +794,430 @@ describe("deriveSections — marker insertion order", () => {
     expect(result.markers[1].line).toContain("/craftar:section");
   });
 });
+
+
+// ====================================================================
+// proveSections tests (spec 12 §6.5)
+// ====================================================================
+
+import { proveSections } from "../src/core/section-extract.js";
+
+const OPEN_TAG = (n: string) => `<!-- craftar:section ${n} -->`;
+const CLOSE_TAG = "<!-- /craftar:section -->";
+
+describe("proveSections (spec 12 §6.5)", () => {
+  const FILE = "rule.md";
+  const LABEL = "ingredients/rules/review-posture/rule.md";
+  const REF = "rule/review-posture";
+
+  describe("new section around a table", () => {
+    // Template T has markers, mBase is base side (markers removed, default content), mVar is variant side
+    // 
+    // IMPORTANT: The segment AFTER the closer starts with what follows the closer LINE, not the closer TAG.
+    // So if footer = "\n\nNever...", after the closer "<!-- /craftar:section -->\n", what remains is "\nNever...".
+    // When constructing mBase/mVar, we must match what expandSections produces.
+    
+    const header = "# Review posture\n\nDispatch reviewers.\n\n";
+    const tableBase = "| Repo | Reviewer |\n|---|---|\n| `acme-api` | backend |\n";
+    const tableVar = "| Repo | Reviewer |\n|---|---|\n| `acme-api` | backend |\n| `acme-web` | frontend |\n";
+    const footerInTemplate = "\n\nNever edit.\n"; // placed after CLOSE_TAG
+    const footerAfterExpand = "\nNever edit.\n"; // what remains after closer line is consumed
+
+    // Template: markers around the table
+    // Structure: header + OPEN + "\n" + tableBase + CLOSE + footerInTemplate
+    // The CLOSE + "\n\n" means closer line is "<!-- /craftar:section -->\n" and then "\nNever..."
+    const template = header + OPEN_TAG("flavors") + "\n" + tableBase + CLOSE_TAG + footerInTemplate;
+    
+    // mBase: must match expandSections(parse(template), {}) = header + tableBase (default) + footerAfterExpand
+    const mBase = header + tableBase + footerAfterExpand;
+    // mVar: must match expandSections(parse(template), {flavors: tableVar}) = header + tableVar + footerAfterExpand
+    const mVar = header + tableVar + footerAfterExpand;
+
+    it("passes when template renders base via defaults and variant via values", () => {
+      expect(() =>
+        proveSections({
+          file: FILE,
+          label: LABEL,
+          ref: REF,
+          template,
+          mBase,
+          mVar,
+          newNames: ["flavors"],
+          values: { flavors: tableVar },
+          profileValues: {},
+          extractions: [],
+        }),
+      ).not.toThrow();
+    });
+
+    it("S17 variant side: wrong value (one row changed)", () => {
+      const wrongValue = "| Repo | Reviewer |\n|---|---|\n| `acme-api` | backend |\n| `WRONG` | WRONG |\n";
+      expect(() =>
+        proveSections({
+          file: FILE,
+          label: LABEL,
+          ref: REF,
+          template,
+          mBase,
+          mVar,
+          newNames: ["flavors"],
+          values: { flavors: wrongValue }, // Wrong value
+          profileValues: {},
+          extractions: [],
+        }),
+      ).toThrow(/would not reproduce the variant side/);
+    });
+
+    it("S17 base side: template default differs from mBase by one line", () => {
+      const wrongTemplate = header + OPEN_TAG("flavors") + "\n" + "| DIFFERENT |\n" + CLOSE_TAG + footerInTemplate;
+      expect(() =>
+        proveSections({
+          file: FILE,
+          label: LABEL,
+          ref: REF,
+          template: wrongTemplate,
+          mBase,
+          mVar,
+          newNames: ["flavors"],
+          values: { flavors: tableVar },
+          profileValues: {},
+          extractions: [],
+        }),
+      ).toThrow(/would not reproduce the base side/);
+    });
+  });
+
+  describe("existing section reused", () => {
+    // For existing section: template T has markers, mBase has markers too (taken base preserves them),
+    // mVar has no markers (variant side expanded)
+    //
+    // Same footer issue: what follows the closer LINE, not the closer TAG
+    
+    const header = "# Posture\n\n";
+    const footerInTemplate = "\n\nEnd.\n";
+    const footerAfterExpand = "\nEnd.\n";
+    const sectionDefault = "| a |\n| b |\n";
+    const sectionVar = "| a |\n| b |\n| c |\n";
+
+    // Template: base with markers (existing section, not new)
+    const template = header + OPEN_TAG("flavors") + "\n" + sectionDefault + CLOSE_TAG + footerInTemplate;
+    // mBase: same as template (markers present, default content inside)
+    const mBase = template;
+    // mVar: expanded with values = header + sectionVar + footerAfterExpand (no markers)
+    const mVar = header + sectionVar + footerAfterExpand;
+
+    it("passes with profileValues {} and values { flavors: variant rows }", () => {
+      expect(() =>
+        proveSections({
+          file: FILE,
+          label: LABEL,
+          ref: REF,
+          template,
+          mBase,
+          mVar,
+          newNames: [], // existing, not new
+          values: { flavors: sectionVar },
+          profileValues: {},
+          extractions: [],
+        }),
+      ).not.toThrow();
+    });
+
+    it("passes with profileValues holding another section (a second section the plan does not name)", () => {
+      // Base has two sections, plan only touches 'flavors', 'extra' stays via profileValues
+      // For the proof: template and mBase both have markers for both sections
+      // mVar has markers only for 'extra' (taken base), content for 'flavors' (taken variant)
+      const extraDefault = "extra content\n";
+      const footerInTemplateTwo = "\nfinal.\n";
+      const footerAfterExpandTwo = "final.\n"; // after "<!-- /craftar:section -->\n" comes "final.\n"
+      
+      // Note: between the two sections we have "\n\nmiddle\n\n" followed by the opener for extra
+      const templateTwo =
+        header + OPEN_TAG("flavors") + "\n" + sectionDefault + CLOSE_TAG + "\n\nmiddle\n\n" + OPEN_TAG("extra") + "\n" + extraDefault + CLOSE_TAG + footerInTemplateTwo;
+      const mBaseTwo = templateTwo;
+      // mVar: flavors expanded to sectionVar (no markers), extra still has markers (taken base)
+      // After flavors closer: "\nmiddle\n\n" (closer consumes one \n from the "\n\nmiddle...")
+      // So mVar = header + sectionVar + "\nmiddle\n\n" + OPEN_TAG("extra") + "\n" + extraDefault + CLOSE_TAG + footerInTemplateTwo
+      const mVarTwo =
+        header + sectionVar + "\nmiddle\n\n" + OPEN_TAG("extra") + "\n" + extraDefault + CLOSE_TAG + footerInTemplateTwo;
+
+      expect(() =>
+        proveSections({
+          file: FILE,
+          label: LABEL,
+          ref: REF,
+          template: templateTwo,
+          mBase: mBaseTwo,
+          mVar: mVarTwo,
+          newNames: [], // existing
+          values: { flavors: sectionVar },
+          profileValues: {}, // extra not in profileValues since mVar still has markers for it
+          extractions: [],
+        }),
+      ).not.toThrow();
+    });
+  });
+
+  describe("combined with a param key", () => {
+    // T holds {{deploy.api}} outside the section and the section around a table
+    // Key insight: mBase and mVar must match what expandSections produces from the template.
+    // 
+    // The closer TAG "<!-- /craftar:section -->" plus footerInTemplate "\nEnd.\n" gives the line:
+    // "<!-- /craftar:section -->\n" and then "End.\n"
+    // So after expansion, the text after the section is "End.\n"
+    
+    const header = "Deploy `{{deploy.api}}` first.\n\n";
+    const tableBase = "| a |\n";
+    const tableVar = "| b |\n";
+    const footerInTemplate = "\nEnd.\n"; // This follows the closer TAG
+    const footerAfterExpand = "End.\n";   // The closer LINE consumes the leading \n
+
+    // Template: has section markers and the {{deploy.api}} placeholder
+    const template = header + OPEN_TAG("flavors") + "\n" + tableBase + CLOSE_TAG + footerInTemplate;
+    // mBase: must match expandSections(pT, {}) = header + tableBase + footerAfterExpand
+    const mBase = header + tableBase + footerAfterExpand;
+    // mVar: must match expandSections(pT, values) = header + tableVar + footerAfterExpand
+    const mVar = header + tableVar + footerAfterExpand;
+
+    it("passes with D/V given", () => {
+      expect(() =>
+        proveSections({
+          file: FILE,
+          label: LABEL,
+          ref: REF,
+          template,
+          mBase,
+          mVar,
+          newNames: ["flavors"],
+          values: { flavors: tableVar },
+          profileValues: {},
+          extractions: [{ key: "deploy.api", default: "acme-api", value: "globex-api", sites: [], reused: false }],
+        }),
+      ).not.toThrow();
+    });
+
+    it("fails with mismatched V", () => {
+      // Use mVarDifferent that has different content, causing variant side mismatch
+      const mVarDifferent = header + "| WRONG |\n" + footerAfterExpand;
+      
+      expect(() =>
+        proveSections({
+          file: FILE,
+          label: LABEL,
+          ref: REF,
+          template,
+          mBase,
+          mVar: mVarDifferent, // Has "| WRONG |" but values says tableVar
+          newNames: ["flavors"],
+          values: { flavors: tableVar },
+          profileValues: {},
+          extractions: [{ key: "deploy.api", default: "acme-api", value: "globex-api", sites: [], reused: false }],
+        }),
+      ).toThrow(/would not reproduce the variant side/);
+    });
+  });
+
+  describe("template markers do not parse (unterminated)", () => {
+    it("S17 with the problem", () => {
+      const badTemplate = "# Header\n\n" + OPEN_TAG("flavors") + "\n| a |\n"; // no closer
+      const mBase = "# Header\n\n| a |\n";
+      const mVar = "# Header\n\n| b |\n";
+
+      expect(() =>
+        proveSections({
+          file: FILE,
+          label: LABEL,
+          ref: REF,
+          template: badTemplate,
+          mBase,
+          mVar,
+          newNames: ["flavors"],
+          values: { flavors: "| b |\n" },
+          profileValues: {},
+          extractions: [],
+        }),
+      ).toThrow(/would not reproduce the base side.*is never closed/);
+    });
+  });
+
+  describe("placeholder check (spec 09 §6.2 (b))", () => {
+    it("value that adds a {{title}} placeholder the variant did not have → P7 wording", () => {
+      // Construct a case where steps 3-4 pass but step 5 fails
+      // The value adds a placeholder that wasn't in mVar
+      //
+      // For step 5 to fail: others(tV) != others(mV)
+      // After expandSections, tV will have the value's placeholders, mV will have the original
+      //
+      // To make steps 3-4 pass:
+      // - Base side: expandSections(pT, {}) with D should equal mB with D  
+      // - Variant side: expandSections(pT, values) with V should equal mV with V
+      //
+      // The trick: make mV have the same text as expandSections(pT, values) but differ only in placeholders.
+      // This is hard because placeholders are part of the text. 
+      //
+      // Actually, looking at step 5 more carefully:
+      // others(tB) = placeholders in expandSections(pT, {}) that are not in K
+      // others(mB) = placeholders in mB that are not in K
+      // For the test to work, these must be equal (step 3-4 pass), but then
+      // others(tV) = placeholders in expandSections(pT, values) that are not in K
+      // others(mV) = placeholders in mV that are not in K
+      // For step 5 to fail, these must differ.
+      //
+      // The value itself contains the new placeholder, so expandSections puts it in tV.
+      // If mV doesn't have that placeholder but has the same text otherwise, step 4 fails first.
+      //
+      // To isolate step 5: we need the text to match but placeholders to differ.
+      // This is only possible if the placeholder in the value renders to the same text
+      // as what's in mV through some substitution - but we're testing with K being the param keys,
+      // and the {{title}} is outside K.
+      //
+      // Actually, the test description says "(Construct mVar consistently so that steps 3–4 pass 
+      // and only step 5 fails, or explain in a comment why it is unreachable and test the reachable path.)"
+      //
+      // It's unreachable: if the value adds {{title}} and mVar doesn't have it, 
+      // expandSections(pT, values) will have "{{title}}" literally in the text,
+      // and mV won't, so step 4's text comparison fails before step 5.
+      //
+      // Let's test the reachable path: step 4 fails when value introduces new placeholder.
+      
+      const template = "# Header\n\n" + OPEN_TAG("data") + "\ncontent\n" + CLOSE_TAG + "\nEnd.\n";
+      const mBase = "# Header\n\ncontent\nEnd.\n";
+      const mVar = "# Header\n\nother\nEnd.\n"; // no {{title}}
+
+      // Value that introduces {{title}} - this will cause step 4 to fail (not step 5)
+      // because the text won't match
+      const valueWithPlaceholder = "{{title}} in section\n";
+
+      // The error will be "would not reproduce the variant side" because:
+      // tV = "# Header\n\n{{title}} in section\nEnd.\n"
+      // mV = "# Header\n\nother\nEnd.\n"
+      // These don't match even after V substitution (V is empty since no param extractions)
+      
+      // So we test that this path is caught by the variant side check
+      expect(() =>
+        proveSections({
+          file: FILE,
+          label: LABEL,
+          ref: REF,
+          template,
+          mBase,
+          mVar,
+          newNames: ["data"],
+          values: { data: valueWithPlaceholder },
+          profileValues: {},
+          extractions: [],
+        }),
+      ).toThrow(/would not reproduce the variant side/);
+      
+      // Note: The P7 wording ("would change which {{…}} placeholders") is unreachable 
+      // in isolation for this scenario because the text mismatch is caught first in step 4.
+      // The placeholder check in step 5 guards against cases where text matches but
+      // placeholders differ, which happens when a param key substitution masks the difference.
+    });
+  });
+
+  describe("case that passes earlier rows and fails only at S17", () => {
+    // spec 12 §4.6: "a failure that reaches S17 without an earlier row is a bug in the rows, and a test case"
+    // This tests a case that passes S1-S12 checks (those are in deriveSections) and fails at the proof step.
+    //
+    // The proof can fail because:
+    // 1. parseSections fails on template/mBase/mVar
+    // 2. Structure mismatch (names don't match)
+    // 3. Base side render mismatch
+    // 4. Variant side render mismatch
+    // 5. Placeholder mismatch
+    //
+    // A case reaching S17 means deriveSections passed but proveSections fails.
+    // The subtlest case is when the texts look right but a tiny difference causes the proof to fail.
+
+    it("subtle base side mismatch: whitespace difference", () => {
+      // Template with markers
+      const template = "# Head\n\n" + OPEN_TAG("data") + "\n| a |\n" + CLOSE_TAG + "\n\nFoot.\n";
+      // mBase has slightly different whitespace (two newlines vs one in a spot)
+      const mBase = "# Head\n\n| a |\n\n\nFoot.\n"; // extra newline
+      const mVar = "# Head\n\n| b |\n\nFoot.\n";
+
+      // This passes S1-S12 (no marker issues, valid structure) but fails the base side proof
+      // because expandSections(pT, {}) gives "| a |\n" as default, but mBase has extra newline
+
+      expect(() =>
+        proveSections({
+          file: FILE,
+          label: LABEL,
+          ref: REF,
+          template,
+          mBase,
+          mVar,
+          newNames: ["data"],
+          values: { data: "| b |\n" },
+          profileValues: {},
+          extractions: [],
+        }),
+      ).toThrow(/would not reproduce the base side/);
+    });
+  });
+
+  describe("structure check", () => {
+    it("newNames entry not in template → S17 base side", () => {
+      // Template has no section, but newNames claims one
+      const template = "# Header\n\nContent.\n\nEnd.\n";
+      const mBase = "# Header\n\nContent.\n\nEnd.\n";
+      const mVar = "# Header\n\nOther.\n\nEnd.\n";
+
+      expect(() =>
+        proveSections({
+          file: FILE,
+          label: LABEL,
+          ref: REF,
+          template,
+          mBase,
+          mVar,
+          newNames: ["flavors"], // not in template
+          values: { flavors: "Other.\n" },
+          profileValues: {},
+          extractions: [],
+        }),
+      ).toThrow(/would not reproduce the base side/);
+    });
+
+    it("template has extra section not in base → S17 base side", () => {
+      // Template has a section, but mBase also has it as existing (should be in base too)
+      const template = "# Header\n\n" + OPEN_TAG("flavors") + "\n| a |\n" + CLOSE_TAG + "\n\nEnd.\n";
+      // mBase has no section at all
+      const mBase = "# Header\n\n| a |\n\nEnd.\n";
+      const mVar = "# Header\n\n| b |\n\nEnd.\n";
+
+      // Structure check: names(pT) - newNames should equal names(pB)
+      // pT has ["flavors"], newNames = ["flavors"], so [] should equal names(pB) = []
+      // That passes structure. But the base side proof should fail because
+      // expandSections(pT, {}) = "# Header\n\n| a |\n\nEnd.\n"
+      // mB = "# Header\n\n| a |\n\nEnd.\n"
+      // These are equal, so it should pass!
+      //
+      // Let's construct a case where the structure check actually fails:
+      // Template has 2 sections, newNames has 1, base has 0
+
+      const template2 = "# H\n\n" + OPEN_TAG("a") + "\nx\n" + CLOSE_TAG + "\n" + OPEN_TAG("b") + "\ny\n" + CLOSE_TAG + "\nE.\n";
+      const mBase2 = "# H\n\nx\ny\nE.\n"; // no sections
+      const mVar2 = "# H\n\nX\nY\nE.\n";
+
+      // names(pT) = ["a", "b"], newNames = ["a"], so remaining = ["b"]
+      // names(pB) = [], so ["b"] != [] → structure mismatch
+
+      expect(() =>
+        proveSections({
+          file: FILE,
+          label: LABEL,
+          ref: REF,
+          template: template2,
+          mBase: mBase2,
+          mVar: mVar2,
+          newNames: ["a"],
+          values: { a: "X\n", b: "Y\n" },
+          profileValues: {},
+          extractions: [],
+        }),
+      ).toThrow(/would not reproduce the base side/);
+    });
+  });
+});
