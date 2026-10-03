@@ -765,25 +765,32 @@ describe("deriveSections — S7: empty span adjacent to another span (SF-B)", ()
     expect(result.markers[3]).toEqual({ at: 2, line: "<!-- /craftar:section -->" });
   });
 
-  it("two empty spans at the SAME position → S7", () => {
-    // Two empty spans at position after line 1: both [2,1]
-    // The diff algorithm cannot produce two hunks at the same position naturally,
-    // so we construct the entries by hand pointing two different section names
-    // at the same single hunk. This is technically S3 (non-consecutive if repeated)
-    // but let's test by constructing artificial runs that end up at the same position.
-    //
-    // Actually, we cannot test same-position via natural diffs. Instead, let's just
-    // document that the check `prev.to === curr.to` catches this case.
-    //
-    // For a real test, use a base/variant where we manipulate entries to produce
-    // overlapping empty spans at the same position - but that requires two hunks
-    // inserting at the same line, which diff doesn't produce.
-    //
-    // The both-empty overlap check is `prev.to === curr.to`, which means:
-    // - [2,1] and [2,1] → 1 === 1 → overlap (same position)
-    // - [2,1] and [3,2] → 1 === 2 → no overlap (one line apart)
-    //
-    // We'll keep this as a comment since we can't naturally produce two same-position hunks.
+  it("two empty spans at the SAME position → S7, in both plan orders", () => {
+    // diffLines cannot produce two hunks at one position, so split one real insertion hunk in two:
+    // both pure insertions sit after base line 1 (a.start 2, no base lines).
+    const baseText = "a\nb\nc\n";
+    const variantText = "a\nX\nY\nb\nc\n";
+    const [h] = diffLines(baseText, variantText);
+    expect(h.a.lines).toEqual([]);
+    expect(h.b.lines).toEqual(["X", "Y"]);
+    const hx: Hunk = { kind: "block", a: { start: h.a.start, lines: [] }, b: { start: h.b.start, lines: ["X"] } };
+    const hy: Hunk = { kind: "block", a: { start: h.a.start, lines: [] }, b: { start: h.b.start + 1, lines: ["Y"] } };
+    const ex: PlanHunk = { hunk: 1, at: "after line 1", take: "section", section: { name: "x" } };
+    const ey: PlanHunk = { hunk: 2, at: "after line 1", take: "section", section: { name: "y" } };
+    for (const entries of [[ex, ey], [ey, ex]]) {
+      expect(() =>
+        deriveSections({
+          file: "rule.md",
+          label: "ingredients/rules/r/rule.md",
+          ref: "rule/r",
+          baseText,
+          variantText,
+          hunks: [hx, hy],
+          entries,
+          declaredElsewhere: new Map(),
+        }),
+      ).toThrow("unify plan: section y would overlap section x (rule.md:2)");
+    }
   });
 });
 

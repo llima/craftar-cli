@@ -390,7 +390,7 @@ export function deriveSections(args: {
     const currEmpty = curr.from === curr.to + 1;
 
     // Non-empty vs non-empty: prev.to must be < curr.from
-    // Empty span [N+1, N] overlaps a neighbor whose to === N or whose from === N + 1
+    // An empty span [N+1, N] conflicts with a non-empty neighbour that touches or contains position N, and with another empty span at the same N.
     let overlaps = false;
     if (!prevEmpty && !currEmpty) {
       // Both non-empty: standard check
