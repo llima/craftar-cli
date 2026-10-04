@@ -1,7 +1,7 @@
 import { toCrlf } from "../core/text.js";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
-import { appliesTo, mcpServers, outName, ruleFile } from "./shared.js";
+import { appliesTo, mcpServers, outName, ruleFile, RULE_NAME_CHARS } from "./shared.js";
 import type { Emitter, EmitContext, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 
@@ -152,7 +152,7 @@ export function agentResources(agentName: string, text: string, known: Set<strin
 /** Rule names referenced as `.claude/rules/<name>.md` or `.kiro/steering/<name>.md`, in order of first appearance. */
 export function referencedRules(text: string, known: Set<string>): string[] {
   const out: string[] = [];
-  for (const m of text.matchAll(/\.(?:claude\/rules|kiro\/steering)\/([A-Za-z0-9._-]+)\.md/g)) {
+  for (const m of text.matchAll(new RegExp(`\\.(?:claude\\/rules|kiro\\/steering)\\/([${RULE_NAME_CHARS}]+)\\.md`, "g"))) {
     const name = m[1];
     if (known.has(name) && !out.includes(name)) out.push(name);
   }
