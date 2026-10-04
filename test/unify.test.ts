@@ -736,6 +736,26 @@ describe("take: param — the engine (spec 09 §6.1, §6.2)", () => {
     (variant as any).meta = { ...(variant as any).meta, params: { k: { default: "y" } } };
     expect(metaDifferences(base, variant)).toEqual(["params"]);
   });
+
+  it("take: param works on a body file declared ./rule.md (0.8.2)", async () => {
+    // Both base and variant declare file: "./rule.md" — the non-canonical spelling
+    const baseDir = await tmpDir();
+    const variantDir = await tmpDir();
+    cleanups.push(() => fs.rm(baseDir, { recursive: true, force: true }), () => fs.rm(variantDir, { recursive: true, force: true }));
+    await writeFiles(baseDir, { "ingredient.yaml": "type: rule\nname: workflow\nfile: ./rule.md\n", "rule.md": "use globex-api\n" });
+    await writeFiles(variantDir, { "ingredient.yaml": "type: rule\nname: workflow--acme\nas: workflow\nfile: ./rule.md\n", "rule.md": "use acme-api\n" });
+    const base = { ref: "rule/workflow", dir: baseDir, meta: { type: "rule", name: "workflow", file: "./rule.md" } } as never;
+    const variant = { ref: "rule/workflow--acme", dir: variantDir, meta: { type: "rule", name: "workflow--acme", as: "workflow", file: "./rule.md" } } as never;
+    const diff = await diffIngredients(base, variant);
+    const plan = await planFrom(base, variant, diff, "acme");
+    Object.assign(plan.files[0].hunks![0], { take: "param", params: [{ token: "globex-api", key: "deploy.api" }] });
+    const r = await applyPlan(base, variant, diff, plan);
+    expect(r.write["rule.md"]).toBe("use {{deploy.api}}\n");
+    expect(r.params).toEqual([
+      { key: "deploy.api", default: "globex-api", value: "acme-api", reused: false, sites: [{ file: "rule.md", hunk: 1 }] },
+    ]);
+    expect(r.resolved).toBe(true);
+  });
 });
 
 describe("take: param — the remaining engine rows (spec 09 AC 9)", () => {

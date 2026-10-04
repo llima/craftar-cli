@@ -121,6 +121,12 @@ describe("checkParamWrites — Forge-level refusals (spec 09 §6.3)", () => {
     expect(await err(check(forge, [ext("k", "globex-api", "acme-api")]))).toContain("rule/other also uses {{k}}");
   });
 
+  it("the citation scan reads a body file declared ./rule.md (0.8.2)", async () => {
+    // The other ingredient declares file: ./rule.md — the non-canonical spelling
+    const forge = await forgeOf(spec({ ingredients: [] }), { "ingredients/rules/other/ingredient.yaml": "type: rule\nname: other\nfile: ./rule.md\n", "ingredients/rules/other/rule.md": "see {{k}}\n" });
+    expect(await err(check(forge, [ext("k", "globex-api", "acme-api")]))).toContain("rule/other also uses {{k}}");
+  });
+
   it("P19: a hand-formatted file, or params behind an alias", async () => {
     const aligned = await forgeOf(spec(), { "profiles/acme/profile.yaml": "name: acme      # the client\nrecipes:\n    - base--acme\n" });
     expect(await err(check(aligned, [ext("k", "globex-api", "acme-api")]))).toContain("does not round-trip");
