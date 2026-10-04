@@ -1118,6 +1118,24 @@ describe("section-aware import — decisions (spec 11 §6.7–§6.10)", () => {
     expect(await snapshot(t.forge)).toEqual(before);
   });
 
+  it("I12: a base with malformed markers is refused, the Forge byte-identical (./rule.md, 0.8.2)", async () => {
+    // This test checks that readBase at :53 uses the `dir` argument when parsing body files.
+    // With dir, bodyFile compares path.join(dir, "rule.md") against path.join(dir, "./rule.md"), which works.
+    // Without dir, it compares "rule.md" === "./rule.md", which is false, so rule.md is not read as a body file.
+    const t = await setup();
+    await marked(t, `${HEAD}${OPEN("flavors")}${ACME}${TAIL}`);
+    // Add file: ./rule.md to the ingredient metadata
+    const metaPath = path.join(t.forge, "ingredients/rules/review-posture/ingredient.yaml");
+    const meta = YAML.parse(await fs.readFile(metaPath, "utf8"));
+    meta.file = "./rule.md";
+    await fs.writeFile(metaPath, YAML.stringify(meta));
+    const before = await snapshot(t.forge);
+    const e = await fail(importInto(t.forge, t.ws("acme"), "acme"));
+    expect(e?.message).toContain("import: ingredients/rules/review-posture/rule.md:5: section flavors is never closed — fix the Forge and re-run");
+    expect(e?.message).toContain("The Forge was left untouched.");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+
   it("a malformed marker in a file no target emits does not refuse the import (0.8.2)", async () => {
     const t = await setup();
     await marked(t);
