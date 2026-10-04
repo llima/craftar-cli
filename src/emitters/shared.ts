@@ -25,21 +25,14 @@ export interface RefReport {
   others: Array<{ path: string; citing: string }>;
 }
 
-/**
- * Resolve `.claude/rules/<x>.md` references in a body emitted into AGENTS.md (spec 15 §4.1–§4.3).
- * Returns the transformed text and a report of what was reworded or found dead.
- */
-export function resolveRuleRefs(
-  body: string,
-  citing: string,
-  ingredients: ResolvedIngredient[],
-  targets: readonly string[],
-): { text: string; report: RefReport } {
-  const report: RefReport = { reworded: [], others: [] };
-  const hasCc = targets.includes("claude-code");
-  const hasKiro = targets.includes("kiro");
+/** Lookup maps for rule reference resolution (spec 15 §4.2), built once per AGENTS.md. */
+export interface RuleLookup {
+  rulesByName: Map<string, ResolvedIngredient>;
+  steeringsByName: Map<string, ResolvedIngredient>;
+}
 
-  // Build lookup maps by output name: rules first, then steering for state B only (spec 15 §4.2)
+/** Build the lookup maps for rule reference resolution, once per AGENTS.md. */
+export function buildRuleLookup(ingredients: ResolvedIngredient[]): RuleLookup {
   const rulesByName = new Map<string, ResolvedIngredient>();
   const steeringsByName = new Map<string, ResolvedIngredient>();
   for (const ing of ingredients) {
@@ -47,29 +40,46 @@ export function resolveRuleRefs(
     if (ing.meta.type === "rule") rulesByName.set(name, ing);
     else if (ing.meta.type === "steering") steeringsByName.set(name, ing);
   }
+  return { rulesByName, steeringsByName };
+}
+
+/**
+ * Resolve `.claude/rules/<x>.md` references in a body emitted into AGENTS.md (spec 15 §4.1–§4.3).
+ * Returns the transformed text and a report of what was reworded or found dead.
+ */
+export function resolveRuleRefs(
+  body: string,
+  citing: string,
+  lookup: RuleLookup,
+  targets: readonly string[],
+): { text: string; report: RefReport } {
+  const report: RefReport = { reworded: [], others: [] };
+  const hasCc = targets.includes("claude-code");
+  const hasKiro = targets.includes("kiro");
+  const { rulesByName, steeringsByName } = lookup;
 
   // Determine rule state: A, B, C, D, or unknown (spec 15 §4.2)
   const ruleState = (name: string): "A" | "B" | "C" | "D" | "unknown" => {
     const rule = rulesByName.get(name);
-    // A: claude-code writes this rule
-    if (rule && hasCc && appliesTo(rule.meta.targets, "claude-code")) return "A";
-    // B: kiro writes this rule
-    if (rule && hasKiro && appliesTo(rule.meta.targets, "kiro")) return "B";
+    if (rule) {
+      // A or B (rule): use ruleWriter to decide
+      const writer = ruleWriter(targets, rule.meta.targets);
+      if (writer === "claude-code") return "A";
+      if (writer === "kiro") return "B";
+      // C: rule aimed at agents-md (text is in AGENTS.md)
+      if (appliesTo(rule.meta.targets, "agents-md")) return "C";
+      // D: rule exists but not written by any target here
+      return "D";
+    }
     // B (steering): kiro writes a steering with this name
     const steering = steeringsByName.get(name);
     if (steering && hasKiro && appliesTo(steering.meta.targets, "kiro")) return "B";
-    // C: rule aimed at agents-md (text is in AGENTS.md)
-    if (rule && appliesTo(rule.meta.targets, "agents-md")) return "C";
-    // D: rule exists but not written by any target here
-    if (rule) return "D";
     // No rule with this name
     return "unknown";
   };
 
-  // Helper to get the ingredient ref for reporting (rules only)
-  const ingRef = (name: string): string | undefined => rulesByName.get(name)?.ref;
-
   // Right boundary: not followed by letter, digit, `_`, `-`, or `.` followed by one of those (spec 15 §4.1)
+  // NOTE: The right boundary class is NOT the same as RULE_NAME_CHARS (which includes `.` for names).
   const rightBoundary = (after: string): boolean => {
     if (!after) return true;
     const c = after[0];
@@ -98,6 +108,7 @@ export function resolveRuleRefs(
   let result = body.replace(linkPattern, (match, text: string, name: string, frag: string | undefined, offset: number) => {
     // A link already bounds the path with `(` and `)` or `#`, so no boundary checks needed (spec 15 §4.1).
     const state = ruleState(name);
+    const rule = rulesByName.get(name);
     switch (state) {
       case "A":
         return match; // unchanged
@@ -106,7 +117,7 @@ export function resolveRuleRefs(
       case "C":
         return `[${text}](AGENTS.md)`; // fragment dropped
       case "D": {
-        rewordedWithOffset.push({ offset, ref: `.claude/rules/${name}.md`, citing, kind: `rule/${ingRef(name)!.split("/")[1]} reaches no target here` });
+        rewordedWithOffset.push({ offset, ref: `.claude/rules/${name}.md`, citing, kind: `${rule!.ref} reaches no target here` });
         return `${text} (${name}, rule not in this workspace)`;
       }
       case "unknown":
@@ -117,10 +128,9 @@ export function resolveRuleRefs(
   });
 
   // Process token references: .claude/rules/<x>.md (not in a link)
-  // We need to be careful not to match references we already processed as links
-  // The pattern matches .claude/rules/<name>.md with boundaries
+  // The pattern matches .claude/rules/<name>.md with left boundary in the capture
   const tokenPattern = new RegExp(
-    `(^|[^/A-Za-z0-9._-])(\\.claude\\/rules\\/([${RULE_NAME_CHARS}]+)\\.md)`,
+    `(^|[^/${RULE_NAME_CHARS}])(\\.claude\\/rules\\/([${RULE_NAME_CHARS}]+)\\.md)`,
     "g",
   );
 
@@ -132,6 +142,7 @@ export function resolveRuleRefs(
     if (!rightBoundary(after)) return match;
 
     const state = ruleState(name);
+    const rule = rulesByName.get(name);
     switch (state) {
       case "A":
         return match; // unchanged
@@ -140,7 +151,7 @@ export function resolveRuleRefs(
       case "C":
         return `${before}AGENTS.md (rule: ${name})`;
       case "D": {
-        rewordedWithOffset.push({ offset, ref: `.claude/rules/${name}.md`, citing, kind: `rule/${ingRef(name)!.split("/")[1]} reaches no target here` });
+        rewordedWithOffset.push({ offset, ref: `.claude/rules/${name}.md`, citing, kind: `${rule!.ref} reaches no target here` });
         return `${before}${name} (rule not in this workspace)`;
       }
       case "unknown":
@@ -164,9 +175,9 @@ export function resolveRuleRefs(
   // Collect other .claude/ paths (agents, commands, skills, scripts, hooks) only when no claude-code (spec 15 §4.5)
   if (!hasCc) {
     const otherDirs = ["agents", "commands", "skills", "scripts", "hooks"];
-    // Note: RULE_NAME_CHARS is `A-Za-z0-9._-`, so we add `/` before the `-` to avoid a bad range
+    // The path class adds `/` for subdirectories; in `[.../-]` the `/` goes before `-` to avoid a range error.
     const otherPattern = new RegExp(
-      `(^|[^/A-Za-z0-9._-])\\.claude\\/(${otherDirs.join("|")})\\/([A-Za-z0-9._/-]+)`,
+      `(^|[^/${RULE_NAME_CHARS}])\\.claude\\/(${otherDirs.join("|")})\\/([A-Za-z0-9._/-]+)`,
       "g",
     );
     let otherMatch;
