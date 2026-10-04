@@ -91,71 +91,108 @@ export function resolveRuleRefs(
     return true;
   };
 
-  // Process links first: [text](.claude/rules/<x>.md) or [text](.claude/rules/<x>.md#frag)
-  // Pattern: `[<text>](.claude/rules/<name>.md)` or `[<text>](.claude/rules/<name>.md#<frag>)`
+  // Collect all matches from the original body with their offsets, then apply in reverse order
+  // so that earlier offsets remain valid. This ensures warning order follows the original body (spec 15 §4.5).
+  interface Match {
+    offset: number;
+    length: number;
+    replacement: string;
+    reworded?: { ref: string; kind: string };
+  }
+  const matches: Match[] = [];
+
+  // Link pattern: [text](.claude/rules/<name>.md) or [text](.claude/rules/<name>.md#frag)
   const linkPattern = new RegExp(
     `\\[([^\\]]+)\\]\\(\\.claude\\/rules\\/([${RULE_NAME_CHARS}]+)\\.md(#[^)]*)?\\)`,
     "g",
   );
-
-  // Collect reworded entries with their original offsets for sorting (spec 15 §4.5)
-  const rewordedWithOffset: Array<{ offset: number; ref: string; citing: string; kind: string }> = [];
-
-  let result = body.replace(linkPattern, (match, text: string, name: string, frag: string | undefined, offset: number) => {
-    // A link already bounds the path with `(` and `)` or `#`, so no boundary checks needed (spec 15 §4.1).
+  let linkMatch;
+  while ((linkMatch = linkPattern.exec(body)) !== null) {
+    const [match, text, name, frag] = linkMatch as RegExpExecArray & [string, string, string, string | undefined];
+    const offset = linkMatch.index;
     const state = ruleState(name);
     const rule = rulesByName.get(name);
+    let replacement: string;
+    let reworded: { ref: string; kind: string } | undefined;
     switch (state) {
       case "A":
-        return match; // unchanged
+        continue; // unchanged, skip
       case "B":
-        return `[${text}](.kiro/steering/${name}.md${frag ?? ""})`;
+        replacement = `[${text}](${ruleFile("kiro", { name })}${frag ?? ""})`;
+        break;
       case "C":
-        return `[${text}](AGENTS.md)`; // fragment dropped
-      case "D": {
-        rewordedWithOffset.push({ offset, ref: `.claude/rules/${name}.md`, citing, kind: `${rule!.ref} reaches no target here` });
-        return `${text} (${name}, rule not in this workspace)`;
-      }
+        replacement = `[${text}](AGENTS.md)`; // fragment dropped
+        break;
+      case "D":
+        reworded = { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` };
+        replacement = `${text} (${name}, rule not in this workspace)`;
+        break;
       case "unknown":
-        if (hasCc) return match;
-        rewordedWithOffset.push({ offset, ref: `.claude/rules/${name}.md`, citing, kind: "no such rule" });
-        return `${text} (${name}, rule not in this workspace)`;
+        if (hasCc) continue;
+        reworded = { ref: `.claude/rules/${name}.md`, kind: "no such rule" };
+        replacement = `${text} (${name}, rule not in this workspace)`;
+        break;
     }
-  });
+    matches.push({ offset, length: match.length, replacement, reworded });
+  }
 
-  // Process token references: .claude/rules/<x>.md (not in a link)
-  // The pattern matches .claude/rules/<name>.md with left boundary in the capture
+  // Token pattern: .claude/rules/<name>.md (not in a link) with left boundary
   const tokenPattern = new RegExp(
     `(^|[^/${RULE_NAME_CHARS}])(\\.claude\\/rules\\/([${RULE_NAME_CHARS}]+)\\.md)`,
     "g",
   );
-
-  result = result.replace(tokenPattern, (match, before: string, ref: string, name: string, offset: number) => {
-    // `before` is the captured boundary character (or empty at start)
-    // Check right boundary
+  let tokenMatch;
+  while ((tokenMatch = tokenPattern.exec(body)) !== null) {
+    const [match, before, , name] = tokenMatch as RegExpExecArray & [string, string, string, string];
+    const offset = tokenMatch.index;
     const fullOffset = offset + match.length;
-    const after = result.slice(fullOffset);
-    if (!rightBoundary(after)) return match;
-
+    const after = body.slice(fullOffset);
+    if (!rightBoundary(after)) continue;
+    // Skip if this offset overlaps with a link match (link pattern already captured it)
+    if (matches.some((m) => offset >= m.offset && offset < m.offset + m.length)) continue;
     const state = ruleState(name);
     const rule = rulesByName.get(name);
+    let replacement: string;
+    let reworded: { ref: string; kind: string } | undefined;
     switch (state) {
       case "A":
-        return match; // unchanged
+        continue; // unchanged, skip
       case "B":
-        return `${before}.kiro/steering/${name}.md`;
+        replacement = `${before}${ruleFile("kiro", { name })}`;
+        break;
       case "C":
-        return `${before}AGENTS.md (rule: ${name})`;
-      case "D": {
-        rewordedWithOffset.push({ offset, ref: `.claude/rules/${name}.md`, citing, kind: `${rule!.ref} reaches no target here` });
-        return `${before}${name} (rule not in this workspace)`;
-      }
+        replacement = `${before}AGENTS.md (rule: ${name})`;
+        break;
+      case "D":
+        reworded = { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` };
+        replacement = `${before}${name} (rule not in this workspace)`;
+        break;
       case "unknown":
-        if (hasCc) return match;
-        rewordedWithOffset.push({ offset, ref: `.claude/rules/${name}.md`, citing, kind: "no such rule" });
-        return `${before}${name} (rule not in this workspace)`;
+        if (hasCc) continue;
+        reworded = { ref: `.claude/rules/${name}.md`, kind: "no such rule" };
+        replacement = `${before}${name} (rule not in this workspace)`;
+        break;
     }
-  });
+    matches.push({ offset, length: match.length, replacement, reworded });
+  }
+
+  // Sort by offset for correct warning order, then apply replacements in reverse order
+  matches.sort((a, b) => a.offset - b.offset);
+
+  // Collect reworded entries with their original offsets for sorting (spec 15 §4.5)
+  const rewordedWithOffset: Array<{ offset: number; ref: string; citing: string; kind: string }> = [];
+  for (const m of matches) {
+    if (m.reworded) {
+      rewordedWithOffset.push({ offset: m.offset, ref: m.reworded.ref, citing, kind: m.reworded.kind });
+    }
+  }
+
+  // Apply replacements from end to start so earlier offsets remain valid
+  let result = body;
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const m = matches[i];
+    result = result.slice(0, m.offset) + m.replacement + result.slice(m.offset + m.length);
+  }
 
   // Sort by offset and deduplicate by (ref, citing), keeping first occurrence (spec 15 §4.5)
   rewordedWithOffset.sort((a, b) => a.offset - b.offset);

@@ -533,4 +533,14 @@ describe("agents-md emitter — rule references in bodies (spec 15)", () => {
       expect(amWarnings(p).filter((w) => w.includes("reference(s)")), ruleTargets.join()).toEqual([]);
     }
   });
+
+  it("warning order follows the original body even after rewritten links (spec 15 §4.5, review fix)", async () => {
+    const dead = (x: string) => `.claude/rules/${x}.md (in rule/hub; no such rule)`;
+    const p1 = await planFor(hubOnly("[a](.claude/rules/d1.md) [b](.claude/rules/d2.md) .claude/rules/z.md [c](.claude/rules/d3.md)"));
+    expect(amWarnings(p1)).toEqual([`agents-md: 4 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: ${["d1", "d2", "z", "d3"].map(dead).join(", ")}`]);
+    const p2 = await planFor(
+      hubOnly("[l](.claude/rules/a-very-long-rule-name.md) [u](.claude/rules/dd.md) .claude/rules/z.md", [rule("a-very-long-rule-name", "# long\n", { inclusion: "manual" })]),
+    );
+    expect(amWarnings(p2)).toEqual([`agents-md: 2 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: ${["dd", "z"].map(dead).join(", ")}`]);
+  });
 });
