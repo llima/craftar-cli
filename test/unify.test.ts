@@ -891,6 +891,30 @@ describe("U1 — a merge never changes section markers (spec 11 §6.12, Ruling 8
     if (rmNotesPlan) rmNotesPlan.take = "variant";
     expect(await e(applyPlan(rmBase, rmVariant, rmDiff, rmPlan))).toContain("the file would be removed with sections n");
   });
+
+  it("carries a rule's notes.md with markers over by take: variant — no target emits it (0.8.2)", async () => {
+    const root = await tmpDir("craftar-u1-notes-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const notes = "<!-- craftar:section n -->\nx\n<!-- /craftar:section -->\n";
+    await makeForge(root, {
+      ingredients: [
+        { meta: { type: "rule", name: "w" }, files: { "rule.md": "a\n" } },
+        { meta: { type: "rule", name: "w--acme", as: "w" }, files: { "rule.md": "a\n", "notes.md": notes } },
+      ],
+      recipes: [recipe("base", ["rule/w"]), recipe("base--acme", ["rule/w--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const forge = await loadForge(root);
+    const base = forge.ingredients.get("rule/w")!;
+    const variant = forge.ingredients.get("rule/w--acme")!;
+    const diff = await diffIngredients(base, variant);
+    const plan = await planFrom(base, variant, diff, "acme");
+    const entry = plan.files.find((f) => f.file === "notes.md");
+    expect(entry).toBeDefined();
+    entry!.take = "variant";
+    const result = await applyPlan(base, variant, diff, plan);
+    expect(result.write["notes.md"]).toBe(notes);
+  });
 });
 
 describe("take: section (spec 12)", () => {
