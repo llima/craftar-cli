@@ -68,7 +68,8 @@ const valueOf = (m: Record<string, unknown>, k: string) => (Object.hasOwn(m, k) 
 /** The keys a source's body files cite literally. */
 export function sourceKeys(meta: Ingredient, files: Record<string, string | Buffer>): Set<string> {
   const out = new Set<string>();
-  for (const [rel, c] of Object.entries(files)) if (bodyFile(meta, rel)) for (const k of placeholders(textOf(c))) out.add(k);
+  // the importer builds meta and file keys itself, with canonical names
+  for (const [rel, c] of Object.entries(files)) if (bodyFile(meta, rel, null)) for (const k of placeholders(textOf(c))) out.add(k);
   return out;
 }
 

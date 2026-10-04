@@ -60,19 +60,21 @@ export function substitutedFile(meta: Ingredient, file: string): boolean {
  * `file: ../r/rule.md` resolves back to the file `rule.md` actually sits in. Do not use `path.resolve`:
  * `path.resolve(dir, "/rule.md")` is `/rule.md`, while `path.join(dir, "/rule.md")` is `<dir>/rule.md`,
  * and 0.8.1 synced `/rule.md`.
+ *
+ * `null` only for metadata the importer builds itself, whose names are canonical.
  */
-export function emittedFile(meta: Ingredient, file: string, dir?: string): boolean {
+export function emittedFile(meta: Ingredient, file: string, dir: string | null): boolean {
   // When dir is provided, compare the resolved paths the way the emitters read them.
-  const eq = (a: string, b: string) => (dir ? path.join(dir, a) === path.join(dir, b) : a === b);
+  const eq = (a: string, b: string) => (dir !== null ? path.join(dir, a) === path.join(dir, b) : a === b);
   switch (meta.type) {
     case "rule":
-      return eq(file, meta.file ?? "rule.md");
+      return eq(file, meta.file);
     case "agent":
-      return eq(file, meta.file ?? "agent.md");
+      return eq(file, meta.file);
     case "command":
-      return eq(file, meta.file ?? "command.md");
+      return eq(file, meta.file);
     case "steering":
-      return eq(file, meta.file ?? "steering.md");
+      return eq(file, meta.file);
     case "skill":
       if (meta.layout === "file") return eq(file, "SKILL.md");
       return file !== "ingredient.yaml"; // dir layout: every file except ingredient.yaml
@@ -84,8 +86,12 @@ export function emittedFile(meta: Ingredient, file: string, dir?: string): boole
   }
 }
 
-/** A file read as the ingredient's body: some target emits it and every target that emits it renders it as text. */
-export function bodyFile(meta: Ingredient, file: string, dir?: string): boolean {
+/**
+ * A file read as the ingredient's body: some target emits it and every target that emits it renders it as text.
+ *
+ * `null` only for metadata the importer builds itself, whose names are canonical.
+ */
+export function bodyFile(meta: Ingredient, file: string, dir: string | null): boolean {
   return emittedFile(meta, file, dir) && substitutedFile(meta, file);
 }
 

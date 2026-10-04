@@ -863,7 +863,8 @@ function markerIn(meta: Ingredient, files: Record<string, string | Buffer>, sour
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
   const offset = raw ? raw.split("\n").length + 2 : 0;
   for (const [rel, content] of Object.entries(files)) {
-    if (!bodyFile(meta, rel)) continue;
+    // the importer builds meta and file keys itself, with canonical names
+    if (!bodyFile(meta, rel, null)) continue;
     const line = firstMarkerLine(toLf(stripBom(typeof content === "string" ? content : content.toString("utf8"))));
     if (line !== null) return { where: meta.type === "skill" && meta.layout === "dir" ? `${source}${rel}` : source, line: line + offset };
   }
