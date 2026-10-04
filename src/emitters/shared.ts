@@ -91,13 +91,6 @@ export function resolveRuleRefs(
     return true;
   };
 
-  // Left boundary: not preceded by `/` or a name character (spec 15 §4.1)
-  const leftBoundary = (before: string): boolean => {
-    if (!before) return true;
-    const c = before[before.length - 1];
-    return c !== "/" && !/[A-Za-z0-9._-]/.test(c);
-  };
-
   // Process links first: [text](.claude/rules/<x>.md) or [text](.claude/rules/<x>.md#frag)
   // Pattern: `[<text>](.claude/rules/<name>.md)` or `[<text>](.claude/rules/<name>.md#<frag>)`
   const linkPattern = new RegExp(

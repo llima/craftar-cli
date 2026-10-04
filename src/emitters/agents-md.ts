@@ -90,7 +90,8 @@ export const agentsMd: Emitter = {
  * Deduplicates entries by (reference, citing) and (path, citing).
  */
 function emitRefWarning(warn: (msg: string) => void, reports: RefReport[]): void {
-  // Collect and deduplicate reworded entries by (ref, citing)
+  // Collect and deduplicate reworded entries by (ref, citing) — a backstop, since resolveRuleRefs
+  // already dedups per body; this catches a reference cited by two ingredients.
   const rewordedSet = new Map<string, { ref: string; citing: string; kind: string }>();
   for (const r of reports) {
     for (const e of r.reworded) {
