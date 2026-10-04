@@ -210,10 +210,11 @@ export async function plan(ws: Workspace): Promise<Plan> {
       // Sections first, then params (spec 11 §6.4), in body files only (§6.5, 0.8.2).
       const parsed = bodyFile(ing.meta, file, ing.dir) ? sections.parsed.get(abs) : null;
       // Every body file of a resolved ingredient was parsed and gated in the section pass; a miss here means the file is
-      // outside the ingredient directory or behind a symlinked directory that listFiles did not descend into.
+      // outside the ingredient directory, behind a symlinked directory that listFiles did not descend into, or spelled
+      // with different letter case on a case-insensitive file system.
       if (parsed === undefined)
         throw new Error(
-          `${forgeRel(ws.forge, abs)}: ${ing.ref} declares a file outside its directory, behind a symlinked directory, or spelled differently from the file on disk — keep the file inside ${forgeRel(ws.forge, ing.dir)} and spell \`file\` as it is on disk`,
+          `${forgeRel(ws.forge, abs)}: ${ing.ref} declares a file outside its directory, behind a symlinked directory, or spelled differently from the file on disk — keep the file inside ${forgeRel(ws.forge, ing.dir)} and spell the declared path as it is on disk`,
         );
       const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution)) : toLf(stripBom(raw));
       const out = substitute(expanded, params, missing);
