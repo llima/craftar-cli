@@ -491,4 +491,17 @@ describe("agents-md emitter — rule references in bodies (spec 15)", () => {
       "agents-md: 2 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: .claude/rules/cc-only.md (in rule/hub; rule/cc-only reaches no target here), .claude/rules/cc-only.md (in rule/emb; rule/cc-only reaches no target here)",
     ]);
   });
+
+  it("a link is a link whatever stands before or after it (spec 15 §4.1, review fix)", async () => {
+    const p = await planFor(
+      hubOnly("rules/[s](.claude/rules/style.md)\n[s](.claude/rules/style.md)-based\n[a](.claude/rules/style.md)/[b](.claude/rules/api.md)\n[c](.claude/rules/cc-only.md)s", [
+        rule("style", "# style\n"),
+        rule("api", "# api\n", { inclusion: "fileMatch", fileMatchPattern: "projects/api/**" }),
+        rule("cc-only", "# cc-only\n", { targets: ["claude-code"] }),
+      ]),
+    );
+    expect(sectionOf(agentsMd(p)!, "hub")).toBe(
+      "<!-- rule: hub -->\n# hub\n\nrules/[s](AGENTS.md)\n[s](AGENTS.md)-based\n[a](AGENTS.md)/[b](AGENTS.md)\nc (cc-only, rule not in this workspace)s",
+    );
+  });
 });

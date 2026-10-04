@@ -88,14 +88,8 @@ export function resolveRuleRefs(
     "g",
   );
 
-  let result = body.replace(linkPattern, (match, text: string, name: string, frag: string | undefined, offset: number) => {
-    // Check left boundary (before the `[`)
-    const before = body.slice(0, offset);
-    if (!leftBoundary(before)) return match;
-    // Check right boundary (after the `)`)
-    const after = body.slice(offset + match.length);
-    if (!rightBoundary(after)) return match;
-
+  let result = body.replace(linkPattern, (match, text: string, name: string, frag: string | undefined) => {
+    // A link already bounds the path with `(` and `)` or `#`, so no boundary checks needed (spec 15 §4.1).
     const state = ruleState(name);
     switch (state) {
       case "A":
