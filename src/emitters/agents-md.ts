@@ -1,4 +1,4 @@
-import { appliesTo, outName, ruleFile, textFile } from "./shared.js";
+import { appliesTo, outName, ruleFile, ruleWriter, textFile } from "./shared.js";
 import type { Emitter } from "./types.js";
 
 /**
@@ -41,16 +41,14 @@ export const agentsMd: Emitter = {
         parts.push(`<!-- rule: ${outName(ing.meta)} -->`, body, "");
       } else {
         // Spec 14 §4.1: decide which target writes this rule file
-        const writers = (["claude-code", "kiro"] as const).filter(
-          (t) => ctx.resolution.targets.includes(t) && appliesTo(ing.meta.targets, t),
-        );
+        const writer = ruleWriter(ctx.resolution.targets, ing.meta.targets);
         const scopeText =
           ing.meta.inclusion === "fileMatch"
             ? `applies to \`${[ing.meta.fileMatchPattern].flat().join("`, `")}\``
             : ing.meta.inclusion;
-        if (writers.includes("claude-code")) {
+        if (writer === "claude-code") {
           pathLines.push(`- \`${ruleFile("claude-code", ing.meta)}\` — ${scopeText}`);
-        } else if (writers.includes("kiro")) {
+        } else if (writer === "kiro") {
           pathLines.push(`- \`${ruleFile("kiro", ing.meta)}\` — ${scopeText}`);
         } else {
           // State C: no target writes the rule file; embed it

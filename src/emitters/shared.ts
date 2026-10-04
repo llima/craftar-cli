@@ -5,6 +5,19 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
   return targets === "*" || targets.includes(target);
 }
 
+/** The characters of a rule name in a `.claude/rules/<name>.md` reference (spec 15 §4.1). */
+export const RULE_NAME_CHARS = "A-Za-z0-9._-";
+
+/**
+ * The target that writes a rule's own file in this workspace, `claude-code` first, else `kiro`, else none
+ * (spec 14 §4.1): a workspace target the rule's `targets` admit.
+ */
+export function ruleWriter(targets: readonly string[], ruleTargets: "*" | string[]): "claude-code" | "kiro" | null {
+  if (targets.includes("claude-code") && appliesTo(ruleTargets, "claude-code")) return "claude-code";
+  if (targets.includes("kiro") && appliesTo(ruleTargets, "kiro")) return "kiro";
+  return null;
+}
+
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
 /** Text file that keeps the EOL and the BOM of the file it replaces (LF, no BOM when new). */
