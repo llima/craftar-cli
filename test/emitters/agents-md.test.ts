@@ -184,7 +184,7 @@ describe("agents-md emitter — scoped rules (spec 14)", () => {
 
   it("agents-md only: every scoped rule is embedded with its scope (spec 14 test 1)", async () => {
     const p = await planFor(forge14());
-    expect(agentsMd(p)).toBe(ONLY_MD.join("\n"));
+    expect(agentsMd(p)).toBe(ONLY_MD.join("\n").replaceAll("See .claude/rules/style.md.", "See AGENTS.md (rule: style)."));
     noAgentsMdWarning(p);
   });
 
@@ -198,7 +198,7 @@ describe("agents-md emitter — scoped rules (spec 14)", () => {
       "- `.kiro/steering/kiro-only.md` — " + K,
       "",
       ...embedded("md-only", M),
-    ].join("\n"));
+    ].join("\n").replaceAll("See .claude/rules/style.md.", "See .kiro/steering/style.md."));
     noAgentsMdWarning(p);
   });
 
@@ -252,6 +252,243 @@ describe("agents-md emitter — scoped rules (spec 14)", () => {
 
   it("keeps the CRLF of the AGENTS.md it replaces (spec 14 test 9)", async () => {
     const p = await planFor(forge14(), { "AGENTS.md": "# old\r\n" });
-    expect(agentsMd(p)).toBe(ONLY_MD.join("\r\n"));
+    expect(agentsMd(p)).toBe(ONLY_MD.join("\r\n").replaceAll("See .claude/rules/style.md.", "See AGENTS.md (rule: style)."));
+  });
+});
+
+describe("agents-md emitter — rule references in bodies (spec 15)", () => {
+  const HUB = [
+    "# hub", "",
+    "- backticks: see `.claude/rules/style.md` and `.claude/rules/api.md`.",
+    "- link: [the md-only rule](.claude/rules/md-only.md).",
+    "- bare: .claude/rules/cc-only.md and .claude/rules/kiro-only.md",
+    "- dead link: [the cc-only rule](.claude/rules/cc-only.md)",
+    "- unknown name: `.claude/rules/handwritten.md`",
+    "- pattern: `.claude/rules/<archetype>.md` and `.claude/rules/*.md`",
+    "- not a rule: `.claude/agents/reviewer.md`, `.claude/commands/open-pr.md`", "",
+  ].join("\n");
+  const forge15 = (): IngredientSpec[] => [
+    rule("hub", HUB),
+    rule("style", "# style\n"),
+    rule("api", "# api\n", { inclusion: "fileMatch", fileMatchPattern: "projects/api/**" }),
+    rule("kiro-only", "# kiro-only\n", { inclusion: "fileMatch", fileMatchPattern: "projects/k/**", targets: ["kiro", "agents-md"] }),
+    rule("md-only", "# md-only\n", { inclusion: "fileMatch", fileMatchPattern: "projects/m/**", targets: ["agents-md"] }),
+    rule("cc-only", "# cc-only\n", { targets: ["claude-code"] }),
+  ];
+  const TAIL = ["- pattern: `.claude/rules/<archetype>.md` and `.claude/rules/*.md`", "- not a rule: `.claude/agents/reviewer.md`, `.claude/commands/open-pr.md`"];
+  const hubAndStyle = (lines: string[]) => ["<!-- rule: hub -->", "# hub", "", ...lines, "", "<!-- rule: style -->", "# style", "", "## Scoped rules", ""];
+  const scoped = (name: string, pattern: string) => [`<!-- rule: ${name} -->`, `> Scoped rule — applies to \`${pattern}\``, "", `# ${name}`, ""];
+  const WARN =
+    "agents-md: 2 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: .claude/rules/cc-only.md (in rule/hub; rule/cc-only reaches no target here), .claude/rules/handwritten.md (in rule/hub; no such rule); 2 reference(s) to other .claude/ files it does not have — left as written: .claude/agents/reviewer.md (in rule/hub), .claude/commands/open-pr.md (in rule/hub)";
+  const amWarnings = (p: Plan) => p.warnings.filter((w) => w.startsWith("agents-md:"));
+  /** The section of `name` in AGENTS.md: from its marker to the next marker or the scoped heading, trailing newlines trimmed. */
+  const sectionOf = (md: string, name: string) => {
+    const start = md.indexOf(`<!-- rule: ${name} -->\n`);
+    if (start < 0) return undefined;
+    const rest = md.slice(start);
+    const end = rest.search(/\n\n(?:<!-- rule: |## Scoped rules)/);
+    return (end < 0 ? rest : rest.slice(0, end)).replace(/\n+$/, "");
+  };
+  const hubOnly = (body: string, more: IngredientSpec[] = []) => [rule("hub", `# hub\n\n${body}\n`), ...more];
+
+  it("agents-md only: §4.4's first block and §4.5's warning (spec 15 test 1)", async () => {
+    const p = await planFor(forge15());
+    expect(agentsMd(p)).toBe([
+      ...HEADER,
+      ...hubAndStyle([
+        "- backticks: see `AGENTS.md (rule: style)` and `AGENTS.md (rule: api)`.",
+        "- link: [the md-only rule](AGENTS.md).",
+        "- bare: cc-only (rule not in this workspace) and AGENTS.md (rule: kiro-only)",
+        "- dead link: the cc-only rule (cc-only, rule not in this workspace)",
+        "- unknown name: `handwritten (rule not in this workspace)`",
+        ...TAIL,
+      ]),
+      ...scoped("api", "projects/api/**"),
+      ...scoped("kiro-only", "projects/k/**"),
+      ...scoped("md-only", "projects/m/**"),
+    ].join("\n"));
+    expect(amWarnings(p)).toEqual([WARN]);
+  });
+
+  it("kiro + agents-md: §4.4's second block, the same warning (spec 15 test 2)", async () => {
+    const p = await planFor(forge15(), undefined, ["kiro", "agents-md"]);
+    expect(agentsMd(p)).toBe([
+      ...HEADER,
+      ...hubAndStyle([
+        "- backticks: see `.kiro/steering/style.md` and `.kiro/steering/api.md`.",
+        "- link: [the md-only rule](AGENTS.md).",
+        "- bare: cc-only (rule not in this workspace) and .kiro/steering/kiro-only.md",
+        "- dead link: the cc-only rule (cc-only, rule not in this workspace)",
+        "- unknown name: `handwritten (rule not in this workspace)`",
+        ...TAIL,
+      ]),
+      "- `.kiro/steering/api.md` — applies to `projects/api/**`",
+      "- `.kiro/steering/kiro-only.md` — applies to `projects/k/**`",
+      "",
+      ...scoped("md-only", "projects/m/**"),
+    ].join("\n"));
+    expect(amWarnings(p)).toEqual([WARN]);
+  });
+
+  it("claude-code + kiro + agents-md: §4.4's third block, no warning (spec 15 test 3)", async () => {
+    const p = await planFor(forge15(), undefined, ["claude-code", "kiro", "agents-md"]);
+    expect(agentsMd(p)).toBe([
+      ...HEADER,
+      ...hubAndStyle([
+        "- backticks: see `.claude/rules/style.md` and `.claude/rules/api.md`.",
+        "- link: [the md-only rule](AGENTS.md).",
+        "- bare: .claude/rules/cc-only.md and .kiro/steering/kiro-only.md",
+        "- dead link: [the cc-only rule](.claude/rules/cc-only.md)",
+        "- unknown name: `.claude/rules/handwritten.md`",
+        ...TAIL,
+      ]),
+      "- `.claude/rules/api.md` — applies to `projects/api/**`",
+      "- `.kiro/steering/kiro-only.md` — applies to `projects/k/**`",
+      "",
+      ...scoped("md-only", "projects/m/**"),
+    ].join("\n"));
+    expect(amWarnings(p)).toEqual([]);
+  });
+
+  it("state A is untouched (spec 15 test 4)", async () => {
+    const p = await planFor(
+      [
+        rule("hub", "# hub\n\n- `.claude/rules/style.md`\n- .claude/rules/api.md\n- [api](.claude/rules/api.md)\n"),
+        rule("style", "# style\n"),
+        rule("api", "# api\n", { inclusion: "fileMatch", fileMatchPattern: "projects/api/**" }),
+      ],
+      undefined,
+      ["claude-code", "agents-md"],
+    );
+    expect(agentsMd(p)).toBe([
+      ...HEADER,
+      "<!-- rule: hub -->", "# hub", "", "- `.claude/rules/style.md`", "- .claude/rules/api.md", "- [api](.claude/rules/api.md)", "",
+      "<!-- rule: style -->", "# style", "",
+      "## Scoped rules", "", "- `.claude/rules/api.md` — applies to `projects/api/**`", "",
+    ].join("\n"));
+    expect(amWarnings(p)).toEqual([]);
+  });
+
+  it("an embedded body is resolved too (spec 15 test 5)", async () => {
+    const p = await planFor([rule("style", "# style\n"), rule("api", "# api\n\nSee .claude/rules/style.md for style.\n", { inclusion: "fileMatch", fileMatchPattern: "projects/api/**" })]);
+    expect(agentsMd(p)).toBe([
+      ...HEADER, "<!-- rule: style -->", "# style", "",
+      "## Scoped rules", "", "<!-- rule: api -->", "> Scoped rule — applies to `projects/api/**`", "", "# api", "", "See AGENTS.md (rule: style) for style.", "",
+    ].join("\n"));
+  });
+
+  it("a steering ingredient kiro writes is state B; without kiro it is no rule (spec 15 test 6)", async () => {
+    const ings = () => hubOnly("See `.claude/rules/product.md`.", [{ meta: { type: "steering", name: "product" }, files: { "steering.md": "# product\n" } }]);
+    const withKiro = await planFor(ings(), undefined, ["kiro", "agents-md"]);
+    expect(sectionOf(agentsMd(withKiro)!, "hub")).toBe("<!-- rule: hub -->\n# hub\n\nSee `.kiro/steering/product.md`.");
+    expect(amWarnings(withKiro)).toEqual([]);
+    const mdOnly = await planFor(ings());
+    expect(sectionOf(agentsMd(mdOnly)!, "hub")).toBe("<!-- rule: hub -->\n# hub\n\nSee `product (rule not in this workspace)`.");
+    expect(amWarnings(mdOnly)).toEqual(["agents-md: 1 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: .claude/rules/product.md (in rule/hub; no such rule)"]);
+  });
+
+  it("a fragment is kept in B, dropped in C, gone with the link in D (spec 15 test 7)", async () => {
+    const p = await planFor(
+      hubOnly("[b](.claude/rules/kb.md#part)\n[c](.claude/rules/mdr.md#part)\n[d](.claude/rules/cc-only.md#part)", [
+        rule("kb", "# kb\n", { inclusion: "manual" }),
+        rule("mdr", "# mdr\n", { inclusion: "manual", targets: ["agents-md"] }),
+        rule("cc-only", "# cc-only\n", { targets: ["claude-code"] }),
+      ]),
+      undefined,
+      ["kiro", "agents-md"],
+    );
+    expect(sectionOf(agentsMd(p)!, "hub")).toBe("<!-- rule: hub -->\n# hub\n\n[b](.kiro/steering/kb.md#part)\n[c](AGENTS.md)\nd (cc-only, rule not in this workspace)");
+  });
+
+  it("what is not a reference is left alone and not reported (spec 15 test 8)", async () => {
+    const lines = [
+      "projects/web/.claude/rules/style.md",
+      "x.claude/rules/style.md",
+      "`.claude/rules/style.md.bak`",
+      "`.claude/rules/style.mdx`",
+      "`.claude/rules/<archetype>.md` and `.claude/rules/*.md`",
+    ];
+    const p = await planFor(hubOnly(lines.join("\n"), [rule("style", "# style\n")]));
+    expect(sectionOf(agentsMd(p)!, "hub")).toBe(["<!-- rule: hub -->", "# hub", "", ...lines].join("\n"));
+    expect(amWarnings(p)).toEqual([]);
+  });
+
+  it("a variant is resolved by its output name (spec 15 test 9)", async () => {
+    const api = (extra: Record<string, unknown>) => rule("api--acme", "# API\n", { as: "api", inclusion: "fileMatch", fileMatchPattern: "projects/api/**", ...extra });
+    const c = await planFor(hubOnly("See .claude/rules/api.md now.", [api({})]));
+    expect(sectionOf(agentsMd(c)!, "hub")).toBe("<!-- rule: hub -->\n# hub\n\nSee AGENTS.md (rule: api) now.");
+    const d = await planFor(hubOnly("See .claude/rules/api.md now.", [api({ targets: ["claude-code"] })]));
+    expect(sectionOf(agentsMd(d)!, "hub")).toBe("<!-- rule: hub -->\n# hub\n\nSee api (rule not in this workspace) now.");
+    expect(amWarnings(d)).toEqual(["agents-md: 1 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: .claude/rules/api.md (in rule/hub; rule/api--acme reaches no target here)"]);
+  });
+
+  it("a reference that comes from a section value is resolved (spec 15 test 10)", async () => {
+    const s = await scenario(
+      {
+        ingredients: [rule("hub", "# hub\n\n<!-- craftar:section s -->\ndefault\n<!-- /craftar:section -->\n"), rule("style", "# style\n")],
+        recipes: [recipe("base", ["rule/hub", "rule/style"])],
+        profiles: [profile("acme", ["base"], ["agents-md"], { sections: { "rule/hub": { s: "See .claude/rules/style.md now." } } })],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await writeFiles(s.forgeRoot, { "craftar.forge.yaml": "name: test-forge\nschema: 2\n" });
+    const md = agentsMd(await plan(await loadWorkspace(s.wsRoot)))!;
+    expect(sectionOf(md, "hub")).toBe("<!-- rule: hub -->\n# hub\n\nSee AGENTS.md (rule: style) now.");
+  });
+
+  it("other .claude/ paths only: left as written, named in the second form; nothing with claude-code (spec 15 test 11)", async () => {
+    const mdOnly = await planFor(hubOnly("See `.claude/agents/reviewer.md`."));
+    expect(sectionOf(agentsMd(mdOnly)!, "hub")).toBe("<!-- rule: hub -->\n# hub\n\nSee `.claude/agents/reviewer.md`.");
+    expect(amWarnings(mdOnly)).toEqual(["agents-md: 1 reference(s) to .claude/ files this workspace does not have — left as written: .claude/agents/reviewer.md (in rule/hub)"]);
+    const withCc = await planFor(hubOnly("See `.claude/agents/reviewer.md`."), undefined, ["claude-code", "agents-md"]);
+    expect(amWarnings(withCc)).toEqual([]);
+  });
+
+  it("one entry per reference and citing rule (spec 15 test 12)", async () => {
+    const p = await planFor(hubOnly(".claude/rules/cc-only.md and .claude/rules/cc-only.md", [rule("cc-only", "# cc-only\n", { targets: ["claude-code"] })]));
+    expect(sectionOf(agentsMd(p)!, "hub")).toBe("<!-- rule: hub -->\n# hub\n\ncc-only (rule not in this workspace) and cc-only (rule not in this workspace)");
+    expect(amWarnings(p)).toEqual(["agents-md: 1 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: .claude/rules/cc-only.md (in rule/hub; rule/cc-only reaches no target here)"]);
+  });
+
+  it("state D with claude-code: the first form alone (spec 15 test 13)", async () => {
+    const p = await planFor(hubOnly("See .claude/rules/k.md.", [rule("k", "# k\n", { targets: ["kiro"] })]), undefined, ["claude-code", "agents-md"]);
+    expect(sectionOf(agentsMd(p)!, "hub")).toBe("<!-- rule: hub -->\n# hub\n\nSee k (rule not in this workspace).");
+    expect(amWarnings(p)).toEqual(["agents-md: 1 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: .claude/rules/k.md (in rule/hub; rule/k reaches no target here)"]);
+  });
+
+  it("an unknown name as a link (spec 15 test 14)", async () => {
+    const p = await planFor(hubOnly("[the notes](.claude/rules/handwritten.md)"));
+    expect(sectionOf(agentsMd(p)!, "hub")).toBe("<!-- rule: hub -->\n# hub\n\nthe notes (handwritten, rule not in this workspace)");
+  });
+
+  it("a reference that comes from a param value is resolved (spec 15 test 15)", async () => {
+    const s = await scenario(
+      {
+        ingredients: [rule("hub", "# hub\n\nSee {{ref}}.\n"), rule("style", "# style\n")],
+        recipes: [recipe("base", ["rule/hub", "rule/style"])],
+        profiles: [profile("acme", ["base"], ["agents-md"], { params: { ref: ".claude/rules/style.md" } })],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const md = agentsMd(await plan(await loadWorkspace(s.wsRoot)))!;
+    expect(sectionOf(md, "hub")).toBe("<!-- rule: hub -->\n# hub\n\nSee AGENTS.md (rule: style).");
+  });
+
+  it("a sentence-ending full stop is not part of the reference (spec 15 test 16)", async () => {
+    const p = await planFor(hubOnly("See .claude/rules/style.md.", [rule("style", "# style\n")]));
+    expect(sectionOf(agentsMd(p)!, "hub")).toBe("<!-- rule: hub -->\n# hub\n\nSee AGENTS.md (rule: style).");
+  });
+
+  it("entries follow the order of AGENTS.md, not of resolution (spec 15 test 17)", async () => {
+    const p = await planFor([
+      rule("emb", "# emb\n\nSee .claude/rules/cc-only.md.\n", { inclusion: "manual" }),
+      rule("hub", "# hub\n\nSee .claude/rules/cc-only.md.\n"),
+      rule("cc-only", "# cc-only\n", { targets: ["claude-code"] }),
+    ]);
+    expect(amWarnings(p)).toEqual([
+      "agents-md: 2 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: .claude/rules/cc-only.md (in rule/hub; rule/cc-only reaches no target here), .claude/rules/cc-only.md (in rule/emb; rule/cc-only reaches no target here)",
+    ]);
   });
 });

@@ -1,4 +1,4 @@
-import { appliesTo, outName, ruleFile, ruleWriter, textFile } from "./shared.js";
+import { appliesTo, outName, resolveRuleRefs, ruleFile, ruleWriter, textFile, type RefReport } from "./shared.js";
 import type { Emitter } from "./types.js";
 
 /**
@@ -34,10 +34,17 @@ export const agentsMd: Emitter = {
     ];
     const pathLines: string[] = [];
     const embedded: string[] = [];
+    // Collect reports in AGENTS.md order: always-on first, then embedded (spec 15 §4.5)
+    const alwaysReports: RefReport[] = [];
+    const embeddedReports: RefReport[] = [];
     for (const ing of rules) {
       if (ing.meta.type !== "rule") continue;
-      const body = (await ctx.text(ing, ing.meta.file)).replace(/\n+$/, "");
+      const rawBody = await ctx.text(ing, ing.meta.file);
       if (ing.meta.inclusion === "always") {
+        // Resolve references, then trim trailing newlines (spec 15: after ctx.text, before the trim)
+        const { text: resolved, report } = resolveRuleRefs(rawBody, ing.ref, ctx.resolution.ingredients, ctx.resolution.targets);
+        alwaysReports.push(report);
+        const body = resolved.replace(/\n+$/, "");
         parts.push(`<!-- rule: ${outName(ing.meta)} -->`, body, "");
       } else {
         // Spec 14 §4.1: decide which target writes this rule file
@@ -52,6 +59,10 @@ export const agentsMd: Emitter = {
           pathLines.push(`- \`${ruleFile("kiro", ing.meta)}\` — ${scopeText}`);
         } else {
           // State C: no target writes the rule file; embed it
+          // Resolve references in embedded bodies too (spec 15 §4, after ctx.text, before trim)
+          const { text: resolved, report } = resolveRuleRefs(rawBody, ing.ref, ctx.resolution.ingredients, ctx.resolution.targets);
+          embeddedReports.push(report);
+          const body = resolved.replace(/\n+$/, "");
           embedded.push(`<!-- rule: ${outName(ing.meta)} -->`, `> Scoped rule — ${scopeText}`, "", body, "");
         }
       }
@@ -61,6 +72,56 @@ export const agentsMd: Emitter = {
       if (pathLines.length) parts.push("");
       parts.push(...embedded);
     }
+
+    // Emit the warning per spec 15 §4.5: at most one ctx.warn for AGENTS.md
+    // Reports in AGENTS.md order: always-on first, then embedded
+    emitRefWarning(ctx.warn, [...alwaysReports, ...embeddedReports]);
+
     return [await textFile(ctx, "AGENTS.md", parts.join("\n"), "agents-md", "rule/*")];
   },
 };
+
+/**
+ * Emit the spec 15 §4.5 warning: one line with reworded rule references and/or dead .claude/ paths.
+ * Deduplicates entries by (reference, citing) and (path, citing).
+ */
+function emitRefWarning(warn: (msg: string) => void, reports: RefReport[]): void {
+  // Collect and deduplicate reworded entries by (ref, citing)
+  const rewordedSet = new Map<string, { ref: string; citing: string; kind: string }>();
+  for (const r of reports) {
+    for (const e of r.reworded) {
+      const key = `${e.ref}|${e.citing}`;
+      if (!rewordedSet.has(key)) rewordedSet.set(key, e);
+    }
+  }
+  // Collect and deduplicate other paths by (path, citing)
+  const othersSet = new Map<string, { path: string; citing: string }>();
+  for (const r of reports) {
+    for (const e of r.others) {
+      const key = `${e.path}|${e.citing}`;
+      if (!othersSet.has(key)) othersSet.set(key, e);
+    }
+  }
+
+  const reworded = [...rewordedSet.values()];
+  const others = [...othersSet.values()];
+
+  if (!reworded.length && !others.length) return;
+
+  const formatReworded = (entries: typeof reworded) =>
+    entries.map((e) => `${e.ref} (in ${e.citing}; ${e.kind})`).join(", ");
+  const formatOthers = (entries: typeof others) =>
+    entries.map((e) => `${e.path} (in ${e.citing})`).join(", ");
+
+  let msg = "";
+  if (reworded.length) {
+    msg = `agents-md: ${reworded.length} reference(s) to rule files this workspace does not have — reworded in AGENTS.md: ${formatReworded(reworded)}`;
+    if (others.length) {
+      msg += `; ${others.length} reference(s) to other .claude/ files it does not have — left as written: ${formatOthers(others)}`;
+    }
+  } else if (others.length) {
+    msg = `agents-md: ${others.length} reference(s) to .claude/ files this workspace does not have — left as written: ${formatOthers(others)}`;
+  }
+
+  if (msg) warn(msg);
+}
