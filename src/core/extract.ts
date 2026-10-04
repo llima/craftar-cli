@@ -68,13 +68,13 @@ export function emittedFile(meta: Ingredient, file: string, dir: string | null):
   const eq = (a: string, b: string) => (dir !== null ? path.join(dir, a) === path.join(dir, b) : a === b);
   switch (meta.type) {
     case "rule":
-      return eq(file, meta.file);
+      return eq(file, meta.file ?? "rule.md");
     case "agent":
-      return eq(file, meta.file);
+      return eq(file, meta.file ?? "agent.md");
     case "command":
-      return eq(file, meta.file);
+      return eq(file, meta.file ?? "command.md");
     case "steering":
-      return eq(file, meta.file);
+      return eq(file, meta.file ?? "steering.md");
     case "skill":
       if (meta.layout === "file") return eq(file, "SKILL.md");
       return file !== "ingredient.yaml"; // dir layout: every file except ingredient.yaml

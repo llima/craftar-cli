@@ -120,7 +120,7 @@ server:
   timeout: 30
 ```
 
-**Sections.** A body (its **body files**: the `file` of a rule, agent, command or steering — `rule.md` etc. by default; `SKILL.md` of a file-layout skill; every `.md`, `.txt`, `.json`, `.yaml` or `.yml` file of a dir-layout skill; the text files listed in `files` of a script or hook) can hold blocks a profile or a workspace replaces. A file no target emits (a `notes.md` beside `rule.md`) is ignored — for sections and for `{{param}}` citations alike; a file a target emits but does not render as text is copied (see below). A block sits between two marker lines, and its content is the default:
+**Sections.** A body (its **body files**: the `file` of a rule, agent, command or steering — `rule.md` etc. by default; `SKILL.md` of a file-layout skill; every `.md`, `.txt`, `.json`, `.yaml` or `.yml` file of a dir-layout skill; the text files listed in `files` of a script or hook — a body file stays inside the ingredient directory; one declared outside it, or behind a symlinked directory, fails every command that plans, naming it) can hold blocks a profile or a workspace replaces. A file no target emits (a `notes.md` beside `rule.md`) is ignored — for sections and for `{{param}}` citations alike; a file a target emits but does not render as text is copied (see below). A block sits between two marker lines, and its content is the default:
 
 ```markdown
 Dispatch reviewers after every commit.
@@ -244,7 +244,7 @@ Next: `craftar init` from a profile; profile-driven integrations (PM tool → MC
 ### to 0.8.2
 
 - **A file no target emits (e.g. notes beside `rule.md`) is no longer read for sections or `{{param}}` citations** — a malformed marker there no longer fails `sync`/`status`/`diff`/`explain`/`ls`/`import` or trips the `schema: 1` gate, and a `{{key}}` there no longer makes `unify`/`import` refuse. No emitted byte changes.
-- **`take: param` and `take: section` on such a file are now refused** (`… is not emitted by any target`). 0.8.1 accepted both there, so a plan saved under 0.8.1 that extracts from such a file no longer applies. A Forge that already ran such a `take: section` under 0.8.1 has markers in that file and a value in the profile's `sections`; 0.8.2 ignores those markers and warns on every run (`sync`, `status`, `diff`, `explain`, `ls`) that the profile sets a section with no such marker — delete the value from the profile, or move the section into the body file. A `take: param` run under 0.8.1 on such a file left a default in `ingredient.yaml` and a value in the profile's `params`; both are inert now — remove them by hand.
+- **`take: param` and `take: section` on such a file are now refused** (`… is not emitted by any target`). 0.8.1 accepted both there, so a plan saved under 0.8.1 that extracts from such a file no longer applies. A Forge that already ran such a `take: section` under 0.8.1 has markers in that file and a value in the profile's `sections`; 0.8.2 ignores those markers and warns on every `sync` and `status` that the profile sets a section with no such marker — delete the value from the profile, or move the section into the body file. A `take: param` run under 0.8.1 on such a file left a default in `ingredient.yaml` and a value in the profile's `params`; both are inert now — remove them by hand.
 
 ### to 0.8.1
 
