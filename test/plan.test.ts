@@ -169,6 +169,12 @@ describe("0.8.2 — files no target emits are not read for sections", () => {
     const p = await sectionPlan({ ingredients: [s], profileExtra: { sections: { "skill/tool": { x: "mine" } } } });
     expect(out(p, ".claude/skills/tool/ref.md")).toBe("mine\n");
   });
+
+  it("an ingredient whose file is spelled ./rule.md still syncs (0.8.2 regression)", async () => {
+    const r: IngredientSpec = { meta: { type: "rule", name: "r", file: "./rule.md" }, files: { "rule.md": "# R v\n" } };
+    const p = await sectionPlan({ ingredients: [r] });
+    expect(out(p, ".claude/rules/r.md")).toBe("# R v\n");
+  });
 });
 
 describe("sections — parse errors and the output guard", () => {

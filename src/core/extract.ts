@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { Ingredient, PlanParam } from "../schema/index.js";
 import { changedRegions } from "./classify.js";
 import { TEXT_EXT } from "../emitters/claude-code.js";
@@ -55,21 +56,22 @@ export function substitutedFile(meta: Ingredient, file: string): boolean {
  * A file no target emits is never read as the ingredient's body — not for sections, not for {{param}} scans.
  */
 export function emittedFile(meta: Ingredient, file: string): boolean {
+  const norm = (x: string) => path.posix.normalize(x.replace(/\\/g, "/"));
   switch (meta.type) {
     case "rule":
-      return file === (meta.file ?? "rule.md");
+      return norm(file) === norm(meta.file ?? "rule.md");
     case "agent":
-      return file === (meta.file ?? "agent.md");
+      return norm(file) === norm(meta.file ?? "agent.md");
     case "command":
-      return file === (meta.file ?? "command.md");
+      return norm(file) === norm(meta.file ?? "command.md");
     case "steering":
-      return file === (meta.file ?? "steering.md");
+      return norm(file) === norm(meta.file ?? "steering.md");
     case "skill":
-      if (meta.layout === "file") return file === "SKILL.md";
+      if (meta.layout === "file") return norm(file) === "SKILL.md";
       return file !== "ingredient.yaml"; // dir layout: every file except ingredient.yaml
     case "script":
     case "hook":
-      return meta.files.includes(file);
+      return meta.files.some((f) => norm(f) === norm(file));
     case "mcp":
       return false;
   }
