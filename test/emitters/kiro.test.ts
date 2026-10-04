@@ -334,4 +334,9 @@ describe("kiro emitter — rule references (spec 17)", () => {
       "kiro: 2 reference(s) to names that are no rule or steering of this workspace — rewritten to .kiro/steering/ as before: .claude/rules/z-dead.md (in command/raw2), .claude/rules/a-dead.md (in command/raw2)",
     ]);
   });
+
+  it("a link fragment keeps the directory rewrite, as on 0.8.4 (spec 17 §4.6, review fix)", async () => {
+    const p = await planFor([rule("hub", "# hub\n\n[t](.claude/rules/style.md#see-.claude/rules/z) [u](.claude/rules/nope.md#see-.claude/rules/z)\n"), rule("style", "# style\n")]);
+    expect(lf(p, ".kiro/steering/hub.md")).toBe(hubFile(["[t](.kiro/steering/style.md#see-.kiro/steering/z) [u](.kiro/steering/nope.md#see-.kiro/steering/z)"]));
+  });
 });

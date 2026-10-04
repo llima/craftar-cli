@@ -135,7 +135,8 @@ export function resolveRuleRefs(
       // Kiro mode (spec 17 §4.3)
       switch (state) {
         case "K1":
-          replacement = `[${kiroRewrite(text)}](${ruleFile("kiro", { name })}${frag ?? ""})`;
+          // Fragment gets the blanket rewrite too (spec 17 §4.6)
+          replacement = `[${kiroRewrite(text)}](${ruleFile("kiro", { name })}${kiroRewrite(frag ?? "")})`;
           break;
         case "K2":
           // unchanged — exempt from directory rewrite; keep original text exactly
@@ -150,8 +151,9 @@ export function resolveRuleRefs(
           break;
         case "unknown":
           // Unknown name gets blanket rewrite and is reported (no kind string)
+          // Fragment gets the blanket rewrite too (spec 17 §4.6)
           reworded = { ref: `.claude/rules/${name}.md`, kind: "" };
-          replacement = `[${kiroRewrite(text)}](${ruleFile("kiro", { name })}${frag ?? ""})`;
+          replacement = `[${kiroRewrite(text)}](${ruleFile("kiro", { name })}${kiroRewrite(frag ?? "")})`;
           break;
         default:
           continue;
