@@ -137,6 +137,20 @@ describe("sections — plan warnings (Ruling 12)", () => {
     expect(p.warnings).toContain("profile acme sets section x of skill/tool, which has no such marker");
   });
 
+  it("markers in a file not every target renders are copied verbatim by both, and warned once (Ruling 17) (./tool.bin, 0.8.2)", async () => {
+    // Like the Ruling 17 test but using a script with files: ["./tool.bin"]. This verifies that
+    // emittedFile at sync.ts:118 uses the `dir` argument correctly. With dir, emittedFile compares
+    // path.join(dir, "./tool.bin") in the files array. Without dir, it compares "./tool.bin" against
+    // the file list literally, which would not match if the file on disk is "tool.bin".
+    const body = ["#!/bin/sh", OPEN("x"), "echo hi", CLOSE, ""].join("\n");
+    const p = await sectionPlan({
+      ingredients: [{ meta: { type: "script", name: "tool", files: ["./tool.bin"] }, files: { "tool.bin": body } }],
+      targets: ["claude-code"],
+    });
+    expect(p.warnings.filter((w) => w.includes("tool.bin"))).toEqual(["script/tool tool.bin: section markers are read only in files every target renders as text — copied with them"]);
+    expect(out(p, ".claude/scripts/./tool.bin")).toBe(body);
+  });
+
   it("warns on markers in a copied file whatever its extension (an .html in a skill dir)", async () => {
     const page = [OPEN("x"), "<p>hi</p>", CLOSE, ""].join("\n");
     const p = await sectionPlan({

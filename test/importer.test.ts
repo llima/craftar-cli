@@ -622,6 +622,23 @@ describe("template-aware import — decisions (spec 10 §6.1–§6.5)", () => {
     expect(r.params).toEqual([]);
   });
 
+  it("refuses a profile change another Forge ingredient would feel (F9, §6.5 (b)) (./rule.md, 0.8.2)", async () => {
+    // Like the original F9 test but with file: ./rule.md in the other ingredient. This verifies that
+    // listAdmitted at decide.ts:277 uses the `dir` argument correctly. With dir, bodyFile compares
+    // path.join(dir, "rule.md") === path.join(dir, "./rule.md"), which works. Without dir, it compares
+    // "rule.md" === "./rule.md", which is false, so rule.md drops out of the F9 scan.
+    const t = await setup();
+    await templated(t, { deploy });
+    await writeFiles(path.join(t.forge, "ingredients/rules/deploy-notes"), {
+      "ingredient.yaml": "type: rule\nname: deploy-notes\nfile: ./rule.md\n",
+      "rule.md": "see {{deploy.api}}\n",
+    });
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "use initech-api here\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.variants[0].reason).toContain("setting deploy.api would change rule/deploy-notes");
+    expect(r.params).toEqual([]);
+  });
+
   it("does not hold a profile change back for a {{key}} in a file no target emits (F9, 0.8.2)", async () => {
     const t = await setup();
     await templated(t, { deploy });

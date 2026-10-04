@@ -150,6 +150,42 @@ describe("planFrom", () => {
     // take should still be "keep"
     expect(paired.hunks![0].take).toBe("keep");
   });
+
+  it("pre-fills a section name from a heading for a block hunk (spec 12 §4.2) (./rule.md, 0.8.2)", async () => {
+    // This test checks that planFrom at :87 uses the `dir` argument when building the `declared` set.
+    // The base already has a section named "reviewer-table" (the slug of "## Reviewer Table"), so the
+    // pre-fill should produce "reviewer-table-2". With dir, bodyFile compares path.join(dir, "rule.md")
+    // against path.join(dir, "./rule.md"), which works. Without dir, it compares "rule.md" against
+    // "./rule.md", which is false, so the file is not read, `declared` is empty, and pre-fill uses
+    // "reviewer-table" instead of "reviewer-table-2".
+    const baseDir = await tmpDir();
+    cleanups.push(() => fs.rm(baseDir, { recursive: true, force: true }));
+    await writeFiles(baseDir, {
+      "ingredient.yaml": "type: rule\nname: review-posture\nfile: ./rule.md\n",
+      // Base has an existing section named "reviewer-table" and a SEPARATE table below another heading with the same slug
+      "rule.md": "# Rules\n\n<!-- craftar:section reviewer-table -->\nOld\n<!-- /craftar:section -->\n\n## Reviewer Table\n| a |\n",
+    });
+
+    const variantDir = await tmpDir();
+    cleanups.push(() => fs.rm(variantDir, { recursive: true, force: true }));
+    await writeFiles(variantDir, {
+      "ingredient.yaml": "type: rule\nname: review-posture--acme\nas: review-posture\nfile: ./rule.md\n",
+      // Variant keeps the existing section content but adds rows to the table below
+      "rule.md": "# Rules\n\n<!-- craftar:section reviewer-table -->\nOld\n<!-- /craftar:section -->\n\n## Reviewer Table\n| a |\n| b |\n",
+    });
+
+    const base = { ref: "rule/review-posture", dir: baseDir, meta: { type: "rule", name: "review-posture", file: "./rule.md" } } as never;
+    const variant = { ref: "rule/review-posture--acme", dir: variantDir, meta: { type: "rule", name: "review-posture--acme", as: "review-posture", file: "./rule.md" } } as never;
+    const diff = await diffIngredients(base, variant);
+
+    const plan = await planFrom(base, variant, diff, "acme");
+    // The only hunk should be the block hunk for "| b |" below the "## Reviewer Table" heading
+    const paired = plan.files.find((f) => f.file === "rule.md")!;
+    expect(paired.hunks).toHaveLength(1);
+    expect(paired.hunks![0].suggestion?.class).toBe("block");
+    // Since "reviewer-table" is already declared in the existing section, the pre-fill should be "reviewer-table-2"
+    expect(paired.hunks![0].section).toEqual({ name: "reviewer-table-2" });
+  });
 });
 
 /** Two temp ingredient directories (base + variant--profile), loaded and diffed for real. */
@@ -1305,6 +1341,37 @@ Done.
     }
 
     await expect(applyPlan(base, variant, diff, planObj)).rejects.toThrow(
+      /would lose or change section markers.*take base for the marker lines, or take: section to fill the section/,
+    );
+  });
+
+  it("U1: --take variant over a marked base is still refused (./rule.md, 0.8.2)", async () => {
+    // This test checks that checkMarkers at :692 uses the `dir` argument correctly. With dir, bodyFile
+    // compares path.join(dir, "rule.md") === path.join(dir, "./rule.md"), which works. Without dir, it
+    // compares "rule.md" === "./rule.md", which is false, so rule.md drops out of the U1 check.
+    const root = await tmpDir("craftar-u1-dotslash-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const baseBody = "# Review\n\n<!-- craftar:section flavors -->\n| a |\n<!-- /craftar:section -->\n\nDone.\n";
+    const variantBody = "# Review\n\n| b |\n\nDone.\n";
+    await makeForge(root, {
+      ingredients: [
+        { meta: { type: "rule", name: "review-posture", file: "./rule.md" }, files: { "rule.md": baseBody } },
+        { meta: { type: "rule", name: "review-posture--acme", as: "review-posture", file: "./rule.md" }, files: { "rule.md": variantBody } },
+      ],
+      recipes: [recipe("base", ["rule/review-posture"]), recipe("base--acme", ["rule/review-posture--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const forge = await loadForge(root);
+    const base = forge.ingredients.get("rule/review-posture")!;
+    const variant = forge.ingredients.get("rule/review-posture--acme")!;
+    const diffResult = await diffIngredients(base, variant);
+    const planObj = await planFrom(base, variant, diffResult, "acme");
+    // Take variant on all hunks (no section declaration)
+    for (const h of planObj.files[0].hunks!) {
+      h.take = "variant";
+    }
+
+    await expect(applyPlan(base, variant, diffResult, planObj)).rejects.toThrow(
       /would lose or change section markers.*take base for the marker lines, or take: section to fill the section/,
     );
   });
