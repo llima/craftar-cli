@@ -845,14 +845,51 @@ describe("U1 — a merge never changes section markers (spec 11 §6.12, Ruling 8
 
   it("refuses a variant-only file that would bring markers in, and a base-only file removed with its sections", async () => {
     const e = (p: Promise<unknown>) => p.then(() => "no error", (x: Error) => x.message);
-    const add = await scenario({ "rule.md": "a\n" }, { "rule.md": "a\n", "notes.md": "<!-- craftar:section n -->\nx\n<!-- /craftar:section -->\n" });
-    const addPlan = await planFrom(add.base, add.variant, add.diff, "acme");
-    addPlan.files[0].take = "variant";
-    expect(await e(applyPlan(add.base, add.variant, add.diff, addPlan))).toContain("sections none would become n");
-    const rm = await scenario({ "rule.md": "a\n", "notes.md": "<!-- craftar:section n -->\nx\n<!-- /craftar:section -->\n" }, { "rule.md": "a\n" });
-    const rmPlan = await planFrom(rm.base, rm.variant, rm.diff, "acme");
-    rmPlan.files[0].take = "variant";
-    expect(await e(applyPlan(rm.base, rm.variant, rm.diff, rmPlan))).toContain("the file would be removed with sections n");
+    // 0.8.2: notes.md beside rule.md in a rule is not emitted by any target, so markers are ignored.
+    // For a file that IS emitted (a skill dir's text file), markers still matter.
+    const skill = (name: string, body: Record<string, string>, extra: Record<string, unknown> = {}): IngredientSpec => ({
+      meta: { type: "skill", name, layout: "dir", ...extra },
+      files: body,
+    });
+    const addRoot = await tmpDir("craftar-u1-add-");
+    cleanups.push(() => fs.rm(addRoot, { recursive: true, force: true }));
+    await makeForge(addRoot, {
+      ingredients: [
+        skill("tool", { "SKILL.md": "a\n" }),
+        skill("tool--acme", { "SKILL.md": "a\n", "notes.md": "<!-- craftar:section n -->\nx\n<!-- /craftar:section -->\n" }, { as: "tool" }),
+      ],
+      recipes: [recipe("base", ["skill/tool"]), recipe("base--acme", ["skill/tool--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const addForge = await loadForge(addRoot);
+    const addBase = addForge.ingredients.get("skill/tool")!;
+    const addVariant = addForge.ingredients.get("skill/tool--acme")!;
+    const addDiff = await diffIngredients(addBase, addVariant);
+    const addPlan = await planFrom(addBase, addVariant, addDiff, "acme");
+    // notes.md is one-sided in variant
+    const notesPlan = addPlan.files.find((f) => f.file === "notes.md");
+    if (notesPlan) notesPlan.take = "variant";
+    expect(await e(applyPlan(addBase, addVariant, addDiff, addPlan))).toContain("sections none would become n");
+
+    const rmRoot = await tmpDir("craftar-u1-rm-");
+    cleanups.push(() => fs.rm(rmRoot, { recursive: true, force: true }));
+    await makeForge(rmRoot, {
+      ingredients: [
+        skill("tool", { "SKILL.md": "a\n", "notes.md": "<!-- craftar:section n -->\nx\n<!-- /craftar:section -->\n" }),
+        skill("tool--acme", { "SKILL.md": "a\n" }, { as: "tool" }),
+      ],
+      recipes: [recipe("base", ["skill/tool"]), recipe("base--acme", ["skill/tool--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const rmForge = await loadForge(rmRoot);
+    const rmBase = rmForge.ingredients.get("skill/tool")!;
+    const rmVariant = rmForge.ingredients.get("skill/tool--acme")!;
+    const rmDiff = await diffIngredients(rmBase, rmVariant);
+    const rmPlan = await planFrom(rmBase, rmVariant, rmDiff, "acme");
+    // notes.md is one-sided in base
+    const rmNotesPlan = rmPlan.files.find((f) => f.file === "notes.md");
+    if (rmNotesPlan) rmNotesPlan.take = "variant";
+    expect(await e(applyPlan(rmBase, rmVariant, rmDiff, rmPlan))).toContain("the file would be removed with sections n");
   });
 });
 
@@ -1160,6 +1197,54 @@ Done.
     await expect(applyPlan(base, variant, diffResult, planObj)).rejects.toThrow(
       /skill\/analyze--acme holds a section marker on notes.md:1/,
     );
+  });
+
+  it("a malformed marker in a file no target emits does not block take: section (0.8.2)", async () => {
+    const root = await tmpDir("craftar-section-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const notes = "<!-- craftar:section x -->\nno closer\n";
+    await makeForge(root, {
+      ingredients: [
+        { meta: { type: "rule", name: "review-posture" }, files: { "rule.md": "# R\n\n| a |\n\nEnd.\n", "notes.md": notes } },
+        { meta: { type: "rule", name: "review-posture--acme", as: "review-posture" }, files: { "rule.md": "# R\n\n| a |\n| b |\n\nEnd.\n", "notes.md": notes } },
+      ],
+      recipes: [recipe("base", ["rule/review-posture"]), recipe("base--acme", ["rule/review-posture--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const forge = await loadForge(root);
+    const base = forge.ingredients.get("rule/review-posture")!;
+    const variant = forge.ingredients.get("rule/review-posture--acme")!;
+    const diff = await diffIngredients(base, variant);
+    const planObj = await planFrom(base, variant, diff, "acme");
+    planObj.files[0].hunks![0].take = "section";
+    (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "flavors" };
+    const result = await applyPlan(base, variant, diff, planObj);
+    expect(result.resolved).toBe(true);
+    expect(result.sections.map((s) => s.name)).toEqual(["flavors"]);
+  });
+
+  it("take: section or take: param on a file no target emits is refused with its own message (0.8.2)", async () => {
+    const root = await tmpDir("craftar-section-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [
+        { meta: { type: "rule", name: "w" }, files: { "rule.md": "# W\n", "notes.md": "use globex-api\n" } },
+        { meta: { type: "rule", name: "w--acme", as: "w" }, files: { "rule.md": "# W\n", "notes.md": "use acme-api\n" } },
+      ],
+      recipes: [recipe("base", ["rule/w"]), recipe("base--acme", ["rule/w--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const forge = await loadForge(root);
+    const base = forge.ingredients.get("rule/w")!;
+    const variant = forge.ingredients.get("rule/w--acme")!;
+    const diff = await diffIngredients(base, variant);
+    const err = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => e.message);
+    const asParam = await planFrom(base, variant, diff, "acme");
+    Object.assign(asParam.files[0].hunks![0], { take: "param", params: [{ token: "globex-api", key: "k" }] });
+    expect(await err(applyPlan(base, variant, diff, asParam))).toContain('unify plan: "notes.md" is not emitted by any target');
+    const asSection = await planFrom(base, variant, diff, "acme");
+    Object.assign(asSection.files[0].hunks![0], { take: "section", section: { name: "s" } });
+    expect(await err(applyPlan(base, variant, diff, asSection))).toContain('unify plan: "notes.md" is not emitted by any target');
   });
 
   it("U1: --take variant over a marked base is still refused", async () => {

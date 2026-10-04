@@ -1,7 +1,7 @@
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
-import { placeholders, reservedKey, substitutedFile } from "../core/extract.js";
+import { placeholders, reservedKey, bodyFile } from "../core/extract.js";
 import { fingerprintOf } from "../core/fingerprint.js";
 import { exists, listFiles, loadForge, readIngredientText, type Forge } from "../core/forge.js";
 import { hashNormalized, stripBom, toLf } from "../core/text.js";
@@ -65,10 +65,10 @@ const norm = (s: string) => toLf(stripBom(s));
 const textOf = (c: string | Buffer) => norm(typeof c === "string" ? c : c.toString("utf8"));
 const valueOf = (m: Record<string, unknown>, k: string) => (Object.hasOwn(m, k) ? String(m[k]) : undefined);
 
-/** The keys a source's admitted files cite literally. */
+/** The keys a source's body files cite literally. */
 export function sourceKeys(meta: Ingredient, files: Record<string, string | Buffer>): Set<string> {
   const out = new Set<string>();
-  for (const [rel, c] of Object.entries(files)) if (substitutedFile(meta, rel)) for (const k of placeholders(textOf(c))) out.add(k);
+  for (const [rel, c] of Object.entries(files)) if (bodyFile(meta, rel)) for (const k of placeholders(textOf(c))) out.add(k);
   return out;
 }
 
@@ -273,7 +273,7 @@ function inferSectionValues(
 }
 
 async function listAdmitted(ing: { dir: string; meta: Ingredient }): Promise<string[]> {
-  return (await listFiles(ing.dir)).filter((rel) => rel !== "ingredient.yaml" && substitutedFile(ing.meta, rel));
+  return (await listFiles(ing.dir)).filter((rel) => rel !== "ingredient.yaml" && bodyFile(ing.meta, rel));
 }
 
 const OverridesParams = z.record(z.unknown());

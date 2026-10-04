@@ -1,6 +1,6 @@
 import path from "node:path";
 import { IngredientSchema, type Ingredient } from "../schema/index.js";
-import { placeholders, substitutedFile } from "./extract.js";
+import { placeholders, bodyFile } from "./extract.js";
 import { fingerprintOf, type DirReader } from "./fingerprint.js";
 import { parseYaml } from "./forge.js";
 import { substitute } from "./resolve.js";
@@ -50,7 +50,7 @@ export async function readBase(dir: string, io: DirReader, forgeRoot?: string): 
   try {
     for (const rel of await io.list(dir)) {
       if (rel === "ingredient.yaml") continue;
-      if (substitutedFile(meta, rel)) {
+      if (bodyFile(meta, rel)) {
         const text = norm(await io.readText(path.join(dir, rel)));
         texts.set(rel, text);
         parsed.set(rel, parseSections(text, label(rel), `${meta.type}/${meta.name}`));

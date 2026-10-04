@@ -3,7 +3,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema } from "../schema/index.js";
-import { placeholders, substitutedFile, type Extraction } from "./extract.js";
+import { placeholders, bodyFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
 import { manifestWithSections } from "./manifest-edit.js";
 import { resolve, sectionKey } from "./resolve.js";
@@ -67,10 +67,10 @@ export function resolvedBy(forge: Forge, profile: string): Set<string> {
   return new Set(r.ingredients.map((i) => i.ref));
 }
 
-/** Whether any file an ingredient reads through `ctx.text` cites `{{key}}`. */
+/** Whether any body file an ingredient reads through `ctx.text` cites `{{key}}`. */
 async function cites(ing: LoadedIngredient, key: string): Promise<boolean> {
   for (const rel of await listFiles(ing.dir)) {
-    if (rel === "ingredient.yaml" || !substitutedFile(ing.meta, rel)) continue;
+    if (rel === "ingredient.yaml" || !bodyFile(ing.meta, rel)) continue;
     if (placeholders(await readIngredientText(ing, rel)).includes(key)) return true;
   }
   return false;

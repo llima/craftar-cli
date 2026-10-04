@@ -6,7 +6,7 @@ import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFo
 import { hashNormalized, stripBom, toLf } from "./text.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
-import { placeholders, substitutedFile } from "./extract.js";
+import { placeholders, substitutedFile, bodyFile, emittedFile } from "./extract.js";
 import { LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
@@ -110,19 +110,20 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
     for (const rel of await listFiles(ing.dir)) {
       if (rel === "ingredient.yaml") continue;
       const abs = path.join(ing.dir, rel);
-      if (substitutedFile(ing.meta, rel)) {
+      if (bodyFile(ing.meta, rel)) {
         const p = parseSections(await fs.readFile(abs, "utf8"), forgeRel(forge, abs), ing.ref);
         parsed.set(abs, p);
         files.push({ rel, p });
         if (p.sections.length && firstMarker === null) firstMarker = `${p.file}:${p.sections[0].line}`;
-      } else {
-        // A file not every target renders as text keeps its markers; one, whatever its extension, is warned, never dropped
+      } else if (emittedFile(ing.meta, rel)) {
+        // A file emitted but not every target renders as text keeps its markers; one, whatever its extension, is warned, never dropped
         // silently. Every marker form contains "craftar:section", so a file without it is not decoded.
         const bytes = await fs.readFile(abs);
         if (bytes.includes("craftar:section") && toLf(stripBom(bytes.toString("utf8"))).split("\n").some((l) => markerLine(l) !== null)) {
           warnings.push(`${ing.ref} ${rel}: section markers are read only in files every target renders as text — copied with them`);
         }
       }
+      // A file no target emits is skipped silently (0.8.2) — not read for sections, not warned
     }
     checkDeclaredOnce(ing.ref, files.map((f) => f.p));
     const list: Array<{ file: string; name: string; layer: SectionLayer }> = [];
@@ -206,9 +207,9 @@ export async function plan(ws: Workspace): Promise<Plan> {
       const raw = await fs.readFile(abs, "utf8");
       const missing = new Set<string>();
       const params = paramsFor(ing, resolution);
-      // Sections first, then params (spec 11 §6.4), in admitted files only (§6.5).
-      const parsed = substitutedFile(ing.meta, file) ? sections.parsed.get(abs) : null;
-      // Every admitted file of a resolved ingredient was parsed and gated in the section pass; a miss here would skip the schema gate.
+      // Sections first, then params (spec 11 §6.4), in body files only (§6.5, 0.8.2).
+      const parsed = bodyFile(ing.meta, file) ? sections.parsed.get(abs) : null;
+      // Every body file of a resolved ingredient was parsed and gated in the section pass; a miss here would skip the schema gate.
       if (parsed === undefined) throw new Error(`internal: ${forgeRel(ws.forge, abs)} was not parsed by the section pass`);
       const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution)) : toLf(stripBom(raw));
       const out = substitute(expanded, params, missing);

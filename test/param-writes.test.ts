@@ -99,6 +99,11 @@ describe("checkParamWrites — Forge-level refusals (spec 09 §6.3)", () => {
     expect(await err(check(v, [ext("k", "globex-api", "acme-api")]))).toContain("rule/deploy--acme already uses {{k}}");
   });
 
+  it("P14 ignores a {{key}} in a file no target emits (0.8.2)", async () => {
+    const b = await forgeOf(spec({ ingredients: [] }), { "ingredients/rules/deploy/notes.md": "see {{k}}\n" });
+    expect(await err(check(b, [ext("k", "globex-api", "acme-api")]))).not.toContain("already uses {{k}}");
+  });
+
   it("P15, P16: a recipe or another profile sets the key to another value", async () => {
     const r = await forgeOf(spec({ recipes: [recipe("base", ["rule/deploy"], { params: { k: { default: "x" } } }), recipe("base--acme", ["rule/deploy--acme"])] }));
     expect(await err(check(r, [ext("k", "globex-api", "acme-api")]))).toContain("recipe base declares k");

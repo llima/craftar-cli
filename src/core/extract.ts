@@ -49,6 +49,37 @@ export function substitutedFile(meta: Ingredient, file: string): boolean {
   }
 }
 
+/**
+ * Whether any target emits `file` (0.8.2): the body file of a rule, agent, command or steering, `SKILL.md` of a
+ * file-layout skill, every file of a dir-layout skill, the listed `files` of a script or hook; nothing for MCP.
+ * A file no target emits is never read as the ingredient's body — not for sections, not for {{param}} scans.
+ */
+export function emittedFile(meta: Ingredient, file: string): boolean {
+  switch (meta.type) {
+    case "rule":
+      return file === (meta.file ?? "rule.md");
+    case "agent":
+      return file === (meta.file ?? "agent.md");
+    case "command":
+      return file === (meta.file ?? "command.md");
+    case "steering":
+      return file === (meta.file ?? "steering.md");
+    case "skill":
+      if (meta.layout === "file") return file === "SKILL.md";
+      return file !== "ingredient.yaml"; // dir layout: every file except ingredient.yaml
+    case "script":
+    case "hook":
+      return meta.files.includes(file);
+    case "mcp":
+      return false;
+  }
+}
+
+/** A file read as the ingredient's body: some target emits it and every target that emits it renders it as text. */
+export function bodyFile(meta: Ingredient, file: string): boolean {
+  return emittedFile(meta, file) && substitutedFile(meta, file);
+}
+
 /** `substitute` restricted to `keys`: every other placeholder is left as it is. */
 export function substituteKeys(text: string, values: Map<string, string>): string {
   return text.replace(PLACEHOLDER, (m, key: string) => (values.has(key) ? values.get(key)! : m));

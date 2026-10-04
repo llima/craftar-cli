@@ -148,6 +148,29 @@ describe("sections — plan warnings (Ruling 12)", () => {
   });
 });
 
+describe("0.8.2 — files no target emits are not read for sections", () => {
+  it("a near-miss marker in a file no target emits does not fail the plan", async () => {
+    const r: IngredientSpec = { meta: { type: "rule", name: "r" }, files: { "rule.md": "# R\n", "notes.md": "<!--craftar:section x-->\n" } };
+    const p = await sectionPlan({ ingredients: [r] });
+    expect(out(p, ".claude/rules/r.md")).toBe("# R\n");
+    expect(p.warnings.filter((w) => /section/.test(w))).toEqual([]);
+  });
+
+  it("a marker in a file no target emits neither trips the schema: 1 gate nor declares a section", async () => {
+    const r: IngredientSpec = { meta: { type: "rule", name: "r" }, files: { "rule.md": "# R\n", "notes.md": [OPEN("x"), "y", CLOSE, ""].join("\n") } };
+    const p = await sectionPlan({ ingredients: [r], schema: 1, profileExtra: { sections: { "rule/r": { x: "z" } } } });
+    expect(out(p, ".claude/rules/r.md")).toBe("# R\n");
+    expect((p.sections.get("rule/r") ?? []).length).toBe(0);
+    expect(p.warnings).toContain("profile acme sets section x of rule/r, which has no such marker");
+  });
+
+  it("a dir skill still expands sections in every text file it emits", async () => {
+    const s: IngredientSpec = { meta: { type: "skill", name: "tool" }, files: { "SKILL.md": "# Tool\n", "ref.md": [OPEN("x"), "default", CLOSE, ""].join("\n") } };
+    const p = await sectionPlan({ ingredients: [s], profileExtra: { sections: { "skill/tool": { x: "mine" } } } });
+    expect(out(p, ".claude/skills/tool/ref.md")).toBe("mine\n");
+  });
+});
+
 describe("sections — parse errors and the output guard", () => {
   it("a malformed marker fails the plan naming the Forge file and line, whichever targets resolve (edge case 20)", async () => {
     const bad = rule("r", ["# R", OPEN("flavors"), "x", ""].join("\n"), { targets: ["kiro"] });

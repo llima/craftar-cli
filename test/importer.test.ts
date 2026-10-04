@@ -1091,6 +1091,18 @@ describe("section-aware import — decisions (spec 11 §6.7–§6.10)", () => {
     expect(await snapshot(t.forge)).toEqual(before);
   });
 
+  it("a malformed marker in a file no target emits does not refuse the import (0.8.2)", async () => {
+    const t = await setup();
+    await marked(t);
+    // Add a notes.md with a malformed marker to the Forge ingredient
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/review-posture/notes.md"), `${OPEN("x")}no closer\n`);
+    // The import should not fail due to the malformed marker in notes.md (a file no target emits)
+    // The source will become a variant since the file set differs, but that's fine
+    const r = await importInto(t.forge, t.ws("acme"), "acme");
+    // Verify the import succeeded (created a variant because file sets differ)
+    expect(r.variants.map((v) => v.name)).toEqual(["rule/review-posture--acme"]);
+  });
+
   it("param inference is preferred for a {{k}} inside a default (Ruling 16); a source that differs in both is a variant", async () => {
     const t = await setup();
     await marked(t, `Deploy {{deploy.api}}.\n${OPEN("rows")}| {{owner}} |\n${CLOSE}`, "Deploy globex-api.\n| ann |\n");
