@@ -1618,4 +1618,55 @@ d
       /rule\/w--acme holds a section marker on rule.md:3/,
     );
   });
+
+  it("refuses a section name another body file declares, with files spelled ./ (unify.ts S6, 0.8.2)", async () => {
+    // This test checks that bodyFile at :445 uses the `dir` argument when building declaredElsewhere.
+    // With dir, bodyFile compares path.join(dir, "b.sh") against path.join(dir, "./b.sh"), which works.
+    // Without dir, it compares "b.sh" === "./b.sh", which is false, so b.sh is not seen as a body file
+    // and its section marker is not collected — allowing an invalid duplicate name.
+    const root = await tmpDir("craftar-s6-dotslash-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+
+    // Script ingredient with files spelled ./
+    const script = (name: string, body: Record<string, string>, extra: Record<string, unknown> = {}): IngredientSpec => ({
+      meta: { type: "script", name, files: ["./a.sh", "./b.sh"], ...extra },
+      files: body,
+    });
+
+    // Base b.sh declares section `flavors` at line 2 (opener on line 1)
+    const baseBsh = "#!/bin/bash\n<!-- craftar:section flavors -->\necho base\n<!-- /craftar:section -->\n";
+    // Variant b.sh has no markers — its hunks take base
+    const variantBsh = "#!/bin/bash\necho base\n";
+
+    // a.sh differs between base and variant
+    const baseAsh = "#!/bin/bash\necho a\n";
+    const variantAsh = "#!/bin/bash\necho variant-a\n";
+
+    await makeForge(root, {
+      ingredients: [
+        script("tool", { "a.sh": baseAsh, "b.sh": baseBsh }),
+        script("tool--acme", { "a.sh": variantAsh, "b.sh": variantBsh }, { as: "tool" }),
+      ],
+      recipes: [recipe("base", ["script/tool"]), recipe("base--acme", ["script/tool--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const forge = await loadForge(root);
+    const base = forge.ingredients.get("script/tool")!;
+    const variant = forge.ingredients.get("script/tool--acme")!;
+    const diffResult = await diffIngredients(base, variant);
+    const planObj = await planFrom(base, variant, diffResult, "acme");
+
+    // Take base on b.sh hunks
+    const bshFile = planObj.files.find((f) => f.file === "b.sh");
+    for (const h of bshFile?.hunks ?? []) h.take = "base";
+
+    // Take section with name "flavors" on a.sh (already declared in b.sh)
+    const ashFile = planObj.files.find((f) => f.file === "a.sh");
+    ashFile!.hunks![0].take = "section";
+    (ashFile!.hunks![0] as Record<string, unknown>).section = { name: "flavors" };
+
+    await expect(applyPlan(base, variant, diffResult, planObj)).rejects.toThrow(
+      /already declared in script\/tool \(b\.sh:2\)/,
+    );
+  });
 });
