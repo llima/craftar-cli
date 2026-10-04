@@ -84,7 +84,7 @@ export async function planFrom(
   const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
   for (const rel of baseFiles) {
     if (rel === "ingredient.yaml") continue;
-    if (!bodyFile(base.meta, rel)) continue;
+    if (!bodyFile(base.meta, rel, base.dir)) continue;
     try {
       const text = await readIngredientText(base, rel);
       const parsed = parseSections(text, label(rel), base.ref);
@@ -99,7 +99,7 @@ export async function planFrom(
   for (const f of diff.files) {
     // Pre-fill section names only when the file is a body file (spec 12 §4.2, 0.8.2)
     let sectionNames: Array<string | undefined> = [];
-    if (bodyFile(base.meta, f.file)) {
+    if (bodyFile(base.meta, f.file, base.dir)) {
       try {
         const baseText = await readIngredientText(base, f.file);
         sectionNames = prefillSections({
@@ -372,7 +372,7 @@ export async function applyPlan(
     const variantFiles = await listFiles(variant.dir);
     for (const rel of variantFiles) {
       if (rel === "ingredient.yaml") continue;
-      if (!bodyFile(variant.meta, rel)) continue;
+      if (!bodyFile(variant.meta, rel, variant.dir)) continue;
       const variantText = await readIngredientText(variant, rel);
       const markerLine = firstMarkerLine(toLf(stripBom(variantText)));
       if (markerLine !== null) {
@@ -427,7 +427,7 @@ export async function applyPlan(
         filesWithSectionHunks.add(pf.file);
 
         // S2: the file must be emitted and substituted (0.8.2)
-        if (!emittedFile(base.meta, pf.file)) {
+        if (!emittedFile(base.meta, pf.file, base.dir)) {
           throw new Error(
             `unify plan: "${pf.file}" is not emitted by any target — a section there would never render`,
           );
@@ -442,7 +442,7 @@ export async function applyPlan(
         const declaredElsewhere = new Map<string, string>();
         for (const otherFile of baseFiles) {
           if (otherFile === "ingredient.yaml" || otherFile === pf.file) continue;
-          if (!bodyFile(base.meta, otherFile)) continue;
+          if (!bodyFile(base.meta, otherFile, base.dir)) continue;
           const otherText = await readIngredientText(base, otherFile);
           const parsed = parseSections(otherText, label(otherFile), base.ref);
           for (const s of parsed.sections) {
@@ -543,7 +543,7 @@ export async function applyPlan(
       // which would re-terminate a base with mixed line endings even though no decision moved it.
       if (paramOf.size) {
         // P3: the file must be emitted and substituted (0.8.2)
-        if (!emittedFile(base.meta, pf.file)) {
+        if (!emittedFile(base.meta, pf.file, base.dir)) {
           throw new Error(`unify plan: "${pf.file}" is not emitted by any target — a {{param}} there would never render`);
         }
         if (!substitutedFile(base.meta, pf.file)) {
@@ -689,7 +689,7 @@ async function checkMarkers(
   newNames: Map<string, string[]> = new Map(),
 ): Promise<void> {
   const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
-  const touched = [...Object.keys(write), ...remove].filter((rel) => bodyFile(base.meta, rel)).sort();
+  const touched = [...Object.keys(write), ...remove].filter((rel) => bodyFile(base.meta, rel, base.dir)).sort();
   for (const rel of touched) {
     const abs = path.join(base.dir, rel);
     const before = (await exists(abs)) ? markerStructure(await fs.readFile(abs, "utf8"), label(rel)) : { names: [] };

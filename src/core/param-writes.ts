@@ -70,7 +70,7 @@ export function resolvedBy(forge: Forge, profile: string): Set<string> {
 /** Whether any body file an ingredient reads through `ctx.text` cites `{{key}}`. */
 async function cites(ing: LoadedIngredient, key: string): Promise<boolean> {
   for (const rel of await listFiles(ing.dir)) {
-    if (rel === "ingredient.yaml" || !bodyFile(ing.meta, rel)) continue;
+    if (rel === "ingredient.yaml" || !bodyFile(ing.meta, rel, ing.dir)) continue;
     if (placeholders(await readIngredientText(ing, rel)).includes(key)) return true;
   }
   return false;

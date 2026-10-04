@@ -55,32 +55,38 @@ export function substitutedFile(meta: Ingredient, file: string): boolean {
  * Whether any target emits `file` (0.8.2): the body file of a rule, agent, command or steering, `SKILL.md` of a
  * file-layout skill, every file of a dir-layout skill, the listed `files` of a script or hook; nothing for MCP.
  * A file no target emits is never read as the ingredient's body — not for sections, not for {{param}} scans.
+ *
+ * The comparison uses `path.join(dir, x)` — the same call the emitters use to read the file — so that
+ * `file: ../r/rule.md` resolves back to the file `rule.md` actually sits in. Do not use `path.resolve`:
+ * `path.resolve(dir, "/rule.md")` is `/rule.md`, while `path.join(dir, "/rule.md")` is `<dir>/rule.md`,
+ * and 0.8.1 synced `/rule.md`.
  */
-export function emittedFile(meta: Ingredient, file: string): boolean {
-  const norm = (x: string) => path.posix.normalize(x.replace(/\\/g, "/")).replace(/^\/+/, "");
+export function emittedFile(meta: Ingredient, file: string, dir?: string): boolean {
+  // When dir is provided, compare the resolved paths the way the emitters read them.
+  const eq = (a: string, b: string) => (dir ? path.join(dir, a) === path.join(dir, b) : a === b);
   switch (meta.type) {
     case "rule":
-      return norm(file) === norm(meta.file ?? "rule.md");
+      return eq(file, meta.file ?? "rule.md");
     case "agent":
-      return norm(file) === norm(meta.file ?? "agent.md");
+      return eq(file, meta.file ?? "agent.md");
     case "command":
-      return norm(file) === norm(meta.file ?? "command.md");
+      return eq(file, meta.file ?? "command.md");
     case "steering":
-      return norm(file) === norm(meta.file ?? "steering.md");
+      return eq(file, meta.file ?? "steering.md");
     case "skill":
-      if (meta.layout === "file") return norm(file) === "SKILL.md";
+      if (meta.layout === "file") return eq(file, "SKILL.md");
       return file !== "ingredient.yaml"; // dir layout: every file except ingredient.yaml
     case "script":
     case "hook":
-      return meta.files.some((f) => norm(f) === norm(file));
+      return meta.files.some((f) => eq(f, file));
     case "mcp":
       return false;
   }
 }
 
 /** A file read as the ingredient's body: some target emits it and every target that emits it renders it as text. */
-export function bodyFile(meta: Ingredient, file: string): boolean {
-  return emittedFile(meta, file) && substitutedFile(meta, file);
+export function bodyFile(meta: Ingredient, file: string, dir?: string): boolean {
+  return emittedFile(meta, file, dir) && substitutedFile(meta, file);
 }
 
 /** `substitute` restricted to `keys`: every other placeholder is left as it is. */

@@ -50,7 +50,7 @@ export async function readBase(dir: string, io: DirReader, forgeRoot?: string): 
   try {
     for (const rel of await io.list(dir)) {
       if (rel === "ingredient.yaml") continue;
-      if (bodyFile(meta, rel)) {
+      if (bodyFile(meta, rel, dir)) {
         const text = norm(await io.readText(path.join(dir, rel)));
         texts.set(rel, text);
         parsed.set(rel, parseSections(text, label(rel), `${meta.type}/${meta.name}`));

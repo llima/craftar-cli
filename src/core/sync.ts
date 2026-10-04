@@ -110,12 +110,12 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
     for (const rel of await listFiles(ing.dir)) {
       if (rel === "ingredient.yaml") continue;
       const abs = path.join(ing.dir, rel);
-      if (bodyFile(ing.meta, rel)) {
+      if (bodyFile(ing.meta, rel, ing.dir)) {
         const p = parseSections(await fs.readFile(abs, "utf8"), forgeRel(forge, abs), ing.ref);
         parsed.set(abs, p);
         files.push({ rel, p });
         if (p.sections.length && firstMarker === null) firstMarker = `${p.file}:${p.sections[0].line}`;
-      } else if (emittedFile(ing.meta, rel)) {
+      } else if (emittedFile(ing.meta, rel, ing.dir)) {
         // A file emitted but not every target renders as text keeps its markers; one, whatever its extension, is warned, never dropped
         // silently. Every marker form contains "craftar:section", so a file without it is not decoded.
         const bytes = await fs.readFile(abs);
@@ -208,7 +208,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
       const missing = new Set<string>();
       const params = paramsFor(ing, resolution);
       // Sections first, then params (spec 11 §6.4), in body files only (§6.5, 0.8.2).
-      const parsed = bodyFile(ing.meta, file) ? sections.parsed.get(abs) : null;
+      const parsed = bodyFile(ing.meta, file, ing.dir) ? sections.parsed.get(abs) : null;
       // Every body file of a resolved ingredient was parsed and gated in the section pass; a miss here would skip the schema gate.
       if (parsed === undefined) throw new Error(`internal: ${forgeRel(ws.forge, abs)} was not parsed by the section pass`);
       const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution)) : toLf(stripBom(raw));

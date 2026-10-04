@@ -273,7 +273,7 @@ function inferSectionValues(
 }
 
 async function listAdmitted(ing: { dir: string; meta: Ingredient }): Promise<string[]> {
-  return (await listFiles(ing.dir)).filter((rel) => rel !== "ingredient.yaml" && bodyFile(ing.meta, rel));
+  return (await listFiles(ing.dir)).filter((rel) => rel !== "ingredient.yaml" && bodyFile(ing.meta, rel, ing.dir));
 }
 
 const OverridesParams = z.record(z.unknown());

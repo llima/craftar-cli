@@ -176,14 +176,14 @@ describe("0.8.2 — files no target emits are not read for sections", () => {
     expect(out(p, ".claude/rules/r.md")).toBe("# R v\n");
   });
 
-  it("every file spelling 0.8.1 synced still syncs with the same bytes (0.8.2)", async () => {
+  it("every rule and script file spelling measured on 0.8.1 still syncs with the same bytes (0.8.2)", async () => {
     const ruleOut = async (file: string) => {
       const p = await sectionPlan({ ingredients: [{ meta: { type: "rule", name: "r", file }, files: { "rule.md": "# R v\n" } }], schema: 1 });
       return p.files.map((f) => [f.path, f.content.toString("utf8")]);
     };
     const reference = await ruleOut("rule.md");
     expect(reference.find(([p]) => p === ".claude/rules/r.md")?.[1]).toBe("# R v\n");
-    for (const file of ["./rule.md", "/rule.md", ".//rule.md", "//rule.md", "a/../rule.md"]) {
+    for (const file of ["./rule.md", "/rule.md", ".//rule.md", "//rule.md", "a/../rule.md", "../r/rule.md", "a/../../r/rule.md", "./../r/rule.md"]) {
       expect(await ruleOut(file), file).toEqual(reference);
     }
     const scriptOut = async (file: string) => {
@@ -194,6 +194,7 @@ describe("0.8.2 — files no target emits are not read for sections", () => {
     expect(await scriptOut("./run.sh")).toEqual([[".claude/scripts/./run.sh", "echo hi\n"]]);
     expect(await scriptOut("/run.sh")).toEqual([[".claude/scripts//run.sh", "echo hi\n"]]);
     expect(await scriptOut("a/../run.sh")).toEqual([[".claude/scripts/a/../run.sh", "echo hi\n"]]);
+    expect(await scriptOut("../s/run.sh")).toEqual([[".claude/scripts/../s/run.sh", "echo hi\n"]]);
   });
 
   it("a file spelling 0.8.1 could not read still fails, and never as an internal error (0.8.2)", async () => {
