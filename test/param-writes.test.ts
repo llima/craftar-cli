@@ -101,7 +101,7 @@ describe("checkParamWrites — Forge-level refusals (spec 09 §6.3)", () => {
 
   it("P14 ignores a {{key}} in a file no target emits (0.8.2)", async () => {
     const b = await forgeOf(spec({ ingredients: [] }), { "ingredients/rules/deploy/notes.md": "see {{k}}\n" });
-    expect(await err(check(b, [ext("k", "globex-api", "acme-api")]))).not.toContain("already uses {{k}}");
+    expect(await err(check(b, [ext("k", "globex-api", "acme-api")]))).toBe("no error");
   });
 
   it("P15, P16: a recipe or another profile sets the key to another value", async () => {

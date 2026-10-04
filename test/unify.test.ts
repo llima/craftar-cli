@@ -868,7 +868,8 @@ describe("U1 — a merge never changes section markers (spec 11 §6.12, Ruling 8
     const addPlan = await planFrom(addBase, addVariant, addDiff, "acme");
     // notes.md is one-sided in variant
     const notesPlan = addPlan.files.find((f) => f.file === "notes.md");
-    if (notesPlan) notesPlan.take = "variant";
+    expect(notesPlan).toBeDefined();
+    notesPlan!.take = "variant";
     expect(await e(applyPlan(addBase, addVariant, addDiff, addPlan))).toContain("sections none would become n");
 
     const rmRoot = await tmpDir("craftar-u1-rm-");
@@ -888,7 +889,8 @@ describe("U1 — a merge never changes section markers (spec 11 §6.12, Ruling 8
     const rmPlan = await planFrom(rmBase, rmVariant, rmDiff, "acme");
     // notes.md is one-sided in base
     const rmNotesPlan = rmPlan.files.find((f) => f.file === "notes.md");
-    if (rmNotesPlan) rmNotesPlan.take = "variant";
+    expect(rmNotesPlan).toBeDefined();
+    rmNotesPlan!.take = "variant";
     expect(await e(applyPlan(rmBase, rmVariant, rmDiff, rmPlan))).toContain("the file would be removed with sections n");
   });
 
