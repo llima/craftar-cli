@@ -622,6 +622,16 @@ describe("template-aware import — decisions (spec 10 §6.1–§6.5)", () => {
     expect(r.params).toEqual([]);
   });
 
+  it("does not hold a profile change back for a {{key}} in a file no target emits (F9, 0.8.2)", async () => {
+    const t = await setup();
+    await templated(t, { deploy });
+    await writeFiles(path.join(t.forge, "ingredients/rules/deploy-notes"), { "ingredient.yaml": "type: rule\nname: deploy-notes\n", "rule.md": "see the docs\n", "notes.md": "see {{deploy.api}}\n" });
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "use initech-api here\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.variants).toEqual([]);
+    expect(r.params.length).toBeGreaterThan(0);
+  });
+
   it("keeps a Forge base in the F9 scan when its workspace source is rejected for a secret (§6.5 (b))", async () => {
     const t = await setup();
     await templated(t, { deploy });
