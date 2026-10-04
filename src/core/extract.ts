@@ -64,8 +64,9 @@ export function substitutedFile(meta: Ingredient, file: string): boolean {
  * `null` only for metadata the importer builds itself, whose names are canonical.
  */
 export function emittedFile(meta: Ingredient, file: string, dir: string | null): boolean {
-  // When dir is provided, compare the resolved paths the way the emitters read them.
+  // When dir is not null, compare the resolved paths the way the emitters read them.
   const eq = (a: string, b: string) => (dir !== null ? path.join(dir, a) === path.join(dir, b) : a === b);
+  // The fallbacks equal the schema defaults; they serve test metadata built without the schema (test/unify.test.ts).
   switch (meta.type) {
     case "rule":
       return eq(file, meta.file ?? "rule.md");

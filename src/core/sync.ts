@@ -213,7 +213,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
       // outside the ingredient directory or behind a symlinked directory that listFiles did not descend into.
       if (parsed === undefined)
         throw new Error(
-          `${forgeRel(ws.forge, abs)}: ${ing.ref} declares a file outside its directory, behind a symlinked directory, or spelled differently from the file on disk — keep the file inside ${forgeRel(ws.forge, ing.dir)}`,
+          `${forgeRel(ws.forge, abs)}: ${ing.ref} declares a file outside its directory, behind a symlinked directory, or spelled differently from the file on disk — keep the file inside ${forgeRel(ws.forge, ing.dir)} and spell \`file\` as it is on disk`,
         );
       const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution)) : toLf(stripBom(raw));
       const out = substitute(expanded, params, missing);

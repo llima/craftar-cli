@@ -120,7 +120,7 @@ server:
   timeout: 30
 ```
 
-**Sections.** A body (its **body files**: the `file` of a rule, agent, command or steering — `rule.md` etc. by default; `SKILL.md` of a file-layout skill; every `.md`, `.txt`, `.json`, `.yaml` or `.yml` file of a dir-layout skill; the text files listed in `files` of a script or hook — a body file stays inside the ingredient directory; one declared outside it, or behind a symlinked directory, fails every command that plans, naming it) can hold blocks a profile or a workspace replaces. A file no target emits (a `notes.md` beside `rule.md`) is ignored — for sections and for `{{param}}` citations alike; a file a target emits but does not render as text is copied (see below). A block sits between two marker lines, and its content is the default:
+**Sections.** A body (its **body files**: the `file` of a rule, agent, command or steering — `rule.md` etc. by default; `SKILL.md` of a file-layout skill; every `.md`, `.txt`, `.json`, `.yaml` or `.yml` file of a dir-layout skill; the text files listed in `files` of a script or hook — a body file stays inside the ingredient directory; one declared outside it, or behind a symlinked directory, or spelled differently from the file on disk (letter case, on a case-insensitive file system), fails `sync`, `status`, `diff`, `explain` and `ls`, naming it) can hold blocks a profile or a workspace replaces. A file no target emits (a `notes.md` beside `rule.md`) is ignored — for sections and for `{{param}}` citations alike; a file a target emits but does not render as text is copied (see below). A block sits between two marker lines, and its content is the default:
 
 ```markdown
 Dispatch reviewers after every commit.
