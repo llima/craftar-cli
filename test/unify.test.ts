@@ -1444,4 +1444,27 @@ d
 `;
     expect(merged).toBe(expected);
   });
+
+  it("--save-plan pre-fills no section name in a file no target emits, and ignores names declared there (0.8.2)", async () => {
+    const root = await tmpDir("craftar-prefill-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [
+        { meta: { type: "rule", name: "w" }, files: { "rule.md": "# W\n\n## Rows\n\n| a |\n", "notes.md": "## Rows\n\n<!-- craftar:section rows -->\nx\n<!-- /craftar:section -->\n" } },
+        { meta: { type: "rule", name: "w--acme", as: "w" }, files: { "rule.md": "# W\n\n## Rows\n\n| a |\n| b |\n", "notes.md": "## Rows\n\n<!-- craftar:section rows -->\nx\n<!-- /craftar:section -->\n| c |\n" } },
+      ],
+      recipes: [recipe("base", ["rule/w"]), recipe("base--acme", ["rule/w--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    const forge = await loadForge(root);
+    const base = forge.ingredients.get("rule/w")!;
+    const variant = forge.ingredients.get("rule/w--acme")!;
+    const plan = await planFrom(base, variant, await diffIngredients(base, variant), "acme");
+    const notes = plan.files.find((f) => f.file === "notes.md");
+    const rule = plan.files.find((f) => f.file === "rule.md");
+    expect(notes).toBeDefined();
+    expect(rule).toBeDefined();
+    expect(notes!.hunks!.every((h) => h.section === undefined)).toBe(true);
+    expect(rule!.hunks![0].section).toEqual({ name: "rows" });
+  });
 });
