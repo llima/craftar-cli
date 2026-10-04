@@ -543,4 +543,12 @@ describe("agents-md emitter — rule references in bodies (spec 15)", () => {
     );
     expect(amWarnings(p2)).toEqual([`agents-md: 2 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: ${["dd", "z"].map(dead).join(", ")}`]);
   });
+
+  it("a token right after a link is still a reference (spec 15 §4.1, review fix)", async () => {
+    const p = await planFor(hubOnly("[y](.claude/rules/u5.md).claude/rules/u6.md"));
+    expect(sectionOf(agentsMd(p)!, "hub")).toBe("<!-- rule: hub -->\n# hub\n\ny (u5, rule not in this workspace)u6 (rule not in this workspace)");
+    expect(amWarnings(p)).toEqual([
+      "agents-md: 2 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: .claude/rules/u5.md (in rule/hub; no such rule), .claude/rules/u6.md (in rule/hub; no such rule)",
+    ]);
+  });
 });

@@ -143,9 +143,10 @@ export function resolveRuleRefs(
   );
   let tokenMatch;
   while ((tokenMatch = tokenPattern.exec(body)) !== null) {
-    const [match, before, , name] = tokenMatch as RegExpExecArray & [string, string, string, string];
-    const offset = tokenMatch.index;
-    const fullOffset = offset + match.length;
+    const [match, before, token, name] = tokenMatch as RegExpExecArray & [string, string, string, string];
+    // The offset of the actual token, not the left boundary; used for overlap checks and ordering
+    const offset = tokenMatch.index + before.length;
+    const fullOffset = tokenMatch.index + match.length;
     const after = body.slice(fullOffset);
     if (!rightBoundary(after)) continue;
     // Skip if this offset overlaps with a link match (link pattern already captured it)
@@ -158,22 +159,22 @@ export function resolveRuleRefs(
       case "A":
         continue; // unchanged, skip
       case "B":
-        replacement = `${before}${ruleFile("kiro", { name })}`;
+        replacement = ruleFile("kiro", { name });
         break;
       case "C":
-        replacement = `${before}AGENTS.md (rule: ${name})`;
+        replacement = `AGENTS.md (rule: ${name})`;
         break;
       case "D":
         reworded = { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` };
-        replacement = `${before}${name} (rule not in this workspace)`;
+        replacement = `${name} (rule not in this workspace)`;
         break;
       case "unknown":
         if (hasCc) continue;
         reworded = { ref: `.claude/rules/${name}.md`, kind: "no such rule" };
-        replacement = `${before}${name} (rule not in this workspace)`;
+        replacement = `${name} (rule not in this workspace)`;
         break;
     }
-    matches.push({ offset, length: match.length, replacement, reworded });
+    matches.push({ offset, length: token.length, replacement, reworded });
   }
 
   // Sort by offset for correct warning order, then apply replacements in reverse order
