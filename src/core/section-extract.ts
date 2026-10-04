@@ -107,7 +107,7 @@ export function deriveSections(args: {
   variantText: string;
   hunks: Hunk[]; // the file's hunks, from diffIngredients (1-based numbering = index + 1)
   entries: PlanHunk[]; // the plan's hunk entries for this file (any take)
-  declaredElsewhere: Map<string, string>; // section names declared in the base's OTHER admitted files → "file:line"
+  declaredElsewhere: Map<string, string>; // section names declared in the base's OTHER body files → "file:line"
 }): { runs: SectionRun[]; markers: MarkerInsertion[] } {
   const { file, label, ref, baseText, variantText, hunks, entries, declaredElsewhere } = args;
   const A = splitLines(baseText);
@@ -771,7 +771,7 @@ export function prefillSections(args: {
   label: string;
   ref: string;
   hunks: HunkWithSuggestion[];
-  /** Every section name the ingredient already declares, in any admitted file. */
+  /** Every section name the ingredient already declares, in any body file. */
   declared: Set<string>;
 }): Array<string | undefined> {
   const { baseText, label, ref, hunks, declared } = args;

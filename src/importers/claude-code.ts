@@ -855,7 +855,7 @@ async function existingProfile(
 }
 
 /**
- * I11 (spec 11 §4.5): the first column-0 section marker (or near miss) in an admitted file of a
+ * I11 (spec 11 §4.5): the first column-0 section marker (or near miss) in a body file of a
  * created or variant source, which sync would read as structure. The line counts from the top of
  * the workspace file, as the secret scan's does: an agent or command body starts after its frontmatter.
  */

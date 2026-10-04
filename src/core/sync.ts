@@ -6,7 +6,7 @@ import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFo
 import { hashNormalized, stripBom, toLf } from "./text.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
-import { placeholders, substitutedFile, bodyFile, emittedFile } from "./extract.js";
+import { placeholders, bodyFile, emittedFile } from "./extract.js";
 import { LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
@@ -91,7 +91,7 @@ function layerLabel(resolution: Resolution, layer: SectionLayer): string {
 }
 
 /**
- * The section pass of `plan()` (spec 11 §6.6 steps 1–5): parse every admitted file of every resolved
+ * The section pass of `plan()` (spec 11 §6.6 steps 1–5): parse every body file of every resolved
  * ingredient (a malformed marker throws, whichever targets resolve), warn on marker lines in files
  * not every target renders, fail a `schema: 1` Forge that holds a marker (Ruling 7/21), and warn on
  * section values that apply to nothing.
@@ -162,7 +162,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
 }
 
 /**
- * The output guard (spec 11 §6.6 step 6, Ruling 19): a rendered admitted file never holds a marker
+ * The output guard (spec 11 §6.6 step 6, Ruling 19): a rendered body file never holds a marker
  * line. When one does, it came from a value; name the first value that carries one.
  */
 function guardOutput(ing: ResolvedIngredient, file: string, out: string, p: ParsedSections, resolution: Resolution, params: Record<string, unknown>): void {
