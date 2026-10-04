@@ -21,6 +21,11 @@ export function outName(m: { name: string; as?: string }): string {
   return m.as ?? m.name;
 }
 
+/** The file a target writes for a rule: the path AGENTS.md lists when that target writes it (spec 14). */
+export function ruleFile(target: "claude-code" | "kiro", m: { name: string; as?: string }): string {
+  return target === "claude-code" ? `.claude/rules/${outName(m)}.md` : `.kiro/steering/${outName(m)}.md`;
+}
+
 /**
  * The MCP servers a target writes into its one JSON file, keyed by `outName` so a variant keeps the
  * server name its workspace uses. The file holds one entry per name, so when two ingredients write

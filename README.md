@@ -189,7 +189,7 @@ Sections layer the same way, weakest → strongest: the body's default → the p
 **kiro** — reproduces, then extends, the hand-written `sync-steering.ps1` script it replaces:
 steering = `inclusion` frontmatter + `GENERATED` banner + rule body, with `.claude/rules/` rewritten to `.kiro/steering/`, UTF-8 without BOM, CRLF. On top of what the script did, it also generates `.kiro/agents/*.json` (tools mapped to Kiro names, `resources` bound to the agent's stack rule + `repo-discovery`, or `**/*.md` for generic agents), `.kiro/steering/commands/*.md`, `.kiro/skills/*/SKILL.md` and `.kiro/settings/mcp.json`. `.kiro/settings/mcp.json` receives each MCP server exactly as the Forge holds it, in its own key order — including keys Kiro may not use (`type` always went through). The banner text is a parameter (`kiro.banner`) so existing workspaces can adopt without a rewrite. Scripts and hooks have no Kiro equivalent: they are skipped with a warning.
 
-**agents-md** — one `AGENTS.md` with the always-on rules concatenated and the scoped rules listed, for tools that read the open standard (Codex, Cursor, Warp, Copilot, Kimi…). Every other ingredient type aimed at `agents-md` — including through the default `targets: "*"` — has no `AGENTS.md` equivalent: it is skipped with a warning — one line per type, naming every skipped ingredient. The file keeps the line endings and BOM of the one it replaces; a new one is LF without a BOM.
+**agents-md** — one `AGENTS.md` with the always-on rules concatenated and the scoped rules after them — each listed at the file a target of the workspace writes for it (`.claude/rules/<name>.md` when `claude-code` writes it, else `.kiro/steering/<name>.md` when `kiro` does), or, when no target writes it, embedded in full under a `> Scoped rule — <scope>` line, for tools that read the open standard (Codex, Cursor, Warp, Copilot, Kimi…). Every other ingredient type aimed at `agents-md` — including through the default `targets: "*"` — has no `AGENTS.md` equivalent: it is skipped with a warning — one line per type, naming every skipped ingredient. The file keeps the line endings and BOM of the one it replaces; a new one is LF without a BOM.
 
 Conversion of hooks/subagents to other tools is out of scope here: the plan is to delegate that to [rulesync](https://github.com/dyoshikawa/rulesync) rather than reimplement it.
 
@@ -240,6 +240,16 @@ Phase 0 (this): schema, import, sync/status/diff/explain, claude-code + kiro + a
 Next: `craftar init` from a profile; profile-driven integrations (PM tool → MCP, IDP → MCP); `service` ingredients with compose fragments (`craftar services up`); `dotnet new` template registration; rulesync bridge for Codex/Kimi/Cursor specifics; remote Forge (git URL + ref); `craftar docs validate`; GitHub Action and Azure Pipelines task around `sync --check`; `craftar ui`; `craftar mcp` + Claude Code / Agent Plugin packaging.
 
 ## Upgrading
+
+### to 0.8.3
+
+- **`AGENTS.md` lists a scoped rule (`fileMatch`, `manual`, `auto`) only at a file a target of the workspace really writes, and embeds it when none does.** Only `AGENTS.md` changes; no other generated file and no lock field.
+  - A workspace with `claude-code` whose scoped rules keep the default `targets` — every workspace `craftar import` produced — sees **no change**, and neither does one with no scoped rule aimed at `agents-md`.
+  - With `kiro` and `agents-md` but no `claude-code`, each scoped line moves from `.claude/rules/` to `.kiro/steering/`.
+  - With `agents-md` alone, each scoped line becomes the embedded rule, and the file grows.
+  - A scoped rule whose own `targets` exclude `claude-code` moves to `.kiro/steering/`, or is embedded when no file-writing target of the workspace admits it.
+- An affected workspace shows `AGENTS.md` as `update`, and `craftar sync --check` exits 1 until it syncs. To keep a scoped rule's text out of `AGENTS.md`, take `agents-md` out of that rule's `targets`.
+- References to `.claude/rules/…` inside a rule body are emitted as the Forge holds them. In a workspace without `claude-code` such a reference points at no file; a later release addresses it.
 
 ### to 0.8.2
 
