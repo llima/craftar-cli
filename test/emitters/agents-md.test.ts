@@ -513,4 +513,11 @@ describe("agents-md emitter — rule references in bodies (spec 15)", () => {
       expect(amWarnings(p).filter((w) => w.includes("reference(s)"))).toEqual([]);
     }
   });
+
+  it("a dead token before a dead link is reported first (spec 15 §4.5, review fix)", async () => {
+    const p = await planFor(hubOnly("x .claude/rules/nope.md\n[c](.claude/rules/cc-only.md)", [rule("cc-only", "# cc-only\n", { targets: ["claude-code"] })]));
+    expect(amWarnings(p)).toEqual([
+      "agents-md: 2 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: .claude/rules/nope.md (in rule/hub; no such rule), .claude/rules/cc-only.md (in rule/hub; rule/cc-only reaches no target here)",
+    ]);
+  });
 });

@@ -92,7 +92,10 @@ export function resolveRuleRefs(
     "g",
   );
 
-  let result = body.replace(linkPattern, (match, text: string, name: string, frag: string | undefined) => {
+  // Collect reworded entries with their original offsets for sorting (spec 15 §4.5)
+  const rewordedWithOffset: Array<{ offset: number; ref: string; citing: string; kind: string }> = [];
+
+  let result = body.replace(linkPattern, (match, text: string, name: string, frag: string | undefined, offset: number) => {
     // A link already bounds the path with `(` and `)` or `#`, so no boundary checks needed (spec 15 §4.1).
     const state = ruleState(name);
     switch (state) {
@@ -103,12 +106,12 @@ export function resolveRuleRefs(
       case "C":
         return `[${text}](AGENTS.md)`; // fragment dropped
       case "D": {
-        report.reworded.push({ ref: `.claude/rules/${name}.md`, citing, kind: `rule/${ingRef(name)!.split("/")[1]} reaches no target here` });
+        rewordedWithOffset.push({ offset, ref: `.claude/rules/${name}.md`, citing, kind: `rule/${ingRef(name)!.split("/")[1]} reaches no target here` });
         return `${text} (${name}, rule not in this workspace)`;
       }
       case "unknown":
         if (hasCc) return match;
-        report.reworded.push({ ref: `.claude/rules/${name}.md`, citing, kind: "no such rule" });
+        rewordedWithOffset.push({ offset, ref: `.claude/rules/${name}.md`, citing, kind: "no such rule" });
         return `${text} (${name}, rule not in this workspace)`;
     }
   });
@@ -137,15 +140,26 @@ export function resolveRuleRefs(
       case "C":
         return `${before}AGENTS.md (rule: ${name})`;
       case "D": {
-        report.reworded.push({ ref: `.claude/rules/${name}.md`, citing, kind: `rule/${ingRef(name)!.split("/")[1]} reaches no target here` });
+        rewordedWithOffset.push({ offset, ref: `.claude/rules/${name}.md`, citing, kind: `rule/${ingRef(name)!.split("/")[1]} reaches no target here` });
         return `${before}${name} (rule not in this workspace)`;
       }
       case "unknown":
         if (hasCc) return match;
-        report.reworded.push({ ref: `.claude/rules/${name}.md`, citing, kind: "no such rule" });
+        rewordedWithOffset.push({ offset, ref: `.claude/rules/${name}.md`, citing, kind: "no such rule" });
         return `${before}${name} (rule not in this workspace)`;
     }
   });
+
+  // Sort by offset and deduplicate by (ref, citing), keeping first occurrence (spec 15 §4.5)
+  rewordedWithOffset.sort((a, b) => a.offset - b.offset);
+  const seen = new Set<string>();
+  for (const e of rewordedWithOffset) {
+    const key = `${e.ref}|${e.citing}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      report.reworded.push({ ref: e.ref, citing: e.citing, kind: e.kind });
+    }
+  }
 
   // Collect other .claude/ paths (agents, commands, skills, scripts, hooks) only when no claude-code (spec 15 §4.5)
   if (!hasCc) {
