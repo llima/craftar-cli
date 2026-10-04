@@ -68,7 +68,9 @@ export const kiro: Emitter = {
         }
         case "command": {
           // Resolve description and raw frontmatter first, then body (spec 17 §4.5 order: frontmatter before body)
-          const resolvedDescription = m.description !== undefined ? resolve(m.description, ing.ref) : undefined;
+          // When frontmatterRaw is set, the description field is unused (serializeFrontmatter ignores it),
+          // so we skip resolving it to avoid spurious reports.
+          const resolvedDescription = !m.frontmatterRaw && m.description !== undefined ? resolve(m.description, ing.ref) : undefined;
           const resolvedFm = m.frontmatterRaw ? resolve(m.frontmatterRaw, ing.ref) : null;
           const body = resolve(await ctx.text(ing, m.file), ing.ref);
           const doc = serializeFrontmatter(

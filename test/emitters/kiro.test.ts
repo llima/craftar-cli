@@ -324,4 +324,14 @@ describe("kiro emitter — rule references (spec 17)", () => {
     expect(lf(p, ".kiro/skills/s1/notes.md")).toBe("See cc-only (rule not in this workspace).\n");
     expect(kw(p)).toEqual(["kiro: 1 reference(s) to rule files this workspace does not have — reworded: .claude/rules/cc-only.md (in skill/s1; rule/cc-only reaches no target here)"]);
   });
+
+  it("a raw frontmatter block wins: the unused description is neither emitted nor reported (spec 17 §4.5, review fix)", async () => {
+    const p = await planFor([
+      { meta: { type: "command", name: "raw2", description: "per .claude/rules/q-dead.md", frontmatterRaw: "argument-hint: per .claude/rules/z-dead.md\ndescription: per .claude/rules/a-dead.md" }, files: { "command.md": "Raw\n" } },
+    ]);
+    expect(lf(p, ".kiro/steering/commands/raw2.md")).toBe("---\ninclusion: manual\n---\n\n---\nargument-hint: per .kiro/steering/z-dead.md\ndescription: per .kiro/steering/a-dead.md\n---\nRaw\n");
+    expect(kw(p)).toEqual([
+      "kiro: 2 reference(s) to names that are no rule or steering of this workspace — rewritten to .kiro/steering/ as before: .claude/rules/z-dead.md (in command/raw2), .claude/rules/a-dead.md (in command/raw2)",
+    ]);
+  });
 });
