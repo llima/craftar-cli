@@ -31,7 +31,7 @@ const HEADER = [
 
 describe("agents-md emitter", () => {
   it("concatenates always rules and lists scoped rules with their pattern", async () => {
-    const p = await planFor([rule("a", "# A\n\nalways on\n"), rule("b", "# B\n", { inclusion: "fileMatch", fileMatchPattern: "projects/api/**" })]);
+    const p = await planFor([rule("a", "# A\n\nalways on\n"), rule("b", "# B\n", { inclusion: "fileMatch", fileMatchPattern: "projects/api/**" })], undefined, ["claude-code", "agents-md"]);
     const doc = agentsMd(p)!;
     expect(doc).toContain("<!-- rule: a -->\n# A\n\nalways on\n");
     expect(doc).toContain("## Scoped rules\n\n- `.claude/rules/b.md` — applies to `projects/api/**`\n");
@@ -44,7 +44,7 @@ describe("agents-md emitter", () => {
       rule("api", "# API\n", { inclusion: "fileMatch", fileMatchPattern: ["projects/api/**", "projects/sdk/**"] }),
       rule("commits", "# Commits\n\nConventional Commits.\n"),
       rule("release", "# Release\n", { inclusion: "manual" }),
-    ]);
+    ], undefined, ["claude-code", "agents-md"]);
     const expected = [
       ...HEADER,
       "<!-- rule: style -->",
@@ -64,7 +64,7 @@ describe("agents-md emitter", () => {
       "",
     ].join("\n");
     expect(agentsMd(p)).toBe(expected);
-    expect(p.files.map((f) => f.path)).toEqual(["AGENTS.md"]);
+    expect(p.files.map((f) => f.path)).toEqual([".claude/rules/api.md", ".claude/rules/commits.md", ".claude/rules/release.md", ".claude/rules/style.md", "AGENTS.md"]);
   });
 
   it("emits no AGENTS.md when no rule applies", async () => {
@@ -76,7 +76,7 @@ describe("agents-md emitter", () => {
     const p = await planFor([
       rule("workflow--acme", "# W\n", { as: "workflow" }),
       rule("api--acme", "# API\n", { as: "api", inclusion: "fileMatch", fileMatchPattern: "projects/api/**" }),
-    ]);
+    ], undefined, ["claude-code", "agents-md"]);
     const expected = [...HEADER, "<!-- rule: workflow -->", "# W", "", "## Scoped rules", "", "- `.claude/rules/api.md` — applies to `projects/api/**`", ""].join("\n");
     expect(agentsMd(p)).toBe(expected);
     expect(agentsMd(p)).not.toContain("--acme");
@@ -152,5 +152,106 @@ describe("agents-md emitter — sections (spec 11 §10.2, AC 2)", () => {
     const md = agentsMd(await plan(await loadWorkspace(s.wsRoot)))!;
     expect(md).not.toContain("craftar:section");
     expect(md).toBe([...HEADER, "<!-- rule: r -->", "# R\n\nbody\nvalue", "", "<!-- rule: q -->", "# R\n\nbody", ""].join("\n"));
+  });
+});
+
+describe("agents-md emitter — scoped rules (spec 14)", () => {
+  const body = (n: string) => `# ${n}\n\nBody of ${n}. See .claude/rules/style.md.\n`;
+  const forge14 = (): IngredientSpec[] => [
+    rule("style", body("style")),
+    rule("api", body("api"), { inclusion: "fileMatch", fileMatchPattern: "projects/api/**" }),
+    rule("release", body("release"), { inclusion: "manual" }),
+    rule("helper", body("helper"), { inclusion: "auto" }),
+    rule("kiro-only", body("kiro-only"), { inclusion: "fileMatch", fileMatchPattern: "projects/k/**", targets: ["kiro", "agents-md"] }),
+    rule("md-only", body("md-only"), { inclusion: "fileMatch", fileMatchPattern: "projects/m/**", targets: ["agents-md"] }),
+  ];
+  const STYLE = [...HEADER, "<!-- rule: style -->", "# style", "", "Body of style. See .claude/rules/style.md.", ""];
+  const embedded = (n: string, scope: string) => [`<!-- rule: ${n} -->`, `> Scoped rule — ${scope}`, "", `# ${n}`, "", `Body of ${n}. See .claude/rules/style.md.`, ""];
+  const API = "applies to `projects/api/**`";
+  const K = "applies to `projects/k/**`";
+  const M = "applies to `projects/m/**`";
+  const ONLY_MD = [...STYLE, "## Scoped rules", "", ...embedded("api", API), ...embedded("release", "manual"), ...embedded("helper", "auto"), ...embedded("kiro-only", K), ...embedded("md-only", M)];
+  const ALL3 = [
+    ...STYLE, "## Scoped rules", "",
+    "- `.claude/rules/api.md` — " + API,
+    "- `.claude/rules/release.md` — manual",
+    "- `.claude/rules/helper.md` — auto",
+    "- `.kiro/steering/kiro-only.md` — " + K,
+    "",
+    ...embedded("md-only", M),
+  ];
+  const noAgentsMdWarning = (p: Plan) => expect(p.warnings.filter((w) => w.startsWith("agents-md:"))).toEqual([]);
+
+  it("agents-md only: every scoped rule is embedded with its scope (spec 14 test 1)", async () => {
+    const p = await planFor(forge14());
+    expect(agentsMd(p)).toBe(ONLY_MD.join("\n"));
+    noAgentsMdWarning(p);
+  });
+
+  it("kiro + agents-md: scoped rules point at .kiro/steering, a rule kiro does not write is embedded (spec 14 test 2)", async () => {
+    const p = await planFor(forge14(), undefined, ["kiro", "agents-md"]);
+    expect(agentsMd(p)).toBe([
+      ...STYLE, "## Scoped rules", "",
+      "- `.kiro/steering/api.md` — " + API,
+      "- `.kiro/steering/release.md` — manual",
+      "- `.kiro/steering/helper.md` — auto",
+      "- `.kiro/steering/kiro-only.md` — " + K,
+      "",
+      ...embedded("md-only", M),
+    ].join("\n"));
+    noAgentsMdWarning(p);
+  });
+
+  it("claude-code + kiro + agents-md: one file, three states (spec 14 test 3)", async () => {
+    const p = await planFor(forge14(), undefined, ["claude-code", "kiro", "agents-md"]);
+    expect(agentsMd(p)).toBe(ALL3.join("\n"));
+    noAgentsMdWarning(p);
+  });
+
+  it("claude-code + agents-md: rules claude-code does not write are embedded (spec 14 test 4)", async () => {
+    const p = await planFor(forge14(), undefined, ["claude-code", "agents-md"]);
+    expect(agentsMd(p)).toBe([
+      ...STYLE, "## Scoped rules", "",
+      "- `.claude/rules/api.md` — " + API,
+      "- `.claude/rules/release.md` — manual",
+      "- `.claude/rules/helper.md` — auto",
+      "",
+      ...embedded("kiro-only", K),
+      ...embedded("md-only", M),
+    ].join("\n"));
+    noAgentsMdWarning(p);
+  });
+
+  it("the order of the workspace's targets does not matter (spec 14 test 5)", async () => {
+    const p = await planFor(forge14(), undefined, ["agents-md", "kiro", "claude-code"]);
+    expect(agentsMd(p)).toBe(ALL3.join("\n"));
+  });
+
+  it("an embedded variant is named by its original name (spec 14 test 6)", async () => {
+    const p = await planFor([rule("api--acme", "# API\n", { as: "api", inclusion: "fileMatch", fileMatchPattern: "projects/api/**" })]);
+    expect(agentsMd(p)).toBe([...HEADER, "## Scoped rules", "", "<!-- rule: api -->", "> Scoped rule — " + API, "", "# API", ""].join("\n"));
+    expect(agentsMd(p)).not.toContain("--acme");
+  });
+
+  it("an embedded rule's sections are expanded (spec 14 test 7)", async () => {
+    const SEC = "# R\n\nbody\n<!-- craftar:section s -->\ndefault\n<!-- /craftar:section -->\n";
+    const s = await scenario(
+      {
+        ingredients: [rule("r", SEC, { inclusion: "manual" })],
+        recipes: [recipe("base", ["rule/r"])],
+        profiles: [profile("acme", ["base"], ["agents-md"], { sections: { "rule/r": { s: "value" } } })],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await writeFiles(s.forgeRoot, { "craftar.forge.yaml": "name: test-forge\nschema: 2\n" });
+    const md = agentsMd(await plan(await loadWorkspace(s.wsRoot)))!;
+    expect(md).not.toContain("craftar:section");
+    expect(md).toBe([...HEADER, "## Scoped rules", "", "<!-- rule: r -->", "> Scoped rule — manual", "", "# R\n\nbody\nvalue", ""].join("\n"));
+  });
+
+  it("keeps the CRLF of the AGENTS.md it replaces (spec 14 test 9)", async () => {
+    const p = await planFor(forge14(), { "AGENTS.md": "# old\r\n" });
+    expect(agentsMd(p)).toBe(ONLY_MD.join("\r\n"));
   });
 });

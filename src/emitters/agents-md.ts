@@ -1,10 +1,11 @@
-import { appliesTo, outName, textFile } from "./shared.js";
+import { appliesTo, outName, ruleFile, textFile } from "./shared.js";
 import type { Emitter } from "./types.js";
 
 /**
  * AGENTS.md target (open standard read by Codex, Cursor, Warp, Copilot, Kiro, Kimi…).
- * Concatenates the `always` rules into one file; `fileMatch`/`manual` rules are listed with their scope
- * so agents that only read AGENTS.md still know where the detailed conventions live.
+ * Concatenates the `always` rules into one file. Scoped rules (`fileMatch`, `manual`, `auto`)
+ * are either listed with a path (when `claude-code` or `kiro` writes them) or embedded in full
+ * (when no target writes them), so agents that only read AGENTS.md see every convention (spec 14).
  */
 export const agentsMd: Emitter = {
   target: "agents-md",
@@ -31,18 +32,37 @@ export const agentsMd: Emitter = {
       "scoped rules are listed at the end with the paths they apply to.",
       "",
     ];
-    const scoped: string[] = [];
+    const pathLines: string[] = [];
+    const embedded: string[] = [];
     for (const ing of rules) {
       if (ing.meta.type !== "rule") continue;
       const body = (await ctx.text(ing, ing.meta.file)).replace(/\n+$/, "");
       if (ing.meta.inclusion === "always") {
         parts.push(`<!-- rule: ${outName(ing.meta)} -->`, body, "");
       } else {
-        const scope = ing.meta.inclusion === "fileMatch" ? ` — applies to \`${[ing.meta.fileMatchPattern].flat().join("`, `")}\`` : ` — ${ing.meta.inclusion}`;
-        scoped.push(`- \`.claude/rules/${outName(ing.meta)}.md\`${scope}`);
+        // Spec 14 §4.1: decide which target writes this rule file
+        const writers = (["claude-code", "kiro"] as const).filter(
+          (t) => ctx.resolution.targets.includes(t) && appliesTo(ing.meta.targets, t),
+        );
+        const scopeText =
+          ing.meta.inclusion === "fileMatch"
+            ? `applies to \`${[ing.meta.fileMatchPattern].flat().join("`, `")}\``
+            : ing.meta.inclusion;
+        if (writers.includes("claude-code")) {
+          pathLines.push(`- \`${ruleFile("claude-code", ing.meta)}\` — ${scopeText}`);
+        } else if (writers.includes("kiro")) {
+          pathLines.push(`- \`${ruleFile("kiro", ing.meta)}\` — ${scopeText}`);
+        } else {
+          // State C: no target writes the rule file; embed it
+          embedded.push(`<!-- rule: ${outName(ing.meta)} -->`, `> Scoped rule — ${scopeText}`, "", body, "");
+        }
       }
     }
-    if (scoped.length) parts.push("## Scoped rules", "", ...scoped, "");
+    if (pathLines.length || embedded.length) {
+      parts.push("## Scoped rules", "", ...pathLines);
+      if (pathLines.length) parts.push("");
+      parts.push(...embedded);
+    }
     return [await textFile(ctx, "AGENTS.md", parts.join("\n"), "agents-md", "rule/*")];
   },
 };
