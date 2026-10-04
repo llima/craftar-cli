@@ -1,6 +1,6 @@
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
-import { appliesTo, mcpServers, outName, textFile } from "./shared.js";
+import { appliesTo, mcpServers, outName, ruleFile, textFile } from "./shared.js";
 import type { Emitter, EmitContext, PlannedFile } from "./types.js";
 
 /**
@@ -18,7 +18,7 @@ export const claudeCode: Emitter = {
       const m = ing.meta;
       switch (m.type) {
         case "rule":
-          out.push(await textFile(ctx, `.claude/rules/${outName(m)}.md`, await ctx.text(ing, m.file), t, ing.ref));
+          out.push(await textFile(ctx, ruleFile("claude-code", m), await ctx.text(ing, m.file), t, ing.ref));
           break;
         case "agent": {
           const body = await ctx.text(ing, m.file);

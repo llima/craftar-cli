@@ -1,7 +1,7 @@
 import { toCrlf } from "../core/text.js";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
-import { appliesTo, mcpServers, outName } from "./shared.js";
+import { appliesTo, mcpServers, outName, ruleFile } from "./shared.js";
 import type { Emitter, EmitContext, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 
@@ -36,7 +36,7 @@ export const kiro: Emitter = {
               ? `---\ninclusion: fileMatch\nfileMatchPattern: ${JSON.stringify(Array.isArray(m.fileMatchPattern) ? m.fileMatchPattern.join(",") : m.fileMatchPattern ?? "**")}\n---\n\n`
               : `---\ninclusion: ${m.inclusion}\n---\n\n`;
           const head = banner.replace("{{source}}", `.claude/rules/${outName(m)}.md`) + "\n\n";
-          out.push(crlf(`.kiro/steering/${outName(m)}.md`, fm + head + body, ing.ref));
+          out.push(crlf(ruleFile("kiro", m), fm + head + body, ing.ref));
           break;
         }
         case "steering":
