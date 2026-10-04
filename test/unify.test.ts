@@ -60,6 +60,8 @@ describe("gitDirty", () => {
     cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
     await fs.writeFile(path.join(dir, "a.txt"), "one\n");
     await execFileP("git", ["-C", dir, "init", "-q"]);
+    await execFileP("git", ["-C", dir, "config", "maintenance.auto", "false"]);
+    await execFileP("git", ["-C", dir, "config", "gc.auto", "0"]);
     await execFileP("git", ["-C", dir, "add", "-A"]);
     await execFileP("git", ["-C", dir, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"]);
     expect(await gitDirty(dir)).toBe(false);
@@ -789,6 +791,8 @@ describe("U1 — a merge never changes section markers (spec 11 §6.12, Ruling 8
     });
     await fs.writeFile(path.join(root, "craftar.forge.yaml"), "name: test-forge\nschema: 2\n");
     await execFileP("git", ["-C", root, "init", "-q"]);
+    await execFileP("git", ["-C", root, "config", "maintenance.auto", "false"]);
+    await execFileP("git", ["-C", root, "config", "gc.auto", "0"]);
     await execFileP("git", ["-C", root, "add", "-A"]);
     await execFileP("git", ["-C", root, "commit", "-qm", "init"], { env: gitEnv });
     return root;

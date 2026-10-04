@@ -89,6 +89,28 @@ describe("status", () => {
     expect(await stateOf(s.wsRoot, ".mcp.json")).toBe("adopt");
   });
 
+  it("adopt rewrites a JSON file into the emitter's layout on the first sync — by design (0.8.1)", async () => {
+    const mcp: IngredientSpec = { meta: { type: "mcp", name: "pw", server: { command: "npx", args: ["-y", "pw"] } } };
+    const s = await oneRule({ ".mcp.json": '{"mcpServers":{"pw":{"command":"npx","args":["-y","pw"]}}}\n' }, [mcp], ["mcp/pw"]);
+    expect(await stateOf(s.wsRoot, ".mcp.json")).toBe("adopt");
+    await sync(s.wsRoot);
+    expect(await fs.readFile(path.join(s.wsRoot, ".mcp.json"), "utf8")).toBe(
+      '{\n  "mcpServers": {\n    "pw": {\n      "command": "npx",\n      "args": [\n        "-y",\n        "pw"\n      ]\n    }\n  }\n}\n',
+    );
+    expect(await stateOf(s.wsRoot, ".mcp.json")).toBe("unchanged");
+  });
+
+  it("adopt keeps the BOM and CRLF of the JSON file it rewrites — by design (0.8.1)", async () => {
+    const mcp: IngredientSpec = { meta: { type: "mcp", name: "pw", server: { command: "npx", args: ["-y", "pw"] } } };
+    const s = await oneRule({ ".mcp.json": '﻿{"mcpServers":{"pw":{"command":"npx","args":["-y","pw"]}}}\r\n' }, [mcp], ["mcp/pw"]);
+    expect(await stateOf(s.wsRoot, ".mcp.json")).toBe("adopt");
+    await sync(s.wsRoot);
+    expect(await fs.readFile(path.join(s.wsRoot, ".mcp.json"), "utf8")).toBe(
+      '﻿{\r\n  "mcpServers": {\r\n    "pw": {\r\n      "command": "npx",\r\n      "args": [\r\n        "-y",\r\n        "pw"\r\n      ]\r\n    }\r\n  }\r\n}\r\n',
+    );
+    expect(await stateOf(s.wsRoot, ".mcp.json")).toBe("unchanged");
+  });
+
   it("a CRLF + BOM copy of a synced LF file is unchanged, not drift (FM-2)", async () => {
     const s = await oneRule();
     await sync(s.wsRoot);
