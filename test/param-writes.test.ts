@@ -99,6 +99,11 @@ describe("checkParamWrites — Forge-level refusals (spec 09 §6.3)", () => {
     expect(await err(check(v, [ext("k", "globex-api", "acme-api")]))).toContain("rule/deploy--acme already uses {{k}}");
   });
 
+  it("P14 ignores a {{key}} in a file no target emits (0.8.2)", async () => {
+    const b = await forgeOf(spec({ ingredients: [] }), { "ingredients/rules/deploy/notes.md": "see {{k}}\n" });
+    expect(await err(check(b, [ext("k", "globex-api", "acme-api")]))).toBe("no error");
+  });
+
   it("P15, P16: a recipe or another profile sets the key to another value", async () => {
     const r = await forgeOf(spec({ recipes: [recipe("base", ["rule/deploy"], { params: { k: { default: "x" } } }), recipe("base--acme", ["rule/deploy--acme"])] }));
     expect(await err(check(r, [ext("k", "globex-api", "acme-api")]))).toContain("recipe base declares k");
@@ -113,6 +118,12 @@ describe("checkParamWrites — Forge-level refusals (spec 09 §6.3)", () => {
 
   it("P18: another ingredient of the Forge cites the key", async () => {
     const forge = await forgeOf(spec({ ingredients: [rule("other", "see {{k}}\n")] }));
+    expect(await err(check(forge, [ext("k", "globex-api", "acme-api")]))).toContain("rule/other also uses {{k}}");
+  });
+
+  it("the citation scan reads a body file declared ./rule.md (0.8.2)", async () => {
+    // The other ingredient declares file: ./rule.md — the non-canonical spelling
+    const forge = await forgeOf(spec({ ingredients: [] }), { "ingredients/rules/other/ingredient.yaml": "type: rule\nname: other\nfile: ./rule.md\n", "ingredients/rules/other/rule.md": "see {{k}}\n" });
     expect(await err(check(forge, [ext("k", "globex-api", "acme-api")]))).toContain("rule/other also uses {{k}}");
   });
 

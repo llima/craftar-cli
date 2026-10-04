@@ -137,6 +137,20 @@ describe("sections — plan warnings (Ruling 12)", () => {
     expect(p.warnings).toContain("profile acme sets section x of skill/tool, which has no such marker");
   });
 
+  it("markers in a file not every target renders are copied verbatim by both, and warned once (Ruling 17) (./tool.bin, 0.8.2)", async () => {
+    // Like the Ruling 17 test but using a script with files: ["./tool.bin"]. This verifies that
+    // emittedFile at sync.ts:118 uses the `dir` argument correctly. With dir, emittedFile compares
+    // path.join(dir, "./tool.bin") in the files array. Without dir, it compares "./tool.bin" against
+    // the file list literally, which would not match if the file on disk is "tool.bin".
+    const body = ["#!/bin/sh", OPEN("x"), "echo hi", CLOSE, ""].join("\n");
+    const p = await sectionPlan({
+      ingredients: [{ meta: { type: "script", name: "tool", files: ["./tool.bin"] }, files: { "tool.bin": body } }],
+      targets: ["claude-code"],
+    });
+    expect(p.warnings.filter((w) => w.includes("tool.bin"))).toEqual(["script/tool tool.bin: section markers are read only in files every target renders as text — copied with them"]);
+    expect(out(p, ".claude/scripts/./tool.bin")).toBe(body);
+  });
+
   it("warns on markers in a copied file whatever its extension (an .html in a skill dir)", async () => {
     const page = [OPEN("x"), "<p>hi</p>", CLOSE, ""].join("\n");
     const p = await sectionPlan({
@@ -145,6 +159,101 @@ describe("sections — plan warnings (Ruling 12)", () => {
     });
     expect(p.warnings.filter((w) => w.includes("page.html"))).toEqual(["skill/tool page.html: section markers are read only in files every target renders as text — copied with them"]);
     expect(out(p, ".claude/skills/tool/page.html")).toBe(page);
+  });
+});
+
+describe("0.8.2 — files no target emits are not read for sections", () => {
+  it("a near-miss marker in a file no target emits does not fail the plan", async () => {
+    const r: IngredientSpec = { meta: { type: "rule", name: "r" }, files: { "rule.md": "# R\n", "notes.md": "<!--craftar:section x-->\n" } };
+    const p = await sectionPlan({ ingredients: [r] });
+    expect(out(p, ".claude/rules/r.md")).toBe("# R\n");
+    expect(p.warnings.filter((w) => /section/.test(w))).toEqual([]);
+  });
+
+  it("a marker in a file no target emits neither trips the schema: 1 gate nor declares a section", async () => {
+    const r: IngredientSpec = { meta: { type: "rule", name: "r" }, files: { "rule.md": "# R\n", "notes.md": [OPEN("x"), "y", CLOSE, ""].join("\n") } };
+    const p = await sectionPlan({ ingredients: [r], schema: 1, profileExtra: { sections: { "rule/r": { x: "z" } } } });
+    expect(out(p, ".claude/rules/r.md")).toBe("# R\n");
+    expect((p.sections.get("rule/r") ?? []).length).toBe(0);
+    expect(p.warnings).toContain("profile acme sets section x of rule/r, which has no such marker");
+  });
+
+  it("a dir skill still expands sections in every text file it emits", async () => {
+    const s: IngredientSpec = { meta: { type: "skill", name: "tool" }, files: { "SKILL.md": "# Tool\n", "ref.md": [OPEN("x"), "default", CLOSE, ""].join("\n") } };
+    const p = await sectionPlan({ ingredients: [s], profileExtra: { sections: { "skill/tool": { x: "mine" } } } });
+    expect(out(p, ".claude/skills/tool/ref.md")).toBe("mine\n");
+  });
+
+  it("an ingredient whose file is spelled ./rule.md still syncs (0.8.2 regression)", async () => {
+    const r: IngredientSpec = { meta: { type: "rule", name: "r", file: "./rule.md" }, files: { "rule.md": "# R v\n" } };
+    const p = await sectionPlan({ ingredients: [r] });
+    expect(out(p, ".claude/rules/r.md")).toBe("# R v\n");
+  });
+
+  it("every rule and script file spelling measured on 0.8.1 still syncs with the same bytes (0.8.2)", async () => {
+    const ruleOut = async (file: string) => {
+      const p = await sectionPlan({ ingredients: [{ meta: { type: "rule", name: "r", file }, files: { "rule.md": "# R v\n" } }], schema: 1 });
+      return p.files.map((f) => [f.path, f.content.toString("utf8")]);
+    };
+    const reference = await ruleOut("rule.md");
+    expect(reference.find(([p]) => p === ".claude/rules/r.md")?.[1]).toBe("# R v\n");
+    for (const file of ["./rule.md", "/rule.md", ".//rule.md", "//rule.md", "a/../rule.md", "../r/rule.md", "a/../../r/rule.md", "./../r/rule.md"]) {
+      expect(await ruleOut(file), file).toEqual(reference);
+    }
+    const scriptOut = async (file: string) => {
+      const p = await sectionPlan({ ingredients: [{ meta: { type: "script", name: "s", files: [file] }, files: { "run.sh": "echo hi\n" } }], targets: ["claude-code"], schema: 1 });
+      return p.files.map((f) => [f.path, f.content.toString("utf8")]);
+    };
+    expect(await scriptOut("run.sh")).toEqual([[".claude/scripts/run.sh", "echo hi\n"]]);
+    expect(await scriptOut("./run.sh")).toEqual([[".claude/scripts/./run.sh", "echo hi\n"]]);
+    expect(await scriptOut("/run.sh")).toEqual([[".claude/scripts//run.sh", "echo hi\n"]]);
+    expect(await scriptOut("a/../run.sh")).toEqual([[".claude/scripts/a/../run.sh", "echo hi\n"]]);
+    expect(await scriptOut("../s/run.sh")).toEqual([[".claude/scripts/../s/run.sh", "echo hi\n"]]);
+  });
+
+  it("a file spelling 0.8.1 could not read still fails, and never as an internal error (0.8.2)", async () => {
+    const plan = (file: string) => sectionPlan({ ingredients: [{ meta: { type: "rule", name: "r", file }, files: { "rule.md": "# R v\n" } }], schema: 1 });
+    const bad = ["rule.md/", ...(process.platform === "win32" ? [] : [".\\rule.md", "\\rule.md"])];
+    for (const file of bad) {
+      const e = await plan(file).then(() => null, (x: Error) => x);
+      expect(e, file).not.toBeNull();
+      expect(e!.message, file).not.toContain("internal:");
+    }
+  });
+
+  it("a body file outside the ingredient directory is a user error, not an internal one (0.8.2)", async () => {
+    // Create the scenario first, then add the file outside the ingredient directory
+    const refs = ["rule/r"];
+    const s = await scenario(
+      { ingredients: [{ meta: { type: "rule", name: "r", file: "../outside.md" }, files: { "rule.md": "# R v\n" } }], recipes: [recipe("base", refs)], profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"], {})] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await writeFiles(s.forgeRoot, { "craftar.forge.yaml": "name: test-forge\nschema: 1\n" });
+    // Create the file outside the ingredient directory (at ingredients/rules/outside.md)
+    await writeFiles(s.forgeRoot, { "ingredients/rules/outside.md": "# Outside\n" });
+    const e = await plan(await loadWorkspace(s.wsRoot)).then(() => null, (x: Error) => x);
+    expect(e).not.toBeNull();
+    expect(e!.message).not.toContain("internal:");
+    expect(e!.message).toContain("outside its directory");
+  });
+
+  it.skipIf(process.platform === "win32")("a body file behind a symlinked directory is a user error, not an internal one (0.8.2)", async () => {
+    // Create a symlink to a subdirectory and declare a file through it
+    const refs = ["rule/r"];
+    const s = await scenario(
+      { ingredients: [{ meta: { type: "rule", name: "r", file: "link/rule.md" }, files: { "rule.md": "# R v\n" } }], recipes: [recipe("base", refs)], profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"], {})] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await writeFiles(s.forgeRoot, { "craftar.forge.yaml": "name: test-forge\nschema: 1\n" });
+    // Create sub/rule.md and symlink link -> sub in the ingredient directory
+    const ingDir = path.join(s.forgeRoot, "ingredients/rules/r");
+    await writeFiles(ingDir, { "sub/rule.md": "# R v\n" });
+    await fs.symlink(path.join(ingDir, "sub"), path.join(ingDir, "link"));
+    const e = await plan(await loadWorkspace(s.wsRoot)).then(() => null, (x: Error) => x);
+    expect(e).not.toBeNull();
+    expect(e!.message).not.toContain("internal:");
   });
 });
 

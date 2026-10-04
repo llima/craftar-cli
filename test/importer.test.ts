@@ -622,6 +622,33 @@ describe("template-aware import — decisions (spec 10 §6.1–§6.5)", () => {
     expect(r.params).toEqual([]);
   });
 
+  it("refuses a profile change another Forge ingredient would feel (F9, §6.5 (b)) (./rule.md, 0.8.2)", async () => {
+    // Like the original F9 test but with file: ./rule.md in the other ingredient. This verifies that
+    // listAdmitted at decide.ts:277 uses the `dir` argument correctly. With dir, bodyFile compares
+    // path.join(dir, "rule.md") === path.join(dir, "./rule.md"), which works. Without dir, it compares
+    // "rule.md" === "./rule.md", which is false, so rule.md drops out of the F9 scan.
+    const t = await setup();
+    await templated(t, { deploy });
+    await writeFiles(path.join(t.forge, "ingredients/rules/deploy-notes"), {
+      "ingredient.yaml": "type: rule\nname: deploy-notes\nfile: ./rule.md\n",
+      "rule.md": "see {{deploy.api}}\n",
+    });
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "use initech-api here\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.variants[0].reason).toContain("setting deploy.api would change rule/deploy-notes");
+    expect(r.params).toEqual([]);
+  });
+
+  it("does not hold a profile change back for a {{key}} in a file no target emits (F9, 0.8.2)", async () => {
+    const t = await setup();
+    await templated(t, { deploy });
+    await writeFiles(path.join(t.forge, "ingredients/rules/deploy-notes"), { "ingredient.yaml": "type: rule\nname: deploy-notes\n", "rule.md": "see the docs\n", "notes.md": "see {{deploy.api}}\n" });
+    await writeFiles(t.ws("b"), { ".claude/rules/deploy.md": "use initech-api here\n" });
+    const r = await importInto(t.forge, t.ws("b"), "b");
+    expect(r.variants).toEqual([]);
+    expect(r.params.length).toBeGreaterThan(0);
+  });
+
   it("keeps a Forge base in the F9 scan when its workspace source is rejected for a secret (§6.5 (b))", async () => {
     const t = await setup();
     await templated(t, { deploy });
@@ -1089,6 +1116,36 @@ describe("section-aware import — decisions (spec 11 §6.7–§6.10)", () => {
     expect(e?.message).toContain("import: ingredients/rules/review-posture/rule.md:5: section flavors is never closed — fix the Forge and re-run");
     expect(e?.message).toContain("The Forge was left untouched.");
     expect(await snapshot(t.forge)).toEqual(before);
+  });
+
+  it("I12: a base with malformed markers is refused, the Forge byte-identical (./rule.md, 0.8.2)", async () => {
+    // This test checks that readBase at :53 uses the `dir` argument when parsing body files.
+    // With dir, bodyFile compares path.join(dir, "rule.md") against path.join(dir, "./rule.md"), which works.
+    // Without dir, it compares "rule.md" === "./rule.md", which is false, so rule.md is not read as a body file.
+    const t = await setup();
+    await marked(t, `${HEAD}${OPEN("flavors")}${ACME}${TAIL}`);
+    // Add file: ./rule.md to the ingredient metadata
+    const metaPath = path.join(t.forge, "ingredients/rules/review-posture/ingredient.yaml");
+    const meta = YAML.parse(await fs.readFile(metaPath, "utf8"));
+    meta.file = "./rule.md";
+    await fs.writeFile(metaPath, YAML.stringify(meta));
+    const before = await snapshot(t.forge);
+    const e = await fail(importInto(t.forge, t.ws("acme"), "acme"));
+    expect(e?.message).toContain("import: ingredients/rules/review-posture/rule.md:5: section flavors is never closed — fix the Forge and re-run");
+    expect(e?.message).toContain("The Forge was left untouched.");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+
+  it("a malformed marker in a file no target emits does not refuse the import (0.8.2)", async () => {
+    const t = await setup();
+    await marked(t);
+    // Add a notes.md with a malformed marker to the Forge ingredient
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/review-posture/notes.md"), `${OPEN("x")}no closer\n`);
+    // The import should not fail due to the malformed marker in notes.md (a file no target emits)
+    // The source will become a variant since the file set differs, but that's fine
+    const r = await importInto(t.forge, t.ws("acme"), "acme");
+    // Verify the import succeeded (created a variant because file sets differ)
+    expect(r.variants.map((v) => v.name)).toEqual(["rule/review-posture--acme"]);
   });
 
   it("param inference is preferred for a {{k}} inside a default (Ruling 16); a source that differs in both is a variant", async () => {

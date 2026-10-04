@@ -8,7 +8,7 @@ import { splitLines, type Hunk } from "./diff.js";
 import { detectEol, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
 import type { HunkTake, Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile, PlanHunk } from "../schema/index.js";
-import { collect, deriveHunk, prove, substitutedFile, type Extraction } from "./extract.js";
+import { collect, deriveHunk, prove, substitutedFile, bodyFile, emittedFile, type Extraction } from "./extract.js";
 import { firstMarkerLine, parseSections, SectionMarkerError } from "./sections.js";
 import { sectionKey } from "./resolve.js";
 import { deriveSections, prefillSections, proveSections, type MarkerInsertion, type SectionRun } from "./section-extract.js";
@@ -78,13 +78,13 @@ export async function planFrom(
 ): Promise<UnifyPlan> {
   await assertTextMergeable(base, variant);
 
-  // Build `declared`: every section name the ingredient already declares, in any admitted file (spec 12 §4.2).
+  // Build `declared`: every section name the ingredient already declares, in any body file (spec 12 §4.2, 0.8.2).
   const declared = new Set<string>();
   const baseFiles = await listFiles(base.dir);
   const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
   for (const rel of baseFiles) {
     if (rel === "ingredient.yaml") continue;
-    if (!substitutedFile(base.meta, rel)) continue;
+    if (!bodyFile(base.meta, rel, base.dir)) continue;
     try {
       const text = await readIngredientText(base, rel);
       const parsed = parseSections(text, label(rel), base.ref);
@@ -97,9 +97,9 @@ export async function planFrom(
 
   const files: PlanFile[] = [];
   for (const f of diff.files) {
-    // Pre-fill section names only when the file is admitted (substitutedFile) (spec 12 §4.2)
+    // Pre-fill section names only when the file is a body file (spec 12 §4.2, 0.8.2)
     let sectionNames: Array<string | undefined> = [];
-    if (substitutedFile(base.meta, f.file)) {
+    if (bodyFile(base.meta, f.file, base.dir)) {
       try {
         const baseText = await readIngredientText(base, f.file);
         sectionNames = prefillSections({
@@ -365,14 +365,14 @@ export async function applyPlan(
     }
   }
 
-  // S12 first part: When the plan has at least one section hunk, every admitted file of the VARIANT
+  // S12 first part: When the plan has at least one section hunk, every body file of the VARIANT
   // (not only the files with runs) is checked for markers.
   const planHasSectionHunk = plan.files.some((pf) => pf.hunks?.some((h) => h.take === "section"));
   if (planHasSectionHunk) {
     const variantFiles = await listFiles(variant.dir);
     for (const rel of variantFiles) {
       if (rel === "ingredient.yaml") continue;
-      if (!substitutedFile(variant.meta, rel)) continue;
+      if (!bodyFile(variant.meta, rel, variant.dir)) continue;
       const variantText = await readIngredientText(variant, rel);
       const markerLine = firstMarkerLine(toLf(stripBom(variantText)));
       if (markerLine !== null) {
@@ -383,7 +383,7 @@ export async function applyPlan(
     }
   }
 
-  // Build declaredElsewhere: section names declared in the base's OTHER admitted files.
+  // Build declaredElsewhere: section names declared in the base's OTHER body files.
   // This is needed for S6 (new section name already declared).
   const baseFiles = await listFiles(base.dir);
   const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
@@ -426,7 +426,12 @@ export async function applyPlan(
       if (sectionOf.size > 0) {
         filesWithSectionHunks.add(pf.file);
 
-        // S2: the file must be substituted
+        // S2: the file must be emitted and substituted (0.8.2)
+        if (!emittedFile(base.meta, pf.file, base.dir)) {
+          throw new Error(
+            `unify plan: "${pf.file}" is not emitted by any target — a section there would never render`,
+          );
+        }
         if (!substitutedFile(base.meta, pf.file)) {
           throw new Error(
             `unify plan: "${pf.file}" is copied without expansion by a target that emits it — a section marker there would be emitted literally`,
@@ -437,7 +442,7 @@ export async function applyPlan(
         const declaredElsewhere = new Map<string, string>();
         for (const otherFile of baseFiles) {
           if (otherFile === "ingredient.yaml" || otherFile === pf.file) continue;
-          if (!substitutedFile(base.meta, otherFile)) continue;
+          if (!bodyFile(base.meta, otherFile, base.dir)) continue;
           const otherText = await readIngredientText(base, otherFile);
           const parsed = parseSections(otherText, label(otherFile), base.ref);
           for (const s of parsed.sections) {
@@ -537,6 +542,10 @@ export async function applyPlan(
       // entirely rather than round-tripping the base through `splitLines`/`withEol` for nothing,
       // which would re-terminate a base with mixed line endings even though no decision moved it.
       if (paramOf.size) {
+        // P3: the file must be emitted and substituted (0.8.2)
+        if (!emittedFile(base.meta, pf.file, base.dir)) {
+          throw new Error(`unify plan: "${pf.file}" is not emitted by any target — a {{param}} there would never render`);
+        }
         if (!substitutedFile(base.meta, pf.file)) {
           throw new Error(`unify plan: "${pf.file}" is copied without substitution by a target that emits it — a {{param}} there would be emitted literally`);
         }
@@ -680,7 +689,7 @@ async function checkMarkers(
   newNames: Map<string, string[]> = new Map(),
 ): Promise<void> {
   const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
-  const touched = [...Object.keys(write), ...remove].filter((rel) => substitutedFile(base.meta, rel)).sort();
+  const touched = [...Object.keys(write), ...remove].filter((rel) => bodyFile(base.meta, rel, base.dir)).sort();
   for (const rel of touched) {
     const abs = path.join(base.dir, rel);
     const before = (await exists(abs)) ? markerStructure(await fs.readFile(abs, "utf8"), label(rel)) : { names: [] };

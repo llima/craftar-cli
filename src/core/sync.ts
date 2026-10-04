@@ -6,7 +6,7 @@ import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFo
 import { hashNormalized, stripBom, toLf } from "./text.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
-import { placeholders, substitutedFile } from "./extract.js";
+import { placeholders, bodyFile, emittedFile } from "./extract.js";
 import { LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
@@ -91,7 +91,7 @@ function layerLabel(resolution: Resolution, layer: SectionLayer): string {
 }
 
 /**
- * The section pass of `plan()` (spec 11 §6.6 steps 1–5): parse every admitted file of every resolved
+ * The section pass of `plan()` (spec 11 §6.6 steps 1–5): parse every body file of every resolved
  * ingredient (a malformed marker throws, whichever targets resolve), warn on marker lines in files
  * not every target renders, fail a `schema: 1` Forge that holds a marker (Ruling 7/21), and warn on
  * section values that apply to nothing.
@@ -110,19 +110,20 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
     for (const rel of await listFiles(ing.dir)) {
       if (rel === "ingredient.yaml") continue;
       const abs = path.join(ing.dir, rel);
-      if (substitutedFile(ing.meta, rel)) {
+      if (bodyFile(ing.meta, rel, ing.dir)) {
         const p = parseSections(await fs.readFile(abs, "utf8"), forgeRel(forge, abs), ing.ref);
         parsed.set(abs, p);
         files.push({ rel, p });
         if (p.sections.length && firstMarker === null) firstMarker = `${p.file}:${p.sections[0].line}`;
-      } else {
-        // A file not every target renders as text keeps its markers; one, whatever its extension, is warned, never dropped
+      } else if (emittedFile(ing.meta, rel, ing.dir)) {
+        // A file emitted but not every target renders as text keeps its markers; one, whatever its extension, is warned, never dropped
         // silently. Every marker form contains "craftar:section", so a file without it is not decoded.
         const bytes = await fs.readFile(abs);
         if (bytes.includes("craftar:section") && toLf(stripBom(bytes.toString("utf8"))).split("\n").some((l) => markerLine(l) !== null)) {
           warnings.push(`${ing.ref} ${rel}: section markers are read only in files every target renders as text — copied with them`);
         }
       }
+      // A file no target emits is skipped silently (0.8.2) — not read for sections, not warned
     }
     checkDeclaredOnce(ing.ref, files.map((f) => f.p));
     const list: Array<{ file: string; name: string; layer: SectionLayer }> = [];
@@ -161,7 +162,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
 }
 
 /**
- * The output guard (spec 11 §6.6 step 6, Ruling 19): a rendered admitted file never holds a marker
+ * The output guard (spec 11 §6.6 step 6, Ruling 19): a rendered body file never holds a marker
  * line. When one does, it came from a value; name the first value that carries one.
  */
 function guardOutput(ing: ResolvedIngredient, file: string, out: string, p: ParsedSections, resolution: Resolution, params: Record<string, unknown>): void {
@@ -206,10 +207,15 @@ export async function plan(ws: Workspace): Promise<Plan> {
       const raw = await fs.readFile(abs, "utf8");
       const missing = new Set<string>();
       const params = paramsFor(ing, resolution);
-      // Sections first, then params (spec 11 §6.4), in admitted files only (§6.5).
-      const parsed = substitutedFile(ing.meta, file) ? sections.parsed.get(abs) : null;
-      // Every admitted file of a resolved ingredient was parsed and gated in the section pass; a miss here would skip the schema gate.
-      if (parsed === undefined) throw new Error(`internal: ${forgeRel(ws.forge, abs)} was not parsed by the section pass`);
+      // Sections first, then params (spec 11 §6.4), in body files only (§6.5, 0.8.2).
+      const parsed = bodyFile(ing.meta, file, ing.dir) ? sections.parsed.get(abs) : null;
+      // Every body file of a resolved ingredient was parsed and gated in the section pass; a miss here means the file is
+      // outside the ingredient directory, behind a symlinked directory that listFiles did not descend into, or spelled
+      // with different letter case on a case-insensitive file system.
+      if (parsed === undefined)
+        throw new Error(
+          `${forgeRel(ws.forge, abs)}: ${ing.ref} declares a file outside its directory, behind a symlinked directory, or spelled differently from the file on disk — keep the file inside ${forgeRel(ws.forge, ing.dir)} and spell the declared path as it is on disk`,
+        );
       const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution)) : toLf(stripBom(raw));
       const out = substitute(expanded, params, missing);
       if (parsed) guardOutput(ing, file, out, parsed, resolution, params);

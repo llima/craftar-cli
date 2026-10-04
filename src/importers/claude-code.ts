@@ -15,7 +15,7 @@ import { resolvedBy } from "../core/param-writes.js";
 import { decide, forgeBefore, pin, sourceKeys, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
 import { renderMap } from "../core/template-import.js";
 import { firstMarkerLine } from "../core/sections.js";
-import { substitutedFile } from "../core/extract.js";
+import { bodyFile } from "../core/extract.js";
 import { deepMerge } from "../core/merge.js";
 
 export interface ImportOptions {
@@ -855,7 +855,7 @@ async function existingProfile(
 }
 
 /**
- * I11 (spec 11 §4.5): the first column-0 section marker (or near miss) in an admitted file of a
+ * I11 (spec 11 §4.5): the first column-0 section marker (or near miss) in a body file of a
  * created or variant source, which sync would read as structure. The line counts from the top of
  * the workspace file, as the secret scan's does: an agent or command body starts after its frontmatter.
  */
@@ -863,7 +863,8 @@ function markerIn(meta: Ingredient, files: Record<string, string | Buffer>, sour
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
   const offset = raw ? raw.split("\n").length + 2 : 0;
   for (const [rel, content] of Object.entries(files)) {
-    if (!substitutedFile(meta, rel)) continue;
+    // the importer builds meta and file keys itself, with canonical names
+    if (!bodyFile(meta, rel, null)) continue;
     const line = firstMarkerLine(toLf(stripBom(typeof content === "string" ? content : content.toString("utf8"))));
     if (line !== null) return { where: meta.type === "skill" && meta.layout === "dir" ? `${source}${rel}` : source, line: line + offset };
   }
