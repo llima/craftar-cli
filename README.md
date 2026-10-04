@@ -120,7 +120,7 @@ server:
   timeout: 30
 ```
 
-**Sections.** A body (`rule.md`, `agent.md`, `command.md`, `steering.md`, `SKILL.md`, a script or hook text file, a skill file every target renders as text) can hold blocks a profile or a workspace replaces. Sections are read only in files a target emits as text; markers in any other file of the ingredient directory (a `notes.md` beside `rule.md`) are ignored. A block sits between two marker lines, and its content is the default:
+**Sections.** A body (its **body files**: the `file` of a rule, agent, command or steering — `rule.md` etc. by default; `SKILL.md` of a file-layout skill; every text file of a dir-layout skill; the text files listed in `files` of a script or hook) can hold blocks a profile or a workspace replaces. Any other file in the ingredient directory (a `notes.md` beside `rule.md`) is not emitted by any target and is ignored — for sections and for `{{param}}` citations alike. A block sits between two marker lines, and its content is the default:
 
 ```markdown
 Dispatch reviewers after every commit.
@@ -134,7 +134,7 @@ Dispatch reviewers after every commit.
 Never edit what a reviewer reads.
 ```
 
-A marker is a whole line starting at column 0, with single spaces (trailing spaces or tabs are tolerated). Sections do not nest, a name is declared once per ingredient, and a line that looks almost like a marker is an error. An indented marker is plain text — indent it to show the syntax in a rule. The parser is line-based and not Markdown-aware, so a column-0 marker inside a fenced block is still a marker. Markers are read only in files every target renders as text; elsewhere they are copied as they are, with a warning. Agent and command frontmatter lives in `ingredient.yaml` and is never expanded; a rule's or skill's frontmatter is part of its body file, so a column-0 marker there is read like any other. A Forge whose bodies hold a marker must declare `schema: 2` in `craftar.forge.yaml`, so that craftar 0.6.2 and older refuse it instead of emitting the markers; `import` sets it when it relies on markers. A section can also be extracted from a variant with `forge unify` (`take: section`), not only added by hand and re-imported.
+A marker is a whole line starting at column 0, with single spaces (trailing spaces or tabs are tolerated). Sections do not nest, a name is declared once per ingredient, and a line that looks almost like a marker is an error. An indented marker is plain text — indent it to show the syntax in a rule. The parser is line-based and not Markdown-aware, so a column-0 marker inside a fenced block is still a marker. Markers are read only in body files; in a file a target emits but does not render as text (a skill's `.sh`, an image) they are copied as they are, with a warning; in a file no target emits they are ignored. Agent and command frontmatter lives in `ingredient.yaml` and is never expanded; a rule's or skill's frontmatter is part of its body file, so a column-0 marker there is read like any other. A Forge whose bodies hold a marker must declare `schema: 2` in `craftar.forge.yaml`, so that craftar 0.6.2 and older refuse it instead of emitting the markers; `import` sets it when it relies on markers. A section can also be extracted from a variant with `forge unify` (`take: section`), not only added by hand and re-imported.
 
 Profile `profile.yaml`, with section values keyed by `<type>/<name>` (the output name: a variant's values are its base's), then by section name:
 
@@ -178,7 +178,7 @@ overrides:
   ingredients: { disable: [] }
 ```
 
-Layer precedence, weakest → strongest: the ingredient's declared defaults (scoped to that ingredient) → recipe defaults → profile → `craftar.yaml` → `craftar.local.yaml` (personal, git-ignored). Bodies may use `{{param}}` placeholders; a placeholder with no value in any layer is left untouched and reported as a warning by `status` and `sync` (Angular's `{{ 'X' | localize }}` does not look like a placeholder and passes silently). Between layers, objects merge key by key while arrays and scalars from the stronger layer replace the weaker one — `targets: [kiro]` in `craftar.local.yaml` means exactly `[kiro]`. Omit a key in `craftar.local.yaml` to inherit it — an empty list there means empty.
+Layer precedence, weakest → strongest: the ingredient's declared defaults (scoped to that ingredient) → recipe defaults → profile → `craftar.yaml` → `craftar.local.yaml` (personal, git-ignored). Bodies may use `{{param}}` placeholders; only body files are read for them, so a placeholder in a file no target emits is never rendered and never counted as a citation; a placeholder with no value in any layer is left untouched and reported as a warning by `status` and `sync` (Angular's `{{ 'X' | localize }}` does not look like a placeholder and passes silently). Between layers, objects merge key by key while arrays and scalars from the stronger layer replace the weaker one — `targets: [kiro]` in `craftar.local.yaml` means exactly `[kiro]`. Omit a key in `craftar.local.yaml` to inherit it — an empty list there means empty.
 
 Sections layer the same way, weakest → strongest: the body's default → the profile's `sections` → `craftar.yaml`'s `overrides.sections` → `craftar.local.yaml`'s, merged per section, so a workspace that sets one section of an ingredient keeps the profile's others. There is no recipe layer for sections.
 
@@ -243,7 +243,8 @@ Next: `craftar init` from a profile; profile-driven integrations (PM tool → MC
 
 ### to 0.8.2
 
-- **A file no target emits (e.g. notes beside `rule.md`) is no longer read for sections or `{{param}}` citations** — a malformed marker there no longer fails `sync`/`status`/`import`, and a `{{key}}` there no longer makes `unify`/`import` refuse; `take: param`/`take: section` on such a file is refused with its own message. No emitted byte changes.
+- **A file no target emits (e.g. notes beside `rule.md`) is no longer read for sections or `{{param}}` citations** — a malformed marker there no longer fails `sync`/`status`/`diff`/`explain`/`ls`/`import` or trips the `schema: 1` gate, and a `{{key}}` there no longer makes `unify`/`import` refuse. No emitted byte changes.
+- **`take: param` and `take: section` on such a file are now refused** (`… is not emitted by any target`). 0.8.1 accepted `take: param` there, so a plan saved under 0.8.1 that extracts from such a file no longer applies.
 
 ### to 0.8.1
 
