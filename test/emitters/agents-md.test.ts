@@ -504,4 +504,13 @@ describe("agents-md emitter — rule references in bodies (spec 15)", () => {
       "<!-- rule: hub -->\n# hub\n\nrules/[s](AGENTS.md)\n[s](AGENTS.md)-based\n[a](AGENTS.md)/[b](AGENTS.md)\nc (cc-only, rule not in this workspace)s",
     );
   });
+
+  it("a command with the same name does not hide the rule (spec 15 §4.2, review fix)", async () => {
+    const cmd = { meta: { type: "command" as const, name: "style" }, files: { "command.md": "# style command\n" } };
+    for (const ings of [hubOnly("See .claude/rules/style.md.", [rule("style", "# style\n"), cmd]), hubOnly("See .claude/rules/style.md.", [cmd, rule("style", "# style\n")])]) {
+      const p = await planFor(ings);
+      expect(sectionOf(agentsMd(p)!, "hub")).toBe("<!-- rule: hub -->\n# hub\n\nSee AGENTS.md (rule: style).");
+      expect(amWarnings(p).filter((w) => w.includes("reference(s)"))).toEqual([]);
+    }
+  });
 });

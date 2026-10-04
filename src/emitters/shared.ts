@@ -39,31 +39,35 @@ export function resolveRuleRefs(
   const hasCc = targets.includes("claude-code");
   const hasKiro = targets.includes("kiro");
 
-  // Build a lookup map by output name
-  const byOutName = new Map<string, ResolvedIngredient>();
+  // Build lookup maps by output name: rules first, then steering for state B only (spec 15 §4.2)
+  const rulesByName = new Map<string, ResolvedIngredient>();
+  const steeringsByName = new Map<string, ResolvedIngredient>();
   for (const ing of ingredients) {
-    byOutName.set(outName(ing.meta), ing);
+    const name = outName(ing.meta);
+    if (ing.meta.type === "rule") rulesByName.set(name, ing);
+    else if (ing.meta.type === "steering") steeringsByName.set(name, ing);
   }
 
   // Determine rule state: A, B, C, D, or unknown (spec 15 §4.2)
   const ruleState = (name: string): "A" | "B" | "C" | "D" | "unknown" => {
-    const ing = byOutName.get(name);
-    if (!ing) return "unknown";
-    const type = ing.meta.type;
-    // A: claude-code writes it
-    if (type === "rule" && hasCc && appliesTo(ing.meta.targets, "claude-code")) return "A";
-    // B: kiro writes it (rule or steering)
-    if ((type === "rule" || type === "steering") && hasKiro && appliesTo(ing.meta.targets, "kiro")) return "B";
-    // C: aimed at agents-md (text is in AGENTS.md)
-    if (type === "rule" && appliesTo(ing.meta.targets, "agents-md")) return "C";
+    const rule = rulesByName.get(name);
+    // A: claude-code writes this rule
+    if (rule && hasCc && appliesTo(rule.meta.targets, "claude-code")) return "A";
+    // B: kiro writes this rule
+    if (rule && hasKiro && appliesTo(rule.meta.targets, "kiro")) return "B";
+    // B (steering): kiro writes a steering with this name
+    const steering = steeringsByName.get(name);
+    if (steering && hasKiro && appliesTo(steering.meta.targets, "kiro")) return "B";
+    // C: rule aimed at agents-md (text is in AGENTS.md)
+    if (rule && appliesTo(rule.meta.targets, "agents-md")) return "C";
     // D: rule exists but not written by any target here
-    if (type === "rule") return "D";
-    // Not a rule or steering: unknown
+    if (rule) return "D";
+    // No rule with this name
     return "unknown";
   };
 
-  // Helper to get the ingredient ref for reporting
-  const ingRef = (name: string): string | undefined => byOutName.get(name)?.ref;
+  // Helper to get the ingredient ref for reporting (rules only)
+  const ingRef = (name: string): string | undefined => rulesByName.get(name)?.ref;
 
   // Right boundary: not followed by letter, digit, `_`, `-`, or `.` followed by one of those (spec 15 §4.1)
   const rightBoundary = (after: string): boolean => {
