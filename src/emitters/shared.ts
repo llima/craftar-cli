@@ -25,6 +25,9 @@ export interface RefReport {
   others: Array<{ path: string; citing: string }>;
 }
 
+/** The kind string for an unknown name (no rule or steering with that name). */
+export const UNKNOWN_NAME_KIND = "";
+
 /** Lookup maps for rule reference resolution (spec 15 §4.2), built once per AGENTS.md. */
 export interface RuleLookup {
   rulesByName: Map<string, ResolvedIngredient>;
@@ -98,6 +101,7 @@ export function resolveRuleRefs(
   };
 
   // Right boundary: not followed by letter, digit, `_`, `-`, or `.` followed by one of those (spec 15 §4.1)
+  // NOTE: The right boundary class is NOT the same as RULE_NAME_CHARS (which includes `.` for names).
   const rightBoundary = (after: string): boolean => {
     if (!after) return true;
     const c = after[0];
@@ -109,6 +113,9 @@ export function resolveRuleRefs(
   // Blanket rewrite for kiro mode: .claude/rules/ → .kiro/steering/
   const kiroRewrite = (s: string): string => s.replace(/\.claude\/rules\//g, ".kiro/steering/");
 
+  // Collect all matches from the original body with their offsets. Warning order follows the
+  // original body (spec 15 §4.5); replacements are applied at the end from end to start so that
+  // earlier offsets remain valid.
   interface Match {
     offset: number;
     length: number;
@@ -152,7 +159,7 @@ export function resolveRuleRefs(
         case "unknown":
           // Unknown name gets blanket rewrite and is reported (no kind string)
           // Fragment gets the blanket rewrite too (spec 17 §4.6)
-          reworded = { ref: `.claude/rules/${name}.md`, kind: "" };
+          reworded = { ref: `.claude/rules/${name}.md`, kind: UNKNOWN_NAME_KIND };
           replacement = `[${kiroRewrite(text)}](${ruleFile("kiro", { name })}${kiroRewrite(frag ?? "")})`;
           break;
         default:
@@ -193,10 +200,12 @@ export function resolveRuleRefs(
   let tokenMatch;
   while ((tokenMatch = tokenPattern.exec(body)) !== null) {
     const [match, before, token, name] = tokenMatch as RegExpExecArray & [string, string, string, string];
+    // The offset of the actual token, not the left boundary; used for overlap checks and ordering
     const offset = tokenMatch.index + before.length;
     const fullOffset = tokenMatch.index + match.length;
     const after = body.slice(fullOffset);
     if (!rightBoundary(after)) continue;
+    // Skip if this offset overlaps with a link match (link pattern already captured it)
     if (matches.some((m) => offset >= m.offset && offset < m.offset + m.length)) continue;
     const state = ruleState(name);
     const rule = rulesByName.get(name);
@@ -222,7 +231,7 @@ export function resolveRuleRefs(
           break;
         case "unknown":
           // Unknown name gets blanket rewrite and is reported (no kind string)
-          reworded = { ref: `.claude/rules/${name}.md`, kind: "" };
+          reworded = { ref: `.claude/rules/${name}.md`, kind: UNKNOWN_NAME_KIND };
           replacement = ruleFile("kiro", { name });
           break;
         default:
@@ -255,8 +264,10 @@ export function resolveRuleRefs(
     matches.push({ offset, length: token.length, replacement, reworded });
   }
 
+  // Sort by offset for correct warning order
   matches.sort((a, b) => a.offset - b.offset);
 
+  // Collect reworded entries with their original offsets for sorting (spec 15 §4.5)
   const rewordedWithOffset: Array<{ offset: number; ref: string; citing: string; kind: string }> = [];
   for (const m of matches) {
     if (m.reworded) {
@@ -276,6 +287,7 @@ export function resolveRuleRefs(
   const tail = body.slice(lastEnd);
   result += mode === "kiro" ? kiroRewrite(tail) : tail;
 
+  // Sort by offset and deduplicate by (ref, citing), keeping first occurrence (spec 15 §4.5)
   rewordedWithOffset.sort((a, b) => a.offset - b.offset);
   const seen = new Set<string>();
   for (const e of rewordedWithOffset) {
@@ -289,6 +301,7 @@ export function resolveRuleRefs(
   // Collect other .claude/ paths only in agents-md mode (spec 15 §4.5) — not in kiro mode (spec 17 §2)
   if (mode === "agents-md" && !hasCc) {
     const otherDirs = ["agents", "commands", "skills", "scripts", "hooks"];
+    // The path class adds `/` for subdirectories; in `[.../-]` the `/` goes before `-` to avoid a range error.
     const otherPattern = new RegExp(
       `(^|[^/${RULE_NAME_CHARS}])\\.claude\\/(${otherDirs.join("|")})\\/([A-Za-z0-9._/-]+)`,
       "g",

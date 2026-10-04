@@ -1,7 +1,7 @@
 import { toCrlf } from "../core/text.js";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
-import { appliesTo, buildRuleLookup, mcpServers, outName, resolveRuleRefs, ruleFile, RULE_NAME_CHARS, type RefReport } from "./shared.js";
+import { appliesTo, buildRuleLookup, mcpServers, outName, resolveRuleRefs, ruleFile, RULE_NAME_CHARS, UNKNOWN_NAME_KIND, type RefReport } from "./shared.js";
 import type { Emitter, EmitContext, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 
@@ -58,10 +58,12 @@ export const kiro: Emitter = {
         case "agent": {
           // Resolve description first, then body (spec 17 §4.5 order: description before prompt)
           const description = resolve(m.description ?? "", ing.ref);
-          const body = resolve(await ctx.text(ing, m.file), ing.ref);
+          // Read the body once and derive both versions from it
+          const rawBody = await ctx.text(ing, m.file);
+          const body = resolve(rawBody, ing.ref);
           const tools = mapTools(m.tools, ctx);
           // agentResources reads the blanket-rewritten text, not the resolved text (spec 17 §4.6)
-          const resources = m.resources ?? agentResources(outName(m), rewrite(m.description ?? "") + "\n" + rewrite(await ctx.text(ing, m.file)), ruleNames, scopedRules);
+          const resources = m.resources ?? agentResources(outName(m), rewrite(m.description ?? "") + "\n" + rewrite(rawBody), ruleNames, scopedRules);
           const json = JSON.stringify({ name: outName(m), description, prompt: body.replace(/^\n+/, "").replace(/\n+$/, ""), tools, allowedTools: tools, resources }, null, 2) + "\n";
           out.push(crlf(`.kiro/agents/${outName(m)}.json`, json, ing.ref));
           break;
@@ -124,14 +126,14 @@ function emitKiroWarning(ctx: EmitContext, reports: RefReport[]): void {
   for (const report of reports) {
     for (const e of report.reworded) {
       const key = `${e.ref}|${e.citing}`;
-      if (e.kind !== "") {
+      if (e.kind !== UNKNOWN_NAME_KIND) {
         // D: has a kind string (e.g. "rule/x reaches no target here")
         if (!seenDead.has(key)) {
           seenDead.add(key);
           dead.push(e);
         }
       } else {
-        // unknown: empty kind string
+        // unknown: empty kind string (UNKNOWN_NAME_KIND)
         if (!seenUnknown.has(key)) {
           seenUnknown.add(key);
           unknown.push({ ref: e.ref, citing: e.citing });
