@@ -66,14 +66,17 @@ export function resolveRuleRefs(
       const writer = ruleWriter(targets, rule.meta.targets);
       if (writer === "claude-code") return "A";
       if (writer === "kiro") return "B";
+    }
+    // B (steering): kiro writes a steering with this name — checked before C/D (spec 15 §4.2)
+    const steering = steeringsByName.get(name);
+    if (steering && hasKiro && appliesTo(steering.meta.targets, "kiro")) return "B";
+    // C or D only when a rule exists
+    if (rule) {
       // C: rule aimed at agents-md (text is in AGENTS.md)
       if (appliesTo(rule.meta.targets, "agents-md")) return "C";
       // D: rule exists but not written by any target here
       return "D";
     }
-    // B (steering): kiro writes a steering with this name
-    const steering = steeringsByName.get(name);
-    if (steering && hasKiro && appliesTo(steering.meta.targets, "kiro")) return "B";
     // No rule with this name
     return "unknown";
   };

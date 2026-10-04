@@ -520,4 +520,17 @@ describe("agents-md emitter — rule references in bodies (spec 15)", () => {
       "agents-md: 2 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: .claude/rules/nope.md (in rule/hub; no such rule), .claude/rules/cc-only.md (in rule/hub; rule/cc-only reaches no target here)",
     ]);
   });
+
+  it("a steering file kiro writes wins over a rule of the same name no target writes (spec 15 §4.2, review fix)", async () => {
+    const steering = { meta: { type: "steering" as const, name: "x" }, files: { "steering.md": "# x steering\n" } };
+    for (const ruleTargets of [["claude-code"], ["agents-md"]]) {
+      const p = await planFor(
+        hubOnly("see .claude/rules/x.md and [l](.claude/rules/x.md)", [rule("x", "# x\n", { inclusion: "manual", targets: ruleTargets }), steering]),
+        undefined,
+        ["kiro", "agents-md"],
+      );
+      expect(sectionOf(agentsMd(p)!, "hub"), ruleTargets.join()).toBe("<!-- rule: hub -->\n# hub\n\nsee .kiro/steering/x.md and [l](.kiro/steering/x.md)");
+      expect(amWarnings(p).filter((w) => w.includes("reference(s)")), ruleTargets.join()).toEqual([]);
+    }
+  });
 });
