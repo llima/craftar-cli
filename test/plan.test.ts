@@ -206,6 +206,41 @@ describe("0.8.2 — files no target emits are not read for sections", () => {
       expect(e!.message, file).not.toContain("internal:");
     }
   });
+
+  it("a body file outside the ingredient directory is a user error, not an internal one (0.8.2)", async () => {
+    // Create the scenario first, then add the file outside the ingredient directory
+    const refs = ["rule/r"];
+    const s = await scenario(
+      { ingredients: [{ meta: { type: "rule", name: "r", file: "../outside.md" }, files: { "rule.md": "# R v\n" } }], recipes: [recipe("base", refs)], profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"], {})] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await writeFiles(s.forgeRoot, { "craftar.forge.yaml": "name: test-forge\nschema: 1\n" });
+    // Create the file outside the ingredient directory (at ingredients/rules/outside.md)
+    await writeFiles(s.forgeRoot, { "ingredients/rules/outside.md": "# Outside\n" });
+    const e = await plan(await loadWorkspace(s.wsRoot)).then(() => null, (x: Error) => x);
+    expect(e).not.toBeNull();
+    expect(e!.message).not.toContain("internal:");
+    expect(e!.message).toContain("outside its directory");
+  });
+
+  it.skipIf(process.platform === "win32")("a body file behind a symlinked directory is a user error, not an internal one (0.8.2)", async () => {
+    // Create a symlink to a subdirectory and declare a file through it
+    const refs = ["rule/r"];
+    const s = await scenario(
+      { ingredients: [{ meta: { type: "rule", name: "r", file: "link/rule.md" }, files: { "rule.md": "# R v\n" } }], recipes: [recipe("base", refs)], profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"], {})] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await writeFiles(s.forgeRoot, { "craftar.forge.yaml": "name: test-forge\nschema: 1\n" });
+    // Create sub/rule.md and symlink link -> sub in the ingredient directory
+    const ingDir = path.join(s.forgeRoot, "ingredients/rules/r");
+    await writeFiles(ingDir, { "sub/rule.md": "# R v\n" });
+    await fs.symlink(path.join(ingDir, "sub"), path.join(ingDir, "link"));
+    const e = await plan(await loadWorkspace(s.wsRoot)).then(() => null, (x: Error) => x);
+    expect(e).not.toBeNull();
+    expect(e!.message).not.toContain("internal:");
+  });
 });
 
 describe("sections — parse errors and the output guard", () => {
