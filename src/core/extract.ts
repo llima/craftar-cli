@@ -57,7 +57,7 @@ export function substitutedFile(meta: Ingredient, file: string): boolean {
  * A file no target emits is never read as the ingredient's body — not for sections, not for {{param}} scans.
  */
 export function emittedFile(meta: Ingredient, file: string): boolean {
-  const norm = (x: string) => path.posix.normalize(x.replace(/\\/g, "/"));
+  const norm = (x: string) => path.posix.normalize(x.replace(/\\/g, "/")).replace(/^\/+/, "");
   switch (meta.type) {
     case "rule":
       return norm(file) === norm(meta.file ?? "rule.md");
