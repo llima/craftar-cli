@@ -25,18 +25,18 @@ export function renderMap(meta: Ingredient, profileParams: Record<string, unknow
   return out;
 }
 
-/** An ingredient directory as the comparison sees it: its validated metadata and its files, admitted ones as normalized text. */
+/** An ingredient directory as the comparison sees it: its validated metadata and its files, body files as normalized text. */
 export interface ImportBase {
   meta: Ingredient;
   texts: Map<string, string>;
   bytes: Map<string, Buffer>;
   metaFile: string;
-  /** Each admitted text parsed for section markers (spec 11 §6.7); a file with none is one outside segment. */
+  /** Each body file parsed for section markers (spec 11 §6.7); a file with none is one outside segment. */
   parsed: Map<string, ParsedSections>;
 }
 
 /**
- * Read a base. Every admitted text is parsed for section markers; a malformed one, or a name
+ * Read a base. Every body file is parsed for section markers; a malformed one, or a name
  * declared twice across the ingredient's files, is I12 (spec 11 §4.5). `forgeRoot`, when given,
  * makes the file the error names Forge-relative.
  */
@@ -64,12 +64,12 @@ export async function readBase(dir: string, io: DirReader, forgeRoot?: string): 
   return { meta, texts, bytes, metaFile, parsed };
 }
 
-/** The names of the sections a base declares, across its admitted files. */
+/** The names of the sections a base declares, across its body files. */
 export function sectionNames(base: ImportBase): string[] {
   return [...base.parsed.values()].flatMap((p) => p.sections.map((s) => s.name));
 }
 
-/** The base's admitted texts with their sections expanded by `values` (spec 11 §6.2) — what sync substitutes into. */
+/** The base's body files with their sections expanded by `values` (spec 11 §6.2) — what sync substitutes into. */
 export function expandedTexts(base: ImportBase, values: Record<string, string> = {}): Map<string, string> {
   const out = new Map<string, string>();
   for (const [rel, text] of base.texts) {
@@ -79,7 +79,7 @@ export function expandedTexts(base: ImportBase, values: Record<string, string> =
   return out;
 }
 
-/** The keys every admitted file of a base cites (`C(X)`); pass `expandedTexts` for what the importing profile renders (spec 11 §6.7). */
+/** The keys every body file of a base cites (`C(X)`); pass `expandedTexts` for what the importing profile renders (spec 11 §6.7). */
 export function citedKeys(texts: Map<string, string>): Set<string> {
   const out = new Set<string>();
   for (const t of texts.values()) for (const k of placeholders(t)) out.add(k);
@@ -88,7 +88,7 @@ export function citedKeys(texts: Map<string, string>): Set<string> {
 
 /**
  * The fingerprint of a base rendered through `map` (spec 10 §6.2): its metadata without `params`
- * (a workspace cannot express a declaration), admitted files expanded with the section values
+ * (a workspace cannot express a declaration), body files expanded with the section values
  * `sections` and then substituted, exactly as `ctx.text` does (spec 11 §6.4, §6.7), every other file
  * as bytes. With no declaration, no marker and nothing set, this is `fingerprintDir`.
  */

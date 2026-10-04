@@ -30,8 +30,9 @@ export function reservedKey(key: string): boolean {
 }
 
 /**
- * Whether every target that emits `file` reads it through `ctx.text` (P3). A file no target
- * emits is inert and allowed; one a target copies as raw bytes would carry `{{key}}` literally.
+ * Whether every target that emits `file` reads it through `ctx.text` (P3). Whether a file is
+ * emitted at all is `emittedFile`'s question; `bodyFile` combines both. A file a target copies
+ * as raw bytes would carry `{{key}}` literally.
  */
 export function substitutedFile(meta: Ingredient, file: string): boolean {
   switch (meta.type) {
