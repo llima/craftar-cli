@@ -47,7 +47,7 @@ export function buildRuleLookup(ingredients: ResolvedIngredient[]): RuleLookup {
 }
 
 /**
- * Resolve `.claude/rules/<x>.md` references in a body (spec 15 §4.1–§4.3, spec 17 §4.2–§4.3).
+ * Resolve `.claude/rules/<x>.md` references in a body (spec 15 §4.1–§4.3, spec 17 §4.2–§4.3, spec 20).
  * Mode "agents-md" (default) is for AGENTS.md; mode "kiro" is for kiro files.
  * Returns the transformed text and a report of what was reworded or found dead.
  */
@@ -113,14 +113,77 @@ export function resolveRuleRefs(
   // Blanket rewrite for kiro mode: .claude/rules/ → .kiro/steering/
   const kiroRewrite = (s: string): string => s.replace(/\.claude\/rules\//g, ".kiro/steering/");
 
+  // Resolve a single token reference (spec 20 §4.1): used for tokens and link text references.
+  // Returns the replacement text and, if it rewords to "not in this workspace", the reworded entry.
+  const resolveToken = (name: string): { text: string; reworded?: { ref: string; kind: string } } => {
+    const state = ruleState(name);
+    const rule = rulesByName.get(name);
+    if (mode === "kiro") {
+      switch (state) {
+        case "K1": return { text: ruleFile("kiro", { name }) };
+        case "K2": return { text: `.claude/rules/${name}.md` };  // unchanged
+        case "K3": return { text: `AGENTS.md (rule: ${name})` };
+        case "D": return { text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` } };
+        case "unknown": return { text: ruleFile("kiro", { name }), reworded: { ref: `.claude/rules/${name}.md`, kind: UNKNOWN_NAME_KIND } };
+      }
+    } else {
+      switch (state) {
+        case "A": return { text: `.claude/rules/${name}.md` };  // unchanged
+        case "B": return { text: ruleFile("kiro", { name }) };
+        case "C": return { text: `AGENTS.md (rule: ${name})` };
+        case "D": return { text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` } };
+        case "unknown":
+          if (hasCc) return { text: `.claude/rules/${name}.md` };  // unchanged
+          return { text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: "no such rule" } };
+      }
+    }
+    return { text: `.claude/rules/${name}.md` };  // fallback
+  };
+
+  // Resolve references inside link text (spec 20 §4.1). Returns the resolved text and any reworded
+  // entries from the text's references. In kiro mode, non-references get the directory rewrite
+  // except for K2 links (Ruling 4: non-references stay as written).
+  const resolveTextRefs = (text: string, isK2: boolean): { resolved: string; reworded: Array<{ offset: number; ref: string; kind: string }> } => {
+    const textPattern = new RegExp(
+      `(^|[^/${RULE_NAME_CHARS}])(\\.claude\\/rules\\/([${RULE_NAME_CHARS}]+)\\.md)`,
+      "g",
+    );
+    const textMatches: Array<{ offset: number; length: number; replacement: string; reworded?: { ref: string; kind: string } }> = [];
+    let textMatch;
+    while ((textMatch = textPattern.exec(text)) !== null) {
+      const [match, before, token, name] = textMatch as RegExpExecArray & [string, string, string, string];
+      const offset = textMatch.index + before.length;
+      const fullOffset = textMatch.index + match.length;
+      const after = text.slice(fullOffset);
+      if (!rightBoundary(after)) continue;
+      const { text: replacement, reworded } = resolveToken(name);
+      textMatches.push({ offset, length: token.length, replacement, reworded });
+    }
+    // Build the result: gaps get the blanket rewrite in kiro mode, unless this is a K2 link (Ruling 4)
+    let resolved = "";
+    let lastEnd = 0;
+    const rewordedEntries: Array<{ offset: number; ref: string; kind: string }> = [];
+    for (const m of textMatches) {
+      const gap = text.slice(lastEnd, m.offset);
+      resolved += (mode === "kiro" && !isK2) ? kiroRewrite(gap) : gap;
+      resolved += m.replacement;
+      lastEnd = m.offset + m.length;
+      if (m.reworded) rewordedEntries.push({ offset: m.offset, ref: m.reworded.ref, kind: m.reworded.kind });
+    }
+    const tail = text.slice(lastEnd);
+    resolved += (mode === "kiro" && !isK2) ? kiroRewrite(tail) : tail;
+    return { resolved, reworded: rewordedEntries };
+  };
+
   // Collect all matches from the original body with their offsets. Warning order follows the
-  // original body (spec 15 §4.5); matches are applied in order, and in kiro mode the gaps between
-  // them get the directory rewrite.
+  // original body (spec 15 §4.5, spec 20 §4.3); matches are applied in order, and in kiro mode the
+  // gaps between them get the directory rewrite.
   interface Match {
-    offset: number;
+    offset: number;        // Position for applying the match
+    warningOffset: number; // Position for warning order (spec 20 §4.3: link's target offset)
     length: number;
     replacement: string;
-    reworded?: { ref: string; kind: string };
+    reworded: Array<{ offset: number; ref: string; kind: string }>;
   }
   const matches: Match[] = [];
 
@@ -133,35 +196,56 @@ export function resolveRuleRefs(
   while ((linkMatch = linkPattern.exec(body)) !== null) {
     const [match, text, name, frag] = linkMatch as RegExpExecArray & [string, string, string, string | undefined];
     const offset = linkMatch.index;
+    // Warning offset is at the target's start, not at `[` (spec 20 §4.3)
+    const targetOffset = offset + 1 + text.length + 2;  // `[` + text + `](`
     const state = ruleState(name);
     const rule = rulesByName.get(name);
     let replacement: string;
-    let reworded: { ref: string; kind: string } | undefined;
+    const reworded: Array<{ offset: number; ref: string; kind: string }> = [];
+
+    // Resolve references in the link's text (spec 20 §4.1)
+    const isK2 = mode === "kiro" && state === "K2";
+    const { resolved: resolvedText, reworded: textReworded } = resolveTextRefs(text, isK2);
+    // Add text reworded entries, positioned before the link's target (spec 20 §4.3)
+    for (const tw of textReworded) reworded.push({ offset: offset + 1 + tw.offset, ref: tw.ref, kind: tw.kind });
 
     if (mode === "kiro") {
       // Kiro mode (spec 17 §4.3)
       switch (state) {
         case "K1":
           // Fragment gets the blanket rewrite too (spec 17 §4.3)
-          replacement = `[${kiroRewrite(text)}](${ruleFile("kiro", { name })}${kiroRewrite(frag ?? "")})`;
+          replacement = `[${resolvedText}](${ruleFile("kiro", { name })}${kiroRewrite(frag ?? "")})`;
           break;
         case "K2":
-          // unchanged — exempt from directory rewrite; keep original text exactly
-          replacement = match;
+          // unchanged target — but text references are resolved (spec 20 §4.1, Ruling 4)
+          replacement = `[${resolvedText}](${`.claude/rules/${name}.md`}${frag ?? ""})`;
           break;
         case "K3":
-          replacement = `[${kiroRewrite(text)}](AGENTS.md)`; // fragment dropped
+          replacement = `[${resolvedText}](AGENTS.md)`; // fragment dropped
           break;
-        case "D":
-          reworded = { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` };
-          replacement = `${kiroRewrite(text)} (${name}, rule not in this workspace)`;
+        case "D": {
+          // Check for collapse (spec 20 §4.2): text is exactly the path, optionally with backticks
+          const exactPath = `.claude/rules/${name}.md`;
+          const backtickedPath = `\`${exactPath}\``;
+          if (text === exactPath || text === backtickedPath) {
+            const hasBackticks = text === backtickedPath;
+            const tokenText = `${name} (rule not in this workspace)`;
+            replacement = hasBackticks ? `\`${tokenText}\`` : tokenText;
+            // Collapsed: only one entry, from the token form
+            reworded.length = 0;  // Clear text entries, they merge into the collapse
+          } else {
+            replacement = `${resolvedText} (${name}, rule not in this workspace)`;
+          }
+          reworded.push({ offset: targetOffset, ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` });
           break;
-        case "unknown":
+        }
+        case "unknown": {
           // Unknown name gets blanket rewrite and is reported (no kind string)
           // Fragment gets the blanket rewrite too (spec 17 §4.3)
-          reworded = { ref: `.claude/rules/${name}.md`, kind: UNKNOWN_NAME_KIND };
-          replacement = `[${kiroRewrite(text)}](${ruleFile("kiro", { name })}${kiroRewrite(frag ?? "")})`;
+          reworded.push({ offset: targetOffset, ref: `.claude/rules/${name}.md`, kind: UNKNOWN_NAME_KIND });
+          replacement = `[${resolvedText}](${ruleFile("kiro", { name })}${kiroRewrite(frag ?? "")})`;
           break;
+        }
         default:
           continue;
       }
@@ -169,27 +253,64 @@ export function resolveRuleRefs(
       // agents-md mode (spec 15 §4.3)
       switch (state) {
         case "A":
-          continue;
+          // State A: link unchanged, but text is now resolved like a token (spec 20 §4.1)
+          // The text resolution already happened; we only emit a match if the text changed
+          if (resolvedText !== text) {
+            replacement = `[${resolvedText}](${`.claude/rules/${name}.md`}${frag ?? ""})`;
+          } else {
+            continue;  // No change needed
+          }
+          break;
         case "B":
-          replacement = `[${text}](${ruleFile("kiro", { name })}${frag ?? ""})`;
+          replacement = `[${resolvedText}](${ruleFile("kiro", { name })}${frag ?? ""})`;
           break;
         case "C":
-          replacement = `[${text}](AGENTS.md)`;
+          replacement = `[${resolvedText}](AGENTS.md)`;
           break;
-        case "D":
-          reworded = { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` };
-          replacement = `${text} (${name}, rule not in this workspace)`;
+        case "D": {
+          // Check for collapse (spec 20 §4.2): text is exactly the path, optionally with backticks
+          const exactPath = `.claude/rules/${name}.md`;
+          const backtickedPath = `\`${exactPath}\``;
+          if (text === exactPath || text === backtickedPath) {
+            const hasBackticks = text === backtickedPath;
+            const tokenText = `${name} (rule not in this workspace)`;
+            replacement = hasBackticks ? `\`${tokenText}\`` : tokenText;
+            // Collapsed: only one entry, from the token form
+            reworded.length = 0;  // Clear text entries, they merge into the collapse
+          } else {
+            replacement = `${resolvedText} (${name}, rule not in this workspace)`;
+          }
+          reworded.push({ offset: targetOffset, ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` });
           break;
+        }
         case "unknown":
-          if (hasCc) continue;
-          reworded = { ref: `.claude/rules/${name}.md`, kind: "no such rule" };
-          replacement = `${text} (${name}, rule not in this workspace)`;
+          if (hasCc) {
+            // With claude-code, unknown links are not consumed — but text is resolved (spec 20 §4.1)
+            if (resolvedText !== text) {
+              replacement = `[${resolvedText}](${`.claude/rules/${name}.md`}${frag ?? ""})`;
+            } else {
+              continue;  // No change needed
+            }
+          } else {
+            // Without claude-code: collapse or reword (spec 20 §4.2)
+            const exactPath = `.claude/rules/${name}.md`;
+            const backtickedPath = `\`${exactPath}\``;
+            if (text === exactPath || text === backtickedPath) {
+              const hasBackticks = text === backtickedPath;
+              const tokenText = `${name} (rule not in this workspace)`;
+              replacement = hasBackticks ? `\`${tokenText}\`` : tokenText;
+              reworded.length = 0;  // Collapsed: clear text entries
+            } else {
+              replacement = `${resolvedText} (${name}, rule not in this workspace)`;
+            }
+            reworded.push({ offset: targetOffset, ref: `.claude/rules/${name}.md`, kind: "no such rule" });
+          }
           break;
         default:
           continue;
       }
     }
-    matches.push({ offset, length: match.length, replacement, reworded });
+    matches.push({ offset, warningOffset: offset, length: match.length, replacement, reworded });
   }
 
   // Token pattern: .claude/rules/<name>.md (not in a link) with left boundary
@@ -207,71 +328,22 @@ export function resolveRuleRefs(
     if (!rightBoundary(after)) continue;
     // Skip if this offset overlaps with a link match (link pattern already captured it)
     if (matches.some((m) => offset >= m.offset && offset < m.offset + m.length)) continue;
-    const state = ruleState(name);
-    const rule = rulesByName.get(name);
-    let replacement: string;
-    let reworded: { ref: string; kind: string } | undefined;
-
-    if (mode === "kiro") {
-      // Kiro mode (spec 17 §4.3)
-      switch (state) {
-        case "K1":
-          replacement = ruleFile("kiro", { name });
-          break;
-        case "K2":
-          // unchanged — exempt from directory rewrite; keep original text exactly
-          replacement = token;
-          break;
-        case "K3":
-          replacement = `AGENTS.md (rule: ${name})`;
-          break;
-        case "D":
-          reworded = { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` };
-          replacement = `${name} (rule not in this workspace)`;
-          break;
-        case "unknown":
-          // Unknown name gets blanket rewrite and is reported (no kind string)
-          reworded = { ref: `.claude/rules/${name}.md`, kind: UNKNOWN_NAME_KIND };
-          replacement = ruleFile("kiro", { name });
-          break;
-        default:
-          continue;
-      }
-    } else {
-      // agents-md mode (spec 15 §4.3)
-      switch (state) {
-        case "A":
-          continue;
-        case "B":
-          replacement = ruleFile("kiro", { name });
-          break;
-        case "C":
-          replacement = `AGENTS.md (rule: ${name})`;
-          break;
-        case "D":
-          reworded = { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` };
-          replacement = `${name} (rule not in this workspace)`;
-          break;
-        case "unknown":
-          if (hasCc) continue;
-          reworded = { ref: `.claude/rules/${name}.md`, kind: "no such rule" };
-          replacement = `${name} (rule not in this workspace)`;
-          break;
-        default:
-          continue;
-      }
-    }
-    matches.push({ offset, length: token.length, replacement, reworded });
+    const { text: replacement, reworded } = resolveToken(name);
+    const rewordedEntries: Array<{ offset: number; ref: string; kind: string }> = [];
+    if (reworded) rewordedEntries.push({ offset, ref: reworded.ref, kind: reworded.kind });
+    // Always add the match even if unchanged (K2, state A, unknown with claude-code) so the token
+    // is excluded from gap rewriting in kiro mode
+    matches.push({ offset, warningOffset: offset, length: token.length, replacement, reworded: rewordedEntries });
   }
 
   // Sort by offset for correct warning order
   matches.sort((a, b) => a.offset - b.offset);
 
-  // Collect reworded entries with their original offsets for sorting (spec 15 §4.5)
+  // Collect reworded entries with their original offsets for sorting (spec 15 §4.5, spec 20 §4.3)
   const rewordedWithOffset: Array<{ offset: number; ref: string; citing: string; kind: string }> = [];
   for (const m of matches) {
-    if (m.reworded) {
-      rewordedWithOffset.push({ offset: m.offset, ref: m.reworded.ref, citing, kind: m.reworded.kind });
+    for (const rw of m.reworded) {
+      rewordedWithOffset.push({ offset: rw.offset, ref: rw.ref, citing, kind: rw.kind });
     }
   }
 

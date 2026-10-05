@@ -340,3 +340,78 @@ describe("kiro emitter — rule references (spec 17)", () => {
     expect(lf(p, ".kiro/steering/hub.md")).toBe(hubFile(["[t](.kiro/steering/style.md#see-.kiro/steering/z) [u](.kiro/steering/nope.md#see-.kiro/steering/z)"]));
   });
 });
+
+describe("kiro emitter — references inside link text (spec 20)", () => {
+  const LINES = [
+    "1 [`.claude/rules/cc.md`](.claude/rules/cc.md)",
+    "2 [.claude/rules/cc.md](.claude/rules/cc.md#part)",
+    "3 [`.claude/rules/k.md`](.claude/rules/k.md)",
+    "4 [see .claude/rules/cc.md](.claude/rules/a.md)",
+    "5 [.claude/rules/md.md](.claude/rules/md.md)",
+    "6 [see .claude/rules/a.md](.claude/rules/cc.md)",
+    "7 [see .claude/rules/*.md](.claude/rules/cc.md)",
+    "8 [see .claude/rules/cc.md](.claude/rules/cc.md)",
+    "9 [.claude/rules/cc.md#part](.claude/rules/cc.md#part)",
+    "10 [.claude/rules/zz.md](.claude/rules/zz.md)",
+  ];
+  const forge20 = (): IngredientSpec[] => [
+    rule("hub", "# hub\n\n" + LINES.join("\n") + "\n"),
+    rule("a", "# a\n"),
+    rule("cc", "# cc\n", { targets: ["claude-code"] }),
+    rule("md", "# md\n", { inclusion: "manual", targets: ["agents-md"] }),
+    rule("k", "# k\n", { inclusion: "manual", targets: ["kiro", "agents-md"] }),
+  ];
+  const numbered = (p: Plan) => file(p, ".kiro/steering/hub.md")!.content.toString("utf8").replace(/\r\n/g, "\n").split("\n").filter((l) => /^\d+ /.test(l));
+  const kw = (p: Plan) => p.warnings.filter((w) => w.startsWith("kiro:"));
+  const D = (x: string) => `${x} (rule not in this workspace)`;
+
+  it("kiro only (spec 20 §4.4)", async () => {
+    const p = await planFor(forge20());
+    expect(numbered(p)).toEqual([
+      "1 `" + D("cc") + "`",
+      "2 " + D("cc"),
+      "3 [`.kiro/steering/k.md`](.kiro/steering/k.md)",
+      "4 [see " + D("cc") + "](.kiro/steering/a.md)",
+      "5 " + D("md"),
+      "6 see .kiro/steering/a.md (cc, rule not in this workspace)",
+      "7 see .kiro/steering/*.md (cc, rule not in this workspace)",
+      "8 see " + D("cc") + " (cc, rule not in this workspace)",
+      "9 " + D("cc") + "#part (cc, rule not in this workspace)",
+      "10 [.kiro/steering/zz.md](.kiro/steering/zz.md)",
+    ]);
+    expect(kw(p)).toEqual([
+      "kiro: 2 reference(s) to rule files this workspace does not have — reworded: .claude/rules/cc.md (in rule/hub; rule/cc reaches no target here), .claude/rules/md.md (in rule/hub; rule/md reaches no target here); 1 reference(s) to names that are no rule or steering here — rewritten to .kiro/steering/ as before: .claude/rules/zz.md (in rule/hub)",
+    ]);
+  });
+
+  it("claude-code + kiro: a K2 link keeps its non-references, its text references resolve (spec 20 §4.1, Ruling 4)", async () => {
+    const p = await planFor(forge20(), {}, ["claude-code", "kiro"]);
+    expect(numbered(p)).toEqual([
+      "1 [`.claude/rules/cc.md`](.claude/rules/cc.md)",
+      "2 [.claude/rules/cc.md](.claude/rules/cc.md#part)",
+      "3 [`.kiro/steering/k.md`](.kiro/steering/k.md)",
+      "4 [see .claude/rules/cc.md](.kiro/steering/a.md)",
+      "5 " + D("md"),
+      "6 [see .kiro/steering/a.md](.claude/rules/cc.md)",
+      "7 [see .claude/rules/*.md](.claude/rules/cc.md)",
+      "8 [see .claude/rules/cc.md](.claude/rules/cc.md)",
+      "9 [.claude/rules/cc.md#part](.claude/rules/cc.md#part)",
+      "10 [.kiro/steering/zz.md](.kiro/steering/zz.md)",
+    ]);
+  });
+
+  it("claude-code + kiro + agents-md: K3 text (spec 20 §4.4)", async () => {
+    const p = await planFor(forge20(), {}, ["claude-code", "kiro", "agents-md"]);
+    expect(numbered(p)[4]).toBe("5 [AGENTS.md (rule: md)](AGENTS.md)");
+  });
+
+  it("pin: an imported-shape Forge keeps its kiro bytes and warning (spec 20 §5)", async () => {
+    const p = await planFor(
+      [rule("hub", "# hub\n\n1 [see .claude/rules/b.md](.claude/rules/a.md)\n2 [`.claude/rules/a.md`](.claude/rules/a.md)\n3 [t](.claude/rules/zz.md)\n"), rule("a", "# a\n"), rule("b", "# b\n")],
+      {},
+      ["claude-code", "kiro", "agents-md"],
+    );
+    expect(numbered(p)).toEqual(["1 [see .kiro/steering/b.md](.kiro/steering/a.md)", "2 [`.kiro/steering/a.md`](.kiro/steering/a.md)", "3 [t](.kiro/steering/zz.md)"]);
+    expect(kw(p)).toEqual(["kiro: 1 reference(s) to names that are no rule or steering of this workspace — rewritten to .kiro/steering/ as before: .claude/rules/zz.md (in rule/hub)"]);
+  });
+});

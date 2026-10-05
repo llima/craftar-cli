@@ -552,3 +552,94 @@ describe("agents-md emitter — rule references in bodies (spec 15)", () => {
     ]);
   });
 });
+
+describe("agents-md emitter — references inside link text (spec 20)", () => {
+  const LINES = [
+    "1 [`.claude/rules/cc.md`](.claude/rules/cc.md)",
+    "2 [.claude/rules/cc.md](.claude/rules/cc.md#part)",
+    "3 [`.claude/rules/k.md`](.claude/rules/k.md)",
+    "4 [see .claude/rules/cc.md](.claude/rules/a.md)",
+    "5 [.claude/rules/md.md](.claude/rules/md.md)",
+    "6 [see .claude/rules/a.md](.claude/rules/cc.md)",
+    "7 [see .claude/rules/*.md](.claude/rules/cc.md)",
+    "8 [see .claude/rules/cc.md](.claude/rules/cc.md)",
+    "9 [.claude/rules/cc.md#part](.claude/rules/cc.md#part)",
+    "10 [.claude/rules/zz.md](.claude/rules/zz.md)",
+  ];
+  const forge20 = (): IngredientSpec[] => [
+    rule("hub", "# hub\n\n" + LINES.join("\n") + "\n"),
+    rule("a", "# a\n"),
+    rule("cc", "# cc\n", { targets: ["claude-code"] }),
+    rule("md", "# md\n", { inclusion: "manual", targets: ["agents-md"] }),
+    rule("k", "# k\n", { inclusion: "manual", targets: ["kiro", "agents-md"] }),
+  ];
+  const numbered = (p: Plan) => agentsMd(p)!.split("\n").filter((l) => /^\d+ /.test(l));
+  const amw = (p: Plan) => p.warnings.filter((w) => w.startsWith("agents-md:"));
+  const D = (x: string) => `${x} (rule not in this workspace)`;
+
+  it("agents-md only: link text resolved like a token, dead self-links collapse (spec 20 §4.4)", async () => {
+    const p = await planFor(forge20());
+    expect(numbered(p)).toEqual([
+      "1 `" + D("cc") + "`",
+      "2 " + D("cc"),
+      "3 [`AGENTS.md (rule: k)`](AGENTS.md)",
+      "4 [see " + D("cc") + "](AGENTS.md)",
+      "5 [AGENTS.md (rule: md)](AGENTS.md)",
+      "6 see AGENTS.md (rule: a) (cc, rule not in this workspace)",
+      "7 see .claude/rules/*.md (cc, rule not in this workspace)",
+      "8 see " + D("cc") + " (cc, rule not in this workspace)",
+      "9 " + D("cc") + "#part (cc, rule not in this workspace)",
+      "10 " + D("zz"),
+    ]);
+    expect(amw(p)).toEqual([
+      "agents-md: 2 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: .claude/rules/cc.md (in rule/hub; rule/cc reaches no target here), .claude/rules/zz.md (in rule/hub; no such rule)",
+    ]);
+  });
+
+  it("kiro + agents-md: link text follows the rule it names (spec 20 §4.4)", async () => {
+    const p = await planFor(forge20(), undefined, ["kiro", "agents-md"]);
+    expect(numbered(p)).toEqual([
+      "1 `" + D("cc") + "`",
+      "2 " + D("cc"),
+      "3 [`.kiro/steering/k.md`](.kiro/steering/k.md)",
+      "4 [see " + D("cc") + "](.kiro/steering/a.md)",
+      "5 [AGENTS.md (rule: md)](AGENTS.md)",
+      "6 see .kiro/steering/a.md (cc, rule not in this workspace)",
+      "7 see .claude/rules/*.md (cc, rule not in this workspace)",
+      "8 see " + D("cc") + " (cc, rule not in this workspace)",
+      "9 " + D("cc") + "#part (cc, rule not in this workspace)",
+      "10 " + D("zz"),
+    ]);
+  });
+
+  it("claude-code + agents-md: only the text of a consumed link moves (spec 20 §4.1)", async () => {
+    const p = await planFor(forge20(), undefined, ["claude-code", "agents-md"]);
+    const before = LINES.slice();
+    before[2] = "3 [`AGENTS.md (rule: k)`](AGENTS.md)";
+    before[4] = "5 [AGENTS.md (rule: md)](AGENTS.md)";
+    expect(numbered(p)).toEqual(before);
+    expect(amw(p)).toEqual([]);
+  });
+
+  it("a reference in a link's text comes before the link's target in the warning (spec 20 §4.3)", async () => {
+    const p = await planFor([rule("hub", "# hub\n\n[see .claude/rules/zz.md](.claude/rules/cc.md)\n"), rule("cc", "# cc\n", { targets: ["claude-code"] })]);
+    expect(amw(p)).toEqual([
+      "agents-md: 2 reference(s) to rule files this workspace does not have — reworded in AGENTS.md: .claude/rules/zz.md (in rule/hub; no such rule), .claude/rules/cc.md (in rule/hub; rule/cc reaches no target here)",
+    ]);
+  });
+
+  it("pin: a reference-style definition and a link with a title stay tokens (spec 15 §12.6)", async () => {
+    const p = await planFor([rule("hub", '# hub\n\n1 [x]: .claude/rules/cc.md\n2 [t](.claude/rules/cc.md "T")\n'), rule("cc", "# cc\n", { targets: ["claude-code"] })]);
+    expect(numbered(p)).toEqual(["1 [x]: " + D("cc"), '2 [t](' + D("cc") + ' "T")']);
+  });
+
+  it("pin: an imported-shape Forge keeps its AGENTS.md (spec 20 §5)", async () => {
+    const p = await planFor(
+      [rule("hub", "# hub\n\n1 [see .claude/rules/b.md](.claude/rules/a.md)\n2 [`.claude/rules/a.md`](.claude/rules/a.md)\n3 [t](.claude/rules/zz.md)\n"), rule("a", "# a\n"), rule("b", "# b\n")],
+      undefined,
+      ["claude-code", "kiro", "agents-md"],
+    );
+    expect(numbered(p)).toEqual(["1 [see .claude/rules/b.md](.claude/rules/a.md)", "2 [`.claude/rules/a.md`](.claude/rules/a.md)", "3 [t](.claude/rules/zz.md)"]);
+    expect(amw(p)).toEqual([]);
+  });
+});
