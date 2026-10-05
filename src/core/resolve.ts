@@ -23,6 +23,30 @@ export interface Resolution {
 }
 
 /**
+ * Depth-first `extends` walk: returns recipes in application order (parents before children).
+ * Throws on a cycle or an unknown recipe, with the same two messages `resolve()` produced.
+ * @param forge  The Forge to look recipes up in.
+ * @param wanted The top-level recipes to walk (profile's + workspace's add, minus remove).
+ * @param origin A human-readable string for the "referenced by" part of the not-found error.
+ */
+export function recipeOrder(forge: Forge, wanted: string[], origin: string): string[] {
+  const order: string[] = [];
+  const visiting = new Set<string>();
+  const visit = (name: string, chain: string[]) => {
+    if (order.includes(name)) return;
+    if (visiting.has(name)) throw new Error(`recipe cycle: ${[...chain, name].join(" → ")}`);
+    const r = forge.recipes.get(name);
+    if (!r) throw new Error(`recipe "${name}" not found (referenced by ${chain.at(-1) ?? origin})`);
+    visiting.add(name);
+    for (const parent of r.extends) visit(parent, [...chain, name]);
+    visiting.delete(name);
+    order.push(name);
+  };
+  for (const r of wanted) visit(r, []);
+  return order;
+}
+
+/**
  * Layer order (weak → strong): ingredient defaults (scoped to that ingredient, see `paramsFor`) →
  * base recipes → stack recipes → profile → workspace → local.
  * Recipes are expanded depth-first through `extends`, each recipe applied once.
@@ -33,20 +57,7 @@ export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
 
   const warnings: string[] = [];
   const wanted = [...profile.recipes, ...ws.recipes.add].filter((r) => !ws.recipes.remove.includes(r));
-
-  const order: string[] = [];
-  const visiting = new Set<string>();
-  const visit = (name: string, chain: string[]) => {
-    if (order.includes(name)) return;
-    if (visiting.has(name)) throw new Error(`recipe cycle: ${[...chain, name].join(" → ")}`);
-    const r = forge.recipes.get(name);
-    if (!r) throw new Error(`recipe "${name}" not found (referenced by ${chain.at(-1) ?? "profile " + profile.name})`);
-    visiting.add(name);
-    for (const parent of r.extends) visit(parent, [...chain, name]);
-    visiting.delete(name);
-    order.push(name);
-  };
-  for (const r of wanted) visit(r, []);
+  const order = recipeOrder(forge, wanted, `profile ${profile.name}`);
 
   // Slot exclusivity
   const slots = new Map<string, string>();
