@@ -2342,3 +2342,69 @@ describe("forge unify take: section (spec 12)", () => {
     expect(await snapshot(root)).toEqual(before);
   });
 });
+
+
+/* ------------------------------------------------------------------ */
+/* craftar ls pin (spec 16 §10.3): captures the exact output before  */
+/* the catalogue commands, so a later change is a test failure.       */
+/* ------------------------------------------------------------------ */
+describe("craftar ls pin (spec 16 §10.3)", () => {
+  it("prints the exact expected output on the golden acme-portal workspace", async () => {
+    // Set up the golden scenario: import acme-portal to create a Forge and craftar.yaml
+    const root = await tmpDir("craftar-ls-pin-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const portal = path.join(root, "acme-portal");
+    const forge = path.join(root, "forge");
+
+    // Copy the golden workspace
+    async function cp(src: string, dst: string) {
+      for (const rel of await listFiles(src)) {
+        await fs.mkdir(path.dirname(path.join(dst, rel)), { recursive: true });
+        await fs.copyFile(path.join(src, rel), path.join(dst, rel));
+      }
+    }
+    await cp(path.join(__dirname, "golden", "acme-portal"), portal);
+
+    // Import to create the Forge and craftar.yaml
+    const imp = runCli([
+      "import",
+      "--from", "claude-code",
+      "--workspace", portal,
+      "--forge", forge,
+      "--profile", "acme-portal",
+      "--write-config",
+    ]);
+    expect(imp.code).toBe(0);
+
+    // Run ls and capture output
+    const r = runCli(["ls", "--workspace", portal]);
+    expect(r.code).toBe(0);
+
+    // The expected output.
+    // The Forge name is "forge" (from importClaudeCode default), commit is "no git" (temp dir has no git).
+    // The output is pinned so any change to ls is caught.
+    const expected = `Forge forge @ no git · profile acme-portal
+
+base — Always-on conventions, commands, agents, scripts and MCP servers.
+  rule/commit-conventions
+  rule/workflow
+  agent/docs-author
+  agent/release-helper
+  command/commit-push
+  skill/spec-driven
+  script/check-branch
+  mcp/playwright
+
+stack-backend-node — Conventions + reviewer for repos matching projects/acme-api/**
+  rule/backend-node
+  agent/backend-node-reviewer
+
+acme-portal-steering — Hand-written Kiro steering specific to acme-portal.
+  steering/product
+
+20 files across targets claude-code, kiro
+`;
+
+    expect(r.stdout).toBe(expected);
+  });
+});
