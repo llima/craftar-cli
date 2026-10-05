@@ -9,6 +9,9 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
 /** The characters of a rule name in a `.claude/rules/<name>.md` reference (spec 15 §4.1). */
 export const RULE_NAME_CHARS = "A-Za-z0-9._-";
 
+/** Token pattern for rule references: `.claude/rules/<name>.md` with left boundary (spec 15 §4.1). */
+const TOKEN_PATTERN_SOURCE = `(^|[^/${RULE_NAME_CHARS}])(\\.claude\\/rules\\/([${RULE_NAME_CHARS}]+)\\.md)`;
+
 /**
  * The target that writes a rule's own file in this workspace, `claude-code` first, else `kiro`, else none
  * (spec 14 §4.1): a workspace target the rule's `targets` admit.
@@ -140,14 +143,22 @@ export function resolveRuleRefs(
     return { text: `.claude/rules/${name}.md` };  // fallback
   };
 
+  // Collapse: a link whose text is exactly its path becomes the token form (spec 20 §4.2).
+  // Returns the token form if collapsible, null otherwise.
+  const collapse = (text: string, name: string): string | null => {
+    const exactPath = `.claude/rules/${name}.md`;
+    const backtickedPath = `\`${exactPath}\``;
+    if (text !== exactPath && text !== backtickedPath) return null;
+    const hasBackticks = text === backtickedPath;
+    const tokenText = `${name} (rule not in this workspace)`;
+    return hasBackticks ? `\`${tokenText}\`` : tokenText;
+  };
+
   // Resolve references inside link text (spec 20 §4.1). Returns the resolved text and any reworded
   // entries from the text's references. In kiro mode, non-references get the directory rewrite
   // except for K2 links (Ruling 4: non-references stay as written).
   const resolveTextRefs = (text: string, isK2: boolean): { resolved: string; reworded: Array<{ offset: number; ref: string; kind: string }> } => {
-    const textPattern = new RegExp(
-      `(^|[^/${RULE_NAME_CHARS}])(\\.claude\\/rules\\/([${RULE_NAME_CHARS}]+)\\.md)`,
-      "g",
-    );
+    const textPattern = new RegExp(TOKEN_PATTERN_SOURCE, "g");
     const textMatches: Array<{ offset: number; length: number; replacement: string; reworded?: { ref: string; kind: string } }> = [];
     let textMatch;
     while ((textMatch = textPattern.exec(text)) !== null) {
@@ -179,8 +190,7 @@ export function resolveRuleRefs(
   // original body (spec 15 §4.5, spec 20 §4.3); matches are applied in order, and in kiro mode the
   // gaps between them get the directory rewrite.
   interface Match {
-    offset: number;        // Position for applying the match
-    warningOffset: number; // Position for warning order (spec 20 §4.3: link's target offset)
+    offset: number;
     length: number;
     replacement: string;
     reworded: Array<{ offset: number; ref: string; kind: string }>;
@@ -224,15 +234,11 @@ export function resolveRuleRefs(
           replacement = `[${resolvedText}](AGENTS.md)`; // fragment dropped
           break;
         case "D": {
-          // Check for collapse (spec 20 §4.2): text is exactly the path, optionally with backticks
-          const exactPath = `.claude/rules/${name}.md`;
-          const backtickedPath = `\`${exactPath}\``;
-          if (text === exactPath || text === backtickedPath) {
-            const hasBackticks = text === backtickedPath;
-            const tokenText = `${name} (rule not in this workspace)`;
-            replacement = hasBackticks ? `\`${tokenText}\`` : tokenText;
-            // Collapsed: only one entry, from the token form
-            reworded.length = 0;  // Clear text entries, they merge into the collapse
+          // Check for collapse (spec 20 §4.2)
+          const collapsed = collapse(text, name);
+          if (collapsed) {
+            replacement = collapsed;
+            reworded.length = 0;  // Collapsed: only one entry, from the token form
           } else {
             replacement = `${resolvedText} (${name}, rule not in this workspace)`;
           }
@@ -268,15 +274,11 @@ export function resolveRuleRefs(
           replacement = `[${resolvedText}](AGENTS.md)`;
           break;
         case "D": {
-          // Check for collapse (spec 20 §4.2): text is exactly the path, optionally with backticks
-          const exactPath = `.claude/rules/${name}.md`;
-          const backtickedPath = `\`${exactPath}\``;
-          if (text === exactPath || text === backtickedPath) {
-            const hasBackticks = text === backtickedPath;
-            const tokenText = `${name} (rule not in this workspace)`;
-            replacement = hasBackticks ? `\`${tokenText}\`` : tokenText;
-            // Collapsed: only one entry, from the token form
-            reworded.length = 0;  // Clear text entries, they merge into the collapse
+          // Check for collapse (spec 20 §4.2)
+          const collapsed = collapse(text, name);
+          if (collapsed) {
+            replacement = collapsed;
+            reworded.length = 0;  // Collapsed: only one entry, from the token form
           } else {
             replacement = `${resolvedText} (${name}, rule not in this workspace)`;
           }
@@ -293,12 +295,9 @@ export function resolveRuleRefs(
             }
           } else {
             // Without claude-code: collapse or reword (spec 20 §4.2)
-            const exactPath = `.claude/rules/${name}.md`;
-            const backtickedPath = `\`${exactPath}\``;
-            if (text === exactPath || text === backtickedPath) {
-              const hasBackticks = text === backtickedPath;
-              const tokenText = `${name} (rule not in this workspace)`;
-              replacement = hasBackticks ? `\`${tokenText}\`` : tokenText;
+            const collapsed = collapse(text, name);
+            if (collapsed) {
+              replacement = collapsed;
               reworded.length = 0;  // Collapsed: clear text entries
             } else {
               replacement = `${resolvedText} (${name}, rule not in this workspace)`;
@@ -310,14 +309,11 @@ export function resolveRuleRefs(
           continue;
       }
     }
-    matches.push({ offset, warningOffset: offset, length: match.length, replacement, reworded });
+    matches.push({ offset, length: match.length, replacement, reworded });
   }
 
   // Token pattern: .claude/rules/<name>.md (not in a link) with left boundary
-  const tokenPattern = new RegExp(
-    `(^|[^/${RULE_NAME_CHARS}])(\\.claude\\/rules\\/([${RULE_NAME_CHARS}]+)\\.md)`,
-    "g",
-  );
+  const tokenPattern = new RegExp(TOKEN_PATTERN_SOURCE, "g");
   let tokenMatch;
   while ((tokenMatch = tokenPattern.exec(body)) !== null) {
     const [match, before, token, name] = tokenMatch as RegExpExecArray & [string, string, string, string];
@@ -333,7 +329,7 @@ export function resolveRuleRefs(
     if (reworded) rewordedEntries.push({ offset, ref: reworded.ref, kind: reworded.kind });
     // Always add the match even if unchanged (K2, state A, unknown with claude-code) so the token
     // is excluded from gap rewriting in kiro mode
-    matches.push({ offset, warningOffset: offset, length: token.length, replacement, reworded: rewordedEntries });
+    matches.push({ offset, length: token.length, replacement, reworded: rewordedEntries });
   }
 
   // Sort by offset for correct warning order
