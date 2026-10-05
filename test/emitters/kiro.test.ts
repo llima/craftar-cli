@@ -428,4 +428,10 @@ describe("kiro emitter — references inside link text (spec 20)", () => {
     expect(numbered(p)).toEqual(["1 [see .kiro/steering/zz.md](.kiro/steering/a.md)"]);
     expect(kw(p)).toEqual(["kiro: 1 reference(s) to names that are no rule or steering of this workspace — rewritten to .kiro/steering/ as before: .claude/rules/zz.md (in rule/hub)"]);
   });
+
+  it("an unknown name in the text of a link kept for claude-code is rewritten and reported (spec 20 §4.1)", async () => {
+    const p = await planFor([rule("hub", "# hub\n\n1 [see .claude/rules/zz.md](.claude/rules/cc.md)\n"), rule("cc", "# cc\n", { targets: ["claude-code"] })], {}, ["claude-code", "kiro"]);
+    expect(numbered(p)).toEqual(["1 [see .kiro/steering/zz.md](.claude/rules/cc.md)"]);
+    expect(kw(p)).toEqual(["kiro: 1 reference(s) to names that are no rule or steering of this workspace — rewritten to .kiro/steering/ as before: .claude/rules/zz.md (in rule/hub)"]);
+  });
 });
