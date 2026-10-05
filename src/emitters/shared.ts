@@ -90,7 +90,7 @@ export function resolveRuleRefs(
       if (writer === "claude-code") return "A";
       if (writer === "kiro") return "B";
     }
-    // B (steering): kiro writes a steering with this name
+    // B (steering): kiro writes a steering with this name — checked before C/D (spec 15 §4.2)
     const steering = steeringsByName.get(name);
     if (steering && hasKiro && appliesTo(steering.meta.targets, "kiro")) return "B";
     if (rule) {
@@ -114,8 +114,8 @@ export function resolveRuleRefs(
   const kiroRewrite = (s: string): string => s.replace(/\.claude\/rules\//g, ".kiro/steering/");
 
   // Collect all matches from the original body with their offsets. Warning order follows the
-  // original body (spec 15 §4.5); replacements are applied at the end from end to start so that
-  // earlier offsets remain valid.
+  // original body (spec 15 §4.5); matches are applied in order, and in kiro mode the gaps between
+  // them get the directory rewrite.
   interface Match {
     offset: number;
     length: number;
@@ -142,7 +142,7 @@ export function resolveRuleRefs(
       // Kiro mode (spec 17 §4.3)
       switch (state) {
         case "K1":
-          // Fragment gets the blanket rewrite too (spec 17 §4.6)
+          // Fragment gets the blanket rewrite too (spec 17 §4.3)
           replacement = `[${kiroRewrite(text)}](${ruleFile("kiro", { name })}${kiroRewrite(frag ?? "")})`;
           break;
         case "K2":
@@ -158,7 +158,7 @@ export function resolveRuleRefs(
           break;
         case "unknown":
           // Unknown name gets blanket rewrite and is reported (no kind string)
-          // Fragment gets the blanket rewrite too (spec 17 §4.6)
+          // Fragment gets the blanket rewrite too (spec 17 §4.3)
           reworded = { ref: `.claude/rules/${name}.md`, kind: UNKNOWN_NAME_KIND };
           replacement = `[${kiroRewrite(text)}](${ruleFile("kiro", { name })}${kiroRewrite(frag ?? "")})`;
           break;
@@ -308,9 +308,11 @@ export function resolveRuleRefs(
     );
     let otherMatch;
     while ((otherMatch = otherPattern.exec(result)) !== null) {
+      // Trim trailing `.` or `/` from the path, and skip if empty after trimming
       let path = otherMatch[3].replace(/[./]+$/, "");
       if (!path) continue;
       const fullPath = `.claude/${otherMatch[2]}/${path}`;
+      // Deduplicate by (path, citing)
       if (!report.others.some((o) => o.path === fullPath && o.citing === citing)) {
         report.others.push({ path: fullPath, citing });
       }
