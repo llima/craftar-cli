@@ -414,4 +414,18 @@ describe("kiro emitter — references inside link text (spec 20)", () => {
     expect(numbered(p)).toEqual(["1 [see .kiro/steering/b.md](.kiro/steering/a.md)", "2 [`.kiro/steering/a.md`](.kiro/steering/a.md)", "3 [t](.kiro/steering/zz.md)"]);
     expect(kw(p)).toEqual(["kiro: 1 reference(s) to names that are no rule or steering of this workspace — rewritten to .kiro/steering/ as before: .claude/rules/zz.md (in rule/hub)"]);
   });
+
+  it("a reference in a link's text is reported before the link's target (spec 20 §4.3)", async () => {
+    const p = await planFor([rule("hub", "# hub\n\n1 [see .claude/rules/yy.md](.claude/rules/zz.md)\n")]);
+    expect(numbered(p)).toEqual(["1 [see .kiro/steering/yy.md](.kiro/steering/zz.md)"]);
+    expect(kw(p)).toEqual([
+      "kiro: 2 reference(s) to names that are no rule or steering of this workspace — rewritten to .kiro/steering/ as before: .claude/rules/yy.md (in rule/hub), .claude/rules/zz.md (in rule/hub)",
+    ]);
+  });
+
+  it("an imported-shape Forge keeps its kiro bytes; an unknown name in link text adds one entry (spec 20 §5)", async () => {
+    const p = await planFor([rule("hub", "# hub\n\n1 [see .claude/rules/zz.md](.claude/rules/a.md)\n"), rule("a", "# a\n")], {}, ["claude-code", "kiro", "agents-md"]);
+    expect(numbered(p)).toEqual(["1 [see .kiro/steering/zz.md](.kiro/steering/a.md)"]);
+    expect(kw(p)).toEqual(["kiro: 1 reference(s) to names that are no rule or steering of this workspace — rewritten to .kiro/steering/ as before: .claude/rules/zz.md (in rule/hub)"]);
+  });
 });
