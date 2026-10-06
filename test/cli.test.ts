@@ -2410,372 +2410,323 @@ acme-portal-steering — Hand-written Kiro steering specific to acme-portal.
 });
 
 /* ------------------------------------------------------------------ */
-/* Catalogue commands: recipes, ingredients, targets (spec 16 §10.3) */
+/* spec 16 §10.3: craftar recipes, ingredients, targets               */
 /* ------------------------------------------------------------------ */
-describe("cli — catalogue commands (spec 16 §10.3)", () => {
-  it("recipes --forge alone: every recipe, sorted, inUse null, profiles through extends", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n")],
-        recipes: [
-          recipe("base", ["rule/a"]),
-          recipe("stack-angular", [], { extends: ["base"], slot: "frontend" }),
-        ],
-        profiles: [profile("acme", ["base", "stack-angular"])],
-      },
-      { config: { profile: "acme" } },
-    );
+describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
+  const CAT_FORGE = {
+    ingredients: [
+      rule("angular-standards", "# A\n", { description: "Angular conventions" }),
+      rule("commit-style", "# C\n"),
+      rule("old-naming", "# O\n", { targets: ["kiro"] }),
+      rule("workflow--acme", "# W\n", { as: "workflow" }),
+      { meta: { type: "agent", name: "angular-reviewer" } },
+    ],
+    recipes: [
+      recipe("base", ["rule/workflow--acme", "rule/commit-style", "rule/gone"], { description: "Shared conventions" }),
+      recipe("stack-angular", ["rule/angular-standards", "agent/angular-reviewer"], { description: "Angular front end", slot: "frontend", extends: ["base"] }),
+    ],
+    profiles: [profile("acme", ["base"], ["claude-code", "kiro"])],
+  };
+  const CAT_WS = { profile: "acme", recipes: { add: ["stack-angular"] }, overrides: { ingredients: { disable: ["rule/commit-style"] } } };
+  const GONE = 'recipe "base" references missing ingredient rule/gone';
+
+  async function cat(config: Record<string, unknown> = CAT_WS) {
+    const s = await scenario(CAT_FORGE, { config });
     cleanups.push(s.cleanup);
-    const r = runCli(["recipes", "--forge", s.forgeRoot, "--json"]);
+    await writeFiles(s.forgeRoot, { "craftar.forge.yaml": "name: acme-forge\nschema: 1\n" });
+    return s;
+  }
+  async function bare() {
+    const dir = await tmpDir("craftar-cat-bare-");
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    return dir;
+  }
+  const json = (r: { code: number | null; stdout: string; stderr: string }) => {
+    expect(r.stderr).toBe("");
     expect(r.code).toBe(0);
-    const j = JSON.parse(r.stdout);
-    expect(Object.keys(j)).toEqual(["forge", "context", "recipes", "warnings"]);
-    expect(j.context).toBeNull();
-    expect(j.recipes.map((x: { name: string }) => x.name)).toEqual(["base", "stack-angular"]);
-    expect(j.recipes[0].inUse).toBeNull();
-    expect(j.recipes[1].profiles).toContain("acme");
+    return JSON.parse(r.stdout);
+  };
+  const keys = (o: object) => Object.keys(o).sort();
+
+  it("recipes --json: exactly the key set of §4.2 at every level", async () => {
+    const s = await cat();
+    const j = json(runCli(["recipes", "--json", "--workspace", s.wsRoot]));
+    expect(keys(j)).toEqual(["context", "forge", "recipes", "warnings"]);
+    expect(keys(j.forge)).toEqual(["commit", "name"]);
+    expect(keys(j.context)).toEqual(["kind", "profile", "recipes"]);
+    for (const r of j.recipes) expect(keys(r)).toEqual(["description", "extends", "inUse", "ingredients", "name", "profiles", "removedByWorkspace", "slot"]);
+    expect(keys(j.recipes[0].inUse)).toEqual(["by", "extendedBy", "order"]);
+    expect(j.warnings).toEqual([GONE]);
   });
 
-  it("recipes --forge --profile: marks what that profile resolves", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n")],
-        recipes: [recipe("base", ["rule/a"]), recipe("stack-angular", [], { extends: ["base"] })],
-        profiles: [profile("acme", ["base", "stack-angular"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    const r = runCli(["recipes", "--forge", s.forgeRoot, "--profile", "acme", "--json"]);
-    expect(r.code).toBe(0);
-    const j = JSON.parse(r.stdout);
-    expect(j.context).toMatchObject({ kind: "profile", profile: "acme" });
-    expect(j.recipes[0].inUse).not.toBeNull();
-    expect(j.recipes[0].inUse.by).toContain("profile");
+  it("ingredients --json: exactly the key set of §4.3 at every level", async () => {
+    const s = await cat();
+    const j = json(runCli(["ingredients", "--json", "--recipe", "stack-angular", "--workspace", s.wsRoot]));
+    expect(keys(j)).toEqual(["context", "forge", "ingredients", "missing", "recipe", "warnings"]);
+    expect(keys(j.recipe)).toEqual(["chain", "name"]);
+    for (const c of j.recipe.chain) expect(keys(c)).toEqual(["ingredients", "recipe"]);
+    for (const i of j.ingredients) expect(keys(i)).toEqual(["description", "disabled", "inUse", "name", "outputName", "recipes", "ref", "targets", "type"]);
+    expect(j.missing).toEqual([{ ref: "rule/gone", recipes: ["base"] }]);
+    expect(j.warnings).toEqual([GONE]);
   });
 
-  it("recipes inside a workspace: marks what the workspace resolves and why", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n")],
-        recipes: [recipe("base", ["rule/a"]), recipe("stack-angular", [], { extends: ["base"] })],
-        profiles: [profile("acme", ["base", "stack-angular"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    const r = runCli(["recipes", "--workspace", s.wsRoot, "--json"]);
-    expect(r.code).toBe(0);
-    const j = JSON.parse(r.stdout);
-    expect(j.context).toMatchObject({ kind: "workspace", profile: "acme" });
-    expect(j.recipes[0].inUse.by).toContain("profile");
+  it("targets --json: exactly the key set of §4.4 at every level, 24 cells", async () => {
+    const dir = await bare();
+    const j = json(runCli(["targets", "--json"], { cwd: dir }));
+    expect(keys(j)).toEqual(["ingredientTypes", "targets", "warnings"]);
+    expect(j.ingredientTypes).toEqual(["rule", "agent", "command", "skill", "mcp", "script", "steering", "hook"]);
+    expect(j.targets.map((t: { name: string }) => t.name)).toEqual(["claude-code", "kiro", "agents-md"]);
+    let cells = 0;
+    for (const t of j.targets) {
+      expect(keys(t)).toEqual(["capabilities", "inUse", "name"]);
+      expect(Object.keys(t.capabilities)).toEqual(j.ingredientTypes);
+      for (const c of Object.values(t.capabilities) as object[]) {
+        expect(keys(c)).toEqual(["note", "output", "state"]);
+        cells++;
+      }
+    }
+    expect(cells).toBe(24);
+    expect(j.targets[1].capabilities.rule).toEqual({
+      state: "converted",
+      output: [".kiro/steering/<name>.md"],
+      note: "inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)",
+    });
+    expect(j.targets[1].capabilities.script).toEqual({ state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" });
+    expect(j.warnings).toEqual([]);
   });
 
-  it("recipes --profile without --forge: exits 1", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n")],
-        recipes: [recipe("base", ["rule/a"])],
-        profiles: [profile("acme", ["base"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    const r = runCli(["recipes", "--profile", "acme", "--workspace", s.wsRoot]);
+  it("recipes and ingredients: --forge alone, --forge --profile, inside a workspace (cwd), --workspace", async () => {
+    const s = await cat();
+    for (const cmd of ["recipes", "ingredients"]) {
+      expect(json(runCli([cmd, "--json", "--forge", s.forgeRoot])).context, cmd).toBeNull();
+      expect(json(runCli([cmd, "--json", "--forge", s.forgeRoot, "--profile", "acme"])).context, cmd).toEqual({ kind: "profile", profile: "acme", recipes: ["base"] });
+      const inWs = { kind: "workspace", profile: "acme", recipes: ["base", "stack-angular"] };
+      expect(json(runCli([cmd, "--json"], { cwd: s.wsRoot })).context, cmd).toEqual(inWs);
+      expect(json(runCli([cmd, "--json", "--workspace", s.wsRoot])).context, cmd).toEqual(inWs);
+    }
+  });
+
+  it("recipes and ingredients: every refusal of §4.1 exits 1 with its message", async () => {
+    const s = await cat();
+    const outside = await bare();
+    const notForge = await bare();
+    const err = (msg: string) => `error: ${msg}\n`;
+    for (const cmd of ["recipes", "ingredients"]) {
+      const cases: Array<[string[], string | undefined, string]> = [
+        [[cmd, "--forge", s.forgeRoot, "--workspace", s.wsRoot], undefined, err("pass either --forge or --workspace, not both — two sources for one Forge")],
+        [[cmd], outside, err(`no craftar.yaml in ${outside} — run this inside a workspace, pass --workspace <dir>, or point at the Forge with --forge <dir>`)],
+        [[cmd, "--workspace", outside], undefined, err(`no craftar.yaml in ${outside} — run this inside a workspace, pass --workspace <dir>, or point at the Forge with --forge <dir>`)],
+        [[cmd, "--forge", notForge], undefined, err(`not a Forge: ${path.join(notForge, "craftar.forge.yaml")} not found`)],
+        [[cmd, "--profile", "acme", "--workspace", s.wsRoot], undefined, err("--profile goes with --forge — inside a workspace the profile comes from craftar.yaml")],
+        [[cmd, "--profile", "acme"], s.wsRoot, err("--profile goes with --forge — inside a workspace the profile comes from craftar.yaml")],
+        [[cmd, "--forge", s.forgeRoot, "--profile", "nobody"], undefined, err('profile "nobody" not found in Forge (acme)')],
+      ];
+      for (const [args, cwd, stderr] of cases) {
+        const r = runCli(args, cwd ? { cwd } : {});
+        expect(r.code, args.join(" ")).toBe(1);
+        expect(r.stderr, args.join(" ")).toBe(stderr);
+        expect(r.stdout, args.join(" ")).toBe("");
+      }
+    }
+  });
+
+  it("recipes and ingredients: a workspace that does not load, or names an unknown profile, exits 1", async () => {
+    for (const cmd of ["recipes", "ingredients"]) {
+      const invalid = await cat();
+      await fs.writeFile(path.join(invalid.wsRoot, "craftar.yaml"), "forge: 42\nprofile: acme\n");
+      const r1 = runCli([cmd, "--workspace", invalid.wsRoot]);
+      expect(r1.code, cmd).toBe(1);
+      expect(r1.stderr.startsWith("error: invalid craftar.yaml: "), cmd).toBe(true);
+
+      const gone = await cat();
+      await fs.rm(gone.forgeRoot, { recursive: true, force: true });
+      const r2 = runCli([cmd, "--workspace", gone.wsRoot]);
+      expect(r2.code, cmd).toBe(1);
+      expect(r2.stderr, cmd).toBe(`error: Forge not found at ${gone.forgeRoot} (remote Forges are not supported yet — clone it and point \`forge:\` at the path)\n`);
+
+      const unknown = await cat({ profile: "nobody" });
+      const r3 = runCli([cmd, "--workspace", unknown.wsRoot]);
+      expect(r3.code, cmd).toBe(1);
+      expect(r3.stderr, cmd).toBe('error: profile "nobody" not found in Forge (acme)\n');
+    }
+  });
+
+  it("ingredients: an unknown --recipe and an unknown --type exit 1", async () => {
+    const s = await cat();
+    const r1 = runCli(["ingredients", "--recipe", "nope", "--workspace", s.wsRoot]);
+    expect([r1.code, r1.stderr]).toEqual([1, 'error: recipe "nope" not found in this Forge (base, stack-angular)\n']);
+    const r2 = runCli(["ingredients", "--type", "widget", "--workspace", s.wsRoot]);
+    expect([r2.code, r2.stderr]).toEqual([1, 'error: unknown ingredient type "widget" — one of rule, agent, command, skill, mcp, script, steering, hook\n']);
+  });
+
+  it("targets: no craftar.yaml (a bare dir, a Forge dir) → every inUse null, exit 0", async () => {
+    const s = await cat();
+    for (const cwd of [await bare(), s.forgeRoot]) {
+      const j = json(runCli(["targets", "--json"], { cwd }));
+      expect(j.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([null, null, null]);
+      expect(j.warnings).toEqual([]);
+    }
+  });
+
+  it("targets: in a workspace the resolved targets are true, the rest false; a profile with no targets is all false", async () => {
+    const s = await cat();
+    expect(json(runCli(["targets", "--json"], { cwd: s.wsRoot })).targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([true, true, false]);
+    expect(json(runCli(["targets", "--json", "--workspace", s.wsRoot])).targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([true, true, false]);
+    const none = await cat({ profile: "acme", targets: [] });
+    expect(json(runCli(["targets", "--json", "--workspace", none.wsRoot])).targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([false, false, false]);
+  });
+
+  it("targets: --workspace on a dir without craftar.yaml exits 1; --forge is an unknown option", async () => {
+    const dir = await bare();
+    const r = runCli(["targets", "--workspace", dir]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain("--profile requires --forge");
-  });
-
-  it("recipes --workspace on a directory without craftar.yaml: exit 1", async () => {
-    const root = await tmpDir("craftar-cli-forge-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    await fs.mkdir(root, { recursive: true });
-    const r = runCli(["recipes", "--workspace", root]);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("craftar.yaml");
-  });
-
-  it("recipes --forge on a directory that is not a Forge: exit 1", async () => {
-    const root = await tmpDir("craftar-cli-notforge-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    await fs.mkdir(root, { recursive: true });
-    const r = runCli(["recipes", "--forge", root]);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("craftar.forge.yaml");
-  });
-
-  it("recipes in a workspace whose craftar.yaml names an unknown profile: exit 1", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n")],
-        recipes: [recipe("base", ["rule/a"])],
-        profiles: [profile("acme", ["base"])],
-      },
-      { config: { profile: "nobody" } },
+    expect(r.stderr).toBe(
+      `error: craftar.yaml not found in ${dir} — run \`craftar import --workspace "${dir}" --from claude-code --forge <dir> --profile <name> --write-config\` to create it\n`,
     );
-    cleanups.push(s.cleanup);
-    const r = runCli(["recipes", "--workspace", s.wsRoot]);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("profile \"nobody\" not found");
+    const s = await cat();
+    const f = runCli(["targets", "--forge", s.forgeRoot]);
+    expect(f.code).toBe(1);
+    expect(f.stderr).toContain("unknown option '--forge'");
   });
 
-  it("ingredients --forge alone: every ingredient sorted by type then name", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("b", "# B\n"), rule("a", "# A\n")],
-        recipes: [recipe("base", ["rule/a", "rule/b"])],
-        profiles: [profile("acme", ["base"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    const r = runCli(["ingredients", "--forge", s.forgeRoot, "--json"]);
-    expect(r.code).toBe(0);
-    const j = JSON.parse(r.stdout);
-    expect(Object.keys(j)).toEqual(["forge", "context", "recipe", "ingredients", "missing", "warnings"]);
-    expect(j.context).toBeNull();
-    expect(j.recipe).toBeNull();
-    expect(j.ingredients.map((x: { ref: string }) => x.ref)).toEqual(["rule/a", "rule/b"]);
-    expect(j.ingredients[0].inUse).toBeNull();
-  });
-
-  it("ingredients --recipe: the chain parents first", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n"), rule("b", "# B\n")],
-        recipes: [
-          recipe("base", ["rule/a"]),
-          recipe("stack-angular", ["rule/b"], { extends: ["base"] }),
-        ],
-        profiles: [profile("acme", ["base", "stack-angular"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    const r = runCli(["ingredients", "--forge", s.forgeRoot, "--recipe", "stack-angular", "--json"]);
-    expect(r.code).toBe(0);
-    const j = JSON.parse(r.stdout);
-    expect(j.recipe.name).toBe("stack-angular");
-    expect(j.recipe.chain.map((c: { recipe: string }) => c.recipe)).toEqual(["base", "stack-angular"]);
-  });
-
-  it("ingredients --recipe with an unknown recipe: exit 1", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n")],
-        recipes: [recipe("base", ["rule/a"])],
-        profiles: [profile("acme", ["base"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    const r = runCli(["ingredients", "--forge", s.forgeRoot, "--recipe", "unknown"]);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain('recipe "unknown" not found');
-  });
-
-  it("ingredients --type with an unknown type: exit 1", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n")],
-        recipes: [recipe("base", ["rule/a"])],
-        profiles: [profile("acme", ["base"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    const r = runCli(["ingredients", "--forge", s.forgeRoot, "--type", "unknown"]);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("unknown ingredient type");
-  });
-
-  it("targets outside a workspace: every inUse null, exit 0", async () => {
-    const root = await tmpDir("craftar-cli-notws-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    await fs.mkdir(root, { recursive: true });
-    const r = runCli(["targets", "--json"], { cwd: root });
-    expect(r.code).toBe(0);
-    const j = JSON.parse(r.stdout);
-    expect(Object.keys(j)).toEqual(["ingredientTypes", "targets", "warnings"]);
-    expect(j.targets.every((t: { inUse: unknown }) => t.inUse === null)).toBe(true);
-  });
-
-  it("targets inside a workspace: the resolved targets marked true", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n")],
-        recipes: [recipe("base", ["rule/a"])],
-        profiles: [profile("acme", ["base"], ["claude-code", "kiro"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    const r = runCli(["targets", "--workspace", s.wsRoot, "--json"]);
-    expect(r.code).toBe(0);
-    const j = JSON.parse(r.stdout);
-    const cc = j.targets.find((t: { name: string }) => t.name === "claude-code");
-    const kiro = j.targets.find((t: { name: string }) => t.name === "kiro");
-    const agentsMd = j.targets.find((t: { name: string }) => t.name === "agents-md");
-    expect(cc.inUse).toBe(true);
-    expect(kiro.inUse).toBe(true);
-    expect(agentsMd.inUse).toBe(false);
-  });
-
-  it("targets --workspace on a directory without craftar.yaml: exit 1", async () => {
-    const root = await tmpDir("craftar-cli-notws-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    await fs.mkdir(root, { recursive: true });
-    const r = runCli(["targets", "--workspace", root]);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("craftar.yaml");
-  });
-
-  it("targets in a workspace whose Forge is gone: exit 0 with warning", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n")],
-        recipes: [recipe("base", ["rule/a"])],
-        profiles: [profile("acme", ["base"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    await fs.rm(s.forgeRoot, { recursive: true, force: true });
-    const r = runCli(["targets", "--workspace", s.wsRoot, "--json"]);
-    expect(r.code).toBe(0);
-    const j = JSON.parse(r.stdout);
-    expect(j.targets.every((t: { inUse: unknown }) => t.inUse === null)).toBe(true);
-    expect(j.warnings.length).toBeGreaterThan(0);
-    expect(j.warnings[0]).toContain("targets in use not shown");
-  });
-
-  it("targets --forge: commander's unknown-option error", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n")],
-        recipes: [recipe("base", ["rule/a"])],
-        profiles: [profile("acme", ["base"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    const r = runCli(["targets", "--forge", s.forgeRoot]);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("unknown option");
-  });
-
-  it("with --json, stdout parses as one JSON document and warnings appear only inside it", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n")],
-        recipes: [recipe("base", ["rule/a", "rule/missing"])],
-        profiles: [profile("acme", ["base"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    const r = runCli(["ingredients", "--workspace", s.wsRoot, "--json"]);
-    expect(r.code).toBe(0);
-    const j = JSON.parse(r.stdout);
-    expect(j.warnings.length).toBeGreaterThan(0);
-    // Make sure the warning text is only inside the JSON "warnings" array, not printed separately
-    // We check this by ensuring no line starts with "  warn" (the text-mode warning format)
-    expect(r.stdout.split("\n").some((l: string) => l.trimStart().startsWith("warn"))).toBe(false);
-  });
-
-  it("a Forge whose rule holds a malformed section marker: recipes and ingredients exit 0", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n<!-- craftar:section bad")],
-        recipes: [recipe("base", ["rule/a"])],
-        profiles: [profile("acme", ["base"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    // The commands do not plan, so malformed markers do not stop them
-    const r1 = runCli(["recipes", "--forge", s.forgeRoot, "--json"]);
-    expect(r1.code).toBe(0);
-    const r2 = runCli(["ingredients", "--forge", s.forgeRoot, "--json"]);
-    expect(r2.code).toBe(0);
-  });
-
-  it("text mode: the header, the count line, the warn line", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n")],
-        recipes: [recipe("base", ["rule/a", "rule/missing"])],
-        profiles: [profile("acme", ["base"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    const r = runCli(["recipes", "--workspace", s.wsRoot]);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain("craftar recipes");
-    expect(r.stdout).toContain("1 recipe");
-    expect(r.stdout).toContain("warn");
-  });
-
-  it("targets text mode: one paths line per writing cell (14)", async () => {
-    const root = await tmpDir("craftar-cli-notws-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    await fs.mkdir(root, { recursive: true });
-    const r = runCli(["targets"], { cwd: root });
-    expect(r.code).toBe(0);
-    // Count the path lines in the paths block (14 cells write: 7 claude-code + 6 kiro + 1 agents-md)
-    const pathsSection = r.stdout.split("paths")[1];
-    // Each path line starts with "  <target> ·" - count all lines that match this pattern
-    const pathLines = pathsSection.split("\n").filter((l: string) => /^\s+\S+\s+·\s+\S+/.test(l));
-    expect(pathLines.length).toBe(14);
-  });
-
-  it("a snapshot of the tree before and after each command: nothing written", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n")],
-        recipes: [recipe("base", ["rule/a"])],
-        profiles: [profile("acme", ["base"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    const before = { forge: await snapshot(s.forgeRoot), ws: await snapshot(s.wsRoot) };
-    runCli(["recipes", "--workspace", s.wsRoot]);
-    runCli(["ingredients", "--workspace", s.wsRoot]);
-    runCli(["targets", "--workspace", s.wsRoot]);
-    expect({ forge: await snapshot(s.forgeRoot), ws: await snapshot(s.wsRoot) }).toEqual(before);
-  });
-
-  it("recipes and ingredients --json key sets match the spec exactly", async () => {
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "# A\n", { as: "output-a" })],
-        recipes: [recipe("base", ["rule/a"])],
-        profiles: [profile("acme", ["base"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-    const rr = runCli(["recipes", "--workspace", s.wsRoot, "--json"]);
-    const jr = JSON.parse(rr.stdout);
-    expect(Object.keys(jr)).toEqual(["forge", "context", "recipes", "warnings"]);
-    expect(Object.keys(jr.forge)).toEqual(["name", "commit"]);
-    expect(Object.keys(jr.context)).toEqual(["kind", "profile", "recipes"]);
-    expect(Object.keys(jr.recipes[0])).toEqual(["name", "description", "slot", "extends", "ingredients", "profiles", "inUse", "removedByWorkspace"]);
-    expect(Object.keys(jr.recipes[0].inUse)).toEqual(["order", "by", "extendedBy"]);
-
-    const ri = runCli(["ingredients", "--workspace", s.wsRoot, "--json"]);
-    const ji = JSON.parse(ri.stdout);
-    expect(Object.keys(ji)).toEqual(["forge", "context", "recipe", "ingredients", "missing", "warnings"]);
-    expect(Object.keys(ji.ingredients[0])).toEqual([
-      "ref", "type", "name", "outputName", "description", "targets", "recipes", "inUse", "disabled",
+  it("targets: a workspace whose Forge is gone, or that names an unknown profile, prints the matrix with the warning, exit 0", async () => {
+    const gone = await cat();
+    await fs.rm(gone.forgeRoot, { recursive: true, force: true });
+    const j1 = json(runCli(["targets", "--json", "--workspace", gone.wsRoot]));
+    expect(j1.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([null, null, null]);
+    expect(j1.warnings).toEqual([
+      `targets in use not shown: Forge not found at ${gone.forgeRoot} (remote Forges are not supported yet — clone it and point \`forge:\` at the path)`,
     ]);
+    const unknown = await cat({ profile: "nobody" });
+    const j2 = json(runCli(["targets", "--json", "--workspace", unknown.wsRoot]));
+    expect(j2.warnings).toEqual(['targets in use not shown: profile "nobody" not found in Forge (acme)']);
+    const t2 = runCli(["targets", "--workspace", unknown.wsRoot]);
+    expect(t2.code).toBe(0);
+    expect(t2.stdout.trimEnd().split("\n").at(-1)).toBe('  warn targets in use not shown: profile "nobody" not found in Forge (acme)');
+  });
 
-    const rt = runCli(["targets", "--workspace", s.wsRoot, "--json"]);
-    const jt = JSON.parse(rt.stdout);
-    expect(Object.keys(jt)).toEqual(["ingredientTypes", "targets", "warnings"]);
-    expect(Object.keys(jt.targets[0])).toEqual(["name", "inUse", "capabilities"]);
-    expect(Object.keys(jt.targets[0].capabilities.rule)).toEqual(["state", "output", "note"]);
+  it("a rule with a malformed section marker: ls exits 1 (it plans), recipes and ingredients exit 0 (they do not)", async () => {
+    const s = await scenario(
+      { ingredients: [rule("broken", "# B\n<!--craftar:section x-->\nbody\n")], recipes: [recipe("base", ["rule/broken"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    expect(runCli(["ls", "--workspace", s.wsRoot]).code).toBe(1);
+    expect(runCli(["recipes", "--workspace", s.wsRoot]).code).toBe(0);
+    expect(runCli(["ingredients", "--workspace", s.wsRoot]).code).toBe(0);
+  });
+
+  it("--json: stdout is one JSON document and the warnings are only inside it", async () => {
+    const s = await cat();
+    for (const args of [["recipes"], ["ingredients"], ["ingredients", "--recipe", "stack-angular"]]) {
+      const r = runCli([...args, "--json", "--workspace", s.wsRoot]);
+      const j = json(r);
+      expect(j.warnings, args.join(" ")).toEqual([GONE]);
+      expect(r.stdout.match(/references missing ingredient/g), args.join(" ")).toHaveLength(1);
+      expect(r.stdout.endsWith("}\n"), args.join(" ")).toBe(true);
+    }
+  });
+
+  it("text mode: recipes header, count line and warn line", async () => {
+    const s = await cat();
+    const r = runCli(["recipes", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    const lines = r.stdout.trimEnd().split("\n");
+    expect(lines[0]).toBe("craftar recipes — forge acme-forge @ no git · workspace profile acme");
+    expect(lines.at(-2)).toBe("  2 recipes, 2 in use · used by profiles: base (acme), stack-angular (—)");
+    expect(lines.at(-1)).toBe(`  warn ${GONE}`);
+    expect(lines.find((l) => l.includes(" base "))).toMatch(/^  ● base .*in use \(profile, extends stack-angular\)\s+— Shared conventions$/);
+    expect(lines.find((l) => l.includes(" stack-angular "))).toMatch(/^  ● stack-angular \[slot frontend\]\s+2 ingredients\s+← base\s+in use \(workspace\)\s+— Angular front end$/);
+  });
+
+  it("text mode: ingredients header, count line and warn line; --recipe groups", async () => {
+    const s = await cat();
+    const r = runCli(["ingredients", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    const lines = r.stdout.trimEnd().split("\n");
+    expect(lines[0]).toBe("craftar ingredients — forge acme-forge @ no git · workspace profile acme");
+    expect(lines.at(-2)).toBe("  5 ingredients, 3 in use, 1 disabled, 1 in no recipe · 1 missing reference");
+    expect(lines.at(-1)).toBe(`  warn ${GONE}`);
+    expect(lines.filter((l) => !l.startsWith(" ") && l !== "")).toEqual([lines[0], "rule", "agent", "missing"]);
+    expect(lines.find((l) => l.includes("rule/gone"))).toMatch(/^  rule\/gone\s+cited by base, not in this Forge$/);
+
+    const g = runCli(["ingredients", "--recipe", "stack-angular", "--workspace", s.wsRoot]);
+    const gl = g.stdout.trimEnd().split("\n");
+    expect(gl[0]).toBe("craftar ingredients --recipe stack-angular — forge acme-forge @ no git · workspace profile acme");
+    expect(gl.at(-2)).toBe("  2 recipes, 4 ingredients · 1 missing reference");
+    expect(gl.filter((l) => !l.startsWith(" ") && l !== "").slice(1).map((l) => l.replace(/\s+/g, " "))).toEqual(["base", "stack-angular ← base [slot frontend]"]);
+    expect(gl.find((l) => l.includes("rule/gone"))).toMatch(/^  ✗ rule\/gone\s+not in this Forge$/);
+  });
+
+  it("text mode: targets header, matrix, legend and one paths line per writing cell (14)", async () => {
+    const s = await cat();
+    const r = runCli(["targets"], { cwd: s.wsRoot });
+    expect(r.code).toBe(0);
+    const norm = r.stdout.trimEnd().split("\n").map((l) => l.trim().replace(/ {2,}/g, " "));
+    expect(norm[0]).toBe("craftar targets — claude-code (in use) · kiro (in use) · agents-md");
+    const at = norm.indexOf("claude-code kiro agents-md");
+    expect(at).toBeGreaterThan(0);
+    expect(norm.slice(at + 1, at + 9)).toEqual([
+      "rule native converted converted",
+      "agent native converted unsupported",
+      "command native converted unsupported",
+      "skill native converted unsupported",
+      "mcp native native unsupported",
+      "script native unsupported unsupported",
+      "steering unsupported native unsupported",
+      "hook native unsupported unsupported",
+    ]);
+    expect(norm).toContain("native written in the tool's own place for that type, as the Forge holds it");
+    expect(norm).toContain("converted written in another form — see its line below");
+    expect(norm).toContain("unsupported not written; sync warns and names an ingredient aimed at this target");
+    const p = norm.indexOf("paths");
+    expect(norm.slice(p + 1)).toEqual([
+      "claude-code · rule .claude/rules/<name>.md",
+      "kiro · rule .kiro/steering/<name>.md — inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)",
+      "agents-md · rule AGENTS.md — always-on rules are embedded in AGENTS.md; a scoped rule is listed at the file another target writes, or embedded when none does; .claude/rules/ references in the bodies, link text included, point at the file a target writes or the rule's place in AGENTS.md, or read <x> (rule not in this workspace) with a warning",
+      "claude-code · agent .claude/agents/<name>.md",
+      "kiro · agent .kiro/agents/<name>.json — written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files",
+      "claude-code · command .claude/commands/<name>.md",
+      "kiro · command .kiro/steering/commands/<name>.md — written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description",
+      "claude-code · skill .claude/skills/<name>/<file>, .claude/skills/<name>.md",
+      "kiro · skill .kiro/skills/<name>/<file> — in its text files (.md, .txt, .json, .yaml, .yml), .claude/rules/ references resolved as for a rule; other files are copied as they are; a single-file skill becomes <name>/SKILL.md",
+      "claude-code · mcp .mcp.json",
+      "kiro · mcp .kiro/settings/mcp.json",
+      "claude-code · script .claude/scripts/<file>",
+      "kiro · steering .kiro/steering/<name>.md",
+      "claude-code · hook .claude/hooks/<file>",
+    ]);
+    const bareRun = runCli(["targets"], { cwd: await bare() });
+    expect(bareRun.stdout.split("\n")[0]).toBe("craftar targets — claude-code · kiro · agents-md");
+  });
+
+  it("the header carries the first 8 characters of the Forge commit, --json the full SHA", async () => {
+    const s = await cat();
+    gitInit(s.forgeRoot);
+    gitCommitAll(s.forgeRoot, "init");
+    const sha = execFileSync("git", ["-C", s.forgeRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    expect(json(runCli(["recipes", "--json", "--forge", s.forgeRoot])).forge).toEqual({ name: "acme-forge", commit: sha });
+    expect(runCli(["recipes", "--forge", s.forgeRoot]).stdout.split("\n")[0]).toBe(`craftar recipes — forge acme-forge @ ${sha.slice(0, 8)}`);
+    expect(runCli(["ingredients", "--forge", s.forgeRoot, "--profile", "acme"]).stdout.split("\n")[0]).toBe(
+      `craftar ingredients — forge acme-forge @ ${sha.slice(0, 8)} · profile acme`,
+    );
+  });
+
+  it("the three commands write nothing in the workspace or the Forge", async () => {
+    const s = await cat();
+    const before = { forge: await snapshot(s.forgeRoot), ws: await snapshot(s.wsRoot) };
+    for (const args of [
+      ["recipes"],
+      ["recipes", "--json"],
+      ["ingredients"],
+      ["ingredients", "--json", "--recipe", "stack-angular", "--type", "rule"],
+      ["targets"],
+      ["targets", "--json"],
+    ]) {
+      expect(runCli([...args, "--workspace", s.wsRoot]).code, args.join(" ")).toBe(0);
+      expect(runCli(args, { cwd: s.wsRoot }).code, args.join(" ")).toBe(0);
+    }
+    expect(json(runCli(["recipes", "--json", "--forge", s.forgeRoot, "--profile", "acme"])).context).not.toBeNull();
+    expect({ forge: await snapshot(s.forgeRoot), ws: await snapshot(s.wsRoot) }).toEqual(before);
   });
 });
