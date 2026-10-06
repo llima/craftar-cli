@@ -434,3 +434,35 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
     });
   }
 });
+
+describe("capability notes are plain text (spec 16 §4.4)", () => {
+  it("the five converted notes, word for word, with no markdown backticks", () => {
+    expect(CAPABILITIES.kiro.rule.note).toBe(
+      "inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)",
+    );
+    expect(CAPABILITIES.kiro.agent.note).toBe(
+      "written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files",
+    );
+    expect(CAPABILITIES.kiro.command.note).toBe(
+      "written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description",
+    );
+    expect(CAPABILITIES.kiro.skill.note).toBe(
+      "in its text files (.md, .txt, .json, .yaml, .yml), .claude/rules/ references resolved as for a rule; other files are copied as they are; a single-file skill becomes <name>/SKILL.md",
+    );
+    expect(CAPABILITIES["agents-md"].rule.note).toBe(
+      "always-on rules are embedded in AGENTS.md; a scoped rule is listed at the file another target writes, or embedded when none does; .claude/rules/ references in the bodies, link text included, point at the file a target writes or the rule's place in AGENTS.md, or read <x> (rule not in this workspace) with a warning",
+    );
+  });
+
+  it("no note of the 24 cells holds a backtick; native notes are null; unsupported notes are the one sentence", () => {
+    const bad: string[] = [];
+    for (const t of TARGETS)
+      for (const ty of INGREDIENT_TYPES) {
+        const c = CAPABILITIES[t][ty];
+        if (c.note !== null && c.note.includes("`")) bad.push(`${t} · ${ty}`);
+        if (c.state === "native" && c.note !== null) bad.push(`${t} · ${ty} (native with a note)`);
+        if (c.state === "unsupported" && c.note !== "skipped with a warning when aimed at this target") bad.push(`${t} · ${ty} (unsupported note)`);
+      }
+    expect(bad).toEqual([]);
+  });
+});

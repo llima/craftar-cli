@@ -69,22 +69,22 @@ export const CAPABILITIES: Record<Target, Record<IngredientType, Capability>> = 
     rule: {
       state: "converted",
       output: [".kiro/steering/<name>.md"],
-      note: "inclusion frontmatter and a banner are added; a `.claude/rules/` reference becomes `.kiro/steering/` when kiro writes that file, and otherwise follows the rule it names (kept for `claude-code`, `AGENTS.md (rule: <x>)`, or `<x> (rule not in this workspace)` with a warning)",
+      note: "inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)",
     },
     agent: {
       state: "converted",
       output: [".kiro/agents/<name>.json"],
-      note: "written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; `.claude/rules/` references resolved as for a rule; `resources` taken from the ingredient, else derived from the steering files",
+      note: "written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files",
     },
     command: {
       state: "converted",
       output: [".kiro/steering/commands/<name>.md"],
-      note: "written as manual steering; `.claude/rules/` references resolved as for a rule, in the body and the description",
+      note: "written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description",
     },
     skill: {
       state: "converted",
       output: [".kiro/skills/<name>/<file>"],
-      note: "in its text files (`.md`, `.txt`, `.json`, `.yaml`, `.yml`), `.claude/rules/` references resolved as for a rule; other files are copied as they are; a single-file skill becomes `<name>/SKILL.md`",
+      note: "in its text files (.md, .txt, .json, .yaml, .yml), .claude/rules/ references resolved as for a rule; other files are copied as they are; a single-file skill becomes <name>/SKILL.md",
     },
     mcp: {
       state: "native",
@@ -111,7 +111,7 @@ export const CAPABILITIES: Record<Target, Record<IngredientType, Capability>> = 
     rule: {
       state: "converted",
       output: ["AGENTS.md"],
-      note: "always-on rules are embedded in `AGENTS.md`; a scoped rule is listed at the file another target writes, or embedded when none does; `.claude/rules/` references in the bodies, link text included, point at the file a target writes or the rule's place in `AGENTS.md`, or read `<x> (rule not in this workspace)` with a warning",
+      note: "always-on rules are embedded in AGENTS.md; a scoped rule is listed at the file another target writes, or embedded when none does; .claude/rules/ references in the bodies, link text included, point at the file a target writes or the rule's place in AGENTS.md, or read <x> (rule not in this workspace) with a warning",
     },
     agent: {
       state: "unsupported",
