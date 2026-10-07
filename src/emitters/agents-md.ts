@@ -1,5 +1,6 @@
-import { appliesTo, buildRuleLookup, outName, resolveRuleRefs, ruleFile, ruleWriter, textFile, type RefReport } from "./shared.js";
+import { buildRuleLookup, outName, resolveRuleRefs, ruleFile, ruleWriter, textFile, type RefReport } from "./shared.js";
 import type { Emitter } from "./types.js";
+import type { WrittenIngredient } from "../core/capabilities.js";
 
 /**
  * AGENTS.md target (open standard read by Codex, Cursor, Warp, Copilot, Kiro, Kimi…).
@@ -7,21 +8,26 @@ import type { Emitter } from "./types.js";
  * are either listed with a path (when `claude-code` or `kiro` writes them) or embedded in full
  * (when no target writes them), so agents that only read AGENTS.md see every convention (spec 14).
  */
-export const agentsMd: Emitter = {
+export const agentsMd: Emitter<"agents-md"> = {
   target: "agents-md",
   async emit(ctx) {
-    const aimed = ctx.resolution.ingredients.filter((i) => appliesTo(i.meta.targets, "agents-md"));
-    // AGENTS.md renders rules only; anything else aimed at this target is said out loud, never dropped silently.
-    // One line per type, naming every ref: the default `targets: "*"` aims a whole profile here, and one
-    // line per ingredient would bury the warnings that matter.
-    const skipped = new Map<string, string[]>();
-    for (const ing of aimed) {
-      if (ing.meta.type !== "rule") skipped.set(ing.meta.type, [...(skipped.get(ing.meta.type) ?? []), ing.ref]);
+    // AGENTS.md renders rules only. Everything else aimed here is warned by the walk, one line per
+    // type naming every ref, on its first pull — before anything is rendered (spec 18 §3.2). The walk
+    // is taken to its end even when no rule comes out of it, or those warnings would be lost.
+    const rules: WrittenIngredient<"agents-md">[] = [];
+    for (const ing of ctx.aimed) {
+      const m = ing.meta;
+      switch (m.type) {
+        case "rule":
+          rules.push(ing);
+          break;
+        default: {
+          // Written<"agents-md"> is the single literal "rule", so the switch narrows `m.type`, not `m`.
+          const never: never = m.type;
+          throw new Error(`internal: agents-md has no case for ${String(never)}`);
+        }
+      }
     }
-    for (const [type, refs] of skipped) {
-      ctx.warn(`agents-md: ${refs.length} ${type} ingredient(s) have no AGENTS.md equivalent — skipped: ${refs.join(", ")}`);
-    }
-    const rules = aimed.filter((i) => i.meta.type === "rule");
     if (!rules.length) return [];
 
     // Build the lookup once per AGENTS.md, not once per body (spec 15 §4.2)
@@ -42,7 +48,6 @@ export const agentsMd: Emitter = {
     const alwaysReports: RefReport[] = [];
     const embeddedReports: RefReport[] = [];
     for (const ing of rules) {
-      if (ing.meta.type !== "rule") continue;
       const rawBody = await ctx.text(ing, ing.meta.file);
       if (ing.meta.inclusion === "always") {
         // Resolve references, then trim trailing newlines (spec 15: after ctx.text, before the trim)

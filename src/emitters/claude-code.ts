@@ -1,20 +1,23 @@
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
-import { appliesTo, mcpServers, outName, ruleFile, textFile } from "./shared.js";
-import type { Emitter, EmitContext, PlannedFile } from "./types.js";
+import { mcpServers, outName, ruleFile, textFile } from "./shared.js";
+import type { Emitter, EmitBase, PlannedFile } from "./types.js";
+import type { ResolvedIngredient } from "../core/resolve.js";
+import type { Ingredient } from "../schema/index.js";
 
 /**
  * Claude Code target: `.claude/{rules,agents,commands,skills,scripts,hooks}` + `.mcp.json`.
  * Files are emitted verbatim from the Forge so that `import` → `sync` on the source workspace is a no-op.
  */
-export const claudeCode: Emitter = {
+export const claudeCode: Emitter<"claude-code"> = {
   target: "claude-code",
   async emit(ctx) {
     const out: PlannedFile[] = [];
     const t = "claude-code";
+    const mcp: ResolvedIngredient[] = [];
 
-    for (const ing of ctx.resolution.ingredients) {
-      if (!appliesTo(ing.meta.targets, t)) continue;
+    // What this target writes comes from its walk; the matrix decides the rest and warns (spec 18).
+    for (const ing of ctx.aimed) {
       const m = ing.meta;
       switch (m.type) {
         case "rule":
@@ -55,18 +58,18 @@ export const claudeCode: Emitter = {
           for (const f of m.files) out.push(await anyFile(ctx, ing, f, `.claude/hooks/${f}`, t));
           break;
         case "mcp":
-          break; // collected into .mcp.json below
-        case "steering":
-          // Kiro-only by nature: the schema defaults steering to `targets: ["kiro"]`, so reaching
-          // here means the Forge aimed it at claude-code explicitly (`"*"` or a list naming it).
-          ctx.warn(`claude-code: steering ${ing.ref} has no Claude Code equivalent — skipped`);
+          mcp.push(ing); // collected into .mcp.json below
           break;
+        default: {
+          const never: never = m; // a cell that writes has no case here
+          throw new Error(`internal: ${t} has no case for ${(never as Ingredient).type}`);
+        }
       }
     }
 
-    const mcp = mcpServers(ctx, t, ".mcp.json");
-    if (Object.keys(mcp).length) {
-      const json = JSON.stringify({ mcpServers: mcp }, null, 2) + "\n";
+    const servers = mcpServers(ctx, t, ".mcp.json", mcp);
+    if (Object.keys(servers).length) {
+      const json = JSON.stringify({ mcpServers: servers }, null, 2) + "\n";
       out.push(await textFile(ctx, ".mcp.json", json, t, "mcp/*"));
     }
     return out;
@@ -76,7 +79,7 @@ export const claudeCode: Emitter = {
 /** Files claude-code emits as text, through `ctx.text` (substituted); anything else is copied as raw bytes. */
 export const TEXT_EXT = /\.(md|txt|json|ya?ml|ps1|py|sh|js|ts|cjs|mjs|toml|xml|csv)$/i;
 
-async function anyFile(ctx: EmitContext, ing: Parameters<EmitContext["text"]>[0], file: string, relPath: string, target: PlannedFile["target"]): Promise<PlannedFile> {
+async function anyFile(ctx: EmitBase, ing: Parameters<EmitBase["text"]>[0], file: string, relPath: string, target: PlannedFile["target"]): Promise<PlannedFile> {
   if (TEXT_EXT.test(file)) return textFile(ctx, relPath, await ctx.text(ing, file), target, ing.ref);
   return { path: relPath, content: await ctx.bytes(ing, file), target, ingredient: ing.ref };
 }

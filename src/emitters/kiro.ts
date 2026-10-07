@@ -1,8 +1,9 @@
 import { toCrlf } from "../core/text.js";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
-import { appliesTo, buildRuleLookup, mcpServers, outName, resolveRuleRefs, ruleFile, RULE_NAME_CHARS, UNKNOWN_NAME_KIND, type RefReport } from "./shared.js";
-import type { Emitter, EmitContext, PlannedFile } from "./types.js";
+import { buildRuleLookup, mcpServers, outName, resolveRuleRefs, ruleFile, RULE_NAME_CHARS, UNKNOWN_NAME_KIND, type RefReport } from "./shared.js";
+import type { Emitter, EmitBase, PlannedFile } from "./types.js";
+import type { Ingredient } from "../schema/index.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 
 /** Files kiro copies as text, through `ctx.text` (substituted); anything else is copied as raw bytes. */
@@ -18,7 +19,7 @@ export const KIRO_TEXT_EXT = /\.(md|txt|json|ya?ml)$/i;
  *   - UTF-8 without BOM, CRLF (the exact shape Kiro already consumes)
  * and additionally generates what the script never did: agents JSON, commands and skills.
  */
-export const kiro: Emitter = {
+export const kiro: Emitter<"kiro"> = {
   target: "kiro",
   async emit(ctx) {
     const out: PlannedFile[] = [];
@@ -37,8 +38,10 @@ export const kiro: Emitter = {
       return resolved;
     };
 
-    for (const ing of ctx.resolution.ingredients) {
-      if (!appliesTo(ing.meta.targets, t)) continue;
+    const mcp: ResolvedIngredient[] = [];
+    // What this target writes comes from its walk; the matrix decides the rest and warns (spec 18).
+    // `ctx.resolution.ingredients` above is for lookups only.
+    for (const ing of ctx.aimed) {
       const m = ing.meta;
       switch (m.type) {
         case "rule": {
@@ -96,18 +99,19 @@ export const kiro: Emitter = {
         }
         case "mcp":
           // Kiro reads MCP servers from .kiro/settings/mcp.json
+          mcp.push(ing);
           break;
-        case "script":
-        case "hook":
-          ctx.warn(`kiro: ${m.type} ${ing.ref} has no Kiro equivalent — skipped`);
-          break;
+        default: {
+          const never: never = m; // a cell that writes has no case here
+          throw new Error(`internal: ${t} has no case for ${(never as Ingredient).type}`);
+        }
       }
     }
 
     // Emit one warning for all dead and unknown references (spec 17 §4.5)
     emitKiroWarning(ctx, reports);
 
-    const servers = mcpServers(ctx, t, ".kiro/settings/mcp.json");
+    const servers = mcpServers(ctx, t, ".kiro/settings/mcp.json", mcp);
     if (Object.keys(servers).length) {
       out.push(crlf(".kiro/settings/mcp.json", JSON.stringify({ mcpServers: servers }, null, 2) + "\n", "mcp/*"));
     }
@@ -116,7 +120,7 @@ export const kiro: Emitter = {
 };
 
 /** Emit the kiro warning for dead and unknown references (spec 17 §4.5). */
-function emitKiroWarning(ctx: EmitContext, reports: RefReport[]): void {
+function emitKiroWarning(ctx: EmitBase, reports: RefReport[]): void {
   // Collect entries: D (has kind with "reaches no target") and unknown (empty kind)
   const dead: Array<{ ref: string; citing: string; kind: string }> = [];
   const unknown: Array<{ ref: string; citing: string }> = [];
@@ -168,7 +172,7 @@ function crlf(path: string, text: string, ingredient: string): PlannedFile {
   return { path, content: Buffer.from(toCrlf(text), "utf8"), target: "kiro", ingredient };
 }
 
-async function copy(ctx: EmitContext, ing: ResolvedIngredient, file: string, relPath: string, resolve: (text: string, citing: string) => string): Promise<PlannedFile> {
+async function copy(ctx: EmitBase, ing: ResolvedIngredient, file: string, relPath: string, resolve: (text: string, citing: string) => string): Promise<PlannedFile> {
   if (KIRO_TEXT_EXT.test(file)) return crlf(relPath, resolve(await ctx.text(ing, file), ing.ref), ing.ref);
   return { path: relPath, content: await ctx.bytes(ing, file), target: "kiro", ingredient: ing.ref };
 }
@@ -190,7 +194,7 @@ const TOOL_MAP: Record<string, string | null> = {
   todowrite: null,
 };
 
-function mapTools(tools: string[], ctx: EmitContext): string[] {
+function mapTools(tools: string[], ctx: EmitBase): string[] {
   const out: string[] = [];
   for (const raw of tools) {
     const key = raw.trim().replace(/\(.*\)$/, "").toLowerCase();
