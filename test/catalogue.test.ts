@@ -449,8 +449,14 @@ describe("catalogue — one sort order, each recipe once (review of 0.9.0)", () 
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
     await makeForge(root, {
       ingredients: [rule("a", "# A\n")],
-      recipes: [recipe("zeta", ["rule/a", "rule/a", "rule/gone", "rule/gone"]), recipe("Zeta", ["rule/a"]), recipe("alpha", [])],
-      profiles: [profile("acme", ["zeta"]), profile("Acme", ["Zeta"])],
+      recipes: [recipe("zeta", ["rule/a", "rule/a", "rule/gone", "rule/gone"]), recipe("alpha", [])],
+      profiles: [profile("acme", ["zeta"])],
+    });
+    // A second recipe and profile whose names differ from the first only in case: distinct FILE names,
+    // because Windows and macOS file systems are case-insensitive (loadForge keys by `name`, not by file).
+    await writeFiles(root, {
+      "recipes/upper-zeta.yaml": "name: Zeta\ningredients: [rule/a]\n",
+      "profiles/upper-acme/profile.yaml": "name: Acme\nrecipes: [Zeta]\n",
     });
     const forge = await loadForge(root);
     expect(listRecipes(forge, null).recipes.map((x) => x.name)).toEqual(["Zeta", "alpha", "zeta"]);
