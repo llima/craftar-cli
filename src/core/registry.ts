@@ -2,9 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { REGISTRY_SCHEMAS, RegistrySchema, type Lock, type Registry, type RegistryEntry } from "../schema/index.js";
 import { exists } from "./forge.js";
-import { resolveHome, withLock, type LockTiming } from "./home-lock.js";
-
-export { resolveHome };
+import { withLock, type LockTiming } from "./home-lock.js";
 import { cacheKey } from "./remote.js";
 import { loadWorkspace, plan, readLock, status, WORKSPACE_FILE, type FileStatus, type Plan, type Workspace } from "./sync.js";
 
@@ -16,7 +14,6 @@ import { loadWorkspace, plan, readLock, status, WORKSPACE_FILE, type FileStatus,
 
 export const REGISTRY_FILE = "registry.json";
 const LOCK_LABEL = "the workspace registry";
-
 
 export function registryFile(home: string): string {
   return path.join(home, REGISTRY_FILE);
