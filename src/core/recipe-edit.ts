@@ -60,10 +60,11 @@ export function planRecipeEdit(
   const top = () => [...profile.recipes, ...lists.add].filter((r) => !lists.remove.includes(r) && known(r));
   // The "resolved" walk: through `extends`, without the slot check, over the names the Forge holds (§3.1).
   const order = () => recipeOrder(forge, top(), `profile ${profile.name}`);
+  // Every occurrence: a name written twice by hand must not survive in the list (§10 criterion 4).
   const without = (list: string[], name: string) => {
-    const i = list.indexOf(name);
-    if (i >= 0) list.splice(i, 1);
-    return i >= 0;
+    const before = list.length;
+    for (let i = list.indexOf(name); i >= 0; i = list.indexOf(name)) list.splice(i, 1);
+    return list.length < before;
   };
 
   const removeOne = (name: string): boolean => {

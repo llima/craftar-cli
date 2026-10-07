@@ -217,6 +217,23 @@ describe("planRecipeEdit (spec 22 §3.1–§3.3)", () => {
       new Error('recipe "nope" not found (referenced by craftar.yaml recipes.add)'),
     );
   });
+  it("a name written twice by hand is deleted everywhere it appears (§10 criterion 4)", () => {
+    expect(planRecipeEdit(forge, config([], ["stack-api", "stack-api"]), "add", ["stack-api"])).toEqual({
+      recipes: { add: [], remove: [] },
+      changed: true,
+      reasons: [],
+    });
+    expect(planRecipeEdit(forge, config(["front-b", "front-b"], ["front-a"]), "remove", ["front-b"])).toEqual({
+      recipes: { add: [], remove: ["front-a"] },
+      changed: true,
+      reasons: [],
+    });
+    expect(planRecipeEdit(forge, config([], ["nope", "nope"]), "remove", ["nope"])).toEqual({
+      recipes: { add: [], remove: [] },
+      changed: true,
+      reasons: [],
+    });
+  });
 });
 
 describe("recipeDiffLine (spec 22 §3.3, line 1)", () => {
@@ -263,6 +280,16 @@ describe("editRecipesText (spec 22 §5.1, §5.2, §6 items 1–3)", () => {
     expect(
       editRecipesText("﻿forge: ../forge\r\nprofile: acme\r\nrecipes: {add: [], remove: []}\r\n", { add: ["front-b"], remove: [] }, "add recipe"),
     ).toBe("﻿forge: ../forge\r\nprofile: acme\r\nrecipes: {add: [front-b], remove: []}\r\n");
+  });
+  it("CRLF and a BOM are kept for recipes absent, recipes: {} and a block form with a comment", () => {
+    const bom = "\uFEFF";
+    const head = "forge: ../forge\r\nprofile: acme\r\n";
+    const one = { add: ["front-b"], remove: [] };
+    expect(editRecipesText(bom + head, one, "add recipe")).toBe(bom + head + "recipes:\r\n  add:\r\n    - front-b\r\n");
+    expect(editRecipesText(bom + head + "recipes: {}\r\n", one, "add recipe")).toBe(bom + head + "recipes:\r\n  add:\r\n    - front-b\r\n");
+    expect(editRecipesText(bom + head + "recipes:\r\n  add: [] # extra\r\n  remove: []\r\n", after, "add recipe")).toBe(
+      bom + head + "recipes:\r\n  add: [front-b] # extra\r\n  remove: [front-a]\r\n",
+    );
   });
   it("an emptied block list is written []", () => {
     expect(editRecipesText("forge: ../forge\nprofile: acme\nrecipes:\n  add:\n    - front-b\n  remove:\n    - front-a\n", { add: [], remove: [] }, "add recipe")).toBe(
