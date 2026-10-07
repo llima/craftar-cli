@@ -3358,14 +3358,24 @@ describe("cli — a remote Forge (spec 13 §4.1, §4.4, AC 1, 3, 4, 5)", () => {
     }
   });
 
-  it("Q13-1 (pending the user): diff --exit-code with the remote unreachable reads the cache — exit 0, the warning, judged against the cache", async () => {
+  it("Q13-1 (answered: like sync --check): with the remote unreachable, diff --exit-code exits 1 naming --offline; plain diff reads the cache with a warning", async () => {
     const { r, run } = await remoteWs();
     expect(run(["sync"]).code).toBe(0);
+    const sha = git(r.src, "rev-parse", "HEAD");
     await fs.rename(r.bare, r.bare + ".gone");
-    const x = run(["diff", "--exit-code"]);
-    expect(x.code).toBe(0);
-    expect(x.stdout).toBe("no differences\n");
-    expect(x.stderr.startsWith(`warn Forge ${r.url} not fetched (`)).toBe(true);
+    const gate = run(["diff", "--exit-code"]);
+    expect(gate.code).toBe(1);
+    expect(gate.stdout).toBe("");
+    expect(gate.stderr.startsWith(`error: cannot fetch the Forge ${r.url}: `)).toBe(true);
+    expect(gate.stderr).toContain(`— run with --offline to use the cached copy (${short(sha)} fetched `);
+    const check = run(["sync", "--check"]);
+    expect([check.code, check.stderr.split(": ").slice(0, 2).join(": ")]).toEqual([1, gate.stderr.split(": ").slice(0, 2).join(": ")]);
+    const plain = run(["diff"]);
+    expect(plain.code).toBe(0);
+    expect(plain.stdout).toBe("no differences\n");
+    expect(plain.stderr.startsWith(`warn Forge ${r.url} not fetched (`)).toBe(true);
+    const offline = run(["diff", "--exit-code", "--offline"]);
+    expect([offline.code, offline.stdout]).toEqual([0, "no differences\n"]);
   });
 
   it("status --json carries forge for a path Forge too", async () => {
