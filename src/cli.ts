@@ -4,6 +4,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
+import { classifyForge } from "./core/remote.js";
 import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, type FetchMode, type FileStatus, type LoadOptions, type SectionLayer, type Workspace } from "./core/sync.js";
 import type { Lock } from "./schema/index.js";
 import { resolve, sectionKey } from "./core/resolve.js";
@@ -51,6 +52,8 @@ program
   .option("--write-config", "write craftar.yaml into the workspace, merging an existing one (forge, profile, targets)", false)
   .action(async (o) => {
     if (o.from !== "claude-code") fail(`unsupported source "${o.from}" (only claude-code for now)`);
+    // import writes a local Forge; a URL would become a directory named after it (spec 13 §4.4).
+    if (classifyForge(o.forge) === "url") fail("--forge takes a directory; to read a remote Forge, run inside a workspace that names it");
     const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig });
     console.log(pc.bold(`Imported ${path.resolve(o.workspace)} → ${path.resolve(o.forge)} as profile "${r.profile}"`));
     console.log(
@@ -77,7 +80,12 @@ program
     console.log(`  profile ${w.path} ${w.action}${w.fields.length ? ` (${w.fields.join(", ")})` : ""}`);
     const split = new Map(r.recipeSplits.map((x) => [x.owned, x.reason]));
     console.log(`  recipes: ${r.recipes.map((n) => (split.has(n) ? `${n} (${split.get(n)})` : n)).join(", ")}`);
-    if (r.configWrite === "edited") console.log(`  workspace craftar.yaml edited (forge, profile, targets)`);
+    if (r.configWrite === "edited")
+      console.log(
+        r.configForgeKept
+          ? `  workspace craftar.yaml edited (profile, targets) — forge kept (remote ${r.configForgeKept}); push the Forge for sync to see this import`
+          : `  workspace craftar.yaml edited (forge, profile, targets)`,
+      );
     for (const w of r.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   });
 

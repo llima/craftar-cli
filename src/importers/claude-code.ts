@@ -10,6 +10,7 @@ import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerpri
 import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { resolve } from "../core/resolve.js";
+import { classifyForge, credentialFault } from "../core/remote.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
 import { decide, forgeBefore, pin, sourceKeys, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
@@ -53,6 +54,8 @@ export interface ImportReport {
   manifestWrite: "created" | "edited" | "unchanged";
   /** What happened to the workspace's craftar.yaml; null without --write-config. */
   configWrite: "created" | "edited" | "unchanged" | null;
+  /** A remote `forge` craftar.yaml already named, kept as written by --write-config (spec 13 §4.5); else null. */
+  configForgeKept: string | null;
 }
 
 /** Rules that every workspace shares by intent — they seed the `base` recipe. */
@@ -116,6 +119,8 @@ interface PlannedConfig {
   abs: string;
   content: string;
   action: "created" | "edited" | "unchanged";
+  /** The remote `forge` kept as written, when there was one. */
+  keptRemote: string | null;
 }
 
 async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ report: ImportReport; targets: Target[]; config: PlannedConfig | null }> {
@@ -126,6 +131,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     profileWrite: { path: `profiles/${opts.profileName}/profile.yaml`, action: "unchanged", fields: [] },
     manifestWrite: "unchanged",
     configWrite: null,
+    configForgeKept: null,
   };
   const claudeDir = path.join(ws, ".claude");
   if (!(await exists(claudeDir))) throw new Error(`${claudeDir} not found — is this a Claude Code workspace?`);
@@ -406,6 +412,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   if (report.manifestWrite === "created") report.created.unshift(FORGE_MANIFEST);
   const config = opts.writeWorkspaceConfig ? await planConfig(ws, forge, opts.profileName, targets) : null;
   report.configWrite = config?.action ?? null;
+  report.configForgeKept = config?.keptRemote ?? null;
   return { report, targets, config };
 }
 
@@ -987,13 +994,20 @@ async function planConfig(ws: string, forge: string, profile: string, targets: T
   const fresh = YAML.stringify({ forge: rel, profile, targets });
   const raw = (await exists(abs)) ? await fs.readFile(abs, "utf8") : null;
   const before = raw === null ? null : YAML.parse(stripBom(raw));
-  if (raw === null || before === null || before === undefined) return { abs, content: fresh, action: "created" };
+  if (raw === null || before === null || before === undefined) return { abs, content: fresh, action: "created", keptRemote: null };
   const i9 = (why: string) => new Error(`import: cannot edit craftar.yaml in place (${why}) — reformat it by hand and re-run`);
   if (typeof before !== "object" || Array.isArray(before)) throw i9("it is not a YAML mapping");
+  // A remote Forge stays what the team named (spec 13 §4.5): import writes the local clone, and sync reads
+  // the URL once the Forge is pushed. The report prints the URL, so a credential in it is refused first (§4.3).
+  const existing: unknown = before.forge;
+  if (typeof existing === "string" && credentialFault(existing))
+    throw new Error("craftar.yaml › forge holds credentials in the URL — remove them and let git authenticate (credential helper, SSH agent; see README › Remote Forge)");
+  const keptRemote = typeof existing === "string" && classifyForge(existing) === "url" ? existing : null;
+  const forgeValue = keptRemote ?? rel;
   let content: string;
   try {
     content = editYamlText(raw, { command: "import", label: "craftar.yaml", keys: [] }, (doc) => {
-      doc.set("forge", rel);
+      if (keptRemote === null) doc.set("forge", rel);
       doc.set("profile", profile);
       if (JSON.stringify(before.targets) !== JSON.stringify(targets)) doc.set("targets", targets);
     });
@@ -1001,8 +1015,8 @@ async function planConfig(ws: string, forge: string, profile: string, targets: T
     throw i9((e as Error).message.replace(/^.*in place \((.*)\) — .*$/s, "$1"));
   }
   const after = YAML.parse(stripBom(content));
-  if (!isDeepStrictEqual(after, { ...before, forge: rel, profile, targets })) throw i9("the edit does not read back as exactly forge, profile and targets set");
+  if (!isDeepStrictEqual(after, { ...before, forge: forgeValue, profile, targets })) throw i9("the edit does not read back as exactly forge, profile and targets set");
   const loaded = WorkspaceConfigSchema.safeParse(after);
   if (!loaded.success) throw i9(`it no longer loads: ${loaded.error.message}`);
-  return { abs, content, action: content === raw ? "unchanged" : "edited" };
+  return { abs, content, action: content === raw ? "unchanged" : "edited", keptRemote };
 }

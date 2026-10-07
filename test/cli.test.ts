@@ -3415,3 +3415,38 @@ describe("cli — a remote Forge (spec 13 §4.1, §4.4, AC 1, 3, 4, 5)", () => {
     expect(await fs.readFile(path.join(entry, "fetched"), "utf8")).toBe(stamp);
   });
 });
+
+describe("cli — import --write-config keeps a remote forge (spec 13 §4.5, AC 8)", () => {
+  async function wsWith(craftarYaml: string) {
+    const root = await tmpDir("craftar-import-remote-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { ".claude/rules/a.md": "# A\n", "craftar.yaml": craftarYaml });
+    return { ws, forge: path.join(root, "forge") };
+  }
+
+  it("forge kept byte for byte, profile and targets set, and the report says the Forge must be pushed", async () => {
+    const { ws, forge } = await wsWith("forge: git@example.com:acme/forge.git\nprofile: old\n");
+    const r = runCli(["import", "--from", "claude-code", "--workspace", ws, "--forge", forge, "--profile", "acme", "--write-config"]);
+    expect(r.code).toBe(0);
+    expect(await fs.readFile(path.join(ws, "craftar.yaml"), "utf8")).toBe("forge: git@example.com:acme/forge.git\nprofile: acme\ntargets:\n  - claude-code\n");
+    expect(r.stdout.split("\n")).toContain(
+      "  workspace craftar.yaml edited (profile, targets) — forge kept (remote git@example.com:acme/forge.git); push the Forge for sync to see this import",
+    );
+  });
+
+  it("a credential in that forge is refused before anything prints it, and the Forge is not created", async () => {
+    const { ws, forge } = await wsWith("forge: https://alice:s3cr3t@example.com/acme/forge.git\nprofile: old\n");
+    const r = runCli(["import", "--from", "claude-code", "--workspace", ws, "--forge", forge, "--profile", "acme", "--write-config"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr + r.stdout).not.toContain("s3cr3t");
+    expect(r.stderr).toContain("craftar.yaml › forge holds credentials in the URL — remove them and let git authenticate");
+    expect(await exists(forge)).toBe(false);
+  });
+
+  it("--forge with a URL is refused for import too", async () => {
+    const { ws } = await wsWith("forge: ../forge\nprofile: acme\n");
+    const r = runCli(["import", "--from", "claude-code", "--workspace", ws, "--forge", "https://example.com/acme/forge.git", "--profile", "acme"]);
+    expect([r.code, r.stderr]).toEqual([1, "error: --forge takes a directory; to read a remote Forge, run inside a workspace that names it\n"]);
+  });
+});
