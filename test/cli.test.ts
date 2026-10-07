@@ -2814,7 +2814,7 @@ describe("cli — the targets text has no trailing spaces and the catalogue drop
 describe("cli — diff, pinned before spec 19", () => {
   // rule/a ("A one\nA two\n") and rule/b ("B one\nB two\n"),
   // recipe base listing both, profile acme using base, target claude-code.
-  async function forgeF() {
+  async function pinnedScenario() {
     const s = await scenario(
       {
         ingredients: [rule("a", "A one\nA two\n"), rule("b", "B one\nB two\n")],
@@ -2828,7 +2828,7 @@ describe("cli — diff, pinned before spec 19", () => {
   }
 
   it("drift only, exit 0", async () => {
-    const s = await forgeF();
+    const s = await pinnedScenario();
     expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
     // Drift on b: append "hand\n"
     await fs.appendFile(path.join(s.wsRoot, ".claude/rules/b.md"), "hand\n");
@@ -2846,7 +2846,7 @@ describe("cli — diff, pinned before spec 19", () => {
   });
 
   it("drift + update, byte for byte (spec test 9)", async () => {
-    const s = await forgeF();
+    const s = await pinnedScenario();
     expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
     // Update on a: rewrite the Forge ingredient
     await fs.writeFile(path.join(s.forgeRoot, "ingredients/rules/a/rule.md"), "A one\nA changed\n");
@@ -2871,7 +2871,7 @@ describe("cli — diff, pinned before spec 19", () => {
   });
 
   it("in sync", async () => {
-    const s = await forgeF();
+    const s = await pinnedScenario();
     expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
 
     const r = runCli(["diff", "--workspace", s.wsRoot]);
@@ -2880,7 +2880,7 @@ describe("cli — diff, pinned before spec 19", () => {
   });
 
   it("a [path] nothing matches, without the flag", async () => {
-    const s = await forgeF();
+    const s = await pinnedScenario();
     expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
     // Drift on b so the workspace is not in sync — but the paths below should still show no differences
     await fs.appendFile(path.join(s.wsRoot, ".claude/rules/b.md"), "hand\n");
@@ -2894,7 +2894,7 @@ describe("cli — diff, pinned before spec 19", () => {
   });
 
   it("a [path] naming an unchanged file while another drifted", async () => {
-    const s = await forgeF();
+    const s = await pinnedScenario();
     expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
     // Drift on b
     await fs.appendFile(path.join(s.wsRoot, ".claude/rules/b.md"), "hand\n");
