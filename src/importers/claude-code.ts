@@ -1016,7 +1016,7 @@ async function planConfig(ws: string, forge: string, profile: string, targets: T
   } catch (e) {
     throw i9((e as Error).message.replace(/^.*in place \((.*)\) — .*$/s, "$1"));
   }
-  const after = YAML.parse(stripBom(content));
+  const after = parseWorkspaceYaml("craftar.yaml", content);
   if (!isDeepStrictEqual(after, { ...before, forge: forgeValue, profile, targets })) throw i9("the edit does not read back as exactly forge, profile and targets set");
   const loaded = WorkspaceConfigSchema.safeParse(after);
   if (!loaded.success) throw i9(`it no longer loads: ${loaded.error.message}`);

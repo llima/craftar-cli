@@ -3590,6 +3590,7 @@ describe("cli — a workspace file's YAML never echoes a credential, on any comm
     await fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), "forge: !foo https://u:SECRET@h.invalid/r\nprofile: acme\n");
     const r = runCli(["status", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
     expect(r.code).toBe(1);
+    expect(r.stderr).toContain("craftar.yaml › forge holds credentials in the URL");
     expect(r.stdout + r.stderr).not.toContain("SECRET");
   });
 });

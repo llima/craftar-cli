@@ -1,7 +1,7 @@
-import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import path from "node:path";
 import { z } from "zod";
 import { placeholders, reservedKey, bodyFile } from "../core/extract.js";
+import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { fingerprintOf } from "../core/fingerprint.js";
 import { exists, listFiles, loadForge, readIngredientText, type Forge } from "../core/forge.js";
 import { hashNormalized, stripBom, toLf } from "../core/text.js";

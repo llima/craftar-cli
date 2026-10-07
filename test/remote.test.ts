@@ -255,3 +255,15 @@ describe("the Forge cache, a tree is complete only when Craftar says so (review 
     expect((await fs.readdir(path.dirname(b.dir))).filter((t) => !t.includes("."))).toEqual([b.commit]);
   });
 });
+
+describe("the Forge cache, stray stamps (review of spec 13, round 4)", () => {
+  it("a .used or .ok whose tree is gone is removed after a fetch", async () => {
+    const { r, home } = await setup();
+    const a = await ensureTree(r.url, null, { home });
+    const trees = path.dirname(a.dir);
+    await fs.writeFile(path.join(trees, `${"e".repeat(40)}.used`), "");
+    await fs.writeFile(path.join(trees, `${"e".repeat(40)}.ok`), "");
+    await ensureTree(r.url, null, { home });
+    expect((await fs.readdir(trees)).sort()).toEqual([a.commit, `${a.commit}.ok`, `${a.commit}.used`].sort());
+  });
+});
