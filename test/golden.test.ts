@@ -6,6 +6,7 @@ import { importClaudeCode } from "../src/importers/claude-code.js";
 import { apply, loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
 import { listFiles } from "../src/core/forge.js";
 import { hasBom } from "../src/core/text.js";
+import { git } from "./helpers/remote.js";
 
 /** The oracle script, run over committed synthetic workspaces — no client material, runs everywhere. */
 const GOLDEN = path.resolve(__dirname, "golden");
@@ -107,5 +108,83 @@ describe("golden: synthetic acme workspaces", () => {
     const p = await plan(w);
     const st = await status(w, p, null);
     expect(st.filter((s) => s.state !== "adopt").map((s) => `${s.state} ${s.path}`)).toEqual([]);
+  });
+});
+
+describe("the lock (spec 13 §4.6, §6.5)", () => {
+  const roots: string[] = [];
+  afterAll(async () => {
+    for (const r of roots) await fs.rm(r, { recursive: true, force: true });
+  });
+  async function imported() {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-lock-"));
+    roots.push(root);
+    const ws = path.join(root, "acme-portal");
+    await cp(path.join(GOLDEN, "acme-portal"), ws);
+    const r = await importClaudeCode({ workspaceRoot: ws, forgeRoot: path.join(root, "forge"), profileName: "acme-portal", writeWorkspaceConfig: true });
+    expect(r.rejected).toEqual([]);
+    return { root, ws, forge: path.join(root, "forge"), lock: path.join(ws, "craftar.lock") };
+  }
+
+  it("a second sync with nothing changed leaves craftar.lock byte-identical, mtime included", async () => {
+    const { ws, lock } = await imported();
+    await syncOnce(ws);
+    const before = { bytes: await fs.readFile(lock), mtime: (await fs.stat(lock)).mtimeMs };
+    await new Promise((r) => setTimeout(r, 20));
+    await syncOnce(ws);
+    expect((await fs.readFile(lock)).equals(before.bytes)).toBe(true);
+    expect((await fs.stat(lock)).mtimeMs).toBe(before.mtime);
+  });
+
+  it("the first sync writes schema 2: key order, ref null for a path Forge, recipes in application order, targets", async () => {
+    const { ws, lock } = await imported();
+    await syncOnce(ws);
+    const l = JSON.parse(await fs.readFile(lock, "utf8"));
+    expect(Object.keys(l)).toEqual(["schema", "forge", "profile", "recipes", "targets", "generatedAt", "files"]);
+    expect(l.schema).toBe(2);
+    expect(l.forge).toEqual({ source: "../forge", ref: null, commit: null });
+    const w = await loadWorkspace(ws);
+    const p = await plan(w);
+    expect(l.recipes).toEqual(p.resolution.recipes);
+    expect(l.recipes).toEqual(["base", "stack-backend-node", "acme-portal-steering"]);
+    expect(l.targets).toEqual(["claude-code", "kiro"]);
+  });
+
+  it("a ref next to a path Forge is not recorded: the lock's forge.ref stays null (spec 13 §4.2)", async () => {
+    const { ws, lock } = await imported();
+    await fs.appendFile(path.join(ws, "craftar.yaml"), "ref: v1\n");
+    await syncOnce(ws);
+    expect(JSON.parse(await fs.readFile(lock, "utf8")).forge.ref).toBeNull();
+  });
+
+  it("a schema 1 lock passes sync --check without a write, and the next sync upgrades it", async () => {
+    const { ws, lock } = await imported();
+    await syncOnce(ws);
+    const v2 = JSON.parse(await fs.readFile(lock, "utf8"));
+    const v1 = { schema: 1, forge: { source: v2.forge.source, commit: v2.forge.commit }, profile: v2.profile, generatedAt: v2.generatedAt, files: v2.files };
+    await fs.writeFile(lock, JSON.stringify(v1, null, 2) + "\n");
+    const bytes = await fs.readFile(lock);
+    const w = await loadWorkspace(ws);
+    const p = await plan(w);
+    const st = await status(w, p, await readLock(ws));
+    expect(st.filter((s) => !["unchanged", "adopt"].includes(s.state))).toEqual([]);
+    expect((await fs.readFile(lock)).equals(bytes)).toBe(true);
+    await syncOnce(ws);
+    expect(JSON.parse(await fs.readFile(lock, "utf8")).schema).toBe(2);
+  });
+
+  it("only the Forge moved: the lock's forge.commit follows, and no generated file is written", async () => {
+    const { ws, forge, lock } = await imported();
+    git(forge, "init", "-q", "-b", "main");
+    git(forge, "add", "-A");
+    git(forge, "commit", "-q", "-m", "init");
+    await syncOnce(ws);
+    expect(JSON.parse(await fs.readFile(lock, "utf8")).forge.commit).toBe(git(forge, "rev-parse", "HEAD"));
+    await fs.writeFile(path.join(forge, "README.md"), "notes\n");
+    git(forge, "add", "-A");
+    git(forge, "commit", "-q", "-m", "notes");
+    const again = await syncOnce(ws);
+    expect([again.r.written, again.r.removed]).toEqual([[], []]);
+    expect(JSON.parse(await fs.readFile(lock, "utf8")).forge.commit).toBe(git(forge, "rev-parse", "HEAD"));
   });
 });

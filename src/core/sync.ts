@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
 import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
@@ -523,14 +524,22 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
     }
   }
 
-  const lock: Lock = {
-    schema: 1,
-    forge: { source: ws.config.forge, commit: ws.forge.commit },
+  // Schema 2, in this key order (spec 13 §5.2): what the sync used, not only what it wrote.
+  const built: Lock = {
+    schema: 2,
+    forge: { source: ws.config.forge, ref: ws.origin.ref, commit: ws.forge.commit },
     profile: ws.config.profile,
+    recipes: p.resolution.recipes,
+    targets: p.resolution.targets,
     generatedAt: new Date().toISOString(),
     files: entries.sort((a, b) => a.path.localeCompare(b.path)),
   };
-  if (!opts.dryRun) await writeLock(ws.root, lock);
+  // Rewritten only when its content changes: generatedAt is when it last did (Ruling 10). A schema 1
+  // lock always differs, so the first sync with this craftar upgrades it.
+  const onDisk = opts.dryRun ? null : await readLock(ws.root);
+  const unchanged = onDisk !== null && isDeepStrictEqual({ ...onDisk, generatedAt: null }, { ...built, generatedAt: null });
+  const lock = unchanged ? onDisk : built;
+  if (!opts.dryRun && !unchanged) await writeLock(ws.root, lock);
   return { written, removed, skipped, lock };
 }
 
