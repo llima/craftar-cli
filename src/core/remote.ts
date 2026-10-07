@@ -377,11 +377,14 @@ async function cleanup(git: GitRunner, entry: string, repo: string, inUse: strin
       removed = true;
     });
   }
-  // A stamp or marker whose tree is gone (a reader stamped it as cleanup took the tree) goes too.
-  for (const name of await fs.readdir(trees).catch(() => [] as string[])) {
-    const m = /^(.+)\.(used|ok)$/.exec(name);
-    if (m && !(await exists(path.join(trees, m[1])))) await fs.rm(path.join(trees, name), { force: true });
-  }
+  // A stamp or marker whose tree is gone (a reader stamped it as cleanup took the tree) goes too — under
+  // the lock, so it never races a rebuild between its `rm` of the tree and the `.ok` it then writes.
+  await withLock(entry, opts, async () => {
+    for (const name of await fs.readdir(trees).catch(() => [] as string[])) {
+      const m = /^(.+)\.(used|ok)$/.exec(name);
+      if (m && !(await exists(path.join(trees, m[1])))) await fs.rm(path.join(trees, name), { force: true });
+    }
+  });
   if (removed) await git(["-C", repo, "worktree", "prune"]).catch(() => {});
 }
 
