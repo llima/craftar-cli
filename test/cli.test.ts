@@ -3728,7 +3728,7 @@ describe("cli — the workspace registry (spec 21 §10.3)", () => {
     expect(f.stdout.trim()).toBe(`forgot ${await fs.realpath(drift)}`);
     const again = s.run(["workspaces", "forget", drift]);
     expect(again.code).toBe(1);
-    expect(again.stderr).toContain(`${path.resolve(drift)} is not registered`);
+    expect(again.stderr).toContain(`${await fs.realpath(drift)} is not registered`);
     expect((await s.entries()).map((e) => path.basename(e.path))).toEqual(["acme-broken", "acme-ok"]);
   });
 

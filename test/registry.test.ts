@@ -179,7 +179,8 @@ describe("forget and prune (§4.3, §4.4)", () => {
     await syncAndRegister(f.home, b);
     expect(await forget(f.home, a)).toBe(await fs.realpath(a));
     expect((await readRegistry(f.home)).workspaces.map((e) => path.basename(e.path))).toEqual(["acme-b"]);
-    await expect(forget(f.home, a)).rejects.toThrow(`${path.resolve(a)} is not registered`);
+    // An existing directory is matched, and named, by its real path (on Windows, the long form of an 8.3 temp path).
+    await expect(forget(f.home, a)).rejects.toThrow(`${await fs.realpath(a)} is not registered`);
   });
 
   it("forget matches a directory that no longer exists by its resolved path", async () => {
