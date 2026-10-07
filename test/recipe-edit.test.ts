@@ -212,6 +212,11 @@ describe("planRecipeEdit (spec 22 §3.1–§3.3)", () => {
       reasons: [],
     });
   });
+  it("an unknown name already in recipes.add fails the final resolve, naming craftar.yaml (R5, §14 item 7)", () => {
+    expect(() => planRecipeEdit(forge, config(["nope"]), "add", ["front-b"], { replace: true })).toThrow(
+      new Error('recipe "nope" not found (referenced by craftar.yaml recipes.add)'),
+    );
+  });
 });
 
 describe("recipeDiffLine (spec 22 §3.3, line 1)", () => {
