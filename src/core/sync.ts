@@ -88,8 +88,19 @@ export async function loadWorkspace(root: string, opts: LoadOptions = {}): Promi
     );
   const base = parseWorkspaceYaml(WORKSPACE_FILE, await fs.readFile(file, "utf8")) ?? {};
   const localFile = path.join(root, LOCAL_FILE);
-  const hasLocal = await exists(localFile);
-  const local = hasLocal ? parseWorkspaceYaml(LOCAL_FILE, await fs.readFile(localFile, "utf8")) ?? {} : {};
+  const local = (await exists(localFile)) ? parseWorkspaceYaml(LOCAL_FILE, await fs.readFile(localFile, "utf8")) ?? {} : null;
+  return loadWorkspaceConfig(root, base, local, opts);
+}
+
+/**
+ * Everything `loadWorkspace` does after reading the two files (spec 23 §5.2): the credential check,
+ * the merge, the schema, the Forge load and the warnings — for a configuration held in memory
+ * (`craftar init`). `local` is null when there is no `craftar.local.yaml`.
+ */
+export async function loadWorkspaceConfig(root: string, base: unknown, localDoc: unknown | null, opts: LoadOptions = {}): Promise<Workspace> {
+  root = path.resolve(root);
+  const hasLocal = localDoc !== null;
+  const local = localDoc ?? {};
   // Before anything can print the value: a credential in either file is refused by file and field (spec 13 §4.3).
   for (const [name, raw] of [[WORKSPACE_FILE, base], [LOCAL_FILE, local]] as const) {
     const value: unknown = raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>).forge : undefined;
