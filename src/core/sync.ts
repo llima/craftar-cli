@@ -1,13 +1,17 @@
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
 import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
+import { parseWorkspaceYaml } from "./workspace-yaml.js";
+import { classifyForge, credentialFault, ensureTree, ForgeFetchError, NoCachedCopyError, type CachedTree } from "./remote.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile } from "./extract.js";
-import { LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Target, type WorkspaceConfig } from "../schema/index.js";
+import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
 import { agentsMd } from "../emitters/agents-md.js";
@@ -32,30 +36,135 @@ export async function emitFor<T extends Target>(t: T, emitter: Emitter<T>, base:
   return files;
 }
 
+/** Where the Forge came from (spec 13 §5.3), for headers and `status --json`. Always set. */
+export interface ForgeOrigin {
+  kind: "path" | "remote";
+  /** `forge:` as written (after the local merge). */
+  source: string;
+  /** The requested ref; null when none was given or the Forge is a path. */
+  ref: string | null;
+  /** The resolved branch when `ref` is null and the Forge is remote, else null. */
+  defaultBranch: string | null;
+  /** True only when this command fetched. */
+  fetched: boolean;
+  /** When the cached copy was last fetched (remote only). */
+  fetchedAt?: string;
+  /** `forge:` came from craftar.local.yaml. */
+  fromLocalFile: boolean;
+}
+
 export interface Workspace {
   root: string;
   config: WorkspaceConfig;
   forge: Forge;
+  origin: ForgeOrigin;
+  /** Warnings from loading the workspace itself (spec 13 §4.2); `plan()` puts them first. */
+  warnings: string[];
 }
 
-export async function loadWorkspace(root: string): Promise<Workspace> {
+/**
+ * How a command treats the network for a remote Forge (spec 13 §4.1, Ruling 6): `sync` fails when the
+ * fetch fails; `read` warns and uses the cached copy; `no-fetch` never fetches (`targets`, spec 16 §7).
+ */
+export type FetchMode = "sync" | "read" | "no-fetch";
+
+export interface LoadOptions {
+  mode?: FetchMode;
+  /** `--offline`: the cached copy, on purpose. No effect on a path Forge. */
+  offline?: boolean;
+  /** `$CRAFTAR_HOME`; defaults to `~/.craftar`. */
+  home?: string;
+  /** Refuse a remote Forge with this message before anything is fetched (`forge unify`, spec 13 §4.4). */
+  refuseRemote?: (url: string) => string;
+}
+
+
+export async function loadWorkspace(root: string, opts: LoadOptions = {}): Promise<Workspace> {
   root = path.resolve(root);
   const file = path.join(root, WORKSPACE_FILE);
   if (!(await exists(file)))
     throw new Error(
       `${WORKSPACE_FILE} not found in ${root} — run \`craftar import --workspace "${root}" --from claude-code --forge <dir> --profile <name> --write-config\` to create it`,
     );
-  const base = YAML.parse(await fs.readFile(file, "utf8")) ?? {};
+  const base = parseWorkspaceYaml(WORKSPACE_FILE, await fs.readFile(file, "utf8")) ?? {};
   const localFile = path.join(root, LOCAL_FILE);
   const hasLocal = await exists(localFile);
-  const local = hasLocal ? YAML.parse(await fs.readFile(localFile, "utf8")) ?? {} : {};
+  const local = hasLocal ? parseWorkspaceYaml(LOCAL_FILE, await fs.readFile(localFile, "utf8")) ?? {} : {};
+  // Before anything can print the value: a credential in either file is refused by file and field (spec 13 §4.3).
+  for (const [name, raw] of [[WORKSPACE_FILE, base], [LOCAL_FILE, local]] as const) {
+    const value: unknown = raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>).forge : undefined;
+    if (typeof value === "string" && credentialFault(value))
+      throw new Error(`${name} › forge holds credentials in the URL — remove them and let git authenticate (credential helper, SSH agent; see README › Remote Forge)`);
+  }
+  const fromLocalFile = local !== null && typeof local === "object" && Object.hasOwn(local, "forge");
   const parsed = WorkspaceConfigSchema.safeParse(deepMerge(base, local));
   // Named, as a Forge file is: a wrong-shape `overrides.sections` key fails here (spec 11 §5.2).
   if (!parsed.success) throw new Error(`invalid ${WORKSPACE_FILE}${hasLocal ? ` (merged with ${LOCAL_FILE})` : ""}: ${parsed.error.message}`);
   const config = parsed.data;
-  const forgeRoot = /^[a-z]+:\/\/|^git@/.test(config.forge) ? config.forge : path.resolve(root, config.forge);
-  if (!(await exists(forgeRoot))) throw new Error(`Forge not found at ${forgeRoot} (remote Forges are not supported yet — clone it and point \`forge:\` at the path)`);
-  return { root, config, forge: await loadForge(forgeRoot) };
+  const remote = classifyForge(config.forge) === "url";
+  const warnings: string[] = [];
+  if (fromLocalFile) warnings.push(`Forge overridden by ${LOCAL_FILE} (${config.forge}) — do not commit ${LOCK_FILE} or the generated files`);
+  if (remote) {
+    if (opts.refuseRemote) throw new Error(opts.refuseRemote(config.forge));
+    const { tree, origin, warning } = await remoteTree(config.forge, config.ref ?? null, opts, fromLocalFile);
+    if (warning) warnings.push(warning);
+    return { root, config, forge: await loadForge(tree), origin, warnings };
+  }
+  const forgeRoot = path.resolve(root, config.forge);
+  if (!(await exists(forgeRoot))) throw new Error(`Forge not found at ${forgeRoot}`);
+  // A path means the working tree as it is; a ref beside it is ignored, said out loud (Ruling 9).
+  if (config.ref !== undefined) warnings.unshift(`ref "${config.ref}" is ignored: the Forge is a path (${config.forge}), read as its working tree`);
+  const origin: ForgeOrigin = { kind: "path", source: config.forge, ref: null, defaultBranch: null, fetched: false, fromLocalFile };
+  return { root, config, forge: await loadForge(forgeRoot), origin, warnings };
+}
+
+const short = (sha: string) => sha.slice(0, 8);
+
+/** Fetch (or not) by the rule of `opts.mode`, and say what was used (spec 13 §4.1, §4.8). */
+async function remoteTree(
+  url: string,
+  ref: string | null,
+  opts: LoadOptions,
+  fromLocalFile: boolean,
+): Promise<{ tree: string; origin: ForgeOrigin; warning: string | null }> {
+  const home = opts.home ?? path.join(os.homedir(), ".craftar");
+  const mode = opts.mode ?? "read";
+  const offline = opts.offline || mode === "no-fetch";
+  const origin = (t: CachedTree): ForgeOrigin => ({
+    kind: "remote",
+    source: url,
+    ref,
+    defaultBranch: t.defaultBranch,
+    fetched: t.fetched,
+    ...(t.fetchedAt ? { fetchedAt: t.fetchedAt } : {}),
+    fromLocalFile,
+  });
+  const used = (t: CachedTree) => `the cached copy at ${short(t.commit)}, fetched ${t.fetchedAt ?? "never"}`;
+  if (offline) {
+    let t: CachedTree;
+    try {
+      t = await ensureTree(url, ref, { home, offline: true });
+    } catch (e) {
+      if (!(e instanceof NoCachedCopyError)) throw e;
+      // `targets` (no-fetch) takes no --offline: point at a command that fetches.
+      throw new Error(`${e.message} — ${opts.offline ? "run without --offline once to fetch it" : "run craftar status once to fetch it"}`);
+    }
+    return { tree: t.dir, origin: origin(t), warning: opts.offline ? `Forge ${url} not fetched (--offline) — using ${used(t)}` : null };
+  }
+  try {
+    const t = await ensureTree(url, ref, { home });
+    return { tree: t.dir, origin: origin(t), warning: null };
+  } catch (e) {
+    if (!(e instanceof ForgeFetchError)) throw e;
+    if (!e.cached)
+      throw new Error(
+        `cannot fetch the Forge ${url}: ${e.gitMessage} — ${e.haveCopy ? `and the cached copy cannot resolve ${ref ?? "the default branch"}` : "and there is no cached copy to fall back on"}`,
+      );
+    if (mode === "sync")
+      throw new Error(`cannot fetch the Forge ${url}: ${e.gitMessage} — run with --offline to use the cached copy (${short(e.cached.commit)} fetched ${e.cached.fetchedAt ?? "never"})`);
+    const t = await ensureTree(url, ref, { home, offline: true });
+    return { tree: t.dir, origin: origin(t), warning: `Forge ${url} not fetched (${e.gitMessage}) — using ${used(t)}` };
+  }
 }
 
 /**
@@ -63,18 +172,22 @@ export async function loadWorkspace(root: string): Promise<Workspace> {
  * `--forge` names the Forge directly, `workspace` is undefined.
  * Otherwise the workspace's craftar.yaml gives both.
  */
-export async function resolveForgeSource(opts: { forge?: string; workspace?: string }): Promise<{ forge: Forge; workspace?: Workspace }> {
+export async function resolveForgeSource(opts: { forge?: string; workspace?: string } & LoadOptions): Promise<{ forge: Forge; workspace?: Workspace }> {
   if (opts.forge !== undefined && opts.workspace !== undefined) {
     throw new Error("pass either --forge or --workspace, not both — two sources for one Forge");
   }
-  if (opts.forge !== undefined) return { forge: await loadForge(path.resolve(opts.forge)) };
+  if (opts.forge !== undefined) {
+    // A URL is not a directory to load: a remote Forge is read through a workspace that names it (spec 13 §4.4).
+    if (classifyForge(opts.forge) === "url") throw new Error("--forge takes a directory; to read a remote Forge, run inside a workspace that names it");
+    return { forge: await loadForge(path.resolve(opts.forge)) };
+  }
   const root = path.resolve(opts.workspace ?? ".");
   if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
     throw new Error(
       `no ${WORKSPACE_FILE} in ${root} — run this inside a workspace, pass --workspace <dir>, or point at the Forge with --forge <dir>`,
     );
   }
-  const workspace = await loadWorkspace(root);
+  const workspace = await loadWorkspace(root, opts);
   return { forge: workspace.forge, workspace };
 }
 
@@ -82,7 +195,7 @@ export async function resolveForgeSource(opts: { forge?: string; workspace?: str
  * The Forge a `forge` command operates on (spec 04 §4.3). `--forge` names it directly;
  * otherwise the workspace's craftar.yaml does. Both at once is ambiguous, so it fails.
  */
-export async function resolveForge(opts: { forge?: string; workspace?: string }): Promise<Forge> {
+export async function resolveForge(opts: { forge?: string; workspace?: string } & LoadOptions): Promise<Forge> {
   return (await resolveForgeSource(opts)).forge;
 }
 
@@ -205,7 +318,7 @@ function guardOutput(ing: ResolvedIngredient, file: string, out: string, p: Pars
 
 export async function plan(ws: Workspace): Promise<Plan> {
   const resolution = resolve(ws.forge, ws.config);
-  const warnings = [...resolution.warnings];
+  const warnings = [...ws.warnings, ...resolution.warnings];
   if (resolution.targets.length === 0) {
     warnings.push(
       "no targets resolved — nothing will be emitted and every file in craftar.lock becomes an orphan (an empty list in craftar.local.yaml replaces the workspace's)",
@@ -287,7 +400,11 @@ function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {
 export async function readLock(root: string): Promise<Lock | null> {
   const f = path.join(root, LOCK_FILE);
   if (!(await exists(f))) return null;
-  return LockSchema.parse(JSON.parse(await fs.readFile(f, "utf8")));
+  const raw: unknown = JSON.parse(await fs.readFile(f, "utf8"));
+  // A lock a later craftar wrote is refused by name, not with a zod dump (spec 13 §4.6).
+  if (raw !== null && typeof raw === "object" && Object.hasOwn(raw, "schema") && !LOCK_SCHEMAS.includes((raw as { schema: unknown }).schema))
+    throw new Error(`${LOCK_FILE} declares schema ${JSON.stringify((raw as { schema: unknown }).schema)}, which this craftar does not read — upgrade craftar`);
+  return LockSchema.parse(raw);
 }
 
 export async function writeLock(root: string, lock: Lock): Promise<void> {
@@ -419,14 +536,22 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
     }
   }
 
-  const lock: Lock = {
-    schema: 1,
-    forge: { source: ws.config.forge, commit: ws.forge.commit },
+  // Schema 2, in this key order (spec 13 §5.2): what the sync used, not only what it wrote.
+  const built: Lock = {
+    schema: 2,
+    forge: { source: ws.config.forge, ref: ws.origin.ref, commit: ws.forge.commit },
     profile: ws.config.profile,
+    recipes: p.resolution.recipes,
+    targets: p.resolution.targets,
     generatedAt: new Date().toISOString(),
     files: entries.sort((a, b) => a.path.localeCompare(b.path)),
   };
-  if (!opts.dryRun) await writeLock(ws.root, lock);
+  // Rewritten only when its content changes: generatedAt is when it last did (Ruling 10). A schema 1
+  // lock always differs, so the first sync with this craftar upgrades it.
+  const onDisk = opts.dryRun ? null : await readLock(ws.root);
+  const unchanged = onDisk !== null && isDeepStrictEqual({ ...onDisk, generatedAt: null }, { ...built, generatedAt: null });
+  const lock = unchanged ? onDisk : built;
+  if (!opts.dryRun && !unchanged) await writeLock(ws.root, lock);
   return { written, removed, skipped, lock };
 }
 

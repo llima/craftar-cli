@@ -246,14 +246,43 @@ export const LockEntrySchema = z.object({
   target: TargetSchema,
   ingredient: z.string(),
 });
-export const LockSchema = z.object({
-  schema: z.literal(1).default(1),
+/** Lock schema 1 (craftar ≤ 0.10.x): read, never written since 0.11.0. */
+export const LockSchemaV1 = z.object({
+  schema: z.literal(1),
   forge: z.object({ source: z.string(), commit: z.string().nullable() }),
   profile: z.string(),
   generatedAt: z.string(),
   files: z.array(LockEntrySchema),
 });
+/** Lock schema 2 (spec 13 §5.2): also what the sync used — the requested ref, the resolved recipes and targets. */
+export const LockSchemaV2 = z.object({
+  schema: z.literal(2),
+  forge: z.object({
+    /** craftar.yaml › forge as written (after the local merge); never holds credentials (spec 13 §4.3). */
+    source: z.string(),
+    /** The requested ref; null when none was given or the Forge is a path. */
+    ref: z.string().nullable(),
+    /** The resolved commit; null for a path Forge without git. */
+    commit: z.string().nullable(),
+  }),
+  profile: z.string(),
+  /** Resolution.recipes: resolved, in application order (extends parents included). */
+  recipes: z.array(z.string()),
+  targets: z.array(TargetSchema),
+  /** When the lock's content last changed (Ruling 10). */
+  generatedAt: z.string(),
+  files: z.array(LockEntrySchema),
+});
+/** Supported lock schemas; anything else is refused by name in `readLock`. */
+export const LOCK_SCHEMAS: readonly unknown[] = [1, 2];
+// A lock with no `schema` key is version 1, as `.default(1)` read it before. A discriminated union
+// rejects a missing discriminator, so the key is supplied before the union sees it.
+export const LockSchema = z.preprocess(
+  (v) => (v !== null && typeof v === "object" && !Array.isArray(v) && !Object.hasOwn(v, "schema") ? { ...v, schema: 1 } : v),
+  z.discriminatedUnion("schema", [LockSchemaV1, LockSchemaV2]),
+);
 export type Lock = z.infer<typeof LockSchema>;
+export type LockV2 = z.infer<typeof LockSchemaV2>;
 export type LockEntry = z.infer<typeof LockEntrySchema>;
 
 /* ------------------------------------------------------------------ */
