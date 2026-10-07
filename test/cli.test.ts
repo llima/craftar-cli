@@ -3604,3 +3604,192 @@ describe("cli — a workspace file's YAML never echoes a credential, on any comm
     expect(r.stdout + r.stderr).not.toContain("SECRET");
   });
 });
+
+describe("cli — the workspace registry (spec 21 §10.3)", () => {
+  const SPEC = {
+    ingredients: [rule("a", "# A\n")],
+    recipes: [recipe("base", ["rule/a"]), recipe("frontend-angular", [], { slot: "frontend" })],
+    profiles: [profile("acme", ["base", "frontend-angular"])],
+  };
+
+  /** A temporary root with its own CRAFTAR_HOME, a path Forge, and workspaces made on demand. */
+  async function setup() {
+    const root = await tmpDir("craftar-registry-cli-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const forgeRoot = path.join(root, "forge");
+    await makeForge(forgeRoot, SPEC);
+    const ws = async (name: string) => {
+      const dir = path.join(root, name);
+      await writeFiles(dir, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+      return dir;
+    };
+    const run = (args: string[], env: NodeJS.ProcessEnv = {}) => runCli(args, { env: { CRAFTAR_HOME: home, ...env } });
+    const registry = path.join(home, "registry.json");
+    const entries = async () => JSON.parse(await fs.readFile(registry, "utf8")).workspaces as Array<{ path: string; lastSync: string }>;
+    return { root, home, forgeRoot, ws, run, registry, entries };
+  }
+
+  it("a writing sync registers; --dry-run and --check do not; a sync with nothing to write still updates lastSync", async () => {
+    const s = await setup();
+    const a = await s.ws("acme-a");
+    expect(s.run(["sync", "--dry-run", "--workspace", a]).code).toBe(0);
+    expect(await exists(s.registry)).toBe(false);
+    expect(s.run(["sync", "--workspace", a]).code).toBe(0);
+    const [first] = await s.entries();
+    expect(first.path).toBe(await fs.realpath(a));
+    const b = await s.ws("acme-b");
+    expect(s.run(["sync", "--check", "--workspace", b]).code).toBe(1);
+    expect((await s.entries()).map((e) => path.basename(e.path))).toEqual(["acme-a"]);
+    await new Promise((r) => setTimeout(r, 20));
+    const again = s.run(["sync", "--workspace", a]);
+    expect(again.stdout).toContain("wrote 0,");
+    expect(again.stdout).not.toContain("registry");
+    const [second] = await s.entries();
+    expect(second.lastSync > first.lastSync).toBe(true);
+  });
+
+  it("CRAFTAR_NO_REGISTRY: a non-empty value turns it off for sync and refuses every workspaces form; an empty one is unset", async () => {
+    const s = await setup();
+    const a = await s.ws("acme-a");
+    const off = { CRAFTAR_NO_REGISTRY: "1" };
+    const r = s.run(["sync", "--workspace", a], off);
+    expect(r.code).toBe(0);
+    expect(r.stdout).not.toContain("registry");
+    expect(await exists(s.home)).toBe(false);
+    for (const args of [["workspaces"], ["workspaces", "--json"], ["workspaces", "forget", a], ["workspaces", "prune"]]) {
+      const x = s.run(args, off);
+      expect(x.code, args.join(" ")).toBe(1);
+      expect(x.stderr).toContain("the workspace registry is off (CRAFTAR_NO_REGISTRY is set)");
+    }
+    expect(await exists(s.home)).toBe(false);
+    expect(s.run(["sync", "--workspace", a], { CRAFTAR_NO_REGISTRY: "" }).code).toBe(0);
+    expect(await s.entries()).toHaveLength(1);
+  });
+
+  it("a CRAFTAR_HOME that cannot hold the registry: sync still writes its files and lock, exits 0, and warns", async () => {
+    const s = await setup();
+    const a = await s.ws("acme-a");
+    await fs.writeFile(s.home, "not a directory\n");
+    const r = s.run(["sync", "--workspace", a]);
+    expect(r.code).toBe(0);
+    expect(await exists(path.join(a, ".claude/rules/a.md"))).toBe(true);
+    expect(await exists(path.join(a, "craftar.lock"))).toBe(true);
+    expect(r.stdout).toContain(`warn registry not updated (${s.registry}): `);
+  });
+
+  it("a registry of schema 2, or of invalid JSON: sync warns and leaves its bytes; workspaces exits 1 naming it", async () => {
+    const s = await setup();
+    const a = await s.ws("acme-a");
+    for (const body of [JSON.stringify({ schema: 2, workspaces: [] }) + "\n", "{ not json\n"]) {
+      await writeFiles(s.home, { "registry.json": body });
+      const r = s.run(["sync", "--workspace", a]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain(`warn registry not updated (${s.registry}): `);
+      expect(await fs.readFile(s.registry, "utf8")).toBe(body);
+      const w = s.run(["workspaces"]);
+      expect(w.code).toBe(1);
+      expect(w.stderr).toMatch(body.startsWith("{ not") ? `cannot read ${s.registry}` : "registry.json declares schema 2, which this craftar does not read — upgrade craftar");
+    }
+  });
+
+  it("the table: up to date and drift, then missing; prune and forget; an error row is never pruned; nothing is written", async () => {
+    const s = await setup();
+    const ok = await s.ws("acme-ok");
+    const drift = await s.ws("acme-drift");
+    const gone = await s.ws("acme-gone");
+    const broken = await s.ws("acme-broken");
+    for (const w of [ok, drift, gone, broken]) expect(s.run(["sync", "--workspace", w]).code).toBe(0);
+    await writeFiles(drift, { ".claude/rules/a.md": "# Edited\n" });
+    await fs.rm(gone, { recursive: true });
+    await writeFiles(broken, { "craftar.yaml": "forge: ../nowhere\nprofile: acme\n" });
+    const before = await fs.stat(s.registry);
+    const bytes = await fs.readFile(s.registry, "utf8");
+
+    const t = s.run(["workspaces"]);
+    expect(t.code).toBe(0);
+    const out = t.stdout;
+    expect(out).toContain("craftar workspaces — 4 registered\n");
+    expect(out).not.toContain("(status read offline");
+    expect(out).toMatch(/acme-ok\s+.*\n\s+profile acme · frontend=frontend-angular · claude-code\n\s+forge \.\.\/forge @ no git · synced \d{4}-\d\d-\d\d \d\d:\d\d · up to date\n/);
+    expect(out).toMatch(/forge \.\.\/forge @ no git · synced [^\n]* · drift\n/);
+    expect(out).toMatch(/acme-gone[^\n]*\n\s+profile acme · frontend=frontend-angular · claude-code\n\s+synced [^\n]* · missing\n/);
+    expect(out).toMatch(/synced [^\n]* · error\n/);
+    expect(out).toContain(`warn ${await fs.realpath(broken)}: Forge not found at `);
+    expect(await fs.readFile(s.registry, "utf8")).toBe(bytes);
+    expect((await fs.stat(s.registry)).mtimeMs).toBe(before.mtimeMs);
+
+    const p1 = s.run(["workspaces", "prune"]);
+    expect(p1.code).toBe(0);
+    expect(p1.stdout.trim()).toBe(`pruned ${path.join(await fs.realpath(s.root), "acme-gone")}`);
+    expect(s.run(["workspaces", "prune"]).stdout.trim()).toBe("nothing to prune");
+    const f = s.run(["workspaces", "forget", drift]);
+    expect(f.code).toBe(0);
+    expect(f.stdout.trim()).toBe(`forgot ${await fs.realpath(drift)}`);
+    const again = s.run(["workspaces", "forget", drift]);
+    expect(again.code).toBe(1);
+    expect(again.stderr).toContain(`${path.resolve(drift)} is not registered`);
+    expect((await s.entries()).map((e) => path.basename(e.path))).toEqual(["acme-broken", "acme-ok"]);
+  });
+
+  it("an empty registry", async () => {
+    const s = await setup();
+    const r = s.run(["workspaces"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe("craftar workspaces — no workspace registered (craftar sync registers one)");
+  });
+
+  it("--json: the full key set for a path Forge, a remote Forge and a missing row", async () => {
+    const s = await setup();
+    const a = await s.ws("acme-a");
+    const r = await remoteForge(SPEC);
+    cleanups.push(r.cleanup);
+    const rem = path.join(s.root, "acme-remote");
+    await writeFiles(rem, { "craftar.yaml": `forge: ${r.url}\nprofile: acme\n` });
+    const gone = await s.ws("acme-gone");
+    for (const w of [a, rem, gone]) expect(s.run(["sync", "--workspace", w]).code).toBe(0);
+    await fs.rm(gone, { recursive: true });
+    const j = JSON.parse(s.run(["workspaces", "--json"]).stdout);
+    expect(Object.keys(j)).toEqual(["registry", "fetch", "workspaces", "warnings"]);
+    expect(j.registry).toBe(s.registry);
+    expect(j.fetch).toBe(false);
+    const rowKeys = ["name", "path", "profile", "recipes", "stack", "targets", "forge", "lastSync", "status", "forgeMoved", "files"];
+    const forgeKeys = ["kind", "source", "key", "ref", "defaultBranch", "commit", "lockCommit", "fromLocalFile", "fetched"];
+    for (const row of j.workspaces) {
+      expect(Object.keys(row)).toEqual(rowKeys);
+      expect(Object.keys(row.forge)).toEqual(forgeKeys);
+    }
+    const by = Object.fromEntries(j.workspaces.map((w: { name: string }) => [w.name, w]));
+    const sha = git(r.src, "rev-parse", "HEAD");
+    expect(by["acme-a"]).toMatchObject({ status: "up-to-date", forgeMoved: null, files: { unchanged: 1 }, stack: { frontend: "frontend-angular" }, forge: { kind: "path", ref: null, commit: null, lockCommit: null, fetched: false } });
+    expect(by["acme-remote"]).toMatchObject({ status: "up-to-date", forgeMoved: false, forge: { kind: "remote", source: r.url, ref: null, defaultBranch: "main", commit: sha, lockCommit: sha, fetched: false } });
+    expect(by["acme-gone"]).toMatchObject({ status: "missing", forgeMoved: null, files: null, forge: { defaultBranch: null, lockCommit: null, fetched: false } });
+    expect(j.warnings).toEqual([]);
+  });
+
+  it("a remote Forge: read offline from the cache without fetching; --fetch picks up a new commit", async () => {
+    const s = await setup();
+    const r = await remoteForge(SPEC);
+    cleanups.push(r.cleanup);
+    const rem = path.join(s.root, "acme-remote");
+    await writeFiles(rem, { "craftar.yaml": `forge: ${r.url}\nprofile: acme\n` });
+    expect(s.run(["sync", "--workspace", rem]).code).toBe(0);
+    const entry = path.join(s.home, "forges", (await fs.readdir(path.join(s.home, "forges")))[0]);
+    const refs = () => git(path.join(entry, "repo.git"), "for-each-ref");
+    const stamp = () => fs.readFile(path.join(entry, "fetched"), "utf8");
+    const [refs0, stamp0, reg0] = [refs(), await stamp(), await fs.readFile(s.registry, "utf8")];
+    const next = await r.commit({ "README.md": "moved\n" });
+    await fs.rename(r.bare, `${r.bare}.away`);
+    const off = s.run(["workspaces"]);
+    expect(off.code).toBe(0);
+    expect(off.stdout).toContain("craftar workspaces — 1 registered (status read offline from the Forge cache)\n");
+    expect(off.stdout).toContain(" · up to date\n");
+    expect(refs()).toBe(refs0);
+    expect(await stamp()).toBe(stamp0);
+    expect(await fs.readFile(s.registry, "utf8")).toBe(reg0);
+    await fs.rename(`${r.bare}.away`, r.bare);
+    const on = JSON.parse(s.run(["workspaces", "--json", "--fetch"]).stdout);
+    expect(on.fetch).toBe(true);
+    expect(on.workspaces[0]).toMatchObject({ forgeMoved: true, forge: { commit: next, fetched: true } });
+  });
+});

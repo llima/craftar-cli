@@ -5,6 +5,7 @@ import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { classifyForge } from "./core/remote.js";
+import { forget, listWorkspaces, prune, register, registryFile, resolveHome, type WorkspaceRow } from "./core/registry.js";
 import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, type FetchMode, type FileStatus, type LoadOptions, type SectionLayer, type Workspace } from "./core/sync.js";
 import type { Lock } from "./schema/index.js";
 import { resolve, sectionKey } from "./core/resolve.js";
@@ -108,7 +109,7 @@ program
 /* ---------------------------------------------------------------- sync */
 program
   .command("sync")
-  .description("Generate the harness for every target from the Forge and update craftar.lock")
+  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces)")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--check", "exit 1 when the workspace is out of date or has drift (CI mode)", false)
   .option("--dry-run", "show the plan, write nothing", false)
@@ -130,6 +131,16 @@ program
       return;
     }
     const r = await apply(ws, p, st, { dryRun: o.dryRun, overwriteDrift: o.overwriteDrift });
+    // A writing sync records the workspace (spec 21 §4.1); the registry is an index, so a failure is a warning.
+    let registryWarning: string | null = null;
+    if (!o.dryRun && !registryOff()) {
+      const home = craftarHome();
+      try {
+        await register(home, ws, p);
+      } catch (e) {
+        registryWarning = `registry not updated (${registryFile(home)}): ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
     const verb = o.dryRun ? "would write" : "wrote";
     console.log(pc.bold(`craftar sync — profile ${ws.config.profile} · recipes ${p.resolution.recipes.join(" → ")} · targets ${p.resolution.targets.join(", ")}`));
     const fl = forgeLine(ws, lock);
@@ -139,6 +150,7 @@ program
     for (const f of r.removed) console.log(`  ${pc.magenta("-")} ${f}  (orphan: no longer produced by the Forge)`);
     for (const s of r.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
     for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+    if (registryWarning) console.log(`  ${pc.yellow("warn")} ${registryWarning}`);
   });
 
 /* ---------------------------------------------------------------- diff */
@@ -238,6 +250,40 @@ program
       }
     }
     console.log(`\n${p.files.length} files across targets ${p.resolution.targets.join(", ")}`);
+  });
+
+/* ---------------------------------------------------------------- workspaces */
+const workspaces = program
+  .command("workspaces")
+  .description(
+    "List every workspace a writing sync registered on this machine ($CRAFTAR_HOME/registry.json), with its status computed now: up to date, outdated, drift, no lock, missing or error — read without the network",
+  )
+  .option("--fetch", "fetch each remote Forge first instead of reading the cached copy", false)
+  .option("--json", "machine-readable output", false)
+  .action(async (o) => {
+    registryGate();
+    const t = await listWorkspaces(craftarHome(), { fetch: o.fetch });
+    if (o.json) return console.log(JSON.stringify({ registry: t.registry, fetch: o.fetch, workspaces: t.rows, warnings: t.warnings }, null, 2));
+    printWorkspaces(t.rows, t.warnings, o.fetch);
+  });
+
+workspaces
+  .command("forget")
+  .description("Remove a workspace from the registry; the directory itself is not touched")
+  .argument("<dir>", "the workspace's directory, as registered")
+  .action(async (dir) => {
+    registryGate();
+    console.log(`forgot ${await forget(craftarHome(), dir)}`);
+  });
+
+workspaces
+  .command("prune")
+  .description("Remove every registered workspace whose directory or craftar.yaml is gone")
+  .action(async () => {
+    registryGate();
+    const gone = await prune(craftarHome());
+    if (gone.length === 0) console.log("nothing to prune");
+    for (const p of gone) console.log(`pruned ${p}`);
   });
 
 /* ---------------------------------------------------------------- recipes */
@@ -1006,6 +1052,56 @@ async function forgeFor(o: { forge?: string; workspace?: string; offline?: boole
   const { forge, workspace } = await resolveForgeSource({ forge: o.forge, workspace: o.workspace, ...load(o, "read") });
   warnStderr(workspace?.warnings ?? []);
   return forge;
+}
+
+/** `$CRAFTAR_HOME`, as the cache reads it (spec 13 §6.3). */
+function craftarHome(): string {
+  return resolveHome(process.env.CRAFTAR_HOME || undefined);
+}
+
+/** `CRAFTAR_NO_REGISTRY` — "no registry", read like NO_COLOR: any non-empty value turns it off (spec 21 §4.1). */
+function registryOff(): boolean {
+  return Boolean(process.env.CRAFTAR_NO_REGISTRY);
+}
+
+function registryGate(): void {
+  if (registryOff()) fail("the workspace registry is off (CRAFTAR_NO_REGISTRY is set)");
+}
+
+const ROW_WORDS: Record<WorkspaceRow["status"], string> = {
+  "up-to-date": "up to date",
+  outdated: "outdated",
+  drift: "drift",
+  "no-lock": "no lock",
+  missing: "missing",
+  error: "error",
+};
+
+/** The text table of `craftar workspaces` (spec 21 §4.2) — presentation, not contract. */
+function printWorkspaces(rows: WorkspaceRow[], warnings: string[], fetched: boolean): void {
+  if (rows.length === 0) {
+    console.log(pc.bold("craftar workspaces — no workspace registered (craftar sync registers one)"));
+    return;
+  }
+  const offline = !fetched && rows.some((r) => r.forge.kind === "remote") ? " (status read offline from the Forge cache)" : "";
+  console.log(pc.bold(`craftar workspaces — ${rows.length} registered${offline}`));
+  const width = Math.max(...rows.map((r) => r.name.length));
+  for (const r of rows) {
+    console.log(`  ${pc.cyan(r.name.padEnd(width))}  ${r.path}`);
+    const stack = Object.entries(r.stack).map(([slot, recipe]) => `${slot}=${recipe}`);
+    console.log(`      ${[`profile ${r.profile}`, ...(stack.length ? [stack.join(", ")] : []), ...(r.targets.length ? [r.targets.join(", ")] : [])].join(" · ")}`);
+    const synced = `synced ${r.lastSync.slice(0, 16).replace("T", " ")}`;
+    const word = ROW_WORDS[r.status] + (r.forgeMoved ? ", forge moved" : "");
+    const painted = r.status === "drift" || r.status === "error" || r.status === "missing" ? pc.red(word) : r.status === "up-to-date" ? pc.dim(word) : pc.yellow(word);
+    if (r.status === "missing" || r.status === "error") {
+      console.log(`      ${synced} · ${painted}`);
+      continue;
+    }
+    const f = r.forge;
+    const at = f.kind === "remote" ? `${f.ref ?? `${f.defaultBranch} (default branch)`} ${f.commit?.slice(0, 8) ?? "no git"}` : (f.commit?.slice(0, 8) ?? "no git");
+    console.log(`      forge ${f.source}${f.fromLocalFile ? " (local override)" : ""} @ ${at} · ${synced} · ${painted}`);
+  }
+  for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
 }
 
 /** Warnings of loading the workspace, for commands whose stdout is not a report (a diff, `explain`, `ls`, `--json`). */
