@@ -6,7 +6,7 @@ import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
 import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
-import { classifyForge, credentialFault, ensureTree, ForgeFetchError, type CachedTree } from "./remote.js";
+import { classifyForge, credentialFault, ensureTree, ForgeFetchError, NoCachedCopyError, type CachedTree } from "./remote.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile } from "./extract.js";
@@ -139,7 +139,14 @@ async function remoteTree(
   });
   const used = (t: CachedTree) => `the cached copy at ${short(t.commit)}, fetched ${t.fetchedAt ?? "never"}`;
   if (offline) {
-    const t = await ensureTree(url, ref, { home, offline: true });
+    let t: CachedTree;
+    try {
+      t = await ensureTree(url, ref, { home, offline: true });
+    } catch (e) {
+      if (!(e instanceof NoCachedCopyError)) throw e;
+      // `targets` (no-fetch) takes no --offline: point at a command that fetches.
+      throw new Error(`${e.message} — ${opts.offline ? "run without --offline once to fetch it" : "run craftar status once to fetch it"}`);
+    }
     return { tree: t.dir, origin: origin(t), warning: opts.offline ? `Forge ${url} not fetched (--offline) — using ${used(t)}` : null };
   }
   try {
@@ -147,7 +154,10 @@ async function remoteTree(
     return { tree: t.dir, origin: origin(t), warning: null };
   } catch (e) {
     if (!(e instanceof ForgeFetchError)) throw e;
-    if (!e.cached) throw new Error(`cannot fetch the Forge ${url}: ${e.gitMessage} — and there is no cached copy to fall back on`);
+    if (!e.cached)
+      throw new Error(
+        `cannot fetch the Forge ${url}: ${e.gitMessage} — ${e.haveCopy ? `and the cached copy cannot resolve ${ref ?? "the default branch"}` : "and there is no cached copy to fall back on"}`,
+      );
     if (mode === "sync")
       throw new Error(`cannot fetch the Forge ${url}: ${e.gitMessage} — run with --offline to use the cached copy (${short(e.cached.commit)} fetched ${e.cached.fetchedAt ?? "never"})`);
     const t = await ensureTree(url, ref, { home, offline: true });

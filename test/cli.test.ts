@@ -3469,3 +3469,83 @@ describe("cli — a credential in a URL no parser accepts is still refused (revi
     }
   });
 });
+
+describe("cli — a remote Forge, the cases the review asked for (spec 13 §10.2, §10.3, AC 2)", () => {
+  const SPEC = {
+    ingredients: [rule("a", "# A\n"), rule("b", "# B\n")],
+    recipes: [recipe("base", ["rule/a"]), recipe("stack", ["rule/b"], { extends: ["base"] })],
+    profiles: [profile("acme", ["stack"], ["claude-code", "kiro"])],
+  };
+  async function remoteWs(extra = "") {
+    const r = await remoteForge(SPEC);
+    const ws = await tmpDir("craftar-remote-ws-");
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    await fs.writeFile(path.join(ws, "craftar.yaml"), `forge: ${r.url}\nprofile: acme\n${extra}`);
+    const run = (args: string[]) => runCli([...args, "--workspace", ws], { env: { CRAFTAR_HOME: home } });
+    return { r, ws, home, run };
+  }
+
+  it("AC 2: the lock after a remote sync is schema 2 with ref null, the commit, the resolved recipes (extends parent first) and targets", async () => {
+    const { r, ws, run } = await remoteWs();
+    expect(run(["sync"]).code).toBe(0);
+    const l = JSON.parse(await fs.readFile(path.join(ws, "craftar.lock"), "utf8"));
+    expect([l.schema, l.forge, l.recipes, l.targets]).toEqual([
+      2,
+      { source: r.url, ref: null, commit: git(r.src, "rev-parse", "HEAD") },
+      ["base", "stack"],
+      ["claude-code", "kiro"],
+    ]);
+  });
+
+  it("a ref is recorded in the lock as requested", async () => {
+    const r0 = await remoteWs("ref: main\n");
+    expect(r0.run(["sync"]).code).toBe(0);
+    expect(JSON.parse(await fs.readFile(path.join(r0.ws, "craftar.lock"), "utf8")).forge.ref).toBe("main");
+  });
+
+  it("forge variants and forge diff through a remote workspace print what --forge on a clone prints; --offline too; a failed fetch warns on stderr", async () => {
+    const { r, run, home } = await remoteWs();
+    for (const args of [["forge", "variants", "--json"], ["forge", "diff", "rule/a", "--json"]]) {
+      const viaClone = runCli([...args, "--forge", r.src]);
+      const viaRemote = run(args);
+      expect([viaRemote.code, viaRemote.stdout, viaRemote.stderr], args.join(" ")).toEqual([viaClone.code, viaClone.stdout, viaClone.stderr]);
+      expect(run([...args, "--offline"]).stdout, `${args.join(" ")} --offline`).toBe(viaClone.stdout);
+    }
+    await fs.rename(r.bare, r.bare + ".gone");
+    const x = run(["forge", "variants", "--json"]);
+    expect(x.code).toBe(0);
+    expect(x.stderr.startsWith(`warn Forge ${r.url} not fetched (`)).toBe(true);
+    void home;
+  });
+
+  it("forge: from craftar.local.yaml warns not to commit, on status, sync, diff, explain and ls", async () => {
+    const s = await scenario(SPEC, { config: { profile: "acme" } });
+    cleanups.push(s.cleanup);
+    await fs.writeFile(path.join(s.wsRoot, "craftar.local.yaml"), "forge: ../forge\n");
+    const w = "Forge overridden by craftar.local.yaml (../forge) — do not commit craftar.lock or the generated files";
+    expect(JSON.parse(runCli(["status", "--json", "--workspace", s.wsRoot]).stdout).warnings[0]).toBe(w);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).stdout.split("\n")).toContain(`  warn ${w}`);
+    for (const args of [["diff"], ["explain", ".claude/rules/a.md"], ["ls"]]) {
+      const x = runCli([...args, "--workspace", s.wsRoot]);
+      expect([x.code, x.stderr], args.join(" ")).toEqual([0, `warn ${w}\n`]);
+    }
+  });
+
+  it("targets with no cached copy points at a command that fetches, not at --offline", async () => {
+    const { r, run } = await remoteWs();
+    expect(JSON.parse(run(["targets", "--json"]).stdout).warnings).toEqual([
+      `targets in use not shown: the Forge ${r.url} has no cached copy yet — run craftar status once to fetch it`,
+    ]);
+  });
+
+  it("a relative CRAFTAR_HOME resolves from the current directory", async () => {
+    const { r, ws } = await remoteWs();
+    const cwd = await tmpDir("craftar-cwd-");
+    cleanups.push(() => fs.rm(cwd, { recursive: true, force: true }));
+    const x = runCli(["status", "--workspace", ws], { cwd, env: { CRAFTAR_HOME: "relhome" } });
+    expect(x.code).toBe(0);
+    expect(await fs.readdir(path.join(cwd, "relhome", "forges"))).toHaveLength(1);
+    void r;
+  });
+});

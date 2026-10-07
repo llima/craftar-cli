@@ -177,9 +177,18 @@ export class ForgeFetchError extends Error {
   constructor(
     readonly url: string,
     readonly gitMessage: string,
+    /** A completed fetch left a copy, whether or not it can resolve the ref. */
+    readonly haveCopy: boolean,
     readonly cached: { commit: string; fetchedAt: string | null } | null,
   ) {
     super(`cannot fetch the Forge ${url}: ${gitMessage}`);
+  }
+}
+
+/** Reading the cache only (`--offline`, `targets`) found no copy of this Forge. */
+export class NoCachedCopyError extends Error {
+  constructor(readonly url: string) {
+    super(`the Forge ${url} has no cached copy yet`);
   }
 }
 
@@ -202,45 +211,54 @@ export const defaultGit: GitRunner = async (args, opts = {}) => {
 /** The tree for `ref` of the remote Forge at `url`, fetching first unless offline or the ref is a full SHA already cached. */
 export async function ensureTree(url: string, ref: string | null, opts: CacheOptions): Promise<CachedTree> {
   const git = opts.git ?? defaultGit;
-  const entry = path.join(opts.home, "forges", cacheKey(url));
+  // Absolute once: `git -C repo.git worktree add <dir>` would read a relative dir from inside repo.git.
+  const home = path.resolve(opts.home);
+  const entry = path.join(home, "forges", cacheKey(url));
   const repo = path.join(entry, "repo.git");
-  try {
-    await fs.mkdir(entry, { recursive: true });
-  } catch (e) {
-    throw new Error(`cannot write the Forge cache in ${opts.home}: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}`);
-  }
-  const haveRepo = await exists(path.join(repo, "HEAD"));
-  const fetchedAt = async () => ((await exists(path.join(entry, "fetched"))) ? (await fs.readFile(path.join(entry, "fetched"), "utf8")).trim() : null);
+  const stamp = path.join(entry, "fetched");
+  // A copy exists once a fetch completed: an init whose fetch then failed leaves no stamp.
+  const haveCopy = await exists(stamp);
+  const fetchedAt = async () => {
+    const text = (await exists(stamp)) ? (await fs.readFile(stamp, "utf8")).trim() : "";
+    return /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(text) ? text : null;
+  };
+  const label = ref ?? "the default branch";
 
   // A full SHA already in the cache names the same commit whatever the remote does: no fetch (§14 item 3).
-  const cachedSha = ref !== null && FULL_SHA.test(ref) && haveRepo && (await hasCommit(git, repo, ref));
+  const cachedSha = ref !== null && FULL_SHA.test(ref) && haveCopy && (await hasCommit(git, repo, ref));
 
   let resolved: { commit: string; defaultBranch: string | null };
   let fetched = false;
   if (opts.offline || cachedSha) {
-    if (!haveRepo) throw new Error(`the Forge ${url} has no cached copy yet — run without --offline once to fetch it`);
+    if (!haveCopy) throw new NoCachedCopyError(url);
     resolved = cachedSha ? { commit: ref!, defaultBranch: null } : resolveRef(await cachedRefs(git, repo), ref, url);
+    if (!(await hasCommit(git, repo, resolved.commit))) throw new Error(`ref "${label}" not found in ${url}`);
   } else {
     let refs: LsRemote;
     try {
       refs = parseLsRemote(await git(["ls-remote", "--symref", url], { remote: true }));
     } catch (e) {
-      throw new ForgeFetchError(url, (e as Error).message, await cachedFallback(git, repo, haveRepo, ref, url, await fetchedAt()));
+      throw new ForgeFetchError(url, (e as Error).message, haveCopy, await cachedFallback(git, repo, haveCopy, ref, url, await fetchedAt()));
     }
     resolved = resolveRef(refs, ref, url);
+    try {
+      await fs.mkdir(entry, { recursive: true });
+    } catch (e) {
+      throw new Error(`cannot write the Forge cache in ${home}: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}`);
+    }
     await withLock(entry, opts, async () => {
       if (!(await exists(path.join(repo, "HEAD")))) await git(["init", "--quiet", "--bare", repo]);
       try {
         await git(["-C", repo, "fetch", "--quiet", "--prune", url, "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"], { remote: true });
       } catch (e) {
-        throw new ForgeFetchError(url, (e as Error).message, await cachedFallback(git, repo, haveRepo, ref, url, await fetchedAt()));
+        throw new ForgeFetchError(url, (e as Error).message, haveCopy, await cachedFallback(git, repo, haveCopy, ref, url, await fetchedAt()));
       }
       // A bare repository filled by fetch does not keep the remote's HEAD; --offline without a ref needs it.
       if (refs.head) await git(["-C", repo, "symbolic-ref", "HEAD", `refs/heads/${refs.head}`]);
-      await fs.writeFile(path.join(entry, "fetched"), new Date().toISOString() + "\n");
+      await fs.writeFile(stamp, new Date().toISOString() + "\n");
     });
     fetched = true;
-    if (!(await hasCommit(git, repo, resolved.commit))) throw new Error(`ref "${ref}" not found in ${url}`);
+    if (!(await hasCommit(git, repo, resolved.commit))) throw new Error(`ref "${label}" not found in ${url}`);
   }
 
   const dir = await treeFor(git, entry, repo, resolved.commit, opts);
@@ -295,9 +313,17 @@ async function cachedFallback(
 /** One worktree per resolved commit; never written to after creation. A failure leaves no half-made tree. */
 async function treeFor(git: GitRunner, entry: string, repo: string, commit: string, opts: CacheOptions): Promise<string> {
   const dir = path.join(entry, "trees", commit);
-  if (!(await exists(dir))) {
+  // Complete once git wrote the worktree's `.git` file: a run killed mid-`worktree add` leaves a
+  // directory without it, which is removed and made again rather than loaded half.
+  const complete = () => exists(path.join(dir, ".git"));
+  if (!(await complete())) {
     await withLock(entry, opts, async () => {
-      if (await exists(dir)) return;
+      if (await complete()) return;
+      if (await exists(dir)) {
+        await git(["-C", repo, "worktree", "remove", "--force", dir]).catch(() => {});
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+      await git(["-C", repo, "worktree", "prune"]).catch(() => {});
       await fs.mkdir(path.dirname(dir), { recursive: true });
       try {
         await git(["-C", repo, "worktree", "add", "--quiet", "--detach", dir, commit]);
@@ -328,11 +354,14 @@ async function cleanup(git: GitRunner, entry: string, repo: string, inUse: strin
     const stat = await fs.stat(path.join(trees, name)).catch(() => null);
     if (!stat || stat.mtimeMs >= limit) continue;
     await withLock(entry, opts, async () => {
+      // Again under the lock: a reader may have touched the stamp since (readers take no lock).
+      const again = await fs.stat(path.join(trees, name)).catch(() => null);
+      if (!again || again.mtimeMs >= limit) return;
       await git(["-C", repo, "worktree", "remove", "--force", path.join(trees, commit)]).catch(() => {});
       await fs.rm(path.join(trees, commit), { recursive: true, force: true });
       await fs.rm(path.join(trees, name), { force: true });
+      removed = true;
     });
-    removed = true;
   }
   if (removed) await git(["-C", repo, "worktree", "prune"]).catch(() => {});
 }
@@ -357,7 +386,7 @@ async function withLock<T>(entry: string, opts: CacheOptions, body: () => Promis
       }
       if (Date.now() - start >= waitMs) {
         const held = (await fs.readFile(file, "utf8").catch(() => "")).split(/\s+/)[0] || "unknown";
-        throw new Error(`the Forge cache entry ${entry}/lock is busy (held by PID ${held})`);
+        throw new Error(`the Forge cache entry ${file} is busy (held by PID ${held})`);
       }
       await new Promise((r) => setTimeout(r, pollMs));
     }

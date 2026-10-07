@@ -153,7 +153,7 @@ describe("the Forge cache (spec 13 §6.3)", () => {
     const entry = path.join(home, "forges", (await fs.readdir(path.join(home, "forges")))[0]);
     await fs.writeFile(path.join(entry, "lock"), `4242 ${new Date().toISOString()}\n`);
     await r.commit({ "README.md": "x\n" });
-    await expect(ensureTree(r.url, null, { home, waitMs: 300, pollMs: 50 })).rejects.toThrow(`the Forge cache entry ${entry}/lock is busy (held by PID 4242)`);
+    await expect(ensureTree(r.url, null, { home, waitMs: 300, pollMs: 50 })).rejects.toThrow(`the Forge cache entry ${path.join(entry, "lock")} is busy (held by PID 4242)`);
     const old = new Date(Date.now() - 60 * 60 * 1000);
     await fs.utimes(path.join(entry, "lock"), old, old);
     expect((await ensureTree(r.url, null, { home, waitMs: 300, pollMs: 50, staleMs: 1000 })).fetched).toBe(true);
@@ -182,5 +182,30 @@ describe("the Forge cache (spec 13 §6.3)", () => {
     cleanups.push(() => fs.rm(empty, { recursive: true, force: true }));
     const none = await ensureTree(r.url, null, { home: empty }).catch((e) => e);
     expect((none as ForgeFetchError).cached).toBeNull();
+  });
+});
+
+describe("the Forge cache, hardened (review of spec 13)", () => {
+  it("a tree left half-made (a directory without git's .git) is removed and made again", async () => {
+    const { r, home } = await setup();
+    const first = await ensureTree(r.url, null, { home });
+    await fs.rm(first.dir, { recursive: true, force: true });
+    await fs.mkdir(first.dir);
+    const again = await ensureTree(r.url, null, { home });
+    expect(again.dir).toBe(first.dir);
+    expect(await fs.readFile(path.join(again.dir, "craftar.forge.yaml"), "utf8")).toBe(await fs.readFile(path.join(r.src, "craftar.forge.yaml"), "utf8"));
+  });
+
+  it("a first fetch that fails leaves no cache entry behind", async () => {
+    const { r, home } = await setup();
+    await fs.rename(r.bare, r.bare + ".gone");
+    await expect(ensureTree(r.url, null, { home })).rejects.toBeInstanceOf(ForgeFetchError);
+    expect(await fs.readdir(home)).toEqual([]);
+  });
+
+  it("offline, a full SHA the cache does not hold is 'not found', not a tree failure", async () => {
+    const { r, home } = await setup();
+    await ensureTree(r.url, null, { home });
+    await expect(ensureTree(r.url, "f".repeat(40), { home, offline: true })).rejects.toThrow(`ref "${"f".repeat(40)}" not found in ${r.url}`);
   });
 });
