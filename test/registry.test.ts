@@ -249,6 +249,22 @@ describe("row status (§4.2)", () => {
     expect(Object.keys(by["acme-1-ok"].forge)).toEqual(["kind", "source", "key", "ref", "defaultBranch", "commit", "lockCommit", "fromLocalFile", "fetched"]);
   });
 
+  it("a row that loads forwards its plan's warnings; an error row its load warnings, then the error — each prefixed with its path", async () => {
+    const f = await fixture();
+    const ok = await f.ws("acme-ok", { profile: "acme", ref: "v1" });
+    const bad = await f.ws("acme-bad", { profile: "acme", ref: "v2" });
+    await syncAndRegister(f.home, ok);
+    await syncAndRegister(f.home, bad);
+    await writeFiles(bad, { "craftar.lock": "{ not json" });
+    const { rows, warnings } = await listWorkspaces(f.home, { fetch: false });
+    expect(rows.map((r) => r.status)).toEqual(["error", "up-to-date"]);
+    const [realBad, realOk] = [await fs.realpath(bad), await fs.realpath(ok)];
+    expect(warnings[0]).toBe(`${realBad}: ref "v2" is ignored: the Forge is a path (../forge), read as its working tree`);
+    expect(warnings[1].startsWith(`${realBad}: `)).toBe(true);
+    expect(warnings[2]).toBe(`${realOk}: ref "v1" is ignored: the Forge is a path (../forge), read as its working tree`);
+    expect(warnings).toHaveLength(3);
+  });
+
   it("forge moved is false when the Forge did not move, and null for a Forge without git", async () => {
     const f = await fixture();
     const a = await f.ws("acme-a");
