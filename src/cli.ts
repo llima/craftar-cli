@@ -7,7 +7,7 @@ import { importClaudeCode } from "./importers/claude-code.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type FetchMode, type FileState, type FileStatus, type LoadOptions, type SectionLayer, type Workspace } from "./core/sync.js";
+import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type Workspace } from "./core/sync.js";
 import type { Lock } from "./schema/index.js";
 import { resolve, sectionKey } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -109,6 +109,35 @@ program
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, false, forgeLine(ws, lock));
   });
 
+/**
+ * A writing sync on a planned workspace, then its report: `apply`, the registration of spec 21 (unless
+ * `CRAFTAR_NO_REGISTRY`), and the lines `sync` prints. `sync` and `init` both call it (spec 23 §5.2).
+ */
+async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lock | null, opts: { dryRun?: boolean; overwriteDrift?: boolean } = {}): Promise<ApplyResult> {
+  const r = await apply(ws, p, st, opts);
+  // A writing sync records the workspace (spec 21 §4.1); the registry is an index, so a failure is a warning.
+  let registryWarning: string | null = null;
+  if (!opts.dryRun && !registryOff()) {
+    const home = craftarHome();
+    try {
+      await register(home, ws, p);
+    } catch (e) {
+      registryWarning = `registry not updated (${registryFile(home)}): ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+  const verb = opts.dryRun ? "would write" : "wrote";
+  console.log(pc.bold(`craftar sync — profile ${ws.config.profile} · recipes ${p.resolution.recipes.join(" → ")} · targets ${p.resolution.targets.join(", ")}`));
+  const fl = forgeLine(ws, lock);
+  if (fl) console.log(fl);
+  console.log(`  ${verb} ${pc.green(String(r.written.length))}, removed ${pc.magenta(String(r.removed.length))} orphan(s), skipped ${pc.yellow(String(r.skipped.length))}`);
+  for (const f of r.written) console.log(`  ${pc.green("+")} ${f}`);
+  for (const f of r.removed) console.log(`  ${pc.magenta("-")} ${f}  (orphan: no longer produced by the Forge)`);
+  for (const s of r.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
+  for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+  if (registryWarning) console.log(`  ${pc.yellow("warn")} ${registryWarning}`);
+  return r;
+}
+
 /* ---------------------------------------------------------------- sync */
 program
   .command("sync")
@@ -133,27 +162,7 @@ program
       console.log(pc.green("\nworkspace in sync"));
       return;
     }
-    const r = await apply(ws, p, st, { dryRun: o.dryRun, overwriteDrift: o.overwriteDrift });
-    // A writing sync records the workspace (spec 21 §4.1); the registry is an index, so a failure is a warning.
-    let registryWarning: string | null = null;
-    if (!o.dryRun && !registryOff()) {
-      const home = craftarHome();
-      try {
-        await register(home, ws, p);
-      } catch (e) {
-        registryWarning = `registry not updated (${registryFile(home)}): ${e instanceof Error ? e.message : String(e)}`;
-      }
-    }
-    const verb = o.dryRun ? "would write" : "wrote";
-    console.log(pc.bold(`craftar sync — profile ${ws.config.profile} · recipes ${p.resolution.recipes.join(" → ")} · targets ${p.resolution.targets.join(", ")}`));
-    const fl = forgeLine(ws, lock);
-    if (fl) console.log(fl);
-    console.log(`  ${verb} ${pc.green(String(r.written.length))}, removed ${pc.magenta(String(r.removed.length))} orphan(s), skipped ${pc.yellow(String(r.skipped.length))}`);
-    for (const f of r.written) console.log(`  ${pc.green("+")} ${f}`);
-    for (const f of r.removed) console.log(`  ${pc.magenta("-")} ${f}  (orphan: no longer produced by the Forge)`);
-    for (const s of r.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
-    for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
-    if (registryWarning) console.log(`  ${pc.yellow("warn")} ${registryWarning}`);
+    await applyAndReport(ws, p, st, lock, { dryRun: o.dryRun, overwriteDrift: o.overwriteDrift });
   });
 
 /* ---------------------------------------------------------------- diff */
