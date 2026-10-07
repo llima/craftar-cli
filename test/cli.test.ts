@@ -3239,3 +3239,38 @@ describe("cli — diff --exit-code (spec 19)", () => {
     expect(got[20002]).toBe("");
   }, 30_000);
 });
+
+describe("cli — forge values: credentials refused, path-Forge warnings (spec 13 §4.2, §4.3)", () => {
+  const ONE = { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] };
+
+  it("a credential in either workspace file is refused, naming the file and never the value", async () => {
+    for (const [file, other] of [["craftar.yaml", "craftar.local.yaml"], ["craftar.local.yaml", "craftar.yaml"]] as const) {
+      const s = await scenario(ONE, { config: { profile: "acme" } });
+      cleanups.push(s.cleanup);
+      const secret = "https://alice:s3cr3t@example.com/acme/forge.git";
+      if (file === "craftar.yaml") await fs.writeFile(path.join(s.wsRoot, file), `forge: ${secret}\nprofile: acme\n`);
+      else await fs.writeFile(path.join(s.wsRoot, file), `forge: ${secret}\n`);
+      void other;
+      const r = runCli(["status", "--workspace", s.wsRoot]);
+      expect(r.code, file).toBe(1);
+      expect(r.stderr, file).toBe(
+        `error: ${file} › forge holds credentials in the URL — remove them and let git authenticate (credential helper, SSH agent; see README › Remote Forge)\n`,
+      );
+      expect(r.stderr + r.stdout, file).not.toContain("s3cr3t");
+      expect(r.stderr + r.stdout, file).not.toContain("alice");
+    }
+  });
+
+  it("a ref next to a path Forge is ignored with a warning; forge: from craftar.local.yaml warns not to commit", async () => {
+    const s = await scenario(ONE, { config: { profile: "acme", ref: "v1" } });
+    cleanups.push(s.cleanup);
+    const j = JSON.parse(runCli(["status", "--json", "--workspace", s.wsRoot]).stdout);
+    expect(j.warnings).toContain('ref "v1" is ignored: the Forge is a path (../forge), read as its working tree');
+    await fs.writeFile(path.join(s.wsRoot, "craftar.local.yaml"), "forge: ../forge\n");
+    const k = JSON.parse(runCli(["status", "--json", "--workspace", s.wsRoot]).stdout);
+    expect(k.warnings.slice(0, 2)).toEqual([
+      'ref "v1" is ignored: the Forge is a path (../forge), read as its working tree',
+      "Forge overridden by craftar.local.yaml (../forge) — do not commit craftar.lock or the generated files",
+    ]);
+  });
+});

@@ -238,6 +238,8 @@ program
     }
 
     const r = listRecipes(forg, context);
+    // Loading the workspace may warn (spec 13 §4.2); those come first, as in `plan()`.
+    if (workspace) r.warnings.unshift(...workspace.warnings);
 
     if (o.json) {
       return console.log(JSON.stringify(r, null, 2));
@@ -362,6 +364,7 @@ program
     } catch (e) {
       fail(e instanceof Error ? e.message : String(e));
     }
+    if (workspace) result.warnings.unshift(...workspace.warnings);
 
     if (o.json) {
       return console.log(JSON.stringify(result, null, 2));

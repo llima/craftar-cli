@@ -4,6 +4,7 @@ import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
 import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
+import { classifyForge, credentialFault } from "./remote.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile } from "./extract.js";
@@ -32,10 +33,30 @@ export async function emitFor<T extends Target>(t: T, emitter: Emitter<T>, base:
   return files;
 }
 
+/** Where the Forge came from (spec 13 §5.3), for headers and `status --json`. Always set. */
+export interface ForgeOrigin {
+  kind: "path" | "remote";
+  /** `forge:` as written (after the local merge). */
+  source: string;
+  /** The requested ref; null when none was given or the Forge is a path. */
+  ref: string | null;
+  /** The resolved branch when `ref` is null and the Forge is remote, else null. */
+  defaultBranch: string | null;
+  /** True only when this command fetched. */
+  fetched: boolean;
+  /** When the cached copy was last fetched (remote only). */
+  fetchedAt?: string;
+  /** `forge:` came from craftar.local.yaml. */
+  fromLocalFile: boolean;
+}
+
 export interface Workspace {
   root: string;
   config: WorkspaceConfig;
   forge: Forge;
+  origin: ForgeOrigin;
+  /** Warnings from loading the workspace itself (spec 13 §4.2); `plan()` puts them first. */
+  warnings: string[];
 }
 
 export async function loadWorkspace(root: string): Promise<Workspace> {
@@ -49,13 +70,26 @@ export async function loadWorkspace(root: string): Promise<Workspace> {
   const localFile = path.join(root, LOCAL_FILE);
   const hasLocal = await exists(localFile);
   const local = hasLocal ? YAML.parse(await fs.readFile(localFile, "utf8")) ?? {} : {};
+  // Before anything can print the value: a credential in either file is refused by file and field (spec 13 §4.3).
+  for (const [name, raw] of [[WORKSPACE_FILE, base], [LOCAL_FILE, local]] as const) {
+    const value: unknown = raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>).forge : undefined;
+    if (typeof value === "string" && credentialFault(value))
+      throw new Error(`${name} › forge holds credentials in the URL — remove them and let git authenticate (credential helper, SSH agent; see README › Remote Forge)`);
+  }
+  const fromLocalFile = local !== null && typeof local === "object" && Object.hasOwn(local, "forge");
   const parsed = WorkspaceConfigSchema.safeParse(deepMerge(base, local));
   // Named, as a Forge file is: a wrong-shape `overrides.sections` key fails here (spec 11 §5.2).
   if (!parsed.success) throw new Error(`invalid ${WORKSPACE_FILE}${hasLocal ? ` (merged with ${LOCAL_FILE})` : ""}: ${parsed.error.message}`);
   const config = parsed.data;
-  const forgeRoot = /^[a-z]+:\/\/|^git@/.test(config.forge) ? config.forge : path.resolve(root, config.forge);
+  const remote = classifyForge(config.forge) === "url";
+  const forgeRoot = remote ? config.forge : path.resolve(root, config.forge);
   if (!(await exists(forgeRoot))) throw new Error(`Forge not found at ${forgeRoot} (remote Forges are not supported yet — clone it and point \`forge:\` at the path)`);
-  return { root, config, forge: await loadForge(forgeRoot) };
+  const warnings: string[] = [];
+  // A path means the working tree as it is; a ref beside it is ignored, said out loud (Ruling 9).
+  if (!remote && config.ref !== undefined) warnings.push(`ref "${config.ref}" is ignored: the Forge is a path (${config.forge}), read as its working tree`);
+  if (fromLocalFile) warnings.push(`Forge overridden by ${LOCAL_FILE} (${config.forge}) — do not commit ${LOCK_FILE} or the generated files`);
+  const origin: ForgeOrigin = { kind: "path", source: config.forge, ref: null, defaultBranch: null, fetched: false, fromLocalFile };
+  return { root, config, forge: await loadForge(forgeRoot), origin, warnings };
 }
 
 /**
@@ -205,7 +239,7 @@ function guardOutput(ing: ResolvedIngredient, file: string, out: string, p: Pars
 
 export async function plan(ws: Workspace): Promise<Plan> {
   const resolution = resolve(ws.forge, ws.config);
-  const warnings = [...resolution.warnings];
+  const warnings = [...ws.warnings, ...resolution.warnings];
   if (resolution.targets.length === 0) {
     warnings.push(
       "no targets resolved — nothing will be emitted and every file in craftar.lock becomes an orphan (an empty list in craftar.local.yaml replaces the workspace's)",
