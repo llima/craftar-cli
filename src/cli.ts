@@ -122,7 +122,7 @@ program
 /* ---------------------------------------------------------------- diff */
 program
   .command("diff")
-  .description("Unified diff between the files on disk and what the Forge would generate")
+  .description("Unified diff between the files on disk and what the Forge would generate, orphans included (files the next sync removes)")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--exit-code", "exit 1 when there are differences (exactly when `sync --check` would fail); a [path] that names no file craftar manages becomes an error", false)
   .argument("[path]", "limit to one file")
