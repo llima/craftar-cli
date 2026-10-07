@@ -1,6 +1,7 @@
 import type { Forge } from "../core/forge.js";
 import type { Resolution, ResolvedIngredient } from "../core/resolve.js";
 import type { Target } from "../schema/index.js";
+import type { Walk } from "../core/capabilities.js";
 
 export interface PlannedFile {
   /** Workspace-relative path, POSIX separators. */
@@ -13,7 +14,8 @@ export interface PlannedFile {
   note?: string;
 }
 
-export interface EmitContext {
+/** What every helper needs; an emitter also gets its walk (`EmitContext`). */
+export interface EmitBase {
   forge: Forge;
   resolution: Resolution;
   workspaceRoot: string;
@@ -26,7 +28,10 @@ export interface EmitContext {
   warn(msg: string): void;
 }
 
-export interface Emitter {
-  target: Target;
-  emit(ctx: EmitContext): Promise<PlannedFile[]>;
+/** An emitter's context: the base, plus the ingredients the matrix says target T writes (spec 18 §3.1). */
+export type EmitContext<T extends Target> = EmitBase & { aimed: Walk<T> };
+
+export interface Emitter<T extends Target> {
+  target: T;
+  emit(ctx: EmitContext<T>): Promise<PlannedFile[]>;
 }

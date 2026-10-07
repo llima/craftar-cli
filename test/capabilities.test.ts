@@ -15,6 +15,9 @@ import { toLf, stripBom } from "../src/core/text.js";
 import { tmpDir, writeFiles, makeWorkspace, type IngredientSpec } from "./helpers/forge.js";
 import { INGREDIENT_TYPES, TARGETS, type IngredientType, type Target } from "../src/schema/index.js";
 import type { PlannedFile } from "../src/emitters/types.js";
+import { emitFor } from "../src/core/sync.js";
+import { mcpServers } from "../src/emitters/shared.js";
+import type { EmitBase, Emitter, PlannedFile as PF } from "../src/emitters/types.js";
 import { written, type Capability as WalkCapability } from "../src/core/capabilities.js";
 import { resolve as resolveWorkspace, type Resolution } from "../src/core/resolve.js";
 import { loadWorkspace as loadWs } from "../src/core/sync.js";
@@ -467,7 +470,7 @@ function spec(type: string, name: string, extra: Record<string, unknown> = {}): 
     meta.files = [`${name}.sh`];
     files[`${name}.sh`] = "echo\n";
   }
-  if (type === "mcp") meta.server = { command: "npx" };
+  if (type === "mcp" && !("server" in extra)) meta.server = { command: "npx" };
   return { meta: meta as Spec["meta"], files };
 }
 
@@ -582,5 +585,69 @@ describe("written() — the walk decides and warns from the matrix (spec 18 §9.
     const empty = written(await resolutionOf([spec("rule", "k", { targets: ["kiro"] })]), "claude-code", () => {});
     expect([...empty]).toEqual([]);
     expect(empty.finished).toBe(true);
+  });
+});
+
+function baseOf(resolution: Resolution, warnings: string[]): EmitBase {
+  return {
+    forge: undefined as never, // not read by the stubs below
+    resolution,
+    workspaceRoot: "/nowhere",
+    readExisting: async () => null,
+    text: async () => "",
+    bytes: async () => Buffer.alloc(0),
+    warn: (m: string) => warnings.push(m),
+  };
+}
+
+describe("emitFor and mcpServers (spec 18 §9.4)", () => {
+  it("an emitter that returns before walking every aimed ingredient fails the plan; one that walks returns its files", async () => {
+    const r = await resolutionOf([spec("rule", "r"), spec("agent", "a"), spec("hook", "h")]);
+    const lazy: Emitter<"kiro"> = { target: "kiro", async emit() { return []; } };
+    await expect(emitFor("kiro", lazy, baseOf(r, []))).rejects.toThrow(
+      "internal: the kiro emitter returned before walking every ingredient aimed at it",
+    );
+    const warnings: string[] = [];
+    const full: Emitter<"kiro"> = {
+      target: "kiro",
+      async emit(ctx) {
+        const out: PF[] = [];
+        for (const ing of ctx.aimed) out.push({ path: `x/${ing.ref}`, content: Buffer.from(""), target: "kiro", ingredient: ing.ref });
+        return out;
+      },
+    };
+    expect((await emitFor("kiro", full, baseOf(r, warnings))).map((f) => f.ingredient)).toEqual(["rule/r", "agent/a"]);
+    expect(warnings).toEqual(["kiro: hook hook/h has no Kiro equivalent — skipped"]);
+  });
+
+  it("mcpServers builds from the collected list: one, two in order, and a name collision with its warning", async () => {
+    const r = await resolutionOf([
+      spec("mcp", "one", { server: { command: "a" } }),
+      spec("mcp", "two", { server: { command: "b" } }),
+      spec("mcp", "one--acme", { as: "one", server: { command: "c" } }),
+    ]);
+    const [one, two, oneAcme] = r.ingredients;
+    const w: string[] = [];
+    expect(mcpServers(baseOf(r, w), "kiro", ".kiro/settings/mcp.json", [one])).toEqual({ one: { command: "a" } });
+    const both = mcpServers(baseOf(r, w), "kiro", ".kiro/settings/mcp.json", [one, two]);
+    expect(Object.keys(both)).toEqual(["one", "two"]);
+    expect(w).toEqual([]);
+    const clash = mcpServers(baseOf(r, w), "kiro", ".kiro/settings/mcp.json", [one, two, oneAcme]);
+    expect(Object.keys(clash)).toEqual(["one", "two"]);
+    expect(clash.one).toEqual({ command: "c" });
+    expect(w).toEqual(['kiro: two ingredients write the MCP server "one" into .kiro/settings/mcp.json: mcp/one and mcp/one--acme (last wins)']);
+  });
+});
+
+describe("agents-md walks to the end with no rule (spec 18 §6.3)", () => {
+  it("a workspace resolving only agents-md, one agent and no rule: no file, the per-type warning, no internal error", async () => {
+    const s = await scen(
+      { ingredients: [spec("agent", "a")], recipes: [rec("base", ["agent/a"])], profiles: [prof("acme", ["base"], ["agents-md"])] },
+      { config: { profile: "acme" } },
+    );
+    walkCleanups.push(s.cleanup);
+    const p = await plan(await loadWs(s.wsRoot));
+    expect(p.files).toEqual([]);
+    expect(p.warnings).toEqual(["agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/a"]);
   });
 });

@@ -11,13 +11,26 @@ import { LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Targ
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
 import { agentsMd } from "../emitters/agents-md.js";
-import type { Emitter, PlannedFile } from "../emitters/types.js";
+import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
+import { written } from "./capabilities.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
 export const LOCAL_FILE = "craftar.local.yaml";
 export const LOCK_FILE = "craftar.lock";
 
-const EMITTERS: Record<Target, Emitter> = { "claude-code": claudeCode, kiro, "agents-md": agentsMd };
+// Mapped, not Record<Target, Emitter>: an emitter in another target's slot does not compile (spec 18 §3.3).
+const EMITTERS: { [T in Target]: Emitter<T> } = { "claude-code": claudeCode, kiro, "agents-md": agentsMd };
+
+/**
+ * Runs one target's emitter on the walk of what the matrix says it writes. The walk warns about the
+ * rest, so an emitter that returns before finishing it would lose warnings: that fails the plan.
+ */
+export async function emitFor<T extends Target>(t: T, emitter: Emitter<T>, base: EmitBase): Promise<PlannedFile[]> {
+  const aimed = written(base.resolution, t, base.warn);
+  const files = await emitter.emit({ ...base, aimed });
+  if (!aimed.finished) throw new Error(`internal: the ${t} emitter returned before walking every ingredient aimed at it`);
+  return files;
+}
 
 export interface Workspace {
   root: string;
@@ -201,7 +214,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const sections = await sectionPass(ws.forge, resolution, warnings);
   /** Unresolved placeholder → refs of the ingredients citing it. */
   const missingParams = new Map<string, Set<string>>();
-  const ctx = {
+  const ctx: EmitBase = {
     forge: ws.forge,
     resolution,
     workspaceRoot: ws.root,
@@ -246,7 +259,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
       warnings.push(`target "${t}" has no emitter yet`);
       continue;
     }
-    files.push(...(await em.emit(ctx)));
+    files.push(...(await emitFor(t, em, ctx)));
   }
   for (const [key, refs] of [...missingParams].sort(([a], [b]) => a.localeCompare(b))) {
     warnings.push(`param "${key}" has no value in any layer — left verbatim (${[...refs].sort().join(", ")})`);
