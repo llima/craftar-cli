@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { loadForge } from "../src/core/forge.js";
-import { ForgeManifestSchema, FORGE_SCHEMA_SECTIONS, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
+import { ForgeManifestSchema, FORGE_SCHEMA_SECTIONS, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, RegistrySchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
 import { makeForge, tmpDir, writeFiles } from "./helpers/forge.js";
 
 /** A minimal valid ingredient of each type. */
@@ -266,5 +266,34 @@ describe("plan section (spec 12)", () => {
     expect(parsed.files[0].hunks![0].take).toBe("param");
     expect(parsed.files[0].hunks![0].params).toEqual([{ token: "globex-api", key: "deploy.api" }]);
     expect(parsed.files[0].hunks![0]).not.toHaveProperty("section");
+  });
+});
+
+describe("the workspace registry (spec 21 §5.2)", () => {
+  const entry = {
+    path: "/home/dev/work/acme-portal",
+    profile: "acme",
+    forge: { kind: "path", source: "../acme-forge", key: "/home/dev/work/acme-forge", ref: null, commit: null, fromLocalFile: false },
+    recipes: ["base"],
+    stack: {},
+    targets: ["claude-code"],
+    lastSync: "2026-10-07T00:00:00.000Z",
+  };
+
+  it("keeps keys it does not declare, at every level, and reads an unknown target as a string", () => {
+    const raw = {
+      schema: 1,
+      workspaces: [{ ...entry, forge: { ...entry.forge, later: 1 }, targets: ["claude-code", "cursor"], extra: "x" }],
+      top: true,
+    };
+    const parsed = RegistrySchema.parse(raw);
+    expect(parsed).toEqual(raw);
+    expect(Object.keys(parsed.workspaces[0]).at(-1)).toBe("extra");
+  });
+
+  it("refuses another schema, and an entry missing a declared key", () => {
+    expect(RegistrySchema.safeParse({ schema: 2, workspaces: [] }).success).toBe(false);
+    const { lastSync: _, ...noLastSync } = entry;
+    expect(RegistrySchema.safeParse({ schema: 1, workspaces: [noLastSync] }).success).toBe(false);
   });
 });

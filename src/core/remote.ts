@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { exists } from "./forge.js";
+import { withLock, type LockTiming } from "./home-lock.js";
 import { hashNormalized } from "./text.js";
 
 /* ------------------------------------------------------------------ */
@@ -150,16 +151,13 @@ export function resolveRef(refs: LsRemote, ref: string | null, url: string): { c
 /** Runs git and resolves its stdout; `remote` marks a call that reaches the remote (prompts off without a TTY). */
 export type GitRunner = (args: string[], opts?: { remote?: boolean }) => Promise<string>;
 
-export interface CacheOptions {
+export interface CacheOptions extends LockTiming {
   /** `$CRAFTAR_HOME` (default `~/.craftar`), resolved by the caller. */
   home: string;
   /** Resolve against the cache only; never reach the remote. */
   offline?: boolean;
   git?: GitRunner;
-  /** How long a busy entry is waited for (60 s), how often it is polled, when a lock is stale (10 min), when an unused tree goes (14 days). */
-  waitMs?: number;
-  pollMs?: number;
-  staleMs?: number;
+  /** When an unused tree goes (14 days); the lock's timing comes from `LockTiming`. */
   cleanupMs?: number;
 }
 
@@ -251,7 +249,7 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
     } catch (e) {
       throw new Error(`cannot write the Forge cache in ${home}: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}`);
     }
-    await withLock(entry, opts, async () => {
+    await withEntryLock(entry, opts, async () => {
       if (!(await exists(path.join(repo, "HEAD")))) await git(["init", "--quiet", "--bare", repo]);
       try {
         await git(["-C", repo, "fetch", "--quiet", "--prune", url, "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"], { remote: true });
@@ -324,7 +322,7 @@ async function treeFor(git: GitRunner, entry: string, repo: string, commit: stri
   const marker = `${dir}.ok`;
   const complete = async () => (await exists(marker)) && (await exists(path.join(dir, ".git")));
   if (!(await complete())) {
-    await withLock(entry, opts, async () => {
+    await withEntryLock(entry, opts, async () => {
       if (await complete()) return;
       if (await exists(dir)) {
         await git(["-C", repo, "worktree", "remove", "--force", dir]).catch(() => {});
@@ -372,7 +370,7 @@ async function cleanup(git: GitRunner, entry: string, repo: string, inUse: strin
     if (name.includes(".") || name === inUse) continue;
     const used = await lastUse(name);
     if (used === null || used >= limit) continue;
-    await withLock(entry, opts, async () => {
+    await withEntryLock(entry, opts, async () => {
       // Again under the lock: a reader may have touched the stamp since (readers take no lock).
       const again = await lastUse(name);
       if (again === null || again >= limit) return;
@@ -383,7 +381,7 @@ async function cleanup(git: GitRunner, entry: string, repo: string, inUse: strin
   }
   // A stamp or marker whose tree is gone (a reader stamped it as cleanup took the tree) goes too — under
   // the lock, so it never races a rebuild between its `rm` of the tree and the `.ok` it then writes.
-  await withLock(entry, opts, async () => {
+  await withEntryLock(entry, opts, async () => {
     for (const name of await fs.readdir(trees).catch(() => [] as string[])) {
       const m = /^(.+)\.(used|ok)$/.exec(name);
       if (m && !(await exists(path.join(trees, m[1])))) await fs.rm(path.join(trees, name), { force: true });
@@ -392,34 +390,7 @@ async function cleanup(git: GitRunner, entry: string, repo: string, inUse: strin
   if (removed) await git(["-C", repo, "worktree", "prune"]).catch(() => {});
 }
 
-/** The entry's lock: created exclusively, holding the PID and a timestamp; waited for, then refused; taken over when stale. */
-async function withLock<T>(entry: string, opts: CacheOptions, body: () => Promise<T>): Promise<T> {
-  const file = path.join(entry, "lock");
-  const waitMs = opts.waitMs ?? 60_000;
-  const pollMs = opts.pollMs ?? 200;
-  const staleMs = opts.staleMs ?? 10 * 60 * 1000;
-  const start = Date.now();
-  for (;;) {
-    try {
-      await fs.writeFile(file, `${process.pid} ${new Date().toISOString()}\n`, { flag: "wx" });
-      break;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      const stat = await fs.stat(file).catch(() => null);
-      if (stat && Date.now() - stat.mtimeMs > staleMs) {
-        await fs.rm(file, { force: true });
-        continue;
-      }
-      if (Date.now() - start >= waitMs) {
-        const held = (await fs.readFile(file, "utf8").catch(() => "")).split(/\s+/)[0] || "unknown";
-        throw new Error(`the Forge cache entry ${file} is busy (held by PID ${held})`);
-      }
-      await new Promise((r) => setTimeout(r, pollMs));
-    }
-  }
-  try {
-    return await body();
-  } finally {
-    await fs.rm(file, { force: true });
-  }
+/** The entry's lock (`<entry>/lock`), through the one helper the registry shares (spec 21 §5.4). */
+function withEntryLock<T>(entry: string, opts: CacheOptions, body: () => Promise<T>): Promise<T> {
+  return withLock(path.join(entry, "lock"), "the Forge cache entry", opts, body);
 }

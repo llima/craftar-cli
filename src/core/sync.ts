@@ -1,5 +1,4 @@
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
@@ -8,6 +7,7 @@ import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFo
 import { hashNormalized, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
 import { classifyForge, credentialFault, ensureTree, ForgeFetchError, NoCachedCopyError, type CachedTree } from "./remote.js";
+import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile } from "./extract.js";
@@ -127,7 +127,7 @@ async function remoteTree(
   opts: LoadOptions,
   fromLocalFile: boolean,
 ): Promise<{ tree: string; origin: ForgeOrigin; warning: string | null }> {
-  const home = opts.home ?? path.join(os.homedir(), ".craftar");
+  const home = resolveHome(opts.home);
   const mode = opts.mode ?? "read";
   const offline = opts.offline || mode === "no-fetch";
   const origin = (t: CachedTree): ForgeOrigin => ({
