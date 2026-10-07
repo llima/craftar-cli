@@ -2544,7 +2544,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       await fs.rm(gone.forgeRoot, { recursive: true, force: true });
       const r2 = runCli([cmd, "--workspace", gone.wsRoot]);
       expect(r2.code, cmd).toBe(1);
-      expect(r2.stderr, cmd).toBe(`error: Forge not found at ${gone.forgeRoot} (remote Forges are not supported yet — clone it and point \`forge:\` at the path)\n`);
+      expect(r2.stderr, cmd).toBe(`error: Forge not found at ${gone.forgeRoot}\n`);
 
       const unknown = await cat({ profile: "nobody" });
       const r3 = runCli([cmd, "--workspace", unknown.wsRoot]);
@@ -2597,7 +2597,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     const j1 = json(runCli(["targets", "--json", "--workspace", gone.wsRoot]));
     expect(j1.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([null, null, null]);
     expect(j1.warnings).toEqual([
-      `targets in use not shown: Forge not found at ${gone.forgeRoot} (remote Forges are not supported yet — clone it and point \`forge:\` at the path)`,
+      `targets in use not shown: Forge not found at ${gone.forgeRoot}`,
     ]);
     const unknown = await cat({ profile: "nobody" });
     const j2 = json(runCli(["targets", "--json", "--workspace", unknown.wsRoot]));

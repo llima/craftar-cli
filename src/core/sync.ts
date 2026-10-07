@@ -108,7 +108,7 @@ export async function loadWorkspace(root: string, opts: LoadOptions = {}): Promi
     return { root, config, forge: await loadForge(tree), origin, warnings };
   }
   const forgeRoot = path.resolve(root, config.forge);
-  if (!(await exists(forgeRoot))) throw new Error(`Forge not found at ${forgeRoot} (remote Forges are not supported yet — clone it and point \`forge:\` at the path)`);
+  if (!(await exists(forgeRoot))) throw new Error(`Forge not found at ${forgeRoot}`);
   // A path means the working tree as it is; a ref beside it is ignored, said out loud (Ruling 9).
   if (config.ref !== undefined) warnings.unshift(`ref "${config.ref}" is ignored: the Forge is a path (${config.forge}), read as its working tree`);
   const origin: ForgeOrigin = { kind: "path", source: config.forge, ref: null, defaultBranch: null, fetched: false, fromLocalFile };
