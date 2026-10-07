@@ -124,36 +124,44 @@ program
   .command("diff")
   .description("Unified diff between the files on disk and what the Forge would generate")
   .option("--workspace <dir>", "workspace root", ".")
+  .option("--exit-code", "exit 1 when there are differences (exactly when `sync --check` would fail); a [path] that names no file craftar manages becomes an error", false)
   .argument("[path]", "limit to one file")
   .action(async (only, o) => {
     const ws = await loadWorkspace(o.workspace);
     const p = await plan(ws);
     const st = await status(ws, p, await readLock(ws.root));
+    // Spec 19 §3.3: under --exit-code a path nothing matches must not read as "clean" to a script
+    if (o.exitCode && only && !st.some((s) => s.path === only))
+      fail(`${only} is not a file craftar manages in this workspace — pass the workspace-relative path as \`craftar status\` prints it (forward slashes)`);
     let shown = 0;
-    const paint = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
+    const render = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
     for (const s of st) {
       if (only && s.path !== only) continue;
       // Spec 19 §3.2: show the six states sync --check refuses (skip unchanged and adopt)
       if (["unchanged", "adopt"].includes(s.state)) continue;
       shown++;
-      const disk = await readText(path.join(ws.root, s.path));
       if (s.state === "orphan-drift") {
         // Header and one line, no body: sync keeps this file
         console.log(pc.bold(`--- ${s.path} (disk, orphan-drift)`));
         console.log(`  ${explainSkip(s)}`);
-      } else if (s.state === "orphan") {
+        continue;
+      }
+      const disk = await readText(path.join(ws.root, s.path));
+      if (s.state === "orphan") {
         // A removal: the file exists on disk but the Forge no longer produces it
         console.log(pc.bold(`--- ${s.path} (disk, orphan)`));
         console.log(pc.bold(`+++ ${s.path} (forge: no longer produced — sync removes it)`));
-        console.log(renderDiff(disk ?? "", "", paint));
+        console.log(renderDiff(disk ?? "", "", render));
       } else {
         const next = s.planned ? toLf(stripBom(s.planned.content.toString("utf8"))) : "";
         console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
         console.log(pc.bold(`+++ ${s.path} (forge)`));
-        console.log(renderDiff(disk ?? "", next, paint));
+        console.log(renderDiff(disk ?? "", next, render));
       }
     }
     if (!shown) console.log(pc.green("no differences"));
+    // exitCode, not process.exit: exit drops a piped diff still queued for a slow reader (spec 19 §3.1)
+    else if (o.exitCode) process.exitCode = 1;
   });
 
 /* ---------------------------------------------------------------- explain */
