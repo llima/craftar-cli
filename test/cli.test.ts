@@ -3802,3 +3802,252 @@ describe("cli — the workspace registry (spec 21 §10.3)", () => {
     expect(on.workspaces[0]).toMatchObject({ forgeMoved: true, forge: { commit: next, fetched: true } });
   });
 });
+
+describe("cli — add recipe / remove recipe (spec 22)", () => {
+  const R2 = (x: string) => `error: recipe "${x}" not found in this Forge (base, front-a, front-b, front-c, stack-api)\n`;
+  const R6 = (cmd: string) =>
+    `error: ${cmd}: cannot edit craftar.yaml in place (it does not round-trip unchanged through the YAML writer) — reformat it by hand and re-run\n`;
+  const BASE_YAML = "forge: ../forge\nprofile: acme\n";
+
+  /** Spec 22 §9's Forge, profile acme = [stack-api, front-a]; synced unless asked not to. */
+  async function recipeScenario(opts: { sync?: boolean; local?: Record<string, unknown> } = {}) {
+    const s = await scenario(
+      {
+        ingredients: [
+          rule("base", "base\n"),
+          rule("api", "api\n"),
+          rule("front-a", "front a\n"),
+          rule("front-b", "front b\n"),
+          rule("front-c", "owner {{owner}}\n"),
+        ],
+        recipes: [
+          recipe("base", ["rule/base"]),
+          recipe("stack-api", ["rule/api"], { extends: ["base"] }),
+          recipe("front-a", ["rule/front-a"], { slot: "front" }),
+          recipe("front-b", ["rule/front-b"], { slot: "front" }),
+          recipe("front-c", ["rule/front-c"], { slot: "front" }),
+        ],
+        profiles: [profile("acme", ["stack-api", "front-a"])],
+      },
+      { config: { profile: "acme" }, local: opts.local },
+    );
+    cleanups.push(s.cleanup);
+    if (opts.sync !== false) expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    return s;
+  }
+  const yamlOf = (s: { wsRoot: string }) => fs.readFile(path.join(s.wsRoot, "craftar.yaml"), "utf8");
+  const setYaml = (s: { wsRoot: string }, text: string) => fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), text);
+  const recipeCli = (s: { wsRoot: string }, ...args: string[]) => runCli([...args, "--workspace", s.wsRoot]);
+
+  it("test 1: a slot held by another recipe is refused without --replace (R3)", async () => {
+    const s = await recipeScenario();
+    const r = recipeCli(s, "add", "recipe", "front-b");
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe('error: recipe "front-b" occupies slot "front", held by "front-a" — pass --replace to swap them\n');
+    expect(await yamlOf(s)).toBe(BASE_YAML);
+  });
+
+  it("tests 2–3: --replace swaps, the output says what the next sync does, and swapping back cancels", async () => {
+    const s = await recipeScenario();
+    const r = recipeCli(s, "add", "recipe", "front-b", "--replace");
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      "craftar.yaml: recipes.add + front-b; recipes.remove + front-a\n" +
+        "recipes: base → stack-api → front-b\n" +
+        "next sync: 1 new, 1 orphan — run `craftar sync`\n",
+    );
+    expect(await yamlOf(s)).toBe(BASE_YAML + "recipes:\n  add:\n    - front-b\n  remove:\n    - front-a\n");
+    expect(recipeCli(s, "status").stdout.split("\n")[0]).toBe("craftar status — profile acme · recipes base → stack-api → front-b");
+
+    const back = recipeCli(s, "add", "recipe", "front-a", "--replace");
+    expect(back.code).toBe(0);
+    expect(back.stderr).toBe("");
+    expect(back.stdout).toBe(
+      "craftar.yaml: recipes.add - front-b; recipes.remove - front-a\n" +
+        "recipes: base → stack-api → front-a\n" +
+        "next sync: nothing to sync\n",
+    );
+    expect(await yamlOf(s)).toBe(BASE_YAML + "recipes:\n  add: []\n  remove: []\n");
+  });
+
+  it("test 4: remove of a recipe extends brings in is refused, naming the top-level recipe (R4)", async () => {
+    const s = await recipeScenario();
+    const r = recipeCli(s, "remove", "recipe", "base");
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe('error: recipe "base" comes in through "stack-api" (extends) — remove "stack-api", or change the Forge\n');
+    expect(await yamlOf(s)).toBe(BASE_YAML);
+  });
+
+  it("test 5: remove of a profile recipe takes what only it brought in", async () => {
+    const s = await recipeScenario();
+    const r = recipeCli(s, "remove", "recipe", "stack-api");
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe("craftar.yaml: recipes.remove + stack-api\nrecipes: front-a\nnext sync: 2 orphan — run `craftar sync`\n");
+    expect(await yamlOf(s)).toBe(BASE_YAML + "recipes:\n  remove:\n    - stack-api\n");
+  });
+
+  it("test 6: add of a recipe in use changes nothing and writes nothing", async () => {
+    const s = await recipeScenario();
+    const r = recipeCli(s, "add", "recipe", "stack-api");
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe("nothing to change: stack-api is already in use\n");
+    expect(await yamlOf(s)).toBe(BASE_YAML);
+  });
+
+  it("test 7: an unknown name is R2; one written by hand is R5 for other calls and cleaned up by remove", async () => {
+    const s = await recipeScenario();
+    const r = recipeCli(s, "add", "recipe", "nope");
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(R2("nope"));
+
+    await setYaml(s, BASE_YAML + "recipes:\n  add: [nope]\n");
+    const st = recipeCli(s, "status");
+    expect(st.code).toBe(1);
+    expect(st.stderr).toBe('error: recipe "nope" not found (referenced by craftar.yaml recipes.add)\n');
+    const other = recipeCli(s, "add", "recipe", "front-b", "--replace");
+    expect(other.code).toBe(1);
+    expect(other.stdout).toBe("");
+    expect(other.stderr).toBe('error: recipe "nope" not found (referenced by craftar.yaml recipes.add)\n');
+
+    const clean = recipeCli(s, "remove", "recipe", "nope");
+    expect(clean.code).toBe(0);
+    expect(clean.stderr).toBe("");
+    expect(clean.stdout).toBe("craftar.yaml: recipes.add - nope\nrecipes: base → stack-api → front-a\nnext sync: nothing to sync\n");
+    expect(await yamlOf(s)).toBe(BASE_YAML + "recipes:\n  add: []\n");
+  });
+
+  it("tests 8–9: a name twice is R7; one bad name refuses the whole call", async () => {
+    const s = await recipeScenario();
+    const twice = recipeCli(s, "add", "recipe", "front-b", "front-b", "--replace");
+    expect(twice.code).toBe(1);
+    expect(twice.stdout).toBe("");
+    expect(twice.stderr).toBe('error: recipe "front-b" is named twice\n');
+    const bad = recipeCli(s, "add", "recipe", "front-b", "nope", "--replace");
+    expect(bad.code).toBe(1);
+    expect(bad.stdout).toBe("");
+    expect(bad.stderr).toBe(R2("nope"));
+    expect(await yamlOf(s)).toBe(BASE_YAML);
+  });
+
+  it("test 10: craftar.local.yaml with recipes is refused for both commands (R1); with only targets it is not", async () => {
+    const R1 = "error: craftar.local.yaml sets recipes, which replaces craftar.yaml's lists — edit it by hand, or remove its recipes key and re-run\n";
+    const s = await recipeScenario({ sync: false, local: { recipes: { add: [] } } });
+    for (const args of [["add", "recipe", "front-b", "--replace"], ["remove", "recipe", "stack-api"]]) {
+      const r = recipeCli(s, ...args);
+      expect(r.code, args.join(" ")).toBe(1);
+      expect(r.stdout, args.join(" ")).toBe("");
+      expect(r.stderr, args.join(" ")).toBe(R1);
+    }
+    expect(await yamlOf(s)).toBe(BASE_YAML);
+
+    const t = await recipeScenario({ local: { targets: ["claude-code"] } });
+    const ok = recipeCli(t, "add", "recipe", "front-b", "--replace");
+    expect(ok.code).toBe(0);
+    expect(ok.stderr).toBe("");
+  });
+
+  it("tests 11–12: the README's padded flow form is R6, file untouched; the unpadded one is edited in place", async () => {
+    const s = await recipeScenario();
+    const padded = BASE_YAML + "recipes: { add: [], remove: [] }\n";
+    await setYaml(s, padded);
+    const r = recipeCli(s, "add", "recipe", "front-b", "--replace");
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(R6("add recipe"));
+    expect(await yamlOf(s)).toBe(padded);
+
+    await setYaml(s, "﻿" + BASE_YAML.replace(/\n/g, "\r\n") + "recipes: {add: [], remove: []}\r\n");
+    expect(recipeCli(s, "remove", "recipe", "stack-api").code).toBe(0);
+    expect(await yamlOf(s)).toBe("﻿" + BASE_YAML.replace(/\n/g, "\r\n") + "recipes: {add: [], remove: [stack-api]}\r\n");
+  });
+
+  it("test 13: nothing to sync when no file moves; a plan warning goes to stderr", async () => {
+    const s = await recipeScenario();
+    await setYaml(s, BASE_YAML + "recipes:\n  remove: [base]\n");
+    const r = recipeCli(s, "add", "recipe", "base");
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe("craftar.yaml: recipes.remove - base\nrecipes: base → stack-api → front-a\nnext sync: nothing to sync\n");
+
+    const t = await recipeScenario();
+    const w = recipeCli(t, "add", "recipe", "front-c", "--replace");
+    expect(w.code).toBe(0);
+    expect(w.stdout).toBe(
+      "craftar.yaml: recipes.add + front-c; recipes.remove + front-a\n" +
+        "recipes: base → stack-api → front-c\n" +
+        "next sync: 1 new, 1 orphan — run `craftar sync`\n",
+    );
+    expect(w.stderr).toBe('warn param "owner" has no value in any layer — left verbatim (rule/front-c)\n');
+  });
+
+  it("test 14: nothing but craftar.yaml is written, by any call", async () => {
+    const s = await recipeScenario();
+    const ws = await snapshot(s.wsRoot);
+    const forgeBefore = await snapshot(s.forgeRoot);
+    for (const args of [
+      ["add", "recipe", "front-b"],
+      ["remove", "recipe", "base"],
+      ["add", "recipe", "nope"],
+      ["add", "recipe", "front-b", "--replace"],
+      ["remove", "recipe", "stack-api"],
+      ["add", "recipe", "stack-api"],
+    ])
+      recipeCli(s, ...args);
+    const after = await snapshot(s.wsRoot);
+    delete ws["craftar.yaml"];
+    delete after["craftar.yaml"];
+    expect(after).toEqual(ws);
+    expect(await snapshot(s.forgeRoot)).toEqual(forgeBefore);
+  });
+
+  it("test 15: --replace with no slot conflict is the same as without it", async () => {
+    const s = await recipeScenario();
+    const t = await recipeScenario();
+    for (const w of [s, t]) expect(recipeCli(w, "remove", "recipe", "stack-api").code).toBe(0);
+    const a = recipeCli(s, "add", "recipe", "stack-api", "--replace");
+    const b = recipeCli(t, "add", "recipe", "stack-api");
+    expect(a.code).toBe(0);
+    expect(a.stdout).toBe("craftar.yaml: recipes.remove - stack-api\nrecipes: base → stack-api → front-a\nnext sync: nothing to sync\n");
+    expect(b.stdout).toBe(a.stdout);
+    expect(await yamlOf(t)).toBe(await yamlOf(s));
+  });
+
+  it("test 16: --replace removes every other holder of the slot", async () => {
+    const s = await recipeScenario();
+    await setYaml(s, BASE_YAML + "recipes:\n  add: [front-c]\n");
+    const r = recipeCli(s, "add", "recipe", "front-b", "--replace");
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      "craftar.yaml: recipes.add + front-b, - front-c; recipes.remove + front-a\n" +
+        "recipes: base → stack-api → front-b\n" +
+        "next sync: 1 new, 1 orphan — run `craftar sync`\n",
+    );
+    expect(YAML.parse(await yamlOf(s)).recipes).toEqual({ add: ["front-b"], remove: ["front-a"] });
+  });
+
+  it("test 17: an edit that resolves but does not plan is refused, craftar.yaml untouched (R5, §5.2 step 4)", async () => {
+    const s = await scenario(
+      {
+        ingredients: [rule("b", "b\n"), rule("m", "<!-- craftar:section s -->\nx\n<!-- /craftar:section -->\n")],
+        recipes: [recipe("base", ["rule/b"]), recipe("marked", ["rule/m"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const r = runCli(["add", "recipe", "marked", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(
+      "error: craftar.forge.yaml declares schema: 1, but ingredients/rules/m/rule.md:1 holds a section marker — set schema: 2 in craftar.forge.yaml, so that craftar 0.6.2 and older refuse this Forge instead of emitting the markers\n",
+    );
+    expect(await fs.readFile(path.join(s.wsRoot, "craftar.yaml"), "utf8")).toBe(BASE_YAML);
+  });
+});
