@@ -5,6 +5,7 @@ import { execFileSync, spawn } from "node:child_process";
 import YAML from "yaml";
 import { makeForge, profile, recipe, rule, scenario, tmpDir, writeFiles } from "./helpers/forge.js";
 import { runCli } from "./helpers/cli.js";
+import { git, remoteForge } from "./helpers/remote.js";
 import { TSX_LOADER } from "./helpers/tsx-loader.js";
 import { exists, listFiles } from "../src/core/forge.js";
 import { UnifyPlanSchema } from "../src/schema/index.js";
@@ -3272,5 +3273,145 @@ describe("cli — forge values: credentials refused, path-Forge warnings (spec 1
       'ref "v1" is ignored: the Forge is a path (../forge), read as its working tree',
       "Forge overridden by craftar.local.yaml (../forge) — do not commit craftar.lock or the generated files",
     ]);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* spec 13: a remote Forge through the cache (file:// remotes only)    */
+/* ------------------------------------------------------------------ */
+describe("cli — a remote Forge (spec 13 §4.1, §4.4, AC 1, 3, 4, 5)", () => {
+  const SPEC = { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] };
+
+  async function remoteWs(extra = "") {
+    const r = await remoteForge(SPEC);
+    const ws = await tmpDir("craftar-remote-ws-");
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    await fs.writeFile(path.join(ws, "craftar.yaml"), `forge: ${r.url}\nprofile: acme\n${extra}`);
+    const run = (args: string[], h = home) => runCli([...args, "--workspace", ws], { env: { CRAFTAR_HOME: h } });
+    return { r, ws, home, run };
+  }
+  const short = (sha: string) => sha.slice(0, 8);
+
+  it("AC 1: sync writes the files a path Forge at the same commit writes, byte for byte", async () => {
+    const { r, ws, run } = await remoteWs();
+    expect(run(["sync"]).code).toBe(0);
+    const viaPath = await tmpDir("craftar-path-ws-");
+    cleanups.push(() => fs.rm(viaPath, { recursive: true, force: true }));
+    await fs.writeFile(path.join(viaPath, "craftar.yaml"), `forge: ${r.src.replace(/\\/g, "/")}\nprofile: acme\n`);
+    expect(runCli(["sync", "--workspace", viaPath]).code).toBe(0);
+    const strip = (o: Record<string, string>) => Object.fromEntries(Object.entries(o).filter(([k]) => k !== "craftar.yaml" && k !== "craftar.lock"));
+    expect(strip(await snapshot(ws))).toEqual(strip(await snapshot(viaPath)));
+  });
+
+  it("AC 3: the header names the Forge, and shows the lock's commit once the Forge moved, until the next sync", async () => {
+    const { r, run } = await remoteWs();
+    const first = git(r.src, "rev-parse", "HEAD");
+    expect(run(["sync"]).code).toBe(0);
+    expect(run(["status"]).stdout.split("\n")[1]).toBe(`  forge ${r.url} @ main (default branch) ${short(first)}`);
+    const next = await r.commit({ "README.md": "moved\n" });
+    expect(run(["status"]).stdout.split("\n")[1]).toBe(`  forge ${r.url} @ main (default branch) ${short(next)} · lock ${short(first)}`);
+    expect(run(["sync"]).code).toBe(0);
+    expect(run(["status"]).stdout.split("\n")[1]).toBe(`  forge ${r.url} @ main (default branch) ${short(next)}`);
+  });
+
+  it("AC 4: a tag in ref does not move when the branch does", async () => {
+    const r0 = await remoteWs("ref: v1\n");
+    const tagged = git(r0.r.src, "rev-parse", "HEAD");
+    git(r0.r.src, "tag", "v1");
+    git(r0.r.src, "push", "-q", "origin", "v1");
+    await r0.r.commit({ "README.md": "later\n" });
+    const j = JSON.parse(r0.run(["status", "--json"]).stdout);
+    expect(j.forge).toEqual({ kind: "remote", source: r0.r.url, ref: "v1", defaultBranch: null, commit: tagged, lockCommit: null, fetched: true });
+  });
+
+  it("AC 5: unreachable — sync fails naming --offline; readers warn and use the cache; --offline works; no cache fails everywhere", async () => {
+    const { r, ws, home, run } = await remoteWs();
+    expect(run(["sync"]).code).toBe(0);
+    const sha = git(r.src, "rev-parse", "HEAD");
+    await fs.rename(r.bare, r.bare + ".gone");
+    for (const args of [["sync"], ["sync", "--dry-run"], ["sync", "--check"]]) {
+      const x = run(args);
+      expect(x.code, args.join(" ")).toBe(1);
+      expect(x.stderr.startsWith(`error: cannot fetch the Forge ${r.url}: `), args.join(" ")).toBe(true);
+      expect(x.stderr, args.join(" ")).toContain(`— run with --offline to use the cached copy (${short(sha)} fetched `);
+    }
+    const notFetched = `Forge ${r.url} not fetched (`;
+    const st = run(["status", "--json"]);
+    expect(st.code).toBe(0);
+    expect(JSON.parse(st.stdout).warnings[0].startsWith(notFetched)).toBe(true);
+    for (const args of [["diff"], ["explain", ".claude/rules/a.md"], ["ls"]]) {
+      const x = run(args);
+      expect(x.code, args.join(" ")).toBe(0);
+      expect(x.stderr.startsWith(`warn ${notFetched}`), args.join(" ")).toBe(true);
+    }
+    for (const cmd of ["recipes", "ingredients"]) {
+      const x = run([cmd, "--json"]);
+      expect(x.code, cmd).toBe(0);
+      expect(JSON.parse(x.stdout).warnings[0].startsWith(notFetched), cmd).toBe(true);
+    }
+    expect(run(["sync", "--offline"]).code).toBe(0);
+    const empty = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(empty, { recursive: true, force: true }));
+    for (const args of [["sync"], ["status"], ["diff"], ["ls"], ["recipes"], ["sync", "--offline"]]) {
+      const x = run(args, empty);
+      expect(x.code, `${args.join(" ")} without a cache`).toBe(1);
+    }
+    void ws;
+    void home;
+  });
+
+  it("Q13-1 (pending the user): diff --exit-code with the remote unreachable reads the cache — exit 0, the warning, judged against the cache", async () => {
+    const { r, run } = await remoteWs();
+    expect(run(["sync"]).code).toBe(0);
+    await fs.rename(r.bare, r.bare + ".gone");
+    const x = run(["diff", "--exit-code"]);
+    expect(x.code).toBe(0);
+    expect(x.stdout).toBe("no differences\n");
+    expect(x.stderr.startsWith(`warn Forge ${r.url} not fetched (`)).toBe(true);
+  });
+
+  it("status --json carries forge for a path Forge too", async () => {
+    const s = await scenario(SPEC, { config: { profile: "acme" } });
+    cleanups.push(s.cleanup);
+    expect(JSON.parse(runCli(["status", "--json", "--workspace", s.wsRoot]).stdout).forge).toEqual({
+      kind: "path",
+      source: "../forge",
+      ref: null,
+      defaultBranch: null,
+      commit: null,
+      lockCommit: null,
+      fetched: false,
+    });
+  });
+
+  it("forge unify on a remote Forge is refused before anything is fetched", async () => {
+    const { r, home, run } = await remoteWs();
+    const x = run(["forge", "unify", "rule/a", "--profile", "acme", "--take", "base"]);
+    expect([x.code, x.stderr]).toEqual([1, `error: the Forge of this workspace is remote (${r.url}) — clone it and pass --forge <dir>\n`]);
+    expect(await fs.readdir(home)).toEqual([]);
+  });
+
+  it("--forge with a URL is refused, for the forge commands and the catalogue", async () => {
+    const { r, home } = await remoteWs();
+    for (const args of [["forge", "variants"], ["recipes"], ["ingredients"]]) {
+      const x = runCli([...args, "--forge", r.url], { env: { CRAFTAR_HOME: home } });
+      expect([x.code, x.stderr], args.join(" ")).toEqual([1, "error: --forge takes a directory; to read a remote Forge, run inside a workspace that names it\n"]);
+    }
+  });
+
+  it("targets never fetches: no cache → unmarked with a warning; once cached → marked, and no new fetch", async () => {
+    const { home, run } = await remoteWs();
+    const before = JSON.parse(run(["targets", "--json"]).stdout);
+    expect(before.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([null, null, null]);
+    expect(before.warnings).toHaveLength(1);
+    expect(before.warnings[0].startsWith("targets in use not shown: ")).toBe(true);
+    expect(run(["status"]).code).toBe(0);
+    const entry = path.join(home, "forges", (await fs.readdir(path.join(home, "forges")))[0]);
+    const stamp = await fs.readFile(path.join(entry, "fetched"), "utf8");
+    const after = JSON.parse(run(["targets", "--json"]).stdout);
+    expect(after.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([true, false, false]);
+    expect(after.warnings).toEqual([]);
+    expect(await fs.readFile(path.join(entry, "fetched"), "utf8")).toBe(stamp);
   });
 });

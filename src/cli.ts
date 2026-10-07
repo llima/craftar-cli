@@ -4,7 +4,8 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
-import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, type FileStatus, type SectionLayer } from "./core/sync.js";
+import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, type FetchMode, type FileStatus, type LoadOptions, type SectionLayer, type Workspace } from "./core/sync.js";
+import type { Lock } from "./schema/index.js";
 import { resolve, sectionKey } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
 import { listTargets } from "./core/capabilities.js";
@@ -28,6 +29,13 @@ import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
+
+/**
+ * Q13-1 — pending the user's answer: with a remote Forge whose fetch fails, does `diff --exit-code`
+ * fail like `sync --check` ("sync") or read the cached copy with a warning ("read", spec 13 as
+ * approved)? One constant and one test (`Q13-1` in test/cli.test.ts) to flip.
+ */
+const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "read";
 
 const program = new Command();
 program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.10.1");
@@ -79,12 +87,14 @@ program
   .description("Show what sync would do: new, update, drift, orphan, collision")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--json", "machine-readable output", false)
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
   .action(async (o) => {
-    const ws = await loadWorkspace(o.workspace);
+    const ws = await loadWorkspace(o.workspace, load(o, "read"));
     const p = await plan(ws);
-    const st = await status(ws, p, await readLock(ws.root));
-    if (o.json) return console.log(JSON.stringify({ statuses: st.map(({ planned, ...s }) => s), warnings: p.warnings }, null, 2));
-    printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes);
+    const lock = await readLock(ws.root);
+    const st = await status(ws, p, lock);
+    if (o.json) return console.log(JSON.stringify({ forge: forgeJson(ws, lock), statuses: st.map(({ planned, ...s }) => s), warnings: p.warnings }, null, 2));
+    printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, false, forgeLine(ws, lock));
   });
 
 /* ---------------------------------------------------------------- sync */
@@ -95,13 +105,15 @@ program
   .option("--check", "exit 1 when the workspace is out of date or has drift (CI mode)", false)
   .option("--dry-run", "show the plan, write nothing", false)
   .option("--overwrite-drift", "regenerate files that were hand-edited (their edits are lost)", false)
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
   .action(async (o) => {
-    const ws = await loadWorkspace(o.workspace);
+    const ws = await loadWorkspace(o.workspace, load(o, "sync"));
     const p = await plan(ws);
-    const st = await status(ws, p, await readLock(ws.root));
+    const lock = await readLock(ws.root);
+    const st = await status(ws, p, lock);
     if (o.check) {
       const bad = st.filter((s) => !["unchanged", "adopt"].includes(s.state));
-      printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true);
+      printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true, forgeLine(ws, lock));
       if (bad.length) {
         console.log(pc.red(`\n${bad.length} file(s) out of sync`));
         process.exit(1);
@@ -112,6 +124,8 @@ program
     const r = await apply(ws, p, st, { dryRun: o.dryRun, overwriteDrift: o.overwriteDrift });
     const verb = o.dryRun ? "would write" : "wrote";
     console.log(pc.bold(`craftar sync — profile ${ws.config.profile} · recipes ${p.resolution.recipes.join(" → ")} · targets ${p.resolution.targets.join(", ")}`));
+    const fl = forgeLine(ws, lock);
+    if (fl) console.log(fl);
     console.log(`  ${verb} ${pc.green(String(r.written.length))}, removed ${pc.magenta(String(r.removed.length))} orphan(s), skipped ${pc.yellow(String(r.skipped.length))}`);
     for (const f of r.written) console.log(`  ${pc.green("+")} ${f}`);
     for (const f of r.removed) console.log(`  ${pc.magenta("-")} ${f}  (orphan: no longer produced by the Forge)`);
@@ -126,8 +140,10 @@ program
   .option("--workspace <dir>", "workspace root", ".")
   .option("--exit-code", "exit 1 when there are differences (exactly when `sync --check` would fail); a [path] that names no file craftar manages becomes an error", false)
   .argument("[path]", "limit to one file")
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
   .action(async (only, o) => {
-    const ws = await loadWorkspace(o.workspace);
+    const ws = await loadWorkspace(o.workspace, load(o, o.exitCode ? DIFF_EXIT_CODE_FETCH_MODE : "read"));
+    warnStderr(ws.warnings);
     const p = await plan(ws);
     const st = await status(ws, p, await readLock(ws.root));
     // Spec 19 §3.3: under --exit-code a path nothing matches must not read as "clean" to a script
@@ -170,8 +186,10 @@ program
   .description("Why does this file exist? Which ingredient, recipe chain and target produced it, and which layer filled each section")
   .argument("<path>", "workspace-relative path of a generated file")
   .option("--workspace <dir>", "workspace root", ".")
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
   .action(async (file, o) => {
-    const ws = await loadWorkspace(o.workspace);
+    const ws = await loadWorkspace(o.workspace, load(o, "read"));
+    warnStderr(ws.warnings);
     const p = await plan(ws);
     const f = p.files.find((x) => x.path === file.replace(/\\/g, "/"));
     if (!f) fail(`${file} is not produced by the Forge for profile ${ws.config.profile}`);
@@ -195,10 +213,14 @@ program
   .command("ls")
   .description("List recipes and ingredients resolved for this workspace")
   .option("--workspace <dir>", "workspace root", ".")
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
   .action(async (o) => {
-    const ws = await loadWorkspace(o.workspace);
+    const ws = await loadWorkspace(o.workspace, load(o, "read"));
+    warnStderr(ws.warnings);
     const p = await plan(ws);
     console.log(pc.bold(`Forge ${ws.forge.manifest.name} @ ${ws.forge.commit?.slice(0, 8) ?? "no git"} · profile ${ws.config.profile}`));
+    const fl = forgeLine(ws, await readLock(ws.root));
+    if (fl) console.log(fl);
     for (const r of p.resolution.recipes) {
       const rec = ws.forge.recipes.get(r)!;
       console.log(`\n${pc.cyan(r)}${rec.slot ? pc.dim(` [slot ${rec.slot}]`) : ""}${rec.description ? pc.dim(" — " + rec.description) : ""}`);
@@ -218,10 +240,11 @@ program
   .option("--profile <name>", "with --forge: mark what this profile resolves")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
   .action(async (o) => {
     if (o.profile && !o.forge) fail("--profile goes with --forge — inside a workspace the profile comes from craftar.yaml");
 
-    const { forge: forg, workspace } = await resolveForgeSource({ forge: o.forge, workspace: o.workspace });
+    const { forge: forg, workspace } = await resolveForgeSource({ forge: o.forge, workspace: o.workspace, ...load(o, "read") });
     const source: ContextSource | null = workspace
       ? { kind: "workspace", config: workspace.config }
       : o.profile
@@ -332,6 +355,7 @@ program
   .option("--profile <name>", "with --forge: mark what this profile resolves")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
   .action(async (o) => {
     if (o.profile && !o.forge) fail("--profile goes with --forge — inside a workspace the profile comes from craftar.yaml");
     if (o.type) {
@@ -342,7 +366,7 @@ program
       }
     }
 
-    const { forge: forg, workspace } = await resolveForgeSource({ forge: o.forge, workspace: o.workspace });
+    const { forge: forg, workspace } = await resolveForgeSource({ forge: o.forge, workspace: o.workspace, ...load(o, "read") });
     const source: ContextSource | null = workspace
       ? { kind: "workspace", config: workspace.config }
       : o.profile
@@ -532,7 +556,7 @@ program
       if (o.workspace !== undefined) {
         // Explicit --workspace: exit 1 with loadWorkspace's message
         try {
-          await loadWorkspace(root);
+          await loadWorkspace(root, load({}, "no-fetch"));
         } catch (e) {
           fail(e instanceof Error ? e.message : String(e));
         }
@@ -541,7 +565,7 @@ program
     } else {
       // craftar.yaml exists, try to load
       try {
-        const ws = await loadWorkspace(root);
+        const ws = await loadWorkspace(root, load({}, "no-fetch"));
         inUse = resolve(ws.forge, ws.config).targets;
       } catch (e) {
         // Load or resolve failed — warning, not error
@@ -612,8 +636,9 @@ forge
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
   .action(async (o) => {
-    const f = await resolveForge({ forge: o.forge, workspace: o.workspace });
+    const f = await forgeFor(o);
     const report = await listVariants(f);
     if (o.json) return console.log(JSON.stringify(report, null, 2));
     console.log(pc.bold(`craftar forge variants — forge ${f.manifest.name} @ ${f.commit?.slice(0, 8) ?? "no git"}`));
@@ -642,8 +667,9 @@ forge
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
   .action(async (ref: string, o) => {
-    const f = await resolveForge({ forge: o.forge, workspace: o.workspace });
+    const f = await forgeFor(o);
     const base = f.ingredients.get(ref as IngredientRef);
     if (!base) fail(`${ref} is not an ingredient of this Forge`);
     const variants = [...f.ingredients.values()].filter((i) => {
@@ -698,7 +724,13 @@ forge
     if (frontEnds.length !== 1) fail("pass exactly one of --take, --plan or --save-plan");
     if (o.take !== undefined && o.take !== "base" && o.take !== "variant") fail(`--take must be "base" or "variant"`);
 
-    const f = await resolveForge({ forge: o.forge, workspace: o.workspace });
+    // Never through the cache: a tree there is clean and tracked, so gitUnheld would pass and the edit
+    // would be lost at the next cleanup without reaching the remote (spec 13 §4.4).
+    const f = await resolveForge({
+      forge: o.forge,
+      workspace: o.workspace,
+      refuseRemote: (url) => `the Forge of this workspace is remote (${url}) — clone it and pass --forge <dir>`,
+    });
     const base = f.ingredients.get(ref as IngredientRef);
     if (!base) fail(`${ref} is not an ingredient of this Forge`);
     const variant = [...f.ingredients.values()].find((i) => {
@@ -956,15 +988,57 @@ program.parseAsync().catch((e) => fail(e instanceof Error ? e.message : String(e
 
 /* ---------------------------------------------------------------- helpers */
 
+/** The network rule of a command, `--offline`, and `$CRAFTAR_HOME` (spec 13 §4.1, §6.3). */
+function load(o: { offline?: boolean }, mode: FetchMode): LoadOptions {
+  return { mode, offline: o.offline === true, home: process.env.CRAFTAR_HOME || undefined };
+}
+
+/** A `forge` command's Forge; the warnings of reading a remote one go to stderr, so `--json` stays its shape. */
+async function forgeFor(o: { forge?: string; workspace?: string; offline?: boolean }) {
+  const { forge, workspace } = await resolveForgeSource({ forge: o.forge, workspace: o.workspace, ...load(o, "read") });
+  warnStderr(workspace?.warnings ?? []);
+  return forge;
+}
+
+/** Warnings of loading the workspace, for commands whose stdout is not a report (a diff, `explain`, `ls`, `--json`). */
+function warnStderr(warnings: string[]): void {
+  for (const w of warnings) console.error(`${pc.yellow("warn")} ${w}`);
+}
+
+/** The header line naming a remote Forge (spec 13 §4.1); null for a path Forge, whose headers keep their shape. */
+function forgeLine(ws: Workspace, lock: Lock | null): string | null {
+  const o = ws.origin;
+  if (o.kind !== "remote") return null;
+  const commit = ws.forge.commit;
+  const at = o.ref ?? `${o.defaultBranch} (default branch)`;
+  const moved = lock?.forge.commit && commit && lock.forge.commit !== commit ? ` · lock ${lock.forge.commit.slice(0, 8)}` : "";
+  return `  forge ${o.source} @ ${at} ${commit?.slice(0, 8) ?? "no git"}${moved}`;
+}
+
+/** `status --json`'s `forge` key, for every Forge (spec 13 §4.1). */
+function forgeJson(ws: Workspace, lock: Lock | null) {
+  const o = ws.origin;
+  return {
+    kind: o.kind,
+    source: o.source,
+    ref: o.ref,
+    defaultBranch: o.defaultBranch,
+    commit: ws.forge.commit,
+    lockCommit: lock?.forge.commit ?? null,
+    fetched: o.fetched,
+  };
+}
+
 function fail(msg: string): never {
   console.error(pc.red("error: ") + msg);
   process.exit(1);
 }
 
-function printStatus(st: FileStatus[], warnings: string[], profile: string, recipes: string[], compact = false) {
+function printStatus(st: FileStatus[], warnings: string[], profile: string, recipes: string[], compact = false, forge: string | null = null) {
   const counts: Record<string, number> = {};
   for (const s of st) counts[s.state] = (counts[s.state] ?? 0) + 1;
   console.log(pc.bold(`craftar status — profile ${profile} · recipes ${recipes.join(" → ")}`));
+  if (forge) console.log(forge);
   console.log(
     "  " +
       Object.entries(counts)
