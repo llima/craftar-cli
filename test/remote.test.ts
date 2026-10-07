@@ -288,3 +288,45 @@ describe("the Forge cache holds a commit's bytes, whatever the host's git config
     }
   });
 });
+
+describe("the Forge cache ignores every host line-ending setting (review of spec 13, round 7)", () => {
+  async function withGlobalConfig(text: string, body: () => Promise<void>) {
+    const dir = await tmpDir("craftar-gitcfg-");
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    const cfg = path.join(dir, "gitconfig");
+    await fs.writeFile(cfg, text.replace(/ATTR/g, path.join(dir, "attributes").replace(/\\/g, "/")));
+    await fs.writeFile(path.join(dir, "attributes"), "* text eol=crlf\n");
+    const before = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = cfg;
+    try {
+      await body();
+    } finally {
+      if (before === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = before;
+    }
+  }
+
+  it("a Forge with `* text=auto` and a host core.eol=crlf (Git for Windows' native default): still LF", async () => {
+    const { r, home } = await setup();
+    await r.commit({ ".gitattributes": "* text=auto\n" });
+    await withGlobalConfig("[core]\n\teol = crlf\n", async () => {
+      const t = await ensureTree(r.url, null, { home });
+      expect((await fs.readFile(path.join(t.dir, "craftar.forge.yaml"))).includes(0x0d)).toBe(false);
+    });
+  });
+
+  it("a host-global core.attributesFile that asks for CRLF does not apply", async () => {
+    const { r, home } = await setup();
+    await withGlobalConfig("[core]\n\tattributesFile = ATTR\n", async () => {
+      const t = await ensureTree(r.url, null, { home });
+      expect((await fs.readFile(path.join(t.dir, "craftar.forge.yaml"))).includes(0x0d)).toBe(false);
+    });
+  });
+
+  it("the Forge's own eol=crlf attribute still wins — the author's choice", async () => {
+    const { r, home } = await setup();
+    await r.commit({ ".gitattributes": "*.yaml text eol=crlf\n" });
+    const t = await ensureTree(r.url, null, { home });
+    expect((await fs.readFile(path.join(t.dir, "craftar.forge.yaml"))).includes(0x0d)).toBe(true);
+  });
+});
