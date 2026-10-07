@@ -7,7 +7,7 @@ import { importClaudeCode } from "./importers/claude-code.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, type FetchMode, type FileStatus, type LoadOptions, type SectionLayer, type Workspace } from "./core/sync.js";
+import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type FetchMode, type FileState, type FileStatus, type LoadOptions, type SectionLayer, type Workspace } from "./core/sync.js";
 import type { Lock } from "./schema/index.js";
 import { resolve, sectionKey } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -29,6 +29,8 @@ import {
   type WriteJournal,
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
+import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
+import { parseWorkspaceYaml } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -41,7 +43,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.12.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.13.0");
 
 /* ---------------------------------------------------------------- import */
 program
@@ -200,6 +202,70 @@ program
     // exitCode, not process.exit: exit drops a piped diff still queued for a slow reader (spec 19 §3.1)
     else if (o.exitCode) process.exitCode = 1;
   });
+
+/* ---------------------------------------------------------------- add / remove recipe */
+/** The states `next sync:` counts, in `FileState` declaration order (spec 22 §14 item 6); a new state does not compile until it is placed here. */
+const NEXT_SYNC: Record<Exclude<FileState, "unchanged">, true> = { new: true, update: true, drift: true, adopt: true, collision: true, orphan: true, "orphan-drift": true };
+const NEXT_SYNC_STATES = Object.keys(NEXT_SYNC) as Array<keyof typeof NEXT_SYNC>;
+
+function recipeCommand(op: RecipeOp) {
+  return async (names: string[], o: { workspace: string; replace?: boolean; offline?: boolean }) => {
+    const ws = await loadWorkspace(o.workspace, load(o, "read"));
+    warnStderr(ws.warnings);
+    // R1: arrays replace across layers, so an edit of craftar.yaml would not take effect (spec 22 Ruling 1).
+    const localFile = path.join(ws.root, LOCAL_FILE);
+    if (await exists(localFile)) {
+      const local = parseWorkspaceYaml(LOCAL_FILE, await fs.readFile(localFile, "utf8"));
+      if (local !== null && typeof local === "object" && "recipes" in local)
+        fail(`${LOCAL_FILE} sets recipes, which replaces ${WORKSPACE_FILE}'s lists — edit it by hand, or remove its recipes key and re-run`);
+    }
+    const edit = planRecipeEdit(ws.forge, ws.config, op, names, { replace: o.replace === true });
+    if (!edit.changed) {
+      console.log(`nothing to change${edit.reasons.length ? `: ${edit.reasons.join(", ")}` : ""}`);
+      return;
+    }
+    const file = path.join(ws.root, WORKSPACE_FILE);
+    const content = editRecipesText(await fs.readFile(file, "utf8"), edit.recipes, `${op} recipe`);
+    // The report is computed before the write, so a plan that fails leaves craftar.yaml untouched (§5.2 step 4).
+    const next: Workspace = { ...ws, config: { ...ws.config, recipes: edit.recipes } };
+    const p = await plan(next);
+    const st = await status(next, p, await readLock(ws.root));
+    const counts = NEXT_SYNC_STATES.map((k) => [k, st.filter((s) => s.state === k).length] as const)
+      .filter(([, n]) => n > 0)
+      .map(([k, n]) => `${n} ${k}`);
+    await fs.writeFile(file, content);
+    console.log(`${WORKSPACE_FILE}: ${recipeDiffLine(ws.config.recipes, edit.recipes)}`);
+    console.log(`recipes: ${p.resolution.recipes.join(" → ")}`);
+    console.log(`next sync: ${counts.length ? `${counts.join(", ")} — run \`craftar sync\`` : "nothing to sync"}`);
+    // plan() already carries ws.warnings first, and they were printed on load.
+    warnStderr(p.warnings.slice(ws.warnings.length));
+  };
+}
+
+program
+  .command("add")
+  .description("Add to the workspace's choices in craftar.yaml")
+  .command("recipe")
+  .description(
+    "Add recipes to craftar.yaml's recipes.add (or cancel their recipes.remove entry), after proving the workspace still resolves; writes nothing else and does not sync — it says what the next sync would do",
+  )
+  .argument("<name...>", "the recipes to add, applied in order, all or nothing")
+  .option("--replace", "swap out every other recipe that holds the same slot", false)
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
+  .action(recipeCommand("add"));
+
+program
+  .command("remove")
+  .description("Remove from the workspace's choices in craftar.yaml")
+  .command("recipe")
+  .description(
+    "Remove recipes through craftar.yaml's recipes.remove (or cancel their recipes.add entry); refuses one another recipe brings in through extends; writes nothing else and does not sync",
+  )
+  .argument("<name...>", "the recipes to remove, applied in order, all or nothing")
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
+  .action(recipeCommand("remove"));
 
 /* ---------------------------------------------------------------- explain */
 program

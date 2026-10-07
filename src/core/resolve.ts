@@ -56,6 +56,9 @@ export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
   if (!profile) throw new Error(`profile "${ws.profile}" not found in Forge (${[...forge.profiles.keys()].join(", ") || "none"})`);
 
   const warnings: string[] = [];
+  // recipeOrder takes one origin for the whole list, so a workspace's own names are checked first (spec 22 §14 item 7).
+  for (const r of ws.recipes.add)
+    if (!ws.recipes.remove.includes(r) && !forge.recipes.has(r)) throw new Error(`recipe "${r}" not found (referenced by craftar.yaml recipes.add)`);
   const wanted = [...profile.recipes, ...ws.recipes.add].filter((r) => !ws.recipes.remove.includes(r));
   const order = recipeOrder(forge, wanted, `profile ${profile.name}`);
 

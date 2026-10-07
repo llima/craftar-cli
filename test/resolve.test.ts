@@ -160,3 +160,24 @@ describe("section layers (spec 11 §6.3)", () => {
     await expect(sectioned({ local: { overrides: { sections: { "x.a": "v" } } } })).rejects.toThrow(/^invalid craftar\.yaml \(merged with craftar\.local\.yaml\):/);
   });
 });
+
+describe("resolve — an unknown recipes.add name names craftar.yaml (spec 22 §14 item 7)", () => {
+  const forge: ForgeSpec = { recipes: [recipe("base", [])], profiles: [profile("acme", ["base"])] };
+
+  it("a recipes.add name the Forge does not hold is referenced by craftar.yaml recipes.add", async () => {
+    await expect(resolved(forge, { config: { profile: "acme", recipes: { add: ["nope"], remove: [] } } })).rejects.toThrow(
+      new Error('recipe "nope" not found (referenced by craftar.yaml recipes.add)'),
+    );
+  });
+
+  it("a profile recipe the Forge does not hold is still referenced by the profile", async () => {
+    await expect(
+      resolved({ recipes: [recipe("base", [])], profiles: [profile("acme", ["base", "nope"])] }),
+    ).rejects.toThrow(new Error('recipe "nope" not found (referenced by profile acme)'));
+  });
+
+  it("an unknown name in both recipes.add and recipes.remove is filtered out, as before", async () => {
+    const r = await resolved(forge, { config: { profile: "acme", recipes: { add: ["nope"], remove: ["nope"] } } });
+    expect(r.recipes).toEqual(["base"]);
+  });
+});
