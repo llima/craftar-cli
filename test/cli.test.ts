@@ -3544,3 +3544,26 @@ describe("cli — a remote Forge, the cases the review asked for (spec 13 §10.2
     expect(await fs.readdir(path.join(cwd, "relhome", "forges"))).toHaveLength(1);
   });
 });
+
+describe("cli — no message prints a credential before it is checked (review of spec 13, round 2)", () => {
+  it("a ? or # inside the password is refused at load; a YAML syntax error names the place, not the line", async () => {
+    const s = await scenario({ recipes: [recipe("base", [])], profiles: [profile("acme", ["base"])] }, { config: { profile: "acme" } });
+    cleanups.push(s.cleanup);
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const run = () => runCli(["status", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
+    await fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), "forge: ssh://u:SECRET?x@h.invalid/r\nprofile: acme\n");
+    const a = run();
+    expect([a.code, a.stderr]).toEqual([
+      1,
+      "error: craftar.yaml › forge holds credentials in the URL — remove them and let git authenticate (credential helper, SSH agent; see README › Remote Forge)\n",
+    ]);
+    await fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), "forge: https://u:SECRET@h.invalid/r: x\nprofile: acme\n");
+    const b = run();
+    expect(b.code).toBe(1);
+    expect(b.stderr.startsWith("error: invalid craftar.yaml: ")).toBe(true);
+    expect(b.stderr).toMatch(/line 1, column \d+/);
+    expect(a.stdout + a.stderr + b.stdout + b.stderr).not.toContain("SECRET");
+    expect(await fs.readdir(home)).toEqual([]);
+  });
+});
