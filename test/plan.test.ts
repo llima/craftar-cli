@@ -383,3 +383,42 @@ describe("sections — the schema gate (Ruling 7, AC 14)", () => {
     expect(d.stdout).toContain(OPEN("flavors"));
   });
 });
+
+describe("plan warnings — the cross-target order of the skip warnings (spec 18 §9.2)", () => {
+  it("the ten lines of spec 18 §2, in order, for claude-code, kiro and agents-md", async () => {
+    const agent = (name: string, tools: string[]): IngredientSpec => ({
+      meta: { type: "agent", name, targets: "*", tools },
+      files: { "agent.md": `# ${name}\n` },
+    });
+    const s = await scenario(
+      {
+        ingredients: [
+          agent("a", ["Read", "Task"]),
+          { meta: { type: "script", name: "s", targets: "*", files: ["s.sh"] }, files: { "s.sh": "echo s\n" } },
+          agent("b", ["TodoWrite"]),
+          { meta: { type: "hook", name: "h", targets: "*", files: ["h.sh"] }, files: { "h.sh": "echo h\n" } },
+          { meta: { type: "steering", name: "st", targets: "*" }, files: { "steering.md": "# St\n" } },
+          { meta: { type: "mcp", name: "m", targets: "*", server: { command: "npx" } } },
+          rule("r", "# R\n", { targets: "*" }),
+        ],
+        recipes: [recipe("base", ["agent/a", "script/s", "agent/b", "hook/h", "steering/st", "mcp/m", "rule/r"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const p = await plan(await loadWorkspace(s.wsRoot));
+    expect(p.warnings).toEqual([
+      "claude-code: steering steering/st has no Claude Code equivalent — skipped",
+      'kiro: tool "Task" has no Kiro equivalent; dropped',
+      "kiro: script script/s has no Kiro equivalent — skipped",
+      'kiro: tool "TodoWrite" has no Kiro equivalent; dropped',
+      "kiro: hook hook/h has no Kiro equivalent — skipped",
+      "agents-md: 2 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/a, agent/b",
+      "agents-md: 1 script ingredient(s) have no AGENTS.md equivalent — skipped: script/s",
+      "agents-md: 1 hook ingredient(s) have no AGENTS.md equivalent — skipped: hook/h",
+      "agents-md: 1 steering ingredient(s) have no AGENTS.md equivalent — skipped: steering/st",
+      "agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/m",
+    ]);
+  });
+});
