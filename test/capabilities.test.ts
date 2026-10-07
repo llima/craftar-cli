@@ -4,23 +4,17 @@
  * output names, every body carrying a `.claude/rules/<x>.md` reference, then verified against
  * each target alone to prove the 24 cells of CAPABILITIES.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { CAPABILITIES, type Capability, type CapabilityState } from "../src/core/capabilities.js";
+import { CAPABILITIES } from "../src/core/capabilities.js";
 import { loadForge } from "../src/core/forge.js";
 import { plan, loadWorkspace } from "../src/core/sync.js";
-import { resolve } from "../src/core/resolve.js";
 import { toLf, stripBom } from "../src/core/text.js";
 import { tmpDir, writeFiles, makeWorkspace, type IngredientSpec } from "./helpers/forge.js";
 import { INGREDIENT_TYPES, TARGETS, type IngredientType, type Target } from "../src/schema/index.js";
 import type { PlannedFile } from "../src/emitters/types.js";
-
-const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => {
-  while (cleanups.length) await cleanups.pop()!();
-});
 
 /**
  * Creates a Forge with one ingredient per type (two skills: dir and file layout), each with
@@ -111,28 +105,14 @@ async function createWorkspace(root: string, forgeRoot: string, targets: Target[
 }
 
 /**
- * Determine which planned files belong to a given ingredient ref or type.
- * - For most types: files where `ingredient` equals the ref.
- * - For `mcp`: files where `ingredient` is `mcp/*` and path matches the MCP file pattern.
- * - For `rule` with AGENTS.md: files where `ingredient` is `rule/*` and path is AGENTS.md.
- */
-function filesFor(files: PlannedFile[], type: IngredientType, ref: string, target: Target): PlannedFile[] {
-  return files.filter((f) => {
-    if (f.ingredient === ref) return true;
-    // Shared files: AGENTS.md is `rule/*`, MCP files are `mcp/*`
-    if (type === "rule" && f.ingredient === "rule/*" && f.path === "AGENTS.md") return true;
-    if (type === "mcp" && f.ingredient === "mcp/*") return true;
-    return false;
-  });
-}
-
-/**
  * Check if a planned file matches a pattern.
+ * Literal patterns (like `AGENTS.md`, `.mcp.json`) must match exactly.
+ * Patterns with `<name>` and `<file>` are expanded.
  */
 function matchesPattern(filePath: string, pattern: string, outName: string): boolean {
   // Replace <name> with the output name
   let regex = pattern.replace(/<name>/g, outName);
-  // Replace <file> with a wildcard
+  // Replace <file> with a wildcard for one or more path segments
   regex = regex.replace(/<file>/g, "[^/]+");
   // Escape dots and make it a full match
   regex = "^" + regex.replace(/\./g, "\\.") + "$";
@@ -161,6 +141,7 @@ function stripFrontmatter(content: string): string {
  * - For text files: equals the source with line endings normalized.
  * - For MCP: the planned JSON has the server object under its name.
  * - For Claude Code agents/commands: setting aside the frontmatter block (spec 16 §10.2).
+ * - For AGENTS.md (shared file with ingredient = "rule/*"): never as held by construction (spec 16 §10.2).
  */
 async function isAsHeld(
   f: PlannedFile,
@@ -180,9 +161,8 @@ async function isAsHeld(
     }
   }
 
-  // For AGENTS.md and other shared files, they are by construction not "as held"
+  // For AGENTS.md (shared rule/* file), it is not as held by construction (spec 16 §10.2)
   if (f.ingredient === "rule/*") {
-    // AGENTS.md contains processed/combined content, never as held
     return false;
   }
 
@@ -298,135 +278,132 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
           const cap = CAPABILITIES[target][type];
           const cellName = `${target} · ${type}`;
 
-          // Find the ingredient ref(s) for this type
+          // Find the ingredient ref(s) for this type in the fixture
           // We have cap-<type> for most, cap-skill-dir and cap-skill-file for skills
-          const refs =
+          const fixtureRefs =
             type === "skill"
               ? ["skill/cap-skill-dir", "skill/cap-skill-file"]
               : [`${type}/cap-${type}`];
 
-          // Collect all files for this type
-          const typeFiles: PlannedFile[] = [];
-          for (const ref of refs) {
-            typeFiles.push(...filesFor(plannedFiles, type, ref, target));
+          // Collect all files for this cell:
+          // - Files whose `ingredient` is one of the fixture refs
+          // - Plus shared files: AGENTS.md for rule (ingredient = "rule/*"), MCP files (ingredient = "mcp/*")
+          const cellFiles: PlannedFile[] = [];
+          for (const f of plannedFiles) {
+            // Direct match to a fixture ref
+            if (fixtureRefs.some((ref) => f.ingredient === ref)) {
+              cellFiles.push(f);
+              continue;
+            }
+            // Shared files: AGENTS.md belongs to type=rule
+            if (type === "rule" && f.ingredient === "rule/*" && f.path === "AGENTS.md") {
+              cellFiles.push(f);
+              continue;
+            }
+            // Shared files: MCP files belong to type=mcp
+            if (type === "mcp" && f.ingredient === "mcp/*") {
+              cellFiles.push(f);
+              continue;
+            }
           }
 
-          // Check rule 1: unsupported ⇔ no file and a warning naming it
+          // Check rule 2: unsupported ⇔ no cell files AND a warning names each fixture ref AND output is empty
           if (cap.state === "unsupported") {
-            // Should have no files for this ingredient
-            const directFiles = typeFiles.filter((f) => refs.some((r) => f.ingredient === r));
             expect(
-              directFiles.length,
-              `${cellName}: unsupported should have no files, but found: ${directFiles.map((f) => f.path).join(", ")}`,
+              cellFiles.length,
+              `${cellName}: unsupported should have no cell files, but found: ${cellFiles.map((f) => f.path).join(", ")}`,
             ).toBe(0);
 
-            // Should have a warning naming the ingredient
-            const hasWarning = warnings.some((w) =>
-              refs.some((r) => w.includes(r) && w.includes("skipped")),
-            );
-            expect(hasWarning, `${cellName}: unsupported should have a skip warning`).toBe(true);
+            // Should have a warning naming each fixture ingredient
+            for (const ref of fixtureRefs) {
+              const hasWarning = warnings.some((w) => w.includes(ref) && w.includes("skipped"));
+              expect(hasWarning, `${cellName}: unsupported should have a skip warning for ${ref}`).toBe(true);
+            }
 
             // output should be empty
             expect(cap.output.length, `${cellName}: unsupported should have empty output`).toBe(0);
           } else {
-            // native or converted: check rules 2-4
+            // native or converted (writing cells): check rules 3, and both directions
 
-            // Rule 2: at least one planned file matches each output pattern for this ingredient
-            for (const pattern of cap.output) {
-              let patternMatched = false;
+            // Rule 3: at least one cell file (no if around the expect!)
+            expect(
+              cellFiles.length,
+              `${cellName}: a writing cell should have at least one file`,
+            ).toBeGreaterThan(0);
 
-              for (const ref of refs) {
-                const outName = ref.split("/")[1];
+            // Direction 1: every cell file matches at least one output pattern
+            for (const f of cellFiles) {
+              // For a shared file, any fixture ref's output name works
+              const outNamesToTry = f.ingredient === "rule/*" || f.ingredient === "mcp/*"
+                ? fixtureRefs.map((ref) => ref.split("/")[1])
+                : [fixtureRefs.find((ref) => f.ingredient === ref)?.split("/")[1] ?? f.ingredient.split("/")[1]];
 
-                // For MCP, the pattern is a single file containing all servers
-                if (type === "mcp") {
-                  const mcpFiles = plannedFiles.filter((f) => f.ingredient === "mcp/*");
-                  const matches = mcpFiles.filter((f) => matchesPattern(f.path, pattern, outName));
-                  if (matches.length > 0) patternMatched = true;
-                } else if (type === "rule" && target === "agents-md") {
-                  // AGENTS.md is a single file for all rules
-                  const agentsMdFiles = plannedFiles.filter((f) => f.path === "AGENTS.md");
-                  if (agentsMdFiles.length > 0) patternMatched = true;
-                } else if (type === "skill") {
-                  // Skills have two layouts with different patterns
-                  const isDir = ref.includes("skill-dir");
-                  const patternHasFile = pattern.includes("<file>");
-                  const patternIsSingleFile = pattern.endsWith("<name>.md");
-
-                  if (isDir && patternHasFile) {
-                    // Dir layout matches <name>/<file> pattern
-                    const dirFiles = filesFor(plannedFiles, type, ref, target);
-                    if (dirFiles.some((f) => matchesPattern(f.path, pattern, outName))) {
-                      patternMatched = true;
-                    }
-                  } else if (!isDir && patternIsSingleFile && target === "claude-code") {
-                    // File layout on claude-code matches <name>.md
-                    const fileFiles = filesFor(plannedFiles, type, ref, target);
-                    if (fileFiles.some((f) => matchesPattern(f.path, pattern, outName))) {
-                      patternMatched = true;
-                    }
-                  } else if (!isDir && patternHasFile && target === "kiro") {
-                    // File layout on kiro is converted to <name>/SKILL.md
-                    const fileFiles = filesFor(plannedFiles, type, ref, target);
-                    if (fileFiles.some((f) => matchesPattern(f.path, pattern, outName))) {
-                      patternMatched = true;
-                    }
-                  }
-                } else {
-                  // Standard case: check if any file from this ref matches
-                  const refFiles = filesFor(plannedFiles, type, ref, target);
-                  if (refFiles.some((f) => matchesPattern(f.path, pattern, outName))) {
-                    patternMatched = true;
-                  }
-                }
-              }
+              const matchesSomePattern = outNamesToTry.some((outName) =>
+                cap.output.some((pattern) => matchesPattern(f.path, pattern, outName))
+              );
 
               expect(
-                patternMatched,
-                `${cellName}: should have file matching pattern "${pattern}"`,
+                matchesSomePattern,
+                `${cellName}: file "${f.path}" (ingredient ${f.ingredient}) should match at least one output pattern (${cap.output.join(", ")})`,
               ).toBe(true);
             }
 
-            // No skip warning for this ingredient
-            const hasSkipWarning = warnings.some((w) =>
-              refs.some((r) => w.includes(r) && w.includes("skipped")),
-            );
-            expect(
-              hasSkipWarning,
-              `${cellName}: native/converted should not have skip warning`,
-            ).toBe(false);
-          }
+            // Direction 2: every output pattern is matched by at least one cell file
+            for (const pattern of cap.output) {
+              const matchedByFile = cellFiles.some((f) => {
+                // For a shared file, any fixture ref's output name works
+                const outNamesToTry = f.ingredient === "rule/*" || f.ingredient === "mcp/*"
+                  ? fixtureRefs.map((ref) => ref.split("/")[1])
+                  : [fixtureRefs.find((ref) => f.ingredient === ref)?.split("/")[1] ?? f.ingredient.split("/")[1]];
 
-          // Rule 3/4: native ⇔ every file is as held; converted ⇔ at least one is not
-          if (cap.state === "native" || cap.state === "converted") {
-            let allAsHeld = true;
-            let hasAnyFile = false;
+                return outNamesToTry.some((outName) => matchesPattern(f.path, pattern, outName));
+              });
 
-            for (const ref of refs) {
-              const refFiles = filesFor(plannedFiles, type, ref, target).filter(
-                (f) => f.ingredient === ref || (type === "mcp" && f.ingredient === "mcp/*"),
-              );
-
-              if (refFiles.length > 0) hasAnyFile = true;
-
-              const ing = forge.ingredients.get(ref);
-              if (!ing) continue;
-
-              for (const f of refFiles) {
-                const asHeld = await isAsHeld(f, ing, type, ref.split("/")[1]);
-                if (!asHeld) allAsHeld = false;
-              }
+              expect(
+                matchedByFile,
+                `${cellName}: pattern "${pattern}" should be matched by at least one cell file`,
+              ).toBe(true);
             }
 
-            if (hasAnyFile) {
-              if (cap.state === "native") {
-                expect(allAsHeld, `${cellName}: native should have all files as held`).toBe(true);
+            // No skip warning for any fixture ingredient
+            for (const ref of fixtureRefs) {
+              const hasSkipWarning = warnings.some((w) => w.includes(ref) && w.includes("skipped"));
+              expect(
+                hasSkipWarning,
+                `${cellName}: native/converted should not have skip warning for ${ref}`,
+              ).toBe(false);
+            }
+          }
+
+          // Rule 4: among writing cells, native ⇔ every cell file is as held; converted ⇔ at least one is not
+          if (cap.state === "native" || cap.state === "converted") {
+            let allAsHeld = true;
+
+            for (const f of cellFiles) {
+              // Find the ingredient for this file
+              // For shared files, pick any matching fixture ingredient for the check
+              let ingRef: string;
+              if (f.ingredient === "rule/*" || f.ingredient === "mcp/*") {
+                ingRef = fixtureRefs[0]; // Any fixture ref of this type
               } else {
-                expect(
-                  allAsHeld,
-                  `${cellName}: converted should have at least one file not as held`,
-                ).toBe(false);
+                ingRef = f.ingredient;
               }
+
+              const ing = forge.ingredients.get(ingRef);
+              if (!ing) continue;
+
+              const outName = ingRef.split("/")[1];
+              const asHeld = await isAsHeld(f, ing, type, outName);
+              if (!asHeld) allAsHeld = false;
+            }
+
+            if (cap.state === "native") {
+              expect(allAsHeld, `${cellName}: native should have all files as held`).toBe(true);
+            } else {
+              expect(
+                allAsHeld,
+                `${cellName}: converted should have at least one file not as held`,
+              ).toBe(false);
             }
           }
         });

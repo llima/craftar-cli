@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { loadWorkspace } from "../src/core/sync.js";
 import { recipeOrder, resolve } from "../src/core/resolve.js";
 import { loadForge } from "../src/core/forge.js";
-import { profile, recipe, rule, scenario, type ForgeSpec, type WorkspaceSpec, makeForge, tmpDir } from "./helpers/forge.js";
+import { profile, recipe, scenario, makeForge, tmpDir } from "./helpers/forge.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
