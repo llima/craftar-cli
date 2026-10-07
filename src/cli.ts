@@ -4,15 +4,15 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
-import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, type FileStatus, type SectionLayer } from "./core/sync.js";
+import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, type FileStatus, type SectionLayer } from "./core/sync.js";
 import { resolve, sectionKey } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
-import { CAPABILITIES, listTargets, type Capability } from "./core/capabilities.js";
+import { listTargets } from "./core/capabilities.js";
 import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
-import { gitDirty, gitIsRepo, gitUnheld } from "./core/forge.js";
+import { exists, gitDirty, gitIsRepo, gitUnheld } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
   hunkAt,
@@ -25,7 +25,7 @@ import {
   type WriteJournal,
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
-import { HUNK_CLASSES, INGREDIENT_TYPES, TARGETS, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
+import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
@@ -470,36 +470,26 @@ program
     let inUse: Target[] | null = null;
     const warnings: string[] = [];
 
-    if (o.workspace !== undefined) {
-      // Explicit --workspace: call loadWorkspace
-      // - If craftar.yaml is missing → exit 1 with loadWorkspace's message
-      // - If craftar.yaml exists but the workspace doesn't load or resolve → warning + matrix (exit 0)
+    const root = o.workspace ?? ".";
+    if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
+      // craftar.yaml does not exist
+      if (o.workspace !== undefined) {
+        // Explicit --workspace: exit 1 with loadWorkspace's message
+        try {
+          await loadWorkspace(root);
+        } catch (e) {
+          fail(e instanceof Error ? e.message : String(e));
+        }
+      }
+      // No --workspace: just show unmarked, no warning
+    } else {
+      // craftar.yaml exists, try to load
       try {
-        const ws = await loadWorkspace(o.workspace);
+        const ws = await loadWorkspace(root);
         inUse = resolve(ws.forge, ws.config).targets;
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        // Check if it's a missing craftar.yaml (exit 1) vs other failure (warning)
-        if (msg.includes("craftar.yaml not found in")) {
-          fail(msg);
-        }
         // Load or resolve failed — warning, not error
-        warnings.push(`targets in use not shown: ${msg}`);
-      }
-    } else {
-      // No --workspace: try current directory, silently unmarked if no craftar.yaml
-      try {
-        await fs.access(path.join(".", "craftar.yaml"));
-        // craftar.yaml exists, try to load
-        try {
-          const ws = await loadWorkspace(".");
-          inUse = resolve(ws.forge, ws.config).targets;
-        } catch (e) {
-          // Load or resolve failed — warning, not error
-          warnings.push(`targets in use not shown: ${e instanceof Error ? e.message : String(e)}`);
-        }
-      } catch {
-        // No craftar.yaml in current directory — just show unmarked, no warning
+        warnings.push(`targets in use not shown: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
 

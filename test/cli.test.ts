@@ -2778,3 +2778,19 @@ describe("cli — the catalogue's text mode (spec 16 §4.2, §4.3)", () => {
     expect(rows[0].indexOf("targets ")).toBe(rows[1].indexOf("targets "));
   });
 });
+
+
+describe("cli — targets reads the workspace once craftar.yaml is there (spec 16 §4.4, §5.2)", () => {
+  it("an explicit --workspace whose craftar.yaml is not valid YAML is a warning, exit 0", async () => {
+    const s = await scenario({ recipes: [recipe("base", [])], profiles: [profile("acme", ["base"])] }, { config: { profile: "acme" } });
+    cleanups.push(s.cleanup);
+    await fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), "forge: [unclosed\n");
+    const r = runCli(["targets", "--json", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    const j = JSON.parse(r.stdout);
+    expect(j.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([null, null, null]);
+    expect(j.warnings).toHaveLength(1);
+    expect(j.warnings[0].startsWith("targets in use not shown: ")).toBe(true);
+  });
+});
