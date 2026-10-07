@@ -7,7 +7,7 @@ import { hashNormalized, stripBom, toLf } from "./text.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile } from "./extract.js";
-import { LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Target, type WorkspaceConfig } from "../schema/index.js";
+import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
 import { agentsMd } from "../emitters/agents-md.js";
@@ -287,7 +287,11 @@ function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {
 export async function readLock(root: string): Promise<Lock | null> {
   const f = path.join(root, LOCK_FILE);
   if (!(await exists(f))) return null;
-  return LockSchema.parse(JSON.parse(await fs.readFile(f, "utf8")));
+  const raw: unknown = JSON.parse(await fs.readFile(f, "utf8"));
+  // A lock a later craftar wrote is refused by name, not with a zod dump (spec 13 §4.6).
+  if (raw !== null && typeof raw === "object" && Object.hasOwn(raw, "schema") && !LOCK_SCHEMAS.includes((raw as { schema: unknown }).schema))
+    throw new Error(`${LOCK_FILE} declares schema ${JSON.stringify((raw as { schema: unknown }).schema)}, which this craftar does not read — upgrade craftar`);
+  return LockSchema.parse(raw);
 }
 
 export async function writeLock(root: string, lock: Lock): Promise<void> {
