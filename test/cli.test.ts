@@ -3251,7 +3251,6 @@ describe("cli — forge values: credentials refused, path-Forge warnings (spec 1
       const secret = "https://alice:s3cr3t@example.com/acme/forge.git";
       if (file === "craftar.yaml") await fs.writeFile(path.join(s.wsRoot, file), `forge: ${secret}\nprofile: acme\n`);
       else await fs.writeFile(path.join(s.wsRoot, file), `forge: ${secret}\n`);
-      void other;
       const r = runCli(["status", "--workspace", s.wsRoot]);
       expect(r.code, file).toBe(1);
       expect(r.stderr, file).toBe(
@@ -3357,8 +3356,6 @@ describe("cli — a remote Forge (spec 13 §4.1, §4.4, AC 1, 3, 4, 5)", () => {
       const x = run(args, empty);
       expect(x.code, `${args.join(" ")} without a cache`).toBe(1);
     }
-    void ws;
-    void home;
   });
 
   it("Q13-1 (pending the user): diff --exit-code with the remote unreachable reads the cache — exit 0, the warning, judged against the cache", async () => {
@@ -3516,7 +3513,6 @@ describe("cli — a remote Forge, the cases the review asked for (spec 13 §10.2
     const x = run(["forge", "variants", "--json"]);
     expect(x.code).toBe(0);
     expect(x.stderr.startsWith(`warn Forge ${r.url} not fetched (`)).toBe(true);
-    void home;
   });
 
   it("forge: from craftar.local.yaml warns not to commit, on status, sync, diff, explain and ls", async () => {
@@ -3546,6 +3542,5 @@ describe("cli — a remote Forge, the cases the review asked for (spec 13 §10.2
     const x = runCli(["status", "--workspace", ws], { cwd, env: { CRAFTAR_HOME: "relhome" } });
     expect(x.code).toBe(0);
     expect(await fs.readdir(path.join(cwd, "relhome", "forges"))).toHaveLength(1);
-    void r;
   });
 });
