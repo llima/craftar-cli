@@ -3838,6 +3838,19 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
   const yamlOf = (s: { wsRoot: string }) => fs.readFile(path.join(s.wsRoot, "craftar.yaml"), "utf8");
   const setYaml = (s: { wsRoot: string }, text: string) => fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), text);
   const recipeCli = (s: { wsRoot: string }, ...args: string[]) => runCli([...args, "--workspace", s.wsRoot]);
+  /** Snapshots the workspace (but craftar.yaml) and the Forge; the returned check asserts nothing else moved. */
+  async function guard(s: { wsRoot: string; forgeRoot: string }) {
+    const strip = (snap: Record<string, string>) => {
+      delete snap["craftar.yaml"];
+      return snap;
+    };
+    const ws = strip(await snapshot(s.wsRoot));
+    const forgeBefore = await snapshot(s.forgeRoot);
+    return async () => {
+      expect(strip(await snapshot(s.wsRoot))).toEqual(ws);
+      expect(await snapshot(s.forgeRoot)).toEqual(forgeBefore);
+    };
+  }
 
   it("test 1: a slot held by another recipe is refused without --replace (R3)", async () => {
     const s = await recipeScenario();
@@ -3901,6 +3914,7 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
 
   it("test 7: an unknown name is R2; one written by hand is R5 for other calls and cleaned up by remove", async () => {
     const s = await recipeScenario();
+    const unmoved = await guard(s);
     const r = recipeCli(s, "add", "recipe", "nope");
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
@@ -3920,6 +3934,7 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
     expect(clean.stderr).toBe("");
     expect(clean.stdout).toBe("craftar.yaml: recipes.add - nope\nrecipes: base → stack-api → front-a\nnext sync: nothing to sync\n");
     expect(await yamlOf(s)).toBe(BASE_YAML + "recipes:\n  add: []\n");
+    await unmoved();
   });
 
   it("tests 8–9: a name twice is R7; one bad name refuses the whole call", async () => {
@@ -3938,6 +3953,7 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
   it("test 10: craftar.local.yaml with recipes is refused for both commands (R1); with only targets it is not", async () => {
     const R1 = "error: craftar.local.yaml sets recipes, which replaces craftar.yaml's lists — edit it by hand, or remove its recipes key and re-run\n";
     const s = await recipeScenario({ sync: false, local: { recipes: { add: [] } } });
+    const unmovedS = await guard(s);
     for (const args of [["add", "recipe", "front-b", "--replace"], ["remove", "recipe", "stack-api"]]) {
       const r = recipeCli(s, ...args);
       expect(r.code, args.join(" ")).toBe(1);
@@ -3946,14 +3962,24 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
     }
     expect(await yamlOf(s)).toBe(BASE_YAML);
 
+    await unmovedS();
+
     const t = await recipeScenario({ local: { targets: ["claude-code"] } });
+    const unmovedT = await guard(t);
     const ok = recipeCli(t, "add", "recipe", "front-b", "--replace");
     expect(ok.code).toBe(0);
     expect(ok.stderr).toBe("");
+    expect(ok.stdout).toBe(
+      "craftar.yaml: recipes.add + front-b; recipes.remove + front-a\n" +
+        "recipes: base → stack-api → front-b\n" +
+        "next sync: 1 new, 1 orphan — run `craftar sync`\n",
+    );
+    await unmovedT();
   });
 
   it("tests 11–12: the README's padded flow form is R6, file untouched; the unpadded one is edited in place", async () => {
     const s = await recipeScenario();
+    const unmoved = await guard(s);
     const padded = BASE_YAML + "recipes: { add: [], remove: [] }\n";
     await setYaml(s, padded);
     const r = recipeCli(s, "add", "recipe", "front-b", "--replace");
@@ -3962,20 +3988,28 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
     expect(r.stderr).toBe(R6("add recipe"));
     expect(await yamlOf(s)).toBe(padded);
 
-    await setYaml(s, "﻿" + BASE_YAML.replace(/\n/g, "\r\n") + "recipes: {add: [], remove: []}\r\n");
-    expect(recipeCli(s, "remove", "recipe", "stack-api").code).toBe(0);
-    expect(await yamlOf(s)).toBe("﻿" + BASE_YAML.replace(/\n/g, "\r\n") + "recipes: {add: [], remove: [stack-api]}\r\n");
+    await setYaml(s, "\uFEFF" + BASE_YAML.replace(/\n/g, "\r\n") + "recipes: {add: [], remove: []}\r\n");
+    const r2 = recipeCli(s, "remove", "recipe", "stack-api");
+    expect(r2.code).toBe(0);
+    expect(r2.stderr).toBe("");
+    expect(r2.stdout).toBe("craftar.yaml: recipes.remove + stack-api\nrecipes: front-a\nnext sync: 2 orphan — run `craftar sync`\n");
+    expect(await yamlOf(s)).toBe("\uFEFF" + BASE_YAML.replace(/\n/g, "\r\n") + "recipes: {add: [], remove: [stack-api]}\r\n");
+    await unmoved();
   });
 
   it("test 13: nothing to sync when no file moves; a plan warning goes to stderr", async () => {
     const s = await recipeScenario();
+    const unmovedS = await guard(s);
     await setYaml(s, BASE_YAML + "recipes:\n  remove: [base]\n");
     const r = recipeCli(s, "add", "recipe", "base");
     expect(r.code).toBe(0);
     expect(r.stderr).toBe("");
     expect(r.stdout).toBe("craftar.yaml: recipes.remove - base\nrecipes: base → stack-api → front-a\nnext sync: nothing to sync\n");
 
+    await unmovedS();
+
     const t = await recipeScenario();
+    const unmovedT = await guard(t);
     const w = recipeCli(t, "add", "recipe", "front-c", "--replace");
     expect(w.code).toBe(0);
     expect(w.stdout).toBe(
@@ -3984,6 +4018,7 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
         "next sync: 1 new, 1 orphan — run `craftar sync`\n",
     );
     expect(w.stderr).toBe('warn param "owner" has no value in any layer — left verbatim (rule/front-c)\n');
+    await unmovedT();
   });
 
   it("test 14: nothing but craftar.yaml is written, by any call", async () => {
@@ -4020,6 +4055,7 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
 
   it("test 16: --replace removes every other holder of the slot", async () => {
     const s = await recipeScenario();
+    const unmoved = await guard(s);
     await setYaml(s, BASE_YAML + "recipes:\n  add: [front-c]\n");
     const r = recipeCli(s, "add", "recipe", "front-b", "--replace");
     expect(r.code).toBe(0);
@@ -4029,7 +4065,8 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
         "recipes: base → stack-api → front-b\n" +
         "next sync: 1 new, 1 orphan — run `craftar sync`\n",
     );
-    expect(YAML.parse(await yamlOf(s)).recipes).toEqual({ add: ["front-b"], remove: ["front-a"] });
+    expect(await yamlOf(s)).toBe(BASE_YAML + "recipes:\n  add: [front-b]\n  remove:\n    - front-a\n");
+    await unmoved();
   });
 
   it("test 17: an edit that resolves but does not plan is refused, craftar.yaml untouched (R5, §5.2 step 4)", async () => {
@@ -4042,6 +4079,7 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
       { config: { profile: "acme" } },
     );
     cleanups.push(s.cleanup);
+    const unmoved = await guard(s);
     const r = runCli(["add", "recipe", "marked", "--workspace", s.wsRoot]);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
@@ -4049,5 +4087,19 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
       "error: craftar.forge.yaml declares schema: 1, but ingredients/rules/m/rule.md:1 holds a section marker — set schema: 2 in craftar.forge.yaml, so that craftar 0.6.2 and older refuse this Forge instead of emitting the markers\n",
     );
     expect(await fs.readFile(path.join(s.wsRoot, "craftar.yaml"), "utf8")).toBe(BASE_YAML);
+    await unmoved();
+  });
+
+  it("test 18: a workspace warning is printed once, on stderr", async () => {
+    const s = await recipeScenario();
+    await setYaml(s, "forge: ../forge\nref: v1\nprofile: acme\n");
+    const r = recipeCli(s, "add", "recipe", "front-b", "--replace");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe(
+      "craftar.yaml: recipes.add + front-b; recipes.remove + front-a\n" +
+        "recipes: base → stack-api → front-b\n" +
+        "next sync: 1 new, 1 orphan — run `craftar sync`\n",
+    );
+    expect(r.stderr).toBe('warn ref "v1" is ignored: the Forge is a path (../forge), read as its working tree\n');
   });
 });

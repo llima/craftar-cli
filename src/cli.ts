@@ -7,7 +7,7 @@ import { importClaudeCode } from "./importers/claude-code.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type FetchMode, type FileStatus, type LoadOptions, type SectionLayer, type Workspace } from "./core/sync.js";
+import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type FetchMode, type FileState, type FileStatus, type LoadOptions, type SectionLayer, type Workspace } from "./core/sync.js";
 import type { Lock } from "./schema/index.js";
 import { resolve, sectionKey } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -204,8 +204,9 @@ program
   });
 
 /* ---------------------------------------------------------------- add / remove recipe */
-/** The states `next sync:` counts, in `FileState` declaration order (spec 22 §14 item 6). */
-const NEXT_SYNC_STATES = ["new", "update", "drift", "adopt", "collision", "orphan", "orphan-drift"] as const;
+/** The states `next sync:` counts, in `FileState` declaration order (spec 22 §14 item 6); a new state does not compile until it is placed here. */
+const NEXT_SYNC: Record<Exclude<FileState, "unchanged">, true> = { new: true, update: true, drift: true, adopt: true, collision: true, orphan: true, "orphan-drift": true };
+const NEXT_SYNC_STATES = Object.keys(NEXT_SYNC) as Array<keyof typeof NEXT_SYNC>;
 
 function recipeCommand(op: RecipeOp) {
   return async (names: string[], o: { workspace: string; replace?: boolean; offline?: boolean }) => {
@@ -236,7 +237,8 @@ function recipeCommand(op: RecipeOp) {
     console.log(`${WORKSPACE_FILE}: ${recipeDiffLine(ws.config.recipes, edit.recipes)}`);
     console.log(`recipes: ${p.resolution.recipes.join(" → ")}`);
     console.log(`next sync: ${counts.length ? `${counts.join(", ")} — run \`craftar sync\`` : "nothing to sync"}`);
-    warnStderr(p.warnings);
+    // plan() already carries ws.warnings first, and they were printed on load.
+    warnStderr(p.warnings.slice(ws.warnings.length));
   };
 }
 
