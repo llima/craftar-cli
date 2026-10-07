@@ -150,7 +150,11 @@ describe("register (§4.1, §5.2, §6.1)", () => {
     await syncAndRegister(f.home, b);
     const raw = JSON.parse(await fs.readFile(registryFile(f.home), "utf8"));
     expect(raw.top).toBe(true);
-    expect(raw.workspaces.find((e: { path: string }) => e.path === foreign.path)).toEqual(foreign);
+    const kept = raw.workspaces.find((e: { path: string }) => e.path === foreign.path);
+    expect(kept).toEqual(foreign);
+    expect(Object.keys(kept).at(-1)).toBe("extra");
+    expect(Object.keys(kept.forge).at(-1)).toBe("later");
+    expect(Object.keys(raw).at(-1)).toBe("top");
   });
 });
 
@@ -263,6 +267,30 @@ describe("row status (§4.2)", () => {
     expect(warnings[1].startsWith(`${realBad}: `)).toBe(true);
     expect(warnings[2]).toBe(`${realOk}: ref "v1" is ignored: the Forge is a path (../forge), read as its working tree`);
     expect(warnings).toHaveLength(3);
+  });
+
+  it("rows print in path order even when the file is not sorted", async () => {
+    const f = await fixture();
+    const a = await f.ws("acme-a");
+    const b = await f.ws("acme-b");
+    await syncAndRegister(f.home, a);
+    await syncAndRegister(f.home, b);
+    const raw = JSON.parse(await fs.readFile(registryFile(f.home), "utf8"));
+    raw.workspaces.reverse();
+    await fs.writeFile(registryFile(f.home), JSON.stringify(raw, null, 2) + "\n");
+    expect((await listWorkspaces(f.home, { fetch: false })).rows.map((r) => r.name)).toEqual(["acme-a", "acme-b"]);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a workspace that exists but cannot be inspected is an error row, and prune keeps it", async () => {
+    const f = await fixture();
+    const parent = path.join(f.root, "fence");
+    const inner = path.join(parent, "acme-locked");
+    await writeFiles(inner, { "craftar.yaml": "forge: ../../forge\nprofile: acme\n" });
+    await syncAndRegister(f.home, inner);
+    await fs.chmod(parent, 0o000);
+    cleanups.push(() => fs.chmod(parent, 0o755));
+    expect((await listWorkspaces(f.home, { fetch: false })).rows[0].status).toBe("error");
+    expect(await prune(f.home)).toEqual([]);
   });
 
   it("forge moved is false when the Forge did not move, and null for a Forge without git", async () => {

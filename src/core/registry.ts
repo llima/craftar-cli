@@ -1,9 +1,10 @@
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { REGISTRY_SCHEMAS, RegistrySchema, type Lock, type Registry, type RegistryEntry } from "../schema/index.js";
 import { exists } from "./forge.js";
-import { withLock, type LockTiming } from "./home-lock.js";
+import { resolveHome, withLock, type LockTiming } from "./home-lock.js";
+
+export { resolveHome };
 import { cacheKey } from "./remote.js";
 import { loadWorkspace, plan, readLock, status, WORKSPACE_FILE, type FileStatus, type Plan, type Workspace } from "./sync.js";
 
@@ -16,10 +17,6 @@ import { loadWorkspace, plan, readLock, status, WORKSPACE_FILE, type FileStatus,
 export const REGISTRY_FILE = "registry.json";
 const LOCK_LABEL = "the workspace registry";
 
-/** `$CRAFTAR_HOME` as given (a relative one resolves from the current directory), else `~/.craftar`. */
-export function resolveHome(home?: string): string {
-  return path.resolve(home || path.join(os.homedir(), ".craftar"));
-}
 
 export function registryFile(home: string): string {
   return path.join(home, REGISTRY_FILE);
@@ -57,13 +54,20 @@ export async function readRegistry(home: string): Promise<Registry> {
   return parsed.data;
 }
 
+const byPath = (a: RegistryEntry, b: RegistryEntry) => a.path.localeCompare(b.path);
+
 /** Atomic: a sibling temporary file renamed over the registry, so a reader never sees half of it. */
 async function writeRegistry(home: string, reg: Registry): Promise<void> {
   const file = registryFile(home);
   const tmp = `${file}.${process.pid}.tmp`;
-  reg.workspaces.sort((a, b) => a.path.localeCompare(b.path));
-  await fs.writeFile(tmp, JSON.stringify(reg, null, 2) + "\n", "utf8");
-  await fs.rename(tmp, file);
+  reg.workspaces.sort(byPath);
+  try {
+    await fs.writeFile(tmp, JSON.stringify(reg, null, 2) + "\n", "utf8");
+    await fs.rename(tmp, file);
+  } catch (e) {
+    await fs.rm(tmp, { force: true });
+    throw e;
+  }
 }
 
 /** Read, change and write the registry under its lock; `$CRAFTAR_HOME` is created first (§6.2). */
@@ -135,9 +139,19 @@ export async function forget(home: string, dir: string): Promise<string> {
   });
 }
 
-/** The directory or its craftar.yaml is gone (§4.2, step 1). */
+/**
+ * The directory or its craftar.yaml is gone (§4.2, step 1): only ENOENT / ENOTDIR. A path that
+ * exists but cannot be inspected (EACCES…) is not gone — the load fails and the row reads `error`,
+ * which `prune` never removes.
+ */
 async function isMissing(entry: RegistryEntry): Promise<boolean> {
-  return !(await exists(path.join(entry.path, WORKSPACE_FILE)));
+  try {
+    await fs.stat(path.join(entry.path, WORKSPACE_FILE));
+    return false;
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR";
+  }
 }
 
 /** `craftar workspaces prune` (§4.4): removes every `missing` entry; returns their paths. Loads nothing else. */
@@ -246,7 +260,8 @@ export async function listWorkspaces(home: string, opts: { fetch: boolean }): Pr
   const reg = await readRegistry(home);
   const rows: WorkspaceRow[] = [];
   const warnings: string[] = [];
-  for (const e of reg.workspaces) {
+  // Sorted on read too: a registry written by hand or by another craftar prints in path order.
+  for (const e of [...reg.workspaces].sort(byPath)) {
     if (await isMissing(e)) {
       rows.push(fromEntry(e, "missing"));
       continue;
@@ -269,7 +284,7 @@ export async function listWorkspaces(home: string, opts: { fetch: boolean }): Pr
         targets: p.resolution.targets,
         forge: {
           kind: ws.origin.kind,
-          source: ws.origin.source,
+          source: ws.config.forge,
           key: await forgeKey(ws),
           ref: ws.origin.ref,
           defaultBranch: ws.origin.defaultBranch,

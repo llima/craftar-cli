@@ -1,4 +1,11 @@
 import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+/** `$CRAFTAR_HOME` as given (a relative one resolves from the current directory), else `~/.craftar` — the one default. */
+export function resolveHome(home?: string): string {
+  return path.resolve(home || path.join(os.homedir(), ".craftar"));
+}
 
 /** How long a busy lock is waited for (60 s), how often it is polled, when it is stale (10 min). */
 export interface LockTiming {

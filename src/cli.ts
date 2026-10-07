@@ -1090,7 +1090,7 @@ function printWorkspaces(rows: WorkspaceRow[], warnings: string[], fetched: bool
     console.log(`  ${pc.cyan(r.name.padEnd(width))}  ${r.path}`);
     const stack = Object.entries(r.stack).map(([slot, recipe]) => `${slot}=${recipe}`);
     console.log(`      ${[`profile ${r.profile}`, ...(stack.length ? [stack.join(", ")] : []), ...(r.targets.length ? [r.targets.join(", ")] : [])].join(" · ")}`);
-    const synced = `synced ${r.lastSync.slice(0, 16).replace("T", " ")}`;
+    const synced = `synced ${r.lastSync.slice(0, 16).replace("T", " ")} UTC`;
     const word = ROW_WORDS[r.status] + (r.forgeMoved ? ", forge moved" : "");
     const painted = r.status === "drift" || r.status === "error" || r.status === "missing" ? pc.red(word) : r.status === "up-to-date" ? pc.dim(word) : pc.yellow(word);
     if (r.status === "missing" || r.status === "error") {

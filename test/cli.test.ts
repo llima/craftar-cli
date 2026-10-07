@@ -3711,7 +3711,7 @@ describe("cli — the workspace registry (spec 21 §10.3)", () => {
     const out = t.stdout;
     expect(out).toContain("craftar workspaces — 4 registered\n");
     expect(out).not.toContain("(status read offline");
-    expect(out).toMatch(/acme-ok\s+.*\n\s+profile acme · frontend=frontend-angular · claude-code\n\s+forge \.\.\/forge @ no git · synced \d{4}-\d\d-\d\d \d\d:\d\d · up to date\n/);
+    expect(out).toMatch(/acme-ok\s+.*\n\s+profile acme · frontend=frontend-angular · claude-code\n\s+forge \.\.\/forge @ no git · synced \d{4}-\d\d-\d\d \d\d:\d\d UTC · up to date\n/);
     expect(out).toMatch(/forge \.\.\/forge @ no git · synced [^\n]* · drift\n/);
     expect(out).toMatch(/acme-gone[^\n]*\n\s+profile acme · frontend=frontend-angular · claude-code\n\s+synced [^\n]* · missing\n/);
     expect(out).toMatch(/synced [^\n]* · error\n/);
@@ -3730,6 +3730,15 @@ describe("cli — the workspace registry (spec 21 §10.3)", () => {
     expect(again.code).toBe(1);
     expect(again.stderr).toContain(`${path.resolve(drift)} is not registered`);
     expect((await s.entries()).map((e) => path.basename(e.path))).toEqual(["acme-broken", "acme-ok"]);
+  });
+
+  it("a Forge from craftar.local.yaml is recorded and marked (local override)", async () => {
+    const s = await setup();
+    const a = await s.ws("acme-a");
+    await writeFiles(a, { "craftar.yaml": "forge: ../nowhere\nprofile: acme\n", "craftar.local.yaml": "forge: ../forge\n" });
+    expect(s.run(["sync", "--workspace", a]).code).toBe(0);
+    expect(JSON.parse(await fs.readFile(s.registry, "utf8")).workspaces[0].forge).toMatchObject({ source: "../forge", fromLocalFile: true });
+    expect(s.run(["workspaces"]).stdout).toMatch(/forge \.\.\/forge \(local override\) @ no git · synced /);
   });
 
   it("an empty registry", async () => {
