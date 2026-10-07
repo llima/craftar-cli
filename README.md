@@ -259,7 +259,7 @@ Next: `craftar init` from a profile; profile-driven integrations (PM tool → MC
 
 ### to 0.10.0
 
-- **`craftar diff` shows orphans.** A file the Forge no longer produces is printed as the removal of the whole file (`+++ <path> (forge: no longer produced — sync removes it)`), and a hand-edited one as a header and one line, since `sync` keeps it. A workspace whose only pending change was an orphan used to print `no differences`; it now prints the orphan. Every other output is unchanged.
+- **`craftar diff` shows orphans.** A file the Forge no longer produces is printed as the removal of the whole file (`+++ <path> (forge: no longer produced — sync removes it)`), and a hand-edited one as a header and one line, since `sync` keeps it. Output changes only in a workspace that has an `orphan` or an `orphan-drift` — one whose only pending change was an orphan used to print `no differences`; elsewhere it is byte for byte 0.9.0's.
 - **`craftar diff --exit-code`** exits 1 when there are differences — exactly when `sync --check` would — and refuses a `[path]` that names no file craftar manages. Without the flag `diff` still exits 0.
 - **No byte change**: no emitter, `plan`, `status` or `sync` changed. No workspace sees `update`.
 

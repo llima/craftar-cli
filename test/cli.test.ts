@@ -2812,7 +2812,7 @@ describe("cli — the targets text has no trailing spaces and the catalogue drop
 
 
 describe("cli — diff, pinned before spec 19", () => {
-  // Shared fixture: Forge F with rule/a ("A one\nA two\n") and rule/b ("B one\nB two\n"),
+  // rule/a ("A one\nA two\n") and rule/b ("B one\nB two\n"),
   // recipe base listing both, profile acme using base, target claude-code.
   async function forgeF() {
     const s = await scenario(
@@ -2907,8 +2907,8 @@ describe("cli — diff, pinned before spec 19", () => {
 
 
 /**
- * Shared helper for step 19b and 19c: builds a scenario with the given ingredients and recipe,
- * pushing cleanup to the global array. Defaults to Forge F from the step file.
+ * A scenario for the `diff` tests of spec 19: the given ingredients in one `base` recipe, profile `acme`,
+ * cleaned up after the test. Defaults to rule/a ("A one\nA two\n") and rule/b ("B one\nB two\n").
  */
 async function diffScenario(
   ingredients = [rule("a", "A one\nA two\n"), rule("b", "B one\nB two\n")],
@@ -3091,7 +3091,7 @@ describe("cli — diff --exit-code (spec 19)", () => {
     expect(C(s.wsRoot).code).toBe(0);
   });
 
-  /** Each state on a fresh Forge F: the flag prints what the plain command prints, and exits 1 as sync --check does. */
+  /** Each state on a fresh default scenario: the flag prints what the plain command prints, and exits 1 as sync --check does. */
   const states: Array<[string, (s: Awaited<ReturnType<typeof diffScenario>>) => Promise<void>, boolean]> = [
     ["drift", (s) => fs.appendFile(path.join(s.wsRoot, ".claude/rules/b.md"), "hand\n"), true],
     ["update", (s) => fs.writeFile(path.join(s.forgeRoot, "ingredients/rules/a/rule.md"), "A one\nA changed\n"), true],
@@ -3181,7 +3181,7 @@ describe("cli — diff --exit-code (spec 19)", () => {
     }
   });
 
-  it("an empty status(): no differences and exit 0; a [path] is the error (agent 9's case)", async () => {
+  it("an empty status(): no differences and exit 0; a [path] is the error", async () => {
     const s = await diffScenario(undefined, undefined, { targets: [] });
     const r = D(s.wsRoot, "--exit-code");
     expect(r.code).toBe(0);
@@ -3213,7 +3213,8 @@ describe("cli — diff --exit-code (spec 19)", () => {
     const s = await synced([rule("big", lines), rule("b", "B one\nB two\n")], ["rule/b", "rule/big"]);
     await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), ONLY_B);
     const repo = path.resolve(__dirname, "..");
-    // spawnSync drains the pipe at once (and caps it at 1 MiB): a paused reader is what exposes a process.exit
+    // spawnSync drains the pipe at once (and caps it at 1 MiB): a paused reader is what exposes a process.exit.
+    // Under process.exit nothing reaches this reader at all — node drops the unread pipe when the child exits.
     const { code, stdout } = await new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
       const child = spawn(process.execPath, ["--import", TSX_LOADER, path.join(repo, "src/cli.ts"), "diff", "--exit-code", "--workspace", s.wsRoot], {
         cwd: repo,
