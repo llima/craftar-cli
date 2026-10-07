@@ -2794,3 +2794,17 @@ describe("cli — targets reads the workspace once craftar.yaml is there (spec 1
     expect(j.warnings[0].startsWith("targets in use not shown: ")).toBe(true);
   });
 });
+
+
+describe("cli — the targets text has no trailing spaces and the catalogue drops marks without a context", () => {
+  it("every line of targets, and of recipes --forge, has no trailing space; recipes --forge rows start with two spaces and the name", async () => {
+    const s = await scenario({ recipes: [recipe("base", [])], profiles: [profile("acme", ["base"])] }, { config: { profile: "acme" } });
+    cleanups.push(s.cleanup);
+    const t = runCli(["targets"], { cwd: s.wsRoot });
+    expect(t.stdout.split("\n").filter((l) => l !== l.trimEnd())).toEqual([]);
+    expect(t.stdout.split("\n").find((l) => l.trim().startsWith("steering"))!.startsWith("  steering")).toBe(true);
+    const r = runCli(["recipes", "--forge", s.forgeRoot]);
+    expect(r.stdout.split("\n").filter((l) => l !== l.trimEnd())).toEqual([]);
+    expect(r.stdout.split("\n")[1]).toMatch(/^  base\s+0 ingredients$/);
+  });
+});

@@ -260,17 +260,30 @@ program
 
     for (let i = 0; i < r.recipes.length; i++) {
       const rec = r.recipes[i];
-      const mark = resolves ? (rec.inUse ? pc.green("●") : pc.dim("○")) : " ";
       const desc = rec.description ? `— ${rec.description}` : "";
-      const line = [
-        `  ${mark} `,
-        col1[i].padEnd(w1),
-        "  ",
-        col2[i].padEnd(w2),
-        col3[i] ? "  " + col3[i].padEnd(w3) : (w3 > 0 ? "  " + "".padEnd(w3) : ""),
-        col4[i] ? "  " + col4[i].padEnd(w4) : (w4 > 0 ? "  " + "".padEnd(w4) : ""),
-        desc ? "  " + desc : "",
-      ].join("").trimEnd();
+      let line: string;
+      if (resolves) {
+        const mark = rec.inUse ? pc.green("●") : pc.dim("○");
+        line = [
+          `  ${mark} `,
+          col1[i].padEnd(w1),
+          "  ",
+          col2[i].padEnd(w2),
+          col3[i] ? "  " + col3[i].padEnd(w3) : (w3 > 0 ? "  " + "".padEnd(w3) : ""),
+          col4[i] ? "  " + col4[i].padEnd(w4) : (w4 > 0 ? "  " + "".padEnd(w4) : ""),
+          desc ? "  " + desc : "",
+        ].join("").trimEnd();
+      } else {
+        // No context: no mark column, rows start with two spaces then the name
+        line = [
+          "  ",
+          col1[i].padEnd(w1),
+          "  ",
+          col2[i].padEnd(w2),
+          col3[i] ? "  " + col3[i].padEnd(w3) : (w3 > 0 ? "  " + "".padEnd(w3) : ""),
+          desc ? "  " + desc : "",
+        ].join("").trimEnd();
+      }
       console.log(line);
     }
 
@@ -371,10 +384,15 @@ program
           const ing = result.ingredients.find((i) => i.ref === ref);
           const miss = result.missing.find((m) => m.ref === ref);
           if (ing) {
-            const mark = resolves ? (ing.disabled ? pc.dim("◌") : ing.inUse ? pc.green("●") : pc.dim("○")) : " ";
             const col1 = ing.outputName !== ing.name ? `${ref} → ${ing.outputName}` : ref;
             const disabled = ing.disabled ? "(disabled by this workspace)" : "";
-            const line = `  ${mark} ${col1.padEnd(w1Recipe)}${disabled ? "  " + disabled : ""}`.trimEnd();
+            let line: string;
+            if (resolves) {
+              const mark = ing.disabled ? pc.dim("◌") : ing.inUse ? pc.green("●") : pc.dim("○");
+              line = `  ${mark} ${col1.padEnd(w1Recipe)}${disabled ? "  " + disabled : ""}`.trimEnd();
+            } else {
+              line = `  ${col1.padEnd(w1Recipe)}`.trimEnd();
+            }
             console.log(line);
           } else if (miss) {
             const line = `  ${pc.red("✗")} ${ref.padEnd(w1Recipe)}  not in this Forge`.trimEnd();
@@ -418,22 +436,36 @@ program
         if (!ings?.length) continue;
         console.log(type);
         for (const ing of ings) {
-          const mark = resolves ? (ing.disabled ? pc.dim("◌") : ing.inUse ? pc.green("●") : pc.dim("○")) : " ";
           const col1 = ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name;
           const col2 = `targets ${ing.targets === "*" ? "*" : (ing.targets as string[]).join(", ")}`;
           const col3 = `in ${ing.recipes.length ? ing.recipes.join(", ") : "no recipe"}`;
           const desc = ing.description ? `— ${ing.description}` : "";
           const disabled = ing.disabled ? "(disabled by this workspace)" : "";
-          const line = [
-            `  ${mark} `,
-            col1.padEnd(w1),
-            "  ",
-            col2.padEnd(w2),
-            "  ",
-            col3.padEnd(w3),
-            desc ? "  " + desc : "",
-            disabled ? "  " + disabled : "",
-          ].join("").trimEnd();
+          let line: string;
+          if (resolves) {
+            const mark = ing.disabled ? pc.dim("◌") : ing.inUse ? pc.green("●") : pc.dim("○");
+            line = [
+              `  ${mark} `,
+              col1.padEnd(w1),
+              "  ",
+              col2.padEnd(w2),
+              "  ",
+              col3.padEnd(w3),
+              desc ? "  " + desc : "",
+              disabled ? "  " + disabled : "",
+            ].join("").trimEnd();
+          } else {
+            // No context: no mark column, rows start with two spaces then the name
+            line = [
+              "  ",
+              col1.padEnd(w1),
+              "  ",
+              col2.padEnd(w2),
+              "  ",
+              col3.padEnd(w3),
+              desc ? "  " + desc : "",
+            ].join("").trimEnd();
+          }
           console.log(line);
         }
       }
@@ -509,14 +541,14 @@ program
     // Matrix table
     const colWidth = 14;
     const typeColWidth = 10;
-    const header = " ".repeat(typeColWidth) + result.targets.map((t) => t.name.padEnd(colWidth)).join("");
-    console.log(header);
+    const header = "  " + " ".repeat(typeColWidth) + result.targets.map((t) => t.name.padEnd(colWidth)).join("");
+    console.log(header.trimEnd());
     for (const type of result.ingredientTypes) {
-      const row = type.padEnd(typeColWidth) + result.targets.map((t) => {
+      const row = "  " + type.padEnd(typeColWidth) + result.targets.map((t) => {
         const cap = t.capabilities[type as IngredientType];
         return cap.state.padEnd(colWidth);
       }).join("");
-      console.log(row);
+      console.log(row.trimEnd());
     }
     console.log();
 
@@ -526,17 +558,22 @@ program
     console.log("  unsupported  not written; sync warns and names an ingredient aimed at this target");
     console.log();
 
-    // Paths block — type-major (types outer, targets inner)
+    // Paths block — type-major (types outer, targets inner); align labels to widest
     console.log("paths");
+    const pathLines: Array<{ label: string; content: string }> = [];
     for (const type of INGREDIENT_TYPES) {
       for (const t of result.targets) {
         const cap = t.capabilities[type as IngredientType];
         if (cap.output.length > 0) {
           const pathStr = cap.output.join(", ");
           const note = cap.note ? ` — ${cap.note}` : "";
-          console.log(`  ${t.name} · ${type}  ${pathStr}${note}`);
+          pathLines.push({ label: `${t.name} · ${type}`, content: `${pathStr}${note}` });
         }
       }
+    }
+    const maxLabelLen = Math.max(...pathLines.map((l) => l.label.length));
+    for (const line of pathLines) {
+      console.log(`  ${line.label.padEnd(maxLabelLen)}  ${line.content}`);
     }
 
     for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);

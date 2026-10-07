@@ -441,3 +441,22 @@ describe("listIngredients (spec 16 §4.3)", () => {
     expect(byRef(r.ingredients, "rule/commit-style")).toMatchObject({ inUse: true, disabled: false });
   });
 });
+
+
+describe("catalogue — one sort order, each recipe once (review of 0.9.0)", () => {
+  it("names sort in code-unit order everywhere, and a recipe listing a ref twice is named once", async () => {
+    const root = await tmpDir("craftar-catalogue-sort-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [rule("a", "# A\n")],
+      recipes: [recipe("zeta", ["rule/a", "rule/a", "rule/gone", "rule/gone"]), recipe("Zeta", ["rule/a"]), recipe("alpha", [])],
+      profiles: [profile("acme", ["zeta"]), profile("Acme", ["Zeta"])],
+    });
+    const forge = await loadForge(root);
+    expect(listRecipes(forge, null).recipes.map((x) => x.name)).toEqual(["Zeta", "alpha", "zeta"]);
+    const i = listIngredients(forge, null);
+    expect(i.ingredients[0].recipes).toEqual(["Zeta", "zeta"]);
+    expect(i.missing).toEqual([{ ref: "rule/gone", recipes: ["zeta"] }]);
+    expect(() => listIngredients(forge, null, { recipe: "nope" })).toThrow('recipe "nope" not found in this Forge (Zeta, alpha, zeta)');
+  });
+});

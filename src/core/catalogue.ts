@@ -179,7 +179,7 @@ export function listRecipes(forge: Forge, context: CatalogueContext | null): Rec
   };
 
   const recipes: RecipeEntry[] = [...forge.recipes.values()]
-    .sort((a, b) => a.name.localeCompare(b.name))
+    .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
     .map((rec) => {
       const inUse: RecipeInUse | null = resolvedSet.has(rec.name)
         ? {
@@ -304,12 +304,13 @@ export function listIngredients(
     chainRefs = new Set(order.flatMap((name) => forge.recipes.get(name)!.ingredients));
   }
 
-  // Build map of ref → recipes that list it (all Forge recipes, sorted)
+  // Build map of ref → recipes that list it (all Forge recipes, sorted, each once)
   const refToRecipes = new Map<string, string[]>();
   for (const [name, rec] of forge.recipes) {
     for (const ref of rec.ingredients) {
       if (!refToRecipes.has(ref)) refToRecipes.set(ref, []);
-      refToRecipes.get(ref)!.push(name);
+      const list = refToRecipes.get(ref)!;
+      if (!list.includes(name)) list.push(name);
     }
   }
   for (const [ref, recipes] of refToRecipes) {
@@ -338,7 +339,7 @@ export function listIngredients(
     .sort((a, b) => {
       const typeOrder = INGREDIENT_TYPES.indexOf(a.meta.type) - INGREDIENT_TYPES.indexOf(b.meta.type);
       if (typeOrder !== 0) return typeOrder;
-      return a.meta.name.localeCompare(b.meta.name);
+      return a.meta.name < b.meta.name ? -1 : a.meta.name > b.meta.name ? 1 : 0;
     })
     .map((ing) => {
       const ref = ing.ref;
