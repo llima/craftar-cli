@@ -130,15 +130,28 @@ program
     const p = await plan(ws);
     const st = await status(ws, p, await readLock(ws.root));
     let shown = 0;
+    const paint = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
     for (const s of st) {
       if (only && s.path !== only) continue;
-      if (!["update", "drift", "collision", "new"].includes(s.state)) continue;
+      // Spec 19 §3.2: show the six states sync --check refuses (skip unchanged and adopt)
+      if (["unchanged", "adopt"].includes(s.state)) continue;
       shown++;
       const disk = await readText(path.join(ws.root, s.path));
-      const next = s.planned ? toLf(stripBom(s.planned.content.toString("utf8"))) : "";
-      console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
-      console.log(pc.bold(`+++ ${s.path} (forge)`));
-      console.log(renderDiff(disk ?? "", next, { paint: { same: pc.dim, del: pc.red, add: pc.green } }));
+      if (s.state === "orphan-drift") {
+        // Header and one line, no body: sync keeps this file
+        console.log(pc.bold(`--- ${s.path} (disk, orphan-drift)`));
+        console.log(`  ${explainSkip(s)}`);
+      } else if (s.state === "orphan") {
+        // A removal: the file exists on disk but the Forge no longer produces it
+        console.log(pc.bold(`--- ${s.path} (disk, orphan)`));
+        console.log(pc.bold(`+++ ${s.path} (forge: no longer produced — sync removes it)`));
+        console.log(renderDiff(disk ?? "", "", paint));
+      } else {
+        const next = s.planned ? toLf(stripBom(s.planned.content.toString("utf8"))) : "";
+        console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
+        console.log(pc.bold(`+++ ${s.path} (forge)`));
+        console.log(renderDiff(disk ?? "", next, paint));
+      }
     }
     if (!shown) console.log(pc.green("no differences"));
   });

@@ -2903,3 +2903,167 @@ describe("cli — diff, pinned before spec 19", () => {
     expect(r.stdout).toBe("no differences\n");
   });
 });
+
+
+/**
+ * Shared helper for step 19b and 19c: builds a scenario with the given ingredients and recipe,
+ * pushing cleanup to the global array. Defaults to Forge F from the step file.
+ */
+async function diffScenario(
+  ingredients = [rule("a", "A one\nA two\n"), rule("b", "B one\nB two\n")],
+  recipeIngredients = ["rule/a", "rule/b"],
+  local?: Record<string, unknown>,
+) {
+  const s = await scenario(
+    { ingredients, recipes: [recipe("base", recipeIngredients)], profiles: [profile("acme", ["base"])] },
+    { config: { profile: "acme" }, local },
+  );
+  cleanups.push(s.cleanup);
+  return s;
+}
+
+describe("cli — diff shows orphans (spec 19)", () => {
+  it("orphan printed as a removal (spec tests 5, 7)", async () => {
+    const s = await diffScenario();
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    // Orphan on a: rewrite the recipe to list only rule/b
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), "name: base\ningredients:\n  - rule/b\n");
+
+    const r = runCli(["diff", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      "--- .claude/rules/a.md (disk, orphan)\n" +
+      "+++ .claude/rules/a.md (forge: no longer produced — sync removes it)\n" +
+      "- A one\n" +
+      "- A two\n",
+    );
+    // Confirm the state really is pending
+    expect(runCli(["sync", "--check", "--workspace", s.wsRoot]).code).toBe(1);
+  });
+
+  it("orphan with no final newline", async () => {
+    // A separate scenario: rule/c has no trailing newline
+    const s = await diffScenario(
+      [rule("c", "C one\nC two"), rule("b", "B one\nB two\n")],
+      ["rule/b", "rule/c"],
+    );
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    // Orphan on c: rewrite the recipe to list only rule/b
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), "name: base\ningredients:\n  - rule/b\n");
+
+    const r = runCli(["diff", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      "--- .claude/rules/c.md (disk, orphan)\n" +
+      "+++ .claude/rules/c.md (forge: no longer produced — sync removes it)\n" +
+      "- C one\n" +
+      "- C two\n" +
+      "\\ No newline at end of file\n",
+    );
+  });
+
+  it("orphan-drift: header and one line (spec test 6)", async () => {
+    const s = await diffScenario();
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    // Orphan on a: rewrite the recipe to list only rule/b
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), "name: base\ningredients:\n  - rule/b\n");
+    // Drift on a: append "hand\n"
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/a.md"), "hand\n");
+
+    const r = runCli(["diff", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      "--- .claude/rules/a.md (disk, orphan-drift)\n" +
+      "  no longer produced by the Forge but hand-edited — kept; delete it yourself if unwanted\n",
+    );
+  });
+
+  it("order (spec test 11)", async () => {
+    const s = await diffScenario();
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    // Orphan on a: rewrite the recipe to list only rule/b
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), "name: base\ningredients:\n  - rule/b\n");
+    // Drift on b: append "hand\n"
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/b.md"), "hand\n");
+
+    const r = runCli(["diff", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      "--- .claude/rules/a.md (disk, orphan)\n" +
+      "+++ .claude/rules/a.md (forge: no longer produced — sync removes it)\n" +
+      "- A one\n" +
+      "- A two\n" +
+      "--- .claude/rules/b.md (disk, drift)\n" +
+      "+++ .claude/rules/b.md (forge)\n" +
+      "  B one\n" +
+      "  B two\n" +
+      "- hand\n",
+    );
+  });
+
+  it("[path] reaches an orphan (spec test 8, first case)", async () => {
+    const s = await diffScenario();
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    // Orphan on a: rewrite the recipe to list only rule/b
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), "name: base\ningredients:\n  - rule/b\n");
+    // Drift on b: append "hand\n"
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/b.md"), "hand\n");
+
+    // diff .claude/rules/a.md should show only the orphan
+    const r = runCli(["diff", ".claude/rules/a.md", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      "--- .claude/rules/a.md (disk, orphan)\n" +
+      "+++ .claude/rules/a.md (forge: no longer produced — sync removes it)\n" +
+      "- A one\n" +
+      "- A two\n",
+    );
+  });
+
+  it("no targets resolved (spec test 12, no flag)", async () => {
+    const s = await diffScenario();
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    // No targets: write craftar.local.yaml with targets: []
+    await fs.writeFile(path.join(s.wsRoot, "craftar.local.yaml"), "targets: []\n");
+
+    const r = runCli(["diff", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      "--- .claude/rules/a.md (disk, orphan)\n" +
+      "+++ .claude/rules/a.md (forge: no longer produced — sync removes it)\n" +
+      "- A one\n" +
+      "- A two\n" +
+      "--- .claude/rules/b.md (disk, orphan)\n" +
+      "+++ .claude/rules/b.md (forge: no longer produced — sync removes it)\n" +
+      "- B one\n" +
+      "- B two\n",
+    );
+  });
+
+  it("empty orphan (spec test 13, no flag)", async () => {
+    // A scenario with an empty rule/e
+    const s = await diffScenario(
+      [rule("e", ""), rule("b", "B one\nB two\n")],
+      ["rule/b", "rule/e"],
+    );
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    // Orphan on e: rewrite the recipe to list only rule/b
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), "name: base\ningredients:\n  - rule/b\n");
+
+    const r = runCli(["diff", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    // Two header lines and ONE empty line (renderDiff("", "") returns "", and console.log("") prints \n)
+    expect(r.stdout).toBe(
+      "--- .claude/rules/e.md (disk, orphan)\n" +
+      "+++ .claude/rules/e.md (forge: no longer produced — sync removes it)\n" +
+      "\n",
+    );
+  });
+});
