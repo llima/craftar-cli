@@ -8,21 +8,15 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { CAPABILITIES } from "../src/core/capabilities.js";
+import { CAPABILITIES, written, type Capability } from "../src/core/capabilities.js";
 import { loadForge } from "../src/core/forge.js";
-import { plan, loadWorkspace } from "../src/core/sync.js";
+import { resolve, type Resolution } from "../src/core/resolve.js";
+import { emitFor, plan, loadWorkspace } from "../src/core/sync.js";
 import { toLf, stripBom } from "../src/core/text.js";
-import { tmpDir, writeFiles, makeWorkspace, type IngredientSpec } from "./helpers/forge.js";
-import { INGREDIENT_TYPES, TARGETS, type IngredientType, type Target } from "../src/schema/index.js";
-import type { PlannedFile } from "../src/emitters/types.js";
-import { emitFor } from "../src/core/sync.js";
 import { mcpServers } from "../src/emitters/shared.js";
-import type { EmitBase, Emitter, PlannedFile as PF } from "../src/emitters/types.js";
-import { written, type Capability as WalkCapability } from "../src/core/capabilities.js";
-import { resolve as resolveWorkspace, type Resolution } from "../src/core/resolve.js";
-import { loadWorkspace as loadWs } from "../src/core/sync.js";
-import { profile as prof, recipe as rec, scenario as scen, type IngredientSpec as Spec } from "./helpers/forge.js";
-import type { IngredientType as IType, Target as TTarget } from "../src/schema/index.js";
+import { profile, recipe, scenario, tmpDir, writeFiles, makeWorkspace, type IngredientSpec } from "./helpers/forge.js";
+import { INGREDIENT_TYPES, TARGETS, type IngredientType, type Target } from "../src/schema/index.js";
+import type { EmitBase, Emitter, PlannedFile } from "../src/emitters/types.js";
 
 /**
  * Creates a Forge with one ingredient per type (two skills: dir and file layout), each with
@@ -458,7 +452,7 @@ afterEach(async () => {
 });
 
 /** One ingredient of any type, with the files its schema needs. */
-function spec(type: string, name: string, extra: Record<string, unknown> = {}): Spec {
+function spec(type: string, name: string, extra: Record<string, unknown> = {}): IngredientSpec {
   const meta: Record<string, unknown> = { type, name, targets: "*", ...extra };
   const files: Record<string, string> = {};
   if (type === "rule") files["rule.md"] = `# ${name}\n`;
@@ -471,37 +465,37 @@ function spec(type: string, name: string, extra: Record<string, unknown> = {}): 
     files[`${name}.sh`] = "echo\n";
   }
   if (type === "mcp" && !("server" in extra)) meta.server = { command: "npx" };
-  return { meta: meta as Spec["meta"], files };
+  return { meta: meta as IngredientSpec["meta"], files };
 }
 
-async function resolutionOf(ings: Spec[]): Promise<Resolution> {
-  const s = await scen(
+async function resolutionOf(ings: IngredientSpec[]): Promise<Resolution> {
+  const s = await scenario(
     {
       ingredients: ings,
-      recipes: [rec("base", ings.map((i) => `${i.meta.type}/${i.meta.name}`))],
-      profiles: [prof("acme", ["base"], ["claude-code", "kiro", "agents-md"])],
+      recipes: [recipe("base", ings.map((i) => `${i.meta.type}/${i.meta.name}`))],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"])],
     },
     { config: { profile: "acme" } },
   );
   walkCleanups.push(s.cleanup);
-  const w = await loadWs(s.wsRoot);
-  return resolveWorkspace(w.forge, w.config);
+  const w = await loadWorkspace(s.wsRoot);
+  return resolve(w.forge, w.config);
 }
 
 /** Walk to the end, recording yields and warnings in one list. */
-function record(resolution: Resolution, target: TTarget, matrix?: Record<TTarget, Record<IType, WalkCapability>>): string[] {
+function record(resolution: Resolution, target: Target, matrix?: Record<Target, Record<IngredientType, Capability>>): string[] {
   const log: string[] = [];
   const walk = written(resolution, target, (m) => log.push(`warn ${m}`), matrix);
   for (const ing of walk) log.push(`yield ${ing.ref}`);
   return log;
 }
 
-const UNSUPPORTED: Array<[TTarget, string, string]> = [
+const UNSUPPORTED: Array<[Target, string, string]> = [
   ["claude-code", "steering", "claude-code: steering steering/x has no Claude Code equivalent — skipped"],
   ["kiro", "script", "kiro: script script/x has no Kiro equivalent — skipped"],
   ["kiro", "hook", "kiro: hook hook/x has no Kiro equivalent — skipped"],
   ...(["agent", "command", "skill", "mcp", "script", "steering", "hook"] as const).map(
-    (ty) => ["agents-md", ty, `agents-md: 1 ${ty} ingredient(s) have no AGENTS.md equivalent — skipped: ${ty}/x`] as [TTarget, string, string],
+    (ty) => ["agents-md", ty, `agents-md: 1 ${ty} ingredient(s) have no AGENTS.md equivalent — skipped: ${ty}/x`] as [Target, string, string],
   ),
 ];
 
@@ -566,7 +560,7 @@ describe("written() — the walk decides and warns from the matrix (spec 18 §9.
     const table = {
       ...CAPABILITIES,
       "claude-code": { ...CAPABILITIES["claude-code"], rule: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" } },
-    } as unknown as Record<TTarget, Record<IType, WalkCapability>>;
+    } as unknown as Record<Target, Record<IngredientType, Capability>>;
     const r = await resolutionOf([spec("rule", "r")]);
     expect(record(r, "claude-code", table)).toEqual(["warn claude-code: rule rule/r has no Claude Code equivalent — skipped"]);
     expect(record(r, "claude-code")).toEqual(["yield rule/r"]);
@@ -611,7 +605,7 @@ describe("emitFor and mcpServers (spec 18 §9.4)", () => {
     const full: Emitter<"kiro"> = {
       target: "kiro",
       async emit(ctx) {
-        const out: PF[] = [];
+        const out: PlannedFile[] = [];
         for (const ing of ctx.aimed) out.push({ path: `x/${ing.ref}`, content: Buffer.from(""), target: "kiro", ingredient: ing.ref });
         return out;
       },
@@ -641,12 +635,12 @@ describe("emitFor and mcpServers (spec 18 §9.4)", () => {
 
 describe("agents-md walks to the end with no rule (spec 18 §6.3)", () => {
   it("a workspace resolving only agents-md, one agent and no rule: no file, the per-type warning, no internal error", async () => {
-    const s = await scen(
-      { ingredients: [spec("agent", "a")], recipes: [rec("base", ["agent/a"])], profiles: [prof("acme", ["base"], ["agents-md"])] },
+    const s = await scenario(
+      { ingredients: [spec("agent", "a")], recipes: [recipe("base", ["agent/a"])], profiles: [profile("acme", ["base"], ["agents-md"])] },
       { config: { profile: "acme" } },
     );
     walkCleanups.push(s.cleanup);
-    const p = await plan(await loadWs(s.wsRoot));
+    const p = await plan(await loadWorkspace(s.wsRoot));
     expect(p.files).toEqual([]);
     expect(p.warnings).toEqual(["agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/a"]);
   });
