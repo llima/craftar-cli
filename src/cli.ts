@@ -30,7 +30,7 @@ import { HUNK_CLASSES, INGREDIENT_TYPES, TARGETS, UnifyPlanSchema, type HunkClas
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.8.6");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.9.0");
 
 /* ---------------------------------------------------------------- import */
 program
