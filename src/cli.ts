@@ -230,29 +230,48 @@ program
       : null;
     console.log(pc.bold(`craftar recipes — forge ${forg.manifest.name} @ ${forg.commit?.slice(0, 8) ?? "no git"}${ctxDesc ? ` · ${ctxDesc}` : ""}`));
 
-    const resolves = context?.resolution !== null;
-    for (const rec of r.recipes) {
-      const mark = resolves ? (rec.inUse ? pc.green("●") : pc.dim("○")) : " ";
-      const slot = rec.slot ? ` [slot ${rec.slot}]` : "";
-      const count = `${rec.ingredients.length} ingredient${rec.ingredients.length === 1 ? "" : "s"}`;
-      const ext = rec.extends.length ? `  ← ${rec.extends.join(", ")}` : "";
-      // Build reason
+    const resolves = context !== null && context.resolution !== null;
+
+    // Compute column widths for alignment
+    // Column 1: name[ [slot s]]
+    // Column 2: <N ingredient(s)>
+    // Column 3: ← parents (empty when none)
+    // Column 4: reason (empty when none)
+    const col1 = r.recipes.map((rec) => `${rec.name}${rec.slot ? ` [slot ${rec.slot}]` : ""}`);
+    const col2 = r.recipes.map((rec) => `${rec.ingredients.length} ingredient${rec.ingredients.length === 1 ? "" : "s"}`);
+    const col3 = r.recipes.map((rec) => rec.extends.length ? `← ${rec.extends.join(", ")}` : "");
+    const col4 = r.recipes.map((rec) => {
       let reason = "";
       if (rec.inUse) {
         const byParts: string[] = [];
         for (const b of rec.inUse.by) {
-          if (b === "extends") {
-            byParts.push(`extends ${rec.inUse.extendedBy.join(", ")}`);
-          } else {
-            byParts.push(b);
-          }
+          if (b === "extends") byParts.push(`extends ${rec.inUse.extendedBy.join(", ")}`);
+          else byParts.push(b);
         }
         reason = `in use (${byParts.join(", ")})`;
       }
       const removed = rec.removedByWorkspace ? (reason ? " · " : "") + "removed by this workspace" : "";
-      const desc = rec.description ? `  — ${rec.description}` : "";
-      const reasonStr = reason || removed ? `  ${reason}${removed}` : "";
-      console.log(`  ${mark} ${rec.name}${slot}  ${count}${ext}${reasonStr}${desc}`);
+      return reason + removed;
+    });
+    const w1 = Math.max(...col1.map((s) => s.length));
+    const w2 = Math.max(...col2.map((s) => s.length));
+    const w3 = Math.max(...col3.map((s) => s.length));
+    const w4 = Math.max(...col4.map((s) => s.length));
+
+    for (let i = 0; i < r.recipes.length; i++) {
+      const rec = r.recipes[i];
+      const mark = resolves ? (rec.inUse ? pc.green("●") : pc.dim("○")) : " ";
+      const desc = rec.description ? `— ${rec.description}` : "";
+      const line = [
+        `  ${mark} `,
+        col1[i].padEnd(w1),
+        "  ",
+        col2[i].padEnd(w2),
+        col3[i] ? "  " + col3[i].padEnd(w3) : (w3 > 0 ? "  " + "".padEnd(w3) : ""),
+        col4[i] ? "  " + col4[i].padEnd(w4) : (w4 > 0 ? "  " + "".padEnd(w4) : ""),
+        desc ? "  " + desc : "",
+      ].join("").trimEnd();
+      console.log(line);
     }
 
     // Count line
@@ -324,10 +343,25 @@ program
     const typeOpt = o.type ? ` --type ${o.type}` : "";
     console.log(pc.bold(`craftar ingredients${recipeOpt}${typeOpt} — forge ${forg.manifest.name} @ ${forg.commit?.slice(0, 8) ?? "no git"}${ctxDesc ? ` · ${ctxDesc}` : ""}`));
 
-    const resolves = context?.resolution !== null;
+    const resolves = context !== null && context.resolution !== null;
 
     if (result.recipe) {
       // --recipe mode: grouped by chain entry
+      // Compute column widths for alignment across the whole listing
+      // Column 1: ref[ → outputName]
+      const col1Recipe: string[] = [];
+      for (const entry of result.recipe.chain) {
+        for (const ref of entry.ingredients) {
+          const ing = result.ingredients.find((i) => i.ref === ref);
+          if (ing) {
+            col1Recipe.push(ing.outputName !== ing.name ? `${ref} → ${ing.outputName}` : ref);
+          } else {
+            col1Recipe.push(ref);
+          }
+        }
+      }
+      const w1Recipe = Math.max(...col1Recipe.map((s) => s.length), 0);
+
       for (const entry of result.recipe.chain) {
         const rec = forg.recipes.get(entry.recipe);
         const ext = rec?.extends.length ? `  ← ${rec.extends.join(", ")}` : "";
@@ -338,11 +372,13 @@ program
           const miss = result.missing.find((m) => m.ref === ref);
           if (ing) {
             const mark = resolves ? (ing.disabled ? pc.dim("◌") : ing.inUse ? pc.green("●") : pc.dim("○")) : " ";
-            const outputName = ing.outputName !== ing.name ? `  → ${ing.outputName}` : "";
-            const disabled = ing.disabled ? "  (disabled by this workspace)" : "";
-            console.log(`  ${mark} ${ref}${outputName}${disabled}`);
+            const col1 = ing.outputName !== ing.name ? `${ref} → ${ing.outputName}` : ref;
+            const disabled = ing.disabled ? "(disabled by this workspace)" : "";
+            const line = `  ${mark} ${col1.padEnd(w1Recipe)}${disabled ? "  " + disabled : ""}`.trimEnd();
+            console.log(line);
           } else if (miss) {
-            console.log(`  ${pc.red("✗")} ${ref}  not in this Forge`);
+            const line = `  ${pc.red("✗")} ${ref.padEnd(w1Recipe)}  not in this Forge`.trimEnd();
+            console.log(line);
           }
         }
       }
@@ -351,6 +387,27 @@ program
       console.log(`\n  ${countLine}`);
     } else {
       // No --recipe: grouped by type
+      // Spec 16 §4.3: rows print the bare `name`, not the `ref`, under their type heading
+      // Compute column widths across the whole listing (all types + missing)
+      // Column 1: name[ → outputName] (or ref for missing)
+      // Column 2: targets <...>
+      // Column 3: in <...>
+      const allCol1: string[] = [];
+      const allCol2: string[] = [];
+      const allCol3: string[] = [];
+      for (const ing of result.ingredients) {
+        const col1 = ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name;
+        allCol1.push(col1);
+        allCol2.push(`targets ${ing.targets === "*" ? "*" : (ing.targets as string[]).join(", ")}`);
+        allCol3.push(`in ${ing.recipes.length ? ing.recipes.join(", ") : "no recipe"}`);
+      }
+      for (const m of result.missing) {
+        allCol1.push(m.ref);
+      }
+      const w1 = Math.max(...allCol1.map((s) => s.length), 0);
+      const w2 = Math.max(...allCol2.map((s) => s.length), 0);
+      const w3 = Math.max(...allCol3.map((s) => s.length), 0);
+
       const byType = new Map<string, typeof result.ingredients>();
       for (const ing of result.ingredients) {
         if (!byType.has(ing.type)) byType.set(ing.type, []);
@@ -362,18 +419,29 @@ program
         console.log(type);
         for (const ing of ings) {
           const mark = resolves ? (ing.disabled ? pc.dim("◌") : ing.inUse ? pc.green("●") : pc.dim("○")) : " ";
-          const outputName = ing.outputName !== ing.name ? `  → ${ing.outputName}` : "";
-          const targets = ing.targets === "*" ? "*" : (ing.targets as string[]).join(", ");
-          const recipes = ing.recipes.length ? ing.recipes.join(", ") : "no recipe";
-          const desc = ing.description ? `  — ${ing.description}` : "";
-          const disabled = ing.disabled ? "  (disabled by this workspace)" : "";
-          console.log(`  ${mark} ${ing.ref}${outputName}  targets ${targets}  in ${recipes}${desc}${disabled}`);
+          const col1 = ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name;
+          const col2 = `targets ${ing.targets === "*" ? "*" : (ing.targets as string[]).join(", ")}`;
+          const col3 = `in ${ing.recipes.length ? ing.recipes.join(", ") : "no recipe"}`;
+          const desc = ing.description ? `— ${ing.description}` : "";
+          const disabled = ing.disabled ? "(disabled by this workspace)" : "";
+          const line = [
+            `  ${mark} `,
+            col1.padEnd(w1),
+            "  ",
+            col2.padEnd(w2),
+            "  ",
+            col3.padEnd(w3),
+            desc ? "  " + desc : "",
+            disabled ? "  " + disabled : "",
+          ].join("").trimEnd();
+          console.log(line);
         }
       }
       if (result.missing.length) {
         console.log("missing");
         for (const m of result.missing) {
-          console.log(`  ${m.ref}  cited by ${m.recipes.join(", ")}, not in this Forge`);
+          const line = `  ${m.ref.padEnd(w1)}  cited by ${m.recipes.join(", ")}, not in this Forge`.trimEnd();
+          console.log(line);
         }
       }
       // Count line
@@ -403,20 +471,20 @@ program
     const warnings: string[] = [];
 
     if (o.workspace !== undefined) {
-      // Explicit --workspace: first check if craftar.yaml exists
-      try {
-        await fs.access(path.join(o.workspace, "craftar.yaml"));
-      } catch {
-        // No craftar.yaml in --workspace dir → exit 1 with import guidance
-        const resolved = path.resolve(o.workspace);
-        fail(`craftar.yaml not found in ${resolved} — run \`craftar import --workspace "${resolved}" --from claude-code --forge <dir> --profile <name> --write-config\` to create it`);
-      }
-      // craftar.yaml exists, try to load and resolve — failures become warnings
+      // Explicit --workspace: call loadWorkspace
+      // - If craftar.yaml is missing → exit 1 with loadWorkspace's message
+      // - If craftar.yaml exists but the workspace doesn't load or resolve → warning + matrix (exit 0)
       try {
         const ws = await loadWorkspace(o.workspace);
         inUse = resolve(ws.forge, ws.config).targets;
       } catch (e) {
-        warnings.push(`targets in use not shown: ${e instanceof Error ? e.message : String(e)}`);
+        const msg = e instanceof Error ? e.message : String(e);
+        // Check if it's a missing craftar.yaml (exit 1) vs other failure (warning)
+        if (msg.includes("craftar.yaml not found in")) {
+          fail(msg);
+        }
+        // Load or resolve failed — warning, not error
+        warnings.push(`targets in use not shown: ${msg}`);
       }
     } else {
       // No --workspace: try current directory, silently unmarked if no craftar.yaml

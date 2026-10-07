@@ -2730,3 +2730,51 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     expect({ forge: await snapshot(s.forgeRoot), ws: await snapshot(s.wsRoot) }).toEqual(before);
   });
 });
+
+
+describe("cli — the catalogue's text mode (spec 16 §4.2, §4.3)", () => {
+  async function two() {
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "# A\n"), rule("long-rule-name--acme", "# L\n", { as: "long-rule-name", description: "Long one" })],
+        recipes: [recipe("base", ["rule/a"]), recipe("stack-angular", ["rule/long-rule-name--acme"], { slot: "frontend", extends: ["base"] })],
+        profiles: [profile("acme", ["stack-angular"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    return s;
+  }
+
+  it("--forge alone: no mark symbol and no 'in use' count", async () => {
+    const s = await two();
+    const r = runCli(["recipes", "--forge", s.forgeRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).not.toMatch(/[●○◌]/);
+    expect(r.stdout.trimEnd().split("\n").at(-1)).toBe("  2 recipes · used by profiles: base (acme), stack-angular (acme)");
+    const i = runCli(["ingredients", "--forge", s.forgeRoot]);
+    expect(i.code).toBe(0);
+    expect(i.stdout).not.toMatch(/[●○◌]/);
+    expect(i.stdout.trimEnd().split("\n").at(-1)).toBe("  2 ingredients, 0 in no recipe");
+  });
+
+  it("recipes rows: the ingredient count starts at one column for every row", async () => {
+    const s = await two();
+    const rows = runCli(["recipes", "--workspace", s.wsRoot]).stdout.split("\n").filter((l) => /^  [●○ ] /.test(l));
+    expect(rows).toHaveLength(2);
+    const at = rows.map((l) => l.search(/\d+ ingredients?/));
+    expect(at[0]).toBeGreaterThan(0);
+    expect(at[1]).toBe(at[0]);
+    expect(rows.every((l) => l === l.trimEnd())).toBe(true);
+  });
+
+  it("ingredients rows: name → outputName, and targets starts at one column", async () => {
+    const s = await two();
+    const lines = runCli(["ingredients", "--workspace", s.wsRoot]).stdout.split("\n");
+    const rows = lines.filter((l) => l.includes(" targets "));
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toMatch(/^  ● long-rule-name--acme → long-rule-name\s+targets \*\s+in stack-angular\s+— Long one$/);
+    expect(rows[0]).toMatch(/^  ● a\s+targets \*\s+in base$/);
+    expect(rows[0].indexOf("targets ")).toBe(rows[1].indexOf("targets "));
+  });
+});
