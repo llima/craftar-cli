@@ -333,7 +333,8 @@ describe("editRecipesText (spec 22 §5.1, §5.2, §6 items 1–3)", () => {
     ).toBe("forge: ../forge\nprofile: acme\nrecipes:\n  add:\n    - front-b # mine\n    - front-b\n  remove: [front-a]\n");
   });
   it("the README's craftar.yaml example is edited in place, comments kept", async () => {
-    const readme = await fs.readFile(path.join(__dirname, "..", "README.md"), "utf8");
+    // A Windows checkout may hold the README with CRLF (core.autocrlf); the example is compared as LF.
+    const readme = (await fs.readFile(path.join(__dirname, "..", "README.md"), "utf8")).replace(/\r\n/g, "\n");
     const example = readme.match(/Workspace `craftar\.yaml`:\n\n```yaml\n([\s\S]*?)```/)![1];
     expect(editRecipesText(example, { add: ["react-front"], remove: ["angular-front"] }, "add recipe")).toBe(
       "forge: ../forge # a path, or a git URL (see Remote Forge)\n" +
