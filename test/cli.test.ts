@@ -2808,3 +2808,98 @@ describe("cli — the targets text has no trailing spaces and the catalogue drop
     expect(r.stdout.split("\n")[1]).toMatch(/^  base\s+0 ingredients$/);
   });
 });
+
+
+describe("cli — diff, pinned before spec 19", () => {
+  // Shared fixture: Forge F with rule/a ("A one\nA two\n") and rule/b ("B one\nB two\n"),
+  // recipe base listing both, profile acme using base, target claude-code.
+  async function forgeF() {
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A one\nA two\n"), rule("b", "B one\nB two\n")],
+        recipes: [recipe("base", ["rule/a", "rule/b"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    return s;
+  }
+
+  it("drift only, exit 0", async () => {
+    const s = await forgeF();
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    // Drift on b: append "hand\n"
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/b.md"), "hand\n");
+
+    const r = runCli(["diff", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      "--- .claude/rules/b.md (disk, drift)\n" +
+      "+++ .claude/rules/b.md (forge)\n" +
+      "  B one\n" +
+      "  B two\n" +
+      "- hand\n",
+    );
+  });
+
+  it("drift + update, byte for byte (spec test 9)", async () => {
+    const s = await forgeF();
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    // Update on a: rewrite the Forge ingredient
+    await fs.writeFile(path.join(s.forgeRoot, "ingredients/rules/a/rule.md"), "A one\nA changed\n");
+    // Drift on b: append "hand\n"
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/b.md"), "hand\n");
+
+    const r = runCli(["diff", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      "--- .claude/rules/a.md (disk, update)\n" +
+      "+++ .claude/rules/a.md (forge)\n" +
+      "  A one\n" +
+      "- A two\n" +
+      "+ A changed\n" +
+      "--- .claude/rules/b.md (disk, drift)\n" +
+      "+++ .claude/rules/b.md (forge)\n" +
+      "  B one\n" +
+      "  B two\n" +
+      "- hand\n",
+    );
+  });
+
+  it("in sync", async () => {
+    const s = await forgeF();
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    const r = runCli(["diff", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("no differences\n");
+  });
+
+  it("a [path] nothing matches, without the flag", async () => {
+    const s = await forgeF();
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    // Drift on b so the workspace is not in sync — but the paths below should still show no differences
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/b.md"), "hand\n");
+
+    for (const p of [".claude/rules/nope.md", "./.claude/rules/a.md", ".claude\\rules\\a.md"]) {
+      const r = runCli(["diff", p, "--workspace", s.wsRoot]);
+      expect(r.code, `path: ${p}`).toBe(0);
+      expect(r.stdout, `path: ${p}`).toBe("no differences\n");
+      expect(r.stderr, `path: ${p}`).toBe("");
+    }
+  });
+
+  it("a [path] naming an unchanged file while another drifted", async () => {
+    const s = await forgeF();
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    // Drift on b
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/b.md"), "hand\n");
+
+    const r = runCli(["diff", ".claude/rules/a.md", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("no differences\n");
+  });
+});
