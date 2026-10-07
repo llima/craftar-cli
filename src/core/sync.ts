@@ -6,6 +6,7 @@ import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
 import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
+import { parseWorkspaceYaml } from "./workspace-yaml.js";
 import { classifyForge, credentialFault, ensureTree, ForgeFetchError, NoCachedCopyError, type CachedTree } from "./remote.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
@@ -77,19 +78,6 @@ export interface LoadOptions {
   refuseRemote?: (url: string) => string;
 }
 
-/**
- * A workspace file's YAML. A syntax error names the file and the place only: yaml's own message quotes
- * the line, and that line can be a `forge:` holding a credential not checked yet (spec 13 §4.3).
- */
-function parseWorkspaceYaml(name: string, text: string): unknown {
-  try {
-    return YAML.parse(text) ?? {};
-  } catch (e) {
-    const pos = (e as { linePos?: Array<{ line: number; col: number }> }).linePos?.[0];
-    const code = (e as { code?: string }).code ?? "YAML syntax error";
-    throw new Error(`invalid ${name}: ${code}${pos ? ` at line ${pos.line}, column ${pos.col}` : ""}`);
-  }
-}
 
 export async function loadWorkspace(root: string, opts: LoadOptions = {}): Promise<Workspace> {
   root = path.resolve(root);
@@ -98,10 +86,10 @@ export async function loadWorkspace(root: string, opts: LoadOptions = {}): Promi
     throw new Error(
       `${WORKSPACE_FILE} not found in ${root} — run \`craftar import --workspace "${root}" --from claude-code --forge <dir> --profile <name> --write-config\` to create it`,
     );
-  const base = parseWorkspaceYaml(WORKSPACE_FILE, await fs.readFile(file, "utf8"));
+  const base = parseWorkspaceYaml(WORKSPACE_FILE, await fs.readFile(file, "utf8")) ?? {};
   const localFile = path.join(root, LOCAL_FILE);
   const hasLocal = await exists(localFile);
-  const local = hasLocal ? parseWorkspaceYaml(LOCAL_FILE, await fs.readFile(localFile, "utf8")) : {};
+  const local = hasLocal ? parseWorkspaceYaml(LOCAL_FILE, await fs.readFile(localFile, "utf8")) ?? {} : {};
   // Before anything can print the value: a credential in either file is refused by file and field (spec 13 §4.3).
   for (const [name, raw] of [[WORKSPACE_FILE, base], [LOCAL_FILE, local]] as const) {
     const value: unknown = raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>).forge : undefined;

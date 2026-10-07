@@ -212,7 +212,9 @@ export const defaultGit: GitRunner = async (args, opts = {}) => {
 };
 
 /** The tree for `ref` of the remote Forge at `url`, fetching first unless offline or the ref is a full SHA already cached. */
-export async function ensureTree(url: string, ref: string | null, opts: CacheOptions): Promise<CachedTree> {
+export async function ensureTree(written: string, ref: string | null, opts: CacheOptions): Promise<CachedTree> {
+  // As classifyForge reads it: git would choke on a stray leading space.
+  const url = written.trim();
   const git = opts.git ?? defaultGit;
   // Absolute once: `git -C repo.git worktree add <dir>` would read a relative dir from inside repo.git.
   const home = path.resolve(opts.home);

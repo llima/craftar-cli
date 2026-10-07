@@ -11,6 +11,7 @@ import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, W
 import { isDeepStrictEqual } from "node:util";
 import { resolve } from "../core/resolve.js";
 import { classifyForge, credentialFault } from "../core/remote.js";
+import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
 import { decide, forgeBefore, pin, sourceKeys, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
@@ -993,7 +994,8 @@ async function planConfig(ws: string, forge: string, profile: string, targets: T
   const rel = path.relative(ws, forge).replace(/\\/g, "/") || ".";
   const fresh = YAML.stringify({ forge: rel, profile, targets });
   const raw = (await exists(abs)) ? await fs.readFile(abs, "utf8") : null;
-  const before = raw === null ? null : YAML.parse(stripBom(raw));
+  // Read as a mapping; the shape is checked below (not a mapping → refused, then WorkspaceConfigSchema).
+  const before = (raw === null ? null : parseWorkspaceYaml("craftar.yaml", raw)) as Record<string, unknown> | null | undefined;
   if (raw === null || before === null || before === undefined) return { abs, content: fresh, action: "created", keptRemote: null };
   const i9 = (why: string) => new Error(`import: cannot edit craftar.yaml in place (${why}) — reformat it by hand and re-run`);
   if (typeof before !== "object" || Array.isArray(before)) throw i9("it is not a YAML mapping");

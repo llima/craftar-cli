@@ -1,5 +1,5 @@
+import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import path from "node:path";
-import YAML from "yaml";
 import { z } from "zod";
 import { placeholders, reservedKey, bodyFile } from "../core/extract.js";
 import { fingerprintOf } from "../core/fingerprint.js";
@@ -286,7 +286,7 @@ export async function workspaceParams(ws: string, read: (abs: string) => Promise
     const abs = path.join(ws, f);
     if (!(await exists(abs))) continue;
     try {
-      const doc = YAML.parse(stripBom(await read(abs))) ?? {};
+      const doc = (parseWorkspaceYaml(f, await read(abs)) ?? {}) as { overrides?: { params?: unknown; sections?: unknown } };
       const params = OverridesParams.parse(doc?.overrides?.params ?? {});
       out = deepMerge(out, params);
     } catch (e) {
@@ -303,7 +303,7 @@ export async function workspaceSections(ws: string, read: (abs: string) => Promi
     const abs = path.join(ws, f);
     if (!(await exists(abs))) continue;
     try {
-      const doc = YAML.parse(stripBom(await read(abs))) ?? {};
+      const doc = (parseWorkspaceYaml(f, await read(abs)) ?? {}) as { overrides?: { params?: unknown; sections?: unknown } };
       out = deepMerge(out, SectionsSchema.parse(doc?.overrides?.sections ?? {}));
     } catch (e) {
       throw new Error(`import: ${f} does not load (${(e as Error).message})`);

@@ -3567,3 +3567,29 @@ describe("cli — no message prints a credential before it is checked (review of
     expect(await fs.readdir(home)).toEqual([]);
   });
 });
+
+describe("cli — a workspace file's YAML never echoes a credential, on any command (review of spec 13, round 3)", () => {
+  it("import with a YAML error in craftar.yaml, with and without --write-config: the secret is never printed", async () => {
+    for (const extra of [[], ["--write-config"]]) {
+      const root = await tmpDir("craftar-import-yaml-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const ws = path.join(root, "ws");
+      await writeFiles(ws, { ".claude/rules/a.md": "# A\n", "craftar.yaml": "forge: https://u:SECRET@h.invalid/r: x\nprofile: acme\n" });
+      const r = runCli(["import", "--from", "claude-code", "--workspace", ws, "--forge", path.join(root, "forge"), "--profile", "acme", ...extra]);
+      expect(r.code, extra.join(" ")).toBe(1);
+      expect(r.stderr, extra.join(" ")).toContain("import: craftar.yaml does not load (invalid craftar.yaml: ");
+      expect(r.stdout + r.stderr, extra.join(" ")).not.toContain("SECRET");
+    }
+  });
+
+  it("a YAML warning (an unknown tag) is not printed before the credential refusal", async () => {
+    const s = await scenario({ recipes: [recipe("base", [])], profiles: [profile("acme", ["base"])] }, { config: { profile: "acme" } });
+    cleanups.push(s.cleanup);
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    await fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), "forge: !foo https://u:SECRET@h.invalid/r\nprofile: acme\n");
+    const r = runCli(["status", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout + r.stderr).not.toContain("SECRET");
+  });
+});
