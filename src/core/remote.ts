@@ -26,15 +26,17 @@ export function classifyForge(value: string): "url" | "path" {
 export function credentialFault(value: string): boolean {
   const head = value.split(/[/\\]/, 1)[0];
   if (/^[^@]*:[^@]*@/.test(head) && !SCHEME_URL.test(value)) return true;
-  if (!SCHEME_URL.test(value)) return false;
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return false;
-  }
-  if (/^https?:$/i.test(url.protocol)) return url.username !== "" || url.password !== "";
-  return url.password !== "";
+  const scheme = SCHEME_URL.exec(value);
+  if (!scheme) return false;
+  // Read the authority as written, never through a parser: a spelling WHATWG URL rejects
+  // (`host:badport`) must not slip through and be printed later. Fail closed.
+  const rest = value.slice(scheme[0].length);
+  const authority = rest.slice(0, rest.search(/[/?#]|$/));
+  const at = authority.lastIndexOf("@");
+  if (at === -1) return false;
+  const userinfo = authority.slice(0, at);
+  if (/^https?:\/\/$/i.test(scheme[0])) return userinfo !== "";
+  return userinfo.includes(":");
 }
 
 /* ------------------------------------------------------------------ */

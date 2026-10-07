@@ -3450,3 +3450,22 @@ describe("cli — import --write-config keeps a remote forge (spec 13 §4.5, AC 
     expect([r.code, r.stderr]).toEqual([1, "error: --forge takes a directory; to read a remote Forge, run inside a workspace that names it\n"]);
   });
 });
+
+describe("cli — a credential in a URL no parser accepts is still refused (review of spec 13)", () => {
+  it("https with a bad port and ssh with a bad port: refused at load, the secret never printed", async () => {
+    for (const forgeValue of ["https://SECRETTOKEN@127.0.0.1:badport/acme/forge.git", "ssh://u:SECRETPW@127.0.0.1:99999999/x"]) {
+      const s = await scenario({ recipes: [recipe("base", [])], profiles: [profile("acme", ["base"])] }, { config: { profile: "acme" } });
+      cleanups.push(s.cleanup);
+      const home = await tmpDir("craftar-home-");
+      cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+      await fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), `forge: ${forgeValue}\nprofile: acme\n`);
+      const r = runCli(["status", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
+      expect(r.code, forgeValue).toBe(1);
+      expect(r.stderr, forgeValue).toBe(
+        "error: craftar.yaml › forge holds credentials in the URL — remove them and let git authenticate (credential helper, SSH agent; see README › Remote Forge)\n",
+      );
+      expect(r.stdout + r.stderr, forgeValue).not.toMatch(/SECRETTOKEN|SECRETPW/);
+      expect(await fs.readdir(home), forgeValue).toEqual([]);
+    }
+  });
+});

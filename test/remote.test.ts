@@ -13,7 +13,21 @@ describe("what counts as a URL (spec 13 §6.1)", () => {
 
 describe("credentials (spec 13 §4.3, §6.1)", () => {
   it("refused", () => {
-    for (const v of ["https://u@example.com/p", "https://u:p@example.com/p", "https://ghp_TOKEN@example.com/p", "http://u:p@example.com/p", "ssh://u:p@example.com/p", "u:p@host:path"])
+    for (const v of [
+      "https://u@example.com/p",
+      "https://u:p@example.com/p",
+      "https://ghp_TOKEN@example.com/p",
+      "http://u:p@example.com/p",
+      "ssh://u:p@example.com/p",
+      "u:p@host:path",
+      // Spellings WHATWG URL cannot parse must still be refused: the check reads the authority itself.
+      "https://u:s3cret@example.invalid:bad/r",
+      "https://SECRETTOKEN@127.0.0.1:badport/acme/forge.git",
+      "ssh://u:s3cret@example.invalid:repo",
+      "ssh://u:SECRETPW@127.0.0.1:99999999/x",
+      "git://u:s3cret@example.invalid:x/r",
+      "HTTPS://tok@example.com/p",
+    ])
       expect(credentialFault(v), v).toBe(true);
   });
   it("accepted", () => {
