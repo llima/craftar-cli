@@ -267,3 +267,24 @@ describe("the Forge cache, stray stamps (review of spec 13, round 4)", () => {
     expect((await fs.readdir(trees)).sort()).toEqual([a.commit, `${a.commit}.ok`, `${a.commit}.used`].sort());
   });
 });
+
+describe("the Forge cache holds a commit's bytes, whatever the host's git config (spec 13 §8)", () => {
+  it("core.autocrlf=true in the user's git config does not turn the tree's LF into CRLF", async () => {
+    const { r, home } = await setup();
+    const cfgDir = await tmpDir("craftar-gitcfg-");
+    cleanups.push(() => fs.rm(cfgDir, { recursive: true, force: true }));
+    const cfg = path.join(cfgDir, "gitconfig");
+    await fs.writeFile(cfg, "[core]\n\tautocrlf = true\n");
+    const before = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = cfg;
+    try {
+      const t = await ensureTree(r.url, null, { home });
+      const committed = git(r.src, "show", "HEAD:craftar.forge.yaml");
+      expect((await fs.readFile(path.join(t.dir, "craftar.forge.yaml"), "utf8")).replace(/\n$/, "")).toBe(committed);
+      expect((await fs.readFile(path.join(t.dir, "craftar.forge.yaml"))).includes(0x0d)).toBe(false);
+    } finally {
+      if (before === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = before;
+    }
+  });
+});

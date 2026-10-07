@@ -333,7 +333,9 @@ async function treeFor(git: GitRunner, entry: string, repo: string, commit: stri
       await git(["-C", repo, "worktree", "prune"]).catch(() => {});
       await fs.mkdir(path.dirname(dir), { recursive: true });
       try {
-        await git(["-C", repo, "worktree", "add", "--quiet", "--detach", dir, commit]);
+        // The commit's bytes, the same on every platform (spec 13 §8): no host `core.autocrlf` rewrites
+        // the checkout. A Forge's own .gitattributes still applies — that is the Forge author's choice.
+        await git(["-c", "core.autocrlf=false", "-C", repo, "worktree", "add", "--quiet", "--detach", dir, commit]);
         await fs.writeFile(marker, `${new Date().toISOString()}\n`);
       } catch (e) {
         await git(["-C", repo, "worktree", "remove", "--force", dir]).catch(() => {});
