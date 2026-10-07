@@ -4090,6 +4090,16 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
     await unmoved();
   });
 
+  it("§14 item 7: recipes --json carries the craftar.yaml wording in its warning", async () => {
+    const s = await recipeScenario();
+    await setYaml(s, BASE_YAML + "recipes:\n  add: [nope]\n");
+    const r = recipeCli(s, "recipes", "--json");
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout).warnings).toEqual([
+      'cannot resolve this workspace (profile acme): recipe "nope" not found (referenced by craftar.yaml recipes.add) — nothing is marked as in use',
+    ]);
+  });
+
   it("test 18: a workspace warning is printed once, on stderr", async () => {
     const s = await recipeScenario();
     await setYaml(s, "forge: ../forge\nref: v1\nprofile: acme\n");

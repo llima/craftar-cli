@@ -150,10 +150,10 @@ export function editRecipesText(raw: string, after: RecipeLists, command: string
       for (const key of ["add", "remove"] as const) {
         const seq = node.get(key, true);
         if (YAML.isSeq(seq)) {
-          const kept = new Map<string, unknown>();
-          for (const item of seq.items) if (YAML.isScalar(item)) kept.set(String(item.value), item);
-          // Keep each surviving item's own node (and comment); append the new ones.
-          seq.items = after[key].map((n) => kept.get(n) ?? doc.createNode(n));
+          // Keep each surviving item's own node (and comment), one per occurrence; append the new ones.
+          const kept = new Map<string, unknown[]>();
+          for (const item of seq.items) if (YAML.isScalar(item)) kept.set(String(item.value), [...(kept.get(String(item.value)) ?? []), item]);
+          seq.items = after[key].map((n) => kept.get(n)?.shift() ?? doc.createNode(n));
         } else if (after[key].length) {
           node.set(key, doc.createNode(after[key]));
         }

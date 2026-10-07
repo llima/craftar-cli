@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
+import path from "node:path";
 import { makeForge, profile, recipe, rule, tmpDir } from "./helpers/forge.js";
 import { loadForge, type Forge } from "../src/core/forge.js";
 import { WorkspaceConfigSchema } from "../src/schema/index.js";
@@ -234,6 +235,26 @@ describe("planRecipeEdit (spec 22 §3.1–§3.3)", () => {
       reasons: [],
     });
   });
+  it("a slot brought in through extends is not swapped by --replace: the whole result is R5", async () => {
+    const other = await tmpDir("craftar-recipe-edit-slot-");
+    try {
+      await makeForge(other, {
+        ingredients: [rule("a", "a\n"), rule("y", "y\n")],
+        recipes: [
+          recipe("front-a", ["rule/a"], { slot: "front" }),
+          recipe("front-y", ["rule/y"], { slot: "front" }),
+          recipe("stack-y", [], { extends: ["front-y"] }),
+        ],
+        profiles: [profile("acme", ["front-a"])],
+      });
+      const f = await loadForge(other);
+      const conflict = new Error('recipes "front-a" and "front-y" both occupy slot "front"');
+      expect(() => planRecipeEdit(f, config(), "add", ["stack-y"])).toThrow(conflict);
+      expect(() => planRecipeEdit(f, config(), "add", ["stack-y"], { replace: true })).toThrow(conflict);
+    } finally {
+      await fs.rm(other, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("recipeDiffLine (spec 22 §3.3, line 1)", () => {
@@ -299,6 +320,31 @@ describe("editRecipesText (spec 22 §5.1, §5.2, §6 items 1–3)", () => {
   it("a kept item keeps its own comment", () => {
     expect(editRecipesText("forge: ../forge\nprofile: acme\nrecipes:\n  add:\n    - front-b # mine\n  remove: []\n", { add: ["front-b", "front-c"], remove: [] }, "add recipe")).toBe(
       "forge: ../forge\nprofile: acme\nrecipes:\n  add:\n    - front-b # mine\n    - front-c\n  remove: []\n",
+    );
+  });
+  it("a removed item's comment goes with it", () => {
+    expect(editRecipesText("forge: ../forge\nprofile: acme\nrecipes:\n  add:\n    - front-b # mine\n    - front-c\n", { add: ["front-c"], remove: [] }, "remove recipe")).toBe(
+      "forge: ../forge\nprofile: acme\nrecipes:\n  add:\n    - front-c\n",
+    );
+  });
+  it("a duplicate written by hand keeps each copy's own comment when its list is left as it is", () => {
+    expect(
+      editRecipesText("forge: ../forge\nprofile: acme\nrecipes:\n  add:\n    - front-b # mine\n    - front-b\n  remove: []\n", { add: ["front-b", "front-b"], remove: ["front-a"] }, "add recipe"),
+    ).toBe("forge: ../forge\nprofile: acme\nrecipes:\n  add:\n    - front-b # mine\n    - front-b\n  remove: [front-a]\n");
+  });
+  it("the README's craftar.yaml example is edited in place, comments kept", async () => {
+    const readme = await fs.readFile(path.join(__dirname, "..", "README.md"), "utf8");
+    const example = readme.match(/Workspace `craftar\.yaml`:\n\n```yaml\n([\s\S]*?)```/)![1];
+    expect(editRecipesText(example, { add: ["react-front"], remove: ["angular-front"] }, "add recipe")).toBe(
+      "forge: ../forge # a path, or a git URL (see Remote Forge)\n" +
+        "ref: v1.4.0 # optional, with a git URL: a branch, a tag or a full SHA\n" +
+        "profile: acme-portal\n" +
+        "targets: [claude-code, kiro] # optional, overrides the profile\n" +
+        "recipes: {add: [react-front], remove: [angular-front]} # edited by craftar add recipe / remove recipe\n" +
+        "overrides:\n" +
+        "  params: {}\n" +
+        "  sections: {} # same shape as the profile's sections\n" +
+        "  ingredients: {disable: []}\n",
     );
   });
   it("the README's padded flow form does not round-trip (R6)", () => {
