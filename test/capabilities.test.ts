@@ -4,7 +4,7 @@
  * output names, every body carrying a `.claude/rules/<x>.md` reference, then verified against
  * each target alone to prove the 24 cells of CAPABILITIES.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
@@ -15,6 +15,11 @@ import { toLf, stripBom } from "../src/core/text.js";
 import { tmpDir, writeFiles, makeWorkspace, type IngredientSpec } from "./helpers/forge.js";
 import { INGREDIENT_TYPES, TARGETS, type IngredientType, type Target } from "../src/schema/index.js";
 import type { PlannedFile } from "../src/emitters/types.js";
+import { written, type Capability as WalkCapability } from "../src/core/capabilities.js";
+import { resolve as resolveWorkspace, type Resolution } from "../src/core/resolve.js";
+import { loadWorkspace as loadWs } from "../src/core/sync.js";
+import { profile as prof, recipe as rec, scenario as scen, type IngredientSpec as Spec } from "./helpers/forge.js";
+import type { IngredientType as IType, Target as TTarget } from "../src/schema/index.js";
 
 /**
  * Creates a Forge with one ingredient per type (two skills: dir and file layout), each with
@@ -441,5 +446,141 @@ describe("capability notes are plain text (spec 16 §4.4)", () => {
         if (c.state === "unsupported" && c.note !== "skipped with a warning when aimed at this target") bad.push(`${t} · ${ty} (unsupported note)`);
       }
     expect(bad).toEqual([]);
+  });
+});
+
+const walkCleanups: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  while (walkCleanups.length) await walkCleanups.pop()!();
+});
+
+/** One ingredient of any type, with the files its schema needs. */
+function spec(type: string, name: string, extra: Record<string, unknown> = {}): Spec {
+  const meta: Record<string, unknown> = { type, name, targets: "*", ...extra };
+  const files: Record<string, string> = {};
+  if (type === "rule") files["rule.md"] = `# ${name}\n`;
+  if (type === "agent") files["agent.md"] = `# ${name}\n`;
+  if (type === "command") files["command.md"] = `# ${name}\n`;
+  if (type === "steering") files["steering.md"] = `# ${name}\n`;
+  if (type === "skill") files["SKILL.md"] = `# ${name}\n`;
+  if (type === "script" || type === "hook") {
+    meta.files = [`${name}.sh`];
+    files[`${name}.sh`] = "echo\n";
+  }
+  if (type === "mcp") meta.server = { command: "npx" };
+  return { meta: meta as Spec["meta"], files };
+}
+
+async function resolutionOf(ings: Spec[]): Promise<Resolution> {
+  const s = await scen(
+    {
+      ingredients: ings,
+      recipes: [rec("base", ings.map((i) => `${i.meta.type}/${i.meta.name}`))],
+      profiles: [prof("acme", ["base"], ["claude-code", "kiro", "agents-md"])],
+    },
+    { config: { profile: "acme" } },
+  );
+  walkCleanups.push(s.cleanup);
+  const w = await loadWs(s.wsRoot);
+  return resolveWorkspace(w.forge, w.config);
+}
+
+/** Walk to the end, recording yields and warnings in one list. */
+function record(resolution: Resolution, target: TTarget, matrix?: Record<TTarget, Record<IType, WalkCapability>>): string[] {
+  const log: string[] = [];
+  const walk = written(resolution, target, (m) => log.push(`warn ${m}`), matrix);
+  for (const ing of walk) log.push(`yield ${ing.ref}`);
+  return log;
+}
+
+const UNSUPPORTED: Array<[TTarget, string, string]> = [
+  ["claude-code", "steering", "claude-code: steering steering/x has no Claude Code equivalent — skipped"],
+  ["kiro", "script", "kiro: script script/x has no Kiro equivalent — skipped"],
+  ["kiro", "hook", "kiro: hook hook/x has no Kiro equivalent — skipped"],
+  ...(["agent", "command", "skill", "mcp", "script", "steering", "hook"] as const).map(
+    (ty) => ["agents-md", ty, `agents-md: 1 ${ty} ingredient(s) have no AGENTS.md equivalent — skipped: ${ty}/x`] as [TTarget, string, string],
+  ),
+];
+
+describe("written() — the walk decides and warns from the matrix (spec 18 §9.3)", () => {
+  it("the ten unsupported cells: not yielded, today's text; not aimed → no warning", async () => {
+    expect(UNSUPPORTED).toHaveLength(10);
+    for (const [target, type, text] of UNSUPPORTED) {
+      expect(record(await resolutionOf([spec(type, "x")]), target), `${target} · ${type}`).toEqual([`warn ${text}`]);
+      const other = target === "claude-code" ? ["kiro"] : ["claude-code"];
+      expect(record(await resolutionOf([spec(type, "x", { targets: other })]), target), `${target} · ${type} not aimed`).toEqual([]);
+    }
+  });
+
+  it("a variant is named by its ref", async () => {
+    expect(record(await resolutionOf([spec("script", "s--acme", { as: "s" })]), "kiro")).toEqual([
+      "warn kiro: script script/s--acme has no Kiro equivalent — skipped",
+    ]);
+  });
+
+  it("lazy, per ingredient: the skip lands between the ingredients around it", async () => {
+    const r = await resolutionOf([spec("agent", "a"), spec("script", "s"), spec("agent", "b")]);
+    expect(record(r, "kiro")).toEqual(["yield agent/a", "warn kiro: script script/s has no Kiro equivalent — skipped", "yield agent/b"]);
+  });
+
+  it("a trailing skip is warned when the loop pulls the end, and finished is then true", async () => {
+    const r = await resolutionOf([spec("agent", "a"), spec("hook", "h")]);
+    const log: string[] = [];
+    const walk = written(r, "kiro", (m) => log.push(`warn ${m}`));
+    for (const ing of walk) {
+      log.push(`yield ${ing.ref}`);
+      expect(log).toEqual(["yield agent/a"]);
+      expect(walk.finished).toBe(false);
+    }
+    expect(log).toEqual(["yield agent/a", "warn kiro: hook hook/h has no Kiro equivalent — skipped"]);
+    expect(walk.finished).toBe(true);
+  });
+
+  it("per type: nothing at call time; on the first pull one line per type, first-appearance order, then the rule", async () => {
+    const r = await resolutionOf([spec("agent", "x"), spec("script", "s"), spec("agent", "y"), spec("rule", "r")]);
+    const log: string[] = [];
+    const walk = written(r, "agents-md", (m) => log.push(`warn ${m}`));
+    expect(log).toEqual([]);
+    for (const ing of walk) log.push(`yield ${ing.ref}`);
+    expect(log).toEqual([
+      "warn agents-md: 2 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/x, agent/y",
+      "warn agents-md: 1 script ingredient(s) have no AGENTS.md equivalent — skipped: script/s",
+      "yield rule/r",
+    ]);
+  });
+
+  it("per type with nothing to yield: the first pull warns and finishes", async () => {
+    const r = await resolutionOf([spec("agent", "x")]);
+    const log: string[] = [];
+    const walk = written(r, "agents-md", (m) => log.push(`warn ${m}`));
+    const it = walk[Symbol.iterator]();
+    expect(it.next().done).toBe(true);
+    expect(log).toEqual(["warn agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/x"]);
+    expect(walk.finished).toBe(true);
+  });
+
+  it("the decision comes from the matrix it is handed", async () => {
+    const table = {
+      ...CAPABILITIES,
+      "claude-code": { ...CAPABILITIES["claude-code"], rule: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" } },
+    } as unknown as Record<TTarget, Record<IType, WalkCapability>>;
+    const r = await resolutionOf([spec("rule", "r")]);
+    expect(record(r, "claude-code", table)).toEqual(["warn claude-code: rule rule/r has no Claude Code equivalent — skipped"]);
+    expect(record(r, "claude-code")).toEqual(["yield rule/r"]);
+  });
+
+  it("finished: false before and after a break, true after a full or an empty walk; a second walk throws", async () => {
+    const r = await resolutionOf([spec("agent", "a"), spec("agent", "b"), spec("rule", "k", { targets: ["kiro"] })]);
+    const broken = written(r, "kiro", () => {});
+    expect(broken.finished).toBe(false);
+    for (const _ of broken) break;
+    expect(broken.finished).toBe(false);
+    const full = written(r, "kiro", () => {});
+    expect([...full].map((i) => i.ref)).toEqual(["agent/a", "agent/b", "rule/k"]);
+    expect(full.finished).toBe(true);
+    expect(() => [...full]).toThrow("internal: the kiro walk was started twice");
+    const empty = written(await resolutionOf([spec("rule", "k", { targets: ["kiro"] })]), "claude-code", () => {});
+    expect([...empty]).toEqual([]);
+    expect(empty.finished).toBe(true);
   });
 });
