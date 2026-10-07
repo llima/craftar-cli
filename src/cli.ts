@@ -39,7 +39,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "read";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.10.1");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.11.0");
 
 /* ---------------------------------------------------------------- import */
 program
