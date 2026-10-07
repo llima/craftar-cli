@@ -30,7 +30,7 @@ import {
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
 import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
-import { parseWorkspaceYaml } from "./core/workspace-yaml.js";
+import { localKeys } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -213,12 +213,8 @@ function recipeCommand(op: RecipeOp) {
     const ws = await loadWorkspace(o.workspace, load(o, "read"));
     warnStderr(ws.warnings);
     // R1: arrays replace across layers, so an edit of craftar.yaml would not take effect (spec 22 Ruling 1).
-    const localFile = path.join(ws.root, LOCAL_FILE);
-    if (await exists(localFile)) {
-      const local = parseWorkspaceYaml(LOCAL_FILE, await fs.readFile(localFile, "utf8"));
-      if (local !== null && typeof local === "object" && "recipes" in local)
-        fail(`${LOCAL_FILE} sets recipes, which replaces ${WORKSPACE_FILE}'s lists — edit it by hand, or remove its recipes key and re-run`);
-    }
+    if ((await localKeys(ws.root)).includes("recipes"))
+      fail(`${LOCAL_FILE} sets recipes, which replaces ${WORKSPACE_FILE}'s lists — edit it by hand, or remove its recipes key and re-run`);
     const edit = planRecipeEdit(ws.forge, ws.config, op, names, { replace: o.replace === true });
     if (!edit.changed) {
       console.log(`nothing to change${edit.reasons.length ? `: ${edit.reasons.join(", ")}` : ""}`);

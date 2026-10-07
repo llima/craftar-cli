@@ -5,6 +5,7 @@ import YAML from "yaml";
 import { loadWorkspace, loadWorkspaceConfig } from "../src/core/sync.js";
 import { profile, recipe, rule, scenario, tmpDir } from "./helpers/forge.js";
 import { remoteForge } from "./helpers/remote.js";
+import { localKeys } from "../src/core/workspace-yaml.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -54,5 +55,28 @@ describe("loadWorkspaceConfig — the in-memory half of loadWorkspace (spec 23 �
     await expect(loadWorkspaceConfig(s.wsRoot, { forge: "../forge", profile: "acme" }, { forge: "https://u:SECRET@h.invalid/r" })).rejects.toThrow(
       "craftar.local.yaml › forge holds credentials in the URL",
     );
+  });
+});
+
+describe("localKeys — which of forge, ref, profile, recipes, targets craftar.local.yaml sets (spec 23 §5.2)", () => {
+  it("no file → none; each key present → named, in a fixed order; other keys ignored", async () => {
+    const dir = await tmpDir("craftar-localkeys-");
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    expect(await localKeys(dir)).toEqual([]);
+    await fs.writeFile(path.join(dir, "craftar.local.yaml"), "targets: [kiro]\noverrides: { params: {} }\nrecipes: { add: [x] }\nforge: ../f\n");
+    expect(await localKeys(dir)).toEqual(["forge", "recipes", "targets"]);
+    await fs.writeFile(path.join(dir, "craftar.local.yaml"), "ref: v1\nprofile: acme\n");
+    expect(await localKeys(dir)).toEqual(["ref", "profile"]);
+    await fs.writeFile(path.join(dir, "craftar.local.yaml"), "");
+    expect(await localKeys(dir)).toEqual([]);
+  });
+
+  it("a YAML error names the file and place, not the line", async () => {
+    const dir = await tmpDir("craftar-localkeys-");
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    await fs.writeFile(path.join(dir, "craftar.local.yaml"), "forge: https://u:SECRET@h.invalid/r: x\n");
+    const e = await localKeys(dir).catch((x: Error) => x);
+    expect((e as Error).message.startsWith("invalid craftar.local.yaml: ")).toBe(true);
+    expect((e as Error).message).not.toContain("SECRET");
   });
 });
