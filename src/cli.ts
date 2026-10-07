@@ -4,13 +4,15 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
-import { loadWorkspace, plan, readLock, status, apply, resolveForge, type FileStatus, type SectionLayer } from "./core/sync.js";
-import { sectionKey } from "./core/resolve.js";
+import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, type FileStatus, type SectionLayer } from "./core/sync.js";
+import { resolve, sectionKey } from "./core/resolve.js";
+import { catalogueContext, listRecipes, listIngredients, checkType, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
+import { listTargets } from "./core/capabilities.js";
 import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
-import { gitDirty, gitIsRepo, gitUnheld } from "./core/forge.js";
+import { exists, gitDirty, gitIsRepo, gitUnheld } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
   hunkAt,
@@ -23,12 +25,12 @@ import {
   type WriteJournal,
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
-import { HUNK_CLASSES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type Take, type UnifyPlan } from "./schema/index.js";
+import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.8.6");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.9.0");
 
 /* ---------------------------------------------------------------- import */
 program
@@ -185,6 +187,396 @@ program
       }
     }
     console.log(`\n${p.files.length} files across targets ${p.resolution.targets.join(", ")}`);
+  });
+
+/* ---------------------------------------------------------------- recipes */
+program
+  .command("recipes")
+  .description("List every recipe of the Forge — slot, parents, the profiles that use it — marked against this workspace or a profile. Read-only")
+  .option("--forge <dir>", "Forge directory (instead of --workspace)")
+  .option("--profile <name>", "with --forge: mark what this profile resolves")
+  .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
+  .option("--json", "machine-readable output", false)
+  .action(async (o) => {
+    if (o.profile && !o.forge) fail("--profile goes with --forge — inside a workspace the profile comes from craftar.yaml");
+
+    const { forge: forg, workspace } = await resolveForgeSource({ forge: o.forge, workspace: o.workspace });
+    const source: ContextSource | null = workspace
+      ? { kind: "workspace", config: workspace.config }
+      : o.profile
+        ? { kind: "profile", profile: o.profile }
+        : null;
+
+    let context: CatalogueContext | null = null;
+    if (source) {
+      try {
+        context = catalogueContext(forg, source);
+      } catch (e) {
+        fail(e instanceof Error ? e.message : String(e));
+      }
+    }
+
+    const r = listRecipes(forg, context);
+
+    if (o.json) {
+      return console.log(JSON.stringify(r, null, 2));
+    }
+
+    // Text mode
+    const ctxDesc = source
+      ? source.kind === "workspace"
+        ? `workspace profile ${source.config.profile}`
+        : `profile ${source.profile}`
+      : null;
+    console.log(pc.bold(`craftar recipes — forge ${forg.manifest.name} @ ${forg.commit?.slice(0, 8) ?? "no git"}${ctxDesc ? ` · ${ctxDesc}` : ""}`));
+
+    const resolves = context !== null && context.resolution !== null;
+
+    // Compute column widths for alignment
+    // Column 1: name[ [slot s]]
+    // Column 2: <N ingredient(s)>
+    // Column 3: ← parents (empty when none)
+    // Column 4: reason (empty when none)
+    const col1 = r.recipes.map((rec) => `${rec.name}${rec.slot ? ` [slot ${rec.slot}]` : ""}`);
+    const col2 = r.recipes.map((rec) => `${rec.ingredients.length} ingredient${rec.ingredients.length === 1 ? "" : "s"}`);
+    const col3 = r.recipes.map((rec) => rec.extends.length ? `← ${rec.extends.join(", ")}` : "");
+    const col4 = r.recipes.map((rec) => {
+      let reason = "";
+      if (rec.inUse) {
+        const byParts: string[] = [];
+        for (const b of rec.inUse.by) {
+          if (b === "extends") byParts.push(`extends ${rec.inUse.extendedBy.join(", ")}`);
+          else byParts.push(b);
+        }
+        reason = `in use (${byParts.join(", ")})`;
+      }
+      const removed = rec.removedByWorkspace ? (reason ? " · " : "") + "removed by this workspace" : "";
+      return reason + removed;
+    });
+    const w1 = Math.max(...col1.map((s) => s.length));
+    const w2 = Math.max(...col2.map((s) => s.length));
+    const w3 = Math.max(...col3.map((s) => s.length));
+    const w4 = Math.max(...col4.map((s) => s.length));
+
+    for (let i = 0; i < r.recipes.length; i++) {
+      const rec = r.recipes[i];
+      const desc = rec.description ? `— ${rec.description}` : "";
+      let line: string;
+      if (resolves) {
+        const mark = rec.inUse ? pc.green("●") : pc.dim("○");
+        line = [
+          `  ${mark} `,
+          col1[i].padEnd(w1),
+          "  ",
+          col2[i].padEnd(w2),
+          col3[i] ? "  " + col3[i].padEnd(w3) : (w3 > 0 ? "  " + "".padEnd(w3) : ""),
+          col4[i] ? "  " + col4[i].padEnd(w4) : (w4 > 0 ? "  " + "".padEnd(w4) : ""),
+          desc ? "  " + desc : "",
+        ].join("").trimEnd();
+      } else {
+        // No context: no mark column, rows start with two spaces then the name
+        line = [
+          "  ",
+          col1[i].padEnd(w1),
+          "  ",
+          col2[i].padEnd(w2),
+          col3[i] ? "  " + col3[i].padEnd(w3) : (w3 > 0 ? "  " + "".padEnd(w3) : ""),
+          desc ? "  " + desc : "",
+        ].join("").trimEnd();
+      }
+      console.log(line);
+    }
+
+    // Count line
+    const inUseCount = r.recipes.filter((x) => x.inUse).length;
+    const profilesPart = r.recipes.length > 0
+      ? ` · used by profiles: ${r.recipes.map((x) => `${x.name} (${x.profiles.length ? x.profiles.join(", ") : "—"})`).join(", ")}`
+      : "";
+    const countLine = resolves
+      ? `${r.recipes.length} recipe${r.recipes.length === 1 ? "" : "s"}, ${inUseCount} in use${profilesPart}`
+      : `${r.recipes.length} recipe${r.recipes.length === 1 ? "" : "s"}${profilesPart}`;
+    console.log(`\n  ${countLine}`);
+    for (const w of r.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+  });
+
+/* ---------------------------------------------------------------- ingredients */
+program
+  .command("ingredients")
+  .description("List every ingredient of the Forge — its recipes and targets, references to missing ones — or what one recipe brings with its parents. Read-only")
+  .option("--recipe <name>", "only what this recipe brings, with the parents it extends, parents first")
+  .option("--type <type>", "only this ingredient type")
+  .option("--forge <dir>", "Forge directory (instead of --workspace)")
+  .option("--profile <name>", "with --forge: mark what this profile resolves")
+  .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
+  .option("--json", "machine-readable output", false)
+  .action(async (o) => {
+    if (o.profile && !o.forge) fail("--profile goes with --forge — inside a workspace the profile comes from craftar.yaml");
+    if (o.type) {
+      try {
+        checkType(o.type);
+      } catch (e) {
+        fail(e instanceof Error ? e.message : String(e));
+      }
+    }
+
+    const { forge: forg, workspace } = await resolveForgeSource({ forge: o.forge, workspace: o.workspace });
+    const source: ContextSource | null = workspace
+      ? { kind: "workspace", config: workspace.config }
+      : o.profile
+        ? { kind: "profile", profile: o.profile }
+        : null;
+
+    let context: CatalogueContext | null = null;
+    if (source) {
+      try {
+        context = catalogueContext(forg, source);
+      } catch (e) {
+        fail(e instanceof Error ? e.message : String(e));
+      }
+    }
+
+    let result;
+    try {
+      result = listIngredients(forg, context, { recipe: o.recipe, type: o.type });
+    } catch (e) {
+      fail(e instanceof Error ? e.message : String(e));
+    }
+
+    if (o.json) {
+      return console.log(JSON.stringify(result, null, 2));
+    }
+
+    // Text mode
+    const ctxDesc = source
+      ? source.kind === "workspace"
+        ? `workspace profile ${source.config.profile}`
+        : `profile ${source.profile}`
+      : null;
+    const recipeOpt = o.recipe ? ` --recipe ${o.recipe}` : "";
+    const typeOpt = o.type ? ` --type ${o.type}` : "";
+    console.log(pc.bold(`craftar ingredients${recipeOpt}${typeOpt} — forge ${forg.manifest.name} @ ${forg.commit?.slice(0, 8) ?? "no git"}${ctxDesc ? ` · ${ctxDesc}` : ""}`));
+
+    const resolves = context !== null && context.resolution !== null;
+
+    if (result.recipe) {
+      // --recipe mode: grouped by chain entry
+      // Compute column widths for alignment across the whole listing
+      // Column 1: ref[ → outputName]
+      const col1Recipe: string[] = [];
+      for (const entry of result.recipe.chain) {
+        for (const ref of entry.ingredients) {
+          const ing = result.ingredients.find((i) => i.ref === ref);
+          if (ing) {
+            col1Recipe.push(ing.outputName !== ing.name ? `${ref} → ${ing.outputName}` : ref);
+          } else {
+            col1Recipe.push(ref);
+          }
+        }
+      }
+      const w1Recipe = Math.max(...col1Recipe.map((s) => s.length), 0);
+
+      for (const entry of result.recipe.chain) {
+        const rec = forg.recipes.get(entry.recipe);
+        const ext = rec?.extends.length ? `  ← ${rec.extends.join(", ")}` : "";
+        const slot = rec?.slot ? `  [slot ${rec.slot}]` : "";
+        console.log(`${entry.recipe}${ext}${slot}`);
+        for (const ref of entry.ingredients) {
+          const ing = result.ingredients.find((i) => i.ref === ref);
+          const miss = result.missing.find((m) => m.ref === ref);
+          if (ing) {
+            const col1 = ing.outputName !== ing.name ? `${ref} → ${ing.outputName}` : ref;
+            const disabled = ing.disabled ? "(disabled by this workspace)" : "";
+            let line: string;
+            if (resolves) {
+              const mark = ing.disabled ? pc.dim("◌") : ing.inUse ? pc.green("●") : pc.dim("○");
+              line = `  ${mark} ${col1.padEnd(w1Recipe)}${disabled ? "  " + disabled : ""}`.trimEnd();
+            } else {
+              line = `  ${col1.padEnd(w1Recipe)}`.trimEnd();
+            }
+            console.log(line);
+          } else if (miss) {
+            const line = `  ${pc.red("✗")} ${ref.padEnd(w1Recipe)}  not in this Forge`.trimEnd();
+            console.log(line);
+          }
+        }
+      }
+      // Count line for --recipe
+      const countLine = `${result.recipe.chain.length} recipe${result.recipe.chain.length === 1 ? "" : "s"}, ${result.ingredients.length} ingredient${result.ingredients.length === 1 ? "" : "s"}${result.missing.length ? ` · ${result.missing.length} missing reference${result.missing.length === 1 ? "" : "s"}` : ""}`;
+      console.log(`\n  ${countLine}`);
+    } else {
+      // No --recipe: grouped by type
+      // Spec 16 §4.3: rows print the bare `name`, not the `ref`, under their type heading
+      // Compute column widths across the whole listing (all types + missing)
+      // Column 1: name[ → outputName] (or ref for missing)
+      // Column 2: targets <...>
+      // Column 3: in <...>
+      const allCol1: string[] = [];
+      const allCol2: string[] = [];
+      const allCol3: string[] = [];
+      for (const ing of result.ingredients) {
+        const col1 = ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name;
+        allCol1.push(col1);
+        allCol2.push(`targets ${ing.targets === "*" ? "*" : (ing.targets as string[]).join(", ")}`);
+        allCol3.push(`in ${ing.recipes.length ? ing.recipes.join(", ") : "no recipe"}`);
+      }
+      for (const m of result.missing) {
+        allCol1.push(m.ref);
+      }
+      const w1 = Math.max(...allCol1.map((s) => s.length), 0);
+      const w2 = Math.max(...allCol2.map((s) => s.length), 0);
+      const w3 = Math.max(...allCol3.map((s) => s.length), 0);
+
+      const byType = new Map<string, typeof result.ingredients>();
+      for (const ing of result.ingredients) {
+        if (!byType.has(ing.type)) byType.set(ing.type, []);
+        byType.get(ing.type)!.push(ing);
+      }
+      for (const type of INGREDIENT_TYPES) {
+        const ings = byType.get(type);
+        if (!ings?.length) continue;
+        console.log(type);
+        for (const ing of ings) {
+          const col1 = ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name;
+          const col2 = `targets ${ing.targets === "*" ? "*" : (ing.targets as string[]).join(", ")}`;
+          const col3 = `in ${ing.recipes.length ? ing.recipes.join(", ") : "no recipe"}`;
+          const desc = ing.description ? `— ${ing.description}` : "";
+          const disabled = ing.disabled ? "(disabled by this workspace)" : "";
+          let line: string;
+          if (resolves) {
+            const mark = ing.disabled ? pc.dim("◌") : ing.inUse ? pc.green("●") : pc.dim("○");
+            line = [
+              `  ${mark} `,
+              col1.padEnd(w1),
+              "  ",
+              col2.padEnd(w2),
+              "  ",
+              col3.padEnd(w3),
+              desc ? "  " + desc : "",
+              disabled ? "  " + disabled : "",
+            ].join("").trimEnd();
+          } else {
+            // No context: no mark column, rows start with two spaces then the name
+            line = [
+              "  ",
+              col1.padEnd(w1),
+              "  ",
+              col2.padEnd(w2),
+              "  ",
+              col3.padEnd(w3),
+              desc ? "  " + desc : "",
+            ].join("").trimEnd();
+          }
+          console.log(line);
+        }
+      }
+      if (result.missing.length) {
+        console.log("missing");
+        for (const m of result.missing) {
+          const line = `  ${m.ref.padEnd(w1)}  cited by ${m.recipes.join(", ")}, not in this Forge`.trimEnd();
+          console.log(line);
+        }
+      }
+      // Count line
+      const inUseCount = result.ingredients.filter((x) => x.inUse).length;
+      const disabledCount = result.ingredients.filter((x) => x.disabled).length;
+      const noRecipeCount = result.ingredients.filter((x) => x.recipes.length === 0).length;
+      const countParts = [`${result.ingredients.length} ingredient${result.ingredients.length === 1 ? "" : "s"}`];
+      if (resolves) {
+        countParts.push(`${inUseCount} in use`);
+        countParts.push(`${disabledCount} disabled`);
+      }
+      countParts.push(`${noRecipeCount} in no recipe`);
+      const missingPart = result.missing.length ? ` · ${result.missing.length} missing reference${result.missing.length === 1 ? "" : "s"}` : "";
+      console.log(`\n  ${countParts.join(", ")}${missingPart}`);
+    }
+    for (const w of result.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+  });
+
+/* ---------------------------------------------------------------- targets */
+program
+  .command("targets")
+  .description("Print the capability matrix: what each target does with each ingredient type (native, converted, unsupported), marking the targets this workspace uses. Read-only")
+  .option("--workspace <dir>", "workspace whose targets to mark (default: . when it holds a craftar.yaml)")
+  .option("--json", "machine-readable output", false)
+  .action(async (o) => {
+    let inUse: Target[] | null = null;
+    const warnings: string[] = [];
+
+    const root = o.workspace ?? ".";
+    if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
+      // craftar.yaml does not exist
+      if (o.workspace !== undefined) {
+        // Explicit --workspace: exit 1 with loadWorkspace's message
+        try {
+          await loadWorkspace(root);
+        } catch (e) {
+          fail(e instanceof Error ? e.message : String(e));
+        }
+      }
+      // No --workspace: just show unmarked, no warning
+    } else {
+      // craftar.yaml exists, try to load
+      try {
+        const ws = await loadWorkspace(root);
+        inUse = resolve(ws.forge, ws.config).targets;
+      } catch (e) {
+        // Load or resolve failed — warning, not error
+        warnings.push(`targets in use not shown: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    const result = listTargets(inUse);
+
+    if (o.json) {
+      return console.log(JSON.stringify({ ...result, warnings }, null, 2));
+    }
+
+    // Text mode
+    const targetLine = result.targets
+      .map((t) => (t.inUse === true ? `${t.name} (in use)` : t.name))
+      .join(" · ");
+    console.log(pc.bold(`craftar targets — ${targetLine}`));
+    console.log();
+
+    // Matrix table
+    const colWidth = 14;
+    const typeColWidth = 10;
+    const header = "  " + " ".repeat(typeColWidth) + result.targets.map((t) => t.name.padEnd(colWidth)).join("");
+    console.log(header.trimEnd());
+    for (const type of result.ingredientTypes) {
+      const row = "  " + type.padEnd(typeColWidth) + result.targets.map((t) => {
+        const cap = t.capabilities[type as IngredientType];
+        return cap.state.padEnd(colWidth);
+      }).join("");
+      console.log(row.trimEnd());
+    }
+    console.log();
+
+    // Legend
+    console.log("  native       written in the tool's own place for that type, as the Forge holds it");
+    console.log("  converted    written in another form — see its line below");
+    console.log("  unsupported  not written; sync warns and names an ingredient aimed at this target");
+    console.log();
+
+    // Paths block — type-major (types outer, targets inner); align labels to widest
+    console.log("paths");
+    const pathLines: Array<{ label: string; content: string }> = [];
+    for (const type of INGREDIENT_TYPES) {
+      for (const t of result.targets) {
+        const cap = t.capabilities[type as IngredientType];
+        if (cap.output.length > 0) {
+          const pathStr = cap.output.join(", ");
+          const note = cap.note ? ` — ${cap.note}` : "";
+          pathLines.push({ label: `${t.name} · ${type}`, content: `${pathStr}${note}` });
+        }
+      }
+    }
+    const maxLabelLen = Math.max(...pathLines.map((l) => l.label.length));
+    for (const line of pathLines) {
+      console.log(`  ${line.label.padEnd(maxLabelLen)}  ${line.content}`);
+    }
+
+    for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   });
 
 /* ---------------------------------------------------------------- forge */

@@ -46,21 +46,31 @@ export async function loadWorkspace(root: string): Promise<Workspace> {
 }
 
 /**
- * The Forge a `forge` command operates on (spec 04 §4.3). `--forge` names it directly;
- * otherwise the workspace's craftar.yaml does. Both at once is ambiguous, so it fails.
+ * The Forge and (optionally) the workspace a command operates on.
+ * `--forge` names the Forge directly, `workspace` is undefined.
+ * Otherwise the workspace's craftar.yaml gives both.
  */
-export async function resolveForge(opts: { forge?: string; workspace?: string }): Promise<Forge> {
+export async function resolveForgeSource(opts: { forge?: string; workspace?: string }): Promise<{ forge: Forge; workspace?: Workspace }> {
   if (opts.forge !== undefined && opts.workspace !== undefined) {
     throw new Error("pass either --forge or --workspace, not both — two sources for one Forge");
   }
-  if (opts.forge !== undefined) return loadForge(path.resolve(opts.forge));
+  if (opts.forge !== undefined) return { forge: await loadForge(path.resolve(opts.forge)) };
   const root = path.resolve(opts.workspace ?? ".");
   if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
     throw new Error(
       `no ${WORKSPACE_FILE} in ${root} — run this inside a workspace, pass --workspace <dir>, or point at the Forge with --forge <dir>`,
     );
   }
-  return (await loadWorkspace(root)).forge;
+  const workspace = await loadWorkspace(root);
+  return { forge: workspace.forge, workspace };
+}
+
+/**
+ * The Forge a `forge` command operates on (spec 04 §4.3). `--forge` names it directly;
+ * otherwise the workspace's craftar.yaml does. Both at once is ambiguous, so it fails.
+ */
+export async function resolveForge(opts: { forge?: string; workspace?: string }): Promise<Forge> {
+  return (await resolveForgeSource(opts)).forge;
 }
 
 export type SectionLayer = "default" | "profile" | "workspace";
