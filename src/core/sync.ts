@@ -84,7 +84,7 @@ export async function loadWorkspace(root: string, opts: LoadOptions = {}): Promi
   const file = path.join(root, WORKSPACE_FILE);
   if (!(await exists(file)))
     throw new Error(
-      `${WORKSPACE_FILE} not found in ${root} — run \`craftar import --workspace "${root}" --from claude-code --forge <dir> --profile <name> --write-config\` to create it`,
+      `${WORKSPACE_FILE} not found in ${root} — run \`craftar init --workspace "${root}" --forge <dir> --profile <name>\` to start one, or \`craftar import --workspace "${root}" --from claude-code --forge <dir> --profile <name> --write-config\` to bring in an existing harness`,
     );
   const base = parseWorkspaceYaml(WORKSPACE_FILE, await fs.readFile(file, "utf8")) ?? {};
   const localFile = path.join(root, LOCAL_FILE);

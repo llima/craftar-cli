@@ -2583,7 +2583,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     const r = runCli(["targets", "--workspace", dir]);
     expect(r.code).toBe(1);
     expect(r.stderr).toBe(
-      `error: craftar.yaml not found in ${dir} — run \`craftar import --workspace "${dir}" --from claude-code --forge <dir> --profile <name> --write-config\` to create it\n`,
+      `error: craftar.yaml not found in ${dir} — run \`craftar init --workspace "${dir}" --forge <dir> --profile <name>\` to start one, or \`craftar import --workspace "${dir}" --from claude-code --forge <dir> --profile <name> --write-config\` to bring in an existing harness\n`,
     );
     const s = await cat();
     const f = runCli(["targets", "--forge", s.forgeRoot]);
@@ -4111,5 +4111,17 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
         "next sync: 1 new, 1 orphan — run `craftar sync`\n",
     );
     expect(r.stderr).toBe('warn ref "v1" is ignored: the Forge is a path (../forge), read as its working tree\n');
+  });
+});
+
+describe("cli — a missing craftar.yaml points at craftar init first (spec 23 §13 item 6)", () => {
+  it("every command that loads a workspace through loadWorkspace names craftar init, then import", async () => {
+    const dir = await tmpDir("craftar-no-yaml-");
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    const expected = `error: craftar.yaml not found in ${dir} — run \`craftar init --workspace "${dir}" --forge <dir> --profile <name>\` to start one, or \`craftar import --workspace "${dir}" --from claude-code --forge <dir> --profile <name> --write-config\` to bring in an existing harness\n`;
+    for (const args of [["status"], ["sync"], ["diff"], ["explain", "x.md"], ["ls"], ["add", "recipe", "base"], ["remove", "recipe", "base"], ["targets"]]) {
+      const r = runCli([...args, "--workspace", dir]);
+      expect([r.code, r.stderr], args.join(" ")).toEqual([1, expected]);
+    }
   });
 });
