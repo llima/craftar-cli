@@ -15,7 +15,8 @@ const SCP_URL = /^[^\s/\\:@]+@[^\s/\\:]+:/;
 
 /** A `forge:` value is a git URL (a remote Forge) or a path resolved from the workspace root. */
 export function classifyForge(value: string): "url" | "path" {
-  return SCHEME_URL.test(value) || SCP_URL.test(value) ? "url" : "path";
+  const v = value.trim();
+  return SCHEME_URL.test(v) || SCP_URL.test(v) ? "url" : "path";
 }
 
 /**
@@ -23,15 +24,17 @@ export function classifyForge(value: string): "url" | "path" {
  * in any other scheme, or a `<x>:<y>@` before the first `/` or `\` whatever the value reads as — so a
  * password never reaches a message that prints the value (spec 13 §6.1, §14 item 11).
  */
-export function credentialFault(value: string): boolean {
+export function credentialFault(raw: string): boolean {
+  const value = raw.trim();
   const head = value.split(/[/\\]/, 1)[0];
   if (/^[^@]*:[^@]*@/.test(head) && !SCHEME_URL.test(value)) return true;
   const scheme = SCHEME_URL.exec(value);
   if (!scheme) return false;
   // Read the authority as written, never through a parser: a spelling WHATWG URL rejects
-  // (`host:badport`) must not slip through and be printed later. Fail closed.
+  // (`host:badport`) must not slip through and be printed later. It runs to the first `/`, as git
+  // reads an ssh URL — a `?` or `#` in a password stays inside it. Fail closed.
   const rest = value.slice(scheme[0].length);
-  const authority = rest.slice(0, rest.search(/[/?#]|$/));
+  const authority = rest.slice(0, rest.search(/\/|$/));
   const at = authority.lastIndexOf("@");
   if (at === -1) return false;
   const userinfo = authority.slice(0, at);
@@ -313,9 +316,11 @@ async function cachedFallback(
 /** One worktree per resolved commit; never written to after creation. A failure leaves no half-made tree. */
 async function treeFor(git: GitRunner, entry: string, repo: string, commit: string, opts: CacheOptions): Promise<string> {
   const dir = path.join(entry, "trees", commit);
-  // Complete once git wrote the worktree's `.git` file: a run killed mid-`worktree add` leaves a
-  // directory without it, which is removed and made again rather than loaded half.
-  const complete = () => exists(path.join(dir, ".git"));
+  // Complete once Craftar wrote `<commit>.ok` under the lock, after `worktree add` returned. Git's own
+  // `.git` file comes before the checkout, so a run cut short — or one still checking out in another
+  // process — leaves a tree without the marker: it is removed and made again, never loaded half.
+  const marker = `${dir}.ok`;
+  const complete = async () => (await exists(marker)) && (await exists(path.join(dir, ".git")));
   if (!(await complete())) {
     await withLock(entry, opts, async () => {
       if (await complete()) return;
@@ -327,6 +332,7 @@ async function treeFor(git: GitRunner, entry: string, repo: string, commit: stri
       await fs.mkdir(path.dirname(dir), { recursive: true });
       try {
         await git(["-C", repo, "worktree", "add", "--quiet", "--detach", dir, commit]);
+        await fs.writeFile(marker, `${new Date().toISOString()}\n`);
       } catch (e) {
         await git(["-C", repo, "worktree", "remove", "--force", dir]).catch(() => {});
         await fs.rm(dir, { recursive: true, force: true });
@@ -346,20 +352,26 @@ async function treeFor(git: GitRunner, entry: string, repo: string, commit: stri
 async function cleanup(git: GitRunner, entry: string, repo: string, inUse: string, opts: CacheOptions): Promise<void> {
   const trees = path.join(entry, "trees");
   const limit = Date.now() - (opts.cleanupMs ?? 14 * 24 * 60 * 60 * 1000);
+  // When a tree was last used: its `.used` stamp, else its completion marker, else the directory — so a
+  // tree whose run died before stamping it still ages out.
+  const lastUse = async (commit: string) => {
+    for (const p of [`${commit}.used`, `${commit}.ok`, commit]) {
+      const st = await fs.stat(path.join(trees, p)).catch(() => null);
+      if (st) return st.mtimeMs;
+    }
+    return null;
+  };
   let removed = false;
   for (const name of await fs.readdir(trees).catch(() => [] as string[])) {
-    if (!name.endsWith(".used")) continue;
-    const commit = name.slice(0, -".used".length);
-    if (commit === inUse) continue;
-    const stat = await fs.stat(path.join(trees, name)).catch(() => null);
-    if (!stat || stat.mtimeMs >= limit) continue;
+    if (name.includes(".") || name === inUse) continue;
+    const used = await lastUse(name);
+    if (used === null || used >= limit) continue;
     await withLock(entry, opts, async () => {
       // Again under the lock: a reader may have touched the stamp since (readers take no lock).
-      const again = await fs.stat(path.join(trees, name)).catch(() => null);
-      if (!again || again.mtimeMs >= limit) return;
-      await git(["-C", repo, "worktree", "remove", "--force", path.join(trees, commit)]).catch(() => {});
-      await fs.rm(path.join(trees, commit), { recursive: true, force: true });
-      await fs.rm(path.join(trees, name), { force: true });
+      const again = await lastUse(name);
+      if (again === null || again >= limit) return;
+      await git(["-C", repo, "worktree", "remove", "--force", path.join(trees, name)]).catch(() => {});
+      for (const p of [name, `${name}.used`, `${name}.ok`]) await fs.rm(path.join(trees, p), { recursive: true, force: true });
       removed = true;
     });
   }

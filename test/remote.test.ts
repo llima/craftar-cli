@@ -27,11 +27,33 @@ describe("credentials (spec 13 §4.3, §6.1)", () => {
       "ssh://u:SECRETPW@127.0.0.1:99999999/x",
       "git://u:s3cret@example.invalid:x/r",
       "HTTPS://tok@example.com/p",
+      // A `?` or `#` inside the userinfo: the authority runs to the first `/`, as git reads an ssh URL.
+      "ssh://u:p?ss@h/r",
+      "ssh://u:p#ss@h/r",
+      "git://u:p?w@h/r",
+      "https://u:p?ss@h/r",
+      "https://tok#x@h/r",
+      " https://tok@example.com/p",
     ])
       expect(credentialFault(v), v).toBe(true);
   });
   it("accepted", () => {
-    for (const v of ["ssh://git@example.com/p", "git@example.com:p", "https://example.com/acme/forge.git", "file:///tmp/forge.git", "../forge"])
+    for (const v of [
+      "ssh://git@example.com/p",
+      "git@example.com:p",
+      "https://example.com/acme/forge.git",
+      "file:///tmp/forge.git",
+      "../forge",
+      "ssh://git@[::1]:22/p",
+      "https://[::1]:8443/p",
+      "https://host:8443/p",
+      "git@github.com:org/repo.git",
+      "file:///C:/x/f",
+      "C:\\Users\\x\\forge",
+      "./a@b/forge",
+      "https://example.com/p@x",
+      "file:///tmp/a@b/c",
+    ])
       expect(credentialFault(v), v).toBe(false);
   });
 });
@@ -167,7 +189,8 @@ describe("the Forge cache (spec 13 §6.3)", () => {
     await r.commit({ "README.md": "y\n" });
     const b = await ensureTree(r.url, null, { home, cleanupMs: 1000 });
     expect(b.commit).not.toBe(a.commit);
-    const trees = (await fs.readdir(path.dirname(b.dir))).filter((t) => !t.endsWith(".used"));
+    // Tree directories only: `.used` stamps and `.ok` markers sit beside them.
+    const trees = (await fs.readdir(path.dirname(b.dir))).filter((t) => !t.includes("."));
     expect(trees).toEqual([b.commit]);
   });
 
@@ -207,5 +230,28 @@ describe("the Forge cache, hardened (review of spec 13)", () => {
     const { r, home } = await setup();
     await ensureTree(r.url, null, { home });
     await expect(ensureTree(r.url, "f".repeat(40), { home, offline: true })).rejects.toThrow(`ref "${"f".repeat(40)}" not found in ${r.url}`);
+  });
+});
+
+describe("the Forge cache, a tree is complete only when Craftar says so (review of spec 13, round 2)", () => {
+  it("a tree with git's .git but no completion marker (a checkout cut short) is made again", async () => {
+    const { r, home } = await setup();
+    const first = await ensureTree(r.url, null, { home });
+    await fs.rm(`${first.dir}.ok`, { force: true });
+    await fs.rm(path.join(first.dir, "craftar.forge.yaml"));
+    expect(await fs.readdir(first.dir)).toContain(".git");
+    const again = await ensureTree(r.url, null, { home });
+    expect(await fs.readFile(path.join(again.dir, "craftar.forge.yaml"), "utf8")).toBe(await fs.readFile(path.join(r.src, "craftar.forge.yaml"), "utf8"));
+  });
+
+  it("cleanup also removes a tree that never got its .used stamp", async () => {
+    const { r, home } = await setup();
+    const a = await ensureTree(r.url, null, { home });
+    await fs.rm(`${a.dir}.used`, { force: true });
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    await fs.utimes(`${a.dir}.ok`, old, old);
+    await r.commit({ "README.md": "z\n" });
+    const b = await ensureTree(r.url, null, { home, cleanupMs: 1000 });
+    expect((await fs.readdir(path.dirname(b.dir))).filter((t) => !t.includes("."))).toEqual([b.commit]);
   });
 });
