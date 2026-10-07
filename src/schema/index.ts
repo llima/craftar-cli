@@ -286,6 +286,52 @@ export type LockV2 = z.infer<typeof LockSchemaV2>;
 export type LockEntry = z.infer<typeof LockEntrySchema>;
 
 /* ------------------------------------------------------------------ */
+/* Workspace registry — $CRAFTAR_HOME/registry.json (spec 21 §5.2)      */
+/* ------------------------------------------------------------------ */
+
+// Every level keeps keys it does not declare (`.passthrough()`) and `targets` are plain strings, so
+// an older craftar neither refuses nor strips what a newer one wrote; a later release only appends
+// keys, and a change an older craftar would misread moves `schema` to 2.
+export const RegistryEntrySchema = z
+  .object({
+    /** The workspace's real path; native and absolute — the registry is per machine. */
+    path: z.string(),
+    profile: z.string(),
+    forge: z
+      .object({
+        kind: z.enum(["path", "remote"]),
+        /** craftar.yaml › forge as written (after the local merge), as the lock records it. */
+        source: z.string(),
+        /** Where the Forge lives: a path Forge's real path, a remote one's cache key; null when unresolvable. */
+        key: z.string().nullable(),
+        /** ForgeOrigin.ref: null for a path Forge. */
+        ref: z.string().nullable(),
+        /** The commit this sync planned from. */
+        commit: z.string().nullable(),
+        fromLocalFile: z.boolean(),
+      })
+      .passthrough(),
+    /** Resolution.recipes, in application order. */
+    recipes: z.array(z.string()),
+    /** slot → recipe, for the resolved recipes that declare one. */
+    stack: z.record(z.string()),
+    targets: z.array(z.string()),
+    /** ISO time of the last writing sync here. */
+    lastSync: z.string(),
+  })
+  .passthrough();
+export const RegistrySchema = z
+  .object({
+    schema: z.literal(1),
+    workspaces: z.array(RegistryEntrySchema),
+  })
+  .passthrough();
+/** Registry schemas this craftar reads; anything else is refused by name. */
+export const REGISTRY_SCHEMAS: readonly unknown[] = [1];
+export type Registry = z.infer<typeof RegistrySchema>;
+export type RegistryEntry = z.infer<typeof RegistryEntrySchema>;
+
+/* ------------------------------------------------------------------ */
 /* Unify plan — external input, so it is parsed, never trusted         */
 /* ------------------------------------------------------------------ */
 
