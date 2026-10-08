@@ -16,6 +16,8 @@ import { findProfileFile } from "./param-writes.js";
 import { deriveSections, prefillSections, proveSections, type MarkerInsertion, type SectionRun } from "./section-extract.js";
 import { stripBom, toLf } from "./text.js";
 import { editYamlText } from "./yaml-edit.js";
+import { concerned, workspaceAgainst, type ForgeWorkspace, type Planned, type RegistryState } from "./impact.js";
+import { plan } from "./sync.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
 // fidelity, correctness should not hinge on a glyph no diff viewer, editor or re-encoding shows.
@@ -1145,18 +1147,9 @@ export interface PruneResult {
 
 /** Context for pruneRecipes: the registry state and after-pass results. */
 export interface PruneContext {
-  state: "read" | "partial" | "none" | "off" | "unreadable";
-  entries: Array<{
-    entry: { path: string; profile: string; forge: { key: string | null } };
-    match: string;
-    via: string | null;
-    ref: string | null;
-  }>;
-  after: Array<
-    | { kind: "planned"; files: Map<string, Buffer> }
-    | { kind: "missing" }
-    | { kind: "error"; stage: "config" | "plan"; message: string }
-  >;
+  state: RegistryState | "unreadable";
+  entries: ForgeWorkspace[];
+  after: Planned[];
 }
 
 /**
@@ -1200,9 +1193,12 @@ export async function pruneRecipes(
       continue;
     }
 
-    // Check 2: registry state not `read`
+    // Check 2: registry state not `read`, or a workspace whose plan threw (spec 25 §4.4 step 5)
     const hasMissingOrConfig = ctx.after.some(
       (a) => a.kind === "missing" || (a.kind === "error" && a.stage === "config"),
+    );
+    const planError = ctx.after.find(
+      (a, i) => a.kind === "error" && a.stage === "plan" && ctx.entries[i] !== undefined,
     );
     if (ctx.state !== "read" || hasMissingOrConfig) {
       let reason: string;
@@ -1230,53 +1226,41 @@ export async function pruneRecipes(
       kept.push({ recipe: candidate.recipe, reason });
       continue;
     }
-
-    // Check 3: a workspace's `recipes.add` or `recipes.remove` names it
-    let workspaceNames: { path: string; kind: "add" | "remove"; file: string } | null = null;
-    for (let i = 0; i < ctx.entries.length && !workspaceNames; i++) {
-      const entry = ctx.entries[i];
-      const after = ctx.after[i];
-      if (after.kind !== "planned") continue;
-
-      // Check the raw workspace config for recipes.add / recipes.remove
-      // We need to check the actual craftar.yaml and craftar.local.yaml files
-      const wsPath = entry.entry.path;
-      const localPath = path.join(wsPath, "craftar.local.yaml");
-      const basePath = path.join(wsPath, "craftar.yaml");
-
-      // Check local first
-      try {
-        const localContent = await fs.readFile(localPath, "utf8");
-        const localDoc = YAML.parse(localContent);
-        if (localDoc?.recipes?.add?.includes(candidate.recipe)) {
-          workspaceNames = { path: wsPath, kind: "add", file: "craftar.local.yaml" };
-        } else if (localDoc?.recipes?.remove?.includes(candidate.recipe)) {
-          workspaceNames = { path: wsPath, kind: "remove", file: "craftar.local.yaml" };
-        }
-      } catch {
-        // No local file or can't read
-      }
-
-      // Check base if not found in local
-      if (!workspaceNames) {
-        try {
-          const baseContent = await fs.readFile(basePath, "utf8");
-          const baseDoc = YAML.parse(baseContent);
-          if (baseDoc?.recipes?.add?.includes(candidate.recipe)) {
-            workspaceNames = { path: wsPath, kind: "add", file: "craftar.yaml" };
-          } else if (baseDoc?.recipes?.remove?.includes(candidate.recipe)) {
-            workspaceNames = { path: wsPath, kind: "remove", file: "craftar.yaml" };
-          }
-        } catch {
-          // No base file or can't read
-        }
-      }
-    }
-
-    if (workspaceNames) {
+    // A workspace whose plan throws against either Forge refuses the recipe (spec 25 §4.4 step 5)
+    if (planError && planError.kind === "error") {
+      const idx = ctx.after.indexOf(planError);
       kept.push({
         recipe: candidate.recipe,
-        reason: `${workspaceNames.path} names it in recipes.${workspaceNames.kind} (${workspaceNames.file})`,
+        reason: `${ctx.entries[idx].entry.path}: ${planError.message}`,
+      });
+      continue;
+    }
+
+    // Check 3: a workspace's `recipes.add` or `recipes.remove` names it
+    // Use concerned() from impact.ts to read merged.local / merged.base (spec 25 §5.1)
+    const addResult = concerned(ctx.after, ctx.entries, (doc) => {
+      if (doc && typeof doc === "object") {
+        const d = doc as { recipes?: { add?: unknown } };
+        return Array.isArray(d.recipes?.add) && d.recipes.add.includes(candidate.recipe);
+      }
+      return false;
+    });
+    const removeResult = concerned(ctx.after, ctx.entries, (doc) => {
+      if (doc && typeof doc === "object") {
+        const d = doc as { recipes?: { remove?: unknown } };
+        return Array.isArray(d.recipes?.remove) && d.recipes.remove.includes(candidate.recipe);
+      }
+      return false;
+    });
+
+    // First match wins: add before remove, entry order within each (spec 25 §4.4 step 3)
+    const firstConcerned = addResult.concerned[0] ?? removeResult.concerned[0];
+    const kind = addResult.concerned[0] ? "add" : "remove";
+
+    if (firstConcerned) {
+      kept.push({
+        recipe: candidate.recipe,
+        reason: `${firstConcerned.path} names it in recipes.${kind} (${firstConcerned.file})`,
       });
       continue;
     }
@@ -1302,13 +1286,13 @@ export async function pruneRecipes(
     const editedRecipes = new Map(current.recipes);
     editedRecipes.delete(candidate.recipe);
 
+    // Use candidate.profiles (already carries name and abs) instead of findProfileFile
     const editedProfiles = new Map(current.profiles);
     for (const pw of profileWrites) {
-      for (const [pName, prof] of current.profiles) {
-        const profAbs = await findProfileFile(forgeRoot, pName);
-        if (profAbs === pw.abs) {
+      for (const prof of candidate.profiles) {
+        if (prof.abs === pw.abs) {
           const newProf = ProfileSchema.parse(YAML.parse(stripBom(pw.content)));
-          editedProfiles.set(pName, newProf);
+          editedProfiles.set(prof.name, newProf);
         }
       }
     }
@@ -1318,10 +1302,6 @@ export async function pruneRecipes(
       recipes: editedRecipes,
       profiles: editedProfiles,
     };
-
-    // Import workspaceAgainst from impact and plan from sync to avoid circular import issues
-    const { workspaceAgainst } = await import("./impact.js");
-    const { plan } = await import("./sync.js");
 
     let proofFailed: { path: string; reason: string } | null = null;
     for (let i = 0; i < ctx.entries.length && !proofFailed; i++) {

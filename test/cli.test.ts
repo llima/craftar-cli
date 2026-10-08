@@ -5193,16 +5193,26 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     expect(fileUpdate.state).toBe("update");
   });
 
-  it("test 2: text mode of test 1 — stdout includes pruned recipe line", async () => {
+  it("test 2: text mode of test 1 — whole stdout", async () => {
     const { root, forge, home } = await pruneFixture();
     const ws = path.join(root, "ws");
     await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
     const env = { CRAFTAR_HOME: home };
     expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+    const realWs = await fs.realpath(ws);
 
     const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge], { env });
     expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout).toContain("  pruned recipe base--acme → base (profiles/acme/profile.yaml)");
+    expect(r.stdout).toBe(
+      `craftar forge unify rule/wf ↔ acme\n` +
+        `  resolved yes · unresolved 0\n` +
+        `  removed variant rule/wf--acme\n` +
+        `  recipes rewritten: base--acme\n` +
+        `  recipes now identical to a sibling: base--acme\n` +
+        `  pruned recipe base--acme → base (profiles/acme/profile.yaml)\n` +
+        `  warn pruned against the 1 workspace registered on this machine — a workspace synced elsewhere (CI, another machine, CRAFTAR_NO_REGISTRY) is not covered\n` +
+        `  impact: ${realWs} (acme) 1 file changes — .claude/rules/wf.md\n`,
+    );
   });
 
   it("test 3: refused — extends — a recipe extends the candidate", async () => {
@@ -5302,9 +5312,7 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     const out = JSON.parse(j.stdout);
 
     // The prune should be refused because after removing base--acme, the param order changes
-    expect(out.recipes.kept.length).toBe(1);
-    expect(out.recipes.kept[0].recipe).toBe("base--acme");
-    expect(out.recipes.kept[0].reason).toBe(`${realWs}: .claude/rules/wf.md would change`);
+    expect(out.recipes.kept).toEqual([{ recipe: "base--acme", reason: `${realWs}: .claude/rules/wf.md would change` }]);
   });
 
   it("test 6: refused — no registered workspace", async () => {
@@ -5321,14 +5329,14 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     expect(out.recipes.kept).toEqual([{ recipe: "base--acme", reason: "no workspace of this Forge is registered on this machine" }]);
   });
 
-  it("test 6b: refused — workspace plan throws", async () => {
+  it("test 6b: refused — a workspace whose configuration does not load", async () => {
     const { root, forge, home } = await pruneFixture();
     const ws = path.join(root, "ws");
     await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
     const env = { CRAFTAR_HOME: home };
     expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
 
-    // Make the workspace's plan throw by breaking the YAML syntax
+    // Make the workspace's configuration fail to load by breaking the YAML syntax
     await fs.writeFile(path.join(ws, "craftar.yaml"), "forge: ../forge\nprofile: {{invalid\n");
 
     const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
@@ -5336,9 +5344,27 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     const out = JSON.parse(j.stdout);
 
     // Should be kept with an error message about unchecked workspaces
-    expect(out.recipes.kept.length).toBe(1);
-    expect(out.recipes.kept[0].recipe).toBe("base--acme");
-    expect(out.recipes.kept[0].reason).toBe("the registry could not check 1 workspace");
+    expect(out.recipes.kept).toEqual([{ recipe: "base--acme", reason: "the registry could not check 1 workspace" }]);
+  });
+
+  it("test 6c: refused — a workspace whose plan throws after unify", async () => {
+    const { root, forge, home } = await pruneFixture();
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+    const realWs = await fs.realpath(ws);
+
+    // Make the workspace's plan throw by adding a nonexistent recipe
+    // This loads OK but plan() throws: "recipe \"nonexistent\" not found (referenced by craftar.yaml recipes.add)"
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\nrecipes:\n  add: [nonexistent]\n` });
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    // Should be kept with the workspace path and error message
+    expect(out.recipes.kept).toEqual([{ recipe: "base--acme", reason: `${realWs}: recipe "nonexistent" not found (referenced by craftar.yaml recipes.add)` }]);
   });
 
   it("test 7: profile list shapes — sibling after suffixed", async () => {
@@ -5357,6 +5383,11 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
       ],
       profiles: [profile("acme", ["base--acme", "x", "base"])],
     });
+    // Add a trailing comment to the recipe list item to prove comment survives
+    const profilePath = path.join(forge, "profiles/acme/profile.yaml");
+    const originalProfile = await fs.readFile(profilePath, "utf8");
+    const profileWithComment = originalProfile.replace("- base--acme\n", "- base--acme # keep\n");
+    await fs.writeFile(profilePath, profileWithComment);
     gitInit(forge);
     gitCommitAll(forge, "init");
 
@@ -5370,8 +5401,9 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     const out = JSON.parse(j.stdout);
 
     expect(out.recipes.pruned.length).toBe(1);
-    const profileText = await fs.readFile(path.join(forge, "profiles/acme/profile.yaml"), "utf8");
-    expect(profileText).toContain("recipes:\n  - base\n  - x\n");
+    const profileText = await fs.readFile(profilePath, "utf8");
+    // The whole profile text with the comment on the renamed item
+    expect(profileText).toBe("name: acme\nrecipes:\n  - base # keep\n  - x\ntargets:\n  - claude-code\n");
   });
 
   it("test 7b: profile list shapes — sibling before suffixed", async () => {
@@ -5390,6 +5422,11 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
       ],
       profiles: [profile("acme", ["base", "x", "base--acme"])],
     });
+    // Add a trailing comment to the suffixed item to prove comment survives (it will be removed)
+    const profilePath = path.join(forge, "profiles/acme/profile.yaml");
+    const originalProfile = await fs.readFile(profilePath, "utf8");
+    const profileWithComment = originalProfile.replace("- base--acme\n", "- base--acme # keep\n");
+    await fs.writeFile(profilePath, profileWithComment);
     gitInit(forge);
     gitCommitAll(forge, "init");
 
@@ -5403,8 +5440,9 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     const out = JSON.parse(j.stdout);
 
     expect(out.recipes.pruned.length).toBe(1);
-    const profileText = await fs.readFile(path.join(forge, "profiles/acme/profile.yaml"), "utf8");
-    expect(profileText).toContain("recipes:\n  - base\n  - x\n");
+    const profileText = await fs.readFile(profilePath, "utf8");
+    // The whole profile text — the suffixed item is removed (sibling comes first)
+    expect(profileText).toBe("name: acme\nrecipes:\n  - base\n  - x\ntargets:\n  - claude-code\n");
   });
 
   it("test 8: a candidate whose profile unify also edits for take: param — both edits land", async () => {
@@ -5447,11 +5485,9 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     expect(out.params[0].key).toBe("deploy.api");
     expect(out.recipes.pruned.length).toBe(1);
 
-    // Profile should have both the param AND the repointed recipe
+    // Profile should have both the param AND the repointed recipe (whole text)
     const profileText = await fs.readFile(path.join(forge, "profiles/acme/profile.yaml"), "utf8");
-    expect(profileText).toContain("deploy.api: acme-api");
-    expect(profileText).toContain("recipes:\n  - base\n");
-    expect(profileText).not.toContain("base--acme");
+    expect(profileText).toBe("name: acme\nrecipes:\n  - base\ntargets:\n  - claude-code\nparams:\n  deploy.api: acme-api\n");
   });
 
   it("test 9: --prune-recipes --no-impact is refused before anything is read", async () => {
@@ -5507,8 +5543,9 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
 
     const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
     expect(r.code).toBe(1);
-    // Should report the profile is not held by git
-    expect(r.stderr).toContain("unify can only change files git can restore");
+    // Should report the profile is not held by git (whole first line)
+    const firstLine = r.stderr.split("\n")[0];
+    expect(firstLine).toBe(`error: unify can only change files git can restore — 1 path(s) under ${forge} are not:`);
 
     // Forge unchanged
     const forgeAfter = await snapshot(forge);
@@ -5527,7 +5564,10 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     expect(j.code, j.stderr).toBe(0);
     const out = JSON.parse(j.stdout);
 
-    const warning = out.warnings.find((w: string) => w.includes("recipe base--acme is now identical to base"));
-    expect(warning).toContain("— or restore the Forge with git and rerun this unify with --prune-recipes");
+    // Assert the whole warnings array with exactly this warning
+    const siblingWarning = out.warnings.filter((w: string) => w.includes("identical to base"));
+    expect(siblingWarning).toEqual([
+      "recipe base--acme is now identical to base — it can be removed by hand after repointing the profiles, extends and workspace recipes lists that name it; unify does not, because a workspace or an extends chain may also name base and the recipe order or param precedence would change — or restore the Forge with git and rerun this unify with --prune-recipes",
+    ]);
   });
 });
