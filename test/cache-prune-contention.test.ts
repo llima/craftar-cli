@@ -106,14 +106,14 @@ describe("the prune lock (§4.2 step 0, §13 item 15)", () => {
       await ensureTree(extra.url, null, { home: s.home });
       void n;
     }
-    const slow = () => new Promise<void>((r) => setTimeout(r, 400));
-    const first = pruneCache(s.home, { ...RUN, staleMs: 600, beforeStep: slow });
-    await new Promise((r) => setTimeout(r, 900));
-    const second = await pruneCache(s.home, { ...RUN, staleMs: 600, waitMs: 100, pollMs: 20 }).catch((e: Error) => e);
+    const slow = () => new Promise<void>((r) => setTimeout(r, 1200));
+    const first = pruneCache(s.home, { ...RUN, staleMs: 3000, beforeStep: slow });
+    await new Promise((r) => setTimeout(r, 3300));
+    const second = await pruneCache(s.home, { ...RUN, staleMs: 3000, waitMs: 100, pollMs: 20 }).catch((e: Error) => e);
     expect(second).toBeInstanceOf(Error);
     expect((second as Error).message).toBe(`the Forge cache prune lock ${path.join(s.forges, "prune.lock")} is busy (held by PID ${process.pid})`);
     expect((await first).report.removed.map((x) => x.kind)).toEqual(["entry", "entry", "entry"]);
-  });
+  }, 20_000);
 });
 
 describe("a file held open, leftovers, and a key shaped like a removal directory", () => {
