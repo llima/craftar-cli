@@ -422,10 +422,9 @@ export function concerned(
       result.concerned.push({ path: entry.entry.path, file: "craftar.local.yaml" });
     } else if (test(merged.base)) {
       result.concerned.push({ path: entry.entry.path, file: "craftar.yaml" });
-    } else {
-      // Merged config passed but neither document does — should not happen, but treat as craftar.yaml
-      result.concerned.push({ path: entry.entry.path, file: "craftar.yaml" });
     }
+    // No else: merged.config is built from base + local via deepMerge, so if test(merged.config)
+    // passes, the value must exist in at least one of them. This branch cannot be reached.
   }
 
   return result;

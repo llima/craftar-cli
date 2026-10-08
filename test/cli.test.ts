@@ -5439,6 +5439,32 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     expect(out.recipes.kept).toEqual([{ recipe: "base--acme", reason: `${realWs} names it in recipes.remove (craftar.local.yaml)` }]);
   });
 
+  it("test 4e: check 3 reads the MERGED config — local empty array replaces base's add (spec 25 §4.3)", async () => {
+    // Arrays replace on merge, so with:
+    //   craftar.yaml: recipes.add: [base--acme]
+    //   craftar.local.yaml: recipes.add: []
+    // The merged config has recipes.add: [], so the workspace is NOT concerned by check 3.
+    // The prune should succeed (proceed to the proof, which passes since the workspace plans the same).
+    const { root, forge, home } = await pruneFixture();
+    const ws = path.join(root, "ws");
+    // craftar.yaml adds, craftar.local.yaml empties the array
+    await writeFiles(ws, {
+      "craftar.yaml": `forge: ../forge\nprofile: acme\nrecipes:\n  add:\n    - base--acme\n`,
+      "craftar.local.yaml": `recipes:\n  add: []\n`,
+    });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    // Check 3 does NOT refuse the workspace: the merged recipes.add is [], not [base--acme].
+    // The prune succeeds (proof passes since the workspace plans the same files).
+    expect(out.recipes.pruned).toEqual([{ recipe: "base--acme", sibling: "base", profiles: ["profiles/acme/profile.yaml"] }]);
+    expect(out.recipes.kept).toEqual([]);
+  });
+
   it("test 5: refused — the proof fails because a param default would move", async () => {
     const root = await tmpDir("craftar-prune-param-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
