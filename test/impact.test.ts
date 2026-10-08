@@ -161,22 +161,29 @@ describe("forgeWorkspaces (spec 25 §3)", () => {
 
     const result = await forgeWorkspaces(f.home, rf.src);
     const realSrc = await fs.realpath(rf.src);
+
+    // Prove: warning names the remote ("creds") only, not the URL
     expect(result.warnings).toEqual([`remote creds of ${realSrc} holds credentials in its URL — not matched`]);
-    // URL never appears in any returned string
-    expect(JSON.stringify(result).includes("tok")).toBe(false);
-    expect(JSON.stringify(result).includes("user:")).toBe(false);
+
+    // Prove: URL and credentials never appear in the result
+    const json = JSON.stringify(result);
+    expect(json.includes("tok")).toBe(false);
+    expect(json.includes("user:")).toBe(false);
+    expect(json.includes("example.invalid")).toBe(false);
   });
 
   it("test 7: forge.key null entry is skipped", async () => {
     const f = await fixture();
     const a = await f.ws("acme-a");
     await syncAndRegister(f.home, a);
+    const realA = await fs.realpath(a);
 
     // Manually write a registry entry with key: null
     const regFile = path.join(f.home, "registry.json");
     const reg = JSON.parse(await fs.readFile(regFile, "utf8"));
+    const nullKeyPath = path.join(f.root, "null-key-ws");
     reg.workspaces.push({
-      path: path.join(f.root, "null-key-ws"),
+      path: nullKeyPath,
       profile: "acme",
       forge: { kind: "path", source: "../gone", key: null, ref: null, commit: null, fromLocalFile: false },
       recipes: ["base"],
@@ -187,9 +194,12 @@ describe("forgeWorkspaces (spec 25 §3)", () => {
     await fs.writeFile(regFile, JSON.stringify(reg, null, 2) + "\n");
 
     const result = await forgeWorkspaces(f.home, f.forgeRoot);
-    // Only the workspace with valid key is included
+
+    // Prove: only workspace with valid key is included; null-key entry is NOT in workspaces
     expect(result.workspaces).toHaveLength(1);
+    expect(result.workspaces[0].entry.path).toBe(realA);
     expect(result.workspaces[0].entry.forge.key).not.toBeNull();
+    expect(result.workspaces.find((w) => w.entry.path === nullKeyPath)).toBeUndefined();
   });
 
   it("test 8: CRAFTAR_NO_REGISTRY=1 returns off; no registry returns none", async () => {

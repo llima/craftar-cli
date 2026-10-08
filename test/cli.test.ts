@@ -4503,7 +4503,20 @@ describe("cli — forge impact (spec 25 §4.1)", () => {
     const r = s.run(["forge", "impact", "--forge", s.forge]);
     expect(r.code).toBe(0);
     expect(r.stderr).toBe("");
-    expect(r.stdout).toContain("missing");
+
+    // Compute padding widths from literal paths
+    const maxPath = Math.max(realA.length, realB.length);
+    const maxProfile = Math.max("acme".length, "globex".length);
+    const padA = realA.padEnd(maxPath);
+    const padB = realB.padEnd(maxPath);
+    const padAcme = "acme".padEnd(maxProfile);
+    const padGlobex = "globex".padEnd(maxProfile);
+
+    expect(r.stdout).toBe(
+      `craftar forge impact — ${realForge} · 2 registered workspaces (2 by path)\n` +
+      `  ${padA}  ${padAcme}  unchanged\n` +
+      `  ${padB}  ${padGlobex}  missing\n`
+    );
 
     const j = s.run(["forge", "impact", "--forge", s.forge, "--json"]);
     expect(j.code).toBe(0);
@@ -5274,10 +5287,9 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     // Recipe file should be gone
     expect(await exists(path.join(forge, "recipes/base--acme.yaml"))).toBe(false);
 
-    // Profile should be repointed
+    // Profile should be repointed — whole value assertion
     const profileText = await fs.readFile(path.join(forge, "profiles/acme/profile.yaml"), "utf8");
-    expect(profileText).toContain("recipes:\n  - base\n");
-    expect(profileText).not.toContain("base--acme");
+    expect(profileText).toBe("name: acme\nrecipes:\n  - base\ntargets:\n  - claude-code\n");
 
     // JSON output
     expect(out.recipes).toEqual({
