@@ -6,7 +6,7 @@ import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
-import { forgeWorkspaces, planAll, nextSync, type ForgeWorkspace, type RegistryState } from "./core/impact.js";
+import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { resolveHome } from "./core/home-lock.js";
 import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type Workspace } from "./core/sync.js";
@@ -18,7 +18,7 @@ import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
-import { exists, gitDirty, gitIsRepo, gitUnheld } from "./core/forge.js";
+import { exists, gitDirty, gitIsRepo, gitUnheld, loadForge } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
   hunkAt,
@@ -989,11 +989,7 @@ forge
         stateStr = `error: ${r.error}`;
       }
 
-      let suffix = "";
-      if (ws.match === "remote") suffix = ` · after push (${ws.via})`;
-      if (ws.match === "clone") suffix = ` · after push and pull (${ws.via})`;
-      if (ws.ref) suffix += `, pins ${ws.ref}`;
-
+      const suffix = matchSuffix(ws);
       console.log(`  ${ws.entry.path.padEnd(maxPath)}  ${ws.entry.profile.padEnd(maxProfile)}  ${stateStr}${suffix}`);
     }
   });
@@ -1055,6 +1051,7 @@ forge
   .option("--take <side>", "resolve every decision to base or variant")
   .option("--plan <file>", "apply the decisions in this plan file (a hunk may be take: param with its params list, or take: section with its section name)")
   .option("--save-plan <file>", "write a plan with every decision deferred, each hunk annotated with its suggested class (which --plan ignores), value hunks pre-filled with params, block hunks pre-filled with a section name, and hunks touching an existing section with its name, to a new file outside the Forge, and stop")
+  .option("--no-impact", "skip planning the registered workspaces of this Forge before and after the writes (the warnings then keep their 0.13.0 text)")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
@@ -1186,6 +1183,35 @@ forge
       fail(`unify can only change files git can restore — ${unheld.length} path(s) under ${f.root} are not:\n${lines.join("\n")}`);
     }
 
+    // Spec 25 §4.2: the impact passes around the writes
+    type ImpactRegistryState = RegistryState | "skipped" | "unreadable";
+    let impactState: ImpactRegistryState = "skipped";
+    let impactEntries: ForgeWorkspace[] = [];
+    let impactBefore: Planned[] = [];
+    let impactWarnings: string[] = [];
+    let impactUnreadableReason: string | null = null;
+
+    if (o.impact) {
+      try {
+        const fw = await forgeWorkspaces(craftarHome(), f.root);
+        impactEntries = fw.workspaces;
+        impactWarnings = fw.warnings;
+        impactBefore = await planAll(fw.workspaces, f);
+        // Refine the state: "partial" when any before entry is missing or stage-config error
+        if (fw.state === "read" || fw.state === "partial") {
+          const hasMissingOrConfig = impactBefore.some(
+            (p) => p.kind === "missing" || (p.kind === "error" && p.stage === "config"),
+          );
+          impactState = hasMissingOrConfig ? "partial" : fw.state;
+        } else {
+          impactState = fw.state;
+        }
+      } catch (e) {
+        impactState = "unreadable";
+        impactUnreadableReason = e instanceof Error ? e.message : String(e);
+      }
+    }
+
     // Order: merged files, then the recipe cascade, then removal of the variant directory
     // (Ruling 21) — a late failure leaves the variant in place, never a recipe naming a removed ingredient.
     // Spec 12 §6.7: the manifest is first when it moves to schema: 2; each prefix is emission-neutral.
@@ -1213,8 +1239,37 @@ forge
       throw new Error(lateFailure(e, f.root, journal), { cause: e });
     }
 
+    // Spec 25 §4.2: after pass — planAll against the Forge as unify left it, then impactOf per entry
+    let impactAfter: Planned[] = [];
+    let impactResults: ImpactResult[] = [];
+    if (o.impact && impactState !== "skipped" && impactState !== "unreadable" && impactEntries.length > 0) {
+      let afterForge = f;
+      try {
+        afterForge = await loadForge(f.root);
+      } catch {
+        // If loadForge fails, treat every entry as error
+        for (let i = 0; i < impactEntries.length; i++) {
+          impactAfter.push({ kind: "error", stage: "plan", message: "Forge could not be reloaded" });
+        }
+      }
+      if (impactAfter.length === 0) {
+        impactAfter = await planAll(impactEntries, afterForge);
+      }
+      for (let i = 0; i < impactEntries.length; i++) {
+        impactResults.push(impactOf(impactBefore[i], impactAfter[i]));
+      }
+    }
+
     // Ruling 28: a metadata difference leaves the variant in place; say which fields and why.
     const warnings: string[] = [];
+
+    // Spec 25 §4.2: warning for unreadable registry
+    if (impactUnreadableReason !== null) {
+      warnings.push(`the registry could not be read (${impactUnreadableReason}) — no workspace was checked`);
+    }
+    // Spec 25 §4.2: push warnings from forgeWorkspaces (credential lines)
+    warnings.push(...impactWarnings);
+
     if (result.metaDiffers.length) {
       warnings.push(
         `ingredient.yaml differs in ${result.metaDiffers.join(", ")} — unify cannot merge ingredient.yaml, so ${variant.ref} stays; ` +
@@ -1233,30 +1288,119 @@ forge
           `${sibling} and the recipe order or param precedence would change`,
       );
     }
-    // Ruling 38: `resolve()` matches overrides.ingredients.disable by ref, so once the variant ref
-    // is gone a workspace that disabled it gets the base back, enabled, with no error.
-    // Spec 09 W1: what a parameter extraction cannot check from inside the Forge (W2 went with spec 10).
+
+    // Spec 25 §4.3: helper to build conditional warnings based on registry state and concerned workspaces
+    const unchecked = impactBefore.filter(
+      (p) => p.kind === "missing" || (p.kind === "error" && p.stage === "config"),
+    ).length;
+
+    const reach = (text: string, test: (doc: unknown) => boolean): string | null => {
+      // --no-impact → today's text
+      if (!o.impact) return `${text}; unify cannot reach workspaces`;
+
+      const c = concerned(impactBefore, impactEntries, test);
+
+      // concerned non-empty → name them
+      if (c.concerned.length > 0) {
+        const names = c.concerned.map((w) => `${w.path} (${w.file})`).join(", ");
+        const uncheckedNote = c.unchecked > 0 ? ` (the registry could not check ${c.unchecked} workspace${c.unchecked > 1 ? "s" : ""})` : "";
+        return `${text} — concerned: ${names}${uncheckedNote}`;
+      }
+
+      // none concerned and registry state read → no warning
+      if (impactState === "read") return null;
+
+      // otherwise → today's text plus suffix by state
+      let stateSuffix: string;
+      switch (impactState) {
+        case "partial":
+          stateSuffix = ` (the registry could not check ${unchecked} workspace${unchecked > 1 ? "s" : ""})`;
+          break;
+        case "none":
+          stateSuffix = " (no workspace of this Forge is registered on this machine)";
+          break;
+        case "off":
+          stateSuffix = " (the registry is off)";
+          break;
+        case "unreadable":
+          stateSuffix = " (the registry could not be read)";
+          break;
+        default:
+          stateSuffix = "";
+      }
+      return `${text}; unify cannot reach workspaces${stateSuffix}`;
+    };
+
+    // Spec 09 W1: a new parameter may override a workspace's overrides.params
     for (const e of result.params.filter((p) => !p.reused)) {
-      warnings.push(
+      const text =
         `${e.key} is now a parameter of ${base.ref} — a workspace that sets overrides.params.${e.key} (craftar.yaml or ` +
-          `craftar.local.yaml) now overrides ${base.ref} too; unify cannot reach workspaces`,
-      );
+        `craftar.local.yaml) now overrides ${base.ref} too`;
+      const testW1 = (doc: unknown): boolean => {
+        if (typeof doc !== "object" || doc === null) return false;
+        const d = doc as Record<string, unknown>;
+        if (typeof d.overrides !== "object" || d.overrides === null) return false;
+        const ov = d.overrides as Record<string, unknown>;
+        if (typeof ov.params !== "object" || ov.params === null) return false;
+        return Object.hasOwn(ov.params, e.key);
+      };
+      const warn = reach(text, testW1);
+      if (warn !== null) warnings.push(warn);
     }
-    // Spec 12 W3: a new section's name may be cited by a workspace's overrides.sections that was inert until now.
+
+    // Spec 12 W3: a new section may be filled by a workspace's overrides.sections
     for (const s of result.sections.filter((sec) => !sec.existing)) {
-      warnings.push(
+      const text =
         `${s.name} is now a section of ${base.ref} — a workspace that sets overrides.sections.${s.key}.${s.name} (craftar.yaml or ` +
-          `craftar.local.yaml) now applies there; unify cannot reach workspaces`,
-      );
+        `craftar.local.yaml) now applies there`;
+      const testW3 = (doc: unknown): boolean => {
+        if (typeof doc !== "object" || doc === null) return false;
+        const d = doc as Record<string, unknown>;
+        if (typeof d.overrides !== "object" || d.overrides === null) return false;
+        const ov = d.overrides as Record<string, unknown>;
+        if (typeof ov.sections !== "object" || ov.sections === null) return false;
+        const sec = ov.sections as Record<string, unknown>;
+        if (!Object.hasOwn(sec, s.key)) return false;
+        const keyObj = sec[s.key];
+        if (typeof keyObj !== "object" || keyObj === null) return false;
+        return Object.hasOwn(keyObj, s.name);
+      };
+      const warn = reach(text, testW3);
+      if (warn !== null) warnings.push(warn);
     }
+
+    // Ruling 38: a removed variant may be disabled by a workspace's overrides.ingredients.disable
     if (variantRemoved) {
-      warnings.push(
+      const text =
         `${variant.ref} was removed — a workspace that disables it in overrides.ingredients.disable (craftar.yaml or craftar.local.yaml) ` +
-          `must now name ${base.ref}, or the base comes back enabled; unify cannot reach workspaces`,
-      );
+        `must now name ${base.ref}, or the base comes back enabled`;
+      const testDisable = (doc: unknown): boolean => {
+        if (typeof doc !== "object" || doc === null) return false;
+        const d = doc as Record<string, unknown>;
+        if (typeof d.overrides !== "object" || d.overrides === null) return false;
+        const ov = d.overrides as Record<string, unknown>;
+        if (typeof ov.ingredients !== "object" || ov.ingredients === null) return false;
+        const ing = ov.ingredients as Record<string, unknown>;
+        if (!Array.isArray(ing.disable)) return false;
+        return ing.disable.includes(variant.ref);
+      };
+      const warn = reach(text, testDisable);
+      if (warn !== null) warnings.push(warn);
     }
 
     if (o.json) {
+      // Spec 25 §4.2: impact array in JSON output
+      const impact = impactResults.map((r, i) => ({
+        path: impactEntries[i].entry.path,
+        profile: impactEntries[i].entry.profile,
+        match: impactEntries[i].match,
+        via: impactEntries[i].via,
+        ref: impactEntries[i].ref,
+        state: r.state,
+        files: r.files,
+        error: r.error,
+      }));
+
       return console.log(
         JSON.stringify(
           {
@@ -1289,6 +1433,8 @@ forge
             manifestEdited: paramWrites?.manifest !== null && paramWrites?.manifest !== undefined,
             profileEdited: paramWrites?.profile ? path.relative(f.root, paramWrites.profile.abs).split(path.sep).join("/") : null,
             warnings,
+            // Spec 25 §4.2: always present, [] when no workspace was checked
+            impact,
           },
           null,
           2,
@@ -1320,7 +1466,34 @@ forge
       console.log(`  recipes now identical to a sibling: ${cascade.identicalToSibling.join(", ")}`);
     }
     for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
-    console.log(`  next: run \`craftar status --workspace <dir>\` in a workspace on profile ${o.profile} to see what moved`);
+
+    // Spec 25 §4.2: impact lines, one per workspace, with suffix format
+    for (let i = 0; i < impactResults.length; i++) {
+      const ws = impactEntries[i];
+      const r = impactResults[i];
+      let stateStr: string;
+      if (r.state === "no-effect") {
+        stateStr = "no effect";
+      } else if (r.state === "changed") {
+        const n = r.files.length;
+        stateStr = n === 1 ? `1 file changes — ${r.files[0]}` : `${n} files change — ${r.files.join(", ")}`;
+      } else if (r.state === "missing") {
+        stateStr = "missing";
+      } else {
+        stateStr = `error: ${r.error}`;
+      }
+      const impactSuffix = matchSuffix(ws);
+      console.log(`  impact: ${ws.entry.path} (${ws.entry.profile}) ${stateStr}${impactSuffix}`);
+    }
+
+    // Spec 25 §4.2: the next: hint is printed only when no workspace was checked
+    // (every entry missing/stage-config error, or no entries, or --no-impact, or unreadable)
+    const someChecked = impactBefore.some(
+      (p) => p.kind !== "missing" && !(p.kind === "error" && p.stage === "config"),
+    );
+    if (!someChecked) {
+      console.log(`  next: run \`craftar status --workspace <dir>\` in a workspace on profile ${o.profile} to see what moved`);
+    }
   });
 
 program.parseAsync().catch((e) => fail(e instanceof Error ? e.message : String(e)));
@@ -1407,6 +1580,18 @@ function printWorkspaces(rows: WorkspaceRow[], warnings: string[], fetched: bool
 /** Warnings of loading the workspace, for commands whose stdout is not a report (a diff, `explain`, `ls`, `--json`). */
 function warnStderr(warnings: string[]): void {
   for (const w of warnings) console.error(`${pc.yellow("warn")} ${w}`);
+}
+
+/**
+ * Spec 25 §4.1–§4.2: the suffix format for a workspace that is not a path match.
+ * Used by both `forge impact` and `forge unify` so the format is shared.
+ */
+function matchSuffix(ws: ForgeWorkspace): string {
+  let suffix = "";
+  if (ws.match === "remote") suffix = ` · after push (${ws.via})`;
+  if (ws.match === "clone") suffix = ` · after push and pull (${ws.via})`;
+  if (ws.ref) suffix += `, pins ${ws.ref}`;
+  return suffix;
 }
 
 /** The header line naming a remote Forge (spec 13 §4.1); null for a path Forge, whose headers keep their shape. */
