@@ -4720,7 +4720,7 @@ describe("cli — forge impact (spec 25 §4.1)", () => {
 
     // Create a symlink to the Forge
     const link = path.join(s.root, "forge-link");
-    await fs.symlink(s.forge, link, "dir");
+    await fs.symlink(s.forge, link, process.platform === "win32" ? "junction" : "dir");
 
     const j = s.run(["forge", "impact", "--forge", link, "--json"]);
     expect(j.code).toBe(0);
@@ -5238,13 +5238,7 @@ describe("cli — forge unify impact (spec 25 §4.2–§4.3)", () => {
     // The workspace is NOT concerned because the merged disable array is []
     // When no workspace is concerned and the registry was fully checked,
     // ALL concerned-based warnings vanish (spec 25 §4.3).
-    // The identical-to-sibling warning is separate but still depends on the concerned state.
-    // No warnings should appear.
     expect(out.warnings).toEqual([]);
-
-    // The removed-variant warning (W0) should NOT appear
-    const w0Warning = out.warnings.find((w: string) => w.includes("was removed"));
-    expect(w0Warning).toBeUndefined();
   });
 });
 

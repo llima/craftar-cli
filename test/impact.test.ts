@@ -160,10 +160,10 @@ describe("forgeWorkspaces (spec 25 §3)", () => {
     const credsUrl = "https://user:tok@example.invalid/acme/forge.git";
     git(rf.src, "remote", "add", "creds", credsUrl);
 
-    // Register a workspace whose Forge is REMOTE with a key matching the URL WITHOUT credentials.
-    // The cacheKey strips credentials, so compute the key the URL would have if matched.
-    const urlWithoutCreds = "https://example.invalid/acme/forge.git";
-    const key = cacheKey(urlWithoutCreds);
+    // Register a workspace whose Forge is REMOTE with a key that WOULD match the credentialed URL.
+    // cacheKey does NOT strip credentials — cacheKey(credsUrl) differs from cacheKey(urlWithoutCreds).
+    // The credential check skips the URL before it can be matched, so this workspace is not returned.
+    const key = cacheKey(credsUrl);
 
     // Manually write a registry entry with kind: "remote" and key matching the credentialed URL
     const regFile = path.join(f.home, "registry.json");
@@ -178,7 +178,7 @@ describe("forgeWorkspaces (spec 25 §3)", () => {
             {
               path: remoteWsPath,
               profile: "acme",
-              forge: { kind: "remote", source: urlWithoutCreds, key, ref: null, commit: "abc123", fromLocalFile: false },
+              forge: { kind: "remote", source: credsUrl, key, ref: null, commit: "abc123", fromLocalFile: false },
               recipes: ["base"],
               stack: {},
               targets: ["claude-code"],
@@ -215,8 +215,8 @@ describe("forgeWorkspaces (spec 25 §3)", () => {
     const realForge = await fs.realpath(f.forgeRoot);
 
     // Manually write a registry entry with key: null.
-    // The key === null skip is defensive: with kind: "path", samePath(null, x) returns false;
-    // with kind: "remote", Map.has(null) returns false (no remote key is null).
+    // The key === null skip is load-bearing on win32: samePath(null, x) throws (null.toLowerCase()).
+    // On POSIX it's defensive: samePath(null, x) returns false; Map.has(null) returns false.
     // The skip makes the intent explicit and prevents unnecessary processing.
     const regFile = path.join(f.home, "registry.json");
     const reg = JSON.parse(await fs.readFile(regFile, "utf8"));
