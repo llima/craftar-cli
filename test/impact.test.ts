@@ -157,13 +157,48 @@ describe("forgeWorkspaces (spec 25 §3)", () => {
     const f = await fixture();
 
     // Add a remote with credentials in URL
-    git(rf.src, "remote", "add", "creds", "https://user:tok@example.invalid/acme/forge.git");
+    const credsUrl = "https://user:tok@example.invalid/acme/forge.git";
+    git(rf.src, "remote", "add", "creds", credsUrl);
+
+    // Register a workspace whose Forge is REMOTE with a key matching the URL WITHOUT credentials.
+    // The cacheKey strips credentials, so compute the key the URL would have if matched.
+    const urlWithoutCreds = "https://example.invalid/acme/forge.git";
+    const key = cacheKey(urlWithoutCreds);
+
+    // Manually write a registry entry with kind: "remote" and key matching the credentialed URL
+    const regFile = path.join(f.home, "registry.json");
+    await fs.mkdir(f.home, { recursive: true });
+    const remoteWsPath = path.join(f.root, "remote-ws");
+    await fs.writeFile(
+      regFile,
+      JSON.stringify(
+        {
+          schema: 1,
+          workspaces: [
+            {
+              path: remoteWsPath,
+              profile: "acme",
+              forge: { kind: "remote", source: urlWithoutCreds, key, ref: null, commit: "abc123", fromLocalFile: false },
+              recipes: ["base"],
+              stack: {},
+              targets: ["claude-code"],
+              lastSync: "2026-10-07T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ) + "\n",
+    );
 
     const result = await forgeWorkspaces(f.home, rf.src);
     const realSrc = await fs.realpath(rf.src);
 
     // Prove: warning names the remote ("creds") only, not the URL
     expect(result.warnings).toEqual([`remote creds of ${realSrc} holds credentials in its URL — not matched`]);
+
+    // Prove: the workspace with matching key is NOT returned (credentialed URL skipped)
+    expect(result.workspaces).toEqual([]);
 
     // Prove: URL and credentials never appear in the result
     const json = JSON.stringify(result);
@@ -177,15 +212,20 @@ describe("forgeWorkspaces (spec 25 §3)", () => {
     const a = await f.ws("acme-a");
     await syncAndRegister(f.home, a);
     const realA = await fs.realpath(a);
+    const realForge = await fs.realpath(f.forgeRoot);
 
-    // Manually write a registry entry with key: null
+    // Manually write a registry entry with key: null.
+    // The key === null skip is defensive: with kind: "path", samePath(null, x) returns false;
+    // with kind: "remote", Map.has(null) returns false (no remote key is null).
+    // The skip makes the intent explicit and prevents unnecessary processing.
     const regFile = path.join(f.home, "registry.json");
     const reg = JSON.parse(await fs.readFile(regFile, "utf8"));
     const nullKeyPath = path.join(f.root, "null-key-ws");
     reg.workspaces.push({
       path: nullKeyPath,
       profile: "acme",
-      forge: { kind: "path", source: "../gone", key: null, ref: null, commit: null, fromLocalFile: false },
+      // kind: "path" + key: null — even without skip, won't match (null !== realForge)
+      forge: { kind: "path", source: realForge, key: null, ref: null, commit: null, fromLocalFile: false },
       recipes: ["base"],
       stack: {},
       targets: ["claude-code"],
