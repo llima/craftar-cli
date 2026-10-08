@@ -5865,4 +5865,59 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     const profileText = await fs.readFile(profilePath, "utf8");
     expect(profileText).toBe("name: acme\nrecipes:\n  - base\n  - web\ntargets:\n  - claude-code\n");
   });
+
+  it("test 13: profile whose recipe list does not round-trip keeps the candidate", async () => {
+    const root = await tmpDir("craftar-prune-noround-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const home = path.join(root, "home");
+
+    // Build Forge with makeForge, then overwrite the profile with a non-round-trip format
+    await makeForge(forge, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
+      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+
+    // Overwrite profile with flow syntax + inner spaces — does not round-trip
+    const profilePath = path.join(forge, "profiles/acme/profile.yaml");
+    const nonRoundTripProfile = `name: acme
+recipes: [ base--acme ]
+targets:
+  - claude-code
+`;
+    await fs.writeFile(profilePath, nonRoundTripProfile);
+
+    // Commit the non-round-trip profile so git gate passes
+    gitInit(forge);
+    gitCommitAll(forge, "init");
+
+    // Register a workspace
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    // Pruned should be empty — profile cannot be edited
+    expect(out.recipes.pruned).toEqual([]);
+
+    // Kept should have the exact reason (copied from a run)
+    expect(out.recipes.kept).toEqual([
+      {
+        recipe: "base--acme",
+        reason: "unify: cannot edit profiles/acme/profile.yaml in place (it does not round-trip unchanged through the YAML writer) — reformat it by hand, commit, and re-run",
+      },
+    ]);
+
+    // Profile file unchanged
+    const profileAfter = await fs.readFile(profilePath, "utf8");
+    expect(profileAfter).toBe(nonRoundTripProfile);
+
+    // Recipe file still exists
+    expect(await exists(path.join(forge, "recipes/base--acme.yaml"))).toBe(true);
+  });
 });

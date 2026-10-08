@@ -216,7 +216,8 @@ describe("forgeWorkspaces (spec 25 §3)", () => {
 
     // Manually write a registry entry with key: null.
     // The key === null skip is load-bearing on win32: samePath(null, x) throws (null.toLowerCase()).
-    // On POSIX it's defensive: samePath(null, x) returns false; Map.has(null) returns false.
+    // On POSIX, samePath(null, x) returns false and Map.has(null) returns false, but the clone
+    // branch's fs.stat(null) throws into its catch as well — so the skip is still defensive there.
     // The skip makes the intent explicit and prevents unnecessary processing.
     const regFile = path.join(f.home, "registry.json");
     const reg = JSON.parse(await fs.readFile(regFile, "utf8"));
