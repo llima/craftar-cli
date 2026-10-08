@@ -4125,3 +4125,189 @@ describe("cli — a missing craftar.yaml points at craftar init first (spec 23 �
     }
   });
 });
+
+describe("cli — craftar init (spec 23 §9.2)", () => {
+  const SPEC = {
+    ingredients: [rule("a", "# A\n"), rule("b", "# B\n"), rule("p", "# P {{nope}}\n")],
+    recipes: [recipe("base", ["rule/a"]), recipe("extra", ["rule/b"]), recipe("ph", ["rule/p"])],
+    profiles: [profile("acme", ["base"])],
+  };
+  const COLLISION = "  warn 1 file(s) already in the workspace differ from the Forge and were left as they are — to bring them into the Forge, run craftar import";
+
+  /** A temporary root with its own CRAFTAR_HOME and a path Forge; workspaces are siblings of the Forge. */
+  async function setup() {
+    const root = await tmpDir("craftar-init-cli-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const forge = path.join(root, "forge");
+    await makeForge(forge, SPEC);
+    const run = (args: string[], env: NodeJS.ProcessEnv = {}) => runCli(args, { env: { CRAFTAR_HOME: home, ...env } });
+    const init = (ws: string, extra: string[] = [], env: NodeJS.ProcessEnv = {}) =>
+      run(["init", "--workspace", ws, "--forge", forge, "--profile", "acme", ...extra], env);
+    const registry = path.join(home, "registry.json");
+    return { root, home, forge, run, init, registry };
+  }
+  const withoutLock = (snap: Record<string, string>) => Object.fromEntries(Object.entries(snap).filter(([k]) => k !== "craftar.lock"));
+  const lockBody = async (ws: string) => {
+    const { generatedAt, ...rest } = JSON.parse(await fs.readFile(path.join(ws, "craftar.lock"), "utf8"));
+    void generatedAt;
+    return rest;
+  };
+
+  it("an empty directory: craftar.yaml, then the same workspace and report a hand-written craftar.yaml plus sync give; registered", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "ws");
+    await fs.mkdir(ws);
+    const r = s.init(ws);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toBe("");
+    const lines = r.stdout.split("\n");
+    expect(lines.slice(0, 2)).toEqual([
+      `craftar init — wrote craftar.yaml in ${ws}`,
+      "  forge ../forge · profile acme · recipes base · targets claude-code (from the profile)",
+    ]);
+    expect(await fs.readFile(path.join(ws, "craftar.yaml"), "utf8")).toBe("forge: ../forge\nprofile: acme\n");
+
+    const hand = path.join(s.root, "hand");
+    await writeFiles(hand, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+    const h = s.run(["sync", "--workspace", hand]);
+    expect(h.code).toBe(0);
+    expect(lines.slice(2).join("\n")).toBe(h.stdout);
+    expect(withoutLock(await snapshot(ws))).toEqual(withoutLock(await snapshot(hand)));
+    expect(await lockBody(ws)).toEqual(await lockBody(hand));
+    const reg = JSON.parse(await fs.readFile(s.registry, "utf8")).workspaces.map((w: { path: string }) => w.path);
+    expect(reg).toContain(await fs.realpath(ws));
+  });
+
+  it("craftar.yaml already there: N1, the file unchanged", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: elsewhere\nprofile: other\n" });
+    const r = s.init(ws);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe(`error: craftar.yaml already exists in ${ws} — change recipes with craftar add recipe / remove recipe, or edit it\n`);
+    expect(await snapshot(ws)).toEqual({ "craftar.yaml": "forge: elsewhere\nprofile: other\n" });
+  });
+
+  it("--workspace: created when missing, not created on a refusal, refused when it is a file (N9)", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "new", "deep");
+    const r = s.init(ws);
+    expect(r.code, r.stderr).toBe(0);
+    expect(await fs.readFile(path.join(ws, "craftar.yaml"), "utf8")).toBe("forge: ../../forge\nprofile: acme\n");
+
+    const never = path.join(s.root, "never");
+    const n5 = s.run(["init", "--workspace", never, "--forge", s.forge, "--profile", "nope"]);
+    expect(n5.code).toBe(1);
+    expect(n5.stderr).toBe('error: profile "nope" not found in Forge (acme)\n');
+    expect(await exists(never)).toBe(false);
+
+    const file = path.join(s.root, "a-file");
+    await fs.writeFile(file, "x\n");
+    const n9 = s.init(file);
+    expect(n9.code).toBe(1);
+    expect(n9.stderr).toBe(`error: cannot use ${file} as a workspace: it is not a directory\n`);
+    expect(await fs.readFile(file, "utf8")).toBe("x\n");
+  });
+
+  it("a differing file already there: left as it is, a collision, the import warning, exit 0", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "ws");
+    await writeFiles(ws, { ".claude/rules/a.md": "# mine\n" });
+    const r = s.init(ws);
+    expect(r.code, r.stderr).toBe(0);
+    expect(await fs.readFile(path.join(ws, ".claude/rules/a.md"), "utf8")).toBe("# mine\n");
+    const lines = r.stdout.trimEnd().split("\n");
+    expect(lines).toContain("  wrote 0, removed 0 orphan(s), skipped 1");
+    expect(lines.at(-1)).toBe(COLLISION);
+    // Without a collision there is no such line.
+    const clean = path.join(s.root, "clean");
+    expect(s.init(clean).stdout).not.toContain("already in the workspace differ");
+  });
+
+  it("a craftar.lock from an earlier sync: --no-sync counts update and orphan; without it, sync's report", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\nrecipes:\n  add: [extra]\n" });
+    expect(s.run(["sync", "--workspace", ws]).code).toBe(0);
+    await writeFiles(s.forge, { "ingredients/rules/a/rule.md": "# A changed\n" });
+    await fs.rm(path.join(ws, "craftar.yaml"));
+    const dry = s.init(ws, ["--no-sync"]);
+    expect(dry.code, dry.stderr).toBe(0);
+    expect(dry.stdout.split("\n")[2]).toBe("next sync: 1 update, 1 orphan — run `craftar sync`");
+    await fs.rm(path.join(ws, "craftar.yaml"));
+    const r = s.init(ws);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split("\n").slice(2, 6)).toEqual([
+      "craftar sync — profile acme · recipes base · targets claude-code",
+      "  wrote 1, removed 1 orphan(s), skipped 0",
+      "  + .claude/rules/a.md",
+      "  - .claude/rules/b.md  (orphan: no longer produced by the Forge)",
+    ]);
+  });
+
+  it("--no-sync: craftar.yaml only, the next sync line and the plan's warnings, nothing registered", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "ws");
+    const r = s.init(ws, ["--no-sync", "--add-recipe", "ph"]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe(
+      [
+        `craftar init — wrote craftar.yaml in ${ws}`,
+        "  forge ../forge · profile acme · recipes base → ph · targets claude-code (from the profile)",
+        "next sync: 2 new — run `craftar sync`",
+        "  warn param \"nope\" has no value in any layer — left verbatim (rule/p)",
+        "",
+      ].join("\n"),
+    );
+    expect(await snapshot(ws)).toEqual({ "craftar.yaml": "forge: ../forge\nprofile: acme\nrecipes:\n  add:\n    - ph\n" });
+    expect(await exists(s.registry)).toBe(false);
+    // Then craftar sync gives the tree init without the flag gives (§6 case 7).
+    expect(s.run(["sync", "--workspace", ws]).code).toBe(0);
+    const other = path.join(s.root, "other");
+    expect(s.init(other, ["--add-recipe", "ph"]).code).toBe(0);
+    expect(withoutLock(await snapshot(ws))).toEqual(withoutLock(await snapshot(other)));
+  });
+
+  it("CRAFTAR_NO_REGISTRY=1: synced, not registered", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "ws");
+    const r = s.init(ws, [], { CRAFTAR_NO_REGISTRY: "1" });
+    expect(r.code, r.stderr).toBe(0);
+    expect(await fs.readFile(path.join(ws, ".claude/rules/a.md"), "utf8")).toBe("# A\n");
+    expect(await exists(s.registry)).toBe(false);
+  });
+
+  it("the first block: targets labelled by where they come from; a recipe call that changes nothing is a note", async () => {
+    const s = await setup();
+    const a = path.join(s.root, "a");
+    const r = s.init(a, ["--no-sync", "--targets", "claude-code,kiro", "--remove-recipe", "extra"]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split("\n").slice(1, 3)).toEqual(["  forge ../forge · profile acme · recipes base · targets claude-code, kiro", "  note extra is not in use"]);
+    expect(await fs.readFile(path.join(a, "craftar.yaml"), "utf8")).toBe("forge: ../forge\nprofile: acme\ntargets:\n  - claude-code\n  - kiro\n");
+    const b = path.join(s.root, "b");
+    await writeFiles(b, { "craftar.local.yaml": "targets: [kiro]\n" });
+    const l = s.init(b, ["--no-sync"]);
+    expect(l.code, l.stderr).toBe(0);
+    expect(l.stdout.split("\n")[1]).toBe("  forge ../forge · profile acme · recipes base · targets kiro (from craftar.local.yaml)");
+    const n10 = s.init(b, ["--no-sync", "--targets", "kiro"]);
+    expect(n10.code).toBe(1);
+  });
+
+  it("a credential in --forge is refused naming the flag, never the value; nothing written", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "ws");
+    const r = s.run(["init", "--workspace", ws, "--forge", "https://alice:s3cr3t@example.invalid/acme/forge.git", "--profile", "acme"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe("error: --forge holds credentials in the URL — remove them and let git authenticate (credential helper, SSH agent; see README › Remote Forge)\n");
+    expect(r.stdout + r.stderr).not.toContain("s3cr3t");
+    expect(await exists(ws)).toBe(false);
+  });
+
+  it("--forge and --profile are required (N2)", async () => {
+    const s = await setup();
+    const r = s.run(["init", "--workspace", path.join(s.root, "ws"), "--forge", s.forge]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe("error: required option '--profile <name>' not specified\n");
+  });
+});

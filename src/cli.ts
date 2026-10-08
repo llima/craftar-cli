@@ -29,6 +29,7 @@ import {
   type WriteJournal,
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
+import { planInit } from "./core/init.js";
 import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
 import { localKeys } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
@@ -138,6 +139,81 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
   return r;
 }
 
+/* ---------------------------------------------------------------- init */
+program
+  .command("init")
+  .description(
+    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync (spec 23); refused when craftar.yaml already exists",
+  )
+  .requiredOption("--forge <dir|url>", "the Forge: a directory (written relative to the workspace) or a git URL")
+  .requiredOption("--profile <name>", "the client profile in the Forge")
+  .option("--ref <ref>", "branch, tag or full SHA of a remote Forge")
+  .option("--targets <a,b>", "targets to write in craftar.yaml (claude-code, kiro, agents-md); omitted, the workspace follows the profile's")
+  .option("--add-recipe <name>", "add a recipe to the profile's (repeatable)", collect, [])
+  .option("--remove-recipe <name>", "remove a recipe of the profile's (repeatable)", collect, [])
+  .option("--replace", "let --add-recipe take a slot another recipe holds", false)
+  .option("--no-sync", "write craftar.yaml only, and say what the first sync would do")
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
+  .option("--workspace <dir>", "workspace root, created when missing", ".")
+  .action(
+    async (o: {
+      forge: string;
+      profile: string;
+      ref?: string;
+      targets?: string;
+      addRecipe: string[];
+      removeRecipe: string[];
+      replace: boolean;
+      sync: boolean;
+      offline: boolean;
+      workspace: string;
+    }) => {
+      const root = path.resolve(o.workspace);
+      const n1 = () => fail(`${WORKSPACE_FILE} already exists in ${root} — change recipes with craftar add recipe / remove recipe, or edit it`);
+      const file = path.join(root, WORKSPACE_FILE);
+      if (await exists(file)) n1();
+      const st = await fs.stat(root).catch(() => null);
+      if (st && !st.isDirectory()) fail(`cannot use ${root} as a workspace: it is not a directory`);
+      const init = await planInit(
+        root,
+        {
+          forge: o.forge,
+          profile: o.profile,
+          ref: o.ref,
+          targets: o.targets === undefined ? undefined : o.targets.split(",").map((t) => t.trim()),
+          addRecipes: o.addRecipe,
+          removeRecipes: o.removeRecipe,
+          replace: o.replace,
+        },
+        load(o, "sync"),
+      );
+      const { ws, plan: p } = init;
+      // Every refusal is above: only now does the directory, and craftar.yaml, come to exist (§13 items 1, 9).
+      await fs.mkdir(root, { recursive: true });
+      try {
+        await fs.writeFile(file, init.text, { flag: "wx" });
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "EEXIST") n1();
+        throw e;
+      }
+      const from = { flag: "", local: ` (from ${LOCAL_FILE})`, profile: " (from the profile)" }[init.targetsFrom];
+      console.log(pc.bold(`craftar init — wrote ${WORKSPACE_FILE} in ${root}`));
+      console.log(`  forge ${ws.config.forge} · profile ${ws.config.profile} · recipes ${p.resolution.recipes.join(" → ")} · targets ${p.resolution.targets.join(", ")}${from}`);
+      for (const n of init.notes) console.log(`  note ${n}`);
+      if (!o.sync) {
+        console.log(nextSyncLine(init.statuses));
+        for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+        return;
+      }
+      const r = await applyAndReport(ws, p, init.statuses, init.lock);
+      const collisions = r.skipped.filter((s) => s.state === "collision").length;
+      if (collisions)
+        console.log(
+          `  ${pc.yellow("warn")} ${collisions} file(s) already in the workspace differ from the Forge and were left as they are — to bring them into the Forge, run craftar import`,
+        );
+    },
+  );
+
 /* ---------------------------------------------------------------- sync */
 program
   .command("sync")
@@ -217,6 +293,14 @@ program
 const NEXT_SYNC: Record<Exclude<FileState, "unchanged">, true> = { new: true, update: true, drift: true, adopt: true, collision: true, orphan: true, "orphan-drift": true };
 const NEXT_SYNC_STATES = Object.keys(NEXT_SYNC) as Array<keyof typeof NEXT_SYNC>;
 
+/** Spec 22's line: what the next sync would do, over `NEXT_SYNC_STATES` (also `init --no-sync`, spec 23 §4.4). */
+function nextSyncLine(st: FileStatus[]): string {
+  const counts = NEXT_SYNC_STATES.map((k) => [k, st.filter((s) => s.state === k).length] as const)
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `${n} ${k}`);
+  return `next sync: ${counts.length ? `${counts.join(", ")} — run \`craftar sync\`` : "nothing to sync"}`;
+}
+
 function recipeCommand(op: RecipeOp) {
   return async (names: string[], o: { workspace: string; replace?: boolean; offline?: boolean }) => {
     const ws = await loadWorkspace(o.workspace, load(o, "read"));
@@ -235,13 +319,11 @@ function recipeCommand(op: RecipeOp) {
     const next: Workspace = { ...ws, config: { ...ws.config, recipes: edit.recipes } };
     const p = await plan(next);
     const st = await status(next, p, await readLock(ws.root));
-    const counts = NEXT_SYNC_STATES.map((k) => [k, st.filter((s) => s.state === k).length] as const)
-      .filter(([, n]) => n > 0)
-      .map(([k, n]) => `${n} ${k}`);
+    const nextLine = nextSyncLine(st);
     await fs.writeFile(file, content);
     console.log(`${WORKSPACE_FILE}: ${recipeDiffLine(ws.config.recipes, edit.recipes)}`);
     console.log(`recipes: ${p.resolution.recipes.join(" → ")}`);
-    console.log(`next sync: ${counts.length ? `${counts.join(", ")} — run \`craftar sync\`` : "nothing to sync"}`);
+    console.log(nextLine);
     // plan() already carries ws.warnings first, and they were printed on load.
     warnStderr(p.warnings.slice(ws.warnings.length));
   };
@@ -1127,6 +1209,11 @@ async function forgeFor(o: { forge?: string; workspace?: string; offline?: boole
 }
 
 /** `$CRAFTAR_HOME`, as the cache reads it (spec 13 §6.3). */
+/** A repeatable option's values, in the order given. */
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
 function craftarHome(): string {
   return resolveHome(process.env.CRAFTAR_HOME || undefined);
 }
