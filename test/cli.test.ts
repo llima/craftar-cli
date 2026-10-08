@@ -4641,6 +4641,79 @@ describe("cli — forge impact (spec 25 §4.1)", () => {
     expect(await snapshot(s.forge)).toEqual(beforeForge);
     expect(await snapshot(s.home)).toEqual(beforeHome);
   });
+
+  it("test 10: lock with schema: 9 → error row, not failed command; exit 0, whole stdout", async () => {
+    const s = await setup();
+    const a = await s.ws("a", "acme");
+    const b = await s.ws("b", "globex");
+    expect(s.run(["sync", "--workspace", a]).code).toBe(0);
+    expect(s.run(["sync", "--workspace", b]).code).toBe(0);
+    const realA = await fs.realpath(a);
+    const realB = await fs.realpath(b);
+    const realForge = await fs.realpath(s.forge);
+
+    // Rewrite workspace b's lock to have schema: 9 (unknown)
+    const lockPath = path.join(b, "craftar.lock");
+    const lock = await fs.readFile(lockPath, "utf8");
+    // Lock is JSON, so we replace "schema": 2 with "schema": 9
+    await fs.writeFile(lockPath, lock.replace('"schema": 2', '"schema": 9'));
+
+    const r = s.run(["forge", "impact", "--forge", s.forge]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+
+    // Compute padding widths from literal paths
+    const maxPath = Math.max(realA.length, realB.length);
+    const maxProfile = Math.max("acme".length, "globex".length);
+    const padA = realA.padEnd(maxPath);
+    const padB = realB.padEnd(maxPath);
+    const padAcme = "acme".padEnd(maxProfile);
+    const padGlobex = "globex".padEnd(maxProfile);
+
+    expect(r.stdout).toBe(
+      `craftar forge impact — ${realForge} · 2 registered workspaces (2 by path)\n` +
+      `  ${padA}  ${padAcme}  unchanged\n` +
+      `  ${padB}  ${padGlobex}  error: craftar.lock declares schema 9, which this craftar does not read — upgrade craftar\n`
+    );
+
+    // --json: the error row has state: "error" and error message
+    const j = s.run(["forge", "impact", "--forge", s.forge, "--json"]);
+    expect(j.code).toBe(0);
+    const out = JSON.parse(j.stdout);
+    expect(out.workspaces[1].state).toBe("error");
+    expect(out.workspaces[1].error).toBe("craftar.lock declares schema 9, which this craftar does not read — upgrade craftar");
+  });
+
+  it("test 11: broken craftar.yaml → registry partial in --json", async () => {
+    const s = await setup();
+    const a = await s.ws("a", "acme");
+    expect(s.run(["sync", "--workspace", a]).code).toBe(0);
+
+    // Break the craftar.yaml
+    await fs.writeFile(path.join(a, "craftar.yaml"), "profile: [\n");
+
+    const j = s.run(["forge", "impact", "--forge", s.forge, "--json"]);
+    expect(j.code).toBe(0);
+    const out = JSON.parse(j.stdout);
+    // A workspace whose config doesn't load → registry is partial (spec 25 §3)
+    expect(out.registry).toBe("partial");
+  });
+
+  it("test 12: --forge symlink → --json forge equals real path", async () => {
+    const s = await setup();
+    const a = await s.ws("a", "acme");
+    expect(s.run(["sync", "--workspace", a]).code).toBe(0);
+    const realForge = await fs.realpath(s.forge);
+
+    // Create a symlink to the Forge
+    const link = path.join(s.root, "forge-link");
+    await fs.symlink(s.forge, link, "dir");
+
+    const j = s.run(["forge", "impact", "--forge", link, "--json"]);
+    expect(j.code).toBe(0);
+    const out = JSON.parse(j.stdout);
+    expect(out.forge).toBe(realForge);
+  });
 });
 
 describe("cli — forge unify impact (spec 25 §4.2–§4.3)", () => {

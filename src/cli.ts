@@ -932,6 +932,15 @@ forge
     const planned = await planAll(fw.workspaces, f);
     const results = await Promise.all(planned.map((p) => nextSync(p)));
 
+    // Refine the registry state: "partial" when any entry is missing or stage-config error (spec 25 §3)
+    let registryState: RegistryState = fw.state;
+    if (fw.state === "read") {
+      const hasMissingOrConfig = planned.some(
+        (p) => p.kind === "missing" || (p.kind === "error" && p.stage === "config"),
+      );
+      if (hasMissingOrConfig) registryState = "partial";
+    }
+
     if (o.json) {
       const workspaces = fw.workspaces.map((ws, i) => {
         const r = results[i];
@@ -946,7 +955,7 @@ forge
           error: r.error,
         };
       });
-      console.log(JSON.stringify({ forge: f.root, registry: fw.state, workspaces }, null, 2));
+      console.log(JSON.stringify({ forge: fw.realForge, registry: registryState, workspaces }, null, 2));
       return;
     }
 
@@ -959,19 +968,19 @@ forge
     if (byMatch.clone) parts.push(`${byMatch.clone} by clone`);
 
     if (fw.state === "none") {
-      console.log(`craftar forge impact — ${f.root}`);
+      console.log(`craftar forge impact — ${fw.realForge}`);
       console.log(`  no registered workspace reads this Forge on this machine`);
       return;
     }
     if (fw.state === "off") {
-      console.log(`craftar forge impact — ${f.root}`);
+      console.log(`craftar forge impact — ${fw.realForge}`);
       console.log(`  the registry is off (CRAFTAR_NO_REGISTRY)`);
       return;
     }
 
     const n = fw.workspaces.length;
     console.log(
-      `craftar forge impact — ${f.root} · ${n} registered workspace${n === 1 ? "" : "s"} (${parts.join(", ")})`,
+      `craftar forge impact — ${fw.realForge} · ${n} registered workspace${n === 1 ? "" : "s"} (${parts.join(", ")})`,
     );
 
     const maxPath = Math.max(...fw.workspaces.map((ws) => ws.entry.path.length));

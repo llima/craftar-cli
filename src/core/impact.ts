@@ -39,6 +39,8 @@ export interface ForgeWorkspaces {
   state: RegistryState;
   workspaces: ForgeWorkspace[];
   warnings: string[];
+  /** The real path of the Forge directory (fs.realpath). */
+  realForge: string;
 }
 
 /** Run git and return stdout, or null if git fails (not a repository, etc.). */
@@ -104,15 +106,15 @@ export async function forgeWorkspaces(
   forgeDir: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ForgeWorkspaces> {
+  // Get the Forge's real path first, before checking CRAFTAR_NO_REGISTRY
+  const realForge = await fs.realpath(forgeDir);
+
   // Check CRAFTAR_NO_REGISTRY first
   if (env.CRAFTAR_NO_REGISTRY && env.CRAFTAR_NO_REGISTRY !== "") {
-    return { state: "off", workspaces: [], warnings: [] };
+    return { state: "off", workspaces: [], warnings: [], realForge };
   }
 
   const warnings: string[] = [];
-
-  // Get the Forge's real path
-  const realForge = await fs.realpath(forgeDir);
 
   // Get the Forge's remotes
   const forgeRemotes = await remoteUrls(forgeDir, warnings, realForge);
@@ -192,7 +194,10 @@ export async function forgeWorkspaces(
     state = "read";
   }
 
-  return { state, workspaces, warnings };
+  // Dedupe warnings (spec 25 §13 item 17: one warning per remote/clone)
+  const uniqueWarnings = [...new Set(warnings)];
+
+  return { state, workspaces, warnings: uniqueWarnings, realForge };
 }
 
 export type Planned =
@@ -298,21 +303,28 @@ export interface NextSyncResult {
   error: string | null;
 }
 
-/** The FileState values in declaration order. */
-const FILE_STATE_ORDER: FileState[] = [
-  "unchanged",
-  "new",
-  "update",
-  "drift",
-  "adopt",
-  "collision",
-  "orphan",
-  "orphan-drift",
-];
+/**
+ * FileState values in declaration order, compile-time exhaustive: adding a state without updating
+ * this record is a type error (spec 25 §9 item 5 nit).
+ */
+const FILE_STATE_ORDER_MAP: Record<FileState, number> = {
+  unchanged: 0,
+  new: 1,
+  update: 2,
+  drift: 3,
+  adopt: 4,
+  collision: 5,
+  orphan: 6,
+  "orphan-drift": 7,
+};
+const FILE_STATE_ORDER: FileState[] = (Object.keys(FILE_STATE_ORDER_MAP) as FileState[]).sort(
+  (a, b) => FILE_STATE_ORDER_MAP[a] - FILE_STATE_ORDER_MAP[b],
+);
 
 /**
  * What the next `sync` would do for a planned workspace: `status()` counts.
  * Keys are `FileState` values, only non-zero; `unchanged` when none.
+ * Catches errors from readLock/status so one workspace's failure stays on its row (spec 25 §4.1).
  */
 export async function nextSync(p: Planned): Promise<NextSyncResult> {
   if (p.kind === "missing") {
@@ -323,9 +335,16 @@ export async function nextSync(p: Planned): Promise<NextSyncResult> {
   }
 
   const ws = p.workspace;
-  const planned = await plan(ws);
-  const lock = await readLock(ws.root);
-  const statuses = await status(ws, planned, lock);
+  let lock: import("../schema/index.js").Lock | null;
+  let statuses: import("./sync.js").FileStatus[];
+  try {
+    const planned = await plan(ws);
+    lock = await readLock(ws.root);
+    statuses = await status(ws, planned, lock);
+  } catch (e) {
+    // An error here (e.g. a lock with schema: 9) becomes an error row, not a failed command
+    return { state: "error", counts: {}, error: e instanceof Error ? e.message : String(e) };
+  }
 
   const counts: Record<string, number> = {};
   for (const s of statuses) {

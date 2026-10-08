@@ -194,14 +194,15 @@ describe("forgeWorkspaces (spec 25 §3)", () => {
 
   it("test 8: CRAFTAR_NO_REGISTRY=1 returns off; no registry returns none", async () => {
     const f = await fixture();
+    const realForge = await fs.realpath(f.forgeRoot);
 
     // With CRAFTAR_NO_REGISTRY=1
     const offResult = await forgeWorkspaces(f.home, f.forgeRoot, { ...process.env, CRAFTAR_NO_REGISTRY: "1" });
-    expect(offResult).toEqual({ state: "off", workspaces: [], warnings: [] });
+    expect(offResult).toEqual({ state: "off", workspaces: [], warnings: [], realForge });
 
     // Without registry file (home doesn't exist)
     const noneResult = await forgeWorkspaces(f.home, f.forgeRoot);
-    expect(noneResult).toEqual({ state: "none", workspaces: [], warnings: [] });
+    expect(noneResult).toEqual({ state: "none", workspaces: [], warnings: [], realForge });
   });
 });
 
