@@ -107,6 +107,18 @@ describe("machine checks", () => {
     expect(one((await run({ home: f.home, registryOff: true })).checks, "registry")).toMatchObject({ level: "ok", message: "off (CRAFTAR_NO_REGISTRY)" });
     await writeFiles(f.home, { "registry.json": JSON.stringify({ schema: 2, workspaces: [] }) });
     expect(one((await run({ home: f.home })).checks, "registry")).toMatchObject({ level: "error", fix: "upgrade craftar" });
+    await writeFiles(f.home, { "registry.json": JSON.stringify({ schema: 1, workspaces: "x" }) });
+    const shape = one((await run({ home: f.home })).checks, "registry");
+    expect(shape).toMatchObject({ level: "error", fix: `repair or remove ${path.join(f.home, "registry.json")}` });
+    expect(shape.message).toMatch(/^invalid .*registry\.json \(workspaces: .+\)$/);
+  });
+
+  it("a craftar.yaml its schema refuses: config error in one line, naming the field", async () => {
+    const f = await fixture();
+    const a = await f.ws("acme-a", { profile: 3 });
+    const cfg = one((await run({ home: f.home, workspace: a })).checks, "config");
+    expect(cfg.level).toBe("error");
+    expect(cfg.message).toMatch(/^invalid craftar\.yaml \(profile: .+\)$/);
   });
 });
 

@@ -90,7 +90,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
   try {
     snapshot = await inspectCache(opts.home);
   } catch (e) {
-    snapshotError = (e as Error).message;
+    snapshotError = oneLine(e);
   }
   let merged: MergedConfig | null = null;
   let configError: string | null = null;
@@ -98,7 +98,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
     try {
       merged = await readWorkspaceConfig(given);
     } catch (e) {
-      configError = (e as Error).message;
+      configError = oneLine(e);
     }
   }
   const remote = merged !== null && classifyForge(merged.config.forge) === "url";
@@ -144,7 +144,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
     } catch (e) {
       registryWhyNot = "the registry cannot be read";
       const msg = (e as Error).message;
-      m("registry", "error", msg, /declares schema/.test(msg) ? "upgrade craftar" : `repair or remove ${registryFile(home)}`);
+      m("registry", "error", oneLine(e), /declares schema/.test(msg) ? "upgrade craftar" : `repair or remove ${registryFile(home)}`);
     }
   }
 
@@ -205,7 +205,7 @@ async function workspaceChecks(
         ws = await loadForgeFor(given, merged, { mode: opts.fetch ? "read" : "no-fetch", home: opts.home });
       } catch (e) {
         // Decided by stage, not by message (§5.1): the Forge of a remote configuration read offline failed to load.
-        w("config", "error", (e as Error).message, remote && !opts.fetch ? "craftar doctor --fetch" : null);
+        w("config", "error", oneLine(e), remote && !opts.fetch ? "craftar doctor --fetch" : null);
       }
     }
   }
@@ -240,7 +240,7 @@ async function workspaceChecks(
     try {
       p = await plan(ws);
     } catch (e) {
-      w("plan", "error", (e as Error).message, null);
+      w("plan", "error", oneLine(e), null);
     }
     if (p !== null) {
       const declaredUnset = declaredWithoutValue(p);
@@ -313,16 +313,37 @@ async function lockAndStatus(
   w("status", "warn", `${row} — ${detail}`, "craftar status, then craftar sync");
 }
 
+type Issue = { path: Array<string | number>; message: string };
+
+/** The first schema issue and how many follow, in one line. */
+const issuesLine = (prefix: string, issues: Issue[]) =>
+  `${prefix} (${issues[0].path.join(".") || "top level"}: ${issues[0].message}${issues.length > 1 ? `, and ${issues.length - 1} more` : ""})`;
+
+/**
+ * Any caught error as one line (§3: each check's message is one line). A schema refusal reaches doctor
+ * as `<what>: <zod's JSON list of issues>` (readYaml, the workspace and registry loads); its first issue is kept.
+ */
+function oneLine(e: unknown): string {
+  const msg = (e as Error).message;
+  if (!msg.includes("\n")) return msg;
+  const at = msg.indexOf(": [");
+  if (at >= 0) {
+    try {
+      const issues: unknown = JSON.parse(msg.slice(at + 2));
+      if (Array.isArray(issues) && issues.length > 0) return issuesLine(msg.slice(0, at), issues as Issue[]);
+    } catch {
+      // Not a zod list: fall through to the first line.
+    }
+  }
+  return msg.split("\n")[0];
+}
+
 /** A lock that does not read, in one line (§3): the zod dump and a bare JSON.parse message name nothing. */
 function lockMessage(e: unknown): string {
-  const issues = (e as { issues?: Array<{ path: Array<string | number>; message: string }> }).issues;
-  if (Array.isArray(issues) && issues.length > 0) {
-    const [first] = issues;
-    const more = issues.length > 1 ? `, and ${issues.length - 1} more` : "";
-    return `${LOCK_FILE} is not a valid lock (${first.path.join(".") || "top level"}: ${first.message}${more})`;
-  }
-  if (e instanceof SyntaxError) return `${LOCK_FILE} is not valid JSON (${e.message.split("\n")[0]})`;
-  return (e as Error).message.split("\n")[0];
+  const issues = (e as { issues?: Issue[] }).issues;
+  if (Array.isArray(issues) && issues.length > 0) return issuesLine(`${LOCK_FILE} is not a valid lock`, issues);
+  if (e instanceof SyntaxError) return `${LOCK_FILE} is not valid JSON (${oneLine(e)})`;
+  return oneLine(e);
 }
 
 /** Declared keys with no default that no layer fills, with the ingredients declaring them (§4.2). */
