@@ -1255,7 +1255,9 @@ function craftarHome(): string {
 function printDoctor(r: DoctorReport): void {
   console.log(pc.bold(`craftar doctor — craftar ${r.version} · ${r.workspace ?? "no workspace (machine checks only)"}`));
   const paint = (l: string) => (l === "error" ? pc.red : l === "warn" ? pc.yellow : pc.dim)(l.padEnd(6));
-  for (const c of r.checks) console.log(`  ${paint(c.level)} ${c.id.padEnd(13)} ${c.message}${c.fix && c.level !== "ok" ? ` — ${c.fix}` : ""}`);
+  // A message that already ends in its fix (a refused schema says "— upgrade craftar") is not suffixed twice.
+  const suffix = (c: DoctorReport["checks"][number]) => (c.fix && c.level !== "ok" && !c.message.endsWith(c.fix) ? ` — ${c.fix}` : "");
+  for (const c of r.checks) console.log(`  ${paint(c.level)} ${c.id.padEnd(13)} ${c.message}${suffix(c)}`);
   console.log(`summary: ${r.summary.ok} ok, ${r.summary.warn} warn, ${r.summary.error} error`);
 }
 

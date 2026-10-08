@@ -4381,6 +4381,14 @@ describe("cli — craftar doctor (spec 24 §9.2)", () => {
     expect(await fs.readFile(path.join(s.home, "registry.json"), "utf8")).toBe(reg);
   });
 
+  it("text: a message that already ends in its fix is not suffixed twice", async () => {
+    const s = await setup();
+    await writeFiles(s.home, { "registry.json": JSON.stringify({ schema: 9, workspaces: [] }) });
+    const out = s.run([], { cwd: s.root }).stdout;
+    expect(out).toMatch(/registry\.json declares schema 9, which this craftar does not read — upgrade craftar\n/);
+    expect(out).not.toContain("upgrade craftar — upgrade craftar");
+  });
+
   it("CRAFTAR_NO_REGISTRY: non-empty turns the registry off; empty still reads it", async () => {
     const s = await setup();
     await writeFiles(s.home, { "registry.json": JSON.stringify({ schema: 2, workspaces: [] }) });

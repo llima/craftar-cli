@@ -124,7 +124,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
   let reg: Registry | null = null;
   let registryWhyNot: string | null = null;
   if (opts.registryOff) {
-    registryWhyNot = "the registry is off (CRAFTAR_NO_REGISTRY)";
+    registryWhyNot = "CRAFTAR_NO_REGISTRY is set";
     m("registry", "ok", "off (CRAFTAR_NO_REGISTRY)");
   } else {
     try {

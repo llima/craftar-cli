@@ -140,11 +140,11 @@ describe("the cache check (§4.3)", () => {
 
   it("the orphan part is skipped, and says why, without a registry or when the checked craftar.yaml does not read", async () => {
     const c = await cacheFixture();
-    expect(one((await run({ home: c.home, registryOff: true })).checks, "cache").message).toMatch(/orphans not checked: the registry is off/);
+    expect(one((await run({ home: c.home, registryOff: true })).checks, "cache").message).toMatch(/\(orphans not checked: CRAFTAR_NO_REGISTRY is set\)$/);
     await fs.mkdir(path.join(c.home, "forges", "example.com-half-000000000000"), { recursive: true });
     expect(one((await run({ home: c.home, registryOff: true })).checks, "cache")).toMatchObject({
       level: "warn",
-      message: "example.com-half-000000000000 — a fetch never completed (orphans not checked: the registry is off (CRAFTAR_NO_REGISTRY))",
+      message: "example.com-half-000000000000 — a fetch never completed (orphans not checked: CRAFTAR_NO_REGISTRY is set)",
     });
     await fs.rm(path.join(c.home, "forges", "example.com-half-000000000000"), { recursive: true });
     const bad = path.join(c.root, "bad");
@@ -212,6 +212,8 @@ describe("workspace checks", () => {
     expect(refused.message).toMatch(/^craftar\.lock is not a valid lock \(.+\)$/);
     expect(refused.message).not.toContain("\n");
     expect(one(bad.checks, "lock").message).toMatch(/^craftar\.lock is not valid JSON \(/);
+    await writeFiles(c, { "craftar.lock": JSON.stringify({ schema: 9 }) });
+    expect(one((await run({ home: f.home, workspace: c })).checks, "lock")).toMatchObject({ level: "error", fix: "upgrade craftar", message: expect.stringMatching(/declares schema 9/) });
   });
 
   it("params: a declared key with no value warns once, naming its citers, and plan does not repeat it", async () => {
