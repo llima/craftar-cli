@@ -6008,8 +6008,7 @@ describe("cli — craftar cache prune (spec 26 §4)", () => {
     expect(await fs.readdir(s.home)).toEqual([]);
     await fs.writeFile(s.forges, "not a directory");
     const unreadable = s.run([]);
-    expect(unreadable.code).toBe(1);
-    expect([unreadable.stderr.startsWith("error: "), unreadable.stderr.includes(s.forges), unreadable.stdout]).toEqual([true, true, ""]);
+    expect([unreadable.code, unreadable.stdout, unreadable.stderr]).toEqual([1, "", `error: cannot read ${s.forges}: not a directory\n`]);
   });
 
   it("--help names the three options", async () => {

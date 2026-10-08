@@ -362,17 +362,37 @@ function withEntryLock<T>(entry: string, opts: LockOptions, body: () => Promise<
 
 /**
  * `withLock` on `forges/prune.lock` for the whole prune run (spec 26 §4.2 step 0). No `createDir`:
- * it never creates `forges/`. The body receives `refresh` to advance the lock's mtime.
+ * it never creates `forges/`. The body receives `refresh` to advance the lock's mtime and `bytes`
+ * (the lock file's size just after acquisition, 0 when unreadable).
  */
-export async function withPruneLock<T>(home: string, opts: LockTiming, body: (refresh: () => Promise<void>) => Promise<T>): Promise<T> {
+export async function withPruneLock<T>(home: string, opts: LockTiming, body: (lock: { refresh: () => Promise<void>; bytes: number }) => Promise<T>): Promise<T> {
   const lockFile = path.join(path.resolve(home), "forges", "prune.lock");
   return withLock(lockFile, "the Forge cache prune lock", opts, async () => {
+    const bytes = await fs.lstat(lockFile).then((s) => s.size, () => 0);
     const refresh = async () => {
       const now = new Date();
       await fs.utimes(lockFile, now, now).catch(() => {});
     };
-    return body(refresh);
+    return body({ refresh, bytes });
   });
+}
+
+/**
+ * Whether `$CRAFTAR_HOME/forges` exists (spec 26 §4.2 step 0, §4.6). Returns `"absent"` when ENOENT,
+ * `"present"` when it is a directory, throws when it exists but is not a directory or on any other error.
+ */
+export async function cacheDir(home: string): Promise<"absent" | "present"> {
+  const forges = path.join(path.resolve(home), "forges");
+  try {
+    const st = await fs.lstat(forges);
+    if (!st.isDirectory()) throw new Error(`cannot read ${forges}: not a directory`);
+    return "present";
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return "absent";
+    if ((e as Error).message.startsWith("cannot read ")) throw e;
+    throw new Error(`cannot read ${forges}: ${code ?? (e as Error).message}`);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -447,7 +467,7 @@ export interface RemoveEntryOptions extends LockOptions {
  * moves the parts out (`fetched` first, then `repo.git`, then `trees`), releases, `rmdir`s the entry,
  * removes the moved contents. A busy lock → `busy`; a failed rename → `held-open`, parts moved back.
  */
-export async function removeEntry(entry: string, stillPrunable: () => Promise<boolean>, opts: RemoveEntryOptions): Promise<RemoveOutcome> {
+export async function removeEntry(entry: string, stillPrunable: (now: { fetched: boolean }) => Promise<boolean>, opts: RemoveEntryOptions): Promise<RemoveOutcome> {
   const key = path.basename(entry);
   const removalDir = path.join(path.dirname(entry), `${REMOVING_PREFIX}${key}-${process.pid}`);
   const rename = opts.rename ?? fs.rename;
@@ -457,7 +477,13 @@ export async function removeEntry(entry: string, stillPrunable: () => Promise<bo
   let outcome: RemoveOutcome;
   try {
     outcome = await withEntryLock(entry, opts, async () => {
-      if (!(await stillPrunable())) return { outcome: "kept" as const, warnings: [] };
+      // Re-check under the lock, passing the fetched state as read now.
+      const fetched = await exists(path.join(entry, "fetched"));
+      if (!(await stillPrunable({ fetched }))) return { outcome: "kept" as const, warnings: [] };
+
+      // Clear a leftover removal directory with this run's name (same PID) before the move,
+      // so it never blocks the move (docs-author nit).
+      await removeLeftover(removalDir);
 
       // Move parts out in order: fetched first (so a reader from then on sees no copy).
       for (const part of parts) {

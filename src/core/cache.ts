@@ -1,10 +1,10 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { exists } from "./forge.js";
 import { LockBusyError, type LockTiming } from "./home-lock.js";
 import { namedCacheKeys, readRegistry } from "./registry.js";
 import type { Registry } from "../schema/index.js";
 import {
+  cacheDir,
   cacheKey,
   classifyForge,
   inspectCache,
@@ -77,7 +77,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
   const rel = (dir: string) => path.relative(home, dir).split(path.sep).join("/");
 
   // Step 1: No forges/ → empty report with header null (before the lock, §4.2 step 0).
-  if (!(await exists(forgesDir))) {
+  if ((await cacheDir(home)) === "absent") {
     return {
       report: { home, dryRun: opts.dryRun, removed: [], kept: [], freedBytes: 0, warnings: [] },
       header: null,
@@ -88,7 +88,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
 
   // The actual prune work: under the prune lock for a run, no lock for dry-run.
   // Everything after the "no forges/" check runs under the prune lock (§4.2 step 0, correction 1).
-  const doPrune = async (refresh: () => Promise<void>) => {
+  const doPrune = async (lock: { refresh: () => Promise<void>; bytes: number }) => {
     const start = Date.now();
 
     // Step 2: Determine naming info (§4.2 step 2) — under the lock so a waiting prune sees the state
@@ -131,8 +131,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
     }
     // Header bytes is the whole of forges/ (snapshot.bytes) minus the prune.lock this run holds:
     // the lock is in forges/ during the snapshot but is not part of the cache content.
-    const pruneLockSize = await fs.lstat(path.join(forgesDir, "prune.lock")).then((s) => s.size, () => 0);
-    const headerBytes = snapshot.bytes - pruneLockSize;
+    const headerBytes = snapshot.bytes - lock.bytes;
     const header = { forges: forgesDir, entries: snapshot.entries.length, bytes: headerBytes };
 
     const removed: PruneRemoved[] = [];
@@ -145,7 +144,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
     }
 
     const step = async () => {
-      await refresh();
+      await lock.refresh();
       await opts.beforeStep?.();
     };
 
@@ -185,7 +184,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
       let finalReason = reason;
       let recheckNamed: Map<string, string[]> | null = null; // Correction 2: capture named2 from re-check.
 
-      const stillPrunable = async (): Promise<boolean> => {
+      const stillPrunable = async (now: { fetched: boolean }): Promise<boolean> => {
         let reg2: Registry;
         try {
           reg2 = await readRegistry(home);
@@ -194,9 +193,8 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
           return false;
         }
         recheckNamed = namedCacheKeys(reg2, checked);
-        const fetched2 = await exists(path.join(e.dir, "fetched"));
-        finalReason = !fetched2 ? "incomplete" : "orphan";
-        return !fetched2 || !recheckNamed.has(e.key);
+        finalReason = !now.fetched ? "incomplete" : "orphan";
+        return !now.fetched || !recheckNamed.has(e.key);
       };
 
       const outcome = await removeEntry(e.dir, stillPrunable, {
@@ -309,8 +307,8 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
 
   // Under prune lock for a run, no lock for dry-run.
   if (opts.dryRun) {
-    // No lock for dry-run; refresh is a no-op.
-    return doPrune(async () => {});
+    // No lock for dry-run; refresh is a no-op, bytes is 0.
+    return doPrune({ refresh: async () => {}, bytes: 0 });
   } else {
     return withPruneLock(home, opts, doPrune);
   }

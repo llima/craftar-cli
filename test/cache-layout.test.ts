@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LockBusyError } from "../src/core/home-lock.js";
-import { REMOVING_PREFIX, cacheKey, ensureTree, inspectCache, pruneTrees, removeEntry, removeLeftover, withPruneLock } from "../src/core/remote.js";
+import { REMOVING_PREFIX, cacheDir, cacheKey, ensureTree, inspectCache, pruneTrees, removeEntry, removeLeftover, withPruneLock } from "../src/core/remote.js";
 import { profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
 import { git, remoteForge } from "./helpers/remote.js";
 
@@ -207,6 +207,41 @@ describe("removeEntry (§4.3)", () => {
     expect((await inspectCache(h)).entries.map((e) => [e.key, e.fetched])).toEqual([[cacheKey(r.url), false]]);
     expect((await ensureTree(r.url, null, { home: h })).fetched).toBe(true);
   });
+
+  it("the re-check callback receives now.fetched from the actual state under the lock", async () => {
+    const h = await home();
+    const { entry } = await cached(h);
+    const seen: boolean[] = [];
+    await removeEntry(entry, async (now) => { seen.push(now.fetched); return false; }, {});
+    await fs.rm(path.join(entry, "fetched"));
+    await removeEntry(entry, async (now) => { seen.push(now.fetched); return false; }, {});
+    expect(seen).toEqual([true, false]);
+  });
+
+  it("a leftover removal directory with this run's name is cleared before the move", async () => {
+    const h = await home();
+    const { entry, key } = await cached(h);
+    await writeFiles(path.join(h, "forges", `~removing-${key}-${process.pid}`), { "repo.git/HEAD": "old" });
+    expect(await removeEntry(entry, async () => true, {})).toEqual({ outcome: "removed", warnings: [] });
+    expect(await ls(path.join(h, "forges"))).toEqual([]);
+  });
+
+  it("a move back that fails too: the part stays in the removal directory, a second warning", async () => {
+    const h = await home();
+    const { entry, key } = await cached(h);
+    const removal = path.join(h, "forges", `~removing-${key}-${process.pid}`);
+    const rename = async (from: string, to: string) => {
+      if (path.basename(from) === "repo.git" && path.dirname(from) === entry) throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      if (path.basename(from) === "fetched" && path.dirname(from) === removal) throw Object.assign(new Error("perm"), { code: "EPERM" });
+      await fs.rename(from, to);
+    };
+    expect(await removeEntry(entry, async () => true, { rename })).toEqual({
+      outcome: "held-open",
+      code: "EBUSY",
+      warnings: [`${key} is held open (EBUSY) — kept`, `${key}: fetched left in ${removal} (EPERM) — the next prune removes it`],
+    });
+    expect([await ls(entry), await ls(removal)]).toEqual([["repo.git", "trees"], ["fetched"]]);
+  });
 });
 
 describe("withPruneLock and removeLeftover (§4.2 steps 0 and 6)", () => {
@@ -214,13 +249,13 @@ describe("withPruneLock and removeLeftover (§4.2 steps 0 and 6)", () => {
     const h = await home();
     await fs.mkdir(path.join(h, "forges"));
     const lock = path.join(h, "forges", "prune.lock");
-    const seen = await withPruneLock(h, {}, async (refresh) => {
+    const seen = await withPruneLock(h, {}, async ({ refresh, bytes }) => {
       await fs.utimes(lock, ago(DAY), ago(DAY));
       const old = (await fs.stat(lock)).mtimeMs;
       await refresh();
-      return [(await fs.readFile(lock, "utf8")).split(" ")[0], (await fs.stat(lock)).mtimeMs > old + DAY / 2];
+      return [(await fs.readFile(lock, "utf8")).split(" ")[0], (await fs.stat(lock)).mtimeMs > old + DAY / 2, bytes === (await fs.stat(lock)).size];
     });
-    expect(seen).toEqual([String(process.pid), true]);
+    expect(seen).toEqual([String(process.pid), true, true]);
     expect(await ls(path.join(h, "forges"))).toEqual([]);
   });
 
@@ -252,5 +287,33 @@ describe("withPruneLock and removeLeftover (§4.2 steps 0 and 6)", () => {
     await fs.chmod(path.join(dir, "sub"), 0o500);
     cleanups.push(() => fs.chmod(path.join(dir, "sub"), 0o700));
     expect(await removeLeftover(dir)).toBe(`cannot remove ${dir}: EACCES — the next prune retries it`);
+  });
+});
+
+// Review round 1: the layout stays in remote.ts.
+describe("review round 1: the layout stays in remote.ts", () => {
+  it("cacheDir returns 'absent' when forges/ does not exist", async () => {
+    const h = await home();
+    expect(await cacheDir(h)).toBe("absent");
+  });
+
+  it("cacheDir returns 'present' when forges/ is a directory", async () => {
+    const h = await home();
+    await fs.mkdir(path.join(h, "forges"));
+    expect(await cacheDir(h)).toBe("present");
+  });
+
+  it("cacheDir throws when forges/ exists but is not a directory", async () => {
+    const h = await home();
+    await fs.writeFile(path.join(h, "forges"), "not a directory");
+    await expect(cacheDir(h)).rejects.toThrow("not a directory");
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("cacheDir throws on EACCES when parent is unreadable", async () => {
+    const h = await home();
+    await fs.mkdir(path.join(h, "forges"));
+    await fs.chmod(h, 0o000);
+    cleanups.push(() => fs.chmod(h, 0o700));
+    await expect(cacheDir(h)).rejects.toThrow(/EACCES/);
   });
 });
