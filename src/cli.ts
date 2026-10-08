@@ -8,6 +8,7 @@ import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
+import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
 import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type Workspace } from "./core/sync.js";
 import type { Lock } from "./schema/index.js";
@@ -1570,6 +1571,36 @@ forge
     }
   });
 
+/* ---------------------------------------------------------------- cache ---------------------------------------------------------------- */
+const cache = program.command("cache").description("The per-machine Forge cache in $CRAFTAR_HOME/forges/");
+
+cache
+  .command("prune")
+  .description(
+    "Remove the Forge cache entries nothing uses — no registered workspace and not this one — the entries whose first fetch never completed, and trees unused for 14 days; --dry-run only shows. Never touches a workspace, a lock or the registry; no network",
+  )
+  // No commander default: an explicit --workspace without craftar.yaml exits 1, the current directory without one runs (spec 26 §4.1).
+  .option("--dry-run", "show what would be removed; remove nothing", false)
+  .option("--workspace <dir>", "the workspace whose Forge counts as used besides the registry (default: the current directory, when it holds craftar.yaml)")
+  .option("--json", "machine-readable output", false)
+  .action(async (o) => {
+    let workspace: string | null = null;
+    if (o.workspace !== undefined) {
+      if (!(await exists(path.join(o.workspace, WORKSPACE_FILE))))
+        fail(`no ${WORKSPACE_FILE} in ${path.resolve(o.workspace)} — run cache prune inside a workspace, or without --workspace`);
+      workspace = o.workspace;
+    } else if (await exists(path.join(process.cwd(), WORKSPACE_FILE))) workspace = process.cwd();
+
+    const result = await pruneCache(craftarHome(), {
+      dryRun: o.dryRun,
+      workspace,
+      registryOff: registryOff(),
+    });
+
+    if (o.json) console.log(JSON.stringify(result.report, null, 2));
+    else printPrune(result);
+  });
+
 program.parseAsync().catch((e) => fail(e instanceof Error ? e.message : String(e)));
 
 /* ---------------------------------------------------------------- helpers */
@@ -1604,6 +1635,69 @@ function printDoctor(r: DoctorReport): void {
   const suffix = (c: DoctorReport["checks"][number]) => (c.fix && c.level !== "ok" && !c.message.endsWith(c.fix) ? ` — ${c.fix}` : "");
   for (const c of r.checks) console.log(`  ${paint(c.level)} ${c.id.padEnd(13)} ${c.message}${suffix(c)}`);
   console.log(`summary: ${r.summary.ok} ok, ${r.summary.warn} warn, ${r.summary.error} error`);
+}
+
+/** The text report of `craftar cache prune` (spec 26 §4.4) — presentation, not contract. */
+function printPrune(result: CachePruneResult): void {
+  const mb = (b: number) => `${(b / (1024 * 1024)).toFixed(1)} MB`;
+
+  if (result.header === null) {
+    console.log("nothing to prune");
+    for (const w of result.report.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+    return;
+  }
+
+  const { forges, entries, bytes } = result.header;
+  console.log(pc.bold(`craftar cache prune — ${forges} (${entries} ${entries === 1 ? "entry" : "entries"}, ${mb(bytes)})`));
+
+  // Compute label width: for entries/leftovers, just the key; for trees, `<key>/trees/<first 10 of commit>…`.
+  const labelOf = (r: typeof result.report.removed[number] | typeof result.report.kept[number]): string => {
+    const p = r.path;
+    if ("kind" in r && r.kind === "tree") {
+      // forges/<key>/trees/<commit> → <key>/trees/<commit10>…
+      const parts = p.split("/");
+      return `${parts[1]}/trees/${parts[3].slice(0, 10)}…`;
+    }
+    // forges/<key> or forges/~removing-<...> → last segment
+    return p.split("/").pop()!;
+  };
+
+  const whyRemoved = (r: typeof result.report.removed[number]): string => {
+    if (r.reason === "orphan") return "orphan: nothing names it";
+    if (r.reason === "incomplete") return "incomplete: a fetch never completed";
+    if (r.reason === "unused") return "unused for 14 days or more";
+    return "leftover of an interrupted prune";
+  };
+
+  const whyKept = (k: typeof result.report.kept[number]): string => {
+    if (k.reason === "named") return `named by ${k.namedBy.join(", ")}`;
+    if (k.reason === "busy") return "in use";
+    if (k.reason === "held-open") return "held open";
+    return "not checked";
+  };
+
+  // Compute column widths W (label) and V (why) across removed and kept rows.
+  const allLabels = [...result.report.removed, ...result.report.kept].map(labelOf);
+  const removedWhys = result.report.removed.map(whyRemoved);
+  const keptWhys = result.report.kept.map(whyKept);
+  const W = Math.max(1, ...allLabels.map((l) => l.length));
+  const V = Math.max(1, ...removedWhys.map((w) => w.length), ...keptWhys.map((w) => w.length));
+
+  const verb = result.report.dryRun ? "would remove" : "removed";
+  for (const r of result.report.removed) {
+    console.log(`  ${verb.padEnd(12)} ${labelOf(r).padEnd(W)} ${whyRemoved(r).padEnd(V)} ${mb(r.bytes)}`);
+  }
+
+  for (const k of result.report.kept) {
+    console.log(`  ${"kept".padEnd(12)} ${labelOf(k).padEnd(W)} ${whyKept(k)}`);
+  }
+
+  for (const w of result.report.warnings) {
+    console.log(`  ${pc.yellow("warn")} ${w}`);
+  }
+
+  const freedVerb = result.report.dryRun ? "would free" : "freed";
+  console.log(`${freedVerb} ${mb(result.report.freedBytes)}`);
 }
 
 /** `CRAFTAR_NO_REGISTRY` — "no registry", read like NO_COLOR: any non-empty value turns it off (spec 21 §4.1). */

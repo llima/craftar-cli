@@ -9,6 +9,7 @@ import { git, remoteForge } from "./helpers/remote.js";
 import { TSX_LOADER } from "./helpers/tsx-loader.js";
 import { exists, listFiles } from "../src/core/forge.js";
 import { UnifyPlanSchema } from "../src/schema/index.js";
+import { cacheKey, ensureTree } from "../src/core/remote.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -5919,5 +5920,101 @@ targets:
 
     // Recipe file still exists
     expect(await exists(path.join(forge, "recipes/base--acme.yaml"))).toBe(true);
+  });
+});
+
+describe("cli — craftar cache prune (spec 26 §4)", () => {
+  const SPEC = { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] };
+  const mb = (b: number) => `${(b / (1024 * 1024)).toFixed(1)} MB`;
+
+  async function setup() {
+    const root = await tmpDir("craftar-prune-cli-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const r = await remoteForge(SPEC);
+    cleanups.push(r.cleanup);
+    await ensureTree(r.url, null, { home });
+    const key = cacheKey(r.url);
+    const run = (args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) =>
+      runCli(["cache", "prune", ...args], { cwd: opts.cwd ?? root, env: { CRAFTAR_HOME: home, CRAFTAR_NO_REGISTRY: "", ...opts.env } });
+    return { root, home, r, key, forges: path.join(home, "forges"), run };
+  }
+
+  it("an orphan entry: the header, one removed line, the total; exit 0; the entry is gone", async () => {
+    const s = await setup();
+    const out = s.run([]);
+    expect([out.code, out.stderr]).toEqual([0, ""]);
+    const lines = out.stdout.split("\n");
+    expect(lines[0]).toMatch(new RegExp(`^craftar cache prune — ${s.forges.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(1 entry, \\d+\\.\\d MB\\)$`));
+    expect(lines[1]).toMatch(new RegExp(`^  removed {6}${s.key} orphan: nothing names it \\d+\\.\\d MB$`));
+    expect(lines.slice(2)).toEqual([expect.stringMatching(/^freed \d+\.\d MB$/), ""]);
+    expect(await fs.readdir(s.forges)).toEqual([]);
+  });
+
+  it("--dry-run: would remove, would free, nothing removed", async () => {
+    const s = await setup();
+    const out = s.run(["--dry-run"]);
+    expect(out.code).toBe(0);
+    expect(out.stdout.split("\n").slice(1)).toEqual([
+      expect.stringMatching(new RegExp(`^  would remove ${s.key} orphan: nothing names it \\d+\\.\\d MB$`)),
+      expect.stringMatching(/^would free \d+\.\d MB$/),
+      "",
+    ]);
+    expect(await fs.readdir(s.forges)).toEqual([s.key]);
+  });
+
+  it("--json prints the report only, keys in the contract's order", async () => {
+    const s = await setup();
+    const out = s.run(["--json", "--dry-run"]);
+    expect(out.code).toBe(0);
+    const report = JSON.parse(out.stdout);
+    expect(Object.keys(report)).toEqual(["home", "dryRun", "removed", "kept", "freedBytes", "warnings"]);
+    expect([report.home, report.dryRun, report.removed.map((x: { path: string; kind: string; reason: string }) => [x.path, x.kind, x.reason]), report.kept, report.warnings]).toEqual([
+      s.home,
+      true,
+      [[`forges/${s.key}`, "entry", "orphan"]],
+      [],
+      [],
+    ]);
+  });
+
+  it("the current directory naming the Forge keeps its entry; CRAFTAR_NO_REGISTRY keeps every entry, with the warning", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "acme-a");
+    await writeFiles(ws, { "craftar.yaml": `forge: ${s.r.url}\nprofile: acme\n` });
+    const here = s.run([], { cwd: ws });
+    expect(here.stdout.split("\n").slice(1)).toEqual([`  kept         ${s.key} named by ${await fs.realpath(ws)}`, "freed 0.0 MB", ""]);
+    const off = s.run([], { env: { CRAFTAR_NO_REGISTRY: "1" } });
+    expect(off.code).toBe(0);
+    expect(off.stdout.split("\n").slice(1)).toEqual([
+      `  kept         ${s.key} not checked`,
+      "  warn whole entries kept: CRAFTAR_NO_REGISTRY is set — nothing can tell which ones are used",
+      "freed 0.0 MB",
+      "",
+    ]);
+    expect(await fs.readdir(s.forges)).toEqual([s.key]);
+  });
+
+  it("an explicit --workspace without craftar.yaml exits 1 on stderr; an unreadable forges/ exits 1 naming it; no forges/: nothing to prune", async () => {
+    const s = await setup();
+    for (const extra of [[], ["--json"]]) {
+      const bad = s.run(["--workspace", s.root, ...extra]);
+      expect([bad.code, bad.stdout]).toEqual([1, ""]);
+      expect(bad.stderr).toBe(`error: no craftar.yaml in ${s.root} — run cache prune inside a workspace, or without --workspace\n`);
+    }
+    await fs.rm(s.forges, { recursive: true, force: true });
+    const none = s.run([]);
+    expect([none.code, none.stdout, none.stderr]).toEqual([0, "nothing to prune\n", ""]);
+    expect(await fs.readdir(s.home)).toEqual([]);
+    await fs.writeFile(s.forges, "not a directory");
+    const unreadable = s.run([]);
+    expect(unreadable.code).toBe(1);
+    expect([unreadable.stderr.startsWith("error: "), unreadable.stderr.includes(s.forges), unreadable.stdout]).toEqual([true, true, ""]);
+  });
+
+  it("--help names the three options", async () => {
+    const out = runCli(["cache", "prune", "--help"]);
+    expect(out.code).toBe(0);
+    for (const flag of ["--dry-run", "--workspace <dir>", "--json"]) expect(out.stdout).toContain(flag);
   });
 });
