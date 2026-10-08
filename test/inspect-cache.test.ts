@@ -18,7 +18,7 @@ describe("inspectCache", () => {
   it("no forges directory → an empty snapshot", async () => {
     const home = await tmpDir();
     cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
-    expect(await inspectCache(home)).toEqual({ forges: path.join(home, "forges"), entries: [], bytes: 0 });
+    expect(await inspectCache(home)).toEqual({ forges: path.join(home, "forges"), entries: [], removing: [], bytes: 0 });
   });
 
   it("an entry after a fetch: fetched, its tree complete, its size summed; an incomplete entry apart; the total counts loose files too", async () => {
@@ -37,7 +37,7 @@ describe("inspectCache", () => {
     expect(full.fetched).toBe(true);
     expect(full.fetchedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(full.bytes).toBeGreaterThan(0);
-    expect(full.trees).toEqual([{ commit: t.commit, complete: true, lastUse: expect.any(Number) }]);
+    expect(full.trees).toEqual([{ commit: t.commit, complete: true, lastUse: expect.any(Number), bytes: expect.any(Number) }]);
     expect(byKey["example.com-half-000000000000"]).toMatchObject({ fetched: false, fetchedAt: null, trees: [] });
   });
 
@@ -52,8 +52,8 @@ describe("inspectCache", () => {
     await fs.utimes(path.join(trees, "c2"), dirTime, dirTime);
     const [e] = (await inspectCache(home)).entries;
     expect(e.trees).toEqual([
-      { commit: "c1", complete: true, lastUse: old.getTime() },
-      { commit: "c2", complete: false, lastUse: dirTime.getTime() },
+      { commit: "c1", complete: true, lastUse: old.getTime(), bytes: 3 },
+      { commit: "c2", complete: false, lastUse: dirTime.getTime(), bytes: 1 },
     ]);
   });
 });
