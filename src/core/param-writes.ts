@@ -37,7 +37,7 @@ export interface ParamWrites {
 
 
 /** The profile file whose `name` field is `name`; last match wins, as `loadForge` keys profiles. */
-async function findProfileFile(root: string, name: string): Promise<string | null> {
+export async function findProfileFile(root: string, name: string): Promise<string | null> {
   const dir = path.join(root, "profiles");
   let found: string | null = null;
   let entries: import("node:fs").Dirent[] = [];
