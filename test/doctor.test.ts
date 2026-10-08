@@ -141,6 +141,12 @@ describe("the cache check (§4.3)", () => {
   it("the orphan part is skipped, and says why, without a registry or when the checked craftar.yaml does not read", async () => {
     const c = await cacheFixture();
     expect(one((await run({ home: c.home, registryOff: true })).checks, "cache").message).toMatch(/orphans not checked: the registry is off/);
+    await fs.mkdir(path.join(c.home, "forges", "example.com-half-000000000000"), { recursive: true });
+    expect(one((await run({ home: c.home, registryOff: true })).checks, "cache")).toMatchObject({
+      level: "warn",
+      message: "example.com-half-000000000000 — a fetch never completed (orphans not checked: the registry is off (CRAFTAR_NO_REGISTRY))",
+    });
+    await fs.rm(path.join(c.home, "forges", "example.com-half-000000000000"), { recursive: true });
     const bad = path.join(c.root, "bad");
     await writeFiles(bad, { "craftar.yaml": "forge: [\n" });
     expect(one((await run({ home: c.home, workspace: bad })).checks, "cache").message).toMatch(/orphans not checked: the checked craftar.yaml does not read/);
@@ -201,7 +207,11 @@ describe("workspace checks", () => {
     expect(one(bad.checks, "lock")).toMatchObject({ level: "error", fix: "repair or remove craftar.lock" });
     expect(of(bad.checks, "status")).toHaveLength(0);
     await writeFiles(c, { "craftar.lock": JSON.stringify({ schema: 2, generatedAt: 5, files: "x" }) });
-    expect(one((await run({ home: f.home, workspace: c })).checks, "lock")).toMatchObject({ level: "error", fix: "repair or remove craftar.lock" });
+    const refused = one((await run({ home: f.home, workspace: c })).checks, "lock");
+    expect(refused).toMatchObject({ level: "error", fix: "repair or remove craftar.lock" });
+    expect(refused.message).toMatch(/^craftar\.lock is not a valid lock \(.+\)$/);
+    expect(refused.message).not.toContain("\n");
+    expect(one(bad.checks, "lock").message).toMatch(/^craftar\.lock is not valid JSON \(/);
   });
 
   it("params: a declared key with no value warns once, naming its citers, and plan does not repeat it", async () => {
@@ -255,11 +265,14 @@ describe("workspace checks", () => {
     expect(of(r.checks, "mcp-env").map((c) => c.message)).toEqual(['server "api" expects ACME_A, not set', 'server "api" expects ACME_B, not set']);
   });
 
-  it("forge-inside: a workspace inside its path Forge warns", async () => {
+  it("forge-inside: a workspace inside its path Forge warns; a directory named ..x inside it too", async () => {
     const f = await fixture();
     const inner = path.join(f.forgeRoot, "ws");
     await makeWorkspace(inner, f.forgeRoot, { config: { profile: "acme" } });
     expect(one((await run({ home: f.home, workspace: inner })).checks, "forge-inside").level).toBe("warn");
+    const dotted = path.join(f.forgeRoot, "..x");
+    await makeWorkspace(dotted, f.forgeRoot, { config: { profile: "acme" } });
+    expect(one((await run({ home: f.home, workspace: dotted })).checks, "forge-inside").level).toBe("warn");
   });
 
   it("config: a ref beside a path Forge is a config warn, not repeated under plan", async () => {

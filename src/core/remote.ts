@@ -113,7 +113,7 @@ export function parseLsRemote(stdout: string): LsRemote {
   return out;
 }
 
-const FULL_SHA = /^[0-9a-f]{40}$/;
+export const FULL_SHA = /^[0-9a-f]{40}$/;
 
 /**
  * The commit a requested ref names, in the order of spec 13 §6.2. A full SHA is returned as is: the
@@ -221,7 +221,7 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
   const stamp = path.join(entry, "fetched");
   // A copy exists once a fetch completed: an init whose fetch then failed leaves no stamp.
   const haveCopy = await exists(stamp);
-  const fetchedAt = () => readFetchedStamp(stamp);
+  const fetchedAt = async () => ((await exists(stamp)) ? readFetchedStamp(stamp) : null);
   const label = ref ?? "the default branch";
 
   // A full SHA already in the cache names the same commit whatever the remote does: no fetch (§14 item 3).
@@ -429,9 +429,9 @@ export interface CacheSnapshot {
   bytes: number;
 }
 
-/** The `fetched` stamp's time, when the file exists and reads as one: the one parse `ensureTree` and the snapshot share. */
+/** The `fetched` stamp's time, when it reads as one: the one parse `ensureTree` and the snapshot share. Throws when the stamp cannot be read. */
 async function readFetchedStamp(stamp: string): Promise<string | null> {
-  const text = (await fs.readFile(stamp, "utf8").catch(() => "")).trim();
+  const text = (await fs.readFile(stamp, "utf8")).trim();
   return /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(text) ? text : null;
 }
 
@@ -469,7 +469,7 @@ export async function inspectCache(home: string): Promise<CacheSnapshot> {
       dir,
       bytes: await sizeOf(dir),
       fetched,
-      fetchedAt: fetched ? await readFetchedStamp(stamp) : null,
+      fetchedAt: fetched ? await readFetchedStamp(stamp).catch(() => null) : null,
       trees: treeInfo,
     });
   }

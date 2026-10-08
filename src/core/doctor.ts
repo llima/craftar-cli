@@ -6,7 +6,7 @@ import type { Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
 import { isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus } from "./registry.js";
-import { cacheKey, classifyForge, inspectCache, type CacheSnapshot } from "./remote.js";
+import { FULL_SHA, cacheKey, classifyForge, inspectCache, type CacheSnapshot } from "./remote.js";
 import { paramsFor } from "./resolve.js";
 import { LOCK_FILE, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
 import { outName } from "../emitters/shared.js";
@@ -70,7 +70,6 @@ async function defaultGitVersion(): Promise<string | null> {
 const MB = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 const short = (sha: string | null) => (sha ? sha.slice(0, 8) : "no git");
 const NAME_REF = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
-const FULL_SHA = /^[0-9a-f]{40}$/;
 const refLabel = (ref: string | null, defaultBranch: string | null) => ref ?? (defaultBranch ? `${defaultBranch} (default branch)` : "the default branch");
 const CACHE_FIX = (dir: string) => `remove ${dir} by hand (craftar cache prune is planned)`;
 
@@ -169,8 +168,10 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
       for (const e of snapshot.entries)
         if (e.fetched && !named.has(e.key)) findings.push({ id: "cache", scope: "machine", level: "warn", message: `${e.key} — nothing names it`, fix: CACHE_FIX(e.dir) });
     }
-    if (findings.length === 0) m("cache", "ok", skip === null ? summary : `${summary} (orphans not checked: ${skip})`);
-    else checks.push(...findings);
+    // A skipped orphan part is said on every cache line, findings included (§4.3, §13 item 6).
+    const why = skip === null ? "" : ` (orphans not checked: ${skip})`;
+    if (findings.length === 0) m("cache", "ok", `${summary}${why}`);
+    else checks.push(...findings.map((c) => ({ ...c, message: `${c.message}${why}` })));
   }
 
   // ---- workspace
@@ -229,7 +230,7 @@ async function workspaceChecks(
     if (o.kind === "path") {
       const forgeReal = await fs.realpath(ws.forge.root).catch(() => ws!.forge.root);
       const rel = path.relative(forgeReal, root);
-      const inside = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+      const inside = rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
       if (inside) w("forge-inside", "warn", `the workspace lies inside its Forge (${forgeReal})`, "move the workspace out of the Forge");
       else w("forge-inside", "ok", "outside the Forge");
     } else w("forge-inside", "ok", "outside the Forge (remote)");
@@ -291,7 +292,7 @@ async function lockAndStatus(
     lock = await readLock(root);
   } catch (e) {
     const msg = (e as Error).message;
-    w("lock", "error", msg, /declares schema/.test(msg) ? "upgrade craftar" : "repair or remove craftar.lock");
+    w("lock", "error", lockMessage(e), /declares schema/.test(msg) ? "upgrade craftar" : `repair or remove ${LOCK_FILE}`);
     return;
   }
   if (lock === null) {
@@ -310,6 +311,18 @@ async function lockAndStatus(
   for (const s of st) if (s.state !== "unchanged" && s.state !== "adopt") counts[s.state] = (counts[s.state] ?? 0) + 1;
   const detail = Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(", ");
   w("status", "warn", `${row} — ${detail}`, "craftar status, then craftar sync");
+}
+
+/** A lock that does not read, in one line (§3): the zod dump and a bare JSON.parse message name nothing. */
+function lockMessage(e: unknown): string {
+  const issues = (e as { issues?: Array<{ path: Array<string | number>; message: string }> }).issues;
+  if (Array.isArray(issues) && issues.length > 0) {
+    const [first] = issues;
+    const more = issues.length > 1 ? `, and ${issues.length - 1} more` : "";
+    return `${LOCK_FILE} is not a valid lock (${first.path.join(".") || "top level"}: ${first.message}${more})`;
+  }
+  if (e instanceof SyntaxError) return `${LOCK_FILE} is not valid JSON (${e.message.split("\n")[0]})`;
+  return (e as Error).message.split("\n")[0];
 }
 
 /** Declared keys with no default that no layer fills, with the ingredients declaring them (§4.2). */
