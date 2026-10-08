@@ -342,4 +342,16 @@ describe("review round 2", () => {
     await fs.symlink(real, path.join(h, "forges"), process.platform === "win32" ? "junction" : "dir");
     expect(await cacheDir(h)).toBe("present");
   });
+
+  it("a rename failing with another code (ENOTEMPTY): held-open too, parts moved back, nothing thrown", async () => {
+    const h = await home();
+    const { entry, key } = await cached(h);
+    const rename = async (from: string, to: string) => {
+      if (path.basename(from) === "repo.git" && path.dirname(from) === entry) throw Object.assign(new Error("not empty"), { code: "ENOTEMPTY" });
+      await fs.rename(from, to);
+    };
+    expect(await removeEntry(entry, async () => true, { rename })).toEqual({ outcome: "held-open", code: "ENOTEMPTY", warnings: [`${key} is held open (ENOTEMPTY) — kept`] });
+    expect(await ls(entry)).toEqual(["fetched", "repo.git", "trees"]);
+    expect(await ls(path.join(h, "forges"))).toEqual([key]);
+  });
 });

@@ -501,7 +501,7 @@ export async function removeEntry(entry: string, stillPrunable: (now: { fetched:
 
       // Clear a leftover removal directory with this run's name (same PID) before the move,
       // so it never blocks the move.
-      await removeLeftover(removalDir);
+      const preMoveWarn = await removeLeftover(removalDir);
 
       // Move parts out in order: fetched first (so a reader from then on sees no copy).
       for (const part of parts) {
@@ -512,22 +512,20 @@ export async function removeEntry(entry: string, stillPrunable: (now: { fetched:
           await rename(src, dst);
           moved.push(part);
         } catch (e) {
-          const code = (e as NodeJS.ErrnoException).code;
+          const code = (e as NodeJS.ErrnoException).code ?? (e as Error).message;
           if (code === "ENOENT") continue; // Part not there — skip.
-          if (code === "EPERM" || code === "EBUSY" || code === "EACCES") {
-            // Move back in reverse order.
-            const warnings: string[] = [`${key} is held open (${code}) — kept`];
-            for (const p of [...moved].reverse()) {
-              try {
-                await rename(path.join(removalDir, p), path.join(entry, p));
-              } catch (e2) {
-                const code2 = (e2 as NodeJS.ErrnoException).code ?? (e2 as Error).message;
-                warnings.push(`${key}: ${p} left in ${removalDir} (${code2}) — the next prune removes it`);
-              }
+          // Any other error: move back in reverse order.
+          const warnings: string[] = preMoveWarn ? [preMoveWarn] : [];
+          warnings.push(`${key} is held open (${code}) — kept`);
+          for (const p of [...moved].reverse()) {
+            try {
+              await rename(path.join(removalDir, p), path.join(entry, p));
+            } catch (e2) {
+              const code2 = (e2 as NodeJS.ErrnoException).code ?? (e2 as Error).message;
+              warnings.push(`${key}: ${p} left in ${removalDir} (${code2}) — the next prune removes it`);
             }
-            return { outcome: "held-open" as const, code, warnings };
           }
-          throw e;
+          return { outcome: "held-open" as const, code, warnings };
         }
       }
       return { outcome: "removed" as const, warnings: [] };
