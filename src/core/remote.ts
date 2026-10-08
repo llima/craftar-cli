@@ -265,7 +265,10 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
   }
 
   const dir = await treeFor(git, entry, repo, resolved.commit, opts);
-  if (fetched) await pruneTrees(entry, { ...opts, git, inUse: resolved.commit });
+  if (fetched) {
+    const { busy } = await pruneTrees(entry, { ...opts, git, inUse: resolved.commit });
+    if (busy) throw busy;
+  }
   return { dir, commit: resolved.commit, defaultBranch: resolved.defaultBranch, fetched, fetchedAt: await fetchedAt() };
 }
 
@@ -410,39 +413,54 @@ export interface PruneTreesOptions extends LockOptions {
 /**
  * Trees unused for `cleanupMs` go (default 14 days), except `inUse`; returns each removed tree with its
  * bytes measured under the lock just before removal. `repo.git` is left to git.
+ * A `LockBusyError` from any lock take stops the pass and is returned in `busy` with everything removed so far.
  */
-export async function pruneTrees(entry: string, opts: PruneTreesOptions): Promise<Array<{ commit: string; bytes: number }>> {
+export async function pruneTrees(entry: string, opts: PruneTreesOptions): Promise<{ removed: Array<{ commit: string; bytes: number }>; busy: LockBusyError | null }> {
   const git = opts.git ?? defaultGit;
   const repo = path.join(entry, "repo.git");
   const trees = path.join(entry, "trees");
   const limit = Date.now() - (opts.cleanupMs ?? 14 * 24 * 60 * 60 * 1000);
   const lastUse = (commit: string) => treeLastUse(trees, commit);
   const removed: Array<{ commit: string; bytes: number }> = [];
-  for (const name of await fs.readdir(trees).catch(() => [] as string[])) {
+  let busy: LockBusyError | null = null;
+  // Iterate sorted tree names (spec c1.md §2: sorted).
+  for (const name of (await fs.readdir(trees).catch(() => [] as string[])).sort()) {
     if (name.includes(".") || name === opts.inUse) continue;
     const used = await lastUse(name);
     if (used === null || used >= limit) continue;
-    await withEntryLock(entry, opts, async () => {
-      // Again under the lock: a reader may have touched the stamp since (readers take no lock).
-      const again = await lastUse(name);
-      if (again === null || again >= limit) return;
-      const dir = path.join(trees, name);
-      const bytes = (await sizeOf(dir)) + (await sizeOf(`${dir}.ok`)) + (await sizeOf(`${dir}.used`));
-      await git(["-C", repo, "worktree", "remove", "--force", dir]).catch(() => {});
-      for (const p of [name, `${name}.used`, `${name}.ok`]) await fs.rm(path.join(trees, p), { recursive: true, force: true });
-      removed.push({ commit: name, bytes });
-    });
+    try {
+      await withEntryLock(entry, opts, async () => {
+        // Again under the lock: a reader may have touched the stamp since (readers take no lock).
+        const again = await lastUse(name);
+        if (again === null || again >= limit) return;
+        const dir = path.join(trees, name);
+        const bytes = (await sizeOf(dir)) + (await sizeOf(`${dir}.ok`)) + (await sizeOf(`${dir}.used`));
+        await git(["-C", repo, "worktree", "remove", "--force", dir]).catch(() => {});
+        for (const p of [name, `${name}.used`, `${name}.ok`]) await fs.rm(path.join(trees, p), { recursive: true, force: true });
+        removed.push({ commit: name, bytes });
+      });
+    } catch (e) {
+      if (e instanceof LockBusyError) { busy = e; break; }
+      throw e;
+    }
   }
   // A stamp or marker whose tree is gone (a reader stamped it as cleanup took the tree) goes too — under
   // the lock, so it never races a rebuild between its `rm` of the tree and the `.ok` it then writes.
-  await withEntryLock(entry, opts, async () => {
-    for (const name of await fs.readdir(trees).catch(() => [] as string[])) {
-      const m = /^(.+)\.(used|ok)$/.exec(name);
-      if (m && !(await exists(path.join(trees, m[1])))) await fs.rm(path.join(trees, name), { force: true });
+  if (busy === null) {
+    try {
+      await withEntryLock(entry, opts, async () => {
+        for (const name of await fs.readdir(trees).catch(() => [] as string[])) {
+          const m = /^(.+)\.(used|ok)$/.exec(name);
+          if (m && !(await exists(path.join(trees, m[1])))) await fs.rm(path.join(trees, name), { force: true });
+        }
+      });
+    } catch (e) {
+      if (e instanceof LockBusyError) busy = e;
+      else throw e;
     }
-  });
+  }
   if (removed.length > 0) await git(["-C", repo, "worktree", "prune"]).catch(() => {});
-  return removed;
+  return { removed, busy };
 }
 
 /* ------------------------------------------------------------------ */

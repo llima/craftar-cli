@@ -73,7 +73,7 @@ describe("pruneTrees (§4.2 step 5)", () => {
     await fs.utimes(`${b.dir}.used`, ago(13 * DAY), ago(13 * DAY));
     const before = (await inspectCache(h)).entries[0].trees.find((x) => x.commit === a.commit)!.bytes;
     expect(before).toBeGreaterThan(0);
-    expect(await pruneTrees(entry, {})).toEqual([{ commit: a.commit, bytes: before }]);
+    expect(await pruneTrees(entry, {})).toEqual({ removed: [{ commit: a.commit, bytes: before }], busy: null });
     expect(await ls(path.join(entry, "trees"))).toEqual([b.commit, `${b.commit}.ok`, `${b.commit}.used`].sort());
     expect(git(path.join(entry, "repo.git"), "worktree", "list", "--porcelain")).not.toContain(a.commit);
   });
@@ -82,7 +82,7 @@ describe("pruneTrees (§4.2 step 5)", () => {
     const h = await home();
     const { t, entry } = await cached(h);
     await fs.utimes(`${t.dir}.used`, ago(15 * DAY), ago(15 * DAY));
-    expect((await pruneTrees(entry, {})).map((x) => x.commit)).toEqual([t.commit]);
+    expect((await pruneTrees(entry, {})).removed.map((x) => x.commit)).toEqual([t.commit]);
     expect(await ls(path.join(entry, "trees"))).toEqual([]);
   });
 });
@@ -315,5 +315,27 @@ describe("review round 1: the layout stays in remote.ts", () => {
     await fs.chmod(h, 0o000);
     cleanups.push(() => fs.chmod(h, 0o700));
     await expect(cacheDir(h)).rejects.toThrow(/EACCES/);
+  });
+});
+
+describe("pruneTrees with the entry lock taken midway (§7: every removal is listed)", () => {
+  it("returns the trees already removed and the busy holder", async () => {
+    const h = await home();
+    const { r, t: a, entry } = await cached(h);
+    await r.commit({ "README.md": "b\n" });
+    const b = await ensureTree(r.url, null, { home: h });
+    for (const t of [a, b]) await fs.utimes(`${t.dir}.used`, ago(15 * DAY), ago(15 * DAY));
+    let attempts = 0;
+    const out = await pruneTrees(entry, {
+      waitMs: 200,
+      pollMs: 20,
+      beforeAttempt: async () => {
+        attempts++;
+        if (attempts === 2) await fs.writeFile(path.join(entry, "lock"), "4242 2026-10-08T00:00:00.000Z\n");
+      },
+    });
+    const [first, second] = [a.commit, b.commit].sort();
+    expect([out.removed.map((x) => x.commit), out.busy?.holder]).toEqual([[first], "4242"]);
+    expect((await ls(path.join(entry, "trees")))!.filter((n) => !n.includes("."))).toEqual([second]);
   });
 });

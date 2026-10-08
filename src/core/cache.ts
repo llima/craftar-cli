@@ -254,28 +254,23 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
       }
 
       // For a run: call pruneTrees.
-      try {
-        const pruned = await pruneTrees(e.dir, {
-          git: opts.git,
-          cleanupMs,
-          waitMs: opts.waitMs,
-          pollMs: opts.pollMs,
-          staleMs: opts.staleMs,
+      const { removed: pruned, busy } = await pruneTrees(e.dir, {
+        git: opts.git,
+        cleanupMs,
+        waitMs: opts.waitMs,
+        pollMs: opts.pollMs,
+        staleMs: opts.staleMs,
+      });
+      for (const t of pruned) {
+        removed.push({
+          path: `${rel(e.dir)}/trees/${t.commit}`,
+          kind: "tree",
+          reason: "unused",
+          bytes: t.bytes,
         });
-        for (const t of pruned) {
-          removed.push({
-            path: `${rel(e.dir)}/trees/${t.commit}`,
-            kind: "tree",
-            reason: "unused",
-            bytes: t.bytes,
-          });
-        }
-      } catch (err) {
-        if (err instanceof LockBusyError) {
-          warnings.push(`${e.key} is in use (held by PID ${err.holder}) — its trees kept`);
-        } else {
-          throw err;
-        }
+      }
+      if (busy) {
+        warnings.push(`${e.key} is in use (held by PID ${busy.holder}) — its trees kept`);
       }
     }
 
