@@ -221,10 +221,7 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
   const stamp = path.join(entry, "fetched");
   // A copy exists once a fetch completed: an init whose fetch then failed leaves no stamp.
   const haveCopy = await exists(stamp);
-  const fetchedAt = async () => {
-    const text = (await exists(stamp)) ? (await fs.readFile(stamp, "utf8")).trim() : "";
-    return /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(text) ? text : null;
-  };
+  const fetchedAt = () => readFetchedStamp(stamp);
   const label = ref ?? "the default branch";
 
   // A full SHA already in the cache names the same commit whatever the remote does: no fetch (§14 item 3).
@@ -388,7 +385,7 @@ function withEntryLock<T>(entry: string, opts: CacheOptions, body: () => Promise
 }
 
 /* ------------------------------------------------------------------ */
-/* Reading the cache (spec 24 §5.1, shared with spec 26)               */
+/* Reading the cache (spec 24 §5.1)                                    */
 /* ------------------------------------------------------------------ */
 
 /**
@@ -428,8 +425,14 @@ export interface CacheSnapshot {
   /** `$CRAFTAR_HOME/forges`. */
   forges: string;
   entries: CacheEntryInfo[];
-  /** Leftover `.removing-*` directories (spec 26): never entries. */
-  removing: string[];
+  /** Summed file sizes under `forges/`, whatever lies there; links are not followed. */
+  bytes: number;
+}
+
+/** The `fetched` stamp's time, when the file exists and reads as one: the one parse `ensureTree` and the snapshot share. */
+async function readFetchedStamp(stamp: string): Promise<string | null> {
+  const text = (await fs.readFile(stamp, "utf8").catch(() => "")).trim();
+  return /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(text) ? text : null;
 }
 
 /** Bytes of every file under `dir`, without following links; 0 for anything unreadable. */
@@ -446,21 +449,15 @@ async function sizeOf(dir: string): Promise<number> {
 export async function inspectCache(home: string): Promise<CacheSnapshot> {
   const forges = path.join(path.resolve(home), "forges");
   const entries: CacheEntryInfo[] = [];
-  const removing: string[] = [];
   const names = (await fs.readdir(forges, { withFileTypes: true }).catch((e: NodeJS.ErrnoException) => {
     if (e.code === "ENOENT") return [];
     throw e;
-  })).sort((a, b) => a.name.localeCompare(b.name));
+  })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   for (const d of names) {
     if (!d.isDirectory()) continue;
     const dir = path.join(forges, d.name);
-    if (d.name.startsWith(".removing-")) {
-      removing.push(dir);
-      continue;
-    }
     const stamp = path.join(dir, "fetched");
     const fetched = await exists(stamp);
-    const text = fetched ? (await fs.readFile(stamp, "utf8").catch(() => "")).trim() : "";
     const trees = path.join(dir, "trees");
     const treeInfo: CacheTreeInfo[] = [];
     for (const name of (await fs.readdir(trees).catch(() => [] as string[])).sort()) {
@@ -472,9 +469,9 @@ export async function inspectCache(home: string): Promise<CacheSnapshot> {
       dir,
       bytes: await sizeOf(dir),
       fetched,
-      fetchedAt: /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(text) ? text : null,
+      fetchedAt: fetched ? await readFetchedStamp(stamp) : null,
       trees: treeInfo,
     });
   }
-  return { forges, entries, removing };
+  return { forges, entries, bytes: await sizeOf(forges) };
 }

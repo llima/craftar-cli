@@ -5,7 +5,7 @@ import { cacheKey, ensureTree, inspectCache } from "../src/core/remote.js";
 import { profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
 import { remoteForge } from "./helpers/remote.js";
 
-// Spec 24 §5.1 (shared with spec 26): a read-only snapshot of the Forge cache.
+// Spec 24 §5.1: a read-only snapshot of the Forge cache.
 
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -18,19 +18,20 @@ describe("inspectCache", () => {
   it("no forges directory → an empty snapshot", async () => {
     const home = await tmpDir();
     cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
-    expect(await inspectCache(home)).toEqual({ forges: path.join(home, "forges"), entries: [], removing: [] });
+    expect(await inspectCache(home)).toEqual({ forges: path.join(home, "forges"), entries: [], bytes: 0 });
   });
 
-  it("an entry after a fetch: fetched, its tree complete, its size summed; an incomplete entry and a .removing leftover apart", async () => {
+  it("an entry after a fetch: fetched, its tree complete, its size summed; an incomplete entry apart; the total counts loose files too", async () => {
     const home = await tmpDir();
     cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
     const r = await remoteForge(SPEC);
     cleanups.push(r.cleanup);
     const t = await ensureTree(r.url, null, { home });
     await writeFiles(path.join(home, "forges", "example.com-half-000000000000"), { "repo.git/HEAD": "ref: refs/heads/main\n" });
-    await fs.mkdir(path.join(home, "forges", ".removing-x-1"), { recursive: true });
+    await fs.writeFile(path.join(home, "forges", "stray.txt"), "12345");
     const snap = await inspectCache(home);
-    expect(snap.removing).toEqual([path.join(home, "forges", ".removing-x-1")]);
+    expect(snap.entries.map((e) => e.key).sort()).toEqual([cacheKey(r.url), "example.com-half-000000000000"].sort());
+    expect(snap.bytes).toBe(snap.entries.reduce((n, e) => n + e.bytes, 0) + 5);
     const byKey = Object.fromEntries(snap.entries.map((e) => [e.key, e]));
     const full = byKey[cacheKey(r.url)];
     expect(full.fetched).toBe(true);

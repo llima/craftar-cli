@@ -158,7 +158,7 @@ export async function isRegistered(reg: Registry, dir: string): Promise<boolean>
 }
 
 /**
- * What names a cache entry (spec 24 §4.3, shared with spec 26): every registry entry's `forge.key` —
+ * What names a cache entry (spec 24 §4.3): every registry entry's `forge.key` —
  * `missing` ones included, until `workspaces prune` — and the checked workspace's own key. Returns
  * each named key with the workspace paths that name it.
  */
