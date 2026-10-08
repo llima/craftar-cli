@@ -3,8 +3,11 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { exists } from "./forge.js";
-import { withLock, type LockTiming } from "./home-lock.js";
+import { LockBusyError, withLock, type LockOptions, type LockTiming } from "./home-lock.js";
 import { hashNormalized } from "./text.js";
+
+/** A removal directory's prefix; `~` is a character `cacheKey` never emits (spec 26 §3, §13 item 14). */
+export const REMOVING_PREFIX = "~removing-";
 
 /* ------------------------------------------------------------------ */
 /* What counts as a URL, and credentials (spec 13 §6.1, §4.3)          */
@@ -151,7 +154,7 @@ export function resolveRef(refs: LsRemote, ref: string | null, url: string): { c
 /** Runs git and resolves its stdout; `remote` marks a call that reaches the remote (prompts off without a TTY). */
 export type GitRunner = (args: string[], opts?: { remote?: boolean }) => Promise<string>;
 
-export interface CacheOptions extends LockTiming {
+export interface CacheOptions extends LockOptions {
   /** `$CRAFTAR_HOME` (default `~/.craftar`), resolved by the caller. */
   home: string;
   /** Resolve against the cache only; never reach the remote. */
@@ -262,7 +265,7 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
   }
 
   const dir = await treeFor(git, entry, repo, resolved.commit, opts);
-  if (fetched) await cleanup(git, entry, repo, resolved.commit, opts);
+  if (fetched) await pruneTrees(entry, { ...opts, git, inUse: resolved.commit });
   return { dir, commit: resolved.commit, defaultBranch: resolved.defaultBranch, fetched, fetchedAt: await fetchedAt() };
 }
 
@@ -349,23 +352,65 @@ async function treeFor(git: GitRunner, entry: string, repo: string, commit: stri
   return dir;
 }
 
-/** Trees unused for `cleanupMs` go, except the one in use; `repo.git` is left to git. */
-async function cleanup(git: GitRunner, entry: string, repo: string, inUse: string, opts: CacheOptions): Promise<void> {
+/**
+ * The entry's lock (`<entry>/lock`), through the one helper the registry shares (spec 21 §5.4).
+ * Passes `createDir: true` so a waiter on an entry another process removed re-creates it (spec 26 §4.3).
+ */
+function withEntryLock<T>(entry: string, opts: LockOptions, body: () => Promise<T>): Promise<T> {
+  return withLock(path.join(entry, "lock"), "the Forge cache entry", { ...opts, createDir: true }, body);
+}
+
+/**
+ * `withLock` on `forges/prune.lock` for the whole prune run (spec 26 §4.2 step 0). No `createDir`:
+ * it never creates `forges/`. The body receives `refresh` to advance the lock's mtime.
+ */
+export async function withPruneLock<T>(home: string, opts: LockTiming, body: (refresh: () => Promise<void>) => Promise<T>): Promise<T> {
+  const lockFile = path.join(path.resolve(home), "forges", "prune.lock");
+  return withLock(lockFile, "the Forge cache prune lock", opts, async () => {
+    const refresh = async () => {
+      const now = new Date();
+      await fs.utimes(lockFile, now, now).catch(() => {});
+    };
+    return body(refresh);
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Pruning trees (spec 26 §4.2 step 5)                                  */
+/* ------------------------------------------------------------------ */
+
+export interface PruneTreesOptions extends LockOptions {
+  git?: GitRunner;
+  /** The tree in use (never removed); when absent, every old tree goes. */
+  inUse?: string;
+  /** When an unused tree goes (default 14 days). */
+  cleanupMs?: number;
+}
+
+/**
+ * Trees unused for `cleanupMs` go (default 14 days), except `inUse`; returns each removed tree with its
+ * bytes measured under the lock just before removal. `repo.git` is left to git.
+ */
+export async function pruneTrees(entry: string, opts: PruneTreesOptions): Promise<Array<{ commit: string; bytes: number }>> {
+  const git = opts.git ?? defaultGit;
+  const repo = path.join(entry, "repo.git");
   const trees = path.join(entry, "trees");
   const limit = Date.now() - (opts.cleanupMs ?? 14 * 24 * 60 * 60 * 1000);
   const lastUse = (commit: string) => treeLastUse(trees, commit);
-  let removed = false;
+  const removed: Array<{ commit: string; bytes: number }> = [];
   for (const name of await fs.readdir(trees).catch(() => [] as string[])) {
-    if (name.includes(".") || name === inUse) continue;
+    if (name.includes(".") || name === opts.inUse) continue;
     const used = await lastUse(name);
     if (used === null || used >= limit) continue;
     await withEntryLock(entry, opts, async () => {
       // Again under the lock: a reader may have touched the stamp since (readers take no lock).
       const again = await lastUse(name);
       if (again === null || again >= limit) return;
-      await git(["-C", repo, "worktree", "remove", "--force", path.join(trees, name)]).catch(() => {});
+      const dir = path.join(trees, name);
+      const bytes = (await sizeOf(dir)) + (await sizeOf(`${dir}.ok`)) + (await sizeOf(`${dir}.used`));
+      await git(["-C", repo, "worktree", "remove", "--force", dir]).catch(() => {});
       for (const p of [name, `${name}.used`, `${name}.ok`]) await fs.rm(path.join(trees, p), { recursive: true, force: true });
-      removed = true;
+      removed.push({ commit: name, bytes });
     });
   }
   // A stamp or marker whose tree is gone (a reader stamped it as cleanup took the tree) goes too — under
@@ -376,16 +421,115 @@ async function cleanup(git: GitRunner, entry: string, repo: string, inUse: strin
       if (m && !(await exists(path.join(trees, m[1])))) await fs.rm(path.join(trees, name), { force: true });
     }
   });
-  if (removed) await git(["-C", repo, "worktree", "prune"]).catch(() => {});
-}
-
-/** The entry's lock (`<entry>/lock`), through the one helper the registry shares (spec 21 §5.4). */
-function withEntryLock<T>(entry: string, opts: CacheOptions, body: () => Promise<T>): Promise<T> {
-  return withLock(path.join(entry, "lock"), "the Forge cache entry", opts, body);
+  if (removed.length > 0) await git(["-C", repo, "worktree", "prune"]).catch(() => {});
+  return removed;
 }
 
 /* ------------------------------------------------------------------ */
-/* Reading the cache (spec 24 §5.1)                                    */
+/* Removing a whole entry (spec 26 §4.3)                                */
+/* ------------------------------------------------------------------ */
+
+export type RemoveOutcome =
+  | { outcome: "removed"; warnings: string[] }
+  | { outcome: "kept"; warnings: string[] }
+  | { outcome: "busy"; holder: string; warnings: string[] }
+  | { outcome: "held-open"; code: string; warnings: string[] };
+
+export interface RemoveEntryOptions extends LockOptions {
+  /** Test hook: the rename used to move an entry's parts (default `fs.rename`). */
+  rename?: (from: string, to: string) => Promise<void>;
+  /** Test hook: awaited after the entry lock is released, before the `rmdir` of the entry (spec 26 §4.3's orderings). */
+  afterRelease?: () => Promise<void>;
+}
+
+/**
+ * Removes a cache entry's contents under its lock (spec 26 §4.3): re-checks through `stillPrunable`,
+ * moves the parts out (`fetched` first, then `repo.git`, then `trees`), releases, `rmdir`s the entry,
+ * removes the moved contents. A busy lock → `busy`; a failed rename → `held-open`, parts moved back.
+ */
+export async function removeEntry(entry: string, stillPrunable: () => Promise<boolean>, opts: RemoveEntryOptions): Promise<RemoveOutcome> {
+  const key = path.basename(entry);
+  const removalDir = path.join(path.dirname(entry), `${REMOVING_PREFIX}${key}-${process.pid}`);
+  const rename = opts.rename ?? fs.rename;
+  const parts = ["fetched", "repo.git", "trees"];
+  const moved: string[] = [];
+
+  let outcome: RemoveOutcome;
+  try {
+    outcome = await withEntryLock(entry, opts, async () => {
+      if (!(await stillPrunable())) return { outcome: "kept" as const, warnings: [] };
+
+      // Move parts out in order: fetched first (so a reader from then on sees no copy).
+      for (const part of parts) {
+        const src = path.join(entry, part);
+        const dst = path.join(removalDir, part);
+        try {
+          await fs.mkdir(removalDir, { recursive: true });
+          await rename(src, dst);
+          moved.push(part);
+        } catch (e) {
+          const code = (e as NodeJS.ErrnoException).code;
+          if (code === "ENOENT") continue; // Part not there — skip.
+          if (code === "EPERM" || code === "EBUSY" || code === "EACCES") {
+            // Move back in reverse order.
+            const warnings: string[] = [`${key} is held open (${code}) — kept`];
+            for (const p of [...moved].reverse()) {
+              try {
+                await rename(path.join(removalDir, p), path.join(entry, p));
+              } catch (e2) {
+                const code2 = (e2 as NodeJS.ErrnoException).code ?? (e2 as Error).message;
+                warnings.push(`${key}: ${p} left in ${removalDir} (${code2}) — the next prune removes it`);
+              }
+            }
+            return { outcome: "held-open" as const, code, warnings };
+          }
+          throw e;
+        }
+      }
+      return { outcome: "removed" as const, warnings: [] };
+    });
+  } catch (e) {
+    if (e instanceof LockBusyError) return { outcome: "busy", holder: e.holder, warnings: [] };
+    throw e;
+  }
+
+  // After the lock is released.
+  if (opts.afterRelease) await opts.afterRelease();
+
+  if (outcome.outcome === "removed") {
+    // rmdir the entry — fails harmlessly (ENOTEMPTY) if another process created its lock there.
+    await fs.rmdir(entry).catch(() => {});
+    // Remove the removal directory.
+    const warn = await removeLeftover(removalDir);
+    if (warn) outcome.warnings.push(warn);
+  } else if (outcome.outcome === "held-open") {
+    // Remove the removal directory only if it's empty (the parts moved back).
+    const isEmpty = (await fs.readdir(removalDir).catch(() => null))?.length === 0;
+    if (isEmpty) {
+      const warn = await removeLeftover(removalDir);
+      if (warn) outcome.warnings.push(warn);
+    }
+  }
+
+  return outcome;
+}
+
+/**
+ * Removes a leftover removal directory (spec 26 §4.2 step 6). Returns null on success, else a warning
+ * with the code — the next prune retries it.
+ */
+export async function removeLeftover(dir: string): Promise<string | null> {
+  try {
+    await fs.rm(dir, { recursive: true, force: true });
+    return null;
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code ?? (e as Error).message;
+    return `cannot remove ${dir}: ${code} — the next prune retries it`;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Reading the cache (spec 24 §5.1, extended by spec 26 §5.1)          */
 /* ------------------------------------------------------------------ */
 
 /**
@@ -406,6 +550,8 @@ export interface CacheTreeInfo {
   complete: boolean;
   /** `treeLastUse`, in ms since the epoch; null when nothing of the tree is left. */
   lastUse: number | null;
+  /** Summed file sizes of the tree directory plus its `.ok` and `.used` stamps. */
+  bytes: number;
 }
 
 export interface CacheEntryInfo {
@@ -425,6 +571,8 @@ export interface CacheSnapshot {
   /** `$CRAFTAR_HOME/forges`. */
   forges: string;
   entries: CacheEntryInfo[];
+  /** Removal directories (`~removing-*`) left by an interrupted prune (spec 26 §5.1). */
+  removing: Array<{ dir: string; bytes: number }>;
   /** Summed file sizes under `forges/`, whatever lies there; links are not followed. */
   bytes: number;
 }
@@ -449,6 +597,7 @@ async function sizeOf(dir: string): Promise<number> {
 export async function inspectCache(home: string): Promise<CacheSnapshot> {
   const forges = path.join(path.resolve(home), "forges");
   const entries: CacheEntryInfo[] = [];
+  const removing: Array<{ dir: string; bytes: number }> = [];
   const names = (await fs.readdir(forges, { withFileTypes: true }).catch((e: NodeJS.ErrnoException) => {
     if (e.code === "ENOENT") return [];
     throw e;
@@ -456,13 +605,20 @@ export async function inspectCache(home: string): Promise<CacheSnapshot> {
   for (const d of names) {
     if (!d.isDirectory()) continue;
     const dir = path.join(forges, d.name);
+    // A directory starting with ~removing- is a removal directory, never an entry (spec 26 §5.1).
+    if (d.name.startsWith(REMOVING_PREFIX)) {
+      removing.push({ dir, bytes: await sizeOf(dir) });
+      continue;
+    }
     const stamp = path.join(dir, "fetched");
     const fetched = await exists(stamp);
     const trees = path.join(dir, "trees");
     const treeInfo: CacheTreeInfo[] = [];
     for (const name of (await fs.readdir(trees).catch(() => [] as string[])).sort()) {
       if (name.includes(".")) continue;
-      treeInfo.push({ commit: name, complete: await exists(path.join(trees, `${name}.ok`)), lastUse: await treeLastUse(trees, name) });
+      const treeDir = path.join(trees, name);
+      const bytes = (await sizeOf(treeDir)) + (await sizeOf(`${treeDir}.ok`)) + (await sizeOf(`${treeDir}.used`));
+      treeInfo.push({ commit: name, complete: await exists(path.join(trees, `${name}.ok`)), lastUse: await treeLastUse(trees, name), bytes });
     }
     entries.push({
       key: d.name,
@@ -473,5 +629,5 @@ export async function inspectCache(home: string): Promise<CacheSnapshot> {
       trees: treeInfo,
     });
   }
-  return { forges, entries, bytes: await sizeOf(forges) };
+  return { forges, entries, removing, bytes: await sizeOf(forges) };
 }
