@@ -400,7 +400,7 @@ describe("the cache check and removal directories (spec 26 §5.1, §6 case 13)",
     expect(one(r.checks, "cache")).toEqual({ id: "cache", scope: "machine", level: "ok", message: "0 entries, 0.0 MB", fix: null });
   });
 
-  it("an entry nothing names: the fix is craftar cache prune", async () => {
+  it("an entry whose fetch never completed: the fix is craftar cache prune", async () => {
     const f = await fixture();
     await writeFiles(path.join(f.home, "forges"), { "example.com-half-000000000000/repo.git/HEAD": "x" });
     const r = await run({ home: f.home });

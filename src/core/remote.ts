@@ -154,7 +154,7 @@ export function resolveRef(refs: LsRemote, ref: string | null, url: string): { c
 /** Runs git and resolves its stdout; `remote` marks a call that reaches the remote (prompts off without a TTY). */
 export type GitRunner = (args: string[], opts?: { remote?: boolean }) => Promise<string>;
 
-export interface CacheOptions extends LockOptions {
+export interface CacheOptions extends LockTiming {
   /** `$CRAFTAR_HOME` (default `~/.craftar`), resolved by the caller. */
   home: string;
   /** Resolve against the cache only; never reach the remote. */
@@ -162,6 +162,8 @@ export interface CacheOptions extends LockOptions {
   git?: GitRunner;
   /** When an unused tree goes (14 days); the lock's timing comes from `LockTiming`. */
   cleanupMs?: number;
+  /** Test hook, passed to the entry lock (spec 26 §9). */
+  beforeAttempt?: () => Promise<void>;
 }
 
 export interface CachedTree {
