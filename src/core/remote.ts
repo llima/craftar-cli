@@ -425,7 +425,7 @@ export async function pruneTrees(entry: string, opts: PruneTreesOptions): Promis
   const lastUse = (commit: string) => treeLastUse(trees, commit);
   const removed: Array<{ commit: string; bytes: number }> = [];
   let busy: LockBusyError | null = null;
-  // Iterate sorted tree names (spec c1.md §2: sorted).
+  // Names sorted, so the order of removal is deterministic.
   for (const name of (await fs.readdir(trees).catch(() => [] as string[])).sort()) {
     if (name.includes(".") || name === opts.inUse) continue;
     const used = await lastUse(name);
@@ -502,7 +502,7 @@ export async function removeEntry(entry: string, stillPrunable: (now: { fetched:
       if (!(await stillPrunable({ fetched }))) return { outcome: "kept" as const, warnings: [] };
 
       // Clear a leftover removal directory with this run's name (same PID) before the move,
-      // so it never blocks the move (docs-author nit).
+      // so it never blocks the move.
       await removeLeftover(removalDir);
 
       // Move parts out in order: fetched first (so a reader from then on sees no copy).

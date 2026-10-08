@@ -17,7 +17,7 @@ import {
 } from "./remote.js";
 import { readWorkspaceConfig } from "./sync.js";
 
-/** Build the "whole entries kept" warning from a reason (reviewer nit: one helper, two places). */
+/** Build the "whole entries kept" warning from a reason (used by two code paths). */
 const wholeEntriesWarning = (reason: string) => `whole entries kept: ${reason} — nothing can tell which ones are used`;
 
 /*
@@ -90,7 +90,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
   const cleanupMs = opts.cleanupMs ?? 14 * 24 * 60 * 60 * 1000;
 
   // The actual prune work: under the prune lock for a run, no lock for dry-run.
-  // Everything after the "no forges/" check runs under the prune lock (§4.2 step 0, correction 1).
+  // Everything after the "no forges/" check runs under the prune lock (§4.2 step 0).
   const doPrune = async (lock: { refresh: () => Promise<void>; bytes: number }) => {
     const start = Date.now();
 
@@ -140,7 +140,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
     const removed: PruneRemoved[] = [];
     const kept: PruneKept[] = [];
     const warnings: string[] = [];
-    let recheckWarningAdded = false; // Correction 3: boolean flag instead of text search.
+    let recheckWarningAdded = false; // Ensures the warning is added at most once.
 
     if (whyNot !== null) {
       warnings.push(wholeEntriesWarning(whyNot));
@@ -185,7 +185,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
       // For a run: call removeEntry with a re-check callback.
       let recheckFailed = false;
       let finalReason = reason;
-      let recheckNamed: Map<string, string[]> | null = null; // Correction 2: capture named2 from re-check.
+      let recheckNamed: Map<string, string[]> | null = null; // Captured from the re-check callback.
 
       const stillPrunable = async (now: { fetched: boolean }): Promise<boolean> => {
         let reg2: Registry;
@@ -215,13 +215,13 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
       } else if (outcome.outcome === "kept") {
         if (recheckFailed) {
           kept.push({ path: entryRelPath, reason: "unchecked", namedBy: [] });
-          // Correction 3: Add warning only once through a boolean flag.
+          // Add warning only once per run.
           if (!recheckWarningAdded) {
             warnings.push(wholeEntriesWarning("the registry cannot be read"));
             recheckWarningAdded = true;
           }
         } else {
-          // Correction 2: Use recheckNamed from the re-check instead of reading the registry a third time.
+          // Use the namedBy values captured from the re-check, which ran under the lock.
           // When recheckFailed is false, stillPrunable ran successfully and set recheckNamed.
           const namedBy = recheckNamed!.get(e.key) ?? [];
           kept.push({ path: entryRelPath, reason: "named", namedBy });

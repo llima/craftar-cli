@@ -208,16 +208,6 @@ describe("removeEntry (§4.3)", () => {
     expect((await ensureTree(r.url, null, { home: h })).fetched).toBe(true);
   });
 
-  it("the re-check callback receives now.fetched from the actual state under the lock", async () => {
-    const h = await home();
-    const { entry } = await cached(h);
-    const seen: boolean[] = [];
-    await removeEntry(entry, async (now) => { seen.push(now.fetched); return false; }, {});
-    await fs.rm(path.join(entry, "fetched"));
-    await removeEntry(entry, async (now) => { seen.push(now.fetched); return false; }, {});
-    expect(seen).toEqual([true, false]);
-  });
-
   it("a leftover removal directory with this run's name is cleared before the move", async () => {
     const h = await home();
     const { entry, key } = await cached(h);
@@ -292,21 +282,24 @@ describe("withPruneLock and removeLeftover (§4.2 steps 0 and 6)", () => {
 
 // Review round 1: the layout stays in remote.ts.
 describe("review round 1: the layout stays in remote.ts", () => {
-  it("cacheDir returns 'absent' when forges/ does not exist", async () => {
+  it("cacheDir: absent, present, or a refusal naming the path", async () => {
     const h = await home();
     expect(await cacheDir(h)).toBe("absent");
-  });
-
-  it("cacheDir returns 'present' when forges/ is a directory", async () => {
-    const h = await home();
     await fs.mkdir(path.join(h, "forges"));
     expect(await cacheDir(h)).toBe("present");
+    await fs.rm(path.join(h, "forges"), { recursive: true });
+    await fs.writeFile(path.join(h, "forges"), "x");
+    await expect(cacheDir(h)).rejects.toThrow(`cannot read ${path.join(h, "forges")}: not a directory`);
   });
 
-  it("cacheDir throws when forges/ exists but is not a directory", async () => {
+  it("the re-check is handed the fetched stamp as read under the lock", async () => {
     const h = await home();
-    await fs.writeFile(path.join(h, "forges"), "not a directory");
-    await expect(cacheDir(h)).rejects.toThrow("not a directory");
+    const { entry } = await cached(h);
+    const seen: boolean[] = [];
+    await removeEntry(entry, async (now) => { seen.push(now.fetched); return false; }, {});
+    await fs.rm(path.join(entry, "fetched"));
+    await removeEntry(entry, async (now) => { seen.push(now.fetched); return false; }, {});
+    expect(seen).toEqual([true, false]);
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("cacheDir throws on EACCES when parent is unreadable", async () => {
