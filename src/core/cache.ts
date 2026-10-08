@@ -17,6 +17,9 @@ import {
 } from "./remote.js";
 import { readWorkspaceConfig } from "./sync.js";
 
+/** Build the "whole entries kept" warning from a reason (reviewer nit: one helper, two places). */
+const wholeEntriesWarning = (reason: string) => `whole entries kept: ${reason} — nothing can tell which ones are used`;
+
 /*
  * The Forge cache pruner (spec 26 §5.1): removes orphan/incomplete entries, trees unused for 14 days,
  * and leftover removal directories. Returns data and never prints; never writes or deletes through
@@ -140,7 +143,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
     let recheckWarningAdded = false; // Correction 3: boolean flag instead of text search.
 
     if (whyNot !== null) {
-      warnings.push(`whole entries kept: ${whyNot} — nothing can tell which ones are used`);
+      warnings.push(wholeEntriesWarning(whyNot));
     }
 
     const step = async () => {
@@ -214,7 +217,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
           kept.push({ path: entryRelPath, reason: "unchecked", namedBy: [] });
           // Correction 3: Add warning only once through a boolean flag.
           if (!recheckWarningAdded) {
-            warnings.push("whole entries kept: the registry cannot be read — nothing can tell which ones are used");
+            warnings.push(wholeEntriesWarning("the registry cannot be read"));
             recheckWarningAdded = true;
           }
         } else {

@@ -266,3 +266,27 @@ describe("the report (§4.5) and what is never touched (§7)", () => {
     expect(await digest()).toEqual(before);
   });
 });
+
+describe("the re-check under the entry lock (§4.3 step 1)", () => {
+  it("a workspace registered between the snapshot and the entry's lock: kept named, namedBy from the re-check", async () => {
+    const s = await setup();
+    await ensureTree(s.r.url, null, { home: s.home });
+    const dir = await s.ws("acme-api");
+    let steps = 0;
+    const { report } = await pruneCache(s.home, { ...RUN, beforeStep: async () => { if (steps++ === 0) await s.syncAndRegister(dir); } });
+    expect([report.removed, report.kept, report.warnings]).toEqual([[], [{ path: `forges/${s.key}`, reason: "named", namedBy: [dir] }], []]);
+  });
+
+  it("the registry stops reading at the re-check: every such entry kept unchecked, the warning once", async () => {
+    const s = await setup();
+    await ensureTree(s.r.url, null, { home: s.home });
+    const other = await remoteForge(SPEC);
+    cleanups.push(other.cleanup);
+    await ensureTree(other.url, null, { home: s.home });
+    let steps = 0;
+    const { report } = await pruneCache(s.home, { ...RUN, beforeStep: async () => { if (steps++ === 0) await fs.writeFile(path.join(s.home, "registry.json"), "{"); } });
+    expect(report.removed).toEqual([]);
+    expect(report.kept.map((k) => [k.reason, k.namedBy])).toEqual([["unchecked", []], ["unchecked", []]]);
+    expect(report.warnings).toEqual(["whole entries kept: the registry cannot be read — nothing can tell which ones are used"]);
+  });
+});
