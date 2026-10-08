@@ -6,6 +6,7 @@ import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
+import { forgeWorkspaces, planAll, nextSync, type ForgeWorkspace, type RegistryState } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { resolveHome } from "./core/home-lock.js";
 import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type Workspace } from "./core/sync.js";
@@ -898,6 +899,103 @@ forge
     console.log(
       `\n  ${groups.length} base${groups.length === 1 ? "" : "s"} with variants, ${total} variant${total === 1 ? "" : "s"} total${orphanNote}`,
     );
+  });
+
+forge
+  .command("impact")
+  .description(
+    "List every workspace registered on this machine that reads this Forge — by its path, by a git remote of this clone, or through another clone of the same remote — with what its next sync would do against the Forge as it is now. Read-only; no fetch",
+  )
+  .option("--forge <dir>", "Forge directory (instead of --workspace)")
+  .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
+  .option("--json", "machine-readable output", false)
+  .action(async (o) => {
+    const f = await resolveForge({
+      forge: o.forge,
+      workspace: o.workspace,
+      refuseRemote: (url) => `the Forge of this workspace is remote (${url}) — clone it and pass --forge <dir>`,
+    });
+
+    let fw;
+    try {
+      fw = await forgeWorkspaces(craftarHome(), f.root);
+    } catch (e) {
+      fail(e instanceof Error ? e.message : String(e));
+    }
+    warnStderr(fw.warnings);
+
+    const planned = await planAll(fw.workspaces, f);
+    const results = await Promise.all(planned.map((p) => nextSync(p)));
+
+    if (o.json) {
+      const workspaces = fw.workspaces.map((ws, i) => {
+        const r = results[i];
+        return {
+          path: ws.entry.path,
+          profile: ws.entry.profile,
+          match: ws.match,
+          via: ws.via,
+          ref: ws.ref,
+          state: r.state,
+          counts: r.counts,
+          error: r.error,
+        };
+      });
+      console.log(JSON.stringify({ forge: f.root, registry: fw.state, workspaces }, null, 2));
+      return;
+    }
+
+    // Text output
+    const parts: string[] = [];
+    const byMatch: Record<string, number> = {};
+    for (const ws of fw.workspaces) byMatch[ws.match] = (byMatch[ws.match] ?? 0) + 1;
+    if (byMatch.path) parts.push(`${byMatch.path} by path`);
+    if (byMatch.remote) parts.push(`${byMatch.remote} by remote`);
+    if (byMatch.clone) parts.push(`${byMatch.clone} by clone`);
+
+    if (fw.state === "none") {
+      console.log(`craftar forge impact — ${f.root}`);
+      console.log(`  no registered workspace reads this Forge on this machine`);
+      return;
+    }
+    if (fw.state === "off") {
+      console.log(`craftar forge impact — ${f.root}`);
+      console.log(`  the registry is off (CRAFTAR_NO_REGISTRY)`);
+      return;
+    }
+
+    const n = fw.workspaces.length;
+    console.log(
+      `craftar forge impact — ${f.root} · ${n} registered workspace${n === 1 ? "" : "s"} (${parts.join(", ")})`,
+    );
+
+    const maxPath = Math.max(...fw.workspaces.map((ws) => ws.entry.path.length));
+    const maxProfile = Math.max(...fw.workspaces.map((ws) => ws.entry.profile.length));
+
+    for (let i = 0; i < fw.workspaces.length; i++) {
+      const ws = fw.workspaces[i];
+      const r = results[i];
+
+      let stateStr: string;
+      if (r.state === "unchanged") {
+        stateStr = "unchanged";
+      } else if (r.state === "changed") {
+        // Counts in NEXT_SYNC order
+        const countParts = NEXT_SYNC_STATES.map((k) => (r.counts[k] ? `${r.counts[k]} ${k}` : "")).filter(Boolean);
+        stateStr = countParts.join(", ");
+      } else if (r.state === "missing") {
+        stateStr = "missing";
+      } else {
+        stateStr = `error: ${r.error}`;
+      }
+
+      let suffix = "";
+      if (ws.match === "remote") suffix = ` · after push (${ws.via})`;
+      if (ws.match === "clone") suffix = ` · after push and pull (${ws.via})`;
+      if (ws.ref) suffix += `, pins ${ws.ref}`;
+
+      console.log(`  ${ws.entry.path.padEnd(maxPath)}  ${ws.entry.profile.padEnd(maxProfile)}  ${stateStr}${suffix}`);
+    }
   });
 
 forge

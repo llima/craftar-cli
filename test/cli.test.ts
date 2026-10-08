@@ -4397,3 +4397,217 @@ describe("cli — craftar doctor (spec 24 §9.2)", () => {
     expect(line({ CRAFTAR_NO_REGISTRY: "" })).toMatchObject({ level: "error", fix: "upgrade craftar" });
   });
 });
+
+
+describe("cli — forge impact (spec 25 §4.1)", () => {
+  const SPEC = {
+    ingredients: [rule("style", "# Style\n")],
+    recipes: [recipe("base", ["rule/style"])],
+    profiles: [profile("acme", ["base"]), profile("globex", ["base"])],
+  };
+
+  /** A temporary root with its own CRAFTAR_HOME, a path Forge, and workspaces made on demand. */
+  async function setup() {
+    const root = await tmpDir("craftar-forge-impact-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const forge = path.join(root, "forge");
+    await makeForge(forge, SPEC);
+    const ws = async (name: string, profileName: string) => {
+      const dir = path.join(root, name);
+      await writeFiles(dir, { "craftar.yaml": `forge: ../forge\nprofile: ${profileName}\n` });
+      return dir;
+    };
+    const run = (args: string[], env: NodeJS.ProcessEnv = {}) => runCli(args, { env: { CRAFTAR_HOME: home, ...env } });
+    const registry = path.join(home, "registry.json");
+    return { root, home, forge, ws, run, registry };
+  }
+
+  it("test 1: two path workspaces in sync", async () => {
+    const s = await setup();
+    const a = await s.ws("a", "acme");
+    const b = await s.ws("b", "globex");
+    expect(s.run(["sync", "--workspace", a]).code).toBe(0);
+    expect(s.run(["sync", "--workspace", b]).code).toBe(0);
+    const realA = await fs.realpath(a);
+    const realB = await fs.realpath(b);
+    const realForge = await fs.realpath(s.forge);
+
+    const r = s.run(["forge", "impact", "--forge", s.forge]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+
+    // Compute padding widths from literal paths
+    const maxPath = Math.max(realA.length, realB.length);
+    const maxProfile = Math.max("acme".length, "globex".length);
+    const padA = realA.padEnd(maxPath);
+    const padB = realB.padEnd(maxPath);
+    const padAcme = "acme".padEnd(maxProfile);
+    const padGlobex = "globex".padEnd(maxProfile);
+
+    expect(r.stdout).toBe(
+      `craftar forge impact — ${realForge} · 2 registered workspaces (2 by path)\n` +
+      `  ${padA}  ${padAcme}  unchanged\n` +
+      `  ${padB}  ${padGlobex}  unchanged\n`
+    );
+  });
+
+  it("test 2: edit Forge rule → both lines show 1 update", async () => {
+    const s = await setup();
+    const a = await s.ws("a", "acme");
+    const b = await s.ws("b", "globex");
+    expect(s.run(["sync", "--workspace", a]).code).toBe(0);
+    expect(s.run(["sync", "--workspace", b]).code).toBe(0);
+
+    // Edit the Forge ingredient
+    await fs.writeFile(path.join(s.forge, "ingredients/rules/style/rule.md"), "# Style!\n");
+
+    const r = s.run(["forge", "impact", "--forge", s.forge]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toContain("1 update");
+    // Both lines should show 1 update
+    const lines = r.stdout.split("\n").filter((l) => l.includes("1 update"));
+    expect(lines).toHaveLength(2);
+  });
+
+  it("test 3: delete workspace → its line says missing; --json asserted whole", async () => {
+    const s = await setup();
+    const a = await s.ws("a", "acme");
+    const b = await s.ws("b", "globex");
+    expect(s.run(["sync", "--workspace", a]).code).toBe(0);
+    expect(s.run(["sync", "--workspace", b]).code).toBe(0);
+    const realA = await fs.realpath(a);
+    const realB = await fs.realpath(b);
+    const realForge = await fs.realpath(s.forge);
+
+    // Delete workspace b
+    await fs.rm(b, { recursive: true });
+
+    const r = s.run(["forge", "impact", "--forge", s.forge]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toContain("missing");
+
+    const j = s.run(["forge", "impact", "--forge", s.forge, "--json"]);
+    expect(j.code).toBe(0);
+    expect(j.stderr).toBe("");
+    const out = JSON.parse(j.stdout);
+    expect(out).toEqual({
+      forge: realForge,
+      registry: "partial",
+      workspaces: [
+        { path: realA, profile: "acme", match: "path", via: null, ref: null, state: "unchanged", counts: {}, error: null },
+        { path: realB, profile: "globex", match: "path", via: null, ref: null, state: "missing", counts: {}, error: null },
+      ],
+    });
+  });
+
+  it("test 4: break craftar.yaml → its line says error: <message>", async () => {
+    const s = await setup();
+    const a = await s.ws("a", "acme");
+    expect(s.run(["sync", "--workspace", a]).code).toBe(0);
+
+    // Break the craftar.yaml
+    await fs.writeFile(path.join(a, "craftar.yaml"), "profile: [\n");
+
+    const r = s.run(["forge", "impact", "--forge", s.forge]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    // The error message comes from the code - run once to capture it
+    expect(r.stdout).toMatch(/error: invalid craftar\.yaml: /);
+  });
+
+  it("test 5: a remote workspace → after push (origin); with ref: main → pins main", async () => {
+    const rf = await remoteForge(SPEC);
+    cleanups.push(rf.cleanup);
+    const root = await tmpDir("craftar-forge-impact-remote-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ${rf.url}\nprofile: acme\n` });
+
+    const run = (args: string[]) => runCli(args, { env: { CRAFTAR_HOME: home } });
+    expect(run(["sync", "--workspace", ws]).code).toBe(0);
+
+    const r = run(["forge", "impact", "--forge", rf.src]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("unchanged · after push (origin)");
+
+    // With ref: main → pins main
+    await fs.writeFile(path.join(ws, "craftar.yaml"), `forge: ${rf.url}\nref: main\nprofile: acme\n`);
+    expect(run(["sync", "--workspace", ws]).code).toBe(0);
+    const r2 = run(["forge", "impact", "--forge", rf.src]);
+    expect(r2.code).toBe(0);
+    expect(r2.stdout).toContain("unchanged · after push (origin), pins main");
+  });
+
+  it("test 6: no registered workspace → specific message; CRAFTAR_NO_REGISTRY=1 → registry off message", async () => {
+    const s = await setup();
+    const realForge = await fs.realpath(s.forge);
+
+    const r = s.run(["forge", "impact", "--forge", s.forge]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      `craftar forge impact — ${realForge}\n` +
+      `  no registered workspace reads this Forge on this machine\n`
+    );
+
+    const off = s.run(["forge", "impact", "--forge", s.forge], { CRAFTAR_NO_REGISTRY: "1" });
+    expect(off.code).toBe(0);
+    expect(off.stderr).toBe("");
+    expect(off.stdout).toBe(
+      `craftar forge impact — ${realForge}\n` +
+      `  the registry is off (CRAFTAR_NO_REGISTRY)\n`
+    );
+  });
+
+  it("test 7: unreadable registry → code 1, stdout empty, stderr error message", async () => {
+    const s = await setup();
+    await fs.mkdir(s.home, { recursive: true });
+    await fs.writeFile(s.registry, "not json\n");
+
+    const r = s.run(["forge", "impact", "--forge", s.forge]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    // The error comes from readRegistry which includes the JSON.parse error
+    expect(r.stderr).toBe(`error: cannot read ${s.registry}: Unexpected token 'o', \"not json\n\" is not valid JSON\n`);
+  });
+
+  it("test 8: --workspace with remote Forge → code 1, exact error message", async () => {
+    const rf = await remoteForge(SPEC);
+    cleanups.push(rf.cleanup);
+    const root = await tmpDir("craftar-forge-impact-remote-ws-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ${rf.url}\nprofile: acme\n` });
+
+    const r = runCli(["forge", "impact", "--workspace", ws], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(`error: the Forge of this workspace is remote (${rf.url}) — clone it and pass --forge <dir>\n`);
+  });
+
+  it("test 9: writes nothing — snapshot before/after unchanged", async () => {
+    const s = await setup();
+    const a = await s.ws("a", "acme");
+    const b = await s.ws("b", "globex");
+    expect(s.run(["sync", "--workspace", a]).code).toBe(0);
+    expect(s.run(["sync", "--workspace", b]).code).toBe(0);
+
+    const beforeA = await snapshot(a);
+    const beforeB = await snapshot(b);
+    const beforeForge = await snapshot(s.forge);
+    const beforeHome = await snapshot(s.home);
+
+    expect(s.run(["forge", "impact", "--forge", s.forge]).code).toBe(0);
+    expect(s.run(["forge", "impact", "--forge", s.forge, "--json"]).code).toBe(0);
+
+    expect(await snapshot(a)).toEqual(beforeA);
+    expect(await snapshot(b)).toEqual(beforeB);
+    expect(await snapshot(s.forge)).toEqual(beforeForge);
+    expect(await snapshot(s.home)).toEqual(beforeHome);
+  });
+});
