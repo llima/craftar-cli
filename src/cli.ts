@@ -143,7 +143,7 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
 program
   .command("init")
   .description(
-    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync (spec 23); refused when craftar.yaml already exists",
+    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync; refused when craftar.yaml already exists",
   )
   .requiredOption("--forge <dir|url>", "the Forge: a directory (written relative to the workspace) or a git URL")
   .requiredOption("--profile <name>", "the client profile in the Forge")
