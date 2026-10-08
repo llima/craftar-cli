@@ -89,10 +89,13 @@ describe("machine checks", () => {
     expect(one(r.checks, "lock").level).toBe("warn");
   });
 
-  it("home: a file at $CRAFTAR_HOME is an error", async () => {
+  it("home: a file at $CRAFTAR_HOME is an error, reported once — the cache is not checked", async () => {
     const f = await fixture();
     await fs.writeFile(f.home, "x");
-    expect(one((await run({ home: f.home })).checks, "home").level).toBe("error");
+    const r = await run({ home: f.home });
+    expect(one(r.checks, "home").level).toBe("error");
+    expect(one(r.checks, "cache")).toMatchObject({ level: "ok", message: "not checked ($CRAFTAR_HOME is not a directory)" });
+    expect(r.summary.error + r.summary.warn).toBe(1);
   });
 
   it("registry: a missing entry warns with prune; schema 2 is an error; a non-empty CRAFTAR_NO_REGISTRY is off", async () => {
@@ -143,6 +146,14 @@ describe("the cache check (§4.3)", () => {
     expect(one((await run({ home: c.home, workspace: bad })).checks, "cache").message).toMatch(/orphans not checked: the checked craftar.yaml does not read/);
   });
 
+  it("the orphan part runs when only the Forge load fails", async () => {
+    const c = await cacheFixture();
+    const a = await c.ws("acme-a", { profile: "acme", forge: "../nowhere" });
+    const r = await run({ home: c.home, workspace: a });
+    expect(one(r.checks, "config").level).toBe("error");
+    expect(one(r.checks, "cache")).toMatchObject({ level: "warn", message: `${c.key} — nothing names it` });
+  });
+
   it("the size is summed", async () => {
     const c = await cacheFixture();
     await syncAndRegister(c.home, await c.ws("acme-remote", { profile: "acme", forge: c.r.url }));
@@ -189,6 +200,8 @@ describe("workspace checks", () => {
     const bad = await run({ home: f.home, workspace: c });
     expect(one(bad.checks, "lock")).toMatchObject({ level: "error", fix: "repair or remove craftar.lock" });
     expect(of(bad.checks, "status")).toHaveLength(0);
+    await writeFiles(c, { "craftar.lock": JSON.stringify({ schema: 2, generatedAt: 5, files: "x" }) });
+    expect(one((await run({ home: f.home, workspace: c })).checks, "lock")).toMatchObject({ level: "error", fix: "repair or remove craftar.lock" });
   });
 
   it("params: a declared key with no value warns once, naming its citers, and plan does not repeat it", async () => {
@@ -203,13 +216,14 @@ describe("workspace checks", () => {
     const planLines = of(r.checks, "plan").map((c) => c.message);
     expect(planLines.some((x) => x.includes('param "who"'))).toBe(false);
     expect(planLines.some((x) => x.includes('param "other"'))).toBe(true);
+    expect(of(r.checks, "plan").map((c) => c.level)).toEqual(["warn"]);
   });
 
   it("params: a default or a profile value is ok", async () => {
     const f = await fixture({
-      ingredients: [rule("a", "# {{who}}\n", { params: { who: { default: "x" } } })],
-      recipes: [recipe("base", ["rule/a"])],
-      profiles: [profile("acme", ["base"])],
+      ingredients: [rule("a", "# {{who}}\n", { params: { who: { default: "x" } } }), rule("b", "# {{where}}\n", { params: { where: { description: "w" } } })],
+      recipes: [recipe("base", ["rule/a", "rule/b"])],
+      profiles: [profile("acme", ["base"], ["claude-code"], { params: { where: "here" } })],
     });
     expect(one((await run({ home: f.home, workspace: await f.ws("acme-a") })).checks, "params").level).toBe("ok");
   });
@@ -231,6 +245,16 @@ describe("workspace checks", () => {
     expect(JSON.stringify(r)).not.toContain(secret);
   });
 
+  it("mcp-env: the same server name written by two targets from different ingredients — both are checked", async () => {
+    const f = await fixture({
+      ingredients: [mcp("api", { T: "${ACME_A}" }, { targets: ["claude-code"] }), mcp("api--x", { T: "${ACME_B}" }, { as: "api", targets: ["kiro"] })],
+      recipes: [recipe("base", ["mcp/api", "mcp/api--x"])],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    expect(of(r.checks, "mcp-env").map((c) => c.message)).toEqual(['server "api" expects ACME_A, not set', 'server "api" expects ACME_B, not set']);
+  });
+
   it("forge-inside: a workspace inside its path Forge warns", async () => {
     const f = await fixture();
     const inner = path.join(f.forgeRoot, "ws");
@@ -242,8 +266,9 @@ describe("workspace checks", () => {
     const f = await fixture();
     const r = await run({ home: f.home, workspace: await f.ws("acme-a", { profile: "acme", ref: "v1" }) });
     const cfg = of(r.checks, "config");
-    expect(cfg.map((c) => c.level)).toEqual(["ok", "warn"]);
-    expect(cfg[1].message).toMatch(/^ref "v1" is ignored/);
+    expect(cfg.map((c) => c.level)).toEqual(["warn"]);
+    expect(cfg[0].message).toMatch(/^ref "v1" is ignored/);
+    expect(r.summary.ok).toBe(r.checks.filter((c) => c.level === "ok").length);
     expect(of(r.checks, "plan").map((c) => c.level)).toEqual(["ok"]);
   });
 
@@ -256,6 +281,22 @@ describe("workspace checks", () => {
     expect(one((await run({ home: f.home, workspace: link })).checks, "registered").message).toBe("in the registry");
     await fs.rm(path.join(f.home, "registry.json"));
     expect(one((await run({ home: f.home, workspace: a })).checks, "registered")).toMatchObject({ level: "warn", fix: "craftar sync" });
+    const off = await run({ home: f.home, workspace: a, registryOff: true });
+    expect(one(off.checks, "registered")).toMatchObject({ level: "ok", message: "registry off" });
+  });
+
+  it("a symlinked workspace loads its Forge through the path as given, like every other command", async () => {
+    const f = await fixture();
+    const real = path.join(f.root, "real", "ws");
+    await writeFiles(real, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+    const links = path.join(f.root, "links");
+    await fs.mkdir(links);
+    const kind = process.platform === "win32" ? "junction" : "dir";
+    await fs.symlink(f.forgeRoot, path.join(links, "forge"), kind);
+    await fs.symlink(real, path.join(links, "ws"), kind);
+    const r = await run({ home: f.home, workspace: path.join(links, "ws") });
+    expect(one(r.checks, "config").level).toBe("ok");
+    expect(r.workspace).toBe(await fs.realpath(real));
   });
 
   it("a workspace that does not load: config error, dependent checks absent, lock still runs", async () => {
@@ -269,6 +310,15 @@ describe("workspace checks", () => {
 });
 
 describe("a remote Forge (§4.2 forge row, §6 cases 2–4)", () => {
+  it("a ref the cache cannot resolve, offline: config error with the --fetch fix", async () => {
+    const f = await fixture();
+    const r = await remoteForge(FORGE);
+    cleanups.push(r.cleanup);
+    await ensureTree(r.url, null, { home: f.home });
+    const a = await f.ws("acme-remote", { profile: "acme", forge: r.url, ref: "nope" });
+    expect(one((await run({ home: f.home, workspace: a })).checks, "config")).toMatchObject({ level: "error", fix: "craftar doctor --fetch" });
+  });
+
   it("never fetched: config error with the --fetch fix; --fetch fetches it", async () => {
     const f = await fixture();
     const r = await remoteForge(FORGE);
@@ -291,6 +341,7 @@ describe("a remote Forge (§4.2 forge row, §6 cases 2–4)", () => {
     const [refs0, stamp0] = [refs(), await stamp()];
     await r.commit({ "README.md": "moved\n" });
     await fs.rename(r.bare, `${r.bare}.away`);
+    cleanups.push(() => fs.rename(`${r.bare}.away`, r.bare).catch(() => {}));
     const off = await run({ home: f.home, workspace: a });
     expect(one(off.checks, "forge").message).toMatch(/, cached /);
     expect(refs()).toBe(refs0);
@@ -299,16 +350,16 @@ describe("a remote Forge (§4.2 forge row, §6 cases 2–4)", () => {
     expect(one(down.checks, "forge").level).toBe("warn");
     expect(of(down.checks, "plan").map((c) => c.level)).toEqual(["ok"]);
     expect(of(down.checks, "config").map((c) => c.level)).toEqual(["ok"]);
-    await fs.rename(`${r.bare}.away`, r.bare);
   });
 
-  it("a full-SHA ref already cached: forge ok, pinned, under --fetch", async () => {
+  it("a full-SHA ref already cached: forge ok, pinned, offline and under --fetch", async () => {
     const f = await fixture();
     const r = await remoteForge(FORGE);
     cleanups.push(r.cleanup);
     const sha = git(r.src, "rev-parse", "HEAD");
     const a = await f.ws("acme-pinned", { profile: "acme", forge: r.url, ref: sha });
     await ensureTree(r.url, sha, { home: f.home });
-    expect(one((await run({ home: f.home, workspace: a, fetch: true })).checks, "forge")).toMatchObject({ level: "ok", message: `${r.url} @ pinned ${sha.slice(0, 8)}, cached` });
+    for (const fetch of [false, true])
+      expect(one((await run({ home: f.home, workspace: a, fetch })).checks, "forge"), String(fetch)).toMatchObject({ level: "ok", message: `${r.url} @ pinned ${sha.slice(0, 8)}, cached` });
   });
 });

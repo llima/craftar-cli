@@ -4380,4 +4380,12 @@ describe("cli — craftar doctor (spec 24 §9.2)", () => {
     expect(await snapshot(s.ws)).toEqual(before);
     expect(await fs.readFile(path.join(s.home, "registry.json"), "utf8")).toBe(reg);
   });
+
+  it("CRAFTAR_NO_REGISTRY: non-empty turns the registry off; empty still reads it", async () => {
+    const s = await setup();
+    await writeFiles(s.home, { "registry.json": JSON.stringify({ schema: 2, workspaces: [] }) });
+    const line = (env: NodeJS.ProcessEnv) => JSON.parse(s.run(["--json"], { cwd: s.root, env }).stdout).checks.find((c: { id: string }) => c.id === "registry");
+    expect(line({ CRAFTAR_NO_REGISTRY: "1" })).toMatchObject({ level: "ok", message: "off (CRAFTAR_NO_REGISTRY)" });
+    expect(line({ CRAFTAR_NO_REGISTRY: "" })).toMatchObject({ level: "error", fix: "upgrade craftar" });
+  });
 });
