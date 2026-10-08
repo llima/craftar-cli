@@ -141,7 +141,7 @@ export async function forget(home: string, dir: string): Promise<string> {
  * exists but cannot be inspected (EACCES…) is not gone — the load fails and the row reads `error`,
  * which `prune` never removes.
  */
-async function isMissing(entry: RegistryEntry): Promise<boolean> {
+export async function isMissing(entry: RegistryEntry): Promise<boolean> {
   try {
     await fs.stat(path.join(entry.path, WORKSPACE_FILE));
     return false;
@@ -149,6 +149,30 @@ async function isMissing(entry: RegistryEntry): Promise<boolean> {
     const code = (e as NodeJS.ErrnoException).code;
     return code === "ENOENT" || code === "ENOTDIR";
   }
+}
+
+/** Whether `dir` has a registry entry — by real path, without case on Windows, as `register` keys it (spec 24 §5.1). */
+export async function isRegistered(reg: Registry, dir: string): Promise<boolean> {
+  const target = await realOrResolved(dir);
+  return reg.workspaces.some((e) => samePath(e.path, target));
+}
+
+/**
+ * What names a cache entry (spec 24 §4.3): every registry entry's `forge.key` —
+ * `missing` ones included, until `workspaces prune` — and the checked workspace's own key. Returns
+ * each named key with the workspace paths that name it.
+ */
+export function namedCacheKeys(reg: Registry, checked: { key: string; path: string } | null): Map<string, string[]> {
+  const named = new Map<string, string[]>();
+  const add = (key: string | null, by: string) => {
+    if (key === null) return;
+    const list = named.get(key) ?? [];
+    if (!list.some((p) => samePath(p, by))) list.push(by);
+    named.set(key, list);
+  };
+  for (const e of reg.workspaces) add(e.forge.key, e.path);
+  if (checked) add(checked.key, checked.path);
+  return named;
 }
 
 /** `craftar workspaces prune` (§4.4): removes every `missing` entry; returns their paths. Loads nothing else. */

@@ -6,6 +6,7 @@ import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
+import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { resolveHome } from "./core/home-lock.js";
 import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type Workspace } from "./core/sync.js";
 import type { Lock } from "./schema/index.js";
@@ -44,7 +45,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.14.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.15.0");
 
 /* ---------------------------------------------------------------- import */
 program
@@ -438,6 +439,38 @@ workspaces
     const gone = await prune(craftarHome());
     if (gone.length === 0) console.log("nothing to prune");
     for (const p of gone) console.log(`pruned ${p}`);
+  });
+
+/* ---------------------------------------------------------------- doctor */
+program
+  .command("doctor")
+  .description(
+    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, lock, status, registration): one line per finding — ok, warn or error — each with its fix. Reports only; reads without the network unless --fetch",
+  )
+  // No commander default: an explicit --workspace without craftar.yaml exits 1, the current directory without one runs the machine checks (spec 24 §4.1).
+  .option("--workspace <dir>", "the workspace to check (default: the current directory, when it holds craftar.yaml)")
+  .option("--fetch", "fetch a remote Forge first instead of reading the cached copy", false)
+  .option("--strict", "exit 1 on a warn too, not only on an error", false)
+  .option("--json", "machine-readable output", false)
+  .action(async (o) => {
+    let workspace: string | null = null;
+    if (o.workspace !== undefined) {
+      if (!(await exists(path.join(o.workspace, WORKSPACE_FILE))))
+        fail(`no ${WORKSPACE_FILE} in ${path.resolve(o.workspace)} — run doctor inside a workspace, or without --workspace for the machine checks`);
+      workspace = o.workspace;
+    } else if (await exists(path.join(process.cwd(), WORKSPACE_FILE))) workspace = process.cwd();
+    const report = await runDoctor({
+      version: program.version() ?? "unknown",
+      home: craftarHome(),
+      workspace,
+      fetch: o.fetch,
+      strict: o.strict,
+      registryOff: registryOff(),
+    });
+    if (o.json) console.log(JSON.stringify(report, null, 2));
+    else printDoctor(report);
+    // exitCode, not process.exit: a piped --json is never cut (spec 24 §5.1).
+    if (report.summary.error > 0 || (o.strict && report.summary.warn > 0)) process.exitCode = 1;
   });
 
 /* ---------------------------------------------------------------- recipes */
@@ -1216,6 +1249,16 @@ function collect(value: string, previous: string[]): string[] {
 /** `$CRAFTAR_HOME`, as the cache reads it (spec 13 §6.3). */
 function craftarHome(): string {
   return resolveHome(process.env.CRAFTAR_HOME || undefined);
+}
+
+/** The text report of `craftar doctor` (spec 24 §4.4) — presentation, not contract. */
+function printDoctor(r: DoctorReport): void {
+  console.log(pc.bold(`craftar doctor — craftar ${r.version} · ${r.workspace ?? "no workspace (machine checks only)"}`));
+  const paint = (l: string) => (l === "error" ? pc.red : l === "warn" ? pc.yellow : pc.dim)(l.padEnd(6));
+  // A message that already ends in its fix (a refused schema says "— upgrade craftar") is not suffixed twice.
+  const suffix = (c: DoctorReport["checks"][number]) => (c.fix && c.level !== "ok" && !c.message.endsWith(c.fix) ? ` — ${c.fix}` : "");
+  for (const c of r.checks) console.log(`  ${paint(c.level)} ${c.id.padEnd(13)} ${c.message}${suffix(c)}`);
+  console.log(`summary: ${r.summary.ok} ok, ${r.summary.warn} warn, ${r.summary.error} error`);
 }
 
 /** `CRAFTAR_NO_REGISTRY` — "no registry", read like NO_COLOR: any non-empty value turns it off (spec 21 §4.1). */

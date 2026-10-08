@@ -79,7 +79,25 @@ export interface LoadOptions {
 }
 
 
+/** A workspace's configuration, merged and validated, before its Forge is loaded (spec 24 §5.1). */
+export interface MergedConfig {
+  config: WorkspaceConfig;
+  /** `forge:` came from craftar.local.yaml. */
+  fromLocalFile: boolean;
+  /** Warnings of the merge itself (a local `forge:` override). */
+  warnings: string[];
+}
+
 export async function loadWorkspace(root: string, opts: LoadOptions = {}): Promise<Workspace> {
+  root = path.resolve(root);
+  return loadForgeFor(root, await readWorkspaceConfig(root), opts);
+}
+
+/**
+ * The two workspace files read and merged, the Forge not loaded (spec 24 §5.1): what `doctor` needs to
+ * know a Forge's kind and cache key even when the Forge does not load. The one reader of the files.
+ */
+export async function readWorkspaceConfig(root: string): Promise<MergedConfig> {
   root = path.resolve(root);
   const file = path.join(root, WORKSPACE_FILE);
   if (!(await exists(file)))
@@ -89,7 +107,7 @@ export async function loadWorkspace(root: string, opts: LoadOptions = {}): Promi
   const base = parseWorkspaceYaml(WORKSPACE_FILE, await fs.readFile(file, "utf8")) ?? {};
   const localFile = path.join(root, LOCAL_FILE);
   const local = (await exists(localFile)) ? parseWorkspaceYaml(LOCAL_FILE, await fs.readFile(localFile, "utf8")) ?? {} : null;
-  return loadWorkspaceConfig(root, base, local, opts);
+  return mergeWorkspaceConfig(base, local);
 }
 
 /**
@@ -98,7 +116,15 @@ export async function loadWorkspace(root: string, opts: LoadOptions = {}): Promi
  * (`craftar init`). `local` is null when there is no `craftar.local.yaml`.
  */
 export async function loadWorkspaceConfig(root: string, base: unknown, localDoc: unknown | null, opts: LoadOptions = {}): Promise<Workspace> {
-  root = path.resolve(root);
+  return loadForgeFor(path.resolve(root), mergeWorkspaceConfig(base, localDoc), opts);
+}
+
+/**
+ * The credential check, the merge and the schema (spec 24 §5.1). `localDoc` is null when there is no
+ * `craftar.local.yaml` (`{}` when it exists but is empty), so the schema error names the local file
+ * exactly when it exists.
+ */
+export function mergeWorkspaceConfig(base: unknown, localDoc: unknown | null): MergedConfig {
   const hasLocal = localDoc !== null;
   const local = localDoc ?? {};
   // Before anything can print the value: a credential in either file is refused by file and field (spec 13 §4.3).
@@ -112,10 +138,17 @@ export async function loadWorkspaceConfig(root: string, base: unknown, localDoc:
   // Named, as a Forge file is: a wrong-shape `overrides.sections` key fails here (spec 11 §5.2).
   if (!parsed.success) throw new Error(`invalid ${WORKSPACE_FILE}${hasLocal ? ` (merged with ${LOCAL_FILE})` : ""}: ${parsed.error.message}`);
   const config = parsed.data;
-  const remote = classifyForge(config.forge) === "url";
   const warnings: string[] = [];
   if (fromLocalFile) warnings.push(`Forge overridden by ${LOCAL_FILE} (${config.forge}) — do not commit ${LOCK_FILE} or the generated files`);
-  if (remote) {
+  return { config, fromLocalFile, warnings };
+}
+
+/** The Forge of a merged configuration — from its path, or from the cache for a URL (spec 24 §5.1). */
+export async function loadForgeFor(root: string, merged: MergedConfig, opts: LoadOptions = {}): Promise<Workspace> {
+  root = path.resolve(root);
+  const { config, fromLocalFile } = merged;
+  const warnings = [...merged.warnings];
+  if (classifyForge(config.forge) === "url") {
     if (opts.refuseRemote) throw new Error(opts.refuseRemote(config.forge));
     const { tree, origin, warning } = await remoteTree(config.forge, config.ref ?? null, opts, fromLocalFile);
     if (warning) warnings.push(warning);
@@ -218,6 +251,8 @@ export interface Plan {
   warnings: string[];
   /** Per ingredient ref, each section it declares, with the layer that filled it (spec 11 §5.3, for `explain`). */
   sections: Map<string, Array<{ file: string; name: string; layer: SectionLayer }>>;
+  /** Each cited `{{key}}` no layer fills, the refs citing it, and the warning that says so (spec 24 §4.2). */
+  missingParams: Array<{ key: string; refs: string[]; warning: string }>;
 }
 
 /** A path as the Forge names it: relative to its root, POSIX separators. */
@@ -385,8 +420,11 @@ export async function plan(ws: Workspace): Promise<Plan> {
     }
     files.push(...(await emitFor(t, em, ctx)));
   }
+  const missing: Plan["missingParams"] = [];
   for (const [key, refs] of [...missingParams].sort(([a], [b]) => a.localeCompare(b))) {
-    warnings.push(`param "${key}" has no value in any layer — left verbatim (${[...refs].sort().join(", ")})`);
+    const warning = `param "${key}" has no value in any layer — left verbatim (${[...refs].sort().join(", ")})`;
+    warnings.push(warning);
+    missing.push({ key, refs: [...refs].sort(), warning });
   }
   // Duplicate path guard
   const seen = new Map<string, string>();
@@ -395,7 +433,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
     if (prev) warnings.push(`two ingredients write ${f.path}: ${prev} and ${f.ingredient} (last wins)`);
     seen.set(f.path, f.ingredient);
   }
-  return { resolution, files: dedupeLastWins(files), warnings, sections: sections.byRef };
+  return { resolution, files: dedupeLastWins(files), warnings, sections: sections.byRef, missingParams: missing };
 }
 
 function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {

@@ -4311,3 +4311,89 @@ describe("cli — craftar init (spec 23 §9.2)", () => {
     expect(r.stderr).toBe("error: required option '--profile <name>' not specified\n");
   });
 });
+
+describe("cli — craftar doctor (spec 24 §9.2)", () => {
+  const SPEC = { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] };
+
+  async function setup() {
+    const root = await tmpDir("craftar-doctor-cli-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    await makeForge(path.join(root, "forge"), SPEC);
+    const ws = path.join(root, "acme-a");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+    const run = (args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) =>
+      runCli(["doctor", ...args], { cwd: opts.cwd, env: { CRAFTAR_HOME: home, ...opts.env } });
+    return { root, home, ws, run };
+  }
+
+  it("exit 0 with warnings; 1 with an error; --strict turns a warning into exit 1", async () => {
+    const s = await setup();
+    const warn = s.run(["--workspace", s.ws]);
+    expect(warn.code).toBe(0);
+    expect(warn.stdout).toMatch(/\n {2}warn {3}lock {10}absent — never synced — craftar sync\n/);
+    expect(warn.stdout).toMatch(/\nsummary: \d+ ok, 1 warn, 0 error\n$/);
+    expect(s.run(["--workspace", s.ws, "--strict"]).code).toBe(1);
+    await writeFiles(s.ws, { "craftar.yaml": "forge: ../nowhere\nprofile: acme\n" });
+    const err = s.run(["--workspace", s.ws]);
+    expect(err.code).toBe(1);
+    expect(err.stdout).toMatch(/ error  config +Forge not found at /);
+  });
+
+  it("outside a workspace: machine checks only, exit 0; an explicit --workspace without craftar.yaml exits 1 on stderr, --json too", async () => {
+    const s = await setup();
+    const out = s.run([], { cwd: s.root });
+    expect(out.code).toBe(0);
+    expect(out.stdout.split("\n")[0]).toMatch(/· no workspace \(machine checks only\)$/);
+    expect(out.stdout).not.toMatch(/ config /);
+    for (const extra of [[], ["--json"]]) {
+      const bad = s.run(["--workspace", s.root, ...extra]);
+      expect(bad.code).toBe(1);
+      expect(bad.stdout).toBe("");
+      expect(bad.stderr).toContain(`no craftar.yaml in ${s.root} — run doctor inside a workspace, or without --workspace for the machine checks`);
+    }
+  });
+
+  it("the current directory with craftar.yaml is checked without --workspace", async () => {
+    const s = await setup();
+    const r = s.run([], { cwd: s.ws });
+    expect(r.stdout.split("\n")[0]).toContain(await fs.realpath(s.ws));
+    expect(r.stdout).toMatch(/ ok {5}config /);
+  });
+
+  it("--json: the top-level keys and each check's keys in order, one entry per finding", async () => {
+    const s = await setup();
+    const j = JSON.parse(s.run(["--workspace", s.ws, "--json"]).stdout);
+    expect(Object.keys(j)).toEqual(["version", "workspace", "fetch", "strict", "checks", "summary"]);
+    expect(j).toMatchObject({ workspace: await fs.realpath(s.ws), fetch: false, strict: false });
+    for (const c of j.checks) expect(Object.keys(c)).toEqual(["id", "scope", "level", "message", "fix"]);
+    expect(j.checks.map((c: { id: string }) => c.id)).toEqual(["node", "git", "home", "registry", "cache", "config", "forge", "forge-inside", "plan", "params", "mcp-env", "lock", "registered"]);
+    expect(Object.keys(j.summary)).toEqual(["ok", "warn", "error"]);
+  });
+
+  it("writes nothing: the workspace tree and the registry are byte-identical before and after", async () => {
+    const s = await setup();
+    expect(runCli(["sync", "--workspace", s.ws], { env: { CRAFTAR_HOME: s.home } }).code).toBe(0);
+    const before = await snapshot(s.ws);
+    const reg = await fs.readFile(path.join(s.home, "registry.json"), "utf8");
+    expect(s.run(["--workspace", s.ws]).code).toBe(0);
+    expect(await snapshot(s.ws)).toEqual(before);
+    expect(await fs.readFile(path.join(s.home, "registry.json"), "utf8")).toBe(reg);
+  });
+
+  it("text: a message that already ends in its fix is not suffixed twice", async () => {
+    const s = await setup();
+    await writeFiles(s.home, { "registry.json": JSON.stringify({ schema: 9, workspaces: [] }) });
+    const out = s.run([], { cwd: s.root }).stdout;
+    expect(out).toMatch(/registry\.json declares schema 9, which this craftar does not read — upgrade craftar\n/);
+    expect(out).not.toContain("upgrade craftar — upgrade craftar");
+  });
+
+  it("CRAFTAR_NO_REGISTRY: non-empty turns the registry off; empty still reads it", async () => {
+    const s = await setup();
+    await writeFiles(s.home, { "registry.json": JSON.stringify({ schema: 2, workspaces: [] }) });
+    const line = (env: NodeJS.ProcessEnv) => JSON.parse(s.run(["--json"], { cwd: s.root, env }).stdout).checks.find((c: { id: string }) => c.id === "registry");
+    expect(line({ CRAFTAR_NO_REGISTRY: "1" })).toMatchObject({ level: "ok", message: "off (CRAFTAR_NO_REGISTRY)" });
+    expect(line({ CRAFTAR_NO_REGISTRY: "" })).toMatchObject({ level: "error", fix: "upgrade craftar" });
+  });
+});

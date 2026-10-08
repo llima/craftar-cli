@@ -113,7 +113,7 @@ export function parseLsRemote(stdout: string): LsRemote {
   return out;
 }
 
-const FULL_SHA = /^[0-9a-f]{40}$/;
+export const FULL_SHA = /^[0-9a-f]{40}$/;
 
 /**
  * The commit a requested ref names, in the order of spec 13 §6.2. A full SHA is returned as is: the
@@ -221,10 +221,7 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
   const stamp = path.join(entry, "fetched");
   // A copy exists once a fetch completed: an init whose fetch then failed leaves no stamp.
   const haveCopy = await exists(stamp);
-  const fetchedAt = async () => {
-    const text = (await exists(stamp)) ? (await fs.readFile(stamp, "utf8")).trim() : "";
-    return /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(text) ? text : null;
-  };
+  const fetchedAt = async () => ((await exists(stamp)) ? readFetchedStamp(stamp) : null);
   const label = ref ?? "the default branch";
 
   // A full SHA already in the cache names the same commit whatever the remote does: no fetch (§14 item 3).
@@ -356,15 +353,7 @@ async function treeFor(git: GitRunner, entry: string, repo: string, commit: stri
 async function cleanup(git: GitRunner, entry: string, repo: string, inUse: string, opts: CacheOptions): Promise<void> {
   const trees = path.join(entry, "trees");
   const limit = Date.now() - (opts.cleanupMs ?? 14 * 24 * 60 * 60 * 1000);
-  // When a tree was last used: its `.used` stamp, else its completion marker, else the directory — so a
-  // tree whose run died before stamping it still ages out.
-  const lastUse = async (commit: string) => {
-    for (const p of [`${commit}.used`, `${commit}.ok`, commit]) {
-      const st = await fs.stat(path.join(trees, p)).catch(() => null);
-      if (st) return st.mtimeMs;
-    }
-    return null;
-  };
+  const lastUse = (commit: string) => treeLastUse(trees, commit);
   let removed = false;
   for (const name of await fs.readdir(trees).catch(() => [] as string[])) {
     if (name.includes(".") || name === inUse) continue;
@@ -393,4 +382,96 @@ async function cleanup(git: GitRunner, entry: string, repo: string, inUse: strin
 /** The entry's lock (`<entry>/lock`), through the one helper the registry shares (spec 21 §5.4). */
 function withEntryLock<T>(entry: string, opts: CacheOptions, body: () => Promise<T>): Promise<T> {
   return withLock(path.join(entry, "lock"), "the Forge cache entry", opts, body);
+}
+
+/* ------------------------------------------------------------------ */
+/* Reading the cache (spec 24 §5.1)                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * When a tree was last used: its `.used` stamp, else its completion marker, else the directory — so a
+ * tree whose run died before stamping it still ages out. The one rule cleanup and the readers share.
+ */
+async function treeLastUse(trees: string, commit: string): Promise<number | null> {
+  for (const p of [`${commit}.used`, `${commit}.ok`, commit]) {
+    const st = await fs.stat(path.join(trees, p)).catch(() => null);
+    if (st) return st.mtimeMs;
+  }
+  return null;
+}
+
+export interface CacheTreeInfo {
+  commit: string;
+  /** The tree holds its completion marker. */
+  complete: boolean;
+  /** `treeLastUse`, in ms since the epoch; null when nothing of the tree is left. */
+  lastUse: number | null;
+}
+
+export interface CacheEntryInfo {
+  /** The entry's directory name: `cacheKey(url)`. */
+  key: string;
+  dir: string;
+  /** Summed file sizes under the entry, `repo.git` included; links are not followed. */
+  bytes: number;
+  /** A fetch completed (the `fetched` stamp exists). */
+  fetched: boolean;
+  /** The stamp's time, when it reads as one. */
+  fetchedAt: string | null;
+  trees: CacheTreeInfo[];
+}
+
+export interface CacheSnapshot {
+  /** `$CRAFTAR_HOME/forges`. */
+  forges: string;
+  entries: CacheEntryInfo[];
+  /** Summed file sizes under `forges/`, whatever lies there; links are not followed. */
+  bytes: number;
+}
+
+/** The `fetched` stamp's time, when it reads as one: the one parse `ensureTree` and the snapshot share. Throws when the stamp cannot be read. */
+async function readFetchedStamp(stamp: string): Promise<string | null> {
+  const text = (await fs.readFile(stamp, "utf8")).trim();
+  return /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(text) ? text : null;
+}
+
+/** Bytes of every file under `dir`, without following links; 0 for anything unreadable. */
+async function sizeOf(dir: string): Promise<number> {
+  const st = await fs.lstat(dir).catch(() => null);
+  if (!st) return 0;
+  if (!st.isDirectory()) return st.size;
+  let total = 0;
+  for (const name of await fs.readdir(dir).catch(() => [] as string[])) total += await sizeOf(path.join(dir, name));
+  return total;
+}
+
+/** A read-only snapshot of the Forge cache (spec 24 §5.1): the one reader of the layout outside `ensureTree`. */
+export async function inspectCache(home: string): Promise<CacheSnapshot> {
+  const forges = path.join(path.resolve(home), "forges");
+  const entries: CacheEntryInfo[] = [];
+  const names = (await fs.readdir(forges, { withFileTypes: true }).catch((e: NodeJS.ErrnoException) => {
+    if (e.code === "ENOENT") return [];
+    throw e;
+  })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const d of names) {
+    if (!d.isDirectory()) continue;
+    const dir = path.join(forges, d.name);
+    const stamp = path.join(dir, "fetched");
+    const fetched = await exists(stamp);
+    const trees = path.join(dir, "trees");
+    const treeInfo: CacheTreeInfo[] = [];
+    for (const name of (await fs.readdir(trees).catch(() => [] as string[])).sort()) {
+      if (name.includes(".")) continue;
+      treeInfo.push({ commit: name, complete: await exists(path.join(trees, `${name}.ok`)), lastUse: await treeLastUse(trees, name) });
+    }
+    entries.push({
+      key: d.name,
+      dir,
+      bytes: await sizeOf(dir),
+      fetched,
+      fetchedAt: fetched ? await readFetchedStamp(stamp).catch(() => null) : null,
+      trees: treeInfo,
+    });
+  }
+  return { forges, entries, bytes: await sizeOf(forges) };
 }
