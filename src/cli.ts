@@ -1208,12 +1208,12 @@ async function forgeFor(o: { forge?: string; workspace?: string; offline?: boole
   return forge;
 }
 
-/** `$CRAFTAR_HOME`, as the cache reads it (spec 13 §6.3). */
 /** A repeatable option's values, in the order given. */
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
 }
 
+/** `$CRAFTAR_HOME`, as the cache reads it (spec 13 §6.3). */
 function craftarHome(): string {
   return resolveHome(process.env.CRAFTAR_HOME || undefined);
 }
