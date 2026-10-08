@@ -4458,6 +4458,9 @@ describe("cli — forge impact (spec 25 §4.1)", () => {
     const b = await s.ws("b", "globex");
     expect(s.run(["sync", "--workspace", a]).code).toBe(0);
     expect(s.run(["sync", "--workspace", b]).code).toBe(0);
+    const realA = await fs.realpath(a);
+    const realB = await fs.realpath(b);
+    const realForge = await fs.realpath(s.forge);
 
     // Edit the Forge ingredient
     await fs.writeFile(path.join(s.forge, "ingredients/rules/style/rule.md"), "# Style!\n");
@@ -4465,10 +4468,20 @@ describe("cli — forge impact (spec 25 §4.1)", () => {
     const r = s.run(["forge", "impact", "--forge", s.forge]);
     expect(r.code).toBe(0);
     expect(r.stderr).toBe("");
-    expect(r.stdout).toContain("1 update");
-    // Both lines should show 1 update
-    const lines = r.stdout.split("\n").filter((l) => l.includes("1 update"));
-    expect(lines).toHaveLength(2);
+
+    // Compute padding widths from literal paths
+    const maxPath = Math.max(realA.length, realB.length);
+    const maxProfile = Math.max("acme".length, "globex".length);
+    const padA = realA.padEnd(maxPath);
+    const padB = realB.padEnd(maxPath);
+    const padAcme = "acme".padEnd(maxProfile);
+    const padGlobex = "globex".padEnd(maxProfile);
+
+    expect(r.stdout).toBe(
+      `craftar forge impact — ${realForge} · 2 registered workspaces (2 by path)\n` +
+      `  ${padA}  ${padAcme}  1 update\n` +
+      `  ${padB}  ${padGlobex}  1 update\n`
+    );
   });
 
   it("test 3: delete workspace → its line says missing; --json asserted whole", async () => {
@@ -4507,6 +4520,8 @@ describe("cli — forge impact (spec 25 §4.1)", () => {
     const s = await setup();
     const a = await s.ws("a", "acme");
     expect(s.run(["sync", "--workspace", a]).code).toBe(0);
+    const realA = await fs.realpath(a);
+    const realForge = await fs.realpath(s.forge);
 
     // Break the craftar.yaml
     await fs.writeFile(path.join(a, "craftar.yaml"), "profile: [\n");
@@ -4514,8 +4529,11 @@ describe("cli — forge impact (spec 25 §4.1)", () => {
     const r = s.run(["forge", "impact", "--forge", s.forge]);
     expect(r.code).toBe(0);
     expect(r.stderr).toBe("");
-    // The error message comes from the code - run once to capture it
-    expect(r.stdout).toMatch(/error: invalid craftar\.yaml: /);
+    // Error message copied from a run: BAD_INDENT at line 2, column 1
+    expect(r.stdout).toBe(
+      `craftar forge impact — ${realForge} · 1 registered workspace (1 by path)\n` +
+      `  ${realA}  acme  error: invalid craftar.yaml: BAD_INDENT at line 2, column 1\n`
+    );
   });
 
   it("test 5: a remote workspace → after push (origin); with ref: main → pins main", async () => {
@@ -4529,17 +4547,27 @@ describe("cli — forge impact (spec 25 §4.1)", () => {
 
     const run = (args: string[]) => runCli(args, { env: { CRAFTAR_HOME: home } });
     expect(run(["sync", "--workspace", ws]).code).toBe(0);
+    const realWs = await fs.realpath(ws);
+    const realSrc = await fs.realpath(rf.src);
 
     const r = run(["forge", "impact", "--forge", rf.src]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("unchanged · after push (origin)");
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      `craftar forge impact — ${realSrc} · 1 registered workspace (1 by remote)\n` +
+      `  ${realWs}  acme  unchanged · after push (origin)\n`
+    );
 
     // With ref: main → pins main
     await fs.writeFile(path.join(ws, "craftar.yaml"), `forge: ${rf.url}\nref: main\nprofile: acme\n`);
     expect(run(["sync", "--workspace", ws]).code).toBe(0);
     const r2 = run(["forge", "impact", "--forge", rf.src]);
     expect(r2.code).toBe(0);
-    expect(r2.stdout).toContain("unchanged · after push (origin), pins main");
+    expect(r2.stderr).toBe("");
+    expect(r2.stdout).toBe(
+      `craftar forge impact — ${realSrc} · 1 registered workspace (1 by remote)\n` +
+      `  ${realWs}  acme  unchanged · after push (origin), pins main\n`
+    );
   });
 
   it("test 6: no registered workspace → specific message; CRAFTAR_NO_REGISTRY=1 → registry off message", async () => {
