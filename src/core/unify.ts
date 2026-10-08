@@ -17,7 +17,7 @@ import { deriveSections, prefillSections, proveSections, type MarkerInsertion, t
 import { stripBom, toLf } from "./text.js";
 import { editYamlText } from "./yaml-edit.js";
 import { concerned, workspaceAgainst, type ForgeWorkspace, type Planned, type RegistryState } from "./impact.js";
-import { plan } from "./sync.js";
+import { plan, type MergedConfig } from "./sync.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
 // fidelity, correctness should not hinge on a glyph no diff viewer, editor or re-encoding shows.
@@ -1237,30 +1237,48 @@ export async function pruneRecipes(
     }
 
     // Check 3: a workspace's `recipes.add` or `recipes.remove` names it
-    // Use concerned() from impact.ts to read merged.local / merged.base (spec 25 §5.1)
-    const addResult = concerned(ctx.after, ctx.entries, (doc) => {
+    // Walk entries once in entry order; for each entry, check add first, then remove
+    const firstConcerned = concerned(ctx.after, ctx.entries, (doc) => {
       if (doc && typeof doc === "object") {
-        const d = doc as { recipes?: { add?: unknown } };
-        return Array.isArray(d.recipes?.add) && d.recipes.add.includes(candidate.recipe);
-      }
-      return false;
-    });
-    const removeResult = concerned(ctx.after, ctx.entries, (doc) => {
-      if (doc && typeof doc === "object") {
-        const d = doc as { recipes?: { remove?: unknown } };
-        return Array.isArray(d.recipes?.remove) && d.recipes.remove.includes(candidate.recipe);
+        const d = doc as { recipes?: { add?: unknown; remove?: unknown } };
+        const inAdd = Array.isArray(d.recipes?.add) && d.recipes.add.includes(candidate.recipe);
+        const inRemove = Array.isArray(d.recipes?.remove) && d.recipes.remove.includes(candidate.recipe);
+        return inAdd || inRemove;
       }
       return false;
     });
 
-    // First match wins: add before remove, entry order within each (spec 25 §4.4 step 3)
-    const firstConcerned = addResult.concerned[0] ?? removeResult.concerned[0];
-    const kind = addResult.concerned[0] ? "add" : "remove";
+    if (firstConcerned.concerned.length > 0) {
+      const first = firstConcerned.concerned[0];
+      // Determine kind by re-reading the merged config for this entry
+      // concerned checks local first, then base - replicate that to determine kind
+      const entryIdx = ctx.entries.findIndex((e) => e.entry.path === first.path);
+      const planned = ctx.after[entryIdx];
+      let merged: MergedConfig | undefined;
+      if (planned.kind === "planned") {
+        merged = planned.workspace.merged;
+      } else if (planned.kind === "error" && planned.stage === "plan" && planned.merged) {
+        merged = planned.merged;
+      }
 
-    if (firstConcerned) {
+      let kind: "add" | "remove" = "remove";
+      if (merged) {
+        const checkAdd = (doc: unknown) => {
+          if (doc && typeof doc === "object") {
+            const d = doc as { recipes?: { add?: unknown } };
+            return Array.isArray(d.recipes?.add) && d.recipes.add.includes(candidate.recipe);
+          }
+          return false;
+        };
+        // Check local first (like concerned does), then base; add wins over remove within same entry
+        if (checkAdd(merged.local) || checkAdd(merged.base)) {
+          kind = "add";
+        }
+      }
+
       kept.push({
         recipe: candidate.recipe,
-        reason: `${firstConcerned.path} names it in recipes.${kind} (${firstConcerned.file})`,
+        reason: `${first.path} names it in recipes.${kind} (${first.file})`,
       });
       continue;
     }
@@ -1286,7 +1304,6 @@ export async function pruneRecipes(
     const editedRecipes = new Map(current.recipes);
     editedRecipes.delete(candidate.recipe);
 
-    // Use candidate.profiles (already carries name and abs) instead of findProfileFile
     const editedProfiles = new Map(current.profiles);
     for (const pw of profileWrites) {
       for (const prof of candidate.profiles) {
@@ -1307,6 +1324,7 @@ export async function pruneRecipes(
     for (let i = 0; i < ctx.entries.length && !proofFailed; i++) {
       const entry = ctx.entries[i];
       const afterBefore = ctx.after[i];
+      // Non-planned entries were refused earlier; this narrows the type
       if (afterBefore.kind !== "planned") continue;
 
       // Plan against the edited Forge

@@ -5274,6 +5274,28 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     expect(out.recipes.kept).toEqual([{ recipe: "base--acme", reason: `${realWs} names it in recipes.remove (craftar.local.yaml)` }]);
   });
 
+  it("test 4c: refused — entry order matters: remove in earlier entry beats add in later", async () => {
+    // forgeWorkspaces sorts entries by path using localeCompare, so "a" < "b".
+    // Workspace `a` has recipes.remove, workspace `b` has recipes.add.
+    // The first concerned entry in entry order should win: `a`'s remove.
+    const { root, forge, home } = await pruneFixture();
+    const wsA = path.join(root, "a"); // earlier in localeCompare order
+    const wsB = path.join(root, "b"); // later in localeCompare order
+    await writeFiles(wsA, { "craftar.yaml": `forge: ../forge\nprofile: acme\nrecipes:\n  remove:\n    - base--acme\n` });
+    await writeFiles(wsB, { "craftar.yaml": `forge: ../forge\nprofile: acme\nrecipes:\n  add:\n    - base--acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", wsA], { env }).code).toBe(0);
+    expect(runCli(["sync", "--workspace", wsB], { env }).code).toBe(0);
+    const realA = await fs.realpath(wsA);
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    // Entry A (remove) should win over entry B (add) because A comes first in entry order
+    expect(out.recipes.kept).toEqual([{ recipe: "base--acme", reason: `${realA} names it in recipes.remove (craftar.yaml)` }]);
+  });
+
   it("test 5: refused — the proof fails because a param default would move", async () => {
     const root = await tmpDir("craftar-prune-param-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
