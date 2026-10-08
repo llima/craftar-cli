@@ -5198,6 +5198,41 @@ describe("cli — forge unify impact (spec 25 §4.2–§4.3)", () => {
       expect(out.sections[0].written).toBe(true);
     }
   });
+
+  it("test 9: concerned() tests merged config — local array replaces base (spec 25 §4.3)", async () => {
+    // Arrays replace on merge, so with:
+    //   craftar.yaml: overrides.ingredients.disable: [rule/wf--acme]
+    //   craftar.local.yaml: overrides.ingredients.disable: []
+    // The merged config has disable: [], so the workspace is NOT concerned.
+    const s = await setup();
+
+    // Add overrides.ingredients.disable to g's craftar.yaml
+    await fs.writeFile(
+      path.join(s.wsG, "craftar.yaml"),
+      `forge: ../forge\nprofile: globex\noverrides:\n  ingredients:\n    disable:\n      - rule/wf--acme\n`,
+    );
+    // Add overrides.ingredients.disable to g's craftar.local.yaml that empties the array
+    await fs.writeFile(
+      path.join(s.wsG, "craftar.local.yaml"),
+      `overrides:\n  ingredients:\n    disable: []\n`,
+    );
+    expect(s.run(["sync", "--workspace", s.wsG]).code).toBe(0);
+
+    const j = s.run(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--forge", s.forge, "--json"]);
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    // The workspace is NOT concerned because the merged disable array is []
+    // When no workspace is concerned and the registry was fully checked,
+    // ALL concerned-based warnings vanish (spec 25 §4.3).
+    // The identical-to-sibling warning is separate but still depends on the concerned state.
+    // No warnings should appear.
+    expect(out.warnings).toEqual([]);
+
+    // The removed-variant warning (W0) should NOT appear
+    const w0Warning = out.warnings.find((w: string) => w.includes("was removed"));
+    expect(w0Warning).toBeUndefined();
+  });
 });
 
 describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {

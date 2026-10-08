@@ -374,7 +374,9 @@ export interface ConcernedResult {
 
 /**
  * Which workspaces are concerned by a condition on their configuration (spec 25 §4.3).
- * Checks `test(merged.local)` first (→ `craftar.local.yaml`), else `test(merged.base)`.
+ * Tests the MERGED configuration to decide, then checks `local` first, else `base` to name the file.
+ * Arrays replace on merge, so with `base.x: [a]` and `local.x: []`, the merged config has `[]`
+ * and the workspace is NOT concerned — even though `base` had `a`.
  * `missing` entries and stage-`config` errors count as `unchecked`.
  */
 export function concerned(
@@ -412,10 +414,16 @@ export function concerned(
       continue;
     }
 
-    // Check local first, then base
+    // Test the MERGED configuration first to decide if concerned (spec 25 §4.3)
+    if (!test(merged.config)) continue;
+
+    // Concerned: find which file holds the entry (local first, then base)
     if (test(merged.local)) {
       result.concerned.push({ path: entry.entry.path, file: "craftar.local.yaml" });
     } else if (test(merged.base)) {
+      result.concerned.push({ path: entry.entry.path, file: "craftar.yaml" });
+    } else {
+      // Merged config passed but neither document does — should not happen, but treat as craftar.yaml
       result.concerned.push({ path: entry.entry.path, file: "craftar.yaml" });
     }
   }
