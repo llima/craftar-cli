@@ -27,8 +27,13 @@ import {
   writeUnified,
   checkRecipeCascade,
   rewriteRecipes,
+  pruneCandidates,
+  pruneRecipes,
+  note,
   type RecipeCascadeResult,
   type WriteJournal,
+  type PruneCandidate,
+  type PruneResult,
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
 import { planInit } from "./core/init.js";
@@ -1052,10 +1057,16 @@ forge
   .option("--plan <file>", "apply the decisions in this plan file (a hunk may be take: param with its params list, or take: section with its section name)")
   .option("--save-plan <file>", "write a plan with every decision deferred, each hunk annotated with its suggested class (which --plan ignores), value hunks pre-filled with params, block hunks pre-filled with a section name, and hunks touching an existing section with its name, to a new file outside the Forge, and stop")
   .option("--no-impact", "skip planning the registered workspaces of this Forge before and after the writes (the warnings then keep their 0.13.0 text)")
+  .option("--prune-recipes", "delete each suffixed recipe the cascade leaves identical to its sibling and repoint the profiles that name it — only when every workspace registered on this machine plans byte for byte the same; needs the impact passes")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--json", "machine-readable output", false)
   .action(async (ref: string, o) => {
+    // Spec 25 §4.4: --prune-recipes with --no-impact is refused before anything is read
+    if (o.pruneRecipes && !o.impact) {
+      fail("--prune-recipes needs the impact passes — drop --no-impact");
+    }
+
     const frontEnds = [o.take, o.plan, o.savePlan].filter((v) => v !== undefined);
     if (frontEnds.length !== 1) fail("pass exactly one of --take, --plan or --save-plan");
     if (o.take !== undefined && o.take !== "base" && o.take !== "variant") fail(`--take must be "base" or "variant"`);
@@ -1164,6 +1175,10 @@ forge
     // Ruling 33, dry pass: every recipe `ingredients` rewrite the cascade will make is checked before
     // the first byte is written, so a refusal (an aliased reference) leaves the Forge untouched.
     const cascadeFiles = result.resolved ? await checkRecipeCascade(f, base.ref, variant.ref) : [];
+    // Spec 25 §4.4: prune candidates, computed in the dry pass
+    const candidates: PruneCandidate[] = o.pruneRecipes && result.resolved
+      ? await pruneCandidates(f, base.ref, variant.ref, o.profile)
+      : [];
     // Spec 09 & 12: the Forge-level rows and YAML edits for parameter and section extractions, rendered before any write.
     const paramWrites = result.params.length || result.sections.length
       ? await checkParamWrites(f, base, variant, o.profile, result.params, result.sections)
@@ -1173,7 +1188,9 @@ forge
     // check above cannot see ignored files (a Forge its enclosing repo ignores, an ignored file in
     // a variant) nor untracked ones under `status.showUntrackedFiles=no` — so every path this run
     // will overwrite or delete is checked on its own, before the first write.
-    const mustHold = [base.dir, ...(result.resolved ? [variant.dir, ...cascadeFiles] : []), ...(paramWrites?.mustHold ?? [])];
+    // Spec 25 §4.4: prune candidates' profile files join mustHold
+    const candidateProfiles = candidates.flatMap((c) => c.profiles.map((p) => p.abs));
+    const mustHold = [base.dir, ...(result.resolved ? [variant.dir, ...cascadeFiles] : []), ...(paramWrites?.mustHold ?? []), ...candidateProfiles];
     const unheld = await gitUnheld(f.root, mustHold);
     if (unheld.length) {
       // Name every such path (the first few, then a count), so one run shows the whole problem.
@@ -1261,6 +1278,36 @@ forge
       }
     }
 
+    // Spec 25 §4.4: prune step — after unify's writes and the after pass, prove and apply prunes
+    let pruneResult: PruneResult = { pruned: [], kept: [] };
+    if (o.pruneRecipes && candidates.length > 0) {
+      // Map the state: "skipped" cannot happen here (--prune-recipes requires --impact)
+      const pruneState = impactState === "unreadable" ? "unreadable" : impactState as "read" | "partial" | "none" | "off";
+      pruneResult = await pruneRecipes(f.root, candidates, {
+        state: pruneState,
+        entries: impactEntries,
+        after: impactAfter,
+      });
+
+      // Apply the prune writes
+      for (const p of pruneResult.pruned) {
+        try {
+          // Write profile files first, then delete the recipe file
+          for (const w of p.writes) {
+            if (w.content !== null) {
+              await note(journal, w.abs);
+              await fs.writeFile(w.abs, w.content);
+            } else {
+              journal.push({ abs: w.abs, created: false });
+              await fs.rm(w.abs, { force: true });
+            }
+          }
+        } catch (e) {
+          throw new Error(lateFailure(e, f.root, journal), { cause: e });
+        }
+      }
+    }
+
     // Ruling 28: a metadata difference leaves the variant in place; say which fields and why.
     const warnings: string[] = [];
 
@@ -1280,14 +1327,22 @@ forge
     // Ruling 42: a suffixed recipe left identical to its sibling is reported, never deleted — a
     // workspace's recipes.add or an extends chain may name the sibling, and removing the suffixed
     // one would shift recipe order or param precedence there.
+    // Spec 25 §4.4: only printed for candidates NOT pruned; without --prune-recipes, ends with a hint
     const suffix = `--${o.profile}`;
+    const prunedRecipes = new Set(pruneResult.pruned.map((p) => p.recipe));
     for (const rn of cascade.identicalToSibling) {
+      // Skip if this was pruned
+      if (prunedRecipes.has(rn)) continue;
       const sibling = rn.slice(0, -suffix.length);
-      warnings.push(
+      const baseText =
         `recipe ${rn} is now identical to ${sibling} — it can be removed by hand after repointing the profiles, extends and ` +
-          `workspace recipes lists that name it; unify does not, because a workspace or an extends chain may also name ` +
-          `${sibling} and the recipe order or param precedence would change`,
-      );
+        `workspace recipes lists that name it; unify does not, because a workspace or an extends chain may also name ` +
+        `${sibling} and the recipe order or param precedence would change`;
+      // Without --prune-recipes: add the hint to rerun with it
+      const warning = o.pruneRecipes
+        ? baseText
+        : `${baseText} — or restore the Forge with git and rerun this unify with --prune-recipes`;
+      warnings.push(warning);
     }
 
     // Spec 25 §4.3: helper to build conditional warnings based on registry state and concerned workspaces
@@ -1389,6 +1444,14 @@ forge
       if (warn !== null) warnings.push(warn);
     }
 
+    // Spec 25 §4.4: when at least one recipe was pruned, add coverage warning
+    if (pruneResult.pruned.length > 0) {
+      const n = impactEntries.length;
+      warnings.push(
+        `pruned against the ${n} workspace${n === 1 ? "" : "s"} registered on this machine — a workspace synced elsewhere (CI, another machine, CRAFTAR_NO_REGISTRY) is not covered`,
+      );
+    }
+
     if (o.json) {
       // Spec 25 §4.2: impact array in JSON output
       const impact = impactResults.map((r, i) => ({
@@ -1417,6 +1480,8 @@ forge
             recipes: {
               rewritten: cascade.rewritten,
               identicalToSibling: cascade.identicalToSibling,
+              pruned: pruneResult.pruned.map((p) => ({ recipe: p.recipe, sibling: p.sibling, profiles: p.profiles })),
+              kept: pruneResult.kept,
             },
             metaDiffers: result.metaDiffers,
             // Spec 09 §4.5: only what this run wrote — [] when every key was already declared and valued.
@@ -1465,6 +1530,13 @@ forge
     if (cascade.rewritten.length) console.log(`  recipes rewritten: ${cascade.rewritten.join(", ")}`);
     if (cascade.identicalToSibling.length) {
       console.log(`  recipes now identical to a sibling: ${cascade.identicalToSibling.join(", ")}`);
+    }
+    // Spec 25 §4.4: pruned and kept recipes, after the identical-to-sibling line
+    for (const p of pruneResult.pruned) {
+      console.log(`  pruned recipe ${p.recipe} → ${p.sibling} (${p.profiles.join(", ")})`);
+    }
+    for (const k of pruneResult.kept) {
+      console.log(`  kept recipe ${k.recipe} — ${k.reason}`);
     }
     for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
 

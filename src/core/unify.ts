@@ -8,11 +8,14 @@ import { splitLines, type Hunk } from "./diff.js";
 import { detectEol, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
 import type { HunkTake, Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile, PlanHunk } from "../schema/index.js";
+import { ProfileSchema, RecipeSchema } from "../schema/index.js";
 import { collect, deriveHunk, prove, substitutedFile, bodyFile, emittedFile, type Extraction } from "./extract.js";
 import { firstMarkerLine, parseSections, SectionMarkerError } from "./sections.js";
 import { sectionKey } from "./resolve.js";
+import { findProfileFile } from "./param-writes.js";
 import { deriveSections, prefillSections, proveSections, type MarkerInsertion, type SectionRun } from "./section-extract.js";
 import { stripBom, toLf } from "./text.js";
+import { editYamlText } from "./yaml-edit.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
 // fidelity, correctness should not hinge on a glyph no diff viewer, editor or re-encoding shows.
@@ -744,7 +747,7 @@ export interface JournalEntry {
 }
 export type WriteJournal = JournalEntry[];
 
-async function note(journal: WriteJournal | undefined, abs: string): Promise<void> {
+export async function note(journal: WriteJournal | undefined, abs: string): Promise<void> {
   if (journal) journal.push({ abs, created: !(await exists(abs)) });
 }
 
@@ -891,6 +894,19 @@ async function ingredientEdits(forge: Forge, baseRef: IngredientRef, variantRef:
 }
 
 /**
+ * Compare two recipes for identity: `ingredients` (sorted), `extends`, `slot` and `params`,
+ * never `description`, which is prose. Used by both `identicalToSibling` and `pruneCandidates`.
+ */
+function recipesSame(a: Recipe, b: Recipe): boolean {
+  return (
+    isDeepStrictEqual([...a.ingredients].sort(), [...b.ingredients].sort()) &&
+    isDeepStrictEqual(a.extends, b.extends) &&
+    a.slot === b.slot &&
+    isDeepStrictEqual(a.params, b.params)
+  );
+}
+
+/**
  * Ruling 42: among the rewritten recipes, each `<r>--<profile>` that is now identical to its
  * unsuffixed sibling `<r>` — compared as `ingredients` (sorted), `extends`, `slot` and `params`,
  * never `description`, which is prose. It is only reported: deleting it and repointing the lists
@@ -906,12 +922,7 @@ function identicalToSibling(recipes: Map<string, Recipe>, rewritten: string[], p
     const suffixed = recipes.get(rn);
     const sibling = recipes.get(rn.slice(0, -suffix.length));
     if (!suffixed || !sibling) continue;
-    const same =
-      isDeepStrictEqual([...suffixed.ingredients].sort(), [...sibling.ingredients].sort()) &&
-      isDeepStrictEqual(suffixed.extends, sibling.extends) &&
-      suffixed.slot === sibling.slot &&
-      isDeepStrictEqual(suffixed.params, sibling.params);
-    if (same) out.push(rn);
+    if (recipesSame(suffixed, sibling)) out.push(rn);
   }
   return out;
 }
@@ -977,4 +988,415 @@ export async function rewriteRecipes(
 
   const reloaded = await loadForge(forge.root);
   return { rewritten, identicalToSibling: identicalToSibling(reloaded.recipes, rewritten, profile) };
+}
+
+/* ---------------------------------------------------------------- prune-recipes (spec 25 §4.4) */
+
+/** A prune candidate: a `<r>--<profile>` recipe now identical to its sibling `<r>`. */
+export interface PruneCandidate {
+  /** The suffixed recipe name (`base--acme`). */
+  recipe: string;
+  /** The sibling recipe name (`base`). */
+  sibling: string;
+  /** Absolute path to the recipe file. */
+  file: string;
+  /** Profiles that list this candidate in their `recipes`. */
+  profiles: Array<{ name: string; abs: string }>;
+}
+
+/**
+ * Candidates in the dry pass (spec 25 §4.4 step 1): for every cascade edit whose recipe name ends
+ * `--<profile>`, render it, parse through RecipeSchema, and compare with the sibling exactly as
+ * `identicalToSibling` compares. Writes nothing.
+ */
+export async function pruneCandidates(
+  forge: Forge,
+  baseRef: IngredientRef,
+  variantRef: IngredientRef,
+  profile: string,
+): Promise<PruneCandidate[]> {
+  const suffix = `--${profile}`;
+  const out: PruneCandidate[] = [];
+
+  // Get the cascade edits
+  const edits = await ingredientEdits(forge, baseRef, variantRef);
+
+  for (const edit of edits) {
+    if (!edit.name.endsWith(suffix)) continue;
+    const sibling = edit.name.slice(0, -suffix.length);
+    const siblingRecipe = forge.recipes.get(sibling);
+    if (!siblingRecipe) continue;
+
+    // Render the edit and parse it
+    const rendered = await renderIngredientEdit(edit);
+    let parsedRecipe: Recipe;
+    try {
+      parsedRecipe = RecipeSchema.parse(YAML.parse(rendered));
+    } catch {
+      continue;
+    }
+
+    // Compare with the sibling using the shared comparison function
+    if (!recipesSame(parsedRecipe, siblingRecipe)) continue;
+
+    // Find profiles that list this candidate
+    const profiles: Array<{ name: string; abs: string }> = [];
+    for (const [pName, prof] of forge.profiles) {
+      if (prof.recipes.includes(edit.name)) {
+        const abs = await findProfileFile(forge.root, pName);
+        if (abs) profiles.push({ name: pName, abs });
+      }
+    }
+
+    out.push({ recipe: edit.name, sibling, file: edit.file, profiles });
+  }
+
+  return out;
+}
+
+/**
+ * Edit a profile's `recipes` list (spec 25 §4.4 step 4): through `editYamlText`, item by item:
+ * - If the list names `sibling` BEFORE `suffixed` → remove the suffixed item
+ * - Otherwise → rename the suffixed item to `sibling`, and remove a later `sibling` if any
+ * Then re-parse and require it equals the original profile with exactly that `recipes` list.
+ */
+export function profileRecipesEdit(raw: string, label: string, suffixed: string, sibling: string): string {
+  const content = editYamlText(raw, { command: "unify", label, keys: ["recipes"] }, (doc) => {
+    const seq = doc.get("recipes", true);
+    if (!(seq instanceof YAML.YAMLSeq)) {
+      throw new Error(`${label} does not have a recipes sequence`);
+    }
+
+    // Find indices of suffixed and sibling
+    let suffixedIdx = -1;
+    let siblingIdx = -1;
+    for (let i = 0; i < seq.items.length; i++) {
+      const item = seq.items[i];
+      const val = item instanceof YAML.Scalar ? item.value : item;
+      if (val === suffixed) suffixedIdx = i;
+      if (val === sibling) siblingIdx = i;
+    }
+
+    if (suffixedIdx < 0) {
+      throw new Error(`${label} does not list ${suffixed}`);
+    }
+
+    // If sibling is before suffixed → remove the suffixed item
+    if (siblingIdx >= 0 && siblingIdx < suffixedIdx) {
+      seq.items.splice(suffixedIdx, 1);
+    } else {
+      // Rename suffixed to sibling
+      const item = seq.items[suffixedIdx];
+      if (item instanceof YAML.Scalar) {
+        item.value = sibling;
+      } else {
+        seq.set(suffixedIdx, sibling);
+      }
+      // Remove a later sibling if any
+      if (siblingIdx > suffixedIdx) {
+        seq.items.splice(siblingIdx, 1);
+      }
+    }
+  });
+
+  // Re-parse and verify
+  const parsed = ProfileSchema.parse(YAML.parse(stripBom(content)));
+  const original = ProfileSchema.parse(YAML.parse(stripBom(raw)));
+
+  // Build expected recipes list
+  const origRecipes = [...original.recipes];
+  const suffixedIdx = origRecipes.indexOf(suffixed);
+  const siblingIdx = origRecipes.indexOf(sibling);
+
+  let expectedRecipes: string[];
+  if (siblingIdx >= 0 && siblingIdx < suffixedIdx) {
+    // Remove suffixed
+    expectedRecipes = origRecipes.filter((r) => r !== suffixed);
+  } else {
+    // Rename suffixed to sibling, remove later sibling
+    expectedRecipes = origRecipes.map((r, i) => (i === suffixedIdx ? sibling : r));
+    if (siblingIdx > suffixedIdx) {
+      expectedRecipes = expectedRecipes.filter((_, i) => i !== siblingIdx);
+    }
+  }
+
+  // The expected profile is the original with exactly the new recipes list
+  const expected = { ...original, recipes: expectedRecipes };
+
+  if (!isDeepStrictEqual(parsed, expected)) {
+    throw new Error(
+      `unify: cannot edit ${label} in place (the edit does not read back as exactly the repointed recipes list) — reformat it by hand, commit, and re-run`,
+    );
+  }
+
+  return content;
+}
+
+/** Result of pruneRecipes: which recipes were pruned and which were kept. */
+export interface PruneResult {
+  pruned: Array<{
+    recipe: string;
+    sibling: string;
+    profiles: string[];
+    writes: Array<{ abs: string; content: string | null }>;
+  }>;
+  kept: Array<{ recipe: string; reason: string }>;
+}
+
+/** Context for pruneRecipes: the registry state and after-pass results. */
+export interface PruneContext {
+  state: "read" | "partial" | "none" | "off" | "unreadable";
+  entries: Array<{
+    entry: { path: string; profile: string; forge: { key: string | null } };
+    match: string;
+    via: string | null;
+    ref: string | null;
+  }>;
+  after: Array<
+    | { kind: "planned"; files: Map<string, Buffer> }
+    | { kind: "missing" }
+    | { kind: "error"; stage: "config" | "plan"; message: string }
+  >;
+}
+
+/**
+ * The proof and the prune (spec 25 §4.4 steps 3-5): reads only, returns the writes.
+ * `content: null` means delete. Reasons, in order, first one wins:
+ * - another recipe's `extends` names it
+ * - registry state not `read` (various messages)
+ * - a workspace's `recipes.add` or `recipes.remove` names it
+ * - the edit throws
+ * - the proof fails (plans differ)
+ */
+export async function pruneRecipes(
+  forgeRoot: string,
+  candidates: PruneCandidate[],
+  ctx: PruneContext,
+): Promise<PruneResult> {
+  const pruned: PruneResult["pruned"] = [];
+  const kept: PruneResult["kept"] = [];
+
+  // Load the Forge as unify left it
+  const left = await loadForge(forgeRoot);
+
+  // Create a mutable copy of the Forge for in-memory edits
+  let current = {
+    ...left,
+    recipes: new Map(left.recipes),
+    profiles: new Map(left.profiles),
+  };
+
+  for (const candidate of candidates) {
+    // Check 1: another recipe's `extends` names it
+    const extendedBy: string[] = [];
+    for (const [rn, r] of current.recipes) {
+      if (r.extends.includes(candidate.recipe)) extendedBy.push(rn);
+    }
+    if (extendedBy.length > 0) {
+      kept.push({
+        recipe: candidate.recipe,
+        reason: `recipe ${extendedBy.sort().join(", ")} extends it`,
+      });
+      continue;
+    }
+
+    // Check 2: registry state not `read`
+    const hasMissingOrConfig = ctx.after.some(
+      (a) => a.kind === "missing" || (a.kind === "error" && a.stage === "config"),
+    );
+    if (ctx.state !== "read" || hasMissingOrConfig) {
+      let reason: string;
+      switch (ctx.state) {
+        case "none":
+          reason = "no workspace of this Forge is registered on this machine";
+          break;
+        case "off":
+          reason = "the registry is off";
+          break;
+        case "unreadable":
+          reason = "the registry could not be read";
+          break;
+        case "partial":
+        case "read":
+          // state is read or partial but we have missing/config-error entries
+          const unchecked = ctx.after.filter(
+            (a) => a.kind === "missing" || (a.kind === "error" && a.stage === "config"),
+          ).length;
+          reason = `the registry could not check ${unchecked} workspace${unchecked > 1 ? "s" : ""}`;
+          break;
+        default:
+          reason = "unknown registry state";
+      }
+      kept.push({ recipe: candidate.recipe, reason });
+      continue;
+    }
+
+    // Check 3: a workspace's `recipes.add` or `recipes.remove` names it
+    let workspaceNames: { path: string; kind: "add" | "remove"; file: string } | null = null;
+    for (let i = 0; i < ctx.entries.length && !workspaceNames; i++) {
+      const entry = ctx.entries[i];
+      const after = ctx.after[i];
+      if (after.kind !== "planned") continue;
+
+      // Check the raw workspace config for recipes.add / recipes.remove
+      // We need to check the actual craftar.yaml and craftar.local.yaml files
+      const wsPath = entry.entry.path;
+      const localPath = path.join(wsPath, "craftar.local.yaml");
+      const basePath = path.join(wsPath, "craftar.yaml");
+
+      // Check local first
+      try {
+        const localContent = await fs.readFile(localPath, "utf8");
+        const localDoc = YAML.parse(localContent);
+        if (localDoc?.recipes?.add?.includes(candidate.recipe)) {
+          workspaceNames = { path: wsPath, kind: "add", file: "craftar.local.yaml" };
+        } else if (localDoc?.recipes?.remove?.includes(candidate.recipe)) {
+          workspaceNames = { path: wsPath, kind: "remove", file: "craftar.local.yaml" };
+        }
+      } catch {
+        // No local file or can't read
+      }
+
+      // Check base if not found in local
+      if (!workspaceNames) {
+        try {
+          const baseContent = await fs.readFile(basePath, "utf8");
+          const baseDoc = YAML.parse(baseContent);
+          if (baseDoc?.recipes?.add?.includes(candidate.recipe)) {
+            workspaceNames = { path: wsPath, kind: "add", file: "craftar.yaml" };
+          } else if (baseDoc?.recipes?.remove?.includes(candidate.recipe)) {
+            workspaceNames = { path: wsPath, kind: "remove", file: "craftar.yaml" };
+          }
+        } catch {
+          // No base file or can't read
+        }
+      }
+    }
+
+    if (workspaceNames) {
+      kept.push({
+        recipe: candidate.recipe,
+        reason: `${workspaceNames.path} names it in recipes.${workspaceNames.kind} (${workspaceNames.file})`,
+      });
+      continue;
+    }
+
+    // Check 4: try the edit
+    let profileWrites: Array<{ abs: string; content: string }> = [];
+    try {
+      for (const prof of candidate.profiles) {
+        const raw = await fs.readFile(prof.abs, "utf8");
+        const edited = profileRecipesEdit(raw, path.relative(forgeRoot, prof.abs).split(path.sep).join("/"), candidate.recipe, candidate.sibling);
+        profileWrites.push({ abs: prof.abs, content: edited });
+      }
+    } catch (e) {
+      kept.push({
+        recipe: candidate.recipe,
+        reason: e instanceof Error ? e.message : String(e),
+      });
+      continue;
+    }
+
+    // Check 5: the proof — compare plans
+    // Create an edited Forge in memory with this candidate's changes applied
+    const editedRecipes = new Map(current.recipes);
+    editedRecipes.delete(candidate.recipe);
+
+    const editedProfiles = new Map(current.profiles);
+    for (const pw of profileWrites) {
+      for (const [pName, prof] of current.profiles) {
+        const profAbs = await findProfileFile(forgeRoot, pName);
+        if (profAbs === pw.abs) {
+          const newProf = ProfileSchema.parse(YAML.parse(stripBom(pw.content)));
+          editedProfiles.set(pName, newProf);
+        }
+      }
+    }
+
+    const editedForge: Forge = {
+      ...current,
+      recipes: editedRecipes,
+      profiles: editedProfiles,
+    };
+
+    // Import workspaceAgainst from impact and plan from sync to avoid circular import issues
+    const { workspaceAgainst } = await import("./impact.js");
+    const { plan } = await import("./sync.js");
+
+    let proofFailed: { path: string; reason: string } | null = null;
+    for (let i = 0; i < ctx.entries.length && !proofFailed; i++) {
+      const entry = ctx.entries[i];
+      const afterBefore = ctx.after[i];
+      if (afterBefore.kind !== "planned") continue;
+
+      // Plan against the edited Forge
+      try {
+        const ws = await workspaceAgainst(entry.entry.path, editedForge);
+        const p = await plan(ws);
+        const afterEdited = new Map<string, Buffer>();
+        for (const f of p.files) afterEdited.set(f.path, f.content);
+
+        // Compare: same paths, same content
+        const beforePaths = new Set(afterBefore.files.keys());
+        const afterPaths = new Set(afterEdited.keys());
+
+        // Check for path differences
+        for (const p of beforePaths) {
+          if (!afterPaths.has(p)) {
+            proofFailed = { path: entry.entry.path, reason: `${p} would change` };
+            break;
+          }
+        }
+        if (!proofFailed) {
+          for (const p of afterPaths) {
+            if (!beforePaths.has(p)) {
+              proofFailed = { path: entry.entry.path, reason: `${p} would change` };
+              break;
+            }
+          }
+        }
+
+        // Check for content differences
+        if (!proofFailed) {
+          const allPaths = [...beforePaths].sort();
+          for (const p of allPaths) {
+            const beforeBuf = afterBefore.files.get(p)!;
+            const afterBuf = afterEdited.get(p)!;
+            if (!beforeBuf.equals(afterBuf)) {
+              proofFailed = { path: entry.entry.path, reason: `${p} would change` };
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        proofFailed = { path: entry.entry.path, reason: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    if (proofFailed) {
+      kept.push({
+        recipe: candidate.recipe,
+        reason: `${proofFailed.path}: ${proofFailed.reason}`,
+      });
+      continue;
+    }
+
+    // Passed all checks: record the prune
+    const writes: Array<{ abs: string; content: string | null }> = [
+      ...profileWrites,
+      { abs: candidate.file, content: null }, // delete the recipe file
+    ];
+
+    pruned.push({
+      recipe: candidate.recipe,
+      sibling: candidate.sibling,
+      profiles: candidate.profiles.map((p) => path.relative(forgeRoot, p.abs).split(path.sep).join("/")),
+      writes,
+    });
+
+    // Update current Forge for next candidate
+    current = editedForge;
+  }
+
+  return { pruned, kept };
 }

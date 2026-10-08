@@ -774,7 +774,7 @@ describe("cli", () => {
       unresolved: 0,
       variantRemoved: "rule/wf--acme",
       // Ruling 42: the cascade reports `rewritten` and `identicalToSibling`, and nothing else.
-      recipes: { rewritten: ["base"], identicalToSibling: [] },
+      recipes: { rewritten: ["base"], identicalToSibling: [], pruned: [], kept: [] },
       metaDiffers: [],
       // Spec 09 §4.5: always present, [] / null when the plan extracts nothing.
       params: [],
@@ -1377,7 +1377,7 @@ describe("cli — forge unify's cascade rewrites ingredients only (Ruling 42)", 
   it("reports a recipe left identical to its sibling in identicalToSibling and in the warnings", async () => {
     const root = await committedForge({ ingredients, recipes: [base, baseAcme], profiles: [profile("acme", ["base--acme"])] });
     const out = unify(root);
-    expect(out.recipes).toEqual({ rewritten: ["base--acme"], identicalToSibling: ["base--acme"] });
+    expect(out.recipes).toEqual({ rewritten: ["base--acme"], identicalToSibling: ["base--acme"], pruned: [], kept: [] });
     expect(out.warnings.join("\n")).toContain("recipe base--acme is now identical to base");
     expect(await exists(path.join(root, "recipes/base--acme.yaml"))).toBe(true);
 
@@ -5124,5 +5124,410 @@ describe("cli — forge unify impact (spec 25 §4.2–§4.3)", () => {
       expect(out.sections.length).toBe(1);
       expect(out.sections[0].written).toBe(true);
     }
+  });
+});
+
+describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
+  const cleanups: Array<() => Promise<void>> = [];
+  afterEach(async () => {
+    for (const fn of cleanups.splice(0)) await fn().catch(() => {});
+  });
+
+  // Fixture: Forge with base variant that can be unified to match its sibling
+  async function pruneFixture() {
+    const root = await tmpDir("craftar-prune-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const home = path.join(root, "home");
+
+    // Base and variant with identical content after --take base
+    await makeForge(forge, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
+      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    gitInit(forge);
+    gitCommitAll(forge, "init");
+
+    return { root, forge, home };
+  }
+
+  it("test 1: proven prune — recipe file deleted, profile repointed, every plan identical", async () => {
+    const { root, forge, home } = await pruneFixture();
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    // Recipe file should be gone
+    expect(await exists(path.join(forge, "recipes/base--acme.yaml"))).toBe(false);
+
+    // Profile should be repointed
+    const profileText = await fs.readFile(path.join(forge, "profiles/acme/profile.yaml"), "utf8");
+    expect(profileText).toContain("recipes:\n  - base\n");
+    expect(profileText).not.toContain("base--acme");
+
+    // JSON output
+    expect(out.recipes).toEqual({
+      rewritten: ["base--acme"],
+      identicalToSibling: ["base--acme"],
+      pruned: [{ recipe: "base--acme", sibling: "base", profiles: ["profiles/acme/profile.yaml"] }],
+      kept: [],
+    });
+
+    // Warning about coverage
+    expect(out.warnings).toEqual([
+      "pruned against the 1 workspace registered on this machine — a workspace synced elsewhere (CI, another machine, CRAFTAR_NO_REGISTRY) is not covered",
+    ]);
+
+    // Next sync should update the file (because the base has "a" not "b")
+    const status = runCli(["status", "--workspace", ws, "--json"], { env });
+    expect(status.code, status.stderr).toBe(0);
+    const statuses = JSON.parse(status.stdout).statuses;
+    const fileUpdate = statuses.find((s: { path: string }) => s.path === ".claude/rules/wf.md");
+    expect(fileUpdate.path).toBe(".claude/rules/wf.md");
+    expect(fileUpdate.state).toBe("update");
+  });
+
+  it("test 2: text mode of test 1 — stdout includes pruned recipe line", async () => {
+    const { root, forge, home } = await pruneFixture();
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge], { env });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("  pruned recipe base--acme → base (profiles/acme/profile.yaml)");
+  });
+
+  it("test 3: refused — extends — a recipe extends the candidate", async () => {
+    const { root, forge, home } = await pruneFixture();
+    // Add a recipe that extends base--acme
+    await writeFiles(forge, {
+      "recipes/stack.yaml": `name: stack\nextends: [base--acme]\ningredients: []\n`,
+    });
+    gitCommitAll(forge, "add stack");
+
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    expect(out.recipes.kept).toEqual([{ recipe: "base--acme", reason: "recipe stack extends it" }]);
+    expect(out.recipes.pruned).toEqual([]);
+
+    // Recipe file should still exist
+    expect(await exists(path.join(forge, "recipes/base--acme.yaml"))).toBe(true);
+  });
+
+  it("test 4: refused — recipes.add in craftar.yaml names the candidate", async () => {
+    const { root, forge, home } = await pruneFixture();
+    const ws = path.join(root, "ws");
+    // Add the candidate to recipes.add
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\nrecipes:\n  add:\n    - base--acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+    const realWs = await fs.realpath(ws);
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    expect(out.recipes.kept).toEqual([{ recipe: "base--acme", reason: `${realWs} names it in recipes.add (craftar.yaml)` }]);
+    expect(out.recipes.pruned).toEqual([]);
+  });
+
+  it("test 4b: refused — recipes.remove in craftar.local.yaml names the candidate", async () => {
+    const { root, forge, home } = await pruneFixture();
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+    const realWs = await fs.realpath(ws);
+
+    // Add the candidate to recipes.remove in local file
+    await writeFiles(ws, { "craftar.local.yaml": `recipes:\n  remove:\n    - base--acme\n` });
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    expect(out.recipes.kept).toEqual([{ recipe: "base--acme", reason: `${realWs} names it in recipes.remove (craftar.local.yaml)` }]);
+  });
+
+  it("test 5: refused — the proof fails because a param default would move", async () => {
+    const root = await tmpDir("craftar-prune-param-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const home = path.join(root, "home");
+
+    // Fixture: base and base--acme with a variant, plus recipe p between them with different param.
+    // Profile: [base--acme, p, base] — removing base--acme means p becomes last-wins for tone.
+    // The proof should fail because after editing, the workspace's plan differs.
+    await makeForge(forge, {
+      ingredients: [
+        rule("wf", "tone is {{tone}}\n"),
+        rule("wf--acme", "tone is {{tone}}\n", { as: "wf" }),
+      ],
+      recipes: [
+        recipe("base", ["rule/wf"], { params: { tone: { default: "base" } } }),
+        recipe("base--acme", ["rule/wf--acme"], { params: { tone: { default: "base" } } }),
+        recipe("p", [], { params: { tone: { default: "p" } } }),
+      ],
+      profiles: [profile("acme", ["base--acme", "p", "base"])],
+    });
+    gitInit(forge);
+    gitCommitAll(forge, "init");
+
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+    const realWs = await fs.realpath(ws);
+
+    // Currently: [base--acme, p, base] → last wins is "base" (from recipe base).
+    // After prune (remove base--acme): [base, p] → last wins is "p".
+    // So the file would change from "tone is base\n" to "tone is p\n".
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    // The prune should be refused because after removing base--acme, the param order changes
+    expect(out.recipes.kept.length).toBe(1);
+    expect(out.recipes.kept[0].recipe).toBe("base--acme");
+    expect(out.recipes.kept[0].reason).toBe(`${realWs}: .claude/rules/wf.md would change`);
+  });
+
+  it("test 6: refused — no registered workspace", async () => {
+    const { root, forge } = await pruneFixture();
+    // Use a fresh home with no registry
+    const freshHome = path.join(root, "fresh-home");
+    await fs.mkdir(freshHome, { recursive: true });
+    const env = { CRAFTAR_HOME: freshHome };
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    expect(out.recipes.kept).toEqual([{ recipe: "base--acme", reason: "no workspace of this Forge is registered on this machine" }]);
+  });
+
+  it("test 6b: refused — workspace plan throws", async () => {
+    const { root, forge, home } = await pruneFixture();
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+
+    // Make the workspace's plan throw by breaking the YAML syntax
+    await fs.writeFile(path.join(ws, "craftar.yaml"), "forge: ../forge\nprofile: {{invalid\n");
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    // Should be kept with an error message about unchecked workspaces
+    expect(out.recipes.kept.length).toBe(1);
+    expect(out.recipes.kept[0].recipe).toBe("base--acme");
+    expect(out.recipes.kept[0].reason).toBe("the registry could not check 1 workspace");
+  });
+
+  it("test 7: profile list shapes — sibling after suffixed", async () => {
+    const root = await tmpDir("craftar-prune-shape-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const home = path.join(root, "home");
+
+    // Profile: [base--acme, x, base] → [base, x]
+    await makeForge(forge, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
+      recipes: [
+        recipe("base", ["rule/wf"]),
+        recipe("base--acme", ["rule/wf--acme"]),
+        recipe("x", []),
+      ],
+      profiles: [profile("acme", ["base--acme", "x", "base"])],
+    });
+    gitInit(forge);
+    gitCommitAll(forge, "init");
+
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    expect(out.recipes.pruned.length).toBe(1);
+    const profileText = await fs.readFile(path.join(forge, "profiles/acme/profile.yaml"), "utf8");
+    expect(profileText).toContain("recipes:\n  - base\n  - x\n");
+  });
+
+  it("test 7b: profile list shapes — sibling before suffixed", async () => {
+    const root = await tmpDir("craftar-prune-shape-before-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const home = path.join(root, "home");
+
+    // Profile: [base, x, base--acme] → [base, x]
+    await makeForge(forge, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
+      recipes: [
+        recipe("base", ["rule/wf"]),
+        recipe("base--acme", ["rule/wf--acme"]),
+        recipe("x", []),
+      ],
+      profiles: [profile("acme", ["base", "x", "base--acme"])],
+    });
+    gitInit(forge);
+    gitCommitAll(forge, "init");
+
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    expect(out.recipes.pruned.length).toBe(1);
+    const profileText = await fs.readFile(path.join(forge, "profiles/acme/profile.yaml"), "utf8");
+    expect(profileText).toContain("recipes:\n  - base\n  - x\n");
+  });
+
+  it("test 8: a candidate whose profile unify also edits for take: param — both edits land", async () => {
+    const root = await tmpDir("craftar-prune-param-edit-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const home = path.join(root, "home");
+
+    // Fixture with a param hunk
+    await makeForge(forge, {
+      ingredients: [rule("deploy", "use globex-api\n"), rule("deploy--acme", "use acme-api\n", { as: "deploy" })],
+      recipes: [recipe("base", ["rule/deploy"]), recipe("base--acme", ["rule/deploy--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    gitInit(forge);
+    gitCommitAll(forge, "init");
+
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+
+    // Save and apply a plan with take: param
+    const planDir = path.join(root, "plan");
+    await fs.mkdir(planDir, { recursive: true });
+    const planPath = path.join(planDir, "plan.yaml");
+    expect(runCli(["forge", "unify", "rule/deploy", "--profile", "acme", "--save-plan", planPath, "--forge", forge], { env }).code).toBe(0);
+
+    const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+    Object.assign(plan.files[0].hunks[0], { take: "param", params: [{ token: "globex-api", key: "deploy.api" }] });
+    const editedPath = path.join(planDir, "edited.yaml");
+    await fs.writeFile(editedPath, YAML.stringify(plan));
+
+    const j = runCli(["forge", "unify", "rule/deploy", "--profile", "acme", "--plan", editedPath, "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    // Both edits should land: param extraction AND prune
+    expect(out.params.length).toBe(1);
+    expect(out.params[0].key).toBe("deploy.api");
+    expect(out.recipes.pruned.length).toBe(1);
+
+    // Profile should have both the param AND the repointed recipe
+    const profileText = await fs.readFile(path.join(forge, "profiles/acme/profile.yaml"), "utf8");
+    expect(profileText).toContain("deploy.api: acme-api");
+    expect(profileText).toContain("recipes:\n  - base\n");
+    expect(profileText).not.toContain("base--acme");
+  });
+
+  it("test 9: --prune-recipes --no-impact is refused before anything is read", async () => {
+    const root = await tmpDir("craftar-prune-noimpact-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+
+    await makeForge(forge, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
+      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    gitInit(forge);
+    gitCommitAll(forge, "init");
+
+    // Snapshot the Forge before
+    const forgeBefore = await snapshot(forge);
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--no-impact", "--forge", forge]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe("error: --prune-recipes needs the impact passes — drop --no-impact\n");
+
+    // Forge should be unchanged
+    const forgeAfter = await snapshot(forge);
+    expect(forgeAfter).toEqual(forgeBefore);
+  });
+
+  it("test 10: a profile file git does not hold refuses the whole unify before any write", async () => {
+    const root = await tmpDir("craftar-prune-unheld-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const home = path.join(root, "home");
+
+    // Forge with acme profile that uses base--acme
+    await makeForge(forge, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })],
+      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    gitInit(forge);
+    // Add the profile directory to .gitignore BEFORE committing
+    await fs.writeFile(path.join(forge, ".gitignore"), "profiles/acme/\n");
+    gitCommitAll(forge, "init");
+    // Now the profile exists but is ignored by git
+
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+
+    // Snapshot
+    const forgeBefore = await snapshot(forge);
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(r.code).toBe(1);
+    // Should report the profile is not held by git
+    expect(r.stderr).toContain("unify can only change files git can restore");
+
+    // Forge unchanged
+    const forgeAfter = await snapshot(forge);
+    expect(forgeAfter).toEqual(forgeBefore);
+  });
+
+  it("test 11: without --prune-recipes the identical-to-sibling warning ends with the prune hint", async () => {
+    const { root, forge, home } = await pruneFixture();
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+
+    // Without --prune-recipes
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    const warning = out.warnings.find((w: string) => w.includes("recipe base--acme is now identical to base"));
+    expect(warning).toContain("— or restore the Forge with git and rerun this unify with --prune-recipes");
   });
 });
