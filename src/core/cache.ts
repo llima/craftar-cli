@@ -129,9 +129,10 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
     } catch (e) {
       throw new Error(`cannot read ${forgesDir}: ${(e as Error).message}`);
     }
-    // Header bytes is the sum of entries and removal directories, not snapshot.bytes: the lock file
-    // (prune.lock) is in forges/ during the snapshot but is not part of the cache content.
-    const headerBytes = snapshot.entries.reduce((s, e) => s + e.bytes, 0) + snapshot.removing.reduce((s, r) => s + r.bytes, 0);
+    // Header bytes is the whole of forges/ (snapshot.bytes) minus the prune.lock this run holds:
+    // the lock is in forges/ during the snapshot but is not part of the cache content.
+    const pruneLockSize = await fs.lstat(path.join(forgesDir, "prune.lock")).then((s) => s.size, () => 0);
+    const headerBytes = snapshot.bytes - pruneLockSize;
     const header = { forges: forgesDir, entries: snapshot.entries.length, bytes: headerBytes };
 
     const removed: PruneRemoved[] = [];

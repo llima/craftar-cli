@@ -130,6 +130,7 @@ describe("a file held open, leftovers, and a key shaped like a removal directory
       [`${s.key} is held open (EBUSY) — kept`],
     ]);
     expect(await ls(s.entry)).toEqual(["fetched", "repo.git", "trees"]);
+    expect(await ls(s.forges)).toEqual([s.key]);
   });
 
   it("a leftover ~removing- directory: removed, its bytes freed, never listed as an entry", async () => {
