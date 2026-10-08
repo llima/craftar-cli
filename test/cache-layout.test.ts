@@ -332,3 +332,14 @@ describe("pruneTrees with the entry lock taken midway (§7: every removal is lis
     expect((await ls(path.join(entry, "trees")))!.filter((n) => !n.includes("."))).toEqual([second]);
   });
 });
+
+// Review round 2: two should-fixes in src/core/remote.ts.
+describe("review round 2", () => {
+  it("cacheDir follows a symlinked forges/ to a directory: present", async () => {
+    const h = await home();
+    const real = path.join(h, "real-forges");
+    await fs.mkdir(real);
+    await fs.symlink(real, path.join(h, "forges"), process.platform === "win32" ? "junction" : "dir");
+    expect(await cacheDir(h)).toBe("present");
+  });
+});

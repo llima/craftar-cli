@@ -388,16 +388,14 @@ export async function withPruneLock<T>(home: string, opts: LockTiming, body: (lo
  */
 export async function cacheDir(home: string): Promise<"absent" | "present"> {
   const forges = path.join(path.resolve(home), "forges");
-  try {
-    const st = await fs.lstat(forges);
-    if (!st.isDirectory()) throw new Error(`cannot read ${forges}: not a directory`);
-    return "present";
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return "absent";
-    if ((e as Error).message.startsWith("cannot read ")) throw e;
-    throw new Error(`cannot read ${forges}: ${code ?? (e as Error).message}`);
-  }
+  const st = await fs.stat(forges).catch((e: NodeJS.ErrnoException) => {
+    const code = e.code;
+    if (code === "ENOENT") return null;
+    throw new Error(`cannot read ${forges}: ${code ?? e.message}`);
+  });
+  if (st === null) return "absent";
+  if (!st.isDirectory()) throw new Error(`cannot read ${forges}: not a directory`);
+  return "present";
 }
 
 /* ------------------------------------------------------------------ */
