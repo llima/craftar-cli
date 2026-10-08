@@ -5,7 +5,7 @@ import YAML from "yaml";
 import { loadWorkspace, loadWorkspaceConfig } from "../src/core/sync.js";
 import { profile, recipe, rule, scenario, tmpDir } from "./helpers/forge.js";
 import { remoteForge } from "./helpers/remote.js";
-import { localKeys } from "../src/core/workspace-yaml.js";
+import { localKeys, readLocalFile } from "../src/core/workspace-yaml.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -78,5 +78,17 @@ describe("localKeys — which of forge, ref, profile, recipes, targets craftar.l
     const e = await localKeys(dir).catch((x: Error) => x);
     expect((e as Error).message.startsWith("invalid craftar.local.yaml: ")).toBe(true);
     expect((e as Error).message).not.toContain("SECRET");
+  });
+});
+
+describe("readLocalFile — one read gives the document init merges and the keys it checks (spec 23 N10)", () => {
+  it("absent → null; empty → {}; otherwise the parsed document beside its keys", async () => {
+    const dir = await tmpDir("craftar-localfile-");
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    expect(await readLocalFile(dir)).toEqual({ doc: null, keys: [] });
+    await fs.writeFile(path.join(dir, "craftar.local.yaml"), "");
+    expect(await readLocalFile(dir)).toEqual({ doc: {}, keys: [] });
+    await fs.writeFile(path.join(dir, "craftar.local.yaml"), "targets: [kiro]\noverrides: { params: { a: 1 } }\n");
+    expect(await readLocalFile(dir)).toEqual({ doc: { targets: ["kiro"], overrides: { params: { a: 1 } } }, keys: ["targets"] });
   });
 });

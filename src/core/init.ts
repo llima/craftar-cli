@@ -1,11 +1,10 @@
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { TARGETS, type Lock, type WorkspaceConfig } from "../schema/index.js";
 import { planRecipeEdit } from "./recipe-edit.js";
 import { classifyForge, credentialFault } from "./remote.js";
 import { LOCAL_FILE, loadWorkspaceConfig, plan, readLock, status, type FileStatus, type LoadOptions, type Plan, type Workspace } from "./sync.js";
-import { localKeys, parseWorkspaceYaml, type LocalKey } from "./workspace-yaml.js";
+import { readLocalFile, type LocalKey } from "./workspace-yaml.js";
 
 /**
  * `craftar init` (spec 23): steps 2–7 of §4.2 — the flag checks, the local-file check, the configuration
@@ -63,7 +62,7 @@ export async function planInit(root: string, input: InitInput, opts: LoadOptions
   if (both !== undefined) throw new Error(`recipe "${both}" is both added and removed`);
 
   // N10: a local key the merge would let win over a flag init writes.
-  const local = await localKeys(root);
+  const { doc: localDoc, keys: local } = await readLocalFile(root);
   const given: Record<LocalKey, boolean> = {
     forge: true,
     ref: input.ref !== undefined,
@@ -80,12 +79,6 @@ export async function planInit(root: string, input: InitInput, opts: LoadOptions
   base.profile = input.profile;
   if (input.targets !== undefined) base.targets = input.targets;
 
-  const localFile = path.join(root, LOCAL_FILE);
-  const localText = await fs.readFile(localFile, "utf8").catch((e: NodeJS.ErrnoException) => {
-    if (e.code === "ENOENT") return null;
-    throw e;
-  });
-  const localDoc = localText === null ? null : (parseWorkspaceYaml(LOCAL_FILE, localText) ?? {});
   const loaded = await loadWorkspaceConfig(root, base, localDoc, { ...opts, mode: "sync" });
 
   // Removes first, then adds, each one spec 22 call (§13 item 3).

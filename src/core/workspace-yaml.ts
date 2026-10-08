@@ -23,19 +23,24 @@ const LOCAL_KEYS = ["forge", "ref", "profile", "recipes", "targets"] as const;
 export type LocalKey = (typeof LOCAL_KEYS)[number];
 
 /**
- * Which of `forge`, `ref`, `profile`, `recipes` and `targets` the workspace's `craftar.local.yaml` sets — none
- * when there is no such file. One answer for every command that writes `craftar.yaml` and must not be
- * overridden by the local layer (spec 22's R1, spec 23's N10).
+ * The workspace's `craftar.local.yaml`, read once: its document (null when there is no such file, `{}` when it
+ * is empty, as `loadWorkspace` merges it) and which of `forge`, `ref`, `profile`, `recipes` and `targets` it
+ * sets. One answer for every command that writes `craftar.yaml` and must not be overridden by the local layer
+ * (spec 22's R1, spec 23's N10); `init` merges the same document it checked.
  */
-export async function localKeys(root: string): Promise<LocalKey[]> {
+export async function readLocalFile(root: string): Promise<{ doc: unknown | null; keys: LocalKey[] }> {
   let text: string;
   try {
     text = await fs.readFile(path.join(root, "craftar.local.yaml"), "utf8");
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return { doc: null, keys: [] };
     throw e;
   }
-  const doc = parseWorkspaceYaml("craftar.local.yaml", text);
-  if (doc === null || typeof doc !== "object") return [];
-  return LOCAL_KEYS.filter((k) => k in doc);
+  const doc = parseWorkspaceYaml("craftar.local.yaml", text) ?? {};
+  return { doc, keys: typeof doc === "object" ? LOCAL_KEYS.filter((k) => k in (doc as object)) : [] };
+}
+
+/** Which of the `LOCAL_KEYS` `craftar.local.yaml` sets — none when there is no such file. */
+export async function localKeys(root: string): Promise<LocalKey[]> {
+  return (await readLocalFile(root)).keys;
 }
