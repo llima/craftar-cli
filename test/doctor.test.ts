@@ -137,7 +137,7 @@ describe("the cache check (§4.3)", () => {
     const r = await run({ home: c.home });
     const found = of(r.checks, "cache");
     expect(found.map((x) => x.message).sort()).toEqual([`${c.key} — nothing names it`, "example.com-half-000000000000 — a fetch never completed"].sort());
-    expect(found.every((x) => x.level === "warn" && x.fix!.startsWith("remove ") && x.fix!.endsWith("(craftar cache prune is planned)"))).toBe(true);
+    expect(found.every((x) => x.level === "warn" && x.fix === "craftar cache prune")).toBe(true);
   });
 
   it("named by a registry entry — missing ones too — or by the checked, unregistered workspace: not reported", async () => {
@@ -388,5 +388,22 @@ describe("a remote Forge (§4.2 forge row, §6 cases 2–4)", () => {
     await ensureTree(r.url, sha, { home: f.home });
     for (const fetch of [false, true])
       expect(one((await run({ home: f.home, workspace: a, fetch })).checks, "forge"), String(fetch)).toMatchObject({ level: "ok", message: `${r.url} @ pinned ${sha.slice(0, 8)}, cached` });
+  });
+});
+
+
+describe("the cache check and removal directories (spec 26 §5.1, §6 case 13)", () => {
+  it("a ~removing- directory is not an entry: no 'fetch never completed', not counted", async () => {
+    const f = await fixture();
+    await writeFiles(path.join(f.home, "forges"), { "~removing-example.com-old-0a1b2c3d4e5f-4242/fetched": "x" });
+    const r = await run({ home: f.home });
+    expect(one(r.checks, "cache")).toEqual({ id: "cache", scope: "machine", level: "ok", message: "0 entries, 0.0 MB", fix: null });
+  });
+
+  it("an entry nothing names: the fix is craftar cache prune", async () => {
+    const f = await fixture();
+    await writeFiles(path.join(f.home, "forges"), { "example.com-half-000000000000/repo.git/HEAD": "x" });
+    const r = await run({ home: f.home });
+    expect(one(r.checks, "cache")).toEqual({ id: "cache", scope: "machine", level: "warn", message: "example.com-half-000000000000 — a fetch never completed", fix: "craftar cache prune" });
   });
 });

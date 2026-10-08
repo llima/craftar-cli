@@ -71,7 +71,7 @@ const MB = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 const short = (sha: string | null) => (sha ? sha.slice(0, 8) : "no git");
 const NAME_REF = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const refLabel = (ref: string | null, defaultBranch: string | null) => ref ?? (defaultBranch ? `${defaultBranch} (default branch)` : "the default branch");
-const CACHE_FIX = (dir: string) => `remove ${dir} by hand (craftar cache prune is planned)`;
+const CACHE_FIX = "craftar cache prune";
 
 export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
   const checks: Check[] = [];
@@ -160,13 +160,13 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
     if (skip === null && root !== null && merged === null) skip = "the checked craftar.yaml does not read";
     const findings: Check[] = [];
     for (const e of snapshot.entries) {
-      if (!e.fetched) findings.push({ id: "cache", scope: "machine", level: "warn", message: `${e.key} — a fetch never completed`, fix: CACHE_FIX(e.dir) });
+      if (!e.fetched) findings.push({ id: "cache", scope: "machine", level: "warn", message: `${e.key} — a fetch never completed`, fix: CACHE_FIX });
     }
     if (skip === null && reg !== null) {
       const checked = remote && root !== null ? { key: cacheKey(merged!.config.forge.trim()), path: root } : null;
       const named = namedCacheKeys(reg, checked);
       for (const e of snapshot.entries)
-        if (e.fetched && !named.has(e.key)) findings.push({ id: "cache", scope: "machine", level: "warn", message: `${e.key} — nothing names it`, fix: CACHE_FIX(e.dir) });
+        if (e.fetched && !named.has(e.key)) findings.push({ id: "cache", scope: "machine", level: "warn", message: `${e.key} — nothing names it`, fix: CACHE_FIX });
     }
     // A skipped orphan part is said on every cache line, findings included (§4.3, §13 item 6).
     const why = skip === null ? "" : ` (orphans not checked: ${skip})`;
