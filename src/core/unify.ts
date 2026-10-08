@@ -1194,17 +1194,7 @@ export async function pruneRecipes(
   const profileTextMap = new Map<string, string>();
 
   for (const candidate of candidates) {
-    // Check 0: a profile that lists this candidate has no profile file
-    if (candidate.missingProfiles.length > 0) {
-      const names = candidate.missingProfiles.sort().join(", ");
-      kept.push({
-        recipe: candidate.recipe,
-        reason: `profile ${names} has no profile file`,
-      });
-      continue;
-    }
-
-    // Check 1: another recipe's `extends` names it
+    // Check 1: another recipe's `extends` names it (spec §4.4 step 3)
     const extendedBy: string[] = [];
     for (const [rn, r] of current.recipes) {
       if (r.extends.includes(candidate.recipe)) extendedBy.push(rn);
@@ -1213,6 +1203,17 @@ export async function pruneRecipes(
       kept.push({
         recipe: candidate.recipe,
         reason: `recipe ${extendedBy.sort().join(", ")} extends it`,
+      });
+      continue;
+    }
+
+    // Check 1b (defensive): a profile that lists this candidate has no profile file.
+    // findProfileFile finds profiles by `name`, the way loadForge keys them, so this should not happen.
+    if (candidate.missingProfiles.length > 0) {
+      const names = [...candidate.missingProfiles].sort().join(", ");
+      kept.push({
+        recipe: candidate.recipe,
+        reason: `profile ${names} has no profile file`,
       });
       continue;
     }

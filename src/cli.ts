@@ -6,7 +6,7 @@ import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
-import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
+import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { resolveHome } from "./core/home-lock.js";
 import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type Workspace } from "./core/sync.js";
@@ -933,13 +933,7 @@ forge
     const results = await Promise.all(planned.map((p) => nextSync(p)));
 
     // Refine the registry state: "partial" when any entry is missing or stage-config error (spec 25 §3)
-    let registryState: RegistryState = fw.state;
-    if (fw.state === "read") {
-      const hasMissingOrConfig = planned.some(
-        (p) => p.kind === "missing" || (p.kind === "error" && p.stage === "config"),
-      );
-      if (hasMissingOrConfig) registryState = "partial";
-    }
+    const registryState = refineRegistryState(fw.state, planned);
 
     if (o.json) {
       const workspaces = fw.workspaces.map((ws, i) => {
@@ -1224,14 +1218,7 @@ forge
         impactWarnings = fw.warnings;
         impactBefore = await planAll(fw.workspaces, f);
         // Refine the state: "partial" when any before entry is missing or stage-config error
-        if (fw.state === "read" || fw.state === "partial") {
-          const hasMissingOrConfig = impactBefore.some(
-            (p) => p.kind === "missing" || (p.kind === "error" && p.stage === "config"),
-          );
-          impactState = hasMissingOrConfig ? "partial" : fw.state;
-        } else {
-          impactState = fw.state;
-        }
+        impactState = refineRegistryState(fw.state, impactBefore);
       } catch (e) {
         impactState = "unreadable";
         impactUnreadableReason = e instanceof Error ? e.message : String(e);

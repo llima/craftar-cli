@@ -16,15 +16,28 @@ import {
   readWorkspaceConfig,
   status,
   type FileState,
+  type FileStatus,
   type MergedConfig,
   type Workspace,
 } from "./sync.js";
-import type { RegistryEntry } from "../schema/index.js";
+import type { Lock, RegistryEntry } from "../schema/index.js";
 
 const execFileP = promisify(execFile);
 
 export type MatchKind = "path" | "remote" | "clone";
 export type RegistryState = "read" | "partial" | "none" | "off";
+
+/**
+ * Refine the registry state: "partial" when any planned entry is missing or stage-config error.
+ * Used by forge impact and unify's impact passes (spec 25 §3).
+ */
+export function refineRegistryState(state: RegistryState, planned: Planned[]): RegistryState {
+  if (state !== "read" && state !== "partial") return state;
+  const hasMissingOrConfig = planned.some(
+    (p) => p.kind === "missing" || (p.kind === "error" && p.stage === "config"),
+  );
+  return hasMissingOrConfig ? "partial" : state;
+}
 
 export interface ForgeWorkspace {
   entry: RegistryEntry;
@@ -335,8 +348,8 @@ export async function nextSync(p: Planned): Promise<NextSyncResult> {
   }
 
   const ws = p.workspace;
-  let lock: import("../schema/index.js").Lock | null;
-  let statuses: import("./sync.js").FileStatus[];
+  let lock: Lock | null;
+  let statuses: FileStatus[];
   try {
     const planned = await plan(ws);
     lock = await readLock(ws.root);
