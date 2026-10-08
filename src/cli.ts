@@ -1246,10 +1246,11 @@ forge
       let afterForge = f;
       try {
         afterForge = await loadForge(f.root);
-      } catch {
-        // If loadForge fails, treat every entry as error
+      } catch (e) {
+        // If loadForge fails, treat every entry as error with the actual message
+        const msg = e instanceof Error ? e.message : String(e);
         for (let i = 0; i < impactEntries.length; i++) {
-          impactAfter.push({ kind: "error", stage: "plan", message: "Forge could not be reloaded" });
+          impactAfter.push({ kind: "error", stage: "plan", message: msg });
         }
       }
       if (impactAfter.length === 0) {

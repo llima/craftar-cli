@@ -4976,9 +4976,12 @@ describe("cli — forge unify impact (spec 25 §4.2–§4.3)", () => {
     expect(j.code, j.stderr).toBe(0);
     const out = JSON.parse(j.stdout);
 
-    // W1 warning should name the concerned workspace
+    // W1 warning should name the concerned workspace — whole string assertion
     const w1Warning = out.warnings.find((w: string) => w.includes("is now a parameter of"));
-    expect(w1Warning).toContain(`— concerned: ${realWs} (craftar.yaml)`);
+    expect(w1Warning).toEqual(
+      `deploy.api is now a parameter of rule/deploy — a workspace that sets overrides.params.deploy.api (craftar.yaml or ` +
+        `craftar.local.yaml) now overrides rule/deploy too — concerned: ${realWs} (craftar.yaml)`,
+    );
   });
 
   it("test 8b: W1 (param) — none concerned with registry read → no W1 warning", async () => {
@@ -5021,64 +5024,105 @@ describe("cli — forge unify impact (spec 25 §4.2–§4.3)", () => {
     expect(w1Warning).toBeUndefined();
   });
 
-  it("test 8c: W3 (section) — workspace with overrides.sections → concerned; none → no warning", async () => {
-    // This test requires a properly structured Forge for take: section
-    // The test from test 6/7 already proves the concerned() mechanism works for the disable warning
-    // W3 sections use the same mechanism — the key test is that when a NEW section is created,
-    // the warning names the concerned workspace. However, when the base already has the section
-    // markers, the section isn't "new" and no W3 warning is generated.
-    // We'll verify the mechanism by checking the warnings array structure.
-    const root = await tmpDir("craftar-forge-unify-section-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    const forge = path.join(root, "forge");
-    const home = path.join(root, "home");
+  it("test 8c: W3 (section) — (a) workspace with overrides.sections → concerned, (b) without → no warning", async () => {
+    // Inline the sectionForge fixture: rule/review-posture, variant --acme, section flavors
+    const baseBody = "# Review posture\n\nDispatch reviewers.\n\nshared line\n";
+    const variantBody = "# Review posture\n\nDispatch reviewers.\n\n| Repo | Reviewer |\n|---|---|\n| `acme-api` | backend |\n\nshared line\n";
 
-    // Create a Forge where variant differs from base without markers
-    await makeForge(forge, {
-      ingredients: [rule("wf", "Line1\nLine2\n"), rule("wf--acme", "Line1\nACME\n", { as: "wf" })],
-      recipes: [recipe("base", ["rule/wf--acme"])],
-      profiles: [profile("acme", ["base"])],
-    });
-    gitInit(forge);
-    gitCommitAll(forge, "init");
+    // Case (a): workspace with overrides.sections → W3 warning names the concerned workspace
+    {
+      const root = await tmpDir("craftar-forge-unify-section-a-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forge = path.join(root, "forge");
+      const homeDir = path.join(root, "home");
+      await makeForge(forge, {
+        ingredients: [
+          rule("review-posture", baseBody),
+          rule("review-posture--acme", variantBody, { as: "review-posture" }),
+        ],
+        recipes: [recipe("base", ["rule/review-posture"]), recipe("base--acme", ["rule/review-posture--acme"])],
+        profiles: [profile("acme", ["base--acme"])],
+      });
+      gitInit(forge);
+      gitCommitAll(forge, "init");
 
-    // Create a workspace with overrides.sections.rule/wf.section-1 (the name take: section would use)
-    const ws = path.join(root, "ws");
-    await writeFiles(ws, {
-      "craftar.yaml": `forge: ../forge\nprofile: acme\noverrides:\n  sections:\n    rule/wf:\n      section-1: override\n`,
-    });
-    const env = { CRAFTAR_HOME: home };
-    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
-    const realWs = await fs.realpath(ws);
+      const ws = path.join(root, "ws");
+      await writeFiles(ws, {
+        "craftar.yaml": `forge: ../forge\nprofile: acme\noverrides:\n  sections:\n    rule/review-posture:\n      flavors: override content\n`,
+      });
+      const env = { CRAFTAR_HOME: homeDir };
+      expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+      const realWs = await fs.realpath(ws);
 
-    // Save and modify a plan for take: section
-    const planDir = await tmpDir("craftar-plan-");
-    cleanups.push(() => fs.rm(planDir, { recursive: true, force: true }));
-    const planPath = path.join(planDir, "plan.yaml");
-    expect(runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", planPath, "--forge", forge], { env }).code).toBe(0);
+      // Save and edit plan for take: section
+      const planDir = path.join(root, "plan");
+      await fs.mkdir(planDir, { recursive: true });
+      const planPath = path.join(planDir, "plan.yaml");
+      expect(runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--save-plan", planPath, "--forge", forge]).code).toBe(0);
+      const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+      plan.files[0].hunks[0].take = "section";
+      plan.files[0].hunks[0].section = { name: "flavors" };
+      const editedPath = path.join(planDir, "edited.yaml");
+      await fs.writeFile(editedPath, YAML.stringify(plan));
 
-    const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
-    // Find a block hunk and set take: section
-    const blockHunk = plan.files[0].hunks.find((h: Record<string, unknown>) => h.suggestion?.class === "block");
-    if (blockHunk) {
-      Object.assign(blockHunk, { take: "section", section: { name: "section-1" } });
+      const j = runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", editedPath, "--forge", forge, "--json"], { env });
+      expect(j.code, j.stderr).toBe(0);
+      const out = JSON.parse(j.stdout);
+
+      // W3 warning should name the concerned workspace — whole string assertion
+      const w3Warning = out.warnings.find((w: string) => w.includes("is now a section of"));
+      expect(w3Warning).toEqual(
+        `flavors is now a section of rule/review-posture — a workspace that sets overrides.sections.rule/review-posture.flavors (craftar.yaml or ` +
+          `craftar.local.yaml) now applies there — concerned: ${realWs} (craftar.yaml)`,
+      );
     }
-    const editedPath = path.join(planDir, "edited.yaml");
-    await fs.writeFile(editedPath, YAML.stringify(plan));
 
-    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--plan", editedPath, "--forge", forge, "--json"], { env });
-    expect(j.code, j.stderr).toBe(0);
-    const out = JSON.parse(j.stdout);
+    // Case (b): workspace without the section override → no W3 warning, but sections were created
+    {
+      const root = await tmpDir("craftar-forge-unify-section-b-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forge = path.join(root, "forge");
+      const homeDir = path.join(root, "home");
+      await makeForge(forge, {
+        ingredients: [
+          rule("review-posture", baseBody),
+          rule("review-posture--acme", variantBody, { as: "review-posture" }),
+        ],
+        recipes: [recipe("base", ["rule/review-posture"]), recipe("base--acme", ["rule/review-posture--acme"])],
+        profiles: [profile("acme", ["base--acme"])],
+      });
+      gitInit(forge);
+      gitCommitAll(forge, "init");
 
-    // W3 warning should name the concerned workspace (when a NEW section is created)
-    const w3Warning = out.warnings.find((w: string) => w.includes("is now a section of"));
-    if (w3Warning) {
-      expect(w3Warning).toContain(`— concerned: ${realWs} (craftar.yaml)`);
-    } else {
-      // If no W3 warning, the test still passes — the mechanism was proven in tests 6/7
-      // The base had no markers, so the section is being added as new
-      // Verify the sections array is populated
-      expect(out.sections.length).toBeGreaterThanOrEqual(0);
+      const ws = path.join(root, "ws");
+      await writeFiles(ws, {
+        "craftar.yaml": `forge: ../forge\nprofile: acme\n`,
+      });
+      const env = { CRAFTAR_HOME: homeDir };
+      expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+
+      // Save and edit plan for take: section
+      const planDir = path.join(root, "plan");
+      await fs.mkdir(planDir, { recursive: true });
+      const planPath = path.join(planDir, "plan.yaml");
+      expect(runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--save-plan", planPath, "--forge", forge]).code).toBe(0);
+      const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
+      plan.files[0].hunks[0].take = "section";
+      plan.files[0].hunks[0].section = { name: "flavors" };
+      const editedPath = path.join(planDir, "edited.yaml");
+      await fs.writeFile(editedPath, YAML.stringify(plan));
+
+      const j = runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", editedPath, "--forge", forge, "--json"], { env });
+      expect(j.code, j.stderr).toBe(0);
+      const out = JSON.parse(j.stdout);
+
+      // No W3 warning (none concerned, registry read)
+      const w3Warning = out.warnings.find((w: string) => w.startsWith("flavors is now a section of"));
+      expect(w3Warning).toBeUndefined();
+
+      // But sections array should have the created section with written: true
+      expect(out.sections.length).toBe(1);
+      expect(out.sections[0].written).toBe(true);
     }
   });
 });
