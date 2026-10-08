@@ -1004,6 +1004,8 @@ export interface PruneCandidate {
   file: string;
   /** Profiles that list this candidate in their `recipes`. */
   profiles: Array<{ name: string; abs: string }>;
+  /** Profiles that list this candidate but whose file could not be found. */
+  missingProfiles: string[];
 }
 
 /**
@@ -1043,14 +1045,19 @@ export async function pruneCandidates(
 
     // Find profiles that list this candidate
     const profiles: Array<{ name: string; abs: string }> = [];
+    const missingProfiles: string[] = [];
     for (const [pName, prof] of forge.profiles) {
       if (prof.recipes.includes(edit.name)) {
         const abs = await findProfileFile(forge.root, pName);
-        if (abs) profiles.push({ name: pName, abs });
+        if (abs) {
+          profiles.push({ name: pName, abs });
+        } else {
+          missingProfiles.push(pName);
+        }
       }
     }
 
-    out.push({ recipe: edit.name, sibling, file: edit.file, profiles });
+    out.push({ recipe: edit.name, sibling, file: edit.file, profiles, missingProfiles });
   }
 
   return out;
@@ -1160,6 +1167,9 @@ export interface PruneContext {
  * - a workspace's `recipes.add` or `recipes.remove` names it
  * - the edit throws
  * - the proof fails (plans differ)
+ *
+ * The in-memory `profileTextMap` accumulates edits across candidates so that candidate 2 edits
+ * the text candidate 1 left, not the disk copy (spec 25 §4.4 step 4).
  */
 export async function pruneRecipes(
   forgeRoot: string,
@@ -1179,7 +1189,21 @@ export async function pruneRecipes(
     profiles: new Map(left.profiles),
   };
 
+  // In-memory map of profile text: seeded from disk on first use, then updated by each prune.
+  // This ensures candidate 2's edit builds on candidate 1's edit, not the original disk copy.
+  const profileTextMap = new Map<string, string>();
+
   for (const candidate of candidates) {
+    // Check 0: a profile that lists this candidate has no profile file
+    if (candidate.missingProfiles.length > 0) {
+      const names = candidate.missingProfiles.sort().join(", ");
+      kept.push({
+        recipe: candidate.recipe,
+        reason: `profile ${names} has no profile file`,
+      });
+      continue;
+    }
+
     // Check 1: another recipe's `extends` names it
     const extendedBy: string[] = [];
     for (const [rn, r] of current.recipes) {
@@ -1280,19 +1304,25 @@ export async function pruneRecipes(
       continue;
     }
 
-    // Check 4: try the edit
-    let profileWrites: Array<{ abs: string; content: string }> = [];
-    try {
-      for (const prof of candidate.profiles) {
-        const raw = await fs.readFile(prof.abs, "utf8");
+    // Check 4: try the edit, reading from profileTextMap (seeded from disk on first use)
+    const profileWrites: Array<{ abs: string; content: string }> = [];
+    let editFailed: string | null = null;
+    for (const prof of candidate.profiles) {
+      try {
+        // Seed from disk on first use
+        if (!profileTextMap.has(prof.abs)) {
+          profileTextMap.set(prof.abs, await fs.readFile(prof.abs, "utf8"));
+        }
+        const raw = profileTextMap.get(prof.abs)!;
         const edited = profileRecipesEdit(raw, path.relative(forgeRoot, prof.abs).split(path.sep).join("/"), candidate.recipe, candidate.sibling);
         profileWrites.push({ abs: prof.abs, content: edited });
+      } catch (e) {
+        editFailed = e instanceof Error ? e.message : String(e);
+        break;
       }
-    } catch (e) {
-      kept.push({
-        recipe: candidate.recipe,
-        reason: e instanceof Error ? e.message : String(e),
-      });
+    }
+    if (editFailed !== null) {
+      kept.push({ recipe: candidate.recipe, reason: editFailed });
       continue;
     }
 
@@ -1376,21 +1406,52 @@ export async function pruneRecipes(
       continue;
     }
 
-    // Passed all checks: record the prune
-    const writes: Array<{ abs: string; content: string | null }> = [
-      ...profileWrites,
-      { abs: candidate.file, content: null }, // delete the recipe file
-    ];
+    // Passed all checks: update the in-memory profile text map with this candidate's edits
+    for (const pw of profileWrites) {
+      profileTextMap.set(pw.abs, pw.content);
+    }
 
+    // Update current Forge for next candidate
+    current = editedForge;
+
+    // Record the prune (writes will be collected at the end)
     pruned.push({
       recipe: candidate.recipe,
       sibling: candidate.sibling,
       profiles: candidate.profiles.map((p) => path.relative(forgeRoot, p.abs).split(path.sep).join("/")),
-      writes,
+      writes: [], // placeholder, will be filled below
     });
+  }
 
-    // Update current Forge for next candidate
-    current = editedForge;
+  // Build the final writes: one write per profile with its final text, plus recipe deletions
+  // Collect all profile paths that need to be written and all recipe files to delete
+  const profileAbsSet = new Set<string>();
+  for (const p of pruned) {
+    for (const prof of candidates.find((c) => c.recipe === p.recipe)!.profiles) {
+      profileAbsSet.add(prof.abs);
+    }
+  }
+
+  // Build a single write per profile with its final text
+  const profileWrites: Array<{ abs: string; content: string }> = [];
+  for (const abs of profileAbsSet) {
+    profileWrites.push({ abs, content: profileTextMap.get(abs)! });
+  }
+
+  // Assign writes to the pruned entries: profile writes go to the first pruned entry that uses them,
+  // recipe deletions stay with each entry. Actually, the CLI writes all writes sequentially,
+  // so we need to return ONE write per profile (with final text) and ONE delete per recipe.
+  // The simplest approach: put all profile writes on the first pruned entry, recipe deletes on each.
+  for (let i = 0; i < pruned.length; i++) {
+    const p = pruned[i];
+    const recipeFile = candidates.find((c) => c.recipe === p.recipe)!.file;
+    if (i === 0) {
+      // First entry gets all profile writes plus its recipe delete
+      p.writes = [...profileWrites.map((pw) => ({ abs: pw.abs, content: pw.content as string | null })), { abs: recipeFile, content: null }];
+    } else {
+      // Other entries just get their recipe delete
+      p.writes = [{ abs: recipeFile, content: null }];
+    }
   }
 
   return { pruned, kept };

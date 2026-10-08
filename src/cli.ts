@@ -1283,11 +1283,16 @@ forge
     if (o.pruneRecipes && candidates.length > 0) {
       // Map the state: "skipped" cannot happen here (--prune-recipes requires --impact)
       const pruneState = impactState === "unreadable" ? "unreadable" : impactState as "read" | "partial" | "none" | "off";
-      pruneResult = await pruneRecipes(f.root, candidates, {
-        state: pruneState,
-        entries: impactEntries,
-        after: impactAfter,
-      });
+      try {
+        pruneResult = await pruneRecipes(f.root, candidates, {
+          state: pruneState,
+          entries: impactEntries,
+          after: impactAfter,
+        });
+      } catch (e) {
+        // A throw in pruneRecipes (e.g. loadForge fails) after unify's writes: name what was touched.
+        throw new Error(lateFailure(e, f.root, journal), { cause: e });
+      }
 
       // Apply the prune writes
       for (const p of pruneResult.pruned) {

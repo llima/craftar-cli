@@ -5615,4 +5615,114 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
       "recipe base--acme is now identical to base — it can be removed by hand after repointing the profiles, extends and workspace recipes lists that name it; unify does not, because a workspace or an extends chain may also name base and the recipe order or param precedence would change — or restore the Forge with git and rerun this unify with --prune-recipes",
     ]);
   });
+
+  it("test 12: multi-candidate prune — profile lists both recipes, both are pruned, final profile text has neither suffix", async () => {
+    // Bug: pruneRecipes check 4 reads each candidate's profile from disk, so with profile
+    // `acme: [base--acme, web--acme]` and BOTH recipes left identical to their siblings,
+    // candidate 2's edit is built from the original text and the CLI's sequential writes
+    // let it overwrite candidate 1's: the profile ends `[base--acme, web]` while
+    // `recipes/base--acme.yaml` is deleted; exit 0.
+    const root = await tmpDir("craftar-prune-multi-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const home = path.join(root, "home");
+
+    // Forge: profile acme uses both base--acme and web--acme; both recipes reference the same
+    // variant ingredient rule/wf--acme, so unifying that single variant makes both recipes
+    // identical to their siblings.
+    await makeForge(forge, {
+      ingredients: [
+        rule("wf", "a\n"),
+        rule("wf--acme", "b\n", { as: "wf" }),
+      ],
+      recipes: [
+        recipe("base", ["rule/wf"]),
+        recipe("base--acme", ["rule/wf--acme"]),
+        recipe("web", ["rule/wf"]),
+        recipe("web--acme", ["rule/wf--acme"]),
+      ],
+      profiles: [profile("acme", ["base--acme", "web--acme"])],
+    });
+    gitInit(forge);
+    gitCommitAll(forge, "init");
+
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    // Both recipes should be pruned (whole value assertion)
+    expect(out.recipes.pruned).toEqual([
+      { recipe: "base--acme", sibling: "base", profiles: ["profiles/acme/profile.yaml"] },
+      { recipe: "web--acme", sibling: "web", profiles: ["profiles/acme/profile.yaml"] },
+    ]);
+    expect(out.recipes.kept).toEqual([]);
+
+    // The whole profile text — both suffixed entries replaced
+    const profilePath = path.join(forge, "profiles/acme/profile.yaml");
+    const profileText = await fs.readFile(profilePath, "utf8");
+    expect(profileText).toBe("name: acme\nrecipes:\n  - base\n  - web\ntargets:\n  - claude-code\n");
+
+    // Both suffixed recipe files should be deleted
+    expect(await exists(path.join(forge, "recipes/base--acme.yaml"))).toBe(false);
+    expect(await exists(path.join(forge, "recipes/web--acme.yaml"))).toBe(false);
+
+    // recipes --forge --profile acme should show no warnings on stderr
+    const recipesCmd = runCli(["recipes", "--forge", forge, "--profile", "acme"]);
+    expect(recipesCmd.code).toBe(0);
+    expect(recipesCmd.stderr).toBe("");
+  });
+
+  it("test 12b: multi-candidate prune — workspace is on a different profile, no conflict", async () => {
+    // Same multi-candidate fixture but the registered workspace is on profile `globex`,
+    // so there is no conflict with the workspace's recipes.add/remove.
+    const root = await tmpDir("craftar-prune-multi-globex-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const home = path.join(root, "home");
+
+    await makeForge(forge, {
+      ingredients: [
+        rule("wf", "a\n"),
+        rule("wf--acme", "b\n", { as: "wf" }),
+      ],
+      recipes: [
+        recipe("base", ["rule/wf"]),
+        recipe("base--acme", ["rule/wf--acme"]),
+        recipe("web", ["rule/wf"]),
+        recipe("web--acme", ["rule/wf--acme"]),
+      ],
+      profiles: [
+        profile("acme", ["base--acme", "web--acme"]),
+        profile("globex", ["base"]),
+      ],
+    });
+    gitInit(forge);
+    gitCommitAll(forge, "init");
+
+    // Workspace is on profile globex, not acme
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: globex\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    // Both recipes should be pruned
+    expect(out.recipes.pruned).toEqual([
+      { recipe: "base--acme", sibling: "base", profiles: ["profiles/acme/profile.yaml"] },
+      { recipe: "web--acme", sibling: "web", profiles: ["profiles/acme/profile.yaml"] },
+    ]);
+
+    // The whole profile text — both suffixed entries replaced
+    const profilePath = path.join(forge, "profiles/acme/profile.yaml");
+    const profileText = await fs.readFile(profilePath, "utf8");
+    expect(profileText).toBe("name: acme\nrecipes:\n  - base\n  - web\ntargets:\n  - claude-code\n");
+  });
 });
