@@ -5296,6 +5296,29 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     expect(out.recipes.kept).toEqual([{ recipe: "base--acme", reason: `${realA} names it in recipes.remove (craftar.yaml)` }]);
   });
 
+  it("test 4d: the kind reads from the same file concerned named — local remove vs base add", async () => {
+    // Regression: craftar.local.yaml has recipes.remove and craftar.yaml has recipes.add.
+    // concerned() reports local first → first.file = "craftar.local.yaml".
+    // The kind must come from the same file (local), not from (local OR base).
+    const { root, forge, home } = await pruneFixture();
+    const ws = path.join(root, "ws");
+    // craftar.yaml adds, craftar.local.yaml removes
+    await writeFiles(ws, {
+      "craftar.yaml": `forge: ../forge\nprofile: acme\nrecipes:\n  add:\n    - base--acme\n`,
+      "craftar.local.yaml": `recipes:\n  remove:\n    - base--acme\n`,
+    });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+    const realWs = await fs.realpath(ws);
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+
+    // The file is craftar.local.yaml (local checked first), the kind is remove (from that file)
+    expect(out.recipes.kept).toEqual([{ recipe: "base--acme", reason: `${realWs} names it in recipes.remove (craftar.local.yaml)` }]);
+  });
+
   it("test 5: refused — the proof fails because a param default would move", async () => {
     const root = await tmpDir("craftar-prune-param-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));

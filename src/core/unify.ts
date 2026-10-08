@@ -1250,8 +1250,8 @@ export async function pruneRecipes(
 
     if (firstConcerned.concerned.length > 0) {
       const first = firstConcerned.concerned[0];
-      // Determine kind by re-reading the merged config for this entry
-      // concerned checks local first, then base - replicate that to determine kind
+      // Determine kind from the same document first.file names (local or base, not both).
+      // concerned() checks local first, so first.file is "craftar.local.yaml" when local passed the test.
       const entryIdx = ctx.entries.findIndex((e) => e.entry.path === first.path);
       const planned = ctx.after[entryIdx];
       let merged: MergedConfig | undefined;
@@ -1263,16 +1263,13 @@ export async function pruneRecipes(
 
       let kind: "add" | "remove" = "remove";
       if (merged) {
-        const checkAdd = (doc: unknown) => {
-          if (doc && typeof doc === "object") {
-            const d = doc as { recipes?: { add?: unknown } };
-            return Array.isArray(d.recipes?.add) && d.recipes.add.includes(candidate.recipe);
+        // Read from the one document that first.file names
+        const doc = first.file === "craftar.local.yaml" ? merged.local : merged.base;
+        if (doc && typeof doc === "object") {
+          const d = doc as { recipes?: { add?: unknown } };
+          if (Array.isArray(d.recipes?.add) && d.recipes.add.includes(candidate.recipe)) {
+            kind = "add";
           }
-          return false;
-        };
-        // Check local first (like concerned does), then base; add wins over remove within same entry
-        if (checkAdd(merged.local) || checkAdd(merged.base)) {
-          kind = "add";
         }
       }
 
