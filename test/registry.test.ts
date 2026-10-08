@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cacheKey } from "../src/core/remote.js";
-import { forget, listWorkspaces, prune, readRegistry, register, registryFile, rowStatus } from "../src/core/registry.js";
+import { forget, isMissing, isRegistered, listWorkspaces, namedCacheKeys, prune, readRegistry, register, registryFile, rowStatus } from "../src/core/registry.js";
 import { apply, loadWorkspace, plan, readLock, status, type FileStatus } from "../src/core/sync.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 import { git, remoteForge } from "./helpers/remote.js";
@@ -304,5 +304,24 @@ describe("row status (§4.2)", () => {
     git(f.forgeRoot, "commit", "-q", "-m", "init");
     await syncAndRegister(f.home, a);
     expect((await listWorkspaces(f.home, { fetch: false })).rows[0]).toMatchObject({ status: "up-to-date", forgeMoved: false });
+  });
+});
+
+describe("exports for doctor (spec 24 §5.1)", () => {
+  it("isRegistered compares real paths; namedCacheKeys gathers registry keys, missing ones included, and the checked key", async () => {
+    const f = await fixture();
+    const a = await f.ws("acme-a");
+    await syncAndRegister(f.home, a);
+    const link = path.join(f.root, "link-a");
+    await fs.symlink(a, link, process.platform === "win32" ? "junction" : "dir");
+    const reg = await readRegistry(f.home);
+    expect(await isRegistered(reg, link)).toBe(true);
+    expect(await isRegistered(reg, f.root)).toBe(false);
+    await fs.rm(a, { recursive: true });
+    expect(await isMissing(reg.workspaces[0])).toBe(true);
+    const named = namedCacheKeys(reg, { key: "example.com-x-000000000000", path: "/w" });
+    expect(named.get(reg.workspaces[0].forge.key!)).toEqual([reg.workspaces[0].path]);
+    expect(named.get("example.com-x-000000000000")).toEqual(["/w"]);
+    expect(namedCacheKeys(reg, null).size).toBe(1);
   });
 });
