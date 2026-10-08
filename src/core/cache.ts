@@ -76,7 +76,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
   const forgesDir = path.join(home, "forges");
   const rel = (dir: string) => path.relative(home, dir).split(path.sep).join("/");
 
-  // Step 1: No forges/ → empty report with header null.
+  // Step 1: No forges/ → empty report with header null (before the lock, §4.2 step 0).
   if (!(await exists(forgesDir))) {
     return {
       report: { home, dryRun: opts.dryRun, removed: [], kept: [], freedBytes: 0, warnings: [] },
@@ -85,57 +85,64 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
   }
 
   const cleanupMs = opts.cleanupMs ?? 14 * 24 * 60 * 60 * 1000;
-  const start = Date.now();
-
-  // Step 2: Determine naming info (§4.2 step 2).
-  let whyNot: string | null = null;
-  let reg: Registry | null = null;
-  let checked: { key: string; path: string } | null = null;
-
-  if (opts.registryOff) {
-    whyNot = "CRAFTAR_NO_REGISTRY is set";
-  } else {
-    try {
-      reg = await readRegistry(home);
-    } catch {
-      whyNot = "the registry cannot be read";
-    }
-  }
-
-  if (opts.workspace !== null && whyNot === null) {
-    const given = path.resolve(opts.workspace);
-    const root = await fs.realpath(given).catch(() => given);
-    try {
-      const merged = await readWorkspaceConfig(given);
-      if (classifyForge(merged.config.forge) === "url") {
-        checked = { key: cacheKey(merged.config.forge.trim()), path: root };
-      }
-    } catch {
-      whyNot = "the checked craftar.yaml does not read";
-    }
-  }
-
-  const named = whyNot === null ? namedCacheKeys(reg!, checked) : new Map<string, string[]>();
-
-  // Step 3: Snapshot the cache (before taking the lock, so header.bytes is correct).
-  let snapshot: CacheSnapshot;
-  try {
-    snapshot = await inspectCache(home);
-  } catch (e) {
-    throw new Error(`cannot read ${forgesDir}: ${(e as Error).message}`);
-  }
-  const header = { forges: forgesDir, entries: snapshot.entries.length, bytes: snapshot.bytes };
-
-  const removed: PruneRemoved[] = [];
-  const kept: PruneKept[] = [];
-  const warnings: string[] = [];
-
-  if (whyNot !== null) {
-    warnings.push(`whole entries kept: ${whyNot} — nothing can tell which ones are used`);
-  }
 
   // The actual prune work: under the prune lock for a run, no lock for dry-run.
+  // Everything after the "no forges/" check runs under the prune lock (§4.2 step 0, correction 1).
   const doPrune = async (refresh: () => Promise<void>) => {
+    const start = Date.now();
+
+    // Step 2: Determine naming info (§4.2 step 2) — under the lock so a waiting prune sees the state
+    // after the one that held the lock finishes.
+    let whyNot: string | null = null;
+    let reg: Registry | null = null;
+    let checked: { key: string; path: string } | null = null;
+
+    if (opts.registryOff) {
+      whyNot = "CRAFTAR_NO_REGISTRY is set";
+    } else {
+      try {
+        reg = await readRegistry(home);
+      } catch {
+        whyNot = "the registry cannot be read";
+      }
+    }
+
+    if (opts.workspace !== null && whyNot === null) {
+      const given = path.resolve(opts.workspace);
+      const root = await fs.realpath(given).catch(() => given);
+      try {
+        const merged = await readWorkspaceConfig(given);
+        if (classifyForge(merged.config.forge) === "url") {
+          checked = { key: cacheKey(merged.config.forge.trim()), path: root };
+        }
+      } catch {
+        whyNot = "the checked craftar.yaml does not read";
+      }
+    }
+
+    const named = whyNot === null ? namedCacheKeys(reg!, checked) : new Map<string, string[]>();
+
+    // Step 3: Snapshot the cache — under the lock.
+    let snapshot: CacheSnapshot;
+    try {
+      snapshot = await inspectCache(home);
+    } catch (e) {
+      throw new Error(`cannot read ${forgesDir}: ${(e as Error).message}`);
+    }
+    // Header bytes is the sum of entries and removal directories, not snapshot.bytes: the lock file
+    // (prune.lock) is in forges/ during the snapshot but is not part of the cache content.
+    const headerBytes = snapshot.entries.reduce((s, e) => s + e.bytes, 0) + snapshot.removing.reduce((s, r) => s + r.bytes, 0);
+    const header = { forges: forgesDir, entries: snapshot.entries.length, bytes: headerBytes };
+
+    const removed: PruneRemoved[] = [];
+    const kept: PruneKept[] = [];
+    const warnings: string[] = [];
+    let recheckWarningAdded = false; // Correction 3: boolean flag instead of text search.
+
+    if (whyNot !== null) {
+      warnings.push(`whole entries kept: ${whyNot} — nothing can tell which ones are used`);
+    }
+
     const step = async () => {
       await refresh();
       await opts.beforeStep?.();
@@ -175,6 +182,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
       // For a run: call removeEntry with a re-check callback.
       let recheckFailed = false;
       let finalReason = reason;
+      let recheckNamed: Map<string, string[]> | null = null; // Correction 2: capture named2 from re-check.
 
       const stillPrunable = async (): Promise<boolean> => {
         let reg2: Registry;
@@ -184,10 +192,10 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
           recheckFailed = true;
           return false;
         }
-        const named2 = namedCacheKeys(reg2, checked);
+        recheckNamed = namedCacheKeys(reg2, checked);
         const fetched2 = await exists(path.join(e.dir, "fetched"));
         finalReason = !fetched2 ? "incomplete" : "orphan";
-        return !fetched2 || !named2.has(e.key);
+        return !fetched2 || !recheckNamed.has(e.key);
       };
 
       const outcome = await removeEntry(e.dir, stillPrunable, {
@@ -205,21 +213,16 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
       } else if (outcome.outcome === "kept") {
         if (recheckFailed) {
           kept.push({ path: entryRelPath, reason: "unchecked", namedBy: [] });
-          // Add warning only once for recheck failures.
-          if (!warnings.some((w) => w.includes("the registry cannot be read"))) {
+          // Correction 3: Add warning only once through a boolean flag.
+          if (!recheckWarningAdded) {
             warnings.push("whole entries kept: the registry cannot be read — nothing can tell which ones are used");
+            recheckWarningAdded = true;
           }
         } else {
-          // Re-read named to get correct namedBy.
-          let reg2: Registry;
-          try {
-            reg2 = await readRegistry(home);
-          } catch {
-            kept.push({ path: entryRelPath, reason: "unchecked", namedBy: [] });
-            continue;
-          }
-          const named2 = namedCacheKeys(reg2, checked);
-          kept.push({ path: entryRelPath, reason: "named", namedBy: named2.get(e.key) ?? [] });
+          // Correction 2: Use recheckNamed from the re-check instead of reading the registry a third time.
+          // When recheckFailed is false, stillPrunable ran successfully and set recheckNamed.
+          const namedBy = recheckNamed!.get(e.key) ?? [];
+          kept.push({ path: entryRelPath, reason: "named", namedBy });
         }
       } else if (outcome.outcome === "busy") {
         kept.push({ path: entryRelPath, reason: "busy", namedBy: named.get(e.key) ?? [] });
@@ -303,7 +306,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
     };
   };
 
-  // Step 2: Under prune lock for a run, no lock for dry-run.
+  // Under prune lock for a run, no lock for dry-run.
   if (opts.dryRun) {
     // No lock for dry-run; refresh is a no-op.
     return doPrune(async () => {});
