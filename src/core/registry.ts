@@ -20,7 +20,7 @@ export function registryFile(home: string): string {
 }
 
 /** Paths compare without case on Windows (spec 21 §5.3). */
-function samePath(a: string, b: string): boolean {
+export function samePath(a: string, b: string): boolean {
   return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 

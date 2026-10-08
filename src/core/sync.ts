@@ -86,6 +86,10 @@ export interface MergedConfig {
   fromLocalFile: boolean;
   /** Warnings of the merge itself (a local `forge:` override). */
   warnings: string[];
+  /** The parsed base document exactly as `mergeWorkspaceConfig` received it (`{}` when empty). */
+  base: unknown;
+  /** The parsed local document exactly as `mergeWorkspaceConfig` received it (`null` when no file, `{}` when empty). */
+  local: unknown | null;
 }
 
 export async function loadWorkspace(root: string, opts: LoadOptions = {}): Promise<Workspace> {
@@ -140,7 +144,7 @@ export function mergeWorkspaceConfig(base: unknown, localDoc: unknown | null): M
   const config = parsed.data;
   const warnings: string[] = [];
   if (fromLocalFile) warnings.push(`Forge overridden by ${LOCAL_FILE} (${config.forge}) — do not commit ${LOCK_FILE} or the generated files`);
-  return { config, fromLocalFile, warnings };
+  return { config, fromLocalFile, warnings, base: base ?? {}, local: localDoc };
 }
 
 /** The Forge of a merged configuration — from its path, or from the cache for a URL (spec 24 §5.1). */
