@@ -1,6 +1,18 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 
+const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
+
+/** Valid UTF-8, BOM included (a BOM is a valid UTF-8 sequence). */
+export function isUtf8(bytes: Buffer): boolean {
+  try {
+    strictUtf8.decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Whether a relative path climbs out of the directory it is joined under (0.17.3): after its `..` segments are
  * resolved, it is `..` or starts with `../`. A backslash counts as a separator, as it is one on Windows, and a
