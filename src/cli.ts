@@ -52,7 +52,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.17.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.17.1");
 
 /* ---------------------------------------------------------------- import */
 program
@@ -1287,7 +1287,7 @@ forge
           after: impactAfter,
         });
       } catch (e) {
-        // A throw in pruneRecipes (e.g. loadForge fails) after unify's writes: name what was touched.
+        // A throw in pruneRecipes (e.g. a profile edit that fails to re-parse) after unify's writes: name what was touched.
         throw new Error(lateFailure(e, f.root, journal), { cause: e });
       }
 

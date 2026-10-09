@@ -452,3 +452,67 @@ describe("mergeWorkspaceConfig returns base/local (spec 25 §5.1)", () => {
     expect(ws3.merged.base).toEqual({ forge: "../forge", profile: "acme" });
   });
 });
+
+describe("pruneRecipes keeps every candidate when the Forge does not reload (spec 25 §13 item 11)", () => {
+  it("returns kept with reload message instead of throwing", async () => {
+    const { pruneCandidates, pruneRecipes } = await import("../src/core/unify.js");
+
+    const root = await tmpDir("craftar-prune-reload-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const forgeRoot = path.join(root, "forge");
+
+    // Forge with base variant that is identical to its sibling after unify
+    await makeForge(forgeRoot, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "a\n", { as: "wf" })],
+      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+
+    // Create and sync a workspace
+    const wsRoot = path.join(root, "ws");
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
+    await syncAndRegister(home, wsRoot);
+
+    // Load the Forge while it's still valid and compute candidates
+    const forge = await loadForge(forgeRoot);
+    const candidates = await pruneCandidates(forge, "rule/wf" as `${string}/${string}`, "rule/wf--acme" as `${string}/${string}`, "acme");
+
+    // Verify we have a candidate
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].recipe).toBe("base--acme");
+    expect(candidates[0].sibling).toBe("base");
+
+    // Break the Forge so loadForge throws — invalid schema
+    await fs.writeFile(path.join(forgeRoot, "craftar.forge.yaml"), "schema: 9\n");
+
+    // Catch the loadForge error to use in the expected result
+    let loadError: Error | null = null;
+    try {
+      await loadForge(forgeRoot);
+    } catch (e) {
+      loadError = e as Error;
+    }
+    expect(loadError).not.toBeNull();
+    expect(loadError!.message).toMatch(/^invalid .*craftar\.forge\.yaml: /);
+
+    // Build context for pruneRecipes — state "read" with one entry
+    const forgeWorkspacesResult = await forgeWorkspaces(home, forgeRoot);
+    const planned = await planAll(forgeWorkspacesResult.workspaces, forge); // Uses the old valid forge
+
+    const ctx = {
+      state: "read" as const,
+      entries: forgeWorkspacesResult.workspaces,
+      after: planned,
+    };
+
+    // Call pruneRecipes — it should NOT throw, but return kept with the reload message
+    const result = await pruneRecipes(forgeRoot, candidates, ctx);
+
+    // Assert exact result structure (whole value)
+    expect(result).toEqual({
+      pruned: [],
+      kept: [{ recipe: "base--acme", reason: `the Forge no longer loads when the prune reloads it: ${loadError!.message}` }],
+    });
+  });
+});
