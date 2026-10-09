@@ -37,9 +37,9 @@ import {
   type PruneResult,
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
-import { planInit } from "./core/init.js";
+import { initLine, planInit } from "./core/init.js";
 import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
-import { localKeys } from "./core/workspace-yaml.js";
+import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -182,6 +182,8 @@ program
       if (await exists(file)) n1();
       const st = await fs.stat(root).catch(() => null);
       if (st && !st.isDirectory()) fail(`cannot use ${root} as a workspace: it is not a directory`);
+      // Read the local file once (after N1 and N9) and hand it to planInit
+      const local = await readLocalFile(root);
       const init = await planInit(
         root,
         {
@@ -193,7 +195,7 @@ program
           removeRecipes: o.removeRecipe,
           replace: o.replace,
         },
-        load(o, "sync"),
+        { ...load(o, "sync"), local },
       );
       const { ws, plan: p } = init;
       // Every refusal is above: only now does the directory, and craftar.yaml, come to exist (§13 items 1, 9).
@@ -204,9 +206,8 @@ program
         if ((e as NodeJS.ErrnoException).code === "EEXIST") n1();
         throw e;
       }
-      const from = { flag: "", local: ` (from ${LOCAL_FILE})`, profile: " (from the profile)" }[init.targetsFrom];
       console.log(pc.bold(`craftar init — wrote ${WORKSPACE_FILE} in ${root}`));
-      console.log(`  forge ${ws.config.forge} · profile ${ws.config.profile} · recipes ${p.resolution.recipes.join(" → ")} · targets ${p.resolution.targets.join(", ")}${from}`);
+      console.log(`  ${initLine(init)}`);
       for (const n of init.notes) console.log(`  note ${n}`);
       if (!o.sync) {
         console.log(nextSyncLine(init.statuses));
