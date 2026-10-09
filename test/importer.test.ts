@@ -1442,3 +1442,324 @@ describe("the variant's slot (spec 11 §6.15, Rulings 9 and 23)", () => {
     expect((await yaml(s.owned)).ingredients).toEqual(["rule/shared", "rule/review-posture"]);
   });
 });
+
+
+describe("import — authEnv (spec 27)", () => {
+  /**
+   * Make a Forge with MCP base `tracker` declaring authEnv, recipe `base` listing it, profile `acme`.
+   * Returns the Forge root.
+   */
+  async function makeAuthEnvForge(t: Awaited<ReturnType<typeof setup>>) {
+    const { makeForge, recipe, profile, rule } = await import("./helpers/forge.js");
+    await makeForge(t.forge, {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        {
+          meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx", args: ["-y", "tracker"] } },
+        },
+      ],
+      recipes: [recipe("base", ["rule/workflow", "mcp/tracker"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    return t.forge;
+  }
+
+  /** Sync the workspace: loadWorkspace → plan → status → apply, returns status array. */
+  async function syncWs(wsRoot: string) {
+    const w = await loadWorkspace(wsRoot);
+    const p = await plan(w);
+    const st = await status(w, p, await readLock(w.root));
+    await apply(w, p, st, {});
+    return st;
+  }
+
+  it("1. Reuse: sync then import same workspace — no variant, snapshot unchanged", async () => {
+    const t = await setup();
+    await makeAuthEnvForge(t);
+    // Write workspace's craftar.yaml and .mcp.json
+    const ws = t.ws("acme-ws");
+    await writeFiles(ws, {
+      "craftar.yaml": "forge: ../forge\nprofile: acme\n",
+      ".claude/rules/workflow.md": "# Workflow\n",
+    });
+    await syncWs(ws);
+    const before = await snapshot(t.forge);
+    const r = await importInto(t.forge, ws, "acme");
+    expect(r.variants).toEqual([]);
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+
+  it("2. Rewriting a declaring variant keeps its declaration", async () => {
+    const t = await setup();
+    const { makeForge, recipe, profile, rule } = await import("./helpers/forge.js");
+    // Forge: base tracker (no authEnv) + variant tracker--acme with authEnv
+    await makeForge(t.forge, {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        {
+          meta: { type: "mcp", name: "tracker", server: { command: "npx", args: ["-y", "tracker"] } },
+        },
+        {
+          meta: { type: "mcp", name: "tracker--acme", as: "tracker", authEnv: ["ACME_VARIANT_TOKEN"], server: { command: "npx", args: ["-y", "acme"] } },
+        },
+      ],
+      recipes: [recipe("base--acme", ["rule/workflow", "mcp/tracker--acme"])],
+      profiles: [profile("acme", ["base--acme"], ["claude-code"])],
+    });
+    // Sync the workspace
+    const ws = t.ws("acme-ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n", ".claude/rules/workflow.md": "# Workflow\n" });
+    await syncWs(ws);
+    // Change the server in the workspace's .mcp.json
+    const mcpPath = path.join(ws, ".mcp.json");
+    const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
+    mcpContent.mcpServers.tracker.args = ["-y", "acme2"];
+    await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
+    // Import
+    await importInto(t.forge, ws, "acme");
+    // Check authEnv kept
+    const variantMeta = await yaml(path.join(t.forge, "ingredients/mcp/tracker--acme/ingredient.yaml"));
+    expect(variantMeta.authEnv).toEqual(["ACME_VARIANT_TOKEN"]);
+    // Check order: authEnv before server
+    const rawYaml = await fs.readFile(path.join(t.forge, "ingredients/mcp/tracker--acme/ingredient.yaml"), "utf8");
+    const authEnvIdx = rawYaml.indexOf("authEnv:");
+    const serverIdx = rawYaml.indexOf("server:");
+    expect(authEnvIdx).toBeGreaterThanOrEqual(0);
+    expect(serverIdx).toBeGreaterThanOrEqual(0);
+    expect(authEnvIdx).toBeLessThan(serverIdx);
+    // Check example file unchanged (needs 27b)
+    // For now, just check plan has the path
+    const w = await loadWorkspace(ws);
+    const p = await plan(w);
+    const hasExampleFile = p.files.some((f) => f.path === ".claude/settings.craftar.example.json");
+    // NOTE: If 27b is not on branch, we assert hasExampleFile; else we check status unchanged
+    expect(hasExampleFile).toBe(true);
+  });
+
+  it("3. An existing variant that declares none stays without under a declaring base", async () => {
+    const t = await setup();
+    const { makeForge, recipe, profile, rule } = await import("./helpers/forge.js");
+    // Base declares authEnv, variant does NOT
+    await makeForge(t.forge, {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        {
+          meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx", args: ["-y", "tracker"] } },
+        },
+        {
+          meta: { type: "mcp", name: "tracker--acme", as: "tracker", server: { command: "npx", args: ["-y", "acme"] } },
+        },
+      ],
+      recipes: [recipe("base--acme", ["rule/workflow", "mcp/tracker--acme"])],
+      profiles: [profile("acme", ["base--acme"], ["claude-code"])],
+    });
+    // Sync
+    const ws = t.ws("acme-ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n", ".claude/rules/workflow.md": "# Workflow\n" });
+    await syncWs(ws);
+    // Change server
+    const mcpPath = path.join(ws, ".mcp.json");
+    const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
+    mcpContent.mcpServers.tracker.args = ["-y", "acme2"];
+    await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
+    // Import
+    await importInto(t.forge, ws, "acme");
+    // Variant should have NO authEnv
+    const variantMeta = await yaml(path.join(t.forge, "ingredients/mcp/tracker--acme/ingredient.yaml"));
+    expect(Object.hasOwn(variantMeta, "authEnv")).toBe(false);
+  });
+
+  it("4. A new variant inherits the base's authEnv", async () => {
+    const t = await setup();
+    await makeAuthEnvForge(t);
+    // Sync workspace
+    const ws = t.ws("acme-ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n", ".claude/rules/workflow.md": "# Workflow\n" });
+    await syncWs(ws);
+    // Edit the server in .mcp.json
+    const mcpPath = path.join(ws, ".mcp.json");
+    const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
+    mcpContent.mcpServers.tracker.args = ["-y", "tracker-acme"];
+    await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
+    // Import
+    const r = await importInto(t.forge, ws, "acme");
+    expect(r.variants.map((v) => v.name)).toEqual(["mcp/tracker--acme"]);
+    // The new variant should have inherited authEnv
+    const variantMeta = await yaml(path.join(t.forge, "ingredients/mcp/tracker--acme/ingredient.yaml"));
+    expect(variantMeta.authEnv).toEqual(["ACME_TRACKER_TOKEN"]);
+  });
+
+  it("5. I8 is not triggered by a declaration — second profile resolves variant, unchanged import succeeds", async () => {
+    const t = await setup();
+    const { makeForge, recipe, profile, rule } = await import("./helpers/forge.js");
+    // Forge with declaring variant, two profiles resolving it
+    // Include a base recipe so import reuses it instead of creating one
+    await makeForge(t.forge, {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        {
+          meta: { type: "mcp", name: "tracker", server: { command: "npx", args: ["-y", "tracker"] } },
+        },
+        {
+          meta: { type: "mcp", name: "tracker--acme", as: "tracker", authEnv: ["ACME_VARIANT_TOKEN"], server: { command: "npx", args: ["-y", "acme"] } },
+        },
+      ],
+      recipes: [
+        recipe("base", ["rule/workflow", "mcp/tracker--acme"]),
+        recipe("base--globex", ["rule/workflow", "mcp/tracker--acme"]),
+      ],
+      profiles: [
+        profile("acme", ["base"], ["claude-code"]),
+        profile("globex", ["base--globex"], ["claude-code"]),
+      ],
+    });
+    // Sync the acme workspace
+    const ws = t.ws("acme-ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n", ".claude/rules/workflow.md": "# Workflow\n" });
+    await syncWs(ws);
+    const before = await snapshot(t.forge);
+    // Import unchanged — should NOT throw I8
+    const r = await importInto(t.forge, ws, "acme");
+    expect(r.reused).toContain("mcp/tracker--acme");
+    expect(await snapshot(t.forge)).toEqual(before);
+  });
+
+  it("6. A lost declaration is reported once", async () => {
+    const t = await setup();
+    const { makeForge, recipe, profile, rule } = await import("./helpers/forge.js");
+    // Profile acme on declaring variant; base does NOT declare
+    await makeForge(t.forge, {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        {
+          meta: { type: "mcp", name: "tracker", server: { command: "npx", args: ["-y", "tracker"] } },
+        },
+        {
+          meta: { type: "mcp", name: "tracker--acme", as: "tracker", authEnv: ["ACME_VARIANT_TOKEN"], server: { command: "npx", args: ["-y", "acme"] } },
+        },
+      ],
+      recipes: [
+        recipe("base", ["rule/workflow", "mcp/tracker"]),
+        recipe("base--acme", ["rule/workflow", "mcp/tracker--acme"]),
+      ],
+      profiles: [profile("acme", ["base--acme"], ["claude-code"])],
+    });
+    // Sync
+    const ws = t.ws("acme-ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n", ".claude/rules/workflow.md": "# Workflow\n" });
+    await syncWs(ws);
+    // Make the workspace's server equal to the base's (triggering reuse of base)
+    const mcpPath = path.join(ws, ".mcp.json");
+    await fs.writeFile(mcpPath, JSON.stringify({ mcpServers: { tracker: { command: "npx", args: ["-y", "tracker"] } } }, null, 2) + "\n");
+    // Import — profile moves to base, losing the declaration
+    const r = await importInto(t.forge, ws, "acme");
+    const expectedWarning = "mcp/tracker: ACME_VARIANT_TOKEN declared by mcp/tracker--acme is not declared by mcp/tracker";
+    expect(r.warnings.filter((w) => w === expectedWarning).length).toBe(1);
+    // Import again unchanged — the warning should NOT appear (both sides now agree)
+    const r2 = await importInto(t.forge, ws, "acme");
+    expect(r2.warnings.filter((w) => w === expectedWarning).length).toBe(0);
+  });
+
+  it("7. No flip-flop: after import, sync, import again → unchanged", async () => {
+    const t = await setup();
+
+    // Scenario 1: Reuse
+    {
+      await makeAuthEnvForge(t);
+      const ws = t.ws("reuse-ws");
+      await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+      await syncWs(ws);
+      await importInto(t.forge, ws, "acme");
+      await syncWs(ws);
+      const beforeSecond = await snapshot(t.forge);
+      await importInto(t.forge, ws, "acme");
+      expect(await snapshot(t.forge)).toEqual(beforeSecond);
+      const w = await loadWorkspace(ws);
+      const st = await status(w, await plan(w), await readLock(ws));
+      expect(st.every((s) => s.state === "unchanged")).toBe(true);
+    }
+
+    // Scenario 2: Rewriting variant
+    {
+      const t2 = await setup();
+      const { makeForge, recipe, profile } = await import("./helpers/forge.js");
+      await makeForge(t2.forge, {
+        ingredients: [
+          { meta: { type: "mcp", name: "tracker", server: { command: "npx", args: ["-y", "tracker"] } } },
+          { meta: { type: "mcp", name: "tracker--acme", as: "tracker", authEnv: ["ACME_VARIANT_TOKEN"], server: { command: "npx", args: ["-y", "acme"] } } },
+        ],
+        recipes: [recipe("base", ["mcp/tracker--acme"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      });
+      const ws2 = t2.ws("variant-ws");
+      await writeFiles(ws2, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+      await syncWs(ws2);
+      // Edit server
+      const mcpPath = path.join(ws2, ".mcp.json");
+      const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
+      mcpContent.mcpServers.tracker.args = ["-y", "acme2"];
+      await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
+      await importInto(t2.forge, ws2, "acme");
+      await syncWs(ws2);
+      // Get variant state after first import+sync
+      const variantBefore = await fs.readFile(path.join(t2.forge, "ingredients/mcp/tracker--acme/ingredient.yaml"), "utf8");
+      // Second import - should reuse the variant unchanged
+      const r2 = await importInto(t2.forge, ws2, "acme");
+      expect(r2.reused).toContain("mcp/tracker--acme");
+      // Variant should be unchanged
+      const variantAfter = await fs.readFile(path.join(t2.forge, "ingredients/mcp/tracker--acme/ingredient.yaml"), "utf8");
+      expect(variantAfter).toEqual(variantBefore);
+      // authEnv should be preserved
+      const variantMeta = await yaml(path.join(t2.forge, "ingredients/mcp/tracker--acme/ingredient.yaml"));
+      expect(variantMeta.authEnv).toEqual(["ACME_VARIANT_TOKEN"]);
+      // Workspace should be unchanged
+      const w = await loadWorkspace(ws2);
+      const st = await status(w, await plan(w), await readLock(ws2));
+      expect(st.every((s) => s.state === "unchanged")).toBe(true);
+    }
+
+    // Scenario 4: New variant inherits
+    {
+      const t4 = await setup();
+      await makeAuthEnvForge(t4);
+      const ws4 = t4.ws("inherit-ws");
+      await writeFiles(ws4, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+      await syncWs(ws4);
+      // Edit
+      const mcpPath = path.join(ws4, ".mcp.json");
+      const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
+      mcpContent.mcpServers.tracker.args = ["-y", "tracker-acme"];
+      await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
+      await importInto(t4.forge, ws4, "acme");
+      await syncWs(ws4);
+      const beforeSecond = await snapshot(t4.forge);
+      await importInto(t4.forge, ws4, "acme");
+      expect(await snapshot(t4.forge)).toEqual(beforeSecond);
+      const w = await loadWorkspace(ws4);
+      const st = await status(w, await plan(w), await readLock(ws4));
+      expect(st.every((s) => s.state === "unchanged")).toBe(true);
+    }
+  });
+
+  it("8. A new ingredient has no authEnv", async () => {
+    const t = await setup();
+    // A Forge with no mcp/fresh
+    const { makeForge, recipe, profile, rule } = await import("./helpers/forge.js");
+    await makeForge(t.forge, {
+      ingredients: [rule("workflow", "# Workflow\n")],
+      recipes: [recipe("base", ["rule/workflow"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    // A workspace with .mcp.json containing a server `fresh`
+    const ws = t.ws("fresh-ws");
+    await writeFiles(ws, {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": JSON.stringify({ mcpServers: { fresh: { command: "npx", args: ["-y", "fresh-server"] } } }, null, 2) + "\n",
+    });
+    // Import
+    await importInto(t.forge, ws, "acme");
+    // Check: mcp/fresh was created with no authEnv
+    const freshMeta = await yaml(path.join(t.forge, "ingredients/mcp/fresh/ingredient.yaml"));
+    expect(Object.hasOwn(freshMeta, "authEnv")).toBe(false);
+  });
+});

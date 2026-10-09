@@ -9,7 +9,7 @@ import { citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerpri
 import { canonicalValue, inferSections } from "../core/sections.js";
 import { sectionKey } from "../core/resolve.js";
 import type { DirReader } from "../core/fingerprint.js";
-import { OverridesParamsSchema, SectionsSchema, type Ingredient, type Sections } from "../schema/index.js";
+import { OverridesParamsSchema, SectionsSchema, stripForgeOnlyKeys, type Ingredient, type Sections } from "../schema/index.js";
 
 /**
  * The decision half of template-aware import (spec 10 §6.1–§6.5): what the importing profile
@@ -57,7 +57,7 @@ export type Decision =
       sectioned?: string[];
       sectionDelta?: SectionChange[];
     }
-  | { kind: "variant"; why?: string }
+  | { kind: "variant"; why?: string; authEnv?: string[] }
   | { kind: "literal"; warn: string };
 
 const norm = (s: string) => toLf(stripBom(s));
@@ -96,6 +96,8 @@ export async function decide(
 ): Promise<Decision> {
   // The Forge root, for the file an I12 names: every base lives at <forge>/ingredients/<folder>/<name>.
   const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."));
+  // The base's authEnv, to carry into the variant answer (spec 27 §5.3).
+  const baseAuthEnv = base.meta.type === "mcp" ? base.meta.authEnv : undefined;
   const key = sectionKey(base.meta);
   const PSk = valuesAt(ctx.PS, key);
   const WSk = valuesAt(ctx.WS, key);
@@ -127,8 +129,10 @@ export async function decide(
   // Param inference first (Ruling 16): the narrower claim. A base with no open section stops there, as in 0.6.2.
   const param = await inferParams(ctx, base, S, map, cited, ref, meta, files, fingerprint, others, runBases);
   const open = names.filter((n) => !Object.hasOwn(WSk, n));
-  if (param.kind === "reuse" || !open.length) return param;
-  return inferSectionValues(ctx, base, key, PSk, WSk, map, ref, meta, files, fingerprint);
+  // Augment a variant decision with the base's authEnv for the importer to carry (spec 27 §5.3).
+  const withAuthEnv = (d: Decision): Decision => (d.kind === "variant" && baseAuthEnv ? { ...d, authEnv: baseAuthEnv } : d);
+  if (param.kind === "reuse" || !open.length) return withAuthEnv(param);
+  return withAuthEnv(inferSectionValues(ctx, base, key, PSk, WSk, map, ref, meta, files, fingerprint));
 }
 
 /** A key's section values in a layer, or none. */
@@ -136,8 +140,7 @@ const valuesAt = (layer: Sections, key: string): Record<string, string> => (Obje
 
 /** F1, F2 (spec 10 §6.3): what no value can explain — metadata, the file set, a file compared as bytes. */
 function shapeDiffers(base: ImportBase, meta: Ingredient, files: Record<string, string | Buffer>): string | null {
-  const metaOnly = { ...base.meta } as Record<string, unknown>;
-  delete metaOnly.params;
+  const metaOnly = stripForgeOnlyKeys({ ...base.meta });
   if (fingerprintOf(metaOnly as Ingredient, {}) !== fingerprintOf(meta, {})) return "metadata differs";
   const baseFiles = [...base.texts.keys(), ...base.bytes.keys()].sort();
   const srcFiles = Object.keys(files).sort();

@@ -44,6 +44,13 @@ export const ENV_NAME = "[A-Za-z_][A-Za-z0-9_]*";
 /** Keys that exist in the Forge only and are stripped by import comparisons (spec 27 §5.2). */
 export const FORGE_ONLY_KEYS = ["params", "authEnv"] as const;
 
+/** Return a shallow copy of `meta` with FORGE_ONLY_KEYS removed (spec 27 §5.3). */
+export function stripForgeOnlyKeys<T extends Record<string, unknown>>(meta: T): T {
+  const copy = { ...meta } as Record<string, unknown>;
+  for (const key of FORGE_ONLY_KEYS) delete copy[key];
+  return copy as T;
+}
+
 const Inclusion = z.enum(["always", "fileMatch", "manual", "auto"]);
 
 /** A parameter an ingredient declares (spec 09). `default` is the weakest layer, scoped to this ingredient. */

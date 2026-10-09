@@ -1,5 +1,5 @@
 import path from "node:path";
-import { IngredientSchema, type Ingredient } from "../schema/index.js";
+import { IngredientSchema, stripForgeOnlyKeys, type Ingredient } from "../schema/index.js";
 import { placeholders, bodyFile } from "./extract.js";
 import { fingerprintOf, type DirReader } from "./fingerprint.js";
 import { parseYaml } from "./forge.js";
@@ -87,14 +87,13 @@ export function citedKeys(texts: Map<string, string>): Set<string> {
 }
 
 /**
- * The fingerprint of a base rendered through `map` (spec 10 §6.2): its metadata without `params`
- * (a workspace cannot express a declaration), body files expanded with the section values
- * `sections` and then substituted, exactly as `ctx.text` does (spec 11 §6.4, §6.7), every other file
- * as bytes. With no declaration, no marker and nothing set, this is `fingerprintDir`.
+ * The fingerprint of a base rendered through `map` (spec 10 §6.2): its metadata without the
+ * Forge-only keys (a workspace cannot express a declaration), body files expanded with the section
+ * values `sections` and then substituted, exactly as `ctx.text` does (spec 11 §6.4, §6.7), every
+ * other file as bytes. With no declaration, no marker and nothing set, this is `fingerprintDir`.
  */
 export function renderedFingerprint(base: ImportBase, map: Record<string, unknown>, sections: Record<string, string> = {}): string {
-  const meta: Record<string, unknown> = { ...base.meta };
-  delete meta.params;
+  const meta = stripForgeOnlyKeys({ ...base.meta });
   const files: Record<string, string | Buffer> = {};
   for (const [rel, text] of expandedTexts(base, sections)) files[rel] = substitute(text, map);
   for (const [rel, b] of base.bytes) files[rel] = b;
