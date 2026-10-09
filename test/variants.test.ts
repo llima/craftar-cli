@@ -201,6 +201,17 @@ describe("diffIngredients", () => {
     expect(d.files[0].hunks).toHaveLength(1);
     expect(d.files[0].hunks[0]).toMatchObject({ kind: "binary" });
   });
+
+  it("a non-UTF-8 pair differing only in line endings has no hunk", async () => {
+    // CRLF vs LF in Latin-1: same content once normalized, so no hunk.
+    const forge = await forgeWith([
+      { meta: { type: "script", name: "s", files: ["run.bat"] }, files: { "run.bat": Buffer.from("echo caf\xe9\r\n", "latin1") } },
+      { meta: { type: "script", name: "s--acme", as: "s", files: ["run.bat"] }, files: { "run.bat": Buffer.from("echo caf\xe9\n", "latin1") } },
+    ]);
+    const d = await diffIngredients(forge.ingredients.get("script/s")!, forge.ingredients.get("script/s--acme")!);
+    // The normalized hashes are equal, so there should be no binary hunk — the fingerprints agree.
+    expect(d.files).toEqual([]);
+  });
 });
 
 describe("hunk classes (spec 08 §4.2, §5.2)", () => {

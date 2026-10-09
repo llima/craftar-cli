@@ -4,7 +4,7 @@ import { classifyHunk, type ClassifiedHunk } from "./classify.js";
 import { diffLines, splitLines, type Hunk } from "./diff.js";
 import { fingerprintDir } from "./fingerprint.js";
 import { listFiles, type Forge, type LoadedIngredient } from "./forge.js";
-import { isUtf8 } from "./text.js";
+import { isUtf8, hashNormalized } from "./text.js";
 import type { HunkClass, IngredientRef } from "../schema/index.js";
 
 export interface Distance {
@@ -82,8 +82,10 @@ export async function diffIngredients(base: LoadedIngredient, variant: LoadedIng
     const baseBuf = a.get(rel)!;
     // When the bytes are identical, no hunk — even if the content is not valid UTF-8.
     if (baseBuf.equals(otherBuf)) continue;
-    // When bytes differ and either side is not valid UTF-8, report one binary hunk.
+    // When bytes differ and either side is not valid UTF-8, report one binary hunk —
+    // unless they hash the same after line-ending normalization (CRLF/LF differ only).
     if (!isUtf8(baseBuf) || !isUtf8(otherBuf)) {
+      if (hashNormalized(baseBuf) === hashNormalized(otherBuf)) continue;
       const binaryHunk: ClassifiedHunk = {
         kind: "binary",
         a: { start: 1, lines: [] },
