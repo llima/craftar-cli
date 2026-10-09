@@ -261,6 +261,8 @@ describe("apply", () => {
   });
 
   it("a pre-0.17.4 lock: a Forge change to a non-UTF-8 file reads update, not drift, and sync writes it", async () => {
+    // This test uses a change that the legacy hash CAN see (echo bar vs echo caf), serving as a
+    // guard for the third branch of the status logic (legacy match + plan differs under legacy hash).
     const root = await tmpDir();
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
     const forgeRoot = path.join(root, "forge");
@@ -283,8 +285,8 @@ describe("apply", () => {
     entry.hash = legacyHash(content);
     await fs.writeFile(lockFile, JSON.stringify(lock, null, 2) + "\n");
 
-    // Now change the Forge's file
-    const newContent = Buffer.from("echo caf\xe8\r\n", "latin1"); // cafè (different accent)
+    // Now change the Forge's file (a change the legacy hash sees: "bar" vs "caf")
+    const newContent = Buffer.from("echo bar\xe9\r\n", "latin1");
     await fs.writeFile(path.join(forgeRoot, "ingredients/scripts/s/run.bat"), newContent);
 
     // Status should be "update", not "drift"
@@ -351,7 +353,7 @@ describe("apply", () => {
     expect(await exists(path.join(wsRoot, ".claude/scripts/run.bat"))).toBe(false);
   });
 
-  it("(guard) a pre-0.17.4 lock with a hand-edited non-UTF-8 file reads drift", async () => {
+  it("(guard) a pre-0.17.4 lock with a hand edit the legacy hash sees reads drift", async () => {
     const root = await tmpDir();
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
     const forgeRoot = path.join(root, "forge");
@@ -384,6 +386,93 @@ describe("apply", () => {
     const s = await status(w, p, await readLock(w.root));
     const statusEntry = s.find((e) => e.path === ".claude/scripts/run.bat");
     expect(statusEntry?.state).toBe("drift");
+  });
+
+  it("a pre-0.17.4 lock: a hand edit confined to an invalid byte is drift, and sync keeps it", async () => {
+    const root = await tmpDir();
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+    const content = Buffer.from("echo caf\xe9\r\n", "latin1"); // café
+    await makeForge(forgeRoot, {
+      ingredients: [{ meta: { type: "script", name: "s", files: ["run.bat"] }, files: { "run.bat": content } }],
+      recipes: [recipe("base", ["script/s"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
+
+    // First sync
+    await sync(wsRoot);
+
+    // Rewrite lock entry with legacy hash
+    const lockFile = path.join(wsRoot, "craftar.lock");
+    const lock = JSON.parse(await fs.readFile(lockFile, "utf8"));
+    const entry = lock.files.find((f: { path: string }) => f.path === ".claude/scripts/run.bat");
+    entry.hash = legacyHash(content);
+    await fs.writeFile(lockFile, JSON.stringify(lock, null, 2) + "\n");
+
+    // Hand-edit only the invalid byte (é → è)
+    const handEdited = Buffer.from("echo caf\xe8\r\n", "latin1");
+    await fs.writeFile(path.join(wsRoot, ".claude/scripts/run.bat"), handEdited);
+
+    // Status should be drift (not update), because it could be a hand edit
+    const w = await loadWorkspace(wsRoot);
+    const p = await plan(w);
+    const s = await status(w, p, await readLock(w.root));
+    const statusEntry = s.find((e) => e.path === ".claude/scripts/run.bat");
+    expect(statusEntry?.state).toBe("drift");
+
+    // Sync keeps the file
+    const result = await apply(w, p, s);
+    expect(result.written).toEqual([]);
+    const wsFile = await fs.readFile(path.join(wsRoot, ".claude/scripts/run.bat"));
+    expect(wsFile).toEqual(handEdited);
+  });
+
+  it("a pre-0.17.4 lock: a Forge change confined to an invalid byte is drift too, and --overwrite-drift takes it", async () => {
+    const root = await tmpDir();
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+    const content = Buffer.from("echo caf\xe9\r\n", "latin1"); // café
+    await makeForge(forgeRoot, {
+      ingredients: [{ meta: { type: "script", name: "s", files: ["run.bat"] }, files: { "run.bat": content } }],
+      recipes: [recipe("base", ["script/s"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
+
+    // First sync
+    await sync(wsRoot);
+
+    // Rewrite lock entry with legacy hash
+    const lockFile = path.join(wsRoot, "craftar.lock");
+    const lock = JSON.parse(await fs.readFile(lockFile, "utf8"));
+    const entry = lock.files.find((f: { path: string }) => f.path === ".claude/scripts/run.bat");
+    entry.hash = legacyHash(content);
+    await fs.writeFile(lockFile, JSON.stringify(lock, null, 2) + "\n");
+
+    // Change the Forge's file (only the invalid byte: é → è)
+    const newContent = Buffer.from("echo caf\xe8\r\n", "latin1");
+    await fs.writeFile(path.join(forgeRoot, "ingredients/scripts/s/run.bat"), newContent);
+
+    // Status should be drift (ambiguous: could be hand edit or Forge change)
+    const w = await loadWorkspace(wsRoot);
+    const p = await plan(w);
+    const s = await status(w, p, await readLock(w.root));
+    const statusEntry = s.find((e) => e.path === ".claude/scripts/run.bat");
+    expect(statusEntry?.state).toBe("drift");
+
+    // Sync with overwriteDrift takes the Forge's bytes
+    const result = await apply(w, p, s, { overwriteDrift: true });
+    expect(result.written).toEqual([".claude/scripts/run.bat"]);
+    const wsFile = await fs.readFile(path.join(wsRoot, ".claude/scripts/run.bat"));
+    expect(wsFile).toEqual(newContent);
+
+    // Lock now has the new hash
+    const newLock = JSON.parse(await fs.readFile(lockFile, "utf8"));
+    const newEntry = newLock.files.find((f: { path: string }) => f.path === ".claude/scripts/run.bat");
+    expect(newEntry.hash).toBe(hashNormalized(newContent));
   });
 
   it("a non-UTF-8 file checked out with CRLF is not drift", async () => {

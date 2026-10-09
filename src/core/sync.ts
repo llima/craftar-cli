@@ -520,8 +520,12 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
     if (disk === null) state = "new";
     else if (entry) {
       const diskHash = hashNormalized(disk);
-      if (!matchesLock(disk, entry)) state = diskHash === planHash ? "unchanged" : "drift";
-      else state = diskHash === planHash ? "unchanged" : "update";
+      if (diskHash === planHash) state = "unchanged";
+      else if (diskHash === entry.hash) state = "update";
+      // A pre-0.17.4 lock, and the Forge changed in a way that lock could record. A difference
+      // confined to invalid bytes could be a hand edit — drift is never overwritten silently.
+      else if (!isUtf8(disk) && legacyHash(disk) === entry.hash && legacyHash(f.content) !== entry.hash) state = "update";
+      else state = "drift";
     } else state = hashNormalized(disk) === planHash || sameJson(f.path, disk, f.content) ? "adopt" : "collision";
     out.push({ path: f.path, state, target: f.target, ingredient: f.ingredient, planned: f, lock: entry });
   }
