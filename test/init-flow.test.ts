@@ -385,9 +385,11 @@ const SPEC2_DESC = specWithDescription(SPEC2);
 
 /** Questions abbreviations expanded. */
 const QF = "Forge — a directory or a git URL: ";
+const QP = "Profile: ";
 const QP1 = "Profile [acme]: ";
 const QA = "Adjust the recipes [no]: ";
 const QT = "Targets — claude-code, kiro, agents-md, separated by commas [claude-code, from the profile]: ";
+const QTk = "Targets — claude-code, kiro, agents-md, separated by commas [kiro, from the profile]: ";
 
 /** Setup for askInit tests. */
 async function askSetup(spec: ForgeSpec = SPEC_DESC) {
@@ -592,14 +594,27 @@ describe("askInit", () => {
       exists: existsSync,
       git: wrappedGit,
     });
-    expect(sc.asked[1]).toBe("Ref — a branch, a tag or a full SHA [the default branch]: ");
+    expect(sc.asked).toEqual([
+      QF,
+      "Ref — a branch, a tag or a full SHA [the default branch]: ",
+      QP1,
+      QA,
+      QT,
+    ]);
+    expect(sc.said).toEqual([
+      `Profiles in ${r.url}:`,
+      "  1) acme",
+      "Recipes of acme: base → stack-api → front-a",
+    ]);
+    expect(sc.left()).toBe(0);
     expect(result.kind).toBe("answered");
     if (result.kind !== "answered") throw new Error("unexpected");
     expect(result.input.ref).toBe(undefined);
 
     // planInit should reuse the loaded Forge
     const plan = await planInit(s.ws, result.input, { home: s.home, mode: "sync", git: countingGit, local });
-    expect(plan).toBeDefined();
+    expect(plan.text).toBe(`forge: ${r.url}\nprofile: acme\n`);
+    expect(plan.plan.resolution.recipes).toEqual(["base", "stack-api", "front-a"]);
     expect(fetchCount).toBe(1);
     // Every recorded pending value should be 0
     for (const p of pendingAtGit) {
@@ -617,6 +632,19 @@ describe("askInit", () => {
       exists: existsSync,
       git: wrappedGit,
     });
+    expect(sc2.asked).toEqual([
+      QF,
+      "Ref — a branch, a tag or a full SHA [the default branch]: ",
+      QP1,
+      QA,
+      QT,
+    ]);
+    expect(sc2.said).toEqual([
+      `Profiles in ${r.url}:`,
+      "  1) acme",
+      "Recipes of acme: base → stack-api → front-a",
+    ]);
+    expect(sc2.left()).toBe(0);
     expect(result2.kind).toBe("answered");
     if (result2.kind !== "answered") throw new Error("unexpected");
     expect(result2.input.ref).toBe("main");
@@ -652,24 +680,44 @@ describe("askInit", () => {
     const given: InitGiven = { addRecipes: [], removeRecipes: [], replace: false };
     const local = { doc: null, keys: [] as LocalKey[] };
 
-    // Check the profiles list
+    // Check the profiles list — answer "globex"
     const sc = script([s.forge, "globex", "", ""]);
     await askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync });
-    expect(sc.said).toContain(`Profiles in ${s.forge}:`);
-    expect(sc.said).toContain("  1) acme");
-    expect(sc.said).toContain("  2) globex  Globex — services");
-    expect(sc.asked).toContain("Profile: ");
+    expect(sc.asked).toEqual([QF, QP, QA, QTk]);
+    expect(sc.said).toEqual([
+      `Profiles in ${s.forge}:`,
+      "  1) acme",
+      "  2) globex  Globex — services",
+      "Recipes of globex: base",
+    ]);
+    expect(sc.left()).toBe(0);
 
     // Answer "2" → globex
     const sc2 = script([s.forge, "2", "", ""]);
     const result2 = await askInit(s.ws, given, local, sc2.io, { home: s.home, registryOff: false, exists: existsSync });
+    expect(sc2.asked).toEqual([QF, QP, QA, QTk]);
+    expect(sc2.said).toEqual([
+      `Profiles in ${s.forge}:`,
+      "  1) acme",
+      "  2) globex  Globex — services",
+      "Recipes of globex: base",
+    ]);
+    expect(sc2.left()).toBe(0);
     expect(result2.kind).toBe("answered");
     if (result2.kind !== "answered") throw new Error("unexpected");
     expect(result2.input.profile).toBe("globex");
 
-    // Answer "globex" → globex
+    // Answer "globex" → globex (same as sc)
     const sc3 = script([s.forge, "globex", "", ""]);
     const result3 = await askInit(s.ws, given, local, sc3.io, { home: s.home, registryOff: false, exists: existsSync });
+    expect(sc3.asked).toEqual([QF, QP, QA, QTk]);
+    expect(sc3.said).toEqual([
+      `Profiles in ${s.forge}:`,
+      "  1) acme",
+      "  2) globex  Globex — services",
+      "Recipes of globex: base",
+    ]);
+    expect(sc3.left()).toBe(0);
     expect(result3.kind).toBe("answered");
     if (result3.kind !== "answered") throw new Error("unexpected");
     expect(result3.input.profile).toBe("globex");
@@ -677,25 +725,38 @@ describe("askInit", () => {
     // Empty → re-ask; "nope" → N5; "acme" → ok
     const sc4 = script([s.forge, "", "nope", "acme", "", ""]);
     const result4 = await askInit(s.ws, given, local, sc4.io, { home: s.home, registryOff: false, exists: existsSync });
-    expect(sc4.said).toContain("a profile is needed — a name or a number from the list");
-    expect(sc4.said).toContain('profile "nope" not found in Forge (acme, globex)');
+    expect(sc4.asked).toEqual([QF, QP, QP, QP, QA, QT]);
+    expect(sc4.said).toEqual([
+      `Profiles in ${s.forge}:`,
+      "  1) acme",
+      "  2) globex  Globex — services",
+      "a profile is needed — a name or a number from the list",
+      'profile "nope" not found in Forge (acme, globex)',
+      "Recipes of acme: base → stack-api → front-a",
+    ]);
+    expect(sc4.left()).toBe(0);
     expect(result4.kind).toBe("answered");
     if (result4.kind !== "answered") throw new Error("unexpected");
     expect(result4.input.profile).toBe("acme");
 
-    // For globex the targets question reads differently and recipes line differs
+    // For globex the targets question reads differently (QTk) and recipes line differs (same as sc)
     const sc5 = script([s.forge, "globex", "", ""]);
     const result5 = await askInit(s.ws, given, local, sc5.io, { home: s.home, registryOff: false, exists: existsSync });
-    expect(sc5.asked.find((q) => q.includes("Targets"))).toBe(
-      "Targets — claude-code, kiro, agents-md, separated by commas [kiro, from the profile]: "
-    );
-    expect(sc5.said).toContain("Recipes of globex: base");
+    expect(sc5.asked).toEqual([QF, QP, QA, QTk]);
+    expect(sc5.said).toEqual([
+      `Profiles in ${s.forge}:`,
+      "  1) acme",
+      "  2) globex  Globex — services",
+      "Recipes of globex: base",
+    ]);
+    expect(sc5.left()).toBe(0);
 
     // With given.profile = "acme" → no Profiles in line and no profile question
     const sc6 = script([s.forge, "", ""]);
     await askInit(s.ws, { ...given, profile: "acme" }, local, sc6.io, { home: s.home, registryOff: false, exists: existsSync });
-    expect(sc6.said.some((l) => l.includes("Profiles in"))).toBe(false);
-    expect(sc6.asked.some((q) => q.includes("Profile"))).toBe(false);
+    expect(sc6.asked).toEqual([QF, QA, QT]);
+    expect(sc6.said).toEqual(["Recipes of acme: base → stack-api → front-a"]);
+    expect(sc6.left()).toBe(0);
 
     // A Forge with a profile literally named "2" and another named "acme" (sorted: "2", "acme"):
     // answering "2" gives the profile "2" (name first)
@@ -706,6 +767,14 @@ describe("askInit", () => {
     const s2 = await askSetup(specWith2);
     const sc7 = script([s2.forge, "2", "", ""]);
     const result7 = await askInit(s2.ws, given, local, sc7.io, { home: s2.home, registryOff: false, exists: existsSync });
+    expect(sc7.asked).toEqual([QF, QP, QA, QT]);
+    expect(sc7.said).toEqual([
+      `Profiles in ${s2.forge}:`,
+      "  1) 2",
+      "  2) acme",
+      "Recipes of 2: base → stack-api → front-a",
+    ]);
+    expect(sc7.left()).toBe(0);
     expect(result7.kind).toBe("answered");
     if (result7.kind !== "answered") throw new Error("unexpected");
     expect(result7.input.profile).toBe("2");
@@ -713,6 +782,14 @@ describe("askInit", () => {
     // Answer "1" → profile "2" (number 1 in the sorted list)
     const sc8 = script([s2.forge, "1", "", ""]);
     const result8 = await askInit(s2.ws, given, local, sc8.io, { home: s2.home, registryOff: false, exists: existsSync });
+    expect(sc8.asked).toEqual([QF, QP, QA, QT]);
+    expect(sc8.said).toEqual([
+      `Profiles in ${s2.forge}:`,
+      "  1) 2",
+      "  2) acme",
+      "Recipes of 2: base → stack-api → front-a",
+    ]);
+    expect(sc8.left()).toBe(0);
     expect(result8.kind).toBe("answered");
     if (result8.kind !== "answered") throw new Error("unexpected");
     expect(result8.input.profile).toBe("2");
@@ -915,8 +992,21 @@ describe("askInit", () => {
 
     const sc = script([s.forge, "", "yes", "", "base", ""]);
     await askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync });
-    expect(sc.said).toContain("  note base is already in use");
-    expect(sc.said.at(-1)).toBe("Recipes: base → stack-api → front-a");
+    expect(sc.asked).toEqual([QF, QP1, QA, "Remove [none]: ", "Add [none]: ", QT]);
+    expect(sc.said).toEqual([
+      `Profiles in ${s.forge}:`,
+      "  1) acme",
+      "Recipes of acme: base → stack-api → front-a",
+      `Recipes in ${s.forge}:`,
+      "  1) base · in use",
+      "  2) stack-api · in use",
+      "  3) front-a · in use · slot front",
+      "  4) extra",
+      "  5) front-b · slot front · The other front",
+      "  note base is already in use",
+      "Recipes: base → stack-api → front-a",
+    ]);
+    expect(sc.left()).toBe(0);
   });
 
   it("16. Targets", async () => {
@@ -1031,27 +1121,55 @@ describe("askInit", () => {
     // keys: ["targets"], doc: { targets: ["kiro"] }
     const sc = script([s.forge, "", ""]);
     await askInit(s.ws, given, { doc: { targets: ["kiro"] }, keys: ["targets"] }, sc.io, { home: s.home, registryOff: false, exists: existsSync });
-    expect(sc.asked.some((q) => q.includes("Targets"))).toBe(false);
-    expect(sc.said).toContain("Targets: kiro (from craftar.local.yaml)");
+    expect(sc.asked).toEqual([QF, QP1, QA]);
+    expect(sc.said).toEqual([
+      `Profiles in ${s.forge}:`,
+      "  1) acme",
+      "Recipes of acme: base → stack-api → front-a",
+      "Targets: kiro (from craftar.local.yaml)",
+    ]);
+    expect(sc.left()).toBe(0);
 
     // keys: ["recipes"], doc: { recipes: { add: ["extra"] } }
     const sc2 = script([s.forge, "", ""]);
     await askInit(s.ws, given, { doc: { recipes: { add: ["extra"] } }, keys: ["recipes"] }, sc2.io, { home: s.home, registryOff: false, exists: existsSync });
-    expect(sc2.asked.some((q) => q === QA)).toBe(false);
-    expect(sc2.said).toContain("Recipes: base → stack-api → front-a → extra (from craftar.local.yaml)");
+    expect(sc2.asked).toEqual([QF, QP1, QT]);
+    expect(sc2.said).toEqual([
+      `Profiles in ${s.forge}:`,
+      "  1) acme",
+      "Recipes: base → stack-api → front-a → extra (from craftar.local.yaml)",
+    ]);
+    expect(sc2.left()).toBe(0);
 
     // keys: ["ref"], doc: { ref: "main" } with remote Forge
     // Questions: Forge, (Ref skipped - says line), Profile, Adjust, Targets = 4 questions
     const sc3 = script([r.url, "", "", ""]);
     const result3 = await askInit(s.ws, given, { doc: { ref: "main" }, keys: ["ref"] }, sc3.io, { home: s.home, registryOff: false, exists: existsSync });
-    expect(sc3.asked.some((q) => q.includes("Ref"))).toBe(false);
-    expect(sc3.said).toContain("Ref: main (from craftar.local.yaml)");
+    expect(sc3.asked).toEqual([QF, QP1, QA, QT]);
+    expect(sc3.said).toEqual([
+      "Ref: main (from craftar.local.yaml)",
+      `Profiles in ${r.url}:`,
+      "  1) acme",
+      "Recipes of acme: base → stack-api → front-a",
+    ]);
+    expect(sc3.left()).toBe(0);
     expect(result3.kind).toBe("answered");
     if (result3.kind !== "answered") throw new Error("unexpected");
     expect(result3.input.ref).toBe(undefined);
     expect(result3.input.loaded!.origin.ref).toBe("main");
     const plan3 = await planInit(s.ws, result3.input, { home: s.home, mode: "sync", local: { doc: { ref: "main" }, keys: ["ref"] } });
     expect(plan3.text).toBe(`forge: ${r.url}\nprofile: acme\n`);
+
+    // keys: ["ref"], doc: { ref: "v1" } with PATH Forge → no "is ignored" line, no Ref: line, no ref question
+    const sc4 = script([s.forge, "", "", ""]);
+    await askInit(s.ws, given, { doc: { ref: "v1" }, keys: ["ref"] }, sc4.io, { home: s.home, registryOff: false, exists: existsSync });
+    expect(sc4.asked).toEqual([QF, QP1, QA, QT]);
+    expect(sc4.said).toEqual([
+      `Profiles in ${s.forge}:`,
+      "  1) acme",
+      "Recipes of acme: base → stack-api → front-a",
+    ]);
+    expect(sc4.left()).toBe(0);
   });
 
   it("20. N10 before any question", async () => {
