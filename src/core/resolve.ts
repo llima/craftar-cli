@@ -5,7 +5,7 @@ import { outName } from "../emitters/shared.js";
 
 /** Builds the "profile not found" message (spec 28 §5.2, N5). */
 export function profileNotFoundMessage(profile: string, profileNames: string[]): string {
-  const names = profileNames.sort().join(", ") || "none";
+  const names = profileNames.join(", ") || "none";
   return `profile "${profile}" not found in Forge (${names})`;
 }
 

@@ -1407,3 +1407,40 @@ describe("askInit → planInit (review of T5b)", () => {
     expect(sc.said.at(-1)).toBe("Recipes: base → stack-api → front-a");
   });
 });
+
+
+describe("askInit → local.doc schema error after Forge answer (T5b-fix3)", () => {
+  it("(a) schema error in local ref surfaces right after Forge answer", async () => {
+    const s = await askSetup();
+    const r = await remoteForge(SPEC_DESC);
+    cleanups.push(r.cleanup);
+    const given: InitGiven = { addRecipes: [], removeRecipes: [], replace: false };
+    // ref: 7 is invalid (should be string), and keys: ["ref"] means it will be used
+    const local = { doc: { ref: 7 }, keys: ["ref"] as LocalKey[] };
+
+    // Answer the Forge only — no other questions should be asked
+    const sc = script([r.url]);
+    await expect(
+      askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync })
+    ).rejects.toThrow(/^invalid craftar\.yaml \(merged with craftar\.local\.yaml\)/);
+    // Only the Forge question was asked before the error
+    expect(sc.asked).toEqual([QF]);
+  });
+
+  it("(b) valid local ref still works unedited", async () => {
+    const s = await askSetup();
+    const r = await remoteForge(SPEC_DESC);
+    cleanups.push(r.cleanup);
+    const given: InitGiven = { addRecipes: [], removeRecipes: [], replace: false };
+    // valid ref
+    const local = { doc: { ref: "main" }, keys: ["ref"] as LocalKey[] };
+
+    const sc = script([r.url, "", "", ""]);
+    const result = await askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync });
+    expect(result.kind).toBe("answered");
+    if (result.kind !== "answered") throw new Error("unexpected");
+    // Questions: Forge, Profile, Adjust, Targets (Ref skipped - from local)
+    expect(sc.asked).toEqual([QF, QP1, QA, QT]);
+    expect(sc.said).toContain("Ref: main (from craftar.local.yaml)");
+  });
+});

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { TARGETS, type Registry, type RegistryEntry } from "../schema/index.js";
+import { TARGETS, type Registry, type RegistryEntry, type WorkspaceConfig } from "../schema/index.js";
 import { countStates } from "./impact.js";
 import { resolveHome } from "./home-lock.js";
 import { checkInitFlags, checkLocalKeys, forgeSource, initLine, type InitInput, type InitPlan } from "./init.js";
@@ -292,6 +292,7 @@ export async function askInit(
 
   // State for loaded Forge
   let loaded: LoadedForge | undefined;
+  let localConfig: WorkspaceConfig | null = null;
 
   // Forge/Ref/Load loop
   forgeLoop: for (;;) {
@@ -345,6 +346,13 @@ export async function askInit(
 
     answeredForge = forgeValue;
 
+    // Validate local.doc through the schema once, right after the Forge is answered.
+    // The profile placeholder "-" is never used: only ref, recipes and targets are read from localConfig,
+    // and none depends on the profile value. A schema error surfaces here, ending the run.
+    localConfig = local.doc !== null
+      ? mergeWorkspaceConfig({ forge: forgeSource(root, forgeValue), profile: given.profile ?? "-" }, local.doc).config
+      : null;
+
     // Step 3: Ref (only for URL, unless --ref or local has ref)
     let refValue: string | null = null;
     if (classifyForge(forgeValue) === "url") {
@@ -353,7 +361,7 @@ export async function askInit(
         answeredRef = given.ref; // given.ref goes into input.ref and answers.ref
       } else if (local.keys.includes("ref")) {
         // Show the ref from local.yaml but don't ask
-        const localRef = (local.doc as { ref?: string })?.ref ?? null;
+        const localRef = localConfig?.ref ?? null;
         if (localRef !== null) {
           io.say(`Ref: ${localRef} (from craftar.local.yaml)`);
         }
@@ -386,7 +394,7 @@ export async function askInit(
     // Step 4: Load the Forge
     try {
       const loadRef = given.ref !== undefined ? given.ref
-        : local.keys.includes("ref") ? ((local.doc as { ref?: string })?.ref ?? null)
+        : local.keys.includes("ref") ? (localConfig?.ref ?? null)
         : (answeredRef ?? null);
       const source = forgeSource(root, forgeValue);
       loaded = await loadForgeSource(root, source, loadRef, { ...opts, mode: "sync" });
@@ -454,21 +462,11 @@ export async function askInit(
         break profileLoop;
       }
       // Unknown
-      io.say(profileNotFoundMessage(trimmed, profiles.map((p) => p.name)));
+      io.say(profileNotFoundMessage(trimmed, [...forge.profiles.keys()]));
     }
   }
 
   const profile = forge.profiles.get(answeredProfile!)!;
-
-  // Validate local.doc through the schema early, before any local.keys check
-  // This catches schema errors (e.g. targets: "kiro" instead of targets: [kiro])
-  if (local.doc !== null && local.keys.length > 0) {
-    // mergeWorkspaceConfig throws on schema errors — let it propagate
-    mergeWorkspaceConfig(
-      { forge: forgeSource(root, answeredForge!), profile: answeredProfile! },
-      local.doc
-    );
-  }
 
   // Step 6: Recipes
   const recipesFlagged = given.addRecipes.length > 0 || given.removeRecipes.length > 0;
@@ -478,23 +476,17 @@ export async function askInit(
     answeredRemoveRecipes = given.removeRecipes;
     answeredReplace = given.replace;
   } else if (local.keys.includes("recipes")) {
-    // Show from local.yaml — validate through schema, but don't put values into answers
-    const merged = mergeWorkspaceConfig(
-      { forge: forgeSource(root, answeredForge!), profile: answeredProfile! },
-      local.doc
-    );
-    const resolution = resolve(forge, merged.config);
+    // Show from local.yaml — already validated through localConfig
+    const recipeConfig = { ...localConfig!, profile: answeredProfile! };
+    const resolution = resolve(forge, recipeConfig);
     io.say(`Recipes: ${resolution.recipes.join(" → ")} (from craftar.local.yaml)`);
     // Do NOT set answeredAddRecipes/answeredRemoveRecipes — the local file provides it
   } else {
     // Resolve the profile on its own first (R5)
-    const baseConfig = {
-      forge: forgeSource(root, answeredForge!),
-      profile: answeredProfile!,
-      recipes: { add: [], remove: [] },
-      targets: profile.targets,
-      overrides: { params: {}, sections: {}, ingredients: { disable: [] } },
-    };
+    const baseConfig = mergeWorkspaceConfig(
+      { forge: forgeSource(root, answeredForge!), profile: answeredProfile! },
+      null
+    ).config;
     let resolution = resolve(forge, baseConfig);
     io.say(`Recipes of ${answeredProfile}: ${resolution.recipes.join(" → ")}`);
 
@@ -571,13 +563,10 @@ export async function askInit(
       }
 
       // Apply removes, then adds, starting from the profile's recipes
-      let editConfig = {
-        forge: forgeSource(root, answeredForge!),
-        profile: answeredProfile!,
-        recipes: { add: [] as string[], remove: [] as string[] },
-        targets: profile.targets,
-        overrides: { params: {}, sections: {}, ingredients: { disable: [] } },
-      };
+      let editConfig = mergeWorkspaceConfig(
+        { forge: forgeSource(root, answeredForge!), profile: answeredProfile! },
+        null
+      ).config;
 
       let replaceUsed = false;
 
@@ -642,12 +631,8 @@ export async function askInit(
   if (given.targets !== undefined) {
     answeredTargets = given.targets;
   } else if (local.keys.includes("targets")) {
-    // Validate through schema
-    const merged = mergeWorkspaceConfig(
-      { forge: forgeSource(root, answeredForge!), profile: answeredProfile! },
-      local.doc
-    );
-    const localTargets = merged.config.targets ?? [];
+    // Already validated through localConfig
+    const localTargets = localConfig?.targets ?? [];
     io.say(`Targets: ${localTargets.join(", ")} (from craftar.local.yaml)`);
     // Don't set answeredTargets — the local file provides it
   } else {
