@@ -318,9 +318,9 @@ export interface NextSyncResult {
 
 /**
  * FileState values in declaration order, compile-time exhaustive: adding a state without updating
- * this record is a type error (spec 25 §9 item 5 nit).
+ * this record is a type error (spec 25 §9 item 5 nit, spec 28 §5.2).
  */
-const FILE_STATE_ORDER_MAP: Record<FileState, number> = {
+export const FILE_STATE_ORDER_MAP: Record<FileState, number> = {
   unchanged: 0,
   new: 1,
   update: 2,
@@ -333,6 +333,34 @@ const FILE_STATE_ORDER_MAP: Record<FileState, number> = {
 const FILE_STATE_ORDER: FileState[] = (Object.keys(FILE_STATE_ORDER_MAP) as FileState[]).sort(
   (a, b) => FILE_STATE_ORDER_MAP[a] - FILE_STATE_ORDER_MAP[b],
 );
+
+/** The states `next sync:` counts, in FILE_STATE_ORDER_MAP order, without `unchanged` (spec 28 §5.2). */
+export const NEXT_SYNC_STATES: Array<Exclude<FileState, "unchanged">> = FILE_STATE_ORDER.filter(
+  (s): s is Exclude<FileState, "unchanged"> => s !== "unchanged",
+);
+
+/**
+ * Count statuses by state, returning non-zero counts for every state but `unchanged`, in
+ * FILE_STATE_ORDER_MAP order (spec 28 §5.2). The counting that `nextSync` and `nextSyncLine` share.
+ */
+export function countStates(
+  statuses: FileStatus[],
+): Array<[Exclude<FileState, "unchanged">, number]> {
+  const counts: Partial<Record<Exclude<FileState, "unchanged">, number>> = {};
+  for (const s of statuses) {
+    if (s.state !== "unchanged") {
+      counts[s.state] = (counts[s.state] ?? 0) + 1;
+    }
+  }
+  const result: Array<[Exclude<FileState, "unchanged">, number]> = [];
+  for (const state of NEXT_SYNC_STATES) {
+    const n = counts[state];
+    if (n !== undefined && n > 0) {
+      result.push([state, n]);
+    }
+  }
+  return result;
+}
 
 /**
  * What the next `sync` would do for a planned workspace: `status()` counts.
@@ -359,25 +387,17 @@ export async function nextSync(p: Planned): Promise<NextSyncResult> {
     return { state: "error", counts: {}, error: e instanceof Error ? e.message : String(e) };
   }
 
-  const counts: Record<string, number> = {};
-  for (const s of statuses) {
-    if (s.state !== "unchanged") {
-      counts[s.state] = (counts[s.state] ?? 0) + 1;
-    }
-  }
-
-  // Reorder counts according to FileState declaration order
-  const orderedCounts: Record<string, number> = {};
-  for (const state of FILE_STATE_ORDER) {
-    if (counts[state] !== undefined) {
-      orderedCounts[state] = counts[state];
-    }
-  }
-
-  if (Object.keys(orderedCounts).length === 0) {
+  // Use countStates for the counting (spec 28 §5.2)
+  const pairs = countStates(statuses);
+  if (pairs.length === 0) {
     return { state: "unchanged", counts: {}, error: null };
   }
-  return { state: "changed", counts: orderedCounts, error: null };
+  // Build the counts object from the pairs, preserving key order
+  const counts: Record<string, number> = {};
+  for (const [state, n] of pairs) {
+    counts[state] = n;
+  }
+  return { state: "changed", counts, error: null };
 }
 
 export interface ConcernedResult {

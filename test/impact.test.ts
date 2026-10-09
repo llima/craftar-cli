@@ -516,3 +516,53 @@ describe("pruneRecipes keeps every candidate when the Forge does not reload (spe
     });
   });
 });
+
+describe("countStates (spec 28 §5.2)", () => {
+  // The tests below build FileStatus values by hand; { path: "p1", state: "drift" } as FileStatus is
+  // acceptable here since countStates reads only `state` and does not touch paths or other fields.
+  it("test 14: countStates([]) returns []", async () => {
+    const { countStates } = await import("../src/core/impact.js");
+    expect(countStates([])).toEqual([]);
+  });
+
+  it("test 15: only unchanged ×3 returns []", async () => {
+    const { countStates } = await import("../src/core/impact.js");
+    const input = [
+      { path: "p1", state: "unchanged" },
+      { path: "p2", state: "unchanged" },
+      { path: "p3", state: "unchanged" },
+    ] as import("../src/core/sync.js").FileStatus[];
+    expect(countStates(input)).toEqual([]);
+  });
+
+  it("test 16: scrambled order returns counts in FILE_STATE_ORDER_MAP order", async () => {
+    const { countStates } = await import("../src/core/impact.js");
+    // Input in scrambled order: orphan-drift, new, unchanged, collision, new, drift, adopt, update, orphan, new
+    const input = [
+      { path: "a1", state: "orphan-drift" },
+      { path: "a2", state: "new" },
+      { path: "a3", state: "unchanged" },
+      { path: "a4", state: "collision" },
+      { path: "a5", state: "new" },
+      { path: "a6", state: "drift" },
+      { path: "a7", state: "adopt" },
+      { path: "a8", state: "update" },
+      { path: "a9", state: "orphan" },
+      { path: "a10", state: "new" },
+    ] as import("../src/core/sync.js").FileStatus[];
+    expect(countStates(input)).toEqual([
+      ["new", 3],
+      ["update", 1],
+      ["drift", 1],
+      ["adopt", 1],
+      ["collision", 1],
+      ["orphan", 1],
+      ["orphan-drift", 1],
+    ]);
+  });
+
+  it("test 17: NEXT_SYNC_STATES is in FILE_STATE_ORDER_MAP order without unchanged", async () => {
+    const { NEXT_SYNC_STATES } = await import("../src/core/impact.js");
+    expect(NEXT_SYNC_STATES).toEqual(["new", "update", "drift", "adopt", "collision", "orphan", "orphan-drift"]);
+  });
+});

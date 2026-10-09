@@ -6,7 +6,7 @@ import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
-import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
+import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
@@ -297,15 +297,13 @@ program
   });
 
 /* ---------------------------------------------------------------- add / remove recipe */
-/** The states `next sync:` counts, in `FileState` declaration order (spec 22 §14 item 6); a new state does not compile until it is placed here. */
-const NEXT_SYNC: Record<Exclude<FileState, "unchanged">, true> = { new: true, update: true, drift: true, adopt: true, collision: true, orphan: true, "orphan-drift": true };
-const NEXT_SYNC_STATES = Object.keys(NEXT_SYNC) as Array<keyof typeof NEXT_SYNC>;
-
-/** Spec 22's line: what the next sync would do, over `NEXT_SYNC_STATES` (also `init --no-sync`, spec 23 §4.4). */
+/**
+ * Spec 22's line: what the next sync would do (also `init --no-sync`, spec 23 §4.4).
+ * Uses `countStates` from `src/core/impact.ts`; a new `FileState` does not compile until it is
+ * placed in `FILE_STATE_ORDER_MAP` there.
+ */
 function nextSyncLine(st: FileStatus[]): string {
-  const counts = NEXT_SYNC_STATES.map((k) => [k, st.filter((s) => s.state === k).length] as const)
-    .filter(([, n]) => n > 0)
-    .map(([k, n]) => `${n} ${k}`);
+  const counts = countStates(st).map(([k, n]) => `${n} ${k}`);
   return `next sync: ${counts.length ? `${counts.join(", ")} — run \`craftar sync\`` : "nothing to sync"}`;
 }
 
