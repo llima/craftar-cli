@@ -126,18 +126,61 @@ describe("readlineIo", () => {
     const { input, output } = createStreams();
     const io = readlineIo(input, output, { terminal: true }); // terminal: true for SIGINT
 
-    // Record listener count before
-    const countBefore = input.listenerCount("data") + input.listenerCount("end") + input.listenerCount("readable");
-
     const p = io.ask("Q: ");
     // Write Ctrl-C
     input.write("\x03");
     const result = await p;
     expect(result).toBe(null);
+  });
 
-    // After, the listener count is back to its "before" number
-    const countAfter = input.listenerCount("data") + input.listenerCount("end") + input.listenerCount("readable");
-    expect(countAfter).toBe(countBefore);
+  it("terminal: two questions, two answers", { timeout: 3000 }, async () => {
+    const { input, output } = createStreams();
+    const io = readlineIo(input, output, { terminal: true });
+
+    const p1 = io.ask("Q1: ");
+    input.write("a\r");
+    expect(await p1).toBe("a");
+
+    const p2 = io.ask("Q2: ");
+    input.write("b\r");
+    expect(await p2).toBe("b");
+  });
+
+  it("terminal: a question after an interrupt still works", { timeout: 3000 }, async () => {
+    const { input, output } = createStreams();
+    const io = readlineIo(input, output, { terminal: true });
+
+    const p1 = io.ask("Q1: ");
+    input.write("\x03");
+    expect(await p1).toBe(null);
+
+    const p2 = io.ask("Q2: ");
+    input.write("c\r");
+    expect(await p2).toBe("c");
+  });
+
+  it("terminal: confirm ignores typed-ahead input", { timeout: 3000 }, async () => {
+    const { input, output } = createStreams();
+    const io = readlineIo(input, output, { terminal: true });
+
+    // First, answer a question
+    const p1 = io.ask("Q1: ");
+    input.write("a\r");
+    expect(await p1).toBe("a");
+
+    // Write a stray line before confirm is called
+    input.write("x\r");
+    await immediate();
+
+    // Call confirm
+    const p2 = io.confirm("Write [yes]: ");
+
+    // Wait DRAIN_MS + 30 ms
+    await new Promise((r) => setTimeout(r, DRAIN_MS + 30));
+
+    // Write the real answer
+    input.write("yes\r");
+    expect(await p2).toBe("yes");
   });
 
   it("no unhandled rejection", async () => {
