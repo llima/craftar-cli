@@ -475,6 +475,52 @@ describe("apply", () => {
     expect(newEntry.hash).toBe(hashNormalized(newContent));
   });
 
+  it("a pre-0.17.4 lock: a file re-saved as UTF-8 is drift, and sync keeps it", async () => {
+    const root = await tmpDir();
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+    const content = Buffer.from("echo caf\xe9\r\n", "latin1"); // café in Latin-1
+    await makeForge(forgeRoot, {
+      ingredients: [{ meta: { type: "script", name: "s", files: ["run.bat"] }, files: { "run.bat": content } }],
+      recipes: [recipe("base", ["script/s"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
+
+    // First sync
+    await sync(wsRoot);
+
+    // Rewrite lock entry with legacy hash
+    const lockFile = path.join(wsRoot, "craftar.lock");
+    const lock = JSON.parse(await fs.readFile(lockFile, "utf8"));
+    const entry = lock.files.find((f: { path: string }) => f.path === ".claude/scripts/run.bat");
+    const legacy = legacyHash(content);
+    entry.hash = legacy;
+    await fs.writeFile(lockFile, JSON.stringify(lock, null, 2) + "\n");
+
+    // Re-save the workspace file as UTF-8 (editor re-encodes Latin-1 invalid byte as replacement char)
+    const utf8Content = Buffer.from(content.toString("utf8"), "utf8");
+    // Confirm this is the trap: the UTF-8 version contains EF BF BD (replacement char)
+    expect(utf8Content.includes(Buffer.from([0xef, 0xbf, 0xbd]))).toBe(true);
+    // And hashNormalized of it equals the legacy hash — this is why it was misidentified as update
+    expect(hashNormalized(utf8Content)).toBe(legacy);
+    await fs.writeFile(path.join(wsRoot, ".claude/scripts/run.bat"), utf8Content);
+
+    // Status should be drift (not update)
+    const w = await loadWorkspace(wsRoot);
+    const p = await plan(w);
+    const s = await status(w, p, await readLock(w.root));
+    const statusEntry = s.find((e) => e.path === ".claude/scripts/run.bat");
+    expect(statusEntry?.state).toBe("drift");
+
+    // Sync keeps the file unchanged
+    const result = await apply(w, p, s);
+    expect(result.written).toEqual([]);
+    const wsFile = await fs.readFile(path.join(wsRoot, ".claude/scripts/run.bat"));
+    expect(wsFile).toEqual(utf8Content);
+  });
+
   it("a non-UTF-8 file checked out with CRLF is not drift", async () => {
     const root = await tmpDir();
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
