@@ -1,4 +1,15 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
+
+/**
+ * Whether a relative path climbs out of the directory it is joined under (0.17.3): after its `..` segments are
+ * resolved, it is `..` or starts with `../`. A backslash counts as a separator, as it is one on Windows.
+ * `./x`, `/x` (joined, so still inside) and `a/../x` do not climb out.
+ */
+export function climbsOut(rel: string): boolean {
+  const n = path.posix.normalize(rel.replace(/\\/g, "/"));
+  return n === ".." || n.startsWith("../");
+}
 
 /** Strip a leading UTF-8 BOM, if any. */
 export function stripBom(s: string): string {

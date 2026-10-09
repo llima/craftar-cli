@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { climbsOut } from "../core/text.js";
 
 /* ------------------------------------------------------------------ */
 /* Targets                                                              */
@@ -33,7 +34,11 @@ const IngredientBase = z.object({
   /** Which targets receive this ingredient. Default: all. */
   targets: z.array(TargetSchema).or(z.literal("*")).default("*"),
   /** Output basename when it differs from `name` (variants: `workflow--acme` emits as `workflow`). */
-  as: z.string().optional(),
+  as: z
+    .string()
+    // Every emitter joins it into an output path (`outName`): `..` there wrote outside the workspace (0.17.3).
+    .refine((v) => !climbsOut(v), 'as must not climb out of its folder with a .. segment')
+    .optional(),
   /** Free-form tags used by recipes and `craftar explain`. */
   tags: z.array(z.string()).default([]),
   /** Where this ingredient came from (set by `craftar import`). */
@@ -102,9 +107,15 @@ export const McpIngredient = IngredientBase.extend({
     .transform((v) => v as McpServer),
 });
 
+/**
+ * A script or hook file: read from the ingredient directory and written under the same spelling (0.17.3).
+ * Only a spelling that climbs out is refused; `./x`, `/x` and `a/../x` keep the output path they always had.
+ */
+const EmittedFile = z.string().refine((v) => !climbsOut(v), 'a files entry must not climb out of the ingredient directory with a .. segment');
+
 export const ScriptIngredient = IngredientBase.extend({
   type: z.literal("script"),
-  files: z.array(z.string()).min(1),
+  files: z.array(EmittedFile).min(1),
 });
 
 /** Kiro-only steering that has no Claude counterpart (product.md, tech.md, structure.md…). */
@@ -116,7 +127,7 @@ export const SteeringIngredient = IngredientBase.extend({
 
 export const HookIngredient = IngredientBase.extend({
   type: z.literal("hook"),
-  files: z.array(z.string()).min(1),
+  files: z.array(EmittedFile).min(1),
 });
 
 export const IngredientSchema = z.discriminatedUnion("type", [

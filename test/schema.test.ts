@@ -53,6 +53,30 @@ describe("strict ingredient keys", () => {
   });
 });
 
+describe("a Forge path never climbs out of its folder (0.17.3)", () => {
+  it("refuses an as that climbs out, and keeps every spelling that does not", () => {
+    const as = (v: string) => IngredientSchema.safeParse({ type: "rule", name: "r", as: v });
+    for (const v of ["../../x", "..", "a/../../x", "..\\x", "a\\..\\..\\x"]) {
+      const r = as(v);
+      expect(r.success, v).toBe(false);
+      if (!r.success) expect(r.error.issues.map((i) => i.message), v).toEqual(['as must not climb out of its folder with a .. segment']);
+    }
+    for (const v of ["workflow", "frontend/react", "a/../b", "./x", "a..b"]) expect(as(v).success, v).toBe(true);
+  });
+
+  for (const type of ["script", "hook"] as const) {
+    it(`refuses a ${type} file that climbs out of the ingredient directory, and keeps every spelling that does not`, () => {
+      const files = (f: string) => IngredientSchema.safeParse({ type, name: "s", files: [f] });
+      for (const f of ["../x.sh", "a/../../x.sh", "..", "..\\x.sh", "../s/run.sh"]) {
+        const r = files(f);
+        expect(r.success, f).toBe(false);
+        if (!r.success) expect(r.error.issues.map((i) => i.message), f).toEqual(['a files entry must not climb out of the ingredient directory with a .. segment']);
+      }
+      for (const f of ["run.sh", "./run.sh", "/run.sh", "a/../run.sh", "..run.sh"]) expect(files(f).success, f).toBe(true);
+    });
+  }
+});
+
 describe("MCP server: validated, loaded as the original object (spec 07, Ruling 7)", () => {
   it("returns the same object, undeclared keys and source key order included", () => {
     const server = { type: "http", url: "https://mcp.acme.dev", headers: { "X-Team": "acme" }, timeout: 30, disabled: false };
