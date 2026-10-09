@@ -521,10 +521,11 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
     else if (entry) {
       const diskHash = hashNormalized(disk);
       if (diskHash === planHash) state = "unchanged";
-      // A pre-0.17.4 entry for this very plan: the plan is not valid UTF-8 and matches the lock under the old hash, which
-      // did not record its invalid bytes. Whatever the disk holds instead — a Forge change confined to those bytes, a
-      // hand edit there, a re-save as UTF-8 — cannot be told apart, and drift is never overwritten silently.
-      else if (!isUtf8(f.content) && legacyHash(f.content) === entry.hash) state = "drift";
+      // The lock records this very plan — under the current hash (a valid UTF-8 plan hashes the same in both) or under
+      // the pre-0.17.4 one, which did not record invalid bytes. The Forge did not change in any way the lock can show, so
+      // whatever the disk holds instead is not ours to overwrite: a hand edit, a re-save in another encoding, or a Forge
+      // change confined to invalid bytes all look the same here, and drift is never overwritten silently.
+      else if (legacyHash(f.content) === entry.hash) state = "drift";
       else if (matchesLock(disk, entry)) state = "update";
       else state = "drift";
     } else state = hashNormalized(disk) === planHash || sameJson(f.path, disk, f.content) ? "adopt" : "collision";

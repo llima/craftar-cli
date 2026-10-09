@@ -587,4 +587,42 @@ describe("apply", () => {
     const wsFile = await fs.readFile(path.join(wsRoot, ".claude/rules/a.md"));
     expect(wsFile).toEqual(content);
   });
+
+  it("a Latin-1 text file restored by hand is drift, and sync keeps it", async () => {
+    const root = await tmpDir();
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+    const latin1Content = Buffer.from("# caf\xe9\n", "latin1"); // café in Latin-1, not valid UTF-8
+    await makeForge(forgeRoot, {
+      // A rule whose body is a Buffer (non-UTF-8)
+      ingredients: [{ meta: { type: "rule", name: "a" }, files: { "rule.md": latin1Content } }],
+      recipes: [recipe("base", ["rule/a"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
+
+    // First sync — this emits the file with U+FFFD (lossy)
+    await sync(wsRoot);
+
+    // Precondition: the workspace file now contains the lossy UTF-8 bytes (EF BF BD = replacement char)
+    const afterSync = await fs.readFile(path.join(wsRoot, ".claude/rules/a.md"));
+    expect(afterSync.includes(Buffer.from([0xef, 0xbf, 0xbd]))).toBe(true);
+
+    // User restores the workspace file to the original Latin-1 bytes
+    await fs.writeFile(path.join(wsRoot, ".claude/rules/a.md"), latin1Content);
+
+    // Status should be drift (the disk differs from the plan, and the lock records this plan)
+    const w = await loadWorkspace(wsRoot);
+    const p = await plan(w);
+    const s = await status(w, p, await readLock(w.root));
+    const statusEntry = s.find((e) => e.path === ".claude/rules/a.md");
+    expect(statusEntry?.state).toBe("drift");
+
+    // Sync keeps the file unchanged
+    const result = await apply(w, p, s);
+    expect(result.written).toEqual([]);
+    const wsFile = await fs.readFile(path.join(wsRoot, ".claude/rules/a.md"));
+    expect(wsFile).toEqual(latin1Content);
+  });
 });
