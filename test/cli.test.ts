@@ -412,6 +412,21 @@ describe("cli", () => {
     expect(report[0].diff.files[0].hunks[0].b.noEofNewline).toBe(true);
   });
 
+  it("forge diff prints a binary hunk without a line position", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [
+        { meta: { type: "script", name: "s", files: ["run.bat"] }, files: { "run.bat": Buffer.from("echo caf\xe9\r\n", "latin1") } },
+        { meta: { type: "script", name: "s--acme", as: "s", files: ["run.bat"] }, files: { "run.bat": Buffer.from("echo caf\xe8\r\n", "latin1") } },
+      ],
+    });
+    const text = runCli(["forge", "diff", "script/s", "--forge", root]);
+    expect(text.code).toBe(0);
+    expect(text.stdout).toContain("hunk 1  [binary]  run.bat differs (not valid UTF-8 — bytes compared)");
+    expect(text.stdout).not.toContain("after line 0");
+  });
+
   it("forge diff does not take a name ending in -- for a variant with an empty profile", async () => {
     const root = await tmpDir("craftar-cli-forge-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));

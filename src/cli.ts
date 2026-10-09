@@ -1040,11 +1040,15 @@ forge
       for (const file of r.diff.files) {
         console.log(`  ${file.file}`);
         file.hunks.forEach((h, k) => {
-          console.log(`    hunk ${k + 1}  [${h.kind}]  ${hunkAt(h)}  ${describeSuggestion(h.suggestion)}`);
-          for (const line of h.a.lines) console.log(pc.red(`      - ${line}`));
-          if (h.a.noEofNewline) console.log(pc.red(`      ${NO_EOF_NEWLINE_MARKER}`));
-          for (const line of h.b.lines) console.log(pc.green(`      + ${line}`));
-          if (h.b.noEofNewline) console.log(pc.green(`      ${NO_EOF_NEWLINE_MARKER}`));
+          if (h.kind === "binary") {
+            console.log(`    hunk ${k + 1}  [binary]  ${file.file} differs (not valid UTF-8 — bytes compared)`);
+          } else {
+            console.log(`    hunk ${k + 1}  [${h.kind}]  ${hunkAt(h)}  ${describeSuggestion(h.suggestion)}`);
+            for (const line of h.a.lines) console.log(pc.red(`      - ${line}`));
+            if (h.a.noEofNewline) console.log(pc.red(`      ${NO_EOF_NEWLINE_MARKER}`));
+            for (const line of h.b.lines) console.log(pc.green(`      + ${line}`));
+            if (h.b.noEofNewline) console.log(pc.green(`      ${NO_EOF_NEWLINE_MARKER}`));
+          }
         });
       }
       for (const file of r.diff.onlyInBase) console.log(`  only in the base: ${file}`);
