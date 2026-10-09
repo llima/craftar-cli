@@ -260,4 +260,31 @@ describe("status — .claude/settings.craftar.example.json (spec 27 §6)", () =>
     const { st } = await statuses(s.wsRoot);
     expect(st.find((x) => x.path === ".claude/settings.example.json")).toBeUndefined();
   });
+
+  it("8. no lock entry, file on disk has keys in wrong order: collision; sync does not write it", async () => {
+    // For two keys, we need a custom ingredient with two authEnv names
+    // The emitter sorts them alphabetically, so planned order is ACME_API_KEY, ACME_TRACKER_TOKEN
+    const mcp2: IngredientSpec = { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN", "ACME_API_KEY"], server: { command: "npx", args: ["-y", "tracker"] } } };
+    // Keys in wrong order: ACME_TRACKER_TOKEN before ACME_API_KEY (opposite of alphabetical)
+    const wrongOrder = '{"env":{"ACME_TRACKER_TOKEN":"","ACME_API_KEY":""}}\n';
+    const s = await scenario(
+      { ingredients: [mcp2], recipes: [recipe("base", ["mcp/tracker"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" }, files: { [EX]: wrongOrder } },
+    );
+    cleanups.push(s.cleanup);
+    expect(await stateOf(s.wsRoot, EX)).toBe("collision");
+    await sync(s.wsRoot);
+    // The file is not overwritten
+    expect(await fs.readFile(path.join(s.wsRoot, EX), "utf8")).toBe(wrongOrder);
+  });
+
+  it("9. no lock entry, file on disk has different value: collision; sync does not write it", async () => {
+    // The disk file has a marker value typed by hand
+    const differentValue = '{"env":{"ACME_TRACKER_TOKEN":"typed-marker"}}\n';
+    const s = await exScenario({ [EX]: differentValue });
+    expect(await stateOf(s.wsRoot, EX)).toBe("collision");
+    await sync(s.wsRoot);
+    // The file is not overwritten
+    expect(await fs.readFile(path.join(s.wsRoot, EX), "utf8")).toBe(differentValue);
+  });
 });

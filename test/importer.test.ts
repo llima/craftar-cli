@@ -1527,13 +1527,11 @@ describe("import — authEnv (spec 27)", () => {
     expect(authEnvIdx).toBeGreaterThanOrEqual(0);
     expect(serverIdx).toBeGreaterThanOrEqual(0);
     expect(authEnvIdx).toBeLessThan(serverIdx);
-    // Check example file unchanged (needs 27b)
-    // For now, just check plan has the path
+    // The example file should be unchanged after the import
     const w = await loadWorkspace(ws);
     const p = await plan(w);
-    const hasExampleFile = p.files.some((f) => f.path === ".claude/settings.craftar.example.json");
-    // NOTE: If 27b is not on branch, we assert hasExampleFile; else we check status unchanged
-    expect(hasExampleFile).toBe(true);
+    const st = await status(w, p, await readLock(ws));
+    expect(st.find((s) => s.path === ".claude/settings.craftar.example.json")?.state).toBe("unchanged");
   });
 
   it("3. An existing variant that declares none stays without under a declaring base", async () => {
@@ -1616,11 +1614,19 @@ describe("import — authEnv (spec 27)", () => {
     const ws = t.ws("acme-ws");
     await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n", ".claude/rules/workflow.md": "# Workflow\n" });
     await syncWs(ws);
+    // Capture fingerprint before import
+    const variantDir = path.join(t.forge, "ingredients/mcp/tracker--acme");
+    const fpBefore = await fingerprintDir(variantDir);
     // Import unchanged — should NOT throw I8 (the variant fingerprint matches after authEnv is applied)
-    // The import succeeds without throwing the I8 error that would occur if fingerprints differed.
     const r = await importInto(t.forge, ws, "acme");
     // The variant is reported (not reused) as 0.17.4 behavior.
     expect(r.variants.map((v) => v.name)).toEqual(["mcp/tracker--acme"]);
+    // Fingerprint should be unchanged
+    const fpAfter = await fingerprintDir(variantDir);
+    expect(fpAfter).toBe(fpBefore);
+    // The variant still declares its authEnv
+    const variantMeta = await yaml(path.join(variantDir, "ingredient.yaml"));
+    expect(variantMeta.authEnv).toEqual(["ACME_VARIANT_TOKEN"]);
   });
 
   it("6. A lost declaration is reported once", async () => {
@@ -1734,6 +1740,43 @@ describe("import — authEnv (spec 27)", () => {
       const w = await loadWorkspace(ws4);
       const st = await status(w, await plan(w), await readLock(ws4));
       expect(st.every((s) => s.state === "unchanged")).toBe(true);
+    }
+
+    // Scenario 3: Lost-declaration — import, sync, then break the Forge so the profile doesn't resolve
+    {
+      const t3 = await setup();
+      const { makeForge, recipe, profile, rule } = await import("./helpers/forge.js");
+      await makeForge(t3.forge, {
+        ingredients: [
+          rule("workflow", "# Workflow\n"),
+          { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx", args: ["-y", "tracker"] } } },
+        ],
+        recipes: [recipe("base", ["rule/workflow", "mcp/tracker"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      });
+      const ws3 = t3.ws("lost-ws");
+      await writeFiles(ws3, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+      await syncWs(ws3);
+      // Break the Forge: add a second recipe on the same slot so acme no longer resolves
+      await fs.writeFile(
+        path.join(t3.forge, "recipes/stack-extra.yaml"),
+        "name: stack-extra\nextends: []\nslot: pm\ningredients: [rule/workflow]\n"
+      );
+      // Edit the base recipe to also have slot: pm
+      await fs.writeFile(
+        path.join(t3.forge, "recipes/base.yaml"),
+        "name: base\nextends: []\nslot: pm\ningredients: [rule/workflow, mcp/tracker]\n"
+      );
+      // Update profile to use both recipes
+      await fs.writeFile(
+        path.join(t3.forge, "profiles/acme/profile.yaml"),
+        "name: acme\nrecipes: [base, stack-extra]\ntargets: [claude-code]\nparams: {}\n"
+      );
+      // Import again — should get the lost-declaration warning
+      const r = await importInto(t3.forge, ws3, "acme");
+      const found = r.warnings.filter((w) => w.startsWith("profile acme did not resolve before this import ("));
+      expect(found.length).toBe(1);
+      expect(found[0]).toMatch(/ — authEnv declarations were not compared$/);
     }
   });
 
@@ -1878,5 +1921,55 @@ describe("import — authEnv (spec 27)", () => {
     // Should have no warning that starts with "profile newbie did not resolve"
     const found = r.warnings.filter((w) => w.startsWith("profile newbie did not resolve"));
     expect(found.length).toBe(0);
+  });
+
+  it("13. A stale variant — profile moved to a declaring base, stale variant stays with none, workspace diverges again", async () => {
+    const t = await setup();
+    const { makeForge, recipe, profile, rule } = await import("./helpers/forge.js");
+    // Phase 1: Forge with base (authEnv) and a stale variant (no authEnv), profile on base
+    await makeForge(t.forge, {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx", args: ["-y", "tracker"] } } },
+        // Stale variant: created long ago, before base had authEnv; now base has it but variant does not
+        { meta: { type: "mcp", name: "tracker--acme", as: "tracker", server: { command: "npx", args: ["-y", "acme"] } } },
+      ],
+      recipes: [
+        recipe("base", ["rule/workflow", "mcp/tracker"]),
+        recipe("base--acme", ["rule/workflow", "mcp/tracker--acme"]),
+      ],
+      profiles: [profile("acme", ["base"], ["claude-code"])], // Profile is on base, which has authEnv
+    });
+    const ws = t.ws("acme-ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+    await syncWs(ws);
+
+    // The workspace has the example file because base declares authEnv
+    const examplePath = path.join(ws, ".claude/settings.craftar.example.json");
+    expect(await exists(examplePath)).toBe(true);
+
+    // Phase 2: Workspace diverges — edit the mcp.json to differ from base
+    const mcpPath = path.join(ws, ".mcp.json");
+    const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
+    mcpContent.mcpServers.tracker.args = ["-y", "acme-custom"];
+    await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
+
+    // Import — the existing stale variant (without authEnv) is rewritten (it decides)
+    const r = await importInto(t.forge, ws, "acme");
+
+    // Check: the stale variant is rewritten with none (it decides)
+    const variantMeta = await yaml(path.join(t.forge, "ingredients/mcp/tracker--acme/ingredient.yaml"));
+    expect(variantMeta.authEnv).toBeUndefined();
+
+    // Check: variant was staged
+    expect(r.variants.map((v) => v.name)).toEqual(["mcp/tracker--acme"]);
+
+    // Check: the lost declaration is reported
+    // Before import: profile resolved base WITH ACME_TRACKER_TOKEN
+    // After import: profile resolves variant WITHOUT any authEnv
+    const lostWarnings = r.warnings.filter((w) => w.includes("ACME_TRACKER_TOKEN") && w.includes("is not declared by"));
+    expect(lostWarnings.length).toBe(1);
+    expect(lostWarnings[0]).toContain("mcp/tracker");
+    expect(lostWarnings[0]).toContain("mcp/tracker--acme");
   });
 });

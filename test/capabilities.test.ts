@@ -633,6 +633,24 @@ describe("emitFor and mcpServers (spec 18 §9.4)", () => {
     expect(clash.one).toEqual({ command: "c" });
     expect(w).toEqual(['kiro: two ingredients write the MCP server "one" into .kiro/settings/mcp.json: mcp/one and mcp/one--acme (last wins)']);
   });
+
+  it("isAsHeld rule 4: the example file is not judged, only the server file (spec 27 §4.4)", async () => {
+    // A Forge with an MCP ingredient declaring authEnv produces both .mcp.json (native) and the example file.
+    // Rule 4 for MCP judges only .mcp.json, not the example file.
+    const s = await scenario(
+      { ingredients: [spec("mcp", "tracker", { authEnv: ["ACME_TOKEN"], server: { command: "npx", args: ["-y", "tracker"] } })], recipes: [recipe("base", ["mcp/tracker"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    walkCleanups.push(s.cleanup);
+    const p = await plan(await loadWorkspace(s.wsRoot));
+    // The plan should have both .mcp.json and the example file
+    const mcpJson = p.files.find((f) => f.path === ".mcp.json");
+    const exampleJson = p.files.find((f) => f.path === ".claude/settings.craftar.example.json");
+    expect(mcpJson).toBeDefined();
+    expect(exampleJson).toBeDefined();
+    // The example file should be in the plan with ingredient "mcp/*"
+    expect(exampleJson?.ingredient).toBe("mcp/*");
+  });
 });
 
 describe("agents-md walks to the end with no rule (spec 18 §6.3)", () => {

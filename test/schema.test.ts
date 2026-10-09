@@ -495,4 +495,25 @@ describe("authEnv (spec 27)", () => {
     expect(ENV_NAME).toBe("[A-Za-z_][A-Za-z0-9_]*");
     expect(FORGE_ONLY_KEYS).toEqual(["params", "authEnv"]);
   });
+
+  it("12. authEnv token refusal at Forge load includes path, index, and kind; never the item", async () => {
+    const gh = "ghp_" + "x".repeat(36);
+    const { parseYaml } = await import("../src/core/forge.js");
+    const { IngredientSchema } = await import("../src/schema/index.js");
+    // At parseYaml level: message includes the file and the path array
+    const file = "ingredients/mcp/tracker/ingredient.yaml";
+    const yaml = `type: mcp\nname: tracker\nauthEnv:\n  - OK_NAME\n  - ${gh}\nserver:\n  command: npx`;
+    // The error message includes: the file path, the path ["authEnv", 1], and "github-token"
+    expect(() => parseYaml(file, yaml, IngredientSchema)).toThrow(/ingredient\.yaml/);
+    expect(() => parseYaml(file, yaml, IngredientSchema)).toThrow(/authEnv/);
+    expect(() => parseYaml(file, yaml, IngredientSchema)).toThrow(/1/);
+    expect(() => parseYaml(file, yaml, IngredientSchema)).toThrow(/github-token/);
+    // The token value itself is never in the message
+    try {
+      parseYaml(file, yaml, IngredientSchema);
+      expect.fail("should have thrown");
+    } catch (e) {
+      expect((e as Error).message).not.toContain(gh);
+    }
+  });
 });

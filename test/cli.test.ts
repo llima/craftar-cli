@@ -4419,6 +4419,29 @@ describe("cli — craftar doctor (spec 24 §9.2)", () => {
     expect(line({ CRAFTAR_NO_REGISTRY: "1" })).toMatchObject({ level: "ok", message: "off (CRAFTAR_NO_REGISTRY)" });
     expect(line({ CRAFTAR_NO_REGISTRY: "" })).toMatchObject({ level: "error", fix: "upgrade craftar" });
   });
+
+  it("8. mcp-env with a marker value: marker does not appear in text or --json output", async () => {
+    const marker = "MARKER_SECRET_27";
+    const root = await tmpDir("craftar-doctor-mcp-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    // Forge with an MCP ingredient declaring authEnv
+    const mcp = { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx" } } };
+    await makeForge(path.join(root, "forge"), {
+      ingredients: [mcp],
+      recipes: [recipe("base", ["mcp/tracker"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    const ws = path.join(root, "acme-a");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+    // Set the env variable to the marker value
+    const text = runCli(["doctor", "--workspace", ws], { env: { CRAFTAR_HOME: home, ACME_TRACKER_TOKEN: marker } });
+    expect(text.stdout).not.toContain(marker);
+    expect(text.stderr).not.toContain(marker);
+    const json = runCli(["doctor", "--workspace", ws, "--json"], { env: { CRAFTAR_HOME: home, ACME_TRACKER_TOKEN: marker } });
+    expect(json.stdout).not.toContain(marker);
+    expect(json.stderr).not.toContain(marker);
+  });
 });
 
 
@@ -6463,5 +6486,15 @@ describe("diff — example file withholding (spec 27 §4.2, Ruling 4)", () => {
     expect(r.stdout).toContain("  content not shown: an example file may hold a value typed by hand");
     // The secret should not appear
     expect(r.stdout.includes("secret")).toBe(false);
+  });
+
+  it("12. collision with --exit-code: exits 1, same stdout as without --exit-code", async () => {
+    const s = await exScenario({ [EX]: '{"env":{"OTHER":"' + MARK + '"}}' });
+    const plain = runCli(["diff", "--workspace", s.wsRoot]);
+    const ec = runCli(["diff", "--exit-code", "--workspace", s.wsRoot]);
+    expect(ec.code).toBe(1);
+    expect(ec.stdout).toBe(plain.stdout);
+    // Marker never appears
+    expect(ec.stdout.includes(MARK)).toBe(false);
   });
 });
