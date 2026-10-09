@@ -500,7 +500,58 @@ describe("pruneRecipes keeps every candidate when the Forge does not reload (spe
     // Break the Forge so loadForge throws — invalid schema
     await fs.writeFile(path.join(forgeRoot, "craftar.forge.yaml"), "schema: 9\n");
 
-    // Verify loadForge now throws
+    // Verify loadForge now throws — build the expected error message
+    const manifestRelPath = path.relative(process.cwd(), path.join(forgeRoot, "craftar.forge.yaml"));
+    const zodErrors = `[
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "name"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_union",
+    "unionErrors": [
+      {
+        "issues": [
+          {
+            "received": 9,
+            "code": "invalid_literal",
+            "expected": 1,
+            "path": [
+              "schema"
+            ],
+            "message": "Invalid literal value, expected 1"
+          }
+        ],
+        "name": "ZodError"
+      },
+      {
+        "issues": [
+          {
+            "received": 9,
+            "code": "invalid_literal",
+            "expected": 2,
+            "path": [
+              "schema"
+            ],
+            "message": "Invalid literal value, expected 2"
+          }
+        ],
+        "name": "ZodError"
+      }
+    ],
+    "path": [
+      "schema"
+    ],
+    "message": "Invalid input"
+  }
+]`;
+    const expectedLoadError = `invalid ${manifestRelPath}: ${zodErrors}`;
+
     let loadError: Error | null = null;
     try {
       await loadForge(forgeRoot);
@@ -508,9 +559,7 @@ describe("pruneRecipes keeps every candidate when the Forge does not reload (spe
       loadError = e as Error;
     }
     expect(loadError).not.toBeNull();
-    // The error message contains the path and validation errors
-    expect(loadError!.message).toContain("invalid");
-    expect(loadError!.message).toContain("craftar.forge.yaml");
+    expect(loadError!.message).toBe(expectedLoadError);
 
     // Build context for pruneRecipes — state "read" with one entry
     const forgeWorkspacesResult = await forgeWorkspaces(home, forgeRoot);
@@ -525,13 +574,11 @@ describe("pruneRecipes keeps every candidate when the Forge does not reload (spe
     // Call pruneRecipes — it should NOT throw, but return kept with the reload message
     const result = await pruneRecipes(forgeRoot, candidates, ctx);
 
-    // Assert exact result structure
-    expect(result.pruned).toEqual([]);
-    expect(result.kept).toHaveLength(1);
-    expect(result.kept[0].recipe).toBe("base--acme");
-    expect(result.kept[0].reason).toContain("the Forge does not reload after unify's writes:");
-    expect(result.kept[0].reason).toContain("invalid");
-    expect(result.kept[0].reason).toContain("craftar.forge.yaml");
+    // Assert exact result structure (whole value)
+    expect(result).toEqual({
+      pruned: [],
+      kept: [{ recipe: "base--acme", reason: `the Forge does not reload after unify's writes: ${expectedLoadError}` }],
+    });
 
     // Verify profile and recipe files are byte-unchanged
     const profileAfter = await fs.readFile(path.join(forgeRoot, "profiles/acme/profile.yaml"), "utf8");
