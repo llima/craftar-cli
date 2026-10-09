@@ -208,7 +208,8 @@ describe("0.8.2 — files no target emits are not read for sections", () => {
     expect(await scriptOut("./run.sh")).toEqual([[".claude/scripts/./run.sh", "echo hi\n"]]);
     expect(await scriptOut("/run.sh")).toEqual([[".claude/scripts//run.sh", "echo hi\n"]]);
     expect(await scriptOut("a/../run.sh")).toEqual([[".claude/scripts/a/../run.sh", "echo hi\n"]]);
-    expect(await scriptOut("../s/run.sh")).toEqual([[".claude/scripts/../s/run.sh", "echo hi\n"]]);
+    // 0.17.3: a spelling that climbs out of the ingredient directory is refused, even when it lands back in it.
+    await expect(scriptOut("../s/run.sh")).rejects.toThrow('a files entry must not climb out of the ingredient directory with a .. segment');
   });
 
   it("a file spelling 0.8.1 could not read still fails, and never as an internal error (0.8.2)", async () => {

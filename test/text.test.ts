@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { hashNormalized, toCrlf, toLf, stripBom, detectEol } from "../src/core/text.js";
+import { climbsOut, hashNormalized, toCrlf, toLf, stripBom, detectEol } from "../src/core/text.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { referencedRules, rewrite, agentResources } from "../src/emitters/kiro.js";
 
@@ -44,5 +44,12 @@ describe("kiro emitter helpers", () => {
       "file://.kiro/steering/repo-discovery.md",
     ]);
     expect(agentResources("docs-author", "mentions .claude/rules/backend-api.md", known, ["frontend-angular", "backend-api"])).toEqual(["file://.kiro/steering/**/*.md"]);
+  });
+});
+
+describe("climbsOut (0.17.3)", () => {
+  it("is true only for a path that resolves above the folder it is joined under", () => {
+    for (const p of ["..", "../x", "a/../../x", "./../x", "..\\x", "a\\..\\..\\x", "/../x", "//../x", "/..", "\\..\\x", "//srv/share/../../../x", "/a/../../x"]) expect(climbsOut(p), p).toBe(true);
+    for (const p of ["x", "./x", "/x", "//x", "/a/../x", "a/../x", "a/b/../../x", "..x", "a/..x", "", "/"]) expect(climbsOut(p), p).toBe(false);
   });
 });

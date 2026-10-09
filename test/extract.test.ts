@@ -20,7 +20,7 @@ describe("emittedFile resolves a declared file the way the emitters read it (0.8
     expect(emittedFile(rule("sub\\rule.md"), "sub/rule.md", dir)).toBe(win);
   });
   it("matches script files the same way", () => {
-    const s = IngredientSchema.parse({ type: "script", name: "s", files: ["./run.sh", "../s/x.sh"] });
+    const s = IngredientSchema.parse({ type: "script", name: "s", files: ["./run.sh", "a/../x.sh"] });
     const sdir = path.join(path.sep, "forge", "ingredients", "scripts", "s");
     expect(emittedFile(s, "run.sh", sdir)).toBe(true);
     expect(emittedFile(s, "x.sh", sdir)).toBe(true);
