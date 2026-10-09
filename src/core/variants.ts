@@ -4,6 +4,7 @@ import { classifyHunk, type ClassifiedHunk } from "./classify.js";
 import { diffLines, splitLines, type Hunk } from "./diff.js";
 import { fingerprintDir } from "./fingerprint.js";
 import { listFiles, type Forge, type LoadedIngredient } from "./forge.js";
+import { isUtf8 } from "./text.js";
 import type { HunkClass, IngredientRef } from "../schema/index.js";
 
 export interface Distance {
@@ -62,11 +63,11 @@ export function profileOf(meta: { name: string; as?: string }): string | null {
   return rest ? rest : null;
 }
 
-async function filesOf(ing: LoadedIngredient): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
+async function filesOf(ing: LoadedIngredient): Promise<Map<string, Buffer>> {
+  const out = new Map<string, Buffer>();
   for (const rel of await listFiles(ing.dir)) {
     if (rel === "ingredient.yaml") continue;
-    out.set(rel, await fs.readFile(path.join(ing.dir, rel), "utf8"));
+    out.set(rel, await fs.readFile(path.join(ing.dir, rel)));
   }
   return out;
 }
@@ -76,10 +77,27 @@ export async function diffIngredients(base: LoadedIngredient, variant: LoadedIng
   const b = await filesOf(variant);
   const files: FileDiff[] = [];
   for (const rel of [...a.keys()].sort()) {
-    const other = b.get(rel);
-    if (other === undefined) continue;
+    const otherBuf = b.get(rel);
+    if (otherBuf === undefined) continue;
+    const baseBuf = a.get(rel)!;
+    // When the bytes are identical, no hunk — even if the content is not valid UTF-8.
+    if (baseBuf.equals(otherBuf)) continue;
+    // When bytes differ and either side is not valid UTF-8, report one binary hunk.
+    if (!isUtf8(baseBuf) || !isUtf8(otherBuf)) {
+      const binaryHunk: ClassifiedHunk = {
+        kind: "binary",
+        a: { start: 1, lines: [] },
+        b: { start: 1, lines: [] },
+        suggestion: { class: "block", reason: `[binary] ${rel} differs` },
+      };
+      files.push({ file: rel, hunks: [binaryHunk] });
+      continue;
+    }
+    // Both sides are valid UTF-8: decode and diff.
+    const baseText = baseBuf.toString("utf8");
+    const otherText = otherBuf.toString("utf8");
     // Classified here and nowhere else, so forge diff, forge variants and --save-plan agree (spec 08 §5.2).
-    const hunks = diffLines(a.get(rel)!, other).map((h) => ({ ...h, suggestion: classifyHunk(h) }));
+    const hunks = diffLines(baseText, otherText).map((h) => ({ ...h, suggestion: classifyHunk(h) }));
     if (hunks.length) files.push({ file: rel, hunks });
   }
   return {
@@ -95,17 +113,25 @@ async function measure(base: LoadedIngredient, variant: LoadedIngredient): Promi
   const variantFiles = await filesOf(variant);
   // A file present on one side only counts as one hunk carrying all of its lines (spec 04,
   // Ruling 9). Counted directly: diffing against "" mismatches a file with no final newline.
+  // For non-UTF-8 files, count the buffer length as lines (a rough approximation).
+  const countLines = (buf: Buffer) => {
+    if (isUtf8(buf)) return splitLines(buf.toString("utf8")).lines.length;
+    // Non-UTF-8: count newline bytes as a rough approximation
+    let count = 1;
+    for (const b of buf) if (b === 0x0a) count++;
+    return count;
+  };
   const oneSidedLines =
-    d.onlyInBase.reduce((n, f) => n + splitLines(baseFiles.get(f)!).lines.length, 0) +
-    d.onlyInVariant.reduce((n, f) => n + splitLines(variantFiles.get(f)!).lines.length, 0);
+    d.onlyInBase.reduce((n, f) => n + countLines(baseFiles.get(f)!), 0) +
+    d.onlyInVariant.reduce((n, f) => n + countLines(variantFiles.get(f)!), 0);
   // A hunk whose two sides carry the same lines exists only to carry the final-newline fact
   // (diff.ts' forceTrailingHunk): no line content changed, so it costs 0 lines. It still counts
   // as one hunk — it is a real difference — which keeps a newline-only variant nearer than any
-  // variant with a changed line instead of tied with it.
+  // variant with a changed line instead of tied with it. A binary hunk has no lines to compare.
   const sameLines = (h: Hunk) =>
-    h.a.lines.length === h.b.lines.length && h.a.lines.every((line, k) => line === h.b.lines[k]);
+    h.kind !== "binary" && h.a.lines.length === h.b.lines.length && h.a.lines.every((line, k) => line === h.b.lines[k]);
   const lineCount = (hunks: Hunk[]) =>
-    hunks.reduce((k, h) => (sameLines(h) ? k : k + h.a.lines.length + h.b.lines.length), 0);
+    hunks.reduce((k, h) => (h.kind === "binary" || sameLines(h) ? k : k + h.a.lines.length + h.b.lines.length), 0);
   const hunks = d.files.reduce((n, f) => n + f.hunks.length, 0) + d.onlyInBase.length + d.onlyInVariant.length;
   const lines = d.files.reduce((n, f) => n + lineCount(f.hunks), 0) + oneSidedLines;
   const bodyDiffers = hunks > 0;

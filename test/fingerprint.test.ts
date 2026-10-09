@@ -34,6 +34,14 @@ describe("fingerprintOf", () => {
     const b = fingerprintOf({ ...base }, { "other.md": "body\n" });
     expect(b).not.toBe(a);
   });
+
+  it("tells apart two non-UTF-8 files that differ only in an invalid byte", () => {
+    // Two Latin-1 files whose only difference is é (0xe9) vs è (0xe8).
+    const script = { type: "script", name: "s", files: ["run.bat"] };
+    const a = fingerprintOf(script, { "run.bat": Buffer.from("echo caf\xe9\r\n", "latin1") });
+    const b = fingerprintOf(script, { "run.bat": Buffer.from("echo caf\xe8\r\n", "latin1") });
+    expect(b).not.toBe(a);
+  });
 });
 
 describe("fingerprintOf — nested metadata", () => {
