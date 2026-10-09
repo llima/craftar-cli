@@ -183,9 +183,20 @@ program
       const n1 = () => fail(`${WORKSPACE_FILE} already exists in ${root} — change recipes with craftar add recipe / remove recipe, or edit it`);
       const file = path.join(root, WORKSPACE_FILE);
       if (await exists(file)) n1();
-      // N9: --workspace is a file
-      const st = await fs.stat(root).catch(() => null);
-      if (st && !st.isDirectory()) fail(`cannot use ${root} as a workspace: it is not a directory`);
+      // N9: --workspace is a file, or any ancestor up to an existing path is a file
+      {
+        let p = root;
+        for (;;) {
+          const st = await fs.stat(p).catch(() => null);
+          if (st) {
+            if (!st.isDirectory()) fail(`cannot use ${p} as a workspace: it is not a directory`);
+            break; // found an existing directory
+          }
+          const parent = path.dirname(p);
+          if (parent === p) break; // reached filesystem root
+          p = parent;
+        }
+      }
       // Check the flags that were given (N3, N7, N11, N6)
       checkInitFlags({
         forge: o.forge,

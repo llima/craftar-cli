@@ -6301,3 +6301,57 @@ describe("cli — craftar init off a terminal (spec 28 §4.5)", () => {
     ]);
   });
 });
+
+
+describe("cli — init under a file (spec 28 §14)", () => {
+  const SPEC = {
+    ingredients: [rule("a", "# A\n")],
+    recipes: [recipe("base", ["rule/a"])],
+    profiles: [profile("acme", ["base"])],
+  };
+
+  async function setup() {
+    const root = await tmpDir("craftar-init-under-file-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const forge = path.join(root, "forge");
+    await makeForge(forge, SPEC);
+    const run = (args: string[], env: NodeJS.ProcessEnv = {}) => runCli(args, { env: { CRAFTAR_HOME: home, ...env } });
+    return { root, home, forge, run };
+  }
+
+  it("test 1: init --workspace <file>/ws → N9 naming the file", async () => {
+    const s = await setup();
+    const f = path.join(s.root, "regular_file");
+    await fs.writeFile(f, "content\n");
+    const r = s.run(["init", "--workspace", `${f}/ws`, "--forge", s.forge, "--profile", "acme"]);
+    expect([r.code, r.stdout, r.stderr]).toEqual([1, "", `error: cannot use ${f} as a workspace: it is not a directory\n`]);
+    expect(await fs.readFile(f, "utf8")).toBe("content\n");
+  });
+
+  it("test 2: two levels down --workspace <file>/a/b → N9 naming the file", async () => {
+    const s = await setup();
+    const f = path.join(s.root, "regular_file");
+    await fs.writeFile(f, "content\n");
+    const r = s.run(["init", "--workspace", `${f}/a/b`, "--forge", s.forge, "--profile", "acme"]);
+    expect([r.code, r.stdout, r.stderr]).toEqual([1, "", `error: cannot use ${f} as a workspace: it is not a directory\n`]);
+  });
+
+  it("test 3: off a terminal with --profile missing and --workspace <file>/ws → N9, not N2", async () => {
+    const s = await setup();
+    const f = path.join(s.root, "regular_file");
+    await fs.writeFile(f, "content\n");
+    const r = s.run(["init", "--workspace", `${f}/ws`, "--forge", s.forge]);
+    expect([r.code, r.stdout, r.stderr]).toEqual([1, "", `error: cannot use ${f} as a workspace: it is not a directory\n`]);
+  });
+
+  it("test 4: --workspace <dir>/a/b/c where none exist → code 0, creates the workspace", async () => {
+    const s = await setup();
+    const dir = path.join(s.root, "existing_dir");
+    await fs.mkdir(dir);
+    const ws = path.join(dir, "a", "b", "c");
+    const r = s.run(["init", "--workspace", ws, "--forge", s.forge, "--profile", "acme"]);
+    expect(r.code).toBe(0);
+    expect(await fs.readFile(path.join(ws, "craftar.yaml"), "utf8")).toBe("forge: ../../../../forge\nprofile: acme\n");
+  });
+});
