@@ -47,18 +47,20 @@ export function toCrlf(s: string): string {
  * For valid UTF-8 content (strings or buffers), EOL and BOM are normalized so
  * CRLF checkouts on Windows do not read as hand edits.
  *
- * For a buffer that is not valid UTF-8, the raw bytes are hashed without any
- * normalization — invalid bytes would be folded to U+FFFD by a UTF-8 decode,
- * making é (0xe9) and è (0xe8) hash identically.
+ * For a buffer that is not valid UTF-8, EOL and a UTF-8 BOM are normalized at
+ * byte level (latin1 round-trips every byte), so CRLF checkouts still match —
+ * but the invalid bytes are preserved, so é (0xe9) and è (0xe8) hash differently.
  */
 export function hashNormalized(content: string | Buffer): string {
   // A string is always valid UTF-8 in JS; normalize and hash.
   if (!Buffer.isBuffer(content)) {
     return "sha256:" + createHash("sha256").update(toLf(stripBom(content)), "utf8").digest("hex");
   }
-  // A buffer that is not valid UTF-8: hash raw bytes, no normalization.
+  // A buffer that is not valid UTF-8: normalize EOL and BOM at byte level, then hash.
   if (!isUtf8(content)) {
-    return "sha256:" + createHash("sha256").update(content).digest("hex");
+    const stripped = hasBom(content) ? content.subarray(3) : content;
+    const normalized = Buffer.from(toLf(stripped.toString("latin1")), "latin1");
+    return "sha256:" + createHash("sha256").update(normalized).digest("hex");
   }
   // A valid UTF-8 buffer: decode, normalize, hash — exactly as before.
   const text = content.toString("utf8");

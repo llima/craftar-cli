@@ -385,4 +385,38 @@ describe("apply", () => {
     const statusEntry = s.find((e) => e.path === ".claude/scripts/run.bat");
     expect(statusEntry?.state).toBe("drift");
   });
+
+  it("a non-UTF-8 file checked out with CRLF is not drift", async () => {
+    const root = await tmpDir();
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+    const content = Buffer.from("echo caf\xe9\n", "latin1"); // LF in Forge
+    await makeForge(forgeRoot, {
+      ingredients: [{ meta: { type: "script", name: "s", files: ["run.bat"] }, files: { "run.bat": content } }],
+      recipes: [recipe("base", ["script/s"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
+
+    // First sync
+    await sync(wsRoot);
+
+    // Overwrite workspace file with CRLF version (simulating Windows checkout)
+    const crlfContent = Buffer.from("echo caf\xe9\r\n", "latin1");
+    await fs.writeFile(path.join(wsRoot, ".claude/scripts/run.bat"), crlfContent);
+
+    // Status should be unchanged, not drift
+    const w = await loadWorkspace(wsRoot);
+    const p = await plan(w);
+    const s = await status(w, p, await readLock(w.root));
+    const statusEntry = s.find((e) => e.path === ".claude/scripts/run.bat");
+    expect(statusEntry?.state).toBe("unchanged");
+
+    // Delete the lock and check that it adopts (not collision)
+    await fs.rm(path.join(wsRoot, "craftar.lock"));
+    const s2 = await status(w, p, null);
+    const statusEntry2 = s2.find((e) => e.path === ".claude/scripts/run.bat");
+    expect(statusEntry2?.state).toBe("adopt");
+  });
 });

@@ -27,6 +27,13 @@ describe("normalized hashing (the CRLF lesson)", () => {
     expect(legacyHash(Buffer.from("caf\xe9\n", "latin1"))).toBe(legacyHash(Buffer.from("caf\xe8\n", "latin1")));
     expect(legacyHash(Buffer.from("caf\xe9\n", "latin1"))).toBe(hashNormalized("caf\ufffd\n"));
   });
+  it("a non-UTF-8 buffer hashes the same in CRLF, CR and LF, and with a UTF-8 BOM", () => {
+    const L = Buffer.from("a\xe9\nb\n", "latin1");
+    expect(hashNormalized(Buffer.from("a\xe9\r\nb\r\n", "latin1"))).toBe(hashNormalized(L));
+    expect(hashNormalized(Buffer.from("a\xe9\rb\r", "latin1"))).toBe(hashNormalized(L));
+    expect(hashNormalized(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), L]))).toBe(hashNormalized(L));
+    expect(hashNormalized(L)).not.toBe(hashNormalized(Buffer.from("a\xe8\nb\n", "latin1")));
+  });
 });
 
 describe("frontmatter", () => {
