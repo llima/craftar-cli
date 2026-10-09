@@ -80,4 +80,12 @@ describe("workspace layers", () => {
     await fs.writeFile(path.join(dir, "craftar.yaml"), "forge: ./nowhere\nprofile: acme\n");
     await expect(loadWorkspace(dir)).rejects.toThrow(/Forge not found/);
   });
+
+  it("workspaceParams refuses a __proto__ key in overrides.params like the loader", async () => {
+    const dir = await tmpDir();
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    await fs.writeFile(dir + "/craftar.yaml", "forge: ../f\nprofile: x\noverrides:\n  params:\n    __proto__: x\n    k: v\n");
+    const read = (abs: string) => fs.readFile(abs, "utf8");
+    await expect(workspaceParams(dir, read)).rejects.toThrow(/craftar\.yaml does not load.*__proto__/s);
+  });
 });

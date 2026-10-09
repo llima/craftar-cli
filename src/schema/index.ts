@@ -250,6 +250,9 @@ export type ForgeManifest = z.infer<typeof ForgeManifestSchema>;
 /* Workspace (craftar.yaml)                                             */
 /* ------------------------------------------------------------------ */
 
+/** The overrides.params record, wrapped to refuse __proto__. Used in WorkspaceConfigSchema and in import's workspaceParams. */
+export const OverridesParamsSchema = noProtoKey(z.record(z.unknown()));
+
 export const WorkspaceConfigSchema = z.object({
   /** Path or git URL of the Forge. Relative paths resolve from the workspace root. */
   forge: z.string(),
@@ -259,7 +262,7 @@ export const WorkspaceConfigSchema = z.object({
   targets: z.array(TargetSchema).optional(),
   overrides: z
     .object({
-      params: noProtoKey(z.record(z.unknown())).default({}),
+      params: OverridesParamsSchema.default({}),
       /** Section values for this workspace, same shape as a profile's (spec 11 §5.1). */
       sections: SectionsSchema,
       ingredients: z.object({ disable: z.array(z.string()).default([]) }).default({}),
