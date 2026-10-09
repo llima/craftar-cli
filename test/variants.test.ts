@@ -140,6 +140,17 @@ describe("listVariants", () => {
     ]);
   });
 
+  it("counts a one-sided non-UTF-8 file the same as a UTF-8 file (no off-by-one)", async () => {
+    const extraContent = Buffer.from("a\xe9\nb\n", "latin1"); // 2 lines, ends with newline
+    const forge = await forgeWith([
+      { meta: { type: "script", name: "s", files: ["run.bat"] }, files: { "run.bat": Buffer.from("echo\n", "latin1") } },
+      { meta: { type: "script", name: "s--acme", as: "s", files: ["run.bat", "extra.bat"] }, files: { "run.bat": Buffer.from("echo\n", "latin1"), "extra.bat": extraContent } },
+    ]);
+    const { groups } = await listVariants(forge);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].variants[0].distance.lines).toBe(2);
+  });
+
   it("reveals a variant whose base is not in the Forge instead of skipping it", async () => {
     const forge = await forgeWith([rule("orphan--acme", "body\n", { as: "orphan" })]);
     const { groups, orphans } = await listVariants(forge);
