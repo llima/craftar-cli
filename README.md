@@ -298,7 +298,7 @@ Next: an interactive `craftar init` (choose the Forge and the profile); cloning 
 
 ### to 0.17.1
 
-- **`forge unify --prune-recipes` no longer exits 1 when the Forge stops loading after the recipe cascade** (before the prune's own reload): every candidate is kept with the reload's message. A Forge that the cascade's own writes leave unloadable still fails `unify`, naming the paths written. No emitter, `plan`, `status`, `sync` or lock changed. No workspace sees `update`.
+- **`forge unify --prune-recipes` no longer exits 1 when the Forge stops loading between the recipe cascade's reload and the prune's own reload** (something else edited the Forge during the run): every candidate is kept with the reload's message (`the Forge no longer loads when the prune reloads it: …`). A Forge that `unify`'s own writes leave unloadable still fails `unify` through the recipe cascade's reload, naming the paths written and the `git` commands that restore them. No emitter, `plan`, `status`, `sync` or lock changed. No workspace sees `update`.
 
 ### to 0.17.0
 

@@ -1162,7 +1162,7 @@ export interface PruneContext {
 /**
  * The proof and the prune (spec 25 §4.4 steps 3-5): reads only, returns the writes.
  * `content: null` means delete. Reasons, in order, first one wins:
- * - the Forge does not reload after unify's writes (every candidate kept with `the Forge does not reload after unify's writes: <message>`)
+ * - the Forge no longer loads when the prune reloads it (every candidate kept with `the Forge no longer loads when the prune reloads it: <message>`)
  * - another recipe's `extends` names it
  * - registry state not `read` (various messages)
  * - a workspace's `recipes.add` or `recipes.remove` names it
@@ -1180,14 +1180,14 @@ export async function pruneRecipes(
   const pruned: PruneResult["pruned"] = [];
   const kept: PruneResult["kept"] = [];
 
-  // Load the Forge as unify left it — a failure here keeps every candidate (spec 25 §13 item 11)
+  // Load the Forge as unify left it — a failure here keeps every candidate (spec 25 §13 item 11, by analogy: a failure after unify's writes never fails unify)
   let left: Forge;
   try {
     left = await loadForge(forgeRoot);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     for (const c of candidates) {
-      kept.push({ recipe: c.recipe, reason: `the Forge does not reload after unify's writes: ${msg}` });
+      kept.push({ recipe: c.recipe, reason: `the Forge no longer loads when the prune reloads it: ${msg}` });
     }
     return { pruned, kept };
   }

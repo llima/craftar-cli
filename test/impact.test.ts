@@ -512,7 +512,7 @@ describe("pruneRecipes keeps every candidate when the Forge does not reload (spe
     // Assert exact result structure (whole value)
     expect(result).toEqual({
       pruned: [],
-      kept: [{ recipe: "base--acme", reason: `the Forge does not reload after unify's writes: ${loadError!.message}` }],
+      kept: [{ recipe: "base--acme", reason: `the Forge no longer loads when the prune reloads it: ${loadError!.message}` }],
     });
   });
 });
