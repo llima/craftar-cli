@@ -1824,4 +1824,59 @@ describe("import — authEnv (spec 27)", () => {
     const expected = `type: mcp\nname: tracker--acme\nauthEnv:\n  - ACME_TRACKER_TOKEN\nserver:\n  command: npx\n  args:\n    - -y\n    - acme2\ntargets: "*"\ntags: []\norigin:\n  workspace: ${workspaceName}\n  path: .mcp.json\nas: tracker\n`;
     expect(variantYamlText).toBe(expected);
   });
+
+  it("11. a profile in the Forge that does not resolve gets a warning instead of silently dropping the lost-declaration check", async () => {
+    const t = await setup();
+    const { makeForge, recipe, profile, rule } = await import("./helpers/forge.js");
+    // Forge with two recipes on the same slot — profile acme cannot resolve
+    await makeForge(t.forge, {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx", args: ["-y", "tracker"] } } },
+      ],
+      recipes: [
+        { ...recipe("base", ["rule/workflow", "mcp/tracker"]), slot: "pm" },
+        { ...recipe("stack-extra", ["rule/workflow"]), slot: "pm" },
+      ],
+      profiles: [profile("acme", ["base", "stack-extra"], ["claude-code"])],
+    });
+    // Workspace with the MCP server
+    const ws = t.ws("acme-ws");
+    await writeFiles(ws, {
+      "craftar.yaml": "forge: ../forge\nprofile: acme\n",
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": JSON.stringify({ mcpServers: { tracker: { command: "npx", args: ["-y", "tracker"] } } }, null, 2) + "\n",
+    });
+    // Import with the existing broken profile
+    const r = await importInto(t.forge, ws, "acme");
+    // Should have exactly one warning that starts with the expected prefix and ends with the expected suffix
+    const found = r.warnings.filter((w) => w.startsWith("profile acme did not resolve before this import ("));
+    expect(found.length).toBe(1);
+    expect(found[0]).toMatch(/ — authEnv declarations were not compared$/);
+  });
+
+  it("12. a profile name not in the Forge does not get the 'did not resolve' warning", async () => {
+    const t = await setup();
+    const { makeForge, recipe, profile, rule } = await import("./helpers/forge.js");
+    // Forge with profile acme but not profile newbie
+    await makeForge(t.forge, {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx", args: ["-y", "tracker"] } } },
+      ],
+      recipes: [recipe("base", ["rule/workflow", "mcp/tracker"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    // Workspace for a NEW profile
+    const ws = t.ws("newbie-ws");
+    await writeFiles(ws, {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": JSON.stringify({ mcpServers: { tracker: { command: "npx", args: ["-y", "tracker"] } } }, null, 2) + "\n",
+    });
+    // Import with a new profile name
+    const r = await importInto(t.forge, ws, "newbie");
+    // Should have no warning that starts with "profile newbie did not resolve"
+    const found = r.warnings.filter((w) => w.startsWith("profile newbie did not resolve"));
+    expect(found.length).toBe(0);
+  });
 });

@@ -368,7 +368,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const afterMcp = new Map<string, { ref: string; authEnv?: string[] }>();
   for (const ref of [...report.reused, ...report.variants.map((v) => v.name), ...report.created].filter((r) => r.startsWith("mcp/"))) {
     // Read the final ingredient as written/reused.
-    const ingredientFile = path.join(forge, "ingredients", "mcp", ref.slice(4), "ingredient.yaml");
+    const ingredientFile = path.join(forge, "ingredients", typeFolder("mcp"), ref.slice(4), "ingredient.yaml");
     if (await stage.exists(ingredientFile)) {
       const ing = parseYaml(ingredientFile, await stage.readText(ingredientFile), IngredientSchema);
       if (ing.type === "mcp") {
@@ -377,8 +377,9 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       }
     }
   }
-  // What the importing profile resolved before the run.
-  if (loaded) {
+  // What the importing profile resolved before the run — only when the profile already exists.
+  // A profile new to the Forge has no *before*, so no lost-declaration warning.
+  if (loaded && loaded.profiles.has(opts.profileName)) {
     try {
       const resolved = resolve(loaded, WorkspaceConfigSchema.parse({ forge: ".", profile: opts.profileName }));
       const beforeMcp = new Map<string, { ref: string; authEnv?: string[] }>();
@@ -399,8 +400,10 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
           report.warnings.push(`mcp/${serverName}: ${lost.join(", ")} declared by ${before.ref} is not declared by ${after.ref}`);
         }
       }
-    } catch {
-      // Profile doesn't resolve (new profile) — no before, no warning.
+    } catch (e) {
+      // The profile exists in the Forge but does not resolve (e.g. two recipes on one slot).
+      const msg = e instanceof Error ? e.message.replace(/\n/g, " ") : String(e);
+      report.warnings.push(`profile ${opts.profileName} did not resolve before this import (${msg}) — authEnv declarations were not compared`);
     }
   }
 
