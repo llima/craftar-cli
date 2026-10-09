@@ -691,27 +691,22 @@ async function writeIngredient(
     const as = meta.name;
     name = `${meta.name}--${profile}`;
     dir = path.join(forge, "ingredients", folder, name);
+    report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge${why ? ` (${why})` : ""}` });
 
-    // Spec 27 §5.3: variant authEnv handling — an existing variant decides, a new one inherits the base's.
-    // This must happen BEFORE the fingerprint comparison so authEnv is included correctly.
+    // Spec 27 §5.3: an existing variant's authEnv decides; a new one inherits the base's.
     const variantFile = path.join(dir, "ingredient.yaml");
     if (meta.type === "mcp") {
       if (await stage.exists(variantFile)) {
-        // Read the existing variant's authEnv; the existing variant decides, never the base.
         const existingMeta = parseYaml(variantFile, await stage.readText(variantFile), IngredientSchema);
         if (existingMeta.type === "mcp" && existingMeta.authEnv) {
           meta = { ...meta, authEnv: existingMeta.authEnv } as Ingredient;
         }
-        // If the existing variant has no authEnv, the rewritten variant gets none too.
       } else if (variantAuthEnv) {
-        // A new variant inherits the base's authEnv.
         meta = { ...meta, authEnv: variantAuthEnv } as Ingredient;
       }
     }
     meta = { ...meta, name, as } as Ingredient;
-    validateImported(meta); // the variant name must be slug-like too (a `--profile` with a space is not)
-
-    report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge${why ? ` (${why})` : ""}` });
+    validateImported(meta);
 
     // I8: rewriting an existing variant another profile resolves would change its files there.
     if (run?.ctx.forge && (await stage.exists(variantFile)) && (await fingerprintDir(dir, stage.reader())) !== fingerprintOf(validateImported(meta), files)) {
@@ -729,21 +724,12 @@ async function writeIngredient(
     run.literal.push({ ref: `${meta.type}/${name}`, source, meta: sourceMeta, files });
   }
 
-  // Build the YAML preserving key order from meta. For MCP, authEnv (if present) goes immediately before server.
-  let yamlMeta: Record<string, unknown>;
-  if (meta.type === "mcp" && (meta as { authEnv?: string[] }).authEnv !== undefined) {
-    // Insert authEnv immediately before server, preserving all other keys in their original order.
-    yamlMeta = {};
-    for (const [k, v] of Object.entries(meta)) {
-      if (k === "authEnv") continue; // Skip authEnv; we'll insert it before server.
-      if (k === "server") {
-        yamlMeta.authEnv = (meta as { authEnv: string[] }).authEnv;
-      }
-      yamlMeta[k] = k === "targets" && v === "*" ? "*" : v;
-    }
-  } else {
-    yamlMeta = { ...meta };
-    if (yamlMeta.targets === "*") yamlMeta.targets = "*";
+  // Build the YAML preserving key order. For MCP, authEnv sits immediately before server.
+  const yamlMeta: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(meta)) {
+    if (k === "authEnv") continue;
+    if (k === "server" && "authEnv" in meta) yamlMeta.authEnv = meta.authEnv;
+    yamlMeta[k] = k === "targets" && v === "*" ? "*" : v;
   }
   stage.write(path.join(dir, "ingredient.yaml"), YAML.stringify(yamlMeta, { lineWidth: 0 }));
   for (const [rel, content] of Object.entries(files)) stage.write(path.join(dir, rel), content);

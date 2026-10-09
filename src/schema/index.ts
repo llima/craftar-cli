@@ -45,10 +45,10 @@ export const ENV_NAME = "[A-Za-z_][A-Za-z0-9_]*";
 export const FORGE_ONLY_KEYS = ["params", "authEnv"] as const;
 
 /** Return a shallow copy of `meta` with FORGE_ONLY_KEYS removed (spec 27 §5.3). */
-export function stripForgeOnlyKeys<T extends Record<string, unknown>>(meta: T): T {
-  const copy = { ...meta } as Record<string, unknown>;
+export function stripForgeOnlyKeys(meta: Record<string, unknown>): Record<string, unknown> {
+  const copy = { ...meta };
   for (const key of FORGE_ONLY_KEYS) delete copy[key];
-  return copy as T;
+  return copy;
 }
 
 const Inclusion = z.enum(["always", "fileMatch", "manual", "auto"]);
