@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { climbsOut, hashNormalized, toCrlf, toLf, stripBom, detectEol } from "../src/core/text.js";
+import { climbsOut, hashNormalized, legacyHash, toCrlf, toLf, stripBom, detectEol } from "../src/core/text.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { referencedRules, rewrite, agentResources } from "../src/emitters/kiro.js";
 
@@ -22,6 +22,10 @@ describe("normalized hashing (the CRLF lesson)", () => {
   it("hashes valid UTF-8 as before (guard)", () => {
     // A valid UTF-8 buffer with BOM and CRLF should hash identically to the normalized string.
     expect(hashNormalized(Buffer.from("﻿a\r\nb"))).toBe(hashNormalized("a\nb"));
+  });
+  it("legacyHash is the pre-0.17.4 hash: blind to the invalid byte", () => {
+    expect(legacyHash(Buffer.from("caf\xe9\n", "latin1"))).toBe(legacyHash(Buffer.from("caf\xe8\n", "latin1")));
+    expect(legacyHash(Buffer.from("caf\xe9\n", "latin1"))).toBe(hashNormalized("caf\ufffd\n"));
   });
 });
 

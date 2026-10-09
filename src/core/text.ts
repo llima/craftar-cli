@@ -65,6 +65,15 @@ export function hashNormalized(content: string | Buffer): string {
   return "sha256:" + createHash("sha256").update(toLf(stripBom(text)), "utf8").digest("hex");
 }
 
+/**
+ * The pre-0.17.4 hash formula: decodes every buffer as UTF-8 (invalid bytes become U+FFFD),
+ * normalizes EOL and BOM, then hashes. This exists only to recognise a lock entry written
+ * before 0.17.4 for a file that is not valid UTF-8 — it is never written.
+ */
+export function legacyHash(bytes: Buffer): string {
+  return "sha256:" + createHash("sha256").update(toLf(stripBom(bytes.toString("utf8"))), "utf8").digest("hex");
+}
+
 export type Eol = "lf" | "crlf";
 
 export function detectEol(s: string): Eol {

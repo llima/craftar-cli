@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
 import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
-import { climbsOut, hashNormalized, stripBom, toLf } from "./text.js";
+import { climbsOut, hashNormalized, isUtf8, legacyHash, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
 import { classifyForge, credentialFault, ensureTree, ForgeFetchError, NoCachedCopyError, type CachedTree } from "./remote.js";
 import { resolveHome } from "./home-lock.js";
@@ -504,6 +504,11 @@ export interface FileStatus {
   lock?: LockEntry;
 }
 
+/** Does the disk content match the lock entry? Recognises both current and pre-0.17.4 hashes for non-UTF-8 files. */
+function matchesLock(disk: Buffer, entry: LockEntry): boolean {
+  return hashNormalized(disk) === entry.hash || (!isUtf8(disk) && legacyHash(disk) === entry.hash);
+}
+
 export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise<FileStatus[]> {
   const out: FileStatus[] = [];
   const lockByPath = new Map((lock?.files ?? []).map((e) => [e.path, e]));
@@ -515,7 +520,7 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
     if (disk === null) state = "new";
     else if (entry) {
       const diskHash = hashNormalized(disk);
-      if (diskHash !== entry.hash) state = diskHash === planHash ? "unchanged" : "drift";
+      if (!matchesLock(disk, entry)) state = diskHash === planHash ? "unchanged" : "drift";
       else state = diskHash === planHash ? "unchanged" : "update";
     } else state = hashNormalized(disk) === planHash || sameJson(f.path, disk, f.content) ? "adopt" : "collision";
     out.push({ path: f.path, state, target: f.target, ingredient: f.ingredient, planned: f, lock: entry });
@@ -525,7 +530,7 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
     if (planned.has(e.path)) continue;
     const disk = await readDisk(ws.root, e.path);
     if (disk === null) continue; // already gone
-    out.push({ path: e.path, state: hashNormalized(disk) === e.hash ? "orphan" : "orphan-drift", target: e.target, ingredient: e.ingredient, lock: e });
+    out.push({ path: e.path, state: matchesLock(disk, e) ? "orphan" : "orphan-drift", target: e.target, ingredient: e.ingredient, lock: e });
   }
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
