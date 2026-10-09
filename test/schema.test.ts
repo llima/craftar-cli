@@ -397,3 +397,102 @@ describe("__proto__ key refusal (tech-debt 2026-09-25-zod)", () => {
     expect(IngredientSchema.safeParse(input).success).toBe(true);
   });
 });
+
+describe("authEnv (spec 27)", () => {
+  const MCP = { type: "mcp", name: "acme-tracker", server: { command: "npx" } };
+
+  it("1. accepts authEnv with valid names", () => {
+    const r = IngredientSchema.safeParse({ ...MCP, authEnv: ["ACME_TRACKER_TOKEN"] });
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data.authEnv).toEqual(["ACME_TRACKER_TOKEN"]);
+  });
+
+  it("2. an MCP ingredient without authEnv has no authEnv property (pins existing behaviour)", () => {
+    const r = IngredientSchema.safeParse(MCP);
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(Object.hasOwn(r.data, "authEnv")).toBe(false);
+  });
+
+  it("3. accepts an empty authEnv array", () => {
+    const r = IngredientSchema.safeParse({ ...MCP, authEnv: [] });
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data.authEnv).toEqual([]);
+  });
+
+  it("4. refuses invalid variable names", () => {
+    for (const authEnv of [["ACME-TOKEN"], ["${ACME_TOKEN}"], [""], ["1ACME"]]) {
+      const r = IngredientSchema.safeParse({ ...MCP, authEnv });
+      expect(r.success).toBe(false);
+      if (r.success) continue;
+      expect(r.error.issues.map((i) => i.path)).toEqual([["authEnv", 0]]);
+    }
+  });
+
+  it("5. refuses authEnv as a string (not an array)", () => {
+    const r = IngredientSchema.safeParse({ ...MCP, authEnv: "ACME_TOKEN" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues[0].path).toEqual(["authEnv"]);
+  });
+
+  it("6. refuses authEnv on a rule ingredient (strict schema)", () => {
+    const r = IngredientSchema.safeParse({ type: "rule", name: "r", authEnv: ["X"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ code: "unrecognized_keys", keys: ["authEnv"], path: [] })]);
+  });
+
+  it("7. accepts __proto__ as a valid authEnv item", () => {
+    const r = IngredientSchema.safeParse({ ...MCP, authEnv: ["__proto__", "A"] });
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data.authEnv).toEqual(["__proto__", "A"]);
+  });
+
+  it("8. refuses known token formats, message never holds the item", () => {
+    const gh = "ghp_" + "x".repeat(36);
+    const aws = "AKIA" + "A".repeat(16);
+    for (const t of [gh, aws]) {
+      const r = IngredientSchema.safeParse({ ...MCP, authEnv: ["OK_NAME", t] });
+      expect(r.success).toBe(false);
+      if (r.success) continue;
+      expect(r.error.issues.map((i) => i.path)).toEqual([["authEnv", 1]]);
+      const expectedKind = t === gh ? "github-token" : "aws-access-key";
+      expect(r.error.issues[0].message).toBe(`looks like a token (${expectedKind}) — an authEnv item is a variable NAME`);
+      expect(JSON.stringify(r.error.issues).includes(t)).toBe(false);
+    }
+  });
+
+  it("9. long ordinary names load (entropy rule is NOT used)", () => {
+    for (const name of [
+      "GITHUB_PERSONAL_ACCESS_TOKEN_V2",
+      "MICROSOFT_GRAPH_OAUTH2_CLIENT_SECRET_KEY",
+      "ACME_JIRA_CLOUD_OAUTH2_REFRESH_TOKEN",
+      "acmeTrackerOauth2RefreshTokenProd",
+    ]) {
+      const r = IngredientSchema.safeParse({ ...MCP, authEnv: [name] });
+      expect(r.success).toBe(true);
+    }
+  });
+
+  it("10. pinned limits: github_pat_for_the_acme_tracker_server refused, MY_ prefix loads", () => {
+    const gh = "ghp_" + "x".repeat(36);
+    // A name the pattern takes for a token is refused
+    const r1 = IngredientSchema.safeParse({ ...MCP, authEnv: ["github_pat_for_the_acme_tracker_server"] });
+    expect(r1.success).toBe(false);
+    if (!r1.success) expect(r1.error.issues.map((i) => i.path)).toEqual([["authEnv", 0]]);
+
+    // A known token with a prefix loads
+    const r2 = IngredientSchema.safeParse({ ...MCP, authEnv: ["MY_" + gh] });
+    expect(r2.success).toBe(true);
+  });
+
+  it("11. ENV_NAME and FORGE_ONLY_KEYS are exported with correct values", async () => {
+    const { ENV_NAME, FORGE_ONLY_KEYS } = await import("../src/schema/index.js");
+    expect(ENV_NAME).toBe("[A-Za-z_][A-Za-z0-9_]*");
+    expect(FORGE_ONLY_KEYS).toEqual(["params", "authEnv"]);
+  });
+});
