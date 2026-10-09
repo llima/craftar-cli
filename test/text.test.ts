@@ -16,6 +16,13 @@ describe("normalized hashing (the CRLF lesson)", () => {
     expect(stripBom("﻿x")).toBe("x");
     expect(detectEol("a\r\nb\r\n")).toBe("crlf");
   });
+  it("tells two Latin-1 buffers apart", () => {
+    expect(hashNormalized(Buffer.from("caf\xe9\n", "latin1"))).not.toBe(hashNormalized(Buffer.from("caf\xe8\n", "latin1")));
+  });
+  it("hashes valid UTF-8 as before (guard)", () => {
+    // A valid UTF-8 buffer with BOM and CRLF should hash identically to the normalized string.
+    expect(hashNormalized(Buffer.from("﻿a\r\nb"))).toBe(hashNormalized("a\nb"));
+  });
 });
 
 describe("frontmatter", () => {

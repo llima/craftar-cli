@@ -43,9 +43,25 @@ export function toCrlf(s: string): string {
  * Content hash that is stable across Windows/Unix checkouts.
  * This is the lesson from the previous generator: hashing raw bytes while git
  * rewrites CRLF on checkout made every managed file look hand-edited.
+ *
+ * For valid UTF-8 content (strings or buffers), EOL and BOM are normalized so
+ * CRLF checkouts on Windows do not read as hand edits.
+ *
+ * For a buffer that is not valid UTF-8, the raw bytes are hashed without any
+ * normalization — invalid bytes would be folded to U+FFFD by a UTF-8 decode,
+ * making é (0xe9) and è (0xe8) hash identically.
  */
 export function hashNormalized(content: string | Buffer): string {
-  const text = Buffer.isBuffer(content) ? content.toString("utf8") : content;
+  // A string is always valid UTF-8 in JS; normalize and hash.
+  if (!Buffer.isBuffer(content)) {
+    return "sha256:" + createHash("sha256").update(toLf(stripBom(content)), "utf8").digest("hex");
+  }
+  // A buffer that is not valid UTF-8: hash raw bytes, no normalization.
+  if (!isUtf8(content)) {
+    return "sha256:" + createHash("sha256").update(content).digest("hex");
+  }
+  // A valid UTF-8 buffer: decode, normalize, hash — exactly as before.
+  const text = content.toString("utf8");
   return "sha256:" + createHash("sha256").update(toLf(stripBom(text)), "utf8").digest("hex");
 }
 

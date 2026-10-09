@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { apply, assertInsideWorkspace, loadWorkspace, plan, readLock, status, type ApplyOptions } from "../src/core/sync.js";
 import { exists } from "../src/core/forge.js";
-import { hashNormalized } from "../src/core/text.js";
-import { profile, recipe, rule, scenario } from "./helpers/forge.js";
+import { hashNormalized, stripBom, toLf } from "../src/core/text.js";
+import { makeForge, makeWorkspace, profile, recipe, rule, scenario, tmpDir } from "./helpers/forge.js";
 
 const A = ".claude/rules/a.md";
 const cleanups: Array<() => Promise<void>> = [];
@@ -172,5 +173,90 @@ describe("apply", () => {
     const w = await loadWorkspace(s.wsRoot);
     w.forge.ingredients.get("rule/a")!.meta.as = "../../../x";
     await expect(plan(w)).rejects.toThrow("rule/a would write .claude/rules/../../../x.md, outside the workspace");
+  });
+
+  it("sees a Forge change confined to non-UTF-8 bytes", async () => {
+    // A Latin-1 script (not valid UTF-8) where only the accented byte differs.
+    const root = await tmpDir();
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+    const originalContent = Buffer.from("echo caf\xe9\r\n", "latin1"); // café
+    await makeForge(forgeRoot, {
+      ingredients: [{ meta: { type: "script", name: "s", files: ["run.bat"] }, files: { "run.bat": originalContent } }],
+      recipes: [recipe("base", ["script/s"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
+
+    // First sync
+    await sync(wsRoot);
+    const wsFile = path.join(wsRoot, ".claude/scripts/run.bat");
+    expect(await fs.readFile(wsFile)).toEqual(originalContent);
+
+    // Rewrite the Forge file with a different accented byte (è instead of é)
+    const newContent = Buffer.from("echo caf\xe8\r\n", "latin1"); // cafè
+    await fs.writeFile(path.join(forgeRoot, "ingredients/scripts/s/run.bat"), newContent);
+
+    // Status and plan should see it as an update
+    const w = await loadWorkspace(wsRoot);
+    const p = await plan(w);
+    const s = await status(w, p, await readLock(w.root));
+    const entry = s.find((e) => e.path === ".claude/scripts/run.bat");
+    expect(entry?.state).toBe("update");
+
+    // Sync should write the new bytes
+    await apply(w, p, s);
+    expect(await fs.readFile(wsFile)).toEqual(newContent);
+  });
+
+  it("a lock written before the raw hash reads unchanged, and the next sync rewrites only the lock", async () => {
+    // A Latin-1 script synced, then overwrite the lock entry's hash with the old-style normalized hash.
+    const root = await tmpDir();
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+    const content = Buffer.from("echo caf\xe9\r\n", "latin1"); // café
+    await makeForge(forgeRoot, {
+      ingredients: [{ meta: { type: "script", name: "s", files: ["run.bat"] }, files: { "run.bat": content } }],
+      recipes: [recipe("base", ["script/s"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
+
+    // First sync to create the lock
+    await sync(wsRoot);
+
+    // Compute the OLD-style hash (what 0.17.3 and earlier would have written)
+    const oldStyleHash = "sha256:" + createHash("sha256").update(toLf(stripBom(content.toString("utf8"))), "utf8").digest("hex");
+    // And what we expect now (raw bytes hash)
+    const newStyleHash = hashNormalized(content);
+    expect(oldStyleHash).not.toBe(newStyleHash); // they really differ
+
+    // Overwrite the lock entry's hash with the old-style hash
+    const lockFile = path.join(wsRoot, "craftar.lock");
+    const lock = JSON.parse(await fs.readFile(lockFile, "utf8"));
+    const entry = lock.files.find((f: { path: string }) => f.path === ".claude/scripts/run.bat");
+    entry.hash = oldStyleHash;
+    await fs.writeFile(lockFile, JSON.stringify(lock, null, 2) + "\n");
+
+    // Status should be unchanged (not drift), because the disk file matches the plan
+    const w = await loadWorkspace(wsRoot);
+    const p = await plan(w);
+    const s = await status(w, p, await readLock(w.root));
+    const statusEntry = s.find((e) => e.path === ".claude/scripts/run.bat");
+    expect(statusEntry?.state).toBe("unchanged");
+
+    // Sync rewrites the lock but not the file
+    const beforeSync = await fs.readFile(path.join(wsRoot, ".claude/scripts/run.bat"));
+    const result = await apply(w, p, s);
+    expect(result.written).toEqual([]); // no files written
+    const afterSync = await fs.readFile(path.join(wsRoot, ".claude/scripts/run.bat"));
+    expect(afterSync).toEqual(beforeSync); // file unchanged
+
+    // The lock should now have the new-style hash
+    const newLock = JSON.parse(await fs.readFile(lockFile, "utf8"));
+    const newEntry = newLock.files.find((f: { path: string }) => f.path === ".claude/scripts/run.bat");
+    expect(newEntry.hash).toBe(newStyleHash);
   });
 });
