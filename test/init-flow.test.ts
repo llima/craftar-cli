@@ -1258,3 +1258,152 @@ describe("askInit", () => {
     expect(sc.asked.some((q) => q === QA)).toBe(false);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* askInit → planInit (review of T5b)                                  */
+/* ------------------------------------------------------------------ */
+
+import { mergeWorkspaceConfig } from "../src/core/sync.js";
+
+describe("askInit → planInit (review of T5b)", () => {
+  it("1. --ref given, the Forge asked", async () => {
+    const s = await askSetup();
+    const r = await remoteForge(SPEC_DESC);
+    cleanups.push(r.cleanup);
+
+    const given: InitGiven = { ref: "main", addRecipes: [], removeRecipes: [], replace: false };
+    const local = { doc: null, keys: [] as LocalKey[] };
+    const sc = script([r.url, "", "", ""]);
+    const result = await askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync });
+    expect(result.kind).toBe("answered");
+    if (result.kind !== "answered") throw new Error("unexpected");
+
+    const plan = await planInit(s.ws, result.input, { home: s.home, mode: "sync", local });
+    expect(plan.text).toBe(`forge: ${r.url}\nref: main\nprofile: acme\n`);
+    expect(againLine(result.answers, { sync: true, offline: false })).toBe(
+      `  again craftar init --forge ${r.url} --ref main --profile acme`
+    );
+  });
+
+  it("2. craftar.local.yaml sets recipes", async () => {
+    const s = await askSetup();
+    const given: InitGiven = { addRecipes: [], removeRecipes: [], replace: false };
+    const local = { doc: { recipes: { add: ["extra"] } }, keys: ["recipes"] as LocalKey[] };
+    const sc = script([s.forge, "", ""]);
+    const result = await askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync });
+    expect(result.kind).toBe("answered");
+    if (result.kind !== "answered") throw new Error("unexpected");
+
+    // addRecipes and removeRecipes should NOT be in input
+    expect("addRecipes" in result.input).toBe(false);
+    expect("removeRecipes" in result.input).toBe(false);
+
+    const plan = await planInit(s.ws, result.input, { home: s.home, mode: "sync", local });
+    expect(plan.text).toBe("forge: ../forge\nprofile: acme\n");
+    expect(plan.plan.resolution.recipes).toEqual(["base", "stack-api", "front-a", "extra"]);
+    expect(againLine(result.answers, { sync: true, offline: false })).toBe(
+      `  again craftar init --forge ${s.forge} --profile acme`
+    );
+  });
+
+  it("3. stale ref after failed remote load, then a directory", async () => {
+    const s = await askSetup();
+    const r = await remoteForge(SPEC_DESC);
+    cleanups.push(r.cleanup);
+
+    const given: InitGiven = { addRecipes: [], removeRecipes: [], replace: false };
+    const local = { doc: null, keys: [] as LocalKey[] };
+    // Remote fails on nope-ref, then user types the path Forge
+    const sc = script([r.url, "nope-ref", s.forge, "", "", ""]);
+    const result = await askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync });
+    expect(result.kind).toBe("answered");
+    if (result.kind !== "answered") throw new Error("unexpected");
+
+    // ref should NOT be in input (the path Forge doesn't use a ref)
+    expect("ref" in result.input).toBe(false);
+
+    const plan = await planInit(s.ws, result.input, { home: s.home, mode: "sync", local });
+    expect(plan.text).toBe("forge: ../forge\nprofile: acme\n");
+
+    // asked should NOT have a ref question after the LAST Forge question (which has a default)
+    // Find the last question that starts with "Forge —"
+    const forgeIdx = sc.asked.reduce(
+      (last, q, i) => (q.startsWith("Forge —") ? i : last),
+      -1
+    );
+    expect(sc.asked.slice(forgeIdx + 1).some((q) => q.includes("Ref"))).toBe(false);
+  });
+
+  it("4. recipe answers are returned as typed, not as resulting lists", async () => {
+    const s = await askSetup();
+    const given: InitGiven = { addRecipes: [], removeRecipes: [], replace: false };
+    const local = { doc: null, keys: [] as LocalKey[] };
+
+    // R3 with yes: Add front-b, replace front-a
+    const sc = script([s.forge, "", "yes", "", "front-b", "yes", ""]);
+    const result = await askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync });
+    expect(result.kind).toBe("answered");
+    if (result.kind !== "answered") throw new Error("unexpected");
+
+    // input.addRecipes should be what was typed, not the final list
+    expect(result.input.addRecipes).toEqual(["front-b"]);
+    // removeRecipes should NOT be in input since nothing was typed for Remove
+    expect("removeRecipes" in result.input).toBe(false);
+    expect(result.input.replace).toBe(true);
+
+    expect(againLine(result.answers, { sync: true, offline: false })).toBe(
+      `  again craftar init --forge ${s.forge} --profile acme --add-recipe front-b --replace`
+    );
+
+    const plan = await planInit(s.ws, result.input, { home: s.home, mode: "sync", local });
+    expect(plan.text).toBe("forge: ../forge\nprofile: acme\nrecipes:\n  add:\n    - front-b\n  remove:\n    - front-a\n");
+
+    // And a no-op: Add = base → result.input.addRecipes ["base"], plan.notes has the note
+    const sc2 = script([s.forge, "", "yes", "", "base", ""]);
+    const result2 = await askInit(s.ws, given, local, sc2.io, { home: s.home, registryOff: false, exists: existsSync });
+    expect(result2.kind).toBe("answered");
+    if (result2.kind !== "answered") throw new Error("unexpected");
+    expect(result2.input.addRecipes).toEqual(["base"]);
+
+    const plan2 = await planInit(s.ws, result2.input, { home: s.home, mode: "sync", local });
+    expect(plan2.notes).toEqual(["base is already in use"]);
+    expect(plan2.text).toBe("forge: ../forge\nprofile: acme\n");
+  });
+
+  it("5. local document read through schema, never raw", async () => {
+    const s = await askSetup();
+    const given: InitGiven = { addRecipes: [], removeRecipes: [], replace: false };
+    // A string instead of an array for targets
+    const local = { doc: { targets: "kiro" }, keys: ["targets"] as LocalKey[] };
+
+    // Get the expected error from mergeWorkspaceConfig
+    let mergeError: string;
+    try {
+      mergeWorkspaceConfig({ forge: "../forge", profile: "acme" }, local.doc);
+      throw new Error("should have thrown");
+    } catch (e) {
+      mergeError = (e as Error).message;
+    }
+    expect(mergeError).toMatch(/^invalid craftar\.yaml \(merged with craftar\.local\.yaml\)/);
+
+    const sc = script([s.forge, ""]);
+    await expect(
+      askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync })
+    ).rejects.toThrow(mergeError);
+  });
+
+  it("6. note of a no-op is one line", async () => {
+    const s = await askSetup();
+    const given: InitGiven = { addRecipes: [], removeRecipes: [], replace: false };
+    const local = { doc: null, keys: [] as LocalKey[] };
+
+    // Remove extra and front-b (neither in use)
+    const sc = script([s.forge, "", "yes", "extra, front-b", "", ""]);
+    await askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync });
+
+    // Should have exactly one note line, then the Recipes line
+    const noteLines = sc.said.filter((l) => l.startsWith("  note"));
+    expect(noteLines).toEqual(["  note extra is not in use, front-b is not in use"]);
+    expect(sc.said.at(-1)).toBe("Recipes: base → stack-api → front-a");
+  });
+});

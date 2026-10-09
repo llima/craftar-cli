@@ -6,8 +6,8 @@ import { checkInitFlags, checkLocalKeys, forgeSource, initLine, type InitInput, 
 import { planRecipeEdit, slotHeld } from "./recipe-edit.js";
 import { readRegistry } from "./registry.js";
 import { classifyForge, credentialFault } from "./remote.js";
-import { resolve } from "./resolve.js";
-import { loadForgeSource, type LoadedForge, type LoadOptions } from "./sync.js";
+import { profileNotFoundMessage, resolve } from "./resolve.js";
+import { loadForgeSource, mergeWorkspaceConfig, type LoadedForge, type LoadOptions } from "./sync.js";
 import type { LocalKey } from "./workspace-yaml.js";
 
 /**
@@ -295,6 +295,9 @@ export async function askInit(
 
   // Forge/Ref/Load loop
   forgeLoop: for (;;) {
+    // Reset answeredRef at the top of each round
+    answeredRef = undefined;
+
     // Step 2: Forge
     let forgeValue: string;
     if (given.forge !== undefined && !forgeWasAsked) {
@@ -347,12 +350,15 @@ export async function askInit(
     if (classifyForge(forgeValue) === "url") {
       if (given.ref !== undefined) {
         refValue = given.ref;
+        answeredRef = given.ref; // given.ref goes into input.ref and answers.ref
       } else if (local.keys.includes("ref")) {
         // Show the ref from local.yaml but don't ask
-        const localRef = (local.doc as { ref?: string })?.ref ?? "";
-        io.say(`Ref: ${localRef} (from craftar.local.yaml)`);
+        const localRef = (local.doc as { ref?: string })?.ref ?? null;
+        if (localRef !== null) {
+          io.say(`Ref: ${localRef} (from craftar.local.yaml)`);
+        }
         refValue = localRef;
-        answeredRef = undefined; // The ref is not written to input.ref
+        // answeredRef stays undefined: the ref is not written to input.ref
       } else {
         const refQ = refDefault !== null && refDefault !== "the default branch"
           ? `Ref — a branch, a tag or a full SHA [${refDefault}]: `
@@ -405,8 +411,7 @@ export async function askInit(
   }
   if (given.profile !== undefined) {
     if (!forge.profiles.has(given.profile)) {
-      const names = [...forge.profiles.keys()].sort().join(", ");
-      throw new Error(`profile "${given.profile}" not found in Forge (${names})`);
+      throw new Error(profileNotFoundMessage(given.profile, [...forge.profiles.keys()]));
     }
     answeredProfile = given.profile;
   } else {
@@ -449,12 +454,21 @@ export async function askInit(
         break profileLoop;
       }
       // Unknown
-      const names = profiles.map((p) => p.name).join(", ");
-      io.say(`profile "${trimmed}" not found in Forge (${names})`);
+      io.say(profileNotFoundMessage(trimmed, profiles.map((p) => p.name)));
     }
   }
 
   const profile = forge.profiles.get(answeredProfile!)!;
+
+  // Validate local.doc through the schema early, before any local.keys check
+  // This catches schema errors (e.g. targets: "kiro" instead of targets: [kiro])
+  if (local.doc !== null && local.keys.length > 0) {
+    // mergeWorkspaceConfig throws on schema errors — let it propagate
+    mergeWorkspaceConfig(
+      { forge: forgeSource(root, answeredForge!), profile: answeredProfile! },
+      local.doc
+    );
+  }
 
   // Step 6: Recipes
   const recipesFlagged = given.addRecipes.length > 0 || given.removeRecipes.length > 0;
@@ -464,20 +478,14 @@ export async function askInit(
     answeredRemoveRecipes = given.removeRecipes;
     answeredReplace = given.replace;
   } else if (local.keys.includes("recipes")) {
-    // Show from local.yaml
-    const localRecipes = (local.doc as { recipes?: { add?: string[]; remove?: string[] } })?.recipes ?? {};
-    const baseConfig = {
-      forge: forgeSource(root, answeredForge!),
-      profile: answeredProfile!,
-      recipes: { add: localRecipes.add ?? [], remove: localRecipes.remove ?? [] },
-      targets: profile.targets,
-      overrides: { params: {}, sections: {}, ingredients: { disable: [] } },
-    };
-    const resolution = resolve(forge, baseConfig);
+    // Show from local.yaml — validate through schema, but don't put values into answers
+    const merged = mergeWorkspaceConfig(
+      { forge: forgeSource(root, answeredForge!), profile: answeredProfile! },
+      local.doc
+    );
+    const resolution = resolve(forge, merged.config);
     io.say(`Recipes: ${resolution.recipes.join(" → ")} (from craftar.local.yaml)`);
-    // Use the local values directly
-    answeredAddRecipes = localRecipes.add ?? [];
-    answeredRemoveRecipes = localRecipes.remove ?? [];
+    // Do NOT set answeredAddRecipes/answeredRemoveRecipes — the local file provides it
   } else {
     // Resolve the profile on its own first (R5)
     const baseConfig = {
@@ -571,8 +579,6 @@ export async function askInit(
         overrides: { params: {}, sections: {}, ingredients: { disable: [] } },
       };
 
-      let finalRemoves: string[] = [];
-      let finalAdds: string[] = [];
       let replaceUsed = false;
 
       try {
@@ -581,9 +587,7 @@ export async function askInit(
           const removeEdit = planRecipeEdit(forge, editConfig, "remove", removeNames);
           editConfig = { ...editConfig, recipes: removeEdit.recipes };
           if (removeEdit.reasons.length) {
-            for (const reason of removeEdit.reasons) {
-              io.say(`  note ${reason}`);
-            }
+            io.say(`  note ${removeEdit.reasons.join(", ")}`);
           }
         }
         // Adds with potential replace
@@ -594,9 +598,7 @@ export async function askInit(
               const addEdit = planRecipeEdit(forge, editConfig, "add", addNames, { replace: doReplace });
               editConfig = { ...editConfig, recipes: addEdit.recipes };
               if (addEdit.reasons.length) {
-                for (const reason of addEdit.reasons) {
-                  io.say(`  note ${reason}`);
-                }
+                io.say(`  note ${addEdit.reasons.join(", ")}`);
               }
               break addLoop;
             } catch (e) {
@@ -619,16 +621,15 @@ export async function askInit(
             }
           }
         }
-        // Success: compute the final lists
-        finalRemoves = editConfig.recipes.remove;
-        finalAdds = editConfig.recipes.add;
+        // Success: return typed names, not resulting lists
         answeredReplace = replaceUsed;
 
         // Resolve with the new config to show the chain
         resolution = resolve(forge, editConfig);
         io.say(`Recipes: ${resolution.recipes.join(" → ")}`);
-        answeredAddRecipes = finalAdds;
-        answeredRemoveRecipes = finalRemoves;
+        // Store the TYPED names, not the resulting lists
+        answeredAddRecipes = addNames;
+        answeredRemoveRecipes = removeNames;
         break recipeLoop;
       } catch (e) {
         io.say((e as Error).message);
@@ -641,7 +642,12 @@ export async function askInit(
   if (given.targets !== undefined) {
     answeredTargets = given.targets;
   } else if (local.keys.includes("targets")) {
-    const localTargets = (local.doc as { targets?: string[] })?.targets ?? [];
+    // Validate through schema
+    const merged = mergeWorkspaceConfig(
+      { forge: forgeSource(root, answeredForge!), profile: answeredProfile! },
+      local.doc
+    );
+    const localTargets = merged.config.targets ?? [];
     io.say(`Targets: ${localTargets.join(", ")} (from craftar.local.yaml)`);
     // Don't set answeredTargets — the local file provides it
   } else {
