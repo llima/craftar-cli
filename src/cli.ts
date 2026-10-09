@@ -37,8 +37,8 @@ import {
   type PruneResult,
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
-import { checkInitFlags, initLine, planInit } from "./core/init.js";
-import { askInit, confirmInit, againLine } from "./core/init-flow.js";
+import { checkInitFlags, initLine, planInit, type InitInput } from "./core/init.js";
+import { askInit, confirmInit, againLine, type InitAnswers } from "./core/init-flow.js";
 import { readlineIo } from "./prompt.js";
 import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
@@ -220,11 +220,9 @@ program
       }
       // Read the local file once (after N1, N9 and flag checks, before any question or planInit)
       const local = await readLocalFile(root);
-      // Interactive mode
-      let input: { forge: string; profile: string; ref?: string; targets?: string[]; addRecipes?: string[]; removeRecipes?: string[]; replace?: boolean };
-      let answers: { forge: string; profile: string; ref?: string; targets?: string[]; addRecipes: string[]; removeRecipes: string[]; replace: boolean } | null = null;
+      let input: InitInput;
+      let answers: InitAnswers | null = null;
       if (!bothGiven) {
-        // Interactive mode: askInit
         const io = readlineIo(process.stdin, process.stdout, { terminal: true });
         const result = await askInit(
           root,
@@ -245,7 +243,6 @@ program
         input = result.input;
         answers = result.answers;
       } else {
-        // Flags mode: build input from flags
         input = {
           forge: o.forge!,
           profile: o.profile!,
@@ -257,14 +254,19 @@ program
         };
       }
       const init = await planInit(root, input, { ...load(o, "sync"), local });
-      // Interactive mode: confirmInit
       if (answers !== null) {
         const io = readlineIo(process.stdin, process.stdout, { terminal: true });
         const confirm = await confirmInit(init, root, io, { sync: o.sync });
         if (confirm === "cancelled") fail("init cancelled — nothing written");
       }
       const { ws, plan: p } = init;
-      // Every refusal is above: only now does the directory, and craftar.yaml, come to exist (§13 items 1, 9).
+      const workspaceGiven = cmd.getOptionValueSource("workspace") === "cli";
+      const again = () => {
+        if (answers !== null) {
+          console.log(againLine(answers, { workspace: workspaceGiven ? o.workspace : undefined, sync: o.sync, offline: o.offline }));
+        }
+      };
+      // Every refusal is above: only now does the directory, and craftar.yaml, come to exist
       await fs.mkdir(root, { recursive: true });
       try {
         await fs.writeFile(file, init.text, { flag: "wx" });
@@ -278,11 +280,7 @@ program
       if (!o.sync) {
         console.log(nextSyncLine(init.statuses));
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
-        // Interactive mode only: print again line (after --no-sync)
-        if (answers !== null) {
-          const workspaceGiven = cmd.getOptionValueSource("workspace") === "cli";
-          console.log(againLine(answers, { workspace: workspaceGiven ? o.workspace : undefined, sync: o.sync, offline: o.offline }));
-        }
+        again();
         return;
       }
       const r = await applyAndReport(ws, p, init.statuses, init.lock);
@@ -291,11 +289,7 @@ program
         console.log(
           `  ${pc.yellow("warn")} ${collisions} file(s) already in the workspace differ from the Forge and were left as they are — to bring them into the Forge, run craftar import`,
         );
-      // Interactive mode only: print again line (after sync)
-      if (answers !== null) {
-        const workspaceGiven = cmd.getOptionValueSource("workspace") === "cli";
-        console.log(againLine(answers, { workspace: workspaceGiven ? o.workspace : undefined, sync: o.sync, offline: o.offline }));
-      }
+      again();
     },
   );
 

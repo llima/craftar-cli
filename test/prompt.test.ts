@@ -257,4 +257,32 @@ describe("readlineIo", () => {
     expect(promptHasProcess).toBe(false);
     expect(promptHasConsole).toBe(false);
   });
+
+  it("terminal: interface is closed after an interrupt (raw mode left)", { timeout: 2000 }, async () => {
+    const { input, output } = createStreams();
+    // Cast to any: a fake TTY for the test — readline's setRawMode is called only when isTTY is true
+    const calls: boolean[] = [];
+    (input as any).isTTY = true;
+    (input as any).setRawMode = (v: boolean) => { calls.push(v); return input; };
+
+    const io = readlineIo(input, output, { terminal: true });
+    const p = io.ask("Q: ");
+    input.write("\x03");
+    expect(await p).toBe(null);
+    expect(calls).toEqual([true, false]);
+  });
+
+  it("terminal: interface is closed after an answer (raw mode left)", { timeout: 2000 }, async () => {
+    const { input, output } = createStreams();
+    // Cast to any: a fake TTY for the test — readline's setRawMode is called only when isTTY is true
+    const calls: boolean[] = [];
+    (input as any).isTTY = true;
+    (input as any).setRawMode = (v: boolean) => { calls.push(v); return input; };
+
+    const io = readlineIo(input, output, { terminal: true });
+    const p = io.ask("Q: ");
+    input.write("a\r");
+    expect(await p).toBe("a");
+    expect(calls).toEqual([true, false]);
+  });
 });

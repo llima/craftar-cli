@@ -17,33 +17,28 @@ import type { LocalKey } from "./workspace-yaml.js";
  */
 
 export interface InitIo {
-  /** One question; resolves to the line typed, or null when the input ended or was interrupted. */
   ask(question: string): Promise<string | null>;
-  /** The confirmation: as `ask`, but only a line typed after the question is shown counts. */
   confirm(question: string): Promise<string | null>;
   say(line: string): void;
 }
 
-/** The Forge `init` offers (§4.3): the value to show and, for a remote one, the ref the registry recorded. */
 export interface OfferedForge {
   forge: string;
   ref: string | null;
 }
 
 /**
- * The Forge last used on this machine (spec 28 §4.3): the entry with the most recent `lastSync`
- * whose Forge can be offered — a path entry by its `key` (skipped when `null` or the directory
- * is gone), a remote one by its `source` (skipped when `credentialFault`).
+ * The Forge last used on this machine: the entry with the most recent `lastSync`
+ * whose Forge can be offered — a path entry by its `key` (skipped when `null` or gone),
+ * a remote one by its `source` (skipped when `credentialFault`).
  */
 export function lastForge(
   registry: Registry,
   exists: (dir: string) => boolean,
 ): OfferedForge | null {
-  // Sort by lastSync descending (most recent first); ISO strings compare as text
   const sorted = [...registry.workspaces].sort((a, b) =>
     b.lastSync.localeCompare(a.lastSync),
   );
-
   for (const entry of sorted) {
     const offer = offerableForge(entry, exists);
     if (offer !== null) return offer;
@@ -56,19 +51,15 @@ function offerableForge(
   exists: (dir: string) => boolean,
 ): OfferedForge | null {
   if (entry.forge.kind === "path") {
-    // Skipped when key is null or the directory is gone
     if (entry.forge.key === null) return null;
     if (!exists(entry.forge.key)) return null;
     return { forge: entry.forge.key, ref: null };
   }
-  // Remote entry
   if (credentialFault(entry.forge.source)) return null;
   return { forge: entry.forge.source, ref: entry.forge.ref };
 }
 
-/**
- * y, yes → true; n, no → false; anything else → null. Case-insensitive, trimmed.
- */
+/** y, yes → true; n, no → false; anything else → null. */
 export function yesNo(answer: string): boolean | null {
   const a = answer.trim().toLowerCase();
   if (a === "y" || a === "yes") return true;
@@ -77,8 +68,8 @@ export function yesNo(answer: string): boolean | null {
 }
 
 /**
- * Step 9 of the interactive flow: says the summary (`initLine`) and the `first sync:` line,
- * asks through `io.confirm`, re-asks anything but yes/no, returns confirmed or cancelled.
+ * Says the summary and the `first sync:` line, asks through `io.confirm`,
+ * re-asks anything but yes/no, returns confirmed or cancelled.
  */
 export async function confirmInit(
   init: InitPlan,
@@ -86,11 +77,9 @@ export async function confirmInit(
   io: InitIo,
   opts: { sync: boolean },
 ): Promise<"confirmed" | "cancelled"> {
-  // Say the summary lines
   io.say(`craftar init — about to write craftar.yaml in ${root}`);
   io.say(`  ${initLine(init)}`);
 
-  // first sync: counts or "nothing to write"
   const counts = countStates(init.statuses);
   if (counts.length === 0) {
     io.say("  first sync: nothing to write");
@@ -99,20 +88,17 @@ export async function confirmInit(
     io.say(`  first sync: ${parts.join(", ")}`);
   }
 
-  // The question wording depends on opts.sync
   const question = opts.sync
     ? "Write craftar.yaml and sync [yes]: "
     : "Write craftar.yaml [yes]: ";
 
-  // Ask and re-ask until yes/no/null
   for (;;) {
     const answer = await io.confirm(question);
     if (answer === null) return "cancelled";
-    if (answer === "") return "confirmed"; // Enter = yes
+    if (answer === "") return "confirmed";
     const yn = yesNo(answer);
     if (yn === true) return "confirmed";
     if (yn === false) return "cancelled";
-    // Not a yes/no answer: re-ask (without repeating the summary)
     io.say("answer yes or no");
   }
 }
@@ -127,14 +113,8 @@ export interface InitAnswers {
   replace: boolean;
 }
 
-/** Characters that do not require quoting in a command-line value. */
 const SAFE_CHARS = /^[A-Za-z0-9_./:@=+,-]+$/;
 
-/**
- * Quote a value for the `again` line if needed. A value holding a character outside
- * `[A-Za-z0-9_./:@=+,-]` is wrapped in double quotes. `"` and `\` inside it are not escaped:
- * the line is for reading, not for shell execution.
- */
 function maybeQuote(value: string): string {
   if (value === "") return '""';
   if (SAFE_CHARS.test(value)) return value;
@@ -142,79 +122,30 @@ function maybeQuote(value: string): string {
 }
 
 /**
- * Step 11 of the interactive flow: returns exactly `  again craftar init` followed by the flags
- * that reproduce the run.
- *
- * The caller guarantees `answers.forge` passed `credentialFault`; this function still refuses to
- * print one: when `credentialFault(answers.forge)` it throws.
- *
- * A value holding a character outside `[A-Za-z0-9_./:@=+,-]` is wrapped in double quotes.
- * `"` and `\` inside it are not escaped: the line is for reading, not promised to survive every
- * shell's quoting.
+ * Returns `  again craftar init` followed by the flags that reproduce the run.
+ * Throws if `answers.forge` holds credentials (defense: never print them).
  */
 export function againLine(
   answers: InitAnswers,
   given: { workspace?: string; sync: boolean; offline: boolean },
 ): string {
-  // Defense: never print credentials
   if (credentialFault(answers.forge)) {
     throw new Error("againLine: the Forge holds credentials");
   }
 
   const parts: string[] = ["  again craftar init"];
-
-  // --forge <v>
   parts.push(`--forge ${maybeQuote(answers.forge)}`);
-
-  // --ref <v> (only when defined)
-  if (answers.ref !== undefined) {
-    parts.push(`--ref ${maybeQuote(answers.ref)}`);
-  }
-
-  // --profile <v>
+  if (answers.ref !== undefined) parts.push(`--ref ${maybeQuote(answers.ref)}`);
   parts.push(`--profile ${maybeQuote(answers.profile)}`);
-
-  // --targets <a,b> (only when defined)
-  if (answers.targets !== undefined) {
-    parts.push(`--targets ${answers.targets.join(",")}`);
-  }
-
-  // --remove-recipe <v> per name
-  for (const name of answers.removeRecipes) {
-    parts.push(`--remove-recipe ${maybeQuote(name)}`);
-  }
-
-  // --add-recipe <v> per name
-  for (const name of answers.addRecipes) {
-    parts.push(`--add-recipe ${maybeQuote(name)}`);
-  }
-
-  // --replace (when replace and there is at least one add)
-  if (answers.replace && answers.addRecipes.length > 0) {
-    parts.push("--replace");
-  }
-
-  // --workspace <v> (when given.workspace is defined)
-  if (given.workspace !== undefined) {
-    parts.push(`--workspace ${maybeQuote(given.workspace)}`);
-  }
-
-  // --no-sync (when given.sync is false)
-  if (!given.sync) {
-    parts.push("--no-sync");
-  }
-
-  // --offline (when given.offline)
-  if (given.offline) {
-    parts.push("--offline");
-  }
-
+  if (answers.targets !== undefined) parts.push(`--targets ${answers.targets.join(",")}`);
+  for (const name of answers.removeRecipes) parts.push(`--remove-recipe ${maybeQuote(name)}`);
+  for (const name of answers.addRecipes) parts.push(`--add-recipe ${maybeQuote(name)}`);
+  if (answers.replace && answers.addRecipes.length > 0) parts.push("--replace");
+  if (given.workspace !== undefined) parts.push(`--workspace ${maybeQuote(given.workspace)}`);
+  if (!given.sync) parts.push("--no-sync");
+  if (given.offline) parts.push("--offline");
   return parts.join(" ");
 }
-
-/* ------------------------------------------------------------------ */
-/* askInit — steps 2–7 of the interactive flow (spec 28 §4.2)          */
-/* ------------------------------------------------------------------ */
 
 export interface InitGiven {
   forge?: string;
@@ -234,13 +165,6 @@ export type AskResult =
  * Steps 2–7 of the interactive flow: asks for the Forge, ref, profile, recipes and targets
  * a command line does not give. Returns the `InitInput` for `planInit` and the `InitAnswers`
  * for `againLine`, or a `cancelled` result when the user interrupted.
- *
- * @param root     The workspace directory (need not exist)
- * @param given    Flags given on the command line
- * @param local    The local file (`craftar.local.yaml`) read once by the caller
- * @param io       The I/O adapter
- * @param opts     Options: `home` is `$CRAFTAR_HOME`, `registryOff` skips the registry,
- *                 `exists` tests if a directory exists (default `fs.existsSync`)
  */
 export async function askInit(
   root: string,
@@ -252,17 +176,12 @@ export async function askInit(
   const exists = opts.exists ?? existsSync;
   const home = resolveHome(opts.home);
 
-  // Step 0: checkLocalKeys before any io.ask (N10)
   checkLocalKeys(local.keys, {
     ref: given.ref !== undefined,
     recipes: given.addRecipes.length + given.removeRecipes.length > 0,
     targets: given.targets !== undefined,
   });
 
-  // Ask helper: returns null on cancel
-  const ask = async (q: string): Promise<string | null> => io.ask(q);
-
-  // Answers to build
   let answeredForge: string | undefined;
   let answeredRef: string | undefined;
   let answeredProfile: string | undefined;
@@ -271,12 +190,10 @@ export async function askInit(
   let answeredRemoveRecipes: string[] = [];
   let answeredReplace = false;
 
-  // State for Forge/Ref retry
   let forgeDefault: string | null = null;
   let refDefault: string | null = null;
   let forgeWasAsked = false;
 
-  // Step 1: Forge default from registry
   if (given.forge === undefined && !opts.registryOff) {
     try {
       const registry = await readRegistry(home);
@@ -290,16 +207,12 @@ export async function askInit(
     }
   }
 
-  // State for loaded Forge
   let loaded: LoadedForge | undefined;
   let localConfig: WorkspaceConfig | null = null;
 
-  // Forge/Ref/Load loop
   forgeLoop: for (;;) {
-    // Reset answeredRef at the top of each round
     answeredRef = undefined;
 
-    // Step 2: Forge
     let forgeValue: string;
     if (given.forge !== undefined && !forgeWasAsked) {
       forgeValue = given.forge;
@@ -308,7 +221,7 @@ export async function askInit(
       const q = forgeDefault !== null
         ? `Forge — a directory or a git URL [${forgeDefault}]: `
         : "Forge — a directory or a git URL: ";
-      const answer = await ask(q);
+      const answer = await io.ask(q);
       if (answer === null) return { kind: "cancelled" };
       const trimmed = answer.trim();
       if (trimmed === "") {
@@ -317,27 +230,19 @@ export async function askInit(
           continue forgeLoop;
         }
         forgeValue = forgeDefault;
-        // When the default is taken as offered and it has a ref, that's the ref default
-        // (refDefault is already set from the registry)
       } else {
-        // Check credentials
         if (credentialFault(trimmed)) {
           io.say("the answer holds credentials in the URL — remove them and let git authenticate");
           continue forgeLoop;
         }
         forgeValue = trimmed;
-        // A typed answer clears the registry ref default (unless it's a re-ask with the same URL)
-        if (forgeValue !== forgeDefault) {
-          refDefault = null;
-        }
+        if (forgeValue !== forgeDefault) refDefault = null;
       }
-      // Check --ref beside a directory
       if (given.ref !== undefined && classifyForge(forgeValue) !== "url") {
         try {
           checkInitFlags({ forge: forgeValue, ref: given.ref });
         } catch (e) {
           io.say((e as Error).message);
-          // Do not set forgeDefault — re-ask without offering the refused value
           continue forgeLoop;
         }
       }
@@ -346,36 +251,29 @@ export async function askInit(
 
     answeredForge = forgeValue;
 
-    // Validate local.doc through the schema once, right after the Forge is answered.
-    // The profile placeholder "-" is never used: only ref, recipes and targets are read from localConfig,
-    // and none depends on the profile value. A schema error surfaces here, ending the run.
+    // The placeholder profile "-" is never used: only ref, recipes and targets are read,
+    // and none depends on the profile value. A schema error surfaces here.
     localConfig = local.doc !== null
       ? mergeWorkspaceConfig({ forge: forgeSource(root, forgeValue), profile: given.profile ?? "-" }, local.doc).config
       : null;
 
-    // Step 3: Ref (only for URL, unless --ref or local has ref)
     let refValue: string | null = null;
     if (classifyForge(forgeValue) === "url") {
       if (given.ref !== undefined) {
         refValue = given.ref;
-        answeredRef = given.ref; // given.ref goes into input.ref and answers.ref
+        answeredRef = given.ref;
       } else if (local.keys.includes("ref")) {
-        // Show the ref from local.yaml but don't ask
         const localRef = localConfig?.ref ?? null;
-        if (localRef !== null) {
-          io.say(`Ref: ${localRef} (from craftar.local.yaml)`);
-        }
+        if (localRef !== null) io.say(`Ref: ${localRef} (from craftar.local.yaml)`);
         refValue = localRef;
-        // answeredRef stays undefined: the ref is not written to input.ref
       } else {
         const refQ = refDefault !== null && refDefault !== "the default branch"
           ? `Ref — a branch, a tag or a full SHA [${refDefault}]: `
           : "Ref — a branch, a tag or a full SHA [the default branch]: ";
-        const answer = await ask(refQ);
+        const answer = await io.ask(refQ);
         if (answer === null) return { kind: "cancelled" };
         const trimmed = answer.trim();
         if (trimmed === "") {
-          // Enter = default; "the default branch" means no ref
           if (refDefault !== null && refDefault !== "the default branch") {
             refValue = refDefault;
             answeredRef = refValue;
@@ -391,7 +289,6 @@ export async function askInit(
       }
     }
 
-    // Step 4: Load the Forge
     try {
       const loadRef = given.ref !== undefined ? given.ref
         : local.keys.includes("ref") ? (localConfig?.ref ?? null)
@@ -413,7 +310,6 @@ export async function askInit(
 
   const forge = loaded!.forge;
 
-  // Step 5: Profile
   if (forge.profiles.size === 0 && given.profile === undefined) {
     throw new Error("the Forge has no profile — add one under profiles/, then re-run init");
   }
@@ -424,7 +320,6 @@ export async function askInit(
     answeredProfile = given.profile;
   } else {
     const profiles = [...forge.profiles.values()].sort((a, b) => a.name.localeCompare(b.name));
-    // Say the list
     io.say(`Profiles in ${answeredForge}:`);
     const maxLen = Math.max(...profiles.map((p) => p.name.length));
     for (let i = 0; i < profiles.length; i++) {
@@ -439,7 +334,7 @@ export async function askInit(
     const defProfile = profiles.length === 1 ? profiles[0].name : null;
     const profileQ = defProfile !== null ? `Profile [${defProfile}]: ` : "Profile: ";
     profileLoop: for (;;) {
-      const answer = await ask(profileQ);
+      const answer = await io.ask(profileQ);
       if (answer === null) return { kind: "cancelled" };
       const trimmed = answer.trim();
       if (trimmed === "") {
@@ -450,7 +345,7 @@ export async function askInit(
         answeredProfile = defProfile;
         break profileLoop;
       }
-      // Name first, then number (spec §13 item 32)
+      // Name first, then number
       const byName = profiles.find((p) => p.name === trimmed);
       if (byName) {
         answeredProfile = byName.name;
@@ -461,28 +356,22 @@ export async function askInit(
         answeredProfile = profiles[num - 1].name;
         break profileLoop;
       }
-      // Unknown
       io.say(profileNotFoundMessage(trimmed, [...forge.profiles.keys()]));
     }
   }
 
   const profile = forge.profiles.get(answeredProfile!)!;
 
-  // Step 6: Recipes
   const recipesFlagged = given.addRecipes.length > 0 || given.removeRecipes.length > 0;
   if (recipesFlagged) {
-    // Skipped: use the flag values
     answeredAddRecipes = given.addRecipes;
     answeredRemoveRecipes = given.removeRecipes;
     answeredReplace = given.replace;
   } else if (local.keys.includes("recipes")) {
-    // Show from local.yaml — already validated through localConfig
     const recipeConfig = { ...localConfig!, profile: answeredProfile! };
     const resolution = resolve(forge, recipeConfig);
     io.say(`Recipes: ${resolution.recipes.join(" → ")} (from craftar.local.yaml)`);
-    // Do NOT set answeredAddRecipes/answeredRemoveRecipes — the local file provides it
   } else {
-    // Resolve the profile on its own first (R5)
     const baseConfig = mergeWorkspaceConfig(
       { forge: forgeSource(root, answeredForge!), profile: answeredProfile! },
       null
@@ -492,25 +381,20 @@ export async function askInit(
 
     recipeLoop: for (;;) {
       const adjustQ = "Adjust the recipes [no]: ";
-      const adjustAns = await ask(adjustQ);
+      const adjustAns = await io.ask(adjustQ);
       if (adjustAns === null) return { kind: "cancelled" };
       const yn = yesNo(adjustAns);
       if (adjustAns.trim() !== "" && yn === null) {
         io.say("answer yes or no");
         continue recipeLoop;
       }
-      if (yn !== true) {
-        // No adjustment
-        break recipeLoop;
-      }
-      // Yes: show recipes list and ask Remove/Add
+      if (yn !== true) break recipeLoop;
+
       io.say(`Recipes in ${answeredForge}:`);
       const allRecipes = [...forge.recipes.values()].sort((a, b) => a.name.localeCompare(b.name));
       const inUse = resolution.recipes;
-      const inUseRecipes = allRecipes.filter((r) => inUse.includes(r.name));
-      const notInUseRecipes = allRecipes.filter((r) => !inUse.includes(r.name));
-      // In use first in resolved order, then others by name
       const orderedInUse = inUse.map((name) => allRecipes.find((r) => r.name === name)!);
+      const notInUseRecipes = allRecipes.filter((r) => !inUse.includes(r.name));
       const ordered = [...orderedInUse, ...notInUseRecipes];
       for (let i = 0; i < ordered.length; i++) {
         const r = ordered[i];
@@ -521,37 +405,27 @@ export async function askInit(
         io.say(parts.join(" "));
       }
 
-      // Helper to parse a recipe answer into names
       const parseRecipeAnswer = (answer: string): string[] => {
-        return answer
-          .split(",")
-          .map((s) => s.trim())
-          .filter((s) => s !== "")
-          .map((s) => {
-            // Name first, then number
-            const byName = ordered.find((r) => r.name === s);
-            if (byName) return byName.name;
-            const num = parseInt(s, 10);
-            if (!isNaN(num) && num >= 1 && num <= ordered.length) return ordered[num - 1].name;
-            return s; // Keep as-is for error handling
-          });
+        return answer.split(",").map((s) => s.trim()).filter((s) => s !== "").map((s) => {
+          // Name first, then number
+          const byName = ordered.find((r) => r.name === s);
+          if (byName) return byName.name;
+          const num = parseInt(s, 10);
+          if (!isNaN(num) && num >= 1 && num <= ordered.length) return ordered[num - 1].name;
+          return s;
+        });
       };
 
-      // Ask Remove and Add
-      const removeAns = await ask("Remove [none]: ");
+      const removeAns = await io.ask("Remove [none]: ");
       if (removeAns === null) return { kind: "cancelled" };
-      const addAns = await ask("Add [none]: ");
+      const addAns = await io.ask("Add [none]: ");
       if (addAns === null) return { kind: "cancelled" };
 
       const removeNames = parseRecipeAnswer(removeAns);
       const addNames = parseRecipeAnswer(addAns);
 
-      if (removeNames.length === 0 && addNames.length === 0) {
-        // As "no"
-        break recipeLoop;
-      }
+      if (removeNames.length === 0 && addNames.length === 0) break recipeLoop;
 
-      // Check N6: recipe both added and removed
       const both = addNames.find((n) => removeNames.includes(n));
       if (both !== undefined) {
         try {
@@ -562,7 +436,7 @@ export async function askInit(
         }
       }
 
-      // Apply removes, then adds, starting from the profile's recipes
+      // Every round starts from the profile's recipes
       let editConfig = mergeWorkspaceConfig(
         { forge: forgeSource(root, answeredForge!), profile: answeredProfile! },
         null
@@ -571,31 +445,24 @@ export async function askInit(
       let replaceUsed = false;
 
       try {
-        // Removes first
         if (removeNames.length > 0) {
           const removeEdit = planRecipeEdit(forge, editConfig, "remove", removeNames);
           editConfig = { ...editConfig, recipes: removeEdit.recipes };
-          if (removeEdit.reasons.length) {
-            io.say(`  note ${removeEdit.reasons.join(", ")}`);
-          }
+          if (removeEdit.reasons.length) io.say(`  note ${removeEdit.reasons.join(", ")}`);
         }
-        // Adds with potential replace
         let doReplace = false;
         if (addNames.length > 0) {
           addLoop: for (;;) {
             try {
               const addEdit = planRecipeEdit(forge, editConfig, "add", addNames, { replace: doReplace });
               editConfig = { ...editConfig, recipes: addEdit.recipes };
-              if (addEdit.reasons.length) {
-                io.say(`  note ${addEdit.reasons.join(", ")}`);
-              }
+              if (addEdit.reasons.length) io.say(`  note ${addEdit.reasons.join(", ")}`);
               break addLoop;
             } catch (e) {
               const held = slotHeld(e);
               if (held !== null && !doReplace) {
-                // Ask the replace question
                 const replaceQ = `${held.recipe} takes the slot "${held.slot}" that ${held.holder} holds — replace ${held.holder} [no]: `;
-                const replaceAns = await ask(replaceQ);
+                const replaceAns = await io.ask(replaceQ);
                 if (replaceAns === null) return { kind: "cancelled" };
                 const replaceYn = yesNo(replaceAns);
                 if (replaceYn === true) {
@@ -603,20 +470,16 @@ export async function askInit(
                   replaceUsed = true;
                   continue addLoop;
                 }
-                // No or Enter: go back to Adjust the recipes
                 continue recipeLoop;
               }
               throw e;
             }
           }
         }
-        // Success: return typed names, not resulting lists
         answeredReplace = replaceUsed;
-
-        // Resolve with the new config to show the chain
         resolution = resolve(forge, editConfig);
         io.say(`Recipes: ${resolution.recipes.join(" → ")}`);
-        // Store the TYPED names, not the resulting lists
+        // Return the typed names, not the resulting lists
         answeredAddRecipes = addNames;
         answeredRemoveRecipes = removeNames;
         break recipeLoop;
@@ -627,28 +490,20 @@ export async function askInit(
     }
   }
 
-  // Step 7: Targets
   if (given.targets !== undefined) {
     answeredTargets = given.targets;
   } else if (local.keys.includes("targets")) {
-    // Already validated through localConfig
     const localTargets = localConfig?.targets ?? [];
     io.say(`Targets: ${localTargets.join(", ")} (from craftar.local.yaml)`);
-    // Don't set answeredTargets — the local file provides it
   } else {
     const profileTargets = profile.targets;
     const targetsQ = `Targets — ${TARGETS.join(", ")}, separated by commas [${profileTargets.join(", ")}, from the profile]: `;
     targetsLoop: for (;;) {
-      const answer = await ask(targetsQ);
+      const answer = await io.ask(targetsQ);
       if (answer === null) return { kind: "cancelled" };
       const trimmed = answer.trim();
-      if (trimmed === "") {
-        // Enter = follow the profile (no targets key)
-        break targetsLoop;
-      }
-      // Parse the answer
+      if (trimmed === "") break targetsLoop;
       const parsed = trimmed.split(",").map((s) => s.trim());
-      // Check for unknown or empty
       try {
         checkInitFlags({ targets: parsed });
       } catch (e) {
@@ -660,7 +515,6 @@ export async function askInit(
     }
   }
 
-  // Build the input and answers
   const input: InitInput = {
     forge: answeredForge!,
     profile: answeredProfile!,

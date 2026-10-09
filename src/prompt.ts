@@ -44,34 +44,35 @@ async function askOne(
   question: string,
 ): Promise<string | null> {
   const rl = readline.createInterface({ input, output, terminal });
-  let resolved = false;
-
   const questionPromise = rl.question(question);
+
+  let weCalledClose = false;
 
   const result = await new Promise<string | null>((resolve) => {
     const done = (value: string | null): void => {
-      if (resolved) return;
-      resolved = true;
-      rl.removeListener("SIGINT", onSigint);
-      rl.removeListener("close", onClose);
       resolve(value);
     };
 
     const onSigint = (): void => done(null);
-    const onClose = (): void => done(null);
+    const onClose = (): void => {
+      // Only resolve null if we did not call close ourselves
+      if (!weCalledClose) done(null);
+    };
 
     rl.on("SIGINT", onSigint);
     rl.on("close", onClose);
 
     questionPromise.then(
-      (answer) => { done(answer); rl.close(); },
-      () => { done(null); rl.close(); },
+      (answer) => done(answer),
+      () => done(null),
     );
   });
 
-  // Suppress any unhandled rejection from the question promise
-  questionPromise.catch(() => { /* swallow */ });
+  // Close the interface in one place after the race settles
+  weCalledClose = true;
+  rl.close();
 
+  questionPromise.catch(() => { /* swallow any rejection */ });
   return result;
 }
 
