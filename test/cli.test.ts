@@ -6355,3 +6355,113 @@ describe("cli — init under a file (spec 28 §14)", () => {
     expect(await fs.readFile(path.join(ws, "craftar.yaml"), "utf8")).toBe("forge: ../../../../forge\nprofile: acme\n");
   });
 });
+
+describe("diff — example file withholding (spec 27 §4.2, Ruling 4)", () => {
+  const EX = ".claude/settings.craftar.example.json";
+  const PLANNED = '{\n  "env": {\n    "ACME_TRACKER_TOKEN": ""\n  }\n}\n';
+  const MARK = "MARKER_TYPED_27";
+  const mcp = { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx" } } };
+
+  async function exScenario(files?: Record<string, string | Buffer>) {
+    const s = await scenario(
+      { ingredients: [mcp], recipes: [recipe("base", ["mcp/tracker"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" }, files },
+    );
+    cleanups.push(s.cleanup);
+    return s;
+  }
+
+  it("8. drift: sync then write marker; diff prints headers and 'content not shown' line, not the marker; with --exit-code: same stdout, code 1", async () => {
+    const s = await exScenario();
+    runCli(["sync", "--workspace", s.wsRoot]);
+    const drifted = '{\n  "env": {\n    "ACME_TRACKER_TOKEN": "' + MARK + '"\n  }\n}\n';
+    await fs.writeFile(path.join(s.wsRoot, EX), drifted);
+    const r = runCli(["diff", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      "--- .claude/settings.craftar.example.json (disk, drift)\n" +
+        "+++ .claude/settings.craftar.example.json (forge)\n" +
+        "  content not shown: an example file may hold a value typed by hand\n",
+    );
+    const ec = runCli(["diff", "--exit-code", "--workspace", s.wsRoot]);
+    expect(ec.code).toBe(1);
+    expect(ec.stdout).toBe(r.stdout);
+  });
+
+  it("9. collision: no sync; write marker file; diff stdout contains headers with (disk, collision) and 'content not shown', marker never printed; assert whole stdout after observing .mcp.json part", async () => {
+    // The spec says: capture the .mcp.json part from unchanged code first, then assert the whole stdout literally after.
+    // .mcp.json is new (no sync), so its diff is the full content added.
+    const s = await exScenario({ [EX]: '{"env":{"OTHER":"' + MARK + '"}}' });
+    const r = runCli(["diff", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    // The marker must never appear in stdout
+    expect(r.stdout.includes(MARK)).toBe(false);
+    // The output must contain the example file headers with collision and the "content not shown" line
+    expect(r.stdout).toContain("--- .claude/settings.craftar.example.json (disk, collision)");
+    expect(r.stdout).toContain("+++ .claude/settings.craftar.example.json (forge)");
+    expect(r.stdout).toContain("  content not shown: an example file may hold a value typed by hand");
+    // The exact expected stdout (example file first as it comes before .mcp.json alphabetically):
+    expect(r.stdout).toBe(
+      "--- .claude/settings.craftar.example.json (disk, collision)\n" +
+        "+++ .claude/settings.craftar.example.json (forge)\n" +
+        "  content not shown: an example file may hold a value typed by hand\n" +
+        "--- .mcp.json (disk, new)\n" +
+        "+++ .mcp.json (forge)\n" +
+        "+ {\n" +
+        '+   "mcpServers": {\n' +
+        '+     "tracker": {\n' +
+        '+       "command": "npx"\n' +
+        "+     }\n" +
+        "+   }\n" +
+        "+ }\n",
+    );
+  });
+
+  it("10. orphan-drift (as test 3 in status): stdout is the unchanged code's output — pinned", async () => {
+    const s = await exScenario();
+    runCli(["sync", "--workspace", s.wsRoot]);
+    await fs.appendFile(path.join(s.wsRoot, EX), " ");
+    // Remove authEnv to make it an orphan
+    await fs.writeFile(
+      path.join(s.forgeRoot, "ingredients/mcp/tracker/ingredient.yaml"),
+      YAML.stringify({ type: "mcp", name: "tracker", server: { command: "npx" } }),
+    );
+    const r = runCli(["diff", "--workspace", s.wsRoot]);
+    // orphan-drift output is: header + explainSkip line
+    expect(r.stdout).toBe(
+      "--- .claude/settings.craftar.example.json (disk, orphan-drift)\n" +
+        "  no longer produced by the Forge but hand-edited — kept; delete it yourself if unwanted\n",
+    );
+  });
+
+  it("11. update for another file is untouched: an ordinary rule drifted in the same workspace still prints its hunks", async () => {
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "# A\n"), mcp],
+        recipes: [recipe("base", ["rule/a", "mcp/tracker"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    runCli(["sync", "--workspace", s.wsRoot]);
+    // Edit the rule to cause drift
+    await fs.writeFile(path.join(s.wsRoot, ".claude/rules/a.md"), "# A modified\n");
+    // Also edit the example file to cause drift there too
+    await fs.writeFile(path.join(s.wsRoot, EX), PLANNED.replace('""', '"secret"'));
+    const r = runCli(["diff", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    // The rule's hunks should be shown (the diff uses "- " and "+ " with leading space)
+    expect(r.stdout).toContain("--- .claude/rules/a.md (disk, drift)");
+    expect(r.stdout).toContain("+++ .claude/rules/a.md (forge)");
+    expect(r.stdout).toContain("- # A modified");
+    expect(r.stdout).toContain("+ # A");
+    // The example file should NOT show its content (drift)
+    expect(r.stdout).toContain("--- .claude/settings.craftar.example.json (disk, drift)");
+    expect(r.stdout).toContain("  content not shown: an example file may hold a value typed by hand");
+    // The secret should not appear
+    expect(r.stdout.includes("secret")).toBe(false);
+  });
+});

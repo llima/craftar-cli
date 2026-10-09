@@ -43,6 +43,7 @@ import { readlineIo } from "./prompt.js";
 import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
+import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
@@ -359,7 +360,12 @@ program
         const next = s.planned ? toLf(stripBom(s.planned.content.toString("utf8"))) : "";
         console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
         console.log(pc.bold(`+++ ${s.path} (forge)`));
-        console.log(renderDiff(disk ?? "", next, render));
+        // Spec 27 §4.2, Ruling 4: do not print on-disk content of the example file for drift/collision
+        if (s.path === EXAMPLE_SETTINGS && (s.state === "drift" || s.state === "collision")) {
+          console.log("  content not shown: an example file may hold a value typed by hand");
+        } else {
+          console.log(renderDiff(disk ?? "", next, render));
+        }
       }
     }
     if (!shown) console.log(pc.green("no differences"));

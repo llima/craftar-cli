@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { apply, loadWorkspace, plan, readLock, status, type ApplyOptions } from "../src/core/sync.js";
+import { exists } from "../src/core/forge.js";
 import { profile, recipe, rule, scenario, type IngredientSpec } from "./helpers/forge.js";
 
 const A = ".claude/rules/a.md";
@@ -168,5 +169,95 @@ describe("status — MCP servers written as the Forge holds them (spec 07)", () 
     await setServer(s.forgeRoot, { type: "stdio", command: "npx", args: ["srv"] });
     expect(await stateOf(s.wsRoot, MCP)).toBe("update");
     expect(await stateOf(s.wsRoot, KIRO_MCP)).toBe("update");
+  });
+});
+
+
+describe("status — .claude/settings.craftar.example.json (spec 27 §6)", () => {
+  const EX = ".claude/settings.craftar.example.json";
+  const PLANNED = '{\n  "env": {\n    "ACME_TRACKER_TOKEN": ""\n  }\n}\n';
+  const mcp: IngredientSpec = { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx" } } };
+
+  async function exScenario(files?: Record<string, string | Buffer>) {
+    const s = await scenario(
+      { ingredients: [mcp], recipes: [recipe("base", ["mcp/tracker"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" }, files },
+    );
+    cleanups.push(s.cleanup);
+    return s;
+  }
+
+  it("1. first sync: new → written with PLANNED, lock entry has ingredient mcp/*; second status: unchanged", async () => {
+    const s = await exScenario();
+    expect(await stateOf(s.wsRoot, EX)).toBe("new");
+    await sync(s.wsRoot);
+    expect(await fs.readFile(path.join(s.wsRoot, EX), "utf8")).toBe(PLANNED);
+    const lock = await readLock(s.wsRoot);
+    const entry = lock!.files.find((f) => f.path === EX);
+    expect(entry?.ingredient).toBe("mcp/*");
+    expect(await stateOf(s.wsRoot, EX)).toBe("unchanged");
+  });
+
+  it("2. remove authEnv from ingredient: orphan; sync removes file and lock entry", async () => {
+    const s = await exScenario();
+    await sync(s.wsRoot);
+    // Remove authEnv from ingredient
+    await fs.writeFile(
+      path.join(s.forgeRoot, "ingredients/mcp/tracker/ingredient.yaml"),
+      YAML.stringify({ type: "mcp", name: "tracker", server: { command: "npx" } }),
+    );
+    expect(await stateOf(s.wsRoot, EX)).toBe("orphan");
+    await sync(s.wsRoot);
+    expect(await exists(path.join(s.wsRoot, EX))).toBe(false);
+    const lock = await readLock(s.wsRoot);
+    expect(lock!.files.find((f) => f.path === EX)).toBeUndefined();
+  });
+
+  it("3. remove authEnv, but file edited first: orphan-drift; sync keeps the file", async () => {
+    const s = await exScenario();
+    await sync(s.wsRoot);
+    await fs.appendFile(path.join(s.wsRoot, EX), " ");
+    await fs.writeFile(
+      path.join(s.forgeRoot, "ingredients/mcp/tracker/ingredient.yaml"),
+      YAML.stringify({ type: "mcp", name: "tracker", server: { command: "npx" } }),
+    );
+    expect(await stateOf(s.wsRoot, EX)).toBe("orphan-drift");
+    await sync(s.wsRoot);
+    expect(await exists(path.join(s.wsRoot, EX))).toBe(true);
+  });
+
+  it("4. hand edit (replace \"\" with \"typed\"): drift; sync leaves file; with overwriteDrift the file is PLANNED", async () => {
+    const s = await exScenario();
+    await sync(s.wsRoot);
+    const edited = PLANNED.replace('""', '"typed"');
+    await fs.writeFile(path.join(s.wsRoot, EX), edited);
+    expect(await stateOf(s.wsRoot, EX)).toBe("drift");
+    await sync(s.wsRoot);
+    expect(await fs.readFile(path.join(s.wsRoot, EX), "utf8")).toBe(edited);
+    await sync(s.wsRoot, { overwriteDrift: true });
+    expect(await fs.readFile(path.join(s.wsRoot, EX), "utf8")).toBe(PLANNED);
+  });
+
+  it("5. no lock entry, file on disk parses to same value with same key order: adopt", async () => {
+    const compact = '{"env":{"ACME_TRACKER_TOKEN":""}}';
+    const s = await exScenario({ [EX]: compact });
+    expect(await stateOf(s.wsRoot, EX)).toBe("adopt");
+  });
+
+  it("6. no lock entry, file on disk has different key: collision; sync does not write it", async () => {
+    const different = '{"env":{"OTHER":""}}';
+    const s = await exScenario({ [EX]: different });
+    expect(await stateOf(s.wsRoot, EX)).toBe("collision");
+    await sync(s.wsRoot);
+    expect(await fs.readFile(path.join(s.wsRoot, EX), "utf8")).toBe(different);
+  });
+
+  it("7. hand-maintained .claude/settings.example.json next to it: unchanged after sync and not in status", async () => {
+    const handMaintained = '{"permissions":{}}\n';
+    const s = await exScenario({ ".claude/settings.example.json": handMaintained });
+    await sync(s.wsRoot);
+    expect(await fs.readFile(path.join(s.wsRoot, ".claude/settings.example.json"), "utf8")).toBe(handMaintained);
+    const { st } = await statuses(s.wsRoot);
+    expect(st.find((x) => x.path === ".claude/settings.example.json")).toBeUndefined();
   });
 });
