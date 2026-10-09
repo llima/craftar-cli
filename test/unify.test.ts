@@ -631,8 +631,11 @@ describe("unify — non-UTF-8 content (Ruling 31)", () => {
       { "rule.md": "x\n", "latin.txt": latinE },
       { "rule.md": "x\n", "latin.txt": latinEGrave },
     );
-    // Both decode to "caf\uFFFD\n": the text diff alone cannot see the difference.
-    expect(diff.files).toEqual([]);
+    // diffIngredients now detects the byte difference and reports a binary hunk.
+    expect(diff.files).toEqual([
+      { file: "latin.txt", hunks: [{ kind: "binary", a: { start: 1, lines: [] }, b: { start: 1, lines: [] }, suggestion: { class: "block", reason: "[binary] latin.txt differs" } }] },
+    ]);
+    // planFrom and applyPlan still refuse via assertTextMergeable (the merge engine cannot merge it).
     await expect(planFrom(base, variant, diff, "acme")).rejects.toThrow(/latin\.txt/);
     const plan = { schema: 1 as const, base: "rule/workflow", profile: "acme", variant: "rule/workflow--acme", baseFingerprint: "", variantFingerprint: "", files: [] };
     await expect(applyPlan(base, variant, diff, plan as never)).rejects.toThrow(/latin\.txt/);

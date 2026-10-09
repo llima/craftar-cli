@@ -1,5 +1,4 @@
 import path from "node:path";
-import { z } from "zod";
 import { placeholders, reservedKey, bodyFile } from "../core/extract.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { fingerprintOf } from "../core/fingerprint.js";
@@ -10,7 +9,7 @@ import { citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerpri
 import { canonicalValue, inferSections } from "../core/sections.js";
 import { sectionKey } from "../core/resolve.js";
 import type { DirReader } from "../core/fingerprint.js";
-import { SectionsSchema, type Ingredient, type Sections } from "../schema/index.js";
+import { OverridesParamsSchema, SectionsSchema, type Ingredient, type Sections } from "../schema/index.js";
 
 /**
  * The decision half of template-aware import (spec 10 §6.1–§6.5): what the importing profile
@@ -277,8 +276,6 @@ async function listAdmitted(ing: { dir: string; meta: Ingredient }): Promise<str
   return (await listFiles(ing.dir)).filter((rel) => rel !== "ingredient.yaml" && bodyFile(ing.meta, rel, ing.dir));
 }
 
-const OverridesParams = z.record(z.unknown());
-
 /** `W`: overrides.params of craftar.yaml and craftar.local.yaml, merged as loadWorkspace merges them (I6). */
 export async function workspaceParams(ws: string, read: (abs: string) => Promise<string>): Promise<Record<string, unknown>> {
   let out: Record<string, unknown> = {};
@@ -287,7 +284,7 @@ export async function workspaceParams(ws: string, read: (abs: string) => Promise
     if (!(await exists(abs))) continue;
     try {
       const doc = (parseWorkspaceYaml(f, await read(abs)) ?? {}) as { overrides?: { params?: unknown; sections?: unknown } };
-      const params = OverridesParams.parse(doc?.overrides?.params ?? {});
+      const params = OverridesParamsSchema.parse(doc?.overrides?.params ?? {});
       out = deepMerge(out, params);
     } catch (e) {
       throw new Error(`import: ${f} does not load (${(e as Error).message})`);

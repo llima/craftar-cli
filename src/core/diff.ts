@@ -7,7 +7,7 @@ export type DiffOp = { kind: "same" | "del" | "add"; line: string };
 export const NO_EOF_NEWLINE_MARKER = "\\ No newline at end of file";
 
 export interface Hunk {
-  kind: "block" | "inline";
+  kind: "block" | "inline" | "binary";
   a: { start: number; lines: string[]; noEofNewline?: true };
   b: { start: number; lines: string[]; noEofNewline?: true };
 }

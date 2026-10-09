@@ -5,7 +5,7 @@ import YAML from "yaml";
 import { fingerprintDir } from "./fingerprint.js";
 import { exists, listFiles, loadForge, readIngredientText, type Forge, type LoadedIngredient } from "./forge.js";
 import { splitLines, type Hunk } from "./diff.js";
-import { detectEol, withEol, type Eol } from "./text.js";
+import { detectEol, isUtf8, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
 import type { HunkTake, Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile, PlanHunk } from "../schema/index.js";
 import { ProfileSchema, RecipeSchema } from "../schema/index.js";
@@ -26,18 +26,6 @@ const BOM = String.fromCharCode(0xfeff);
 /** Where a hunk sits, worded exactly as `forge diff` prints it. */
 export function hunkAt(h: Hunk): string {
   return h.a.lines.length ? `lines ${h.a.start}–${h.a.start + h.a.lines.length - 1}` : `after line ${h.a.start - 1}`;
-}
-
-const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
-
-/** Valid UTF-8, BOM included (a BOM is a valid UTF-8 sequence). */
-function isUtf8(bytes: Buffer): boolean {
-  try {
-    strictUtf8.decode(bytes);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** Every file of an ingredient but `ingredient.yaml`, as the raw bytes on disk. */

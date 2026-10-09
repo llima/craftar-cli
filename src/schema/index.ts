@@ -2,6 +2,27 @@ import { z } from "zod";
 import { climbsOut } from "../core/text.js";
 
 /* ------------------------------------------------------------------ */
+/* __proto__ key refusal helper (tech-debt 2026-09-25-zod)              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Refuse `__proto__` as a key in the raw input: zod's `z.record()` silently strips it,
+ * turning a write into a silent drop — the key appears in the source file yet vanishes
+ * from the parsed object. Wrap any `z.record()` that users can write (profile params,
+ * recipe params, workspace overrides.params, ingredient params, etc.).
+ *
+ * MCP `server` and `env` keep `__proto__` by design (spec 07): they are tool configs
+ * passed through, not user-facing Craftar records.
+ */
+function noProtoKey<T extends z.ZodTypeAny>(schema: T): z.ZodType<z.infer<T>> {
+  return z.custom<unknown>().superRefine((v, ctx) => {
+    if (v !== null && typeof v === "object" && !Array.isArray(v) && Object.hasOwn(v, "__proto__")) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["__proto__"], message: "a __proto__ key is not allowed" });
+    }
+  }).pipe(schema);
+}
+
+/* ------------------------------------------------------------------ */
 /* Targets                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -44,7 +65,7 @@ const IngredientBase = z.object({
   /** Where this ingredient came from (set by `craftar import`). */
   origin: z.object({ workspace: z.string(), path: z.string() }).strict().optional(),
   /** Declared parameters (spec 09). Optional without a default, so fingerprints of existing ingredients do not move. */
-  params: z.record(IngredientParam).optional(),
+  params: noProtoKey(z.record(IngredientParam)).optional(),
   // Strict: an unknown key is a typo or a field no command reads. Stripping it hid it from `forge unify`,
   // which could then resolve and delete a variant that differed only there (spec 07, Ruling 1).
 }).strict();
@@ -170,7 +191,7 @@ export const RecipeSchema = z.object({
   /** Mutually exclusive slot (e.g. `frontend`): two recipes on the same slot cannot coexist. */
   slot: z.string().optional(),
   ingredients: z.array(z.string()).default([]),
-  params: z.record(z.object({ default: z.unknown().optional(), description: z.string().optional() })).default({}),
+  params: noProtoKey(z.record(z.object({ default: z.unknown().optional(), description: z.string().optional() }))).default({}),
 });
 export type Recipe = z.infer<typeof RecipeSchema>;
 
@@ -202,10 +223,10 @@ export const ProfileSchema = z.object({
     .object({ kind: z.enum(["kiro", "claude-subagent", "none"]).optional(), modelPin: z.string().optional(), terminal: z.string().optional() })
     .partial()
     .default({}),
-  integrations: z.record(z.unknown()).default({}),
+  integrations: noProtoKey(z.record(z.unknown())).default({}),
   /** Values substituted into `{{param}}` placeholders inside ingredient bodies. */
-  params: z.record(z.unknown()).default({}),
-  repos: z.array(z.record(z.unknown())).default([]),
+  params: noProtoKey(z.record(z.unknown())).default({}),
+  repos: z.array(noProtoKey(z.record(z.unknown()))).default([]),
   /** Section values for this profile, keyed `<type>/<outName>` then section name (spec 11 §5.1). */
   sections: SectionsSchema,
 });
@@ -229,6 +250,9 @@ export type ForgeManifest = z.infer<typeof ForgeManifestSchema>;
 /* Workspace (craftar.yaml)                                             */
 /* ------------------------------------------------------------------ */
 
+/** The overrides.params record, wrapped to refuse __proto__. Used in WorkspaceConfigSchema and in import's workspaceParams. */
+export const OverridesParamsSchema = noProtoKey(z.record(z.unknown()));
+
 export const WorkspaceConfigSchema = z.object({
   /** Path or git URL of the Forge. Relative paths resolve from the workspace root. */
   forge: z.string(),
@@ -238,7 +262,7 @@ export const WorkspaceConfigSchema = z.object({
   targets: z.array(TargetSchema).optional(),
   overrides: z
     .object({
-      params: z.record(z.unknown()).default({}),
+      params: OverridesParamsSchema.default({}),
       /** Section values for this workspace, same shape as a profile's (spec 11 §5.1). */
       sections: SectionsSchema,
       ingredients: z.object({ disable: z.array(z.string()).default([]) }).default({}),
