@@ -37,7 +37,9 @@ import {
   type PruneResult,
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
-import { initLine, planInit } from "./core/init.js";
+import { checkInitFlags, initLine, planInit } from "./core/init.js";
+import { askInit, confirmInit, againLine } from "./core/init-flow.js";
+import { readlineIo } from "./prompt.js";
 import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
@@ -151,10 +153,10 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
 program
   .command("init")
   .description(
-    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync; refused when craftar.yaml already exists",
+    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync; in a terminal, asks for the Forge and the profile not given as flags; refused when craftar.yaml already exists",
   )
-  .requiredOption("--forge <dir|url>", "the Forge: a directory (written relative to the workspace) or a git URL")
-  .requiredOption("--profile <name>", "the client profile in the Forge")
+  .option("--forge <dir|url>", "the Forge: a directory (written relative to the workspace) or a git URL; asked for in a terminal when omitted")
+  .option("--profile <name>", "the client profile in the Forge; asked for in a terminal when omitted")
   .option("--ref <ref>", "branch, tag or full SHA of a remote Forge")
   .option("--targets <a,b>", "targets to write in craftar.yaml (claude-code, kiro, agents-md); omitted, the workspace follows the profile's")
   .option("--add-recipe <name>", "add a recipe to the profile's (repeatable)", collect, [])
@@ -165,8 +167,8 @@ program
   .option("--workspace <dir>", "workspace root, created when missing", ".")
   .action(
     async (o: {
-      forge: string;
-      profile: string;
+      forge?: string;
+      profile?: string;
       ref?: string;
       targets?: string;
       addRecipe: string[];
@@ -175,28 +177,81 @@ program
       sync: boolean;
       offline: boolean;
       workspace: string;
-    }) => {
+    }, cmd) => {
       const root = path.resolve(o.workspace);
+      // N1: craftar.yaml already exists
       const n1 = () => fail(`${WORKSPACE_FILE} already exists in ${root} — change recipes with craftar add recipe / remove recipe, or edit it`);
       const file = path.join(root, WORKSPACE_FILE);
       if (await exists(file)) n1();
+      // N9: --workspace is a file
       const st = await fs.stat(root).catch(() => null);
       if (st && !st.isDirectory()) fail(`cannot use ${root} as a workspace: it is not a directory`);
-      // Read the local file once (after N1 and N9) and hand it to planInit
+      // Check the flags that were given (N3, N7, N11, N6)
+      checkInitFlags({
+        forge: o.forge,
+        ref: o.ref,
+        targets: o.targets === undefined ? undefined : o.targets.split(",").map((t) => t.trim()),
+        addRecipes: o.addRecipe,
+        removeRecipes: o.removeRecipe,
+      });
+      // Mode: flags when both given; else interactive when both streams are TTYs; else N2
+      const bothGiven = o.forge !== undefined && o.profile !== undefined;
+      const isTTY = process.stdin.isTTY && process.stdout.isTTY;
+      if (!bothGiven && !isTTY) {
+        // N2: refuse with our message
+        if (o.forge === undefined && o.profile === undefined) {
+          fail("--forge and --profile are required when craftar init does not run in a terminal — pass them, or run craftar init in a terminal to be asked");
+        } else if (o.profile === undefined) {
+          fail("--profile is required when craftar init does not run in a terminal — pass it, or run craftar init in a terminal to be asked");
+        } else {
+          fail("--forge is required when craftar init does not run in a terminal — pass it, or run craftar init in a terminal to be asked");
+        }
+      }
+      // Read the local file once (after N1, N9 and flag checks, before any question or planInit)
       const local = await readLocalFile(root);
-      const init = await planInit(
-        root,
-        {
-          forge: o.forge,
-          profile: o.profile,
+      // Interactive mode
+      let input: { forge: string; profile: string; ref?: string; targets?: string[]; addRecipes?: string[]; removeRecipes?: string[]; replace?: boolean };
+      let answers: { forge: string; profile: string; ref?: string; targets?: string[]; addRecipes: string[]; removeRecipes: string[]; replace: boolean } | null = null;
+      if (!bothGiven) {
+        // Interactive mode: askInit
+        const io = readlineIo(process.stdin, process.stdout, { terminal: true });
+        const result = await askInit(
+          root,
+          {
+            forge: o.forge,
+            profile: o.profile,
+            ref: o.ref,
+            targets: o.targets === undefined ? undefined : o.targets.split(",").map((t) => t.trim()),
+            addRecipes: o.addRecipe,
+            removeRecipes: o.removeRecipe,
+            replace: o.replace,
+          },
+          local,
+          io,
+          { ...load(o, "sync"), registryOff: registryOff() },
+        );
+        if (result.kind === "cancelled") fail("init cancelled — nothing written");
+        input = result.input;
+        answers = result.answers;
+      } else {
+        // Flags mode: build input from flags
+        input = {
+          forge: o.forge!,
+          profile: o.profile!,
           ref: o.ref,
           targets: o.targets === undefined ? undefined : o.targets.split(",").map((t) => t.trim()),
           addRecipes: o.addRecipe,
           removeRecipes: o.removeRecipe,
           replace: o.replace,
-        },
-        { ...load(o, "sync"), local },
-      );
+        };
+      }
+      const init = await planInit(root, input, { ...load(o, "sync"), local });
+      // Interactive mode: confirmInit
+      if (answers !== null) {
+        const io = readlineIo(process.stdin, process.stdout, { terminal: true });
+        const confirm = await confirmInit(init, root, io, { sync: o.sync });
+        if (confirm === "cancelled") fail("init cancelled — nothing written");
+      }
       const { ws, plan: p } = init;
       // Every refusal is above: only now does the directory, and craftar.yaml, come to exist (§13 items 1, 9).
       await fs.mkdir(root, { recursive: true });
@@ -212,6 +267,11 @@ program
       if (!o.sync) {
         console.log(nextSyncLine(init.statuses));
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+        // Interactive mode only: print again line (after --no-sync)
+        if (answers !== null) {
+          const workspaceGiven = cmd.getOptionValueSource("workspace") === "cli";
+          console.log(againLine(answers, { workspace: workspaceGiven ? o.workspace : undefined, sync: o.sync, offline: o.offline }));
+        }
         return;
       }
       const r = await applyAndReport(ws, p, init.statuses, init.lock);
@@ -220,6 +280,11 @@ program
         console.log(
           `  ${pc.yellow("warn")} ${collisions} file(s) already in the workspace differ from the Forge and were left as they are — to bring them into the Forge, run craftar import`,
         );
+      // Interactive mode only: print again line (after sync)
+      if (answers !== null) {
+        const workspaceGiven = cmd.getOptionValueSource("workspace") === "cli";
+        console.log(againLine(answers, { workspace: workspaceGiven ? o.workspace : undefined, sync: o.sync, offline: o.offline }));
+      }
     },
   );
 
