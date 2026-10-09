@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { apply, loadWorkspace, plan, readLock, status, type ApplyOptions } from "../src/core/sync.js";
+import { apply, assertInsideWorkspace, loadWorkspace, plan, readLock, status, type ApplyOptions } from "../src/core/sync.js";
 import { exists } from "../src/core/forge.js";
 import { hashNormalized } from "../src/core/text.js";
 import { profile, recipe, rule, scenario } from "./helpers/forge.js";
@@ -128,5 +128,38 @@ describe("apply", () => {
     const r = await sync(s.wsRoot);
     expect(r.written).toEqual([]);
     expect(r.removed).toEqual([]);
+  });
+
+  it("refuses a lock whose entry is outside the workspace, and deletes nothing (0.17.3)", async () => {
+    const s = await oneRule();
+    await sync(s.wsRoot);
+    const victim = path.join(s.root, "victim.txt");
+    await fs.writeFile(victim, "keep\n");
+    const lockFile = path.join(s.wsRoot, "craftar.lock");
+    const lock = JSON.parse(await fs.readFile(lockFile, "utf8"));
+    lock.files.push({ path: "../victim.txt", hash: hashNormalized("keep\n"), target: "claude-code", ingredient: "rule/gone" });
+    await fs.writeFile(lockFile, JSON.stringify(lock, null, 2) + "\n");
+    await expect(sync(s.wsRoot)).rejects.toThrow("craftar.lock: entry ../victim.txt is outside the workspace");
+    expect(await fs.readFile(victim, "utf8")).toBe("keep\n");
+  });
+
+  it("apply never writes or removes a path outside the workspace, whatever it is handed (0.17.3)", async () => {
+    const s = await oneRule();
+    const w = await loadWorkspace(s.wsRoot);
+    const p = await plan(w);
+    const victim = path.join(s.root, "victim.txt");
+    await fs.writeFile(victim, "keep\n");
+    const planned = { path: "../victim.txt", content: Buffer.from("gone\n"), target: "claude-code" as const, ingredient: "rule/a" };
+    const entry = { path: "../victim.txt", hash: hashNormalized("keep\n"), target: "claude-code" as const, ingredient: "rule/a" };
+    await expect(apply(w, p, [{ path: "../victim.txt", state: "update", target: "claude-code", planned, lock: entry }])).rejects.toThrow("../victim.txt is outside the workspace");
+    await expect(apply(w, p, [{ path: "../victim.txt", state: "orphan", target: "claude-code", lock: entry }])).rejects.toThrow("../victim.txt is outside the workspace");
+    expect(await fs.readFile(victim, "utf8")).toBe("keep\n");
+    expect(await exists(path.join(s.wsRoot, "craftar.lock"))).toBe(false);
+  });
+
+  it("a planned path outside the workspace is refused, and one that stays inside is not (0.17.3)", () => {
+    const f = (p: string) => [{ path: p, content: Buffer.from(""), target: "claude-code" as const, ingredient: "rule/r" }];
+    expect(() => assertInsideWorkspace(f(".claude/rules/../../../x.md"))).toThrow("rule/r would write .claude/rules/../../../x.md, outside the workspace");
+    for (const p of [".claude/scripts/./run.sh", ".claude/scripts//run.sh", ".claude/scripts/a/../run.sh", ".claude/rules/r.md"]) expect(() => assertInsideWorkspace(f(p)), p).not.toThrow();
   });
 });

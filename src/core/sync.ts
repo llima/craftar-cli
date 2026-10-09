@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
 import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
-import { hashNormalized, stripBom, toLf } from "./text.js";
+import { climbsOut, hashNormalized, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
 import { classifyForge, credentialFault, ensureTree, ForgeFetchError, NoCachedCopyError, type CachedTree } from "./remote.js";
 import { resolveHome } from "./home-lock.js";
@@ -366,6 +366,20 @@ function guardOutput(ing: ResolvedIngredient, file: string, out: string, p: Pars
   throw new Error(`${ing.ref} ${file}: the rendered text holds a section marker on line ${line} (from ${from}) — a value cannot open or close a section`);
 }
 
+/** A workspace-relative path that is absolute or resolves above the workspace root. */
+function outsideWorkspace(rel: string): boolean {
+  return path.posix.isAbsolute(rel) || path.win32.isAbsolute(rel) || climbsOut(rel);
+}
+
+/**
+ * Fails a plan holding a path outside the workspace (0.17.3). It catches what leaves the workspace, whatever built
+ * the path; a path that leaves its own folder and stays inside (`.claude/scripts/../x`) is the schema's to refuse.
+ */
+export function assertInsideWorkspace(files: PlannedFile[]): void {
+  const f = files.find((x) => outsideWorkspace(x.path));
+  if (f) throw new Error(`${f.ingredient} would write ${f.path}, outside the workspace — refused`);
+}
+
 export async function plan(ws: Workspace): Promise<Plan> {
   const resolution = resolve(ws.forge, ws.config);
   const warnings = [...ws.warnings, ...resolution.warnings];
@@ -424,6 +438,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
     }
     files.push(...(await emitFor(t, em, ctx)));
   }
+  assertInsideWorkspace(files);
   const missing: Plan["missingParams"] = [];
   for (const [key, refs] of [...missingParams].sort(([a], [b]) => a.localeCompare(b))) {
     const warning = `param "${key}" has no value in any layer — left verbatim (${[...refs].sort().join(", ")})`;
@@ -457,7 +472,11 @@ export async function readLock(root: string): Promise<Lock | null> {
   // A lock a later craftar wrote is refused by name, not with a zod dump (spec 13 §4.6).
   if (raw !== null && typeof raw === "object" && Object.hasOwn(raw, "schema") && !LOCK_SCHEMAS.includes((raw as { schema: unknown }).schema))
     throw new Error(`${LOCK_FILE} declares schema ${JSON.stringify((raw as { schema: unknown }).schema)}, which this craftar does not read — upgrade craftar`);
-  return LockSchema.parse(raw);
+  const lock = LockSchema.parse(raw);
+  // The orphan pass removes what the lock names: an entry outside the workspace would delete there (0.17.3).
+  const outside = lock.files.find((e) => outsideWorkspace(e.path));
+  if (outside) throw new Error(`${LOCK_FILE}: entry ${outside.path} is outside the workspace`);
+  return lock;
 }
 
 export async function writeLock(root: string, lock: Lock): Promise<void> {
@@ -548,6 +567,9 @@ export interface ApplyResult {
 }
 
 export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts: ApplyOptions = {}): Promise<ApplyResult> {
+  // A backstop, before the first write: `plan()` and `readLock()` already refuse such a path.
+  const outside = statuses.find((s) => outsideWorkspace(s.path));
+  if (outside) throw new Error(`${outside.path} is outside the workspace — refused`);
   const written: string[] = [];
   const removed: string[] = [];
   const skipped: FileStatus[] = [];
