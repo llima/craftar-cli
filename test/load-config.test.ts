@@ -6,6 +6,7 @@ import { loadWorkspace, loadWorkspaceConfig } from "../src/core/sync.js";
 import { profile, recipe, rule, scenario, tmpDir } from "./helpers/forge.js";
 import { remoteForge } from "./helpers/remote.js";
 import { localKeys, readLocalFile } from "../src/core/workspace-yaml.js";
+import { defaultGit, type GitRunner } from "../src/core/remote.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -90,5 +91,131 @@ describe("readLocalFile — one read gives the document init merges and the keys
     expect(await readLocalFile(dir)).toEqual({ doc: {}, keys: [] });
     await fs.writeFile(path.join(dir, "craftar.local.yaml"), "targets: [kiro]\noverrides: { params: { a: 1 } }\n");
     expect(await readLocalFile(dir)).toEqual({ doc: { targets: ["kiro"], overrides: { params: { a: 1 } } }, keys: ["targets"] });
+  });
+});
+
+describe("loadForgeSource (spec 28 §5.2)", () => {
+  it("a path Forge, no ref: warnings empty, origin as expected, the Forge loads", async () => {
+    const s = await scenario(SPEC, { config: { profile: "acme" } });
+    cleanups.push(s.cleanup);
+    const home = await tmpDir("craftar-lfs-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const { loadForgeSource } = await import("../src/core/sync.js");
+    // Use a workspace directory that does not exist, to prove loadForgeSource doesn't require it
+    const ws = path.join(s.root, "nonexistent-ws");
+    const result = await loadForgeSource(ws, path.relative(ws, s.forgeRoot).replace(/\\/g, "/"), null, { home });
+    expect(result.warnings).toEqual([]);
+    expect(result.origin).toEqual({
+      kind: "path",
+      source: path.relative(ws, s.forgeRoot).replace(/\\/g, "/"),
+      ref: null,
+      defaultBranch: null,
+      fetched: false,
+      fromLocalFile: false,
+    });
+    expect([...result.forge.profiles.keys()]).toEqual(["acme"]);
+    // The workspace directory ws does not exist and still does not afterwards
+    expect(await fs.stat(ws).catch(() => "no")).toBe("no");
+  });
+
+  it("a path Forge with a ref: warns about ignored ref, origin.ref is null", async () => {
+    const s = await scenario(SPEC, { config: { profile: "acme" } });
+    cleanups.push(s.cleanup);
+    const home = await tmpDir("craftar-lfs-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const { loadForgeSource } = await import("../src/core/sync.js");
+    const result = await loadForgeSource(s.wsRoot, "../forge", "v1", { home });
+    expect(result.warnings).toEqual(['ref "v1" is ignored: the Forge is a path (../forge), read as its working tree']);
+    expect(result.origin.ref).toBe(null);
+  });
+
+  it("a path that is not there: rejects with the resolved path", async () => {
+    const ws = await tmpDir("craftar-lfs-ws-");
+    cleanups.push(() => fs.rm(ws, { recursive: true, force: true }));
+    const home = await tmpDir("craftar-lfs-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const { loadForgeSource } = await import("../src/core/sync.js");
+    await expect(loadForgeSource(ws, "../nope", null, { home })).rejects.toThrow(`Forge not found at ${path.resolve(ws, "../nope")}`);
+  });
+
+  it("a file:// Forge, counted: one fetch, origin as expected", async () => {
+    const r = await remoteForge(SPEC);
+    const ws = await tmpDir("craftar-lfs-ws-");
+    const home = await tmpDir("craftar-lfs-home-");
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    const { loadForgeSource } = await import("../src/core/sync.js");
+    let fetchCount = 0;
+    const counting: GitRunner = async (args, opts) => {
+      if (args.includes("fetch")) fetchCount++;
+      return defaultGit(args, opts);
+    };
+    const result = await loadForgeSource(ws, r.url, null, { home, mode: "sync", git: counting });
+    expect(fetchCount).toBe(1);
+    expect(result.origin.kind).toBe("remote");
+    expect(result.origin.source).toBe(r.url);
+    expect(result.origin.ref).toBe(null);
+    expect(result.origin.fetched).toBe(true);
+    expect(result.origin.defaultBranch).toBe("main");
+    expect(result.origin.fromLocalFile).toBe(false);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("fromLocalFile travels: the same call with fromLocalFile: true sets origin.fromLocalFile", async () => {
+    const r = await remoteForge(SPEC);
+    const ws = await tmpDir("craftar-lfs-ws-");
+    const home = await tmpDir("craftar-lfs-home-");
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    const { loadForgeSource } = await import("../src/core/sync.js");
+    const result = await loadForgeSource(ws, r.url, null, { home, mode: "sync", fromLocalFile: true });
+    expect(result.origin.fromLocalFile).toBe(true);
+  });
+
+  it("refuseRemote: with refuseRemote and a URL, rejects with the message, no fetch", async () => {
+    const r = await remoteForge(SPEC);
+    const ws = await tmpDir("craftar-lfs-ws-");
+    const home = await tmpDir("craftar-lfs-home-");
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    const { loadForgeSource } = await import("../src/core/sync.js");
+    let callCount = 0;
+    const counting: GitRunner = async (args, opts) => {
+      callCount++;
+      return defaultGit(args, opts);
+    };
+    await expect(loadForgeSource(ws, r.url, null, { home, refuseRemote: () => "no remote here", git: counting })).rejects.toThrow("no remote here");
+    expect(callCount).toBe(0);
+  });
+
+  it("loadWorkspaceConfig goes through the seam: the counting runner sees 1 fetch", async () => {
+    const r = await remoteForge(SPEC);
+    const ws = await tmpDir("craftar-lfs-ws-");
+    const home = await tmpDir("craftar-lfs-home-");
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    let fetchCount = 0;
+    const counting: GitRunner = async (args, opts) => {
+      if (args.includes("fetch")) fetchCount++;
+      return defaultGit(args, opts);
+    };
+    await loadWorkspaceConfig(ws, { forge: r.url, profile: "acme" }, null, { home, mode: "sync", git: counting });
+    expect(fetchCount).toBe(1);
+  });
+
+  it("--offline threads git too: after a previous load, offline sees 0 fetches and warns", async () => {
+    const r = await remoteForge(SPEC);
+    const ws = await tmpDir("craftar-lfs-ws-");
+    const home = await tmpDir("craftar-lfs-home-");
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    const { loadForgeSource } = await import("../src/core/sync.js");
+    // First load to populate the cache
+    await loadForgeSource(ws, r.url, null, { home, mode: "sync" });
+    // Second load with offline and a counting runner
+    let fetchCount = 0;
+    const counting: GitRunner = async (args, opts) => {
+      if (args.includes("fetch")) fetchCount++;
+      return defaultGit(args, opts);
+    };
+    const result = await loadForgeSource(ws, r.url, null, { home, offline: true, git: counting });
+    expect(fetchCount).toBe(0);
+    expect(result.warnings.length).toBe(1);
+    expect(result.warnings[0].startsWith(`Forge ${r.url} not fetched (--offline) — using the cached copy at `)).toBe(true);
   });
 });
