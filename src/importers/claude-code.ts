@@ -708,13 +708,6 @@ async function writeIngredient(
     meta = { ...meta, name, as } as Ingredient;
     validateImported(meta); // the variant name must be slug-like too (a `--profile` with a space is not)
 
-    // Spec 27 §5.3: reuse an MCP variant whose fingerprint matches exactly (e.g., synced workspace re-imported).
-    // This avoids I8 and avoids reporting a variant when none was created. Non-MCP types always report a variant.
-    if (meta.type === "mcp" && (await stage.exists(variantFile)) && (await fingerprintDir(dir, stage.reader())) === fingerprintOf(validateImported(meta), files)) {
-      report.reused.push(`${meta.type}/${name}`);
-      return `${meta.type}/${name}`;
-    }
-
     report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge${why ? ` (${why})` : ""}` });
 
     // I8: rewriting an existing variant another profile resolves would change its files there.
@@ -733,19 +726,18 @@ async function writeIngredient(
     run.literal.push({ ref: `${meta.type}/${name}`, source, meta: sourceMeta, files });
   }
 
-  // Build the YAML with authEnv immediately before server for MCP ingredients (spec 27 §5.3).
+  // Build the YAML preserving key order from meta. For MCP, authEnv (if present) goes immediately before server.
   let yamlMeta: Record<string, unknown>;
-  if (meta.type === "mcp") {
-    // Construct object in order: type, name, as, authEnv, server, targets, tags, origin
-    yamlMeta = Object.create(null);
-    yamlMeta.type = meta.type;
-    yamlMeta.name = meta.name;
-    if (meta.as !== undefined) yamlMeta.as = meta.as;
-    if (meta.authEnv !== undefined) yamlMeta.authEnv = meta.authEnv;
-    yamlMeta.server = meta.server;
-    yamlMeta.targets = meta.targets === "*" ? "*" : meta.targets;
-    yamlMeta.tags = meta.tags;
-    if (meta.origin !== undefined) yamlMeta.origin = meta.origin;
+  if (meta.type === "mcp" && (meta as { authEnv?: string[] }).authEnv !== undefined) {
+    // Insert authEnv immediately before server, preserving all other keys in their original order.
+    yamlMeta = {};
+    for (const [k, v] of Object.entries(meta)) {
+      if (k === "authEnv") continue; // Skip authEnv; we'll insert it before server.
+      if (k === "server") {
+        yamlMeta.authEnv = (meta as { authEnv: string[] }).authEnv;
+      }
+      yamlMeta[k] = k === "targets" && v === "*" ? "*" : v;
+    }
   } else {
     yamlMeta = { ...meta };
     if (yamlMeta.targets === "*") yamlMeta.targets = "*";
