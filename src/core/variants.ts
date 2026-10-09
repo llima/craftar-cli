@@ -113,7 +113,7 @@ async function measure(base: LoadedIngredient, variant: LoadedIngredient): Promi
   const variantFiles = await filesOf(variant);
   // A file present on one side only counts as one hunk carrying all of its lines (spec 04,
   // Ruling 9). Counted directly: diffing against "" mismatches a file with no final newline.
-  // For non-UTF-8 files, count the buffer length as lines (a rough approximation).
+  // For non-UTF-8 files, count newline bytes as a rough approximation.
   const countLines = (buf: Buffer) => {
     if (isUtf8(buf)) return splitLines(buf.toString("utf8")).lines.length;
     // Non-UTF-8: count newline bytes as a rough approximation
