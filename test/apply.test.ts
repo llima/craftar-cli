@@ -554,4 +554,37 @@ describe("apply", () => {
     const statusEntry2 = s2.find((e) => e.path === ".claude/scripts/run.bat");
     expect(statusEntry2?.state).toBe("adopt");
   });
+
+  it("with no lock, a Latin-1 text file equal to the Forge's bytes is a collision, not an adopt that rewrites it lossy", async () => {
+    const root = await tmpDir();
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+    const content = Buffer.from("# caf\xe9\n", "latin1"); // café in Latin-1, not valid UTF-8
+    await makeForge(forgeRoot, {
+      // A rule whose body is a Buffer (non-UTF-8)
+      ingredients: [{ meta: { type: "rule", name: "a" }, files: { "rule.md": content } }],
+      recipes: [recipe("base", ["rule/a"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    // Put the same Latin-1 bytes in the workspace
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" }, files: { ".claude/rules/a.md": content } });
+    // No lock: workspace has no craftar.lock
+
+    const w = await loadWorkspace(wsRoot);
+    const p = await plan(w);
+    const s = await status(w, p, null); // no lock
+    const statusEntry = s.find((e) => e.path === ".claude/rules/a.md");
+    // The current behaviour is collision: the bytes are equal, but hashNormalized
+    // decodes non-UTF-8 raw, so the hash reflects the invalid byte (not U+FFFD).
+    // If the plan were UTF-8-decoded and hashed that way, adopt would have rewritten the file lossy.
+    expect(statusEntry?.state).toBe("collision");
+
+    // Sync should not write the file (collision)
+    const result = await apply(w, p, s);
+    expect(result.written).toEqual([]);
+    // The workspace file still holds the original Latin-1 bytes
+    const wsFile = await fs.readFile(path.join(wsRoot, ".claude/rules/a.md"));
+    expect(wsFile).toEqual(content);
+  });
 });
