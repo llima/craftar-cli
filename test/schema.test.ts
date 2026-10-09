@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { loadForge } from "../src/core/forge.js";
-import { ForgeManifestSchema, FORGE_SCHEMA_SECTIONS, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, RegistrySchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
+import { ForgeManifestSchema, FORGE_SCHEMA_SECTIONS, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, RecipeSchema, RegistrySchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
 import { makeForge, tmpDir, writeFiles } from "./helpers/forge.js";
 
 /** A minimal valid ingredient of each type. */
@@ -319,5 +319,81 @@ describe("the workspace registry (spec 21 §5.2)", () => {
     expect(RegistrySchema.safeParse({ schema: 2, workspaces: [] }).success).toBe(false);
     const { lastSync: _, ...noLastSync } = entry;
     expect(RegistrySchema.safeParse({ schema: 1, workspaces: [noLastSync] }).success).toBe(false);
+  });
+});
+
+describe("__proto__ key refusal (tech-debt 2026-09-25-zod)", () => {
+  // Each of these records silently dropped __proto__ before the fix. The test confirms the key is now refused.
+
+  it("profile params: refuses __proto__ key", () => {
+    const input = YAML.parse("name: x\nparams:\n  __proto__: x\n  k: v\n");
+    const r = ProfileSchema.safeParse(input);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues.some((i) => i.message.includes("__proto__"))).toBe(true);
+  });
+
+  it("profile params: accepts the same input without __proto__ (guard)", () => {
+    const input = YAML.parse("name: x\nparams:\n  k: v\n");
+    expect(ProfileSchema.safeParse(input).success).toBe(true);
+  });
+
+  it("profile integrations: refuses __proto__ key", () => {
+    const input = YAML.parse("name: x\nintegrations:\n  __proto__: x\n  k: v\n");
+    const r = ProfileSchema.safeParse(input);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues.some((i) => i.message.includes("__proto__"))).toBe(true);
+  });
+
+  it("profile integrations: accepts the same input without __proto__ (guard)", () => {
+    const input = YAML.parse("name: x\nintegrations:\n  k: v\n");
+    expect(ProfileSchema.safeParse(input).success).toBe(true);
+  });
+
+  it("profile repos: refuses __proto__ key in an inner record", () => {
+    const input = YAML.parse("name: x\nrepos:\n  - __proto__: x\n    k: v\n");
+    const r = ProfileSchema.safeParse(input);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues.some((i) => i.message.includes("__proto__"))).toBe(true);
+  });
+
+  it("profile repos: accepts the same input without __proto__ (guard)", () => {
+    const input = YAML.parse("name: x\nrepos:\n  - k: v\n");
+    expect(ProfileSchema.safeParse(input).success).toBe(true);
+  });
+
+  it("recipe params: refuses __proto__ key", () => {
+    const input = YAML.parse("name: r\nparams:\n  __proto__: {default: 1}\n  k: {default: 2}\n");
+    const r = RecipeSchema.safeParse(input);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues.some((i) => i.message.includes("__proto__"))).toBe(true);
+  });
+
+  it("recipe params: accepts the same input without __proto__ (guard)", () => {
+    const input = YAML.parse("name: r\nparams:\n  k: {default: 2}\n");
+    expect(RecipeSchema.safeParse(input).success).toBe(true);
+  });
+
+  it("workspace overrides.params: refuses __proto__ key", () => {
+    const input = YAML.parse("forge: ../f\nprofile: x\noverrides:\n  params:\n    __proto__: x\n    k: v\n");
+    const r = WorkspaceConfigSchema.safeParse(input);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues.some((i) => i.message.includes("__proto__"))).toBe(true);
+  });
+
+  it("workspace overrides.params: accepts the same input without __proto__ (guard)", () => {
+    const input = YAML.parse("forge: ../f\nprofile: x\noverrides:\n  params:\n    k: v\n");
+    expect(WorkspaceConfigSchema.safeParse(input).success).toBe(true);
+  });
+
+  it("ingredient params: refuses __proto__ key", () => {
+    const input = YAML.parse("type: rule\nname: a\nparams:\n  __proto__: {default: 1}\n  k: {default: 2}\n");
+    const r = IngredientSchema.safeParse(input);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues.some((i) => i.message.includes("__proto__"))).toBe(true);
+  });
+
+  it("ingredient params: accepts the same input without __proto__ (guard)", () => {
+    const input = YAML.parse("type: rule\nname: a\nparams:\n  k: {default: 2}\n");
+    expect(IngredientSchema.safeParse(input).success).toBe(true);
   });
 });
