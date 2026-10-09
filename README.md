@@ -139,15 +139,15 @@ The keys above are the whole vocabulary (`params` declares the ingredient's own 
 
 ```yaml
 type: mcp
-name: acme-tracker
+name: acme-docs
+authEnv: [ACME_DOCS_TOKEN]           # names only, never a value
 targets: "*"
 tags: []
-authEnv: [ACME_TRACKER_TOKEN]        # names only, never a value
 server:
-  command: npx
-  args: ["-y", "@acme/tracker-mcp"]
-  env:
-    ACME_TRACKER_TOKEN: "${ACME_TRACKER_TOKEN}"
+  type: http
+  url: https://mcp.acme.dev/docs
+  headers: { X-Team: acme, Authorization: "Bearer ${ACME_DOCS_TOKEN}" }   # not declared by Craftar: passed through to both MCP files
+  timeout: 30
 ```
 
 `authEnv` names the environment variables the server needs — names only, never a value. It is a declaration: the server is emitted exactly as written (write `${NAME}` in `server` yourself when the tool should expand it). An item that is a token of a known format fails the load.
