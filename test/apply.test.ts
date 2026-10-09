@@ -162,4 +162,11 @@ describe("apply", () => {
     expect(() => assertInsideWorkspace(f(".claude/rules/../../../x.md"))).toThrow("rule/r would write .claude/rules/../../../x.md, outside the workspace");
     for (const p of [".claude/scripts/./run.sh", ".claude/scripts//run.sh", ".claude/scripts/a/../run.sh", ".claude/rules/r.md"]) expect(() => assertInsideWorkspace(f(p)), p).not.toThrow();
   });
+
+  it("plan() itself refuses a path outside the workspace, for an as the schema never saw (0.17.3)", async () => {
+    const s = await oneRule();
+    const w = await loadWorkspace(s.wsRoot);
+    w.forge.ingredients.get("rule/a")!.meta.as = "../../../x";
+    await expect(plan(w)).rejects.toThrow("rule/a would write .claude/rules/../../../x.md, outside the workspace");
+  });
 });
