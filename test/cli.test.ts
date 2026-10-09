@@ -2711,7 +2711,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       "kiro · command .kiro/steering/commands/<name>.md — written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description",
       "claude-code · skill .claude/skills/<name>/<file>, .claude/skills/<name>.md",
       "kiro · skill .kiro/skills/<name>/<file> — in its text files (.md, .txt, .json, .yaml, .yml), .claude/rules/ references resolved as for a rule; other files are copied as they are; a single-file skill becomes <name>/SKILL.md",
-      "claude-code · mcp .mcp.json",
+      "claude-code · mcp .mcp.json, .claude/settings.craftar.example.json",
       "kiro · mcp .kiro/settings/mcp.json",
       "claude-code · script .claude/scripts/<file>",
       "kiro · steering .kiro/steering/<name>.md",

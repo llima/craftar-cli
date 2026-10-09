@@ -63,7 +63,7 @@ async function makeCapabilityForge(root: string): Promise<void> {
     },
     // mcp
     {
-      meta: { type: "mcp", name: "cap-mcp", targets: "*", server: { command: "npx", args: ["cap-server"] } },
+      meta: { type: "mcp", name: "cap-mcp", targets: "*", authEnv: ["CAP_TOKEN"], server: { command: "npx", args: ["cap-server"] } },
     },
     // script
     {
@@ -152,6 +152,8 @@ async function isAsHeld(
   outName: string,
 ): Promise<boolean> {
   if (type === "mcp") {
+    // The example file is not a file rule 4 judges (spec 27 §4.4): return true for it.
+    if (f.path === ".claude/settings.craftar.example.json") return true;
     // MCP: check if the server object is deep-equal under the output name
     try {
       const planned = JSON.parse(f.content.toString("utf8"));

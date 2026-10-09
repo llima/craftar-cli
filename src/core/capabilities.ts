@@ -49,7 +49,7 @@ export const CAPABILITIES = {
     },
     mcp: {
       state: "native",
-      output: [".mcp.json"],
+      output: [".mcp.json", ".claude/settings.craftar.example.json"],
       note: null,
     },
     script: {

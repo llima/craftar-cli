@@ -1,6 +1,6 @@
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
-import { mcpServers, outName, ruleFile, textFile } from "./shared.js";
+import { authEnvNames, EXAMPLE_SETTINGS, mcpServers, outName, ruleFile, textFile } from "./shared.js";
 import type { Emitter, EmitBase, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 import type { Ingredient } from "../schema/index.js";
@@ -71,6 +71,16 @@ export const claudeCode: Emitter<"claude-code"> = {
     if (Object.keys(servers).length) {
       const json = JSON.stringify({ mcpServers: servers }, null, 2) + "\n";
       out.push(await textFile(ctx, ".mcp.json", json, t, "mcp/*"));
+    }
+
+    // Write the example file when authEnvNames is non-empty (spec 27 §4.2)
+    const names = authEnvNames(mcp);
+    if (names.length) {
+      // Build env object on null prototype so __proto__ is a key, not the prototype
+      const env: Record<string, string> = Object.create(null);
+      for (const name of names) env[name] = "";
+      const exJson = JSON.stringify({ env }, null, 2) + "\n";
+      out.push(await textFile(ctx, EXAMPLE_SETTINGS, exJson, t, "mcp/*"));
     }
     return out;
   },

@@ -160,3 +160,90 @@ describe("claude-code emitter — sections (spec 11 §10.2, AC 2)", () => {
     expect(f.content.subarray(3).toString("utf8")).toBe("# T\r\nvalue\r\nend\r\n");
   });
 });
+
+describe("claude-code emitter — authEnv example file (spec 27)", () => {
+  const EX = ".claude/settings.craftar.example.json";
+
+  it("1. no declaring ingredient → no example file", async () => {
+    const p = await planFor([{ meta: { type: "mcp", name: "pw", server: { command: "npx" } } }]);
+    expect(p.files.map((f) => f.path)).toEqual([".mcp.json"]);
+  });
+
+  it("2. two declaring ingredients, names out of order and one shared", async () => {
+    const a = { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN", "ACME_SHARED"], server: { command: "npx" } } };
+    const b = { meta: { type: "mcp", name: "idp", authEnv: ["ACME_SHARED", "ACME_IDP_TOKEN"], server: { url: "https://idp.example.com/mcp" } } };
+    const p = await planFor([a, b] as any);
+    expect(text(p, EX)).toBe('{\n  "env": {\n    "ACME_IDP_TOKEN": "",\n    "ACME_SHARED": "",\n    "ACME_TRACKER_TOKEN": ""\n  }\n}\n');
+    const f = p.files.find((f) => f.path === EX)!;
+    expect(f.ingredient).toBe("mcp/*");
+    expect(f.target).toBe("claude-code");
+  });
+
+  it("3. .mcp.json is byte-identical with and without the declaration", async () => {
+    const a = { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN", "ACME_SHARED"], server: { command: "npx" } } };
+    const b = { meta: { type: "mcp", name: "idp", authEnv: ["ACME_SHARED", "ACME_IDP_TOKEN"], server: { url: "https://idp.example.com/mcp" } } };
+    const p1 = await planFor([a, b] as any);
+    const aNo = { meta: { type: "mcp", name: "tracker", server: { command: "npx" } } };
+    const bNo = { meta: { type: "mcp", name: "idp", server: { url: "https://idp.example.com/mcp" } } };
+    const p2 = await planFor([aNo, bNo]);
+    expect(text(p1, ".mcp.json")).toBe(text(p2, ".mcp.json"));
+    expect(text(p1, ".mcp.json")!.includes("authEnv")).toBe(false);
+    // Repeat for kiro target
+    const k1 = await planFor([a, b] as any, undefined, ["kiro"]);
+    const k2 = await planFor([aNo, bNo], undefined, ["kiro"]);
+    expect(Buffer.from(k1.files.find((f) => f.path === ".kiro/settings/mcp.json")!.content).equals(
+      Buffer.from(k2.files.find((f) => f.path === ".kiro/settings/mcp.json")!.content)
+    )).toBe(true);
+  });
+
+  it("4. two ingredients writing one server name — only the survivor counts", async () => {
+    const p = await planFor([
+      { meta: { type: "mcp", name: "srv", authEnv: ["DROPPED"], server: { command: "a" } } },
+      { meta: { type: "mcp", name: "srv--b", as: "srv", authEnv: ["KEPT"], server: { command: "b" } } },
+    ] as any);
+    expect(text(p, EX)).toBe('{\n  "env": {\n    "KEPT": ""\n  }\n}\n');
+  });
+
+  it("5. declaring ingredient has targets: [kiro] → no file at EX for claude-code", async () => {
+    const ing = { meta: { type: "mcp", name: "tracker", authEnv: ["TOKEN"], targets: ["kiro"], server: { command: "npx" } } };
+    const p = await planFor([ing] as any, undefined, ["claude-code", "kiro"]);
+    expect(p.files.some((f) => f.path === EX)).toBe(false);
+    // kiro-only workspace → also no example file
+    const pk = await planFor([ing] as any, undefined, ["kiro"]);
+    expect(pk.files.some((f) => f.path === EX)).toBe(false);
+  });
+
+  it("6. the emitter never reads the environment", async () => {
+    const orig = process.env.ACME_TRACKER_TOKEN;
+    try {
+      process.env.ACME_TRACKER_TOKEN = "MARKER_VALUE_27";
+      const a = { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx" } } };
+      const p = await planFor([a] as any);
+      expect(p.files.every((f) => !f.content.includes("MARKER_VALUE_27"))).toBe(true);
+    } finally {
+      if (orig === undefined) delete process.env.ACME_TRACKER_TOKEN;
+      else process.env.ACME_TRACKER_TOKEN = orig;
+    }
+  });
+
+  it("7. an existing CRLF + BOM file at EX keeps both", async () => {
+    const a = { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_SHARED", "ACME_TRACKER_TOKEN"], server: { command: "npx" } } };
+    const files = { [EX]: Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("{}\r\n")]) };
+    const p = await planFor([a] as any, files);
+    const f = p.files.find((f) => f.path === EX)!;
+    expect(hasBom(f.content)).toBe(true);
+    expect(f.content.subarray(3).toString("utf8")).toBe('{\r\n  "env": {\r\n    "ACME_SHARED": "",\r\n    "ACME_TRACKER_TOKEN": ""\r\n  }\r\n}\r\n');
+  });
+
+  it("8. authEnv: [\"__proto__\", \"A\"] → both are keys", async () => {
+    const a = { meta: { type: "mcp", name: "tracker", authEnv: ["__proto__", "A"], server: { command: "npx" } } };
+    const p = await planFor([a] as any);
+    expect(text(p, EX)).toBe('{\n  "env": {\n    "A": "",\n    "__proto__": ""\n  }\n}\n');
+  });
+
+  it("9. authEnv: [] alone → no file at EX", async () => {
+    const a = { meta: { type: "mcp", name: "tracker", authEnv: [], server: { command: "npx" } } };
+    const p = await planFor([a] as any);
+    expect(p.files.some((f) => f.path === EX)).toBe(false);
+  });
+});
