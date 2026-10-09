@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { pathToFileURL } from "node:url";
+import YAML from "yaml";
 import { checkInitFlags, checkLocalKeys, forgeSource, initLine, planInit, type InitInput } from "../src/core/init.js";
-import { loadForgeSource } from "../src/core/sync.js";
+import { loadForgeSource, mergeWorkspaceConfig, workspaceOf } from "../src/core/sync.js";
 import { defaultGit, type GitRunner } from "../src/core/remote.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 import { remoteForge } from "./helpers/remote.js";
@@ -266,7 +267,8 @@ describe("planInit with a loaded Forge (spec 28 §5.2, §9.1)", () => {
   it("a path Forge and a local ref: the ignored-ref warning is present", async () => {
     const s = await setup();
     await writeFiles(s.ws, { "craftar.local.yaml": "ref: v1\n" });
-    const loaded = await load(s.ws, "../forge", null, s.home);
+    // Path Forge loaded with the ref the workspace will have (workspaceOf doc comment)
+    const loaded = await load(s.ws, "../forge", "v1", s.home);
     const init = await planInit(s.ws, { forge: s.forge, profile: "acme", loaded }, { home: s.home });
     expect(init.plan.warnings[0]).toBe('ref "v1" is ignored: the Forge is a path (../forge), read as its working tree');
     // The same planInit without loaded gives toEqual warnings
@@ -349,5 +351,46 @@ describe("planInit with a loaded Forge (spec 28 §5.2, §9.1)", () => {
 
     const initTargets = await planInit(s.ws, { forge: s.forge, profile: "acme", targets: ["kiro", "claude-code"] }, { home: s.home });
     expect(initLine(initTargets)).toBe("forge ../forge · profile acme · recipes base → stack-api → front-a · targets kiro, claude-code");
+  });
+
+  it("remote Forge: workspaceOf gives the same warnings as loadForgeFor (offline)", async () => {
+    // A remote Forge with { offline: true } must give the same warnings as the regular path (via loadWorkspaceConfig)
+    const rf = await remoteForge(SPEC);
+    cleanups.push(rf.cleanup);
+    const s = await setup();
+    // First fetch to seed the cache
+    await loadForgeSource(s.ws, rf.url, null, { home: s.home, mode: "sync" });
+    // Load with offline: true to get the warning
+    const loaded = await loadForgeSource(s.ws, rf.url, null, { home: s.home, offline: true });
+    const init = await planInit(s.ws, { forge: rf.url, profile: "acme", loaded }, { home: s.home, offline: true });
+    // The warning about offline must be in init.plan.warnings
+    expect(init.plan.warnings.some((w) => w.includes("offline"))).toBe(true);
+    // Control: without loaded, we get the same warnings
+    const initWithout = await planInit(s.ws, { forge: rf.url, profile: "acme" }, { home: s.home, offline: true });
+    expect(init.plan.warnings).toEqual(initWithout.plan.warnings);
+  });
+
+  it("workspaceOf: path warning order is [loaded, merged], remote is [merged, loaded]", async () => {
+    // This test pins the warning order to catch accidental swaps
+    const s = await setup();
+
+    // Path Forge: loaded warnings come first
+    await writeFiles(s.ws, { "craftar.local.yaml": "forge: ../forge-local\n" });
+    const localDoc = YAML.parse("forge: ../forge-local\n");
+    // Simulate a path Forge loaded with ref "v1"
+    const loadedPath = await load(s.ws, "../forge", "v1", s.home);
+    const mergedPath = mergeWorkspaceConfig({ forge: "../forge", profile: "acme" }, localDoc);
+    // The merge warning for local-file forge
+    expect(mergedPath.warnings.length).toBe(1);
+    expect(mergedPath.warnings[0]).toContain("Forge overridden by craftar.local.yaml");
+    // Manually verify the order — the ignored-ref warning in loaded.warnings comes first
+    expect(loadedPath.warnings[0]).toContain("is ignored: the Forge is a path");
+    const wsPath = workspaceOf(s.ws, mergedPath, loadedPath);
+    expect(wsPath.warnings[0]).toContain("is ignored: the Forge is a path");
+    expect(wsPath.warnings[1]).toContain("Forge overridden by craftar.local.yaml");
+    // The loaded warning is first, then the merge warning
+    const loadedIdx = wsPath.warnings.findIndex((w) => w.includes("is ignored: the Forge is a path"));
+    const mergeIdx = wsPath.warnings.findIndex((w) => w.includes("Forge overridden by craftar.local.yaml"));
+    expect(loadedIdx).toBeLessThan(mergeIdx);
   });
 });

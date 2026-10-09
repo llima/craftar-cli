@@ -161,18 +161,20 @@ export function mergeWorkspaceConfig(base: unknown, localDoc: unknown | null): M
 export async function loadForgeFor(root: string, merged: MergedConfig, opts: LoadOptions = {}): Promise<Workspace> {
   root = path.resolve(root);
   const { config, fromLocalFile } = merged;
-  const warnings = [...merged.warnings];
   const loaded = await loadForgeSource(root, config.forge, config.ref ?? null, { ...opts, fromLocalFile });
-  // The order of `Workspace.warnings` must not move: the ignored-ref warning is `unshift`ed *before* the
-  // merge's warnings (the path branch), and the remote warning is `push`ed *after* them (the remote branch).
-  if (loaded.origin.kind === "path") {
-    // Path branch: ignored-ref warning comes before merge warnings
-    warnings.unshift(...loaded.warnings);
-  } else {
-    // Remote branch: fetch/offline warnings come after merge warnings
-    warnings.push(...loaded.warnings);
-  }
-  return { root, config, forge: loaded.forge, origin: loaded.origin, warnings };
+  return workspaceOf(root, merged, loaded);
+}
+
+/**
+ * Builds a Workspace from an already-loaded Forge (spec 28 §5.2): the order of `Workspace.warnings`
+ * is path → `[...loaded.warnings, ...merged.warnings]`, remote → `[...merged.warnings, ...loaded.warnings]`.
+ */
+export function workspaceOf(root: string, merged: MergedConfig, loaded: LoadedForge): Workspace {
+  const warnings: string[] =
+    loaded.origin.kind === "path"
+      ? [...loaded.warnings, ...merged.warnings]
+      : [...merged.warnings, ...loaded.warnings];
+  return { root, config: merged.config, forge: loaded.forge, origin: loaded.origin, warnings };
 }
 
 /** `source` is the value `craftar.yaml › forge` holds: a URL, or a path relative to `root`. */

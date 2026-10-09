@@ -10,6 +10,7 @@ import {
   plan,
   readLock,
   status,
+  workspaceOf,
   type FileStatus,
   type LoadedForge,
   type LoadOptions,
@@ -33,7 +34,9 @@ export interface InitInput {
   addRecipes?: string[];
   removeRecipes?: string[];
   replace?: boolean;
-  /** A Forge already loaded: `planInit` reuses it instead of loading again (spec 28 §5.2). */
+  /** A Forge already loaded: `planInit` reuses it instead of loading again (spec 28 §5.2).
+   * A path Forge is loaded with the ref the workspace will have (`loadForgeSource(root, source, ref)`),
+   * so its ignored-ref warning travels in `loaded.warnings`. */
   loaded?: LoadedForge;
 }
 
@@ -182,30 +185,7 @@ export async function planInit(root: string, input: InitInput, opts: InitOptions
       }
     }
 
-    // Build warnings in the same order as loadForgeFor: ignored-ref warning comes before merge warnings
-    // for path Forges, and remote warnings come after merge warnings.
-    // The ignored-ref warning must be generated here if the merged config has a ref and the Forge is a path,
-    // because loadForgeSource was called before the merge and may not have seen the ref.
-    const warnings: string[] = [];
-    if (input.loaded.origin.kind === "path") {
-      // Path branch: ignored-ref warning comes before merge warnings
-      // Generate the ignored-ref warning if the merged config has a ref
-      if (merged.config.ref !== undefined) {
-        warnings.push(`ref "${merged.config.ref}" is ignored: the Forge is a path (${merged.config.forge}), read as its working tree`);
-      }
-      warnings.push(...merged.warnings);
-    } else {
-      // Remote branch: merge warnings first, then fetch/offline warnings
-      warnings.push(...merged.warnings, ...input.loaded.warnings);
-    }
-
-    loaded = {
-      root,
-      config: merged.config,
-      forge: input.loaded.forge,
-      origin: input.loaded.origin,
-      warnings,
-    };
+    loaded = workspaceOf(root, merged, input.loaded);
   } else {
     loaded = await loadWorkspaceConfig(root, base, localDoc, { ...opts, mode: "sync" });
   }
