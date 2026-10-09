@@ -104,7 +104,7 @@ forge/
 └── profiles/<name>/profile.yaml
 ```
 
-An ingredient's `as` and a script's or hook's `files` entries become part of the paths `sync` writes, so one that climbs out of its folder with `..` (`as: ../x`, `files: [../x.sh]`) fails the Forge load. A spelling that stays inside (`./run.sh`, `a/../run.sh`) is kept as written.
+An ingredient's `as` and a script's or hook's `files` entries become part of the paths `sync` writes, so one that climbs out of its folder with `..` (`as: ../x`, `files: [../x.sh]`) fails the Forge load. A leading `/` anchors nothing (`/../x` is refused too). A spelling that stays inside (`./run.sh`, `a/../run.sh`) is kept as written.
 
 `craftar.forge.yaml`:
 

@@ -56,7 +56,7 @@ describe("strict ingredient keys", () => {
 describe("a Forge path never climbs out of its folder (0.17.3)", () => {
   it("refuses an as that climbs out, and keeps every spelling that does not", () => {
     const as = (v: string) => IngredientSchema.safeParse({ type: "rule", name: "r", as: v });
-    for (const v of ["../../x", "..", "a/../../x", "..\\x", "a\\..\\..\\x"]) {
+    for (const v of ["../../x", "..", "a/../../x", "..\\x", "a\\..\\..\\x", "/../../x", "//../x"]) {
       const r = as(v);
       expect(r.success, v).toBe(false);
       if (!r.success) expect(r.error.issues.map((i) => i.message), v).toEqual(['as must not climb out of its folder with a .. segment']);
@@ -67,7 +67,7 @@ describe("a Forge path never climbs out of its folder (0.17.3)", () => {
   for (const type of ["script", "hook"] as const) {
     it(`refuses a ${type} file that climbs out of the ingredient directory, and keeps every spelling that does not`, () => {
       const files = (f: string) => IngredientSchema.safeParse({ type, name: "s", files: [f] });
-      for (const f of ["../x.sh", "a/../../x.sh", "..", "..\\x.sh", "../s/run.sh"]) {
+      for (const f of ["../x.sh", "a/../../x.sh", "..", "..\\x.sh", "../s/run.sh", "/../../x.sh", "//../x.sh"]) {
         const r = files(f);
         expect(r.success, f).toBe(false);
         if (!r.success) expect(r.error.issues.map((i) => i.message), f).toEqual(['a files entry must not climb out of the ingredient directory with a .. segment']);

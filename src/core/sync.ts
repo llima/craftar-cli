@@ -366,7 +366,7 @@ function guardOutput(ing: ResolvedIngredient, file: string, out: string, p: Pars
   throw new Error(`${ing.ref} ${file}: the rendered text holds a section marker on line ${line} (from ${from}) — a value cannot open or close a section`);
 }
 
-/** A workspace-relative path that resolves above the workspace root. An absolute one is joined under it, so it stays inside. */
+/** A workspace-relative path that resolves above the workspace root once joined under it (`path.join`, never `path.resolve`). */
 const outsideWorkspace = climbsOut;
 
 /**

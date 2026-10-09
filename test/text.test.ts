@@ -49,7 +49,7 @@ describe("kiro emitter helpers", () => {
 
 describe("climbsOut (0.17.3)", () => {
   it("is true only for a path that resolves above the folder it is joined under", () => {
-    for (const p of ["..", "../x", "a/../../x", "./../x", "..\\x", "a\\..\\..\\x"]) expect(climbsOut(p), p).toBe(true);
-    for (const p of ["x", "./x", "/x", "a/../x", "a/b/../../x", "..x", "a/..x", ""]) expect(climbsOut(p), p).toBe(false);
+    for (const p of ["..", "../x", "a/../../x", "./../x", "..\\x", "a\\..\\..\\x", "/../x", "//../x", "/..", "\\..\\x", "//srv/share/../../../x", "/a/../../x"]) expect(climbsOut(p), p).toBe(true);
+    for (const p of ["x", "./x", "/x", "//x", "/a/../x", "a/../x", "a/b/../../x", "..x", "a/..x", "", "/"]) expect(climbsOut(p), p).toBe(false);
   });
 });

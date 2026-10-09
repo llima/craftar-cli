@@ -137,10 +137,13 @@ describe("apply", () => {
     await fs.writeFile(victim, "keep\n");
     const lockFile = path.join(s.wsRoot, "craftar.lock");
     const lock = JSON.parse(await fs.readFile(lockFile, "utf8"));
-    lock.files.push({ path: "../victim.txt", hash: hashNormalized("keep\n"), target: "claude-code", ingredient: "rule/gone" });
-    await fs.writeFile(lockFile, JSON.stringify(lock, null, 2) + "\n");
-    await expect(sync(s.wsRoot)).rejects.toThrow("craftar.lock: entry ../victim.txt is outside the workspace");
-    expect(await fs.readFile(victim, "utf8")).toBe("keep\n");
+    // A leading separator does not anchor the path: path.join(root, "/../x") is beside the workspace too.
+    for (const escaping of ["../victim.txt", "/../victim.txt", "//../victim.txt"]) {
+      const edited = { ...lock, files: [...lock.files, { path: escaping, hash: hashNormalized("keep\n"), target: "claude-code", ingredient: "rule/gone" }] };
+      await fs.writeFile(lockFile, JSON.stringify(edited, null, 2) + "\n");
+      await expect(sync(s.wsRoot), escaping).rejects.toThrow(`craftar.lock: entry ${escaping} is outside the workspace`);
+      expect(await fs.readFile(victim, "utf8"), escaping).toBe("keep\n");
+    }
   });
 
   it("apply never writes or removes a path outside the workspace, whatever it is handed (0.17.3)", async () => {
@@ -160,6 +163,7 @@ describe("apply", () => {
   it("a planned path outside the workspace is refused, and one that stays inside is not (0.17.3)", () => {
     const f = (p: string) => [{ path: p, content: Buffer.from(""), target: "claude-code" as const, ingredient: "rule/r" }];
     expect(() => assertInsideWorkspace(f(".claude/rules/../../../x.md"))).toThrow("rule/r would write .claude/rules/../../../x.md, outside the workspace");
+    expect(() => assertInsideWorkspace(f("/../x.md"))).toThrow("rule/r would write /../x.md, outside the workspace");
     for (const p of [".claude/scripts/./run.sh", ".claude/scripts//run.sh", ".claude/scripts/a/../run.sh", ".claude/rules/r.md"]) expect(() => assertInsideWorkspace(f(p)), p).not.toThrow();
   });
 
