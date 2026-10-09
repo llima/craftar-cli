@@ -6032,3 +6032,139 @@ describe("cli — craftar cache prune (spec 26 §4)", () => {
     for (const flag of ["--dry-run", "--workspace <dir>", "--json"]) expect(out.stdout).toContain(flag);
   });
 });
+
+
+describe("cli — pinned before spec 28", () => {
+  /**
+   * Pin the order of two or more states on `craftar forge impact` rows and `next sync:` lines.
+   * The order reads NEXT_SYNC_STATES in src/cli.ts (and FILE_STATE_ORDER_MAP in src/core/impact.ts
+   * for --json); spec 28 will move the counting half of nextSyncLine to the core over the one
+   * FileState record. These tests fail when the order moves.
+   */
+
+  const SPEC = {
+    ingredients: [
+      rule("a", "# A\n"),
+      rule("b", "# B\n"),
+      rule("c", "# C\n"),
+      rule("d", "# D\n"),
+    ],
+    recipes: [recipe("base", ["rule/a", "rule/b", "rule/c"])],
+    profiles: [profile("acme", ["base"])],
+  };
+
+  async function setup() {
+    const root = await tmpDir("craftar-pinned-spec28-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const forge = path.join(root, "forge");
+    await makeForge(forge, SPEC);
+    const run = (args: string[], env: NodeJS.ProcessEnv = {}) => runCli(args, { env: { CRAFTAR_HOME: home, ...env } });
+    const registry = path.join(home, "registry.json");
+    return { root, home, forge, run, registry };
+  }
+
+  it("test 1: a row with three states in FileState order — new, update, drift, orphan", async () => {
+    const s = await setup();
+    // Create a workspace with rules a, b, c
+    const ws = path.join(s.root, "ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+    expect(s.run(["sync", "--workspace", ws]).code).toBe(0);
+
+    // Hand-edit rule a → drift
+    await fs.writeFile(path.join(ws, ".claude/rules/a.md"), "# A edited by hand\n");
+    // Change rule b in the Forge → update
+    await fs.writeFile(path.join(s.forge, "ingredients/rules/b/rule.md"), "# B changed in Forge\n");
+    // Add rule d to the recipe → new
+    const baseRecipe = YAML.parse(await fs.readFile(path.join(s.forge, "recipes/base.yaml"), "utf8"));
+    baseRecipe.ingredients.push("rule/d");
+    await fs.writeFile(path.join(s.forge, "recipes/base.yaml"), YAML.stringify(baseRecipe));
+    // Remove rule c from the recipe → orphan
+    baseRecipe.ingredients = baseRecipe.ingredients.filter((i: string) => i !== "rule/c");
+    await fs.writeFile(path.join(s.forge, "recipes/base.yaml"), YAML.stringify(baseRecipe));
+
+    const realWs = await fs.realpath(ws);
+    const realForge = await fs.realpath(s.forge);
+
+    const r = s.run(["forge", "impact", "--forge", s.forge]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+
+    expect(r.stdout).toBe(
+      `craftar forge impact — ${realForge} · 1 registered workspace (1 by path)\n` +
+      `  ${realWs}  acme  1 new, 1 update, 1 drift, 1 orphan\n`
+    );
+  });
+
+  it("test 2: the same counts through --json — keys in FileState order", async () => {
+    const s = await setup();
+    // Create a workspace with rules a, b, c
+    const ws = path.join(s.root, "ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+    expect(s.run(["sync", "--workspace", ws]).code).toBe(0);
+
+    // Hand-edit rule a → drift
+    await fs.writeFile(path.join(ws, ".claude/rules/a.md"), "# A edited by hand\n");
+    // Change rule b in the Forge → update
+    await fs.writeFile(path.join(s.forge, "ingredients/rules/b/rule.md"), "# B changed in Forge\n");
+    // Add rule d to the recipe → new
+    const baseRecipe = YAML.parse(await fs.readFile(path.join(s.forge, "recipes/base.yaml"), "utf8"));
+    baseRecipe.ingredients.push("rule/d");
+    await fs.writeFile(path.join(s.forge, "recipes/base.yaml"), YAML.stringify(baseRecipe));
+    // Remove rule c from the recipe → orphan
+    baseRecipe.ingredients = baseRecipe.ingredients.filter((i: string) => i !== "rule/c");
+    await fs.writeFile(path.join(s.forge, "recipes/base.yaml"), YAML.stringify(baseRecipe));
+
+    const realWs = await fs.realpath(ws);
+    const realForge = await fs.realpath(s.forge);
+
+    const r = s.run(["forge", "impact", "--forge", s.forge, "--json"]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+
+    const out = JSON.parse(r.stdout);
+    expect(out.forge).toBe(realForge);
+
+    // Find the workspace row
+    const row = out.workspaces.find((w: { path: string }) => w.path === realWs);
+    expect(row).toBeDefined();
+
+    // The counts object's keys must be in FileState order: new, update, drift, orphan
+    expect(JSON.stringify(Object.keys(row.counts))).toBe(JSON.stringify(["new", "update", "drift", "orphan"]));
+    expect(row.counts).toEqual({ new: 1, update: 1, drift: 1, orphan: 1 });
+  });
+
+  it("test 3: next sync: with new before collision — 3 new, 1 collision", async () => {
+    // A SEPARATE Forge for this test: four rules a, b, c, d
+    const SPEC2 = {
+      ingredients: [
+        rule("a", "# A\n"),
+        rule("b", "# B\n"),
+        rule("c", "# C\n"),
+        rule("d", "# D\n"),
+      ],
+      recipes: [recipe("base", ["rule/a", "rule/b", "rule/c", "rule/d"])],
+      profiles: [profile("acme", ["base"])],
+    };
+
+    const root = await tmpDir("craftar-pinned-spec28-nextsync-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const forge = path.join(root, "forge");
+    await makeForge(forge, SPEC2);
+    const run = (args: string[], env: NodeJS.ProcessEnv = {}) => runCli(args, { env: { CRAFTAR_HOME: home, ...env } });
+
+    // Create workspace dir with a pre-existing .claude/rules/a.md that differs → collision
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, {
+      ".claude/rules/a.md": "# My own A\n",
+    });
+
+    const r = run(["init", "--workspace", ws, "--forge", forge, "--profile", "acme", "--no-sync"]);
+    expect(r.code, r.stderr).toBe(0);
+
+    const lines = r.stdout.split("\n");
+    // The next sync: line must have new before collision
+    expect(lines[2]).toBe("next sync: 3 new, 1 collision — run `craftar sync`");
+  });
+});
