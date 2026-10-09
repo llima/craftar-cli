@@ -1162,6 +1162,7 @@ export interface PruneContext {
 /**
  * The proof and the prune (spec 25 §4.4 steps 3-5): reads only, returns the writes.
  * `content: null` means delete. Reasons, in order, first one wins:
+ * - the Forge does not reload after unify's writes (every candidate kept with `the Forge does not reload after unify's writes: <message>`)
  * - another recipe's `extends` names it
  * - registry state not `read` (various messages)
  * - a workspace's `recipes.add` or `recipes.remove` names it

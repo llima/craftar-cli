@@ -1287,7 +1287,7 @@ forge
           after: impactAfter,
         });
       } catch (e) {
-        // A throw in pruneRecipes (e.g. loadForge fails) after unify's writes: name what was touched.
+        // A throw in pruneRecipes (e.g. a profile edit that fails to re-parse) after unify's writes: name what was touched.
         throw new Error(lateFailure(e, f.root, journal), { cause: e });
       }
 
