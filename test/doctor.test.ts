@@ -407,3 +407,85 @@ describe("the cache check and removal directories (spec 26 §5.1, §6 case 13)",
     expect(one(r.checks, "cache")).toEqual({ id: "cache", scope: "machine", level: "warn", message: "example.com-half-000000000000 — a fetch never completed", fix: "craftar cache prune" });
   });
 });
+
+
+describe("mcp-env — authEnv (spec 27)", () => {
+  it("declared and unset, no env block: reports the name", async () => {
+    const f = await fixture({
+      ingredients: [{ meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx" } } }],
+      recipes: [recipe("base", ["mcp/tracker"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    expect(of(r.checks, "mcp-env")).toEqual([
+      { id: "mcp-env", scope: "workspace", level: "warn", message: 'server "tracker" expects ACME_TRACKER_TOKEN, not set', fix: "export ACME_TRACKER_TOKEN" },
+    ]);
+  });
+
+  it("declared and set: ok", async () => {
+    const f = await fixture({
+      ingredients: [{ meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx" } } }],
+      recipes: [recipe("base", ["mcp/tracker"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a"), env: { ACME_TRACKER_TOKEN: "x" } });
+    expect(of(r.checks, "mcp-env")).toEqual([
+      { id: "mcp-env", scope: "workspace", level: "ok", message: "every variable a written MCP server expects is set", fix: null },
+    ]);
+  });
+
+  it("declared AND referenced as ${NAME}: one line only", async () => {
+    const f = await fixture({
+      ingredients: [mcp("tracker", { T: "${ACME_TRACKER_TOKEN}" }, { authEnv: ["ACME_TRACKER_TOKEN"] })],
+      recipes: [recipe("base", ["mcp/tracker"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    expect(of(r.checks, "mcp-env")).toEqual([
+      { id: "mcp-env", scope: "workspace", level: "warn", message: 'server "tracker" expects ACME_TRACKER_TOKEN, not set', fix: "export ACME_TRACKER_TOKEN" },
+    ]);
+  });
+
+  it("two targets, two authEnv names, one set: reports only the unset one", async () => {
+    const f = await fixture({
+      ingredients: [mcp("tracker", {}, { authEnv: ["A_TOKEN", "B_TOKEN"], targets: ["claude-code", "kiro"] })],
+      recipes: [recipe("base", ["mcp/tracker"])],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a"), env: { A_TOKEN: "1" } });
+    expect(of(r.checks, "mcp-env").map((c) => c.message)).toEqual(['server "tracker" expects B_TOKEN, not set']);
+  });
+
+  it("last wins: the survivor's authEnv is checked, not the dropped one's", async () => {
+    const f = await fixture({
+      ingredients: [mcp("srv", {}, { authEnv: ["DROPPED"] }), mcp("srv--b", {}, { as: "srv", authEnv: ["KEPT"] })],
+      recipes: [recipe("base", ["mcp/srv", "mcp/srv--b"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    expect(of(r.checks, "mcp-env").map((c) => c.message)).toEqual(['server "srv" expects KEPT, not set']);
+  });
+
+  it("the value never appears in the report", async () => {
+    const secret = "sk-" + "z".repeat(24);
+    const f = await fixture({
+      ingredients: [mcp("tracker", {}, { authEnv: ["ACME_TRACKER_TOKEN"] })],
+      recipes: [recipe("base", ["mcp/tracker"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a"), env: { OTHER: secret, ACME_TRACKER_TOKEN: secret } });
+    expect(JSON.stringify(r).includes(secret)).toBe(false);
+  });
+
+  it("an empty string counts as set", async () => {
+    const f = await fixture({
+      ingredients: [mcp("tracker", {}, { authEnv: ["ACME_TRACKER_TOKEN"] })],
+      recipes: [recipe("base", ["mcp/tracker"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a"), env: { ACME_TRACKER_TOKEN: "" } });
+    expect(of(r.checks, "mcp-env")).toEqual([
+      { id: "mcp-env", scope: "workspace", level: "ok", message: "every variable a written MCP server expects is set", fix: null },
+    ]);
+  });
+});
