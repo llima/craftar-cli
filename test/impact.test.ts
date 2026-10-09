@@ -452,3 +452,91 @@ describe("mergeWorkspaceConfig returns base/local (spec 25 §5.1)", () => {
     expect(ws3.merged.base).toEqual({ forge: "../forge", profile: "acme" });
   });
 });
+
+describe("pruneRecipes keeps every candidate when the Forge does not reload (spec 25 §13 item 11)", () => {
+  it("returns kept with reload message instead of throwing", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { pruneCandidates, pruneRecipes } = await import("../src/core/unify.js");
+
+    const root = await tmpDir("craftar-prune-reload-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const forgeRoot = path.join(root, "forge");
+
+    // Forge with base variant that is identical to its sibling after unify
+    await makeForge(forgeRoot, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "a\n", { as: "wf" })],
+      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+
+    // Git init is required for unify to work
+    execFileSync("git", ["init", "-q", forgeRoot]);
+    execFileSync("git", ["-C", forgeRoot, "config", "maintenance.auto", "false"]);
+    execFileSync("git", ["-C", forgeRoot, "config", "gc.auto", "0"]);
+    execFileSync("git", ["-C", forgeRoot, "add", "-A"]);
+    execFileSync("git", ["-C", forgeRoot, "commit", "-q", "-m", "init"], {
+      env: { ...process.env, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "t@t" },
+    });
+
+    // Create and sync a workspace
+    const wsRoot = path.join(root, "ws");
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
+    await syncAndRegister(home, wsRoot);
+
+    // Load the Forge while it's still valid and compute candidates
+    const forge = await loadForge(forgeRoot);
+    const candidates = await pruneCandidates(forge, "rule/wf" as `${string}/${string}`, "rule/wf--acme" as `${string}/${string}`, "acme");
+
+    // Verify we have a candidate
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].recipe).toBe("base--acme");
+    expect(candidates[0].sibling).toBe("base");
+
+    // Save original files for byte comparison
+    const profileBefore = await fs.readFile(path.join(forgeRoot, "profiles/acme/profile.yaml"), "utf8");
+    const recipeBefore = await fs.readFile(path.join(forgeRoot, "recipes/base--acme.yaml"), "utf8");
+
+    // Break the Forge so loadForge throws — invalid schema
+    await fs.writeFile(path.join(forgeRoot, "craftar.forge.yaml"), "schema: 9\n");
+
+    // Verify loadForge now throws
+    let loadError: Error | null = null;
+    try {
+      await loadForge(forgeRoot);
+    } catch (e) {
+      loadError = e as Error;
+    }
+    expect(loadError).not.toBeNull();
+    // The error message contains the path and validation errors
+    expect(loadError!.message).toContain("invalid");
+    expect(loadError!.message).toContain("craftar.forge.yaml");
+
+    // Build context for pruneRecipes — state "read" with one entry
+    const forgeWorkspacesResult = await forgeWorkspaces(home, forgeRoot);
+    const planned = await planAll(forgeWorkspacesResult.workspaces, forge); // Uses the old valid forge
+
+    const ctx = {
+      state: "read" as const,
+      entries: forgeWorkspacesResult.workspaces,
+      after: planned,
+    };
+
+    // Call pruneRecipes — it should NOT throw, but return kept with the reload message
+    const result = await pruneRecipes(forgeRoot, candidates, ctx);
+
+    // Assert exact result structure
+    expect(result.pruned).toEqual([]);
+    expect(result.kept).toHaveLength(1);
+    expect(result.kept[0].recipe).toBe("base--acme");
+    expect(result.kept[0].reason).toContain("the Forge does not reload after unify's writes:");
+    expect(result.kept[0].reason).toContain("invalid");
+    expect(result.kept[0].reason).toContain("craftar.forge.yaml");
+
+    // Verify profile and recipe files are byte-unchanged
+    const profileAfter = await fs.readFile(path.join(forgeRoot, "profiles/acme/profile.yaml"), "utf8");
+    const recipeAfter = await fs.readFile(path.join(forgeRoot, "recipes/base--acme.yaml"), "utf8");
+    expect(profileAfter).toBe(profileBefore);
+    expect(recipeAfter).toBe(recipeBefore);
+  });
+});

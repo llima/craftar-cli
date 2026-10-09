@@ -1179,8 +1179,17 @@ export async function pruneRecipes(
   const pruned: PruneResult["pruned"] = [];
   const kept: PruneResult["kept"] = [];
 
-  // Load the Forge as unify left it
-  const left = await loadForge(forgeRoot);
+  // Load the Forge as unify left it — a failure here keeps every candidate (spec 25 §13 item 11)
+  let left: Forge;
+  try {
+    left = await loadForge(forgeRoot);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    for (const c of candidates) {
+      kept.push({ recipe: c.recipe, reason: `the Forge does not reload after unify's writes: ${msg}` });
+    }
+    return { pruned, kept };
+  }
 
   // Create a mutable copy of the Forge for in-memory edits
   let current = {
