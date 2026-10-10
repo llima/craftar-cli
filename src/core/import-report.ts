@@ -98,6 +98,10 @@ export function renderImportReport(i: ImportReportInput): string {
     [`## Variants (${report.variants.length})`, ...report.variants.map((x) => oneLine(variantLine(x.name, report.profile)))],
     [`## Rejected (${report.rejected.length})`, ...report.rejected.map((x) => `- ${oneLine(said(`${x.name} — ${x.reason}`))}`)],
     ...(report.preferKiro?.length ? [[`## Preferred from Kiro (${report.preferKiro.length})`, ...report.preferKiro.map((x) => `- ${oneLine(preferredLine(x))}`)]] : []),
+    // Spec 33 §4.2 / A4: only when something was left, so reports below schema 3 keep their bytes.
+    ...(report.leftToRecipes.length
+      ? [[`## Left to an integration recipe (${report.leftToRecipes.length})`, ...report.leftToRecipes.map((x) => `- ${oneLine(`${x.recipe} (integrations.${x.slot}): ${x.refs.join(", ")}`)}`)] as string[]]
+      : []),
     ...kiroSections(report, said),
     [`## Warnings (${report.warnings.length})`, ...report.warnings.map((x) => `- ${oneLine(said(x))}`)],
   ];

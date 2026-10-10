@@ -20,6 +20,7 @@ const base = (over: Partial<ImportReport> = {}): ImportReport => ({
   sectioned: [{ name: "rule/parts", sections: ["who", "where"] }],
   sections: [],
   recipeSplits: [],
+  leftToRecipes: [],
   profileWrite: { path: "profiles/acme/profile.yaml", action: "created", fields: [] },
   manifestWrite: "created",
   configWrite: null,
