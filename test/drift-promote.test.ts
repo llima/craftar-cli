@@ -2369,3 +2369,134 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     expect(porcelain(cloneDir)).toBe(" M recipes/base.yaml\n?? ingredients/rules/a--acme/\n");
   });
 });
+
+
+// Commit 1 tests: params/sections with dependents, gitUnheld tests for params outcome
+
+/** Fixture P3 — a templated rule with three targets. */
+async function P3() {
+  const s = await scenario(
+    {
+      ingredients: [
+        {
+          meta: {
+            type: "rule",
+            name: "a",
+            params: { "scm.org": { default: "acme-org" } },
+          },
+          files: { "rule.md": "Org: {{scm.org}}\nA two\n" },
+        },
+        rule("b", "B one\n"),
+      ],
+      recipes: [recipe("base", ["rule/a", "rule/b"])],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"], { params: { "scm.org": "acme-org" } })],
+    },
+    { config: { profile: "acme" } },
+  );
+  cleanups.push(s.cleanup);
+  return {
+    ...s,
+    ws: s.wsRoot,
+    read: (rel: string) => fs.readFile(path.join(s.wsRoot, rel), "utf8"),
+    forgeRead: (rel: string) => fs.readFile(path.join(s.forgeRoot, rel), "utf8"),
+    lockBytes: () => fs.readFile(path.join(s.wsRoot, "craftar.lock")),
+  };
+}
+
+describe("cli — drift promote (commit 1: params with dependents)", () => {
+  it("59. params outcome with three targets — dependents allowed and reported", async () => {
+    const f = await P3();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    expect(await f.read(A)).toBe("Org: acme-org\nA two\n");
+    await fs.writeFile(path.join(f.ws, A), "Org: globex-org\nA two\n");
+    const lockBefore = await f.lockBytes();
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      `promote ${A} → profile acme (params)\n` +
+        "  edited profiles/acme/profile.yaml (params)\n" +
+        `  param scm.org: "acme-org" → "globex-org"\n` +
+        "  proved: this workspace plans the file on disk; 2 other file(s) unchanged\n" +
+        "  also changes .kiro/steering/a.md, AGENTS.md\n" +
+        "  next sync: 2 update — run `craftar sync`\n" +
+        "  no other registered workspace reads this Forge\n" +
+        "  the Forge is not committed — review with git, then commit and push it\n",
+    );
+
+    // Profile now has the new value
+    expect(YAML.parse(await f.forgeRead("profiles/acme/profile.yaml")).params).toEqual({ "scm.org": "globex-org" });
+
+    // Forge porcelain shows only the profile edited
+    expect(porcelain(f.forgeRoot)).toBe(" M profiles/acme/profile.yaml\n");
+
+    // No variant directory created
+    await expect(fs.stat(path.join(f.forgeRoot, "ingredients/rules/a--acme"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    // Lock unchanged
+    expect((await f.lockBytes()).equals(lockBefore)).toBe(true);
+  });
+
+  it("60. D14 on profile.yaml for params outcome — modified and uncommitted", async () => {
+    const f = await P3();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await fs.writeFile(path.join(f.ws, A), "Org: globex-org\nA two\n");
+    const lockBefore = await f.lockBytes();
+
+    // Modify the profile file without committing
+    await fs.appendFile(path.join(f.forgeRoot, "profiles/acme/profile.yaml"), "# modified\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    const realForge = await fs.realpath(f.forgeRoot);
+    expect(r.stderr).toBe(
+      `error: drift promote can only change files git can restore — 1 path(s) under ${realForge} are not:\n` +
+        "  profiles/acme/profile.yaml is not held by git (modified)\n",
+    );
+    expect((await f.lockBytes()).equals(lockBefore)).toBe(true);
+  });
+
+  it("61. D14 on profile.yaml for params outcome — untracked", async () => {
+    const f = await P3();
+    gitInit(f.forgeRoot);
+    // Remove profile.yaml from the index (untrack it)
+    execFileSync("git", ["-C", f.forgeRoot, "rm", "--cached", "profiles/acme/profile.yaml"]);
+    execFileSync("git", ["-C", f.forgeRoot, "commit", "-q", "-m", "untrack profile"], { env: gitEnv() });
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await fs.writeFile(path.join(f.ws, A), "Org: globex-org\nA two\n");
+    const lockBefore = await f.lockBytes();
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    const realForge = await fs.realpath(f.forgeRoot);
+    expect(r.stderr).toBe(
+      `error: drift promote can only change files git can restore — 1 path(s) under ${realForge} are not:\n` +
+        "  profiles/acme/profile.yaml is not held by git (untracked)\n",
+    );
+    expect((await f.lockBytes()).equals(lockBefore)).toBe(true);
+  });
+
+  it("62. D14 on profile.yaml for params outcome — assume-unchanged", async () => {
+    const f = await P3();
+    gitInit(f.forgeRoot);
+    execFileSync("git", ["-C", f.forgeRoot, "update-index", "--assume-unchanged", "profiles/acme/profile.yaml"]);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await fs.writeFile(path.join(f.ws, A), "Org: globex-org\nA two\n");
+    const lockBefore = await f.lockBytes();
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    const realForge = await fs.realpath(f.forgeRoot);
+    expect(r.stderr).toBe(
+      `error: drift promote can only change files git can restore — 1 path(s) under ${realForge} are not:\n` +
+        "  profiles/acme/profile.yaml is not held by git (assume-unchanged)\n",
+    );
+    expect((await f.lockBytes()).equals(lockBefore)).toBe(true);
+  });
+});

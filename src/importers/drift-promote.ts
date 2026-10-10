@@ -796,16 +796,53 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         }
       }
 
-      // Every path not in E must be byte-equal (no dependent paths for params/sections)
+      // Dependent paths: files of this ingredient on non-claude-code targets
+      const dependentPaths = new Set<string>();
+      for (const pf of p0.files) {
+        if (pf.ingredient === ingredientRef && pf.target !== "claude-code") {
+          dependentPaths.add(pf.path);
+        }
+      }
+
+      // Also add AGENTS.md if this is a rule that's embedded in it (has a marker line)
+      let agentsMdIsDependent = false;
+      if (meta.type === "rule") {
+        const agentsMd = p0.files.find((f) => f.ingredient === ("rule/*" as IngredientRef) || f.path === "AGENTS.md");
+        if (agentsMd) {
+          const p0AgentsContent = agentsMd.content.toString("utf8");
+          const markerLine = `<!-- rule: ${N} -->`;
+          if (p0AgentsContent.includes(markerLine)) {
+            // This rule is embedded in AGENTS.md — it's a dependent path with bound
+            dependentPaths.add(agentsMd.path);
+            agentsMdIsDependent = true;
+          }
+          // If no marker, AGENTS.md just points at the file; it should be byte-equal
+        }
+      }
+
+      // Every path not in E and not dependent must be byte-equal
       let otherFilesUnchanged = 0;
       for (const p0f of p0.files) {
-        if (EPaths.has(p0f.path)) continue;
+        if (EPaths.has(p0f.path) || dependentPaths.has(p0f.path)) continue;
         const p1f = p1.files.find((x) => x.path === p0f.path);
         if (!p1f) throw new Error(D15(`${p0f.path} would change`));
         if (!p0f.content.equals(p1f.content)) {
           throw new Error(D15(`${p0f.path} would change`));
         }
         otherFilesUnchanged++;
+      }
+
+      // Check AGENTS.md bound (§4.6 item 4)
+      if (agentsMdIsDependent) {
+        const p0AgentsMd = p0.files.find((f) => f.path === "AGENTS.md");
+        const p1AgentsMd = p1.files.find((f) => f.path === "AGENTS.md");
+        if (p0AgentsMd && p1AgentsMd) {
+          const p0Text = p0AgentsMd.content.toString("utf8");
+          const p1Text = p1AgentsMd.content.toString("utf8");
+          if (!agentsBound(p0Text, p1Text, N)) {
+            throw new Error(D15(`AGENTS.md would change outside rule ${N}`));
+          }
+        }
       }
 
       // Compute next sync statuses
@@ -842,7 +879,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         params: paramsChanged,
         sections: sectionsChanged,
         flattened: { params: [], sections: [] },
-        dependents: [],
+        dependents: [...dependentPaths],
         otherFilesUnchanged,
         nextSync: stScratch,
         nextUnset: unsetDeclared(p1),
