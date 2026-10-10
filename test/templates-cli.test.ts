@@ -244,6 +244,16 @@ describe("templates install", () => {
     expect(cli(["templates", "install"], s.wsRoot).code).toBe(1);
     expect([await tree(s.root), await tree(home)]).toEqual(before);
   });
+
+  it("nothing declared: a load warning is still printed, before the line (the same one list prints)", async () => {
+    const s = await fresh();
+    await writeFiles(s.wsRoot, { "craftar.yaml": "forge: ../forge\nref: v1\nprofile: acme\n" });
+    const WARNING = 'warn ref "v1" is ignored: the Forge is a path (../forge), read as its working tree\n';
+    const list = cli(["templates", "list"], s.wsRoot);
+    expect([list.code, list.stdout, list.stderr]).toEqual([0, NOTHING, WARNING]);
+    const install = cli(["templates", "install"], s.wsRoot);
+    expect([install.code, install.stdout, install.stderr]).toEqual([0, NOTHING, WARNING]);
+  });
 });
 
 describe("templates --help", () => {
