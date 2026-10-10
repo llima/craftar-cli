@@ -580,7 +580,7 @@ export async function readEmitted(
 
   if (type === "skill") {
     const skillDir = path.join(claudeDir, "skills", rel);
-    const stat = await fs.stat(skillDir).catch(() => null);
+    const stat = await fs.lstat(skillDir).catch(() => null);
     if (!stat) return null;
 
     if (stat.isDirectory()) {

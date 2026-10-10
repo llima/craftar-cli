@@ -104,3 +104,22 @@ describe("readEmitted (spec 30 §5.1)", () => {
     expect(r!.meta.targets).toEqual(["claude-code"]);
   });
 });
+
+  it("skill: a symlink to a directory returns null (spec 30, 30d)", async () => {
+    const root = await tmpDir("craftar-read-emitted-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const claudeDir = path.join(root, ".claude");
+
+    // Create a real skill directory OUTSIDE .claude/, holding SKILL.md
+    const realSkill = path.join(root, "real-skill");
+    await fs.mkdir(realSkill, { recursive: true });
+    await fs.writeFile(path.join(realSkill, "SKILL.md"), "# S\n");
+
+    // Create .claude/skills/ and a symlink to the real directory
+    await fs.mkdir(path.join(claudeDir, "skills"), { recursive: true });
+    await fs.symlink(realSkill, path.join(claudeDir, "skills", "linked"), "junction");
+
+    const origin = (rel: string) => ({ workspace: "w", path: rel });
+    const r = await readEmitted(claudeDir, "skill", "linked", origin);
+    expect(r).toBe(null);
+  });

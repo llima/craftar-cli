@@ -2149,3 +2149,28 @@ describe("ForgeStage — listing and flushTo (spec 30)", () => {
     ]);
   });
 });
+
+describe("import — a symlinked skill directory (spec 30, 30d)", () => {
+  it("does not follow a symlink to a directory and does not warn about its missing SKILL.md", async () => {
+    const t = await setup();
+    // Create a real skill directory inside .claude/skills/
+    await writeFiles(t.ws("ws"), {
+      ".claude/skills/ok/SKILL.md": "# OK\n",
+    });
+    // Create a directory OUTSIDE .claude/ with NO SKILL.md
+    const outsideSkill = path.join(t.ws("ws"), "outside-skill");
+    await fs.mkdir(outsideSkill, { recursive: true });
+    await fs.writeFile(path.join(outsideSkill, "notes.txt"), "notes\n");
+    // Create a symlink in .claude/skills/ pointing to that directory
+    await fs.symlink(outsideSkill, path.join(t.ws("ws"), ".claude", "skills", "linked"), "junction");
+
+    const r = await importInto(t.forge, t.ws("ws"), "acme");
+
+    // The real skill should be imported
+    expect(await exists(path.join(t.forge, "ingredients/skills/ok/SKILL.md"))).toBe(true);
+    // The symlinked directory should NOT be imported
+    expect(await exists(path.join(t.forge, "ingredients/skills/linked"))).toBe(false);
+    // The warnings should NOT include the "skill dir linked has no SKILL.md; skipped" warning
+    expect(r.warnings).toEqual([]);
+  });
+});
