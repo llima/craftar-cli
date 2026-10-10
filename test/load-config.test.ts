@@ -57,6 +57,23 @@ describe("loadWorkspaceConfig — the in-memory half of loadWorkspace (spec 23 �
       "craftar.local.yaml › forge holds credentials in the URL",
     );
   });
+  it("a credential behind an empty authority is refused the same way, and the message holds nothing of it", async () => {
+    const s = await scenario(SPEC, { config: { profile: "acme" } });
+    cleanups.push(s.cleanup);
+    const pw = "pw" + "x".repeat(6);
+    const forge = `https:///${["user", pw].join(":")}@h.invalid/r`;
+    const message = "craftar.yaml › forge holds credentials in the URL — remove them and let git authenticate (credential helper, SSH agent; see README › Remote Forge)";
+    const err: unknown = await loadWorkspaceConfig(s.wsRoot, { forge, profile: "acme" }, null).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe(message);
+    expect((err as Error).message).not.toContain(pw);
+    await expect(loadWorkspaceConfig(s.wsRoot, { forge: "../forge", profile: "acme" }, { forge })).rejects.toThrow(
+      "craftar.local.yaml › forge holds credentials in the URL",
+    );
+  });
 });
 
 describe("localKeys — which of forge, ref, profile, recipes, targets craftar.local.yaml sets (spec 23 §5.2)", () => {
