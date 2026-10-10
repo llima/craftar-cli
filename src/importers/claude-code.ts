@@ -402,8 +402,12 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       }
     } catch (e) {
       // The profile exists in the Forge but does not resolve (e.g. two recipes on one slot).
-      const msg = e instanceof Error ? e.message.replace(/\n/g, " ") : String(e);
-      report.warnings.push(`profile ${opts.profileName} did not resolve before this import (${msg}) — authEnv declarations were not compared`);
+      // Only warn when the Forge declares authEnv somewhere — otherwise 0.17.4 was silent (spec 27 §10 criterion 2).
+      const forgeDeclaresAuthEnv = [...loaded.ingredients.values()].some((ing) => ing.meta.type === "mcp" && ing.meta.authEnv && ing.meta.authEnv.length > 0);
+      if (forgeDeclaresAuthEnv) {
+        const msg = e instanceof Error ? e.message.replace(/[\r\n]+/g, " ") : String(e);
+        report.warnings.push(`profile ${opts.profileName} did not resolve before this import (${msg}) — authEnv declarations were not compared`);
+      }
     }
   }
 
@@ -706,7 +710,7 @@ async function writeIngredient(
       }
     }
     meta = { ...meta, name, as } as Ingredient;
-    validateImported(meta);
+    validateImported(meta); // the variant name must be slug-like too (a `--profile` with a space is not)
 
     // I8: rewriting an existing variant another profile resolves would change its files there.
     if (run?.ctx.forge && (await stage.exists(variantFile)) && (await fingerprintDir(dir, stage.reader())) !== fingerprintOf(validateImported(meta), files)) {
@@ -728,8 +732,9 @@ async function writeIngredient(
   const yamlMeta: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(meta)) {
     if (k === "authEnv") continue;
+    // authEnv is emitted with server because only an mcp metadata can hold it (the schema refuses it elsewhere).
     if (k === "server" && "authEnv" in meta) yamlMeta.authEnv = meta.authEnv;
-    yamlMeta[k] = k === "targets" && v === "*" ? "*" : v;
+    yamlMeta[k] = v;
   }
   stage.write(path.join(dir, "ingredient.yaml"), YAML.stringify(yamlMeta, { lineWidth: 0 }));
   for (const [rel, content] of Object.entries(files)) stage.write(path.join(dir, rel), content);

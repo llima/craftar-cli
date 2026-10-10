@@ -427,11 +427,13 @@ interface McpSurvivorsResult {
 /**
  * Determine the surviving MCP ingredient per server name. One pass over collected in walk order;
  * survivors is a Map keyed by outName, last value wins; collisions holds each (key, prev ref, next
- * ref) in the order they occur. A reassigned key stays in the slot where it was first set, so the
- * collision's surviving server can sit in the dropped one's slot — such a file does not adopt
- * (`sameJson` is key-order sensitive).
+ * ref) in the order they occur — it is warned about by `mcpServers`. A reassigned key stays in the
+ * slot where it was first set, so the collision's surviving server can sit in the dropped one's
+ * slot — such a file does not adopt (`sameJson` is key-order sensitive), so a workspace file with
+ * no lock entry reads as `collision`.
  */
 function mcpSurvivors(collected: readonly ResolvedIngredient[]): McpSurvivorsResult {
+  // A Map, so a server named `constructor` or `toString` is not mistaken for one already written.
   const survivors = new Map<string, McpResolved>();
   const collisions: Array<{ key: string; prev: string; next: string }> = [];
   for (const ing of collected) {
@@ -455,6 +457,7 @@ export function mcpServers(ctx: EmitBase, target: string, file: string, collecte
   for (const c of collisions) {
     ctx.warn(`${target}: two ingredients write the MCP server "${c.key}" into ${file}: ${c.prev} and ${c.next} (last wins)`);
   }
+  // A null prototype, so a server named `__proto__` is an entry and not the object's prototype.
   const servers: Record<string, unknown> = Object.create(null);
   for (const [key, ing] of survivors) {
     servers[key] = ing.meta.server;

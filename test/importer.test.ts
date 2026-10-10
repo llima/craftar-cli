@@ -1972,4 +1972,33 @@ describe("import — authEnv (spec 27)", () => {
     expect(lostWarnings[0]).toContain("mcp/tracker");
     expect(lostWarnings[0]).toContain("mcp/tracker--acme");
   });
+
+  it("14. a Forge with NO authEnv anywhere does not trigger the 'did not resolve' warning", async () => {
+    const t = await setup();
+    const { makeForge, recipe, profile, rule } = await import("./helpers/forge.js");
+    // Forge with two recipes on the same slot — profile acme cannot resolve
+    // BUT no authEnv anywhere in the Forge
+    await makeForge(t.forge, {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        { meta: { type: "mcp", name: "tracker", server: { command: "npx", args: ["-y", "tracker"] } } },
+      ],
+      recipes: [
+        { ...recipe("base", ["rule/workflow", "mcp/tracker"]), slot: "pm" },
+        { ...recipe("stack-extra", ["rule/workflow"]), slot: "pm" },
+      ],
+      profiles: [profile("acme", ["base", "stack-extra"], ["claude-code"])],
+    });
+    // Workspace with the MCP server
+    const ws = t.ws("acme-ws");
+    await writeFiles(ws, {
+      "craftar.yaml": "forge: ../forge\nprofile: acme\n",
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": JSON.stringify({ mcpServers: { tracker: { command: "npx", args: ["-y", "tracker"] } } }, null, 2) + "\n",
+    });
+    // Import with the existing broken profile
+    const r = await importInto(t.forge, ws, "acme");
+    // Should have NO warning about "did not resolve before this import"
+    expect(r.warnings.filter((w) => w.includes("did not resolve before this import")).length).toBe(0);
+  });
 });
