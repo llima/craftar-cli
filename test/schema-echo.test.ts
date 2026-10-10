@@ -31,7 +31,7 @@ const REFUSED: Record<string, { text: string; fault: string }> = {
   },
   "craftar.forge.yaml": {
     text: `name: test-forge\nschema: ${URL}\n`,
-    fault: "schema: Invalid input (Invalid literal value, expected 1 | Invalid literal value, expected 2 | Invalid literal value, expected 3)",
+    fault: "schema: Invalid input (Invalid literal value, expected 1 | Invalid literal value, expected 2 | Invalid literal value, expected 3 | Invalid literal value, expected 4)",
   },
 };
 
