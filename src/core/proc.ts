@@ -1,6 +1,6 @@
 /**
  * External-process execution (design D3): capture (stdout of a finished process, execFile)
- * and spawnInherited (inherited output, spawn). No shell.
+ * and spawnInherited (inherited output, spawn). A program is resolved by onPath before it is run. No shell.
  */
 import { execFile, spawn } from "node:child_process";
 import { promises as fs, constants } from "node:fs";
@@ -24,6 +24,31 @@ const PROBE_TIMEOUT_MS = 30_000;
 /** What a program's file may end with on win32 when no shell runs it; a `.cmd` or `.bat` needs one, so it is never a program here. */
 const WIN_EXTENSIONS = [".exe", ".com"];
 
+const WIN = process.platform === "win32";
+
+/** Absolute; on win32 a drive `X:\` / `X:/` or a UNC path — a rooted path without a drive depends on the current directory's drive. */
+function isAnchored(entry: string): boolean {
+  if (!path.isAbsolute(entry)) return false;
+  if (WIN) {
+    if (/^[A-Za-z]:[\\/]/.test(entry)) return true;
+    if (entry.startsWith("\\\\")) return true;
+    return false;
+  }
+  return true;
+}
+
+/** A file; off win32 also executable; any error → false. */
+async function isProgram(file: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(file);
+    if (!stat.isFile()) return false;
+    if (!WIN) await fs.access(file, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The absolute path of the program `file`, looked for in the ABSOLUTE entries of `env`'s PATH only — or null.
  * The platform's own lookup is not used: it also searches the child's working directory (on Windows always; elsewhere
@@ -31,80 +56,21 @@ const WIN_EXTENSIONS = [".exe", ".com"];
  * (spec 32 §7: a program is found on PATH only). An absolute `file` is returned as given; a relative path is null.
  */
 export async function onPath(file: string, env: NodeJS.ProcessEnv): Promise<string | null> {
-  // An absolute file is returned as given
   if (path.isAbsolute(file)) return file;
-
-  // A relative path (contains a separator, or is empty) is not looked for
-  if (file !== path.basename(file) || file === "") return null;
-
-  // Get the PATH value: on win32, first key whose upper-cased name is PATH; elsewhere, env.PATH
-  let pathValue: string | undefined;
-  if (process.platform === "win32") {
-    for (const key of Object.keys(env)) {
-      if (key.toUpperCase() === "PATH") {
-        pathValue = env[key];
-        break;
-      }
-    }
-  } else {
-    pathValue = env.PATH;
-  }
-
-  // No PATH means no entries
-  if (pathValue === undefined) return null;
-
-  // Split by the platform delimiter and filter to absolute entries only
-  const entries = pathValue.split(path.delimiter).filter((entry) => {
-    if (!path.isAbsolute(entry)) return false;
-    // On win32, a rooted path without a drive (\tools) depends on the current directory's drive
-    if (process.platform === "win32") {
-      // Must start with a drive (A: or a:) followed by / or \, OR be a UNC path (\\...)
-      if (/^[A-Za-z]:[\\/]/.test(entry)) return true;
-      if (entry.startsWith("\\\\")) return true;
-      return false;
-    }
-    return true;
-  });
-
-  // On win32, determine the names to try
-  const names: string[] = [];
-  if (process.platform === "win32") {
-    // If file already ends with one of the extensions, just use it
-    const lower = file.toLowerCase();
-    if (WIN_EXTENSIONS.some((ext) => lower.endsWith(ext))) {
-      names.push(file);
-    } else {
-      // Try each extension
-      for (const ext of WIN_EXTENSIONS) {
-        names.push(file + ext);
-      }
-    }
-  } else {
-    names.push(file);
-  }
-
-  // Search each entry for each name
+  if (file === "" || file !== path.basename(file)) return null;
+  const key = WIN ? Object.keys(env).find((k) => k.toUpperCase() === "PATH") : "PATH";
+  const entries = ((key === undefined ? undefined : env[key]) ?? "").split(path.delimiter).filter(isAnchored);
+  const names = WIN && !WIN_EXTENSIONS.some((ext) => file.toLowerCase().endsWith(ext)) ? WIN_EXTENSIONS.map((ext) => file + ext) : [file];
   for (const entry of entries) {
     for (const name of names) {
       const candidate = path.join(entry, name);
-      try {
-        const stat = await fs.stat(candidate);
-        if (!stat.isFile()) continue;
-        // On non-win32, check executable bit
-        if (process.platform !== "win32") {
-          await fs.access(candidate, constants.X_OK);
-        }
-        return candidate;
-      } catch {
-        // Not this one
-      }
+      if (await isProgram(candidate)) return candidate;
     }
   }
-
   return null;
 }
 
-/** Helper: reject with an ENOENT error for a file not on PATH. */
+/** Reject with an ENOENT error for a file not on PATH. */
 function notOnPath(file: string): Error {
   return Object.assign(new Error(`${file} is not on PATH`), { code: "ENOENT" });
 }

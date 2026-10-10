@@ -140,4 +140,18 @@ describe("onPath — where a program is looked for", () => {
     await fs.writeFile(path.join(dir, "craftar-plain-tool"), "#!/bin/sh\n", { mode: 0o644 });
     expect(await onPath("craftar-plain-tool", withPath(dir))).toBeNull();
   });
+
+  it("a relative PATH entry is not looked in, even when it leads to the program from craftar's own working directory", async () => {
+    // Under node_modules/ so that the entry can be spelled relative to this process on every platform (a temp
+    // directory is on another drive on Windows CI).
+    const dir = await fs.mkdtemp(path.join(process.cwd(), "node_modules", ".craftar-proc-rel-"));
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    await fs.copyFile(process.execPath, path.join(dir, TOOL + EXE));
+    await fs.chmod(path.join(dir, TOOL + EXE), 0o755);
+    const relative = path.relative(process.cwd(), dir);
+    expect(path.isAbsolute(relative)).toBe(false);
+    expect(await onPath(TOOL, withPath(relative))).toBeNull();
+    expect(await onPath(TOOL, withPath(`.${path.sep}${relative}`))).toBeNull();
+    expect(await onPath(TOOL, withPath(dir))).toBe(path.join(dir, TOOL + EXE));
+  });
 });
