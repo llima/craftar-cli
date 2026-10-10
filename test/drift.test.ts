@@ -351,3 +351,32 @@ describe("cli — drift discard", () => {
     expect((await lockBytes(f.ws)).equals(before)).toBe(true);
   });
 });
+
+
+describe("cli — drift show and the example file (spec 27 Ruling 4)", () => {
+  const EX = ".claude/settings.craftar.example.json";
+  const MARKER = "MARKER_TYPED_30";
+  const mcp = { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx" } } };
+
+  it("drift show withholds the example file's content, as diff does", async () => {
+    const s = await scenario(
+      { ingredients: [mcp], recipes: [recipe("base", ["mcp/tracker"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    runCli(["sync", "--workspace", s.wsRoot]);
+    // Overwrite the example file with a value containing the marker
+    const drifted = '{\n  "env": {\n    "ACME_TRACKER_TOKEN": "' + MARKER + '"\n  }\n}\n';
+    await fs.writeFile(path.join(s.wsRoot, EX), drifted);
+    const r = runCli(["drift", "show", EX, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      `drift         ${EX}  mcp/*  forge: same  promote: no (.mcp.json)\n` +
+        `--- ${EX} (disk, drift)\n` +
+        `+++ ${EX} (forge)\n` +
+        "  content not shown: an example file may hold a value typed by hand\n",
+    );
+    expect(r.stdout.includes(MARKER)).toBe(false);
+  });
+});
