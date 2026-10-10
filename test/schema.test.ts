@@ -15,6 +15,7 @@ const MINIMAL: Record<(typeof INGREDIENT_TYPES)[number], Record<string, unknown>
   script: { type: "script", name: "x", files: ["x.sh"] },
   steering: { type: "steering", name: "x" },
   hook: { type: "hook", name: "x", files: ["x.sh"] },
+  service: { type: "service", name: "echo" },
 };
 
 describe("strict ingredient keys", () => {
@@ -514,5 +515,90 @@ describe("authEnv (spec 27)", () => {
     } catch (e) {
       expect((e as Error).message).not.toContain(gh);
     }
+  });
+});
+
+describe("service ingredient (spec 31)", () => {
+  it("parses minimal service with defaults", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "echo" });
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data).toMatchObject({
+      type: "service",
+      name: "echo",
+      compose: "compose.yaml",
+      files: [],
+      executable: [],
+      binary: [],
+      targets: [],
+    });
+  });
+
+  it("refuses files with ../x (climbs out)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["../x"] });
+    expect(r.success).toBe(false);
+  });
+
+  it("refuses files with /abs (absolute)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["/abs"] });
+    expect(r.success).toBe(false);
+  });
+
+  it("refuses files with a\\b (backslash)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["a\\b"] });
+    expect(r.success).toBe(false);
+  });
+
+  it("refuses files with ingredient.yaml", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["ingredient.yaml"] });
+    expect(r.success).toBe(false);
+  });
+
+  it("refuses compose with ../c.yaml (climbs out)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "../c.yaml" });
+    expect(r.success).toBe(false);
+  });
+
+  it("refuses executable not in files", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: [], executable: ["x.sh"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues.some((i) => i.message.includes("executable must be a subset of files"))).toBe(true);
+  });
+
+  it("refuses binary not in files", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: [], binary: ["x.bin"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues.some((i) => i.message.includes("binary must be a subset of files"))).toBe(true);
+  });
+
+  it("refuses as with a/b (has separator)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", as: "a/b" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues.some((i) => i.message.includes("slug-like"))).toBe(true);
+  });
+
+  it("refuses as: '..'", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", as: ".." });
+    expect(r.success).toBe(false);
+  });
+
+  it("refuses unknown key ports: []", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", ports: [] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues.some((i) => i.code === "unrecognized_keys" && (i as { keys: string[] }).keys.includes("ports"))).toBe(true);
+  });
+
+  it("accepts files with ./init/a.sh and executable with normalized init/a.sh", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["./init/a.sh"], executable: ["init/a.sh"] });
+    expect(r.success).toBe(true);
+  });
+
+  it("refuses compose with drive letter C:/x (absolute on Windows)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "C:/x.yaml" });
+    expect(r.success).toBe(false);
   });
 });

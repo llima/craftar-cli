@@ -2520,11 +2520,11 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     expect(j.warnings).toEqual([GONE]);
   });
 
-  it("targets --json: exactly the key set of §4.4 at every level, 24 cells", async () => {
+  it("targets --json: exactly the key set of §4.4 at every level, 27 cells", async () => {
     const dir = await bare();
     const j = json(runCli(["targets", "--json"], { cwd: dir }));
     expect(keys(j)).toEqual(["ingredientTypes", "targets", "warnings"]);
-    expect(j.ingredientTypes).toEqual(["rule", "agent", "command", "skill", "mcp", "script", "steering", "hook"]);
+    expect(j.ingredientTypes).toEqual(["rule", "agent", "command", "skill", "mcp", "script", "steering", "hook", "service"]);
     expect(j.targets.map((t: { name: string }) => t.name)).toEqual(["claude-code", "kiro", "agents-md"]);
     let cells = 0;
     for (const t of j.targets) {
@@ -2535,7 +2535,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
         cells++;
       }
     }
-    expect(cells).toBe(24);
+    expect(cells).toBe(27);
     expect(j.targets[1].capabilities.rule).toEqual({
       state: "converted",
       output: [".kiro/steering/<name>.md"],
@@ -2606,7 +2606,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     const r1 = runCli(["ingredients", "--recipe", "nope", "--workspace", s.wsRoot]);
     expect([r1.code, r1.stderr]).toEqual([1, 'error: recipe "nope" not found in this Forge (base, stack-angular)\n']);
     const r2 = runCli(["ingredients", "--type", "widget", "--workspace", s.wsRoot]);
-    expect([r2.code, r2.stderr]).toEqual([1, 'error: unknown ingredient type "widget" — one of rule, agent, command, skill, mcp, script, steering, hook\n']);
+    expect([r2.code, r2.stderr]).toEqual([1, 'error: unknown ingredient type "widget" — one of rule, agent, command, skill, mcp, script, steering, hook, service\n']);
   });
 
   it("targets: no craftar.yaml (a bare dir, a Forge dir) → every inUse null, exit 0", async () => {

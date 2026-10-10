@@ -48,6 +48,14 @@ export function substitutedFile(meta: Ingredient, file: string): boolean {
       return TEXT_EXT.test(file); // kiro emits neither type
     case "mcp":
       return false;
+    case "service": {
+      // compose is always substituted; a files entry unless listed in binary
+      const normalize = (p: string) => path.posix.normalize(p);
+      const normalized = normalize(file);
+      if (normalize(meta.compose) === normalized) return true;
+      if (meta.binary.some((b: string) => normalize(b) === normalized)) return false;
+      return true; // a files entry not in binary
+    }
   }
 }
 
@@ -84,6 +92,9 @@ export function emittedFile(meta: Ingredient, file: string, dir: string | null):
       return meta.files.some((f) => eq(f, file));
     case "mcp":
       return false;
+    case "service":
+      // compose + each files entry
+      return eq(file, meta.compose) || meta.files.some((f: string) => eq(f, file));
   }
 }
 

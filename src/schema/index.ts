@@ -1,3 +1,4 @@
+import path from "node:path";
 import { z } from "zod";
 import { climbsOut } from "../core/text.js";
 import { findSecrets } from "../core/secrets.js";
@@ -35,7 +36,7 @@ export const TargetSchema = z.enum(TARGETS);
 /* Ingredients                                                          */
 /* ------------------------------------------------------------------ */
 
-export const INGREDIENT_TYPES = ["rule", "agent", "command", "skill", "mcp", "script", "steering", "hook"] as const;
+export const INGREDIENT_TYPES = ["rule", "agent", "command", "skill", "mcp", "script", "steering", "hook", "service"] as const;
 export type IngredientType = (typeof INGREDIENT_TYPES)[number];
 
 /** The environment variable name pattern (spec 27 §5.1). Exported so doctor's NAME_REF can be built from it. */
@@ -183,7 +184,52 @@ export const HookIngredient = IngredientBase.extend({
   files: z.array(EmittedFile).min(1),
 });
 
-export const IngredientSchema = z.discriminatedUnion("type", [
+/** The slug pattern `name` uses (spec 31 §7): a service's `as` must match it. */
+const SlugPattern = /^[a-z0-9][a-z0-9._-]*$/i;
+
+/**
+ * A service path: `compose`, and every entry of `files`, `executable` and `binary`.
+ * Refused when absolute (starts with `/` or a drive letter), has a `..` segment, contains a
+ * backslash, or is literally `ingredient.yaml`.
+ */
+const ServicePath = z.string()
+  .refine((v) => !climbsOut(v), 'a service path must not climb out with a .. segment')
+  .refine((v) => !/^\/|^[A-Za-z]:/.test(v), 'a service path must not be absolute')
+  .refine((v) => !v.includes('\\'), 'a service path must not contain a backslash')
+  .refine((v) => v !== 'ingredient.yaml', 'a service path must not be ingredient.yaml');
+
+/**
+ * Service ingredient: a Compose fragment plus the files it mounts or builds from.
+ * NOTE: This is the base shape for parsing; the subset validations (executable ⊆ files, binary ⊆ files)
+ * are done in the IngredientSchema wrapper below.
+ */
+export const ServiceIngredientBase = IngredientBase
+  .omit({ as: true }) // Remove the base `as` to add our own with slug validation
+  .extend({
+    type: z.literal("service"),
+    /** The compose fragment, relative to the ingredient directory. */
+    compose: ServicePath.default("compose.yaml"),
+    /** Other files to write next to the fragment. */
+    files: z.array(ServicePath).default([]),
+    /** A subset of files written with mode 0755 on POSIX. */
+    executable: z.array(ServicePath).default([]),
+    /** A subset of files copied as bytes (no {{param}}, no sections, no secret scan). */
+    binary: z.array(ServicePath).default([]),
+    /** A service is aimed at no AI coder by default. */
+    targets: z.array(TargetSchema).or(z.literal("*")).default([]),
+    /** For a service, `as` must be slug-like (spec 31 §7). */
+    as: z.string()
+      .refine((v) => !climbsOut(v), 'as must not climb out of its folder with a .. segment')
+      .refine((v) => SlugPattern.test(v), 'a service as must be slug-like (like name)')
+      .optional(),
+  })
+  .strict();
+
+// For the discriminated union to work, we use the base shape without additional refinements
+export const ServiceIngredient = ServiceIngredientBase;
+
+// The base discriminated union of all ingredient types
+const IngredientSchemaBase = z.discriminatedUnion("type", [
   RuleIngredient,
   AgentIngredient,
   CommandIngredient,
@@ -192,8 +238,29 @@ export const IngredientSchema = z.discriminatedUnion("type", [
   ScriptIngredient,
   SteeringIngredient,
   HookIngredient,
+  ServiceIngredientBase,
 ]);
-export type Ingredient = z.infer<typeof IngredientSchema>;
+
+/**
+ * The full ingredient schema: parses with the discriminated union, then validates
+ * service-specific constraints (executable ⊆ files, binary ⊆ files).
+ */
+export const IngredientSchema = IngredientSchemaBase.superRefine((data, ctx) => {
+  if (data.type !== "service") return;
+  const normalizePath = (p: string) => path.posix.normalize(p);
+  const filesSet = new Set(data.files.map(normalizePath));
+  for (let i = 0; i < data.executable.length; i++) {
+    if (!filesSet.has(normalizePath(data.executable[i]))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['executable', i], message: 'executable must be a subset of files' });
+    }
+  }
+  for (let i = 0; i < data.binary.length; i++) {
+    if (!filesSet.has(normalizePath(data.binary[i]))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['binary', i], message: 'binary must be a subset of files' });
+    }
+  }
+});
+export type Ingredient = z.infer<typeof IngredientSchemaBase>;
 
 /** `type/name`, the way recipes refer to ingredients. */
 export type IngredientRef = `${IngredientType}/${string}`;

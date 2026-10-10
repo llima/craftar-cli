@@ -67,6 +67,11 @@ export const CAPABILITIES = {
       output: [".claude/hooks/<file>"],
       note: null,
     },
+    service: {
+      state: "unsupported",
+      output: [],
+      note: "skipped with a warning when aimed at this target",
+    },
   },
   kiro: {
     rule: {
@@ -109,6 +114,11 @@ export const CAPABILITIES = {
       output: [],
       note: "skipped with a warning when aimed at this target",
     },
+    service: {
+      state: "unsupported",
+      output: [],
+      note: "skipped with a warning when aimed at this target",
+    },
   },
   "agents-md": {
     rule: {
@@ -147,6 +157,11 @@ export const CAPABILITIES = {
       note: "skipped with a warning when aimed at this target",
     },
     hook: {
+      state: "unsupported",
+      output: [],
+      note: "skipped with a warning when aimed at this target",
+    },
+    service: {
       state: "unsupported",
       output: [],
       note: "skipped with a warning when aimed at this target",
