@@ -228,7 +228,7 @@ describe("workspace checks", () => {
     expect(one((await run({ home: f.home, workspace: c })).checks, "lock")).toMatchObject({ level: "error", fix: "upgrade craftar", message: expect.stringMatching(/declares schema 9/) });
   });
 
-  it("params: a declared key with no value warns once, naming its citers, and plan does not repeat it", async () => {
+  it("params: a declared, cited key with no value is one error, naming its citers, and plan does not repeat it", async () => {
     const f = await fixture({
       ingredients: [rule("a", "# {{who}}\n", { params: { who: { description: "w" } } }), rule("b", "# {{who}} too\n"), rule("c", "# {{other}}\n")],
       recipes: [recipe("base", ["rule/a", "rule/b", "rule/c"])],
@@ -236,11 +236,37 @@ describe("workspace checks", () => {
     });
     const a = await f.ws("acme-a");
     const r = await run({ home: f.home, workspace: a });
-    expect(one(r.checks, "params")).toMatchObject({ level: "warn", message: '"who" declared by rule/a has no value — cited by rule/a, rule/b', fix: "set who in the profile's params or overrides.params" });
+    expect(one(r.checks, "params")).toMatchObject({ level: "error", message: '"who" declared by rule/a has no value — cited by rule/a, rule/b', fix: "set who in the profile's params or overrides.params" });
     const planLines = of(r.checks, "plan").map((c) => c.message);
     expect(planLines.some((x) => x.includes('param "who"'))).toBe(false);
     expect(planLines.some((x) => x.includes('param "other"'))).toBe(true);
     expect(of(r.checks, "plan").map((c) => c.level)).toEqual(["warn"]);
+  });
+
+  it("params: cited is an error, cited nowhere stays a warning — one line each, and the summary counts them", async () => {
+    const f = await fixture({
+      ingredients: [rule("a", "# {{who}}\n", { params: { who: { description: "w" }, spare: { description: "s" } } })],
+      recipes: [recipe("base", ["rule/a"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    expect(of(r.checks, "params").map((c) => [c.level, c.message, c.fix])).toEqual([
+      ["error", '"who" declared by rule/a has no value — cited by rule/a', "set who in the profile's params or overrides.params"],
+      ["warn", '"spare" declared by rule/a has no value', "set spare in the profile's params or overrides.params"],
+    ]);
+    expect(of(r.checks, "plan").map((c) => c.level)).toEqual(["ok"]);
+    expect(r.summary.error).toBe(1);
+  });
+
+  it("params: only an uncited declaration — a warning, no error in the summary", async () => {
+    const f = await fixture({
+      ingredients: [rule("a", "# no cite\n", { params: { spare: { description: "s" } } })],
+      recipes: [recipe("base", ["rule/a"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    expect(of(r.checks, "params").map((c) => c.level)).toEqual(["warn"]);
+    expect(r.summary.error).toBe(0);
   });
 
   it("params: a default or a profile value is ok", async () => {

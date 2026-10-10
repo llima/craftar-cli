@@ -4363,6 +4363,18 @@ describe("cli — craftar doctor (spec 24 §9.2)", () => {
     expect(err.stdout).toMatch(/ error  config +Forge not found at /);
   });
 
+  it("doctor exits 1 without --strict when a declared, cited parameter has no value (spec 29)", async () => {
+    const s = await scenario(
+      { ingredients: [rule("a", "Org: {{org}}\n", { params: { org: { description: "o" } } })], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const r = runCli(["doctor", "--workspace", s.wsRoot, "--json"]);
+    expect(r.code).toBe(1);
+    const params = JSON.parse(r.stdout).checks.filter((c: { id: string }) => c.id === "params");
+    expect(params.map((c: { level: string }) => c.level)).toEqual(["error"]);
+  });
+
   it("outside a workspace: machine checks only, exit 0; an explicit --workspace without craftar.yaml exits 1 on stderr, --json too", async () => {
     const s = await setup();
     const out = s.run([], { cwd: s.root });

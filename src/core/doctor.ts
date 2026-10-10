@@ -252,9 +252,10 @@ async function workspaceChecks(
       if (declaredUnset.size === 0) w("params", "ok", "every declared parameter has a value");
       for (const [key, declaredBy] of declaredUnset) {
         const cited = p.missingParams.find((mp) => mp.key === key)?.refs ?? [];
+        // Spec 29 §4.1: a key a planned file cites refuses the sync, so it is an error; a stale declaration stays a warning.
         w(
           "params",
-          "warn",
+          cited.length ? "error" : "warn",
           `"${key}" declared by ${declaredBy.join(", ")} has no value${cited.length ? ` — cited by ${cited.join(", ")}` : ""}`,
           `set ${key} in the profile's params or overrides.params`,
         );
