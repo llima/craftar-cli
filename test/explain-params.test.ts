@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { loadWorkspace, plan } from "../src/core/sync.js";
+import { loadWorkspace, plan, unsetDeclared } from "../src/core/sync.js";
 import { runCli } from "./helpers/cli.js";
 import { profile, recipe, rule, scenario } from "./helpers/forge.js";
 
@@ -60,5 +60,21 @@ describe("explain — params", () => {
     const agents = runCli(["explain", "AGENTS.md", "--workspace", s.wsRoot]);
     expect(agents.code).toBe(0);
     expect(agents.stdout).not.toContain("  params");
+  });
+
+  it("a citation in a file that is not a body file is listed too: explain names every key the refusal can name", async () => {
+    const s = await scenario(
+      {
+        ingredients: [{ meta: { type: "skill", name: "x", layout: "dir", params: { org: { description: "o" } } }, files: { "SKILL.md": "# x\n", "run.sh": "echo {{org}}\n" } }],
+        recipes: [recipe("base", ["skill/x"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const p = await plan(await loadWorkspace(s.wsRoot));
+    expect(unsetDeclared(p)).toEqual([{ key: "org", declaredBy: ["skill/x"], citedBy: ["skill/x"] }]);
+    expect(p.params.get("skill/x")).toEqual([{ key: "org", layer: "unset" }]);
+    expect(runCli(["explain", ".claude/skills/x/run.sh", "--workspace", s.wsRoot]).stdout.split("\n")).toContain("  params      org (unset)");
   });
 });

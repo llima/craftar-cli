@@ -291,7 +291,7 @@ export interface Plan {
   warnings: string[];
   /** Per ingredient ref, each section it declares, with the layer that filled it (spec 11 §5.3, for `explain`). */
   sections: Map<string, Array<{ file: string; name: string; layer: SectionLayer }>>;
-  /** Per ingredient ref, each `{{key}}` its body files cite, sorted, with the layer that filled it (spec 29 §4.1, for `explain`). */
+  /** Per ingredient ref, each `{{key}}` a file rendered for it cites, sorted, with the layer that filled it (spec 29 §4.1, for `explain`). */
   params: Map<string, Array<{ key: string; layer: ParamLayer }>>;
   /**
    * Each cited `{{key}}` no layer fills, the refs citing it, and the warning that says so (spec 24 §4.2);
@@ -477,7 +477,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const sections = await sectionPass(ws.forge, resolution, warnings);
   /** Unresolved placeholder → refs of the ingredients citing it. */
   const missingParams = new Map<string, Set<string>>();
-  /** Ingredient ref → the placeholders its body files cite, after section expansion. */
+  /** Ingredient ref → the placeholders the files rendered for it cite, after section expansion. */
   const cited = new Map<string, { ing: ResolvedIngredient; keys: Set<string> }>();
   const ctx: EmitBase = {
     forge: ws.forge,
@@ -506,12 +506,11 @@ export async function plan(ws: Workspace): Promise<Plan> {
         );
       const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution)) : toLf(stripBom(raw));
       const out = substitute(expanded, params, missing);
-      if (parsed) {
-        guardOutput(ing, file, out, parsed, resolution, params);
-        const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
-        for (const key of placeholders(expanded)) c.keys.add(key);
-        if (c.keys.size) cited.set(ing.ref, c);
-      }
+      if (parsed) guardOutput(ing, file, out, parsed, resolution, params);
+      // Every file rendered here, body file or not: `explain` names each key the refusal can name (spec 29 §4.1).
+      const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
+      for (const key of placeholders(expanded)) c.keys.add(key);
+      if (c.keys.size) cited.set(ing.ref, c);
       for (const key of missing) missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ing.ref));
       return out;
     },
