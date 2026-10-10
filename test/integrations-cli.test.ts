@@ -310,10 +310,10 @@ describe("Valid schema 3 Forge — key sets and lock unchanged", () => {
     const doc1 = JSON.parse(runCli(["doctor", "--workspace", ws1, "--json"], { env: env1 }).stdout);
     const doc2 = JSON.parse(runCli(["doctor", "--workspace", ws2, "--json"], { env: env2 }).stdout);
 
-    // Normalize by replacing temp roots with <root>
+    // Normalize by replacing temp roots with <root> and timestamps with <when>
     type Check = { id: string; scope: string; level: string; message: string; fix: string | null };
     const normalize = (checks: Check[], root: string) =>
-      checks.map((c) => [c.id, c.scope, c.level, c.message.replaceAll(root, "<root>"), c.fix?.replaceAll(root, "<root>") ?? null]);
+      checks.map((c) => [c.id, c.scope, c.level, c.message.replaceAll(root, "<root>").replace(/generated \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/g, "generated <when>"), c.fix?.replaceAll(root, "<root>") ?? null]);
 
     const checks1 = normalize(doc1.checks, r1);
     const checks2 = normalize(doc2.checks, r2);

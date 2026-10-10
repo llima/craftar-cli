@@ -327,7 +327,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
         const p = provided.get(providedKey)!;
         // `ref` is the Forge ref — the first entry of the provided entry's `refs` whose type is `rule`.
         const ref = p.refs.find((r) => r.startsWith("rule/")) ?? providedKey;
-        report.warnings.push(`--prefer-kiro ${name}: ${ref} is left to recipe ${p.recipe} (integrations.${p.slot}) — nothing to prefer; its steering file was not read`);
+        report.warnings.push(`--prefer-kiro ${name}: ${ref} is left to recipe ${p.recipe} (integrations.${p.slot}) — nothing to prefer; its steering file was not used`);
         continue;
       }
       const q = rules.get(name);

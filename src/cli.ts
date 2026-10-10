@@ -498,19 +498,23 @@ drift
     if (only !== null && !named) fail(unmanaged(only));
     // Spec 33i: compute the provided map; a throw (profile that resolves only because recipes.remove silences something) gives an empty map.
     let provided = new Map<string, { slot: string; recipe: string }>();
+    const providedWarnings: string[] = [];
     try {
       provided = providedRefs(ws.forge, ws.config.profile);
-    } catch {
+    } catch (e) {
       // The profile's effective recipes don't resolve — drift show never fails for this.
+      // Below schema 3, providedRefs returns early (line "if (!eff.selected.length) return new Map()") before resolve(), so it cannot throw.
+      providedWarnings.push(`profile ${ws.config.profile} does not resolve on its own (${(e as Error).message}) — what its integrations provide was not computed, and craftar drift promote will refuse`);
     }
     const rows = driftList(named ? [named] : st, provided);
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
-      console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: p.warnings, unsetParams: unset }, null, 2));
+      console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: [...p.warnings, ...providedWarnings], unsetParams: unset }, null, 2));
       if (unset.length) process.exitCode = 1;
       return;
     }
+    warnStderr(providedWarnings);
     if (named && !rows.length) {
       console.log(`${named.path} is not drifted (${named.state})`);
       if (refusalBlock(unset)) process.exitCode = 1;

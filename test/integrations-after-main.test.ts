@@ -26,7 +26,7 @@ async function moved(forgeRoot: string, before: Record<string, string>): Promise
 
 describe("--prefer-kiro on a rule the block provides", () => {
   const LEFT_TO_RECIPE_LINE = "  left to recipe pm-azure-devops (integrations.pm): rule/stories-azure-devops, mcp/azure-devops — not compared; when this workspace resolves that recipe, craftar status shows whether its copies differ";
-  const WARN_LINE = "  warn --prefer-kiro stories-azure-devops: rule/stories-azure-devops is left to recipe pm-azure-devops (integrations.pm) — nothing to prefer; its steering file was not read";
+  const WARN_LINE = "  warn --prefer-kiro stories-azure-devops: rule/stories-azure-devops is left to recipe pm-azure-devops (integrations.pm) — nothing to prefer; its steering file was not used";
 
   it("C1. --prefer-kiro on a rule the block provides — untouched workspace", async () => {
     const s = await synced(3, ado());
@@ -116,7 +116,7 @@ Stories live in Azure DevOps, see .claude/rules/workflow.md for the workflow.
 
     expect(r.code).toBe(0);
     // The warn line names the Forge ref (rule/stories-azure-devops), not rule/stories:
-    expect(lines).toContain("  warn --prefer-kiro stories: rule/stories-azure-devops is left to recipe pm-azure-devops (integrations.pm) — nothing to prefer; its steering file was not read");
+    expect(lines).toContain("  warn --prefer-kiro stories: rule/stories-azure-devops is left to recipe pm-azure-devops (integrations.pm) — nothing to prefer; its steering file was not used");
     expect(lines.filter((l) => l.startsWith("  prefer-kiro"))).toEqual([]);
   });
 });

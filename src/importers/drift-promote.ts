@@ -1005,6 +1005,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // For variant-updated, no recipe changes needed
   const viaRecipes = X.via;
   const editedKeys = new Map<string, string[]>();
+  // The WRITTEN list on purpose: it asks which file lists R, to edit it. A recipe the block selects never reaches the fork or D17 below — D19 refuses it first.
   const profileRecipes = forge.profiles.get(profile)?.recipes ?? [];
 
   // The ref we're replacing in recipes: X.ref (not T/N, because X might be another profile's variant)
