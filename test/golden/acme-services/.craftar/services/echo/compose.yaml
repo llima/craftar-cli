@@ -1,0 +1,8 @@
+services:
+  echo:
+    image: example/echo:1
+    ports:
+      - "8080:80"
+    environment:
+      GREETING: "hello"
+      TOKEN: ${ECHO_TOKEN:-local}

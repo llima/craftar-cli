@@ -1,0 +1,4 @@
+name: base
+ingredients:
+  - rule/workflow
+  - service/echo

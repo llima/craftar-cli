@@ -1,0 +1,9 @@
+type: service
+name: echo
+compose: compose.yaml
+files:
+  - init/setup.sh
+executable:
+  - init/setup.sh
+params:
+  greeting: { default: hello }
