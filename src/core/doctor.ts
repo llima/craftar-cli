@@ -11,6 +11,8 @@ import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, frag
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
 import { outName } from "../emitters/shared.js";
+import { declaredTemplates, dotnetVersion as defaultDotnetVersion, feedMessage, profileLabel, unpinnedSources } from "./templates.js";
+import { capture } from "./proc.js";
 
 /*
  * `craftar doctor` (spec 24): every check Craftar can make about this machine and, inside one, this
@@ -52,9 +54,10 @@ export interface DoctorOptions {
   registryOff: boolean;
   /** Environment to read `${NAME}` from; defaults to `process.env`. */
   env?: NodeJS.ProcessEnv;
-  /** Test seams: the Node version and `git --version` (null when git is not found). */
+  /** Test seams: the Node version, `git --version` and `dotnet --version` (null when not found). */
   nodeVersion?: string;
   gitVersion?: () => Promise<string | null>;
+  dotnetVersion?: () => Promise<string | null>;
   /** Test seam: injected runner for `docker compose version --short` (spec 31 §4.7). */
   dockerRunner?: DockerRunner;
 }
@@ -284,6 +287,40 @@ async function workspaceChecks(
     else if (await isRegistered(reg, root)) w("registered", "ok", "in the registry");
     else if (await exists(path.join(root, LOCK_FILE))) w("registered", "warn", "synced but not registered", "craftar sync");
     else w("registered", "ok", "never synced, nothing to register yet");
+
+    // templates, dotnet — only when the profile has the key (spec 32 §4.3, D11)
+    const profile = ws.forge.profiles.get(ws.config.profile);
+    if (profile) {
+      const label = await profileLabel(ws.forge.root, profile.name);
+      let declared;
+      try {
+        declared = declaredTemplates(profile, label);
+      } catch (e) {
+        w("templates", "warn", oneLine(e), "fix the templates block: only craftar templates reads it");
+        // No dotnet check when the block is refused
+      }
+      if (declared && declared.declared) {
+        const findings: Check[] = [];
+        for (const e of declared.entries) {
+          if (!e.installable) findings.push({ id: "templates", scope: "workspace", level: "warn", message: `templates[${e.entry}]: kind "${e.kind}" is not installed by this craftar`, fix: "upgrade craftar, or remove the entry" });
+        }
+        const unpinned = await unpinnedSources(declared.entries, root);
+        if (unpinned.length > 0) findings.push({ id: "templates", scope: "workspace", level: "warn", message: feedMessage(unpinned), fix: "add a NuGet.Config at the workspace root that pins the feed, or ignore this when NuGet is configured above the workspace or for the user" });
+        if (findings.length === 0) {
+          const n = declared.entries.length;
+          w("templates", "ok", `block accepted: ${n} ${n === 1 ? "entry" : "entries"}`);
+        } else {
+          for (const f of findings) w(f.id, f.level, f.message, f.fix);
+        }
+        // dotnet check — only when at least one entry is installable
+        if (declared.entries.some((e) => e.installable)) {
+          const getDotnetVersion = opts.dotnetVersion ?? (() => defaultDotnetVersion(capture, env));
+          const version = await getDotnetVersion();
+          if (version !== null) w("dotnet", "ok", version);
+          else w("dotnet", "warn", "dotnet is not available on PATH", "install the .NET SDK");
+        }
+      }
+    }
   } else {
     // The workspace did not load: only `lock` runs (it needs only the directory, §6 case 1).
     await lockAndStatus(root, null, null, w);
