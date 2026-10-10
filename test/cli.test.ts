@@ -3028,7 +3028,7 @@ describe("cli — diff shows orphans (spec 19)", () => {
     expect(r.stderr).toBe("");
     expect(r.stdout).toBe(
       "--- .claude/rules/a.md (disk, orphan-drift)\n" +
-      "  no longer produced by the Forge but hand-edited — kept; delete it yourself if unwanted\n",
+      "  no longer produced by the Forge but hand-edited — kept; `craftar drift discard <path>` removes it, or delete it yourself\n",
     );
   });
 

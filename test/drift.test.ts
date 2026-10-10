@@ -59,8 +59,8 @@ async function F3() {
 }
 
 const HEADER = "craftar sync — profile acme · recipes base · targets claude-code\n";
-const SKIP_DRIFT = "hand-edited since last sync — run `craftar diff` and either `--overwrite-drift` or promote the change to the Forge";
-const SKIP_ORPHAN = "no longer produced by the Forge but hand-edited — kept; delete it yourself if unwanted";
+const SKIP_DRIFT = "hand-edited since last sync — `craftar drift show <path>`, then `craftar drift discard` or `craftar drift promote`";
+const SKIP_ORPHAN = "no longer produced by the Forge but hand-edited — kept; `craftar drift discard <path>` removes it, or delete it yourself";
 const entry = (p: string, hash: string, ingredient: string) => ({ path: p, hash, target: "claude-code", ingredient });
 
 describe("cli — hand-edited files, pinned before spec 30", () => {
