@@ -735,23 +735,27 @@ async function T() {
 
 describe("cli — drift promote (step 30f)", () => {
   it("23. case 2 — recipe forked for this profile, profile edited", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
     const f = await M();
     gitInit(f.forgeRoot);
     // Sync acme workspace
-    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
     // Create and sync a globex workspace so status can confirm it's unchanged
     const ws2 = path.join(f.root, "ws2");
     await makeWorkspace(ws2, f.forgeRoot, { config: { profile: "globex" } });
-    expect(runCli(["sync", "--workspace", ws2]).code).toBe(0);
+    expect(runCli(["sync", "--workspace", ws2], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
     const baseYamlBefore = await f.forgeRead("recipes/base.yaml");
     const globexProfileBefore = await f.forgeRead("profiles/globex/profile.yaml");
 
     await f.driftA();
     const lockBefore = await f.lockBytes();
 
-    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws], { env: { CRAFTAR_HOME: home } });
     expect(r.code).toBe(0);
     expect(r.stderr).toBe("");
+    // Note: no "no other registered workspace" line because ws2 (globex) is registered.
+    // Globex is unchanged (uses original base recipe), so no impact line for same-profile.
     expect(r.stdout).toBe(
       `promote ${A} → rule/a--acme (variant, profile acme)\n` +
         "  wrote  ingredients/rules/a--acme/ingredient.yaml\n" +
@@ -760,7 +764,6 @@ describe("cli — drift promote (step 30f)", () => {
         "  edited profiles/acme/profile.yaml (recipes)\n" +
         "  proved: this workspace plans the file on disk; 2 other file(s) unchanged\n" +
         "  next sync: nothing to sync\n" +
-        "  no other registered workspace reads this Forge\n" +
         "  the Forge is not committed — review with git, then commit and push it\n",
     );
 
@@ -1545,16 +1548,422 @@ describe("cli — drift promote (step 30g: params/sections)", () => {
     // Profile is byte-equal (no params were written)
     expect((await fs.readFile(path.join(s.forgeRoot, "profiles/acme/profile.yaml"))).equals(profileBefore)).toBe(true);
   });
+});
 
-  it("49. the internal error is unreachable from the CLI", () => {
-    // This is a design note: the internal error "internal: <path> is drift but the Forge already renders it"
-    // cannot be reached from the CLI because:
-    // 1. If the file is drift, disk hash !== lock hash
-    // 2. If decide() returns reuse with no delta (rendered fingerprint equals source fingerprint),
-    //    that means the Forge already produces the file on disk
-    // 3. But then disk hash === plan hash, and status() would have called it "unchanged", not "drift"
-    // So there's no way to have drift + reuse with no delta from the CLI.
-    // The check is defensive code for internal consistency.
-    expect(true).toBe(true); // placeholder assertion
+// Step 30h: other workspaces impact check and --json output
+
+describe("cli — drift promote (step 30h: impact check)", () => {
+  it("50. reported, not refused — two workspaces of one profile", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const f = await F();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Create a second workspace on the same profile
+    const ws2 = path.join(f.root, "ws2");
+    await makeWorkspace(ws2, f.forgeRoot, { config: { profile: "acme" } });
+    expect(runCli(["sync", "--workspace", ws2], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    await f.driftA();
+    const realWs2 = await fs.realpath(ws2);
+
+    const P = ["drift", "promote", A, "--workspace", f.ws];
+    const r = runCli(P, { env: { CRAFTAR_HOME: home } });
+
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      `promote ${A} → rule/a--acme (variant, profile acme)\n` +
+        "  wrote  ingredients/rules/a--acme/ingredient.yaml\n" +
+        "  wrote  ingredients/rules/a--acme/rule.md\n" +
+        "  edited recipes/base.yaml (ingredients)\n" +
+        "  proved: this workspace plans the file on disk; 2 other file(s) unchanged\n" +
+        "  next sync: nothing to sync\n" +
+        `  1 other workspace(s) of profile acme read this Forge: ${realWs2} — 1 update\n` +
+        "  the Forge is not committed — review with git, then commit and push it\n",
+    );
+  });
+
+  it("51. --json output", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const f = await F();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Create a second workspace on the same profile
+    const ws2 = path.join(f.root, "ws2");
+    await makeWorkspace(ws2, f.forgeRoot, { config: { profile: "acme" } });
+    expect(runCli(["sync", "--workspace", ws2], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    await f.driftA();
+    const realWs = await fs.realpath(f.ws);
+    const realWs2 = await fs.realpath(ws2);
+    const realForge = await fs.realpath(f.forgeRoot);
+
+    const P = ["drift", "promote", A, "--workspace", f.ws, "--json"];
+    const r = runCli(P, { env: { CRAFTAR_HOME: home } });
+
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed).toEqual({
+      workspace: realWs,
+      forge: realForge,
+      profile: "acme",
+      dryRun: false,
+      path: ".claude/rules/a.md",
+      ingredient: "rule/a",
+      outcome: "variant",
+      promoted: "rule/a--acme",
+      written: [
+        { path: "ingredients/rules/a--acme/ingredient.yaml", action: "created" },
+        { path: "ingredients/rules/a--acme/rule.md", action: "created" },
+        { path: "recipes/base.yaml", action: "edited" },
+      ],
+      params: [],
+      sections: [],
+      flattened: { params: [], sections: [] },
+      dependents: [],
+      nextSync: { counts: {} },
+      impact: {
+        registry: "read",
+        workspaces: [
+          { path: realWs2, profile: "acme", match: "path", via: null, ref: null, state: "changed", counts: { update: 1 }, error: null },
+        ],
+      },
+      warnings: [],
+    });
+    // Verify key order
+    expect(Object.keys(parsed)).toEqual([
+      "workspace",
+      "forge",
+      "profile",
+      "dryRun",
+      "path",
+      "ingredient",
+      "outcome",
+      "promoted",
+      "written",
+      "params",
+      "sections",
+      "flattened",
+      "dependents",
+      "nextSync",
+      "impact",
+      "warnings",
+    ]);
+
+    // --json --dry-run
+    gitCommit(f.forgeRoot, "promote");
+    expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+    await fs.appendFile(path.join(f.ws, A), "again\n");
+
+    const r2 = runCli(["drift", "promote", A, "--workspace", f.ws, "--json", "--dry-run"], { env: { CRAFTAR_HOME: home } });
+    expect(r2.code).toBe(0);
+    const parsed2 = JSON.parse(r2.stdout);
+    expect(parsed2.dryRun).toBe(true);
+    expect(parsed2.written.length).toBeGreaterThan(0);
+    expect(porcelain(f.forgeRoot)).toBe("");
+  });
+
+  it("52. the promoting workspace is not in impact.workspaces", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const f = await F();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+    await f.driftA();
+
+    const P = ["drift", "promote", A, "--workspace", f.ws, "--json"];
+    const r = runCli(P, { env: { CRAFTAR_HOME: home } });
+
+    expect(r.code).toBe(0);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.impact.workspaces).toEqual([]);
+  });
+
+  it("53. D16 another profile", async () => {
+    // Fixture M: two profiles sharing base; W2 on globex with recipes: { add: ["solo"] }
+    // Recipe `solo` lists rule/a, and only profile `acme` resolves it from its OWN layer
+    // So when acme promotes rule/a (editing solo.yaml in place), globex which adds solo should change
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A one\nA two\n"), rule("b", "B one\nB two\n"), rule("c", "C one\n")],
+        recipes: [
+          recipe("base-rest", ["rule/b", "rule/c"]),
+          recipe("solo", ["rule/a"]),
+          { name: "base", ingredients: ["rule/a", "rule/b", "rule/c"] },
+        ],
+        profiles: [
+          profile("acme", ["base-rest", "solo"]),
+          profile("globex", ["base"]),
+        ],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Create W2 on globex with recipes.add: ["solo"] — so it also resolves solo
+    const ws2 = path.join(s.root, "ws2");
+    await makeWorkspace(ws2, s.forgeRoot, { config: { profile: "globex", recipes: { add: ["solo"] } } });
+    expect(runCli(["sync", "--workspace", ws2], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    const lockBefore = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
+    await fs.appendFile(path.join(s.wsRoot, A), "hand a\n");
+
+    const realWs2 = await fs.realpath(ws2);
+
+    const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(`error: promote would change ${realWs2} (profile globex): ${A} — the Forge was left untouched\n`);
+    expect(porcelain(s.forgeRoot)).toBe("");
+    expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
+  });
+
+  it("54. D16 same profile, outside — workspace disables rule/a", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const f = await F();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Create ws2 with rule/a disabled
+    const ws2 = path.join(f.root, "ws2");
+    await makeWorkspace(ws2, f.forgeRoot, { config: { profile: "acme", overrides: { ingredients: { disable: ["rule/a"] } } } });
+    expect(runCli(["sync", "--workspace", ws2], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+    // Verify a.md does not exist in ws2
+    await expect(fs.stat(path.join(ws2, A))).rejects.toMatchObject({ code: "ENOENT" });
+
+    const lockBefore = await fs.readFile(path.join(f.ws, "craftar.lock"));
+    await f.driftA();
+    const realWs2 = await fs.realpath(ws2);
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(`error: promote would change ${realWs2} beyond rule/a: ${A} — the Forge was left untouched\n`);
+    expect(porcelain(f.forgeRoot)).toBe("");
+    expect((await fs.readFile(path.join(f.ws, "craftar.lock"))).equals(lockBefore)).toBe(true);
+  });
+
+  it("55. D16 same profile, override — sections outcome is refused when ws2 fills the section", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const f = await S();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Create ws2 with overrides.sections for rule/a
+    const ws2 = path.join(f.root, "ws2");
+    await makeWorkspace(ws2, f.forgeRoot, { config: { profile: "acme", overrides: { sections: { "rule/a": { flavors: "w2\n" } } } } });
+    expect(runCli(["sync", "--workspace", ws2], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    const lockBefore = await f.lockBytes();
+    // Trigger a variant outcome by appending text after the section
+    await fs.appendFile(path.join(f.ws, A), "hand\n");
+    const realWs2 = await fs.realpath(ws2);
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(`error: ${realWs2} fills rule/a from its own overrides — a variant would silently stop applying them there; the Forge was left untouched\n`);
+    expect(porcelain(f.forgeRoot)).toBe("");
+    expect((await f.lockBytes()).equals(lockBefore)).toBe(true);
+  });
+
+  it("55b. D16 same profile, override — sections outcome (not variant) IS allowed when override keeps applying", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const f = await S();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Create ws2 with overrides.sections for rule/a
+    const ws2 = path.join(f.root, "ws2");
+    await makeWorkspace(ws2, f.forgeRoot, { config: { profile: "acme", overrides: { sections: { "rule/a": { flavors: "w2\n" } } } } });
+    expect(runCli(["sync", "--workspace", ws2], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Trigger a sections outcome by editing only the section content
+    await fs.writeFile(path.join(f.ws, A), "S one\nacme flavor\nS end\n");
+    const realWs2 = await fs.realpath(ws2);
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws], { env: { CRAFTAR_HOME: home } });
+    // A sections outcome is allowed because the override in ws2 still applies
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    // The report should show ws2 with update (it sees the profile value change but its override wins)
+    expect(r.stdout).toContain(`1 other workspace(s) of profile acme read this Forge: ${realWs2}`);
+  });
+
+  it("56. registry off", async () => {
+    const f = await F();
+    gitInit(f.forgeRoot);
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+    await f.driftA();
+
+    const P = ["drift", "promote", A, "--workspace", f.ws, "--dry-run"];
+    const r = runCli(P, { env: { CRAFTAR_HOME: home, CRAFTAR_NO_REGISTRY: "1" } });
+
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toContain("  warn other workspaces could not be checked (registry: off)\n");
+    expect(r.stdout).not.toContain("no other registered workspace");
+
+    // --json (also with --dry-run to avoid changing state)
+    const P2 = ["drift", "promote", A, "--workspace", f.ws, "--json", "--dry-run"];
+    const r2 = runCli(P2, { env: { CRAFTAR_HOME: home, CRAFTAR_NO_REGISTRY: "1" } });
+    expect(r2.code).toBe(0);
+    const parsed = JSON.parse(r2.stdout);
+    expect(parsed.impact).toEqual({ registry: "off", workspaces: [] });
+  });
+
+  it("57. URL Forge + --forge <clone>", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    // Use remoteForge helper to create a bare repo with file:// URL
+    const { remoteForge } = await import("./helpers/remote.js");
+    const rf = await remoteForge({
+      ingredients: [rule("a", "A one\nA two\n"), rule("b", "B one\nB two\n"), rule("c", "C one\n")],
+      recipes: [recipe("base", ["rule/a", "rule/b", "rule/c"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    cleanups.push(rf.cleanup);
+
+    // Create a workspace whose forge: is the URL
+    const root = await tmpDir("craftar-ws-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.writeFile(path.join(root, "craftar.yaml"), `forge: ${rf.url}\nprofile: acme\n`);
+    expect(runCli(["sync", "--workspace", root], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Clone the Forge separately
+    const cloneDir = await tmpDir("craftar-clone-");
+    cleanups.push(() => fs.rm(cloneDir, { recursive: true, force: true }));
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("git", ["clone", "-q", rf.bare, cloneDir], { env: gitEnv() });
+    // Disable git maintenance in clone
+    execFileSync("git", ["-C", cloneDir, "config", "maintenance.auto", "false"]);
+    execFileSync("git", ["-C", cloneDir, "config", "gc.auto", "0"]);
+
+    // Drift on a
+    await fs.appendFile(path.join(root, A), "hand a\n");
+
+    // List forges/ entries before
+    const forgesDir = path.join(home, "forges");
+    const forgesBefore = await fs.readdir(forgesDir).catch(() => []);
+    const statsBefore = new Map<string, number>();
+    for (const entry of forgesBefore) {
+      const stat = await fs.stat(path.join(forgesDir, entry)).catch(() => null);
+      if (stat) statsBefore.set(entry, stat.mtimeMs);
+    }
+
+    const P = ["drift", "promote", A, "--workspace", root, "--forge", cloneDir];
+    const r = runCli(P, { env: { CRAFTAR_HOME: home } });
+
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    // Check the last two stdout lines
+    const lines = r.stdout.trim().split("\n");
+    expect(lines[lines.length - 2]).toBe("  the Forge is not committed — review with git, then commit and push it");
+    expect(lines[lines.length - 1]).toBe("  push the Forge for sync to see this");
+
+    // The clone shows the changes
+    expect(porcelain(cloneDir)).toBe(" M recipes/base.yaml\n?? ingredients/rules/a--acme/\n");
+
+    // The forges/ listing is unchanged (no fetch, no tree built, no .used stamp moved)
+    const forgesAfter = await fs.readdir(forgesDir).catch(() => []);
+    expect(forgesAfter.sort()).toEqual(forgesBefore.sort());
+    for (const entry of forgesAfter) {
+      const stat = await fs.stat(path.join(forgesDir, entry)).catch(() => null);
+      if (stat && statsBefore.has(entry)) {
+        expect(stat.mtimeMs).toBe(statsBefore.get(entry));
+      }
+    }
+  });
+
+  it("57b. URL Forge + --forge pointing at unrelated directory → D2", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    const { remoteForge } = await import("./helpers/remote.js");
+    const rf = await remoteForge({
+      ingredients: [rule("a", "A one\n")],
+      recipes: [recipe("base", ["rule/a"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    cleanups.push(rf.cleanup);
+
+    const root = await tmpDir("craftar-ws-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.writeFile(path.join(root, "craftar.yaml"), `forge: ${rf.url}\nprofile: acme\n`);
+    expect(runCli(["sync", "--workspace", root], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Create an unrelated git directory
+    const unrelatedDir = await tmpDir("craftar-unrelated-");
+    cleanups.push(() => fs.rm(unrelatedDir, { recursive: true, force: true }));
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("git", ["init", "-q", unrelatedDir], { env: gitEnv() });
+    execFileSync("git", ["-C", unrelatedDir, "config", "maintenance.auto", "false"]);
+    execFileSync("git", ["-C", unrelatedDir, "config", "gc.auto", "0"]);
+    await fs.writeFile(path.join(unrelatedDir, "README.md"), "unrelated\n");
+    execFileSync("git", ["-C", unrelatedDir, "add", "-A"]);
+    execFileSync("git", ["-C", unrelatedDir, "commit", "-q", "-m", "init"], { env: gitEnv() });
+
+    await fs.appendFile(path.join(root, A), "hand a\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", root, "--forge", unrelatedDir], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(`error: --forge ${unrelatedDir} is not a clone of this workspace's Forge — none of its git remotes matches\n`);
+  });
+
+  it("58. forge: overridden in craftar.local.yaml", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    const { remoteForge } = await import("./helpers/remote.js");
+    const rf = await remoteForge({
+      ingredients: [rule("a", "A one\nA two\n")],
+      recipes: [recipe("base", ["rule/a"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    cleanups.push(rf.cleanup);
+
+    // Clone locally
+    const cloneDir = await tmpDir("craftar-clone-");
+    cleanups.push(() => fs.rm(cloneDir, { recursive: true, force: true }));
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("git", ["clone", "-q", rf.bare, cloneDir], { env: gitEnv() });
+    execFileSync("git", ["-C", cloneDir, "config", "maintenance.auto", "false"]);
+    execFileSync("git", ["-C", cloneDir, "config", "gc.auto", "0"]);
+
+    // Create workspace: craftar.yaml points at URL, craftar.local.yaml overrides to local path
+    const root = await tmpDir("craftar-ws-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeWorkspace(root, rf.url, { config: { profile: "acme" } });
+    await fs.writeFile(path.join(root, "craftar.local.yaml"), YAML.stringify({ forge: cloneDir }));
+    expect(runCli(["sync", "--workspace", root], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    await fs.appendFile(path.join(root, A), "hand a\n");
+
+    // No --forge needed: the merged config's forge is a path
+    const P = ["drift", "promote", A, "--workspace", root];
+    const r = runCli(P, { env: { CRAFTAR_HOME: home } });
+
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    // Verify the clone has the changes
+    expect(porcelain(cloneDir)).toBe(" M recipes/base.yaml\n?? ingredients/rules/a--acme/\n");
   });
 });

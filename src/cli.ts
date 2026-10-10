@@ -521,7 +521,8 @@ drift
   .option("--workspace <dir>", "workspace root", ".")
   .option("--forge <dir>", "the Forge directory to write (required for a URL Forge; a path Forge is used as-is)")
   .option("--dry-run", "prove and show the plan, write nothing", false)
-  .action(async (givenPath: string, o: { workspace: string; forge?: string; dryRun: boolean }) => {
+  .option("--json", "machine-readable output", false)
+  .action(async (givenPath: string, o: { workspace: string; forge?: string; dryRun: boolean; json: boolean }) => {
     const home = craftarHome();
     const normalizedPath = statusPath(givenPath);
 
@@ -540,6 +541,46 @@ drift
         fail(unheldMessage("drift promote", e.forgeRoot, e.unheld));
       }
       throw e;
+    }
+
+    // --json output
+    if (o.json) {
+      // Build the JSON object in spec §4.7 order
+      const jsonObj = {
+        workspace: promotePlan.workspaceRealPath,
+        forge: promotePlan.forgeRoot,
+        profile: promotePlan.profile,
+        dryRun: o.dryRun,
+        path: promotePlan.inputPath,
+        ingredient: promotePlan.ingredientRef,
+        outcome: promotePlan.outcome,
+        promoted: promotePlan.promoted,
+        written: promotePlan.entries.map((e) => ({
+          path: e.rel,
+          action: e.created ? "created" : "edited",
+        })),
+        params: promotePlan.params.map((p) => ({ key: p.key, old: p.old, value: p.value })),
+        sections: promotePlan.sections.map((s) => ({ key: s.key, name: s.name })),
+        flattened: promotePlan.flattened,
+        dependents: promotePlan.dependents,
+        nextSync: { counts: countStatesObject(promotePlan.nextSync) },
+        impact: {
+          registry: promotePlan.impact.registry,
+          workspaces: promotePlan.impact.workspaces,
+        },
+        warnings: promotePlan.warnings,
+      };
+      console.log(JSON.stringify(jsonObj, null, 2));
+      // Apply if not dry-run
+      if (!o.dryRun) {
+        const journal: WriteJournal = [];
+        try {
+          await applyPromote(promotePlan, journal);
+        } catch (e) {
+          fail(lateFailure(e, promotePlan.forgeRoot, journal, "drift promote"));
+        }
+      }
+      return;
     }
 
     // Print the report
@@ -565,9 +606,13 @@ drift
     }
     // Print early warnings (e.g., unmanaged skill files) — pinned by test 10
     const unusedSectionPrefix = "profile ";
+    const registryWarnPrefix = "warn other workspaces";
     for (const w of promotePlan.warnings) {
       if (!w.startsWith(unusedSectionPrefix) || !w.includes(" still sets section ")) {
-        console.log(`  ${pc.yellow("warn")} ${w}`);
+        // Skip registry warnings here — they come later
+        if (!w.includes(": missing") && !w.includes(": error:")) {
+          console.log(`  ${pc.yellow("warn")} ${w}`);
+        }
       }
     }
     for (const [file, keys] of promotePlan.editedKeys) {
@@ -604,8 +649,34 @@ drift
       console.log(`  also changes ${promotePlan.dependents.join(", ")}`);
     }
     console.log(`  ${nextSyncLine(promotePlan.nextSync)}`);
-    if (promotePlan.impact.workspaces.length === 0) {
+
+    // Impact: print other workspaces or registry warning
+    const impact = promotePlan.impact;
+    if (impact.registry !== "read" && impact.registry !== "none") {
+      // Registry could not be read fully: off, partial, or other
+      console.log(`  ${pc.yellow("warn")} other workspaces could not be checked (registry: ${impact.registry})`);
+    } else if (impact.workspaces.length === 0) {
       console.log("  no other registered workspace reads this Forge");
+    } else {
+      // Group by profile and print
+      const sameProfile = impact.workspaces.filter((ws) => ws.profile === promotePlan.profile && ws.state !== "missing" && ws.state !== "error");
+      if (sameProfile.length > 0) {
+        const countParts = sameProfile.map((ws) => {
+          const c = NEXT_SYNC_STATES.map((k) => (ws.counts[k] ? `${ws.counts[k]} ${k}` : "")).filter(Boolean);
+          return `${ws.path} — ${c.length ? c.join(", ") : "unchanged"}`;
+        });
+        console.log(`  ${sameProfile.length} other workspace(s) of profile ${promotePlan.profile} read this Forge: ${countParts.join("; ")}`);
+      } else if (impact.workspaces.filter((ws) => ws.state !== "missing" && ws.state !== "error").length === 0) {
+        console.log("  no other registered workspace reads this Forge");
+      }
+      // Print missing/error as warnings
+      for (const ws of impact.workspaces) {
+        if (ws.state === "missing") {
+          console.log(`  ${pc.yellow("warn")} ${ws.path}: missing`);
+        } else if (ws.state === "error") {
+          console.log(`  ${pc.yellow("warn")} ${ws.path}: error: ${ws.error}`);
+        }
+      }
     }
 
     if (o.dryRun) {
@@ -621,7 +692,19 @@ drift
     }
 
     console.log("  the Forge is not committed — review with git, then commit and push it");
+    if (promotePlan.isUrlForge) {
+      console.log("  push the Forge for sync to see this");
+    }
   });
+
+/** Build counts object for JSON output (only non-zero states). */
+function countStatesObject(st: FileStatus[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const [state, n] of countStates(st)) {
+    counts[state] = n;
+  }
+  return counts;
+}
 
 /* ---------------------------------------------------------------- add / remove recipe */
 /**

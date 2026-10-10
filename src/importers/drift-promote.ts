@@ -24,7 +24,19 @@ import { readWorkspaceConfig, plan, status, readLock, type FileStatus } from "..
 import { driftList } from "../core/drift.js";
 import { hashNormalized } from "../core/text.js";
 import { fingerprintOf } from "../core/fingerprint.js";
-import { workspaceAgainst, forgeWorkspaces, remoteUrls, urlToKey, type RegistryState } from "../core/impact.js";
+import {
+  workspaceAgainst,
+  forgeWorkspaces,
+  remoteUrls,
+  urlToKey,
+  planAll,
+  impactOf,
+  nextSync,
+  type RegistryState,
+  type ForgeWorkspace,
+  type MatchKind,
+  type NextSyncResult,
+} from "../core/impact.js";
 import { findProfileFile, resolvedBy } from "../core/param-writes.js";
 import {
   readEmitted,
@@ -71,6 +83,18 @@ export class UnheldError extends Error {
   }
 }
 
+/** One row in impact.workspaces, matching spec 25's forge impact --json shape. */
+export interface ImpactWorkspaceRow {
+  path: string;
+  profile: string;
+  match: MatchKind;
+  via: string | null;
+  ref: string | null;
+  state: "unchanged" | "changed" | "missing" | "error";
+  counts: Record<string, number>;
+  error: string | null;
+}
+
 export interface PromotePlan {
   outcome: "params" | "sections" | "variant" | "variant-updated";
   /** The ref of the promoted ingredient (null for params/sections). */
@@ -95,7 +119,7 @@ export interface PromotePlan {
   /** What the next sync would do (statuses for CLI to print through countStates/nextSyncLine). */
   nextSync: FileStatus[];
   /** Impact on other workspaces. */
-  impact: { registry: RegistryState; workspaces: never[] };
+  impact: { registry: RegistryState; workspaces: ImpactWorkspaceRow[] };
   /** Warnings to print. */
   warnings: string[];
 
@@ -104,6 +128,14 @@ export interface PromotePlan {
   forgeRoot: string;
   mustHold: string[];
   creates: string[];
+
+  // For JSON output:
+  /** Absolute path of the workspace root. */
+  workspaceRealPath: string;
+  /** The ingredient ref (e.g. "rule/a"). */
+  ingredientRef: string;
+  /** True if --dry-run. */
+  isUrlForge: boolean;
 }
 
 /** D1–D17 messages. */
@@ -131,9 +163,175 @@ const D12_PARAM = (ing: string, key: string) =>
 const D13_EXISTS = (rel: string) => `${rel} already exists in the Forge — promote does not overwrite it`;
 const D13_IGNORED = (rel: string) => `${rel} is ignored by git — git could not show or undo it`;
 const D15 = (what: string) => `promote could not be proved for this workspace: ${what} — the Forge was left untouched`;
+const D16_OTHER_PROFILE = (wsPath: string, profile: string, changedPath: string) =>
+  `promote would change ${wsPath} (profile ${profile}): ${changedPath} — the Forge was left untouched`;
+const D16_SAME_PROFILE_OUTSIDE = (wsPath: string, ingredient: string, changedPath: string) =>
+  `promote would change ${wsPath} beyond ${ingredient}: ${changedPath} — the Forge was left untouched`;
+const D16_SAME_PROFILE_OVERRIDE = (wsPath: string, ingredient: string) =>
+  `${wsPath} fills ${ingredient} from its own overrides — a variant would silently stop applying them there; the Forge was left untouched`;
 const D17 = (recipe: string, chain: string) =>
   `recipe ${recipe} reaches this workspace through ${chain} — promote does not fork a recipe chain; re-import the workspace or edit the recipes by hand`;
 const INTERNAL_REUSE = (p: string) => `internal: ${p} is drift but the Forge already renders it — please report this`;
+
+interface OtherWorkspaceCheck {
+  entries: ForgeWorkspace[];
+  before: ReturnType<typeof planAll> extends Promise<infer T> ? T : never;
+  after: ReturnType<typeof planAll> extends Promise<infer T> ? T : never;
+  rows: ImpactWorkspaceRow[];
+}
+
+/**
+ * Check other workspaces for impact (spec 30 §4.6 items 5-6).
+ * Throws on D16 refusals; returns the impact rows to report otherwise.
+ */
+async function checkOtherWorkspaces(
+  opts: {
+    home: string;
+    forgeDir: string;
+    env: NodeJS.ProcessEnv;
+    thisWsRealPath: string;
+    forge: Forge;
+    scratchForge: Forge;
+    profile: string;
+    outcome: "params" | "sections" | "variant" | "variant-updated";
+    ingredientRef: IngredientRef;
+    allowedPaths: Set<string>;
+    baseCitedKeys: Set<string>;
+    baseSectionNames: string[];
+    ingKey: string;
+  },
+): Promise<{ state: RegistryState; rows: ImpactWorkspaceRow[]; warnings: string[] }> {
+  const {
+    home,
+    forgeDir,
+    env,
+    thisWsRealPath,
+    forge,
+    scratchForge,
+    profile,
+    outcome,
+    ingredientRef,
+    allowedPaths,
+    baseCitedKeys,
+    baseSectionNames,
+    ingKey,
+  } = opts;
+
+  const fwResult = await forgeWorkspaces(home, forgeDir, env);
+  const warnings: string[] = [];
+
+  // Filter out this workspace
+  const otherEntries = fwResult.workspaces.filter((fw) => {
+    try {
+      // Compare real paths
+      return fw.entry.path !== thisWsRealPath;
+    } catch {
+      return true; // keep if can't compare
+    }
+  });
+
+  if (otherEntries.length === 0 || fwResult.state === "off") {
+    return {
+      state: fwResult.state,
+      rows: [],
+      warnings: fwResult.state !== "read" && fwResult.state !== "none" ? [] : [],
+    };
+  }
+
+  // Plan all before and after
+  const before = await planAll(otherEntries, forge);
+  const after = await planAll(otherEntries, scratchForge);
+
+  const rows: ImpactWorkspaceRow[] = [];
+
+  for (let i = 0; i < otherEntries.length; i++) {
+    const fw = otherEntries[i];
+    const bPlan = before[i];
+    const aPlan = after[i];
+
+    // Build the row using nextSync for state/counts
+    const ns = await nextSync(aPlan);
+    const row: ImpactWorkspaceRow = {
+      path: fw.entry.path,
+      profile: fw.entry.profile,
+      match: fw.match,
+      via: fw.via,
+      ref: fw.ref,
+      state: ns.state,
+      counts: ns.counts,
+      error: ns.error,
+    };
+    rows.push(row);
+
+    // Skip missing/error for D16 checks - report in warnings
+    if (bPlan.kind === "missing" || aPlan.kind === "missing") {
+      warnings.push(`${fw.entry.path}: missing`);
+      continue;
+    }
+    if (bPlan.kind === "error" || aPlan.kind === "error") {
+      const errMsg = aPlan.kind === "error" ? aPlan.message : bPlan.kind === "error" ? bPlan.message : "";
+      warnings.push(`${fw.entry.path}: error: ${errMsg}`);
+      continue;
+    }
+
+    // Compare the plans
+    const impact = impactOf(bPlan, aPlan);
+    if (impact.state === "no-effect") continue;
+    if (impact.state === "missing" || impact.state === "error") continue;
+
+    // D16 checks
+    const changedFiles = impact.files;
+    if (changedFiles.length === 0) continue;
+
+    const otherProfile = fw.entry.profile;
+    const firstChanged = changedFiles[0];
+
+    // D16 (other profile) — any change to another profile is refused
+    if (otherProfile !== profile) {
+      throw new Error(D16_OTHER_PROFILE(fw.entry.path, otherProfile, firstChanged));
+    }
+
+    // Same profile - check if the change is within allowed bounds
+    // For variant outcomes, check if the workspace fills the ingredient from overrides
+    if (outcome === "variant" || outcome === "variant-updated") {
+      // Check if this workspace's merged config sets sections or params that X cites
+      const merged = aPlan.workspace.merged;
+      const wsSections = merged.config.overrides?.sections?.[ingKey];
+      const wsParams = merged.config.overrides?.params ?? {};
+
+      // Check sections
+      if (wsSections) {
+        for (const secName of baseSectionNames) {
+          if (Object.hasOwn(wsSections, secName)) {
+            throw new Error(D16_SAME_PROFILE_OVERRIDE(fw.entry.path, ingredientRef));
+          }
+        }
+      }
+
+      // Check params
+      for (const key of baseCitedKeys) {
+        if (Object.hasOwn(wsParams, key)) {
+          throw new Error(D16_SAME_PROFILE_OVERRIDE(fw.entry.path, ingredientRef));
+        }
+      }
+    }
+
+    // Check if changes are outside the allowed paths
+    // For D16 same-profile-outside: use THIS workspace's before paths, not the promoting workspace's.
+    // If ws2 disabled the ingredient, ws2BeforePaths for the ingredient is empty,
+    // and any new file appearing is "outside" what ws2 expected.
+    // We approximate this by checking if the changed file existed in ws2's before plan.
+    // If ws2 had the file before and it changed content, that's within bounds.
+    // If ws2 didn't have the file before and it now appears, that's outside bounds.
+    for (const changed of changedFiles) {
+      if (!bPlan.files.has(changed)) {
+        throw new Error(D16_SAME_PROFILE_OUTSIDE(fw.entry.path, ingredientRef, changed));
+      }
+    }
+  }
+
+  return { state: fwResult.state, rows, warnings };
+}
 
 /**
  * Plan a promote operation. Throws an Error with the D1–D17 message on every refusal.
@@ -523,8 +721,27 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       // Compute next sync statuses
       const stScratch = await status(wsScratch, p1, lock);
 
-      // Impact
-      const fwResult = await forgeWorkspaces(home, forgeDir, env);
+      // Impact — check other workspaces (step 30h)
+      const thisWsRealPath = await fs.realpath(root);
+      // For params/sections, allowed paths are the paths in E plus dependent paths
+      const allowedPaths = new Set([...EPaths]);
+      // For params/sections, the override check is not needed (the params/sections are going into the profile)
+      // So we pass empty baseCitedKeys and baseSectionNames to skip the override check
+      const impactResult = await checkOtherWorkspaces({
+        home,
+        forgeDir,
+        env,
+        thisWsRealPath,
+        forge,
+        scratchForge,
+        profile,
+        outcome,
+        ingredientRef,
+        allowedPaths,
+        baseCitedKeys: new Set<string>(), // params/sections don't trigger override check
+        baseSectionNames: [], // params/sections don't trigger override check
+        ingKey,
+      });
 
       return {
         outcome,
@@ -539,12 +756,15 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         dependents: [],
         otherFilesUnchanged,
         nextSync: stScratch,
-        impact: { registry: fwResult.state, workspaces: [] },
-        warnings,
+        impact: { registry: impactResult.state, workspaces: impactResult.rows },
+        warnings: [...warnings, ...impactResult.warnings],
         stage,
         forgeRoot: realForgeDir,
         mustHold: [profileAbs],
         creates: [],
+        workspaceRealPath: thisWsRealPath,
+        ingredientRef,
+        isUrlForge: forgeKind === "url",
       };
     } finally {
       await fs.rm(scratchDir, { recursive: true, force: true });
@@ -889,13 +1109,29 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     // Compute next sync statuses (return FileStatus[] for CLI to use countStates/nextSyncLine)
     const stScratch = await status(wsScratch, p1, lock);
 
-    // Impact: check for other workspaces (step 30h handles this fully)
-    const fwResult = await forgeWorkspaces(home, forgeDir, env);
+    // Impact: check for other workspaces (step 30h)
+    const thisWsRealPath = await fs.realpath(root);
+    // Allowed paths for variant outcomes: E paths + dependent paths
+    const allowedPaths = new Set([...EPaths, ...dependentPaths]);
+    const impactResult = await checkOtherWorkspaces({
+      home,
+      forgeDir,
+      env,
+      thisWsRealPath,
+      forge,
+      scratchForge,
+      profile,
+      outcome,
+      ingredientRef,
+      allowedPaths,
+      baseCitedKeys,
+      baseSectionNames,
+      ingKey,
+    });
 
     // Add warning for profile section values that are now unused by the variant
     if (flattenedSections.length > 0) {
       const profileSections = forge.profiles.get(profile)?.sections ?? {};
-      const ingKey = sectionKey(X.meta);
       const profileIngSections = profileSections[ingKey] ?? {};
       for (const name of flattenedSections) {
         if (Object.hasOwn(profileIngSections, name)) {
@@ -917,12 +1153,15 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       dependents: [...dependentPaths],
       otherFilesUnchanged,
       nextSync: stScratch,
-      impact: { registry: fwResult.state, workspaces: [] },
-      warnings,
+      impact: { registry: impactResult.state, workspaces: impactResult.rows },
+      warnings: [...warnings, ...impactResult.warnings],
       stage,
       forgeRoot: realForgeDir,
       mustHold,
       creates,
+      workspaceRealPath: thisWsRealPath,
+      ingredientRef,
+      isUrlForge: forgeKind === "url",
     };
   } finally {
     await fs.rm(scratchDir, { recursive: true, force: true });
