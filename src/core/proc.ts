@@ -14,12 +14,15 @@ export interface RunRequest {
 
 export type Runner = (req: RunRequest) => Promise<{ code: number | null }>;
 
-export type Probe = (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string>;
+export type Probe = (file: string, args: string[], env: NodeJS.ProcessEnv, cwd?: string) => Promise<string>;
+
+/** A wedged probe should not hang doctor forever. */
+const PROBE_TIMEOUT_MS = 30_000;
 
 /** stdout of a process that exited 0; rejects otherwise (ENOENT when it cannot start). No shell. */
-export const capture: Probe = (file, args, env) =>
+export const capture: Probe = (file, args, env, cwd) =>
   new Promise((resolve, reject) => {
-    execFile(file, args, { env }, (error, stdout) => {
+    execFile(file, args, { env, cwd, timeout: PROBE_TIMEOUT_MS }, (error, stdout) => {
       if (error) reject(error);
       else resolve(stdout);
     });

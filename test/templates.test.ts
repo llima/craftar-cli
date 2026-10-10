@@ -339,6 +339,19 @@ describe("installTemplates (spec 32 §10 tests 4, 5, 9)", () => {
     ]);
   });
 
+  it("a runner that rejects is a failed entry, and the next entry still runs", async () => {
+    const calls: string[] = [];
+    const run = async (req: RunRequest) => {
+      calls.push(req.args.join(" "));
+      if (calls.length === 1) throw Object.assign(new Error("spawn dotnet ENOENT"), { code: "ENOENT" });
+      return { code: 0 };
+    };
+    const result = await installTemplates([API, TOOLS], await emptyRoot(), { env: {} }, run);
+    expect(calls).toHaveLength(2);
+    expect(result.failed).toEqual([{ entry: 0, code: null }]);
+    expect(result.installed).toEqual([2]);
+  });
+
   it.each([
     ["a folder", { "Acme.Templates.Api/keep.txt": "" }, "Acme.Templates.Api"],
     ["a file", { "Acme.Templates.Api": "" }, "Acme.Templates.Api"],
@@ -425,5 +438,16 @@ describe("dotnetVersion (spec 32 §4.2 step 2, design D5)", () => {
     expect(await dotnetVersion(probe(Object.assign(new Error("Command failed"), { code: 145 })).run, {})).toBeNull();
     expect(await dotnetVersion(probe("No .NET SDKs were found.\n").run, {})).toBeNull();
     expect(await dotnetVersion(probe("").run, {})).toBeNull();
+  });
+
+  it("probes in the directory it is given", async () => {
+    const seen: Array<string | undefined> = [];
+    const run = async (_file: string, _args: string[], _env: NodeJS.ProcessEnv, cwd?: string) => {
+      seen.push(cwd);
+      return "10.0.401\n";
+    };
+    expect(await dotnetVersion(run, {}, "/some/root")).toBe("10.0.401");
+    expect(await dotnetVersion(run, {})).toBe("10.0.401");
+    expect(seen).toEqual(["/some/root", undefined]);
   });
 });

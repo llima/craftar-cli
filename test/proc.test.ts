@@ -22,6 +22,11 @@ describe("capture", () => {
   it("passes an argument as one argument: no shell reads it", async () => {
     expect(await capture(process.execPath, node("console.log(process.argv[1])", "a b; echo c && $(d)"), process.env)).toBe("a b; echo c && $(d)\n");
   });
+  it("runs in the directory it is given", async () => {
+    const cwd = await fs.realpath(await tmpDir("craftar-proc-"));
+    cleanups.push(() => fs.rm(cwd, { recursive: true, force: true }));
+    expect(await capture(process.execPath, node("console.log(require('node:fs').realpathSync(process.cwd()))"), process.env, cwd)).toBe(`${cwd}\n`);
+  });
 });
 
 describe("spawnInherited", () => {

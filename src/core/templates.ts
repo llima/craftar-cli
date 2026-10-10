@@ -213,18 +213,23 @@ export async function installTemplates(entries: DeclaredEntry[], root: string, o
     if (opts.dryRun) continue;
 
     opts.announce?.(e.entry, line);
-    const result = await run({
-      file: "dotnet",
-      args: argv,
-      cwd: root,
-      env: { ...opts.env, DOTNET_NOLOGO: "1" },
-      stdin: opts.interactive ? "inherit" : "ignore",
-    });
+    try {
+      const result = await run({
+        file: "dotnet",
+        args: argv,
+        cwd: root,
+        env: { ...opts.env, DOTNET_NOLOGO: "1" },
+        stdin: opts.interactive ? "inherit" : "ignore",
+      });
 
-    if (result.code === 0) {
-      installed.push(e.entry);
-    } else {
-      failed.push({ entry: e.entry, code: result.code });
+      if (result.code === 0) {
+        installed.push(e.entry);
+      } else {
+        failed.push({ entry: e.entry, code: result.code });
+      }
+    } catch {
+      // The program could not start — the next entry still runs.
+      failed.push({ entry: e.entry, code: null });
     }
   }
 
@@ -232,9 +237,9 @@ export async function installTemplates(entries: DeclaredEntry[], root: string, o
 }
 
 /** The SDK's version, or null (D5). */
-export async function dotnetVersion(probe: Probe = defaultCapture, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+export async function dotnetVersion(probe: Probe = defaultCapture, env: NodeJS.ProcessEnv = process.env, cwd?: string): Promise<string | null> {
   try {
-    const stdout = await probe("dotnet", ["--version"], { ...env, DOTNET_NOLOGO: "1" });
+    const stdout = await probe("dotnet", ["--version"], { ...env, DOTNET_NOLOGO: "1" }, cwd);
     for (const raw of stdout.split("\n")) {
       const line = raw.trim();
       if (/^\d+\.\d+\.\d+/.test(line)) return line;

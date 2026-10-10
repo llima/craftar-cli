@@ -314,7 +314,7 @@ async function workspaceChecks(
         }
         // dotnet check — only when at least one entry is installable
         if (declared.entries.some((e) => e.installable)) {
-          const getDotnetVersion = opts.dotnetVersion ?? (() => defaultDotnetVersion(capture, env));
+          const getDotnetVersion = opts.dotnetVersion ?? (() => defaultDotnetVersion(capture, env, root));
           const version = await getDotnetVersion();
           if (version !== null) w("dotnet", "ok", version);
           else w("dotnet", "warn", "dotnet is not available on PATH", "install the .NET SDK");
