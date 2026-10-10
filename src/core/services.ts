@@ -445,7 +445,7 @@ export function pendingLine(p: PendingFile): string {
     case "missing":
       return `${p.path} — missing — run craftar sync`;
     case "edited":
-      return `${p.path} — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift`;
+      return `${p.path} — edited — run craftar drift discard ${p.path} to put back what craftar wrote (craftar sync --overwrite-drift does it for every edited file)`;
     case "unrecorded":
       return `${p.path} is not craftar's — run craftar status`;
   }

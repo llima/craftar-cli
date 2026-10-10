@@ -512,10 +512,10 @@ describe("pendingLine", () => {
     expect(result).toBe(".craftar/foo.yaml — missing — run craftar sync");
   });
 
-  it('"edited" → the overwrite-drift line', () => {
+  it('"edited" → the drift discard line', () => {
     const result = pendingLine({ path: ".craftar/foo.yaml", reason: "edited" });
     expect(result).toBe(
-      ".craftar/foo.yaml — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift"
+      ".craftar/foo.yaml — edited — run craftar drift discard .craftar/foo.yaml to put back what craftar wrote (craftar sync --overwrite-drift does it for every edited file)"
     );
   });
 
