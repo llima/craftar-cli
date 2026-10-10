@@ -513,6 +513,78 @@ drift
     await applyAndReport(ws, p, st, lock, { dryRun: o.dryRun, overwritePaths });
   });
 
+drift
+  .command("promote")
+  .description("Carry a hand-edited file to the Forge as a profile variant, behind git's gate, proved before any write; never writes the lock, the registry or the cache")
+  .argument("<path>", "the hand-edited file, as `craftar status` prints it")
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--forge <dir>", "the Forge directory to write (required for a URL Forge; a path Forge is used as-is)")
+  .option("--dry-run", "prove and show the plan, write nothing", false)
+  .action(async (givenPath: string, o: { workspace: string; forge?: string; dryRun: boolean }) => {
+    const { planPromote, applyPromote } = await import("./importers/drift-promote.js");
+    const home = craftarHome();
+    const normalizedPath = statusPath(givenPath);
+
+    let plan;
+    try {
+      plan = await planPromote({
+        workspaceRoot: o.workspace,
+        forgeDir: o.forge ?? null,
+        path: normalizedPath,
+        home,
+        env: process.env,
+      });
+    } catch (e) {
+      // Handle gitUnheld error with its special shape
+      if (e instanceof Error && "unheld" in e) {
+        const err = e as Error & { unheld: import("./core/forge.js").UnheldPath[]; forgeRoot: string };
+        fail(unheldMessage("drift promote", err.forgeRoot, err.unheld));
+      }
+      throw e;
+    }
+
+    // Print the report
+    const verb = o.dryRun ? "would write" : "wrote ";
+    const editVerb = o.dryRun ? "would edit" : "edited";
+    console.log(`promote ${plan.inputPath} → ${plan.promoted} (${plan.outcome}, profile ${plan.profile})`);
+    for (const e of plan.entries) {
+      if (e.created) {
+        console.log(`  ${verb} ${e.rel}`);
+      }
+    }
+    for (const w of plan.warnings.filter((w) => w.includes("is not a file craftar generated"))) {
+      console.log(`  ${pc.yellow("warn")} ${w}`);
+    }
+    for (const [file, keys] of plan.editedKeys) {
+      console.log(`  ${editVerb} ${file} (${keys.join(", ")})`);
+    }
+    const otherCount = plan.otherFilesUnchanged;
+    console.log(`  proved: this workspace plans the file on disk; ${otherCount} other file(s) unchanged`);
+    const counts = Object.entries(plan.nextSync.counts).map(([k, n]) => `${n} ${k}`);
+    console.log(`  next sync: ${counts.length ? counts.join(", ") : "nothing to sync"}`);
+    if (plan.impact.workspaces.length === 0) {
+      console.log("  no other registered workspace reads this Forge");
+    }
+    // Impact warnings (step 30h)
+    if (plan.impact.registry !== "read") {
+      console.log(`  ${pc.yellow("warn")} other workspaces could not be checked (registry: ${plan.impact.registry})`);
+    }
+
+    if (o.dryRun) {
+      console.log("  dry run — the Forge was not written");
+      return;
+    }
+
+    const journal: import("./core/unify.js").WriteJournal = [];
+    try {
+      await applyPromote(plan, journal);
+    } catch (e) {
+      fail(lateFailure(e, plan.forgeRoot, journal, "drift promote"));
+    }
+
+    console.log("  the Forge is not committed — review with git, then commit and push it");
+  });
+
 /* ---------------------------------------------------------------- add / remove recipe */
 /**
  * Spec 22's line: what the next sync would do (also `init --no-sync`, spec 23 §4.4).
