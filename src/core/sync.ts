@@ -3,7 +3,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
-import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
+import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
 import { climbsOut, hashNormalized, isUtf8, legacyHash, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
 import { classifyForge, credentialFault, ensureTree, ForgeFetchError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
@@ -291,8 +291,63 @@ export interface Plan {
   warnings: string[];
   /** Per ingredient ref, each section it declares, with the layer that filled it (spec 11 §5.3, for `explain`). */
   sections: Map<string, Array<{ file: string; name: string; layer: SectionLayer }>>;
-  /** Each cited `{{key}}` no layer fills, the refs citing it, and the warning that says so (spec 24 §4.2). */
-  missingParams: Array<{ key: string; refs: string[]; warning: string }>;
+  /** Per ingredient ref, each `{{key}}` a file rendered for it cites, sorted, with the layer that filled it (spec 29 §4.1, for `explain`). */
+  params: Map<string, Array<{ key: string; layer: ParamLayer }>>;
+  /**
+   * Each cited `{{key}}` no layer fills, the refs citing it, and the warning that says so (spec 24 §4.2);
+   * `declaredBy` names the resolved ingredients that declare the key with no value — empty for a key nobody
+   * declares that way (spec 29 §4.1).
+   */
+  missingParams: Array<{ key: string; refs: string[]; warning: string; declaredBy: string[] }>;
+}
+
+/** Declared keys with no default that no layer fills, with the ingredients declaring them (spec 24 §4.2) — cited or not. */
+export function declaredWithoutValue(p: Pick<Plan, "resolution">): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const ing of p.resolution.ingredients) {
+    const values = paramsFor(ing, p.resolution);
+    // `paramsFor` already holds the ingredient's own default, so a key it lacks has neither default nor value.
+    for (const key of Object.keys(ing.meta.params ?? {})) {
+      if (Object.hasOwn(values, key)) continue;
+      out.set(key, [...(out.get(key) ?? []), ing.ref]);
+    }
+  }
+  return out;
+}
+
+/** A declared parameter with no value that a planned file cites: what refuses a sync (spec 29 §3). */
+export interface UnsetParam {
+  key: string;
+  declaredBy: string[];
+  citedBy: string[];
+}
+
+/** The unset declared parameters of a plan, in `missingParams` order (sorted by key). */
+export function unsetDeclared(p: Plan): UnsetParam[] {
+  return p.missingParams.filter((m) => m.declaredBy.length > 0).map((m) => ({ key: m.key, declaredBy: m.declaredBy, citedBy: m.refs }));
+}
+
+/**
+ * The refusal block of spec 29 §4.1, without the `error: ` prefix. `thenSync` is `init`'s form: it has just written
+ * `craftar.yaml`, so its first line says that instead of "nothing written", and its fix line ends with the sync to run.
+ */
+export function unsetRefusal(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): string {
+  const width = Math.max(...unset.map((u) => u.key.length));
+  return [
+    `${unset.length} declared parameter(s) have no value — ${opts.thenSync ? "craftar.yaml written, sync not run" : "nothing written"}`,
+    ...unset.map((u) => `  ${u.key.padEnd(width)}  declared by ${u.declaredBy.join(", ")} · cited by ${u.citedBy.join(", ")}`),
+    `  fix: set each under params in the profile, or under overrides.params in craftar.yaml${opts.thenSync ? ", then run craftar sync" : ""}`,
+  ].join("\n");
+}
+
+/** What stands where a sync's file counts would: `next sync:` (`add recipe`, `init --no-sync`) and `first sync:` (the interactive `init`). */
+export function unsetRefused(unset: UnsetParam[]): string {
+  return `refused — ${unset.length} declared parameter(s) have no value (${unset.map((u) => u.key).join(", ")})`;
+}
+
+/** The refusal in one line, for a row that has no room for the block (`workspaces`, `forge impact`). */
+export function unsetSummary(unset: UnsetParam[]): string {
+  return `sync refused: declared parameter(s) with no value: ${unset.map((u) => u.key).join(", ")}`;
 }
 
 /** A path as the Forge names it: relative to its root, POSIX separators. */
@@ -425,6 +480,8 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const sections = await sectionPass(ws.forge, resolution, warnings);
   /** Unresolved placeholder → refs of the ingredients citing it. */
   const missingParams = new Map<string, Set<string>>();
+  /** Ingredient ref → the placeholders the files rendered for it cite, after section expansion. */
+  const cited = new Map<string, { ing: ResolvedIngredient; keys: Set<string> }>();
   const ctx: EmitBase = {
     forge: ws.forge,
     resolution,
@@ -453,6 +510,10 @@ export async function plan(ws: Workspace): Promise<Plan> {
       const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution)) : toLf(stripBom(raw));
       const out = substitute(expanded, params, missing);
       if (parsed) guardOutput(ing, file, out, parsed, resolution, params);
+      // Every file rendered here, body file or not: `explain` names each key the refusal can name (spec 29 §4.1).
+      const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
+      for (const key of placeholders(expanded)) c.keys.add(key);
+      if (c.keys.size) cited.set(ing.ref, c);
       for (const key of missing) missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ing.ref));
       return out;
     },
@@ -474,10 +535,15 @@ export async function plan(ws: Workspace): Promise<Plan> {
   }
   assertInsideWorkspace(files);
   const missing: Plan["missingParams"] = [];
+  const declared = declaredWithoutValue({ resolution });
   for (const [key, refs] of [...missingParams].sort(([a], [b]) => a.localeCompare(b))) {
     const warning = `param "${key}" has no value in any layer — left verbatim (${[...refs].sort().join(", ")})`;
     warnings.push(warning);
-    missing.push({ key, refs: [...refs].sort(), warning });
+    missing.push({ key, refs: [...refs].sort(), warning, declaredBy: [...(declared.get(key) ?? [])].sort() });
+  }
+  const params: Plan["params"] = new Map();
+  for (const [ref, { ing, keys }] of cited) {
+    params.set(ref, [...keys].sort((a, b) => a.localeCompare(b)).map((key) => ({ key, layer: paramLayer(key, ing, resolution) })));
   }
   // Duplicate path guard
   const seen = new Map<string, string>();
@@ -486,7 +552,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
     if (prev) warnings.push(`two ingredients write ${f.path}: ${prev} and ${f.ingredient} (last wins)`);
     seen.set(f.path, f.ingredient);
   }
-  return { resolution, files: dedupeLastWins(files), warnings, sections: sections.byRef, missingParams: missing };
+  return { resolution, files: dedupeLastWins(files), warnings, sections: sections.byRef, params, missingParams: missing };
 }
 
 function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {
@@ -615,6 +681,10 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   // A backstop, before the first write: `plan()` and `readLock()` already refuse such a path.
   const outside = statuses.find((s) => outsideWorkspace(s.path));
   if (outside) throw new Error(`${outside.path} is outside the workspace — refused`);
+  // The gate of spec 29 §4.1, `dryRun` included: a declared parameter nobody set never reaches a file. `src/cli.ts`
+  // asks first and prints the block itself; this is what no writer can go around.
+  const unset = unsetDeclared(p);
+  if (unset.length) throw new Error(unsetRefusal(unset));
   const written: string[] = [];
   const removed: string[] = [];
   const skipped: FileStatus[] = [];

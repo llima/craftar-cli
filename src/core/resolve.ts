@@ -23,6 +23,11 @@ export interface Resolution {
   sections: Sections;
   /** The two layers `sections` was merged from, kept so `plan()` can name the one that set a value. */
   sectionLayers: { profile: Sections; workspace: Sections };
+  /**
+   * The global layers `params` was merged from, kept so `paramLayer` can name the one that set a key (spec 29
+   * §4.1): per key the last recipe with a default, then the profile's and the workspace's own records.
+   */
+  paramLayers: { recipes: Map<string, string>; profile: Record<string, unknown>; workspace: Record<string, unknown> };
   ingredients: ResolvedIngredient[];
   disabled: IngredientRef[];
   warnings: string[];
@@ -80,8 +85,13 @@ export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
 
   // Params: recipe defaults (in order) → profile → workspace overrides
   const params: Record<string, unknown> = {};
+  const recipeParams = new Map<string, string>(); // key → the last recipe giving it a default
   for (const name of order) {
-    for (const [k, v] of Object.entries(forge.recipes.get(name)!.params)) if (v.default !== undefined) params[k] = v.default;
+    for (const [k, v] of Object.entries(forge.recipes.get(name)!.params)) {
+      if (v.default === undefined) continue;
+      params[k] = v.default;
+      recipeParams.set(k, name);
+    }
   }
   Object.assign(params, profile.params, ws.overrides.params);
 
@@ -114,6 +124,7 @@ export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
     params,
     sections,
     sectionLayers: { profile: profile.sections, workspace: ws.overrides.sections },
+    paramLayers: { recipes: recipeParams, profile: profile.params, workspace: ws.overrides.params },
     ingredients: [...picked.values()],
     disabled,
     warnings,
@@ -140,6 +151,23 @@ export function paramsFor(ing: LoadedIngredient, resolution: Resolution): Record
   for (const [k, v] of Object.entries(ing.meta.params ?? {})) if (v.default !== undefined) out[k] = v.default;
   for (const [k, v] of Object.entries(resolution.params)) out[k] = v;
   return out;
+}
+
+/** The layer that fills a parameter for one ingredient; `workspace` is either workspace file. */
+export type ParamLayer = "default" | "workspace" | "unset" | { recipe: string } | { profile: string };
+
+/**
+ * Which layer `paramsFor` took `key` from for this ingredient, strongest first (spec 29 §4.1, for `explain`) —
+ * the same order `resolve()` and `paramsFor` apply, read off the layers instead of the merged record.
+ */
+export function paramLayer(key: string, ing: LoadedIngredient, resolution: Resolution): ParamLayer {
+  const { recipes, profile, workspace } = resolution.paramLayers;
+  if (Object.hasOwn(workspace, key)) return "workspace";
+  if (Object.hasOwn(profile, key)) return { profile: resolution.profile.name };
+  const recipe = recipes.get(key);
+  if (recipe !== undefined) return { recipe };
+  const declared = ing.meta.params ?? {};
+  return Object.hasOwn(declared, key) && declared[key].default !== undefined ? "default" : "unset";
 }
 
 /** Substitute `{{param}}` placeholders. Unknown placeholders are left untouched (and reported by the caller). */

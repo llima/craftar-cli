@@ -15,6 +15,8 @@ import {
   readLock,
   readWorkspaceConfig,
   status,
+  unsetDeclared,
+  unsetSummary,
   type FileState,
   type FileStatus,
   type MergedConfig,
@@ -380,6 +382,9 @@ export async function nextSync(p: Planned): Promise<NextSyncResult> {
   let statuses: FileStatus[];
   try {
     const planned = await plan(ws);
+    // Spec 29 §4.1: the next sync of such a plan writes nothing. `planAll` and `impactOf` do not ask — they compare bytes.
+    const unset = unsetDeclared(planned);
+    if (unset.length) return { state: "error", counts: {}, error: unsetSummary(unset) };
     lock = await readLock(ws.root);
     statuses = await status(ws, planned, lock);
   } catch (e) {

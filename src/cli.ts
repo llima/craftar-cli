@@ -10,9 +10,9 @@ import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistry
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type Workspace } from "./core/sync.js";
+import { loadWorkspace, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock } from "./schema/index.js";
-import { resolve, sectionKey } from "./core/resolve.js";
+import { resolve, sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
 import { listTargets } from "./core/capabilities.js";
 import { canonicalValue } from "./core/sections.js";
@@ -55,7 +55,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.19.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.20.0");
 
 /* ---------------------------------------------------------------- import */
 program
@@ -108,7 +108,7 @@ program
 /* ---------------------------------------------------------------- status */
 program
   .command("status")
-  .description("Show what sync would do: new, update, drift, orphan, collision")
+  .description("Show what sync would do: new, update, drift, orphan, collision; exits 1 when a declared parameter a file cites has no value")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--json", "machine-readable output", false)
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
@@ -117,9 +117,25 @@ program
     const p = await plan(ws);
     const lock = await readLock(ws.root);
     const st = await status(ws, p, lock);
-    if (o.json) return console.log(JSON.stringify({ forge: forgeJson(ws, lock), statuses: st.map(({ planned, ...s }) => s), warnings: p.warnings }, null, 2));
+    const unset = unsetDeclared(p);
+    if (o.json) {
+      console.log(JSON.stringify({ forge: forgeJson(ws, lock), statuses: st.map(({ planned, ...s }) => s), warnings: p.warnings, unsetParams: unset }, null, 2));
+      // exitCode, not process.exit: a piped object is not cut (spec 29 §4.1)
+      if (unset.length) process.exitCode = 1;
+      return;
+    }
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, false, forgeLine(ws, lock));
+    if (refusalBlock(unset)) process.exitCode = 1;
   });
+
+/**
+ * The refusal of spec 29 §4.1 for a command that goes on to print or exit by itself: the block on stderr, as
+ * `fail()` would print it, without exiting. Says whether there was one.
+ */
+function refusalBlock(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): boolean {
+  if (unset.length) console.error(pc.red("error: ") + unsetRefusal(unset, opts));
+  return unset.length > 0;
+}
 
 /**
  * A writing sync on a planned workspace, then its report: `apply`, the registration of spec 21 (unless
@@ -278,10 +294,20 @@ program
       console.log(pc.bold(`craftar init — wrote ${WORKSPACE_FILE} in ${root}`));
       console.log(`  ${initLine(init)}`);
       for (const n of init.notes) console.log(`  note ${n}`);
+      const unset = unsetDeclared(p);
       if (!o.sync) {
-        console.log(nextSyncLine(init.statuses));
+        console.log(nextSyncLine(init.statuses, unset));
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
         again();
+        return;
+      }
+      // Spec 29 §4.1, §6 case 11: craftar.yaml is written — the workspace layer is a place for the value — and the
+      // first sync is not run. exitCode, not fail(): the `again` line still follows the block.
+      if (unset.length) {
+        for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+        refusalBlock(unset, { thenSync: true });
+        again();
+        process.exitCode = 1;
         return;
       }
       const r = await applyAndReport(ws, p, init.statuses, init.lock);
@@ -297,7 +323,7 @@ program
 /* ---------------------------------------------------------------- sync */
 program
   .command("sync")
-  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces)")
+  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces); refuses, writing nothing, when a declared parameter a file cites has no value")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--check", "exit 1 when the workspace is out of date or has drift (CI mode)", false)
   .option("--dry-run", "show the plan, write nothing", false)
@@ -311,12 +337,20 @@ program
     if (o.check) {
       const bad = st.filter((s) => !["unchanged", "adopt"].includes(s.state));
       printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true, forgeLine(ws, lock));
-      if (bad.length) {
-        console.log(pc.red(`\n${bad.length} file(s) out of sync`));
-        process.exit(1);
-      }
-      console.log(pc.green("\nworkspace in sync"));
+      const unset = unsetDeclared(p);
+      if (bad.length) console.log(pc.red(`\n${bad.length} file(s) out of sync`));
+      // A refused sync is not "in sync", whatever the files say: the listing, then the block, and the exit is
+      // exitCode's, so nothing queued is cut (spec 29 §4.1)
+      if (refusalBlock(unset)) process.exitCode = 1;
+      else if (bad.length) process.exit(1);
+      else console.log(pc.green("\nworkspace in sync"));
       return;
+    }
+    // Asked here, not left to apply()'s gate: the plan's warnings come before the block (spec 29 §4.1)
+    const unset = unsetDeclared(p);
+    if (unset.length) {
+      for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+      fail(unsetRefusal(unset));
     }
     await applyAndReport(ws, p, st, lock, { dryRun: o.dryRun, overwriteDrift: o.overwriteDrift });
   });
@@ -324,7 +358,7 @@ program
 /* ---------------------------------------------------------------- diff */
 program
   .command("diff")
-  .description("Unified diff between the files on disk and what the Forge would generate, orphans included (files the Forge no longer produces)")
+  .description("Unified diff between the files on disk and what the Forge would generate, orphans included (files the Forge no longer produces); also says when a declared parameter a file cites has no value, which sync refuses")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--exit-code", "exit 1 when there are differences (exactly when `sync --check` would fail); a [path] that names no file craftar manages becomes an error; with a remote Forge, a failed fetch exits 1 as `sync --check` does (--offline to use the cached copy)", false)
   .argument("[path]", "limit to one file")
@@ -371,15 +405,19 @@ program
     if (!shown) console.log(pc.green("no differences"));
     // exitCode, not process.exit: exit drops a piped diff still queued for a slow reader (spec 19 §3.1)
     else if (o.exitCode) process.exitCode = 1;
+    // Spec 29 §4.1: with no [path], --exit-code fails exactly when `sync --check` does — a refused sync included
+    if (refusalBlock(unsetDeclared(p)) && o.exitCode && !only) process.exitCode = 1;
   });
 
 /* ---------------------------------------------------------------- add / remove recipe */
 /**
  * Spec 22's line: what the next sync would do (also `init --no-sync`, spec 23 §4.4).
  * Uses `countStates` from `src/core/impact.ts`; a new `FileState` does not compile until it is
- * placed in `FILE_STATE_ORDER_MAP` there.
+ * placed in `FILE_STATE_ORDER_MAP` there. A plan with unset declared parameters has no next sync
+ * to count: the line says it is refused (spec 29 §4.1).
  */
-function nextSyncLine(st: FileStatus[]): string {
+function nextSyncLine(st: FileStatus[], unset: UnsetParam[]): string {
+  if (unset.length) return `next sync: ${unsetRefused(unset)}`;
   const counts = countStates(st).map(([k, n]) => `${n} ${k}`);
   return `next sync: ${counts.length ? `${counts.join(", ")} — run \`craftar sync\`` : "nothing to sync"}`;
 }
@@ -402,7 +440,7 @@ function recipeCommand(op: RecipeOp) {
     const next: Workspace = { ...ws, config: { ...ws.config, recipes: edit.recipes } };
     const p = await plan(next);
     const st = await status(next, p, await readLock(ws.root));
-    const nextLine = nextSyncLine(st);
+    const nextLine = nextSyncLine(st, unsetDeclared(p));
     await fs.writeFile(file, content);
     console.log(`${WORKSPACE_FILE}: ${recipeDiffLine(ws.config.recipes, edit.recipes)}`);
     console.log(`recipes: ${p.resolution.recipes.join(" → ")}`);
@@ -440,7 +478,7 @@ program
 /* ---------------------------------------------------------------- explain */
 program
   .command("explain")
-  .description("Why does this file exist? Which ingredient, recipe chain and target produced it, and which layer filled each section")
+  .description("Why does this file exist? Which ingredient, recipe chain and target produced it, and which layer filled each section and each parameter it cites")
   .argument("<path>", "workspace-relative path of a generated file")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
@@ -460,6 +498,12 @@ program
     if (sections?.length) {
       const layer = (l: SectionLayer) => (l === "profile" ? `profile ${p.resolution.profile.name}` : l);
       console.log(`  sections    ${sections.map((x) => `${x.name} (${layer(x.layer)})`).join(", ")}`);
+    }
+    // Spec 29 §4.1: which layer filled each parameter the file's ingredient cites — or `unset`.
+    const params = p.params.get(f.ingredient);
+    if (params?.length) {
+      const layer = (l: ParamLayer) => (typeof l === "string" ? l : "recipe" in l ? `recipe ${l.recipe}` : `profile ${l.profile}`);
+      console.log(`  params      ${params.map((x) => `${x.key} (${layer(x.layer)})`).join(", ")}`);
     }
     console.log(`  profile     ${ws.config.profile}  (recipes: ${p.resolution.recipes.join(", ")})`);
     console.log(`  hash        ${hashNormalized(f.content)}`);

@@ -230,6 +230,36 @@ describe("confirmInit", () => {
     await confirmInit(init, s.ws, sc.io, { sync: true });
     expect(sc.said[2]).toBe("  first sync: 2 new, 1 collision");
   });
+
+  // Spec 29 §4.1: the first sync of such a plan is refused, so the confirmation says it and offers no sync.
+  const UNSET: ForgeSpec = {
+    ingredients: [rule("a", "Org: {{org}}\n", { params: { org: { description: "o" } } }), rule("b", "Also {{org}}\n")],
+    recipes: [recipe("base", ["rule/a", "rule/b"])],
+    profiles: [profile("acme", ["base"])],
+  };
+
+  it("12. an unset declared parameter → first sync: refused, and the question offers no sync", async () => {
+    const s = await setup(UNSET);
+    const init = await planInit(s.ws, { forge: s.forge, profile: "acme" }, { home: s.home });
+    const sc = script([""]);
+    const result = await confirmInit(init, s.ws, sc.io, { sync: true });
+    expect(sc.said).toEqual([
+      `craftar init — about to write craftar.yaml in ${s.ws}`,
+      "  forge ../forge · profile acme · recipes base · targets claude-code (from the profile)",
+      "  first sync: refused — 1 declared parameter(s) have no value (org)",
+    ]);
+    expect(sc.asked).toEqual(["Write craftar.yaml [yes]: "]);
+    expect(result).toBe("confirmed");
+  });
+
+  it("13. (control) the same Forge with the value set → first sync: 2 new, and the sync is offered", async () => {
+    const s = await setup({ ...UNSET, profiles: [profile("acme", ["base"], ["claude-code"], { params: { org: "acme-inc" } })] });
+    const init = await planInit(s.ws, { forge: s.forge, profile: "acme" }, { home: s.home });
+    const sc = script([""]);
+    await confirmInit(init, s.ws, sc.io, { sync: true });
+    expect(sc.said[2]).toBe("  first sync: 2 new");
+    expect(sc.asked).toEqual(["Write craftar.yaml and sync [yes]: "]);
+  });
 });
 
 /* ------------------------------------------------------------------ */

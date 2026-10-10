@@ -4363,6 +4363,18 @@ describe("cli — craftar doctor (spec 24 §9.2)", () => {
     expect(err.stdout).toMatch(/ error  config +Forge not found at /);
   });
 
+  it("doctor exits 1 without --strict when a declared, cited parameter has no value (spec 29)", async () => {
+    const s = await scenario(
+      { ingredients: [rule("a", "Org: {{org}}\n", { params: { org: { description: "o" } } })], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const r = runCli(["doctor", "--workspace", s.wsRoot, "--json"]);
+    expect(r.code).toBe(1);
+    const params = JSON.parse(r.stdout).checks.filter((c: { id: string }) => c.id === "params");
+    expect(params.map((c: { level: string }) => c.level)).toEqual(["error"]);
+  });
+
   it("outside a workspace: machine checks only, exit 0; an explicit --workspace without craftar.yaml exits 1 on stderr, --json too", async () => {
     const s = await setup();
     const out = s.run([], { cwd: s.root });
@@ -4834,6 +4846,25 @@ describe("cli — forge unify impact (spec 25 §4.2–§4.3)", () => {
     expect(r.stdout).not.toContain("next:");
     // No removed-variant warning (none concerned, registry read)
     expect(r.stdout).not.toContain("was removed");
+  });
+
+  it("spec 29: a workspace whose sync is refused does not turn unify's passes into an error — they compare planned bytes", async () => {
+    const s = await setup();
+    const realG = await fs.realpath(s.wsG);
+    // globex's rule now cites and declares `org`, with no value anywhere: its sync is refused
+    await writeFiles(s.forge, {
+      "ingredients/rules/other/rule.md": "Org: {{org}}\n",
+      "ingredients/rules/other/ingredient.yaml": "type: rule\nname: other\nparams:\n  org:\n    description: the organisation\n",
+    });
+    gitCommitAll(s.forge, "other declares org");
+    const impact = JSON.parse(s.run(["forge", "impact", "--forge", s.forge, "--json"]).stdout);
+    expect(impact.workspaces.find((w: { path: string }) => w.path === realG).state).toBe("error");
+
+    const r = s.run(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--forge", s.forge, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).impact.find((w: { path: string }) => w.path === realG)).toEqual({
+      path: realG, profile: "globex", match: "path", via: null, ref: null, state: "no-effect", files: [], error: null,
+    });
   });
 
   it("test 2: --json: impact array with correct shape", async () => {
@@ -5354,6 +5385,39 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     const fileUpdate = statuses.find((s: { path: string }) => s.path === ".claude/rules/wf.md");
     expect(fileUpdate.path).toBe(".claude/rules/wf.md");
     expect(fileUpdate.state).toBe("update");
+  });
+
+  it("spec 29: a registered workspace whose sync is refused does not stop the proof — it compares planned bytes", async () => {
+    const root = await tmpDir("craftar-prune-refused-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const env = { CRAFTAR_HOME: path.join(root, "home") };
+    await makeForge(forge, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" }), rule("other", "Org: {{org}}\n")],
+      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"]), recipe("other", ["rule/other"])],
+      profiles: [profile("acme", ["base--acme"]), profile("globex", ["other"])],
+    });
+    const wsA = path.join(root, "a");
+    const wsG = path.join(root, "g");
+    await writeFiles(wsA, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    await writeFiles(wsG, { "craftar.yaml": `forge: ../forge\nprofile: globex\n` });
+    expect(runCli(["sync", "--workspace", wsA], { env }).code).toBe(0);
+    expect(runCli(["sync", "--workspace", wsG], { env }).code).toBe(0);
+    // globex's rule now declares the key it cites, with no value anywhere: its sync is refused
+    await writeFiles(forge, { "ingredients/rules/other/ingredient.yaml": "type: rule\nname: other\nparams:\n  org:\n    description: the organisation\n" });
+    gitInit(forge);
+    gitCommitAll(forge, "init");
+    expect(runCli(["sync", "--check", "--workspace", wsG], { env }).code).toBe(1);
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+    expect(out.recipes.pruned).toEqual([{ recipe: "base--acme", sibling: "base", profiles: ["profiles/acme/profile.yaml"] }]);
+    expect(out.recipes.kept).toEqual([]);
+    expect(out.warnings).toEqual([
+      "pruned against the 2 workspaces registered on this machine — a workspace synced elsewhere (CI, another machine, CRAFTAR_NO_REGISTRY) is not covered",
+    ]);
+    expect(await exists(path.join(forge, "recipes/base--acme.yaml"))).toBe(false);
   });
 
   it("test 2: text mode of test 1 — whole stdout", async () => {
@@ -6310,6 +6374,11 @@ describe("cli — craftar init off a terminal (spec 28 §4.5)", () => {
     expect(r.code).toBe(0);
     expect(r.stdout.split("\n")[1]).toBe("  forge ../forge · profile acme · recipes base · targets kiro (from craftar.local.yaml)");
     expect(r.stdout.split("\n").filter((l) => l.startsWith("  again "))).toEqual([]);
+  });
+
+  it("--help of status and sync name the unset-parameter refusal (spec 29)", () => {
+    expect(runCli(["status", "--help"]).stdout.replace(/\s+/g, " ")).toContain("exits 1 when a declared parameter a file cites has no value");
+    expect(runCli(["sync", "--help"]).stdout.replace(/\s+/g, " ")).toContain("refuses, writing nothing, when a declared parameter a file cites has no value");
   });
 
   it("test 10: --help shows the updated option descriptions", async () => {

@@ -7,7 +7,7 @@ import { planRecipeEdit, slotHeld } from "./recipe-edit.js";
 import { readRegistry } from "./registry.js";
 import { classifyForge, credentialFault } from "./remote.js";
 import { profileNotFoundMessage, resolve } from "./resolve.js";
-import { loadForgeSource, mergeWorkspaceConfig, type LoadedForge, type LoadOptions } from "./sync.js";
+import { loadForgeSource, mergeWorkspaceConfig, unsetDeclared, unsetRefused, type LoadedForge, type LoadOptions } from "./sync.js";
 import type { LocalKey } from "./workspace-yaml.js";
 
 /**
@@ -69,7 +69,8 @@ export function yesNo(answer: string): boolean | null {
 
 /**
  * Says the summary and the `first sync:` line, asks through `io.confirm`,
- * re-asks anything but yes/no, returns confirmed or cancelled.
+ * re-asks anything but yes/no, returns confirmed or cancelled. A plan whose sync
+ * is refused (spec 29 §4.1) says so before the question, which then offers no sync.
  */
 export async function confirmInit(
   init: InitPlan,
@@ -80,15 +81,18 @@ export async function confirmInit(
   io.say(`craftar init — about to write craftar.yaml in ${root}`);
   io.say(`  ${initLine(init)}`);
 
+  const unset = unsetDeclared(init.plan);
   const counts = countStates(init.statuses);
-  if (counts.length === 0) {
+  if (unset.length > 0) {
+    io.say(`  first sync: ${unsetRefused(unset)}`);
+  } else if (counts.length === 0) {
     io.say("  first sync: nothing to write");
   } else {
     const parts = counts.map(([k, n]) => `${n} ${k}`);
     io.say(`  first sync: ${parts.join(", ")}`);
   }
 
-  const question = opts.sync
+  const question = opts.sync && unset.length === 0
     ? "Write craftar.yaml and sync [yes]: "
     : "Write craftar.yaml [yes]: ";
 

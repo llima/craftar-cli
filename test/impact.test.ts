@@ -339,6 +339,28 @@ describe("nextSync (spec 25 §5.1)", () => {
     const syncResult2 = await nextSync(planned2[0]);
     expect(syncResult2).toEqual({ state: "changed", counts: { update: 1 }, error: null });
   });
+
+  it("spec 29: a declared, cited parameter with no value — nextSync is error with the reason, and impactOf still compares bytes", async () => {
+    const f = await fixture({
+      ingredients: [rule("a", "Org: {{org}}\n")],
+      recipes: [recipe("base", ["rule/a"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    const a = await f.ws("acme-a");
+    await syncAndRegister(f.home, a); // `org` undeclared: `{{org}}` is on disk and in the lock
+
+    // The ingredient now declares `org` with no default
+    await writeFiles(f.forgeRoot, { "ingredients/rules/a/ingredient.yaml": "type: rule\nname: a\nparams:\n  org:\n    description: the organisation\n" });
+    const result = await forgeWorkspaces(f.home, f.forgeRoot);
+    const planned = await planAll(result.workspaces, await loadForge(f.forgeRoot));
+
+    expect(await nextSync(planned[0])).toEqual({ state: "error", counts: {}, error: "sync refused: declared parameter(s) with no value: org" });
+
+    // The byte comparison ignores the refusal: the plan still exists, and planning twice changes nothing
+    expect(planned[0].kind).toBe("planned");
+    const again = await planAll(result.workspaces, await loadForge(f.forgeRoot));
+    expect(impactOf(planned[0], again[0])).toEqual({ state: "no-effect", files: [], error: null });
+  });
 });
 
 describe("concerned (spec 25 §4.3)", () => {

@@ -7,8 +7,7 @@ import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
 import { isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus } from "./registry.js";
 import { FULL_SHA, cacheKey, classifyForge, inspectCache, type CacheSnapshot } from "./remote.js";
-import { paramsFor } from "./resolve.js";
-import { LOCK_FILE, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
+import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
 import { outName } from "../emitters/shared.js";
 
 /*
@@ -253,9 +252,10 @@ async function workspaceChecks(
       if (declaredUnset.size === 0) w("params", "ok", "every declared parameter has a value");
       for (const [key, declaredBy] of declaredUnset) {
         const cited = p.missingParams.find((mp) => mp.key === key)?.refs ?? [];
+        // Spec 29 §4.1: a key a planned file cites refuses the sync, so it is an error; a stale declaration stays a warning.
         w(
           "params",
-          "warn",
+          cited.length ? "error" : "warn",
           `"${key}" declared by ${declaredBy.join(", ")} has no value${cited.length ? ` — cited by ${cited.join(", ")}` : ""}`,
           `set ${key} in the profile's params or overrides.params`,
         );
@@ -344,20 +344,6 @@ function lockMessage(e: unknown): string {
   if (Array.isArray(issues) && issues.length > 0) return issuesLine(`${LOCK_FILE} is not a valid lock`, issues);
   if (e instanceof SyntaxError) return `${LOCK_FILE} is not valid JSON (${oneLine(e)})`;
   return oneLine(e);
-}
-
-/** Declared keys with no default that no layer fills, with the ingredients declaring them (§4.2). */
-function declaredWithoutValue(p: Plan): Map<string, string[]> {
-  const out = new Map<string, string[]>();
-  for (const ing of p.resolution.ingredients) {
-    const values = paramsFor(ing, p.resolution);
-    // `paramsFor` already holds the ingredient's own default, so a key it lacks has neither default nor value.
-    for (const key of Object.keys(ing.meta.params ?? {})) {
-      if (Object.hasOwn(values, key)) continue;
-      out.set(key, [...(out.get(key) ?? []), ing.ref]);
-    }
-  }
-  return out;
 }
 
 /**
