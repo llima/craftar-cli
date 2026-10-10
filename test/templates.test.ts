@@ -233,3 +233,189 @@ describe("one reader (spec 32 §8)", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+import { dotnetVersion, feedMessage, installArgv, installLine, installTemplates, rootCollisions, unpinnedSources, type DeclaredEntry, type DotnetNewEntry } from "../src/core/templates.js";
+import type { RunRequest } from "../src/core/proc.js";
+import { tmpDir } from "./helpers/forge.js";
+
+// Spec 32 §4.2 and §10 tests 3, 4, 5, 9, 10 — the install loop, over a recording runner. No test runs dotnet.
+
+const API: DotnetNewEntry = {
+  entry: 0,
+  kind: "dotnet-new",
+  installable: true,
+  source: SOURCE,
+  packages: [
+    { id: "Acme.Templates.Api", version: null },
+    { id: "Acme.Templates.Front", version: "2.1.0" },
+  ],
+};
+const NPM: DeclaredEntry = { entry: 1, kind: "npm-create", installable: false };
+const TOOLS: DotnetNewEntry = { entry: 2, kind: "dotnet-new", installable: true, source: null, packages: [{ id: "Acme.Tools", version: null }] };
+const ARGV_API = ["new", "install", "Acme.Templates.Api", "Acme.Templates.Front::2.1.0", "--add-source", SOURCE];
+const LINE_API = `dotnet new install Acme.Templates.Api Acme.Templates.Front::2.1.0 --add-source ${SOURCE}`;
+const LINE_TOOLS = "dotnet new install Acme.Tools";
+const COLLISION = (ids: string) =>
+  `a file or folder named like a declared package exists at the workspace root (${ids}) — dotnet would install it instead of the feed's package; nothing installed`;
+const FEED = (positions: string) =>
+  `a source is declared (${positions}) and the workspace root has no NuGet.Config — dotnet adds a declared source to the feeds it already uses, it does not replace them (craftar looks at the workspace root only; NuGet also reads parent directories and the user's configuration)`;
+
+/** A runner that records every request and answers the given exit codes in order (0 once they run out). */
+function recorder(codes: Array<number | null> = []) {
+  const calls: RunRequest[] = [];
+  const log: string[] = [];
+  const run = async (req: RunRequest) => {
+    calls.push(req);
+    log.push(`run ${req.args.join(" ")}`);
+    return { code: calls.length <= codes.length ? codes[calls.length - 1] : 0 };
+  };
+  const announce = (entry: number, line: string) => void log.push(`announce ${entry} ${line}`);
+  return { calls, log, run, announce };
+}
+async function emptyRoot(files: Record<string, string> = {}) {
+  const root = await tmpDir("craftar-templates-root-");
+  cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+  await writeFiles(root, files);
+  return root;
+}
+const tree = async (root: string) => Object.fromEntries(await Promise.all((await listFiles(root)).map(async (f) => [f, await fs.readFile(path.join(root, f), "base64")] as const)));
+
+describe("installArgv (spec 32 §10 test 3)", () => {
+  it("packages, versions, the source; --force and --interactive only when asked, in that order", () => {
+    expect(installArgv(API)).toEqual(ARGV_API);
+    expect(installArgv(API, { force: false, interactive: false })).toEqual(ARGV_API);
+    expect(installArgv(TOOLS)).toEqual(["new", "install", "Acme.Tools"]);
+    expect(installArgv(API, { force: true })).toEqual([...ARGV_API, "--force"]);
+    expect(installArgv(API, { interactive: true })).toEqual([...ARGV_API, "--interactive"]);
+    expect(installArgv(TOOLS, { force: true, interactive: true })).toEqual(["new", "install", "Acme.Tools", "--force", "--interactive"]);
+    expect(installLine(installArgv(API))).toBe(LINE_API);
+  });
+});
+
+describe("installTemplates (spec 32 §10 tests 4, 5, 9)", () => {
+  it("runs every dotnet-new entry in order at the root, announces each first, skips an unknown kind", async () => {
+    const root = await emptyRoot();
+    const r = recorder();
+    const result = await installTemplates([API, NPM, TOOLS], root, { env: { KEEP: "x" }, announce: r.announce }, r.run);
+    expect(result).toEqual({
+      lines: [
+        { entry: 0, line: LINE_API },
+        { entry: 2, line: LINE_TOOLS },
+      ],
+      installed: [0, 2],
+      failed: [],
+      skipped: [1],
+    });
+    expect(r.calls).toEqual([
+      { file: "dotnet", args: ARGV_API, cwd: root, env: { KEEP: "x", DOTNET_NOLOGO: "1" }, stdin: "ignore" },
+      { file: "dotnet", args: ["new", "install", "Acme.Tools"], cwd: root, env: { KEEP: "x", DOTNET_NOLOGO: "1" }, stdin: "ignore" },
+    ]);
+    expect(r.log).toEqual([`announce 0 ${LINE_API}`, `run ${ARGV_API.join(" ")}`, `announce 2 ${LINE_TOOLS}`, "run new install Acme.Tools"]);
+  });
+
+  it("--interactive gives the child the terminal's input; --force is passed", async () => {
+    const r = recorder();
+    await installTemplates([TOOLS], await emptyRoot(), { env: {}, force: true, interactive: true }, r.run);
+    expect(r.calls.map((c) => [c.args, c.stdin])).toEqual([[["new", "install", "Acme.Tools", "--force", "--interactive"], "inherit"]]);
+  });
+
+  it("an entry that fails does not stop the next; a child that did not exit is a failure too", async () => {
+    const r = recorder([103, null, 0]);
+    const third: DotnetNewEntry = { ...TOOLS, entry: 3, packages: [{ id: "Acme.More", version: null }] };
+    const result = await installTemplates([API, TOOLS, third], await emptyRoot(), { env: {} }, r.run);
+    expect(r.calls).toHaveLength(3);
+    expect(result.installed).toEqual([3]);
+    expect(result.failed).toEqual([
+      { entry: 0, code: 103 },
+      { entry: 2, code: null },
+    ]);
+  });
+
+  it.each([
+    ["a folder", { "Acme.Templates.Api/keep.txt": "" }, "Acme.Templates.Api"],
+    ["a file", { "Acme.Templates.Api": "" }, "Acme.Templates.Api"],
+    ["a file named like the ID of a versioned package", { "Acme.Templates.Front": "" }, "Acme.Templates.Front"],
+    ["two of them, in declaration order", { "Acme.Tools": "", "Acme.Templates.Api": "" }, "Acme.Templates.Api, Acme.Tools"],
+  ] as Array<[string, Record<string, string>, string]>)("refuses %s named like a declared ID at the root, before any run — --dry-run too", async (_name, files, ids) => {
+    const root = await emptyRoot(files);
+    expect(await rootCollisions([API, NPM, TOOLS], root)).toEqual(ids.split(", "));
+    for (const dryRun of [false, true]) {
+      const r = recorder();
+      await expect(installTemplates([API, NPM, TOOLS], root, { env: {}, dryRun, announce: r.announce }, r.run)).rejects.toThrow(new Error(COLLISION(ids)));
+      expect(r.log).toEqual([]);
+    }
+  });
+
+  it("a file elsewhere, or named like nothing declared, is no collision", async () => {
+    const root = await emptyRoot({ "src/Acme.Templates.Api": "", "Acme.Templates.Other": "" });
+    expect(await rootCollisions([API, NPM, TOOLS], root)).toEqual([]);
+  });
+
+  it("--dry-run calls the runner zero times, announces nothing, and returns the lines", async () => {
+    const r = recorder();
+    const result = await installTemplates([API, NPM, TOOLS], await emptyRoot(), { env: {}, dryRun: true, announce: r.announce }, r.run);
+    expect(r.log).toEqual([]);
+    expect(result).toEqual({
+      lines: [
+        { entry: 0, line: LINE_API },
+        { entry: 2, line: LINE_TOOLS },
+      ],
+      installed: [],
+      failed: [],
+      skipped: [1],
+    });
+  });
+
+  it("writes nothing at the root, run or dry run (spec 32 §10 test 5)", async () => {
+    const root = await emptyRoot({ "craftar.yaml": "forge: ../forge\nprofile: acme\n", "nuget.config": "<configuration />\n" });
+    const before = await tree(root);
+    await installTemplates([API, NPM, TOOLS], root, { env: {} }, recorder([1]).run);
+    await installTemplates([API, NPM, TOOLS], root, { env: {}, dryRun: true }, recorder().run);
+    expect(await tree(root)).toEqual(before);
+  });
+});
+
+describe("unpinnedSources and feedMessage (spec 32 §10 test 10)", () => {
+  it("names the entries with a source when the root has no NuGet.Config, whatever the file's case", async () => {
+    const withSource: DotnetNewEntry = { ...TOOLS, entry: 3, source: "https://pkgs.example.com/other/index.json" };
+    expect(await unpinnedSources([API, NPM, TOOLS, withSource], await emptyRoot())).toEqual([0, 3]);
+    expect(await unpinnedSources([API], await emptyRoot({ "NuGet.Config": "<configuration />\n" }))).toEqual([]);
+    expect(await unpinnedSources([API], await emptyRoot({ "nuget.config": "<configuration />\n" }))).toEqual([]);
+    expect(await unpinnedSources([API], await emptyRoot({ "NUGET.CONFIG": "<configuration />\n" }))).toEqual([]);
+    expect(await unpinnedSources([API], await emptyRoot({ "sub/NuGet.Config": "<configuration />\n" }))).toEqual([0]);
+    expect(await unpinnedSources([NPM, TOOLS], await emptyRoot())).toEqual([]);
+  });
+
+  it("the text names the positions", () => {
+    expect(feedMessage([0])).toBe(FEED("templates[0]"));
+    expect(feedMessage([0, 3])).toBe(FEED("templates[0], templates[3]"));
+  });
+});
+
+describe("dotnetVersion (spec 32 §4.2 step 2, design D5)", () => {
+  const probe = (answer: string | Error) => {
+    const calls: Array<[string, string[], NodeJS.ProcessEnv]> = [];
+    return {
+      calls,
+      run: async (file: string, args: string[], env: NodeJS.ProcessEnv) => {
+        calls.push([file, args, env]);
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
+    };
+  };
+
+  it("asks `dotnet --version` with DOTNET_NOLOGO=1 and reads the first line that is a version", async () => {
+    const p = probe("Welcome to .NET!\n\n10.0.401\n8.0.100\n");
+    expect(await dotnetVersion(p.run, { KEEP: "x" })).toBe("10.0.401");
+    expect(p.calls).toEqual([["dotnet", ["--version"], { KEEP: "x", DOTNET_NOLOGO: "1" }]]);
+    expect(await dotnetVersion(probe("9.0.100-rc.1.24452.12\r\n").run, {})).toBe("9.0.100-rc.1.24452.12");
+  });
+
+  it("is null when dotnet cannot start, exits non-zero, or prints no version", async () => {
+    expect(await dotnetVersion(probe(Object.assign(new Error("spawn dotnet ENOENT"), { code: "ENOENT" })).run, {})).toBeNull();
+    expect(await dotnetVersion(probe(Object.assign(new Error("Command failed"), { code: 145 })).run, {})).toBeNull();
+    expect(await dotnetVersion(probe("No .NET SDKs were found.\n").run, {})).toBeNull();
+    expect(await dotnetVersion(probe("").run, {})).toBeNull();
+  });
+});

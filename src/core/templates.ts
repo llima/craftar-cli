@@ -3,11 +3,13 @@
  * `declaredTemplates` is the one reader of `profile.templates`.
  * This module returns data and throws; it never prints.
  */
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import { DotnetNewTemplateSchema, TEMPLATE_RULES, TemplatesSchema } from "../schema/index.js";
 import { credentialFault } from "./remote.js";
 import { exists } from "./forge.js";
 import { schemaIssues } from "./schema-fault.js";
+import { capture as defaultCapture, type Probe, type Runner } from "./proc.js";
 
 const CREDENTIAL = "a source must not carry a user or a password: NuGet's own configuration holds credentials";
 
@@ -107,4 +109,138 @@ export async function profileLabel(forgeRoot: string, name: string): Promise<str
   return (await exists(path.join(forgeRoot, "profiles", name, "profile.yaml")))
     ? `profiles/${name}/profile.yaml`
     : `the profile.yaml of profile ${name}`;
+}
+
+/** Build the argv for `dotnet new install`. */
+export function installArgv(e: DotnetNewEntry, opts?: { force?: boolean; interactive?: boolean }): string[] {
+  const argv = ["new", "install"];
+  for (const pkg of e.packages) {
+    argv.push(pkg.version !== null ? `${pkg.id}::${pkg.version}` : pkg.id);
+  }
+  if (e.source !== null) {
+    argv.push("--add-source", e.source);
+  }
+  if (opts?.force) argv.push("--force");
+  if (opts?.interactive) argv.push("--interactive");
+  return argv;
+}
+
+/** "dotnet " + argv.join(" ") */
+export function installLine(argv: string[]): string {
+  return `dotnet ${argv.join(" ")}`;
+}
+
+/** Declared package IDs that exist at `root` as anything (lstat), in declaration order, once each. */
+export async function rootCollisions(entries: DeclaredEntry[], root: string): Promise<string[]> {
+  const seen = new Set<string>();
+  const collisions: string[] = [];
+  for (const e of entries) {
+    if (!e.installable) continue;
+    for (const pkg of e.packages) {
+      if (seen.has(pkg.id)) continue;
+      seen.add(pkg.id);
+      try {
+        await fs.lstat(path.join(root, pkg.id));
+        collisions.push(pkg.id);
+      } catch {
+        // does not exist, no collision
+      }
+    }
+  }
+  return collisions;
+}
+
+/** Positions of the entries that declare a `source`, when `root` holds no file named NuGet.Config (any case); else []. */
+export async function unpinnedSources(entries: DeclaredEntry[], root: string): Promise<number[]> {
+  const withSource = entries.filter((e): e is DotnetNewEntry => e.installable && e.source !== null);
+  if (withSource.length === 0) return [];
+
+  let files: string[];
+  try {
+    files = await fs.readdir(root);
+  } catch {
+    files = [];
+  }
+  const hasNugetConfig = files.some((f) => f.toLowerCase() === "nuget.config");
+  if (hasNugetConfig) return [];
+
+  return withSource.map((e) => e.entry);
+}
+
+/** messages.md §5, without a prefix: the CLI's line and doctor's message are this text. */
+export function feedMessage(positions: number[]): string {
+  const pos = positions.map((p) => `templates[${p}]`).join(", ");
+  return `a source is declared (${pos}) and the workspace root has no NuGet.Config — dotnet adds a declared source to the feeds it already uses, it does not replace them (craftar looks at the workspace root only; NuGet also reads parent directories and the user's configuration)`;
+}
+
+export interface InstallOptions {
+  dryRun?: boolean;
+  force?: boolean;
+  interactive?: boolean;
+  env: NodeJS.ProcessEnv;
+  announce?: (entry: number, line: string) => void;
+}
+
+export interface InstallResult {
+  lines: Array<{ entry: number; line: string }>;
+  installed: number[];
+  failed: Array<{ entry: number; code: number | null }>;
+  skipped: number[];
+}
+
+/** Throws messages.md §4 before any run when an ID collides — `dryRun` included. */
+export async function installTemplates(entries: DeclaredEntry[], root: string, opts: InstallOptions, run: Runner): Promise<InstallResult> {
+  const collisions = await rootCollisions(entries, root);
+  if (collisions.length > 0) {
+    throw new Error(`a file or folder named like a declared package exists at the workspace root (${collisions.join(", ")}) — dotnet would install it instead of the feed's package; nothing installed`);
+  }
+
+  const lines: Array<{ entry: number; line: string }> = [];
+  const installed: number[] = [];
+  const failed: Array<{ entry: number; code: number | null }> = [];
+  const skipped: number[] = [];
+
+  for (const e of entries) {
+    if (!e.installable) {
+      skipped.push(e.entry);
+      continue;
+    }
+
+    const argv = installArgv(e, { force: opts.force, interactive: opts.interactive });
+    const line = installLine(argv);
+    lines.push({ entry: e.entry, line });
+
+    if (opts.dryRun) continue;
+
+    opts.announce?.(e.entry, line);
+    const result = await run({
+      file: "dotnet",
+      args: argv,
+      cwd: root,
+      env: { ...opts.env, DOTNET_NOLOGO: "1" },
+      stdin: opts.interactive ? "inherit" : "ignore",
+    });
+
+    if (result.code === 0) {
+      installed.push(e.entry);
+    } else {
+      failed.push({ entry: e.entry, code: result.code });
+    }
+  }
+
+  return { lines, installed, failed, skipped };
+}
+
+/** The SDK's version, or null (D5). */
+export async function dotnetVersion(probe: Probe = defaultCapture, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  try {
+    const stdout = await probe("dotnet", ["--version"], { ...env, DOTNET_NOLOGO: "1" });
+    for (const raw of stdout.split("\n")) {
+      const line = raw.trim();
+      if (/^\d+\.\d+\.\d+/.test(line)) return line;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
