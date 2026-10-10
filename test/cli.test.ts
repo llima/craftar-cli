@@ -4848,6 +4848,25 @@ describe("cli — forge unify impact (spec 25 §4.2–§4.3)", () => {
     expect(r.stdout).not.toContain("was removed");
   });
 
+  it("spec 29: a workspace whose sync is refused does not turn unify's passes into an error — they compare planned bytes", async () => {
+    const s = await setup();
+    const realG = await fs.realpath(s.wsG);
+    // globex's rule now cites and declares `org`, with no value anywhere: its sync is refused
+    await writeFiles(s.forge, {
+      "ingredients/rules/other/rule.md": "Org: {{org}}\n",
+      "ingredients/rules/other/ingredient.yaml": "type: rule\nname: other\nparams:\n  org:\n    description: the organisation\n",
+    });
+    gitCommitAll(s.forge, "other declares org");
+    const impact = JSON.parse(s.run(["forge", "impact", "--forge", s.forge, "--json"]).stdout);
+    expect(impact.workspaces.find((w: { path: string }) => w.path === realG).state).toBe("error");
+
+    const r = s.run(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--forge", s.forge, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).impact.find((w: { path: string }) => w.path === realG)).toEqual({
+      path: realG, profile: "globex", match: "path", via: null, ref: null, state: "no-effect", files: [], error: null,
+    });
+  });
+
   it("test 2: --json: impact array with correct shape", async () => {
     const s = await setup();
     const realA = await fs.realpath(s.wsA);

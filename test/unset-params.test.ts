@@ -95,18 +95,20 @@ describe("unset declared parameters — plan", () => {
 });
 
 describe("unset declared parameters — every layer supplies the value", () => {
-  const cases: Array<[string, ForgeSpec, WorkspaceSpec]> = [
-    ["a recipe default", forge({ recipeExtra: { params: { org: { default: "from-recipe" } } } }), { config: { profile: "acme" } }],
-    ["the profile", forge({ profileExtra: { params: { org: "from-profile" } } }), { config: { profile: "acme" } }],
-    ["craftar.yaml", forge(), { config: { profile: "acme", overrides: { params: { org: "from-workspace" } } } }],
-    ["craftar.local.yaml", forge(), { config: { profile: "acme" }, local: { overrides: { params: { org: "from-local" } } } }],
+  const cases: Array<[string, ForgeSpec, WorkspaceSpec, string]> = [
+    // rule/b cites `org` without declaring it, so the ingredient's own default leaves b's `{{org}}` verbatim — a warning, not a refusal
+    ["the ingredient's default", forge({ aParams: { org: { default: "from-default" } } }), { config: { profile: "acme" } }, "default"],
+    ["a recipe default", forge({ recipeExtra: { params: { org: { default: "from-recipe" } } } }), { config: { profile: "acme" } }, "recipe"],
+    ["the profile", forge({ profileExtra: { params: { org: "from-profile" } } }), { config: { profile: "acme" } }, "profile"],
+    ["craftar.yaml", forge(), { config: { profile: "acme", overrides: { params: { org: "from-workspace" } } } }, "workspace"],
+    ["craftar.local.yaml", forge(), { config: { profile: "acme" }, local: { overrides: { params: { org: "from-local" } } } }, "local"],
   ];
-  for (const [name, f, w] of cases) {
+  for (const [name, f, w, from] of cases) {
     it(`${name}: nothing unset, apply writes, the value is in the file`, async () => {
       const { s, ws, p, st } = await planned(f, w);
       expect(unsetDeclared(p)).toEqual([]);
       await apply(ws, p, st);
-      expect(await fs.readFile(path.join(s.wsRoot, ".claude/rules/a.md"), "utf8")).toBe(`Org: from-${name === "a recipe default" ? "recipe" : name === "the profile" ? "profile" : name === "craftar.yaml" ? "workspace" : "local"}\n`);
+      expect(await fs.readFile(path.join(s.wsRoot, ".claude/rules/a.md"), "utf8")).toBe(`Org: from-${from}\n`);
       expect(await exists(path.join(s.wsRoot, "craftar.lock"))).toBe(true);
     });
   }
@@ -129,7 +131,7 @@ describe("unset declared parameters — the block and the gate", () => {
     // init's form: it has just written craftar.yaml, so its first line does not say "nothing written"
     expect(unsetRefusal(unset, { thenSync: true }).split("\n")[0]).toBe("2 declared parameter(s) have no value — craftar.yaml written, sync not run");
     expect(unsetRefusal(unset, { thenSync: true }).split("\n").at(-1)).toBe("  fix: set each under params in the profile, or under overrides.params in craftar.yaml, then run craftar sync");
-    expect(unsetSummary(unset)).toBe("declared parameter(s) with no value: apiPort, org");
+    expect(unsetSummary(unset)).toBe("sync refused: declared parameter(s) with no value: apiPort, org");
   });
 
   it("apply() throws the block before any write: no file, no lock", async () => {

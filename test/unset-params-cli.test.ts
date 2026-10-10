@@ -227,8 +227,20 @@ describe("workspaces and forge impact with an unset declared parameter", () => {
     expect(row.status).toBe("error");
     expect(row.files).toBeNull();
     expect(json.warnings.filter((w: string) => w.includes(path.basename(s.root)) && w.endsWith(": sync refused: declared parameter(s) with no value: org"))).toHaveLength(1);
+    // the plan's own warning for that row is still said
+    expect(json.warnings.filter((w: string) => w.includes(path.basename(s.root)) && w.endsWith(`: ${WARN.slice("  warn ".length)}`))).toHaveLength(1);
     const text = runCli(["workspaces"]);
     expect(text.stdout).toContain("error");
+  });
+
+  it("a refused workspace whose lock does not read gives the same reason on both surfaces", async () => {
+    const s = await syncedThenDeclared();
+    await fs.writeFile(path.join(s.wsRoot, "craftar.lock"), "{");
+    const REASON = "sync refused: declared parameter(s) with no value: org";
+    const table = JSON.parse(runCli(["workspaces", "--json"]).stdout);
+    expect(table.warnings.filter((w: string) => w.includes(path.basename(s.root)) && w.endsWith(`: ${REASON}`))).toHaveLength(1);
+    const row = JSON.parse(runCli(["forge", "impact", "--forge", s.forgeRoot, "--json"]).stdout).workspaces.find((w: { path: string }) => w.path.includes(path.basename(s.root)));
+    expect([row.state, row.error]).toEqual(["error", REASON]);
   });
 
   it("forge impact: the workspace's state is error with the reason; exit and shape as for any error row", async () => {

@@ -292,11 +292,15 @@ export async function listWorkspaces(home: string, opts: { fetch: boolean }): Pr
     try {
       ws = await loadWorkspace(e.path, { mode: opts.fetch ? "read" : "no-fetch", home });
       const p = await plan(ws);
+      // Spec 29 §4.1: a sync that would refuse is an `error` row, rebuilt from the entry like any other, its reason a
+      // warning after the plan's own. Asked before the lock is read, as `nextSync` asks, so both give the same reason.
+      const unset = unsetDeclared(p);
+      if (unset.length) {
+        for (const w of p.warnings.slice(ws.warnings.length)) say(w);
+        throw new Error(unsetSummary(unset));
+      }
       const lock = await readLock(ws.root);
       const st = await status(ws, p, lock);
-      // Spec 29 §4.1: a sync that would refuse is an `error` row, rebuilt from the entry like any other, its reason a warning.
-      const unset = unsetDeclared(p);
-      if (unset.length) throw new Error(`sync refused: ${unsetSummary(unset)}`);
       const commit = ws.forge.commit;
       const lockCommit = lock?.forge.commit ?? null;
       rows.push({

@@ -347,7 +347,7 @@ export function unsetRefused(unset: UnsetParam[]): string {
 
 /** The refusal in one line, for a row that has no room for the block (`workspaces`, `forge impact`). */
 export function unsetSummary(unset: UnsetParam[]): string {
-  return `declared parameter(s) with no value: ${unset.map((u) => u.key).join(", ")}`;
+  return `sync refused: declared parameter(s) with no value: ${unset.map((u) => u.key).join(", ")}`;
 }
 
 /** A path as the Forge names it: relative to its root, POSIX separators. */
