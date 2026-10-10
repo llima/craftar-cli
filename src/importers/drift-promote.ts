@@ -55,6 +55,7 @@ import {
 import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
 import { sectionKey } from "../core/resolve.js";
+import { effectiveProfile } from "../core/integrations.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import type { WriteJournal } from "../core/unify.js";
@@ -707,10 +708,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Step 5: Decide the outcome
   const stage = new ForgeStage(forgeDir);
   const readWs = (abs: string) => fs.readFile(abs, "utf8");
+  const profileObj = forge.profiles.get(profile)!;
   const ctx: RunContext = {
-    P: { ...(forge.profiles.get(profile)?.params ?? {}) },
+    P: { ...effectiveProfile(forge, profileObj).params },
     W: await workspaceParams(root, readWs, "drift promote"),
-    PS: structuredClone(forge.profiles.get(profile)?.sections ?? {}),
+    PS: structuredClone(profileObj.sections ?? {}),
     WS: await workspaceSections(root, readWs, "drift promote"),
     pinned: new Map(),
     forge,
