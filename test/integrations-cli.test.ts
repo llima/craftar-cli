@@ -307,8 +307,17 @@ describe("Valid schema 3 Forge — key sets and lock unchanged", () => {
     const sync2 = runCli(["sync", "--workspace", ws2], { env: env2 });
     expect(sync2.code, sync2.stderr).toBe(0);
 
-    const doc1 = JSON.parse(runCli(["doctor", "--workspace", ws1, "--json"], { env: env1 }).stdout);
-    const doc2 = JSON.parse(runCli(["doctor", "--workspace", ws2, "--json"], { env: env2 }).stdout);
+    const run1 = runCli(["doctor", "--workspace", ws1, "--json"], { env: env1 });
+    const run2 = runCli(["doctor", "--workspace", ws2, "--json"], { env: env2 });
+    expect(run1.code, run1.stderr).toBe(0);
+    expect(run2.code, run2.stderr).toBe(0);
+
+    const doc1 = JSON.parse(run1.stdout);
+    const doc2 = JSON.parse(run2.stdout);
+
+    expect(doc1.checks.length).toBeGreaterThan(0);
+    expect(doc1.checks.length).toBe(doc2.checks.length);
+    expect(doc1.checks.length).toBe(14); // pinned: doctor --json has 14 checks for a healthy workspace
 
     // Normalize by replacing temp roots with <root> and timestamps with <when>
     type Check = { id: string; scope: string; level: string; message: string; fix: string | null };
