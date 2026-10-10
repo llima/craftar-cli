@@ -12,7 +12,7 @@ import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.j
 import { resolveHome } from "./core/home-lock.js";
 import { loadWorkspace, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock } from "./schema/index.js";
-import { resolve, sectionKey } from "./core/resolve.js";
+import { resolve, sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
 import { listTargets } from "./core/capabilities.js";
 import { canonicalValue } from "./core/sections.js";
@@ -479,7 +479,7 @@ program
 /* ---------------------------------------------------------------- explain */
 program
   .command("explain")
-  .description("Why does this file exist? Which ingredient, recipe chain and target produced it, and which layer filled each section")
+  .description("Why does this file exist? Which ingredient, recipe chain and target produced it, and which layer filled each section and each parameter it cites")
   .argument("<path>", "workspace-relative path of a generated file")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
@@ -499,6 +499,12 @@ program
     if (sections?.length) {
       const layer = (l: SectionLayer) => (l === "profile" ? `profile ${p.resolution.profile.name}` : l);
       console.log(`  sections    ${sections.map((x) => `${x.name} (${layer(x.layer)})`).join(", ")}`);
+    }
+    // Spec 29 §4.1: which layer filled each parameter the file's ingredient cites — or `unset`.
+    const params = p.params.get(f.ingredient);
+    if (params?.length) {
+      const layer = (l: ParamLayer) => (typeof l === "string" ? l : "recipe" in l ? `recipe ${l.recipe}` : `profile ${l.profile}`);
+      console.log(`  params      ${params.map((x) => `${x.key} (${layer(x.layer)})`).join(", ")}`);
     }
     console.log(`  profile     ${ws.config.profile}  (recipes: ${p.resolution.recipes.join(", ")})`);
     console.log(`  hash        ${hashNormalized(f.content)}`);

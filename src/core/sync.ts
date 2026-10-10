@@ -3,7 +3,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
-import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
+import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
 import { climbsOut, hashNormalized, isUtf8, legacyHash, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
 import { classifyForge, credentialFault, ensureTree, ForgeFetchError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
@@ -291,6 +291,8 @@ export interface Plan {
   warnings: string[];
   /** Per ingredient ref, each section it declares, with the layer that filled it (spec 11 §5.3, for `explain`). */
   sections: Map<string, Array<{ file: string; name: string; layer: SectionLayer }>>;
+  /** Per ingredient ref, each `{{key}}` its body files cite, sorted, with the layer that filled it (spec 29 §4.1, for `explain`). */
+  params: Map<string, Array<{ key: string; layer: ParamLayer }>>;
   /**
    * Each cited `{{key}}` no layer fills, the refs citing it, and the warning that says so (spec 24 §4.2);
    * `declaredBy` names the resolved ingredients that declare the key with no value — empty for a key nobody
@@ -475,6 +477,8 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const sections = await sectionPass(ws.forge, resolution, warnings);
   /** Unresolved placeholder → refs of the ingredients citing it. */
   const missingParams = new Map<string, Set<string>>();
+  /** Ingredient ref → the placeholders its body files cite, after section expansion. */
+  const cited = new Map<string, { ing: ResolvedIngredient; keys: Set<string> }>();
   const ctx: EmitBase = {
     forge: ws.forge,
     resolution,
@@ -502,7 +506,12 @@ export async function plan(ws: Workspace): Promise<Plan> {
         );
       const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution)) : toLf(stripBom(raw));
       const out = substitute(expanded, params, missing);
-      if (parsed) guardOutput(ing, file, out, parsed, resolution, params);
+      if (parsed) {
+        guardOutput(ing, file, out, parsed, resolution, params);
+        const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
+        for (const key of placeholders(expanded)) c.keys.add(key);
+        if (c.keys.size) cited.set(ing.ref, c);
+      }
       for (const key of missing) missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ing.ref));
       return out;
     },
@@ -530,6 +539,10 @@ export async function plan(ws: Workspace): Promise<Plan> {
     warnings.push(warning);
     missing.push({ key, refs: [...refs].sort(), warning, declaredBy: [...(declared.get(key) ?? [])].sort((a, b) => a.localeCompare(b)) });
   }
+  const params: Plan["params"] = new Map();
+  for (const [ref, { ing, keys }] of cited) {
+    params.set(ref, [...keys].sort((a, b) => a.localeCompare(b)).map((key) => ({ key, layer: paramLayer(key, ing, resolution) })));
+  }
   // Duplicate path guard
   const seen = new Map<string, string>();
   for (const f of files) {
@@ -537,7 +550,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
     if (prev) warnings.push(`two ingredients write ${f.path}: ${prev} and ${f.ingredient} (last wins)`);
     seen.set(f.path, f.ingredient);
   }
-  return { resolution, files: dedupeLastWins(files), warnings, sections: sections.byRef, missingParams: missing };
+  return { resolution, files: dedupeLastWins(files), warnings, sections: sections.byRef, params, missingParams: missing };
 }
 
 function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {
