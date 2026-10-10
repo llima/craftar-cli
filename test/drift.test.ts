@@ -380,3 +380,32 @@ describe("cli — drift show and the example file (spec 27 Ruling 4)", () => {
     expect(r.stdout.includes(MARKER)).toBe(false);
   });
 });
+
+describe("cli — drift --help", () => {
+  it("lists show, discard and promote", () => {
+    const r = runCli(["drift", "--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      "Usage: craftar drift [options] [command]\n\n" +
+        "Hand-edited generated files: show them, discard the edit, or promote it to the\n" +
+        "Forge\n\n" +
+        "Options:\n" +
+        "  -h, --help                   display help for command\n\n" +
+        "Commands:\n" +
+        "  show [options] [path]        List the files hand-edited since the last sync,\n" +
+        "                               with the Forge's side and whether the edit can be\n" +
+        "                               promoted; with a path, that file's row and its\n" +
+        "                               diff. Writes nothing\n" +
+        "  discard [options] <path...>  Regenerate the named hand-edited files from the\n" +
+        "                               Forge (their edits are lost) and remove a named\n" +
+        "                               hand-edited file the Forge no longer produces;\n" +
+        "                               otherwise a sync like any other\n" +
+        "  promote [options] <path>     Carry a hand-edited file to the Forge as a\n" +
+        "                               profile variant, behind git's gate, proved before\n" +
+        "                               any write; never writes the lock, the registry or\n" +
+        "                               the cache\n" +
+        "  help [command]               display help for command\n",
+    );
+  });
+});
