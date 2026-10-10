@@ -88,7 +88,7 @@ program
   )
   .option(
     "--prefer-kiro <rule,…>",
-    "take the named rules from .kiro/steering/<name>.md instead of .claude/rules/<name>.md — each proved to render back to that steering file; refused for a name that is not a rule, has no steering file, or whose steering does not render back",
+    "take the named rules from .kiro/steering/<name>.md instead of .claude/rules/<name>.md — each proved to render back to that steering file's body; refused for a name that is not a rule, has no steering file, or whose steering does not render back",
   )
   .action(async (o) => {
     if (o.from !== "claude-code") fail(`unsupported source "${o.from}" (only claude-code for now)`);
