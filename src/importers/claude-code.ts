@@ -18,6 +18,7 @@ import { decide, forgeBefore, pin, sourceKeys, workspaceParams, workspaceSection
 import { renderMap } from "../core/template-import.js";
 import { firstMarkerLine } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
+import type { KiroReport } from "./kiro-report.js";
 import { deepMerge } from "../core/merge.js";
 import { outName } from "../emitters/shared.js";
 
@@ -58,6 +59,8 @@ export interface ImportReport {
   configWrite: "created" | "edited" | "unchanged" | null;
   /** A remote `forge` craftar.yaml already named, kept as written by --write-config (spec 13 §4.5); else null. */
   configForgeKept: string | null;
+  /** The Kiro part of the report (spec 29 §4.2); the key is absent unless the `report` option asked for it. */
+  kiro?: KiroReport;
 }
 
 /** Rules that every workspace shares by intent — they seed the `base` recipe. */
