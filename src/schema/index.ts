@@ -32,6 +32,11 @@ export const TARGETS = ["claude-code", "kiro", "agents-md"] as const;
 export type Target = (typeof TARGETS)[number];
 export const TargetSchema = z.enum(TARGETS);
 
+/** Owners of lock entries: AI-coder targets plus internal owners like `services` (spec 31 §5.2). */
+export const OWNERS = [...TARGETS, "services"] as const;
+export type Owner = (typeof OWNERS)[number];
+export const OwnerSchema = z.enum(OWNERS);
+
 /* ------------------------------------------------------------------ */
 /* Ingredients                                                          */
 /* ------------------------------------------------------------------ */
@@ -382,10 +387,18 @@ export type WorkspaceConfig = z.infer<typeof WorkspaceConfigSchema>;
 /* Lockfile (craftar.lock)                                              */
 /* ------------------------------------------------------------------ */
 
+/** Lock entry for schema 1 and 2: target is an AI-coder target. */
 export const LockEntrySchema = z.object({
   path: z.string(),
   hash: z.string(),
   target: TargetSchema,
+  ingredient: z.string(),
+});
+/** Lock entry for schema 3: target is any owner (AI-coder targets plus `services`). */
+export const LockEntrySchemaV3 = z.object({
+  path: z.string(),
+  hash: z.string(),
+  target: OwnerSchema,
   ingredient: z.string(),
 });
 /** Lock schema 1 (craftar ≤ 0.10.x): read, never written since 0.11.0. */
@@ -415,17 +428,38 @@ export const LockSchemaV2 = z.object({
   generatedAt: z.string(),
   files: z.array(LockEntrySchema),
 });
+/** Lock schema 3 (spec 31 §5.2): entry targets include internal owners like `services`. */
+export const LockSchemaV3 = z.object({
+  schema: z.literal(3),
+  forge: z.object({
+    /** craftar.yaml › forge as written (after the local merge); never holds credentials (spec 13 §4.3). */
+    source: z.string(),
+    /** The requested ref; null when none was given or the Forge is a path. */
+    ref: z.string().nullable(),
+    /** The resolved commit; null for a path Forge without git. */
+    commit: z.string().nullable(),
+  }),
+  profile: z.string(),
+  /** Resolution.recipes: resolved, in application order (extends parents included). */
+  recipes: z.array(z.string()),
+  targets: z.array(TargetSchema),
+  /** When the lock's content last changed (Ruling 10). */
+  generatedAt: z.string(),
+  files: z.array(LockEntrySchemaV3),
+});
 /** Supported lock schemas; anything else is refused by name in `readLock`. */
-export const LOCK_SCHEMAS: readonly unknown[] = [1, 2];
+export const LOCK_SCHEMAS: readonly unknown[] = [1, 2, 3];
 // A lock with no `schema` key is version 1, as `.default(1)` read it before. A discriminated union
 // rejects a missing discriminator, so the key is supplied before the union sees it.
 export const LockSchema = z.preprocess(
   (v) => (v !== null && typeof v === "object" && !Array.isArray(v) && !Object.hasOwn(v, "schema") ? { ...v, schema: 1 } : v),
-  z.discriminatedUnion("schema", [LockSchemaV1, LockSchemaV2]),
+  z.discriminatedUnion("schema", [LockSchemaV1, LockSchemaV2, LockSchemaV3]),
 );
 export type Lock = z.infer<typeof LockSchema>;
 export type LockV2 = z.infer<typeof LockSchemaV2>;
+export type LockV3 = z.infer<typeof LockSchemaV3>;
 export type LockEntry = z.infer<typeof LockEntrySchema>;
+export type LockEntryV3 = z.infer<typeof LockEntrySchemaV3>;
 
 /* ------------------------------------------------------------------ */
 /* Workspace registry — $CRAFTAR_HOME/registry.json (spec 21 §5.2)      */

@@ -1,6 +1,6 @@
 import type { Forge } from "../core/forge.js";
 import type { Resolution, ResolvedIngredient } from "../core/resolve.js";
-import type { Target } from "../schema/index.js";
+import type { Owner, Target } from "../schema/index.js";
 import type { Walk } from "../core/capabilities.js";
 
 export interface PlannedFile {
@@ -8,7 +8,7 @@ export interface PlannedFile {
   path: string;
   /** Final bytes to write. */
   content: Buffer;
-  target: Target;
+  target: Owner;
   ingredient: string;
   /** Human-readable note surfaced by `craftar explain`. */
   note?: string;

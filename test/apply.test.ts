@@ -696,5 +696,79 @@ describe("apply — overwritePaths (spec 30)", () => {
     const r = await sync(s.wsRoot, { overwritePaths: new Set([B]) });
     expect([r.written, r.skipped.map((x) => x.path)]).toEqual([[], [A]]);
     expect(await read(s.wsRoot, A)).toBe("A one\nA two\nhand a\n");
+describe("apply lock schema selection (spec 31 §5.2)", () => {
+  const cleanups: Array<() => Promise<void>> = [];
+  afterEach(async () => {
+    while (cleanups.length) await cleanups.pop()!();
+  });
+
+  // The golden lock text, captured from main @ 36645a1 (0.20.0) BEFORE any schema change.
+  // Command: npx vitest run test/capture-lock.test.ts (see step 31b notes).
+  // generatedAt removed, forge.commit normalised to null as the existing lock tests do.
+  const GOLDEN_LOCK_V2_NO_DATE = {
+    schema: 2,
+    forge: { source: "../forge", ref: null, commit: null },
+    profile: "acme",
+    recipes: ["base"],
+    targets: ["claude-code"],
+    files: [{ path: ".claude/rules/a.md", hash: "sha256:aa1237b773c38dbddef583c4868aaea7a44c5237ea7923aecca5513764b42d80", target: "claude-code", ingredient: "rule/a" }],
+  };
+
+  it("apply() over a plan with no service file writes schema 2, matching 0.17.x golden lock", async () => {
+    const s = await scenario(
+      { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const w = await loadWorkspace(s.wsRoot);
+    const p = await plan(w);
+    const st = await status(w, p, null);
+    const { lock } = await apply(w, p, st);
+    // Remove generatedAt and normalise commit for comparison
+    const { generatedAt: _drop, ...lockNoDate } = lock;
+    lockNoDate.forge.commit = null;
+    expect(lockNoDate).toEqual(GOLDEN_LOCK_V2_NO_DATE);
+    expect(lock.schema).toBe(2);
+  });
+
+  it("apply() over statuses holding one planned file with target services writes schema 3", async () => {
+    const s = await scenario(
+      { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const w = await loadWorkspace(s.wsRoot);
+    const p = await plan(w);
+    // Inject a service file into the plan
+    p.files.push({ path: ".craftar/compose.yaml", content: Buffer.from("services: {}\n"), target: "services", ingredient: "service/db" });
+    const st = await status(w, p, null);
+    const { lock } = await apply(w, p, st);
+    expect(lock.schema).toBe(3);
+    expect(lock.files.some((f) => f.target === "services")).toBe(true);
+  });
+
+  it("a kept drift entry owned by services still writes schema 3", async () => {
+    const s = await scenario(
+      { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const w = await loadWorkspace(s.wsRoot);
+    const p = await plan(w);
+    // Hand-build a drift status with target: services (no planned service file otherwise)
+    const serviceEntry = { path: ".craftar/compose.yaml", hash: "sha256:old", target: "services" as const, ingredient: "service/db" };
+    const servicePlanned = { path: ".craftar/compose.yaml", content: Buffer.from("services: {}\n"), target: "services" as const, ingredient: "service/db" };
+    // Write the file with different content to make it drift
+    await fs.mkdir(path.join(s.wsRoot, ".craftar"), { recursive: true });
+    await fs.writeFile(path.join(s.wsRoot, ".craftar/compose.yaml"), "# hand edit\n");
+    const st = await status(w, p, null);
+    // Add the drift entry
+    st.push({ path: ".craftar/compose.yaml", state: "drift", target: "services", ingredient: "service/db", planned: servicePlanned, lock: serviceEntry });
+    const { lock } = await apply(w, p, st);
+    expect(lock.schema).toBe(3);
+    // The drift entry is kept with the old hash
+    const kept = lock.files.find((f) => f.path === ".craftar/compose.yaml");
+    expect(kept?.target).toBe("services");
+    expect(kept?.hash).toBe("sha256:old");
   });
 });

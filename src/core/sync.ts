@@ -11,7 +11,7 @@ import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile } from "./extract.js";
-import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Target, type WorkspaceConfig } from "../schema/index.js";
+import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockV2, type LockV3, type Owner, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
@@ -608,14 +608,14 @@ export type FileState =
 export interface FileStatus {
   path: string;
   state: FileState;
-  target?: Target;
+  target?: Owner;
   ingredient?: string;
   planned?: PlannedFile;
-  lock?: LockEntry;
+  lock?: LockEntry | LockEntryV3;
 }
 
 /** Does the disk content match the lock entry? Recognises both current and pre-0.17.4 hashes for non-UTF-8 files. */
-function matchesLock(disk: Buffer, entry: LockEntry): boolean {
+function matchesLock(disk: Buffer, entry: LockEntry | LockEntryV3): boolean {
   return hashNormalized(disk) === entry.hash || (!isUtf8(disk) && legacyHash(disk) === entry.hash);
 }
 
@@ -698,7 +698,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   const written: string[] = [];
   const removed: string[] = [];
   const skipped: FileStatus[] = [];
-  const entries: LockEntry[] = [];
+  const entries: LockEntryV3[] = [];
 
   for (const s of statuses) {
     switch (s.state) {
@@ -719,7 +719,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
           entries.push(entry(s.planned!));
         } else {
           skipped.push(s);
-          entries.push(s.lock!); // keep the old hash so the drift stays visible
+          entries.push(s.lock! as LockEntryV3); // keep the old hash so the drift stays visible
         }
         break;
       case "collision":
@@ -742,16 +742,28 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
     }
   }
 
-  // Schema 2, in this key order (spec 13 §5.2): what the sync used, not only what it wrote.
-  const built: Lock = {
-    schema: 2,
-    forge: { source: ws.config.forge, ref: ws.origin.ref, commit: ws.forge.commit },
-    profile: ws.config.profile,
-    recipes: p.resolution.recipes,
-    targets: p.resolution.targets,
-    generatedAt: new Date().toISOString(),
-    files: entries.sort((a, b) => a.path.localeCompare(b.path)),
-  };
+  // Schema 3 when any entry has target `services`; otherwise schema 2 (spec 31 §5.2, spec 13 §5.2).
+  const sortedEntries = entries.sort((a, b) => a.path.localeCompare(b.path));
+  const hasServices = entries.some((e) => e.target === "services");
+  const built: LockV2 | LockV3 = hasServices
+    ? {
+        schema: 3,
+        forge: { source: ws.config.forge, ref: ws.origin.ref, commit: ws.forge.commit },
+        profile: ws.config.profile,
+        recipes: p.resolution.recipes,
+        targets: p.resolution.targets,
+        generatedAt: new Date().toISOString(),
+        files: sortedEntries,
+      }
+    : {
+        schema: 2,
+        forge: { source: ws.config.forge, ref: ws.origin.ref, commit: ws.forge.commit },
+        profile: ws.config.profile,
+        recipes: p.resolution.recipes,
+        targets: p.resolution.targets,
+        generatedAt: new Date().toISOString(),
+        files: sortedEntries as LockEntry[],
+      };
   // Rewritten only when its content changes: generatedAt is when it last did (Ruling 10). A schema 1
   // lock always differs, so the first sync with this craftar upgrades it.
   const onDisk = opts.dryRun ? null : await readLock(ws.root);
@@ -761,7 +773,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   return { written, removed, skipped, lock };
 }
 
-function entry(f: PlannedFile): LockEntry {
+function entry(f: PlannedFile): LockEntryV3 {
   return { path: f.path, hash: hashNormalized(f.content), target: f.target, ingredient: f.ingredient };
 }
 
