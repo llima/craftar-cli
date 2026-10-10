@@ -696,6 +696,9 @@ describe("apply — overwritePaths (spec 30)", () => {
     const r = await sync(s.wsRoot, { overwritePaths: new Set([B]) });
     expect([r.written, r.skipped.map((x) => x.path)]).toEqual([[], [A]]);
     expect(await read(s.wsRoot, A)).toBe("A one\nA two\nhand a\n");
+  });
+});
+
 describe("apply lock schema selection (spec 31 §5.2)", () => {
   const cleanups: Array<() => Promise<void>> = [];
   afterEach(async () => {

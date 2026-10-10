@@ -1,4 +1,4 @@
-import type { Target } from "../schema/index.js";
+import type { Owner } from "../schema/index.js";
 import type { FileStatus } from "./sync.js";
 import { hashNormalized } from "./text.js";
 
@@ -9,7 +9,7 @@ export type ForgeSide = "same" | "changed" | "removed";
 export interface DriftRow {
   path: string;
   state: "drift" | "orphan-drift";
-  target: Target;
+  target: Owner;
   ingredient: string;
   forge: ForgeSide;
   promotable: boolean;
@@ -17,13 +17,14 @@ export interface DriftRow {
   reason: string | null;
 }
 
-/** D4: the path is not a file craftar manages. Shared by cli.ts and drift-promote.ts. */
+/** D1–D17 messages. */
 export const unmanaged = (p: string) =>
   `${p} is not a file craftar manages in this workspace — pass the workspace-relative path as \`craftar status\` prints it (forward slashes)`;
 
 /** The static half of promote's refusals: it reads the status, never the Forge's git state. */
 function staticReason(s: FileStatus): string | null {
   if (s.state === "orphan-drift") return "no longer produced";
+  if (s.target === "services") return "service file";
   if (s.target === "kiro") return "kiro file";
   if (s.target === "agents-md") return "AGENTS.md";
   if (s.ingredient?.startsWith("mcp/")) return ".mcp.json";
