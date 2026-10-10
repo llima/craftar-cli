@@ -2367,7 +2367,7 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
     expect(r.stderr).toBe(
-      "error: ingredients is a symbolic link in the Forge — promote does not write through a link; replace it with the file and commit\n",
+      "error: ingredients is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit\n",
     );
     // Outside directory listing unchanged (no new a--acme dir)
     expect((await fs.readdir(path.join(outsideDir, "ingredients/rules"))).sort()).toEqual(outsideListing);
@@ -2377,7 +2377,7 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     expect((await f.lockBytes()).equals(lockBefore)).toBe(true);
   });
 
-  it("R4. copyForgeForProof — scratch copy has no .git and dereferences file links", async () => {
+  it("R4. copyForgeForProof — skips .git, dereferences file links inside the Forge, refuses non-regular files and root dir links", async () => {
     const { copyForgeForProof } = await import("../src/importers/drift-promote.js");
     const f = await F();
     gitInit(f.forgeRoot);
@@ -2885,5 +2885,278 @@ Edited body
     const statusJ = JSON.parse(statusR.stdout);
     const agentStatus = statusJ.statuses.find((st: { path: string }) => st.path === agentPath);
     expect(agentStatus?.state).toBe("unchanged");
+  });
+});
+
+
+// Commit 1: copyForgeForProof refuses non-regular files and root directory links, profile label derived from real file
+
+describe("copyForgeForProof — non-regular files and root directory links (commit 1)", () => {
+  it("R5. copyForgeForProof refuses a FIFO (unit)", async () => {
+    // On Windows there is no FIFO; the test must early-return on win32
+    if (process.platform === "win32") {
+      // Windows has no FIFO; skip
+      return;
+    }
+    const { copyForgeForProof } = await import("../src/importers/drift-promote.js");
+    const f = await F();
+    gitInit(f.forgeRoot);
+
+    // Create a FIFO at the Forge root
+    const fifoPath = path.join(f.forgeRoot, "fifo");
+    execFileSync("mkfifo", [fifoPath]);
+    cleanups.push(() => fs.rm(fifoPath, { force: true }));
+
+    const scratchDir = await tmpDir("craftar-scratch-");
+    cleanups.push(() => fs.rm(scratchDir, { recursive: true, force: true }));
+
+    // The call should reject promptly (not hang), with the refusal message
+    await expect(copyForgeForProof(f.forgeRoot, scratchDir)).rejects.toThrow(
+      "fifo is not a regular file — promote cannot copy the Forge to prove its edit; remove it",
+    );
+  });
+
+  it("R6a. copyForgeForProof refuses root directory link: ingredients", async () => {
+    const { copyForgeForProof } = await import("../src/importers/drift-promote.js");
+    const f = await F();
+    
+    // Create an outside directory to hold the ingredients
+    const outsideDir = await tmpDir("outside-ing-");
+    cleanups.push(() => fs.rm(outsideDir, { recursive: true, force: true }));
+    
+    // Move ingredients to outside and replace with junction
+    await fs.rename(path.join(f.forgeRoot, "ingredients"), path.join(outsideDir, "ingredients"));
+    try {
+      await fs.symlink(path.join(outsideDir, "ingredients"), path.join(f.forgeRoot, "ingredients"), "junction");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EPERM") {
+        return; // Windows without privilege
+      }
+      throw e;
+    }
+    gitInit(f.forgeRoot);
+
+    const scratchDir = await tmpDir("craftar-scratch-");
+    cleanups.push(() => fs.rm(scratchDir, { recursive: true, force: true }));
+
+    await expect(copyForgeForProof(f.forgeRoot, scratchDir)).rejects.toThrow(
+      "ingredients is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit",
+    );
+  });
+
+  it("R6b. copyForgeForProof refuses root directory link: recipes", async () => {
+    const { copyForgeForProof } = await import("../src/importers/drift-promote.js");
+    const f = await F();
+    
+    const outsideDir = await tmpDir("outside-rec-");
+    cleanups.push(() => fs.rm(outsideDir, { recursive: true, force: true }));
+    
+    await fs.rename(path.join(f.forgeRoot, "recipes"), path.join(outsideDir, "recipes"));
+    try {
+      await fs.symlink(path.join(outsideDir, "recipes"), path.join(f.forgeRoot, "recipes"), "junction");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EPERM") {
+        return;
+      }
+      throw e;
+    }
+    gitInit(f.forgeRoot);
+
+    const scratchDir = await tmpDir("craftar-scratch-");
+    cleanups.push(() => fs.rm(scratchDir, { recursive: true, force: true }));
+
+    await expect(copyForgeForProof(f.forgeRoot, scratchDir)).rejects.toThrow(
+      "recipes is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit",
+    );
+  });
+
+  it("R6c. copyForgeForProof refuses root directory link: profiles", async () => {
+    const { copyForgeForProof } = await import("../src/importers/drift-promote.js");
+    const f = await F();
+    
+    const outsideDir = await tmpDir("outside-pro-");
+    cleanups.push(() => fs.rm(outsideDir, { recursive: true, force: true }));
+    
+    await fs.rename(path.join(f.forgeRoot, "profiles"), path.join(outsideDir, "profiles"));
+    try {
+      await fs.symlink(path.join(outsideDir, "profiles"), path.join(f.forgeRoot, "profiles"), "junction");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EPERM") {
+        return;
+      }
+      throw e;
+    }
+    gitInit(f.forgeRoot);
+
+    const scratchDir = await tmpDir("craftar-scratch-");
+    cleanups.push(() => fs.rm(scratchDir, { recursive: true, force: true }));
+
+    await expect(copyForgeForProof(f.forgeRoot, scratchDir)).rejects.toThrow(
+      "profiles is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit",
+    );
+  });
+
+  it("R7. CLI: linked profiles directory → exit 1 with params outcome, Forge and link target untouched, no scratch left", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    
+    // P fixture: a templated rule with params outcome
+    const s = await scenario(
+      {
+        ingredients: [
+          {
+            meta: {
+              type: "rule",
+              name: "a",
+              params: { "scm.org": { default: "acme-org" } },
+            },
+            files: { "rule.md": "Org: {{scm.org}}\nA two\n" },
+          },
+          rule("b", "B one\n"),
+        ],
+        recipes: [recipe("base", ["rule/a", "rule/b"])],
+        profiles: [profile("acme", ["base"], ["claude-code"], { params: { "scm.org": "acme-org" } })],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    
+    // Move profiles to outside and replace with junction
+    const outsideDir = await tmpDir("outside-pro-cli-");
+    cleanups.push(() => fs.rm(outsideDir, { recursive: true, force: true }));
+    await fs.rename(path.join(s.forgeRoot, "profiles"), path.join(outsideDir, "profiles"));
+    try {
+      await fs.symlink(path.join(outsideDir, "profiles"), path.join(s.forgeRoot, "profiles"), "junction");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EPERM") {
+        return;
+      }
+      throw e;
+    }
+    gitInit(s.forgeRoot);
+    
+    const outsideListing = (await fs.readdir(path.join(outsideDir, "profiles"))).sort();
+    expect(runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+    
+    // Trigger params outcome: change only the param value
+    await fs.writeFile(path.join(s.wsRoot, A), "Org: globex-org\nA two\n");
+    const lockBefore = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
+    const scratchBefore = await scratchDirs();
+    
+    const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(
+      "error: profiles is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit\n",
+    );
+    // Outside profiles listing unchanged
+    expect((await fs.readdir(path.join(outsideDir, "profiles"))).sort()).toEqual(outsideListing);
+    // Forge porcelain empty
+    expect(porcelain(s.forgeRoot)).toBe("");
+    // Lock unchanged
+    expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
+    // No scratch left
+    expect(await scratchDirs()).toEqual(scratchBefore);
+  });
+});
+
+describe("profile label from real file (commit 1)", () => {
+  it("R8a. params outcome with profile in client-a directory → report shows profiles/client-a/profile.yaml", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    
+    // Create a fixture where profile 'acme' lives in directory 'client-a'
+    const root = await tmpDir("craftar-fixture-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+    
+    // Build forge by hand with profile in client-a directory
+    await fs.mkdir(path.join(forgeRoot, "ingredients", "rules", "a"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "ingredients", "rules", "a", "ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "a", params: { "scm.org": { default: "acme-org" } } }));
+    await fs.writeFile(path.join(forgeRoot, "ingredients", "rules", "a", "rule.md"), "Org: {{scm.org}}\nA two\n");
+    await fs.mkdir(path.join(forgeRoot, "recipes"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "recipes", "base.yaml"), YAML.stringify({ name: "base", ingredients: ["rule/a"] }));
+    // Profile acme lives in profiles/client-a/ directory
+    await fs.mkdir(path.join(forgeRoot, "profiles", "client-a"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "profiles", "client-a", "profile.yaml"),
+      YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code"], params: { "scm.org": "acme-org" } }));
+    await fs.writeFile(path.join(forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test", schema: 1 }));
+    
+    gitInit(forgeRoot);
+    
+    // Create workspace
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
+    expect(runCli(["sync", "--workspace", wsRoot], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+    
+    // Trigger params outcome
+    await fs.writeFile(path.join(wsRoot, A), "Org: globex-org\nA two\n");
+    
+    const r = runCli(["drift", "promote", A, "--workspace", wsRoot], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      `promote ${A} → profile acme (params)\n` +
+        "  edited profiles/client-a/profile.yaml (params)\n" +
+        `  param scm.org: "acme-org" → "globex-org"\n` +
+        "  proved: this workspace plans the file on disk; 0 other file(s) unchanged\n" +
+        "  next sync: nothing to sync\n" +
+        "  no other registered workspace reads this Forge\n" +
+        "  the Forge is not committed — review with git, then commit and push it\n",
+    );
+  });
+
+  it("R8b. case-2 recipe fork with profile in client-a directory → report shows profiles/client-a/profile.yaml", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    
+    // Create a fixture where profile 'acme' lives in directory 'client-a'
+    // and there's a second profile 'beta' so case 2 applies (recipe fork)
+    const root = await tmpDir("craftar-fixture-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+    
+    // Build forge by hand
+    await fs.mkdir(path.join(forgeRoot, "ingredients", "rules", "a"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "ingredients", "rules", "a", "ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "a" }));
+    await fs.writeFile(path.join(forgeRoot, "ingredients", "rules", "a", "rule.md"), "A one\n");
+    await fs.mkdir(path.join(forgeRoot, "recipes"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "recipes", "base.yaml"), YAML.stringify({ name: "base", ingredients: ["rule/a"] }));
+    // Profile acme in client-a directory
+    await fs.mkdir(path.join(forgeRoot, "profiles", "client-a"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "profiles", "client-a", "profile.yaml"),
+      YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code"] }));
+    // Profile beta in client-b directory (so case 2 applies: base is shared)
+    await fs.mkdir(path.join(forgeRoot, "profiles", "client-b"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "profiles", "client-b", "profile.yaml"),
+      YAML.stringify({ name: "beta", recipes: ["base"], targets: ["claude-code"] }));
+    await fs.writeFile(path.join(forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test", schema: 1 }));
+    
+    gitInit(forgeRoot);
+    
+    // Create workspace
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
+    expect(runCli(["sync", "--workspace", wsRoot], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+    
+    // Drift rule a
+    await fs.appendFile(path.join(wsRoot, A), "hand a\n");
+    
+    const r = runCli(["drift", "promote", A, "--workspace", wsRoot], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      `promote ${A} → rule/a--acme (variant, profile acme)\n` +
+        "  wrote  ingredients/rules/a--acme/ingredient.yaml\n" +
+        "  wrote  ingredients/rules/a--acme/rule.md\n" +
+        "  wrote  recipes/base--acme.yaml\n" +
+        "  edited profiles/client-a/profile.yaml (recipes)\n" +
+        "  proved: this workspace plans the file on disk; 0 other file(s) unchanged\n" +
+        "  next sync: nothing to sync\n" +
+        "  no other registered workspace reads this Forge\n" +
+        "  the Forge is not committed — review with git, then commit and push it\n",
+    );
   });
 });

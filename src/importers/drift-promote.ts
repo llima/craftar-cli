@@ -39,6 +39,7 @@ import {
   type NextSyncResult,
 } from "../core/impact.js";
 import { findProfileFile, resolvedBy } from "../core/param-writes.js";
+import { outName } from "../emitters/shared.js";
 import {
   readEmitted,
   secretIn,
@@ -177,6 +178,13 @@ const D17 = (recipe: string, chain: string) =>
 const INTERNAL_REUSE = (p: string) => `internal: ${p} is drift but the Forge already renders it — please report this`;
 const SYMLINK_REFUSAL = (rel: string) =>
   `${rel} is a symbolic link in the Forge — promote does not write through a link; replace it with the file and commit`;
+const SYMLINK_DIR_REFUSAL = (rel: string) =>
+  `${rel} is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit`;
+const NON_REGULAR_FILE_REFUSAL = (rel: string) =>
+  `${rel} is not a regular file — promote cannot copy the Forge to prove its edit; remove it`;
+
+/** The root directories loadForge reads; a link there causes the scratch to differ from the real Forge. */
+const ROOT_DIRS = new Set(["ingredients", "recipes", "profiles"]);
 
 interface OtherWorkspaceCheck {
   entries: ForgeWorkspace[];
@@ -186,11 +194,14 @@ interface OtherWorkspaceCheck {
 }
 
 /**
- * Copy the Forge to a scratch directory without `.git`.
- * - A regular file or directory inside the Forge: copied.
- * - A symbolic link to a FILE whose real path is inside the Forge: copied as a regular file.
- * - A symbolic link to a DIRECTORY (inside or outside): NOT copied and not followed.
- * - A symbolic link that is dangling, or whose target is a file OUTSIDE the Forge: throws.
+ * Copy the Forge to a scratch directory without `.git`, for the proof.
+ * - A regular file: copied.
+ * - A directory: recursed.
+ * - A symbolic link to a FILE whose real path is inside the Forge: copied as a regular file (dereferenced).
+ * - A symbolic link to a DIRECTORY (inside or outside): skipped — except a root directory link
+ *   (ingredients, recipes, profiles), which is refused because loadForge follows it and the scratch would not.
+ * - A symbolic link that is dangling, or whose target is a file OUTSIDE the Forge: refused.
+ * - A non-regular file (FIFO, socket, device): refused.
  * Exported so tests can verify the copy behaviour directly.
  */
 export async function copyForgeForProof(forgeDir: string, scratchDir: string): Promise<void> {
@@ -223,8 +234,14 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string): P
           );
         }
 
-        // If it's a directory (inside or outside Forge), skip it entirely — loadForge doesn't traverse these
+        // If it's a directory (inside or outside Forge)
         if (targetStat.isDirectory()) {
+          // A root directory link (ingredients, recipes, profiles) is refused: loadForge follows it
+          // but the scratch would skip it, so the scratch would not load the same as the real Forge.
+          if (rel === "" && ROOT_DIRS.has(ent.name)) {
+            throw new Error(SYMLINK_DIR_REFUSAL(ent.name));
+          }
+          // Other directory links are skipped entirely — loadForge doesn't traverse them
           continue;
         }
 
@@ -237,14 +254,17 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string): P
           );
         }
 
-        // File link to inside the Forge — copy the target's bytes as a regular file
+        // File link to inside the Forge — copy the target's bytes as a regular file (dereferenced)
         await fs.copyFile(targetReal, entDest);
       } else if (ent.isDirectory()) {
         await fs.mkdir(entDest, { recursive: true });
         await walk(entRel);
-      } else {
+      } else if (ent.isFile()) {
         // Regular file
         await fs.copyFile(entSrc, entDest);
+      } else {
+        // Non-regular file (FIFO, socket, device, etc.) — refuse
+        throw new Error(NON_REGULAR_FILE_REFUSAL(entRel));
       }
     }
   }
@@ -272,6 +292,10 @@ async function checkStagedSymlinks(forgeDir: string, stage: ForgeStage): Promise
         const stat = await fs.lstat(current);
         if (stat.isSymbolicLink()) {
           const rel = path.relative(forgeDir, current).split(path.sep).join("/");
+          // Use the directory-specific message for root directories (ingredients, recipes, profiles)
+          if (ROOT_DIRS.has(rel)) {
+            throw new Error(SYMLINK_DIR_REFUSAL(rel));
+          }
           throw new Error(SYMLINK_REFUSAL(rel));
         }
       } catch (e) {
@@ -593,7 +617,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const X = p0.resolution.ingredients.find((i) => i.ref === ingredientRef)!;
   const claudeDir = path.join(root, ".claude");
   const meta = X.meta;
-  const outputName = "as" in meta && meta.as ? (meta.as as string) : meta.name;
+  const outputName = outName(meta);
 
   // Determine the relative path for readEmitted based on type
   let rel: string;
@@ -805,7 +829,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     }
 
     const raw = await fs.readFile(profileAbs, "utf8");
-    const label = `profiles/${profile}/profile.yaml`;
+    const label = path.relative(forgeDir, profileAbs).split(path.sep).join("/");
     const editKeys = outcome === "params" ? ["params"] : ["sections"];
     const content = editYamlText(raw, { command: "drift promote", label, keys: editKeys }, (doc) => {
       if (outcome === "params") {
@@ -1119,7 +1143,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         }
 
         const profileRaw = await stage.readText(profileFile);
-        const profileLabel = `profiles/${profile}/profile.yaml`;
+        const profileLabel = path.relative(forgeDir, profileFile).split(path.sep).join("/");
         const newProfileContent = editYamlText(profileRaw, { command: "drift promote", label: profileLabel, keys: ["recipes"] }, (doc) => {
           const seq = doc.get("recipes", true);
           if (!YAML.isSeq(seq)) return;
@@ -1185,7 +1209,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Step 8: The proof
   const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-promote-"));
   try {
-    // Copy Forge without .git, with symlinks dereferenced
+    // Copy Forge without .git, with file symlinks dereferenced and non-regular files refused
     await copyForgeForProof(forgeDir, scratchDir);
     await stage.flushTo(scratchDir);
 
