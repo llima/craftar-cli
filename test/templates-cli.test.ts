@@ -248,7 +248,7 @@ describe("templates install", () => {
 
 describe("templates --help", () => {
   const flat = (s: string) => s.replace(/\s+/g, " ");
-  it("the group, list and install describe themselves as the README does", () => {
+  it("the group, list and install describe themselves", () => {
     const group = runCli(["templates", "--help"], { env: NO_DOTNET });
     expect(group.code).toBe(0);
     expect(flat(group.stdout)).toContain("Project templates the profile declares (dotnet new): list them, or install them into this user's dotnet template store");
