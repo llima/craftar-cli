@@ -1,0 +1,81 @@
+import { describe, expect, it } from "vitest";
+import { credentialFault, urlCredentialIn } from "../src/core/remote.js";
+
+// Spec 34 §4.3, row U — every URL example of that section, pinned as written there.
+// No real credential appears here: `u:p`, `tok`, `pw` are placeholders, never a token of a known format.
+
+const FINDING: Array<[string, string]> = [
+  ["a user and a password on https", "https://u:p@idp.example.com/"],
+  ["the same inside a longer leaf (§6.12)", "--url=https://u:p@idp.example.com/"],
+  ["a bare user on a +https scheme", "git+https://tok@idp.example.com/x"],
+  ["an http(s) URL with a user and no password — refused though it may not be a secret", "https://acme@dev.azure.com/acme/Portal"],
+  ["a userinfo mixing a literal with a reference", "postgres://acme:${DB_PASS}@db.example.com/app"],
+  ["a reference with a default is not a plain reference", "https://${A:-x}@host/"],
+  ["no path, then text holding an @ with no terminator between", "https://a.example.com&cc=ops@example.com"],
+  ["a port reference before an @", "https://host:${PORT}@x"],
+  ["the second :// of a comma list", "https://a.example.com,https://u:p@b.example.com/"],
+  ["the scheme compared without case", "HTTPS://user@host/"],
+  ["wss with a bare user", "wss://user@host/"],
+  ["ws with a bare user, no path", "ws://user@host"],
+  ["http with a bare user, no path", "http://user@host"],
+  ["a + scheme in mixed case", "svn+HTTP://user@host/"],
+  ["an empty scheme with user:password", "://u:p@host/"],
+  ["another scheme with a password", "ssh://git:pw@host/x"],
+  ["a reference followed by a literal", "https://${USER}x@host/"],
+  ["no terminator after the host", "https://u:p@host"],
+  ["a clean URL first, a credential URL later", "x https://ok.example.com y https://u@h z"],
+  ["two @ in the authority, the user part a reference", "https://${A}@b:c@host/"],
+];
+
+const NONE: Array<[string, string]> = [
+  ["a mail address", "mailto:ops@example.com"],
+  ["a package at a version", "npm:pkg@1.2.3"],
+  ["an @ in the query", "https://idp.example.com?hint=a@b"],
+  ["a plain URL", "https://idp.example.com/mcp"],
+  ["a word", "acme"],
+  ["a flag", "--org=acme"],
+  ["a URL with a path", "https://dev.azure.com/acme/Portal"],
+  ["a bare reference", "${ACME_TOKEN}"],
+  ["the remedy: a userinfo that is one reference", "https://${IDP_TOKEN}@idp.example.com/mcp"],
+  ["the remedy: user and password both references", "https://${IDP_USER}:${IDP_TOKEN}@idp.example.com/"],
+  ["ssh with a user and no password", "ssh://git@git.example.com/acme/x"],
+  ["a comma list whose second item is a mail address", "--allow=https://a.example.com,ops@example.com"],
+  ["an empty userinfo", "https://@host"],
+  ["an empty user and password", "https://:@host"],
+  ["a secret in the query — passes though it is one", "https://idp.example.com/mcp?api_key=abc@def"],
+  ["a password holding / — the authority ends there", "https://u:pa/ss@host/"],
+  ["a password holding ?", "https://u:pa?ss@host/"],
+  ["a password holding #", "https://u:pa#ss@host/"],
+  ["a password holding a space", "https://u:pa ss@host/"],
+  ['a password holding "', 'https://u:pa"ss@host/'],
+  ["a password holding '", "https://u:pa'ss@host/"],
+  ["a password holding ,", "https://u:pa,ss@host/"],
+  ["a password holding ;", "https://u:pa;ss@host/"],
+  ["credentials with no ://", "user:secret@host"],
+  ["a user-only token on ssh", "ssh://tok@host/"],
+  ["a user-only token on a scheme that only looks like https", "x-https://tok@host/"],
+  ["news is not ws", "news://user@host/"],
+  ["aws is not ws", "aws://user@host/"],
+  ["an empty scheme with a bare user", "://user@host/"],
+  ["a non-breaking space ends the authority", "https://a.example.com x@y"],
+  ["an @ in the path", "https://a.example.com/x@y"],
+  ["the empty string", ""],
+  ["a bare ://", "://"],
+  ["a scheme and nothing else", "https://"],
+];
+
+describe("urlCredentialIn — row U", () => {
+  for (const [label, text] of FINDING) it(`finding: ${label}`, () => expect(urlCredentialIn(text)).toBe(true));
+  for (const [label, text] of NONE) it(`no finding: ${label}`, () => expect(urlCredentialIn(text)).toBe(false));
+
+  it("is not credentialFault: the five whole-leaf examples of §4.3 go the other way", () => {
+    const five = ["mailto:ops@example.com", "npm:pkg@1.2.3", "https://idp.example.com?hint=a@b", "--url=https://u:p@idp.example.com/", "git+https://tok@idp.example.com/x"];
+    expect(five.map((s) => [credentialFault(s), urlCredentialIn(s)])).toEqual([
+      [true, false],
+      [true, false],
+      [true, false],
+      [false, true],
+      [false, true],
+    ]);
+  });
+});

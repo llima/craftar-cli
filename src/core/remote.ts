@@ -4,6 +4,7 @@ import { exists } from "./forge.js";
 import { LockBusyError, withLock, type LockOptions, type LockTiming } from "./home-lock.js";
 import { hashNormalized } from "./text.js";
 import { execProgram } from "./proc.js";
+import { ENV_NAME } from "../schema/index.js";
 
 /** A removal directory's prefix; `~` is a character `cacheKey` never emits (spec 26 §3, §13 item 14). */
 export const REMOVING_PREFIX = "~removing-";
@@ -20,6 +21,66 @@ const SCP_URL = /^[^\s/\\:@]+@[^\s/\\:]+:/;
 export function classifyForge(value: string): "url" | "path" {
   const v = value.trim();
   return SCHEME_URL.test(v) || SCP_URL.test(v) ? "url" : "path";
+}
+
+/* ------------------------------------------------------------------ */
+/* urlCredentialIn — spec 34 §4.3 row U, the five steps literally       */
+/* ------------------------------------------------------------------ */
+
+/** The http(s), ws(s) schemes and +variants thereof that are findings for a bare user (step 5). */
+const HTTP_WS_SCHEMES = ["http", "https", "ws", "wss"];
+
+/** A userinfo made only of `${NAME}` references and `:` is the remedy (step 4). Built from ENV_NAME. */
+const REFERENCE_ONLY = new RegExp(`^(\\$\\{${ENV_NAME}\\}|:)*$`);
+
+/**
+ * Whether `text` holds, anywhere in it, a URL with credentials (spec 34 §4.3, row U).
+ * Not `credentialFault`: that one answers "may this whole value, a Forge URL, be printed" and fails
+ * closed; this one looks inside a leaf and must let through `--allow=…` lists, mail addresses and
+ * the remedy it prescribes (a userinfo made only of `${NAME}` references).
+ */
+export function urlCredentialIn(text: string): boolean {
+  // Step 1: For every occurrence of `://` in the leaf (occurrences are independent; none hides another).
+  let pos = 0;
+  while (true) {
+    const sep = text.indexOf("://", pos);
+    if (sep === -1) break;
+    pos = sep + 3; // Move past this `://` for the next iteration
+
+    // Step 1: The scheme is the run of [A-Za-z0-9+.-] directly before it; it may be empty.
+    let schemeStart = sep;
+    while (schemeStart > 0 && /[A-Za-z0-9+.-]/.test(text[schemeStart - 1])) schemeStart--;
+    const scheme = text.slice(schemeStart, sep).toLowerCase();
+
+    // Step 2: The authority is the text after it, up to the first of `/`, `?`, `#`, white space (\s), `"`, `'`, `,`, `;` or the end.
+    const afterScheme = text.slice(sep + 3);
+    const authorityEnd = afterScheme.search(/[/?#\s"',;]/);
+    const authority = authorityEnd === -1 ? afterScheme : afterScheme.slice(0, authorityEnd);
+
+    // Step 3: The userinfo is the authority before its last `@`; no `@`, no finding.
+    const at = authority.lastIndexOf("@");
+    if (at === -1) continue;
+    const userinfo = authority.slice(0, at);
+
+    // Step 4: A userinfo made only of `${NAME}` references and `:` is no finding.
+    // An empty userinfo is also no finding.
+    if (userinfo === "" || REFERENCE_ONLY.test(userinfo)) continue;
+
+    // Step 5: When the scheme is http, https, ws or wss, or ends in + followed by one of them,
+    // any other non-empty userinfo is a finding; for any other scheme, the empty one included,
+    // only a userinfo holding `:` is.
+    const isHttpWs = HTTP_WS_SCHEMES.includes(scheme) ||
+      HTTP_WS_SCHEMES.some((s) => scheme.endsWith("+" + s));
+
+    if (isHttpWs) {
+      // Any non-empty userinfo (not made of references only) is a finding
+      return true;
+    } else {
+      // For other schemes, only a userinfo holding `:` is a finding
+      if (userinfo.includes(":")) return true;
+    }
+  }
+  return false;
 }
 
 /**
