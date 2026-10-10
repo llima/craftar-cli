@@ -2520,10 +2520,10 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     expect(j.warnings).toEqual([GONE]);
   });
 
-  it("targets --json: exactly the key set of §4.4 at every level, 27 cells, plus services", async () => {
+  it("targets --json: exactly the key set of §4.4 at every level, 27 cells", async () => {
     const dir = await bare();
     const j = json(runCli(["targets", "--json"], { cwd: dir }));
-    expect(keys(j)).toEqual(["ingredientTypes", "services", "targets", "warnings"]);
+    expect(keys(j)).toEqual(["ingredientTypes", "targets", "warnings"]);
     expect(j.ingredientTypes).toEqual(["rule", "agent", "command", "skill", "mcp", "script", "steering", "hook", "service"]);
     expect(j.targets.map((t: { name: string }) => t.name)).toEqual(["claude-code", "kiro", "agents-md"]);
     let cells = 0;
@@ -2542,12 +2542,20 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       note: "inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)",
     });
     expect(j.targets[1].capabilities.script).toEqual({ state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" });
-    // Services are not a target; they are in a separate object (spec 31 §4.5)
-    expect(j.services).toEqual({
-      output: [".craftar/compose.yaml", ".craftar/services/<name>/compose.yaml", ".craftar/.gitattributes"],
-      note: "managed by `craftar services up/down/status`",
-    });
     expect(j.warnings).toEqual([]);
+  });
+
+  it("targets text mode: the services line appears after the paths block", async () => {
+    const dir = await bare();
+    const result = runCli(["targets"], { cwd: dir });
+    expect(result.code).toBe(0);
+    // The service line must appear with two leading spaces, after paths
+    expect(result.stdout).toContain("  service: written by sync under .craftar/ for no target; see craftar services");
+    // Verify it's after the paths block
+    const pathsIdx = result.stdout.indexOf("paths");
+    const serviceIdx = result.stdout.indexOf("  service:");
+    expect(pathsIdx).toBeGreaterThan(-1);
+    expect(serviceIdx).toBeGreaterThan(pathsIdx);
   });
 
   it("recipes and ingredients: --forge alone, --forge --profile, inside a workspace (cwd), --workspace", async () => {
@@ -2735,7 +2743,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     expect(norm).toContain("converted written in another form — see its line below");
     expect(norm).toContain("unsupported not written; sync warns and names an ingredient aimed at this target");
     const p = norm.indexOf("paths");
-    expect(norm.slice(p + 1)).toEqual([
+    expect(norm.slice(p + 1, -2)).toEqual([
       "claude-code · rule .claude/rules/<name>.md",
       "kiro · rule .kiro/steering/<name>.md — inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)",
       "agents-md · rule AGENTS.md — always-on rules are embedded in AGENTS.md; a scoped rule is listed at the file another target writes, or embedded when none does; .claude/rules/ references in the bodies, link text included, point at the file a target writes or the rule's place in AGENTS.md, or read <x> (rule not in this workspace) with a warning",
@@ -2750,9 +2758,9 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       "claude-code · script .claude/scripts/<file>",
       "kiro · steering .kiro/steering/<name>.md",
       "claude-code · hook .claude/hooks/<file>",
-      // Services are not a target; they are in a separate line (spec 31 §4.5)
-      "services .craftar/compose.yaml, .craftar/services/<name>/compose.yaml — managed by `craftar services up/down/status`",
     ]);
+    // Services are not a target; they get their own line after the paths block (spec 31 §4.7)
+    expect(norm[norm.length - 1]).toBe("service: written by sync under .craftar/ for no target; see craftar services");
     const bareRun = runCli(["targets"], { cwd: await bare() });
     expect(bareRun.stdout.split("\n")[0]).toBe("craftar targets — claude-code · kiro · agents-md");
   });

@@ -50,7 +50,8 @@ import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
-import { servicesCommand, dockerRunner, MIN_COMPOSE, type ServicesResult, type PsContainer } from "./core/services.js";
+import { spawn } from "node:child_process";
+import { recordedServices, canUseStack, pendingLine, upRefusal, composeArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -1283,10 +1284,6 @@ program
     if (o.json) {
       return console.log(JSON.stringify({
         ...result,
-        services: {
-          output: [".craftar/compose.yaml", ".craftar/services/<name>/compose.yaml", ".craftar/.gitattributes"],
-          note: "managed by `craftar services up/down/status`",
-        },
         warnings,
       }, null, 2));
     }
@@ -1331,15 +1328,13 @@ program
         }
       }
     }
-    // Services are not a target; they are written to .craftar/ by planServices (spec 31)
-    pathLines.push({
-      label: "services",
-      content: ".craftar/compose.yaml, .craftar/services/<name>/compose.yaml — managed by `craftar services up/down/status`",
-    });
     const maxLabelLen = Math.max(...pathLines.map((l) => l.label.length));
     for (const line of pathLines) {
       console.log(`  ${line.label.padEnd(maxLabelLen)}  ${line.content}`);
     }
+    console.log();
+    // Service line — text mode only (spec 31 §4.7: no JSON key, one line in the paths block)
+    console.log("  service: written by sync under .craftar/ for no target; see craftar services");
 
     for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   });
@@ -2163,115 +2158,97 @@ forge
   });
 
 /* ---------------------------------------------------------------- services ---------------------------------------------------------------- */
-const services = program.command("services").description("Manage local services: start, stop and show status of Docker Compose stacks");
+const services = program.command("services").description("Local services of this workspace: run Docker Compose on what craftar.lock records under .craftar/");
+
+/** The workspace's lock, read without the Forge: these commands need no plan and no network (spec 31 §4.2). */
+async function servicesContext(dir: string): Promise<{ root: string; real: string; recorded: Recorded }> {
+  const root = path.resolve(dir);
+  if (!(await exists(path.join(root, WORKSPACE_FILE)))) fail(`no ${WORKSPACE_FILE} in ${root} — run craftar services inside a workspace, or pass --workspace <dir>`);
+  return { root, real: await fs.realpath(root), recorded: await recordedServices(root, await readLock(root)) };
+}
+
+/** Runs `docker compose` with the terminal's own streams and resolves with its exit code. No shell. */
+function runCompose(argv: string[], real: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("docker", argv, { stdio: "inherit", env: { ...process.env, CRAFTAR_WORKSPACE: real } });
+    child.on("error", reject);
+    child.on("close", (code) => resolve(code ?? 1));
+  });
+}
 
 services
   .command("up")
-  .description("Start the local services recorded in this workspace")
-  .option("--workspace <dir>", "workspace to operate on", ".")
-  .option("--wait", "wait for services to be healthy", false)
-  .argument("[service...]", "specific services to start (default: all)")
-  .action(async (svcArgs: string[], o) => {
-    const root = o.workspace;
-
-    // Load workspace and lock
-    if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
-      try {
-        await loadWorkspace(root, load({}, "no-fetch"));
-      } catch (e) {
-        fail(e instanceof Error ? e.message : String(e));
-      }
+  .description("Start the services (docker compose up -d) — refused when a recorded file is missing or edited")
+  .argument("[service...]", "Compose service names to start (default: all)")
+  .option("--wait", "wait until the services are running or healthy", false)
+  .option("--workspace <dir>", "workspace root", ".")
+  .action(async (names: string[], o) => {
+    try {
+      const { root, real, recorded } = await servicesContext(o.workspace);
+      const refusal = upRefusal(recorded, names);
+      if (refusal.length) fail(refusal.join("\n"));
+      const fault = dockerFault(await dockerVersion(dockerRunner), true);
+      if (fault !== null) fail(fault);
+      const env = path.join(root, ".env");
+      const argv = composeArgv("up", { project: projectName(real), stack: path.join(root, ".craftar", "compose.yaml"), envFile: (await exists(env)) ? env : null, wait: o.wait, services: names });
+      process.exitCode = await runCompose(argv, real);
+    } catch (e) {
+      fail(e instanceof Error ? e.message : String(e));
     }
-
-    const lock = await readLock(root);
-    if (!lock) fail("no craftar.lock — run `craftar sync` first");
-
-    const result = await servicesCommand(root, lock, {
-      kind: "up",
-      wait: o.wait,
-      services: svcArgs.length > 0 ? svcArgs : undefined,
-    }, dockerRunner);
-
-    // Print warnings
-    for (const w of result.warnings) console.error(pc.yellow(`warn: ${w}`));
-
-    if (!result.ok) fail(result.message);
-
-    // Print success with containers
-    printServicesStatus(result);
   });
 
 services
   .command("down")
-  .description("Stop the local services for this workspace")
-  .option("--workspace <dir>", "workspace to operate on", ".")
-  .option("--volumes", "also remove volumes", false)
+  .description("Stop the services (docker compose down) — never refused on the files")
+  .option("--volumes", "also remove the volumes the stack declares", false)
+  .option("--workspace <dir>", "workspace root", ".")
   .action(async (o) => {
-    const root = o.workspace;
-
-    // Load workspace and lock — lock is optional for down (can use project name alone)
-    if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
-      try {
-        await loadWorkspace(root, load({}, "no-fetch"));
-      } catch (e) {
-        fail(e instanceof Error ? e.message : String(e));
-      }
+    try {
+      const { root, real, recorded } = await servicesContext(o.workspace);
+      const docker = await dockerVersion(dockerRunner);
+      const fault = dockerFault(docker, false);
+      if (fault !== null) fail(fault);
+      // `-f` only for a stack `up` would accept, on a Compose that can read `include`; otherwise the project is stopped by its name.
+      const stack = canUseStack(recorded) && !docker.belowFloor ? path.join(root, ".craftar", "compose.yaml") : null;
+      process.exitCode = await runCompose(composeArgv("down", { project: projectName(real), stack, envFile: null, volumes: o.volumes }), real);
+    } catch (e) {
+      fail(e instanceof Error ? e.message : String(e));
     }
-
-    const lock = await readLock(root);
-    if (!lock) fail("no craftar.lock — run `craftar sync` first");
-
-    const result = await servicesCommand(root, lock, {
-      kind: "down",
-      volumes: o.volumes,
-    }, dockerRunner);
-
-    // Print warnings
-    for (const w of result.warnings) console.error(pc.yellow(`warn: ${w}`));
-
-    if (!result.ok) fail(result.message);
-
-    console.log(pc.green(result.message));
   });
 
 services
   .command("status")
-  .description("Show the status of local services")
-  .option("--workspace <dir>", "workspace to operate on", ".")
+  .description("The declared services and their containers — reports, never refused on the files")
   .option("--json", "machine-readable output", false)
+  .option("--workspace <dir>", "workspace root", ".")
   .action(async (o) => {
-    const root = o.workspace;
-
-    // Load workspace and lock
-    if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
-      try {
-        await loadWorkspace(root, load({}, "no-fetch"));
-      } catch (e) {
-        fail(e instanceof Error ? e.message : String(e));
+    try {
+      const { real, recorded } = await servicesContext(o.workspace);
+      const docker = await dockerVersion(dockerRunner);
+      let ps: ReturnType<typeof readPs> | null = null;
+      let psFault = dockerFault(docker, false);
+      if (psFault === null) {
+        const r = await dockerRunner("docker", composeArgv("ps", { project: projectName(real), stack: null, envFile: null }));
+        if (r.code === 0) ps = readPs(r.stdout);
+        else psFault = `docker compose ps failed — ${r.stderr.trim().split("\n")[0] || `exit ${r.code}`}`;
       }
+      const report = statusReport(real, recorded, docker, ps, psFault);
+      if (o.json) console.log(JSON.stringify(report, null, 2));
+      else {
+        console.log(pc.bold(`craftar services — project ${report.project}`));
+        if (report.services.length === 0) console.log("  no service declared");
+        const w = Math.max(0, ...report.services.map((s) => s.name.length));
+        for (const s of report.services) {
+          const ports = s.ports.map((p) => `${p.host}:${p.container}/${p.protocol}`).join(", ");
+          console.log(`  ${s.name.padEnd(w)}  ${s.ingredient ?? "(not declared)"}  ${s.state}${s.health ? ` (${s.health})` : ""}${ports ? `  ${ports}` : ""}`);
+        }
+        for (const p of report.pending) console.log(`  ${pc.yellow(pendingLine(p))}`);
+        for (const x of report.warnings) console.error(`${pc.yellow("warn")} ${x}`);
+      }
+      if (psFault !== null) process.exitCode = 1;
+    } catch (e) {
+      fail(e instanceof Error ? e.message : String(e));
     }
-
-    const lock = await readLock(root);
-    if (!lock) fail("no craftar.lock — run `craftar sync` first");
-
-    const result = await servicesCommand(root, lock, { kind: "status" }, dockerRunner);
-
-    // Print warnings
-    for (const w of result.warnings) console.error(pc.yellow(`warn: ${w}`));
-
-    if (!result.ok) fail(result.message);
-
-    if (o.json) {
-      console.log(JSON.stringify({
-        compose: result.compose,
-        recorded: result.recorded,
-        containers: result.containers,
-        warnings: result.warnings,
-      }, null, 2));
-      return;
-    }
-
-    printServicesStatus(result);
   });
 
 /* ---------------------------------------------------------------- cache ---------------------------------------------------------------- */
@@ -2502,44 +2479,6 @@ function forgeJson(ws: Workspace, lock: Lock | null) {
 function fail(msg: string): never {
   console.error(pc.red("error: ") + msg);
   process.exit(1);
-}
-
-/** Print service status (for `services up` and `services status`). */
-function printServicesStatus(result: ServicesResult): void {
-  const compose = result.compose ? ` · compose ${result.compose}` : "";
-  console.log(pc.bold(`craftar services${compose}`));
-
-  // Show recorded services
-  if (result.recorded) {
-    const rec = result.recorded;
-    if (!rec.stack) {
-      console.log("  " + pc.yellow("no services recorded — run `craftar sync` first"));
-    } else if (rec.pending.length > 0) {
-      console.log("  " + pc.yellow("pending changes — run `craftar sync` first:"));
-      for (const p of rec.pending) {
-        console.log(`    ${p.path}: ${p.reason}`);
-      }
-    } else {
-      console.log(`  ${rec.services.length} service(s) declared`);
-    }
-  }
-
-  // Show containers
-  if (result.containers && result.containers.length > 0) {
-    console.log();
-    console.log("  containers:");
-    for (const c of result.containers) {
-      const health = c.health ? ` (${c.health})` : "";
-      const ports = c.ports.length > 0
-        ? ` — ${c.ports.map((p) => `${p.host}:${p.container}/${p.protocol}`).join(", ")}`
-        : "";
-      const stateColor = c.state === "running" ? pc.green : c.state === "exited" ? pc.red : pc.yellow;
-      console.log(`    ${c.service.padEnd(20)} ${stateColor(c.state.padEnd(10))}${health}${ports}`);
-    }
-  } else if (result.containers) {
-    console.log();
-    console.log("  " + pc.dim("no containers running"));
-  }
 }
 
 function printStatus(st: FileStatus[], warnings: string[], profile: string, recipes: string[], compact = false, forge: string | null = null) {
