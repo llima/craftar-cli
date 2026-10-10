@@ -57,7 +57,7 @@ const NONE: Array<[string, string]> = [
   ["news is not ws", "news://user@host/"],
   ["aws is not ws", "aws://user@host/"],
   ["an empty scheme with a bare user", "://user@host/"],
-  ["a non-breaking space ends the authority", "https://a.example.com x@y"],
+  ["a non-breaking space ends the authority", "https://a.example.com\u00A0x@y"],
   ["an @ in the path", "https://a.example.com/x@y"],
   ["the empty string", ""],
   ["a bare ://", "://"],
