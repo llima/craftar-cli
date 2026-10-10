@@ -53,7 +53,7 @@ import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { spawn } from "node:child_process";
 import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
-import { declaredTemplates, profileLabel, templateRows, type DeclaredEntry, type TemplateRow } from "./core/templates.js";
+import { declaredTemplates, profileLabel, templateRows, type Declared } from "./core/templates.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
@@ -942,16 +942,14 @@ program
 /* ---------------------------------------------------------------- templates */
 const templates = program.command("templates").description("Project templates the profile declares (dotnet new): list them, or install them into this user's dotnet template store");
 
-/** Load workspace and return the profile name and declared templates; refusal goes through `fail()`. */
-function declaredFor(ws: Workspace): { profile: string; declared: ReturnType<typeof declaredTemplates> } {
+/** The profile's declared templates (spec 32 §5.2); a refused block is the command's error. */
+async function declaredFor(ws: Workspace): Promise<{ profile: string; declared: Declared }> {
   const profile = ws.forge.profiles.get(ws.config.profile);
-  if (!profile) throw new Error(`profile "${ws.config.profile}" not found in Forge`);
-  const labelPromise = profileLabel(ws.forge.root, profile.name);
-  const label = `profiles/${profile.name}/profile.yaml`;
+  if (!profile) fail(`profile "${ws.config.profile}" not found in Forge`);
   try {
-    return { profile: profile.name, declared: declaredTemplates(profile, label) };
+    return { profile: profile.name, declared: declaredTemplates(profile, await profileLabel(ws.forge.root, profile.name)) };
   } catch (e) {
-    fail(e instanceof Error ? e.message : String(e));
+    fail(errorText(e));
   }
 }
 
@@ -965,7 +963,7 @@ templates
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
   .action(async (o) => {
     const ws = await loadWorkspace(o.workspace, load(o, "read"));
-    const { profile, declared } = declaredFor(ws);
+    const { profile, declared } = await declaredFor(ws);
     const rows = templateRows(declared.entries);
     const warnings = [...ws.warnings, ...declared.warnings];
 
@@ -984,13 +982,13 @@ templates
     // Text mode: header and one line per row
     const installableRows = rows.filter((r) => r.installable);
     const kindWidth = Math.max(...rows.map((r) => r.kind.length));
-    const packageWidth = installableRows.length ? Math.max(...installableRows.map((r) => r.package!.length)) : 0;
+    const packageWidth = installableRows.length ? Math.max(...installableRows.map((r) => (r.package ?? "").length)) : 0;
     const versionWidth = installableRows.length ? Math.max(...installableRows.map((r) => (r.version ?? "latest").length)) : 0;
 
     console.log(pc.bold(`Templates of profile ${profile}`));
     for (const row of rows) {
       if (row.installable) {
-        const pkg = row.package!.padEnd(packageWidth);
+        const pkg = (row.package ?? "").padEnd(packageWidth);
         const ver = (row.version ?? "latest").padEnd(versionWidth);
         const src = row.source ?? "default feeds";
         console.log(`  ${row.kind.padEnd(kindWidth)}  ${pkg}  ${ver}  ${src}`);

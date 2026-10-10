@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { exists, listFiles } from "../src/core/forge.js";
 import { runCli } from "./helpers/cli.js";
-import { profile, recipe, rule, scenario, type ForgeSpec } from "./helpers/forge.js";
+import { profile, recipe, rule, scenario, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 
 // Spec 32 §4 — `craftar templates list | install` as real processes.
 // dotnet is installed on some machines that run this suite: EVERY call empties PATH, so no test can start it.
@@ -127,6 +127,17 @@ describe("templates list", () => {
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
     expect(r.stderr).toContain("craftar.yaml");
+  });
+
+  it("names a profile whose directory is not its name without a path (design D9)", async () => {
+    const s = await fresh([TOOLS]);
+    await writeFiles(s.forgeRoot, { "profiles/other-dir/profile.yaml": `name: globex\nrecipes: [base]\ntemplates:\n  dotnetNew: [${M}]\n` });
+    await writeFiles(s.wsRoot, { "craftar.yaml": "forge: ../forge\nprofile: globex\n" });
+    const r = cli(["templates", "list"], s.wsRoot);
+    expect([r.code, r.stdout]).toEqual([1, ""]);
+    expect(r.stderr).toBe(
+      "error: the profile.yaml of profile globex: templates — must be a list of entries, each with a kind\n  templates:\n    - kind: dotnet-new\n      packages: [Example.Templates.Api]\n",
+    );
   });
 });
 
