@@ -14,6 +14,7 @@ import {
   type Recipe,
 } from "../schema/index.js";
 import { parseYamlText } from "./yaml-read.js";
+import { SchemaError, schemaIssues } from "./schema-fault.js";
 
 const execFileP = promisify(execFile);
 
@@ -51,7 +52,8 @@ export function parseYaml<T>(file: string, text: string, schema: { parse: (v: un
   try {
     return schema.parse(parsed);
   } catch (e) {
-    throw new Error(`invalid ${rel}: ${(e as Error).message}`);
+    if (schemaIssues(e).length) throw new SchemaError(`invalid ${rel}`, e);
+    throw e;
   }
 }
 

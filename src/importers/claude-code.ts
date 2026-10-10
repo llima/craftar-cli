@@ -5,6 +5,7 @@ import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../core/secrets.js";
+import { schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
 import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
@@ -869,7 +870,7 @@ export function validateImported(meta: Ingredient): Ingredient {
   const r = IngredientSchema.safeParse(meta);
   if (r.success) return r.data;
   const source = meta.origin?.path ?? `${meta.type}/${meta.name}`;
-  throw new Error(`${source} (${meta.type}/${meta.name}) does not fit the ingredient schema: ${r.error.message}`);
+  throw new Error(`${source} (${meta.type}/${meta.name}) does not fit the ingredient schema: ${schemaFault(r.error)}`);
 }
 
 export interface RecipeOptions {
@@ -1210,6 +1211,6 @@ async function planConfig(ws: string, forge: string, profile: string, targets: T
   const after = parseWorkspaceYaml("craftar.yaml", content);
   if (!isDeepStrictEqual(after, { ...before, forge: forgeValue, profile, targets })) throw i9("the edit does not read back as exactly forge, profile and targets set");
   const loaded = WorkspaceConfigSchema.safeParse(after);
-  if (!loaded.success) throw i9(`it no longer loads: ${loaded.error.message}`);
+  if (!loaded.success) throw i9(`it no longer loads: ${schemaFault(loaded.error)}`);
   return { abs, content, action: content === raw ? "unchanged" : "edited", keptRemote };
 }

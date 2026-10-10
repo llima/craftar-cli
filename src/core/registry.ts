@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { REGISTRY_SCHEMAS, RegistrySchema, type Lock, type Registry, type RegistryEntry } from "../schema/index.js";
+import { SchemaError, shownSchema } from "./schema-fault.js";
 import { exists } from "./forge.js";
 import { withLock, type LockTiming } from "./home-lock.js";
 import { cacheKey } from "./remote.js";
@@ -42,12 +43,12 @@ export async function readRegistry(home: string): Promise<Registry> {
   try {
     raw = JSON.parse(await fs.readFile(file, "utf8"));
   } catch (e) {
-    throw new Error(`cannot read ${file}: ${(e as Error).message}`);
+    throw new Error(`cannot read ${file}: ${e instanceof SyntaxError ? "not valid JSON" : (e as Error).message}`);
   }
   if (raw !== null && typeof raw === "object" && Object.hasOwn(raw, "schema") && !REGISTRY_SCHEMAS.includes((raw as { schema: unknown }).schema))
-    throw new Error(`${REGISTRY_FILE} declares schema ${JSON.stringify((raw as { schema: unknown }).schema)}, which this craftar does not read — upgrade craftar`);
+    throw new Error(`${REGISTRY_FILE} declares schema ${shownSchema((raw as { schema: unknown }).schema)}, which this craftar does not read — upgrade craftar`);
   const parsed = RegistrySchema.safeParse(raw);
-  if (!parsed.success) throw new Error(`invalid ${file}: ${parsed.error.message}`);
+  if (!parsed.success) throw new SchemaError(`invalid ${file}`, parsed.error);
   return parsed.data;
 }
 

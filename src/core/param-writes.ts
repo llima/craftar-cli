@@ -6,6 +6,7 @@ import { placeholders, bodyFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
 import { manifestWithSections } from "./manifest-edit.js";
 import { resolve, sectionKey } from "./resolve.js";
+import { errorText } from "./schema-fault.js";
 import { canonicalValue } from "./sections.js";
 import type { SectionExtraction, WriteJournal } from "./unify.js";
 import { editYamlText } from "./yaml-edit.js";
@@ -295,7 +296,7 @@ function parseOr<T>(label: string, parse: () => T): T {
   try {
     return parse();
   } catch (e) {
-    throw new Error(`unify: cannot edit ${label} in place (the edit no longer loads: ${(e as Error).message})`);
+    throw new Error(`unify: cannot edit ${label} in place (the edit no longer loads: ${errorText(e)})`);
   }
 }
 

@@ -223,7 +223,7 @@ describe("workspace checks", () => {
     expect(refused).toMatchObject({ level: "error", fix: "repair or remove craftar.lock" });
     expect(refused.message).toMatch(/^craftar\.lock is not a valid lock \(.+\)$/);
     expect(refused.message).not.toContain("\n");
-    expect(one(bad.checks, "lock").message).toMatch(/^craftar\.lock is not valid JSON \(/);
+    expect(one(bad.checks, "lock").message).toBe("craftar.lock is not valid JSON");
     await writeFiles(c, { "craftar.lock": JSON.stringify({ schema: 9 }) });
     expect(one((await run({ home: f.home, workspace: c })).checks, "lock")).toMatchObject({ level: "error", fix: "upgrade craftar", message: expect.stringMatching(/declares schema 9/) });
   });

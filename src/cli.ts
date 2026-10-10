@@ -48,6 +48,7 @@ import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
+import { errorText } from "./core/schema-fault.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
@@ -59,7 +60,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.22.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.22.1");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -1552,12 +1553,12 @@ forge
       try {
         parsed = parseYamlText(o.plan, await fs.readFile(o.plan, "utf8"));
       } catch (e) {
-        fail(e instanceof YamlSyntaxError ? e.message : `${o.plan}: ${e instanceof Error ? e.message : String(e)}`);
+        fail(e instanceof YamlSyntaxError ? e.message : `${o.plan}: ${errorText(e)}`);
       }
       try {
         loadedPlan = UnifyPlanSchema.parse(parsed);
       } catch (e) {
-        fail(`${o.plan}: ${e instanceof Error ? e.message : String(e)}`);
+        fail(`${o.plan}: ${errorText(e)}`);
       }
       // The plan must be for this exact invocation (Ruling 23) — checked before staleness, so a
       // right-ingredient-wrong-profile plan is named for what it is rather than misdiagnosed as
@@ -2032,7 +2033,7 @@ cache
     else printPrune(result);
   });
 
-program.parseAsync().catch((e) => fail(e instanceof Error ? e.message : String(e)));
+program.parseAsync().catch((e) => fail(errorText(e)));
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -2377,7 +2378,7 @@ function unheldMessage(command: string, root: string, unheld: UnheldPath[]): str
  * git tracks, `clean` for files unify created (checkout refuses a path git does not know).
  */
 function lateFailure(e: unknown, root: string, journal: WriteJournal, command = "unify"): string {
-  const msg = e instanceof Error ? e.message : String(e);
+  const msg = errorText(e);
   if (journal.length === 0) return msg;
   const rel = (abs: string) => path.relative(root, abs).split(path.sep).join("/");
   const quote = (p: string) => (/^[\w./-]+$/.test(p) ? p : `"${p}"`);

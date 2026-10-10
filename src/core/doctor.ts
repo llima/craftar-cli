@@ -7,6 +7,7 @@ import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
 import { isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus } from "./registry.js";
 import { FULL_SHA, cacheKey, classifyForge, inspectCache, type CacheSnapshot } from "./remote.js";
+import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
 import { outName } from "../emitters/shared.js";
 
@@ -142,7 +143,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
         );
     } catch (e) {
       registryWhyNot = "the registry cannot be read";
-      const msg = (e as Error).message;
+      const msg = errorText(e);
       m("registry", "error", oneLine(e), /declares schema/.test(msg) ? "upgrade craftar" : `repair or remove ${registryFile(home)}`);
     }
   }
@@ -291,8 +292,8 @@ async function lockAndStatus(
   try {
     lock = await readLock(root);
   } catch (e) {
-    const msg = (e as Error).message;
-    w("lock", "error", lockMessage(e), /declares schema/.test(msg) ? "upgrade craftar" : `repair or remove ${LOCK_FILE}`);
+    const msg = errorText(e);
+    w("lock", "error", oneLine(e), /declares schema/.test(msg) ? "upgrade craftar" : `repair or remove ${LOCK_FILE}`);
     return;
   }
   if (lock === null) {
@@ -313,37 +314,18 @@ async function lockAndStatus(
   w("status", "warn", `${row} — ${detail}`, "craftar status, then craftar sync");
 }
 
-type Issue = { path: Array<string | number>; message: string };
-
-/** The first schema issue and how many follow, in one line. */
-const issuesLine = (prefix: string, issues: Issue[]) =>
-  `${prefix} (${issues[0].path.join(".") || "top level"}: ${issues[0].message}${issues.length > 1 ? `, and ${issues.length - 1} more` : ""})`;
-
 /**
- * Any caught error as one line (§3: each check's message is one line). A schema refusal reaches doctor
- * as `<what>: <zod's JSON list of issues>` (readYaml, the workspace and registry loads); its first issue is kept.
+ * Any caught error as one line (§3: each check's message is one line). A SchemaError carries its issues;
+ * its first issue is shown with the count of any that follow. Everything else goes through `errorText`.
  */
 function oneLine(e: unknown): string {
-  const msg = (e as Error).message;
-  if (!msg.includes("\n")) return msg;
-  const at = msg.indexOf(": [");
-  if (at >= 0) {
-    try {
-      const issues: unknown = JSON.parse(msg.slice(at + 2));
-      if (Array.isArray(issues) && issues.length > 0) return issuesLine(msg.slice(0, at), issues as Issue[]);
-    } catch {
-      // Not a zod list: fall through to the first line.
-    }
+  if (e instanceof SchemaError && e.issues.length > 0) {
+    const first = e.issues[0];
+    const n = e.issues.length;
+    return `${e.what} (${first.path}: ${first.text}${n > 1 ? `, and ${n - 1} more` : ""})`;
   }
-  return msg.split("\n")[0];
-}
-
-/** A lock that does not read, in one line (§3): the zod dump and a bare JSON.parse message name nothing. */
-function lockMessage(e: unknown): string {
-  const issues = (e as { issues?: Issue[] }).issues;
-  if (Array.isArray(issues) && issues.length > 0) return issuesLine(`${LOCK_FILE} is not a valid lock`, issues);
-  if (e instanceof SyntaxError) return `${LOCK_FILE} is not valid JSON (${oneLine(e)})`;
-  return oneLine(e);
+  const msg = errorText(e);
+  return msg.includes("\n") ? msg.split("\n")[0] : msg;
 }
 
 /**
