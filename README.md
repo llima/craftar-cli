@@ -391,6 +391,7 @@ A `kind` is a lowercase name (`dotnet-new`); a package is a NuGet ID, optionally
 - **The store is the user's** — one per machine user, shared by every workspace; the last install of a package ID wins. Remove one with `dotnet new uninstall <package>`.
 - **Feeds are additive** — a declared `source` is added to the feeds `dotnet` already uses, so an ID nobody reserved on a public feed can be served from there. Pin it with the team's own `NuGet.Config` at the workspace root (craftar looks there only, and generates none). `install` and `doctor` warn when an entry declares a `source` and the root has no `NuGet.Config`.
 - **Private feeds** — authentication is NuGet's (`NuGet.Config`, a credential provider, `--interactive`); craftar holds no token, and a `source` carrying a user or a password is refused and never printed. A `source` is printed as written by `list`, `--dry-run` and `install`: craftar refuses a user or a password in it, not a token in its path or query — keep those out of the profile.
+- **`dotnet` comes from `PATH`** — craftar looks for it in the absolute entries of `PATH` only (on Windows, a `dotnet.exe` or `dotnet.com`), never in the workspace root, where `install` and `doctor`'s probe run it: a `dotnet` committed in a repository is not run. An empty or relative `PATH` entry is ignored for it.
 - **Unknown kind** — an entry of a kind this craftar cannot install (`npm-create`, `nx`) is listed, skipped and warned; `install` then exits 1 (`--dry-run` still exits 0).
 
 ## Roadmap (from the functional spec)
