@@ -198,7 +198,8 @@ describe("import — the round trip", () => {
     const { r, changed } = await moved(s);
     expect(changed).toEqual([]);
     expect(r.recipes).toEqual(["base"]);
-    expect(r.leftToRecipes[0].refs).toContain("steering/product");
+    // Print once, then pin: steering/product is last
+    expect(r.leftToRecipes[0].refs).toEqual(["rule/stories-azure-devops", "mcp/azure-devops", "steering/product"]);
   });
 
   it("13. an as: ingredient with no directory under its output name", async () => {
