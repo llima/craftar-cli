@@ -3,26 +3,27 @@
  * Writes nothing in a workspace, its lock, the registry or the Forge cache.
  */
 import { promises as fs } from "node:fs";
-import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import YAML from "yaml";
 import { classifyForge, cacheKey as computeCacheKey } from "../core/remote.js";
 import {
   loadForge,
   gitIsRepo,
+  gitHasCommit,
+  gitIgnored,
   gitUnheld,
   exists,
+  listFiles,
+  typeFolder,
   type Forge,
   type UnheldPath,
 } from "../core/forge.js";
-import { readWorkspaceConfig, plan, status, readLock, type FileStatus, type Workspace } from "../core/sync.js";
-import { driftList, type ForgeSide } from "../core/drift.js";
-import { hashNormalized, stripBom, toLf } from "../core/text.js";
-import { fingerprintOf, type DirReader } from "../core/fingerprint.js";
+import { readWorkspaceConfig, plan, status, readLock, type FileStatus } from "../core/sync.js";
+import { driftList } from "../core/drift.js";
+import { hashNormalized } from "../core/text.js";
+import { fingerprintOf } from "../core/fingerprint.js";
 import { workspaceAgainst, forgeWorkspaces, remoteUrls, urlToKey, type RegistryState } from "../core/impact.js";
-import { resolve, sectionKey } from "../core/resolve.js";
 import {
   readEmitted,
   secretIn,
@@ -32,14 +33,11 @@ import {
   recipeFile,
   ForgeStage,
   type RecipeOptions,
-  type EmittedSource,
 } from "./claude-code.js";
-import { decide, workspaceParams, workspaceSections, type RunContext, type Decision } from "./decide.js";
+import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
 import { editYamlText } from "../core/yaml-edit.js";
-import { note, type WriteJournal } from "../core/unify.js";
-import { WorkspaceConfigSchema, type Ingredient, type Sections, type Target } from "../schema/index.js";
-
-const execFileP = promisify(execFile);
+import type { WriteJournal } from "../core/unify.js";
+import type { Ingredient, IngredientRef } from "../schema/index.js";
 
 export interface PromoteInput {
   workspaceRoot: string;
@@ -57,6 +55,16 @@ export interface PromoteEntry {
   rel: string;
   /** True for a new file, false for an overwrite. */
   created: boolean;
+}
+
+/** Error thrown when gitUnheld finds paths that are not held by git. */
+export class UnheldError extends Error {
+  constructor(
+    readonly forgeRoot: string,
+    readonly unheld: UnheldPath[],
+  ) {
+    super("gitUnheld");
+  }
 }
 
 export interface PromotePlan {
@@ -80,8 +88,8 @@ export interface PromotePlan {
   dependents: string[];
   /** True if all other files (not in E and not dependent) are byte-equal. */
   otherFilesUnchanged: number;
-  /** What the next sync would do. */
-  nextSync: { counts: Record<string, number> };
+  /** What the next sync would do (statuses for CLI to print through countStates/nextSyncLine). */
+  nextSync: FileStatus[];
   /** Impact on other workspaces. */
   impact: { registry: RegistryState; workspaces: never[] };
   /** Warnings to print. */
@@ -103,6 +111,9 @@ const D4_UNMANAGED = (p: string) =>
   `${p} is not a file craftar manages in this workspace — pass the workspace-relative path as \`craftar status\` prints it (forward slashes)`;
 const D4_OTHER = (p: string, state: string) => `${p} is not drifted (${state}) — nothing to promote`;
 const D4_ORPHAN = (p: string) => `${p} is no longer produced by the Forge — nothing to promote into; \`craftar drift discard ${p}\` removes it`;
+const D5_KIRO = (p: string, hint: string) => `${p} is a kiro file — promote reads only what the claude-code target wrote${hint}`;
+const D5_AGENTSMD = (p: string) => `${p} holds several rules in one file — promote reads only what the claude-code target wrote`;
+const D6 = (p: string) => `${p} holds every mcp ingredient in one file — edit the mcp ingredient in the Forge`;
 const D7 = (ing: string, p: string, state: string, profile: string) =>
   `the Forge changed ${ing} since the last sync (${p}: ${state}) — a variant taken from the disk would undo that change for profile ${profile}; sync the rest, redo the edit on top, and promote again`;
 const D8 = (p: string, ing: string) => `${p} of ${ing} is missing on disk — restore it with \`craftar sync\` first`;
@@ -180,21 +191,39 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   if (fileStatus.state === "orphan-drift") throw new Error(D4_ORPHAN(normalized));
   if (fileStatus.state !== "drift") throw new Error(D4_OTHER(normalized, fileStatus.state));
 
-  // Static checks (promotability) already done by driftList; verify we can proceed
+  // Static checks (promotability) using driftList's row
   const rows = driftList([fileStatus]);
-  if (rows.length === 0 || !rows[0].promotable) {
-    // Should not happen if state is drift, but handle anyway
+  if (rows.length === 0) {
     throw new Error(D4_OTHER(normalized, fileStatus.state));
+  }
+  const row = rows[0];
+  if (!row.promotable) {
+    // Build the right D5/D6 message from the static reason
+    const reason = row.reason;
+    if (reason === "kiro file") {
+      // D5 kiro: check if the plan has a claude-code path for this ingredient
+      const ingredientRef = fileStatus.ingredient;
+      const claudePath = ingredientRef ? p0.files.find((f) => f.ingredient === ingredientRef && f.target === "claude-code")?.path : null;
+      const hint = claudePath ? `; edit and promote \`${claudePath}\` instead` : "";
+      throw new Error(D5_KIRO(normalized, hint));
+    } else if (reason === "AGENTS.md") {
+      throw new Error(D5_AGENTSMD(normalized));
+    } else if (reason === ".mcp.json") {
+      throw new Error(D6(normalized));
+    } else {
+      // Fallback for any other reason (shouldn't happen for drift state)
+      throw new Error(D4_OTHER(normalized, fileStatus.state));
+    }
   }
 
   const profile = ws.config.profile;
-  const ingredientRef = fileStatus.ingredient! as import("../schema/index.js").IngredientRef;
+  const ingredientRef = fileStatus.ingredient! as IngredientRef;
 
   // Step 3: The emitted set E — every file the plan emits for this ingredient on claude-code
   const E = p0.files.filter((f) => f.ingredient === ingredientRef && f.target === "claude-code");
   const EPaths = new Set(E.map((f) => f.path));
 
-  // Check each path of E for D7 and D8
+  // Check each path of E for D7 and D8, using driftList's forge field for D7
   for (const f of E) {
     const s = st.find((x) => x.path === f.path);
     if (!s) continue; // shouldn't happen
@@ -204,12 +233,12 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       throw new Error(D8(f.path, ingredientRef));
     }
 
-    // D7: Forge changed since last sync (for drifted files, check forge side)
+    // D7: Forge changed since last sync (for drifted files, use driftList's forge field)
     if (s.state === "drift" || s.state === "update" || s.state === "collision" || s.state === "adopt") {
       if (s.state === "drift") {
-        // Check if forge changed too
-        const forgeSide = s.lock!.hash === hashNormalized(s.planned!.content) ? "same" : "changed";
-        if (forgeSide === "changed") {
+        // Get forge side from driftList
+        const driftRow = driftList([s])[0];
+        if (driftRow && driftRow.forge === "changed") {
           throw new Error(D7(ingredientRef, f.path, "drift, forge changed", profile));
         }
       } else {
@@ -254,9 +283,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     throw new Error(`cannot promote ${ingredientRef} — unsupported type`);
   }
 
-  // Get steering metadata if it's a rule
-  const steeringMeta = readType === "rule" ? await getSteeringMeta(root, outputName) : undefined;
-  const emitted = await readEmitted(claudeDir, readType, rel, (r) => ({ workspace: path.basename(root), path: r }), steeringMeta);
+  // Call readEmitted without steering metadata — source metadata is X's own
+  const emitted = await readEmitted(claudeDir, readType, rel, (r) => ({ workspace: path.basename(root), path: r }));
   if (!emitted) throw new Error(`cannot read ${readType} ${outputName} from ${claudeDir}`);
 
   // Source metadata: X's own, but re-read certain fields; drop params
@@ -275,7 +303,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const warnings: string[] = [];
   if (meta.type === "skill" && meta.layout === "dir") {
     const skillDir = path.join(claudeDir, "skills", outputName);
-    const diskFiles = await listDirFiles(skillDir);
+    const diskFiles = await listFiles(skillDir).catch(() => [] as string[]);
     const plannedFiles = new Set(E.map((f) => f.path.replace(/^\.claude\/skills\/[^/]+\//, "")));
     for (const df of diskFiles) {
       if (!plannedFiles.has(df)) {
@@ -304,7 +332,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   let outcome: "variant" | "variant-updated";
   const N = outputName;
   const variantName = `${N}--${profile}`;
-  const variantRef = `${meta.type}/${variantName}` as `rule/${string}` | `agent/${string}` | `command/${string}` | `skill/${string}` | `mcp/${string}` | `script/${string}` | `steering/${string}` | `hook/${string}`;
+  const variantRef = `${meta.type}/${variantName}` as IngredientRef;
 
   if (decision.kind === "reuse") {
     // No delta means the Forge already renders this — internal error
@@ -341,8 +369,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     },
   } as Ingredient;
 
-  // Stage the variant files
-  const folder = `${readType}s`; // rules, agents, commands, skills, scripts, hooks
+  // Stage the variant files using typeFolder
+  const folder = typeFolder(meta.type);
   const variantDir = path.join(forgeDir, "ingredients", folder, variantName);
   const variantDirRel = `ingredients/${folder}/${variantName}`;
 
@@ -423,7 +451,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   if (recipesToEdit.length > 0) {
     const unheld = await gitUnheld(forgeDir, recipesToEdit.map((r) => r.recFile));
     if (unheld.length > 0) {
-      throw Object.assign(new Error("gitUnheld"), { unheld, forgeRoot: realForgeDir });
+      throw new UnheldError(realForgeDir, unheld);
     }
   }
 
@@ -451,11 +479,6 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
   // D13: check created paths don't exist and aren't ignored
   for (const e of entries.filter((e) => e.created)) {
-    // Check if the directory already exists
-    const dirPath = path.dirname(e.abs);
-    const itemName = path.basename(e.abs);
-    const parentRel = path.relative(forgeDir, dirPath).split(path.sep).join("/");
-
     // For the variant directory, check if it exists
     if (e.rel.includes("/ingredient.yaml")) {
       const varDirRel = e.rel.replace("/ingredient.yaml", "");
@@ -476,16 +499,25 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   if (mustHold.length > 0) {
     const unheld = await gitUnheld(forgeDir, mustHold);
     if (unheld.length > 0) {
-      // Return the unheld paths for the CLI to format
-      throw Object.assign(new Error("gitUnheld"), { unheld, forgeRoot: realForgeDir });
+      throw new UnheldError(realForgeDir, unheld);
     }
   }
 
   // Step 8: The proof
   const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-promote-"));
   try {
-    // Copy Forge without .git
-    await copyDir(forgeDir, scratchDir, (rel) => !rel.startsWith(".git/") && rel !== ".git");
+    // Copy Forge without .git using fs.cp with filter
+    await fs.cp(forgeDir, scratchDir, {
+      recursive: true,
+      filter: (src) => {
+        const rel = path.relative(forgeDir, src);
+        // Allow the root directory itself
+        if (rel === "") return true;
+        // Filter out .git (file or directory)
+        const firstPart = rel.split(path.sep)[0];
+        return firstPart !== ".git";
+      },
+    });
     await stage.flushTo(scratchDir);
 
     const scratchForge = await loadForge(scratchDir);
@@ -540,14 +572,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       throw new Error(D15(`${ingredientRef} would still resolve beside ${variantRef}`));
     }
 
-    // Compute next sync statuses
+    // Compute next sync statuses (return FileStatus[] for CLI to use countStates/nextSyncLine)
     const stScratch = await status(wsScratch, p1, lock);
-    const nextSyncCounts: Record<string, number> = {};
-    for (const s of stScratch) {
-      if (s.state !== "unchanged") {
-        nextSyncCounts[s.state] = (nextSyncCounts[s.state] ?? 0) + 1;
-      }
-    }
 
     // Impact: check for other workspaces (step 30h handles this fully)
     const fwResult = await forgeWorkspaces(home, forgeDir, env);
@@ -564,7 +590,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       flattened: { params: [], sections: [] },
       dependents: [...dependentPaths],
       otherFilesUnchanged,
-      nextSync: { counts: nextSyncCounts },
+      nextSync: stScratch,
       impact: { registry: fwResult.state, workspaces: [] },
       warnings,
       stage,
@@ -596,44 +622,6 @@ export async function applyPromote(plan: PromotePlan, journal: WriteJournal): Pr
 
 // Helper functions
 
-async function gitHasCommit(dir: string): Promise<boolean> {
-  try {
-    const { stdout } = await execFileP("git", ["-C", dir, "rev-parse", "HEAD"]);
-    return stdout.trim().length > 0;
-  } catch {
-    return false;
-  }
-}
-
-async function gitIgnored(dir: string, rel: string): Promise<boolean> {
-  try {
-    await execFileP("git", ["-C", dir, "check-ignore", "-q", "--", rel]);
-    return true; // exit 0 means ignored
-  } catch (e) {
-    // exit 1 means not ignored; any other error fails closed
-    if ((e as { code?: number }).code === 1) return false;
-    return true; // fail closed
-  }
-}
-
-async function getSteeringMeta(wsRoot: string, ruleName: string): Promise<{ inclusion: string; fileMatchPattern?: string } | undefined> {
-  const steeringFile = path.join(wsRoot, ".kiro", "steering", `${ruleName}.md`);
-  if (!(await exists(steeringFile))) return undefined;
-  try {
-    const content = await fs.readFile(steeringFile, "utf8");
-    // Parse frontmatter
-    const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-    if (!match) return { inclusion: "always" };
-    const fm = YAML.parse(match[1]) as Record<string, unknown>;
-    return {
-      inclusion: (fm.inclusion as string) ?? "always",
-      fileMatchPattern: fm.fileMatchPattern as string | undefined,
-    };
-  } catch {
-    return { inclusion: "always" };
-  }
-}
-
 function emittedMetaFields(emitted: Ingredient, type: string): Partial<Ingredient> {
   // Only re-read certain fields from the emitted source
   if (type === "agent") {
@@ -653,51 +641,6 @@ function emittedMetaFields(emitted: Ingredient, type: string): Partial<Ingredien
     };
   }
   return {};
-}
-
-async function listDirFiles(dir: string): Promise<string[]> {
-  const files: string[] = [];
-  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-  for (const e of entries) {
-    if (e.isFile()) files.push(e.name);
-    else if (e.isDirectory()) {
-      const sub = await listDirFiles(path.join(dir, e.name));
-      files.push(...sub.map((f) => `${e.name}/${f}`));
-    }
-  }
-  return files.sort();
-}
-
-async function copyDir(src: string, dest: string, filter: (rel: string) => boolean): Promise<void> {
-  await fs.mkdir(dest, { recursive: true });
-  const entries = await fs.readdir(src, { withFileTypes: true });
-  for (const e of entries) {
-    const srcPath = path.join(src, e.name);
-    const destPath = path.join(dest, e.name);
-    const rel = e.name;
-    if (!filter(rel)) continue;
-    if (e.isDirectory()) {
-      await copyDirRecursive(srcPath, destPath, src, filter);
-    } else {
-      await fs.copyFile(srcPath, destPath);
-    }
-  }
-}
-
-async function copyDirRecursive(src: string, dest: string, baseDir: string, filter: (rel: string) => boolean): Promise<void> {
-  await fs.mkdir(dest, { recursive: true });
-  const entries = await fs.readdir(src, { withFileTypes: true });
-  for (const e of entries) {
-    const srcPath = path.join(src, e.name);
-    const destPath = path.join(dest, e.name);
-    const rel = path.relative(baseDir, srcPath).split(path.sep).join("/");
-    if (!filter(rel)) continue;
-    if (e.isDirectory()) {
-      await copyDirRecursive(srcPath, destPath, baseDir, filter);
-    } else {
-      await fs.copyFile(srcPath, destPath);
-    }
-  }
 }
 
 function findExtendsChain(forge: Forge, targetRecipe: string): string | null {

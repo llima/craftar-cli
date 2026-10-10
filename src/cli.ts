@@ -4,6 +4,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
+import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
@@ -521,13 +522,12 @@ drift
   .option("--forge <dir>", "the Forge directory to write (required for a URL Forge; a path Forge is used as-is)")
   .option("--dry-run", "prove and show the plan, write nothing", false)
   .action(async (givenPath: string, o: { workspace: string; forge?: string; dryRun: boolean }) => {
-    const { planPromote, applyPromote } = await import("./importers/drift-promote.js");
     const home = craftarHome();
     const normalizedPath = statusPath(givenPath);
 
-    let plan;
+    let promotePlan;
     try {
-      plan = await planPromote({
+      promotePlan = await planPromote({
         workspaceRoot: o.workspace,
         forgeDir: o.forge ?? null,
         path: normalizedPath,
@@ -535,10 +535,9 @@ drift
         env: process.env,
       });
     } catch (e) {
-      // Handle gitUnheld error with its special shape
-      if (e instanceof Error && "unheld" in e) {
-        const err = e as Error & { unheld: import("./core/forge.js").UnheldPath[]; forgeRoot: string };
-        fail(unheldMessage("drift promote", err.forgeRoot, err.unheld));
+      // Handle UnheldError
+      if (e instanceof UnheldError) {
+        fail(unheldMessage("drift promote", e.forgeRoot, e.unheld));
       }
       throw e;
     }
@@ -546,28 +545,23 @@ drift
     // Print the report
     const verb = o.dryRun ? "would write" : "wrote ";
     const editVerb = o.dryRun ? "would edit" : "edited";
-    console.log(`promote ${plan.inputPath} → ${plan.promoted} (${plan.outcome}, profile ${plan.profile})`);
-    for (const e of plan.entries) {
+    console.log(`promote ${promotePlan.inputPath} → ${promotePlan.promoted} (${promotePlan.outcome}, profile ${promotePlan.profile})`);
+    for (const e of promotePlan.entries) {
       if (e.created) {
         console.log(`  ${verb} ${e.rel}`);
       }
     }
-    for (const w of plan.warnings.filter((w) => w.includes("is not a file craftar generated"))) {
+    for (const w of promotePlan.warnings) {
       console.log(`  ${pc.yellow("warn")} ${w}`);
     }
-    for (const [file, keys] of plan.editedKeys) {
+    for (const [file, keys] of promotePlan.editedKeys) {
       console.log(`  ${editVerb} ${file} (${keys.join(", ")})`);
     }
-    const otherCount = plan.otherFilesUnchanged;
+    const otherCount = promotePlan.otherFilesUnchanged;
     console.log(`  proved: this workspace plans the file on disk; ${otherCount} other file(s) unchanged`);
-    const counts = Object.entries(plan.nextSync.counts).map(([k, n]) => `${n} ${k}`);
-    console.log(`  next sync: ${counts.length ? counts.join(", ") : "nothing to sync"}`);
-    if (plan.impact.workspaces.length === 0) {
+    console.log(`  ${nextSyncLine(promotePlan.nextSync)}`);
+    if (promotePlan.impact.workspaces.length === 0) {
       console.log("  no other registered workspace reads this Forge");
-    }
-    // Impact warnings (step 30h)
-    if (plan.impact.registry !== "read") {
-      console.log(`  ${pc.yellow("warn")} other workspaces could not be checked (registry: ${plan.impact.registry})`);
     }
 
     if (o.dryRun) {
@@ -575,11 +569,11 @@ drift
       return;
     }
 
-    const journal: import("./core/unify.js").WriteJournal = [];
+    const journal: WriteJournal = [];
     try {
-      await applyPromote(plan, journal);
+      await applyPromote(promotePlan, journal);
     } catch (e) {
-      fail(lateFailure(e, plan.forgeRoot, journal, "drift promote"));
+      fail(lateFailure(e, promotePlan.forgeRoot, journal, "drift promote"));
     }
 
     console.log("  the Forge is not committed — review with git, then commit and push it");

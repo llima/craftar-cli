@@ -134,6 +134,34 @@ export async function gitIsRepo(dir: string): Promise<boolean> {
 }
 
 /**
+ * Whether `dir` is a git repository with at least one commit — `gitIsRepo(dir)` can be true even
+ * for a freshly `git init`-ed repository, but this needs HEAD to resolve.
+ */
+export async function gitHasCommit(dir: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileP("git", ["-C", dir, "rev-parse", "HEAD"]);
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `rel` (a Forge-relative POSIX path) is ignored by git. Fails closed: when git cannot
+ * answer, the path counts as ignored.
+ */
+export async function gitIgnored(dir: string, rel: string): Promise<boolean> {
+  try {
+    await execFileP("git", ["-C", dir, "check-ignore", "-q", "--", rel]);
+    return true; // exit 0 means ignored
+  } catch (e) {
+    // exit 1 means not ignored; any other error fails closed
+    if ((e as { code?: number }).code === 1) return false;
+    return true; // fail closed
+  }
+}
+
+/**
  * True when the Forge has uncommitted changes — and also when `git status` cannot be run at all.
  * By the time this is called the directory is known to be a git repository (`forge.commit !== null`
  * is checked first), so a failure here is anomalous, and an anomaly is not evidence of a clean

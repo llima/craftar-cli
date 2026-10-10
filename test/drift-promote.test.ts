@@ -249,9 +249,8 @@ describe("cli — drift promote", () => {
     const realForge = await fs.realpath(f.forgeRoot);
     expect(r.stderr).toBe(`error: ${realForge} is not a git repository with at least one commit — promote needs git to undo its edit\n`);
 
-    // Forge directory listing unchanged
-    const before = await fs.readdir(f.forgeRoot, { recursive: true });
-    expect(before).not.toContain("a--acme");
+    // No variant directory was created (the Forge was never a git repo, so no porcelain check)
+    await expect(fs.stat(path.join(f.forgeRoot, "ingredients/rules/a--acme"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("6. D2 (path Forge) — --forge points at a different directory", async () => {
@@ -468,8 +467,7 @@ describe("cli — drift promote", () => {
       expect(r.code).toBe(1);
       expect(r.stdout).toBe("");
       const root = await realpath(f);
-      expect(r.stderr.startsWith(`error: drift promote can only change files git can restore — 1 path(s) under ${root} are not:\n`)).toBe(true);
-      expect(r.stderr).toContain("recipes/base.yaml is not held by git (modified)");
+      expect(r.stderr).toBe(`error: drift promote can only change files git can restore — 1 path(s) under ${root} are not:\n  recipes/base.yaml is not held by git (modified)\n`);
       await expect(fs.stat(path.join(f.forgeRoot, "ingredients/rules/a--acme"))).rejects.toMatchObject({ code: "ENOENT" });
     }
 
@@ -485,9 +483,9 @@ describe("cli — drift promote", () => {
 
       const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
       expect(r.code).toBe(1);
+      expect(r.stdout).toBe("");
       const root = await realpath(f);
-      expect(r.stderr.startsWith(`error: drift promote can only change files git can restore — 1 path(s) under ${root} are not:\n`)).toBe(true);
-      expect(r.stderr).toContain("recipes/base.yaml is not held by git (untracked)");
+      expect(r.stderr).toBe(`error: drift promote can only change files git can restore — 1 path(s) under ${root} are not:\n  recipes/base.yaml is not held by git (untracked)\n`);
       await expect(fs.stat(path.join(f.forgeRoot, "ingredients/rules/a--acme"))).rejects.toMatchObject({ code: "ENOENT" });
     }
 
@@ -501,9 +499,9 @@ describe("cli — drift promote", () => {
 
       const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
       expect(r.code).toBe(1);
+      expect(r.stdout).toBe("");
       const root = await realpath(f);
-      expect(r.stderr.startsWith(`error: drift promote can only change files git can restore — 1 path(s) under ${root} are not:\n`)).toBe(true);
-      expect(r.stderr).toContain("recipes/base.yaml is not held by git (assume-unchanged)");
+      expect(r.stderr).toBe(`error: drift promote can only change files git can restore — 1 path(s) under ${root} are not:\n  recipes/base.yaml is not held by git (assume-unchanged)\n`);
       await expect(fs.stat(path.join(f.forgeRoot, "ingredients/rules/a--acme"))).rejects.toMatchObject({ code: "ENOENT" });
     }
   });
@@ -581,3 +579,110 @@ describe("cli — drift promote", () => {
     expect((await f.lockBytes()).equals(lockBefore)).toBe(true);
   });
 });
+
+  it("19. D5 (kiro with hint) — kiro file with claude-code path available", async () => {
+    // Profile targets claude-code and kiro, drift on .kiro/steering/a.md
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A one\nA two\n")],
+        recipes: [recipe("base", ["rule/a"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "kiro"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Hand-edit the kiro file
+    await fs.appendFile(path.join(s.wsRoot, ".kiro/steering/a.md"), "hand edit\n");
+    const lockBefore = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
+
+    const r = runCli(["drift", "promote", ".kiro/steering/a.md", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: .kiro/steering/a.md is a kiro file — promote reads only what the claude-code target wrote; edit and promote `.claude/rules/a.md` instead\n");
+    expect(porcelain(s.forgeRoot)).toBe("");
+    expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
+  });
+
+  it("20. D5 (kiro without hint) — kiro file with kiro-only targets", async () => {
+    // Profile targets kiro only, drift on .kiro/steering/a.md
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A one\nA two\n")],
+        recipes: [recipe("base", ["rule/a"])],
+        profiles: [profile("acme", ["base"], ["kiro"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Hand-edit the kiro file
+    await fs.appendFile(path.join(s.wsRoot, ".kiro/steering/a.md"), "hand edit\n");
+    const lockBefore = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
+
+    const r = runCli(["drift", "promote", ".kiro/steering/a.md", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: .kiro/steering/a.md is a kiro file — promote reads only what the claude-code target wrote\n");
+    expect(porcelain(s.forgeRoot)).toBe("");
+    expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
+  });
+
+  it("21. D5 (agents-md) — AGENTS.md file", async () => {
+    // Profile targets claude-code and agents-md, drift on AGENTS.md
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A one\nA two\n")],
+        recipes: [recipe("base", ["rule/a"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "agents-md"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Hand-edit AGENTS.md
+    await fs.appendFile(path.join(s.wsRoot, "AGENTS.md"), "hand edit\n");
+    const lockBefore = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
+
+    const r = runCli(["drift", "promote", "AGENTS.md", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: AGENTS.md holds several rules in one file — promote reads only what the claude-code target wrote\n");
+    expect(porcelain(s.forgeRoot)).toBe("");
+    expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
+  });
+
+  it("22. D6 — .mcp.json file", async () => {
+    // An mcp ingredient in the recipe, drift on .mcp.json
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A\n"), { meta: { type: "mcp", name: "srv", server: { command: "npx", args: ["srv"] } } }],
+        recipes: [recipe("base", ["rule/a", "mcp/srv"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Hand-edit .mcp.json
+    const mcpPath = path.join(s.wsRoot, ".mcp.json");
+    const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
+    mcpContent.mcpServers.srv.args = ["srv-edited"];
+    await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2));
+    const lockBefore = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
+
+    const r = runCli(["drift", "promote", ".mcp.json", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: .mcp.json holds every mcp ingredient in one file — edit the mcp ingredient in the Forge\n");
+    expect(porcelain(s.forgeRoot)).toBe("");
+    expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
+  });
