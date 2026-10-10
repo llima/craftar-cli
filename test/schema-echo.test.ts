@@ -140,6 +140,15 @@ describe("a craftar.lock that does not read", () => {
     const check = JSON.parse(d.stdout).checks.filter((c: { id: string }) => c.id === "lock");
     expect(check[0].message).toBe("craftar.lock is not a valid lock (files.0.target: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md')");
   });
+
+  it("a lock that cannot be read is not called invalid JSON", async () => {
+    const s = await fresh();
+    await fs.mkdir(path.join(s.wsRoot, "craftar.lock"));
+    const r = runCli(["status", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^error: EISDIR\b/);
+    expect(r.stderr).not.toContain("not valid JSON");
+  });
 });
 
 describe("a registry that is not valid JSON", () => {

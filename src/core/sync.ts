@@ -569,9 +569,10 @@ function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {
 export async function readLock(root: string): Promise<Lock | null> {
   const f = path.join(root, LOCK_FILE);
   if (!(await exists(f))) return null;
+  const text = await fs.readFile(f, "utf8");
   let raw: unknown;
   try {
-    raw = JSON.parse(await fs.readFile(f, "utf8"));
+    raw = JSON.parse(text);
   } catch {
     throw new Error(`${LOCK_FILE} is not valid JSON`);
   }
