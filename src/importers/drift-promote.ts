@@ -22,7 +22,7 @@ import {
 } from "../core/forge.js";
 import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type UnsetParam } from "../core/sync.js";
 import { driftList } from "../core/drift.js";
-import { hashNormalized } from "../core/text.js";
+import { hashNormalized, toLf } from "../core/text.js";
 import { fingerprintOf } from "../core/fingerprint.js";
 import {
   workspaceAgainst,
@@ -46,6 +46,7 @@ import {
   recipesOf,
   recipeFile,
   ForgeStage,
+  type EmittedSource,
   type RecipeOptions,
 } from "./claude-code.js";
 import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
@@ -249,7 +250,8 @@ async function checkOtherWorkspaces(
     profile: string;
     outcome: "params" | "sections" | "variant" | "variant-updated";
     ingredientRef: IngredientRef;
-    allowedPaths: Set<string>;
+    variantRef: IngredientRef | null;
+    ingredientName: string;
     baseCitedKeys: Set<string>;
     baseSectionNames: string[];
     ingKey: string;
@@ -265,7 +267,8 @@ async function checkOtherWorkspaces(
     profile,
     outcome,
     ingredientRef,
-    allowedPaths,
+    variantRef,
+    ingredientName,
     baseCitedKeys,
     baseSectionNames,
     ingKey,
@@ -330,14 +333,27 @@ async function checkOtherWorkspaces(
 
     // Compare the plans
     const impact = impactOf(bPlan, aPlan);
-    if (impact.state === "no-effect") continue;
     if (impact.state === "missing" || impact.state === "error") continue;
 
-    // D16 checks
-    const changedFiles = impact.files;
-    if (changedFiles.length === 0) continue;
-
     const otherProfile = fw.entry.profile;
+
+    // For same-profile siblings with variant outcome, check that X.ref doesn't resolve beside the variant
+    // BEFORE checking changed files — the resolution itself is problematic even if files are byte-equal
+    // (§4.6 item 5: spec 30r1 commit 2 issue 2)
+    if (otherProfile === profile && outcome === "variant" && variantRef) {
+      const siblingAfterRefs = new Set(aPlan.plan.resolution.ingredients.map((i) => i.ref));
+      if (siblingAfterRefs.has(ingredientRef)) {
+        // The sibling still resolves X beside the variant — this is D16 same-profile-outside
+        // Use the file path that would be affected (the file X writes to)
+        const xPath = bPlan.plan.files.find((pf) => pf.ingredient === ingredientRef)?.path ?? ".claude/rules/unknown.md";
+        throw new Error(D16_SAME_PROFILE_OUTSIDE(fw.entry.path, ingredientRef, xPath));
+      }
+    }
+
+    // D16 checks that require changed files
+    const changedFiles = impact.files;
+    if (impact.state === "no-effect" || changedFiles.length === 0) continue;
+
     const firstChanged = changedFiles[0];
 
     // D16 (other profile) — any change to another profile is refused
@@ -370,17 +386,34 @@ async function checkOtherWorkspaces(
       }
     }
 
-    // Check if changes are outside the allowed paths
-    // For D16 same-profile-outside: use THIS workspace's before paths, not the promoting workspace's.
-    // If ws2 disabled the ingredient, ws2BeforePaths for the ingredient is empty,
-    // and any new file appearing is "outside" what ws2 expected.
-    // We approximate this by checking if the changed file existed in ws2's before plan.
-    // If ws2 had the file before and it changed content, that's within bounds.
-    // If ws2 didn't have the file before and it now appears, that's outside bounds.
-    for (const changed of changedFiles) {
-      if (!bPlan.files.has(changed)) {
-        throw new Error(D16_SAME_PROFILE_OUTSIDE(fw.entry.path, ingredientRef, changed));
+    // D16 same-profile-outside: for a same-profile sibling, a changed path is allowed only when:
+    // - it's one of the sibling's OWN planned files of X (any target), OR
+    // - it's AGENTS.md within agentsBound for rule N (§4.6 item 5)
+    // Get the sibling's before-plan files for X.ref
+    const siblingXPaths = new Set<string>();
+    for (const pf of bPlan.plan.files) {
+      if (pf.ingredient === ingredientRef) {
+        siblingXPaths.add(pf.path);
       }
+    }
+
+    for (const changed of changedFiles) {
+      // Allow if it's a planned file of X in the sibling's before-plan
+      if (siblingXPaths.has(changed)) continue;
+
+      // Allow AGENTS.md if it's bound within the rule's marker
+      if (changed === "AGENTS.md") {
+        const bAgentsMd = bPlan.plan.files.find((f) => f.path === "AGENTS.md");
+        const aAgentsMd = aPlan.plan.files.find((f) => f.path === "AGENTS.md");
+        if (bAgentsMd && aAgentsMd) {
+          const bText = bAgentsMd.content.toString("utf8");
+          const aText = aAgentsMd.content.toString("utf8");
+          if (agentsBound(bText, aText, ingredientName)) continue;
+        }
+      }
+
+      // Not allowed — D16 same-profile-outside
+      throw new Error(D16_SAME_PROFILE_OUTSIDE(fw.entry.path, ingredientRef, changed));
     }
   }
 
@@ -536,16 +569,37 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     rel = `${outputName}.md`;
   } else if (meta.type === "script") {
     readType = "script";
+    // For multi-file scripts, we need to read all files
     rel = meta.files?.[0] ?? `${outputName}.sh`;
   } else if (meta.type === "hook") {
     readType = "hook";
+    // For multi-file hooks, we need to read all files
     rel = meta.files?.[0] ?? `${outputName}.sh`;
   } else {
     throw new Error(`cannot promote ${ingredientRef} — unsupported type`);
   }
 
-  // Call readEmitted without steering metadata — source metadata is X's own
-  const emitted = await readEmitted(claudeDir, readType, rel, (r) => ({ workspace: path.basename(root), path: r }));
+  // For scripts/hooks with multiple files, read each file and merge
+  const scriptHookFiles = (meta.type === "script" || meta.type === "hook") ? (meta.files ?? [rel]) : null;
+  let emitted: EmittedSource | null;
+  let mergedFiles: Record<string, string | Buffer> = {};
+  let mergedScan: Record<string, string> = {};
+
+  if (scriptHookFiles && scriptHookFiles.length > 1) {
+    // Read each file and merge
+    for (const fileRel of scriptHookFiles) {
+      const fileEmitted = await readEmitted(claudeDir, readType, fileRel, (r) => ({ workspace: path.basename(root), path: r }));
+      if (!fileEmitted) throw new Error(`cannot read ${readType} file ${fileRel} from ${claudeDir}`);
+      Object.assign(mergedFiles, fileEmitted.files);
+      Object.assign(mergedScan, fileEmitted.scan);
+    }
+    // Use the first file's metadata as base but with files from the original ingredient
+    const firstEmitted = await readEmitted(claudeDir, readType, scriptHookFiles[0], (r) => ({ workspace: path.basename(root), path: r }));
+    emitted = firstEmitted ? { meta: { ...firstEmitted.meta, files: scriptHookFiles } as Ingredient, files: mergedFiles, scan: mergedScan } : null;
+  } else {
+    // Single file case: call readEmitted normally
+    emitted = await readEmitted(claudeDir, readType, rel, (r) => ({ workspace: path.basename(root), path: r }));
+  }
   if (!emitted) throw new Error(`cannot read ${readType} ${outputName} from ${claudeDir}`);
 
   // Source metadata: X's own, but re-read certain fields; drop params
@@ -772,8 +826,6 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
       // Impact — check other workspaces (step 30h)
       const thisWsRealPath = await fs.realpath(root);
-      // For params/sections, allowed paths are the paths in E plus dependent paths
-      const allowedPaths = new Set([...EPaths]);
       // For params/sections, the override check is not needed (the params/sections are going into the profile)
       // So we pass empty baseCitedKeys and baseSectionNames to skip the override check
       const impactResult = await checkOtherWorkspaces({
@@ -786,7 +838,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         profile,
         outcome,
         ingredientRef,
-        allowedPaths,
+        variantRef: null, // params/sections don't create a variant
+        ingredientName: N,
         baseCitedKeys: new Set<string>(), // params/sections don't trigger override check
         baseSectionNames: [], // params/sections don't trigger override check
         ingKey,
@@ -879,7 +932,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       ? new Set(E.map((f) => f.path.replace(/^\.claude\/skills\/[^/]+\//, "")))
       : null;
 
-  for (const [fileRel, content] of Object.entries(emitted.files)) {
+  for (const [fileRel, content] of Object.entries(emitted.files) as [string, string | Buffer][]) {
     if (plannedRelPaths && !plannedRelPaths.has(fileRel)) continue; // skip hand-added files
     stage.write(path.join(variantDir, fileRel), content);
   }
@@ -998,7 +1051,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
           throw new UnheldError(realForgeDir, unheld);
         }
 
-        const profileRaw = await fs.readFile(profileFile, "utf8");
+        const profileRaw = await stage.readText(profileFile);
         const profileLabel = `profiles/${profile}/profile.yaml`;
         const newProfileContent = editYamlText(profileRaw, { command: "drift promote", label: profileLabel, keys: ["recipes"] }, (doc) => {
           const seq = doc.get("recipes", true);
@@ -1154,8 +1207,6 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
     // Impact: check for other workspaces (step 30h)
     const thisWsRealPath = await fs.realpath(root);
-    // Allowed paths for variant outcomes: E paths + dependent paths
-    const allowedPaths = new Set([...EPaths, ...dependentPaths]);
     const impactResult = await checkOtherWorkspaces({
       home,
       forgeDir,
@@ -1166,7 +1217,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       profile,
       outcome,
       ingredientRef,
-      allowedPaths,
+      variantRef,
+      ingredientName: N,
       baseCitedKeys,
       baseSectionNames,
       ingKey,
@@ -1284,17 +1336,21 @@ function isExtendedByOtherResolved(forge: Forge, resolvedRecipes: string[], R: s
  * Returns true if the change is acceptable, false if it would be D15.
  */
 export function agentsBound(p0Text: string, p1Text: string, N: string): boolean {
+  // Normalize both to LF before comparing (spec 30r1 §2.1)
+  const p0 = toLf(p0Text);
+  const p1 = toLf(p1Text);
+  
   const markerRe = /^<!-- rule: (.+) -->$/;
 
   // If p0 has no marker for N, p1 must be byte-equal
   const markerLine = `<!-- rule: ${N} -->`;
-  if (!p0Text.includes(markerLine)) {
-    return p0Text === p1Text;
+  if (!p0.includes(markerLine)) {
+    return p0 === p1;
   }
 
   // Find the boundaries in p0
-  const p0Lines = p0Text.split("\n");
-  const p1Lines = p1Text.split("\n");
+  const p0Lines = p0.split("\n");
+  const p1Lines = p1.split("\n");
 
   // Find the marker line for N in p0
   let markerIdx = -1;
@@ -1304,7 +1360,7 @@ export function agentsBound(p0Text: string, p1Text: string, N: string): boolean 
       break;
     }
   }
-  if (markerIdx === -1) return p0Text === p1Text;
+  if (markerIdx === -1) return p0 === p1;
 
   // Find the next boundary in p0: next <!-- rule: ... --> or ## Scoped rules, or end
   let boundaryIdx = p0Lines.length;

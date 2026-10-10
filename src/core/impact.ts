@@ -20,6 +20,7 @@ import {
   type FileState,
   type FileStatus,
   type MergedConfig,
+  type Plan,
   type Workspace,
 } from "./sync.js";
 import type { Lock, RegistryEntry } from "../schema/index.js";
@@ -216,7 +217,7 @@ export async function forgeWorkspaces(
 }
 
 export type Planned =
-  | { kind: "planned"; files: Map<string, Buffer>; workspace: Workspace & { merged: MergedConfig } }
+  | { kind: "planned"; files: Map<string, Buffer>; workspace: Workspace & { merged: MergedConfig }; plan: Plan }
   | { kind: "missing" }
   | { kind: "error"; stage: "config" | "plan"; message: string; merged?: MergedConfig };
 
@@ -242,7 +243,7 @@ export async function planAll(entries: ForgeWorkspace[], forge: Forge): Promise<
         for (const f of p.files) {
           files.set(f.path, f.content);
         }
-        results.push({ kind: "planned", files, workspace: ws });
+        results.push({ kind: "planned", files, workspace: ws, plan: p });
       } catch (e) {
         results.push({
           kind: "error",

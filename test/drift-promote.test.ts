@@ -1260,6 +1260,50 @@ describe("agentsBound (unit)", () => {
     // N = "c" (no marker), p1 different anywhere → false
     expect(agentsBound(p0, p0 + "extra", "c")).toBe(false);
   });
+
+  it("39b. agentsBound EOL normalization — CRLF compares equal to LF", async () => {
+    const { agentsBound } = await import("../src/importers/drift-promote.js");
+
+    const p0Lf = "H\n<!-- rule: a -->\nA\n\n<!-- rule: b -->\nB\n\n## Scoped rules\n- x\n";
+    const p0Crlf = p0Lf.replace(/\n/g, "\r\n");
+
+    // A change within rule a is allowed, even when one side is CRLF
+    const p1Lf = p0Lf.replace("A\n\n", "A\nhand\n\n");
+    expect(agentsBound(p0Crlf, p1Lf, "a")).toBe(true);
+    expect(agentsBound(p0Lf, p1Lf.replace(/\n/g, "\r\n"), "a")).toBe(true);
+
+    // No marker for "c": p0 CRLF === p1 LF with same logical content
+    expect(agentsBound(p0Crlf, p0Lf, "c")).toBe(true);
+  });
+
+  it("39c. CRLF AGENTS.md on disk — promote succeeds as the LF case does", async () => {
+    // Three-target fixture: AGENTS.md has rule markers
+    const f = await T();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+
+    // Rewrite AGENTS.md with CRLF line endings
+    const agentsMdPath = path.join(f.ws, "AGENTS.md");
+    const agentsLf = await fs.readFile(agentsMdPath, "utf8");
+    const agentsCrlf = agentsLf.replace(/\n/g, "\r\n");
+    await fs.writeFile(agentsMdPath, agentsCrlf);
+
+    // Status should say unchanged for AGENTS.md (EOL-normalized hash)
+    const st = runCli(["status", "--workspace", f.ws]);
+    expect(st.code).toBe(0);
+    expect(st.stdout).toContain("unchanged     AGENTS.md");
+
+    // Drift rule a
+    await f.driftA();
+
+    // Promote should succeed (code 0), same as LF case
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    // The report should have the same structure as the LF case (test 33)
+    expect(r.stdout).toContain("  also changes .kiro/steering/a.md, AGENTS.md\n");
+    expect(r.stdout).toContain("  next sync: 2 update — run `craftar sync`\n");
+  });
 });
 
 
@@ -1801,6 +1845,176 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     expect(r.stderr).toBe("");
     // The report should show ws2 with update (it sees the profile value change but its override wins)
     expect(r.stdout).toContain(`1 other workspace(s) of profile acme read this Forge: ${realWs2}`);
+  });
+
+  it("55c. D16 same profile, X beside variant — sibling with recipes.add listing rule/a", async () => {
+    // Create a Forge where rule/a is in base, but also an "extra" recipe that lists rule/a
+    // When ws2 adds "extra", it will still resolve rule/a from base AND have rule/a in extra
+    // After promote creates rule/a--acme, ws2 would have both rule/a (from extra) and rule/a--acme
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A one\n"), rule("b", "B one\n"), rule("c", "C one\n")],
+        recipes: [
+          recipe("base", ["rule/a", "rule/b", "rule/c"]),
+          { name: "extra", ingredients: ["rule/a"], extends: [] }, // Another recipe also lists rule/a
+        ],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Create ws2 with recipes.add: [extra] - now ws2 resolves rule/a from BOTH base and extra
+    const ws2 = path.join(s.root, "ws2");
+    await makeWorkspace(ws2, s.forgeRoot, { config: { profile: "acme", recipes: { add: ["extra"], remove: [] } } });
+    expect(runCli(["sync", "--workspace", ws2], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Drift rule/a in main workspace
+    await fs.appendFile(path.join(s.wsRoot, A), "hand a\n");
+    const lockBefore = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
+    const realWs2 = await fs.realpath(ws2);
+
+    // Promote should be refused: after promote, ws2 would resolve BOTH rule/a (from extra) and rule/a--acme (from base--acme)
+    const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(`error: promote would change ${realWs2} beyond rule/a: ${A} — the Forge was left untouched\n`);
+    expect(porcelain(s.forgeRoot)).toBe("");
+    expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
+  });
+
+  it("55d. D16 same profile, outside — sibling AGENTS.md changes outside rule N", async () => {
+    // Three-target fixture: AGENTS.md has rule markers
+    // ws2 disables rule/c, so its AGENTS.md is different from ws1's
+    // When we promote rule/a, ws2's AGENTS.md changes inside rule/a's section (allowed)
+    // BUT if the promote also changes something outside that section, it should be refused
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    const f = await T();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Create ws2 with rule/c disabled — its AGENTS.md has different content (no rule c)
+    const ws2 = path.join(f.root, "ws2");
+    await makeWorkspace(ws2, f.forgeRoot, { config: { profile: "acme", overrides: { ingredients: { disable: ["rule/c"] } } } });
+    expect(runCli(["sync", "--workspace", ws2], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Verify ws2's AGENTS.md doesn't have rule c
+    const ws2AgentsMd = await fs.readFile(path.join(ws2, "AGENTS.md"), "utf8");
+    expect(ws2AgentsMd).not.toContain("<!-- rule: c -->");
+    expect(ws2AgentsMd).toContain("<!-- rule: a -->");
+
+    // Drift rule/a — this should be allowed for AGENTS.md changes within rule/a's section
+    await f.driftA();
+
+    // This promote should succeed because:
+    // - ws2's AGENTS.md will change only within rule/a's section (agentsBound = true)
+    // - ws2 doesn't resolve rule/a from another recipe (no X beside variant issue)
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    // ws2 should show as changed (update for a.md + AGENTS.md)
+    expect(r.stdout).toContain("1 other workspace(s) of profile acme read this Forge:");
+  });
+
+  it("55e. two recipes both Case 2 — profile edited twice through stage", async () => {
+    // Two recipes both used by acme, both listing rule/a, but also used by another profile
+    // So they're Case 2: each forks, and the profile's recipes list is edited twice
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A one\n"), rule("b", "B one\n"), rule("c", "C one\n")],
+        recipes: [
+          recipe("base", ["rule/a", "rule/b"]),
+          recipe("extra", ["rule/a", "rule/c"]),
+        ],
+        profiles: [
+          profile("acme", ["base", "extra"]),
+          profile("globex", ["base", "extra"]), // both profiles use both recipes
+        ],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Drift rule/a
+    await fs.appendFile(path.join(s.wsRoot, A), "hand a\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+
+    // Both recipes should be forked
+    const baseAcme = YAML.parse(await fs.readFile(path.join(s.forgeRoot, "recipes/base--acme.yaml"), "utf8"));
+    const extraAcme = YAML.parse(await fs.readFile(path.join(s.forgeRoot, "recipes/extra--acme.yaml"), "utf8"));
+    expect(baseAcme.ingredients).toEqual(["rule/a--acme", "rule/b"]);
+    expect(extraAcme.ingredients).toEqual(["rule/a--acme", "rule/c"]);
+
+    // Profile should now use both forked recipes
+    const profileContent = YAML.parse(await fs.readFile(path.join(s.forgeRoot, "profiles/acme/profile.yaml"), "utf8"));
+    expect(profileContent.recipes).toEqual(["base--acme", "extra--acme"]);
+  });
+
+  it("55f. script with multiple files — all files promoted", async () => {
+    // A script ingredient with two files: run.sh and config.json
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    const s = await scenario(
+      {
+        ingredients: [
+          {
+            meta: {
+              type: "script",
+              name: "deploy",
+              files: ["run.sh", "config.json"],
+              targets: ["claude-code"],
+              tags: [],
+            },
+            files: { "run.sh": "#!/bin/bash\necho deploy\n", "config.json": '{"env":"prod"}' },
+          },
+        ],
+        recipes: [recipe("base", ["script/deploy"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Verify both files exist
+    expect(await fs.readFile(path.join(s.wsRoot, ".claude/scripts/run.sh"), "utf8")).toBe("#!/bin/bash\necho deploy\n");
+    expect(await fs.readFile(path.join(s.wsRoot, ".claude/scripts/config.json"), "utf8")).toBe('{"env":"prod"}');
+
+    // Drift run.sh
+    await fs.writeFile(path.join(s.wsRoot, ".claude/scripts/run.sh"), "#!/bin/bash\necho deploy-edited\n");
+
+    const r = runCli(["drift", "promote", ".claude/scripts/run.sh", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+
+    // The variant directory should have BOTH files
+    const variantDir = path.join(s.forgeRoot, "ingredients/scripts/deploy--acme");
+    expect(await fs.readFile(path.join(variantDir, "run.sh"), "utf8")).toBe("#!/bin/bash\necho deploy-edited\n");
+    expect(await fs.readFile(path.join(variantDir, "config.json"), "utf8")).toBe('{"env":"prod"}');
+
+    // The ingredient.yaml should list both files
+    const variantMeta = YAML.parse(await fs.readFile(path.join(variantDir, "ingredient.yaml"), "utf8"));
+    expect(variantMeta.files).toEqual(["run.sh", "config.json"]);
   });
 
   it("56. registry off", async () => {
