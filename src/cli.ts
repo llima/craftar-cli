@@ -51,7 +51,7 @@ import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type H
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { spawn } from "node:child_process";
-import { recordedServices, canUseStack, pendingLine, upRefusal, composeArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
+import { recordedServices, canUseStack, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -2162,9 +2162,21 @@ const services = program.command("services").description("Local services of this
 
 /** The workspace's lock, read without the Forge: these commands need no plan and no network (spec 31 §4.2). */
 async function servicesContext(dir: string): Promise<{ root: string; real: string; recorded: Recorded }> {
+  const { root, real } = await servicesBase(dir);
+  return { root, real, recorded: await recordedServices(root, await readLock(root)) };
+}
+
+/** The base workspace info without the lock read — `down` catches the lock read separately. */
+async function servicesBase(dir: string): Promise<{ root: string; real: string }> {
   const root = path.resolve(dir);
   if (!(await exists(path.join(root, WORKSPACE_FILE)))) fail(`no ${WORKSPACE_FILE} in ${root} — run craftar services inside a workspace, or pass --workspace <dir>`);
-  return { root, real: await fs.realpath(root), recorded: await recordedServices(root, await readLock(root)) };
+  return { root, real: await fs.realpath(root) };
+}
+
+/** Helper to get the .env file path if it exists, or null. */
+async function envFileOrNull(root: string): Promise<string | null> {
+  const env = path.join(root, ".env");
+  return (await exists(env)) ? env : null;
 }
 
 /** Runs `docker compose` with the terminal's own streams and resolves with its exit code. No shell. */
@@ -2189,8 +2201,7 @@ services
       if (refusal.length) fail(refusal.join("\n"));
       const fault = dockerFault(await dockerVersion(dockerRunner), true);
       if (fault !== null) fail(fault);
-      const env = path.join(root, ".env");
-      const argv = composeArgv("up", { project: projectName(real), stack: path.join(root, ".craftar", "compose.yaml"), envFile: (await exists(env)) ? env : null, wait: o.wait, services: names });
+      const argv = composeArgv("up", { project: projectName(real), stack: path.join(root, ".craftar", "compose.yaml"), envFile: await envFileOrNull(root), wait: o.wait, services: names });
       process.exitCode = await runCompose(argv, real);
     } catch (e) {
       fail(e instanceof Error ? e.message : String(e));
@@ -2204,13 +2215,20 @@ services
   .option("--workspace <dir>", "workspace root", ".")
   .action(async (o) => {
     try {
-      const { root, real, recorded } = await servicesContext(o.workspace);
+      const { root, real } = await servicesBase(o.workspace);
+      // Try to read the lock — if it fails, warn and stop by name only
+      let recorded: Recorded | null = null;
+      try {
+        recorded = await recordedServices(root, await readLock(root));
+      } catch (e) {
+        console.error(`${pc.yellow("warn")} ${e instanceof Error ? e.message : String(e)}`);
+      }
       const docker = await dockerVersion(dockerRunner);
       const fault = dockerFault(docker, false);
       if (fault !== null) fail(fault);
-      // `-f` only for a stack `up` would accept, on a Compose that can read `include`; otherwise the project is stopped by its name.
-      const stack = canUseStack(recorded) && !docker.belowFloor ? path.join(root, ".craftar", "compose.yaml") : null;
-      process.exitCode = await runCompose(composeArgv("down", { project: projectName(real), stack, envFile: null, volumes: o.volumes }), real);
+      // Use downArgv for the full decision — `-f` and `--env-file` only when lock was read and stack is usable
+      const argv = downArgv(projectName(real), recorded, docker, path.join(root, ".craftar", "compose.yaml"), await envFileOrNull(root), o.volumes);
+      process.exitCode = await runCompose(argv, real);
     } catch (e) {
       fail(e instanceof Error ? e.message : String(e));
     }

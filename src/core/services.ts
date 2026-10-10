@@ -408,6 +408,35 @@ export function canUseStack(r: Recorded): boolean {
   return r.stack && r.pending.length === 0;
 }
 
+/**
+ * The argv for `docker compose down`. Pure function for testability.
+ * @param project The project name (always passed with -p)
+ * @param r The recorded services state, or null if the lock could not be read
+ * @param d Docker version info
+ * @param stackPath The stack file path (e.g. /workspace/.craftar/compose.yaml)
+ * @param envFile The .env file path, or null if it does not exist
+ * @param volumes Whether to pass --volumes
+ */
+export function downArgv(
+  project: string,
+  r: Recorded | null,
+  d: DockerInfo,
+  stackPath: string,
+  envFile: string | null,
+  volumes: boolean,
+): string[] {
+  // Pass -f only when: r is not null AND canUseStack AND Compose is new enough
+  const useStack = r !== null && canUseStack(r) && !d.belowFloor;
+  const argv = ["compose", "-p", project];
+  if (useStack) {
+    argv.push("-f", stackPath);
+    if (envFile !== null) argv.push("--env-file", envFile);
+  }
+  argv.push("down");
+  if (volumes) argv.push("--volumes");
+  return argv;
+}
+
 /** One line per pending file, with the fix its reason calls for (spec 31 §4.2 step 2, §16.1). */
 export function pendingLine(p: PendingFile): string {
   switch (p.reason) {

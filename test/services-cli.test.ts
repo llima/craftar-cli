@@ -158,6 +158,36 @@ describe.skipIf(DOCKER_THERE)("craftar services — without Docker (spec 31 §4.
     expect([b.code, b.stderr]).toEqual([1, `error: ${NOT_FOUND}\n`]);
   });
 
+  it("C3: down with a lock holding schema: 4 → exit 1 with docker not found AFTER a warn line naming schema 4, never 'error: craftar.lock declares...'", async () => {
+    const s = await synced();
+    await fs.writeFile(path.join(s.wsRoot, "craftar.lock"), '{"schema": 4}');
+    const r = runCli(["services", "down", "--workspace", s.wsRoot], { env: NO_DOCKER });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("warn ");
+    expect(r.stderr).toContain("schema 4");
+    expect(r.stderr).toContain(`error: ${NOT_FOUND}`);
+    expect(r.stderr).not.toContain("error: craftar.lock declares schema 4");
+  });
+
+  it("C3: down with craftar.lock = '<<<<<<< HEAD' → same shape: warn then docker not found", async () => {
+    const s = await synced();
+    await fs.writeFile(path.join(s.wsRoot, "craftar.lock"), "<<<<<<< HEAD\n");
+    const r = runCli(["services", "down", "--workspace", s.wsRoot], { env: NO_DOCKER });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("warn ");
+    expect(r.stderr).toContain(`error: ${NOT_FOUND}`);
+    expect(r.stderr).not.toContain("error: craftar.lock");
+  });
+
+  it("C3: up and status --json with a schema 4 lock → exit 1 with 'error: craftar.lock declares schema 4...'", async () => {
+    const s = await synced();
+    await fs.writeFile(path.join(s.wsRoot, "craftar.lock"), '{"schema": 4}');
+    const u = runCli(["services", "up", "--workspace", s.wsRoot], { env: NO_DOCKER });
+    expect([u.code, u.stderr]).toEqual([1, "error: craftar.lock declares schema 4, which this craftar does not read — upgrade craftar\n"]);
+    const st = runCli(["services", "status", "--json", "--workspace", s.wsRoot], { env: NO_DOCKER });
+    expect([st.code, st.stderr]).toEqual([1, "error: craftar.lock declares schema 4, which this craftar does not read — upgrade craftar\n"]);
+  });
+
   it("status --json: the contract's keys in order, every value, exit 1 with Docker absent", async () => {
     const s = await synced();
     const r = statusJson(s.wsRoot);

@@ -13,6 +13,7 @@ import {
   parseFragment,
   projectName,
   composeArgv,
+  downArgv,
   readPs,
   dockerVersion,
   recordedServices,
@@ -269,6 +270,49 @@ describe("composeArgv", () => {
       envFile: null,
     });
     expect(argv).toEqual(["compose", "-p", "p", "-f", "/w/.craftar/compose.yaml", "ps", "--all", "--format", "json"]);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* downArgv tests (C3)                                                  */
+/* ------------------------------------------------------------------ */
+
+describe("downArgv", () => {
+  const stackPath = "/w/.craftar/compose.yaml";
+  const intactRecorded: Recorded = { entries: 3, stack: true, services: [{ name: "echo", ingredient: "service/echo" }], pending: [], warnings: [] };
+  const pendingRecorded: Recorded = { entries: 3, stack: true, services: [], pending: [{ path: ".craftar/services/echo/compose.yaml", reason: "missing" }], warnings: [] };
+  const belowFloorRecorded: Recorded = intactRecorded;
+  const dockerOk: DockerInfo = { available: true, compose: "5.5.1", belowFloor: false, reason: null };
+  const dockerOld: DockerInfo = { available: true, compose: "2.19.0", belowFloor: true, reason: "too old" };
+
+  it("intact + env → -f and --env-file both", () => {
+    const argv = downArgv("p", intactRecorded, dockerOk, stackPath, "/w/.env", false);
+    expect(argv).toEqual(["compose", "-p", "p", "-f", stackPath, "--env-file", "/w/.env", "down"]);
+  });
+
+  it("intact, no .env → -f only", () => {
+    const argv = downArgv("p", intactRecorded, dockerOk, stackPath, null, false);
+    expect(argv).toEqual(["compose", "-p", "p", "-f", stackPath, "down"]);
+  });
+
+  it("pending file → neither -f nor --env-file", () => {
+    const argv = downArgv("p", pendingRecorded, dockerOk, stackPath, "/w/.env", false);
+    expect(argv).toEqual(["compose", "-p", "p", "down"]);
+  });
+
+  it("belowFloor → neither -f nor --env-file", () => {
+    const argv = downArgv("p", belowFloorRecorded, dockerOld, stackPath, "/w/.env", false);
+    expect(argv).toEqual(["compose", "-p", "p", "down"]);
+  });
+
+  it("r: null → neither -f nor --env-file (lock could not be read)", () => {
+    const argv = downArgv("p", null, dockerOk, stackPath, "/w/.env", false);
+    expect(argv).toEqual(["compose", "-p", "p", "down"]);
+  });
+
+  it("volumes → ends with ['down', '--volumes']", () => {
+    const argv = downArgv("p", intactRecorded, dockerOk, stackPath, "/w/.env", true);
+    expect(argv.slice(-2)).toEqual(["down", "--volumes"]);
   });
 });
 
