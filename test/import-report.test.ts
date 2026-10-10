@@ -190,3 +190,22 @@ describe("renderImportReport", () => {
     expect(text.split("\n")[1]).toBe(`workspace: ${long}`);
   });
 });
+
+describe("the Preferred from Kiro section (spec 29 §4.3)", () => {
+  const preferred = [
+    { ref: "rule/workflow", source: ".kiro/steering/workflow.md", steeringLines: 56, rule: ".claude/rules/workflow.md", ruleLines: 34, differs: true },
+    { ref: "rule/style--acme", source: ".kiro/steering/style.md", steeringLines: 9, rule: ".claude/rules/style.md", ruleLines: 9, differs: false },
+  ];
+  it("lists each rule with its two files and their line counts, after Rejected and before the Kiro sections", () => {
+    const text = render(base({ kiro: KIRO, preferKiro: preferred }));
+    expect(text).toContain(
+      "\n## Rejected (0)\n\n## Preferred from Kiro (2)\n" +
+        "- rule/workflow — source .kiro/steering/workflow.md (56 lines; .claude/rules/workflow.md has 34)\n" +
+        "- rule/style--acme — source .kiro/steering/style.md (9 lines; .claude/rules/style.md has 9)\n\n## Kiro collisions",
+    );
+  });
+  it("is absent without the option and for an empty list", () => {
+    expect(render(base({ kiro: KIRO }))).not.toContain("Preferred from Kiro");
+    expect(render(base({ kiro: KIRO, preferKiro: [] }))).not.toContain("Preferred from Kiro");
+  });
+});

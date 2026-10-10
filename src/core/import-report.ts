@@ -74,6 +74,11 @@ function kiroSections(report: ImportReport, said: (text: string) => string): str
   return [collisions, [`## Unsourced Kiro files (${kiro.unsourced.length})`, ...kiro.unsourced.map((f) => `- ${oneLine(f)}`)]];
 }
 
+/** A rule taken from its steering file (spec 29 §4.3), as the summary and the report both say it: paths and line counts. */
+export function preferredLine(x: NonNullable<ImportReport["preferKiro"]>[number]): string {
+  return `${x.ref} — source ${x.source} (${x.steeringLines} lines; ${x.rule} has ${x.ruleLines})`;
+}
+
 /**
  * The Markdown report of `craftar import --report` (spec 29 §4.2): import's own lists and the Kiro part, as paths,
  * refs and counts — never a line of a workspace file (§6 case 5). LF, no BOM, one trailing newline.
@@ -92,6 +97,7 @@ export function renderImportReport(i: ImportReportInput): string {
     [`## Reused (${report.reused.length})`, ...report.reused.map((x) => oneLine(reusedLine(x, report)))],
     [`## Variants (${report.variants.length})`, ...report.variants.map((x) => oneLine(variantLine(x.name, report.profile)))],
     [`## Rejected (${report.rejected.length})`, ...report.rejected.map((x) => `- ${oneLine(said(`${x.name} — ${x.reason}`))}`)],
+    ...(report.preferKiro?.length ? [[`## Preferred from Kiro (${report.preferKiro.length})`, ...report.preferKiro.map((x) => `- ${oneLine(preferredLine(x))}`)]] : []),
     ...kiroSections(report, said),
     [`## Warnings (${report.warnings.length})`, ...report.warnings.map((x) => `- ${oneLine(said(x))}`)],
   ];
