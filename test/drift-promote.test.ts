@@ -2012,7 +2012,8 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
     expect(r.stderr).toBe(
-      `error: promote would change ${ws2} beyond rule/a: AGENTS.md — the Forge was left untouched\n`,
+      // The registry holds the real path: on Windows the temp dir's short name (RUNNER~1) differs from it.
+      `error: promote would change ${await fs.realpath(ws2)} beyond rule/a: AGENTS.md — the Forge was left untouched\n`,
     );
     // Forge untouched
     expect(porcelain(s.forgeRoot)).toBe("");
