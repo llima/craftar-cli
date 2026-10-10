@@ -4,7 +4,8 @@ import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
-import { decodeForScan, findSecrets, hasUtf16Bom, secretValueKind } from "../core/secrets.js";
+import { decodeForScan, findSecrets, hasUtf16Bom } from "../core/secrets.js";
+import { serverSecret } from "../core/mcp-server.js";
 import { schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
@@ -792,37 +793,10 @@ export function secretIn(meta: Ingredient, files: Record<string, string | Buffer
     if (hit) return `secret-like value (${hit.kind}) in ${t.where} line ${hit.line + t.offset}`;
   }
   if (meta.type === "mcp") {
-    // Walk every field of the server config, not just env/args: headers, url, command, etc.
-    // can carry a token too. Entropy stays reserved for env/args; every other field is
-    // checked against known patterns only.
-    const server: Record<string, unknown> = meta.server;
-    for (const [key, value] of Object.entries(server)) {
-      const hit = secretInServerField(meta.name, key, value, key === "env" || key === "args");
-      if (hit) return hit;
-    }
+    const hit = serverSecret(meta.name, meta.server);
+    if (hit) return hit;
   }
   return null;
-}
-
-/** Recursively scan one MCP server field for a secret-like value, building a dotted/bracketed field path. */
-function secretInServerField(server: string, field: string, value: unknown, useEntropy: boolean): string | null {
-  if (Array.isArray(value)) {
-    for (const [i, v] of value.entries()) {
-      const hit = secretInServerField(server, `${field}[${i}]`, v, useEntropy);
-      if (hit) return hit;
-    }
-    return null;
-  }
-  if (value !== null && typeof value === "object") {
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      const hit = secretInServerField(server, `${field}.${k}`, v, useEntropy);
-      if (hit) return hit;
-    }
-    return null;
-  }
-  if (typeof value !== "string" && typeof value !== "number") return null;
-  const kind = useEntropy ? secretValueKind(String(value)) : (findSecrets(String(value))[0]?.kind ?? null);
-  return kind ? `secret-like value (${kind}) in .mcp.json → mcpServers.${server}.${field}` : null;
 }
 
 /**

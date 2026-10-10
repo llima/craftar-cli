@@ -5,7 +5,7 @@
 
 import type { ForgeManifest, Ingredient, McpServer } from "../schema/index.js";
 import { FORGE_SCHEMA_SERVER_PARAMS } from "../schema/index.js";
-import { findSecrets, looksLikeSecretValue } from "./secrets.js";
+import { findSecrets, looksLikeSecretValue, secretValueKind } from "./secrets.js";
 import { urlCredentialIn } from "./remote.js";
 
 type McpMeta = Extract<Ingredient, { type: "mcp" }>;
@@ -221,6 +221,36 @@ export function entropyMessage(ref: string, f: ServerFinding): string {
 /** Build the warning message for an undeclared key with a value. */
 export function undeclaredMessage(ref: string, key: string): string {
   return `${ref}: server cites {{${key}}}, which has a value but is not declared in the ingredient's params — left verbatim`;
+}
+
+/** Import's scan of a server it read (moved from the importer, messages unchanged). */
+export function serverSecret(serverName: string, server: Record<string, unknown>): string | null {
+  for (const [key, value] of Object.entries(server)) {
+    const hit = secretInServerField(serverName, key, value, key === "env" || key === "args");
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** Recursively scan one MCP server field for a secret-like value, building a dotted/bracketed field path. */
+function secretInServerField(server: string, field: string, value: unknown, useEntropy: boolean): string | null {
+  if (Array.isArray(value)) {
+    for (const [i, v] of value.entries()) {
+      const hit = secretInServerField(server, `${field}[${i}]`, v, useEntropy);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const hit = secretInServerField(server, `${field}.${k}`, v, useEntropy);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const kind = useEntropy ? secretValueKind(String(value)) : (findSecrets(String(value))[0]?.kind ?? null);
+  return kind ? `secret-like value (${kind}) in .mcp.json → mcpServers.${server}.${field}` : null;
 }
 
 /** Whether `unify`'s kept-variant warning gets its second line (spec 34 §5.2). */
