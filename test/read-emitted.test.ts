@@ -103,7 +103,6 @@ describe("readEmitted (spec 30 §5.1)", () => {
     expect(r!.meta.files).toEqual(["Run.SH"]);
     expect(r!.meta.targets).toEqual(["claude-code"]);
   });
-});
 
   it("skill: a symlink to a directory returns null (spec 30, 30d)", async () => {
     const root = await tmpDir("craftar-read-emitted-");
@@ -123,3 +122,20 @@ describe("readEmitted (spec 30 §5.1)", () => {
     const r = await readEmitted(claudeDir, "skill", "linked", origin);
     expect(r).toBe(null);
   });
+
+  it("script: a dangling symlink throws ENOENT (spec 30r1 §3.4)", async () => {
+    const root = await tmpDir("craftar-read-emitted-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const claudeDir = path.join(root, ".claude");
+
+    // Create .claude/scripts/
+    await fs.mkdir(path.join(claudeDir, "scripts"), { recursive: true });
+    // Create a dangling symlink: points at a target that does not exist
+    const link = path.join(claudeDir, "scripts", "gone.sh");
+    const target = path.join(root, "nonexistent.sh");
+    await fs.symlink(target, link);
+
+    const origin = (rel: string) => ({ workspace: "w", path: rel });
+    await expect(readEmitted(claudeDir, "script", "gone.sh", origin)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});

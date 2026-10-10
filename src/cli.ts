@@ -548,6 +548,16 @@ drift
 
     // --json output
     if (o.json) {
+      // Apply first if not dry-run (spec 30r1 §3.2: JSON follows the write)
+      if (!o.dryRun) {
+        const journal: WriteJournal = [];
+        try {
+          await applyPromote(promotePlan, journal);
+        } catch (e) {
+          // Late failure: stdout stays "", stderr is lateFailure
+          fail(lateFailure(e, promotePlan.forgeRoot, journal, "drift promote"));
+        }
+      }
       // Build the JSON object in spec §4.7 order
       const jsonObj = {
         workspace: promotePlan.workspaceRealPath,
@@ -574,15 +584,6 @@ drift
         warnings: promotePlan.warnings,
       };
       console.log(JSON.stringify(jsonObj, null, 2));
-      // Apply if not dry-run
-      if (!o.dryRun) {
-        const journal: WriteJournal = [];
-        try {
-          await applyPromote(promotePlan, journal);
-        } catch (e) {
-          fail(lateFailure(e, promotePlan.forgeRoot, journal, "drift promote"));
-        }
-      }
       return;
     }
 
@@ -655,8 +656,8 @@ drift
 
     // Impact: print other workspaces or registry warning
     const impact = promotePlan.impact;
-    if (impact.registry !== "read" && impact.registry !== "none") {
-      // Registry could not be read fully: off, partial, or other
+    if (impact.registry !== "read") {
+      // none, partial, or off — spec 30 §4.6 item 6
       console.log(`  ${pc.yellow("warn")} other workspaces could not be checked (registry: ${impact.registry})`);
     } else if (impact.workspaces.length === 0) {
       console.log("  no other registered workspace reads this Forge");

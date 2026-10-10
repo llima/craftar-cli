@@ -622,8 +622,9 @@ export async function readEmitted(
   if (type === "script" || type === "hook") {
     const kind = type === "script" ? "scripts" : "hooks";
     const abs = path.join(claudeDir, kind, rel);
-    const stat = await fs.stat(abs).catch(() => null);
-    if (!stat?.isFile()) return null;
+    // fs.stat throws on a dangling link (ENOENT) — spec 30r1 §3.4 says we must let it throw
+    const stat = await fs.stat(abs);
+    if (!stat.isFile()) return null;
 
     const src = /\.(ps1|py|sh|js|ts|cjs|mjs|json|md|txt|ya?ml)$/i.test(rel) ? await readSource(abs) : null;
     const content = src ? toLf(stripBom(src.text)) : await fs.readFile(abs);

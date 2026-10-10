@@ -1068,22 +1068,26 @@ describe("cli — drift promote (three targets)", () => {
     gitInit(f.forgeRoot);
     expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
 
-    // Print the synced AGENTS.md and .kiro/steering/a.md for result.txt
+    // Save synced AGENTS.md for later comparison
     const agentsMd = await f.read("AGENTS.md");
-    const kiroA = await f.read(".kiro/steering/a.md");
-    console.log("--- AGENTS.md (synced) ---");
-    console.log(agentsMd);
-    console.log("--- .kiro/steering/a.md (synced) ---");
-    console.log(kiroA);
 
     await f.driftA();
 
     const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
     expect(r.code).toBe(0);
     expect(r.stderr).toBe("");
-    // Check it has the dependent paths and the next sync line
-    expect(r.stdout).toContain("  also changes .kiro/steering/a.md, AGENTS.md\n");
-    expect(r.stdout).toContain("  next sync: 2 update — run `craftar sync`\n");
+    // Whole stdout pinned — the shared home's registry has no workspace for this fresh Forge
+    expect(r.stdout).toBe(
+      `promote ${A} → rule/a--acme (variant, profile acme)\n` +
+        "  wrote  ingredients/rules/a--acme/ingredient.yaml\n" +
+        "  wrote  ingredients/rules/a--acme/rule.md\n" +
+        "  edited recipes/base.yaml (ingredients)\n" +
+        "  proved: this workspace plans the file on disk; 4 other file(s) unchanged\n" +
+        "  also changes .kiro/steering/a.md, AGENTS.md\n" +
+        "  next sync: 2 update — run `craftar sync`\n" +
+        "  no other registered workspace reads this Forge\n" +
+        "  the Forge is not committed — review with git, then commit and push it\n",
+    );
 
     // Commit nothing, sync
     const s = runCli(["sync", "--workspace", f.ws]);
@@ -1843,8 +1847,16 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     // A sections outcome is allowed because the override in ws2 still applies
     expect(r.code).toBe(0);
     expect(r.stderr).toBe("");
-    // The report should show ws2 with update (it sees the profile value change but its override wins)
-    expect(r.stdout).toContain(`1 other workspace(s) of profile acme read this Forge: ${realWs2}`);
+    // Whole stdout pinned — ws2 sees update from the profile section change but its override wins
+    expect(r.stdout).toBe(
+      `promote ${A} → profile acme (sections)\n` +
+        "  edited profiles/acme/profile.yaml (sections)\n" +
+        "  section rule/a flavors: 1 line(s)\n" +
+        "  proved: this workspace plans the file on disk; 1 other file(s) unchanged\n" +
+        "  next sync: nothing to sync\n" +
+        `  1 other workspace(s) of profile acme read this Forge: ${realWs2} — unchanged\n` +
+        "  the Forge is not committed — review with git, then commit and push it\n",
+    );
   });
 
   it("55c. D16 same profile, X beside variant — sibling with recipes.add listing rule/a", async () => {
@@ -2031,8 +2043,17 @@ describe("cli — drift promote (step 30h: impact check)", () => {
 
     expect(r.code).toBe(0);
     expect(r.stderr).toBe("");
-    expect(r.stdout).toContain("  warn other workspaces could not be checked (registry: off)\n");
-    expect(r.stdout).not.toContain("no other registered workspace");
+    // Whole stdout pinned — registry: off triggers the warning
+    expect(r.stdout).toBe(
+      `promote ${A} → rule/a--acme (variant, profile acme)\n` +
+        "  would write ingredients/rules/a--acme/ingredient.yaml\n" +
+        "  would write ingredients/rules/a--acme/rule.md\n" +
+        "  would edit recipes/base.yaml (ingredients)\n" +
+        "  proved: this workspace plans the file on disk; 2 other file(s) unchanged\n" +
+        "  next sync: nothing to sync\n" +
+        "  warn other workspaces could not be checked (registry: off)\n" +
+        "  dry run — the Forge was not written\n",
+    );
 
     // --json (also with --dry-run to avoid changing state)
     const P2 = ["drift", "promote", A, "--workspace", f.ws, "--json", "--dry-run"];
@@ -2073,14 +2094,22 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     // Drift on a
     await fs.appendFile(path.join(root, A), "hand a\n");
 
-    // List forges/ entries before
+    // Get recursive listing of forges/ before promote — names, sizes and mtimes
     const forgesDir = path.join(home, "forges");
-    const forgesBefore = await fs.readdir(forgesDir).catch(() => []);
-    const statsBefore = new Map<string, number>();
-    for (const entry of forgesBefore) {
-      const stat = await fs.stat(path.join(forgesDir, entry)).catch(() => null);
-      if (stat) statsBefore.set(entry, stat.mtimeMs);
+    async function recursiveListing(dir: string): Promise<Array<{ name: string; size: number; mtimeMs: number }>> {
+      const result: Array<{ name: string; size: number; mtimeMs: number }> = [];
+      const walk = async (d: string, prefix: string) => {
+        for (const entry of await fs.readdir(d)) {
+          const p = path.join(d, entry);
+          const stat = await fs.stat(p);
+          result.push({ name: prefix + entry, size: stat.size, mtimeMs: stat.mtimeMs });
+          if (stat.isDirectory()) await walk(p, prefix + entry + "/");
+        }
+      };
+      await walk(dir, "");
+      return result.sort((a, b) => a.name.localeCompare(b.name));
     }
+    const listingBefore = await recursiveListing(forgesDir);
 
     const P = ["drift", "promote", A, "--workspace", root, "--forge", cloneDir];
     const r = runCli(P, { env: { CRAFTAR_HOME: home } });
@@ -2096,14 +2125,8 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     expect(porcelain(cloneDir)).toBe(" M recipes/base.yaml\n?? ingredients/rules/a--acme/\n");
 
     // The forges/ listing is unchanged (no fetch, no tree built, no .used stamp moved)
-    const forgesAfter = await fs.readdir(forgesDir).catch(() => []);
-    expect(forgesAfter.sort()).toEqual(forgesBefore.sort());
-    for (const entry of forgesAfter) {
-      const stat = await fs.stat(path.join(forgesDir, entry)).catch(() => null);
-      if (stat && statsBefore.has(entry)) {
-        expect(stat.mtimeMs).toBe(statsBefore.get(entry));
-      }
-    }
+    const listingAfter = await recursiveListing(forgesDir);
+    expect(listingAfter).toEqual(listingBefore);
   });
 
   it("57b. URL Forge + --forge pointing at unrelated directory → D2", async () => {
