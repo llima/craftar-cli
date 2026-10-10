@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { exists, listFiles } from "../core/forge.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
-import { loadWorkspaceConfig, plan, status } from "../core/sync.js";
+import { loadWorkspaceConfig, plan, status, unsetDeclared, unsetSummary } from "../core/sync.js";
 import { stripBom, toLf } from "../core/text.js";
 import type { Target } from "../schema/index.js";
 import { workspaceParams, workspaceSections } from "./decide.js";
@@ -69,7 +69,7 @@ async function noteFor(workspaceRoot: string, rel: string, from: string, steerin
  * `overrides.sections`, read as import read them to prove a reuse (`workspaceParams`, `workspaceSections`): without
  * them a file import reused through an override would read as a collision `sync` never has. Nothing else of its
  * `craftar.yaml` or `craftar.local.yaml` is read, nor its lock. Then it is planned, and `status()` with no lock says
- * which `.kiro/` files are a `collision`. It is `status()`'s
+ * which `.kiro/` files are a `collision` — unless `sync` would refuse the plan, which is `not-computed`. It is `status()`'s
  * state, not a second comparison: a line-ending or JSON-formatting difference is an `adopt` there. Reads only; never
  * throws — an import that flushed has succeeded whatever the plan says. `deps.plan` is for tests.
  */
@@ -84,6 +84,9 @@ export async function kiroReport(
     const overrides = { params: await workspaceParams(root, read), sections: await workspaceSections(root, read) };
     const ws = await loadWorkspaceConfig(root, { forge: path.resolve(o.forgeRoot), profile: o.profile, targets: o.targets, overrides }, null);
     const p = await deps.plan(ws);
+    // A plan sync refuses (spec 29 §4.1) is compared with nothing: its files still hold the `{{key}}` and are never written.
+    const unset = unsetDeclared(p);
+    if (unset.length) return { kind: "not-computed", message: unsetSummary(unset) };
     const collisions: KiroCollision[] = [];
     for (const s of await status(ws, p, null)) {
       if (s.state !== "collision" || !s.path.startsWith(".kiro/")) continue;

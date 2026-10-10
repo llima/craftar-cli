@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import YAML from "yaml";
 import { listFiles } from "../src/core/forge.js";
 import { importClaudeCode } from "../src/importers/claude-code.js";
 import { kiroReport, textLines } from "../src/importers/kiro-report.js";
@@ -144,6 +145,18 @@ describe("import with report: the Kiro part", () => {
     const k = await kiroReport({ workspaceRoot: s.ws, forgeRoot: s.forge, profile: "acme", targets: ["claude-code", "kiro"] }, { plan: async () => { throw new Error("boom\nsecond line"); } });
     expect(k).toEqual({ kind: "not-computed", message: "boom" });
     expect((await listFiles(s.forge)).length).toBeGreaterThan(0);
+  });
+
+  it("a plan sync would refuse — a declared parameter with no value — is not computed, naming the key: never a collision against a file sync does not write", async () => {
+    const s = await setup();
+    await importClaudeCode({ workspaceRoot: s.ws, forgeRoot: s.forge, profileName: "acme" });
+    const dir = path.join(s.forge, "ingredients/rules/exact");
+    const meta = path.join(dir, "ingredient.yaml");
+    await fs.writeFile(meta, YAML.stringify({ ...YAML.parse(await fs.readFile(meta, "utf8")), params: { "team.name": { description: "the team" } } }));
+    const body = (await listFiles(dir)).find((f) => f.endsWith(".md"))!;
+    await fs.appendFile(path.join(dir, body), "Team: {{team.name}}\n");
+    const k = await kiroReport({ workspaceRoot: s.ws, forgeRoot: s.forge, profile: "acme", targets: ["claude-code", "kiro"] });
+    expect(k).toEqual({ kind: "not-computed", message: "sync refused: declared parameter(s) with no value: team.name" });
   });
 
   it("a Forge that no longer loads: not computed, no throw", async () => {
