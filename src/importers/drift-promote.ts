@@ -21,7 +21,7 @@ import {
   type UnheldPath,
 } from "../core/forge.js";
 import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type UnsetParam } from "../core/sync.js";
-import { driftList } from "../core/drift.js";
+import { driftList, unmanaged } from "../core/drift.js";
 import { hashNormalized, toLf } from "../core/text.js";
 import { fingerprintOf } from "../core/fingerprint.js";
 import {
@@ -47,7 +47,6 @@ import {
   recipeFile,
   ForgeStage,
   type EmittedSource,
-  type RecipeOptions,
 } from "./claude-code.js";
 import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
@@ -115,7 +114,7 @@ export interface PromotePlan {
   flattened: { params: string[]; sections: string[] };
   /** Dependent workspace paths. */
   dependents: string[];
-  /** True if all other files (not in E and not dependent) are byte-equal. */
+  /** Count of other files (not in E and not dependent) that are byte-equal. */
   otherFilesUnchanged: number;
   /** What the next sync would do (statuses for CLI to print through countStates/nextSyncLine). */
   nextSync: FileStatus[];
@@ -137,7 +136,7 @@ export interface PromotePlan {
   workspaceRealPath: string;
   /** The ingredient ref (e.g. "rule/a"). */
   ingredientRef: string;
-  /** True if --dry-run. */
+  /** True when the workspace's Forge is a URL (tells CLI to say "push the Forge"). */
   isUrlForge: boolean;
 }
 
@@ -146,8 +145,6 @@ const D1 = "the Forge of this workspace is remote, read from a cache craftar nev
 const D2_PATH = (given: string, real: string) => `--forge ${given} is not this workspace's Forge (${real})`;
 const D2_URL = (given: string) => `--forge ${given} is not a clone of this workspace's Forge — none of its git remotes matches`;
 const D3 = (dir: string) => `${dir} is not a git repository with at least one commit — promote needs git to undo its edit`;
-const D4_UNMANAGED = (p: string) =>
-  `${p} is not a file craftar manages in this workspace — pass the workspace-relative path as \`craftar status\` prints it (forward slashes)`;
 const D4_OTHER = (p: string, state: string) => `${p} is not drifted (${state}) — nothing to promote`;
 const D4_ORPHAN = (p: string) => `${p} is no longer produced by the Forge — nothing to promote into; \`craftar drift discard ${p}\` removes it`;
 const D5_KIRO = (p: string, hint: string) => `${p} is a kiro file — promote reads only what the claude-code target wrote${hint}`;
@@ -278,20 +275,13 @@ async function checkOtherWorkspaces(
   const warnings: string[] = [];
 
   // Filter out this workspace
-  const otherEntries = fwResult.workspaces.filter((fw) => {
-    try {
-      // Compare real paths
-      return fw.entry.path !== thisWsRealPath;
-    } catch {
-      return true; // keep if can't compare
-    }
-  });
+  const otherEntries = fwResult.workspaces.filter((fw) => fw.entry.path !== thisWsRealPath);
 
   if (otherEntries.length === 0 || fwResult.state === "off") {
     return {
       state: fwResult.state,
       rows: [],
-      warnings: fwResult.state !== "read" && fwResult.state !== "none" ? [] : [],
+      warnings: [],
     };
   }
 
@@ -481,7 +471,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Step 2: Classify the path (D4, D5, D6)
   const normalized = inputPath.replace(/\\/g, "/").replace(/^\.\//, "");
   const fileStatus = st.find((s) => s.path === normalized);
-  if (!fileStatus) throw new Error(D4_UNMANAGED(normalized));
+  if (!fileStatus) throw new Error(unmanaged(normalized));
   if (fileStatus.state === "orphan-drift") throw new Error(D4_ORPHAN(normalized));
   if (fileStatus.state !== "drift") throw new Error(D4_OTHER(normalized, fileStatus.state));
 
@@ -649,9 +639,6 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
   // Determine if X is this profile's variant (name is `<N>--<p>` AND as is `<N>`)
   const isOwnVariant = X.meta.name === `${N}--${profile}` && X.meta.as === N;
-  // Determine if X is another profile's variant (name ends with --<q> for some q)
-  const variantMatch = X.meta.name.match(/^(.+)--([^-]+)$/);
-  const isOtherVariant = variantMatch !== null && variantMatch[2] !== profile && X.meta.as === N;
 
   // The variant name is always <outputName>--<profile>
   const variantName = `${N}--${profile}`;
@@ -969,14 +956,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
       if (profileOwns && !otherOwns) {
         // Case 1: profile owns it alone — edit recipe in place
-        const recipeOpts: RecipeOptions = {
-          stage,
-          dir: path.join(forgeDir, "recipes"),
-          profile,
-          forge,
-          report: { recipes: [], recipeSplits: [] } as unknown as import("./claude-code.js").ImportReport,
-          currentRules: null,
-        };
+        const recipeOpts = { stage, dir: path.join(forgeDir, "recipes") };
         const recFile = await recipeFile(recipeOpts, R, "drift promote");
 
         // D14 check: recipe file must be held by git
@@ -1017,14 +997,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         }
 
         // Read the original recipe and create the forked one
-        const recipeOpts: RecipeOptions = {
-          stage,
-          dir: path.join(forgeDir, "recipes"),
-          profile,
-          forge,
-          report: { recipes: [], recipeSplits: [] } as unknown as import("./claude-code.js").ImportReport,
-          currentRules: null,
-        };
+        const recipeOpts = { stage, dir: path.join(forgeDir, "recipes") };
         const origRecFile = await recipeFile(recipeOpts, R, "drift promote");
         const origRaw = await fs.readFile(origRecFile, "utf8");
 
@@ -1379,9 +1352,7 @@ export function agentsBound(p0Text: string, p1Text: string, N: string): boolean 
 
   // p1 must equal p0 from the boundary to the end
   const p0Suffix = p0Lines.slice(boundaryIdx).join("\n");
-  const p1Suffix = p1Lines.slice(p1Lines.length - (p0Lines.length - boundaryIdx)).join("\n");
 
-  // For the suffix comparison, we need to find where it starts in p1
   // The suffix in p1 starts at the same distance from the end as in p0
   const suffixLen = p0Lines.length - boundaryIdx;
   if (p1Lines.length < suffixLen) return false;

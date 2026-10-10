@@ -365,6 +365,15 @@ export function countStates(
   return result;
 }
 
+/** Build counts object for JSON output (only non-zero states). */
+export function countStatesObject(st: FileStatus[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const [state, n] of countStates(st)) {
+    counts[state] = n;
+  }
+  return counts;
+}
+
 /**
  * What the next `sync` would do for a planned workspace: `status()` counts.
  * Keys are `FileState` values, only non-zero; `unchanged` when none.
@@ -393,15 +402,10 @@ export async function nextSync(p: Planned): Promise<NextSyncResult> {
     return { state: "error", counts: {}, error: e instanceof Error ? e.message : String(e) };
   }
 
-  // Use countStates for the counting (spec 28 §5.2)
-  const pairs = countStates(statuses);
-  if (pairs.length === 0) {
+  // Use countStatesObject for the counting (spec 28 §5.2)
+  const counts = countStatesObject(statuses);
+  if (Object.keys(counts).length === 0) {
     return { state: "unchanged", counts: {}, error: null };
-  }
-  // Build the counts object from the pairs, preserving key order
-  const counts: Record<string, number> = {};
-  for (const [state, n] of pairs) {
-    counts[state] = n;
   }
   return { state: "changed", counts, error: null };
 }

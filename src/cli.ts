@@ -7,7 +7,7 @@ import { importClaudeCode } from "./importers/claude-code.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
-import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
+import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
@@ -19,7 +19,7 @@ import { listTargets } from "./core/capabilities.js";
 import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { renderImportReport } from "./core/import-report.js";
-import { driftList, type DriftRow } from "./core/drift.js";
+import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
 import { exists, gitDirty, gitIsRepo, gitUnheld, loadForge, type UnheldPath } from "./core/forge.js";
@@ -448,9 +448,6 @@ async function printFileDiff(root: string, s: FileStatus): Promise<void> {
   }
 }
 
-/** The one wording for a path no status names (spec 19 §3.3), shared by `diff --exit-code` and the drift commands. */
-const unmanaged = (p: string) => `${p} is not a file craftar manages in this workspace — pass the workspace-relative path as \`craftar status\` prints it (forward slashes)`;
-
 /** A path as the user may type it, to the spelling `status` prints: forward slashes, no leading `./`. */
 const statusPath = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, "");
 
@@ -522,7 +519,7 @@ drift
   .description("Carry a hand-edited file to the Forge as a profile variant, behind git's gate, proved before any write; never writes the lock, the registry or the cache")
   .argument("<path>", "the hand-edited file, as `craftar status` prints it")
   .option("--workspace <dir>", "workspace root", ".")
-  .option("--forge <dir>", "the Forge directory to write (required for a URL Forge; a path Forge is used as-is)")
+  .option("--forge <dir>", "the Forge directory to write (required for a URL Forge)")
   .option("--dry-run", "prove and show the plan, write nothing", false)
   .option("--json", "machine-readable output", false)
   .action(async (givenPath: string, o: { workspace: string; forge?: string; dryRun: boolean; json: boolean }) => {
@@ -610,7 +607,6 @@ drift
     }
     // Print early warnings (e.g., unmanaged skill files) — pinned by test 10
     const unusedSectionPrefix = "profile ";
-    const registryWarnPrefix = "warn other workspaces";
     for (const w of promotePlan.warnings) {
       if (!w.startsWith(unusedSectionPrefix) || !w.includes(" still sets section ")) {
         // Skip registry warnings here — they come later
@@ -700,15 +696,6 @@ drift
       console.log("  push the Forge for sync to see this");
     }
   });
-
-/** Build counts object for JSON output (only non-zero states). */
-function countStatesObject(st: FileStatus[]): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const [state, n] of countStates(st)) {
-    counts[state] = n;
-  }
-  return counts;
-}
 
 /* ---------------------------------------------------------------- add / remove recipe */
 /**

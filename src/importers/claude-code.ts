@@ -1007,7 +1007,7 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
  * declaring another name, would leave two recipes under one name and loadForge would keep one.
  * Refused before the first write, as I4 refuses the same split for a profile.
  */
-export async function recipeFile(o: RecipeOptions, name: string, command = "import"): Promise<string> {
+export async function recipeFile(o: Pick<RecipeOptions, "stage" | "dir">, name: string, command = "import"): Promise<string> {
   const file = path.join(o.dir, `${name}.yaml`);
   for (const f of await o.stage.reader().list(o.dir)) {
     if (f.includes("/") || !/\.ya?ml$/.test(f)) continue;

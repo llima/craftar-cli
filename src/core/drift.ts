@@ -17,6 +17,10 @@ export interface DriftRow {
   reason: string | null;
 }
 
+/** D4: the path is not a file craftar manages. Shared by cli.ts and drift-promote.ts. */
+export const unmanaged = (p: string) =>
+  `${p} is not a file craftar manages in this workspace — pass the workspace-relative path as \`craftar status\` prints it (forward slashes)`;
+
 /** The static half of promote's refusals: it reads the status, never the Forge's git state. */
 function staticReason(s: FileStatus): string | null {
   if (s.state === "orphan-drift") return "no longer produced";
