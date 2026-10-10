@@ -186,6 +186,8 @@ const D17 = (recipe: string, chain: string) =>
   `recipe ${recipe} reaches this workspace through ${chain} — promote does not fork a recipe chain; re-import the workspace or edit the recipes by hand`;
 const D18 = (p: string, recipe: string, profile: string, slot: string, ref: string) =>
   `${p} comes from recipe ${recipe}, which profile ${profile} selects through integrations.${slot} — edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
+const D19 = (p: string, recipe: string, profile: string, slot: string, ref: string) =>
+  `${p} reaches this workspace through recipe ${recipe}, which profile ${profile} selects through integrations.${slot} and another profile also resolves — promote cannot fork a recipe a block selects; edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
 const INTERNAL_REUSE = (p: string) => `internal: ${p} is drift but the Forge already renders it — please report this`;
 interface OtherWorkspaceCheck {
   entries: ForgeWorkspace[];
@@ -1008,6 +1010,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // The ref we're replacing in recipes: X.ref (not T/N, because X might be another profile's variant)
   const refToReplace = X.ref;
 
+  // Build a map of recipes the profile's integrations block selects: recipe → slot
+  const selectedBy = new Map(effectiveProfile(forge, profileObj).selected.map((s) => [s.recipe, s.slot]));
+
   if (outcome === "variant") {
     // Check which recipes need to be edited or forked
     for (const R of viaRecipes) {
@@ -1020,6 +1025,15 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
           otherOwns = true;
           break;
         }
+      }
+
+      // D19: if the block selects R and another profile resolves it, promote cannot fork it
+      // The ONLY allowed case is "profile owns it alone → edit in place" (profileOwns && !otherOwns)
+      const selectedSlot = selectedBy.get(R);
+      if (selectedSlot && !(profileOwns && !otherOwns)) {
+        // Find the ref for the D19 message (the first ref of type matching X's type)
+        const ref = ingredientRef;
+        throw new Error(D19(normalized, R, profile, selectedSlot, ref));
       }
 
       // Find the extends chain to R
