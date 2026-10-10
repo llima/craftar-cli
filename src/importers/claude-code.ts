@@ -21,6 +21,7 @@ import { bodyFile } from "../core/extract.js";
 import { GENERATED_BANNER, kiroReport, type KiroReport } from "./kiro-report.js";
 import { deepMerge } from "../core/merge.js";
 import { outName } from "../emitters/shared.js";
+import { parseYamlText } from "../core/yaml-read.js";
 
 export interface ImportOptions {
   workspaceRoot: string;
@@ -880,7 +881,7 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
     });
     for (const x of next.slice(kept.length)) seq.items.push(doc.createNode(x));
   });
-  const after = RecipeSchema.safeParse(YAML.parse(stripBom(content)) ?? {});
+  const after = RecipeSchema.safeParse(parseYamlText(label, content) ?? {});
   if (!after.success || !isDeepStrictEqual(after.data, { ...before, ingredients: next })) {
     throw new Error(`import: cannot edit ${label} in place (the edit does not read back as exactly the new ingredients) — reformat it by hand, commit, and re-run`);
   }
@@ -1024,7 +1025,7 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
       else doc.set("targets", targets);
     }
   });
-  const after = ProfileSchema.safeParse(YAML.parse(stripBom(content)) ?? {});
+  const after = ProfileSchema.safeParse(parseYamlText(label, content) ?? {});
   const expected = { ...before, recipes, targets, params: { ...before.params, ...values }, sections: deepMerge(before.sections, sectionValues) };
   if (!after.success || !isDeepStrictEqual(after.data, expected)) {
     throw new Error(`import: cannot edit ${label} in place (the edit does not read back as exactly the intended change) — reformat it by hand, commit, and re-run`);

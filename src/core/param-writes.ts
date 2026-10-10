@@ -1,17 +1,16 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import YAML from "yaml";
 import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema } from "../schema/index.js";
 import { placeholders, bodyFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
 import { manifestWithSections } from "./manifest-edit.js";
 import { resolve, sectionKey } from "./resolve.js";
 import { canonicalValue } from "./sections.js";
-import { stripBom } from "./text.js";
 import type { SectionExtraction, WriteJournal } from "./unify.js";
 import { editYamlText } from "./yaml-edit.js";
 import { deepMerge } from "./merge.js";
+import { parseYamlText } from "./yaml-read.js";
 
 /**
  * The Forge-level half of a parameter extraction (spec 09 §6.3–§6.5): the rows only the whole
@@ -52,7 +51,7 @@ export async function findProfileFile(root: string, name: string): Promise<strin
     const abs = path.join(dir, d.name, "profile.yaml");
     if (!(await exists(abs))) continue;
     try {
-      const parsed = YAML.parse(await fs.readFile(abs, "utf8"));
+      const parsed = parseYamlText("profile.yaml", await fs.readFile(abs, "utf8"));
       if (parsed && typeof parsed === "object" && (parsed as { name?: unknown }).name === name) found = abs;
     } catch {
       continue;
@@ -216,8 +215,8 @@ export async function checkParamWrites(
     const content = await editYamlText(await fs.readFile(abs, "utf8"), { command: "unify", label, keys: ["params"] }, (doc) => {
       for (const e of declare) doc.setIn(["params", e.key, "default"], e.default);
     });
-    const before = IngredientSchema.parse(YAML.parse(await fs.readFile(abs, "utf8")));
-    const after = parseOr(label, () => IngredientSchema.parse(YAML.parse(stripBom(content))));
+    const before = IngredientSchema.parse(parseYamlText(label, await fs.readFile(abs, "utf8")));
+    const after = parseOr(label, () => IngredientSchema.parse(parseYamlText(label, content)));
     const expected = { ...before, params: { ...(before.params ?? {}), ...Object.fromEntries(declare.map((e) => [e.key, { default: e.default }])) } };
     if (!isDeepStrictEqual(after, expected) || declare.some((e) => !same(after.params?.[e.key]?.default, e.default))) {
       throw new Error(`unify: cannot edit ${label} in place (the edit does not read back as exactly the new declarations)`);
@@ -233,8 +232,8 @@ export async function checkParamWrites(
       for (const e of assign) doc.setIn(["params", e.key], e.value);
       for (const s of sectionAssign) doc.setIn(["sections", s.key, s.name], s.value);
     });
-    const before = ProfileSchema.parse(YAML.parse(await fs.readFile(profileAbs, "utf8")));
-    const after = parseOr(label, () => ProfileSchema.parse(YAML.parse(stripBom(content))));
+    const before = ProfileSchema.parse(parseYamlText(label, await fs.readFile(profileAbs, "utf8")));
+    const after = parseOr(label, () => ProfileSchema.parse(parseYamlText(label, content)));
     // Build expected sections: deep-merge the before sections with the new ones
     const expectedSections = deepMerge(
       before.sections,

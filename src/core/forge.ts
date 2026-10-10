@@ -1,6 +1,5 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import YAML from "yaml";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
@@ -14,6 +13,7 @@ import {
   type Profile,
   type Recipe,
 } from "../schema/index.js";
+import { parseYamlText } from "./yaml-read.js";
 
 const execFileP = promisify(execFile);
 
@@ -46,10 +46,12 @@ export async function exists(p: string): Promise<boolean> {
 
 /** Parse YAML `text` read from `file` through `schema`; a syntax or schema error names the file. */
 export function parseYaml<T>(file: string, text: string, schema: { parse: (v: unknown) => T }): T {
+  const rel = path.relative(process.cwd(), file);
+  const parsed = parseYamlText(rel, text) ?? {};
   try {
-    return schema.parse(YAML.parse(text) ?? {});
+    return schema.parse(parsed);
   } catch (e) {
-    throw new Error(`invalid ${path.relative(process.cwd(), file)}: ${(e as Error).message}`);
+    throw new Error(`invalid ${rel}: ${(e as Error).message}`);
   }
 }
 

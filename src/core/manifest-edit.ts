@@ -1,8 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
-import YAML from "yaml";
 import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema } from "../schema/index.js";
-import { stripBom } from "./text.js";
 import { editYamlText } from "./yaml-edit.js";
+import { parseYamlText, yamlFault } from "./yaml-read.js";
 
 /**
  * `craftar.forge.yaml` with `schema: 2` (spec 11 §6.14; spec 12 §6.7), edited in place through the
@@ -15,9 +14,9 @@ export function manifestWithSections(raw: string, command: "import" | "unify"): 
 
   let before: unknown;
   try {
-    before = YAML.parse(stripBom(raw));
+    before = parseYamlText("craftar.forge.yaml", raw);
   } catch (e) {
-    throw refuse(`it does not parse: ${(e as Error).message}`);
+    throw refuse(`it does not parse: ${yamlFault(e)}`);
   }
 
   // Unreachable while forgeBefore/loadForge loads the manifest through its schema first; kept so the edit never assumes it.
@@ -36,7 +35,7 @@ export function manifestWithSections(raw: string, command: "import" | "unify"): 
     throw refuse((e as Error).message.replace(/^.*in place \((.*)\) — .*$/s, "$1"));
   }
 
-  const after = YAML.parse(stripBom(content));
+  const after = parseYamlText("craftar.forge.yaml", content);
   if (!ForgeManifestSchema.safeParse(after).success || !isDeepStrictEqual(after, { ...before, schema: FORGE_SCHEMA_SECTIONS })) {
     throw refuse(`the edit does not read back as the original with exactly schema: ${FORGE_SCHEMA_SECTIONS}`);
   }
