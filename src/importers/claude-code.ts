@@ -9,7 +9,7 @@ import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
 import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
-import { resolve } from "../core/resolve.js";
+import { resolve, type Resolution } from "../core/resolve.js";
 import { classifyForge, credentialFault } from "../core/remote.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { editYamlText } from "../core/yaml-edit.js";
@@ -380,26 +380,9 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // What the importing profile resolved before the run — only when the profile already exists.
   // A profile new to the Forge has no *before*, so no lost-declaration warning.
   if (loaded && loaded.profiles.has(opts.profileName)) {
+    let resolved: Resolution | null = null;
     try {
-      const resolved = resolve(loaded, WorkspaceConfigSchema.parse({ forge: ".", profile: opts.profileName }));
-      const beforeMcp = new Map<string, { ref: string; authEnv?: string[] }>();
-      for (const ing of resolved.ingredients) {
-        if (ing.meta.type === "mcp") {
-          const serverName = outName(ing.meta);
-          beforeMcp.set(serverName, { ref: ing.ref, authEnv: ing.meta.authEnv });
-        }
-      }
-      // Compare: for each server name, if before declares names that after does not, warn.
-      for (const [serverName, before] of beforeMcp) {
-        const after = afterMcp.get(serverName);
-        if (!after) continue; // Server gone from workspace or rejected — nothing lost in the Forge.
-        const beforeNames = before.authEnv ?? [];
-        const afterNames = after.authEnv ?? [];
-        const lost = beforeNames.filter((n) => !afterNames.includes(n));
-        if (lost.length > 0) {
-          report.warnings.push(`mcp/${serverName}: ${lost.join(", ")} declared by ${before.ref} is not declared by ${after.ref}`);
-        }
-      }
+      resolved = resolve(loaded, WorkspaceConfigSchema.parse({ forge: ".", profile: opts.profileName }));
     } catch (e) {
       // The profile exists in the Forge but does not resolve (e.g. two recipes on one slot).
       // Only warn when the Forge declares authEnv somewhere — otherwise 0.17.4 was silent (spec 27 §10 criterion 2).
@@ -407,6 +390,21 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       if (forgeDeclaresAuthEnv) {
         const msg = e instanceof Error ? e.message.replace(/[\r\n]+/g, " ") : String(e);
         report.warnings.push(`profile ${opts.profileName} did not resolve before this import (${msg}) — authEnv declarations were not compared`);
+      }
+    }
+    if (resolved) {
+      const beforeMcp = new Map<string, { ref: string; authEnv?: string[] }>();
+      for (const ing of resolved.ingredients) {
+        if (ing.meta.type === "mcp") beforeMcp.set(outName(ing.meta), { ref: ing.ref, authEnv: ing.meta.authEnv });
+      }
+      for (const [serverName, before] of beforeMcp) {
+        const after = afterMcp.get(serverName);
+        if (!after) continue; // Server gone from workspace or rejected — nothing lost in the Forge.
+        const afterNames = after.authEnv ?? [];
+        const lost = (before.authEnv ?? []).filter((n) => !afterNames.includes(n));
+        if (lost.length > 0) {
+          report.warnings.push(`mcp/${serverName}: ${lost.join(", ")} declared by ${before.ref} is not declared by ${after.ref}`);
+        }
       }
     }
   }
