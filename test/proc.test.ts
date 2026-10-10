@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { capture, onPath, spawnInherited } from "../src/core/proc.js";
+import { capture, onPath, pathEntries, spawnInherited } from "../src/core/proc.js";
 import { tmpDir } from "./helpers/forge.js";
 
 // design D3 — the two ways craftar runs an external program besides git: no shell, an argument array.
@@ -128,6 +128,7 @@ describe("onPath — where a program is looked for", () => {
   it.runIf(process.platform === "win32")("on Windows: PATH is read whatever its key's case, and a .cmd is not a program", async () => {
     const dir = await planted();
     expect(await onPath(TOOL, { Path: dir })).toBe(path.join(dir, `${TOOL}.exe`));
+    expect(await onPath(TOOL, { PATH: `"${dir}"` })).toBe(path.join(dir, `${TOOL}.exe`));
     const cmds = await fs.realpath(await tmpDir("craftar-proc-cmd-"));
     cleanups.push(() => fs.rm(cmds, { recursive: true, force: true }));
     await fs.writeFile(path.join(cmds, "craftar-cmd-tool.cmd"), "@echo ran\r\n");
@@ -153,5 +154,23 @@ describe("onPath — where a program is looked for", () => {
     expect(await onPath(TOOL, withPath(relative))).toBeNull();
     expect(await onPath(TOOL, withPath(`.${path.sep}${relative}`))).toBeNull();
     expect(await onPath(TOOL, withPath(dir))).toBe(path.join(dir, TOOL + EXE));
+  });
+});
+
+describe("pathEntries — which entries of PATH a program is looked for in", () => {
+  it("elsewhere: the entries that start with /, in order", () => {
+    expect(pathEntries(":/usr/bin:.:bin:./bin:~/bin:/opt/dotnet:", false)).toEqual(["/usr/bin", "/opt/dotnet"]);
+    expect(pathEntries("", false)).toEqual([]);
+    expect(pathEntries(".", false)).toEqual([]);
+  });
+
+  it("win32: a drive or a UNC host, with or without wrapping quotes; never a rooted entry without a drive", () => {
+    expect(pathEntries('C:\\Windows;"C:\\Program Files\\dotnet";c:/tools;\\\\host\\share\\bin', true)).toEqual([
+      "C:\\Windows",
+      "C:\\Program Files\\dotnet",
+      "c:/tools",
+      "\\\\host\\share\\bin",
+    ]);
+    expect(pathEntries(';.;bin;.\\bin;\\tools;/tools;C:tools;\\\;\\\\\\tools;"";"."', true)).toEqual([]);
   });
 });

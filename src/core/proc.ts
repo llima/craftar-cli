@@ -26,15 +26,24 @@ const WIN_EXTENSIONS = [".exe", ".com"];
 
 const WIN = process.platform === "win32";
 
-/** Absolute; on win32 a drive `X:\` / `X:/` or a UNC path — a rooted path without a drive depends on the current directory's drive. */
-function isAnchored(entry: string): boolean {
-  if (!path.isAbsolute(entry)) return false;
-  if (WIN) {
-    if (/^[A-Za-z]:[\\/]/.test(entry)) return true;
-    if (entry.startsWith("\\\\")) return true;
-    return false;
+/**
+ * The entries of a PATH value a program is looked for in: the absolute ones, in order. On win32 an entry may be
+ * wrapped in quotes, and must start with a drive (`X:\`, `X:/`) or be a UNC path (`\\host\…`) — a rooted entry
+ * without a drive depends on the current directory's drive. Empty and relative entries are dropped everywhere.
+ */
+export function pathEntries(value: string, win: boolean = WIN): string[] {
+  const raw = value.split(win ? ";" : ":");
+  const entries: string[] = [];
+  for (let e of raw) {
+    if (win && e.startsWith('"') && e.endsWith('"')) e = e.slice(1, -1);
+    if (e === "") continue;
+    if (win) {
+      if (/^[A-Za-z]:[\\/]/.test(e) || /^\\\\[^\\/]/.test(e)) entries.push(e);
+    } else {
+      if (e.startsWith("/")) entries.push(e);
+    }
   }
-  return true;
+  return entries;
 }
 
 /** A file; off win32 also executable; any error → false. */
@@ -59,7 +68,7 @@ export async function onPath(file: string, env: NodeJS.ProcessEnv): Promise<stri
   if (path.isAbsolute(file)) return file;
   if (file === "" || file !== path.basename(file)) return null;
   const key = WIN ? Object.keys(env).find((k) => k.toUpperCase() === "PATH") : "PATH";
-  const entries = ((key === undefined ? undefined : env[key]) ?? "").split(path.delimiter).filter(isAnchored);
+  const entries = pathEntries((key === undefined ? undefined : env[key]) ?? "");
   const names = WIN && !WIN_EXTENSIONS.some((ext) => file.toLowerCase().endsWith(ext)) ? WIN_EXTENSIONS.map((ext) => file + ext) : [file];
   for (const entry of entries) {
     for (const name of names) {
