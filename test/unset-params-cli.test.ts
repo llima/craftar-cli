@@ -4,7 +4,7 @@ import YAML from "yaml";
 import { afterEach, describe, expect, it } from "vitest";
 import { exists } from "../src/core/forge.js";
 import { runCli } from "./helpers/cli.js";
-import { profile, recipe, rule, scenario, type ForgeSpec } from "./helpers/forge.js";
+import { makeForge, profile, recipe, rule, scenario, tmpDir, type ForgeSpec } from "./helpers/forge.js";
 
 // Spec 29 §4.1 / §9 slice A — what each command prints and exits with when a declared, cited parameter has no value.
 
@@ -134,5 +134,73 @@ describe("diff with an unset declared parameter", () => {
     const s = await syncedThenDeclared();
     const r = runCli(["diff", "--exit-code", ".claude/rules/a.md", "--workspace", s.wsRoot]);
     expect(r.code).toBe(0);
+  });
+});
+
+describe("init and the recipe commands with an unset declared parameter", () => {
+  async function forgeOnly() {
+    const root = await tmpDir("craftar-unset-init-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    await makeForge(forge, FORGE(true));
+    return { forge, ws: path.join(root, "ws") };
+  }
+
+  it("init writes craftar.yaml, does not sync, prints the block with 'then run craftar sync', exits 1", async () => {
+    const f = await forgeOnly();
+    const r = runCli(["init", "--forge", f.forge, "--profile", "acme", "--workspace", f.ws]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe(
+      [
+        "error: 1 declared parameter(s) have no value — nothing written",
+        "  org  declared by rule/a · cited by rule/a, rule/b",
+        "  fix: set each under params in the profile, or under overrides.params in craftar.yaml, then run craftar sync",
+        "",
+      ].join("\n"),
+    );
+    expect(r.stdout).toContain("craftar init — wrote craftar.yaml");
+    expect(r.stdout.split("\n")).toContain(WARN);
+    expect(await exists(path.join(f.ws, "craftar.yaml"))).toBe(true);
+    expect(await exists(path.join(f.ws, "craftar.lock"))).toBe(false);
+    expect(await exists(path.join(f.ws, ".claude"))).toBe(false);
+  });
+
+  it("after init's refusal, setting the value in craftar.yaml and running sync succeeds", async () => {
+    const f = await forgeOnly();
+    runCli(["init", "--forge", f.forge, "--profile", "acme", "--workspace", f.ws]);
+    const file = path.join(f.ws, "craftar.yaml");
+    await fs.writeFile(file, YAML.stringify({ ...YAML.parse(await fs.readFile(file, "utf8")), overrides: { params: { org: "acme-inc" } } }));
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    expect(await fs.readFile(path.join(f.ws, ".claude/rules/b.md"), "utf8")).toBe("Also acme-inc\n");
+  });
+
+  it("init --no-sync: the edit is made, the next-sync line says refused, exit 0", async () => {
+    const f = await forgeOnly();
+    const r = runCli(["init", "--forge", f.forge, "--profile", "acme", "--workspace", f.ws, "--no-sync"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout.split("\n")).toContain("next sync: refused — 1 declared parameter(s) have no value (org)");
+    expect(r.stdout).not.toContain("run `craftar sync`");
+    expect(await exists(path.join(f.ws, "craftar.yaml"))).toBe(true);
+  });
+
+  it("add recipe that brings an unset declared parameter: craftar.yaml is edited, the line says refused, exit 0", async () => {
+    const s = await scenario(
+      {
+        ingredients: [rule("style", "# Style\n"), rule("a", "Org: {{org}}\n", { params: DECLARED })],
+        recipes: [recipe("base", ["rule/style"]), recipe("extra", ["rule/a"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    const r = runCli(["add", "recipe", "extra", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stdout.split("\n")).toContain("next sync: refused — 1 declared parameter(s) have no value (org)");
+    expect(YAML.parse(await fs.readFile(path.join(s.wsRoot, "craftar.yaml"), "utf8")).recipes.add).toEqual(["extra"]);
+    // and removing it again puts the ordinary line back
+    const back = runCli(["remove", "recipe", "extra", "--workspace", s.wsRoot]);
+    expect(back.code).toBe(0);
+    expect(back.stdout.split("\n")).toContain("next sync: nothing to sync");
   });
 });

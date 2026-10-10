@@ -10,7 +10,7 @@ import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistry
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, plan, readLock, status, apply, unsetDeclared, unsetRefusal, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock } from "./schema/index.js";
 import { resolve, sectionKey } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -294,10 +294,20 @@ program
       console.log(pc.bold(`craftar init — wrote ${WORKSPACE_FILE} in ${root}`));
       console.log(`  ${initLine(init)}`);
       for (const n of init.notes) console.log(`  note ${n}`);
+      const unset = unsetDeclared(p);
       if (!o.sync) {
-        console.log(nextSyncLine(init.statuses));
+        console.log(nextSyncLine(init.statuses, unset));
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
         again();
+        return;
+      }
+      // Spec 29 §4.1, §6 case 11: craftar.yaml is written — the workspace layer is a place for the value — and the
+      // first sync is not run. exitCode, not fail(): the `again` line still follows the block.
+      if (unset.length) {
+        for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+        console.error(pc.red("error: ") + unsetRefusal(unset, { thenSync: true }));
+        again();
+        process.exitCode = 1;
         return;
       }
       const r = await applyAndReport(ws, p, init.statuses, init.lock);
@@ -404,9 +414,11 @@ program
 /**
  * Spec 22's line: what the next sync would do (also `init --no-sync`, spec 23 §4.4).
  * Uses `countStates` from `src/core/impact.ts`; a new `FileState` does not compile until it is
- * placed in `FILE_STATE_ORDER_MAP` there.
+ * placed in `FILE_STATE_ORDER_MAP` there. A plan with unset declared parameters has no next sync
+ * to count: the line says it is refused (spec 29 §4.1).
  */
-function nextSyncLine(st: FileStatus[]): string {
+function nextSyncLine(st: FileStatus[], unset: UnsetParam[]): string {
+  if (unset.length) return `next sync: ${unsetRefused(unset)}`;
   const counts = countStates(st).map(([k, n]) => `${n} ${k}`);
   return `next sync: ${counts.length ? `${counts.join(", ")} — run \`craftar sync\`` : "nothing to sync"}`;
 }
@@ -429,7 +441,7 @@ function recipeCommand(op: RecipeOp) {
     const next: Workspace = { ...ws, config: { ...ws.config, recipes: edit.recipes } };
     const p = await plan(next);
     const st = await status(next, p, await readLock(ws.root));
-    const nextLine = nextSyncLine(st);
+    const nextLine = nextSyncLine(st, unsetDeclared(p));
     await fs.writeFile(file, content);
     console.log(`${WORKSPACE_FILE}: ${recipeDiffLine(ws.config.recipes, edit.recipes)}`);
     console.log(`recipes: ${p.resolution.recipes.join(" → ")}`);

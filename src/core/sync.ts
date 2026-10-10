@@ -335,6 +335,11 @@ export function unsetRefusal(unset: UnsetParam[], opts: { thenSync?: boolean } =
   ].join("\n");
 }
 
+/** What stands where a sync's file counts would: `next sync:` (`add recipe`, `init --no-sync`) and `first sync:` (the interactive `init`). */
+export function unsetRefused(unset: UnsetParam[]): string {
+  return `refused — ${unset.length} declared parameter(s) have no value (${unset.map((u) => u.key).join(", ")})`;
+}
+
 /** The refusal in one line, for a row that has no room for the block (`workspaces`, `forge impact`). */
 export function unsetSummary(unset: UnsetParam[]): string {
   return `declared parameter(s) with no value: ${unset.map((u) => u.key).join(", ")}`;
