@@ -53,6 +53,7 @@ import {
   type EmittedSource,
 } from "./claude-code.js";
 import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
+import { providedRefs } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
 import { sectionKey } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
@@ -183,6 +184,8 @@ const D16_BREAK = (wsPath: string, profile: string, errMsg: string) =>
   `promote would break ${wsPath} (profile ${profile}): ${errMsg.split("\n")[0]} — the Forge was left untouched`;
 const D17 = (recipe: string, chain: string) =>
   `recipe ${recipe} reaches this workspace through ${chain} — promote does not fork a recipe chain; re-import the workspace or edit the recipes by hand`;
+const D18 = (p: string, recipe: string, profile: string, slot: string, ref: string) =>
+  `${p} comes from recipe ${recipe}, which profile ${profile} selects through integrations.${slot} — edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
 const INTERNAL_REUSE = (p: string) => `internal: ${p} is drift but the Forge already renders it — please report this`;
 interface OtherWorkspaceCheck {
   entries: ForgeWorkspace[];
@@ -553,8 +556,17 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const p0 = await plan(ws);
   const lock = await readLock(root);
   const st = await status(ws, p0, lock);
+  const profile = ws.config.profile;
 
-  // Step 2: Classify the path (D4, D5, D6)
+  // Spec 33i: compute the provided map; unlike drift show, a throw here is NOT swallowed.
+  let provided: Map<string, { slot: string; recipe: string }>;
+  try {
+    provided = providedRefs(forge, profile);
+  } catch (e) {
+    throw new Error(`drift promote: profile ${profile} does not resolve (${(e as Error).message})`);
+  }
+
+  // Step 2: Classify the path (D4, D5, D6, D18)
   const normalized = inputPath.replace(/\\/g, "/").replace(/^\.\//, "");
   const fileStatus = st.find((s) => s.path === normalized);
   if (!fileStatus) throw new Error(unmanaged(normalized));
@@ -562,13 +574,13 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   if (fileStatus.state !== "drift") throw new Error(D4_OTHER(normalized, fileStatus.state));
 
   // Static checks (promotability) using driftList's row
-  const rows = driftList([fileStatus]);
+  const rows = driftList([fileStatus], provided);
   if (rows.length === 0) {
     throw new Error(D4_OTHER(normalized, fileStatus.state));
   }
   const row = rows[0];
   if (!row.promotable) {
-    // Build the right D5/D6 message from the static reason
+    // Build the right D5/D6/D18 message from the static reason
     const reason = row.reason;
     if (reason === "service file") {
       throw new Error(D5_SERVICE(normalized));
@@ -582,13 +594,16 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       throw new Error(D5_AGENTSMD(normalized));
     } else if (reason === ".mcp.json") {
       throw new Error(D6(normalized));
+    } else if (reason?.startsWith("provided by integrations.")) {
+      // D18: provided by the integrations block
+      const prov = provided.get(fileStatus.ingredient!)!;
+      throw new Error(D18(normalized, prov.recipe, profile, prov.slot, fileStatus.ingredient!));
     } else {
       // Fallback for any other reason (shouldn't happen for drift state)
       throw new Error(D4_OTHER(normalized, fileStatus.state));
     }
   }
 
-  const profile = ws.config.profile;
   const ingredientRef = fileStatus.ingredient! as IngredientRef;
 
   // Step 3: The emitted set E — every file the plan emits for this ingredient on claude-code
@@ -609,7 +624,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     if (s.state === "drift" || s.state === "update" || s.state === "collision" || s.state === "adopt") {
       if (s.state === "drift") {
         // Get forge side from driftList
-        const driftRow = driftList([s])[0];
+        const driftRow = driftList([s], provided)[0];
         if (driftRow && driftRow.forge === "changed") {
           throw new Error(D7(ingredientRef, f.path, "drift, forge changed", profile));
         }

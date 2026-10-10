@@ -6,6 +6,7 @@ import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
+import { providedRefs } from "./importers/provided.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
@@ -495,7 +496,14 @@ drift
     const only = given === undefined ? null : statusPath(given);
     const named = only === null ? null : st.find((s) => s.path === only);
     if (only !== null && !named) fail(unmanaged(only));
-    const rows = driftList(named ? [named] : st);
+    // Spec 33i: compute the provided map; a throw (profile that resolves only because recipes.remove silences something) gives an empty map.
+    let provided = new Map<string, { slot: string; recipe: string }>();
+    try {
+      provided = providedRefs(ws.forge, ws.config.profile);
+    } catch {
+      // The profile's effective recipes don't resolve — drift show never fails for this.
+    }
+    const rows = driftList(named ? [named] : st, provided);
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {

@@ -84,3 +84,20 @@ export function providedByBlock(forge: Forge, profileName: string): Map<string, 
 
   return result;
 }
+
+/**
+ * Every Forge ref the profile's block alone provides (spec 33 step 33i, design.md item 14), keyed
+ * by the ref (e.g. `"rule/stories-azure-devops"`). For `driftList` and `planPromote`.
+ *
+ * Throws what `effectiveProfile` and `resolve` throw.
+ */
+export function providedRefs(forge: Forge, profileName: string): Map<string, { slot: string; recipe: string }> {
+  const byBlock = providedByBlock(forge, profileName);
+  const result = new Map<string, { slot: string; recipe: string }>();
+  for (const [, provided] of byBlock) {
+    for (const ref of provided.refs) {
+      result.set(ref, { slot: provided.slot, recipe: provided.recipe });
+    }
+  }
+  return result;
+}

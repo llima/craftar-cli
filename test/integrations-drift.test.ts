@@ -125,3 +125,252 @@ describe("promote renders with the effective profile's params", () => {
     expect(j.flattened.params).toEqual(["integrations.pm.org"]);
   });
 });
+
+
+describe("drift × the integrations block", () => {
+  it("2. drift show says no, and why", async () => {
+    const s = await forgeAt(3, ado());
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+    
+    // Sync the workspace
+    await sync(s.wsRoot);
+    
+    // Hand-edit both the stories rule (provided by block) and the where rule (not provided)
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/stories-azure-devops.md"), "by hand\n");
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/where.md"), "by hand\n");
+    
+    const r = runCli(["drift", "show", "--workspace", s.wsRoot], { env });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe(
+      `drift         .claude/rules/stories-azure-devops.md  rule/stories-azure-devops  forge: same  promote: no (provided by integrations.pm)\n` +
+      `drift         .claude/rules/where.md                 rule/where                 forge: same  promote: yes\n`,
+    );
+  });
+
+  it("3. --json", async () => {
+    const s = await forgeAt(3, ado());
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+    
+    await sync(s.wsRoot);
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/stories-azure-devops.md"), "by hand\n");
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/where.md"), "by hand\n");
+    
+    const r = runCli(["drift", "show", "--workspace", s.wsRoot, "--json"], { env });
+    expect(r.code).toBe(0);
+    const j = JSON.parse(r.stdout);
+    
+    expect(j.files).toEqual([
+      { path: ".claude/rules/stories-azure-devops.md", state: "drift", target: "claude-code", ingredient: "rule/stories-azure-devops", forge: "same", promotable: false, reason: "provided by integrations.pm" },
+      { path: ".claude/rules/where.md", state: "drift", target: "claude-code", ingredient: "rule/where", forge: "same", promotable: true, reason: null },
+    ]);
+    expect(Object.keys(j.files[0])).toEqual(["path", "state", "target", "ingredient", "forge", "promotable", "reason"]);
+  });
+
+  it("4. drift promote refuses, the Forge untouched", async () => {
+    const s = await forgeAt(3, ado());
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+    
+    await sync(s.wsRoot);
+    gitInit(s.forgeRoot);
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/stories-azure-devops.md"), "by hand\n");
+    
+    const before = await snapshot(s.forgeRoot);
+    const r = runCli(["drift", "promote", ".claude/rules/stories-azure-devops.md", "--workspace", s.wsRoot], { env });
+    const after = await snapshot(s.forgeRoot);
+    
+    expect([r.code, r.stdout, r.stderr]).toEqual([
+      1,
+      "",
+      "error: .claude/rules/stories-azure-devops.md comes from recipe pm-azure-devops, which profile acme selects through integrations.pm — edit rule/stories-azure-devops in the Forge, or `craftar drift discard .claude/rules/stories-azure-devops.md`\n",
+    ]);
+    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+    expect(porcelain(s.forgeRoot)).toBe("");
+  });
+
+  it("5. drift discard still works on it", async () => {
+    const s = await forgeAt(3, ado());
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+    
+    await sync(s.wsRoot);
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/stories-azure-devops.md"), "by hand\n");
+    
+    const r = runCli(["drift", "discard", ".claude/rules/stories-azure-devops.md", "--workspace", s.wsRoot], { env });
+    expect(r.code).toBe(0);
+    
+    // The file should be regenerated to its original content
+    const content = await fs.readFile(path.join(s.wsRoot, ".claude/rules/stories-azure-devops.md"), "utf8");
+    expect(content).toBe("Stories live in Azure DevOps, organisation acme, project Platform.\n");
+  });
+
+  it("6. (control) the other drifted file promotes", async () => {
+    const s = await forgeAt(3, ado());
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+    
+    await sync(s.wsRoot);
+    gitInit(s.forgeRoot);
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/where.md"), "by hand\n");
+    
+    const r = runCli(["drift", "promote", ".claude/rules/where.md", "--workspace", s.wsRoot, "--dry-run"], { env });
+    expect(r.code).toBe(0);
+  });
+
+  it("7. (control) schema 2, the recipe listed by hand: promotable, as spec 30 shipped it", async () => {
+    const spec: ForgeSpec = ado({}, PM, { recipes: ["base", "pm-azure-devops"], params: { "integrations.pm.org": "acme", "integrations.pm.project": "Platform" } });
+    const s = await forgeAt(2, spec);
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+    
+    await sync(s.wsRoot);
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/stories-azure-devops.md"), "by hand\n");
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/where.md"), "by hand\n");
+    
+    const r = runCli(["drift", "show", "--workspace", s.wsRoot, "--json"], { env });
+    const j = JSON.parse(r.stdout);
+    
+    expect(j.files.map((f: { promotable: boolean; reason: string | null }) => [f.promotable, f.reason])).toEqual([
+      [true, null],
+      [true, null],
+    ]);
+  });
+
+  it("8. listed in base and in the integration recipe: promotable (not provided by the block alone)", async () => {
+    // Case 23 from 33f: the rule is in BOTH base AND the integration recipe
+    const spec: ForgeSpec = {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        rule("where", "Org {{integrations.pm.org}}\n"),
+        rule("stories-azure-devops", STORIES),
+        mcp("azure-devops", { command: "npx", args: ["-y", "ado-mcp"] }),
+      ],
+      recipes: [
+        recipe("base", ["rule/workflow", "rule/where", "rule/stories-azure-devops"]),  // stories in base too!
+        recipe("pm-azure-devops", ["mcp/azure-devops", "rule/stories-azure-devops"], { slot: "pm" }),
+      ],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"], { integrations: PM })],
+    };
+    const s = await forgeAt(3, spec);
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+    
+    await sync(s.wsRoot);
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/stories-azure-devops.md"), "by hand\n");
+    
+    const r = runCli(["drift", "show", "--workspace", s.wsRoot, "--json"], { env });
+    const j = JSON.parse(r.stdout);
+    const row = j.files.find((f: { path: string }) => f.path === ".claude/rules/stories-azure-devops.md");
+    
+    expect(row.promotable).toBe(true);
+    expect(row.reason).toBe(null);
+  });
+
+  it("9. the recipe removed by the workspace: 'no longer produced' wins", async () => {
+    const s = await forgeAt(3, ado());
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+    
+    await sync(s.wsRoot);
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/stories-azure-devops.md"), "by hand\n");
+    
+    // Update craftar.yaml to remove the integration recipe
+    const configPath = path.join(s.wsRoot, "craftar.yaml");
+    const config = await fs.readFile(configPath, "utf8");
+    await fs.writeFile(configPath, config + "\nrecipes:\n  remove: [pm-azure-devops]\n");
+    
+    const r = runCli(["drift", "show", "--workspace", s.wsRoot, "--json"], { env });
+    const j = JSON.parse(r.stdout);
+    const row = j.files.find((f: { path: string }) => f.path === ".claude/rules/stories-azure-devops.md");
+    
+    expect(row.state).toBe("orphan-drift");
+    expect(row.reason).toBe("no longer produced");
+  });
+
+  it("10. unit — driftList's order of reasons", () => {
+    const planned = (p: string, target: "claude-code" | "kiro" | "agents-md", ingredient: string, body: string) => ({ path: p, content: Buffer.from(body), target, ingredient });
+    const drift = (p: string, target: "claude-code" | "kiro" | "agents-md", ingredient: string, lockBody: string, planBody: string): FileStatus => ({
+      path: p,
+      state: "drift",
+      target,
+      ingredient,
+      planned: planned(p, target, ingredient, planBody),
+      lock: { path: p, hash: hashNormalized(Buffer.from(lockBody)), target, ingredient },
+    });
+    const orphanDrift = (p: string, target: "claude-code" | "kiro" | "agents-md", ingredient: string): FileStatus => ({
+      path: p,
+      state: "orphan-drift",
+      target,
+      ingredient,
+      lock: { path: p, hash: hashNormalized(Buffer.from("was\n")), target, ingredient },
+    });
+    
+    const provided = new Map([["rule/x", { slot: "pm", recipe: "pm-x" }]]);
+    
+    // A drift on claude-code with the ref in provided → "provided by integrations.pm"
+    const rows1 = driftList([drift(".claude/rules/x.md", "claude-code", "rule/x", "x\n", "x\n")], provided);
+    expect(rows1[0].reason).toBe("provided by integrations.pm");
+    
+    // The same ref on kiro → "provided by integrations.pm" (before "kiro file")
+    const rows2 = driftList([drift(".kiro/steering/x.md", "kiro", "rule/x", "x\n", "x\n")], provided);
+    expect(rows2[0].reason).toBe("provided by integrations.pm");
+    
+    // An orphan-drift of that ref → "no longer produced" (no longer produced wins)
+    const rows3 = driftList([orphanDrift(".claude/rules/x.md", "claude-code", "rule/x")], provided);
+    expect(rows3[0].reason).toBe("no longer produced");
+    
+    // With no map (spec 30's own tests) → null for the drift
+    const rows4 = driftList([drift(".claude/rules/x.md", "claude-code", "rule/x", "x\n", "x\n")]);
+    expect(rows4[0].reason).toBe(null);
+  });
+
+  // Builder's note: test what happens when the rule is listed in base AND in the integration recipe
+  // and the user edits it. This is case 8's Forge.
+  it("print-once: drift promote on a rule listed in base AND in the integration recipe", async () => {
+    const spec: ForgeSpec = {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        rule("where", "Org {{integrations.pm.org}}\n"),
+        rule("stories-azure-devops", STORIES),
+        mcp("azure-devops", { command: "npx", args: ["-y", "ado-mcp"] }),
+      ],
+      recipes: [
+        recipe("base", ["rule/workflow", "rule/where", "rule/stories-azure-devops"]),  // stories in base too!
+        recipe("pm-azure-devops", ["mcp/azure-devops", "rule/stories-azure-devops"], { slot: "pm" }),
+      ],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"], { integrations: PM })],
+    };
+    const s = await forgeAt(3, spec);
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+    
+    await sync(s.wsRoot);
+    gitInit(s.forgeRoot);
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/stories-azure-devops.md"), "by hand\n");
+    
+    const r = runCli(["drift", "promote", ".claude/rules/stories-azure-devops.md", "--workspace", s.wsRoot, "--dry-run", "--json"], { env });
+    
+    // Print the output for pinning
+    console.log("--- print-once: drift promote on dual-listed rule ---");
+    console.log("code:", r.code);
+    console.log("stdout:", r.stdout);
+    console.log("stderr:", r.stderr);
+    
+    // The claims that must hold:
+    // - It does not crash with a stack trace or an internal error
+    // - If it exits 0, no planned write touches recipes/pm-azure-devops.yaml's meaning for other profiles silently
+    // - If it refuses, the message is one of spec 30's own D… refusals
+    expect(r.code).toBe(0);  // This may need adjustment after seeing the output
+  });
+});
