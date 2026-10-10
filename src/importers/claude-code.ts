@@ -19,7 +19,8 @@ import { decide, forgeBefore, pin, sourceKeys, workspaceParams, workspaceSection
 import { renderMap } from "../core/template-import.js";
 import { firstMarkerLine } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
-import { GENERATED_BANNER, kiroReport, type KiroReport } from "./kiro-report.js";
+import { GENERATED_BANNER, kiroReport, textLines, type KiroReport } from "./kiro-report.js";
+import { preferKiro } from "./prefer-kiro.js";
 import { deepMerge } from "../core/merge.js";
 import { outName } from "../emitters/shared.js";
 import { parseYamlText } from "../core/yaml-read.js";
@@ -33,6 +34,8 @@ export interface ImportOptions {
   writeWorkspaceConfig?: boolean;
   /** Also compute the Kiro part of the report, from the flushed Forge (spec 29 §4.2). */
   report?: boolean;
+  /** Rules to read from `.kiro/steering/<name>.md` instead of `.claude/rules/<name>.md` (spec 29 §4.3), already parsed. */
+  preferKiro?: string[];
 }
 
 export interface ImportReport {
@@ -66,6 +69,12 @@ export interface ImportReport {
   configForgeKept: string | null;
   /** The Kiro part of the report (spec 29 §4.2); the key is absent unless the `report` option asked for it. */
   kiro?: KiroReport;
+  /**
+   * The rules taken from their steering file (spec 29 §4.3), one per named rule that was decided: `ref` as decided, the
+   * two workspace files and their line counts, and whether the text built differs from the rule file's. The key is
+   * absent unless the `preferKiro` option named a rule.
+   */
+  preferKiro?: { ref: string; source: string; steeringLines: number; rule: string; ruleLines: number; differs: boolean }[];
 }
 
 /** Rules that every workspace shares by intent — they seed the `base` recipe. */
@@ -126,6 +135,8 @@ interface Source {
   scan: Record<string, string>;
   after: (ref: string) => void;
   skip?: () => boolean;
+  /** Lines of the source file above the text in `files`, when it is not the file's own top (a rule read from its steering mirror). */
+  lineOffset?: number;
 }
 
 interface PlannedConfig {
@@ -285,28 +296,57 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     forge: loaded,
     markedBase: false,
   };
+  /* ---- --prefer-kiro: the named rules take their text from the steering mirror (spec 29 §4.3) ---- */
+  // Before the secret scan and every decision, so the text built is scanned and decided like any source. The names are
+  // looked up in what was read, never joined into a path.
+  if (opts.preferKiro?.length) {
+    const preferred: NonNullable<ImportReport["preferKiro"]> = (report.preferKiro = []);
+    const rules = new Map(queue.filter((q) => q.meta.type === "rule").map((q) => [q.meta.name, q]));
+    const handSteering = new Set([...steeringMeta].filter(([n, sm]) => !rules.has(n) && !sm.generated && n !== "commands").map(([n]) => n));
+    // The banner sync would write for this workspace: the importing profile's resolved `kiro.banner`, under the workspace's own.
+    const set = Object.hasOwn(ctx.W, "kiro.banner") ? ctx.W["kiro.banner"] : resolvedParam(loaded, opts.profileName, "kiro.banner", existing.params);
+    const banner = set === undefined || set === null ? null : String(set);
+    for (const name of opts.preferKiro) {
+      const q = rules.get(name);
+      if (!q) throw new Error(`import: --prefer-kiro ${name}: there is no .claude/rules/${name}.md — --prefer-kiro takes rules; a steering file with no rule is already imported as steering`);
+      const sm = steeringMeta.get(name);
+      if (!sm) throw new Error(`import: --prefer-kiro ${name}: there is no .kiro/steering/${name}.md to prefer`);
+      const ruleText = q.files["rule.md"] as string;
+      const { text, offset } = preferKiro({ name, steering: sm.text, rules: new Set(rules.keys()), handSteering, banner });
+      const source = `.kiro/steering/${name}.md`;
+      q.files = { "rule.md": text };
+      q.scan = scanOf("rule.md", sm);
+      q.lineOffset = offset;
+      q.meta = { ...q.meta, origin: origin(source) };
+      const after = q.after;
+      q.after = (ref) => {
+        after(ref);
+        preferred.push({ ref, source, steeringLines: textLines(sm.text), rule: `.claude/rules/${name}.md`, ruleLines: textLines(ruleText), differs: text !== ruleText });
+      };
+    }
+  }
   // F9 (§6.5): a source rejected for a secret or skipped is never decided. Its base stays in the Forge-wide scan (b),
   // and its text leaves the literal check (c). `ruleNames` fills only as rules are decided, so each set errs on its
   // safe side for a steering file a rule of its name may shadow: out of `runBases`, still in `others`.
   const queuedRules = new Set(queue.filter((q) => q.meta.type === "rule").map((q) => q.meta.name));
   const mayBeSkipped = (q: Source) => q.skip?.() || (q.meta.type === "steering" && queuedRules.has(q.meta.name));
-  const clean = queue.filter((q) => !secretIn(q.meta, q.files, q.scan));
+  const clean = queue.filter((q) => !secretIn(q.meta, q.files, q.scan, q.lineOffset));
   const runBases = new Set(clean.filter((q) => !mayBeSkipped(q)).map((q) => `${q.meta.type}/${q.meta.name}`));
   const mayBeDecided = clean.filter((q) => !q.skip?.());
-  const literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer> }> = [];
+  const literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer>; lineOffset?: number }> = [];
 
   /* ---- decide, in read order ---- */
   for (const src of queue) {
     if (src.skip?.()) continue;
     const others = mayBeDecided.filter((q) => q !== src).map((q) => ({ ref: `${q.meta.type}/${q.meta.name}`, meta: q.meta, files: q.files }));
-    const ref = await writeIngredient(stage, src.meta, src.files, opts.profileName, report, src.scan, { ctx, others, runBases, literal });
+    const ref = await writeIngredient(stage, src.meta, src.files, opts.profileName, report, src.scan, { ctx, others, runBases, literal, lineOffset: src.lineOffset });
     if (ref) src.after(ref);
   }
 
   // I3: a created or variant ingredient is the workspace text itself; a key the profile now sets would change it at sync.
   // I11 first (spec 11 §6.9): a column-0 marker in that text would be read as structure, so sync could not reproduce it.
   for (const l of literal) {
-    const marker = markerIn(l.meta, l.files, l.source);
+    const marker = markerIn(l.meta, l.files, l.source, l.lineOffset);
     if (marker) throw new Error(`import: ${marker.where} holds a section marker on line ${marker.line} — sync would not reproduce it; indent it or remove it, and re-run`);
     const map = renderMap(l.meta, ctx.P, ctx.W);
     const key = [...sourceKeys(l.meta, l.files)].find((k) => Object.hasOwn(map, k));
@@ -663,11 +703,12 @@ function addRef(list: string[], ref: string | null): void {
 }
 
 /** First secret-like value in an ingredient about to be imported, described by location only. */
-export function secretIn(meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string> = {}): string | null {
+export function secretIn(meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string> = {}, lineOffset = 0): string | null {
   const origin = meta.origin?.path ?? `${meta.type}/${meta.name}`;
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
-  // Bodies of agents and commands start after `---`, the raw block and the closing `---`.
-  const bodyOffset = raw ? raw.split("\n").length + 2 : 0;
+  // Bodies of agents and commands start after `---`, the raw block and the closing `---`; `lineOffset` is for a text
+  // that starts lower in its source file for another reason (spec 29 §4.3).
+  const bodyOffset = raw ? raw.split("\n").length + 2 : lineOffset;
   const texts: { where: string; text: string; offset: number }[] = [];
   if (raw) texts.push({ where: origin, text: raw, offset: 1 });
   for (const [rel, content] of Object.entries(files)) {
@@ -771,9 +812,9 @@ async function writeIngredient(
   profile: string,
   report: ImportReport,
   scan: Record<string, string> = {},
-  run?: { ctx: RunContext; others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>; runBases: Set<string>; literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer> }> },
+  run?: { ctx: RunContext; others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>; runBases: Set<string>; literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer>; lineOffset?: number }>; lineOffset?: number },
 ): Promise<string | null> {
-  const secret = secretIn(meta, files, scan);
+  const secret = secretIn(meta, files, scan, run?.lineOffset);
   if (secret) {
     report.rejected.push({ name: `${meta.type}/${meta.name}`, reason: secret });
     return null;
@@ -845,7 +886,7 @@ async function writeIngredient(
   }
   if (run) {
     pin(run.ctx, sourceKeys(sourceMeta, files), renderMap(sourceMeta, run.ctx.P, run.ctx.W));
-    run.literal.push({ ref: `${meta.type}/${name}`, source, meta: sourceMeta, files });
+    run.literal.push({ ref: `${meta.type}/${name}`, source, meta: sourceMeta, files, lineOffset: run.lineOffset });
   }
 
   // Build the YAML preserving key order. For MCP, authEnv sits immediately before server.
@@ -1020,6 +1061,18 @@ export async function recipeFile(o: Pick<RecipeOptions, "stage" | "dir">, name: 
   return file;
 }
 
+/** A parameter as the profile resolves it in the Forge before the run — recipe defaults under its own `params`; the profile's own when it is new or does not resolve. */
+function resolvedParam(forge: import("../core/forge.js").Forge | null, profile: string, key: string, own: Record<string, unknown>): unknown {
+  if (forge?.profiles.has(profile)) {
+    try {
+      return resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile })).params[key];
+    } catch {
+      // falls through: a profile that does not resolve still has its own value
+    }
+  }
+  return Object.hasOwn(own, key) ? own[key] : undefined;
+}
+
 /** The recipes a profile resolves inside the Forge; fails closed — a profile that does not resolve counts as using everything. */
 export function recipesOf(forge: import("../core/forge.js").Forge, profile: string): { has(name: string): boolean } {
   try {
@@ -1059,9 +1112,9 @@ async function existingProfile(
  * created or variant source, which sync would read as structure. The line counts from the top of
  * the workspace file, as the secret scan's does: an agent or command body starts after its frontmatter.
  */
-export function markerIn(meta: Ingredient, files: Record<string, string | Buffer>, source: string): { where: string; line: number } | null {
+export function markerIn(meta: Ingredient, files: Record<string, string | Buffer>, source: string, lineOffset = 0): { where: string; line: number } | null {
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
-  const offset = raw ? raw.split("\n").length + 2 : 0;
+  const offset = raw ? raw.split("\n").length + 2 : lineOffset;
   for (const [rel, content] of Object.entries(files)) {
     // the importer builds meta and file keys itself, with canonical names
     if (!bodyFile(meta, rel, null)) continue;

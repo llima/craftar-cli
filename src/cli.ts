@@ -4,6 +4,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
+import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
@@ -18,7 +19,7 @@ import { catalogueContext, listRecipes, listIngredients, checkType, type Catalog
 import { listTargets } from "./core/capabilities.js";
 import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
-import { renderImportReport } from "./core/import-report.js";
+import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
@@ -60,7 +61,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.22.1");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.23.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -85,19 +86,26 @@ program
     "--report <file.md>",
     "also write a Markdown report of the import — what was created, reused, made a variant or rejected, and the .kiro/ files that differ from what Craftar would generate (paths and line counts, never content); refused when the path is inside the Forge or already exists",
   )
+  .option(
+    "--prefer-kiro <rule,…>",
+    "take the named rules from .kiro/steering/<name>.md instead of .claude/rules/<name>.md — each proved to render back to that steering file's body; refused for a name that is not a rule, has no steering file, or whose steering does not render back",
+  )
   .action(async (o) => {
     if (o.from !== "claude-code") fail(`unsupported source "${o.from}" (only claude-code for now)`);
     // import writes a local Forge; a URL would become a directory named after it (spec 13 §4.4).
     if (classifyForge(o.forge) === "url") fail("--forge takes a directory; to read a remote Forge, run inside a workspace that names it");
     // Spec 29 §4.2: the report's path is refused before the import reads anything, so a refusal leaves the Forge untouched.
+    // Spec 29 §4.3: PK5, before anything is read.
+    const preferKiro = o.preferKiro === undefined ? undefined : parsePreferKiro(o.preferKiro);
     const reportAbs = o.report === undefined ? null : await gateOutsideForge(o.report, o.forge, REPORT_GATE);
-    const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig, report: reportAbs !== null });
+    const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig, report: reportAbs !== null, preferKiro });
     console.log(pc.bold(`Imported ${path.resolve(o.workspace)} → ${path.resolve(o.forge)} as profile "${r.profile}"`));
     console.log(
       `  ${pc.green(String(r.created.length))} created, ${pc.cyan(String(r.reused.length))} reused, ${pc.yellow(String(r.variants.length))} variants, ${pc.red(String(r.rejected.length))} rejected`,
     );
     for (const v of r.variants) console.log(`  ${pc.yellow("variant")} ${v.name} — ${v.reason}`);
     for (const x of r.rejected) console.log(`  ${pc.red("rejected")} ${x.name} — ${x.reason}`);
+    for (const x of r.preferKiro ?? []) console.log(`  ${pc.cyan("prefer-kiro")} ${preferredLine(x)}`);
     // Spec 10 §4.2: how a templated base was reused, and what the profile gained.
     // Spec 11 §4.3: `; sections …` when a section value filled the render.
     for (const x of r.rendered) {
@@ -124,6 +132,13 @@ program
           : `  workspace craftar.yaml edited (forge, profile, targets)`,
       );
     for (const w of r.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+    // Spec 29 §4.3: what the workspace sees next for a rule whose text now differs from its .claude file, and how to converge.
+    for (const x of r.preferKiro ?? []) {
+      if (!x.differs) continue;
+      console.log(`  ${pc.yellow("note")} ${x.ref} now comes from Kiro: ${x.rule} differs from it. With no lock entry it will read`);
+      console.log(`       "collision" at the next sync — delete it (and ${x.source} if it also collides) and run`);
+      console.log(`       craftar sync to regenerate both. Where craftar.lock already records it unedited, sync updates it.`);
+    }
     if (reportAbs !== null) {
       const text = renderImportReport({ workspace: path.resolve(o.workspace), forge: path.resolve(o.forge), report: r, now: new Date(), version: program.version()! });
       // After the summary, so a report that cannot be written never costs the summary of an import that succeeded.
