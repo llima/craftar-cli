@@ -11,7 +11,7 @@ import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, frag
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
 import { outName } from "../emitters/shared.js";
-import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, profileLabel, unpinnedSources } from "./templates.js";
+import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture } from "./proc.js";
 
 /*
@@ -292,7 +292,7 @@ async function workspaceChecks(
     const profile = ws.forge.profiles.get(ws.config.profile);
     if (profile) {
       const label = await profileLabel(ws.forge.root, profile.name);
-      let declared: import("./templates.js").Declared | undefined;
+      let declared: Declared | undefined;
       try {
         declared = declaredTemplates(profile, label);
       } catch (e) {

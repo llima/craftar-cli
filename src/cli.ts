@@ -53,7 +53,7 @@ import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { spawn } from "node:child_process";
 import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
-import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion, feedMessage, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared } from "./core/templates.js";
+import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion, feedMessage, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared, type InstallResult } from "./core/templates.js";
 import { capture, spawnInherited } from "./core/proc.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -1034,7 +1034,7 @@ templates
     }
 
     const announce = (entry: number, line: string) => console.log(`templates[${entry}]: ${line}`);
-    let result: import("./core/templates.js").InstallResult;
+    let result: InstallResult;
     try {
       result = await installTemplates(declared.entries, ws.root, { dryRun: o.dryRun, force: o.force, interactive: o.interactive, env: process.env, announce }, spawnInherited);
     } catch (e) {

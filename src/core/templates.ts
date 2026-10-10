@@ -13,9 +13,8 @@ import { capture as defaultCapture, type Probe, type Runner } from "./proc.js";
 
 const CREDENTIAL = "a source must not carry a user or a password: NuGet's own configuration holds credentials";
 
-/** The .NET SDK is missing: install + doctor use the same text (spec 32 §4.2 step 2). */
+/** The missing-SDK finding and its fix: one spelling for `templates install` and doctor's `dotnet` check. */
 export const DOTNET_MISSING = "the .NET SDK is not available: dotnet --version gave no version";
-/** The fix line for a missing .NET SDK. */
 export const DOTNET_MISSING_FIX = "install the .NET SDK and check PATH";
 
 export interface DotnetNewEntry {
@@ -199,7 +198,7 @@ export interface InstallReport {
   exitCode: 0 | 1;
 }
 
-/** What `install` prints and how it exits — pure, tested. */
+/** What `install` prints after its runs, and its exit code (spec 32 §4.2 step 5). */
 export function installReport(result: InstallResult, dryRun: boolean): InstallReport {
   const store = "into the dotnet template store of this user (remove a package with: dotnet new uninstall <package>)";
   if (dryRun) {
