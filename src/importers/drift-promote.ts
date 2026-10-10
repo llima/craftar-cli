@@ -20,7 +20,7 @@ import {
   type Forge,
   type UnheldPath,
 } from "../core/forge.js";
-import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type UnsetParam } from "../core/sync.js";
+import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type UnsetParam, type Plan, type Workspace } from "../core/sync.js";
 import { driftList, unmanaged } from "../core/drift.js";
 import { hashNormalized, toLf } from "../core/text.js";
 import { fingerprintOf } from "../core/fingerprint.js";
@@ -55,7 +55,7 @@ import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/templa
 import { sectionKey } from "../core/resolve.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import type { WriteJournal } from "../core/unify.js";
-import type { Ingredient, IngredientRef } from "../schema/index.js";
+import type { Ingredient, IngredientRef, Lock } from "../schema/index.js";
 
 export interface PromoteInput {
   workspaceRoot: string;
@@ -307,6 +307,116 @@ async function checkStagedSymlinks(forgeDir: string, stage: ForgeStage): Promise
       current = path.dirname(current);
     }
   }
+}
+
+/**
+ * The proof: build a scratch copy, plan against it, and verify the promote would work.
+ * Shared by params/sections and variant branches.
+ *
+ * Returns the proof results; throws D15 errors when the proof fails.
+ * The scratch directory is NOT cleaned up — the caller must do that after using scratchForge.
+ */
+async function provePromote(opts: {
+  forgeDir: string;
+  scratchDir: string;
+  stage: ForgeStage;
+  root: string;
+  p0: Plan;
+  lock: Lock | null;
+  E: { path: string }[];
+  EPaths: Set<string>;
+  ingredientRef: IngredientRef;
+  meta: { type: string };
+  N: string;
+}): Promise<{
+  scratchForge: Forge;
+  wsScratch: Workspace;
+  p1: Plan;
+  dependentPaths: Set<string>;
+  otherFilesUnchanged: number;
+  stScratch: FileStatus[];
+}> {
+  const { forgeDir, scratchDir, stage, root, p0, lock, E, EPaths, ingredientRef, meta, N } = opts;
+
+  // Copy Forge without .git, with file symlinks dereferenced and non-regular files refused
+  await copyForgeForProof(forgeDir, scratchDir);
+  await stage.flushTo(scratchDir);
+
+  const scratchForge = await loadForge(scratchDir);
+  const wsScratch = await workspaceAgainst(root, scratchForge);
+  const p1 = await plan(wsScratch);
+
+  // Proof checks
+  // 1. Same path set
+  const p0Paths = new Set(p0.files.map((f) => f.path));
+  const p1Paths = new Set(p1.files.map((f) => f.path));
+  if (p0Paths.size !== p1Paths.size || [...p0Paths].some((p) => !p1Paths.has(p))) {
+    throw new Error(D15(`the planned files would change (${p0Paths.size} → ${p1Paths.size})`));
+  }
+
+  // 2. For each path in E, p1 content matches disk
+  for (const f of E) {
+    const p1File = p1.files.find((x) => x.path === f.path);
+    if (!p1File) throw new Error(D15(`${f.path} would not be planned`));
+    const diskContent = await fs.readFile(path.join(root, f.path));
+    if (hashNormalized(p1File.content) !== hashNormalized(diskContent)) {
+      throw new Error(D15(`${f.path} would not match the file on disk`));
+    }
+  }
+
+  // 3. Dependent paths: files of this ingredient on non-claude-code targets
+  const dependentPaths = new Set<string>();
+  for (const pf of p0.files) {
+    if (pf.ingredient === ingredientRef && pf.target !== "claude-code") {
+      dependentPaths.add(pf.path);
+    }
+  }
+
+  // Also add AGENTS.md if this is a rule that's embedded in it (has a marker line)
+  let agentsMdIsDependent = false;
+  if (meta.type === "rule") {
+    const agentsMd = p0.files.find((f) => f.ingredient === ("rule/*" as IngredientRef) || f.path === "AGENTS.md");
+    if (agentsMd) {
+      const p0AgentsContent = agentsMd.content.toString("utf8");
+      const markerLine = `<!-- rule: ${N} -->`;
+      if (p0AgentsContent.includes(markerLine)) {
+        // This rule is embedded in AGENTS.md — it's a dependent path with bound
+        dependentPaths.add(agentsMd.path);
+        agentsMdIsDependent = true;
+      }
+      // If no marker, AGENTS.md just points at the file; it should be byte-equal
+    }
+  }
+
+  // 4. Every path not in E and not dependent must be byte-equal
+  let otherFilesUnchanged = 0;
+  for (const p0f of p0.files) {
+    if (EPaths.has(p0f.path) || dependentPaths.has(p0f.path)) continue;
+    const p1f = p1.files.find((x) => x.path === p0f.path);
+    if (!p1f) throw new Error(D15(`${p0f.path} would change`));
+    if (!p0f.content.equals(p1f.content)) {
+      throw new Error(D15(`${p0f.path} would change`));
+    }
+    otherFilesUnchanged++;
+  }
+
+  // 5. Check AGENTS.md bound (§4.6 item 4)
+  if (agentsMdIsDependent) {
+    const p0AgentsMd = p0.files.find((f) => f.path === "AGENTS.md");
+    const p1AgentsMd = p1.files.find((f) => f.path === "AGENTS.md");
+    if (p0AgentsMd && p1AgentsMd) {
+      const p0Text = p0AgentsMd.content.toString("utf8");
+      const p1Text = p1AgentsMd.content.toString("utf8");
+      if (!agentsBound(p0Text, p1Text, N)) {
+        throw new Error(D15(`AGENTS.md would change outside rule ${N}`));
+      }
+    }
+  }
+
+  // Compute next sync statuses
+  const stScratch = await status(wsScratch, p1, lock);
+
+  return { scratchForge, wsScratch, p1, dependentPaths, otherFilesUnchanged, stScratch };
 }
 
 /**
@@ -853,81 +963,10 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     // Build proof in scratch copy
     const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-promote-"));
     try {
-      await copyForgeForProof(forgeDir, scratchDir);
-      await stage.flushTo(scratchDir);
-
-      const scratchForge = await loadForge(scratchDir);
-      const wsScratch = await workspaceAgainst(root, scratchForge);
-      const p1 = await plan(wsScratch);
-
-      // Proof checks
-      const p0Paths = new Set(p0.files.map((f) => f.path));
-      const p1Paths = new Set(p1.files.map((f) => f.path));
-      if (p0Paths.size !== p1Paths.size || [...p0Paths].some((p) => !p1Paths.has(p))) {
-        throw new Error(D15(`the planned files would change (${p0Paths.size} → ${p1Paths.size})`));
-      }
-
-      // For each path in E, p1 content matches disk
-      for (const f of E) {
-        const p1File = p1.files.find((x) => x.path === f.path);
-        if (!p1File) throw new Error(D15(`${f.path} would not be planned`));
-        const diskContent = await fs.readFile(path.join(root, f.path));
-        if (hashNormalized(p1File.content) !== hashNormalized(diskContent)) {
-          throw new Error(D15(`${f.path} would not match the file on disk`));
-        }
-      }
-
-      // Dependent paths: files of this ingredient on non-claude-code targets
-      const dependentPaths = new Set<string>();
-      for (const pf of p0.files) {
-        if (pf.ingredient === ingredientRef && pf.target !== "claude-code") {
-          dependentPaths.add(pf.path);
-        }
-      }
-
-      // Also add AGENTS.md if this is a rule that's embedded in it (has a marker line)
-      let agentsMdIsDependent = false;
-      if (meta.type === "rule") {
-        const agentsMd = p0.files.find((f) => f.ingredient === ("rule/*" as IngredientRef) || f.path === "AGENTS.md");
-        if (agentsMd) {
-          const p0AgentsContent = agentsMd.content.toString("utf8");
-          const markerLine = `<!-- rule: ${N} -->`;
-          if (p0AgentsContent.includes(markerLine)) {
-            // This rule is embedded in AGENTS.md — it's a dependent path with bound
-            dependentPaths.add(agentsMd.path);
-            agentsMdIsDependent = true;
-          }
-          // If no marker, AGENTS.md just points at the file; it should be byte-equal
-        }
-      }
-
-      // Every path not in E and not dependent must be byte-equal
-      let otherFilesUnchanged = 0;
-      for (const p0f of p0.files) {
-        if (EPaths.has(p0f.path) || dependentPaths.has(p0f.path)) continue;
-        const p1f = p1.files.find((x) => x.path === p0f.path);
-        if (!p1f) throw new Error(D15(`${p0f.path} would change`));
-        if (!p0f.content.equals(p1f.content)) {
-          throw new Error(D15(`${p0f.path} would change`));
-        }
-        otherFilesUnchanged++;
-      }
-
-      // Check AGENTS.md bound (§4.6 item 4)
-      if (agentsMdIsDependent) {
-        const p0AgentsMd = p0.files.find((f) => f.path === "AGENTS.md");
-        const p1AgentsMd = p1.files.find((f) => f.path === "AGENTS.md");
-        if (p0AgentsMd && p1AgentsMd) {
-          const p0Text = p0AgentsMd.content.toString("utf8");
-          const p1Text = p1AgentsMd.content.toString("utf8");
-          if (!agentsBound(p0Text, p1Text, N)) {
-            throw new Error(D15(`AGENTS.md would change outside rule ${N}`));
-          }
-        }
-      }
-
-      // Compute next sync statuses
-      const stScratch = await status(wsScratch, p1, lock);
+      const proof = await provePromote({
+        forgeDir, scratchDir, stage, root, p0, lock, E, EPaths, ingredientRef, meta, N,
+      });
+      const { scratchForge, p1, dependentPaths, otherFilesUnchanged, stScratch } = proof;
 
       // Impact — check other workspaces (step 30h)
       const thisWsRealPath = await fs.realpath(root);
@@ -1209,82 +1248,12 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Step 8: The proof
   const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-promote-"));
   try {
-    // Copy Forge without .git, with file symlinks dereferenced and non-regular files refused
-    await copyForgeForProof(forgeDir, scratchDir);
-    await stage.flushTo(scratchDir);
+    const proof = await provePromote({
+      forgeDir, scratchDir, stage, root, p0, lock, E, EPaths, ingredientRef, meta, N,
+    });
+    const { scratchForge, p1, dependentPaths, otherFilesUnchanged, stScratch } = proof;
 
-    const scratchForge = await loadForge(scratchDir);
-    const wsScratch = await workspaceAgainst(root, scratchForge);
-    const p1 = await plan(wsScratch);
-
-    // Proof checks
-    // 1. Same path set
-    const p0Paths = new Set(p0.files.map((f) => f.path));
-    const p1Paths = new Set(p1.files.map((f) => f.path));
-    if (p0Paths.size !== p1Paths.size || [...p0Paths].some((p) => !p1Paths.has(p))) {
-      throw new Error(D15(`the planned files would change (${p0Paths.size} → ${p1Paths.size})`));
-    }
-
-    // 2. For each path in E, p1 content matches disk
-    for (const f of E) {
-      const p1File = p1.files.find((x) => x.path === f.path);
-      if (!p1File) throw new Error(D15(`${f.path} would not be planned`));
-      const diskContent = await fs.readFile(path.join(root, f.path));
-      if (hashNormalized(p1File.content) !== hashNormalized(diskContent)) {
-        throw new Error(D15(`${f.path} would not match the file on disk`));
-      }
-    }
-
-    // 3. Every path not in E and not dependent must be byte-equal
-    // Dependent paths: files of this ingredient on non-claude-code targets
-    const dependentPaths = new Set<string>();
-    for (const pf of p0.files) {
-      if (pf.ingredient === ingredientRef && pf.target !== "claude-code") {
-        dependentPaths.add(pf.path);
-      }
-    }
-
-    // Also add AGENTS.md if this is a rule that's embedded in it (has a marker line)
-    let agentsMdIsDependent = false;
-    if (meta.type === "rule") {
-      const agentsMd = p0.files.find((f) => f.ingredient === ("rule/*" as IngredientRef) || f.path === "AGENTS.md");
-      if (agentsMd) {
-        const p0AgentsContent = agentsMd.content.toString("utf8");
-        const markerLine = `<!-- rule: ${N} -->`;
-        if (p0AgentsContent.includes(markerLine)) {
-          // This rule is embedded in AGENTS.md — it's a dependent path with bound
-          dependentPaths.add(agentsMd.path);
-          agentsMdIsDependent = true;
-        }
-        // If no marker, AGENTS.md just points at the file; it should be byte-equal
-      }
-    }
-
-    let otherFilesUnchanged = 0;
-    for (const p0f of p0.files) {
-      if (EPaths.has(p0f.path) || dependentPaths.has(p0f.path)) continue;
-      const p1f = p1.files.find((x) => x.path === p0f.path);
-      if (!p1f) throw new Error(D15(`${p0f.path} would change`));
-      if (!p0f.content.equals(p1f.content)) {
-        throw new Error(D15(`${p0f.path} would change`));
-      }
-      otherFilesUnchanged++;
-    }
-
-    // Check AGENTS.md bound (§4.6 item 4)
-    if (agentsMdIsDependent) {
-      const p0AgentsMd = p0.files.find((f) => f.path === "AGENTS.md");
-      const p1AgentsMd = p1.files.find((f) => f.path === "AGENTS.md");
-      if (p0AgentsMd && p1AgentsMd) {
-        const p0Text = p0AgentsMd.content.toString("utf8");
-        const p1Text = p1AgentsMd.content.toString("utf8");
-        if (!agentsBound(p0Text, p1Text, N)) {
-          throw new Error(D15(`AGENTS.md would change outside rule ${N}`));
-        }
-      }
-    }
-
-    // 4. X.ref should not be in p1's resolution (only for new variants, not variant-updated)
+    // Variant-specific check: X.ref should not be in p1's resolution (only for new variants)
     // For variant-updated, ingredientRef === variantRef, so it SHOULD still be there
     if (outcome === "variant") {
       const p1Refs = new Set(p1.resolution.ingredients.map((i) => i.ref));
@@ -1292,9 +1261,6 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         throw new Error(D15(`${ingredientRef} would still resolve beside ${variantRef}`));
       }
     }
-
-    // Compute next sync statuses (return FileStatus[] for CLI to use countStates/nextSyncLine)
-    const stScratch = await status(wsScratch, p1, lock);
 
     // Impact: check for other workspaces (step 30h)
     const thisWsRealPath = await fs.realpath(root);
