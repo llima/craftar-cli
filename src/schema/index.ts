@@ -416,14 +416,16 @@ export type Sections = z.infer<typeof SectionsSchema>;
 /* Templates (spec 32)                                                  */
 /* ------------------------------------------------------------------ */
 
-/** Rule messages — exported for tests that pin them. */
-export const LIST = "must be a list of entries, each with a kind";
-export const ENTRY = "an entry is a mapping with a kind";
-export const KIND = 'a kind is a lowercase name: a-z, 0-9 and "-", starting with a letter';
-export const PACKAGES = "a dotnet-new entry lists at least one package";
-export const PACKAGE = 'a package is a NuGet ID, optionally <id>::<version>: no path, no space, no leading "-" or "."';
-export const SOURCE = "a source is an https:// URL";
-export const UNKNOWN_KEY = "a dotnet-new entry has no such key (it has kind, packages and source)";
+/** Rule texts of spec 32 §5.2 — each refusal names its position and one of these, never a value from the block. */
+export const TEMPLATE_RULES = {
+  list: "must be a list of entries, each with a kind",
+  entry: "an entry is a mapping with a kind",
+  kind: 'a kind is a lowercase name: a-z, 0-9 and "-", starting with a letter',
+  packages: "a dotnet-new entry lists at least one package",
+  package: 'a package is a NuGet ID, optionally <id>::<version>: no path, no space, no leading "-" or "."',
+  source: "a source is an https:// URL",
+  unknownKey: "a dotnet-new entry has no such key (it has kind, packages and source)",
+} as const;
 
 export const TEMPLATE_KIND = /^[a-z][a-z0-9-]*$/;
 /** `<id>` or `<id>::<version>` (spec 32 §5.2): no separator, no space, no leading `-` or `.`. */
@@ -434,30 +436,38 @@ export const DotnetNewTemplateSchema = z
   .object({
     kind: z.literal("dotnet-new"),
     packages: z
-      .array(z.string({ invalid_type_error: PACKAGE }).regex(TEMPLATE_PACKAGE, PACKAGE), { invalid_type_error: PACKAGES, required_error: PACKAGES })
-      .min(1, PACKAGES),
-    source: z.string({ invalid_type_error: SOURCE }).regex(TEMPLATE_SOURCE, SOURCE).optional(),
+      .array(
+        z.string({ invalid_type_error: TEMPLATE_RULES.package, required_error: TEMPLATE_RULES.package }).regex(TEMPLATE_PACKAGE, TEMPLATE_RULES.package),
+        { invalid_type_error: TEMPLATE_RULES.packages, required_error: TEMPLATE_RULES.packages }
+      )
+      .min(1, TEMPLATE_RULES.packages),
+    source: z.string({ invalid_type_error: TEMPLATE_RULES.source }).regex(TEMPLATE_SOURCE, TEMPLATE_RULES.source).optional(),
   })
-  .strict({ message: UNKNOWN_KEY });
+  .strict();
 export type DotnetNewTemplate = z.infer<typeof DotnetNewTemplateSchema>;
 
 /** An entry with any kind: validated as a record with a kind, then `dotnet-new` is re-checked with DotnetNewTemplateSchema. */
 export const TemplatesSchema = z.array(
-  noProtoKey(z.record(z.unknown(), { invalid_type_error: ENTRY })).superRefine((entry, ctx) => {
-    // kind: present and matching TEMPLATE_KIND
+  noProtoKey(z.record(z.unknown(), { invalid_type_error: TEMPLATE_RULES.entry })).superRefine((entry, ctx) => {
     const kind = (entry as Record<string, unknown>).kind;
     if (typeof kind !== "string" || !TEMPLATE_KIND.test(kind)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["kind"], message: KIND });
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["kind"], message: TEMPLATE_RULES.kind });
       return;
     }
-    // dotnet-new: strict shape
     if (kind === "dotnet-new") {
       const r = DotnetNewTemplateSchema.safeParse(entry);
-      if (!r.success) for (const issue of r.error.issues) ctx.addIssue(issue);
+      if (!r.success) {
+        for (const issue of r.error.issues) {
+          if (issue.code === "unrecognized_keys") {
+            for (const key of issue.keys) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: TEMPLATE_RULES.unknownKey });
+          } else {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, path: issue.path, message: issue.message });
+          }
+        }
+      }
     }
-    // any other kind: accepted whatever its keys
   }),
-  { invalid_type_error: LIST, required_error: LIST }
+  { invalid_type_error: TEMPLATE_RULES.list, required_error: TEMPLATE_RULES.list }
 );
 
 /* ------------------------------------------------------------------ */

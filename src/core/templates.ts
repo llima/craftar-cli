@@ -1,24 +1,15 @@
+/**
+ * Project templates declared in a profile (spec 32 §5).
+ * `declaredTemplates` is the one reader of `profile.templates`.
+ * This module returns data and throws; it never prints.
+ */
 import path from "node:path";
-import {
-  DotnetNewTemplateSchema,
-  ENTRY,
-  LIST,
-  TemplatesSchema,
-  type DotnetNewTemplate,
-} from "../schema/index.js";
+import { DotnetNewTemplateSchema, TEMPLATE_RULES, TemplatesSchema } from "../schema/index.js";
 import { credentialFault } from "./remote.js";
 import { exists } from "./forge.js";
 import { schemaIssues } from "./schema-fault.js";
 
-/* ------------------------------------------------------------------ */
-/* Rule message for credentials (messages.md §1)                       */
-/* ------------------------------------------------------------------ */
-
 const CREDENTIAL = "a source must not carry a user or a password: NuGet's own configuration holds credentials";
-
-/* ------------------------------------------------------------------ */
-/* Types (design.md)                                                    */
-/* ------------------------------------------------------------------ */
 
 export interface DotnetNewEntry {
   entry: number;
@@ -49,150 +40,71 @@ export interface TemplateRow {
   installable: boolean;
 }
 
-/* ------------------------------------------------------------------ */
-/* declaredTemplates                                                    */
-/* ------------------------------------------------------------------ */
+const position = (p: Array<string | number>) => "templates" + p.map((x) => (typeof x === "number" ? `[${x}]` : `.${x}`)).join("");
 
-const UNKNOWN_KIND = (kind: string) => `templates: kind "${kind}" is not installed by this craftar — skipped`;
+const unknownKind = (kind: string) => `templates: kind "${kind}" is not installed by this craftar — skipped`;
 
 /** The one reader of `profile.templates` (spec 32 §8). Throws the refusal of messages.md §2. */
 export function declaredTemplates(profile: { name: string; templates?: unknown }, label: string): Declared {
-  // 1. Not declared
   if (profile.templates === undefined || profile.templates === null) {
     return { declared: false, entries: [], warnings: [] };
   }
 
-  // 2. Parse through TemplatesSchema
   const parsed = TemplatesSchema.safeParse(profile.templates);
   if (!parsed.success) {
-    const rawIssues = parsed.error.issues;
-    const rawFirst = rawIssues[0];
     const issues = schemaIssues(parsed.error);
-    const first = issues[0];
-
-    // Format the position: numeric path segments become [N], others become .key
-    // schemaIssues returns path as "0" or "0.kind" or "0.packages.1" — we need templates[0] or templates[0].kind or templates[0].packages[1]
-    // For unrecognized_keys, the path is just the entry index and we need to append the unknown key name
-    const formatPosition = (rawPath: string, rawIssue: typeof rawFirst): string => {
-      let result = "templates";
-      if (rawPath !== "top level") {
-        const parts = rawPath.split(".");
-        for (const part of parts) {
-          if (/^\d+$/.test(part)) {
-            result += `[${part}]`;
-          } else {
-            result += `.${part}`;
-          }
-        }
-      }
-      // For unrecognized_keys, append the first unknown key to the path
-      if (rawIssue.code === "unrecognized_keys" && Array.isArray(rawIssue.keys) && rawIssue.keys.length > 0) {
-        result += `.${rawIssue.keys[0]}`;
-      }
-      return result;
-    };
-    const position = formatPosition(first.path, rawFirst);
+    const pos = position(parsed.error.issues[0].path);
     const more = issues.length > 1 ? ` (and ${issues.length - 1} more)` : "";
-
-    // Check if it's the list-level refusal (the block is not a list)
-    if (first.text === LIST) {
+    if (parsed.error.issues[0].path.length === 0) {
       const hint = `  templates:\n    - kind: dotnet-new\n      packages: [Example.Templates.Api]`;
-      throw new Error(`${label}: ${position} — ${first.text}\n${hint}`);
+      throw new Error(`${label}: ${pos} — ${issues[0].text}\n${hint}`);
     }
-    throw new Error(`${label}: ${position} — ${first.text}${more}`);
+    throw new Error(`${label}: ${pos} — ${issues[0].text}${more}`);
   }
 
-  // 3. For each dotnet-new entry with a source: credentialFault
-  const rawEntries = parsed.data;
-  for (let i = 0; i < rawEntries.length; i++) {
-    const entry = rawEntries[i] as Record<string, unknown>;
-    if (entry.kind === "dotnet-new") {
-      // Re-parse with DotnetNewTemplateSchema to get the typed entry
-      // (the schema already validated; this cannot fail)
-      const r = DotnetNewTemplateSchema.safeParse(entry);
-      if (!r.success) {
-        throw new Error(`${label}: templates[${i}] — ${ENTRY}`);
-      }
-      const typed = r.data;
-      if (typed.source && credentialFault(typed.source)) {
-        throw new Error(`${label}: templates[${i}].source — ${CREDENTIAL}`);
-      }
-    }
-  }
-
-  // 4. Build entries and warnings
   const entries: DeclaredEntry[] = [];
   const warnings: string[] = [];
 
-  for (let i = 0; i < rawEntries.length; i++) {
-    const entry = rawEntries[i] as Record<string, unknown>;
-    const kind = entry.kind as string;
+  for (let entry = 0; entry < parsed.data.length; entry++) {
+    const raw = parsed.data[entry];
+    const kind = String((raw as Record<string, unknown>).kind);
 
-    if (kind === "dotnet-new") {
-      const typed = entry as DotnetNewTemplate;
-      const packages = typed.packages.map((pkg) => {
-        const idx = pkg.indexOf("::");
-        if (idx === -1) return { id: pkg, version: null };
-        return { id: pkg.slice(0, idx), version: pkg.slice(idx + 2) };
-      });
-      entries.push({
-        entry: i,
-        kind: "dotnet-new",
-        installable: true,
-        packages,
-        source: typed.source ?? null,
-      });
-    } else {
-      // Unknown kind
-      entries.push({ entry: i, kind, installable: false });
-      warnings.push(UNKNOWN_KIND(kind));
+    if (kind !== "dotnet-new") {
+      entries.push({ entry, kind, installable: false });
+      warnings.push(unknownKind(kind));
+      continue;
     }
+
+    // The list schema already accepted this entry; this cannot fail
+    const r = DotnetNewTemplateSchema.safeParse(raw);
+    if (!r.success) throw new Error(`${label}: templates[${entry}] — ${TEMPLATE_RULES.entry}`);
+
+    if (r.data.source !== undefined && credentialFault(r.data.source)) {
+      throw new Error(`${label}: templates[${entry}].source — ${CREDENTIAL}`);
+    }
+
+    const packages = r.data.packages.map((pkg) => {
+      const idx = pkg.indexOf("::");
+      return idx === -1 ? { id: pkg, version: null } : { id: pkg.slice(0, idx), version: pkg.slice(idx + 2) };
+    });
+    entries.push({ entry, kind: "dotnet-new", installable: true, packages, source: r.data.source ?? null });
   }
 
   return { declared: true, entries, warnings };
 }
 
-/* ------------------------------------------------------------------ */
-/* templateRows                                                         */
-/* ------------------------------------------------------------------ */
-
+/** Flatten entries to rows for `templates list --json`. */
 export function templateRows(entries: DeclaredEntry[]): TemplateRow[] {
-  const rows: TemplateRow[] = [];
-  for (const e of entries) {
-    if (e.installable) {
-      for (const pkg of e.packages) {
-        rows.push({
-          entry: e.entry,
-          kind: e.kind,
-          package: pkg.id,
-          version: pkg.version,
-          source: e.source,
-          installable: true,
-        });
-      }
-    } else {
-      rows.push({
-        entry: e.entry,
-        kind: e.kind,
-        package: null,
-        version: null,
-        source: null,
-        installable: false,
-      });
-    }
-  }
-  return rows;
+  return entries.flatMap((e): TemplateRow[] =>
+    e.installable
+      ? e.packages.map((pkg) => ({ entry: e.entry, kind: e.kind, package: pkg.id, version: pkg.version, source: e.source, installable: true as const }))
+      : [{ entry: e.entry, kind: e.kind, package: null, version: null, source: null, installable: false as const }]
+  );
 }
-
-/* ------------------------------------------------------------------ */
-/* profileLabel (D9)                                                    */
-/* ------------------------------------------------------------------ */
 
 /** D9: the Forge-relative file when the directory carries the profile's name, else a description. */
 export async function profileLabel(forgeRoot: string, name: string): Promise<string> {
-  const expected = path.join(forgeRoot, "profiles", name, "profile.yaml");
-  if (await exists(expected)) {
-    return `profiles/${name}/profile.yaml`;
-  }
-  return `the profile.yaml of profile ${name}`;
+  return (await exists(path.join(forgeRoot, "profiles", name, "profile.yaml")))
+    ? `profiles/${name}/profile.yaml`
+    : `the profile.yaml of profile ${name}`;
 }
