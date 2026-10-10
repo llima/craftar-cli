@@ -32,7 +32,7 @@ export const TARGETS = ["claude-code", "kiro", "agents-md"] as const;
 export type Target = (typeof TARGETS)[number];
 export const TargetSchema = z.enum(TARGETS);
 
-/** Owners of lock entries: AI-coder targets plus internal owners like `services` (spec 31 §5.2). */
+/** Owners of lock entries: AI-coder targets (`claude-code`, `kiro`, `agents-md`) plus `services`. */
 export const OWNERS = [...TARGETS, "services"] as const;
 export type Owner = (typeof OWNERS)[number];
 export const OwnerSchema = z.enum(OWNERS);
@@ -394,13 +394,8 @@ export const LockEntrySchema = z.object({
   target: TargetSchema,
   ingredient: z.string(),
 });
-/** Lock entry for schema 3: target is any owner (AI-coder targets plus `services`). */
-export const LockEntrySchemaV3 = z.object({
-  path: z.string(),
-  hash: z.string(),
-  target: OwnerSchema,
-  ingredient: z.string(),
-});
+/** Lock entry for schema 3: target is any owner (AI-coder targets plus `services`). Derived from LockEntrySchema. */
+export const LockEntrySchemaV3 = LockEntrySchema.extend({ target: OwnerSchema });
 /** Lock schema 1 (craftar ≤ 0.10.x): read, never written since 0.11.0. */
 export const LockSchemaV1 = z.object({
   schema: z.literal(1),
@@ -428,23 +423,9 @@ export const LockSchemaV2 = z.object({
   generatedAt: z.string(),
   files: z.array(LockEntrySchema),
 });
-/** Lock schema 3 (spec 31 §5.2): entry targets include internal owners like `services`. */
-export const LockSchemaV3 = z.object({
+/** Lock schema 3 (spec 31 §5.2): entry targets include internal owners like `services`. Derived from LockSchemaV2. */
+export const LockSchemaV3 = LockSchemaV2.extend({
   schema: z.literal(3),
-  forge: z.object({
-    /** craftar.yaml › forge as written (after the local merge); never holds credentials (spec 13 §4.3). */
-    source: z.string(),
-    /** The requested ref; null when none was given or the Forge is a path. */
-    ref: z.string().nullable(),
-    /** The resolved commit; null for a path Forge without git. */
-    commit: z.string().nullable(),
-  }),
-  profile: z.string(),
-  /** Resolution.recipes: resolved, in application order (extends parents included). */
-  recipes: z.array(z.string()),
-  targets: z.array(TargetSchema),
-  /** When the lock's content last changed (Ruling 10). */
-  generatedAt: z.string(),
   files: z.array(LockEntrySchemaV3),
 });
 /** Supported lock schemas; anything else is refused by name in `readLock`. */

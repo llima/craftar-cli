@@ -719,7 +719,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
           entries.push(entry(s.planned!));
         } else {
           skipped.push(s);
-          entries.push(s.lock! as LockEntryV3); // keep the old hash so the drift stays visible
+          entries.push(s.lock!); // keep the old hash so the drift stays visible
         }
         break;
       case "collision":
@@ -745,25 +745,19 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   // Schema 3 when any entry has target `services`; otherwise schema 2 (spec 31 §5.2, spec 13 §5.2).
   const sortedEntries = entries.sort((a, b) => a.path.localeCompare(b.path));
   const hasServices = entries.some((e) => e.target === "services");
+  // Build the shared part once; the two branches differ only in `schema` and in the entry type.
+  const base = {
+    forge: { source: ws.config.forge, ref: ws.origin.ref, commit: ws.forge.commit },
+    profile: ws.config.profile,
+    recipes: p.resolution.recipes,
+    targets: p.resolution.targets,
+    generatedAt: new Date().toISOString(),
+  };
   const built: LockV2 | LockV3 = hasServices
-    ? {
-        schema: 3,
-        forge: { source: ws.config.forge, ref: ws.origin.ref, commit: ws.forge.commit },
-        profile: ws.config.profile,
-        recipes: p.resolution.recipes,
-        targets: p.resolution.targets,
-        generatedAt: new Date().toISOString(),
-        files: sortedEntries,
-      }
-    : {
-        schema: 2,
-        forge: { source: ws.config.forge, ref: ws.origin.ref, commit: ws.forge.commit },
-        profile: ws.config.profile,
-        recipes: p.resolution.recipes,
-        targets: p.resolution.targets,
-        generatedAt: new Date().toISOString(),
-        files: sortedEntries as LockEntry[],
-      };
+    ? { schema: 3, ...base, files: sortedEntries }
+    // The narrowing cast is sound: hasServices is false, so no entry has target "services",
+    // thus every entry's target is a Target (claude-code | kiro | agents-md).
+    : { schema: 2, ...base, files: sortedEntries as LockEntry[] };
   // Rewritten only when its content changes: generatedAt is when it last did (Ruling 10). A schema 1
   // lock always differs, so the first sync with this craftar upgrades it.
   const onDisk = opts.dryRun ? null : await readLock(ws.root);

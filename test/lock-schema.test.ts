@@ -72,6 +72,12 @@ describe("lock schema 3 (spec 31 §5.2)", () => {
     expect(LockSchema.parse(V3)).toEqual(V3);
   });
 
+  it("parsed V3 key order matches V2 key order (extend keeps key positions)", () => {
+    const v2Keys = Object.keys(LockSchema.parse(V2));
+    const v3Keys = Object.keys(LockSchema.parse(V3));
+    expect(v3Keys).toEqual(v2Keys);
+  });
+
   it("schema 2 refuses the services owner in a file entry", () => {
     const v2WithServices = { ...V2, files: V3.files };
     expect(LockSchema.safeParse(v2WithServices).success).toBe(false);
