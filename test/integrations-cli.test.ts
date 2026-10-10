@@ -310,9 +310,15 @@ describe("Valid schema 3 Forge — key sets and lock unchanged", () => {
     const doc1 = JSON.parse(runCli(["doctor", "--workspace", ws1, "--json"], { env: env1 }).stdout);
     const doc2 = JSON.parse(runCli(["doctor", "--workspace", ws2, "--json"], { env: env2 }).stdout);
 
-    expect(doc1.checks.map((c: { id: string; level: string }) => [c.id, c.level])).toEqual(
-      doc2.checks.map((c: { id: string; level: string }) => [c.id, c.level]),
-    );
+    // Normalize by replacing temp roots with <root>
+    type Check = { id: string; scope: string; level: string; message: string; fix: string | null };
+    const normalize = (checks: Check[], root: string) =>
+      checks.map((c) => [c.id, c.scope, c.level, c.message.replaceAll(root, "<root>"), c.fix?.replaceAll(root, "<root>") ?? null]);
+
+    const checks1 = normalize(doc1.checks, r1);
+    const checks2 = normalize(doc2.checks, r2);
+
+    expect(checks1).toEqual(checks2);
   });
 });
 

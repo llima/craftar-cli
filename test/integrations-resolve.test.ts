@@ -330,4 +330,44 @@ describe("spec 33 §9.2 — resolve() reads the effective profile", () => {
     expect(r.code).toBe(0);
     expect(r.stdout.split("\n")).toContain("  params      integrations.pm.org (profile acme), integrations.pm.project (profile acme)");
   });
+
+  // §6.28 — a padded flow mapping resolves at schema 3
+  it("§6.28. a profile file with a padded flow mapping resolves", async () => {
+    // Write the profile file with a padded flow mapping (inner spaces around braces)
+    const spec: ForgeSpec = {
+      ingredients: [rule("workflow", "# Workflow\n"), rule("where", "Org {{integrations.pm.org}}\n")],
+      recipes: [recipe("base", ["rule/workflow", "rule/where"]), recipe("pm-azure-devops", [], { slot: "pm" })],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    };
+    const s = await forgeAt(3, spec);
+    cleanups.push(s.cleanup);
+
+    // Overwrite the profile with a padded flow mapping
+    const profilePath = path.join(s.forgeRoot, "profiles/acme/profile.yaml");
+    await fs.writeFile(profilePath, `name: acme
+recipes: [base]
+targets: [claude-code]
+integrations:
+  pm:  { kind: azure-devops, org: acme, project: Platform }
+`);
+
+    const r = await resolved(s.wsRoot);
+    expect(r.recipes).toEqual(["base", "pm-azure-devops"]);
+    const w = await loadWorkspace(s.wsRoot);
+    const p = await plan(w);
+    expect(text(p, ".claude/rules/where.md")).toBe("Org acme\n");
+  });
+
+  // §6.31 — a slot named like a recipe prefix
+  it("§6.31. a slot named like a recipe prefix selects that recipe", async () => {
+    const spec: ForgeSpec = {
+      ingredients: [rule("workflow", "# Workflow\n")],
+      recipes: [recipe("stack-dotnet", ["rule/workflow"])],
+      profiles: [profile("acme", [], ["claude-code"], { integrations: { stack: { kind: "dotnet" } } })],
+    };
+    const { wsRoot } = await at(3, spec);
+    const r = await resolved(wsRoot);
+    expect(r.recipes).toEqual(["stack-dotnet"]);
+    expect(r.params["integrations.stack.kind"]).toBe("dotnet");
+  });
 });

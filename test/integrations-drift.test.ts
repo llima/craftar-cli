@@ -294,6 +294,7 @@ describe("drift × the integrations block", () => {
     await fs.appendFile(path.join(s.wsRoot, ".claude/rules/where.md"), "by hand\n");
     
     const r = runCli(["drift", "show", "--workspace", s.wsRoot, "--json"], { env });
+    expect(r.code).toBe(0);
     const j = JSON.parse(r.stdout);
     
     expect(j.files.map((f: { promotable: boolean; reason: string | null }) => [f.promotable, f.reason])).toEqual([
@@ -327,18 +328,38 @@ describe("drift × the integrations block", () => {
     expect(r1.code).toBe(0);
     const j1 = JSON.parse(r1.stdout);
 
-    // Claim: one row, .claude/rules/where.md, promotable: true, reason: null
+    // Pin the whole files array
     expect(j1.files).toEqual([
       { path: ".claude/rules/where.md", state: "drift", target: "claude-code", ingredient: "rule/where", forge: "same", promotable: true, reason: null },
     ]);
 
-    // drift promote --dry-run --json
+    // drift promote --dry-run --json — pin the WHOLE object with temp paths from variables
     const r2 = runCli(["drift", "promote", ".claude/rules/where.md", "--workspace", s.wsRoot, "--dry-run", "--json"], { env });
     expect(r2.code).toBe(0);
     const j2 = JSON.parse(r2.stdout);
 
-    // Claim: exit 0, outcome is variant (the base has {{integrations.pm.org}} which renders verbatim at schema 2)
-    expect(j2.outcome).toBe("variant");
+    expect(j2).toEqual({
+      workspace: s.wsRoot,
+      forge: s.forgeRoot,
+      profile: "acme",
+      dryRun: true,
+      path: ".claude/rules/where.md",
+      ingredient: "rule/where",
+      outcome: "variant",
+      promoted: "rule/where--acme",
+      written: [
+        { path: "ingredients/rules/where--acme/ingredient.yaml", action: "created" },
+        { path: "ingredients/rules/where--acme/rule.md", action: "created" },
+        { path: "recipes/base.yaml", action: "edited" },
+      ],
+      params: [],
+      sections: [],
+      flattened: { params: ["integrations.pm.org"], sections: [] },
+      dependents: [".kiro/steering/where.md"],
+      nextSync: { counts: { update: 1 } },
+      impact: { registry: "none", workspaces: [] },
+      warnings: [],
+    });
   });
 
   it("8. listed in base and in the integration recipe: promotable (not provided by the block alone)", async () => {
@@ -429,6 +450,40 @@ describe("drift × the integrations block", () => {
     // With no map (spec 30's own tests) → null for the drift
     const rows4 = driftList([drift(".claude/rules/x.md", "claude-code", "rule/x", "x\n", "x\n")]);
     expect(rows4[0].reason).toBe(null);
+  });
+
+  // §6.9: schema 3, block { pm: { kind: "jira", org: "acme" } }, no pm-jira recipe, workspace recipes: { remove: ["pm-jira"] }, synced.
+  // drift show lists the file as promotable; drift promote exits 1 because the profile does not resolve.
+  it("§6.9. no-recipe with recipes.remove — drift show is promotable, drift promote exits 1", async () => {
+    const spec: ForgeSpec = {
+      ingredients: [rule("workflow", "# Workflow\n")],
+      recipes: [recipe("base", ["rule/workflow"])],
+      profiles: [profile("acme", ["base"], ["claude-code"], { integrations: { pm: { kind: "jira", org: "acme" } } })],
+    };
+    const s = await forgeAt(3, spec, { config: { profile: "acme", recipes: { remove: ["pm-jira"] } } });
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+
+    await sync(s.wsRoot);
+    gitInit(s.forgeRoot);
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/workflow.md"), "by hand\n");
+
+    // drift show --json: the file is promotable (show never fails for this)
+    const r1 = runCli(["drift", "show", "--workspace", s.wsRoot, "--json"], { env });
+    expect(r1.code).toBe(0);
+    const j1 = JSON.parse(r1.stdout);
+    expect(j1.files).toEqual([
+      { path: ".claude/rules/workflow.md", state: "drift", target: "claude-code", ingredient: "rule/workflow", forge: "same", promotable: true, reason: null },
+    ]);
+
+    // drift promote: exits 1 because the profile does not resolve (no pm-jira recipe, but the remove takes it out)
+    const r2 = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", s.wsRoot, "--dry-run"], { env });
+    expect([r2.code, r2.stdout, r2.stderr]).toEqual([
+      1,
+      "",
+      'error: drift promote: profile acme does not resolve (recipe "pm-jira" not found (referenced by integrations.pm of profile acme))\n',
+    ]);
   });
 });
 
