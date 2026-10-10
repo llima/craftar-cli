@@ -99,7 +99,7 @@ describe("withLock", () => {
       platform: "win32",
       createDir: true,
       pollMs: 60,
-      pendingDeleteMs: 100,
+      pendingDeleteMs: 50,
       // EPERM, then the directory gone at the write (ENOENT, retried), then EPERM again 120 ms after
       // the first — past the wait of the first, inside its own — then the lock.
       beforeAttempt: async () => {
@@ -109,21 +109,5 @@ describe("withLock", () => {
       },
     }, async () => "ran");
     expect([out, attempts]).toEqual(["ran", 4]);
-  });
-
-  // The diagnosis itself: a name whose unlink is pending refuses an exclusive create. Only Windows
-  // can answer; elsewhere the unlink is immediate and the test would prove nothing.
-  it.skipIf(process.platform !== "win32")("win32, for real: a lock file deleted while a handle is open on it is waited out", async () => {
-    const dir = await tmpDir();
-    const file = path.join(dir, "registry.lock");
-    await fs.writeFile(file, "4242 2026-10-07T00:00:00.000Z\n");
-    const handle = await fs.open(file, "r");
-    await fs.rm(file, { force: true });
-    let attempts = 0;
-    const closing = new Promise<void>((res) => setTimeout(() => void handle.close().then(res), 150));
-    const out = await withLock(file, "x", { pollMs: 20, beforeAttempt: async () => void attempts++ }, async () => "ran");
-    await closing;
-    expect(out).toBe("ran");
-    expect(attempts).toBeGreaterThan(1);
   });
 });

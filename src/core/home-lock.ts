@@ -14,7 +14,7 @@ export interface LockTiming {
   staleMs?: number;
 }
 
-/** How long a Windows EPERM on the lock's acquisition is taken for a release still landing. */
+/** How long a Windows EPERM on the lock's acquisition is taken for a release still landing (2 s). */
 const PENDING_DELETE_MS = 2_000;
 
 /** Lock options, extending timing with behavior for directory creation. */
@@ -78,7 +78,7 @@ export async function withLock<T>(file: string, label: string, timing: LockOptio
         await new Promise((r) => setTimeout(r, pollMs));
         continue;
       }
-      // Windows refuses to create a file whose unlink is still pending — the holder releasing the lock
+      // Windows refuses to create a file while its unlink is in flight — the holder releasing the lock
       // this very moment — with EPERM, not EEXIST, and answers the same for a directory in that state
       // (the mkdir under createDir). It clears in milliseconds; an EPERM that outlasts its own short
       // wait is a real refusal (a directory that cannot be written) and is rethrown.
