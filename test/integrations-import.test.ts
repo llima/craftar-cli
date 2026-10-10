@@ -466,4 +466,26 @@ describe("import — below the gate", () => {
     expect(r.profileWrite).toEqual({ path: "profiles/acme/profile.yaml", action: "edited", fields: ["recipes"] });
     expect(changed).toEqual(["profiles/acme/profile.yaml", "recipes/base--acme.yaml"]);
   });
+
+  it("30b. (control) schema 2, a full block the profile does NOT list by hand: a workspace file named like the block's rule is imported, not skipped", async () => {
+    // At schema 2 the block is inert, so sync would not write the rule — no sync, write files by hand.
+    const s = await forgeAt(2, ado());
+    cleanups.push(s.cleanup);
+    await writeFiles(s.wsRoot, {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".claude/rules/stories-azure-devops.md": STORIES_ACME,
+    });
+    const { r, changed } = await moved(s);
+    // The claim: rule/stories-azure-devops (or its --acme variant) is DECIDED, not left.
+    const decided = [...r.reused, ...r.created, ...r.variants.map((x) => x.name)];
+    expect(decided.some((d) => d.startsWith("rule/stories-azure-devops"))).toBe(true);
+    // Pinned:
+    expect(r.leftToRecipes).toEqual([]);
+    expect(r.reused).toEqual(["rule/workflow"]);
+    expect(r.created).toEqual([]);
+    expect(r.variants).toEqual([{ name: "rule/stories-azure-devops--acme", reason: "differs from rule/stories-azure-devops already in the Forge" }]);
+    expect(r.recipes).toEqual(["base--acme"]);
+    expect(r.recipeSplits).toEqual([]);
+    expect(changed).toEqual(["ingredients/rules/stories-azure-devops--acme/ingredient.yaml", "ingredients/rules/stories-azure-devops--acme/rule.md", "profiles/acme/profile.yaml", "recipes/base--acme.yaml"]);
+  });
 });
