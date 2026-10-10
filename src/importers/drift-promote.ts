@@ -174,12 +174,64 @@ const D16_SAME_PROFILE_OVERRIDE = (wsPath: string, ingredient: string) =>
 const D17 = (recipe: string, chain: string) =>
   `recipe ${recipe} reaches this workspace through ${chain} — promote does not fork a recipe chain; re-import the workspace or edit the recipes by hand`;
 const INTERNAL_REUSE = (p: string) => `internal: ${p} is drift but the Forge already renders it — please report this`;
+const SYMLINK_REFUSAL = (rel: string) =>
+  `${rel} is a symbolic link in the Forge — promote does not write through a link; replace it with the file and commit`;
 
 interface OtherWorkspaceCheck {
   entries: ForgeWorkspace[];
   before: ReturnType<typeof planAll> extends Promise<infer T> ? T : never;
   after: ReturnType<typeof planAll> extends Promise<infer T> ? T : never;
   rows: ImpactWorkspaceRow[];
+}
+
+/**
+ * Copy the Forge to a scratch directory without `.git` and with all symbolic links dereferenced.
+ * Exported so tests can verify the copy behaviour directly.
+ */
+export async function copyForgeForProof(forgeDir: string, scratchDir: string): Promise<void> {
+  await fs.cp(forgeDir, scratchDir, {
+    recursive: true,
+    dereference: true, // follow symlinks, copy the target file
+    filter: (src) => {
+      const rel = path.relative(forgeDir, src);
+      // Allow the root directory itself
+      if (rel === "") return true;
+      // Filter out .git (file or directory)
+      const firstPart = rel.split(path.sep)[0];
+      return firstPart !== ".git";
+    },
+  });
+}
+
+/**
+ * Check every staged path for symlinks in its path (the path itself or any ancestor between it and forgeDir).
+ * Throws with SYMLINK_REFUSAL if any is found.
+ */
+async function checkStagedSymlinks(forgeDir: string, stage: ForgeStage): Promise<void> {
+  const entries = await stage.entries();
+  const checked = new Set<string>();
+  for (const entry of entries) {
+    // Check the path and every ancestor up to but not including forgeDir
+    let current = entry.abs;
+    while (current.length > forgeDir.length) {
+      if (checked.has(current)) break;
+      checked.add(current);
+      // Check if current exists and is a symlink
+      try {
+        const stat = await fs.lstat(current);
+        if (stat.isSymbolicLink()) {
+          const rel = path.relative(forgeDir, current).split(path.sep).join("/");
+          throw new Error(SYMLINK_REFUSAL(rel));
+        }
+      } catch (e) {
+        // ENOENT means the path doesn't exist yet (it will be created) — that's fine
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw e;
+        }
+      }
+      current = path.dirname(current);
+    }
+  }
 }
 
 /**
@@ -673,18 +725,13 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     const editedKeys = new Map<string, string[]>();
     editedKeys.set(label, editKeys);
 
+    // Check for symlinks in staged paths before any write
+    await checkStagedSymlinks(forgeDir, stage);
+
     // Build proof in scratch copy
     const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-promote-"));
     try {
-      await fs.cp(forgeDir, scratchDir, {
-        recursive: true,
-        filter: (src) => {
-          const rel = path.relative(forgeDir, src);
-          if (rel === "") return true;
-          const firstPart = rel.split(path.sep)[0];
-          return firstPart !== ".git";
-        },
-      });
+      await copyForgeForProof(forgeDir, scratchDir);
       await stage.flushTo(scratchDir);
 
       const scratchForge = await loadForge(scratchDir);
@@ -981,10 +1028,13 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   }
   // For variant-updated, no recipe changes are needed
 
-  // Step 7: Gate (D13, D14)
+  // Step 7: Gate (D13, D14, symlinks)
   const entries = await stage.entries();
   const creates = entries.filter((e) => e.created).map((e) => e.rel);
   const mustHold = entries.filter((e) => !e.created).map((e) => e.abs);
+
+  // Check for symlinks in staged paths before any write or further gate checks
+  await checkStagedSymlinks(forgeDir, stage);
 
   // D13: check created paths don't exist and aren't ignored
   for (const e of entries.filter((e) => e.created)) {
@@ -1015,18 +1065,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Step 8: The proof
   const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-promote-"));
   try {
-    // Copy Forge without .git using fs.cp with filter
-    await fs.cp(forgeDir, scratchDir, {
-      recursive: true,
-      filter: (src) => {
-        const rel = path.relative(forgeDir, src);
-        // Allow the root directory itself
-        if (rel === "") return true;
-        // Filter out .git (file or directory)
-        const firstPart = rel.split(path.sep)[0];
-        return firstPart !== ".git";
-      },
-    });
+    // Copy Forge without .git, with symlinks dereferenced
+    await copyForgeForProof(forgeDir, scratchDir);
     await stage.flushTo(scratchDir);
 
     const scratchForge = await loadForge(scratchDir);

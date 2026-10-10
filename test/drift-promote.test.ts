@@ -1928,6 +1928,170 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     expect(r.stderr).toBe(`error: --forge ${unrelatedDir} is not a clone of this workspace's Forge — none of its git remotes matches\n`);
   });
 
+  // Step 30r1: symlink refusal tests
+  it("R1. symlink recipe file (--dry-run) — refused, outside file unchanged", async () => {
+    const f = await F();
+    // Create an outside directory and file
+    const outsideDir = path.join(f.root, "outside");
+    await fs.mkdir(outsideDir, { recursive: true });
+    const outsideFile = path.join(outsideDir, "base.yaml");
+    await fs.writeFile(outsideFile, await fs.readFile(path.join(f.forgeRoot, "recipes/base.yaml")));
+    const outsideBefore = await fs.readFile(outsideFile);
+
+    // Replace recipes/base.yaml with a symlink to the outside file
+    await fs.rm(path.join(f.forgeRoot, "recipes/base.yaml"));
+    try {
+      await fs.symlink(outsideFile, path.join(f.forgeRoot, "recipes/base.yaml"));
+    } catch (e) {
+      // On Windows without privilege, symlink throws EPERM
+      if ((e as NodeJS.ErrnoException).code === "EPERM") {
+        // The test cannot create symlinks; assert the EPERM and return
+        expect((e as NodeJS.ErrnoException).code).toBe("EPERM");
+        return;
+      }
+      throw e;
+    }
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await f.driftA();
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws, "--dry-run"]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(
+      "error: recipes/base.yaml is a symbolic link in the Forge — promote does not write through a link; replace it with the file and commit\n",
+    );
+    // Outside file unchanged
+    expect((await fs.readFile(outsideFile)).equals(outsideBefore)).toBe(true);
+    // Forge porcelain empty
+    expect(porcelain(f.forgeRoot)).toBe("");
+  });
+
+  it("R2. symlink recipe file (no --dry-run) — refused, outside file unchanged", async () => {
+    const f = await F();
+    // Create an outside directory and file
+    const outsideDir = path.join(f.root, "outside");
+    await fs.mkdir(outsideDir, { recursive: true });
+    const outsideFile = path.join(outsideDir, "base.yaml");
+    await fs.writeFile(outsideFile, await fs.readFile(path.join(f.forgeRoot, "recipes/base.yaml")));
+    const outsideBefore = await fs.readFile(outsideFile);
+
+    // Replace recipes/base.yaml with a symlink to the outside file
+    await fs.rm(path.join(f.forgeRoot, "recipes/base.yaml"));
+    try {
+      await fs.symlink(outsideFile, path.join(f.forgeRoot, "recipes/base.yaml"));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EPERM") {
+        expect((e as NodeJS.ErrnoException).code).toBe("EPERM");
+        return;
+      }
+      throw e;
+    }
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await f.driftA();
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(
+      "error: recipes/base.yaml is a symbolic link in the Forge — promote does not write through a link; replace it with the file and commit\n",
+    );
+    // Outside file unchanged
+    expect((await fs.readFile(outsideFile)).equals(outsideBefore)).toBe(true);
+    // Forge porcelain empty
+    expect(porcelain(f.forgeRoot)).toBe("");
+  });
+
+  it("R3. symlink directory (junction) — refused naming the ancestor", async () => {
+    // Test that a symlinked ancestor of a staged path (new variant directory) is refused
+    const f = await F();
+    // First sync normally so the files exist in the workspace (before gitInit)
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    
+    // Create an outside directory and copy ingredients there BEFORE git init
+    const outsideDir = path.join(f.root, "outside");
+    await fs.mkdir(outsideDir, { recursive: true });
+    // Copy the entire ingredients directory to outside
+    await fs.cp(
+      path.join(f.forgeRoot, "ingredients"),
+      path.join(outsideDir, "ingredients"),
+      { recursive: true }
+    );
+
+    // Replace ingredients with a junction to the outside directory's ingredients BEFORE git init
+    await fs.rm(path.join(f.forgeRoot, "ingredients"), { recursive: true });
+    try {
+      await fs.symlink(path.join(outsideDir, "ingredients"), path.join(f.forgeRoot, "ingredients"), "junction");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EPERM") {
+        expect((e as NodeJS.ErrnoException).code).toBe("EPERM");
+        return;
+      }
+      throw e;
+    }
+    
+    // Now gitInit - this commits the symlink state
+    gitInit(f.forgeRoot);
+    
+    // Now sync - this should work because the Forge still loads through the symlink
+    expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+    await f.driftA();
+    
+    const outsideListing = (await fs.readdir(path.join(outsideDir, "ingredients/rules"))).sort();
+    const lockBefore = await f.lockBytes();
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(
+      "error: ingredients is a symbolic link in the Forge — promote does not write through a link; replace it with the file and commit\n",
+    );
+    // Outside directory listing unchanged (no new a--acme dir)
+    expect((await fs.readdir(path.join(outsideDir, "ingredients/rules"))).sort()).toEqual(outsideListing);
+    // Forge porcelain empty
+    expect(porcelain(f.forgeRoot)).toBe("");
+    // Lock unchanged
+    expect((await f.lockBytes()).equals(lockBefore)).toBe(true);
+  });
+
+  it("R4. copyForgeForProof — scratch copy has no .git and dereferences file links", async () => {
+    const { copyForgeForProof } = await import("../src/importers/drift-promote.js");
+    const f = await F();
+    gitInit(f.forgeRoot);
+
+    // Create a harmless file link inside the Forge (pointing inside the Forge)
+    const linkTarget = path.join(f.forgeRoot, "ingredients/rules/a/rule.md");
+    const linkPath = path.join(f.forgeRoot, "inside-link.md");
+    try {
+      await fs.symlink(linkTarget, linkPath);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EPERM") {
+        // On Windows without privilege, just verify copyForgeForProof exists and returns
+        const scratchDir = await tmpDir("craftar-scratch-");
+        cleanups.push(() => fs.rm(scratchDir, { recursive: true, force: true }));
+        await copyForgeForProof(f.forgeRoot, scratchDir);
+        // .git should not exist
+        await expect(fs.stat(path.join(scratchDir, ".git"))).rejects.toMatchObject({ code: "ENOENT" });
+        return;
+      }
+      throw e;
+    }
+
+    const scratchDir = await tmpDir("craftar-scratch-");
+    cleanups.push(() => fs.rm(scratchDir, { recursive: true, force: true }));
+    await copyForgeForProof(f.forgeRoot, scratchDir);
+
+    // .git should not exist in scratch
+    await expect(fs.stat(path.join(scratchDir, ".git"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    // inside-link.md in scratch should be a regular file (dereferenced), not a link
+    const stat = await fs.lstat(path.join(scratchDir, "inside-link.md"));
+    expect(stat.isFile()).toBe(true);
+    expect(stat.isSymbolicLink()).toBe(false);
+  });
+
   it("58. forge: overridden in craftar.local.yaml", async () => {
     const home = await tmpDir("craftar-home-");
     cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
