@@ -664,7 +664,7 @@ function addRef(list: string[], ref: string | null): void {
 }
 
 /** First secret-like value in an ingredient about to be imported, described by location only. */
-function secretIn(meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string> = {}): string | null {
+export function secretIn(meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string> = {}): string | null {
   const origin = meta.origin?.path ?? `${meta.type}/${meta.name}`;
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
   // Bodies of agents and commands start after `---`, the raw block and the closing `---`.
@@ -867,14 +867,14 @@ async function writeIngredient(
  * `env` value, a name that is not slug-like) fails the whole import, naming its source, before the
  * first write — 0.2.4 wrote a Forge no command could load (spec 07, Ruling 6).
  */
-function validateImported(meta: Ingredient): Ingredient {
+export function validateImported(meta: Ingredient): Ingredient {
   const r = IngredientSchema.safeParse(meta);
   if (r.success) return r.data;
   const source = meta.origin?.path ?? `${meta.type}/${meta.name}`;
   throw new Error(`${source} (${meta.type}/${meta.name}) does not fit the ingredient schema: ${r.error.message}`);
 }
 
-interface RecipeOptions {
+export interface RecipeOptions {
   stage: ForgeStage;
   dir: string;
   profile: string;
@@ -1009,20 +1009,20 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
  * declaring another name, would leave two recipes under one name and loadForge would keep one.
  * Refused before the first write, as I4 refuses the same split for a profile.
  */
-async function recipeFile(o: RecipeOptions, name: string): Promise<string> {
+export async function recipeFile(o: RecipeOptions, name: string, command = "import"): Promise<string> {
   const file = path.join(o.dir, `${name}.yaml`);
   for (const f of await o.stage.reader().list(o.dir)) {
     if (f.includes("/") || !/\.ya?ml$/.test(f)) continue;
     const abs = path.join(o.dir, f);
     const declared = parseYaml(abs, stripBom(await o.stage.readText(abs)), RecipeSchema).name;
-    if (abs === file && declared !== name) throw new Error(`import: recipes/${f} is recipe ${declared} — import writes recipe ${name} there`);
-    if (abs !== file && declared === name) throw new Error(`import: recipe ${name} is recipes/${f} — import writes recipes/${name}.yaml`);
+    if (abs === file && declared !== name) throw new Error(`${command}: recipes/${f} is recipe ${declared} — ${command} writes recipe ${name} there`);
+    if (abs !== file && declared === name) throw new Error(`${command}: recipe ${name} is recipes/${f} — ${command} writes recipes/${name}.yaml`);
   }
   return file;
 }
 
 /** The recipes a profile resolves inside the Forge; fails closed — a profile that does not resolve counts as using everything. */
-function recipesOf(forge: import("../core/forge.js").Forge, profile: string): { has(name: string): boolean } {
+export function recipesOf(forge: import("../core/forge.js").Forge, profile: string): { has(name: string): boolean } {
   try {
     return new Set(resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile })).recipes);
   } catch {
@@ -1060,7 +1060,7 @@ async function existingProfile(
  * created or variant source, which sync would read as structure. The line counts from the top of
  * the workspace file, as the secret scan's does: an agent or command body starts after its frontmatter.
  */
-function markerIn(meta: Ingredient, files: Record<string, string | Buffer>, source: string): { where: string; line: number } | null {
+export function markerIn(meta: Ingredient, files: Record<string, string | Buffer>, source: string): { where: string; line: number } | null {
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
   const offset = raw ? raw.split("\n").length + 2 : 0;
   for (const [rel, content] of Object.entries(files)) {

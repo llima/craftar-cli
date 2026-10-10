@@ -21,7 +21,7 @@ import { renderImportReport } from "./core/import-report.js";
 import { driftList, type DriftRow } from "./core/drift.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
-import { exists, gitDirty, gitIsRepo, gitUnheld, loadForge } from "./core/forge.js";
+import { exists, gitDirty, gitIsRepo, gitUnheld, loadForge, type UnheldPath } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
   hunkAt,
@@ -1416,11 +1416,7 @@ forge
     const mustHold = [base.dir, ...(result.resolved ? [variant.dir, ...cascadeFiles] : []), ...(paramWrites?.mustHold ?? []), ...candidateProfiles];
     const unheld = await gitUnheld(f.root, mustHold);
     if (unheld.length) {
-      // Name every such path (the first few, then a count), so one run shows the whole problem.
-      const SHOWN = 10;
-      const lines = unheld.slice(0, SHOWN).map((u) => `  ${u.path} is not held by git (${u.reason})`);
-      if (unheld.length > SHOWN) lines.push(`  … and ${unheld.length - SHOWN} more`);
-      fail(`unify can only change files git can restore — ${unheld.length} path(s) under ${f.root} are not:\n${lines.join("\n")}`);
+      fail(unheldMessage("unify", f.root, unheld));
     }
 
     // Spec 25 §4.2: the impact passes around the writes
@@ -2151,19 +2147,27 @@ async function pathTaken(p: string): Promise<boolean> {
   }
 }
 
+/** The refusal message for paths git cannot restore (Ruling 37): the command name and every unheld path. */
+function unheldMessage(command: string, root: string, unheld: UnheldPath[]): string {
+  const SHOWN = 10;
+  const lines = unheld.slice(0, SHOWN).map((u) => `  ${u.path} is not held by git (${u.reason})`);
+  if (unheld.length > SHOWN) lines.push(`  … and ${unheld.length - SHOWN} more`);
+  return `${command} can only change files git can restore — ${unheld.length} path(s) under ${root} are not:\n${lines.join("\n")}`;
+}
+
 /**
  * The message for a `forge unify` failure after writing began (Ruling 33): the original error, the
  * Forge-relative paths already touched, and the git commands that undo them — `checkout` for what
  * git tracks, `clean` for files unify created (checkout refuses a path git does not know).
  */
-function lateFailure(e: unknown, root: string, journal: WriteJournal): string {
+function lateFailure(e: unknown, root: string, journal: WriteJournal, command = "unify"): string {
   const msg = e instanceof Error ? e.message : String(e);
   if (journal.length === 0) return msg;
   const rel = (abs: string) => path.relative(root, abs).split(path.sep).join("/");
   const quote = (p: string) => (/^[\w./-]+$/.test(p) ? p : `"${p}"`);
   const restore = [...new Set(journal.filter((j) => !j.created).map((j) => rel(j.abs)))];
   const created = [...new Set(journal.filter((j) => j.created).map((j) => rel(j.abs)))];
-  const lines = [msg, `unify had already started changing the Forge (${root}) when this failed:`];
+  const lines = [msg, `${command} had already started changing the Forge (${root}) when this failed:`];
   for (const p of [...restore, ...created]) lines.push(`  ${p}`);
   lines.push("recover with:");
   if (restore.length) lines.push(`  git -C ${quote(root)} checkout -- ${restore.map(quote).join(" ")}`);

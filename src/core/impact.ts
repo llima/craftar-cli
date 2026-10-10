@@ -72,7 +72,7 @@ async function gitSafe(cwd: string, ...args: string[]): Promise<string | null> {
  * The fetch URLs of every remote, in `git remote` order, each with its remote name.
  * A URL that `credentialFault` flags is not returned and adds a warning.
  */
-async function remoteUrls(
+export async function remoteUrls(
   dir: string,
   warnings: string[],
   warningDir: string,
@@ -100,7 +100,7 @@ async function remoteUrls(
  * Convert a remote URL to a cache key. For a local path remote (e.g. pointing at a bare repo),
  * convert to file:// URL first — this is what a workspace's `file://` URL names.
  */
-function urlToKey(url: string, baseDir: string): string {
+export function urlToKey(url: string, baseDir: string): string {
   if (classifyForge(url) === "path") {
     // A local bare repository named by path: convert to file:// URL as that's what cacheKey expects
     return cacheKey(pathToFileURL(path.resolve(baseDir, url)).href);
