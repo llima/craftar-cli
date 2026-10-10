@@ -58,6 +58,7 @@ function assertText(ref: string, file: string, bytes: Buffer, hint: string): voi
  * 5. Each of services/volumes/networks/configs/secrets must be a mapping (via ComposeFragmentShape)
  * 6. __proto__ keys are refused (via noProtoKey in the schema)
  * 7. Must declare at least one service
+ * 8. A service must not extend a file (extends: { file: ... }) — the lock would not record it
  */
 export function parseFragment(text: string): { ok: true; fragment: ComposeFragment } | { ok: false; reason: string } {
   // 1. Parse YAML — through parseYamlText so the error never includes the source line
@@ -105,6 +106,18 @@ export function parseFragment(text: string): { ok: true; fragment: ComposeFragme
   // 7. Must declare at least one service
   if (!fragment.services || Object.keys(fragment.services).length === 0) {
     return { ok: false, reason: "a fragment must declare at least one service" };
+  }
+
+  // 8. A service must not extend a file — the lock would not record it
+  //    Accepted: extends: 'svc' (a string) and extends: { service: 'svc' } (no file key)
+  //    Refused: extends: { file: ..., service: ... }
+  for (const svcDef of Object.values(fragment.services)) {
+    if (svcDef && typeof svcDef === "object" && !Array.isArray(svcDef)) {
+      const ext = (svcDef as Record<string, unknown>).extends;
+      if (ext && typeof ext === "object" && !Array.isArray(ext) && Object.hasOwn(ext as object, "file")) {
+        return { ok: false, reason: "a service must not extend a file — the lock would not record it" };
+      }
+    }
   }
 
   return { ok: true, fragment };

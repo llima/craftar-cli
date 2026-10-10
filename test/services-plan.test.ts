@@ -686,3 +686,117 @@ services:
       }),
     ).rejects.toThrow(/service\/a and service\/b both declare services\.echo/);
   });
+
+  it("test 25: a service with extends: { file: '../other.yaml', service: 'base' } is refused", async () => {
+    // An extends that names a file makes Compose load a file the lock does not record
+    await expect(
+      planned({
+        ingredients: [
+          {
+            meta: { type: "service", name: "echo", compose: "compose.yaml", files: [] },
+            files: {
+              "compose.yaml": `services:
+  echo:
+    image: example/echo:1
+    extends:
+      file: ../other.yaml
+      service: base
+`,
+            },
+          },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      }),
+    ).rejects.toThrow("service/echo compose.yaml: a service must not extend a file — the lock would not record it");
+  });
+
+  it("test 26: extends: { file: ... } arriving through a merge key is caught", async () => {
+    // An extends.file arriving through <<: *anchor must also be refused
+    const fragment = `x-e: &e
+  extends:
+    file: ../other.yaml
+    service: base
+services:
+  echo:
+    <<: *e
+    image: example/echo:1
+`;
+    await expect(
+      planned({
+        ingredients: [
+          { meta: { type: "service", name: "echo", compose: "compose.yaml", files: [] }, files: { "compose.yaml": fragment } },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      }),
+    ).rejects.toThrow("service/echo compose.yaml: a service must not extend a file — the lock would not record it");
+  });
+
+  it("test 27: extends: 'base' (a string) and extends: { service: 'base' } (no file) are accepted", async () => {
+    // A service can extend another service of the same fragment
+    const fragmentStringExtends = `services:
+  base:
+    image: alpine
+  echo:
+    extends: base
+    ports: ["8080:80"]
+`;
+    const { p: p1 } = await planned({
+      ingredients: [
+        { meta: { type: "service", name: "a", compose: "compose.yaml", files: [] }, files: { "compose.yaml": fragmentStringExtends } },
+      ],
+      recipes: [recipe("base", ["service/a"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    // Should plan without error
+    expect(p1.files.filter((f) => f.target === "services").length).toBeGreaterThan(0);
+
+    // Also test extends: { service: 'base' } without a file key
+    const fragmentObjectExtends = `services:
+  base:
+    image: alpine
+  echo:
+    extends:
+      service: base
+    ports: ["8080:80"]
+`;
+    const { p: p2 } = await planned({
+      ingredients: [
+        { meta: { type: "service", name: "b", compose: "compose.yaml", files: [] }, files: { "compose.yaml": fragmentObjectExtends } },
+      ],
+      recipes: [recipe("base", ["service/b"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    expect(p2.files.filter((f) => f.target === "services").length).toBeGreaterThan(0);
+  });
+
+  it("test 28: the extends.file refusal message does not contain the file name", async () => {
+    // Per 0.22.1's rule: no value from the fragment in the message
+    let caughtMessage = "";
+    try {
+      await planned({
+        ingredients: [
+          {
+            meta: { type: "service", name: "echo", compose: "compose.yaml", files: [] },
+            files: {
+              "compose.yaml": `services:
+  echo:
+    image: example/echo:1
+    extends:
+      file: ../other.yaml
+      service: base
+`,
+            },
+          },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      });
+    } catch (e) {
+      caughtMessage = (e as Error).message;
+    }
+    expect(caughtMessage).not.toContain("other.yaml");
+    // Also should not contain the service name from the fragment
+    expect(caughtMessage).not.toContain("base");
+  });

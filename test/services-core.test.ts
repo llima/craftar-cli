@@ -146,6 +146,20 @@ describe("parseFragment", () => {
       expect((result.fragment as any)["x-foo"]).toBe("bar");
     }
   });
+
+  it("refuses a service with extends: { file: ... }", () => {
+    const result = parseFragment(`services:
+  echo:
+    image: alpine
+    extends:
+      file: ../other.yaml
+      service: base
+`);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("a service must not extend a file — the lock would not record it");
+    }
+  });
 });
 
 /* ------------------------------------------------------------------ */
