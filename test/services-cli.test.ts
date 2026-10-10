@@ -1,496 +1,264 @@
-/**
- * CLI tests for `craftar services` commands (spec 31 §4.2–§4.4, §4.8).
- *
- * These tests use PATH manipulation to avoid requiring Docker to be installed.
- * Docker is absent, so they verify error handling and correct refusals.
- *
- * Test cases per spec 31 §10 item 11:
- *   - up with no lock
- *   - up with no service (lock exists but no services entry)
- *   - up with a missing file
- *   - up with an edited file
- *   - up with the stack unrecorded (a collision at .craftar/compose.yaml)
- *   - up refuses "-v" as service name before Docker check
- *   - down's argv has no -f for unrecorded stack, edited stack, or missing fragment
- *   - status --json keys and order with Docker unavailable
- */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { existsSync, promises as fs, realpathSync } from "node:fs";
+import path from "node:path";
 import { runCli } from "./helpers/cli.js";
-import { hashNormalized } from "../src/core/text.js";
-import { scenario, recipe, profile } from "./helpers/forge.js";
-import type { IngredientSpec } from "./helpers/forge.js";
+import { profile, recipe, rule, scenario, type IngredientSpec } from "./helpers/forge.js";
 
-/** A service ingredient. */
-const service = (name: string, composeBody: string, extra: Record<string, unknown> = {}): IngredientSpec => ({
-  meta: { type: "service", name, ...extra },
-  files: { "compose.yaml": composeBody },
+// No test here runs Docker: the child's PATH holds only node's own directory, so `docker` is not found.
+const NODE_DIR = path.dirname(process.execPath);
+const DOCKER_THERE = existsSync(path.join(NODE_DIR, "docker")) || existsSync(path.join(NODE_DIR, "docker.exe"));
+const NO_DOCKER = { PATH: NODE_DIR, Path: NODE_DIR };
+const NOT_FOUND = "docker not found — install Docker with the Compose plugin 2.20.0 or later";
+const NO_SERVICES = "no services in this workspace — craftar sync writes them when a recipe brings a service ingredient";
+const FRAGMENT = ".craftar/services/echo/compose.yaml";
+
+const echo: IngredientSpec = {
+  meta: { type: "service", name: "echo" },
+  files: { "compose.yaml": "services:\n  echo:\n    image: example/echo:1\n" },
+};
+
+const cleanups: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  while (cleanups.length) await cleanups.pop()!();
 });
 
-/** Create a schema 3 lock with the given file entries. */
-function makeLock(
-  profile: string,
-  recipes: string[],
-  targets: string[],
-  files: Array<{ path: string; hash: string; target: string; ingredient: string }>,
-): string {
-  return JSON.stringify(
+/** A workspace whose recipe brings `service/echo` (or only a rule), not synced yet. */
+async function workspace(withService = true, files: Record<string, string> = {}) {
+  const s = await scenario(
     {
-      schema: 3,
-      forge: { source: "../forge", ref: null, commit: null },
-      profile,
-      recipes,
-      targets,
-      generatedAt: new Date().toISOString(),
-      files,
+      ingredients: [echo, rule("a", "# A\n")],
+      recipes: [recipe("base", withService ? ["rule/a", "service/echo"] : ["rule/a"])],
+      profiles: [profile("acme", ["base"])],
     },
-    null,
-    2,
+    { config: { profile: "acme" }, files },
   );
+  cleanups.push(s.cleanup);
+  return s;
 }
 
-/** Remove docker from PATH to simulate it not being installed. */
-function noDockEnv(): NodeJS.ProcessEnv {
-  return { PATH: "/nonexistent" };
+async function synced(withService = true, files: Record<string, string> = {}) {
+  const s = await workspace(withService, files);
+  const r = runCli(["sync", "--workspace", s.wsRoot]);
+  expect([r.code, r.stderr]).toEqual([0, ""]);
+  return s;
 }
 
-describe("craftar services up", () => {
-  describe("without craftar.yaml", () => {
-    let tmpDir: string;
+/** Every file under `dir` with its bytes, as one comparable object. */
+async function tree(dir: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const walk = async (rel: string): Promise<void> => {
+    for (const e of await fs.readdir(path.join(dir, rel), { withFileTypes: true })) {
+      const p = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) await walk(p);
+      else out[p] = (await fs.readFile(path.join(dir, p))).toString("base64");
+    }
+  };
+  await walk("");
+  return out;
+}
 
-    beforeEach(async () => {
-      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-services-cli-"));
-    });
+const up = (ws: string, ...more: string[]) => runCli(["services", "up", "--workspace", ws, ...more], { env: NO_DOCKER });
+const statusJson = (ws: string) => runCli(["services", "status", "--json", "--workspace", ws], { env: NO_DOCKER });
 
-    afterEach(async () => {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    });
-
-    it("fails with no craftar.yaml error", async () => {
-      // Empty directory - no craftar.yaml
-      const result = runCli(["services", "up", "--workspace", tmpDir], { env: noDockEnv() });
-
-      expect(result.code).toBe(1);
-      expect(result.stderr).toContain("no craftar.yaml");
-    });
+describe.skipIf(DOCKER_THERE)("craftar services — without Docker (spec 31 §4.2–§4.4)", () => {
+  it("sync wrote the three service files and a schema 3 lock (the ground the other cases stand on)", async () => {
+    const s = await synced();
+    const lock = JSON.parse(await fs.readFile(path.join(s.wsRoot, "craftar.lock"), "utf8"));
+    expect(lock.schema).toBe(3);
+    expect(lock.files.filter((f: { target: string }) => f.target === "services").map((f: { path: string }) => f.path)).toEqual([
+      ".craftar/.gitattributes",
+      ".craftar/compose.yaml",
+      FRAGMENT,
+    ]);
   });
 
-  describe("with workspace but never synced", () => {
-    let ctx: Awaited<ReturnType<typeof scenario>>;
-
-    beforeEach(async () => {
-      ctx = await scenario(
-        { recipes: [recipe("base", [])], profiles: [profile("test", ["base"])] },
-        { config: { profile: "test" } },
-      );
-    });
-
-    afterEach(() => ctx.cleanup());
-
-    it("fails with 'no services' message when lock is missing", async () => {
-      const result = runCli(["services", "up", "--workspace", ctx.wsRoot], { env: noDockEnv() });
-
-      expect(result.code).toBe(1);
-      expect(result.stderr).toContain(
-        "no services in this workspace — craftar sync writes them when a recipe brings a service ingredient",
-      );
-    });
+  it("no craftar.yaml: exit 1 with our message, for up, down and status", async () => {
+    const s = await workspace();
+    await fs.rm(path.join(s.wsRoot, "craftar.yaml"));
+    for (const cmd of ["up", "down", "status"]) {
+      const r = runCli(["services", cmd, "--workspace", s.wsRoot], { env: NO_DOCKER });
+      expect([cmd, r.code, r.stdout, r.stderr]).toEqual([
+        cmd,
+        1,
+        "",
+        `error: no craftar.yaml in ${path.resolve(s.wsRoot)} — run craftar services inside a workspace, or pass --workspace <dir>\n`,
+      ]);
+    }
   });
 
-  describe("with lock but no service entries", () => {
-    let ctx: Awaited<ReturnType<typeof scenario>>;
-
-    beforeEach(async () => {
-      ctx = await scenario(
-        { recipes: [recipe("base", [])], profiles: [profile("test", ["base"])] },
-        { config: { profile: "test" } },
-      );
-      // Write a lock with no service entries
-      await fs.writeFile(path.join(ctx.wsRoot, "craftar.lock"), makeLock("test", ["base"], ["claude-code"], []));
-    });
-
-    afterEach(() => ctx.cleanup());
-
-    it("fails with 'no services' message", async () => {
-      const result = runCli(["services", "up", "--workspace", ctx.wsRoot], { env: noDockEnv() });
-
-      expect(result.code).toBe(1);
-      expect(result.stderr).toContain(
-        "no services in this workspace — craftar sync writes them when a recipe brings a service ingredient",
-      );
-    });
+  it("up: never synced, and synced without a service → the 'no services' line, before Docker", async () => {
+    const never = await workspace();
+    expect([up(never.wsRoot).code, up(never.wsRoot).stderr]).toEqual([1, `error: ${NO_SERVICES}\n`]);
+    const none = await synced(false);
+    expect([up(none.wsRoot).code, up(none.wsRoot).stderr]).toEqual([1, `error: ${NO_SERVICES}\n`]);
   });
 
-  describe("with service fragment edited", () => {
-    let ctx: Awaited<ReturnType<typeof scenario>>;
-    const fragmentContent = "services:\n  echo:\n    image: alpine\n";
-    const stackContent = "# Generated by craftar\ninclude:\n  - path: services/echo/compose.yaml\n";
-    const gitattributes = "* -text\n";
-
-    beforeEach(async () => {
-      ctx = await scenario(
-        { recipes: [recipe("base", ["service/echo"])], profiles: [profile("test", ["base"])] },
-        { config: { profile: "test" } },
-      );
-      // Write service files
-      await fs.mkdir(path.join(ctx.wsRoot, ".craftar/services/echo"), { recursive: true });
-      await fs.writeFile(path.join(ctx.wsRoot, ".craftar/compose.yaml"), stackContent);
-      await fs.writeFile(path.join(ctx.wsRoot, ".craftar/services/echo/compose.yaml"), "EDITED CONTENT\n");
-      await fs.writeFile(path.join(ctx.wsRoot, ".craftar/.gitattributes"), gitattributes);
-
-      // Write lock with original hashes
-      await fs.writeFile(
-        path.join(ctx.wsRoot, "craftar.lock"),
-        makeLock("test", ["base"], ["claude-code"], [
-          { path: ".craftar/compose.yaml", hash: hashNormalized(Buffer.from(stackContent)), target: "services", ingredient: "service/*" },
-          {
-            path: ".craftar/services/echo/compose.yaml",
-            hash: hashNormalized(Buffer.from(fragmentContent)),
-            target: "services",
-            ingredient: "service/echo",
-          },
-          { path: ".craftar/.gitattributes", hash: hashNormalized(Buffer.from(gitattributes)), target: "services", ingredient: "service/*" },
-        ]),
-      );
-    });
-
-    afterEach(() => ctx.cleanup());
-
-    it("refuses with edited file message", async () => {
-      const result = runCli(["services", "up", "--workspace", ctx.wsRoot], { env: noDockEnv() });
-
-      expect(result.code).toBe(1);
-      expect(result.stderr).toContain(".craftar/services/echo/compose.yaml");
-      expect(result.stderr).toContain("edited");
-      expect(result.stderr).toContain("craftar sync --overwrite-drift");
-    });
+  it("up: a hand-edited fragment is refused with the --overwrite-drift fix, and nothing is written", async () => {
+    const s = await synced();
+    await fs.appendFile(path.join(s.wsRoot, FRAGMENT), "# hand edit\n");
+    const before = await tree(s.wsRoot);
+    const r = up(s.wsRoot);
+    expect([r.code, r.stdout, r.stderr]).toEqual([
+      1,
+      "",
+      `error: ${FRAGMENT} — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift\n`,
+    ]);
+    expect(await tree(s.wsRoot)).toEqual(before);
   });
 
-  describe("with service fragment deleted", () => {
-    let ctx: Awaited<ReturnType<typeof scenario>>;
-    const fragmentContent = "services:\n  echo:\n    image: alpine\n";
-    const stackContent = "# Generated by craftar\ninclude:\n  - path: services/echo/compose.yaml\n";
-    const gitattributes = "* -text\n";
-
-    beforeEach(async () => {
-      ctx = await scenario(
-        { recipes: [recipe("base", ["service/echo"])], profiles: [profile("test", ["base"])] },
-        { config: { profile: "test" } },
-      );
-      // Write stack but NOT the fragment
-      await fs.mkdir(path.join(ctx.wsRoot, ".craftar/services/echo"), { recursive: true });
-      await fs.writeFile(path.join(ctx.wsRoot, ".craftar/compose.yaml"), stackContent);
-      await fs.writeFile(path.join(ctx.wsRoot, ".craftar/.gitattributes"), gitattributes);
-      // NOT writing the fragment
-
-      // Write lock
-      await fs.writeFile(
-        path.join(ctx.wsRoot, "craftar.lock"),
-        makeLock("test", ["base"], ["claude-code"], [
-          { path: ".craftar/compose.yaml", hash: hashNormalized(Buffer.from(stackContent)), target: "services", ingredient: "service/*" },
-          {
-            path: ".craftar/services/echo/compose.yaml",
-            hash: hashNormalized(Buffer.from(fragmentContent)),
-            target: "services",
-            ingredient: "service/echo",
-          },
-          { path: ".craftar/.gitattributes", hash: hashNormalized(Buffer.from(gitattributes)), target: "services", ingredient: "service/*" },
-        ]),
-      );
-    });
-
-    afterEach(() => ctx.cleanup());
-
-    it("refuses with missing file message", async () => {
-      const result = runCli(["services", "up", "--workspace", ctx.wsRoot], { env: noDockEnv() });
-
-      expect(result.code).toBe(1);
-      expect(result.stderr).toContain(".craftar/services/echo/compose.yaml");
-      expect(result.stderr).toContain("missing");
-      expect(result.stderr).toContain("craftar sync");
-    });
-  });
-
-  describe("with stack unrecorded (collision)", () => {
-    let ctx: Awaited<ReturnType<typeof scenario>>;
-    const fragmentContent = "services:\n  echo:\n    image: alpine\n";
-
-    beforeEach(async () => {
-      ctx = await scenario(
-        { recipes: [recipe("base", ["service/echo"])], profiles: [profile("test", ["base"])] },
-        { config: { profile: "test" } },
-      );
-      // Write fragment but lock does NOT record the stack
-      await fs.mkdir(path.join(ctx.wsRoot, ".craftar/services/echo"), { recursive: true });
-      await fs.writeFile(path.join(ctx.wsRoot, ".craftar/services/echo/compose.yaml"), fragmentContent);
-
-      // Lock with fragment but no stack entry
-      await fs.writeFile(
-        path.join(ctx.wsRoot, "craftar.lock"),
-        makeLock("test", ["base"], ["claude-code"], [
-          {
-            path: ".craftar/services/echo/compose.yaml",
-            hash: hashNormalized(Buffer.from(fragmentContent)),
-            target: "services",
-            ingredient: "service/echo",
-          },
-        ]),
-      );
-    });
-
-    afterEach(() => ctx.cleanup());
-
-    it("refuses with 'not craftar's' message", async () => {
-      const result = runCli(["services", "up", "--workspace", ctx.wsRoot], { env: noDockEnv() });
-
-      expect(result.code).toBe(1);
-      expect(result.stderr).toContain(".craftar/compose.yaml is not craftar's");
-      expect(result.stderr).toContain("craftar status");
-    });
-  });
-
-  describe("with -v as service name", () => {
-    let ctx: Awaited<ReturnType<typeof scenario>>;
-    const fragmentContent = "services:\n  echo:\n    image: alpine\n";
-    const stackContent = "# Generated by craftar\ninclude:\n  - path: services/echo/compose.yaml\n";
-    const gitattributes = "* -text\n";
-
-    beforeEach(async () => {
-      ctx = await scenario(
-        { recipes: [recipe("base", ["service/echo"])], profiles: [profile("test", ["base"])] },
-        { config: { profile: "test" } },
-      );
-      // Write intact service files
-      await fs.mkdir(path.join(ctx.wsRoot, ".craftar/services/echo"), { recursive: true });
-      await fs.writeFile(path.join(ctx.wsRoot, ".craftar/compose.yaml"), stackContent);
-      await fs.writeFile(path.join(ctx.wsRoot, ".craftar/services/echo/compose.yaml"), fragmentContent);
-      await fs.writeFile(path.join(ctx.wsRoot, ".craftar/.gitattributes"), gitattributes);
-
-      // Write lock
-      await fs.writeFile(
-        path.join(ctx.wsRoot, "craftar.lock"),
-        makeLock("test", ["base"], ["claude-code"], [
-          { path: ".craftar/compose.yaml", hash: hashNormalized(Buffer.from(stackContent)), target: "services", ingredient: "service/*" },
-          {
-            path: ".craftar/services/echo/compose.yaml",
-            hash: hashNormalized(Buffer.from(fragmentContent)),
-            target: "services",
-            ingredient: "service/echo",
-          },
-          { path: ".craftar/.gitattributes", hash: hashNormalized(Buffer.from(gitattributes)), target: "services", ingredient: "service/*" },
-        ]),
-      );
-    });
-
-    afterEach(() => ctx.cleanup());
-
-    it("refuses -v before Docker check", async () => {
-      // Use -- to separate service name from options
-      const result = runCli(["services", "up", "--workspace", ctx.wsRoot, "--", "-v"], { env: noDockEnv() });
-
-      expect(result.code).toBe(1);
-      expect(result.stderr).toContain('"-v" starts with "-"');
-      expect(result.stderr).toContain("refused");
-      // Should NOT mention Docker - the refusal happens before Docker check
-      expect(result.stderr).not.toContain("docker not found");
-    });
-  });
-
-  describe("with Docker absent and intact files", () => {
-    let ctx: Awaited<ReturnType<typeof scenario>>;
-    const fragmentContent = "services:\n  echo:\n    image: alpine\n";
-    const stackContent = "# Generated by craftar\ninclude:\n  - path: services/echo/compose.yaml\n";
-    const gitattributes = "* -text\n";
-
-    beforeEach(async () => {
-      ctx = await scenario(
-        { recipes: [recipe("base", ["service/echo"])], profiles: [profile("test", ["base"])] },
-        { config: { profile: "test" } },
-      );
-      // Write intact service files
-      await fs.mkdir(path.join(ctx.wsRoot, ".craftar/services/echo"), { recursive: true });
-      await fs.writeFile(path.join(ctx.wsRoot, ".craftar/compose.yaml"), stackContent);
-      await fs.writeFile(path.join(ctx.wsRoot, ".craftar/services/echo/compose.yaml"), fragmentContent);
-      await fs.writeFile(path.join(ctx.wsRoot, ".craftar/.gitattributes"), gitattributes);
-
-      // Write lock
-      await fs.writeFile(
-        path.join(ctx.wsRoot, "craftar.lock"),
-        makeLock("test", ["base"], ["claude-code"], [
-          { path: ".craftar/compose.yaml", hash: hashNormalized(Buffer.from(stackContent)), target: "services", ingredient: "service/*" },
-          {
-            path: ".craftar/services/echo/compose.yaml",
-            hash: hashNormalized(Buffer.from(fragmentContent)),
-            target: "services",
-            ingredient: "service/echo",
-          },
-          { path: ".craftar/.gitattributes", hash: hashNormalized(Buffer.from(gitattributes)), target: "services", ingredient: "service/*" },
-        ]),
-      );
-    });
-
-    afterEach(() => ctx.cleanup());
-
-    it("fails with docker not found", async () => {
-      const result = runCli(["services", "up", "--workspace", ctx.wsRoot], { env: noDockEnv() });
-
-      expect(result.code).toBe(1);
-      expect(result.stderr).toContain("docker not found");
-    });
-  });
-});
-
-describe("craftar services down", () => {
-  let ctx: Awaited<ReturnType<typeof scenario>>;
-
-  beforeEach(async () => {
-    ctx = await scenario(
-      { recipes: [recipe("base", [])], profiles: [profile("test", ["base"])] },
-      { config: { profile: "test" } },
+  it("up: a deleted fragment is refused with plain sync as the fix; two problems give two lines", async () => {
+    const s = await synced();
+    await fs.rm(path.join(s.wsRoot, FRAGMENT));
+    expect(up(s.wsRoot).stderr).toBe(`error: ${FRAGMENT} — missing — run craftar sync\n`);
+    await fs.appendFile(path.join(s.wsRoot, ".craftar/compose.yaml"), "# hand edit\n");
+    expect(up(s.wsRoot).stderr).toBe(
+      `error: .craftar/compose.yaml — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift\n` +
+        `${FRAGMENT} — missing — run craftar sync\n`,
     );
   });
 
-  afterEach(() => ctx.cleanup());
-
-  it("fails with docker not found when Docker absent", async () => {
-    const result = runCli(["services", "down", "--workspace", ctx.wsRoot], { env: noDockEnv() });
-
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("docker not found");
+  it("up: a user's own .craftar/compose.yaml (a collision at the first sync) is never run", async () => {
+    const s = await workspace(true, { ".craftar/compose.yaml": "services:\n  mine:\n    image: example/mine:1\n" });
+    runCli(["sync", "--workspace", s.wsRoot]);
+    const r = up(s.wsRoot);
+    expect([r.code, r.stderr]).toEqual([1, "error: .craftar/compose.yaml is not craftar's — run craftar status\n"]);
+    expect(await fs.readFile(path.join(s.wsRoot, ".craftar/compose.yaml"), "utf8")).toBe("services:\n  mine:\n    image: example/mine:1\n");
   });
 
-  it("accepts --volumes flag", async () => {
-    const result = runCli(["services", "down", "--volumes", "--workspace", ctx.wsRoot], { env: noDockEnv() });
-
-    // Still fails because no docker, but the flag is accepted
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("docker not found");
-    // Should not complain about the flag
-    expect(result.stderr).not.toContain("--volumes");
-  });
-});
-
-describe("craftar services status --json", () => {
-  let ctx: Awaited<ReturnType<typeof scenario>>;
-  const fragmentContent = "services:\n  echo:\n    image: alpine\n";
-  const stackContent = "# Generated by craftar\ninclude:\n  - path: services/echo/compose.yaml\n";
-  const gitattributes = "* -text\n";
-
-  beforeEach(async () => {
-    ctx = await scenario(
-      { recipes: [recipe("base", ["service/echo"])], profiles: [profile("test", ["base"])] },
-      { config: { profile: "test" } },
-    );
-    // Write intact service files
-    await fs.mkdir(path.join(ctx.wsRoot, ".craftar/services/echo"), { recursive: true });
-    await fs.writeFile(path.join(ctx.wsRoot, ".craftar/compose.yaml"), stackContent);
-    await fs.writeFile(path.join(ctx.wsRoot, ".craftar/services/echo/compose.yaml"), fragmentContent);
-    await fs.writeFile(path.join(ctx.wsRoot, ".craftar/.gitattributes"), gitattributes);
-
-    // Write lock
-    await fs.writeFile(
-      path.join(ctx.wsRoot, "craftar.lock"),
-      makeLock("test", ["base"], ["claude-code"], [
-        { path: ".craftar/compose.yaml", hash: hashNormalized(Buffer.from(stackContent)), target: "services", ingredient: "service/*" },
-        {
-          path: ".craftar/services/echo/compose.yaml",
-          hash: hashNormalized(Buffer.from(fragmentContent)),
-          target: "services",
-          ingredient: "service/echo",
-        },
-        { path: ".craftar/.gitattributes", hash: hashNormalized(Buffer.from(gitattributes)), target: "services", ingredient: "service/*" },
-      ]),
-    );
+  it("up: a user's own fragment file (a collision) is refused by its path", async () => {
+    const s = await workspace(true, { [FRAGMENT]: "services:\n  mine:\n    image: example/mine:1\n" });
+    runCli(["sync", "--workspace", s.wsRoot]);
+    const r = up(s.wsRoot);
+    expect([r.code, r.stderr]).toEqual([1, `error: ${FRAGMENT} is not craftar's — run craftar status\n`]);
   });
 
-  afterEach(() => ctx.cleanup());
-
-  it("has correct key order with Docker unavailable", async () => {
-    const result = runCli(["services", "status", "--json", "--workspace", ctx.wsRoot], { env: noDockEnv() });
-
-    expect(result.code).toBe(1);
-    const json = JSON.parse(result.stdout);
-    expect(Object.keys(json)).toEqual(["workspace", "project", "composeFile", "docker", "services", "pending", "warnings"]);
+  it("up: a service name starting with '-' is refused first, even with no lock", async () => {
+    const want = [1, 'error: service name "-v" starts with "-" — refused\n'];
+    const s = await synced();
+    const a = up(s.wsRoot, "--", "-v");
+    expect([a.code, a.stderr]).toEqual(want);
+    const never = await workspace();
+    const b = up(never.wsRoot, "--", "-v");
+    expect([b.code, b.stderr]).toEqual(want);
   });
 
-  it("docker.available is false when Docker absent", async () => {
-    const result = runCli(["services", "status", "--json", "--workspace", ctx.wsRoot], { env: noDockEnv() });
-
-    expect(result.code).toBe(1);
-    const json = JSON.parse(result.stdout);
-    expect(json.docker.available).toBe(false);
-    expect(json.docker.compose).toBe(null);
+  it("up: everything intact → only then Docker is looked for", async () => {
+    const s = await synced();
+    const r = up(s.wsRoot);
+    expect([r.code, r.stderr]).toEqual([1, `error: ${NOT_FOUND}\n`]);
   });
 
-  it("services show 'not created' when Docker unavailable", async () => {
-    const result = runCli(["services", "status", "--json", "--workspace", ctx.wsRoot], { env: noDockEnv() });
-
-    expect(result.code).toBe(1);
-    const json = JSON.parse(result.stdout);
-    expect(json.services).toHaveLength(1);
-    expect(json.services[0].name).toBe("echo");
-    expect(json.services[0].state).toBe("not created");
-    expect(json.services[0].ingredient).toBe("service/echo");
+  it("down is never gated on the lock or the files: with and without a lock it gets as far as Docker", async () => {
+    const s = await synced();
+    await fs.rm(path.join(s.wsRoot, FRAGMENT));
+    const a = runCli(["services", "down", "--volumes", "--workspace", s.wsRoot], { env: NO_DOCKER });
+    expect([a.code, a.stderr]).toEqual([1, `error: ${NOT_FOUND}\n`]);
+    const never = await workspace();
+    const b = runCli(["services", "down", "--workspace", never.wsRoot], { env: NO_DOCKER });
+    expect([b.code, b.stderr]).toEqual([1, `error: ${NOT_FOUND}\n`]);
   });
 
-  it("warnings include docker message when Docker unavailable", async () => {
-    const result = runCli(["services", "status", "--json", "--workspace", ctx.wsRoot], { env: noDockEnv() });
-
-    expect(result.code).toBe(1);
-    const json = JSON.parse(result.stdout);
-    expect(json.warnings.some((w: string) => w.includes("docker"))).toBe(true);
+  it("status --json: the contract's keys in order, every value, exit 1 with Docker absent", async () => {
+    const s = await synced();
+    const r = statusJson(s.wsRoot);
+    expect(r.code).toBe(1);
+    const j = JSON.parse(r.stdout);
+    expect(Object.keys(j)).toEqual(["workspace", "project", "composeFile", "docker", "services", "pending", "warnings"]);
+    expect(j.project).toMatch(/^craftar-ws-[0-9a-f]{8}$/);
+    expect({ ...j, project: "<p>" }).toEqual({
+      workspace: realpathSync(s.wsRoot),
+      project: "<p>",
+      composeFile: ".craftar/compose.yaml",
+      docker: { available: false, compose: null },
+      services: [{ name: "echo", ingredient: "service/echo", state: "not created", health: null, ports: [] }],
+      pending: [],
+      warnings: [NOT_FOUND],
+    });
+    expect(Object.keys(j.services[0])).toEqual(["name", "ingredient", "state", "health", "ports"]);
   });
 
-  it("composeFile is set when stack is recorded", async () => {
-    const result = runCli(["services", "status", "--json", "--workspace", ctx.wsRoot], { env: noDockEnv() });
+  it("status --json: a missing fragment is pending and declares nothing; an unrecorded stack has composeFile null", async () => {
+    const s = await synced();
+    await fs.rm(path.join(s.wsRoot, FRAGMENT));
+    const j = JSON.parse(statusJson(s.wsRoot).stdout);
+    expect([j.pending, j.services, j.composeFile]).toEqual([[{ path: FRAGMENT, reason: "missing" }], [], ".craftar/compose.yaml"]);
 
-    expect(result.code).toBe(1);
-    const json = JSON.parse(result.stdout);
-    expect(json.composeFile).toBe(".craftar/compose.yaml");
+    const c = await workspace(true, { ".craftar/compose.yaml": "services:\n  mine:\n    image: example/mine:1\n" });
+    runCli(["sync", "--workspace", c.wsRoot]);
+    const k = JSON.parse(statusJson(c.wsRoot).stdout);
+    expect([k.pending, k.services, k.composeFile]).toEqual([[{ path: ".craftar/compose.yaml", reason: "unrecorded" }], [], null]);
   });
 
-  it("project name follows craftar-<slug>-<hash> pattern", async () => {
-    const result = runCli(["services", "status", "--json", "--workspace", ctx.wsRoot], { env: noDockEnv() });
+  it("status reads the lock only: the Forge can be gone; with no lock it reports nothing declared", async () => {
+    const s = await synced();
+    await fs.rm(s.forgeRoot, { recursive: true, force: true });
+    const j = JSON.parse(statusJson(s.wsRoot).stdout);
+    expect(j.services).toEqual([{ name: "echo", ingredient: "service/echo", state: "not created", health: null, ports: [] }]);
 
-    expect(result.code).toBe(1);
-    const json = JSON.parse(result.stdout);
-    expect(json.project).toMatch(/^craftar-[a-z0-9-]+-[0-9a-f]{8}$/);
+    const never = await workspace();
+    const r = statusJson(never.wsRoot);
+    const k = JSON.parse(r.stdout);
+    expect([r.code, k.services, k.pending, k.composeFile]).toEqual([1, [], [], null]);
+  });
+
+  it("status (text): the service line, the pending line, the warning on stderr", async () => {
+    const s = await synced();
+    await fs.appendFile(path.join(s.wsRoot, ".craftar/.gitattributes"), "# hand edit\n");
+    const r = runCli(["services", "status", "--workspace", s.wsRoot], { env: NO_DOCKER });
+    expect(r.code).toBe(1);
+    const lines = r.stdout.trimEnd().split("\n");
+    expect(lines[0]).toMatch(/^craftar services — project craftar-ws-[0-9a-f]{8}$/);
+    expect(lines.slice(1)).toEqual([
+      "  echo  service/echo  not created",
+      "  .craftar/.gitattributes — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift",
+    ]);
+    expect(r.stderr).toBe(`warn ${NOT_FOUND}\n`);
   });
 });
 
-describe("craftar services help", () => {
-  it("shows services subcommands", () => {
-    const result = runCli(["services", "--help"]);
-
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain("up");
-    expect(result.stdout).toContain("down");
-    expect(result.stdout).toContain("status");
+describe("craftar services — surfaces that need no Docker at all (spec 31 §4.7)", () => {
+  it("`craftar services` alone prints the group's help", () => {
+    const r = runCli(["services"]);
+    const text = r.stdout + r.stderr;
+    for (const word of ["up [options] [service...]", "down [options]", "status [options]"]) expect(text).toContain(word);
   });
 
-  it("shows up --wait flag", () => {
-    const result = runCli(["services", "up", "--help"]);
-
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain("--wait");
-    expect(result.stdout).toContain("--workspace");
+  it("explain and status --json carry the owner `services` for a file under .craftar/", async () => {
+    const s = await synced();
+    const e = runCli(["explain", FRAGMENT, "--workspace", s.wsRoot]);
+    expect(e.code).toBe(0);
+    expect(e.stdout.split("\n")).toContain("  target      services");
+    const j = JSON.parse(runCli(["status", "--json", "--workspace", s.wsRoot]).stdout);
+    expect(Object.keys(j).at(-1)).toBe("unsetParams");
+    expect(JSON.stringify(j)).toContain(`"path":"${FRAGMENT}"`);
+    const flat = JSON.stringify(j);
+    expect(flat.includes(`"target":"services"`)).toBe(true);
   });
 
-  it("shows down --volumes flag", () => {
-    const result = runCli(["services", "down", "--help"]);
-
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain("--volumes");
-    expect(result.stdout).toContain("--workspace");
+  it("sync --check: clean after a sync, 1 with drift after a hand edit; diff --exit-code agrees", async () => {
+    const s = await synced();
+    expect(runCli(["sync", "--check", "--workspace", s.wsRoot]).code).toBe(0);
+    expect(runCli(["diff", "--exit-code", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.appendFile(path.join(s.wsRoot, FRAGMENT), "# hand edit\n");
+    const c = runCli(["sync", "--check", "--workspace", s.wsRoot]);
+    expect(c.code).toBe(1);
+    expect(c.stdout + c.stderr).toMatch(/drift/);
+    expect(runCli(["diff", "--exit-code", "--workspace", s.wsRoot]).code).toBe(1);
   });
 
-  it("shows status --json flag", () => {
-    const result = runCli(["services", "status", "--help"]);
+  it("removing the recipe's service: the next sync deletes the three files and the lock is schema 2 again", async () => {
+    const s = await synced();
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), "name: base\ningredients: [rule/a]\n");
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    for (const p of [".craftar/compose.yaml", ".craftar/.gitattributes", FRAGMENT]) expect(existsSync(path.join(s.wsRoot, p)), p).toBe(false);
+    expect(JSON.parse(await fs.readFile(path.join(s.wsRoot, "craftar.lock"), "utf8")).schema).toBe(2);
+  });
 
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain("--json");
-    expect(result.stdout).toContain("--workspace");
+  it("ingredients --type service lists the ingredient", async () => {
+    const s = await synced();
+    const r = runCli(["ingredients", "--type", "service", "--json", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    const j = JSON.parse(r.stdout);
+    expect(j.ingredients.map((i: { ref: string; targets: string[]; inUse: boolean }) => [i.ref, i.targets, i.inUse])).toEqual([["service/echo", [], true]]);
   });
 });

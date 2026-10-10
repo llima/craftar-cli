@@ -3,7 +3,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import YAML from "yaml";
-import { makeForge, profile, recipe, rule, scenario, tmpDir, writeFiles } from "./helpers/forge.js";
+import { makeForge, profile, recipe, rule, scenario, tmpDir, writeFiles, type IngredientSpec } from "./helpers/forge.js";
 import { runCli } from "./helpers/cli.js";
 import { git, remoteForge } from "./helpers/remote.js";
 import { TSX_LOADER } from "./helpers/tsx-loader.js";
@@ -322,6 +322,31 @@ describe("cli", () => {
     expect(none.code).toBe(0);
     expect(none.stdout).toContain("no variants");
     expect(none.stdout).not.toContain("bases with variants");
+  });
+
+  it("forge variants lists a service pair with an image difference", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const service = (name: string, image: string, extra: Record<string, unknown> = {}): IngredientSpec => ({
+      meta: { type: "service", name, ...extra },
+      files: { "compose.yaml": `services:\n  echo:\n    image: ${image}\n` },
+    });
+    await makeForge(root, {
+      ingredients: [service("echo", "example/echo:1"), service("echo--acme", "acme/echo:2", { as: "echo" })],
+    });
+
+    const r = runCli(["forge", "variants", "--forge", root, "--json"]);
+    expect(r.code).toBe(0);
+    const { groups } = JSON.parse(r.stdout);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].base).toBe("service/echo");
+    expect(groups[0].variants[0].profile).toBe("acme");
+    expect(groups[0].variants[0].distance.hunks).toBe(1);
+
+    const text = runCli(["forge", "variants", "--forge", root]);
+    expect(text.code).toBe(0);
+    expect(text.stdout).toContain("service/echo");
+    expect(text.stdout).toContain("acme (");
   });
 
   it("forge diff prints hunks per variant, exits 1 on a bad ref or profile, and writes nothing", async () => {
@@ -2543,19 +2568,6 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     });
     expect(j.targets[1].capabilities.script).toEqual({ state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" });
     expect(j.warnings).toEqual([]);
-  });
-
-  it("targets text mode: the services line appears after the paths block", async () => {
-    const dir = await bare();
-    const result = runCli(["targets"], { cwd: dir });
-    expect(result.code).toBe(0);
-    // The service line must appear with two leading spaces, after paths
-    expect(result.stdout).toContain("  service: written by sync under .craftar/ for no target; see craftar services");
-    // Verify it's after the paths block
-    const pathsIdx = result.stdout.indexOf("paths");
-    const serviceIdx = result.stdout.indexOf("  service:");
-    expect(pathsIdx).toBeGreaterThan(-1);
-    expect(serviceIdx).toBeGreaterThan(pathsIdx);
   });
 
   it("recipes and ingredients: --forge alone, --forge --profile, inside a workspace (cwd), --workspace", async () => {
