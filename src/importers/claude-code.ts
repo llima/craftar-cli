@@ -11,6 +11,7 @@ import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerpri
 import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { resolve, type Resolution } from "../core/resolve.js";
+import { effectiveProfile } from "../core/integrations.js";
 import { classifyForge, credentialFault } from "../core/remote.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { editYamlText } from "../core/yaml-edit.js";
@@ -350,7 +351,11 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     if (marker) throw new Error(`import: ${marker.where} holds a section marker on line ${marker.line} — sync would not reproduce it; indent it or remove it, and re-run`);
     const map = renderMap(l.meta, ctx.P, ctx.W);
     const key = [...sourceKeys(l.meta, l.files)].find((k) => Object.hasOwn(map, k));
-    if (key) throw new Error(`import: ${l.source} holds {{${key}}} literally, but profile ${opts.profileName} sets ${key} — sync would render it`);
+    if (key) {
+      // Spec 33 §5.3: say "integrations set" when the key is one the block gives (not overridden by params).
+      const who = existing.blockKeys.includes(key) ? `profile ${opts.profileName}'s integrations set` : `profile ${opts.profileName} sets`;
+      throw new Error(`import: ${l.source} holds {{${key}}} literally, but ${who} ${key} — sync would render it`);
+    }
   }
 
   // Spec 27 §5.3: report a declaration a profile loses — the run's MCP refs keyed by server name.
@@ -1083,16 +1088,17 @@ export function recipesOf(forge: import("../core/forge.js").Forge, profile: stri
 }
 
 /**
- * The importing profile's params and sections before the run (`P`, `PS`; spec 10 §6.1, spec 11 §6.7), and I4: import writes
- * `profiles/<p>/profile.yaml`, so a profile named `<p>` elsewhere, or that file naming another
- * profile, would leave two files for one name.
+ * The importing profile's effective params and sections before the run (`P`, `PS`; spec 10 §6.1, spec 11 §6.7,
+ * spec 33 §5.3), and `blockKeys` — the `integrations.*` keys whose value comes from the block (spec 33 design.md
+ * item 12). I4: import writes `profiles/<p>/profile.yaml`, so a profile named `<p>` elsewhere, or that file
+ * naming another profile, would leave two files for one name.
  */
 async function existingProfile(
   forge: string,
   profile: string,
   loaded: import("../core/forge.js").Forge | null,
-): Promise<{ params: Record<string, unknown>; sections: Sections }> {
-  if (!loaded) return { params: {}, sections: {} };
+): Promise<{ params: Record<string, unknown>; sections: Sections; blockKeys: string[] }> {
+  if (!loaded) return { params: {}, sections: {}, blockKeys: [] };
   const dir = path.join(forge, "profiles");
   for (const d of (await exists(dir)) ? await fs.readdir(dir, { withFileTypes: true }) : []) {
     if (!d.isDirectory()) continue;
@@ -1104,7 +1110,14 @@ async function existingProfile(
     }
   }
   const p = loaded.profiles.get(profile);
-  return { params: { ...(p?.params ?? {}) }, sections: p?.sections ?? {} };
+  if (!p) return { params: {}, sections: {}, blockKeys: [] };
+  try {
+    const eff = effectiveProfile(loaded, p);
+    return { params: { ...eff.params }, sections: p.sections, blockKeys: eff.blockKeys };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Error(`import: profile ${profile} does not resolve (${message}) — fix the Forge and re-run`);
+  }
 }
 
 /**
