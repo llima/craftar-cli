@@ -22,7 +22,7 @@ import { GENERATED_BANNER, kiroReport, type KiroReport } from "./kiro-report.js"
 import { deepMerge } from "../core/merge.js";
 import { outName } from "../emitters/shared.js";
 import { parseYamlText } from "../core/yaml-read.js";
-import type { WriteJournal } from "../core/unify.js";
+import { note, type WriteJournal } from "../core/unify.js";
 
 export interface ImportOptions {
   workspaceRoot: string;
@@ -494,10 +494,7 @@ export class ForgeStage {
     // Write each entry to the target root
     for (const { rel, content } of entries) {
       const targetAbs = path.join(root, rel);
-      const created = !(await exists(targetAbs));
-      if (opts?.journal) {
-        opts.journal.push({ abs: targetAbs, created });
-      }
+      await note(opts?.journal, targetAbs);
       await fs.mkdir(path.dirname(targetAbs), { recursive: true });
       await fs.writeFile(targetAbs, content);
     }
