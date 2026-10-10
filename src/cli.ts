@@ -10,7 +10,7 @@ import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistry
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, plan, readLock, status, apply, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type Workspace } from "./core/sync.js";
+import { loadWorkspace, plan, readLock, status, apply, unsetDeclared, unsetRefusal, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock } from "./schema/index.js";
 import { resolve, sectionKey } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -108,7 +108,7 @@ program
 /* ---------------------------------------------------------------- status */
 program
   .command("status")
-  .description("Show what sync would do: new, update, drift, orphan, collision")
+  .description("Show what sync would do: new, update, drift, orphan, collision; exits 1 when a declared parameter a file cites has no value")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--json", "machine-readable output", false)
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
@@ -117,9 +117,25 @@ program
     const p = await plan(ws);
     const lock = await readLock(ws.root);
     const st = await status(ws, p, lock);
-    if (o.json) return console.log(JSON.stringify({ forge: forgeJson(ws, lock), statuses: st.map(({ planned, ...s }) => s), warnings: p.warnings }, null, 2));
+    const unset = unsetDeclared(p);
+    if (o.json) {
+      console.log(JSON.stringify({ forge: forgeJson(ws, lock), statuses: st.map(({ planned, ...s }) => s), warnings: p.warnings, unsetParams: unset }, null, 2));
+      // exitCode, not process.exit: a piped object is not cut (spec 29 §4.1)
+      if (unset.length) process.exitCode = 1;
+      return;
+    }
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, false, forgeLine(ws, lock));
+    if (refusalBlock(unset)) process.exitCode = 1;
   });
+
+/**
+ * The refusal of spec 29 §4.1 for a command that goes on to print or exit by itself: the block on stderr, as
+ * `fail()` would print it, without exiting. Says whether there was one.
+ */
+function refusalBlock(unset: UnsetParam[]): boolean {
+  if (unset.length) console.error(pc.red("error: ") + unsetRefusal(unset));
+  return unset.length > 0;
+}
 
 /**
  * A writing sync on a planned workspace, then its report: `apply`, the registration of spec 21 (unless
@@ -297,7 +313,7 @@ program
 /* ---------------------------------------------------------------- sync */
 program
   .command("sync")
-  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces)")
+  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces); refuses, writing nothing, when a declared parameter a file cites has no value")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--check", "exit 1 when the workspace is out of date or has drift (CI mode)", false)
   .option("--dry-run", "show the plan, write nothing", false)
@@ -311,12 +327,21 @@ program
     if (o.check) {
       const bad = st.filter((s) => !["unchanged", "adopt"].includes(s.state));
       printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true, forgeLine(ws, lock));
+      // A refused sync is not "in sync", whatever the files say (spec 29 §4.1)
+      const refused = refusalBlock(unsetDeclared(p));
+      if (refused) process.exitCode = 1;
       if (bad.length) {
         console.log(pc.red(`\n${bad.length} file(s) out of sync`));
         process.exit(1);
       }
-      console.log(pc.green("\nworkspace in sync"));
+      if (!refused) console.log(pc.green("\nworkspace in sync"));
       return;
+    }
+    // Asked here, not left to apply()'s gate: the plan's warnings come before the block (spec 29 §4.1)
+    const unset = unsetDeclared(p);
+    if (unset.length) {
+      for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+      fail(unsetRefusal(unset));
     }
     await applyAndReport(ws, p, st, lock, { dryRun: o.dryRun, overwriteDrift: o.overwriteDrift });
   });
@@ -371,6 +396,8 @@ program
     if (!shown) console.log(pc.green("no differences"));
     // exitCode, not process.exit: exit drops a piped diff still queued for a slow reader (spec 19 §3.1)
     else if (o.exitCode) process.exitCode = 1;
+    // Spec 29 §4.1: with no [path], --exit-code fails exactly when `sync --check` does — a refused sync included
+    if (refusalBlock(unsetDeclared(p)) && o.exitCode && !only) process.exitCode = 1;
   });
 
 /* ---------------------------------------------------------------- add / remove recipe */
