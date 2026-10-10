@@ -790,3 +790,246 @@ export const dockerRunner: DockerRunner = (file, args, opts) => {
     });
   });
 };
+
+
+/* ------------------------------------------------------------------ */
+/* Services command (step 31e)                                          */
+/* ------------------------------------------------------------------ */
+
+/** The kind of services command. */
+export type ServicesKind = "up" | "down" | "status";
+
+/** Options for servicesCommand. */
+export interface ServicesOptions {
+  kind: ServicesKind;
+  /** For `up`: wait for services to be healthy. */
+  wait?: boolean;
+  /** For `down`: also remove volumes. */
+  volumes?: boolean;
+  /** For `up`: specific services to start (empty = all). */
+  services?: string[];
+}
+
+/** Result of servicesCommand. */
+export interface ServicesResult {
+  /** Did the command succeed? */
+  ok: boolean;
+  /** Exit code for CLI (0 = success). */
+  exitCode: number;
+  /** Message for the user. */
+  message: string;
+  /** Warnings (printed before message). */
+  warnings: string[];
+  /** For `status`: the running containers. */
+  containers?: PsContainer[];
+  /** For `status`: the recorded services (for comparison). */
+  recorded?: RecordedServicesResult;
+  /** The compose version, when available. */
+  compose?: string;
+}
+
+/**
+ * Run a services command (up, down, status).
+ *
+ * This is a pure-ish function: it takes a runner for Docker commands and reads
+ * the workspace files. The CLI calls this and handles output.
+ *
+ * Checks before running:
+ * 1. Docker is available (ENOENT → "Docker is not installed")
+ * 2. Compose plugin is available (exit 1 → "Docker Compose is not installed")
+ * 3. Compose version is >= MIN_COMPOSE (too old → warning, continues)
+ * 4. For `up`: the stack is usable (no pending files)
+ */
+export async function servicesCommand(
+  root: string,
+  lock: Lock,
+  opts: ServicesOptions,
+  run: DockerRunner,
+): Promise<ServicesResult> {
+  const warnings: string[] = [];
+
+  // Step 1: Check Docker + Compose
+  const ver = await dockerVersion(run);
+
+  if (!ver.available) {
+    return {
+      ok: false,
+      exitCode: 1,
+      message: "Docker is not installed or not in PATH",
+      warnings,
+    };
+  }
+
+  if (ver.compose === null) {
+    return {
+      ok: false,
+      exitCode: 1,
+      message: "Docker Compose plugin is not installed — run `docker compose version` to check",
+      warnings,
+    };
+  }
+
+  if (ver.belowFloor) {
+    warnings.push(`Docker Compose ${ver.compose} is below the minimum ${MIN_COMPOSE} — some features may not work`);
+  }
+
+  // Step 2: Get the recorded services
+  const recorded = await recordedServices(root, lock);
+
+  // Step 3: Compute project name and paths
+  const realRoot = await fs.realpath(root);
+  const project = projectName(realRoot);
+  const stackPath = path.join(root, ".craftar/compose.yaml");
+  const envFile = await findEnvFile(root);
+
+  // Step 4: Run the command
+  if (opts.kind === "status") {
+    // Status command: run ps, show containers
+    const argv = composeArgv("ps", {
+      project,
+      stack: canUseStack(recorded) ? stackPath : null,
+      envFile,
+    });
+
+    const result = await run("docker", argv, { cwd: root });
+
+    if (result.code !== 0) {
+      // ps failed — may mean no containers exist
+      return {
+        ok: true,
+        exitCode: 0,
+        message: "no containers running",
+        warnings,
+        containers: [],
+        recorded,
+        compose: ver.compose,
+      };
+    }
+
+    const containers = readPs(result.stdout);
+
+    return {
+      ok: true,
+      exitCode: 0,
+      message: containers.length === 0
+        ? "no containers running"
+        : `${containers.length} container(s) running`,
+      warnings,
+      containers,
+      recorded,
+      compose: ver.compose,
+    };
+  }
+
+  if (opts.kind === "up") {
+    // Check if stack is usable
+    if (!canUseStack(recorded)) {
+      const reasons = recorded.pending.map((p) => `  ${p.path}: ${p.reason}`);
+      return {
+        ok: false,
+        exitCode: 1,
+        message: recorded.stack
+          ? `cannot start: pending changes — run \`craftar sync\` first\n${reasons.join("\n")}`
+          : "cannot start: no services recorded — run `craftar sync` first",
+        warnings,
+        recorded,
+        compose: ver.compose,
+      };
+    }
+
+    // Build argv and run
+    const argv = composeArgv("up", {
+      project,
+      stack: stackPath,
+      envFile,
+      wait: opts.wait,
+      services: opts.services,
+    });
+
+    const result = await run("docker", argv, { cwd: root });
+
+    if (result.code !== 0) {
+      return {
+        ok: false,
+        exitCode: result.code ?? 1,
+        message: result.stderr.trim() || "docker compose up failed",
+        warnings,
+        compose: ver.compose,
+      };
+    }
+
+    // Get the running containers for output
+    const psArgv = composeArgv("ps", {
+      project,
+      stack: stackPath,
+      envFile,
+    });
+    const psResult = await run("docker", psArgv, { cwd: root });
+    const containers = psResult.code === 0 ? readPs(psResult.stdout) : [];
+
+    return {
+      ok: true,
+      exitCode: 0,
+      message: containers.length === 0
+        ? "services started"
+        : `${containers.length} container(s) running`,
+      warnings,
+      containers,
+      recorded,
+      compose: ver.compose,
+    };
+  }
+
+  if (opts.kind === "down") {
+    // Down can run with or without the stack file — use project name only when stack is not usable
+    const useStack = canUseStack(recorded);
+    const argv = composeArgv("down", {
+      project,
+      stack: useStack ? stackPath : null,
+      envFile: null, // down doesn't need env file
+      volumes: opts.volumes,
+    });
+
+    const result = await run("docker", argv, { cwd: root });
+
+    if (result.code !== 0) {
+      return {
+        ok: false,
+        exitCode: result.code ?? 1,
+        message: result.stderr.trim() || "docker compose down failed",
+        warnings,
+        compose: ver.compose,
+      };
+    }
+
+    return {
+      ok: true,
+      exitCode: 0,
+      message: opts.volumes ? "services stopped, volumes removed" : "services stopped",
+      warnings,
+      compose: ver.compose,
+    };
+  }
+
+  // Should never reach here
+  return {
+    ok: false,
+    exitCode: 1,
+    message: `unknown command: ${opts.kind}`,
+    warnings,
+  };
+}
+
+/**
+ * Find the .env file for the workspace, if it exists.
+ * Returns the path if found, null otherwise.
+ */
+async function findEnvFile(root: string): Promise<string | null> {
+  const envPath = path.join(root, ".env");
+  try {
+    await fs.access(envPath);
+    return envPath;
+  } catch {
+    return null;
+  }
+}
