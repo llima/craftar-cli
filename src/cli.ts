@@ -1749,7 +1749,7 @@ forge
     // Spec 33 §4.4: pruneCandidates warns once per profile whose block cannot be read
     const pruneWarnings: string[] = [];
     const candidates: PruneCandidate[] = o.pruneRecipes && result.resolved
-      ? await pruneCandidates(f, base.ref, variant.ref, o.profile, (w) => { if (!pruneWarnings.includes(w)) pruneWarnings.push(w); })
+      ? await pruneCandidates(f, base.ref, variant.ref, o.profile, (w) => pruneWarnings.push(w))
       : [];
     // Spec 09 & 12: the Forge-level rows and YAML edits for parameter and section extractions, rendered before any write.
     const paramWrites = result.params.length || result.sections.length
@@ -1896,13 +1896,11 @@ forge
     // workspace's recipes.add or an extends chain may name the sibling, and removing the suffixed
     // one would shift recipe order or param precedence there.
     // Spec 25 §4.4: only printed for candidates NOT pruned; without --prune-recipes, ends with a hint
-    // Spec 33 §4.4: also skip candidates kept for any reason (e.g., integration selection)
     const suffix = `--${o.profile}`;
     const prunedRecipes = new Set(pruneResult.pruned.map((p) => p.recipe));
-    const keptRecipes = new Set(pruneResult.kept.map((k) => k.recipe));
     for (const rn of cascade.identicalToSibling) {
-      // Skip if this was pruned or kept
-      if (prunedRecipes.has(rn) || keptRecipes.has(rn)) continue;
+      // Skip if this was pruned
+      if (prunedRecipes.has(rn)) continue;
       const sibling = rn.slice(0, -suffix.length);
       const baseText =
         `recipe ${rn} is now identical to ${sibling} — it can be removed by hand after repointing the profiles, extends and ` +

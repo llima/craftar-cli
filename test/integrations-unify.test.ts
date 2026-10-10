@@ -176,8 +176,8 @@ describe("--prune-recipes and a recipe a block selects (spec 33 §4.4)", () => {
     expect(await exists(path.join(t.forge, "recipes/pm-ado--acme.yaml"))).toBe(true);
     expect(await fs.readFile(path.join(t.forge, "profiles/acme/profile.yaml"), "utf8")).toBe(t.profileBefore);
     expect(runCli(["status", "--workspace", t.ws, "--json"], { env: t.env }).code).toBe(0);
-    // Print once, then pin: the warnings array
-    expect(out.warnings).toEqual([]);
+    // A kept recipe still gets the identical-to-sibling warning (the gate: nothing changes below schema 3)
+    expect(out.warnings.some((w: string) => w.includes("recipe pm-ado--acme is now identical to pm-ado"))).toBe(true);
   });
 
   it("10. listed by hand AND selected: kept too (choice B10)", async () => {
@@ -227,5 +227,24 @@ describe("--prune-recipes and a recipe a block selects (spec 33 §4.4)", () => {
     expect(r.code).toBe(0);
     const out = JSON.parse(r.stdout);
     expect(out.recipes.kept).toEqual([{ recipe: "pm-ado--acme", reason: "profile acme selects it through integrations" }]);
+  });
+
+  it("15. (control at 94efeaf — the gate's pin)", async () => {
+    // At schema 2, CRAFTAR_NO_REGISTRY: "1", profile lists the recipe:
+    // the kept array shows "the registry is off" reason,
+    // and the warnings array DOES include the identical-to-sibling warning for that recipe.
+    // This pins the behavior below the schema 3 gate.
+    const t = await forgeOf(2, pruneSpec({ recipes: ["pm-ado--acme"], integrations: {} }));
+    const ws = path.join(t.root, "ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+    expect(runCli(["sync", "--workspace", ws], { env: t.env }).code).toBe(0);
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", t.forge, "--json"], { env: { ...t.env, CRAFTAR_NO_REGISTRY: "1" } });
+    expect(r.code).toBe(0);
+    const out = JSON.parse(r.stdout);
+    // With the registry off, it cannot tell if any workspace names the recipe, so it's kept
+    expect(out.recipes.pruned).toEqual([]);
+    expect(out.recipes.kept).toEqual([{ recipe: "pm-ado--acme", reason: "the registry is off" }]);
+    // The gate: a kept recipe still gets the identical-to-sibling warning
+    expect(out.warnings.some((w: string) => w.includes("recipe pm-ado--acme is now identical to pm-ado"))).toBe(true);
   });
 });

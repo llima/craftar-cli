@@ -1024,8 +1024,22 @@ export async function pruneCandidates(
 ): Promise<PruneCandidate[]> {
   const suffix = `--${profile}`;
   const out: PruneCandidate[] = [];
-  // Warnings already emitted, to warn once per text.
-  const warned = new Set<string>();
+
+  // Compute selectedBy once for all profiles (spec 33 §4.4): recipe → profile names that select it.
+  const selectedBy = new Map<string, string[]>();
+  for (const [pName, prof] of forge.profiles) {
+    try {
+      for (const s of effectiveProfile(forge, prof).selected) {
+        const arr = selectedBy.get(s.recipe);
+        if (arr) arr.push(pName);
+        else selectedBy.set(s.recipe, [pName]);
+      }
+    } catch {
+      // effectiveProfile threw on a malformed block — warn via recipesOrWritten's message.
+      const row = recipesOrWritten(forge, prof);
+      if (row.warning) warn?.(row.warning);
+    }
+  }
 
   // Get the cascade edits
   const edits = await ingredientEdits(forge, baseRef, variantRef);
@@ -1062,29 +1076,10 @@ export async function pruneCandidates(
       }
     }
 
-    // Find profiles that select this candidate through integrations (spec 33 §4.4).
-    // This includes profiles that also list it by hand (choice B10).
-    const viaIntegrations: string[] = [];
-    for (const [pName, prof] of forge.profiles) {
-      const row = recipesOrWritten(forge, prof);
-      if (row.warning) {
-        if (warn && !warned.has(row.warning)) {
-          warned.add(row.warning);
-          warn(row.warning);
-        }
-        continue;
-      }
-      try {
-        const eff = effectiveProfile(forge, prof);
-        if (eff.selected.some((s) => s.recipe === edit.name)) {
-          viaIntegrations.push(pName);
-        }
-      } catch {
-        // effectiveProfile threw — recipesOrWritten should have caught it, but just in case
-      }
-    }
+    // viaIntegrations: profiles that select this recipe through integrations (spec 33 §4.4, choice B10).
+    const viaIntegrations = [...(selectedBy.get(edit.name) ?? [])].sort();
 
-    out.push({ recipe: edit.name, sibling, file: edit.file, profiles, missingProfiles, viaIntegrations: viaIntegrations.sort() });
+    out.push({ recipe: edit.name, sibling, file: edit.file, profiles, missingProfiles, viaIntegrations });
   }
 
   return out;
