@@ -177,7 +177,11 @@ describe("--prune-recipes and a recipe a block selects (spec 33 §4.4)", () => {
     expect(await fs.readFile(path.join(t.forge, "profiles/acme/profile.yaml"), "utf8")).toBe(t.profileBefore);
     expect(runCli(["status", "--workspace", t.ws, "--json"], { env: t.env }).code).toBe(0);
     // A kept recipe still gets the identical-to-sibling warning (the gate: nothing changes below schema 3)
-    expect(out.warnings.some((w: string) => w.includes("recipe pm-ado--acme is now identical to pm-ado"))).toBe(true);
+    expect(out.warnings).toEqual([
+      "recipe pm-ado--acme is now identical to pm-ado — it can be removed by hand after repointing the profiles, extends and " +
+      "workspace recipes lists that name it; unify does not, because a workspace or an extends chain may also name pm-ado and " +
+      "the recipe order or param precedence would change",
+    ]);
   });
 
   it("10. listed by hand AND selected: kept too (choice B10)", async () => {
@@ -229,12 +233,12 @@ describe("--prune-recipes and a recipe a block selects (spec 33 §4.4)", () => {
     expect(out.recipes.kept).toEqual([{ recipe: "pm-ado--acme", reason: "profile acme selects it through integrations" }]);
   });
 
-  it("15. (control at 94efeaf — the gate's pin)", async () => {
-    // At schema 2, CRAFTAR_NO_REGISTRY: "1", profile lists the recipe:
-    // the kept array shows "the registry is off" reason,
-    // and the warnings array DOES include the identical-to-sibling warning for that recipe.
-    // This pins the behavior below the schema 3 gate.
-    const t = await forgeOf(2, pruneSpec({ recipes: ["pm-ado--acme"], integrations: {} }));
+  it("15. (control) below the gate a kept recipe still gets its identical-to-sibling warning", async () => {
+    // At schema 2, the integrations block is inert (below the gate). The profile lists the recipe
+    // by hand, and CRAFTAR_NO_REGISTRY: "1" makes the prune keep it because the registry cannot
+    // verify that no workspace names it. The warnings array DOES include the identical-to-sibling
+    // warning — pinning that a kept recipe is NOT skipped from that warning.
+    const t = await forgeOf(2, pruneSpec({ recipes: ["pm-ado--acme"], integrations: { pm: { kind: "ado--acme" } } }));
     const ws = path.join(t.root, "ws");
     await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
     expect(runCli(["sync", "--workspace", ws], { env: t.env }).code).toBe(0);
@@ -245,6 +249,6 @@ describe("--prune-recipes and a recipe a block selects (spec 33 §4.4)", () => {
     expect(out.recipes.pruned).toEqual([]);
     expect(out.recipes.kept).toEqual([{ recipe: "pm-ado--acme", reason: "the registry is off" }]);
     // The gate: a kept recipe still gets the identical-to-sibling warning
-    expect(out.warnings.some((w: string) => w.includes("recipe pm-ado--acme is now identical to pm-ado"))).toBe(true);
+    expect(out.warnings.filter((w: string) => w.startsWith("recipe pm-ado--acme is now identical to pm-ado — it can be removed by hand")).length).toBe(1);
   });
 });
