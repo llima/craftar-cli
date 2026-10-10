@@ -161,9 +161,8 @@ describe("removeEntry (§4.3)", () => {
     let lockAtRmdir: boolean | null = null;
     let waiter: Promise<{ fetched: boolean }> | null = null;
     // The waiter's fetch runs under its lock: held there until the removal has returned, so the rmdir
-    // falls while the lock file is in the entry. (Polling the entry for `lock` instead missed it when
-    // the whole read fitted between two polls.)
-    const git: typeof defaultGit = async (args, opts) => {
+    // falls while the lock file is in the entry.
+    const heldGit: typeof defaultGit = async (args, opts) => {
       if (args.includes("fetch")) {
         inFetch = true;
         await until(() => removed);
@@ -171,7 +170,7 @@ describe("removeEntry (§4.3)", () => {
       return defaultGit(args, opts);
     };
     const out = await removeEntry(entry, async () => {
-      waiter = ensureTree(r.url, null, { home: h, pollMs: 20, git, beforeAttempt: async () => void attempts++ });
+      waiter = ensureTree(r.url, null, { home: h, pollMs: 20, git: heldGit, beforeAttempt: async () => void attempts++ });
       await until(() => attempts >= 1);
       return true;
     }, { afterRelease: async () => { await until(() => inFetch); lockAtRmdir = (await ls(entry))?.includes("lock") ?? false; } }).finally(() => { removed = true; });
@@ -192,10 +191,9 @@ describe("removeEntry (§4.3)", () => {
     let waiter: Promise<{ fetched: boolean }> | null = null;
     const beforeAttempt = async () => {
       attempts++;
-      // The first attempt finds the pruner's lock (EEXIST). Every later one is held here, after its
-      // mkdir, until the pruner has released: left free, the waiter could take the lock in the window
-      // between the release and `released`, and the rmdir below would then fall on a later lock of the
-      // same read (the tree's), on an entry the fetch had filled — ENOTEMPTY, about half the Windows runs.
+      // The first attempt finds the pruner's lock (EEXIST). The second is held here, after its mkdir,
+      // until the pruner has released — so the waiter cannot take the lock first — and then removes the
+      // emptied entry itself, standing in for the pruner's rmdir, which waits for it below.
       if (attempts === 1 || raced === 1) return;
       await until(() => released);
       raced++;
@@ -204,9 +202,10 @@ describe("removeEntry (§4.3)", () => {
     };
     const out = await removeEntry(entry, async () => {
       waiter = ensureTree(r.url, null, { home: h, pollMs: 20, beforeAttempt });
-      await until(() => attempts >= 1);
+      // Two attempts: the first has failed on the lock, the second is parked in the hook.
+      await until(() => attempts >= 2);
       return true;
-    }, { afterRelease: async () => { released = true; await until(() => raced === 1); } });
+    }, { afterRelease: async () => { released = true; await until(() => goneAtWrite !== null); } });
     expect(out).toEqual({ outcome: "removed", warnings: [] });
     expect((await waiter!).fetched).toBe(true);
     // The rmdir fell on the second attempt, between its mkdir and its write: that write found no directory.
@@ -223,11 +222,14 @@ describe("removeEntry (§4.3)", () => {
       waiter = ensureTree(r.url, null, { home: h, pollMs: 20, beforeAttempt: async () => void attempts++ });
       await until(() => attempts >= 1);
       return true;
-      // The pruner's own rmdir is held back until the waiter's fetch has refilled the entry.
-    }, { afterRelease: () => until(async () => (await ls(entry))?.includes("fetched") ?? false) });
+    }, {
+      // The pruner's rmdir waits until the waiter's fetch has refilled the entry.
+      afterRelease: () => until(async () => (await ls(entry))?.includes("fetched") ?? false),
+    });
     expect(out).toEqual({ outcome: "removed", warnings: [] });
     expect((await waiter!).fetched).toBe(true);
     expect(await ls(entry)).toEqual(["fetched", "repo.git", "trees"]);
+    expect((await ls(path.join(h, "forges")))!.filter((n) => n.startsWith(REMOVING_PREFIX))).toEqual([]);
   });
 
   it("a reader waiting to rebuild a tree fails cleanly, leaves an incomplete entry, and the next read fetches again", async () => {
