@@ -53,7 +53,7 @@ import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { spawn } from "node:child_process";
 import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
-import { declaredTemplates, dotnetVersion, feedMessage, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared, type DeclaredEntry } from "./core/templates.js";
+import { declaredTemplates, dotnetVersion, feedMessage, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared } from "./core/templates.js";
 import { spawnInherited } from "./core/proc.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -188,7 +188,7 @@ program
  * `fail()` would print it, without exiting. Says whether there was one.
  */
 function refusalBlock(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): boolean {
-  if (unset.length) console.error(pc.red("error: ") + unsetRefusal(unset, opts));
+  if (unset.length) errorLine(unsetRefusal(unset, opts));
   return unset.length > 0;
 }
 
@@ -1014,7 +1014,6 @@ templates
     const { profile, declared } = await declaredFor(ws);
     const warnings = [...ws.warnings, ...declared.warnings];
 
-    // Nothing declared: the list line and exit 0, no dotnet needed
     if (!declared.declared || declared.entries.length === 0) {
       console.log(`no templates declared for profile ${profile}`);
       return;
@@ -1022,8 +1021,7 @@ templates
 
     warnStderr(warnings);
 
-    // Has an installable entry and not --dry-run: check dotnet
-    const hasInstallable = declared.entries.some((e): e is DeclaredEntry & { installable: true } => e.installable);
+    const hasInstallable = declared.entries.some((e) => e.installable);
     if (hasInstallable && !o.dryRun) {
       const version = await dotnetVersion();
       if (version === null) {
@@ -1031,7 +1029,6 @@ templates
       }
     }
 
-    // Feed line (before any run, under --dry-run too)
     const unpinned = await unpinnedSources(declared.entries, ws.root);
     if (unpinned.length > 0) {
       warnStderr([`templates: ${feedMessage(unpinned)}`]);
@@ -1051,13 +1048,11 @@ templates
       return;
     }
 
-    // Print one error per failed entry
     for (const f of result.failed) {
       const msg = f.code === null ? "dotnet did not exit" : `dotnet exited ${f.code}`;
-      console.error(`error: templates[${f.entry}] failed — ${msg}`);
+      errorLine(`templates[${f.entry}] failed — ${msg}`);
     }
 
-    // Summary on stdout
     const store = "into the dotnet template store of this user (remove a package with: dotnet new uninstall <package>)";
     console.log(`templates: ${result.installed.length} installed, ${result.failed.length} failed, ${result.skipped.length} skipped — ${store}`);
 
@@ -2619,8 +2614,13 @@ function forgeJson(ws: Workspace, lock: Lock | null) {
   };
 }
 
-function fail(msg: string): never {
+/** One line on stderr with the `error: ` prefix, without exiting — `fail()` is this, then exit 1. */
+function errorLine(msg: string): void {
   console.error(pc.red("error: ") + msg);
+}
+
+function fail(msg: string): never {
+  errorLine(msg);
   process.exit(1);
 }
 
