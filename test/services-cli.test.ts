@@ -93,7 +93,7 @@ describe.skipIf(DOCKER_THERE)("craftar services — without Docker (spec 31 §4.
     expect([up(none.wsRoot).code, up(none.wsRoot).stderr]).toEqual([1, `error: ${NO_SERVICES}\n`]);
   });
 
-  it("up: a hand-edited fragment is refused with the drift discard fix, and nothing is written", async () => {
+  it("up: a hand-edited fragment is refused with the overwrite-drift line (spec §16.1), nothing written", async () => {
     const s = await synced();
     await fs.appendFile(path.join(s.wsRoot, FRAGMENT), "# hand edit\n");
     const before = await tree(s.wsRoot);
@@ -101,7 +101,7 @@ describe.skipIf(DOCKER_THERE)("craftar services — without Docker (spec 31 §4.
     expect([r.code, r.stdout, r.stderr]).toEqual([
       1,
       "",
-      `error: ${FRAGMENT} — edited — run craftar drift discard ${FRAGMENT} to put back what craftar wrote (craftar sync --overwrite-drift does it for every edited file)\n`,
+      `error: ${FRAGMENT} — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift\n`,
     ]);
     expect(await tree(s.wsRoot)).toEqual(before);
   });
@@ -112,7 +112,7 @@ describe.skipIf(DOCKER_THERE)("craftar services — without Docker (spec 31 §4.
     expect(up(s.wsRoot).stderr).toBe(`error: ${FRAGMENT} — missing — run craftar sync\n`);
     await fs.appendFile(path.join(s.wsRoot, ".craftar/compose.yaml"), "# hand edit\n");
     expect(up(s.wsRoot).stderr).toBe(
-      `error: .craftar/compose.yaml — edited — run craftar drift discard .craftar/compose.yaml to put back what craftar wrote (craftar sync --overwrite-drift does it for every edited file)\n` +
+      `error: .craftar/compose.yaml — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift\n` +
         `${FRAGMENT} — missing — run craftar sync\n`,
     );
   });
@@ -240,7 +240,7 @@ describe.skipIf(DOCKER_THERE)("craftar services — without Docker (spec 31 §4.
     expect(lines[0]).toMatch(/^craftar services — project craftar-ws-[0-9a-f]{8}$/);
     expect(lines.slice(1)).toEqual([
       "  echo  service/echo  not created",
-      "  .craftar/.gitattributes — edited — run craftar drift discard .craftar/.gitattributes to put back what craftar wrote (craftar sync --overwrite-drift does it for every edited file)",
+      "  .craftar/.gitattributes — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift",
     ]);
     expect(r.stderr).toBe(`warn ${NOT_FOUND}\n`);
   });

@@ -22,6 +22,7 @@ import {
   pendingLine,
   upRefusal,
   statusReport,
+  fragmentPaths,
   MIN_COMPOSE,
   type DockerRunner,
   type DockerInfo,
@@ -437,11 +438,11 @@ describe("dockerVersion", () => {
     expect(result.reason).toBe("too old");
   });
 
-  it('"2.24.5-desktop.1" → available:true, compose:"2.24.5-desktop.1", belowFloor:false', async () => {
+  it('"2.24.5-desktop.1" → compose extracts numeric part "2.24.5" only (E2)', async () => {
     const run: DockerRunner = async () => ({ code: 0, stdout: "2.24.5-desktop.1\n", stderr: "" });
     const result = await dockerVersion(run);
     expect(result.available).toBe(true);
-    expect(result.compose).toBe("2.24.5-desktop.1");
+    expect(result.compose).toBe("2.24.5"); // just the numeric part
     expect(result.belowFloor).toBe(false);
   });
 
@@ -512,10 +513,10 @@ describe("pendingLine", () => {
     expect(result).toBe(".craftar/foo.yaml — missing — run craftar sync");
   });
 
-  it('"edited" → the drift discard line', () => {
+  it('"edited" → the overwrite-drift line per spec §16.1', () => {
     const result = pendingLine({ path: ".craftar/foo.yaml", reason: "edited" });
     expect(result).toBe(
-      ".craftar/foo.yaml — edited — run craftar drift discard .craftar/foo.yaml to put back what craftar wrote (craftar sync --overwrite-drift does it for every edited file)"
+      ".craftar/foo.yaml — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift"
     );
   });
 
@@ -986,5 +987,41 @@ describe("statusReport", () => {
     const d: DockerInfo = { available: true, compose: "5.5.1", belowFloor: false, reason: null };
     const report = statusReport("/home/ws", r, d, null, null);
     expect(report.composeFile).toBe(null);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* fragmentPaths tests (E2: returns [] for invalid YAML, not throw)   */
+/* ------------------------------------------------------------------ */
+
+describe("fragmentPaths", () => {
+  it("valid craftar stack → workspace-relative POSIX paths", () => {
+    const stack = "include:\n  - path: services/echo/compose.yaml\n  - path: services/redis/compose.yaml\n";
+    expect(fragmentPaths(stack)).toEqual([".craftar/services/echo/compose.yaml", ".craftar/services/redis/compose.yaml"]);
+  });
+
+  it("invalid YAML (syntax error) → empty array, not throw", () => {
+    const bad = "include: [\n  - path: foo\n"; // broken YAML
+    expect(fragmentPaths(bad)).toEqual([]);
+  });
+
+  it("not a mapping → empty array", () => {
+    const notMapping = "- a\n- b\n";
+    expect(fragmentPaths(notMapping)).toEqual([]);
+  });
+
+  it("no include key → empty array", () => {
+    const noInclude = "services:\n  echo:\n    image: x\n";
+    expect(fragmentPaths(noInclude)).toEqual([]);
+  });
+
+  it("absolute path in include → empty array", () => {
+    const absPath = "include:\n  - path: /etc/compose.yaml\n";
+    expect(fragmentPaths(absPath)).toEqual([]);
+  });
+
+  it(".. segment in include path → empty array", () => {
+    const dotDot = "include:\n  - path: ../escape/compose.yaml\n";
+    expect(fragmentPaths(dotDot)).toEqual([]);
   });
 });

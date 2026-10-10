@@ -2218,7 +2218,7 @@ services
       try {
         recorded = await recordedServices(root, await readLock(root));
       } catch (e) {
-        console.error(`${pc.yellow("warn")} ${e instanceof Error ? e.message : String(e)}`);
+        console.error(`${pc.yellow("warn")} ${errorText(e)}`);
       }
       const docker = await dockerVersion(dockerRunner);
       const fault = dockerFault(docker, false);

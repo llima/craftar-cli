@@ -322,7 +322,13 @@ const DOCKER_FIX = `install Docker with the Compose plugin ${MIN_COMPOSE} or lat
  * include path that is absolute or has a `..` segment).
  */
 export function fragmentPaths(stackText: string): string[] {
-  const parsed = ComposeStackShape.safeParse(parseYamlText("stack", stackText));
+  let doc: unknown;
+  try {
+    doc = parseYamlText("stack", stackText);
+  } catch {
+    return []; // invalid YAML
+  }
+  const parsed = ComposeStackShape.safeParse(doc);
   if (!parsed.success) return [];
   // Refuse an include path that is absolute or has a .. segment — not a craftar stack
   for (const inc of parsed.data.include) {
@@ -351,14 +357,6 @@ export interface Recorded {
   services: RecordedService[];
   pending: PendingFile[];
   warnings: string[];
-}
-
-function yamlOrNull(text: string): unknown {
-  try {
-    return parseYamlText("stack", text);
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -445,7 +443,7 @@ export function pendingLine(p: PendingFile): string {
     case "missing":
       return `${p.path} — missing — run craftar sync`;
     case "edited":
-      return `${p.path} — edited — run craftar drift discard ${p.path} to put back what craftar wrote (craftar sync --overwrite-drift does it for every edited file)`;
+      return `${p.path} — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift`;
     case "unrecorded":
       return `${p.path} is not craftar's — run craftar status`;
   }
@@ -542,8 +540,8 @@ export async function dockerVersion(run: DockerRunner): Promise<DockerInfo> {
   }
   const m = /^v?(\d+(?:\.\d+)*)/.exec(r.stdout.trim());
   if (r.code !== 0 || m === null) return { available: false, compose: null, belowFloor: false, reason: "no compose plugin" };
-  const compose = r.stdout.trim().replace(/^v/, "");
-  const belowFloor = compareVersions(m[1], MIN_COMPOSE) < 0;
+  const compose = m[1]; // just the numeric version, no suffix like "-desktop.1"
+  const belowFloor = compareVersions(compose, MIN_COMPOSE) < 0;
   return { available: true, compose, belowFloor, reason: belowFloor ? "too old" : null };
 }
 
