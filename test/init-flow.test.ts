@@ -1265,6 +1265,13 @@ describe("askInit", () => {
 
 import { mergeWorkspaceConfig } from "../src/core/sync.js";
 
+/**
+ * A temp path or URL as the `again` line carries it. The rule of spec 28 §4.2 step 11, restated here and not
+ * taken from `src/`: a value holding a character outside `[A-Za-z0-9_./:@=+,-]` is wrapped in double quotes.
+ * A Windows temp path (`C:\\Users\\RUNNER~1\\…`) and its `file://` URL (`%7E`) are quoted; a Linux one is not.
+ */
+const asArg = (v: string): string => (/^[A-Za-z0-9_./:@=+,-]+$/.test(v) ? v : `"${v}"`);
+
 describe("askInit → planInit (review of T5b)", () => {
   it("1. --ref given, the Forge asked", async () => {
     const s = await askSetup();
@@ -1281,7 +1288,7 @@ describe("askInit → planInit (review of T5b)", () => {
     const plan = await planInit(s.ws, result.input, { home: s.home, mode: "sync", local });
     expect(plan.text).toBe(`forge: ${r.url}\nref: main\nprofile: acme\n`);
     expect(againLine(result.answers, { sync: true, offline: false })).toBe(
-      `  again craftar init --forge ${r.url} --ref main --profile acme`
+      `  again craftar init --forge ${asArg(r.url)} --ref main --profile acme`
     );
   });
 
@@ -1302,7 +1309,7 @@ describe("askInit → planInit (review of T5b)", () => {
     expect(plan.text).toBe("forge: ../forge\nprofile: acme\n");
     expect(plan.plan.resolution.recipes).toEqual(["base", "stack-api", "front-a", "extra"]);
     expect(againLine(result.answers, { sync: true, offline: false })).toBe(
-      `  again craftar init --forge ${s.forge} --profile acme`
+      `  again craftar init --forge ${asArg(s.forge)} --profile acme`
     );
   });
 
@@ -1352,7 +1359,7 @@ describe("askInit → planInit (review of T5b)", () => {
     expect(result.input.replace).toBe(true);
 
     expect(againLine(result.answers, { sync: true, offline: false })).toBe(
-      `  again craftar init --forge ${s.forge} --profile acme --add-recipe front-b --replace`
+      `  again craftar init --forge ${asArg(s.forge)} --profile acme --add-recipe front-b --replace`
     );
 
     const plan = await planInit(s.ws, result.input, { home: s.home, mode: "sync", local });
