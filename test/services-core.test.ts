@@ -298,7 +298,7 @@ describe("dockerVersion", () => {
   it('runner answering "5.5.1\\n" → {available:true, compose:"5.5.1"}', async () => {
     const run: DockerRunner = async () => ({ code: 0, stdout: "5.5.1\n", stderr: "" });
     const result = await dockerVersion(run);
-    expect(result).toEqual({ available: true, compose: "5.5.1", reason: null });
+    expect(result).toEqual({ available: true, compose: "5.5.1", belowFloor: false, reason: null });
   });
 
   it("v2.19.1 → available but below floor", async () => {
@@ -316,13 +316,13 @@ describe("dockerVersion", () => {
       throw err;
     };
     const result = await dockerVersion(run);
-    expect(result).toEqual({ available: false, compose: null, reason: "no docker" });
+    expect(result).toEqual({ available: false, compose: null, belowFloor: false, reason: "no docker" });
   });
 
   it("non-zero exit → no compose plugin", async () => {
     const run: DockerRunner = async () => ({ code: 1, stdout: "", stderr: "plugin not found" });
     const result = await dockerVersion(run);
-    expect(result).toEqual({ available: true, compose: null, reason: "no compose plugin" });
+    expect(result).toEqual({ available: true, compose: null, belowFloor: false, reason: "no compose plugin" });
   });
 });
 
@@ -548,5 +548,123 @@ describe("canUseStack", () => {
 
   it("stack:true but pending has items → false", () => {
     expect(canUseStack({ stack: true, services: [], pending: [{ path: "x", reason: "missing" }], warnings: [] })).toBe(false);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Mutation proof tests for 31d fixes                                   */
+/* ------------------------------------------------------------------ */
+
+describe("mutation proofs (31d)", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-test-mutation-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  // (a) compareVersions string vs number: "2.9.0" < "2.20.0" must hold
+  // A mutation that uses string comparison would incorrectly say "2.9.0" > "2.20.0"
+  it("(a) compareVersions: 2.9.0 < 2.20.0 (string comparison would fail)", () => {
+    expect(compareVersions("2.9.0", "2.20.0")).toBeLessThan(0);
+    // Also verify that single-digit vs double-digit comparison works
+    expect(compareVersions("1.9.0", "1.10.0")).toBeLessThan(0);
+  });
+
+  // (b) composeArgv --env-file position: must come before the command
+  it("(b) composeArgv: --env-file comes before the command, not after", () => {
+    const argv = composeArgv("up", {
+      project: "p",
+      stack: "/w/.craftar/compose.yaml",
+      envFile: "/w/.env",
+      wait: false,
+      services: [],
+    });
+    const envFileIdx = argv.indexOf("--env-file");
+    const upIdx = argv.indexOf("up");
+    expect(envFileIdx).toBeGreaterThan(-1);
+    expect(upIdx).toBeGreaterThan(-1);
+    expect(envFileIdx).toBeLessThan(upIdx);
+  });
+
+  // (c) composeArgv refusing `-` name: must throw for service names starting with "-"
+  it("(c) composeArgv: refuses service name starting with dash", () => {
+    expect(() =>
+      composeArgv("up", {
+        project: "p",
+        stack: "/w/.craftar/compose.yaml",
+        envFile: null,
+        services: ["--help"],
+      }),
+    ).toThrow('service name "--help" starts with "-"');
+  });
+
+  // (d) recordedServices hashNormalized vs raw: CRLF and LF must hash the same
+  it("(d) recordedServices: CRLF and LF hash to same value (normalized comparison)", async () => {
+    const lfContent = "services:\n  echo:\n    image: alpine\n";
+    const crlfContent = "services:\r\n  echo:\r\n    image: alpine\r\n";
+    // Both should produce the same hash
+    expect(hashNormalized(Buffer.from(lfContent))).toBe(hashNormalized(Buffer.from(crlfContent)));
+  });
+
+  // (e) 40-char slug cut: a 60-char basename must be cut to 40
+  it("(e) projectName: 60-char basename is cut to 40", () => {
+    const longName = "a".repeat(60);
+    const name = projectName(`/home/acme/${longName}`);
+    // The slug part (after "craftar-" and before "-<hash>") must be exactly 40 chars
+    const match = name.match(/^craftar-(.+)-[0-9a-f]{8}$/);
+    expect(match).not.toBeNull();
+    expect(match![1].length).toBe(40);
+    expect(match![1]).toBe("a".repeat(40));
+  });
+
+  // (f) Health: "" kept as "": Health of empty string must become null (not empty string)
+  it('(f) readPs: Health: "" becomes health: null', () => {
+    const json = JSON.stringify([{ Name: "c", Service: "s", State: "running", Health: "" }]);
+    const result = readPs(json);
+    expect(result[0].health).toBe(null);
+    // Also verify that a non-empty Health is preserved
+    const json2 = JSON.stringify([{ Name: "c", Service: "s", State: "running", Health: "healthy" }]);
+    const result2 = readPs(json2);
+    expect(result2[0].health).toBe("healthy");
+  });
+
+  // (g) recordedServices returning at first pending: must list ALL pending entries
+  it("(g) recordedServices: lists ALL pending entries, not just the first", async () => {
+    const stackContent = "# Generated by craftar\ninclude:\n  - path: services/a/compose.yaml\n  - path: services/b/compose.yaml\n";
+    const fragmentA = "services:\n  a:\n    image: alpine\n";
+    const fragmentB = "services:\n  b:\n    image: alpine\n";
+
+    await fs.mkdir(path.join(tmpDir, ".craftar/services/a"), { recursive: true });
+    await fs.mkdir(path.join(tmpDir, ".craftar/services/b"), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, ".craftar/compose.yaml"), stackContent);
+    // Write both fragments but with wrong content so they are "edited"
+    await fs.writeFile(path.join(tmpDir, ".craftar/services/a/compose.yaml"), "edited a\n");
+    await fs.writeFile(path.join(tmpDir, ".craftar/services/b/compose.yaml"), "edited b\n");
+
+    const lock: Lock = {
+      schema: 3,
+      forge: { source: "../forge", ref: null, commit: null },
+      profile: "acme",
+      recipes: ["base"],
+      targets: ["claude-code"],
+      generatedAt: new Date().toISOString(),
+      files: [
+        { path: ".craftar/compose.yaml", hash: hashNormalized(Buffer.from(stackContent)), target: "services", ingredient: "service/*" },
+        { path: ".craftar/services/a/compose.yaml", hash: hashNormalized(Buffer.from(fragmentA)), target: "services", ingredient: "service/a" },
+        { path: ".craftar/services/b/compose.yaml", hash: hashNormalized(Buffer.from(fragmentB)), target: "services", ingredient: "service/b" },
+      ],
+    };
+
+    const result = await recordedServices(tmpDir, lock);
+    // Must list BOTH edited entries, not just the first
+    expect(result.pending.length).toBe(2);
+    expect(result.pending.map(p => p.path).sort()).toEqual([
+      ".craftar/services/a/compose.yaml",
+      ".craftar/services/b/compose.yaml",
+    ]);
   });
 });

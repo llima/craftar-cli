@@ -96,6 +96,39 @@ export const ComposeFragmentShape = z
   .passthrough();
 export type ComposeFragment = z.infer<typeof ComposeFragmentShape>;
 
+/**
+ * The stack file shape: the `include` array contains objects with a `path` key.
+ * Used by `recordedServices` to parse the stack without casts.
+ */
+export const ComposeStackShape = z.object({
+  include: z.array(z.object({ path: z.string() }).passthrough()).optional(),
+}).passthrough();
+export type ComposeStack = z.infer<typeof ComposeStackShape>;
+
+/**
+ * A row from `docker compose ps --format json` (spec 31 §4.4).
+ * The schema validates the shape; `readPs` transforms it to `PsContainer`.
+ */
+export const ComposePsRowSchema = z.object({
+  ID: z.string().optional(),
+  Name: z.string(),
+  Service: z.string(),
+  State: z.string(),
+  Health: z.string().optional(),
+  Publishers: z
+    .array(
+      z.object({
+        URL: z.string().optional(),
+        TargetPort: z.number(),
+        PublishedPort: z.number(),
+        Protocol: z.string(),
+      }),
+    )
+    .optional()
+    .nullable(),
+});
+export type ComposePsRow = z.infer<typeof ComposePsRowSchema>;
+
 const IngredientBase = z.object({
   name: z.string().regex(SLUG, "ingredient names are slug-like"),
   description: z.string().optional(),

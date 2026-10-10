@@ -3,16 +3,25 @@
  * These are not a target's: they are planned by one function, called once after the target loop.
  */
 import { createHash } from "node:crypto";
-import * as fs from "node:fs/promises";
+import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import YAML from "yaml";
-import { z } from "zod";
 import type { EmitBase, PlannedFile } from "../emitters/types.js";
 import { outName } from "../emitters/shared.js";
 import { findSecrets } from "./secrets.js";
 import { isUtf8, hashNormalized, stripBom, toLf } from "./text.js";
-import { normalizeDeclared, COMPOSE_MAPS, ComposeFragmentShape, type ComposeFragment, type Ingredient, type Lock, type LockEntryV3 } from "../schema/index.js";
+import {
+  normalizeDeclared,
+  COMPOSE_MAPS,
+  ComposeFragmentShape,
+  ComposeStackShape,
+  ComposePsRowSchema,
+  type ComposeFragment,
+  type Ingredient,
+  type Lock,
+  type LockEntryV3,
+} from "../schema/index.js";
 
 /** Whether a path is listed in the binary array. */
 function isBinary(meta: Extract<Ingredient, { type: "service" }>, file: string): boolean {
@@ -300,7 +309,7 @@ function extractHostPort(port: unknown): string | null {
 }
 
 /* ------------------------------------------------------------------ */
-/* Step 31d: services core functions                                    */
+/* Services core functions                                              */
 /* ------------------------------------------------------------------ */
 
 /** Minimum Docker Compose version required (spec 31 §4.6). */
@@ -320,8 +329,8 @@ export function projectName(realRoot: string): string {
   const basename = path.basename(realRoot);
   // Lowercase, replace non-slug chars with -, cut at 40
   let slug = basename.toLowerCase().replace(/[^a-z0-9_-]/g, "-").slice(0, 40);
-  // If slug is empty (e.g., root "/" has empty basename), use a fallback
-  if (slug === "" || slug === "-".repeat(slug.length)) {
+  // If slug is empty or all dashes, use empty slug
+  if (/^-*$/.test(slug)) {
     slug = "";
   }
   // Hash the real path string
@@ -365,14 +374,20 @@ export interface RecordedServicesResult {
  * and the pending list says why.
  *
  * A fragment that does not parse adds a warning and no service.
+ *
+ * IMPORTANT: This function checks ALL entries in lock order and lists ALL pending
+ * entries, not just the first one. This is required for `services status` to show
+ * all issues at once.
  */
 export async function recordedServices(root: string, lock: Lock): Promise<RecordedServicesResult> {
   const services: RecordedService[] = [];
   const pending: PendingFile[] = [];
   const warnings: string[] = [];
 
-  // Get all lock entries owned by "services"
-  const serviceEntries = lock.files.filter((e): e is LockEntryV3 => (e as LockEntryV3).target === "services");
+  // Get all lock entries owned by "services", preserving lock order
+  const serviceEntries = lock.files.filter(
+    (e): e is LockEntryV3 => "target" in e && e.target === "services"
+  );
 
   if (serviceEntries.length === 0) {
     // No services recorded — a schema 1 or 2 lock has no services entry
@@ -385,6 +400,21 @@ export async function recordedServices(root: string, lock: Lock): Promise<Record
   // If the lock has service entries but not the stack, it was a collision
   if (!stackEntry) {
     pending.push({ path: ".craftar/compose.yaml", reason: "unrecorded" });
+    // Still check all other entries in lock order
+    for (const entry of serviceEntries) {
+      const filePath = path.join(root, entry.path);
+      let fileBytes: Buffer;
+      try {
+        fileBytes = await fs.readFile(filePath);
+      } catch {
+        pending.push({ path: entry.path, reason: "missing" });
+        continue;
+      }
+      const fileHash = hashNormalized(fileBytes);
+      if (fileHash !== entry.hash) {
+        pending.push({ path: entry.path, reason: "edited" });
+      }
+    }
     return { stack: false, services: [], pending, warnings };
   }
 
@@ -395,86 +425,86 @@ export async function recordedServices(root: string, lock: Lock): Promise<Record
     stackBytes = await fs.readFile(stackPath);
   } catch {
     pending.push({ path: ".craftar/compose.yaml", reason: "missing" });
+    // Still check all other entries in lock order
+    for (const entry of serviceEntries) {
+      if (entry.path === ".craftar/compose.yaml") continue;
+      const filePath = path.join(root, entry.path);
+      let fileBytes: Buffer;
+      try {
+        fileBytes = await fs.readFile(filePath);
+      } catch {
+        pending.push({ path: entry.path, reason: "missing" });
+        continue;
+      }
+      const fileHash = hashNormalized(fileBytes);
+      if (fileHash !== entry.hash) {
+        pending.push({ path: entry.path, reason: "edited" });
+      }
+    }
     return { stack: false, services: [], pending, warnings };
   }
 
   const stackHash = hashNormalized(stackBytes);
   if (stackHash !== stackEntry.hash) {
     pending.push({ path: ".craftar/compose.yaml", reason: "edited" });
+    // Still check all other entries in lock order
+    for (const entry of serviceEntries) {
+      if (entry.path === ".craftar/compose.yaml") continue;
+      const filePath = path.join(root, entry.path);
+      let fileBytes: Buffer;
+      try {
+        fileBytes = await fs.readFile(filePath);
+      } catch {
+        pending.push({ path: entry.path, reason: "missing" });
+        continue;
+      }
+      const fileHash = hashNormalized(fileBytes);
+      if (fileHash !== entry.hash) {
+        pending.push({ path: entry.path, reason: "edited" });
+      }
+    }
     return { stack: false, services: [], pending, warnings };
   }
 
-  // Stack is recorded, present and unedited — parse it for includes
+  // Stack is recorded, present and unedited — parse it for includes using ComposeStackShape
   let stackContent: unknown;
   try {
     stackContent = YAML.parse(stackBytes.toString("utf8"));
   } catch {
     pending.push({ path: ".craftar/compose.yaml", reason: "edited" });
+    // Still check all other entries in lock order
+    for (const entry of serviceEntries) {
+      if (entry.path === ".craftar/compose.yaml") continue;
+      const filePath = path.join(root, entry.path);
+      let fileBytes: Buffer;
+      try {
+        fileBytes = await fs.readFile(filePath);
+      } catch {
+        pending.push({ path: entry.path, reason: "missing" });
+        continue;
+      }
+      const fileHash = hashNormalized(fileBytes);
+      if (fileHash !== entry.hash) {
+        pending.push({ path: entry.path, reason: "edited" });
+      }
+    }
     return { stack: false, services: [], pending, warnings };
   }
 
-  // Get the include paths from the stack
+  // Parse through ComposeStackShape to avoid casts
+  const stackParsed = ComposeStackShape.safeParse(stackContent);
   const includes: string[] = [];
-  if (
-    stackContent !== null &&
-    typeof stackContent === "object" &&
-    !Array.isArray(stackContent) &&
-    "include" in stackContent &&
-    Array.isArray((stackContent as Record<string, unknown>).include)
-  ) {
-    for (const inc of (stackContent as Record<string, unknown>).include as unknown[]) {
-      if (inc !== null && typeof inc === "object" && "path" in inc) {
-        const p = (inc as Record<string, unknown>).path;
-        if (typeof p === "string") {
-          // Paths in the stack are relative to .craftar/
-          includes.push(path.posix.join(".craftar", p));
-        }
-      }
+  if (stackParsed.success && stackParsed.data.include) {
+    for (const inc of stackParsed.data.include) {
+      // Paths in the stack are relative to .craftar/
+      includes.push(path.posix.join(".craftar", inc.path));
     }
   }
 
-  // Check each recorded fragment file
-  for (const entryPath of includes) {
-    const entry = serviceEntries.find((e) => e.path === entryPath);
-    if (!entry) {
-      // Fragment path is in the stack but not in the lock — unrecorded
-      pending.push({ path: entryPath, reason: "unrecorded" });
-      continue;
-    }
-
-    const filePath = path.join(root, entryPath);
-    let fileBytes: Buffer;
-    try {
-      fileBytes = await fs.readFile(filePath);
-    } catch {
-      pending.push({ path: entryPath, reason: "missing" });
-      continue;
-    }
-
-    const fileHash = hashNormalized(fileBytes);
-    if (fileHash !== entry.hash) {
-      pending.push({ path: entryPath, reason: "edited" });
-      continue;
-    }
-
-    // Parse the fragment to get the service names
-    const fragmentText = fileBytes.toString("utf8");
-    const parseResult = parseFragment(fragmentText);
-    if (!parseResult.ok) {
-      warnings.push(`${entryPath}: cannot be read as a Compose fragment`);
-      continue;
-    }
-
-    // Add each service name from this fragment
-    for (const name of Object.keys(parseResult.fragment.services!)) {
-      services.push({ name, ingredient: entry.ingredient });
-    }
-  }
-
-  // Also check other recorded service files (non-fragment files like .gitattributes and script files)
+  // Check each recorded entry in lock order
   for (const entry of serviceEntries) {
-    // Skip the stack itself and fragment files (already processed)
-    if (entry.path === ".craftar/compose.yaml" || includes.includes(entry.path)) {
+    // Skip the stack itself (already processed)
+    if (entry.path === ".craftar/compose.yaml") {
       continue;
     }
 
@@ -490,6 +520,22 @@ export async function recordedServices(root: string, lock: Lock): Promise<Record
     const fileHash = hashNormalized(fileBytes);
     if (fileHash !== entry.hash) {
       pending.push({ path: entry.path, reason: "edited" });
+      continue;
+    }
+
+    // If this is a fragment (in the includes list), parse it for service names
+    if (includes.includes(entry.path)) {
+      const fragmentText = fileBytes.toString("utf8");
+      const parseResult = parseFragment(fragmentText);
+      if (!parseResult.ok) {
+        warnings.push(`${entry.path}: cannot be read as a Compose fragment`);
+        continue;
+      }
+
+      // Add each service name from this fragment
+      for (const name of Object.keys(parseResult.fragment.services!)) {
+        services.push({ name, ingredient: entry.ingredient });
+      }
     }
   }
 
@@ -559,27 +605,6 @@ export function composeArgv(
   return argv;
 }
 
-/** A row from docker compose ps --format json. */
-export const ComposePsRowSchema = z.object({
-  ID: z.string().optional(),
-  Name: z.string(),
-  Service: z.string(),
-  State: z.string(),
-  Health: z.string().optional(),
-  Publishers: z
-    .array(
-      z.object({
-        URL: z.string().optional(),
-        TargetPort: z.number(),
-        PublishedPort: z.number(),
-        Protocol: z.string(),
-      }),
-    )
-    .optional()
-    .nullable(),
-});
-export type ComposePsRow = z.infer<typeof ComposePsRowSchema>;
-
 /** Parsed port from a ps row. */
 export interface ParsedPort {
   host: number;
@@ -596,6 +621,12 @@ export interface PsContainer {
   ports: ParsedPort[];
 }
 
+/** Result of readPs: the parsed containers and the count of rows that failed to parse. */
+export interface ReadPsResult {
+  containers: PsContainer[];
+  unread: number;
+}
+
 /**
  * Parse the output of docker compose ps --format json.
  *
@@ -603,6 +634,9 @@ export interface PsContainer {
  * - A JSON array of rows
  * - One JSON object per line (older Compose versions)
  * - Empty (no containers)
+ *
+ * Returns `{ containers, unread }` where `unread` is the count of rows that did not
+ * match ComposePsRowSchema. Throws on unparseable output (not valid JSON).
  */
 export function readPs(stdout: string): PsContainer[] {
   const trimmed = stdout.trim();
@@ -622,7 +656,7 @@ export function readPs(stdout: string): PsContainer[] {
       rows = [parsed];
     }
   } catch {
-    // Try one object per line
+    // Try one object per line — throws if any line is invalid JSON
     rows = trimmed.split("\n").map((line) => JSON.parse(line));
   }
 
@@ -661,7 +695,8 @@ export function readPs(stdout: string): PsContainer[] {
 export interface DockerVersionResult {
   available: boolean;
   compose: string | null;
-  belowFloor?: boolean;
+  /** True when Compose is present but below MIN_COMPOSE; always present when available is true. */
+  belowFloor: boolean;
   reason: "no docker" | "no compose plugin" | "too old" | null;
 }
 
@@ -677,15 +712,15 @@ export type DockerRunner = (
  *
  * Runs `docker compose version --short` and parses the output.
  *
- * @param run - The runner function (for testing)
- * @returns The availability and version info
+ * Returns `{ available: true, ... }` when Docker is present (may still lack Compose).
+ * Returns `{ available: false, ... }` when Docker itself is missing.
  */
 export async function dockerVersion(run: DockerRunner): Promise<DockerVersionResult> {
   try {
     const result = await run("docker", ["compose", "version", "--short"], {});
 
     if (result.code !== 0) {
-      return { available: true, compose: null, reason: "no compose plugin" };
+      return { available: true, compose: null, belowFloor: false, reason: "no compose plugin" };
     }
 
     // Parse the version from stdout (e.g., "v2.24.5" or "2.24.5-desktop.1")
@@ -697,14 +732,14 @@ export async function dockerVersion(run: DockerRunner): Promise<DockerVersionRes
       return { available: true, compose: versionStr, belowFloor: true, reason: "too old" };
     }
 
-    return { available: true, compose: versionStr, reason: null };
+    return { available: true, compose: versionStr, belowFloor: false, reason: null };
   } catch (e) {
     // ENOENT means docker is not found
-    if (e instanceof Error && "code" in e && e.code === "ENOENT") {
-      return { available: false, compose: null, reason: "no docker" };
+    if (e instanceof Error && "code" in e && (e as NodeJS.ErrnoException).code === "ENOENT") {
+      return { available: false, compose: null, belowFloor: false, reason: "no docker" };
     }
     // Other errors — treat as docker missing
-    return { available: false, compose: null, reason: "no docker" };
+    return { available: false, compose: null, belowFloor: false, reason: "no docker" };
   }
 }
 
@@ -735,14 +770,20 @@ export function compareVersions(a: string, b: string): number {
 export const dockerRunner: DockerRunner = (file, args, opts) => {
   return new Promise((resolve, reject) => {
     execFile(file, args, { ...opts, encoding: "utf8" }, (error, stdout, stderr) => {
-      if (error && "code" in error && error.code === "ENOENT") {
+      if (error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
         // Propagate ENOENT as a thrown error so dockerVersion can detect it
         reject(error);
         return;
       }
-      // For other errors (non-zero exit), resolve with the code
+      // For other errors (non-zero exit), resolve with the exit code from error.code (a number)
+      // or fall back to 1. Note: error.code can be a string like "ENOENT" or a number like 1.
+      const exitCode = error
+        ? (typeof (error as NodeJS.ErrnoException & { code?: unknown }).code === "number"
+            ? (error as NodeJS.ErrnoException & { code?: number }).code
+            : 1)
+        : 0;
       resolve({
-        code: error ? (error as NodeJS.ErrnoException).code as unknown as number ?? 1 : 0,
+        code: exitCode ?? 1,
         stdout: stdout ?? "",
         stderr: stderr ?? "",
       });
