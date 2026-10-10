@@ -19,7 +19,8 @@ import { decide, forgeBefore, pin, sourceKeys, workspaceParams, workspaceSection
 import { renderMap } from "../core/template-import.js";
 import { firstMarkerLine } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
-import { GENERATED_BANNER, kiroReport, type KiroReport } from "./kiro-report.js";
+import { GENERATED_BANNER, kiroReport, textLines, type KiroReport } from "./kiro-report.js";
+import { preferKiro } from "./prefer-kiro.js";
 import { deepMerge } from "../core/merge.js";
 import { outName } from "../emitters/shared.js";
 import { parseYamlText } from "../core/yaml-read.js";
@@ -33,6 +34,8 @@ export interface ImportOptions {
   writeWorkspaceConfig?: boolean;
   /** Also compute the Kiro part of the report, from the flushed Forge (spec 29 §4.2). */
   report?: boolean;
+  /** Rules to read from `.kiro/steering/<name>.md` instead of `.claude/rules/<name>.md` (spec 29 §4.3), already parsed. */
+  preferKiro?: string[];
 }
 
 export interface ImportReport {
@@ -66,6 +69,12 @@ export interface ImportReport {
   configForgeKept: string | null;
   /** The Kiro part of the report (spec 29 §4.2); the key is absent unless the `report` option asked for it. */
   kiro?: KiroReport;
+  /**
+   * The rules taken from their steering file (spec 29 §4.3), one per named rule that was decided: `ref` as decided, the
+   * two workspace files and their line counts, and whether the text built differs from the rule file's. The key is
+   * absent unless the `preferKiro` option named a rule.
+   */
+  preferKiro?: { ref: string; source: string; steeringLines: number; rule: string; ruleLines: number; differs: boolean }[];
 }
 
 /** Rules that every workspace shares by intent — they seed the `base` recipe. */
@@ -275,6 +284,32 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- what the importing profile renders (spec 10 §6.1, §6.8 step 2) ---- */
   const loaded = await forgeBefore(forge, manifestOnDisk);
   const existing = await existingProfile(forge, opts.profileName, loaded);
+  /* ---- --prefer-kiro: the named rules take their text from the steering mirror (spec 29 §4.3) ---- */
+  // Before the secret scan and every decision, so the text built is scanned and decided like any source. The names are
+  // looked up in what was read, never joined into a path.
+  if (opts.preferKiro?.length) {
+    const preferred: NonNullable<ImportReport["preferKiro"]> = (report.preferKiro = []);
+    const rules = new Map(queue.filter((q) => q.meta.type === "rule").map((q) => [q.meta.name, q]));
+    const handSteering = new Set([...steeringMeta].filter(([n, sm]) => !rules.has(n) && !sm.generated && n !== "commands").map(([n]) => n));
+    const banner = typeof existing.params["kiro.banner"] === "string" ? existing.params["kiro.banner"] : null;
+    for (const name of opts.preferKiro) {
+      const q = rules.get(name);
+      if (!q) throw new Error(`import: --prefer-kiro ${name}: there is no .claude/rules/${name}.md — --prefer-kiro takes rules; a steering file with no rule is already imported as steering`);
+      const sm = steeringMeta.get(name);
+      if (!sm) throw new Error(`import: --prefer-kiro ${name}: there is no .kiro/steering/${name}.md to prefer`);
+      const ruleText = q.files["rule.md"] as string;
+      const { text } = preferKiro({ name, steering: sm.text, rules: new Set(rules.keys()), handSteering, banner });
+      const source = `.kiro/steering/${name}.md`;
+      q.files = { "rule.md": text };
+      q.scan = scanOf("rule.md", sm);
+      q.meta = { ...q.meta, origin: origin(source) };
+      const after = q.after;
+      q.after = (ref) => {
+        after(ref);
+        preferred.push({ ref, source, steeringLines: textLines(sm.text), rule: `.claude/rules/${name}.md`, ruleLines: textLines(ruleText), differs: text !== ruleText });
+      };
+    }
+  }
   const readWs = (abs: string) => fs.readFile(abs, "utf8");
   const ctx: RunContext = {
     P: Object.assign(Object.create(null), existing.params),
