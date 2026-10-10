@@ -1,14 +1,12 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import YAML from "yaml";
 import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema } from "../schema/index.js";
 import { placeholders, bodyFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
 import { manifestWithSections } from "./manifest-edit.js";
 import { resolve, sectionKey } from "./resolve.js";
 import { canonicalValue } from "./sections.js";
-import { stripBom } from "./text.js";
 import type { SectionExtraction, WriteJournal } from "./unify.js";
 import { editYamlText } from "./yaml-edit.js";
 import { deepMerge } from "./merge.js";

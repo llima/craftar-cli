@@ -1,7 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import YAML from "yaml";
 import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema } from "../schema/index.js";
-import { stripBom } from "./text.js";
 import { editYamlText } from "./yaml-edit.js";
 import { parseYamlText, yamlFault } from "./yaml-read.js";
 
