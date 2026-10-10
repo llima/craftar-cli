@@ -1444,3 +1444,96 @@ describe("askInit → local.doc schema error after Forge answer (T5b-fix3)", () 
     expect(sc.said).toContain("Ref: main (from craftar.local.yaml)");
   });
 });
+
+describe("askInit — answers that are not an item (review round 1)", () => {
+  const given = (): InitGiven => ({ addRecipes: [], removeRecipes: [], replace: false });
+  const local = { doc: null, keys: [] as LocalKey[] };
+  const opts = (home: string) => ({ home, registryOff: true, exists: existsSync });
+
+  it("a profile answer that only starts with a number is not that number", async () => {
+    const s = await askSetup(SPEC2_DESC);
+    for (const wrong of ["2x", "1.5", "2 x ", "+1", "0", "3"]) {
+      const sc = script([s.forge, wrong, "acme", "", ""]);
+      const result = await askInit(s.ws, given(), local, sc.io, opts(s.home));
+      expect(sc.asked).toEqual([QF, QP, QP, QA, QT]);
+      expect(sc.said).toEqual([
+        `Profiles in ${s.forge}:`,
+        "  1) acme",
+        "  2) globex  Globex — services",
+        `profile "${wrong.trim()}" not found in Forge (acme, globex)`,
+        "Recipes of acme: base → stack-api → front-a",
+      ]);
+      expect(result.kind === "answered" && result.input.profile).toBe("acme");
+      expect(sc.left()).toBe(0);
+    }
+  });
+
+  it("a recipe answer that only starts with a number is kept as typed, so spec 22 names it", async () => {
+    const s = await askSetup();
+    const sc = script([s.forge, "", "yes", "", "4x", "", ""]);
+    await askInit(s.ws, given(), local, sc.io, opts(s.home));
+    expect(sc.asked).toEqual([QF, QP1, QA, "Remove [none]: ", "Add [none]: ", QA, QT]);
+    expect(sc.said.at(-1)).toBe('recipe "4x" not found in this Forge (base, extra, front-a, front-b, stack-api)');
+    expect(sc.left()).toBe(0);
+  });
+
+  it("a recipe literally named 2 is reached by its name, not read as position 2", async () => {
+    const spec: ForgeSpec = {
+      ingredients: ["base", "api", "two"].map((n) => rule(n, `# ${n}\n`)),
+      recipes: [recipe("base", ["rule/base"]), recipe("api", ["rule/api"]), recipe("2", ["rule/two"])],
+      profiles: [profile("acme", ["base", "api"])],
+    };
+    const s = await askSetup(spec);
+    // The list: 1) base · in use, 2) api · in use, 3) 2 — so "2" as a position would be api, already in use.
+    const sc = script([s.forge, "", "yes", "", "2", ""]);
+    const result = await askInit(s.ws, given(), local, sc.io, opts(s.home));
+    expect(sc.said).toEqual([
+      `Profiles in ${s.forge}:`,
+      "  1) acme",
+      "Recipes of acme: base → api",
+      `Recipes in ${s.forge}:`,
+      "  1) base · in use",
+      "  2) api · in use",
+      "  3) 2",
+      "Recipes: base → api → 2",
+    ]);
+    expect(result.kind === "answered" && result.input.addRecipes).toEqual(["2"]);
+    expect(sc.left()).toBe(0);
+  });
+
+  it("the replace question asks again for anything but yes or no", async () => {
+    const s = await askSetup();
+    const Q = 'front-b takes the slot "front" that front-a holds — replace front-a [no]: ';
+    const sc = script([s.forge, "", "yes", "", "front-b", "maybe", "yes", ""]);
+    const result = await askInit(s.ws, given(), local, sc.io, opts(s.home));
+    expect(sc.asked).toEqual([QF, QP1, QA, "Remove [none]: ", "Add [none]: ", Q, Q, QT]);
+    expect(sc.said.slice(-2)).toEqual(["answer yes or no", "Recipes: base → stack-api → front-b"]);
+    expect(result.kind === "answered" && [result.input.addRecipes, result.input.replace]).toEqual([["front-b"], true]);
+    expect(sc.left()).toBe(0);
+  });
+
+  it("a cancel at Remove, at Add and at the replace question", async () => {
+    const s = await askSetup();
+    for (const answers of [
+      [s.forge, "", "yes", null],
+      [s.forge, "", "yes", "", null],
+      [s.forge, "", "yes", "", "front-b", null],
+    ]) {
+      const sc = script(answers);
+      expect(await askInit(s.ws, given(), local, sc.io, opts(s.home))).toEqual({ kind: "cancelled" });
+      expect(sc.left()).toBe(0);
+      expect(existsSync(s.ws)).toBe(false);
+    }
+  });
+
+  it("a --forge pre-answer holding credentials is refused by the flow itself, never said", async () => {
+    const s = await askSetup();
+    const secret = "s3" + "cr3t";
+    const sc = script([]);
+    const p = askInit(s.ws, { ...given(), forge: `https://alice:${secret}@example.invalid/f.git` }, local, sc.io, opts(s.home));
+    await expect(p).rejects.toThrow(
+      new Error("--forge holds credentials in the URL — remove them and let git authenticate (credential helper, SSH agent; see README › Remote Forge)"),
+    );
+    expect([sc.asked, sc.said]).toEqual([[], []]);
+  });
+});

@@ -162,6 +162,16 @@ export type AskResult =
   | { kind: "answered"; input: InitInput; answers: InitAnswers };
 
 /**
+ * An item of a numbered list by its answer: the name wins over the number (a profile or a recipe
+ * literally named `2` stays reachable), and a number is digits only — `2x` is no item.
+ */
+function pickItem(names: string[], answer: string): string | null {
+  if (names.includes(answer)) return answer;
+  if (!/^\d+$/.test(answer)) return null;
+  return names[Number(answer) - 1] ?? null;
+}
+
+/**
  * Steps 2–7 of the interactive flow: asks for the Forge, ref, profile, recipes and targets
  * a command line does not give. Returns the `InitInput` for `planInit` and the `InitAnswers`
  * for `againLine`, or a `cancelled` result when the user interrupted.
@@ -176,6 +186,8 @@ export async function askInit(
   const exists = opts.exists ?? existsSync;
   const home = resolveHome(opts.home);
 
+  // The flags given, checked here too: nothing below may say a Forge that holds credentials.
+  checkInitFlags(given);
   checkLocalKeys(local.keys, {
     ref: given.ref !== undefined,
     recipes: given.addRecipes.length + given.removeRecipes.length > 0,
@@ -345,15 +357,9 @@ export async function askInit(
         answeredProfile = defProfile;
         break profileLoop;
       }
-      // Name first, then number
-      const byName = profiles.find((p) => p.name === trimmed);
-      if (byName) {
-        answeredProfile = byName.name;
-        break profileLoop;
-      }
-      const num = parseInt(trimmed, 10);
-      if (!isNaN(num) && num >= 1 && num <= profiles.length) {
-        answeredProfile = profiles[num - 1].name;
+      const picked = pickItem(profiles.map((p) => p.name), trimmed);
+      if (picked !== null) {
+        answeredProfile = picked;
         break profileLoop;
       }
       io.say(profileNotFoundMessage(trimmed, [...forge.profiles.keys()]));
@@ -405,16 +411,10 @@ export async function askInit(
         io.say(parts.join(" "));
       }
 
-      const parseRecipeAnswer = (answer: string): string[] => {
-        return answer.split(",").map((s) => s.trim()).filter((s) => s !== "").map((s) => {
-          // Name first, then number
-          const byName = ordered.find((r) => r.name === s);
-          if (byName) return byName.name;
-          const num = parseInt(s, 10);
-          if (!isNaN(num) && num >= 1 && num <= ordered.length) return ordered[num - 1].name;
-          return s;
-        });
-      };
+      // An answer that is no item is kept as typed, so spec 22's R2 names it.
+      const names = ordered.map((r) => r.name);
+      const parseRecipeAnswer = (answer: string): string[] =>
+        answer.split(",").map((s) => s.trim()).filter((s) => s !== "").map((s) => pickItem(names, s) ?? s);
 
       const removeAns = await io.ask("Remove [none]: ");
       if (removeAns === null) return { kind: "cancelled" };
@@ -462,10 +462,15 @@ export async function askInit(
               const held = slotHeld(e);
               if (held !== null && !doReplace) {
                 const replaceQ = `${held.recipe} takes the slot "${held.slot}" that ${held.holder} holds — replace ${held.holder} [no]: `;
-                const replaceAns = await io.ask(replaceQ);
-                if (replaceAns === null) return { kind: "cancelled" };
-                const replaceYn = yesNo(replaceAns);
-                if (replaceYn === true) {
+                let replaceYn: boolean | null;
+                for (;;) {
+                  const replaceAns = await io.ask(replaceQ);
+                  if (replaceAns === null) return { kind: "cancelled" };
+                  replaceYn = replaceAns.trim() === "" ? false : yesNo(replaceAns);
+                  if (replaceYn !== null) break;
+                  io.say("answer yes or no");
+                }
+                if (replaceYn) {
                   doReplace = true;
                   replaceUsed = true;
                   continue addLoop;
