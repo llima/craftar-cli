@@ -54,7 +54,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.17.4");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.18.0");
 
 /* ---------------------------------------------------------------- import */
 program
