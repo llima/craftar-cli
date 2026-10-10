@@ -508,7 +508,7 @@ describe("pendingLine", () => {
     expect(result).toBe(".craftar/foo.yaml — missing — run craftar sync");
   });
 
-  it('"edited" → the overwrite-drift line per spec §16.1', () => {
+  it('"edited" → the drift discard line per spec §16.1', () => {
     const result = pendingLine({ path: ".craftar/foo.yaml", reason: "edited" });
     expect(result).toBe(
       ".craftar/foo.yaml — edited — run craftar drift discard .craftar/foo.yaml: it regenerates the file, or removes it when the Forge no longer produces it"

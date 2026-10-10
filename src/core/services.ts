@@ -197,7 +197,9 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
         if (Array.isArray(ports)) {
           for (const port of ports) {
             const hostPort = extractHostPort(port);
-            if (hostPort && !hostPort.includes("$")) {
+            // Compare and print only when the host port is all digits (spec §4.1: a port written
+            // with a variable is not compared; a range like "8080-8090" is also not compared).
+            if (hostPort && /^\d+$/.test(hostPort)) {
               const prev = publishedPorts.get(hostPort);
               // Only warn for different ingredients (same ingredient = Compose's own error)
               if (prev && prev !== ing.ref) {
@@ -237,6 +239,7 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
           content: bytes,
           target: "services",
           ingredient: ing.ref,
+          ...(isExecutable(meta, file) ? { mode: 0o755 } : {}),
         });
       } else {
         // Text: validate UTF-8, render, check for secrets
@@ -393,12 +396,7 @@ export async function recordedServices(root: string, lock: Lock | null): Promise
   const stack = intact.get(STACK);
   if (stack === undefined) return out;
   // Read include list through fragmentPaths (spec 31 §4.7: fragment reading is one place)
-  let includes: string[];
-  try {
-    includes = fragmentPaths(stack.toString("utf8"));
-  } catch {
-    throw new Error(`${STACK}: recorded by craftar.lock but not a craftar stack`);
-  }
+  const includes = fragmentPaths(stack.toString("utf8"));
   if (includes.length === 0) throw new Error(`${STACK}: recorded by craftar.lock but not a craftar stack`);
   for (const rel of includes) {
     const entry = entries.find((e) => e.path === rel);

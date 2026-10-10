@@ -100,7 +100,7 @@ describe("craftar services — without Docker (spec 31 §4.2–§4.4)", () => {
     expect([up(none.wsRoot).code, up(none.wsRoot).stderr]).toEqual([1, `error: ${NO_SERVICES}\n`]);
   });
 
-  it("up: a hand-edited fragment is refused with the overwrite-drift line (spec §16.1), nothing written", async () => {
+  it("up: a hand-edited fragment is refused with the drift discard line (spec §16.1), nothing written", async () => {
     const s = await synced();
     await fs.appendFile(path.join(s.wsRoot, FRAGMENT), "# hand edit\n");
     const before = await tree(s.wsRoot);

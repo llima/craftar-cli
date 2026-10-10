@@ -800,3 +800,103 @@ services:
     // Also should not contain the service name from the fragment
     expect(caughtMessage).not.toContain("base");
   });
+
+  it("test 29: a binary file listed in both binary and executable gets mode 0o755", async () => {
+    const binaryContent = Buffer.from([0x00, 0x01, 0x02]);
+    const { p } = await planned({
+      ingredients: [
+        {
+          meta: {
+            type: "service",
+            name: "x",
+            compose: "compose.yaml",
+            files: ["tool.bin"],
+            binary: ["tool.bin"],
+            executable: ["tool.bin"],
+          },
+          files: { "compose.yaml": "services:\n  x:\n    image: x\n", "tool.bin": binaryContent },
+        },
+      ],
+      recipes: [recipe("base", ["service/x"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    const tool = p.files.find((f) => f.path === ".craftar/services/x/tool.bin")!;
+    expect(tool.mode).toBe(0o755);
+    expect(tool.content).toEqual(binaryContent);
+  });
+
+  it.skipIf(process.platform === "win32")("test 30: after sync, a binary+executable file on disk has mode & 0o111 non-zero", async () => {
+    const binaryContent = Buffer.from([0x00, 0x01, 0x02]);
+    const s = await scenario(
+      {
+        ingredients: [
+          {
+            meta: {
+              type: "service",
+              name: "x",
+              compose: "compose.yaml",
+              files: ["tool.bin"],
+              binary: ["tool.bin"],
+              executable: ["tool.bin"],
+            },
+            files: { "compose.yaml": "services:\n  x:\n    image: x\n", "tool.bin": binaryContent },
+          },
+        ],
+        recipes: [recipe("base", ["service/x"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const ws = await loadWorkspace(s.wsRoot);
+    const p = await plan(ws);
+    const st = await status(ws, p, null);
+    await apply(ws, p, st);
+    const stat = await fs.stat(path.join(s.wsRoot, ".craftar/services/x/tool.bin"));
+    expect(stat.mode & 0o111).not.toBe(0);
+  });
+
+  it("test 31: two fragments with published: '8080-8090' → no warning; published: 8080 and '8080:80' → one warning", async () => {
+    // Port ranges should not be compared
+    const { p: p1 } = await planned({
+      ingredients: [
+        { meta: { type: "service", name: "a", compose: "compose.yaml", files: [] }, files: { "compose.yaml": 'services:\n  a:\n    image: x\n    ports:\n      - published: "8080-8090"\n        target: 80\n' } },
+        { meta: { type: "service", name: "b", compose: "compose.yaml", files: [] }, files: { "compose.yaml": 'services:\n  b:\n    image: y\n    ports:\n      - published: "8080-8090"\n        target: 81\n' } },
+      ],
+      recipes: [recipe("base", ["service/a", "service/b"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    expect(p1.warnings.filter((w) => w.includes("host port")).length).toBe(0);
+
+    // A number and a short syntax with the same port → warning
+    const { p: p2 } = await planned({
+      ingredients: [
+        { meta: { type: "service", name: "a", compose: "compose.yaml", files: [] }, files: { "compose.yaml": 'services:\n  a:\n    image: x\n    ports:\n      - published: 8080\n        target: 80\n' } },
+        { meta: { type: "service", name: "b", compose: "compose.yaml", files: [] }, files: { "compose.yaml": 'services:\n  b:\n    image: y\n    ports: ["8080:80"]\n' } },
+      ],
+      recipes: [recipe("base", ["service/a", "service/b"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    expect(p2.warnings.filter((w) => w.includes("host port") && w.includes("8080")).length).toBe(1);
+  });
+
+  it("test 32: a service whose whole value is an alias with extends.file is refused", async () => {
+    // x-b: &b { image: ..., extends: { file: ..., service: s } } and echo: *b
+    const fragment = `x-b: &b
+  image: example/e:1
+  extends:
+    file: ../o.yaml
+    service: s
+services:
+  echo: *b
+`;
+    await expect(
+      planned({
+        ingredients: [
+          { meta: { type: "service", name: "echo", compose: "compose.yaml", files: [] }, files: { "compose.yaml": fragment } },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      }),
+    ).rejects.toThrow("service/echo compose.yaml: a service must not extend a file — the lock would not record it");
+  });
