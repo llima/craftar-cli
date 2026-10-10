@@ -87,7 +87,7 @@ program
     if (classifyForge(o.forge) === "url") fail("--forge takes a directory; to read a remote Forge, run inside a workspace that names it");
     // Spec 29 §4.2: the report's path is refused before the import reads anything, so a refusal leaves the Forge untouched.
     const reportAbs = o.report === undefined ? null : await gateOutsideForge(o.report, o.forge, REPORT_GATE);
-    const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig });
+    const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig, report: reportAbs !== null });
     console.log(pc.bold(`Imported ${path.resolve(o.workspace)} → ${path.resolve(o.forge)} as profile "${r.profile}"`));
     console.log(
       `  ${pc.green(String(r.created.length))} created, ${pc.cyan(String(r.reused.length))} reused, ${pc.yellow(String(r.variants.length))} variants, ${pc.red(String(r.rejected.length))} rejected`,

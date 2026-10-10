@@ -31,6 +31,7 @@ const WORKSPACE: Record<string, string> = {
   ".kiro/steering/commands/open-pr.md": "Do it, differently.\n",
   ".kiro/steering/commands/legacy-deploy.md": "old\n",
   ".kiro/agents/ghost.json": "{}\n",
+  ".kiro/hooks/stray.json": "{}\n", // outside the four locations: never listed
 };
 
 async function setup(files: Record<string, string> = WORKSPACE) {
@@ -144,5 +145,43 @@ describe("import --report — the path gate, before the import reads anything", 
     expect(r.stderr).toContain("import cannot prove the target lies outside the Forge");
     expect(r.stderr).not.toContain("unify");
     await untouched(s.forge, null);
+  });
+});
+
+describe("import --report — the Kiro part in the file", () => {
+  it("the report lists the collisions and the unsourced files, and holds no line of any mirror", async () => {
+    const s = await setup();
+    const r = run(s, ["--report", s.out]);
+    expect(r.code, r.stderr).toBe(0);
+    const text = await fs.readFile(s.out, "utf8");
+    expect(text).toContain(
+      [
+        "## Kiro collisions (2)",
+        "",
+        "| File | From | Workspace lines | Generated lines | Note |",
+        "|---|---|---|---|---|",
+        "| .kiro/steering/commands/open-pr.md | command/open-pr | 1 | 9 | |",
+        "| .kiro/steering/workflow.md | rule/workflow | 11 | 9 | steering bigger than the rule |",
+        "",
+        "## Unsourced Kiro files (2)",
+        "- .kiro/agents/ghost.json",
+        "- .kiro/steering/commands/legacy-deploy.md",
+        "",
+        "## Warnings (0)",
+      ].join("\n"),
+    );
+    // no content: not the marker line, not the token, not a line of the command mirror — in the file or on screen
+    for (const leak of [MARKER, TOKEN, "Do it, differently."]) {
+      expect(text).not.toContain(leak);
+      expect(r.stdout + r.stderr).not.toContain(leak);
+    }
+    // the stray mirror was reported, never imported
+    expect((await listFiles(s.forge)).some((f) => f.includes("legacy-deploy"))).toBe(false);
+  });
+
+  it("a workspace with no .kiro/: the single line", async () => {
+    const s = await setup({ ".claude/rules/workflow.md": "# Workflow\n" });
+    expect(run(s, ["--report", s.out]).code).toBe(0);
+    expect(await fs.readFile(s.out, "utf8")).toContain("\n## Kiro collisions\nno .kiro/ in this workspace\n");
   });
 });
