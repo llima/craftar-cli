@@ -288,13 +288,13 @@ const ServicePath = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path must not contain a backslash" });
       return;
     }
-    // Fifth: check segment characters
-    if (stripped === "" || !stripped.split("/").every((seg) => SEGMENT_OK.test(seg))) {
+    // Fifth: check segment characters — SEGMENT_OK matches "." but "." alone is not a valid segment
+    if (stripped === "" || !stripped.split("/").every((seg) => SEGMENT_OK.test(seg) && seg !== ".")) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path holds only letters, digits and . _ @ + - in each segment" });
       return;
     }
-    // Sixth: ingredient.yaml
-    if (normalizeDeclared(v) === "ingredient.yaml") {
+    // Sixth: ingredient.yaml (case-insensitive: on case-insensitive disks INGREDIENT.YAML aliases ingredient.yaml)
+    if (normalizeDeclared(v).toLowerCase() === "ingredient.yaml") {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path must not be ingredient.yaml" });
     }
   });
@@ -357,35 +357,38 @@ export const normalizeDeclared = (p: string) => path.posix.normalize(p);
  */
 export const IngredientSchema = IngredientSchemaBase.superRefine((data, ctx) => {
   if (data.type !== "service") return;
-  const composeNorm = normalizeDeclared(data.compose);
-  const filesSet = new Set(data.files.map(normalizeDeclared));
+  // Case-insensitive: on case-insensitive disks Compose.yaml aliases compose.yaml
+  const composeNorm = normalizeDeclared(data.compose).toLowerCase();
+  const filesSet = new Set(data.files.map((f) => normalizeDeclared(f).toLowerCase()));
 
-  // Check that compose is not in files
+  // Check that compose is not in files (case-insensitive)
   for (let i = 0; i < data.files.length; i++) {
-    if (normalizeDeclared(data.files[i]) === composeNorm) {
+    if (normalizeDeclared(data.files[i]).toLowerCase() === composeNorm) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["files", i], message: "files must not list the compose file" });
     }
   }
 
-  // Check for duplicate files entries
-  const seen = new Map<string, number>(); // normalized -> first index
+  // Check for duplicate files entries (case-insensitive; message names the place, never the value)
+  const seen = new Map<string, number>(); // normalized lower -> first index
   for (let i = 0; i < data.files.length; i++) {
-    const norm = normalizeDeclared(data.files[i]);
+    const norm = normalizeDeclared(data.files[i]).toLowerCase();
     const prev = seen.get(norm);
     if (prev !== undefined) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["files", i], message: `files lists ${norm} twice` });
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["files", i], message: `files[${i}] repeats files[${prev}]` });
     } else {
       seen.set(norm, i);
     }
   }
 
+  // executable ⊆ files stays exact (a subset names the entry as written)
+  const filesSetExact = new Set(data.files.map(normalizeDeclared));
   for (let i = 0; i < data.executable.length; i++) {
-    if (!filesSet.has(normalizeDeclared(data.executable[i]))) {
+    if (!filesSetExact.has(normalizeDeclared(data.executable[i]))) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["executable", i], message: "executable must be a subset of files" });
     }
   }
   for (let i = 0; i < data.binary.length; i++) {
-    if (!filesSet.has(normalizeDeclared(data.binary[i]))) {
+    if (!filesSetExact.has(normalizeDeclared(data.binary[i]))) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["binary", i], message: "binary must be a subset of files" });
     }
   }

@@ -153,10 +153,10 @@ describe("a craftar.lock that does not read", () => {
   it("a schema this craftar does not read: the number is printed, anything else is not", async () => {
     const s = await fresh();
     const file = path.join(s.wsRoot, "craftar.lock");
-    await fs.writeFile(file, JSON.stringify({ schema: 3 }) + "\n");
+    await fs.writeFile(file, JSON.stringify({ schema: 4 }) + "\n");
     const n = runCli(["status", "--workspace", s.wsRoot]);
     expect(n.code).toBe(1);
-    expect(n.stderr).toBe("error: craftar.lock declares schema 3, which this craftar does not read — upgrade craftar\n");
+    expect(n.stderr).toBe("error: craftar.lock declares schema 4, which this craftar does not read — upgrade craftar\n");
 
     await fs.writeFile(file, JSON.stringify({ schema: M }) + "\n");
     for (const command of [["status"], ["sync"], ["diff"]]) {
@@ -238,5 +238,44 @@ describe("forge unify --plan with a plan the schema refuses", () => {
     expect(r.stdout).toBe("");
     expect(r.stdout + r.stderr).not.toContain(M);
     expect(r.stderr).toBe(`error: ${planPath}: schema: Invalid literal value, expected 1; base: Invalid input; profile: Required; variant: Invalid input; baseFingerprint: Required; variantFingerprint: Required\n`);
+  });
+});
+
+describe("a service ingredient the schema refuses, with a marker-holding duplicated value", () => {
+  // E1: the services commands and a service fixture whose refused value is a runtime-assembled marker must not print the marker
+
+  it("the refusal message does not print the marker through status, sync or services status", async () => {
+    // Create a service ingredient with duplicated files holding a marker in the path
+    const s = await scenario(
+      {
+        ingredients: [
+          rule("a", "A\n"),
+          {
+            meta: { type: "service", name: "echo", files: [`${M}.sh`, `./${M}.sh`] }, // duplicate
+            files: { "compose.yaml": "services:\n  echo:\n    image: example/echo:1\n", [`${M}.sh`]: "#!/bin/sh\necho ok\n" },
+          },
+        ],
+        recipes: [recipe("base", ["rule/a", "service/echo"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+
+    // The fixture write above creates a service with duplicated files entries
+    // but the makeForge helper writes the ingredient.yaml without our invalid files array
+    // We need to overwrite ingredient.yaml to have the invalid duplicate
+    await writeFiles(s.forgeRoot, {
+      "ingredients/services/echo/ingredient.yaml": `type: service\nname: echo\nfiles:\n  - ${M}.sh\n  - ./${M}.sh\n`,
+    });
+
+    for (const command of [["status"], ["sync"]]) {
+      const r = runCli([...command, "--workspace", s.wsRoot]);
+      const where = command.join(" ");
+      expect(r.code, where).toBe(1);
+      expect(r.stdout + r.stderr, where).not.toContain(M);
+      // The error should name the file and indices, not the value
+      expect(r.stderr, where).toMatch(/files\[1\] repeats files\[0\]/);
+    }
   });
 });

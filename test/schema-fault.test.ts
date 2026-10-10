@@ -21,7 +21,7 @@ describe("schemaFault words a refusal without the value", () => {
     ["a union of literals", refusal(ForgeManifestSchema, { name: "f", schema: M }), "schema: Invalid input (Invalid literal value, expected 1 | Invalid literal value, expected 2)"],
     ["a union of an array and a literal", refusal(IngredientSchema, { type: "rule", name: "s", targets: M }), 'targets: Invalid input (Expected array, received string | Invalid literal value, expected "*")'],
     ["an enum inside a union", refusal(IngredientSchema, { type: "rule", name: "s", targets: [M] }), "targets: Invalid input (Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | Invalid literal value, expected \"*\")"],
-    ["a discriminator", refusal(IngredientSchema, { type: M, name: "s" }), "type: Invalid discriminator value. Expected 'rule' | 'agent' | 'command' | 'skill' | 'mcp' | 'script' | 'steering' | 'hook'"],
+    ["a discriminator", refusal(IngredientSchema, { type: M, name: "s" }), "type: Invalid discriminator value. Expected 'rule' | 'agent' | 'command' | 'skill' | 'mcp' | 'script' | 'steering' | 'hook' | 'service'"],
     ["a literal", refusal(z.object({ schema: z.literal(1) }), { schema: M }), "schema: Invalid literal value, expected 1"],
     ["several issues, in zod's order", refusal(ProfileSchema, { scm: { kind: M } }), "name: Required; scm.kind: Invalid enum value. Expected 'azure-devops' | 'github' | 'gitlab' | 'other'"],
     ["a wrong type", refusal(z.object({ profile: z.string() }), { profile: 3 }), "profile: Expected string, received number"],
