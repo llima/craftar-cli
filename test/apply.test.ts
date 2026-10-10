@@ -626,3 +626,75 @@ describe("apply", () => {
     expect(wsFile).toEqual(latin1Content);
   });
 });
+
+describe("apply — overwritePaths (spec 30)", () => {
+  const A = ".claude/rules/a.md";
+  const B = ".claude/rules/b.md";
+  const C = ".claude/rules/c.md";
+  const OLD = {
+    b: "sha256:048b356869ea169a3f9422cbcc74387065e2c5a80eb7cb4cdedd4b157e8f118f",
+    c: "sha256:1b5dd7d4e03d0a3e31577f9e74dcdd8f9c5c594172e88bbf9894463b0031379e",
+  };
+
+  /** Three rules synced, then a and b hand-edited (unless `only: "a"`), and c hand-edited and dropped from the Forge. */
+  async function three(only?: "a") {
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A one\nA two\n"), rule("b", "B one\nB two\n"), rule("c", "C one\n")],
+        recipes: [recipe("base", ["rule/a", "rule/b", "rule/c"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await sync(s.wsRoot);
+    await fs.appendFile(path.join(s.wsRoot, A), "hand a\n");
+    if (only === "a") return s;
+    await fs.appendFile(path.join(s.wsRoot, B), "hand b\n");
+    await fs.appendFile(path.join(s.wsRoot, C), "hand c\n");
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), YAML.stringify(recipe("base", ["rule/a", "rule/b"])));
+    return s;
+  }
+  const lockOf = async (wsRoot: string) => (await readLock(wsRoot))!.files;
+  const hashOf = async (wsRoot: string, rel: string) => (await lockOf(wsRoot)).find((e) => e.path === rel)?.hash;
+
+  it("a named drift is written; the other drift and the hand-edited orphan keep their file and their old lock entry", async () => {
+    const s = await three();
+    const r = await sync(s.wsRoot, { overwritePaths: new Set([A]) });
+    expect([r.written, r.removed, r.skipped.map((x) => x.path)]).toEqual([[A], [], [B, C]]);
+    expect([await read(s.wsRoot, A), await read(s.wsRoot, B)]).toEqual(["A one\nA two\n", "B one\nB two\nhand b\n"]);
+    expect([await hashOf(s.wsRoot, A), await hashOf(s.wsRoot, B), await hashOf(s.wsRoot, C)]).toEqual([hashNormalized("A one\nA two\n"), OLD.b, OLD.c]);
+  });
+
+  it("a named hand-edited orphan is removed, with its lock entry", async () => {
+    const s = await three();
+    const r = await sync(s.wsRoot, { overwritePaths: new Set([C]) });
+    expect(r.removed).toEqual([C]);
+    await expect(fs.stat(path.join(s.wsRoot, C))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await lockOf(s.wsRoot)).map((e) => e.path)).toEqual([A, B]);
+    expect([await read(s.wsRoot, A), await read(s.wsRoot, B)]).toEqual(["A one\nA two\nhand a\n", "B one\nB two\nhand b\n"]);
+  });
+
+  it("overwriteDrift alone never removes a hand-edited orphan", async () => {
+    const s = await three();
+    await sync(s.wsRoot, { overwriteDrift: true });
+    expect(await read(s.wsRoot, C)).toBe("C one\nhand c\n");
+    expect(await hashOf(s.wsRoot, C)).toBe(OLD.c);
+  });
+
+  it("dryRun reports the named paths and touches neither the files nor the lock", async () => {
+    const s = await three();
+    const lockBefore = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
+    const r = await sync(s.wsRoot, { dryRun: true, overwritePaths: new Set([A, C]) });
+    expect([r.written, r.removed]).toEqual([[A], [C]]);
+    expect([await read(s.wsRoot, A), await read(s.wsRoot, C)]).toEqual(["A one\nA two\nhand a\n", "C one\nhand c\n"]);
+    expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
+  });
+
+  it("a named path that is unchanged is not rewritten, and an unnamed drift is still skipped", async () => {
+    const s = await three("a");
+    const r = await sync(s.wsRoot, { overwritePaths: new Set([B]) });
+    expect([r.written, r.skipped.map((x) => x.path)]).toEqual([[], [A]]);
+    expect(await read(s.wsRoot, A)).toBe("A one\nA two\nhand a\n");
+  });
+});
