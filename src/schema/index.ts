@@ -541,10 +541,12 @@ export type Profile = z.infer<typeof ProfileSchema>;
 
 /** The manifest schema a Forge must declare once a body holds a section marker (spec 11 §6.14, Ruling 7): craftar ≤ 0.6.2 refuses it at load. */
 export const FORGE_SCHEMA_SECTIONS = 2;
+/** The manifest schema a Forge must declare for its profiles' integrations blocks to be read (spec 33 §4.2): a craftar that does not know schema 3 refuses the Forge at load. */
+export const FORGE_SCHEMA_INTEGRATIONS = 3;
 
 export const ForgeManifestSchema = z.object({
   name: z.string(),
-  schema: z.union([z.literal(1), z.literal(FORGE_SCHEMA_SECTIONS)]).default(1),
+  schema: z.union([z.literal(1), z.literal(FORGE_SCHEMA_SECTIONS), z.literal(FORGE_SCHEMA_INTEGRATIONS)]).default(1),
   description: z.string().optional(),
 });
 export type ForgeManifest = z.infer<typeof ForgeManifestSchema>;

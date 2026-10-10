@@ -18,7 +18,7 @@ describe("schemaFault words a refusal without the value", () => {
   const cases: Array<[string, unknown, string]> = [
     ["an enum", refusal(ProfileSchema, { name: "acme", scm: { kind: M } }), "scm.kind: Invalid enum value. Expected 'azure-devops' | 'github' | 'gitlab' | 'other'"],
     ["an enum inside an array", refusal(WorkspaceConfigSchema, { forge: ".", profile: "acme", targets: [M] }), "targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md'"],
-    ["a union of literals", refusal(ForgeManifestSchema, { name: "f", schema: M }), "schema: Invalid input (Invalid literal value, expected 1 | Invalid literal value, expected 2)"],
+    ["a union of literals", refusal(ForgeManifestSchema, { name: "f", schema: M }), "schema: Invalid input (Invalid literal value, expected 1 | Invalid literal value, expected 2 | Invalid literal value, expected 3)"],
     ["a union of an array and a literal", refusal(IngredientSchema, { type: "rule", name: "s", targets: M }), 'targets: Invalid input (Expected array, received string | Invalid literal value, expected "*")'],
     ["an enum inside a union", refusal(IngredientSchema, { type: "rule", name: "s", targets: [M] }), "targets: Invalid input (Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | Invalid literal value, expected \"*\")"],
     ["a discriminator", refusal(IngredientSchema, { type: M, name: "s" }), "type: Invalid discriminator value. Expected 'rule' | 'agent' | 'command' | 'skill' | 'mcp' | 'script' | 'steering' | 'hook' | 'service'"],

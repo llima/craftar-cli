@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { loadForge } from "../src/core/forge.js";
-import { ForgeManifestSchema, FORGE_SCHEMA_SECTIONS, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, RecipeSchema, RegistrySchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
+import { ForgeManifestSchema, FORGE_SCHEMA_INTEGRATIONS, FORGE_SCHEMA_SECTIONS, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, RecipeSchema, RegistrySchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
 import { makeForge, tmpDir, writeFiles } from "./helpers/forge.js";
 
 /** A minimal valid ingredient of each type. */
@@ -144,18 +144,20 @@ describe("sections and the manifest schema (spec 11 §5.2)", () => {
     while (cleanups.length) await fs.rm(cleanups.pop()!, { recursive: true, force: true });
   });
 
-  it("loads a manifest at schema 1, at schema 2 and with no schema (read as 1); refuses schema 3", () => {
+  it("loads a manifest at schema 1, 2 and 3 and with no schema (read as 1); refuses schema 4", () => {
     expect(FORGE_SCHEMA_SECTIONS).toBe(2);
     expect(ForgeManifestSchema.parse({ name: "f", schema: 1 }).schema).toBe(1);
     expect(ForgeManifestSchema.parse({ name: "f", schema: 2 }).schema).toBe(2);
     expect(ForgeManifestSchema.parse({ name: "f" }).schema).toBe(1);
-    expect(ForgeManifestSchema.safeParse({ name: "f", schema: 3 }).success).toBe(false);
+    expect(FORGE_SCHEMA_INTEGRATIONS).toBe(3);
+    expect(ForgeManifestSchema.parse({ name: "f", schema: 3 }).schema).toBe(3);
+    expect(ForgeManifestSchema.safeParse({ name: "f", schema: 4 }).success).toBe(false);
   });
 
-  it("a Forge whose manifest says schema: 3 fails the load, naming the file", async () => {
+  it("a Forge whose manifest says schema: 4 fails the load, naming the file", async () => {
     const root = await tmpDir();
     cleanups.push(root);
-    await writeFiles(root, { "craftar.forge.yaml": "name: f\nschema: 3\n" });
+    await writeFiles(root, { "craftar.forge.yaml": "name: f\nschema: 4\n" });
     await expect(loadForge(root)).rejects.toThrow(/craftar\.forge\.yaml/);
   });
 
