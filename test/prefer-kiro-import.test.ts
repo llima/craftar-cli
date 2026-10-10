@@ -84,7 +84,7 @@ describe("import with preferKiro", () => {
 
   it("5. PK3 and PK4 reach the caller from the pure module, the Forge untouched — and an existing Forge keeps every byte", async () => {
     const pk3 = await setup({ ...WORKSPACE, ".kiro/steering/workflow.md": mirror("workflow", "# Workflow\n\nSee AGENTS.md (rule: style).\n") });
-    await expect(run(pk3, ["workflow"])).rejects.toThrow('.kiro/steering/workflow.md line 9 holds "AGENTS.md (rule: style)"');
+    await expect(run(pk3, ["workflow"])).rejects.toThrow('.kiro/steering/workflow.md line 9 holds "AGENTS.md (rule: <x>)"');
     await expect(fs.stat(pk3.forge)).rejects.toThrow();
 
     const pk4 = await setup();
@@ -100,6 +100,8 @@ describe("import with preferKiro", () => {
     const s = await setup({ ...WORKSPACE, ".kiro/steering/workflow.md": mirror("workflow", KEPT + `token ${TOKEN}\n`) });
     const r = await run(s, ["workflow"]);
     expect(r.rejected.map((x) => x.name)).toEqual(["rule/workflow"]);
+    // The line is the steering file's: six lines of frontmatter and banner above the body's fifth.
+    expect(r.rejected[0].reason).toMatch(/^secret-like value \(.+\) in \.kiro\/steering\/workflow\.md line 11$/);
     expect(JSON.stringify(r)).not.toContain(TOKEN);
     expect(r.preferKiro).toEqual([]);
     await expect(fs.stat(path.join(s.forge, "ingredients/rules/workflow"))).rejects.toThrow();
@@ -219,5 +221,44 @@ describe("import with preferKiro", () => {
     expect(r.rejected).toEqual([]);
     expect(r.preferKiro!.map((e) => e.ref)).toEqual(["rule/workflow"]);
     expect(await forgeFile(s, "ingredients/rules/workflow/rule.md")).toBe(BUILT);
+  });
+
+  it("14. a reference to a hand-written steering file stays a .kiro/steering/ path in the rule, and the round trip holds", async () => {
+    const body = "# Workflow\n\nSee .kiro/steering/style.md and the team notes in .kiro/steering/team.md.\n";
+    const s = await setup({ ...WORKSPACE, ".kiro/steering/workflow.md": mirror("workflow", body) });
+    await run(s, ["workflow"]);
+    expect(await forgeFile(s, "ingredients/rules/workflow/rule.md")).toBe("# Workflow\n\nSee .claude/rules/style.md and the team notes in .kiro/steering/team.md.\n");
+    await fs.writeFile(path.join(s.ws, "craftar.yaml"), YAML.stringify({ forge: s.forge, profile: "acme" }));
+    const ws = await loadWorkspace(s.ws);
+    const p = await plan(ws);
+    expect(p.files.find((f) => f.path === ".kiro/steering/workflow.md")!.content.toString("utf8")).toBe(mirror("workflow", body));
+    expect(p.files.find((f) => f.path === ".claude/rules/workflow.md")!.content.toString("utf8")).toContain(".kiro/steering/team.md");
+  });
+
+  it("15. the banner dropped is the one sync would write: set by the workspace's overrides, or by a recipe default", async () => {
+    const line = "<!-- acme: generated, do not edit -->";
+    const custom = `---\ninclusion: always\n---\n\n${line}\n\n${KEPT}`.replace(/\n/g, "\r\n");
+    // The workspace's own craftar.yaml sets it; the profile is new.
+    const over = await setup({ ...WORKSPACE, ".kiro/steering/workflow.md": custom, "craftar.yaml": YAML.stringify({ overrides: { params: { "kiro.banner": line } } }) });
+    await run(over, ["workflow"]);
+    expect(await forgeFile(over, "ingredients/rules/workflow/rule.md")).toBe(BUILT);
+    // A recipe the profile already resolves gives it as a default.
+    const byRecipe = await setup();
+    await run(byRecipe);
+    const recipeFile = path.join(byRecipe.forge, "recipes/base.yaml");
+    await fs.writeFile(recipeFile, YAML.stringify({ ...YAML.parse(await fs.readFile(recipeFile, "utf8")), params: { "kiro.banner": { default: line } } }));
+    await fs.writeFile(path.join(byRecipe.ws, ".kiro/steering/workflow.md"), custom);
+    const r = await run(byRecipe, ["workflow"]);
+    expect(await forgeFile(byRecipe, `ingredients/rules/${r.preferKiro![0].ref.split("/")[1]}/rule.md`)).toBe(BUILT);
+    // Control: nothing sets it — the line is the user's text, and stays the rule's first line.
+    const bare = await setup({ ...WORKSPACE, ".kiro/steering/workflow.md": custom });
+    await run(bare, ["workflow"]);
+    expect(await forgeFile(bare, "ingredients/rules/workflow/rule.md")).toBe(`${line}\n\n${BUILT}`);
+  });
+
+  it("16. a section marker in the steering text is refused by the steering file's own line", async () => {
+    const s = await setup({ ...WORKSPACE, ".kiro/steering/workflow.md": mirror("workflow", KEPT + "<!-- craftar:section extra -->\nmore\n<!-- craftar:end -->\n") });
+    await expect(run(s, ["workflow"])).rejects.toThrow("import: .kiro/steering/workflow.md holds a section marker on line 11 — sync would not reproduce it");
+    await expect(fs.stat(s.forge)).rejects.toThrow();
   });
 });

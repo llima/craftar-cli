@@ -49,15 +49,22 @@ export function ruleTextOf(body: string, rules: ReadonlySet<string>, handSteerin
   });
 }
 
-// What kiro writes for a rule it does not write (spec 17 §4.3): its four forms hold one of these three.
-const UNCERTAIN = /AGENTS\.md \(rule: [^)\n]+\)|\]\(AGENTS\.md\)|rule not in this workspace\)/;
+// What kiro writes for a rule it does not write (spec 17 §4.3): its four forms hold one of these three. Each is named
+// by a fixed label, never by the text matched — a refusal is printed before anything was scanned for secrets.
+const UNCERTAIN: Array<{ form: string; at: RegExp }> = [
+  { form: "AGENTS.md (rule: <x>)", at: /AGENTS\.md \(rule: [^)\n]+\)/ },
+  { form: "](AGENTS.md)", at: /\]\(AGENTS\.md\)/ },
+  { form: "rule not in this workspace)", at: /rule not in this workspace\)/ },
+];
 
-/** PK3: the first line holding a form kiro writes for a rule it does not write, 1-based within `body`; null when none. */
+/** PK3: the first line holding a form kiro writes for a rule it does not write, 1-based within `body`, and that form's label; null when none. */
 export function uncertainForm(body: string): { line: number; form: string } | null {
   const lines = body.split("\n");
   for (let i = 0; i < lines.length; i++) {
-    const m = UNCERTAIN.exec(lines[i]);
-    if (m) return { line: i + 1, form: m[0] };
+    const hit = UNCERTAIN.map((u) => ({ form: u.form, index: lines[i].search(u.at) }))
+      .filter((u) => u.index !== -1)
+      .sort((a, b) => a.index - b.index)[0];
+    if (hit) return { line: i + 1, form: hit.form };
   }
   return null;
 }
@@ -75,11 +82,12 @@ export interface PreferKiroInput {
 }
 
 /**
- * The rule's source text built from its steering file, and the steering body it was proved against: rendered for kiro
- * over the workspace's own rules, the text gives that body back. Throws PK3 for a form with no certain source and PK4
- * for a body that does not come back; both name a line of the steering file and quote none of it.
+ * The rule's source text built from its steering file, the steering body it was proved against — rendered for kiro over
+ * the workspace's own rules, the text gives that body back — and `offset`, the lines of the file above that body.
+ * Throws PK3 for a form with no certain source and PK4 for a body that does not come back; both name a line of the
+ * steering file and quote none of it. The proof is over the body: the frontmatter and the banner are sync's to write.
  */
-export function preferKiro(i: PreferKiroInput): { text: string; body: string } {
+export function preferKiro(i: PreferKiroInput): { text: string; body: string; offset: number } {
   const body = steeringBody(i.steering, i.name, i.banner);
   // The lines the frontmatter and the banner took, so a line of `body` is named as the file has it.
   const offset = i.steering.split("\n").length - body.split("\n").length;
@@ -107,5 +115,5 @@ export function preferKiro(i: PreferKiroInput): { text: string; body: string } {
     while (n < a.length && n < b.length && a[n] === b[n]) n++;
     throw new Error(`${where} ${n + 1 + offset} would not come back from the rule built from it — it names .claude/rules/ where sync writes .kiro/steering/; ${drop}`);
   }
-  return { text, body };
+  return { text, body, offset };
 }

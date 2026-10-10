@@ -62,7 +62,7 @@ describe("ruleTextOf", () => {
 
 describe("uncertainForm (PK3)", () => {
   it.each([
-    ["AGENTS.md (rule: style)", "AGENTS.md (rule: style)"],
+    ["AGENTS.md (rule: style)", "AGENTS.md (rule: <x>)"],
     ["see [the style](AGENTS.md) too", "](AGENTS.md)"],
     ["style (rule not in this workspace)", "rule not in this workspace)"],
     ["the style (style, rule not in this workspace)", "rule not in this workspace)"],
@@ -72,11 +72,18 @@ describe("uncertainForm (PK3)", () => {
   it("a plain mention of AGENTS.md is not one", () => {
     expect(uncertainForm("Read AGENTS.md first.\n")).toBeNull();
   });
+  it("names the form by a fixed label, the first on the line — never the text it matched", () => {
+    const typed = "ghp_" + "x".repeat(36); // assembled at runtime on purpose
+    const found = uncertainForm(`a (rule not in this workspace) then AGENTS.md (rule: note ${typed})\n`);
+    expect(found).toEqual({ line: 1, form: "rule not in this workspace)" });
+    expect(JSON.stringify(uncertainForm(`AGENTS.md (rule: note ${typed})\n`))).toBe('{"line":1,"form":"AGENTS.md (rule: <x>)"}');
+  });
 });
 
 describe("preferKiro", () => {
   it("returns the rule text, proved to render back to the steering body", () => {
-    expect(preferKiro(input(FM + DEFAULT_BANNER + "\n\n" + BODY))).toEqual({ text: RULE_TEXT, body: BODY });
+    expect(preferKiro(input(FM + DEFAULT_BANNER + "\n\n" + BODY))).toEqual({ text: RULE_TEXT, body: BODY, offset: 6 });
+    expect(preferKiro(input(BODY))).toEqual({ text: RULE_TEXT, body: BODY, offset: 0 });
   });
   it("a mirror the emitter generated gives the rule's own text back", () => {
     const generated = "# Workflow\n\nSee .kiro/steering/style.md.\n";
@@ -85,7 +92,7 @@ describe("preferKiro", () => {
   it("PK3 names the line of the steering file and the form", () => {
     const steering = FM + DEFAULT_BANNER + "\n\n# Workflow\n\nSee AGENTS.md (rule: style).\n";
     expect(() => preferKiro(input(steering))).toThrow(
-      'import: --prefer-kiro workflow: .kiro/steering/workflow.md line 9 holds "AGENTS.md (rule: style)", which Kiro writes for a rule it does not have — that form has no certain source; edit the steering file or drop workflow from --prefer-kiro',
+      'import: --prefer-kiro workflow: .kiro/steering/workflow.md line 9 holds "AGENTS.md (rule: <x>)", which Kiro writes for a rule it does not have — that form has no certain source; edit the steering file or drop workflow from --prefer-kiro',
     );
   });
   it("PK4: a body that names .claude/rules/ does not come back, and the first such line is named", () => {
