@@ -53,3 +53,6 @@ export function errorText(e: unknown): string {
   if (!(e instanceof SchemaError) && rawIssues(e)?.length) return schemaFault(e);
   return e instanceof Error ? e.message : String(e);
 }
+
+/** A `schema` number as a refusal prints it: the number when it is a whole one, never any other value read from the file. */
+export const shownSchema = (v: unknown): string => (typeof v === "number" && Number.isInteger(v) ? String(v) : "(not a whole number)");

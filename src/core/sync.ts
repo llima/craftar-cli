@@ -12,7 +12,7 @@ import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile } from "./extract.js";
 import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Target, type WorkspaceConfig } from "../schema/index.js";
-import { SchemaError } from "./schema-fault.js";
+import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
 import { agentsMd } from "../emitters/agents-md.js";
@@ -578,7 +578,7 @@ export async function readLock(root: string): Promise<Lock | null> {
   }
   // A lock a later craftar wrote is refused by name, not with a zod dump (spec 13 §4.6).
   if (raw !== null && typeof raw === "object" && Object.hasOwn(raw, "schema") && !LOCK_SCHEMAS.includes((raw as { schema: unknown }).schema))
-    throw new Error(`${LOCK_FILE} declares schema ${JSON.stringify((raw as { schema: unknown }).schema)}, which this craftar does not read — upgrade craftar`);
+    throw new Error(`${LOCK_FILE} declares schema ${shownSchema((raw as { schema: unknown }).schema)}, which this craftar does not read — upgrade craftar`);
   const r = LockSchema.safeParse(raw);
   if (!r.success) throw new SchemaError(`${LOCK_FILE} is not a valid lock`, r.error);
   // The orphan pass removes what the lock names: an entry outside the workspace would delete there (0.17.3).

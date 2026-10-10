@@ -2378,7 +2378,7 @@ function unheldMessage(command: string, root: string, unheld: UnheldPath[]): str
  * git tracks, `clean` for files unify created (checkout refuses a path git does not know).
  */
 function lateFailure(e: unknown, root: string, journal: WriteJournal, command = "unify"): string {
-  const msg = e instanceof Error ? e.message : String(e);
+  const msg = errorText(e);
   if (journal.length === 0) return msg;
   const rel = (abs: string) => path.relative(root, abs).split(path.sep).join("/");
   const quote = (p: string) => (/^[\w./-]+$/.test(p) ? p : `"${p}"`);

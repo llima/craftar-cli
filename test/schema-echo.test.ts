@@ -149,6 +149,29 @@ describe("a craftar.lock that does not read", () => {
     expect(r.stderr).toMatch(/^error: EISDIR\b/);
     expect(r.stderr).not.toContain("not valid JSON");
   });
+
+  it("a schema this craftar does not read: the number is printed, anything else is not", async () => {
+    const s = await fresh();
+    const file = path.join(s.wsRoot, "craftar.lock");
+    await fs.writeFile(file, JSON.stringify({ schema: 3 }) + "\n");
+    const n = runCli(["status", "--workspace", s.wsRoot]);
+    expect(n.code).toBe(1);
+    expect(n.stderr).toBe("error: craftar.lock declares schema 3, which this craftar does not read — upgrade craftar\n");
+
+    await fs.writeFile(file, JSON.stringify({ schema: M }) + "\n");
+    for (const command of [["status"], ["sync"], ["diff"]]) {
+      const r = runCli([...command, "--workspace", s.wsRoot]);
+      const where = command.join(" ");
+      expect(r.code, where).toBe(1);
+      expect(r.stdout + r.stderr, where).not.toContain(M);
+      expect(r.stderr, where).toBe("error: craftar.lock declares schema (not a whole number), which this craftar does not read — upgrade craftar\n");
+    }
+    const d = runCli(["doctor", "--json", "--workspace", s.wsRoot]);
+    expect(d.stdout + d.stderr).not.toContain(M);
+    const lock = JSON.parse(d.stdout).checks.filter((c: { id: string }) => c.id === "lock");
+    expect(lock[0].message).toBe("craftar.lock declares schema (not a whole number), which this craftar does not read — upgrade craftar");
+    expect(lock[0].fix).toBe("upgrade craftar");
+  });
 });
 
 describe("a registry that is not valid JSON", () => {
@@ -167,6 +190,22 @@ describe("a registry that is not valid JSON", () => {
     expect(registry).toHaveLength(1);
     expect(registry[0].level).toBe("error");
     expect(registry[0].message).toMatch(/^cannot read \S*registry\.json: not valid JSON$/);
+  });
+
+  it("a registry schema this craftar does not read: anything but a number is not printed", async () => {
+    const file = path.join(process.env.CRAFTAR_HOME!, "registry.json");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify({ schema: M, workspaces: [] }) + "\n");
+    cleanups.push(() => fs.rm(file, { force: true }));
+    const s = await fresh();
+    const w = runCli(["workspaces"]);
+    expect(w.stdout + w.stderr).not.toContain(M);
+    expect(w.stdout + w.stderr).toContain("registry.json declares schema (not a whole number), which this craftar does not read — upgrade craftar");
+    const d = runCli(["doctor", "--json", "--workspace", s.wsRoot]);
+    expect(d.stdout + d.stderr).not.toContain(M);
+    const registry = JSON.parse(d.stdout).checks.filter((c: { id: string }) => c.id === "registry");
+    expect(registry[0].message).toBe("registry.json declares schema (not a whole number), which this craftar does not read — upgrade craftar");
+    expect(registry[0].fix).toBe("upgrade craftar");
   });
 });
 
@@ -198,6 +237,6 @@ describe("forge unify --plan with a plan the schema refuses", () => {
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
     expect(r.stdout + r.stderr).not.toContain(M);
-    expect(r.stderr).toMatch(new RegExp(`^error: ${re(planPath)}: schema: Invalid literal value, expected 1; [^\\n]*\\n$`));
+    expect(r.stderr).toBe(`error: ${planPath}: schema: Invalid literal value, expected 1; base: Invalid input; profile: Required; variant: Invalid input; baseFingerprint: Required; variantFingerprint: Required\n`);
   });
 });

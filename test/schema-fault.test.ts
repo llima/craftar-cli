@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { listFiles } from "../src/core/forge.js";
-import { SchemaError, errorText, schemaFault, schemaIssues } from "../src/core/schema-fault.js";
+import { SchemaError, errorText, schemaFault, schemaIssues, shownSchema } from "../src/core/schema-fault.js";
 import { ForgeManifestSchema, IngredientSchema, ProfileSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
 
 const M = ["ZZ", "MARKER", "ZZ"].join("");
@@ -77,6 +77,17 @@ describe("SchemaError and errorText", () => {
     expect(errorText(new SchemaError("invalid x", error))).toBe("invalid x: name: Required; scm.kind: Invalid enum value. Expected 'azure-devops' | 'github' | 'gitlab' | 'other'");
     expect(errorText(new Error("plain"))).toBe("plain");
     expect(errorText("text")).toBe("text");
+  });
+});
+
+describe("shownSchema prints a schema number only when it is one", () => {
+  it("a whole number is printed; anything else is not", () => {
+    expect(shownSchema(3)).toBe("3");
+    expect(shownSchema(0)).toBe("0");
+    expect(shownSchema(M)).toBe("(not a whole number)");
+    expect(shownSchema(1.5)).toBe("(not a whole number)");
+    expect(shownSchema({ k: M })).toBe("(not a whole number)");
+    expect(shownSchema(null)).toBe("(not a whole number)");
   });
 });
 

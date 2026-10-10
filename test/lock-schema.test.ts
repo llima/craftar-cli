@@ -49,7 +49,7 @@ describe("the lock schema (spec 13 §4.6, §5.2)", () => {
     const dir = await lockDir(JSON.stringify({ ...V2, schema: 3 }));
     await expect(readLock(dir)).rejects.toThrow("craftar.lock declares schema 3, which this craftar does not read — upgrade craftar");
     const str = await lockDir(JSON.stringify({ ...V2, schema: "2" }));
-    await expect(readLock(str)).rejects.toThrow('craftar.lock declares schema "2", which this craftar does not read — upgrade craftar');
+    await expect(readLock(str)).rejects.toThrow('craftar.lock declares schema (not a whole number), which this craftar does not read — upgrade craftar');
   });
 
   it("readLock reads both versions", async () => {

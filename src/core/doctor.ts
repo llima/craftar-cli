@@ -143,7 +143,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
         );
     } catch (e) {
       registryWhyNot = "the registry cannot be read";
-      const msg = (e as Error).message;
+      const msg = errorText(e);
       m("registry", "error", oneLine(e), /declares schema/.test(msg) ? "upgrade craftar" : `repair or remove ${registryFile(home)}`);
     }
   }
