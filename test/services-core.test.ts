@@ -245,25 +245,6 @@ describe("composeArgv", () => {
     ).toThrow('service name "-v" starts with "-" — refused');
   });
 
-  it("down with stack:null (no -f)", () => {
-    const argv = composeArgv("down", {
-      project: "p",
-      stack: null,
-      envFile: null,
-    });
-    expect(argv).toEqual(["compose", "-p", "p", "down"]);
-  });
-
-  it("down with volumes:true", () => {
-    const argv = composeArgv("down", {
-      project: "p",
-      stack: "/w/.craftar/compose.yaml",
-      envFile: null,
-      volumes: true,
-    });
-    expect(argv).toEqual(["compose", "-p", "p", "-f", "/w/.craftar/compose.yaml", "down", "--volumes"]);
-  });
-
   it("ps", () => {
     const argv = composeArgv("ps", {
       project: "p",
@@ -516,7 +497,7 @@ describe("pendingLine", () => {
   it('"edited" → the overwrite-drift line per spec §16.1', () => {
     const result = pendingLine({ path: ".craftar/foo.yaml", reason: "edited" });
     expect(result).toBe(
-      ".craftar/foo.yaml — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift"
+      ".craftar/foo.yaml — edited — run craftar drift discard .craftar/foo.yaml: it regenerates the file, or removes it when the Forge no longer produces it"
     );
   });
 

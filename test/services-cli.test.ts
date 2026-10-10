@@ -108,7 +108,7 @@ describe("craftar services — without Docker (spec 31 §4.2–§4.4)", () => {
     expect([r.code, r.stdout, r.stderr]).toEqual([
       1,
       "",
-      `error: ${FRAGMENT} — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift\n`,
+      `error: ${FRAGMENT} — edited — run craftar drift discard ${FRAGMENT}: it regenerates the file, or removes it when the Forge no longer produces it\n`,
     ]);
     expect(await tree(s.wsRoot)).toEqual(before);
   });
@@ -119,7 +119,7 @@ describe("craftar services — without Docker (spec 31 §4.2–§4.4)", () => {
     expect(up(s.wsRoot).stderr).toBe(`error: ${FRAGMENT} — missing — run craftar sync\n`);
     await fs.appendFile(path.join(s.wsRoot, ".craftar/compose.yaml"), "# hand edit\n");
     expect(up(s.wsRoot).stderr).toBe(
-      `error: .craftar/compose.yaml — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift\n` +
+      `error: .craftar/compose.yaml — edited — run craftar drift discard .craftar/compose.yaml: it regenerates the file, or removes it when the Forge no longer produces it\n` +
         `${FRAGMENT} — missing — run craftar sync\n`,
     );
   });
@@ -253,7 +253,7 @@ describe("craftar services — without Docker (spec 31 §4.2–§4.4)", () => {
     expect(lines[0]).toMatch(/^craftar services — project craftar-ws-[0-9a-f]{8}$/);
     expect(lines.slice(1)).toEqual([
       "  echo  service/echo  not created",
-      "  .craftar/.gitattributes — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift",
+      "  .craftar/.gitattributes — edited — run craftar drift discard .craftar/.gitattributes: it regenerates the file, or removes it when the Forge no longer produces it",
     ]);
     expect(r.stderr).toBe(`warn ${NOT_FOUND}\n`);
   });

@@ -443,7 +443,7 @@ export function pendingLine(p: PendingFile): string {
     case "missing":
       return `${p.path} — missing — run craftar sync`;
     case "edited":
-      return `${p.path} — edited — run craftar sync --overwrite-drift to regenerate it, or delete it if craftar status calls it orphan-drift`;
+      return `${p.path} — edited — run craftar drift discard ${p.path}: it regenerates the file, or removes it when the Forge no longer produces it`;
     case "unrecorded":
       return `${p.path} is not craftar's — run craftar status`;
   }
@@ -459,14 +459,13 @@ export function upRefusal(r: Recorded, names: string[]): string[] {
 
 /** `docker compose` arguments, as an array for `execFile` / `spawn` — never a shell line. */
 export function composeArgv(
-  kind: "up" | "down" | "ps",
-  o: { project: string; stack: string | null; envFile: string | null; wait?: boolean; volumes?: boolean; services?: string[] },
+  kind: "up" | "ps",
+  o: { project: string; stack: string | null; envFile: string | null; wait?: boolean; services?: string[] },
 ): string[] {
   const argv = ["compose", "-p", o.project];
   if (o.stack !== null) argv.push("-f", o.stack);
   if (o.envFile !== null) argv.push("--env-file", o.envFile);
   if (kind === "ps") return [...argv, "ps", "--all", "--format", "json"];
-  if (kind === "down") return [...argv, "down", ...(o.volumes ? ["--volumes"] : [])];
   const names = o.services ?? [];
   const dash = names.find((n) => n.startsWith("-"));
   if (dash !== undefined) throw new Error(`service name ${JSON.stringify(dash)} starts with "-" — refused`);
