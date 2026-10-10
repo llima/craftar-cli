@@ -5,6 +5,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { classifyForge, cacheKey as computeCacheKey } from "../core/remote.js";
 import {
@@ -24,6 +25,7 @@ import { driftList } from "../core/drift.js";
 import { hashNormalized } from "../core/text.js";
 import { fingerprintOf } from "../core/fingerprint.js";
 import { workspaceAgainst, forgeWorkspaces, remoteUrls, urlToKey, type RegistryState } from "../core/impact.js";
+import { findProfileFile, resolvedBy } from "../core/param-writes.js";
 import {
   readEmitted,
   secretIn,
@@ -118,6 +120,7 @@ const D7 = (ing: string, p: string, state: string, profile: string) =>
   `the Forge changed ${ing} since the last sync (${p}: ${state}) — a variant taken from the disk would undo that change for profile ${profile}; sync the rest, redo the edit on top, and promote again`;
 const D8 = (p: string, ing: string) => `${p} of ${ing} is missing on disk — restore it with \`craftar sync\` first`;
 const D9 = (ing: string, reason: string) => `${ing} looks like it holds a secret (${reason}) — nothing was written`;
+const D10 = (ing: string, q: string) => `${ing} is also used by profile ${q} — its files would change there`;
 const D11 = (p: string, line: number) => `${p}:${line} holds a section marker — a variant body cannot hold one; remove it and promote again`;
 const D13_EXISTS = (rel: string) => `${rel} already exists in the Forge — promote does not overwrite it`;
 const D13_IGNORED = (rel: string) => `${rel} is ignored by git — git could not show or undo it`;
@@ -331,6 +334,14 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Handle the decision
   let outcome: "variant" | "variant-updated";
   const N = outputName;
+
+  // Determine if X is this profile's variant (name is `<N>--<p>` AND as is `<N>`)
+  const isOwnVariant = X.meta.name === `${N}--${profile}` && X.meta.as === N;
+  // Determine if X is another profile's variant (name ends with --<q> for some q)
+  const variantMatch = X.meta.name.match(/^(.+)--([^-]+)$/);
+  const isOtherVariant = variantMatch !== null && variantMatch[2] !== profile && X.meta.as === N;
+
+  // The variant name is always <outputName>--<profile>
   const variantName = `${N}--${profile}`;
   const variantRef = `${meta.type}/${variantName}` as IngredientRef;
 
@@ -340,18 +351,26 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       throw new Error(INTERNAL_REUSE(normalized));
     }
     // Has delta: this step treats it as variant until step 30g implements params/sections
-    outcome = "variant";
-  } else if (decision.kind === "variant") {
+    outcome = isOwnVariant ? "variant-updated" : "variant";
+  } else if (decision.kind === "variant" || decision.kind === "literal") {
     // Check if this is updating an existing variant
-    const existingVariant = forge.ingredients.get(variantRef);
-    if (existingVariant && existingVariant.meta.as === N) {
+    if (isOwnVariant) {
       outcome = "variant-updated";
     } else {
       outcome = "variant";
     }
   } else {
     // literal — shouldn't happen with no others, treat as variant
-    outcome = "variant";
+    outcome = isOwnVariant ? "variant-updated" : "variant";
+  }
+
+  // D10: another profile resolves that variant (only for variant-updated)
+  if (outcome === "variant-updated") {
+    for (const [q] of forge.profiles) {
+      if (q !== profile && resolvedBy(forge, q).has(variantRef)) {
+        throw new Error(D10(variantRef, q));
+      }
+    }
   }
 
   // D11: marker check
@@ -374,13 +393,39 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const variantDir = path.join(forgeDir, "ingredients", folder, variantName);
   const variantDirRel = `ingredients/${folder}/${variantName}`;
 
-  // D13 early check: variant directory must not already exist
-  if (await exists(variantDir)) {
-    throw new Error(D13_EXISTS(variantDirRel));
+  // For variant-updated, we don't check D13 — we're updating the existing directory
+  if (outcome === "variant") {
+    // D13 early check: variant directory must not already exist
+    if (await exists(variantDir)) {
+      throw new Error(D13_EXISTS(variantDirRel));
+    }
   }
 
   const ingredientYaml = YAML.stringify(variantMeta, { lineWidth: 0 });
-  stage.write(path.join(variantDir, "ingredient.yaml"), ingredientYaml);
+  const ingredientYamlPath = path.join(variantDir, "ingredient.yaml");
+
+  // For variant-updated, only stage ingredient.yaml if it changed
+  if (outcome === "variant") {
+    stage.write(ingredientYamlPath, ingredientYaml);
+  } else {
+    // variant-updated: compare with existing file, only write if different
+    let shouldWrite = true;
+    try {
+      const existingYaml = await fs.readFile(ingredientYamlPath, "utf8");
+      // Compare parsed YAML to ignore formatting differences
+      const existingParsed = YAML.parse(existingYaml);
+      const newParsed = YAML.parse(ingredientYaml);
+      // Deep compare the objects
+      if (isDeepStrictEqual(existingParsed, newParsed)) {
+        shouldWrite = false;
+      }
+    } catch {
+      // File doesn't exist or can't be read — write it
+    }
+    if (shouldWrite) {
+      stage.write(ingredientYamlPath, ingredientYaml);
+    }
+  }
 
   // For skills with dir layout, only write files that were planned (not hand-added ones)
   const plannedRelPaths =
@@ -393,84 +438,149 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     stage.write(path.join(variantDir, fileRel), content);
   }
 
-  // Step 6: Recipe placement
+  // Step 6: Recipe placement (§4.5)
+  // For variant-updated, no recipe changes needed
   const viaRecipes = X.via;
   const editedKeys = new Map<string, string[]>();
+  const profileRecipes = forge.profiles.get(profile)?.recipes ?? [];
 
-  // First pass: collect recipe files we'll need to edit and check D14
-  const recipesToEdit: Array<{ recipe: string; recFile: string }> = [];
+  // The ref we're replacing in recipes: X.ref (not T/N, because X might be another profile's variant)
+  const refToReplace = X.ref;
 
-  for (const R of viaRecipes) {
-    // Check if this profile owns the recipe
-    const profileOwns = recipesOf(forge, profile).has(R);
-    // Check if any other profile resolves it
-    let otherOwns = false;
-    for (const [q] of forge.profiles) {
-      if (q !== profile && recipesOf(forge, q).has(R)) {
-        otherOwns = true;
-        break;
+  if (outcome === "variant") {
+    // Check which recipes need to be edited or forked
+    for (const R of viaRecipes) {
+      // Check if this profile owns the recipe (resolves it in its own layer)
+      const profileOwns = recipesOf(forge, profile).has(R);
+      // Check if any other profile resolves it
+      let otherOwns = false;
+      for (const [q] of forge.profiles) {
+        if (q !== profile && recipesOf(forge, q).has(R)) {
+          otherOwns = true;
+          break;
+        }
       }
-    }
 
-    if (profileOwns && !otherOwns) {
-      // Case 1: will edit recipe in place - collect the file path
-      const recipeOpts: RecipeOptions = {
-        stage,
-        dir: path.join(forgeDir, "recipes"),
-        profile,
-        forge,
-        report: { recipes: [], recipeSplits: [] } as unknown as import("./claude-code.js").ImportReport,
-        currentRules: null,
-      };
-      const recFile = await recipeFile(recipeOpts, R, "drift promote");
-      recipesToEdit.push({ recipe: R, recFile });
-    } else {
-      // Cases 2-3: D17
-      // Determine the chain
-      let chain: string;
-      const profileRecipes = forge.profiles.get(profile)?.recipes ?? [];
-      if (profileRecipes.includes(R)) {
-        // Case 2: in profile's recipes list — for this step, refuse
-        const extendsChain = findExtendsChain(forge, R);
-        chain = extendsChain ?? R;
+      // Find the extends chain to R
+      const extendsChain = findExtendsChain(forge, p0.resolution.recipes, R);
+      // Check if R is in the profile's recipes list
+      const inProfileRecipes = profileRecipes.includes(R);
+      // Check if any other resolved recipe extends R
+      const extendedByOther = isExtendedByOtherResolved(forge, p0.resolution.recipes, R);
+
+      if (profileOwns && !otherOwns) {
+        // Case 1: profile owns it alone — edit recipe in place
+        const recipeOpts: RecipeOptions = {
+          stage,
+          dir: path.join(forgeDir, "recipes"),
+          profile,
+          forge,
+          report: { recipes: [], recipeSplits: [] } as unknown as import("./claude-code.js").ImportReport,
+          currentRules: null,
+        };
+        const recFile = await recipeFile(recipeOpts, R, "drift promote");
+
+        // D14 check: recipe file must be held by git
+        const unheld = await gitUnheld(forgeDir, [recFile]);
+        if (unheld.length > 0) {
+          throw new UnheldError(realForgeDir, unheld);
+        }
+
+        // Edit recipe in place
+        const raw = await fs.readFile(recFile, "utf8");
+        const label = `recipes/${R}.yaml`;
+        const content = editYamlText(raw, { command: "drift promote", label, keys: ["ingredients"] }, (doc) => {
+          const seq = doc.get("ingredients", true);
+          if (!YAML.isSeq(seq)) return;
+          for (const item of seq.items) {
+            if (YAML.isScalar(item) && item.value === refToReplace) {
+              item.value = variantRef;
+            }
+          }
+        });
+        stage.write(recFile, content);
+        editedKeys.set(`recipes/${R}.yaml`, ["ingredients"]);
+      } else if (inProfileRecipes && !extendedByOther) {
+        // Case 2: R is in profile's recipes but also used by others, and no other resolved recipe extends R
+        // Fork the recipe as R--<p> and edit the profile's recipes list
+        const forkedRecipeName = `${R}--${profile}`;
+        const forkedRecipeFile = path.join(forgeDir, "recipes", `${forkedRecipeName}.yaml`);
+        const forkedRecipeRel = `recipes/${forkedRecipeName}.yaml`;
+
+        // D13: check the forked recipe doesn't already exist
+        if (await exists(forkedRecipeFile)) {
+          throw new Error(D13_EXISTS(forkedRecipeRel));
+        }
+        // Check if ignored
+        const ignored = await gitIgnored(forgeDir, forkedRecipeRel);
+        if (ignored) {
+          throw new Error(D13_IGNORED(forkedRecipeRel));
+        }
+
+        // Read the original recipe and create the forked one
+        const recipeOpts: RecipeOptions = {
+          stage,
+          dir: path.join(forgeDir, "recipes"),
+          profile,
+          forge,
+          report: { recipes: [], recipeSplits: [] } as unknown as import("./claude-code.js").ImportReport,
+          currentRules: null,
+        };
+        const origRecFile = await recipeFile(recipeOpts, R, "drift promote");
+        const origRaw = await fs.readFile(origRecFile, "utf8");
+
+        // Edit the forked recipe: change name and swap the ingredient
+        const forkedContent = editYamlText(origRaw, { command: "drift promote", label: forkedRecipeRel, keys: ["name", "ingredients"] }, (doc) => {
+          doc.set("name", forkedRecipeName);
+          const seq = doc.get("ingredients", true);
+          if (!YAML.isSeq(seq)) return;
+          for (const item of seq.items) {
+            if (YAML.isScalar(item) && item.value === refToReplace) {
+              item.value = variantRef;
+            }
+          }
+        });
+        stage.write(forkedRecipeFile, forkedContent);
+
+        // Edit the profile's recipes list to replace R with R--<p>
+        const profileFile = await findProfileFile(forgeDir, profile);
+        if (!profileFile) throw new Error(`profile ${profile} not found`);
+
+        // D14 check: profile file must be held by git
+        const unheld = await gitUnheld(forgeDir, [profileFile]);
+        if (unheld.length > 0) {
+          throw new UnheldError(realForgeDir, unheld);
+        }
+
+        const profileRaw = await fs.readFile(profileFile, "utf8");
+        const profileLabel = `profiles/${profile}/profile.yaml`;
+        const newProfileContent = editYamlText(profileRaw, { command: "drift promote", label: profileLabel, keys: ["recipes"] }, (doc) => {
+          const seq = doc.get("recipes", true);
+          if (!YAML.isSeq(seq)) return;
+          for (const item of seq.items) {
+            if (YAML.isScalar(item) && item.value === R) {
+              item.value = forkedRecipeName;
+            }
+          }
+        });
+        stage.write(profileFile, newProfileContent);
+        editedKeys.set(profileLabel, ["recipes"]);
       } else {
-        // Case 3: reaches through extends or recipes.add
+        // Case 3: D17 — recipe reaches through extends or recipes.add, or case 2 applies but another resolved recipe extends R
+        let chain: string;
         const wsAdds = ws.config.recipes?.add ?? [];
         if (wsAdds.includes(R)) {
           chain = "recipes.add (craftar.yaml)";
+        } else if (extendsChain) {
+          chain = extendsChain;
         } else {
-          const extendsChain = findExtendsChain(forge, R);
-          chain = extendsChain ?? R;
+          chain = R;
         }
+        throw new Error(D17(R, chain));
       }
-      throw new Error(D17(R, chain));
     }
   }
-
-  // D14 early check: recipe files must be held by git before we try to edit them
-  if (recipesToEdit.length > 0) {
-    const unheld = await gitUnheld(forgeDir, recipesToEdit.map((r) => r.recFile));
-    if (unheld.length > 0) {
-      throw new UnheldError(realForgeDir, unheld);
-    }
-  }
-
-  // Second pass: actually edit the recipe files
-  for (const { recipe: R, recFile } of recipesToEdit) {
-    const raw = await fs.readFile(recFile, "utf8");
-    const label = `recipes/${R}.yaml`;
-    const content = editYamlText(raw, { command: "drift promote", label, keys: ["ingredients"] }, (doc) => {
-      const seq = doc.get("ingredients", true);
-      if (!YAML.isSeq(seq)) return;
-      for (const item of seq.items) {
-        if (YAML.isScalar(item) && item.value === ingredientRef) {
-          item.value = variantRef;
-        }
-      }
-    });
-    stage.write(recFile, content);
-    editedKeys.set(`recipes/${R}.yaml`, ["ingredients"]);
-  }
+  // For variant-updated, no recipe changes are needed
 
   // Step 7: Gate (D13, D14)
   const entries = await stage.entries();
@@ -543,16 +653,28 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     }
 
     // 3. Every path not in E and not dependent must be byte-equal
+    // Dependent paths: files of this ingredient on non-claude-code targets
     const dependentPaths = new Set<string>();
     for (const pf of p0.files) {
       if (pf.ingredient === ingredientRef && pf.target !== "claude-code") {
         dependentPaths.add(pf.path);
       }
     }
-    // Also add rule/* files for AGENTS.md (step 30f handles this fully)
+
+    // Also add AGENTS.md if this is a rule that's embedded in it (has a marker line)
+    let agentsMdIsDependent = false;
     if (meta.type === "rule") {
-      const agentsMd = p0.files.find((f) => f.ingredient === ("rule/*" as const));
-      if (agentsMd) dependentPaths.add(agentsMd.path);
+      const agentsMd = p0.files.find((f) => f.ingredient === ("rule/*" as IngredientRef) || f.path === "AGENTS.md");
+      if (agentsMd) {
+        const p0AgentsContent = agentsMd.content.toString("utf8");
+        const markerLine = `<!-- rule: ${N} -->`;
+        if (p0AgentsContent.includes(markerLine)) {
+          // This rule is embedded in AGENTS.md — it's a dependent path with bound
+          dependentPaths.add(agentsMd.path);
+          agentsMdIsDependent = true;
+        }
+        // If no marker, AGENTS.md just points at the file; it should be byte-equal
+      }
     }
 
     let otherFilesUnchanged = 0;
@@ -566,10 +688,26 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       otherFilesUnchanged++;
     }
 
-    // 4. X.ref should not be in p1's resolution
-    const p1Refs = new Set(p1.resolution.ingredients.map((i) => i.ref));
-    if (p1Refs.has(ingredientRef)) {
-      throw new Error(D15(`${ingredientRef} would still resolve beside ${variantRef}`));
+    // Check AGENTS.md bound (§4.6 item 4)
+    if (agentsMdIsDependent) {
+      const p0AgentsMd = p0.files.find((f) => f.path === "AGENTS.md");
+      const p1AgentsMd = p1.files.find((f) => f.path === "AGENTS.md");
+      if (p0AgentsMd && p1AgentsMd) {
+        const p0Text = p0AgentsMd.content.toString("utf8");
+        const p1Text = p1AgentsMd.content.toString("utf8");
+        if (!agentsBound(p0Text, p1Text, N)) {
+          throw new Error(D15(`AGENTS.md would change outside rule ${N}`));
+        }
+      }
+    }
+
+    // 4. X.ref should not be in p1's resolution (only for new variants, not variant-updated)
+    // For variant-updated, ingredientRef === variantRef, so it SHOULD still be there
+    if (outcome === "variant") {
+      const p1Refs = new Set(p1.resolution.ingredients.map((i) => i.ref));
+      if (p1Refs.has(ingredientRef)) {
+        throw new Error(D15(`${ingredientRef} would still resolve beside ${variantRef}`));
+      }
     }
 
     // Compute next sync statuses (return FileStatus[] for CLI to use countStates/nextSyncLine)
@@ -643,12 +781,85 @@ function emittedMetaFields(emitted: Ingredient, type: string): Partial<Ingredien
   return {};
 }
 
-function findExtendsChain(forge: Forge, targetRecipe: string): string | null {
-  // Find a recipe that extends the target
-  for (const [name, r] of forge.recipes) {
-    if (r.extends?.includes(targetRecipe)) {
-      return `${targetRecipe} → ${name}`;
+/**
+ * Find the extends chain from a resolved recipe to the target recipe.
+ * Returns the chain like "target → child" if found, null otherwise.
+ */
+function findExtendsChain(forge: Forge, resolvedRecipes: string[], targetRecipe: string): string | null {
+  // Look for a resolved recipe that extends the target
+  for (const name of resolvedRecipes) {
+    const r = forge.recipes.get(name);
+    if (r?.extends?.includes(targetRecipe)) {
+      return `${name} → ${targetRecipe}`;
     }
   }
   return null;
+}
+
+/**
+ * Check if any other resolved recipe extends the given recipe.
+ */
+function isExtendedByOtherResolved(forge: Forge, resolvedRecipes: string[], R: string): boolean {
+  for (const name of resolvedRecipes) {
+    if (name === R) continue;
+    const r = forge.recipes.get(name);
+    if (r?.extends?.includes(R)) return true;
+  }
+  return false;
+}
+
+/**
+ * Check if AGENTS.md changes are within the bound for rule N (spec 30 §4.6 item 4).
+ * Returns true if the change is acceptable, false if it would be D15.
+ */
+export function agentsBound(p0Text: string, p1Text: string, N: string): boolean {
+  const markerRe = /^<!-- rule: (.+) -->$/;
+
+  // If p0 has no marker for N, p1 must be byte-equal
+  const markerLine = `<!-- rule: ${N} -->`;
+  if (!p0Text.includes(markerLine)) {
+    return p0Text === p1Text;
+  }
+
+  // Find the boundaries in p0
+  const p0Lines = p0Text.split("\n");
+  const p1Lines = p1Text.split("\n");
+
+  // Find the marker line for N in p0
+  let markerIdx = -1;
+  for (let i = 0; i < p0Lines.length; i++) {
+    if (p0Lines[i] === markerLine) {
+      markerIdx = i;
+      break;
+    }
+  }
+  if (markerIdx === -1) return p0Text === p1Text;
+
+  // Find the next boundary in p0: next <!-- rule: ... --> or ## Scoped rules, or end
+  let boundaryIdx = p0Lines.length;
+  for (let i = markerIdx + 1; i < p0Lines.length; i++) {
+    if (markerRe.test(p0Lines[i]) || p0Lines[i] === "## Scoped rules") {
+      boundaryIdx = i;
+      break;
+    }
+  }
+
+  // p1 must equal p0 up to and including the marker line
+  const prefixEnd = markerIdx + 1;
+  for (let i = 0; i < prefixEnd; i++) {
+    if (p0Lines[i] !== p1Lines[i]) return false;
+  }
+
+  // p1 must equal p0 from the boundary to the end
+  const p0Suffix = p0Lines.slice(boundaryIdx).join("\n");
+  const p1Suffix = p1Lines.slice(p1Lines.length - (p0Lines.length - boundaryIdx)).join("\n");
+
+  // For the suffix comparison, we need to find where it starts in p1
+  // The suffix in p1 starts at the same distance from the end as in p0
+  const suffixLen = p0Lines.length - boundaryIdx;
+  if (p1Lines.length < suffixLen) return false;
+  const p1SuffixStart = p1Lines.length - suffixLen;
+  const p1SuffixLines = p1Lines.slice(p1SuffixStart);
+
+  return p0Suffix === p1SuffixLines.join("\n");
 }

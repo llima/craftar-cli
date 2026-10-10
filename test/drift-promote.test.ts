@@ -578,7 +578,6 @@ describe("cli — drift promote", () => {
     expect(registryAfter.equals(registryBefore)).toBe(true);
     expect((await f.lockBytes()).equals(lockBefore)).toBe(true);
   });
-});
 
   it("19. D5 (kiro with hint) — kiro file with claude-code path available", async () => {
     // Profile targets claude-code and kiro, drift on .kiro/steering/a.md
@@ -686,3 +685,576 @@ describe("cli — drift promote", () => {
     expect(porcelain(s.forgeRoot)).toBe("");
     expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
   });
+});
+
+// Step 30f: recipe placement, existing variant, three targets
+
+/** Two profiles sharing `base`. */
+async function M() {
+  const s = await scenario(
+    {
+      ingredients: [rule("a", "A one\nA two\n"), rule("b", "B one\nB two\n"), rule("c", "C one\n")],
+      recipes: [recipe("base", ["rule/a", "rule/b", "rule/c"])],
+      profiles: [profile("acme", ["base"]), profile("globex", ["base"])],
+    },
+    { config: { profile: "acme" } },
+  );
+  cleanups.push(s.cleanup);
+  return {
+    ...s,
+    ws: s.wsRoot,
+    read: (rel: string) => fs.readFile(path.join(s.wsRoot, rel), "utf8"),
+    forgeRead: (rel: string) => fs.readFile(path.join(s.forgeRoot, rel), "utf8"),
+    lockBytes: () => fs.readFile(path.join(s.wsRoot, "craftar.lock")),
+    driftA: () => fs.appendFile(path.join(s.wsRoot, A), "hand a\n"),
+  };
+}
+
+/** Three targets profile. */
+async function T() {
+  const s = await scenario(
+    {
+      ingredients: [rule("a", "A one\nA two\n"), rule("b", "B one\nB two\n"), rule("c", "C one\n")],
+      recipes: [recipe("base", ["rule/a", "rule/b", "rule/c"])],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"])],
+    },
+    { config: { profile: "acme" } },
+  );
+  cleanups.push(s.cleanup);
+  return {
+    ...s,
+    ws: s.wsRoot,
+    read: (rel: string) => fs.readFile(path.join(s.wsRoot, rel), "utf8"),
+    forgeRead: (rel: string) => fs.readFile(path.join(s.forgeRoot, rel), "utf8"),
+    lockBytes: () => fs.readFile(path.join(s.wsRoot, "craftar.lock")),
+    driftA: () => fs.appendFile(path.join(s.wsRoot, A), "hand a\n"),
+    driftB: () => fs.appendFile(path.join(s.wsRoot, B), "hand b\n"),
+    driftC: () => fs.appendFile(path.join(s.wsRoot, C), "hand c\n"),
+  };
+}
+
+describe("cli — drift promote (step 30f)", () => {
+  it("23. case 2 — recipe forked for this profile, profile edited", async () => {
+    const f = await M();
+    gitInit(f.forgeRoot);
+    // Sync acme workspace
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    // Create and sync a globex workspace so status can confirm it's unchanged
+    const ws2 = path.join(f.root, "ws2");
+    await makeWorkspace(ws2, f.forgeRoot, { config: { profile: "globex" } });
+    expect(runCli(["sync", "--workspace", ws2]).code).toBe(0);
+    const baseYamlBefore = await f.forgeRead("recipes/base.yaml");
+    const globexProfileBefore = await f.forgeRead("profiles/globex/profile.yaml");
+
+    await f.driftA();
+    const lockBefore = await f.lockBytes();
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      `promote ${A} → rule/a--acme (variant, profile acme)\n` +
+        "  wrote  ingredients/rules/a--acme/ingredient.yaml\n" +
+        "  wrote  ingredients/rules/a--acme/rule.md\n" +
+        "  wrote  recipes/base--acme.yaml\n" +
+        "  edited profiles/acme/profile.yaml (recipes)\n" +
+        "  proved: this workspace plans the file on disk; 2 other file(s) unchanged\n" +
+        "  next sync: nothing to sync\n" +
+        "  no other registered workspace reads this Forge\n" +
+        "  the Forge is not committed — review with git, then commit and push it\n",
+    );
+
+    // The forked recipe has the correct content
+    expect(YAML.parse(await f.forgeRead("recipes/base--acme.yaml"))).toEqual({ name: "base--acme", ingredients: ["rule/a--acme", "rule/b", "rule/c"] });
+
+    // The original base recipe is untouched
+    expect(await f.forgeRead("recipes/base.yaml")).toBe(baseYamlBefore);
+
+    // Profile acme now uses base--acme
+    expect(YAML.parse(await f.forgeRead("profiles/acme/profile.yaml")).recipes).toEqual(["base--acme"]);
+
+    // Profile globex is untouched
+    expect(await f.forgeRead("profiles/globex/profile.yaml")).toBe(globexProfileBefore);
+
+    // A workspace of globex reads status all unchanged
+    const st2 = runCli(["status", "--workspace", ws2]);
+    expect(st2.code).toBe(0);
+    expect(st2.stdout).toBe(
+      "craftar status — profile globex · recipes base\n" +
+        "  unchanged 3\n" +
+        `  unchanged     ${A}\n` +
+        `  unchanged     ${B}\n` +
+        `  unchanged     ${C}\n`,
+    );
+  });
+
+  it("24. case 2 keeps the slot", async () => {
+    // Profile acme with recipes: ["pre", "base", "post"]
+    const s = await scenario(
+      {
+        ingredients: [
+          rule("a", "A one\n"),
+          rule("b", "B one\n"),
+          rule("c", "C one\n"),
+          rule("p", "P rule\n"),
+          rule("q", "Q rule\n"),
+        ],
+        recipes: [
+          recipe("pre", ["rule/p"]),
+          recipe("base", ["rule/a", "rule/b", "rule/c"]),
+          recipe("post", ["rule/q"]),
+        ],
+        profiles: [
+          profile("acme", ["pre", "base", "post"]),
+          profile("globex", ["pre", "base", "post"]),
+        ],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.appendFile(path.join(s.wsRoot, A), "hand a\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+
+    // Profile's recipes keep the slot order
+    expect(YAML.parse(await fs.readFile(path.join(s.forgeRoot, "profiles/acme/profile.yaml"), "utf8")).recipes).toEqual(["pre", "base--acme", "post"]);
+  });
+
+  it("25. D13 for the recipe file", async () => {
+    const f = await M();
+    // Create recipes/base--acme.yaml before gitInit (a recipe nobody uses)
+    await fs.writeFile(path.join(f.forgeRoot, "recipes/base--acme.yaml"), YAML.stringify({ name: "base--acme", ingredients: [] }));
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await f.driftA();
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: recipes/base--acme.yaml already exists in the Forge — promote does not overwrite it\n");
+  });
+
+  it("26. D17 — extends chain", async () => {
+    // Recipe `top` extends `base`; both profiles use `["top"]`
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A one\n")],
+        recipes: [
+          recipe("base", ["rule/a"]),
+          { name: "top", extends: ["base"], ingredients: [] },
+        ],
+        profiles: [
+          profile("acme", ["top"]),
+          profile("globex", ["top"]),
+        ],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.appendFile(path.join(s.wsRoot, A), "hand a\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: recipe base reaches this workspace through top → base — promote does not fork a recipe chain; re-import the workspace or edit the recipes by hand\n");
+    expect(porcelain(s.forgeRoot)).toBe("");
+  });
+
+  it("27. D17 — recipes.add", async () => {
+    // Recipe `extra` in no profile; ws craftar.yaml has recipes: { add: ["extra"] }
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A\n"), rule("c", "C\n")],
+        recipes: [
+          recipe("base", ["rule/a"]),
+          recipe("extra", ["rule/c"]),
+        ],
+        profiles: [
+          profile("acme", ["base"]),
+          profile("globex", ["base"]),
+        ],
+      },
+      { config: { profile: "acme", recipes: { add: ["extra"] } } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.appendFile(path.join(s.wsRoot, C), "hand c\n");
+
+    const r = runCli(["drift", "promote", C, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: recipe extra reaches this workspace through recipes.add (craftar.yaml) — promote does not fork a recipe chain; re-import the workspace or edit the recipes by hand\n");
+    expect(porcelain(s.forgeRoot)).toBe("");
+  });
+
+  it("28. D17 — listed and extended", async () => {
+    // acme and globex both ["base", "top"] with top extending base
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A one\n")],
+        recipes: [
+          recipe("base", ["rule/a"]),
+          { name: "top", extends: ["base"], ingredients: [] },
+        ],
+        profiles: [
+          profile("acme", ["base", "top"]),
+          profile("globex", ["base", "top"]),
+        ],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.appendFile(path.join(s.wsRoot, A), "hand a\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: recipe base reaches this workspace through top → base — promote does not fork a recipe chain; re-import the workspace or edit the recipes by hand\n");
+    expect(porcelain(s.forgeRoot)).toBe("");
+  });
+
+  it("29. variant-updated", async () => {
+    // Run test 1's promote, commit the Forge, sync, append again
+    const f = await F();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await f.driftA();
+    expect(runCli(["drift", "promote", A, "--workspace", f.ws]).code).toBe(0);
+    gitCommit(f.forgeRoot, "first promote");
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await fs.appendFile(path.join(f.ws, A), "hand again\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      `promote ${A} → rule/a--acme (variant-updated, profile acme)\n` +
+        "  edited ingredients/rules/a--acme/rule.md\n" +
+        "  proved: this workspace plans the file on disk; 2 other file(s) unchanged\n" +
+        "  next sync: nothing to sync\n" +
+        "  no other registered workspace reads this Forge\n" +
+        "  the Forge is not committed — review with git, then commit and push it\n",
+    );
+
+    // The variant rule.md is updated
+    expect(await f.forgeRead("ingredients/rules/a--acme/rule.md")).toBe("A one\nA two\nhand a\nhand again\n");
+
+    // No a--acme--acme directory
+    await expect(fs.stat(path.join(f.forgeRoot, "ingredients/rules/a--acme--acme"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    // Git porcelain shows exactly the rule.md modified
+    expect(porcelain(f.forgeRoot)).toBe(" M ingredients/rules/a--acme/rule.md\n");
+  });
+
+  it("30. D10 — another profile resolves the variant", async () => {
+    // Forge where globex's recipe lists rule/a--acme (built by hand, committed) and acme resolves it too
+    const s = await scenario(
+      {
+        ingredients: [
+          rule("a", "A one\n"),
+          { meta: { type: "rule", name: "a--acme", as: "a", inclusion: "always", file: "rule.md", targets: "*", tags: [] }, files: { "rule.md": "variant\n" } },
+        ],
+        recipes: [
+          recipe("base", ["rule/a--acme"]), // both use the variant directly
+        ],
+        profiles: [
+          profile("acme", ["base"]),
+          profile("globex", ["base"]),
+        ],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.appendFile(path.join(s.wsRoot, A), "hand a\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: rule/a--acme is also used by profile globex — its files would change there\n");
+    expect(porcelain(s.forgeRoot)).toBe("");
+  });
+
+  it("31. another profile's variant → new variant for this profile", async () => {
+    // Forge with rule/a, a hand-built rule/a--globex (as: a), recipe shared → ["rule/a--globex"] used by BOTH
+    const s = await scenario(
+      {
+        ingredients: [
+          rule("a", "A base\n"),
+          { meta: { type: "rule", name: "a--globex", as: "a", inclusion: "always", file: "rule.md", targets: "*", tags: [] }, files: { "rule.md": "G one\n" } },
+        ],
+        recipes: [
+          recipe("shared", ["rule/a--globex"]),
+        ],
+        profiles: [
+          profile("acme", ["shared"]),
+          profile("globex", ["shared"]),
+        ],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.appendFile(path.join(s.wsRoot, A), "hand acme\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+
+    // A new variant a--acme was created
+    const variantMeta = YAML.parse(await fs.readFile(path.join(s.forgeRoot, "ingredients/rules/a--acme/ingredient.yaml"), "utf8"));
+    expect(variantMeta.name).toBe("a--acme");
+    expect(variantMeta.as).toBe("a");
+
+    // The forked recipe shared--acme references the new variant
+    expect(YAML.parse(await fs.readFile(path.join(s.forgeRoot, "recipes/shared--acme.yaml"), "utf8")).ingredients).toEqual(["rule/a--acme"]);
+
+    // The old variant is byte-equal
+    expect(await fs.readFile(path.join(s.forgeRoot, "ingredients/rules/a--globex/rule.md"), "utf8")).toBe("G one\n");
+
+    // No a--globex--acme directory
+    await expect(fs.stat(path.join(s.forgeRoot, "ingredients/rules/a--globex--acme"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("32. a base whose `as` differs from its name", async () => {
+    // Rule ingredient { type: "rule", name: "a-src", as: "a" }
+    const s = await scenario(
+      {
+        ingredients: [
+          { meta: { type: "rule", name: "a-src", as: "a", inclusion: "always", file: "rule.md", targets: "*", tags: [] }, files: { "rule.md": "A base\n" } },
+        ],
+        recipes: [
+          recipe("base", ["rule/a-src"]),
+        ],
+        profiles: [
+          profile("acme", ["base"]),
+          profile("globex", ["base"]),
+        ],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.appendFile(path.join(s.wsRoot, A), "hand a\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+
+    // The variant is rule/a--acme (as: "a"), NOT a-src--acme
+    const variantMeta = YAML.parse(await fs.readFile(path.join(s.forgeRoot, "ingredients/rules/a--acme/ingredient.yaml"), "utf8"));
+    expect(variantMeta.name).toBe("a--acme");
+    expect(variantMeta.as).toBe("a");
+  });
+});
+
+// Step 30f: three targets tests
+describe("cli — drift promote (three targets)", () => {
+  it("33. dependents", async () => {
+    const f = await T();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+
+    // Print the synced AGENTS.md and .kiro/steering/a.md for result.txt
+    const agentsMd = await f.read("AGENTS.md");
+    const kiroA = await f.read(".kiro/steering/a.md");
+    console.log("--- AGENTS.md (synced) ---");
+    console.log(agentsMd);
+    console.log("--- .kiro/steering/a.md (synced) ---");
+    console.log(kiroA);
+
+    await f.driftA();
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    // Check it has the dependent paths and the next sync line
+    expect(r.stdout).toContain("  also changes .kiro/steering/a.md, AGENTS.md\n");
+    expect(r.stdout).toContain("  next sync: 2 update — run `craftar sync`\n");
+
+    // Commit nothing, sync
+    const s = runCli(["sync", "--workspace", f.ws]);
+    expect(s.code).toBe(0);
+
+    // Both contain "hand a" exactly once
+    const newKiroA = await f.read(".kiro/steering/a.md");
+    const newAgentsMd = await f.read("AGENTS.md");
+    expect(newKiroA.split("\n").filter((l: string) => l.replace("\r", "") === "hand a").length).toBe(1);
+    expect(newAgentsMd.split("\n").filter((l: string) => l.replace("\r", "") === "hand a").length).toBe(1);
+
+    // AGENTS.md before vs after differs ONLY by that one inserted line
+    const withoutHandA = newAgentsMd.replace("hand a\n", "");
+    expect(withoutHandA).toBe(agentsMd);
+  });
+
+  it("34. the last always-on rule, with a scoped rule after it", async () => {
+    // F's rule c made scoped
+    const s = await scenario(
+      {
+        ingredients: [
+          rule("a", "A one\nA two\n"),
+          rule("b", "B one\nB two\n"),
+          { meta: { type: "rule", name: "c", inclusion: "fileMatch", fileMatchPattern: "src/**", file: "rule.md", targets: "*", tags: [] }, files: { "rule.md": "C one\n" } },
+        ],
+        recipes: [recipe("base", ["rule/a", "rule/b", "rule/c"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Get the ## Scoped rules section of AGENTS.md
+    const agentsMdBefore = await fs.readFile(path.join(s.wsRoot, "AGENTS.md"), "utf8");
+    const scopedIdx = agentsMdBefore.indexOf("## Scoped rules");
+    const scopedTail = scopedIdx >= 0 ? agentsMdBefore.slice(scopedIdx) : "";
+
+    // Drift on b (the last always-on rule)
+    await fs.appendFile(path.join(s.wsRoot, B), "hand b\n");
+
+    const r = runCli(["drift", "promote", B, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+
+    // After sync, the ## Scoped rules tail is unchanged
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    const agentsMdAfter = await fs.readFile(path.join(s.wsRoot, "AGENTS.md"), "utf8");
+    const scopedIdxAfter = agentsMdAfter.indexOf("## Scoped rules");
+    const scopedTailAfter = scopedIdxAfter >= 0 ? agentsMdAfter.slice(scopedIdxAfter) : "";
+    expect(scopedTailAfter).toBe(scopedTail);
+  });
+
+  it("35. a scoped rule the file only points at", async () => {
+    // Drift on c in the scoped Forge from test 34
+    const s = await scenario(
+      {
+        ingredients: [
+          rule("a", "A one\n"),
+          { meta: { type: "rule", name: "c", inclusion: "fileMatch", fileMatchPattern: "src/**", file: "rule.md", targets: "*", tags: [] }, files: { "rule.md": "C one\n" } },
+        ],
+        recipes: [recipe("base", ["rule/a", "rule/c"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Get AGENTS.md bytes before
+    const agentsMdBefore = await fs.readFile(path.join(s.wsRoot, "AGENTS.md"));
+
+    // Drift on c
+    await fs.appendFile(path.join(s.wsRoot, C), "hand c\n");
+
+    const r = runCli(["drift", "promote", C, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+
+    // stdout's also changes line is exactly .kiro/steering/c.md (no AGENTS.md)
+    expect(r.stdout).toContain("  also changes .kiro/steering/c.md\n");
+    expect(r.stdout).not.toContain("AGENTS.md");
+
+    // After sync, AGENTS.md is byte-equal
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    const agentsMdAfter = await fs.readFile(path.join(s.wsRoot, "AGENTS.md"));
+    expect(agentsMdAfter.equals(agentsMdBefore)).toBe(true);
+  });
+
+  it("36. D5 — promote .kiro/steering/a.md", async () => {
+    const f = await T();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+
+    // Drift the kiro file
+    await fs.appendFile(path.join(f.ws, ".kiro/steering/a.md"), "hand kiro\n");
+
+    const r = runCli(["drift", "promote", ".kiro/steering/a.md", "--workspace", f.ws]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(`error: .kiro/steering/a.md is a kiro file — promote reads only what the claude-code target wrote; edit and promote \`.claude/rules/a.md\` instead\n`);
+  });
+
+  it("37. D5 — promote AGENTS.md", async () => {
+    const f = await T();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+
+    // Drift AGENTS.md
+    await fs.appendFile(path.join(f.ws, "AGENTS.md"), "hand agents\n");
+
+    const r = runCli(["drift", "promote", "AGENTS.md", "--workspace", f.ws]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: AGENTS.md holds several rules in one file — promote reads only what the claude-code target wrote\n");
+  });
+
+  it("38. D6 — .mcp.json", async () => {
+    const s = await scenario(
+      {
+        ingredients: [
+          rule("a", "A\n"),
+          { meta: { type: "mcp", name: "srv", server: { command: "npx", args: ["srv"] } } },
+        ],
+        recipes: [recipe("base", ["rule/a", "mcp/srv"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Hand-edit .mcp.json
+    const mcpPath = path.join(s.wsRoot, ".mcp.json");
+    const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
+    mcpContent.mcpServers.srv.args = ["srv-edited"];
+    await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2));
+
+    const r = runCli(["drift", "promote", ".mcp.json", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: .mcp.json holds every mcp ingredient in one file — edit the mcp ingredient in the Forge\n");
+  });
+});
+
+// Step 30f: agentsBound unit tests
+describe("agentsBound (unit)", () => {
+  it("39. D16 bound function", async () => {
+    const { agentsBound } = await import("../src/importers/drift-promote.js");
+
+    const p0 = "H\n<!-- rule: a -->\nA\n\n<!-- rule: b -->\nB\n\n## Scoped rules\n- x\n";
+
+    // p1 same with A → A\nhand → true
+    expect(agentsBound(p0, p0.replace("A\n\n", "A\nhand\n\n"), "a")).toBe(true);
+
+    // p1 with B changed while N = "a" → false
+    expect(agentsBound(p0, p0.replace("B\n\n", "Bchanged\n\n"), "a")).toBe(false);
+
+    // p1 with the two rule blocks swapped → false
+    const swapped = "H\n<!-- rule: b -->\nB\n\n<!-- rule: a -->\nA\n\n## Scoped rules\n- x\n";
+    expect(agentsBound(p0, swapped, "a")).toBe(false);
+
+    // N = "b", p1 with B → B\nhand → true
+    expect(agentsBound(p0, p0.replace("B\n\n", "B\nhand\n\n"), "b")).toBe(true);
+
+    // N = "b", p1 with - x → - y → false
+    expect(agentsBound(p0, p0.replace("- x", "- y"), "b")).toBe(false);
+
+    // N = "c" (no marker), p1 === p0 → true
+    expect(agentsBound(p0, p0, "c")).toBe(true);
+
+    // N = "c" (no marker), p1 different anywhere → false
+    expect(agentsBound(p0, p0 + "extra", "c")).toBe(false);
+  });
+});

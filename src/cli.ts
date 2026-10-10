@@ -543,12 +543,17 @@ drift
     }
 
     // Print the report
-    const verb = o.dryRun ? "would write" : "wrote ";
+    const writeVerb = o.dryRun ? "would write" : "wrote ";
     const editVerb = o.dryRun ? "would edit" : "edited";
     console.log(`promote ${promotePlan.inputPath} → ${promotePlan.promoted} (${promotePlan.outcome}, profile ${promotePlan.profile})`);
+    // Skip entries that are also in editedKeys (they'll be printed with keys below)
+    const editedKeyFiles = new Set(promotePlan.editedKeys.keys());
     for (const e of promotePlan.entries) {
+      if (editedKeyFiles.has(e.rel)) continue;
       if (e.created) {
-        console.log(`  ${verb} ${e.rel}`);
+        console.log(`  ${writeVerb} ${e.rel}`);
+      } else {
+        console.log(`  ${editVerb} ${e.rel}`);
       }
     }
     for (const w of promotePlan.warnings) {
@@ -559,6 +564,9 @@ drift
     }
     const otherCount = promotePlan.otherFilesUnchanged;
     console.log(`  proved: this workspace plans the file on disk; ${otherCount} other file(s) unchanged`);
+    if (promotePlan.dependents.length > 0) {
+      console.log(`  also changes ${promotePlan.dependents.join(", ")}`);
+    }
     console.log(`  ${nextSyncLine(promotePlan.nextSync)}`);
     if (promotePlan.impact.workspaces.length === 0) {
       console.log("  no other registered workspace reads this Forge");
