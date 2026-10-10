@@ -2796,4 +2796,94 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     // Forge was written to
     expect(porcelain(f.forgeRoot)).not.toBe("");
   });
+
+  // === Commit 4: agent with edited frontmatter ===
+
+  it("66. an agent with edited frontmatter travels as a variant", async () => {
+    // Spec §9 item 9: agent ingredient with frontmatter, edit description + body, promote
+    const agentPath = ".claude/agents/helper.md";
+    const s = await scenario(
+      {
+        ingredients: [
+          {
+            meta: {
+              type: "agent",
+              name: "helper",
+              description: "Original description",
+              tools: ["Read", "Grep"],
+              model: "sonnet",
+              frontmatterRaw: "name: helper\ndescription: Original description\ntools: Read, Grep\nmodel: sonnet",
+            },
+            files: { "agent.md": "\nOriginal body\n" },
+          },
+        ],
+        recipes: [recipe("base", ["agent/helper"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Verify the synced file has the frontmatter
+    const synced = await fs.readFile(path.join(s.wsRoot, agentPath), "utf8");
+    expect(synced).toContain("name: helper");
+    expect(synced).toContain("Original description");
+    expect(synced).toContain("Original body");
+
+    // Edit the description in the frontmatter AND the body line
+    const edited = `---
+name: helper
+description: Edited description
+tools: Read, Grep
+model: sonnet
+---
+
+Edited body
+`;
+    await fs.writeFile(path.join(s.wsRoot, agentPath), edited);
+    const lockBefore = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
+
+    const r = runCli(["drift", "promote", agentPath, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    // Check stdout contains the expected output
+    expect(r.stdout).toContain(`promote ${agentPath} → agent/helper--acme (variant, profile acme)`);
+    expect(r.stdout).toContain("wrote  ingredients/agents/helper--acme/ingredient.yaml");
+    expect(r.stdout).toContain("wrote  ingredients/agents/helper--acme/agent.md");
+    expect(r.stdout).toContain("proved: this workspace plans the file on disk");
+
+    // Check the variant's ingredient.yaml
+    const variantMeta = YAML.parse(
+      await fs.readFile(path.join(s.forgeRoot, "ingredients/agents/helper--acme/ingredient.yaml"), "utf8"),
+    );
+    expect(variantMeta).toEqual({
+      type: "agent",
+      name: "helper--acme",
+      file: "agent.md",
+      description: "Edited description",
+      tools: ["Read", "Grep"],
+      model: "sonnet",
+      frontmatterRaw: "name: helper\ndescription: Edited description\ntools: Read, Grep\nmodel: sonnet",
+      as: "helper",
+      targets: "*",
+      tags: [],
+      origin: {
+        workspace: "ws",
+        path: agentPath,
+      },
+    });
+
+    // Check the variant's body file
+    const variantBody = await fs.readFile(path.join(s.forgeRoot, "ingredients/agents/helper--acme/agent.md"), "utf8");
+    expect(variantBody).toBe("\nEdited body\n");
+
+    // Check that craftar status says unchanged for the agent file (the proof's claim)
+    const statusR = runCli(["status", "--workspace", s.wsRoot, "--json"]);
+    expect(statusR.code).toBe(0);
+    const statusJ = JSON.parse(statusR.stdout);
+    const agentStatus = statusJ.statuses.find((st: { path: string }) => st.path === agentPath);
+    expect(agentStatus?.state).toBe("unchanged");
+  });
 });
