@@ -20,7 +20,7 @@ import {
   type Forge,
   type UnheldPath,
 } from "../core/forge.js";
-import { readWorkspaceConfig, plan, status, readLock, type FileStatus } from "../core/sync.js";
+import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type UnsetParam } from "../core/sync.js";
 import { driftList } from "../core/drift.js";
 import { hashNormalized } from "../core/text.js";
 import { fingerprintOf } from "../core/fingerprint.js";
@@ -118,6 +118,8 @@ export interface PromotePlan {
   otherFilesUnchanged: number;
   /** What the next sync would do (statuses for CLI to print through countStates/nextSyncLine). */
   nextSync: FileStatus[];
+  /** Declared parameters the plan after the promote leaves without a value: that next sync is refused (spec 29 §4.1). */
+  nextUnset: UnsetParam[];
   /** Impact on other workspaces. */
   impact: { registry: RegistryState; workspaces: ImpactWorkspaceRow[] };
   /** Warnings to print. */
@@ -756,6 +758,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         dependents: [],
         otherFilesUnchanged,
         nextSync: stScratch,
+        nextUnset: unsetDeclared(p1),
         impact: { registry: impactResult.state, workspaces: impactResult.rows },
         warnings: [...warnings, ...impactResult.warnings],
         stage,
@@ -1153,6 +1156,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       dependents: [...dependentPaths],
       otherFilesUnchanged,
       nextSync: stScratch,
+      nextUnset: unsetDeclared(p1),
       impact: { registry: impactResult.state, workspaces: impactResult.rows },
       warnings: [...warnings, ...impactResult.warnings],
       stage,
