@@ -270,7 +270,7 @@ name: echo
 type: service
 files: [init/setup.sh]        # every other file written next to the fragment
 executable: [init/setup.sh]   # a subset of files, written with mode 0755 (POSIX)
-# binary: [logo.png]          # a subset of files copied as bytes
+# binary: [init/logo.png]     # a subset of files copied as bytes — list it under files too
 # compose: compose.yaml       # the fragment (this is the default)
 params:
   greeting: { default: hello }
@@ -309,7 +309,7 @@ They are generated files like any other: `status`, `diff`, `sync --check` and `-
 - **The project** is `craftar-<slug>-<hash>`: the workspace directory's name, lowercased, every character outside `a-z 0-9 _ -` replaced by `-`, cut at 40, then the first 8 hex digits of the SHA-256 of the workspace's real path. It is computed, never written, so the files under `.craftar/` are the same on every machine and two checkouts are two projects. `services status` prints it. Moving a workspace changes it: stop the old one with `docker compose -p <old name> down`. A name that leaves nothing but dashes gives `craftar--<hash>`.
 - **`${CRAFTAR_WORKSPACE}`** is set by `craftar services` to the workspace's real path, so a fragment can mount a repository of the workspace.
 - **`.env`** at the workspace root is passed to Compose (`--env-file`) by `up`, and by `down` when it reads the stack, when it exists. craftar never reads its values; `craftar doctor`'s `services-env` reads only its key names, and warns for each `${NAME}` a fragment uses with no default (`${NAME}`, `${NAME?…}`, `${NAME:?…}`) that is set neither in the environment nor there. Only the braced form is read. A key is read as `NAME=` at the start of a line. `CRAFTAR_WORKSPACE` is never reported.
-- **Plain Compose** works too, for `logs`, `exec` and the rest: `CRAFTAR_WORKSPACE="$PWD" docker compose -p <project> -f .craftar/compose.yaml [--env-file .env] logs -f`.
+- **Plain Compose** works too, for `logs`, `exec` and the rest: `CRAFTAR_WORKSPACE="$(pwd -P)" docker compose -p <project> -f .craftar/compose.yaml [--env-file .env] logs -f`.
 - **Sections in a fragment.** A section marker is a whole line, so a Forge fragment holding one is not valid YAML until `sync` renders it, and `docker compose config` cannot be run on the Forge copy; `{{param}}` has no such cost.
 - **Older craftar.** A Forge with a service ingredient needs this version in every workspace that reads it, whether or not the workspace uses the service — see *Upgrading*.
 
