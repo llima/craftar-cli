@@ -22,6 +22,7 @@ import { GENERATED_BANNER, kiroReport, type KiroReport } from "./kiro-report.js"
 import { deepMerge } from "../core/merge.js";
 import { outName } from "../emitters/shared.js";
 import { parseYamlText } from "../core/yaml-read.js";
+import { note, type WriteJournal } from "../core/unify.js";
 
 export interface ImportOptions {
   workspaceRoot: string;
@@ -183,22 +184,13 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   for (const f of await safeList(path.join(claudeDir, "rules"))) {
     if (!f.endsWith(".md")) continue;
     const name = f.replace(/\.md$/, "");
-    const src = await readSource(path.join(claudeDir, "rules", f));
-    const text = toLf(stripBom(src.text));
     const sm = steeringMeta.get(name);
-    const meta: Ingredient = {
-      type: "rule",
-      name,
-      inclusion: (sm?.inclusion as any) ?? "always",
-      fileMatchPattern: sm?.fileMatchPattern,
-      file: "rule.md",
-      targets: "*",
-      tags: [],
-      origin: origin(`.claude/rules/${f}`),
-    };
-    read(meta, { "rule.md": text }, scanOf("rule.md", src), (ref) => {
+    const emitted = await readEmitted(claudeDir, "rule", f, origin, sm ? { inclusion: sm.inclusion, fileMatchPattern: sm.fileMatchPattern } : undefined);
+    if (!emitted) continue;
+    const ruleMeta = emitted.meta as Ingredient & { inclusion: string };
+    read(emitted.meta, emitted.files, emitted.scan, (ref) => {
       ruleNames.push(ref.split("/")[1]);
-      if (meta.inclusion === "fileMatch") scopedRules.set(ref, sm?.fileMatchPattern ?? "");
+      if (ruleMeta.inclusion === "fileMatch") scopedRules.set(ref, sm?.fileMatchPattern ?? "");
       else refs.base.push(ref);
     });
   }
@@ -207,24 +199,11 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const agentBodies = new Map<string, string>();
   for (const f of await safeList(path.join(claudeDir, "agents"))) {
     if (!f.endsWith(".md")) continue;
-    const src = await readSource(path.join(claudeDir, "agents", f));
-    const text = src.text;
-    const { data, body, raw } = parseFrontmatter<Record<string, string>>(text, { loose: true });
-    const name = (data.name || f.replace(/\.md$/, "")).trim();
-    const meta: Ingredient = {
-      type: "agent",
-      name,
-      description: data.description?.trim(),
-      tools: splitList(data.tools),
-      model: data.model?.trim() || undefined,
-      file: "agent.md",
-      frontmatterRaw: raw ?? undefined,
-      targets: "*",
-      tags: [],
-      origin: origin(`.claude/agents/${f}`),
-    };
-    read(meta, { "agent.md": body }, scanOf("agent.md", src), (ref) => {
-      agentBodies.set(ref, (data.description ?? "") + "\n" + body);
+    const emitted = await readEmitted(claudeDir, "agent", f, origin);
+    if (!emitted) continue;
+    const agentMeta = emitted.meta as Ingredient & { description?: string };
+    read(emitted.meta, emitted.files, emitted.scan, (ref) => {
+      agentBodies.set(ref, (agentMeta.description ?? "") + "\n" + (emitted.files["agent.md"] as string));
       refs.base.push(ref);
     });
   }
@@ -232,22 +211,9 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- commands ---- */
   for (const f of await safeList(path.join(claudeDir, "commands"))) {
     if (!f.endsWith(".md")) continue;
-    const src = await readSource(path.join(claudeDir, "commands", f));
-    const text = src.text;
-    const { data, body, raw } = parseFrontmatter<Record<string, string>>(text, { loose: true });
-    const meta: Ingredient = {
-      type: "command",
-      name: f.replace(/\.md$/, ""),
-      description: data.description?.trim(),
-      argumentHint: data["argument-hint"]?.trim() || undefined,
-      allowedTools: data["allowed-tools"]?.trim() || undefined,
-      file: "command.md",
-      frontmatterRaw: raw ?? undefined,
-      targets: "*",
-      tags: [],
-      origin: origin(`.claude/commands/${f}`),
-    };
-    read(meta, { "command.md": body }, scanOf("command.md", src), (ref) => addRef(refs.base, ref));
+    const emitted = await readEmitted(claudeDir, "command", f, origin);
+    if (!emitted) continue;
+    read(emitted.meta, emitted.files, emitted.scan, (ref) => addRef(refs.base, ref));
   }
 
   /* ---- skills ---- */
@@ -256,29 +222,12 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     // Sorted, so the decision order — and which of two sources is "the later one" — is reproducible (spec 10 §14 Q6).
     for (const e of (await fs.readdir(skillsDir, { withFileTypes: true })).sort((x, y) => x.name.localeCompare(y.name))) {
       if (e.name === ".gitkeep") continue;
-      if (e.isDirectory()) {
-        const files: Record<string, string | Buffer> = {};
-        const scan: Record<string, string> = {};
-        for (const rel of await listFiles(path.join(skillsDir, e.name))) {
-          const abs = path.join(skillsDir, e.name, rel);
-          if (/\.(md|txt|json|ya?ml|ps1|py|sh|js|ts)$/i.test(rel)) {
-            const src = await readSource(abs);
-            files[rel] = toLf(stripBom(src.text));
-            Object.assign(scan, scanOf(rel, src));
-          } else files[rel] = await fs.readFile(abs);
-        }
-        if (!files["SKILL.md"]) {
-          report.warnings.push(`skill dir ${e.name} has no SKILL.md; skipped`);
-          continue;
-        }
-        const meta: Ingredient = { type: "skill", name: e.name, layout: "dir", targets: "*", tags: [], origin: origin(`.claude/skills/${e.name}/`) };
-        read(meta, files, scan, (ref) => addRef(refs.base, ref));
-      } else if (e.name.endsWith(".md")) {
-        const src = await readSource(path.join(skillsDir, e.name));
-        const text = toLf(stripBom(src.text));
-        const meta: Ingredient = { type: "skill", name: e.name.replace(/\.md$/, ""), layout: "file", targets: "*", tags: [], origin: origin(`.claude/skills/${e.name}`) };
-        read(meta, { "SKILL.md": text }, scanOf("SKILL.md", src), (ref) => addRef(refs.base, ref));
+      const emitted = await readEmitted(claudeDir, "skill", e.name, origin);
+      if (!emitted) {
+        if (e.isDirectory()) report.warnings.push(`skill dir ${e.name} has no SKILL.md; skipped`);
+        continue;
       }
+      read(emitted.meta, emitted.files, emitted.scan, (ref) => addRef(refs.base, ref));
     }
   }
 
@@ -286,19 +235,9 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   for (const kind of ["scripts", "hooks"] as const) {
     for (const f of await safeList(path.join(claudeDir, kind))) {
       if (f === ".gitkeep" || f.startsWith("__pycache__") || f.endsWith(".pyc")) continue;
-      const abs = path.join(claudeDir, kind, f);
-      if (!(await fs.stat(abs)).isFile()) continue;
-      const src = /\.(ps1|py|sh|js|ts|cjs|mjs|json|md|txt|ya?ml)$/i.test(f) ? await readSource(abs) : null;
-      const content = src ? toLf(stripBom(src.text)) : await fs.readFile(abs);
-      const meta: Ingredient = {
-        type: kind === "scripts" ? "script" : "hook",
-        name: f.replace(/\.[^.]+$/, "").toLowerCase(),
-        files: [f],
-        targets: ["claude-code"],
-        tags: [],
-        origin: origin(`.claude/${kind}/${f}`),
-      } as Ingredient;
-      read(meta, { [f]: content }, src ? scanOf(f, src) : {}, (ref) => addRef(refs.base, ref));
+      const emitted = await readEmitted(claudeDir, kind === "scripts" ? "script" : "hook", f, origin);
+      if (!emitted) continue;
+      read(emitted.meta, emitted.files, emitted.scan, (ref) => addRef(refs.base, ref));
     }
   }
 
@@ -528,6 +467,179 @@ export class ForgeStage {
       throw new Error(`${e instanceof Error ? e.message : String(e)}\nThe import failed while writing into the Forge (${already}); restore or remove those paths before re-running.`, { cause: e });
     }
   }
+
+  /** Staged paths in staging order, Forge-relative with `/`; `created` is false when the path exists on disk under `root`. */
+  async entries(): Promise<Array<{ rel: string; abs: string; created: boolean }>> {
+    const result: Array<{ rel: string; abs: string; created: boolean }> = [];
+    for (const [abs] of this.files) {
+      const rel = path.relative(this.root, abs).split(path.sep).join("/");
+      const created = !(await exists(abs));
+      result.push({ rel, abs, created });
+    }
+    return result;
+  }
+
+  /** Write every staged file under another root (same relative paths), in the order given by `order` (a comparator over `rel`), noting each in `journal` before it is touched. */
+  async flushTo(root: string, opts?: { order?: (a: string, b: string) => number; journal?: WriteJournal }): Promise<void> {
+    // Build entries in staging order
+    const entries: Array<{ rel: string; content: string | Buffer }> = [];
+    for (const [abs, content] of this.files) {
+      const rel = path.relative(this.root, abs).split(path.sep).join("/");
+      entries.push({ rel, content });
+    }
+    // Sort if order given
+    if (opts?.order) {
+      entries.sort((a, b) => opts.order!(a.rel, b.rel));
+    }
+    // Write each entry to the target root
+    for (const { rel, content } of entries) {
+      const targetAbs = path.join(root, rel);
+      await note(opts?.journal, targetAbs);
+      await fs.mkdir(path.dirname(targetAbs), { recursive: true });
+      await fs.writeFile(targetAbs, content);
+    }
+  }
+}
+
+export interface EmittedSource {
+  meta: Ingredient;
+  files: Record<string, string | Buffer>;
+  scan: Record<string, string>;
+}
+
+/**
+ * One ingredient as import reads it from a workspace's `.claude/` tree. `rel` is the path under
+ * `.claude/<folder>/` (a file, or a skill's directory name). Returns `null` where `planImport`
+ * skips: a skill directory without `SKILL.md`, a non-file under scripts/hooks.
+ */
+export async function readEmitted(
+  claudeDir: string,
+  type: "rule" | "agent" | "command" | "skill" | "script" | "hook",
+  rel: string,
+  origin: (rel: string) => { workspace: string; path: string },
+  steering?: { inclusion: string; fileMatchPattern?: string },
+): Promise<EmittedSource | null> {
+  if (type === "rule") {
+    const name = rel.replace(/\.md$/, "");
+    const src = await readSource(path.join(claudeDir, "rules", rel));
+    const text = toLf(stripBom(src.text));
+    const meta: Ingredient = {
+      type: "rule",
+      name,
+      inclusion: (steering?.inclusion as "always" | "fileMatch" | "manual" | "auto") ?? "always",
+      fileMatchPattern: steering?.fileMatchPattern,
+      file: "rule.md",
+      targets: "*",
+      tags: [],
+      origin: origin(`.claude/rules/${rel}`),
+    };
+    return { meta, files: { "rule.md": text }, scan: scanOf("rule.md", src) };
+  }
+
+  if (type === "agent") {
+    const src = await readSource(path.join(claudeDir, "agents", rel));
+    const text = src.text;
+    const { data, body, raw } = parseFrontmatter<Record<string, string>>(text, { loose: true });
+    const name = (data.name || rel.replace(/\.md$/, "")).trim();
+    const meta: Ingredient = {
+      type: "agent",
+      name,
+      description: data.description?.trim(),
+      tools: splitList(data.tools),
+      model: data.model?.trim() || undefined,
+      file: "agent.md",
+      frontmatterRaw: raw ?? undefined,
+      targets: "*",
+      tags: [],
+      origin: origin(`.claude/agents/${rel}`),
+    };
+    return { meta, files: { "agent.md": body }, scan: scanOf("agent.md", src) };
+  }
+
+  if (type === "command") {
+    const src = await readSource(path.join(claudeDir, "commands", rel));
+    const text = src.text;
+    const { data, body, raw } = parseFrontmatter<Record<string, string>>(text, { loose: true });
+    const meta: Ingredient = {
+      type: "command",
+      name: rel.replace(/\.md$/, ""),
+      description: data.description?.trim(),
+      argumentHint: data["argument-hint"]?.trim() || undefined,
+      allowedTools: data["allowed-tools"]?.trim() || undefined,
+      file: "command.md",
+      frontmatterRaw: raw ?? undefined,
+      targets: "*",
+      tags: [],
+      origin: origin(`.claude/commands/${rel}`),
+    };
+    return { meta, files: { "command.md": body }, scan: scanOf("command.md", src) };
+  }
+
+  if (type === "skill") {
+    const skillDir = path.join(claudeDir, "skills", rel);
+    const stat = await fs.lstat(skillDir).catch(() => null);
+    if (!stat) return null;
+
+    if (stat.isDirectory()) {
+      const files: Record<string, string | Buffer> = {};
+      const scan: Record<string, string> = {};
+      for (const fileRel of await listFiles(skillDir)) {
+        const abs = path.join(skillDir, fileRel);
+        if (/\.(md|txt|json|ya?ml|ps1|py|sh|js|ts)$/i.test(fileRel)) {
+          const src = await readSource(abs);
+          files[fileRel] = toLf(stripBom(src.text));
+          Object.assign(scan, scanOf(fileRel, src));
+        } else {
+          files[fileRel] = await fs.readFile(abs);
+        }
+      }
+      if (!files["SKILL.md"]) return null;
+      const meta: Ingredient = {
+        type: "skill",
+        name: rel,
+        layout: "dir",
+        targets: "*",
+        tags: [],
+        origin: origin(`.claude/skills/${rel}/`),
+      };
+      return { meta, files, scan };
+    } else if (rel.endsWith(".md")) {
+      const src = await readSource(skillDir);
+      const text = toLf(stripBom(src.text));
+      const meta: Ingredient = {
+        type: "skill",
+        name: rel.replace(/\.md$/, ""),
+        layout: "file",
+        targets: "*",
+        tags: [],
+        origin: origin(`.claude/skills/${rel}`),
+      };
+      return { meta, files: { "SKILL.md": text }, scan: scanOf("SKILL.md", src) };
+    }
+    return null;
+  }
+
+  if (type === "script" || type === "hook") {
+    const kind = type === "script" ? "scripts" : "hooks";
+    const abs = path.join(claudeDir, kind, rel);
+    // fs.stat throws on a dangling link (ENOENT) — spec 30r1 §3.4 says we must let it throw
+    const stat = await fs.stat(abs);
+    if (!stat.isFile()) return null;
+
+    const src = /\.(ps1|py|sh|js|ts|cjs|mjs|json|md|txt|ya?ml)$/i.test(rel) ? await readSource(abs) : null;
+    const content = src ? toLf(stripBom(src.text)) : await fs.readFile(abs);
+    const meta: Ingredient = {
+      type,
+      name: rel.replace(/\.[^.]+$/, "").toLowerCase(),
+      files: [rel],
+      targets: ["claude-code"],
+      tags: [],
+      origin: origin(`.claude/${kind}/${rel}`),
+    } as Ingredient;
+    return { meta, files: { [rel]: content }, scan: src ? scanOf(rel, src) : {} };
+  }
+
+  return null;
 }
 
 /**
@@ -550,7 +662,7 @@ function addRef(list: string[], ref: string | null): void {
 }
 
 /** First secret-like value in an ingredient about to be imported, described by location only. */
-function secretIn(meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string> = {}): string | null {
+export function secretIn(meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string> = {}): string | null {
   const origin = meta.origin?.path ?? `${meta.type}/${meta.name}`;
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
   // Bodies of agents and commands start after `---`, the raw block and the closing `---`.
@@ -753,14 +865,14 @@ async function writeIngredient(
  * `env` value, a name that is not slug-like) fails the whole import, naming its source, before the
  * first write — 0.2.4 wrote a Forge no command could load (spec 07, Ruling 6).
  */
-function validateImported(meta: Ingredient): Ingredient {
+export function validateImported(meta: Ingredient): Ingredient {
   const r = IngredientSchema.safeParse(meta);
   if (r.success) return r.data;
   const source = meta.origin?.path ?? `${meta.type}/${meta.name}`;
   throw new Error(`${source} (${meta.type}/${meta.name}) does not fit the ingredient schema: ${r.error.message}`);
 }
 
-interface RecipeOptions {
+export interface RecipeOptions {
   stage: ForgeStage;
   dir: string;
   profile: string;
@@ -895,20 +1007,20 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
  * declaring another name, would leave two recipes under one name and loadForge would keep one.
  * Refused before the first write, as I4 refuses the same split for a profile.
  */
-async function recipeFile(o: RecipeOptions, name: string): Promise<string> {
+export async function recipeFile(o: Pick<RecipeOptions, "stage" | "dir">, name: string, command = "import"): Promise<string> {
   const file = path.join(o.dir, `${name}.yaml`);
   for (const f of await o.stage.reader().list(o.dir)) {
     if (f.includes("/") || !/\.ya?ml$/.test(f)) continue;
     const abs = path.join(o.dir, f);
     const declared = parseYaml(abs, stripBom(await o.stage.readText(abs)), RecipeSchema).name;
-    if (abs === file && declared !== name) throw new Error(`import: recipes/${f} is recipe ${declared} — import writes recipe ${name} there`);
-    if (abs !== file && declared === name) throw new Error(`import: recipe ${name} is recipes/${f} — import writes recipes/${name}.yaml`);
+    if (abs === file && declared !== name) throw new Error(`${command}: recipes/${f} is recipe ${declared} — ${command} writes recipe ${name} there`);
+    if (abs !== file && declared === name) throw new Error(`${command}: recipe ${name} is recipes/${f} — ${command} writes recipes/${name}.yaml`);
   }
   return file;
 }
 
 /** The recipes a profile resolves inside the Forge; fails closed — a profile that does not resolve counts as using everything. */
-function recipesOf(forge: import("../core/forge.js").Forge, profile: string): { has(name: string): boolean } {
+export function recipesOf(forge: import("../core/forge.js").Forge, profile: string): { has(name: string): boolean } {
   try {
     return new Set(resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile })).recipes);
   } catch {
@@ -946,7 +1058,7 @@ async function existingProfile(
  * created or variant source, which sync would read as structure. The line counts from the top of
  * the workspace file, as the secret scan's does: an agent or command body starts after its frontmatter.
  */
-function markerIn(meta: Ingredient, files: Record<string, string | Buffer>, source: string): { where: string; line: number } | null {
+export function markerIn(meta: Ingredient, files: Record<string, string | Buffer>, source: string): { where: string; line: number } | null {
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
   const offset = raw ? raw.split("\n").length + 2 : 0;
   for (const [rel, content] of Object.entries(files)) {

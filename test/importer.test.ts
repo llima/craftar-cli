@@ -2071,3 +2071,106 @@ describe("import — authEnv (spec 27)", () => {
     expect(r.warnings).toEqual([]);
   });
 });
+
+describe("ForgeStage — listing and flushTo (spec 30)", () => {
+  it("entries() returns staged paths in staging order with created flags", async () => {
+    const root = await tmpDir("craftar-stage-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+
+    // Pre-create a.txt on disk
+    await fs.mkdir(root, { recursive: true });
+    await fs.writeFile(path.join(root, "a.txt"), "old a\n");
+
+    const stage = new ForgeStage(root);
+    // Stage b.txt (new) then a.txt (exists)
+    stage.write(path.join(root, "b.txt"), "new b\n");
+    stage.write(path.join(root, "a.txt"), "updated a\n");
+
+    const entries = await stage.entries();
+    expect(entries).toEqual([
+      { rel: "b.txt", abs: path.join(root, "b.txt"), created: true },
+      { rel: "a.txt", abs: path.join(root, "a.txt"), created: false },
+    ]);
+  });
+
+  it("flushTo() writes to another root, not the stage's own root; with order and journal", async () => {
+    const root = await tmpDir("craftar-stage-");
+    const other = await tmpDir("craftar-stage-other-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanups.push(() => fs.rm(other, { recursive: true, force: true }));
+
+    const stage = new ForgeStage(root);
+    stage.write(path.join(root, "b.txt"), "b content\n");
+    stage.write(path.join(root, "a.txt"), "a content\n");
+
+    type JournalEntry = { abs: string; created: boolean };
+    const journal: JournalEntry[] = [];
+    await stage.flushTo(other, { order: (x, y) => x.localeCompare(y), journal });
+
+    // Journal entries should be in sorted order
+    expect(journal).toEqual([
+      { abs: path.join(other, "a.txt"), created: true },
+      { abs: path.join(other, "b.txt"), created: true },
+    ]);
+
+    // Files should exist under `other`, not under `root`
+    expect(await exists(path.join(other, "a.txt"))).toBe(true);
+    expect(await exists(path.join(other, "b.txt"))).toBe(true);
+    expect(await fs.readFile(path.join(other, "a.txt"), "utf8")).toBe("a content\n");
+    expect(await fs.readFile(path.join(other, "b.txt"), "utf8")).toBe("b content\n");
+
+    // Root should NOT have the staged files (they were not flushed there)
+    expect(await exists(path.join(root, "a.txt"))).toBe(false);
+    expect(await exists(path.join(root, "b.txt"))).toBe(false);
+  });
+
+  it("flushTo() midway failure: journal holds only attempted paths", async () => {
+    const root = await tmpDir("craftar-stage-");
+    const other = await tmpDir("craftar-stage-other-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanups.push(() => fs.rm(other, { recursive: true, force: true }));
+
+    const stage = new ForgeStage(root);
+    stage.write(path.join(root, "a.txt"), "a content\n");
+    stage.write(path.join(root, "b.txt"), "b content\n");
+
+    // Make b.txt a directory so the write fails
+    await fs.mkdir(path.join(other, "b.txt"), { recursive: true });
+
+    type JournalEntry = { abs: string; created: boolean };
+    const journal: JournalEntry[] = [];
+
+    await expect(stage.flushTo(other, { order: (x, y) => x.localeCompare(y), journal })).rejects.toThrow();
+
+    // Journal holds paths noted before write attempt; b.txt was noted (exists as dir) but write failed
+    expect(journal).toEqual([
+      { abs: path.join(other, "a.txt"), created: true },
+      { abs: path.join(other, "b.txt"), created: false }, // exists as directory
+    ]);
+  });
+});
+
+describe("import — a symlinked skill directory (spec 30, 30d)", () => {
+  it("does not import a skill through a symlink to a directory, and says nothing about it", async () => {
+    const t = await setup();
+    // Create a real skill directory inside .claude/skills/
+    await writeFiles(t.ws("ws"), {
+      ".claude/skills/ok/SKILL.md": "# OK\n",
+    });
+    // A complete skill OUTSIDE .claude/: following the link would import it.
+    const outsideSkill = path.join(t.ws("ws"), "outside-skill");
+    await fs.mkdir(outsideSkill, { recursive: true });
+    await fs.writeFile(path.join(outsideSkill, "SKILL.md"), "# LINKED\n");
+    // Create a symlink in .claude/skills/ pointing to that directory
+    await fs.symlink(outsideSkill, path.join(t.ws("ws"), ".claude", "skills", "linked"), "junction");
+
+    const r = await importInto(t.forge, t.ws("ws"), "acme");
+
+    // The real skill should be imported
+    expect(await exists(path.join(t.forge, "ingredients/skills/ok/SKILL.md"))).toBe(true);
+    // The symlinked directory should NOT be imported
+    expect(await exists(path.join(t.forge, "ingredients/skills/linked"))).toBe(false);
+    // Skipped silently, as before readEmitted existed: the Dirent of a link is not a directory.
+    expect(r.warnings).toEqual([]);
+  });
+});

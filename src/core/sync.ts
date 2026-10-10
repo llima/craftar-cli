@@ -668,6 +668,8 @@ async function readDisk(root: string, rel: string): Promise<Buffer | null> {
 export interface ApplyOptions {
   overwriteDrift?: boolean;
   dryRun?: boolean;
+  /** Hand-edited paths to regenerate (`drift`) or remove (`orphan-drift`), one by one (spec 30 §4.3). A path in another state is left to its own case. */
+  overwritePaths?: ReadonlySet<string>;
 }
 
 export interface ApplyResult {
@@ -703,7 +705,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
         entries.push(entry(s.planned!));
         break;
       case "drift":
-        if (opts.overwriteDrift) {
+        if (opts.overwriteDrift || opts.overwritePaths?.has(s.path)) {
           if (!opts.dryRun) await writeFile(ws.root, s.planned!);
           written.push(s.path);
           entries.push(entry(s.planned!));
@@ -720,8 +722,14 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
         removed.push(s.path);
         break;
       case "orphan-drift":
-        skipped.push(s);
-        entries.push(s.lock!); // keep the old entry so the hand-edited orphan stays visible until deleted
+        // Only a path named one by one is discarded: `overwriteDrift` regenerates, and there is nothing to regenerate here.
+        if (opts.overwritePaths?.has(s.path)) {
+          if (!opts.dryRun) await fs.rm(path.join(ws.root, s.path), { force: true });
+          removed.push(s.path);
+        } else {
+          skipped.push(s);
+          entries.push(s.lock!); // keep the old entry so the hand-edited orphan stays visible until deleted
+        }
         break;
     }
   }

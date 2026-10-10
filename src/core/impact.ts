@@ -20,6 +20,7 @@ import {
   type FileState,
   type FileStatus,
   type MergedConfig,
+  type Plan,
   type Workspace,
 } from "./sync.js";
 import type { Lock, RegistryEntry } from "../schema/index.js";
@@ -72,7 +73,7 @@ async function gitSafe(cwd: string, ...args: string[]): Promise<string | null> {
  * The fetch URLs of every remote, in `git remote` order, each with its remote name.
  * A URL that `credentialFault` flags is not returned and adds a warning.
  */
-async function remoteUrls(
+export async function remoteUrls(
   dir: string,
   warnings: string[],
   warningDir: string,
@@ -100,7 +101,7 @@ async function remoteUrls(
  * Convert a remote URL to a cache key. For a local path remote (e.g. pointing at a bare repo),
  * convert to file:// URL first — this is what a workspace's `file://` URL names.
  */
-function urlToKey(url: string, baseDir: string): string {
+export function urlToKey(url: string, baseDir: string): string {
   if (classifyForge(url) === "path") {
     // A local bare repository named by path: convert to file:// URL as that's what cacheKey expects
     return cacheKey(pathToFileURL(path.resolve(baseDir, url)).href);
@@ -216,7 +217,7 @@ export async function forgeWorkspaces(
 }
 
 export type Planned =
-  | { kind: "planned"; files: Map<string, Buffer>; workspace: Workspace & { merged: MergedConfig } }
+  | { kind: "planned"; files: Map<string, Buffer>; workspace: Workspace & { merged: MergedConfig }; plan: Plan }
   | { kind: "missing" }
   | { kind: "error"; stage: "config" | "plan"; message: string; merged?: MergedConfig };
 
@@ -242,7 +243,7 @@ export async function planAll(entries: ForgeWorkspace[], forge: Forge): Promise<
         for (const f of p.files) {
           files.set(f.path, f.content);
         }
-        results.push({ kind: "planned", files, workspace: ws });
+        results.push({ kind: "planned", files, workspace: ws, plan: p });
       } catch (e) {
         results.push({
           kind: "error",
@@ -364,6 +365,15 @@ export function countStates(
   return result;
 }
 
+/** Build counts object for JSON output (only non-zero states). */
+export function countStatesObject(st: FileStatus[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const [state, n] of countStates(st)) {
+    counts[state] = n;
+  }
+  return counts;
+}
+
 /**
  * What the next `sync` would do for a planned workspace: `status()` counts.
  * Keys are `FileState` values, only non-zero; `unchanged` when none.
@@ -392,15 +402,10 @@ export async function nextSync(p: Planned): Promise<NextSyncResult> {
     return { state: "error", counts: {}, error: e instanceof Error ? e.message : String(e) };
   }
 
-  // Use countStates for the counting (spec 28 §5.2)
-  const pairs = countStates(statuses);
-  if (pairs.length === 0) {
+  // Use countStatesObject for the counting (spec 28 §5.2)
+  const counts = countStatesObject(statuses);
+  if (Object.keys(counts).length === 0) {
     return { state: "unchanged", counts: {}, error: null };
-  }
-  // Build the counts object from the pairs, preserving key order
-  const counts: Record<string, number> = {};
-  for (const [state, n] of pairs) {
-    counts[state] = n;
   }
   return { state: "changed", counts, error: null };
 }

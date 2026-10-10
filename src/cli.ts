@@ -4,9 +4,10 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
+import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
-import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
+import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
@@ -18,9 +19,10 @@ import { listTargets } from "./core/capabilities.js";
 import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { renderImportReport } from "./core/import-report.js";
+import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
-import { exists, gitDirty, gitIsRepo, gitUnheld, loadForge } from "./core/forge.js";
+import { exists, gitDirty, gitIsRepo, gitUnheld, loadForge, type UnheldPath } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
   hunkAt,
@@ -57,7 +59,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.21.1");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.22.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -173,7 +175,7 @@ function refusalBlock(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): b
  * A writing sync on a planned workspace, then its report: `apply`, the registration of spec 21 (unless
  * `CRAFTAR_NO_REGISTRY`), and the lines `sync` prints. `sync` and `init` both call it (spec 23 §5.2).
  */
-async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lock | null, opts: { dryRun?: boolean; overwriteDrift?: boolean } = {}): Promise<ApplyResult> {
+async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lock | null, opts: { dryRun?: boolean; overwriteDrift?: boolean; overwritePaths?: ReadonlySet<string> } = {}): Promise<ApplyResult> {
   const r = await apply(ws, p, st, opts);
   // A writing sync records the workspace (spec 21 §4.1); the registry is an index, so a failure is a warning.
   let registryWarning: string | null = null;
@@ -191,7 +193,7 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
   if (fl) console.log(fl);
   console.log(`  ${verb} ${pc.green(String(r.written.length))}, removed ${pc.magenta(String(r.removed.length))} orphan(s), skipped ${pc.yellow(String(r.skipped.length))}`);
   for (const f of r.written) console.log(`  ${pc.green("+")} ${f}`);
-  for (const f of r.removed) console.log(`  ${pc.magenta("-")} ${f}  (orphan: no longer produced by the Forge)`);
+  for (const f of r.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : "orphan: no longer produced by the Forge"})`);
   for (const s of r.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
   for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   if (registryWarning) console.log(`  ${pc.yellow("warn")} ${registryWarning}`);
@@ -401,44 +403,330 @@ program
     const p = await plan(ws);
     const st = await status(ws, p, await readLock(ws.root));
     // Spec 19 §3.3: under --exit-code a path nothing matches must not read as "clean" to a script
-    if (o.exitCode && only && !st.some((s) => s.path === only))
-      fail(`${only} is not a file craftar manages in this workspace — pass the workspace-relative path as \`craftar status\` prints it (forward slashes)`);
+    if (o.exitCode && only && !st.some((s) => s.path === only)) fail(unmanaged(only));
     let shown = 0;
-    const render = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
     for (const s of st) {
       if (only && s.path !== only) continue;
       // Spec 19 §3.2: show the six states sync --check refuses (skip unchanged and adopt)
       if (["unchanged", "adopt"].includes(s.state)) continue;
       shown++;
-      if (s.state === "orphan-drift") {
-        // Header and one line, no body: sync keeps this file
-        console.log(pc.bold(`--- ${s.path} (disk, orphan-drift)`));
-        console.log(`  ${explainSkip(s)}`);
-        continue;
-      }
-      const disk = await readText(path.join(ws.root, s.path));
-      if (s.state === "orphan") {
-        // A removal: the file exists on disk but the Forge no longer produces it
-        console.log(pc.bold(`--- ${s.path} (disk, orphan)`));
-        console.log(pc.bold(`+++ ${s.path} (forge: no longer produced — sync removes it)`));
-        console.log(renderDiff(disk ?? "", "", render));
-      } else {
-        const next = s.planned ? toLf(stripBom(s.planned.content.toString("utf8"))) : "";
-        console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
-        console.log(pc.bold(`+++ ${s.path} (forge)`));
-        // Spec 27 §4.2, Ruling 4: do not print on-disk content of the example file for drift/collision
-        if (s.path === EXAMPLE_SETTINGS && (s.state === "drift" || s.state === "collision")) {
-          console.log("  content not shown: an example file may hold a value typed by hand");
-        } else {
-          console.log(renderDiff(disk ?? "", next, render));
-        }
-      }
+      await printFileDiff(ws.root, s);
     }
     if (!shown) console.log(pc.green("no differences"));
     // exitCode, not process.exit: exit drops a piped diff still queued for a slow reader (spec 19 §3.1)
     else if (o.exitCode) process.exitCode = 1;
     // Spec 29 §4.1: with no [path], --exit-code fails exactly when `sync --check` does — a refused sync included
     if (refusalBlock(unsetDeclared(p)) && o.exitCode && !only) process.exitCode = 1;
+  });
+
+const DIFF_PAINT = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
+
+/** What `craftar diff` prints for one file `sync --check` refuses; `drift show <path>` prints the same for a drifted one. */
+async function printFileDiff(root: string, s: FileStatus): Promise<void> {
+  if (s.state === "orphan-drift") {
+    // Header and one line, no body: sync keeps this file
+    console.log(pc.bold(`--- ${s.path} (disk, orphan-drift)`));
+    console.log(`  ${explainSkip(s)}`);
+    return;
+  }
+  const disk = await readText(path.join(root, s.path));
+  if (s.state === "orphan") {
+    // A removal: the file exists on disk but the Forge no longer produces it
+    console.log(pc.bold(`--- ${s.path} (disk, orphan)`));
+    console.log(pc.bold(`+++ ${s.path} (forge: no longer produced — sync removes it)`));
+    console.log(renderDiff(disk ?? "", "", DIFF_PAINT));
+  } else {
+    const next = s.planned ? toLf(stripBom(s.planned.content.toString("utf8"))) : "";
+    console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
+    console.log(pc.bold(`+++ ${s.path} (forge)`));
+    // Spec 27 §4.2, Ruling 4: do not print on-disk content of the example file for drift/collision
+    if (s.path === EXAMPLE_SETTINGS && (s.state === "drift" || s.state === "collision")) {
+      console.log(EXAMPLE_CONTENT_HIDDEN);
+    } else {
+      console.log(renderDiff(disk ?? "", next, DIFF_PAINT));
+    }
+  }
+}
+
+/** Spec 27 Ruling 4: the on-disk content of the example file is never printed. */
+const EXAMPLE_CONTENT_HIDDEN = "  content not shown: an example file may hold a value typed by hand";
+
+/** A path as the user may type it, to the spelling `status` prints: forward slashes, no leading `./`. */
+const statusPath = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, "");
+
+/* ---------------------------------------------------------------- drift */
+const drift = program.command("drift").description("Hand-edited generated files: show them, discard the edit, or promote it to the Forge");
+
+drift
+  .command("show", { isDefault: true })
+  .description("List the files hand-edited since the last sync, with the Forge's side and whether the edit can be promoted; with a path, that file's row and its diff. Writes nothing")
+  .argument("[path]", "limit to one file, and show its diff")
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--json", "machine-readable output", false)
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
+  .action(async (given: string | undefined, o: { workspace: string; json: boolean; offline: boolean }) => {
+    const ws = await loadWorkspace(o.workspace, load(o, "read"));
+    warnStderr(ws.warnings);
+    const p = await plan(ws);
+    const st = await status(ws, p, await readLock(ws.root));
+    const only = given === undefined ? null : statusPath(given);
+    const named = only === null ? null : st.find((s) => s.path === only);
+    if (only !== null && !named) fail(unmanaged(only));
+    const rows = driftList(named ? [named] : st);
+    // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
+    const unset = unsetDeclared(p);
+    if (o.json) {
+      console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: p.warnings, unsetParams: unset }, null, 2));
+      if (unset.length) process.exitCode = 1;
+      return;
+    }
+    if (named && !rows.length) {
+      console.log(`${named.path} is not drifted (${named.state})`);
+      if (refusalBlock(unset)) process.exitCode = 1;
+      return;
+    }
+    if (!rows.length) {
+      console.log("no drift");
+      if (refusalBlock(unset)) process.exitCode = 1;
+      return;
+    }
+    // Columns as wide as their longest value, as the spec's example lines them up (§4.2).
+    const wide = (pick: (r: DriftRow) => string) => Math.max(...rows.map((r) => pick(r).length));
+    const [pathW, ingW, forgeW] = [wide((r) => r.path), wide((r) => r.ingredient), wide((r) => `forge: ${r.forge}`)];
+    for (const r of rows)
+      console.log(
+        `${color(r.state)(r.state.padEnd(13))} ${r.path.padEnd(pathW)}  ${pc.dim(r.ingredient.padEnd(ingW))}  ${`forge: ${r.forge}`.padEnd(forgeW)}  promote: ${r.promotable ? "yes" : `no (${r.reason})`}`,
+      );
+    if (!named) {
+      if (refusalBlock(unset)) process.exitCode = 1;
+      return;
+    }
+    if (named.state === "orphan-drift") {
+      // The whole file as a removal: what `drift discard` would do to it.
+      console.log(pc.bold(`--- ${named.path} (disk, orphan-drift)`));
+      console.log(pc.bold(`+++ ${named.path} (forge: no longer produced — \`craftar drift discard\` removes it)`));
+      // Spec 27 Ruling 4: the on-disk content of the example file is never printed.
+      if (named.path === EXAMPLE_SETTINGS) {
+        console.log(EXAMPLE_CONTENT_HIDDEN);
+      } else {
+        console.log(renderDiff((await readText(path.join(ws.root, named.path))) ?? "", "", DIFF_PAINT));
+      }
+    } else await printFileDiff(ws.root, named);
+    if (refusalBlock(unset)) process.exitCode = 1;
+  });
+
+drift
+  .command("discard")
+  .description("Regenerate the named hand-edited files from the Forge (their edits are lost) and remove a named hand-edited file the Forge no longer produces; otherwise a sync like any other")
+  .argument("<path...>", "the hand-edited files, as `craftar status` prints them")
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--dry-run", "show the plan, write nothing", false)
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
+  .action(async (given: string[], o: { workspace: string; dryRun: boolean; offline: boolean }) => {
+    const ws = await loadWorkspace(o.workspace, load(o, "sync"));
+    const p = await plan(ws);
+    const lock = await readLock(ws.root);
+    const st = await status(ws, p, lock);
+    const paths = [...new Set(given.map(statusPath))];
+    // Every refusal comes before the first write: one path that is not a hand edit stops the whole run.
+    const stateOf = new Map(st.map((s) => [s.path, s.state]));
+    const not = paths.filter((x) => stateOf.get(x) !== "drift" && stateOf.get(x) !== "orphan-drift");
+    if (not.length) fail(`not drifted: ${not.map((x) => `${x} (${stateOf.get(x) ?? "not managed"})`).join(", ")} — nothing was written`);
+    // Check for unset params BEFORE any output (spec 29 §4.1, spec 30r1 commit 3 issue 1)
+    // Print plan warnings before the refusal, as sync does (spec 30r3 commit 3 issue 6)
+    const unset = unsetDeclared(p);
+    if (unset.length) {
+      for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+      fail(unsetRefusal(unset));
+    }
+    const overwritePaths = new Set(paths);
+    console.log(`discarding ${paths.length} hand edit(s): ${st.filter((s) => overwritePaths.has(s.path)).map((s) => s.path).join(", ")}`);
+    await applyAndReport(ws, p, st, lock, { dryRun: o.dryRun, overwritePaths });
+  });
+
+drift
+  .command("promote")
+  .description("Carry a hand-edited file to the Forge as a profile variant, behind git's gate, proved before any write; never writes the lock, the registry or the cache")
+  .argument("<path>", "the hand-edited file, as `craftar status` prints it")
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--forge <dir>", "the Forge directory to write (required for a URL Forge)")
+  .option("--dry-run", "prove and show the plan, write nothing", false)
+  .option("--json", "machine-readable output", false)
+  .action(async (givenPath: string, o: { workspace: string; forge?: string; dryRun: boolean; json: boolean }) => {
+    const home = craftarHome();
+    const normalizedPath = statusPath(givenPath);
+
+    let promotePlan;
+    try {
+      promotePlan = await planPromote({
+        workspaceRoot: o.workspace,
+        forgeDir: o.forge ?? null,
+        path: normalizedPath,
+        home,
+        env: process.env,
+      });
+    } catch (e) {
+      // Handle UnheldError
+      if (e instanceof UnheldError) {
+        fail(unheldMessage("drift promote", e.forgeRoot, e.unheld));
+      }
+      throw e;
+    }
+
+    // --json output
+    if (o.json) {
+      // Apply first if not dry-run (spec 30r1 §3.2: JSON follows the write)
+      if (!o.dryRun) {
+        const journal: WriteJournal = [];
+        try {
+          await applyPromote(promotePlan, journal);
+        } catch (e) {
+          // Late failure: stdout stays "", stderr is lateFailure
+          fail(lateFailure(e, promotePlan.forgeRoot, journal, "drift promote"));
+        }
+      }
+      // Build the JSON object in spec §4.7 order
+      const jsonObj = {
+        workspace: promotePlan.workspaceRealPath,
+        forge: promotePlan.forgeRoot,
+        profile: promotePlan.profile,
+        dryRun: o.dryRun,
+        path: promotePlan.inputPath,
+        ingredient: promotePlan.ingredientRef,
+        outcome: promotePlan.outcome,
+        promoted: promotePlan.promoted,
+        written: promotePlan.entries.map((e) => ({
+          path: e.rel,
+          action: e.created ? "created" : "edited",
+        })),
+        params: promotePlan.params.map((p) => ({ key: p.key, old: p.old, value: p.value })),
+        sections: promotePlan.sections.map((s) => ({ key: s.key, name: s.name })),
+        flattened: promotePlan.flattened,
+        dependents: promotePlan.dependents,
+        nextSync: { counts: countStatesObject(promotePlan.nextSync) },
+        impact: {
+          registry: promotePlan.impact.registry,
+          workspaces: promotePlan.impact.workspaces,
+        },
+        warnings: promotePlan.warnings,
+      };
+      console.log(JSON.stringify(jsonObj, null, 2));
+      return;
+    }
+
+    // Apply first (unless dry-run), print after — spec 30r3 §3.4: on late failure stdout is ""
+    const journal: WriteJournal = [];
+    if (!o.dryRun) {
+      try {
+        await applyPromote(promotePlan, journal);
+      } catch (e) {
+        fail(lateFailure(e, promotePlan.forgeRoot, journal, "drift promote"));
+      }
+    }
+
+    // Print the report
+    const writeVerb = o.dryRun ? "would write" : "wrote ";
+    const editVerb = o.dryRun ? "would edit" : "edited";
+
+    // First line depends on outcome
+    if (promotePlan.outcome === "params" || promotePlan.outcome === "sections") {
+      console.log(`promote ${promotePlan.inputPath} → profile ${promotePlan.profile} (${promotePlan.outcome})`);
+    } else {
+      console.log(`promote ${promotePlan.inputPath} → ${promotePlan.promoted} (${promotePlan.outcome}, profile ${promotePlan.profile})`);
+    }
+
+    // Skip entries that are also in editedKeys (they'll be printed with keys below)
+    const editedKeyFiles = new Set(promotePlan.editedKeys.keys());
+    for (const e of promotePlan.entries) {
+      if (editedKeyFiles.has(e.rel)) continue;
+      if (e.created) {
+        console.log(`  ${writeVerb} ${e.rel}`);
+      } else {
+        console.log(`  ${editVerb} ${e.rel}`);
+      }
+    }
+    // Print early warnings (e.g., unmanaged skill files) — pinned by test 10
+    const unusedSectionPrefix = "profile ";
+    for (const w of promotePlan.warnings) {
+      if (!w.startsWith(unusedSectionPrefix) || !w.includes(" still sets section ")) {
+        // Skip registry warnings here — they come later
+        if (!w.includes(": missing") && !w.includes(": error:")) {
+          console.log(`  ${pc.yellow("warn")} ${w}`);
+        }
+      }
+    }
+    for (const [file, keys] of promotePlan.editedKeys) {
+      console.log(`  ${editVerb} ${file} (${keys.join(", ")})`);
+    }
+    // Print param changes
+    for (const p of promotePlan.params) {
+      console.log(`  param ${p.key}: ${p.old === null ? "(unset)" : JSON.stringify(p.old)} → ${JSON.stringify(p.value)}`);
+    }
+    // Print section changes (line count, never content)
+    for (const s of promotePlan.sections) {
+      console.log(`  section ${s.key} ${s.name}: ${s.lines} line(s)`);
+    }
+    // Print flattened (only for variant outcomes)
+    const flatParts: string[] = [];
+    if (promotePlan.flattened.params.length > 0) {
+      flatParts.push(`${promotePlan.flattened.params.length} param(s) (${promotePlan.flattened.params.join(", ")})`);
+    }
+    if (promotePlan.flattened.sections.length > 0) {
+      flatParts.push(`${promotePlan.flattened.sections.length} section(s) (${promotePlan.flattened.sections.join(", ")})`);
+    }
+    if (flatParts.length > 0) {
+      console.log(`  flattened: ${flatParts.join(", ")}`);
+    }
+    // Print late warnings (unused section value) after flattened — step 30g
+    for (const w of promotePlan.warnings) {
+      if (w.startsWith(unusedSectionPrefix) && w.includes(" still sets section ")) {
+        console.log(`  ${pc.yellow("warn")} ${w}`);
+      }
+    }
+    const otherCount = promotePlan.otherFilesUnchanged;
+    console.log(`  proved: this workspace plans the file on disk; ${otherCount} other file(s) unchanged`);
+    if (promotePlan.dependents.length > 0) {
+      console.log(`  also changes ${promotePlan.dependents.join(", ")}`);
+    }
+    console.log(`  ${nextSyncLine(promotePlan.nextSync, promotePlan.nextUnset)}`);
+
+    // Impact: print other workspaces or registry warning
+    const impact = promotePlan.impact;
+    if (impact.registry !== "read") {
+      // none, partial, or off — spec 30 §4.6 item 6
+      console.log(`  ${pc.yellow("warn")} other workspaces could not be checked (registry: ${impact.registry})`);
+    } else if (impact.workspaces.length === 0) {
+      console.log("  no other registered workspace reads this Forge");
+    } else {
+      // Group by profile and print
+      const sameProfile = impact.workspaces.filter((ws) => ws.profile === promotePlan.profile && ws.state !== "missing" && ws.state !== "error");
+      if (sameProfile.length > 0) {
+        const countParts = sameProfile.map((ws) => {
+          const c = NEXT_SYNC_STATES.map((k) => (ws.counts[k] ? `${ws.counts[k]} ${k}` : "")).filter(Boolean);
+          return `${ws.path} — ${c.length ? c.join(", ") : "unchanged"}`;
+        });
+        console.log(`  ${sameProfile.length} other workspace(s) of profile ${promotePlan.profile} read this Forge: ${countParts.join("; ")}`);
+      } else if (impact.workspaces.filter((ws) => ws.state !== "missing" && ws.state !== "error").length === 0) {
+        console.log("  no other registered workspace reads this Forge");
+      }
+      // Print missing/error as warnings
+      for (const ws of impact.workspaces) {
+        if (ws.state === "missing") {
+          console.log(`  ${pc.yellow("warn")} ${ws.path}: missing`);
+        } else if (ws.state === "error") {
+          console.log(`  ${pc.yellow("warn")} ${ws.path}: error: ${ws.error}`);
+        }
+      }
+    }
+
+    if (o.dryRun) {
+      console.log("  dry run — the Forge was not written");
+    } else {
+      console.log("  the Forge is not committed — review with git, then commit and push it");
+      if (promotePlan.isUrlForge) {
+        console.log("  push the Forge for sync to see this");
+      }
+    }
   });
 
 /* ---------------------------------------------------------------- add / remove recipe */
@@ -1344,11 +1632,7 @@ forge
     const mustHold = [base.dir, ...(result.resolved ? [variant.dir, ...cascadeFiles] : []), ...(paramWrites?.mustHold ?? []), ...candidateProfiles];
     const unheld = await gitUnheld(f.root, mustHold);
     if (unheld.length) {
-      // Name every such path (the first few, then a count), so one run shows the whole problem.
-      const SHOWN = 10;
-      const lines = unheld.slice(0, SHOWN).map((u) => `  ${u.path} is not held by git (${u.reason})`);
-      if (unheld.length > SHOWN) lines.push(`  … and ${unheld.length - SHOWN} more`);
-      fail(`unify can only change files git can restore — ${unheld.length} path(s) under ${f.root} are not:\n${lines.join("\n")}`);
+      fail(unheldMessage("unify", f.root, unheld));
     }
 
     // Spec 25 §4.2: the impact passes around the writes
@@ -1978,11 +2262,11 @@ function color(state: string) {
 function explainSkip(s: FileStatus): string {
   switch (s.state) {
     case "drift":
-      return "hand-edited since last sync — run `craftar diff` and either `--overwrite-drift` or promote the change to the Forge";
+      return "hand-edited since last sync — `craftar drift show <path>`, then `craftar drift discard` or `craftar drift promote`";
     case "collision":
       return "exists but was never generated by craftar and differs from the Forge — rename it or import it";
     case "orphan-drift":
-      return "no longer produced by the Forge but hand-edited — kept; delete it yourself if unwanted";
+      return "no longer produced by the Forge but hand-edited — kept; `craftar drift discard <path>` removes it, or delete it yourself";
     default:
       return "";
   }
@@ -2079,19 +2363,27 @@ async function pathTaken(p: string): Promise<boolean> {
   }
 }
 
+/** The refusal message for paths git cannot restore (Ruling 37): the command name and every unheld path. */
+function unheldMessage(command: string, root: string, unheld: UnheldPath[]): string {
+  const SHOWN = 10;
+  const lines = unheld.slice(0, SHOWN).map((u) => `  ${u.path} is not held by git (${u.reason})`);
+  if (unheld.length > SHOWN) lines.push(`  … and ${unheld.length - SHOWN} more`);
+  return `${command} can only change files git can restore — ${unheld.length} path(s) under ${root} are not:\n${lines.join("\n")}`;
+}
+
 /**
  * The message for a `forge unify` failure after writing began (Ruling 33): the original error, the
  * Forge-relative paths already touched, and the git commands that undo them — `checkout` for what
  * git tracks, `clean` for files unify created (checkout refuses a path git does not know).
  */
-function lateFailure(e: unknown, root: string, journal: WriteJournal): string {
+function lateFailure(e: unknown, root: string, journal: WriteJournal, command = "unify"): string {
   const msg = e instanceof Error ? e.message : String(e);
   if (journal.length === 0) return msg;
   const rel = (abs: string) => path.relative(root, abs).split(path.sep).join("/");
   const quote = (p: string) => (/^[\w./-]+$/.test(p) ? p : `"${p}"`);
   const restore = [...new Set(journal.filter((j) => !j.created).map((j) => rel(j.abs)))];
   const created = [...new Set(journal.filter((j) => j.created).map((j) => rel(j.abs)))];
-  const lines = [msg, `unify had already started changing the Forge (${root}) when this failed:`];
+  const lines = [msg, `${command} had already started changing the Forge (${root}) when this failed:`];
   for (const p of [...restore, ...created]) lines.push(`  ${p}`);
   lines.push("recover with:");
   if (restore.length) lines.push(`  git -C ${quote(root)} checkout -- ${restore.map(quote).join(" ")}`);
