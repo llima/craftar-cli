@@ -11,7 +11,7 @@ import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, frag
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
 import { outName } from "../emitters/shared.js";
-import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, profileLabel, unpinnedSources, type Declared } from "./templates.js";
+import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture } from "./proc.js";
 
 /*
@@ -302,7 +302,7 @@ async function workspaceChecks(
       if (declared && declared.declared) {
         const findings: Check[] = [];
         for (const e of declared.entries) {
-          if (!e.installable) findings.push({ id: "templates", scope: "workspace", level: "warn", message: `templates[${e.entry}]: kind "${e.kind}" is not installed by this craftar`, fix: "upgrade craftar, or remove the entry" });
+          if (!e.installable) findings.push({ id: "templates", scope: "workspace", level: "warn", message: `templates[${e.entry}]: ${notInstalled(e.kind)}`, fix: "upgrade craftar, or remove the entry" });
         }
         const unpinned = await unpinnedSources(declared.entries, root);
         if (unpinned.length > 0) findings.push({ id: "templates", scope: "workspace", level: "warn", message: feedMessage(unpinned), fix: "add a NuGet.Config at the workspace root that pins the feed, or ignore this when NuGet is configured above the workspace or for the user" });

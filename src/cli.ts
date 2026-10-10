@@ -1002,7 +1002,7 @@ templates
 templates
   .command("install")
   .description(
-    "Run dotnet new install once per dotnet-new entry, in the profile's order, at the workspace root; the packages land in this user's dotnet template store, shared by every workspace. Nothing else runs it. Exits 1 when an entry failed or was skipped",
+    "Run dotnet new install once per dotnet-new entry, in the profile's order, at the workspace root; the packages land in this user's dotnet template store, shared by every workspace. Nothing else runs it. Exits 1 when an entry failed or was skipped (--dry-run exits 0 over an accepted block)",
   )
   .option("--dry-run", "print each dotnet new install line; run nothing (needs no dotnet)", false)
   .option("--force", "pass --force to dotnet new install", false)

@@ -15,7 +15,7 @@ const CREDENTIAL = "a source must not carry a user or a password: NuGet's own co
 
 /** The missing-SDK finding and its fix: one spelling for `templates install` and doctor's `dotnet` check. */
 export const DOTNET_MISSING = "the .NET SDK is not available: dotnet --version gave no version";
-export const DOTNET_MISSING_FIX = "install the .NET SDK and check PATH";
+export const DOTNET_MISSING_FIX = "install the .NET SDK (the version a global.json at the workspace root pins, if there is one) and check PATH";
 
 export interface DotnetNewEntry {
   entry: number;
@@ -48,7 +48,10 @@ export interface TemplateRow {
 
 const position = (p: Array<string | number>) => "templates" + p.map((x) => (typeof x === "number" ? `[${x}]` : `.${x}`)).join("");
 
-const unknownKind = (kind: string) => `templates: kind "${kind}" is not installed by this craftar — skipped`;
+/** The phrase for an entry this craftar cannot install (one spelling for the warning and doctor). */
+export const notInstalled = (kind: string) => `kind "${kind}" is not installed by this craftar`;
+
+const unknownKind = (kind: string) => `templates: ${notInstalled(kind)} — skipped`;
 
 /** The one reader of `profile.templates` (spec 32 §8). Throws the refusal of messages.md §2. */
 export function declaredTemplates(profile: { name: string; templates?: unknown }, label: string): Declared {
@@ -266,7 +269,10 @@ export async function installTemplates(entries: DeclaredEntry[], root: string, o
   return { lines, installed, failed, skipped };
 }
 
-/** The SDK's version, or null (D5). */
+/**
+ * The SDK's version, or null (D5). Probed in `cwd` (the workspace root) because `dotnet` reads
+ * `global.json` from its working directory — the install runs there.
+ */
 export async function dotnetVersion(probe: Probe = defaultCapture, env: NodeJS.ProcessEnv = process.env, cwd?: string): Promise<string | null> {
   try {
     const stdout = await probe("dotnet", ["--version"], { ...env, DOTNET_NOLOGO: "1" }, cwd);
