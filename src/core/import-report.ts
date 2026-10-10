@@ -54,11 +54,11 @@ function withoutValues(report: ImportReport): (text: string) => string {
 }
 
 /** The Kiro sections (spec 29 §4.2): `status()`'s collisions and the files nothing sources, or why there are none. */
-function kiroSections(report: ImportReport): string[][] {
+function kiroSections(report: ImportReport, said: (text: string) => string): string[][] {
   const kiro = report.kiro ?? { kind: "none" };
   if (kiro.kind === "none") return [["## Kiro collisions", "no .kiro/ in this workspace"]];
   if (kiro.kind === "not-computed") {
-    const line = `not computed: ${oneLine(kiro.message)}`;
+    const line = `not computed: ${oneLine(said(kiro.message))}`;
     return [
       ["## Kiro collisions", line],
       ["## Unsourced Kiro files", line],
@@ -92,7 +92,7 @@ export function renderImportReport(i: ImportReportInput): string {
     [`## Reused (${report.reused.length})`, ...report.reused.map((x) => oneLine(reusedLine(x, report)))],
     [`## Variants (${report.variants.length})`, ...report.variants.map((x) => oneLine(variantLine(x.name, report.profile)))],
     [`## Rejected (${report.rejected.length})`, ...report.rejected.map((x) => `- ${oneLine(said(`${x.name} — ${x.reason}`))}`)],
-    ...kiroSections(report),
+    ...kiroSections(report, said),
     [`## Warnings (${report.warnings.length})`, ...report.warnings.map((x) => `- ${oneLine(said(x))}`)],
   ];
   return `---\n${frontmatter}---\n\n${sections.map((s) => s.join("\n")).join("\n\n")}\n`;

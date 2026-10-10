@@ -168,6 +168,18 @@ describe("renderImportReport", () => {
     for (const leak of ["NEW-WORKSPACE-TEXT", "OLD-WORKSPACE-TEXT", "SECRET-LOOKING-VALUE", "SECTION-WORKSPACE-TEXT"]) expect(text).not.toContain(leak);
   });
 
+  it("the not-computed message is written without those values too, as the warning that repeats it is", () => {
+    const text = render(
+      base({
+        params: [{ key: "k", old: null, value: "NEW-WORKSPACE-TEXT", from: "rule/a" }],
+        kiro: { kind: "not-computed", message: 'boom near "NEW-WORKSPACE-TEXT"' },
+        warnings: ['import report: Kiro sections not computed: boom near "NEW-WORKSPACE-TEXT"'],
+      }),
+    );
+    expect(text).toContain('\n## Kiro collisions\nnot computed: boom near "…"\n\n## Unsourced Kiro files\nnot computed: boom near "…"\n');
+    expect(text).not.toContain("NEW-WORKSPACE-TEXT");
+  });
+
   it("a reuse that used no key and no section says only that it was rendered", () => {
     expect(render(base({ reused: ["rule/bare"], rendered: [{ name: "rule/bare", keys: [] }] }))).toContain("\n## Reused (1)\n- rule/bare — rendered\n");
   });
