@@ -316,10 +316,18 @@ const DOCKER_FIX = `install Docker with the Compose plugin ${MIN_COMPOSE} or lat
 /**
  * The paths the planned stack includes — `.craftar/services/<name>/<compose>` for each service.
  * Returns the workspace-relative POSIX paths (spec 31 §4.7: services-env scans only the planned fragments).
+ * Returns empty array for a stack that is not a valid craftar stack (invalid YAML, no includes, or an
+ * include path that is absolute or has a `..` segment).
  */
 export function fragmentPaths(stackText: string): string[] {
   const parsed = ComposeStackShape.safeParse(parseYamlText("stack", stackText));
   if (!parsed.success) return [];
+  // Refuse an include path that is absolute or has a .. segment — not a craftar stack
+  for (const inc of parsed.data.include) {
+    const p = inc.path;
+    if (/^\/|^[A-Za-z]:/.test(p)) return []; // absolute
+    if (p.split("/").includes("..")) return []; // .. segment
+  }
   return parsed.data.include.map((inc) => path.posix.join(".craftar", inc.path));
 }
 

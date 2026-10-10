@@ -249,15 +249,52 @@ export const HookIngredient = IngredientBase.extend({
 
 /**
  * A service path: `compose`, and every entry of `files`, `executable` and `binary`.
- * Refused when absolute (starts with `/` or a drive letter), has a `..` segment, contains a
- * backslash, or is literally `ingredient.yaml`.
+ *
+ * Every `/`-separated segment must match `/^[A-Za-z0-9._@+-]+$/` (letters, digits, . _ @ + -)
+ * after an optional leading `./`. Refused when:
+ * - climbsOut (the path escapes the directory)
+ * - Any segment is `..` (even `a/../b` that stays inside is refused)
+ * - Absolute (starts with `/` or a Windows drive letter)
+ * - Contains a backslash
+ * - Any segment does not match the allowed chars (including empty string, trailing `/`, `a//b`, spaces, `#`, newlines, `:`)
+ * - Equals `ingredient.yaml` after normalization
  */
+const SEGMENT_OK = /^[A-Za-z0-9._@+-]+$/;
+
 const ServicePath = z
   .string()
-  .refine((v) => !climbsOut(v), "a service path must not climb out with a .. segment")
-  .refine((v) => !/^\/|^[A-Za-z]:/.test(v), "a service path must not be absolute")
-  .refine((v) => !v.includes("\\"), "a service path must not contain a backslash")
-  .refine((v) => v !== "ingredient.yaml", "a service path must not be ingredient.yaml");
+  .superRefine((v, ctx) => {
+    // First: check if it actually climbs out (escapes the directory)
+    if (climbsOut(v)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path must not climb out with a .. segment" });
+      return; // short-circuit
+    }
+    const stripped = v.startsWith("./") ? v.slice(2) : v;
+    // Second: check for .. segment even in paths that don't climb out (a/../b)
+    if (stripped.split("/").includes("..")) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path must not hold a .. segment" });
+      return; // short-circuit
+    }
+    // Third: absolute path (before segment check, so /abs fails as absolute, not as bad segment)
+    if (/^\/|^[A-Za-z]:/.test(v)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path must not be absolute" });
+      return;
+    }
+    // Fourth: backslash (before segment check, so a\b fails as backslash, not as bad segment)
+    if (v.includes("\\")) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path must not contain a backslash" });
+      return;
+    }
+    // Fifth: check segment characters
+    if (stripped === "" || !stripped.split("/").every((seg) => SEGMENT_OK.test(seg))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path holds only letters, digits and . _ @ + - in each segment" });
+      return;
+    }
+    // Sixth: ingredient.yaml
+    if (normalizeDeclared(v) === "ingredient.yaml") {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path must not be ingredient.yaml" });
+    }
+  });
 
 /**
  * Service ingredient: a Compose fragment plus the files it mounts or builds from.
@@ -308,7 +345,8 @@ export const normalizeDeclared = (p: string) => path.posix.normalize(p);
 
 /**
  * The full ingredient schema: parses with the discriminated union, then validates
- * service-specific constraints (executable ⊆ files, binary ⊆ files).
+ * service-specific constraints (executable ⊆ files, binary ⊆ files, compose not in files,
+ * no duplicate files entries).
  *
  * NOTE: We use superRefine on the union instead of on ServiceIngredient itself because
  * zod's discriminatedUnion does not propagate refinements from its members — a refine
@@ -316,7 +354,28 @@ export const normalizeDeclared = (p: string) => path.posix.normalize(p);
  */
 export const IngredientSchema = IngredientSchemaBase.superRefine((data, ctx) => {
   if (data.type !== "service") return;
+  const composeNorm = normalizeDeclared(data.compose);
   const filesSet = new Set(data.files.map(normalizeDeclared));
+
+  // Check that compose is not in files
+  for (let i = 0; i < data.files.length; i++) {
+    if (normalizeDeclared(data.files[i]) === composeNorm) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["files", i], message: "files must not list the compose file" });
+    }
+  }
+
+  // Check for duplicate files entries
+  const seen = new Map<string, number>(); // normalized -> first index
+  for (let i = 0; i < data.files.length; i++) {
+    const norm = normalizeDeclared(data.files[i]);
+    const prev = seen.get(norm);
+    if (prev !== undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["files", i], message: `files lists ${norm} twice` });
+    } else {
+      seen.set(norm, i);
+    }
+  }
+
   for (let i = 0; i < data.executable.length; i++) {
     if (!filesSet.has(normalizeDeclared(data.executable[i]))) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["executable", i], message: "executable must be a subset of files" });

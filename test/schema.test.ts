@@ -640,4 +640,83 @@ describe("service ingredient (spec 31)", () => {
     const r = IngredientSchema.safeParse({ type: "rule", name: "r", as: "a/b" });
     expect(r.success).toBe(true);
   });
+
+  // C2: ServicePath segment validation and superRefine checks
+  it("C2: refuses compose: 'a #b.yaml' (segment has space)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "a #b.yaml" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path holds only letters, digits and . _ @ + - in each segment" })]);
+  });
+
+  it("C2: refuses compose: 'a\\nb.yaml' (segment has newline)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "a\nb.yaml" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path holds only letters, digits and . _ @ + - in each segment" })]);
+  });
+
+  it("C2: refuses compose: '' (empty)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path holds only letters, digits and . _ @ + - in each segment" })]);
+  });
+
+  it("C2: refuses compose: 'a/../b.yaml' (has .. segment)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "a/../b.yaml" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path must not hold a .. segment" })]);
+  });
+
+  it("C2: refuses compose: './ingredient.yaml' (is ingredient.yaml)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "./ingredient.yaml" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path must not be ingredient.yaml" })]);
+  });
+
+  it("C2: refuses compose: 'dir/' (trailing slash)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "dir/" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path holds only letters, digits and . _ @ + - in each segment" })]);
+  });
+
+  it("C2: refuses files: ['a b.sh'] (segment has space)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["a b.sh"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 0], message: "a service path holds only letters, digits and . _ @ + - in each segment" })]);
+  });
+
+  it("C2: refuses files: ['compose.yaml'] when compose defaults (compose in files)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["compose.yaml"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 0], message: "files must not list the compose file" })]);
+  });
+
+  it("C2: refuses files: ['a.sh', './a.sh'] (duplicate after normalisation)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["a.sh", "./a.sh"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 1], message: "files lists a.sh twice" })]);
+  });
+
+  it("C2: accepts compose: './compose.yaml' (valid with leading ./)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "./compose.yaml" });
+    expect(r.success).toBe(true);
+  });
+
+  it("C2: accepts compose: 'docker/compose.dev.yaml' (valid with directory)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "docker/compose.dev.yaml" });
+    expect(r.success).toBe(true);
+  });
+
+  it("C2: accepts files: ['init/01-create_queues.sh', 'conf/app@2x+1.conf'] (valid chars)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["init/01-create_queues.sh", "conf/app@2x+1.conf"] });
+    expect(r.success).toBe(true);
+  });
 });
