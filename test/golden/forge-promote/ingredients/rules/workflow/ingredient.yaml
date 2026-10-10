@@ -1,0 +1,5 @@
+type: rule
+name: workflow
+# the text every client started from
+inclusion: always
+file: rule.md

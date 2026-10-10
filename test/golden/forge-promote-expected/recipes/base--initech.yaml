@@ -1,0 +1,10 @@
+# The recipe every client shares.
+name: base--initech
+description: Shared rules
+slot: core
+params:
+  org:
+    default: nobody # a profile sets it
+ingredients:
+  - rule/workflow--initech # the rule being promoted
+  - rule/style

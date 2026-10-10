@@ -1,0 +1,7 @@
+# globex follows the shared recipe
+name: globex
+recipes: [base]
+targets:
+  - claude-code
+params:
+  org: globex
