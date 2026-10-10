@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { capture, spawnInherited } from "../src/core/proc.js";
+import { capture, onPath, spawnInherited } from "../src/core/proc.js";
 import { tmpDir } from "./helpers/forge.js";
 
 // design D3 — the two ways craftar runs an external program besides git: no shell, an argument array.
@@ -99,5 +99,45 @@ describe("the program lookup never uses the child's working directory", () => {
     cleanups.push(() => fs.rm(cwd, { recursive: true, force: true }));
     expect(await capture(TOOL, ["-e", "console.log('ran')"], withPath(dir), cwd)).toBe("ran\n");
     expect(await spawnInherited({ file: TOOL, args: ["-e", "process.exit(7)"], cwd, env: withPath(dir), stdin: "ignore" })).toEqual({ code: 7 });
+  });
+});
+
+
+describe("onPath — where a program is looked for", () => {
+  it("finds it in an absolute PATH entry, skipping the empty and the relative ones, and returns its absolute path", async () => {
+    const dir = await planted();
+    expect(await onPath(TOOL, withPath(`${path.delimiter}.${path.delimiter}${dir}`))).toBe(path.join(dir, TOOL + EXE));
+  });
+
+  it("is null when it is on no absolute entry, when PATH is absent, for a relative path, and for a directory of that name", async () => {
+    const dir = await planted();
+    expect(await onPath(TOOL, withPath(""))).toBeNull();
+    expect(await onPath(TOOL, withPath("."))).toBeNull();
+    expect(await onPath(TOOL, {})).toBeNull();
+    expect(await onPath(`.${path.sep}${TOOL}`, withPath(dir))).toBeNull();
+    const other = await fs.realpath(await tmpDir("craftar-proc-dir-"));
+    cleanups.push(() => fs.rm(other, { recursive: true, force: true }));
+    await fs.mkdir(path.join(other, `craftar-other-tool${EXE}`));
+    expect(await onPath("craftar-other-tool", withPath(other))).toBeNull();
+  });
+
+  it("an absolute path is returned as given", async () => {
+    expect(await onPath(process.execPath, {})).toBe(process.execPath);
+  });
+
+  it.runIf(process.platform === "win32")("on Windows: PATH is read whatever its key's case, and a .cmd is not a program", async () => {
+    const dir = await planted();
+    expect(await onPath(TOOL, { Path: dir })).toBe(path.join(dir, `${TOOL}.exe`));
+    const cmds = await fs.realpath(await tmpDir("craftar-proc-cmd-"));
+    cleanups.push(() => fs.rm(cmds, { recursive: true, force: true }));
+    await fs.writeFile(path.join(cmds, "craftar-cmd-tool.cmd"), "@echo ran\r\n");
+    expect(await onPath("craftar-cmd-tool", { PATH: cmds })).toBeNull();
+  });
+
+  it.runIf(process.platform !== "win32")("elsewhere: a file that is not executable is not a program", async () => {
+    const dir = await fs.realpath(await tmpDir("craftar-proc-plain-"));
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    await fs.writeFile(path.join(dir, "craftar-plain-tool"), "#!/bin/sh\n", { mode: 0o644 });
+    expect(await onPath("craftar-plain-tool", withPath(dir))).toBeNull();
   });
 });
