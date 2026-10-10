@@ -505,8 +505,7 @@ describe("authEnv (spec 27)", () => {
     const yaml = `type: mcp\nname: tracker\nauthEnv:\n  - OK_NAME\n  - ${gh}\nserver:\n  command: npx`;
     // The error message includes: the file path, the path ["authEnv", 1], and "github-token"
     expect(() => parseYaml(file, yaml, IngredientSchema)).toThrow(/ingredient\.yaml/);
-    expect(() => parseYaml(file, yaml, IngredientSchema)).toThrow(/authEnv/);
-    expect(() => parseYaml(file, yaml, IngredientSchema)).toThrow(/1/);
+    expect(() => parseYaml(file, yaml, IngredientSchema)).toThrow(/"authEnv",\s*1\s*\]/);
     expect(() => parseYaml(file, yaml, IngredientSchema)).toThrow(/github-token/);
     // The token value itself is never in the message
     try {

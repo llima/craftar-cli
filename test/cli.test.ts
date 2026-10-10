@@ -4435,12 +4435,18 @@ describe("cli — craftar doctor (spec 24 §9.2)", () => {
     const ws = path.join(root, "acme-a");
     await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
     // Set the env variable to the marker value
+    const mcpEnv = (stdout: string) => (JSON.parse(stdout).checks as Array<{ id: string; level: string; message: string }>).filter((c) => c.id === "mcp-env");
     const text = runCli(["doctor", "--workspace", ws], { env: { CRAFTAR_HOME: home, ACME_TRACKER_TOKEN: marker } });
     expect(text.stdout).not.toContain(marker);
     expect(text.stderr).not.toContain(marker);
+    expect(text.stdout).toContain("every variable a written MCP server expects is set");
     const json = runCli(["doctor", "--workspace", ws, "--json"], { env: { CRAFTAR_HOME: home, ACME_TRACKER_TOKEN: marker } });
     expect(json.stdout).not.toContain(marker);
     expect(json.stderr).not.toContain(marker);
+    expect(mcpEnv(json.stdout).map((c) => [c.level, c.message])).toEqual([["ok", "every variable a written MCP server expects is set"]]);
+    // Unset: the declared name is what doctor reports, so a doctor that ignores authEnv cannot pass.
+    const unset = runCli(["doctor", "--workspace", ws, "--json"], { env: { CRAFTAR_HOME: home, ACME_TRACKER_TOKEN: undefined } });
+    expect(mcpEnv(unset.stdout).map((c) => [c.level, c.message])).toEqual([["warn", 'server "tracker" expects ACME_TRACKER_TOKEN, not set']]);
   });
 });
 
@@ -6491,6 +6497,10 @@ describe("diff — example file withholding (spec 27 §4.2, Ruling 4)", () => {
   it("12. collision with --exit-code: exits 1, same stdout as without --exit-code", async () => {
     const s = await exScenario({ [EX]: '{"env":{"OTHER":"' + MARK + '"}}' });
     const plain = runCli(["diff", "--workspace", s.wsRoot]);
+    // A `diff` that throws exits 1 with nothing on stdout: the plain run pins that it printed.
+    expect(plain.code).toBe(0);
+    expect(plain.stderr).toBe("");
+    expect(plain.stdout.startsWith("--- .claude/settings.craftar.example.json (disk, collision)\n+++ .claude/settings.craftar.example.json (forge)\n  content not shown: an example file may hold a value typed by hand\n")).toBe(true);
     const ec = runCli(["diff", "--exit-code", "--workspace", s.wsRoot]);
     expect(ec.code).toBe(1);
     expect(ec.stdout).toBe(plain.stdout);

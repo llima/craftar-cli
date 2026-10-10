@@ -650,6 +650,13 @@ describe("emitFor and mcpServers (spec 18 §9.4)", () => {
     expect(exampleJson).toBeDefined();
     // The example file should be in the plan with ingredient "mcp/*"
     expect(exampleJson?.ingredient).toBe("mcp/*");
+    // Rule 4 reads the server file only: the example file is not judged, and a changed server still fails.
+    const ing = { dir: "", meta: { server: { command: "npx", args: ["-y", "tracker"] } } };
+    expect(await isAsHeld(exampleJson!, ing, "mcp", "tracker")).toBe(true);
+    expect(await isAsHeld(mcpJson!, ing, "mcp", "tracker")).toBe(true);
+    const changed = { ...mcpJson!, content: Buffer.from(mcpJson!.content.toString("utf8").replace('"tracker"\n', '"trackeR"\n')) };
+    expect(changed.content.equals(mcpJson!.content)).toBe(false);
+    expect(await isAsHeld(changed, ing, "mcp", "tracker")).toBe(false);
   });
 });
 

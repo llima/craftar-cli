@@ -1486,6 +1486,7 @@ describe("import — authEnv (spec 27)", () => {
     const before = await snapshot(t.forge);
     const r = await importInto(t.forge, ws, "acme");
     expect(r.variants).toEqual([]);
+    expect(r.warnings).toEqual([]);
     expect(await snapshot(t.forge)).toEqual(before);
   });
 
@@ -1674,7 +1675,7 @@ describe("import — authEnv (spec 27)", () => {
       const ws = t.ws("reuse-ws");
       await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
       await syncWs(ws);
-      await importInto(t.forge, ws, "acme");
+      expect((await importInto(t.forge, ws, "acme")).warnings).toEqual([]);
       await syncWs(ws);
       const beforeSecond = await snapshot(t.forge);
       await importInto(t.forge, ws, "acme");
@@ -1704,7 +1705,7 @@ describe("import — authEnv (spec 27)", () => {
       const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
       mcpContent.mcpServers.tracker.args = ["-y", "acme2"];
       await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
-      await importInto(t2.forge, ws2, "acme");
+      expect((await importInto(t2.forge, ws2, "acme")).warnings).toEqual([]);
       await syncWs(ws2);
       const beforeSecond = await snapshot(t2.forge);
       // Second import - should report the variant again but not change anything
@@ -1732,7 +1733,7 @@ describe("import — authEnv (spec 27)", () => {
       const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
       mcpContent.mcpServers.tracker.args = ["-y", "tracker-acme"];
       await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
-      await importInto(t4.forge, ws4, "acme");
+      expect((await importInto(t4.forge, ws4, "acme")).warnings).toEqual([]);
       await syncWs(ws4);
       const beforeSecond = await snapshot(t4.forge);
       await importInto(t4.forge, ws4, "acme");
@@ -1742,41 +1743,65 @@ describe("import — authEnv (spec 27)", () => {
       expect(st.every((s) => s.state === "unchanged")).toBe(true);
     }
 
-    // Scenario 3: Lost-declaration — import, sync, then break the Forge so the profile doesn't resolve
+    // Scenario 5: a lost declaration (test 6) — the second import says nothing and changes nothing
     {
-      const t3 = await setup();
+      const t5 = await setup();
       const { makeForge, recipe, profile, rule } = await import("./helpers/forge.js");
-      await makeForge(t3.forge, {
+      await makeForge(t5.forge, {
+        ingredients: [
+          rule("workflow", "# Workflow\n"),
+          { meta: { type: "mcp", name: "tracker", server: { command: "npx", args: ["-y", "tracker"] } } },
+          { meta: { type: "mcp", name: "tracker--acme", as: "tracker", authEnv: ["ACME_VARIANT_TOKEN"], server: { command: "npx", args: ["-y", "acme"] } } },
+        ],
+        recipes: [recipe("base", ["rule/workflow", "mcp/tracker"]), recipe("base--acme", ["rule/workflow", "mcp/tracker--acme"])],
+        profiles: [profile("acme", ["base--acme"], ["claude-code"])],
+      });
+      const ws5 = t5.ws("lost-ws");
+      await writeFiles(ws5, { "craftar.yaml": "forge: ../forge\nprofile: acme\n", ".claude/rules/workflow.md": "# Workflow\n" });
+      await syncWs(ws5);
+      await fs.writeFile(path.join(ws5, ".mcp.json"), JSON.stringify({ mcpServers: { tracker: { command: "npx", args: ["-y", "tracker"] } } }, null, 2) + "\n");
+      const first = await importInto(t5.forge, ws5, "acme");
+      expect(first.warnings).toEqual(["mcp/tracker: ACME_VARIANT_TOKEN declared by mcp/tracker--acme is not declared by mcp/tracker"]);
+      await syncWs(ws5);
+      const beforeSecond = await snapshot(t5.forge);
+      const second = await importInto(t5.forge, ws5, "acme");
+      expect(second.warnings).toEqual([]);
+      expect(await snapshot(t5.forge)).toEqual(beforeSecond);
+      const w = await loadWorkspace(ws5);
+      const st = await status(w, await plan(w), await readLock(ws5));
+      expect(st.map((x) => x.state)).toEqual(st.map(() => "unchanged"));
+    }
+
+    // Scenario 6: the stale variant (test 13) — the same three assertions
+    {
+      const t6 = await setup();
+      const { makeForge, recipe, profile, rule } = await import("./helpers/forge.js");
+      await makeForge(t6.forge, {
         ingredients: [
           rule("workflow", "# Workflow\n"),
           { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx", args: ["-y", "tracker"] } } },
+          { meta: { type: "mcp", name: "tracker--acme", as: "tracker", server: { command: "npx", args: ["-y", "acme"] } } },
         ],
-        recipes: [recipe("base", ["rule/workflow", "mcp/tracker"])],
+        recipes: [recipe("base", ["rule/workflow", "mcp/tracker"]), recipe("base--acme", ["rule/workflow", "mcp/tracker--acme"])],
         profiles: [profile("acme", ["base"], ["claude-code"])],
       });
-      const ws3 = t3.ws("lost-ws");
-      await writeFiles(ws3, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
-      await syncWs(ws3);
-      // Break the Forge: add a second recipe on the same slot so acme no longer resolves
-      await fs.writeFile(
-        path.join(t3.forge, "recipes/stack-extra.yaml"),
-        "name: stack-extra\nextends: []\nslot: pm\ningredients: [rule/workflow]\n"
-      );
-      // Edit the base recipe to also have slot: pm
-      await fs.writeFile(
-        path.join(t3.forge, "recipes/base.yaml"),
-        "name: base\nextends: []\nslot: pm\ningredients: [rule/workflow, mcp/tracker]\n"
-      );
-      // Update profile to use both recipes
-      await fs.writeFile(
-        path.join(t3.forge, "profiles/acme/profile.yaml"),
-        "name: acme\nrecipes: [base, stack-extra]\ntargets: [claude-code]\nparams: {}\n"
-      );
-      // Import again — should get the lost-declaration warning
-      const r = await importInto(t3.forge, ws3, "acme");
-      const found = r.warnings.filter((w) => w.startsWith("profile acme did not resolve before this import ("));
-      expect(found.length).toBe(1);
-      expect(found[0]).toMatch(/ — authEnv declarations were not compared$/);
+      const ws6 = t6.ws("stale-ws");
+      await writeFiles(ws6, { "craftar.yaml": "forge: ../forge\nprofile: acme\n", ".claude/rules/workflow.md": "# Workflow\n" });
+      await syncWs(ws6);
+      const mcpPath = path.join(ws6, ".mcp.json");
+      const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
+      mcpContent.mcpServers.tracker.args = ["-y", "acme-custom"];
+      await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
+      const first = await importInto(t6.forge, ws6, "acme");
+      expect(first.warnings).toEqual(["mcp/tracker: ACME_TRACKER_TOKEN declared by mcp/tracker is not declared by mcp/tracker--acme"]);
+      await syncWs(ws6);
+      const beforeSecond = await snapshot(t6.forge);
+      const second = await importInto(t6.forge, ws6, "acme");
+      expect(second.warnings).toEqual([]);
+      expect(await snapshot(t6.forge)).toEqual(beforeSecond);
+      const w = await loadWorkspace(ws6);
+      const st = await status(w, await plan(w), await readLock(ws6));
+      expect(st.map((x) => x.state)).toEqual(st.map(() => "unchanged"));
     }
   });
 
