@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { Ingredient, PlanParam } from "../schema/index.js";
+import { normalizeDeclared } from "../schema/index.js";
 import { changedRegions } from "./classify.js";
 import { TEXT_EXT } from "../emitters/claude-code.js";
 import { KIRO_TEXT_EXT } from "../emitters/kiro.js";
@@ -50,10 +51,9 @@ export function substitutedFile(meta: Ingredient, file: string): boolean {
       return false;
     case "service": {
       // compose is always substituted; a files entry unless listed in binary
-      const normalize = (p: string) => path.posix.normalize(p);
-      const normalized = normalize(file);
-      if (normalize(meta.compose) === normalized) return true;
-      if (meta.binary.some((b: string) => normalize(b) === normalized)) return false;
+      const normalized = normalizeDeclared(file);
+      if (normalizeDeclared(meta.compose) === normalized) return true;
+      if (meta.binary.some((b) => normalizeDeclared(b) === normalized)) return false;
       return true; // a files entry not in binary
     }
   }
@@ -94,7 +94,7 @@ export function emittedFile(meta: Ingredient, file: string, dir: string | null):
       return false;
     case "service":
       // compose + each files entry
-      return eq(file, meta.compose) || meta.files.some((f: string) => eq(f, file));
+      return eq(file, meta.compose) || meta.files.some((f) => eq(f, file));
   }
 }
 

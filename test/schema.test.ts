@@ -537,52 +537,64 @@ describe("service ingredient (spec 31)", () => {
   it("refuses files with ../x (climbs out)", () => {
     const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["../x"] });
     expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 0], message: "a service path must not climb out with a .. segment" })]);
   });
 
   it("refuses files with /abs (absolute)", () => {
     const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["/abs"] });
     expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 0], message: "a service path must not be absolute" })]);
   });
 
   it("refuses files with a\\b (backslash)", () => {
     const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["a\\b"] });
     expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 0], message: "a service path must not contain a backslash" })]);
   });
 
   it("refuses files with ingredient.yaml", () => {
     const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["ingredient.yaml"] });
     expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 0], message: "a service path must not be ingredient.yaml" })]);
   });
 
   it("refuses compose with ../c.yaml (climbs out)", () => {
     const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "../c.yaml" });
     expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path must not climb out with a .. segment" })]);
   });
 
   it("refuses executable not in files", () => {
     const r = IngredientSchema.safeParse({ type: "service", name: "s", files: [], executable: ["x.sh"] });
     expect(r.success).toBe(false);
     if (r.success) return;
-    expect(r.error.issues.some((i) => i.message.includes("executable must be a subset of files"))).toBe(true);
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["executable", 0], message: "executable must be a subset of files" })]);
   });
 
   it("refuses binary not in files", () => {
     const r = IngredientSchema.safeParse({ type: "service", name: "s", files: [], binary: ["x.bin"] });
     expect(r.success).toBe(false);
     if (r.success) return;
-    expect(r.error.issues.some((i) => i.message.includes("binary must be a subset of files"))).toBe(true);
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["binary", 0], message: "binary must be a subset of files" })]);
   });
 
   it("refuses as with a/b (has separator)", () => {
     const r = IngredientSchema.safeParse({ type: "service", name: "s", as: "a/b" });
     expect(r.success).toBe(false);
     if (r.success) return;
-    expect(r.error.issues.some((i) => i.message.includes("slug-like"))).toBe(true);
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["as"], message: "a service as must be slug-like (like name)" })]);
   });
 
-  it("refuses as: '..'", () => {
+  it("refuses as: '..' (climbs out)", () => {
     const r = IngredientSchema.safeParse({ type: "service", name: "s", as: ".." });
     expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues.some((i) => JSON.stringify(i.path) === JSON.stringify(["as"]) && i.message.includes("climb out"))).toBe(true);
   });
 
   it("refuses unknown key ports: []", () => {
@@ -600,5 +612,32 @@ describe("service ingredient (spec 31)", () => {
   it("refuses compose with drive letter C:/x (absolute on Windows)", () => {
     const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "C:/x.yaml" });
     expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path must not be absolute" })]);
+  });
+
+  it("refuses executable with ../x even when files is empty (climb check on executable path itself)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: [], executable: ["../x"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    // The climb check on the path itself fires first; there may also be a subset error
+    expect(r.error.issues.some((i) => JSON.stringify(i.path) === JSON.stringify(["executable", 0]) && i.message === "a service path must not climb out with a .. segment")).toBe(true);
+  });
+
+  it("accepts as: 'Echo_1.x' (slug-like)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", as: "Echo_1.x" });
+    expect(r.success).toBe(true);
+  });
+
+  it("minimal service has as: undefined", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "echo" });
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data.as).toBeUndefined();
+  });
+
+  it("a rule with as: 'a/b' still loads (the slug rule is service-only)", () => {
+    const r = IngredientSchema.safeParse({ type: "rule", name: "r", as: "a/b" });
+    expect(r.success).toBe(true);
   });
 });

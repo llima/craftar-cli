@@ -682,14 +682,43 @@ describe("agents-md walks to the end with no rule (spec 18 §6.3)", () => {
 });
 
 describe("service ingredient with default targets (spec 31)", () => {
-  it("with default targets (omitted) no warning mentions the service", async () => {
-    // A service with default targets: [] is not aimed at any target, so no warning
+  it("with default targets (no targets key) no warning mentions the service and no file is planned from it", async () => {
+    // A service with NO targets key (default: []) is not aimed at any target, so no warning
     const s = await scenario(
-      { ingredients: [spec("service", "echo", { targets: [] })], recipes: [recipe("base", ["service/echo"])], profiles: [profile("acme", ["base"])] },
+      {
+        ingredients: [
+          { meta: { type: "service", name: "echo" }, files: { "compose.yaml": "services:\n  echo:\n    image: alpine\n" } },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"])],
+      },
       { config: { profile: "acme" } },
     );
     walkCleanups.push(s.cleanup);
     const p = await plan(await loadWorkspace(s.wsRoot));
-    expect(p.warnings.some((w) => w.includes("cap-service") || w.includes("service/echo"))).toBe(false);
+    expect(p.warnings.some((w) => w.includes("service/echo"))).toBe(false);
+    expect(p.files.some((f) => f.ingredient === "service/echo")).toBe(false);
+  });
+
+  it("with targets: '*' the three walk warnings appear and still no file is planned from it", async () => {
+    // A service with targets: "*" is aimed at all targets, so all three warn
+    const s = await scenario(
+      {
+        ingredients: [
+          { meta: { type: "service", name: "echo", targets: "*" }, files: { "compose.yaml": "services:\n  echo:\n    image: alpine\n" } },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    walkCleanups.push(s.cleanup);
+    const p = await plan(await loadWorkspace(s.wsRoot));
+    expect(p.warnings).toEqual(expect.arrayContaining([
+      "claude-code: service service/echo has no Claude Code equivalent — skipped",
+      "kiro: service service/echo has no Kiro equivalent — skipped",
+      "agents-md: 1 service ingredient(s) have no AGENTS.md equivalent — skipped: service/echo",
+    ]));
+    expect(p.files.some((f) => f.ingredient === "service/echo")).toBe(false);
   });
 });

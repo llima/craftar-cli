@@ -64,8 +64,11 @@ const IngredientParam = z
   })
   .strict();
 
+/** Slug-like pattern: starts with alphanumeric, then alphanumeric, dots, underscores or hyphens. Used by ingredient names and service `as`. */
+const SLUG = /^[a-z0-9][a-z0-9._-]*$/i;
+
 const IngredientBase = z.object({
-  name: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/i, "ingredient names are slug-like"),
+  name: z.string().regex(SLUG, "ingredient names are slug-like"),
   description: z.string().optional(),
   /** Which targets receive this ingredient. Default: all. */
   targets: z.array(TargetSchema).or(z.literal("*")).default("*"),
@@ -73,7 +76,7 @@ const IngredientBase = z.object({
   as: z
     .string()
     // Every emitter joins it into an output path (`outName`): `..` there wrote outside the workspace (0.17.3).
-    .refine((v) => !climbsOut(v), 'as must not climb out of its folder with a .. segment')
+    .refine((v) => !climbsOut(v), "as must not climb out of its folder with a .. segment")
     .optional(),
   /** Free-form tags used by recipes and `craftar explain`. */
   tags: z.array(z.string()).default([]),
@@ -184,26 +187,24 @@ export const HookIngredient = IngredientBase.extend({
   files: z.array(EmittedFile).min(1),
 });
 
-/** The slug pattern `name` uses (spec 31 §7): a service's `as` must match it. */
-const SlugPattern = /^[a-z0-9][a-z0-9._-]*$/i;
-
 /**
  * A service path: `compose`, and every entry of `files`, `executable` and `binary`.
  * Refused when absolute (starts with `/` or a drive letter), has a `..` segment, contains a
  * backslash, or is literally `ingredient.yaml`.
  */
-const ServicePath = z.string()
-  .refine((v) => !climbsOut(v), 'a service path must not climb out with a .. segment')
-  .refine((v) => !/^\/|^[A-Za-z]:/.test(v), 'a service path must not be absolute')
-  .refine((v) => !v.includes('\\'), 'a service path must not contain a backslash')
-  .refine((v) => v !== 'ingredient.yaml', 'a service path must not be ingredient.yaml');
+const ServicePath = z
+  .string()
+  .refine((v) => !climbsOut(v), "a service path must not climb out with a .. segment")
+  .refine((v) => !/^\/|^[A-Za-z]:/.test(v), "a service path must not be absolute")
+  .refine((v) => !v.includes("\\"), "a service path must not contain a backslash")
+  .refine((v) => v !== "ingredient.yaml", "a service path must not be ingredient.yaml");
 
 /**
  * Service ingredient: a Compose fragment plus the files it mounts or builds from.
  * NOTE: This is the base shape for parsing; the subset validations (executable ⊆ files, binary ⊆ files)
  * are done in the IngredientSchema wrapper below.
  */
-export const ServiceIngredientBase = IngredientBase
+export const ServiceIngredient = IngredientBase
   .omit({ as: true }) // Remove the base `as` to add our own with slug validation
   .extend({
     type: z.literal("service"),
@@ -218,15 +219,13 @@ export const ServiceIngredientBase = IngredientBase
     /** A service is aimed at no AI coder by default. */
     targets: z.array(TargetSchema).or(z.literal("*")).default([]),
     /** For a service, `as` must be slug-like (spec 31 §7). */
-    as: z.string()
-      .refine((v) => !climbsOut(v), 'as must not climb out of its folder with a .. segment')
-      .refine((v) => SlugPattern.test(v), 'a service as must be slug-like (like name)')
+    as: z
+      .string()
+      .refine((v) => !climbsOut(v), "as must not climb out of its folder with a .. segment")
+      .refine((v) => SLUG.test(v), "a service as must be slug-like (like name)")
       .optional(),
   })
   .strict();
-
-// For the discriminated union to work, we use the base shape without additional refinements
-export const ServiceIngredient = ServiceIngredientBase;
 
 // The base discriminated union of all ingredient types
 const IngredientSchemaBase = z.discriminatedUnion("type", [
@@ -238,25 +237,34 @@ const IngredientSchemaBase = z.discriminatedUnion("type", [
   ScriptIngredient,
   SteeringIngredient,
   HookIngredient,
-  ServiceIngredientBase,
+  ServiceIngredient,
 ]);
+
+/**
+ * Normalize a declared service path for subset checks: resolves `./foo` to `foo`.
+ * Used by schema validation (executable ⊆ files, binary ⊆ files) and by extract.ts.
+ */
+export const normalizeDeclared = (p: string) => path.posix.normalize(p);
 
 /**
  * The full ingredient schema: parses with the discriminated union, then validates
  * service-specific constraints (executable ⊆ files, binary ⊆ files).
+ *
+ * NOTE: We use superRefine on the union instead of on ServiceIngredient itself because
+ * zod's discriminatedUnion does not propagate refinements from its members — a refine
+ * on ServiceIngredient would never run when parsed through this union.
  */
 export const IngredientSchema = IngredientSchemaBase.superRefine((data, ctx) => {
   if (data.type !== "service") return;
-  const normalizePath = (p: string) => path.posix.normalize(p);
-  const filesSet = new Set(data.files.map(normalizePath));
+  const filesSet = new Set(data.files.map(normalizeDeclared));
   for (let i = 0; i < data.executable.length; i++) {
-    if (!filesSet.has(normalizePath(data.executable[i]))) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['executable', i], message: 'executable must be a subset of files' });
+    if (!filesSet.has(normalizeDeclared(data.executable[i]))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["executable", i], message: "executable must be a subset of files" });
     }
   }
   for (let i = 0; i < data.binary.length; i++) {
-    if (!filesSet.has(normalizePath(data.binary[i]))) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['binary', i], message: 'binary must be a subset of files' });
+    if (!filesSet.has(normalizeDeclared(data.binary[i]))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["binary", i], message: "binary must be a subset of files" });
     }
   }
 });

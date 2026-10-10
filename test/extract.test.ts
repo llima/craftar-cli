@@ -79,4 +79,18 @@ describe("service ingredient emittedFile and bodyFile (spec 31)", () => {
     });
     expect(bodyFile(s2, "logo.png", dir)).toBe(false);
   });
+
+  it("bodyFile: other.md is not a body file (not emitted)", () => {
+    expect(bodyFile(service, "other.md", dir)).toBe(false);
+  });
+
+  it("bodyFile: with null dir, 'compose.yaml' is false (./compose.yaml declared, not string-equal)", () => {
+    // service has compose: "./compose.yaml", asking for "compose.yaml" with null dir: not string-equal
+    expect(bodyFile(service, "compose.yaml", null)).toBe(false);
+  });
+
+  it("bodyFile: with null dir, './compose.yaml' is true (string-equal to declared)", () => {
+    // service has compose: "./compose.yaml", asking for "./compose.yaml" with null dir: string-equal
+    expect(bodyFile(service, "./compose.yaml", null)).toBe(true);
+  });
 });
