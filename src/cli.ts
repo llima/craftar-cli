@@ -53,7 +53,8 @@ import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { spawn } from "node:child_process";
 import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
-import { declaredTemplates, profileLabel, templateRows, type Declared } from "./core/templates.js";
+import { declaredTemplates, dotnetVersion, feedMessage, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared, type DeclaredEntry } from "./core/templates.js";
+import { spawnInherited } from "./core/proc.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
@@ -995,6 +996,73 @@ templates
       } else {
         console.log(`  ${row.kind.padEnd(kindWidth)}  not installed by this craftar`);
       }
+    }
+  });
+
+templates
+  .command("install")
+  .description(
+    "Run dotnet new install once per dotnet-new entry, in the profile's order, at the workspace root; the packages land in this user's dotnet template store, shared by every workspace. Nothing else runs it. Exits 1 when an entry failed or was skipped",
+  )
+  .option("--dry-run", "print each dotnet new install line; run nothing (needs no dotnet)", false)
+  .option("--force", "pass --force to dotnet new install", false)
+  .option("--interactive", "pass --interactive to dotnet new install and give it the terminal's input", false)
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
+  .action(async (o) => {
+    const ws = await loadWorkspace(o.workspace, load(o, "read"));
+    const { profile, declared } = await declaredFor(ws);
+    const warnings = [...ws.warnings, ...declared.warnings];
+
+    // Nothing declared: the list line and exit 0, no dotnet needed
+    if (!declared.declared || declared.entries.length === 0) {
+      console.log(`no templates declared for profile ${profile}`);
+      return;
+    }
+
+    warnStderr(warnings);
+
+    // Has an installable entry and not --dry-run: check dotnet
+    const hasInstallable = declared.entries.some((e): e is DeclaredEntry & { installable: true } => e.installable);
+    if (hasInstallable && !o.dryRun) {
+      const version = await dotnetVersion();
+      if (version === null) {
+        fail("dotnet is not available on PATH — install the .NET SDK, then run craftar templates install again (--dry-run shows the lines without it)");
+      }
+    }
+
+    // Feed line (before any run, under --dry-run too)
+    const unpinned = await unpinnedSources(declared.entries, ws.root);
+    if (unpinned.length > 0) {
+      warnStderr([`templates: ${feedMessage(unpinned)}`]);
+    }
+
+    const announce = (entry: number, line: string) => console.log(`templates[${entry}]: ${line}`);
+    let result;
+    try {
+      result = await installTemplates(declared.entries, ws.root, { dryRun: o.dryRun, force: o.force, interactive: o.interactive, env: process.env, announce }, spawnInherited);
+    } catch (e) {
+      fail(errorText(e));
+    }
+
+    if (o.dryRun) {
+      for (const l of result.lines) console.log(l.line);
+      console.log(`dry run: ${result.lines.length} would run, ${result.skipped.length} skipped — nothing installed`);
+      return;
+    }
+
+    // Print one error per failed entry
+    for (const f of result.failed) {
+      const msg = f.code === null ? "dotnet did not exit" : `dotnet exited ${f.code}`;
+      console.error(`error: templates[${f.entry}] failed — ${msg}`);
+    }
+
+    // Summary on stdout
+    const store = "into the dotnet template store of this user (remove a package with: dotnet new uninstall <package>)";
+    console.log(`templates: ${result.installed.length} installed, ${result.failed.length} failed, ${result.skipped.length} skipped — ${store}`);
+
+    if (result.failed.length > 0 || result.skipped.length > 0) {
+      process.exitCode = 1;
     }
   });
 

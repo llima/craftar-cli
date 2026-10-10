@@ -150,3 +150,98 @@ describe("templates (the group alone)", () => {
     expect(r.stderr).toMatch(/\n\s+list\b/);
   });
 });
+
+const LINE_API = `dotnet new install Acme.Templates.Api Acme.Templates.Front::2.1.0 --add-source ${SOURCE}`;
+const FEED = (positions: string) =>
+  `warn templates: a source is declared (${positions}) and the workspace root has no NuGet.Config — dotnet adds a declared source to the feeds it already uses, it does not replace them (craftar looks at the workspace root only; NuGet also reads parent directories and the user's configuration)\n`;
+const COLLISION = (ids: string) =>
+  `error: a file or folder named like a declared package exists at the workspace root (${ids}) — dotnet would install it instead of the feed's package; nothing installed\n`;
+const DOTNET_MISSING =
+  "error: dotnet is not available on PATH — install the .NET SDK, then run craftar templates install again (--dry-run shows the lines without it)\n";
+const STORE = "into the dotnet template store of this user (remove a package with: dotnet new uninstall <package>)";
+const NUGET = { "nuget.config": "<configuration />\n" };
+
+describe("templates install --dry-run", () => {
+  it("prints the exact line of the entry and the additive-feed line, needs no dotnet, exits 0 (AC 1)", async () => {
+    const s = await fresh([API]);
+    const r = cli(["templates", "install", "--dry-run"], s.wsRoot);
+    expect([r.code, r.stdout, r.stderr]).toEqual([0, `${LINE_API}\ndry run: 1 would run, 0 skipped — nothing installed\n`, FEED("templates[0]")]);
+  });
+
+  it("with a NuGet.Config at the workspace root, whatever its case, the additive-feed line is absent", async () => {
+    const s = await fresh([API], NUGET);
+    const r = cli(["templates", "install", "--dry-run"], s.wsRoot);
+    expect([r.code, r.stderr]).toEqual([0, ""]);
+  });
+
+  it("an unknown kind is warned and skipped, and the exit is still 0 (choice 30)", async () => {
+    const s = await fresh([API, NPM, TOOLS], NUGET);
+    const r = cli(["templates", "install", "--dry-run"], s.wsRoot);
+    expect([r.code, r.stdout, r.stderr]).toEqual([
+      0,
+      `${LINE_API}\ndotnet new install Acme.Tools\ndry run: 2 would run, 1 skipped — nothing installed\n`,
+      `warn ${UNKNOWN_KIND}\n`,
+    ]);
+  });
+
+  it("--force and --interactive are passed through, in that order, and only when typed", async () => {
+    const s = await fresh([TOOLS]);
+    expect(cli(["templates", "install", "--dry-run", "--interactive", "--force"], s.wsRoot).stdout.split("\n")[0]).toBe("dotnet new install Acme.Tools --force --interactive");
+    expect(cli(["templates", "install", "--dry-run", "--force"], s.wsRoot).stdout.split("\n")[0]).toBe("dotnet new install Acme.Tools --force");
+    expect(cli(["templates", "install", "--dry-run"], s.wsRoot).stdout.split("\n")[0]).toBe("dotnet new install Acme.Tools");
+  });
+
+  it.each([
+    ["a folder", { "Acme.Templates.Api/keep.txt": "" }],
+    ["a file", { "Acme.Templates.Api": "" }],
+  ] as Array<[string, Record<string, string>]>)("%s named like a declared ID at the workspace root: exit 1, no line printed", async (_name, files) => {
+    const s = await fresh([API], { ...NUGET, ...files });
+    const r = cli(["templates", "install", "--dry-run"], s.wsRoot);
+    expect([r.code, r.stdout, r.stderr]).toEqual([1, "", COLLISION("Acme.Templates.Api")]);
+  });
+});
+
+describe("templates install", () => {
+  it("without dotnet on PATH: exit 1 with the fix, before anything else is said", async () => {
+    const s = await fresh([API]);
+    const r = cli(["templates", "install"], s.wsRoot);
+    expect([r.code, r.stdout, r.stderr]).toEqual([1, "", DOTNET_MISSING]);
+  });
+
+  it("nothing declared: exit 0 and no dotnet needed", async () => {
+    for (const templates of [undefined, []]) {
+      const s = await fresh(templates);
+      const r = cli(["templates", "install"], s.wsRoot);
+      expect([r.code, r.stdout, r.stderr]).toEqual([0, NOTHING, ""]);
+    }
+  });
+
+  it("only an unknown kind: nothing to run, the entry is skipped, exit 1", async () => {
+    const s = await fresh([NPM]);
+    const r = cli(["templates", "install"], s.wsRoot);
+    expect([r.code, r.stdout, r.stderr]).toEqual([1, `templates: 0 installed, 0 failed, 1 skipped — ${STORE}\n`, `warn ${UNKNOWN_KIND}\n`]);
+  });
+
+  it("a refused block installs nothing: the mapping, and a source with a password that is never printed (AC 3)", async () => {
+    for (const [templates, message] of [
+      [{ dotnetNew: [M] }, HINT],
+      [withCredential, CREDENTIAL],
+    ] as Array<[unknown, string]>) {
+      const s = await fresh(templates);
+      for (const args of [["templates", "install"], ["templates", "install", "--dry-run"]]) {
+        const r = cli(args, s.wsRoot);
+        expect([r.code, r.stdout, r.stderr]).toEqual([1, "", `error: ${message}\n`]);
+        expect(r.stdout + r.stderr).not.toContain(M);
+      }
+    }
+  });
+
+  it("writes nothing — dry run, refusal or failure: the Forge, the workspace and $CRAFTAR_HOME stay byte-identical", async () => {
+    const s = await fresh([API, NPM, TOOLS], { "Acme.Tools": "" });
+    const home = process.env.CRAFTAR_HOME!;
+    const before = [await tree(s.root), await tree(home)];
+    expect(cli(["templates", "install", "--dry-run"], s.wsRoot).code).toBe(1);
+    expect(cli(["templates", "install"], s.wsRoot).code).toBe(1);
+    expect([await tree(s.root), await tree(home)]).toEqual(before);
+  });
+});
