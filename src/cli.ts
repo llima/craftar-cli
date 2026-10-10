@@ -18,6 +18,7 @@ import { listTargets } from "./core/capabilities.js";
 import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { renderImportReport } from "./core/import-report.js";
+import { driftList, type DriftRow } from "./core/drift.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
 import { exists, gitDirty, gitIsRepo, gitUnheld, loadForge } from "./core/forge.js";
@@ -401,44 +402,93 @@ program
     const p = await plan(ws);
     const st = await status(ws, p, await readLock(ws.root));
     // Spec 19 §3.3: under --exit-code a path nothing matches must not read as "clean" to a script
-    if (o.exitCode && only && !st.some((s) => s.path === only))
-      fail(`${only} is not a file craftar manages in this workspace — pass the workspace-relative path as \`craftar status\` prints it (forward slashes)`);
+    if (o.exitCode && only && !st.some((s) => s.path === only)) fail(unmanaged(only));
     let shown = 0;
-    const render = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
     for (const s of st) {
       if (only && s.path !== only) continue;
       // Spec 19 §3.2: show the six states sync --check refuses (skip unchanged and adopt)
       if (["unchanged", "adopt"].includes(s.state)) continue;
       shown++;
-      if (s.state === "orphan-drift") {
-        // Header and one line, no body: sync keeps this file
-        console.log(pc.bold(`--- ${s.path} (disk, orphan-drift)`));
-        console.log(`  ${explainSkip(s)}`);
-        continue;
-      }
-      const disk = await readText(path.join(ws.root, s.path));
-      if (s.state === "orphan") {
-        // A removal: the file exists on disk but the Forge no longer produces it
-        console.log(pc.bold(`--- ${s.path} (disk, orphan)`));
-        console.log(pc.bold(`+++ ${s.path} (forge: no longer produced — sync removes it)`));
-        console.log(renderDiff(disk ?? "", "", render));
-      } else {
-        const next = s.planned ? toLf(stripBom(s.planned.content.toString("utf8"))) : "";
-        console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
-        console.log(pc.bold(`+++ ${s.path} (forge)`));
-        // Spec 27 §4.2, Ruling 4: do not print on-disk content of the example file for drift/collision
-        if (s.path === EXAMPLE_SETTINGS && (s.state === "drift" || s.state === "collision")) {
-          console.log("  content not shown: an example file may hold a value typed by hand");
-        } else {
-          console.log(renderDiff(disk ?? "", next, render));
-        }
-      }
+      await printFileDiff(ws.root, s);
     }
     if (!shown) console.log(pc.green("no differences"));
     // exitCode, not process.exit: exit drops a piped diff still queued for a slow reader (spec 19 §3.1)
     else if (o.exitCode) process.exitCode = 1;
     // Spec 29 §4.1: with no [path], --exit-code fails exactly when `sync --check` does — a refused sync included
     if (refusalBlock(unsetDeclared(p)) && o.exitCode && !only) process.exitCode = 1;
+  });
+
+const DIFF_PAINT = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
+
+/** What `craftar diff` prints for one file `sync --check` refuses; `drift show <path>` prints the same for a drifted one. */
+async function printFileDiff(root: string, s: FileStatus): Promise<void> {
+  if (s.state === "orphan-drift") {
+    // Header and one line, no body: sync keeps this file
+    console.log(pc.bold(`--- ${s.path} (disk, orphan-drift)`));
+    console.log(`  ${explainSkip(s)}`);
+    return;
+  }
+  const disk = await readText(path.join(root, s.path));
+  if (s.state === "orphan") {
+    // A removal: the file exists on disk but the Forge no longer produces it
+    console.log(pc.bold(`--- ${s.path} (disk, orphan)`));
+    console.log(pc.bold(`+++ ${s.path} (forge: no longer produced — sync removes it)`));
+    console.log(renderDiff(disk ?? "", "", DIFF_PAINT));
+  } else {
+    const next = s.planned ? toLf(stripBom(s.planned.content.toString("utf8"))) : "";
+    console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
+    console.log(pc.bold(`+++ ${s.path} (forge)`));
+    // Spec 27 §4.2, Ruling 4: do not print on-disk content of the example file for drift/collision
+    if (s.path === EXAMPLE_SETTINGS && (s.state === "drift" || s.state === "collision")) {
+      console.log("  content not shown: an example file may hold a value typed by hand");
+    } else {
+      console.log(renderDiff(disk ?? "", next, DIFF_PAINT));
+    }
+  }
+}
+
+/** The one wording for a path no status names (spec 19 §3.3), shared by `diff --exit-code` and the drift commands. */
+const unmanaged = (p: string) => `${p} is not a file craftar manages in this workspace — pass the workspace-relative path as \`craftar status\` prints it (forward slashes)`;
+
+/** A path as the user may type it, to the spelling `status` prints: forward slashes, no leading `./`. */
+const statusPath = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, "");
+
+/* ---------------------------------------------------------------- drift */
+const drift = program.command("drift").description("Hand-edited generated files: show them, discard the edit, or promote it to the Forge");
+
+drift
+  .command("show", { isDefault: true })
+  .description("List the files hand-edited since the last sync, with the Forge's side and whether the edit can be promoted; with a path, that file's row and its diff. Writes nothing")
+  .argument("[path]", "limit to one file, and show its diff")
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--json", "machine-readable output", false)
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
+  .action(async (given: string | undefined, o: { workspace: string; json: boolean; offline: boolean }) => {
+    const ws = await loadWorkspace(o.workspace, load(o, "read"));
+    warnStderr(ws.warnings);
+    const p = await plan(ws);
+    const st = await status(ws, p, await readLock(ws.root));
+    const only = given === undefined ? null : statusPath(given);
+    const named = only === null ? null : st.find((s) => s.path === only);
+    if (only !== null && !named) fail(unmanaged(only));
+    const rows = driftList(named ? [named] : st);
+    if (o.json) return console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: p.warnings }, null, 2));
+    if (named && !rows.length) return console.log(`${named.path} is not drifted (${named.state})`);
+    if (!rows.length) return console.log("no drift");
+    // Columns as wide as their longest value, as the spec's example lines them up (§4.2).
+    const wide = (pick: (r: DriftRow) => string) => Math.max(...rows.map((r) => pick(r).length));
+    const [pathW, ingW, forgeW] = [wide((r) => r.path), wide((r) => r.ingredient), wide((r) => `forge: ${r.forge}`)];
+    for (const r of rows)
+      console.log(
+        `${color(r.state)(r.state.padEnd(13))} ${r.path.padEnd(pathW)}  ${pc.dim(r.ingredient.padEnd(ingW))}  ${`forge: ${r.forge}`.padEnd(forgeW)}  promote: ${r.promotable ? "yes" : `no (${r.reason})`}`,
+      );
+    if (!named) return;
+    if (named.state === "orphan-drift") {
+      // The whole file as a removal: what `drift discard` would do to it.
+      console.log(pc.bold(`--- ${named.path} (disk, orphan-drift)`));
+      console.log(pc.bold(`+++ ${named.path} (forge: no longer produced — \`craftar drift discard\` removes it)`));
+      console.log(renderDiff((await readText(path.join(ws.root, named.path))) ?? "", "", DIFF_PAINT));
+    } else await printFileDiff(ws.root, named);
   });
 
 /* ---------------------------------------------------------------- add / remove recipe */
