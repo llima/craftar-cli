@@ -279,3 +279,23 @@ describe("templates --help", () => {
     expect(readme).toContain("dotnet new uninstall <package>");
   });
 });
+
+
+describe("a dotnet planted at the workspace root (spec 32 §7: dotnet is found on PATH only)", () => {
+  it("is never run by templates install or by doctor — PATH empty or '.'", async () => {
+    // A program that would answer the probe and leave a mark. On Windows it is a .cmd, as a repository would carry it.
+    const planted: Record<string, string> =
+      process.platform === "win32"
+        ? { "dotnet.cmd": "@echo ran> planted-ran.txt\r\n@echo 10.0.401\r\n" }
+        : { dotnet: "#!/bin/sh\necho ran > planted-ran.txt\necho 10.0.401\n" };
+    const s = await fresh([TOOLS], planted);
+    if (process.platform !== "win32") await fs.chmod(path.join(s.wsRoot, "dotnet"), 0o755);
+    for (const value of ["", "."]) {
+      const r = runCli(["templates", "install", "--workspace", s.wsRoot], { env: { PATH: value, Path: value } });
+      expect([r.code, r.stdout, r.stderr], `PATH=${JSON.stringify(value)}`).toEqual([1, "", DOTNET_MISSING]);
+      const d = runCli(["doctor", "--json", "--workspace", s.wsRoot], { env: { PATH: value, Path: value } });
+      expect(JSON.parse(d.stdout).checks.filter((c: { id: string }) => c.id === "dotnet").map((c: { level: string }) => c.level), `doctor, PATH=${JSON.stringify(value)}`).toEqual(["warn"]);
+    }
+    expect(await exists(path.join(s.wsRoot, "planted-ran.txt"))).toBe(false);
+  });
+});

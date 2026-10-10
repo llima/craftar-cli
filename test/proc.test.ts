@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { capture, spawnInherited } from "../src/core/proc.js";
 import { tmpDir } from "./helpers/forge.js";
@@ -52,5 +53,51 @@ describe("spawnInherited", () => {
     const cwd = await tmpDir("craftar-proc-");
     cleanups.push(() => fs.rm(cwd, { recursive: true, force: true }));
     await expect(spawnInherited({ file: "craftar-no-such-program", args: [], cwd, env: process.env, stdin: "ignore" })).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+// The program is looked up on PATH only — never in the child's working directory (spec 32 §7).
+// A copy of node itself, under a name no real program has, is the planted program: it is a real executable on
+// every platform, so "it did not run" is a fact about the lookup and not about the file.
+const TOOL = "craftar-fake-tool";
+const EXE = process.platform === "win32" ? ".exe" : "";
+async function planted(): Promise<string> {
+  const dir = await fs.realpath(await tmpDir("craftar-proc-planted-"));
+  cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+  await fs.copyFile(process.execPath, path.join(dir, TOOL + EXE));
+  await fs.chmod(path.join(dir, TOOL + EXE), 0o755);
+  return dir;
+}
+/** The process environment with PATH replaced, whatever the key's case (Windows spells it `Path`). */
+function withPath(value: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) if (k.toUpperCase() !== "PATH") env[k] = v;
+  env.PATH = value;
+  return env;
+}
+
+describe("the program lookup never uses the child's working directory", () => {
+  it("capture does not run a program planted there — PATH empty, '.', with an empty entry, or without that directory", async () => {
+    const cwd = await planted();
+    const elsewhere = await fs.realpath(await tmpDir("craftar-proc-elsewhere-"));
+    cleanups.push(() => fs.rm(elsewhere, { recursive: true, force: true }));
+    for (const value of ["", ".", `${elsewhere}${path.delimiter}`, elsewhere]) {
+      await expect(capture(TOOL, ["-e", "console.log('ran')"], withPath(value), cwd), `PATH=${JSON.stringify(value)}`).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+
+  it("spawnInherited does not run it either", async () => {
+    const cwd = await planted();
+    for (const value of ["", "."]) {
+      await expect(spawnInherited({ file: TOOL, args: ["-e", "process.exit(0)"], cwd, env: withPath(value), stdin: "ignore" }), `PATH=${JSON.stringify(value)}`).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+
+  it("the same program on PATH, as an absolute entry, is found and runs — from another working directory (control)", async () => {
+    const dir = await planted();
+    const cwd = await fs.realpath(await tmpDir("craftar-proc-cwd-"));
+    cleanups.push(() => fs.rm(cwd, { recursive: true, force: true }));
+    expect(await capture(TOOL, ["-e", "console.log('ran')"], withPath(dir), cwd)).toBe("ran\n");
+    expect(await spawnInherited({ file: TOOL, args: ["-e", "process.exit(7)"], cwd, env: withPath(dir), stdin: "ignore" })).toEqual({ code: 7 });
   });
 });
