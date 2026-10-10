@@ -569,9 +569,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   if (!row.promotable) {
     // Build the right D5/D6 message from the static reason
     const reason = row.reason;
-    if (reason === "no longer produced") {
-      throw new Error(D4_ORPHAN(normalized));
-    } else if (reason === "service file") {
+    if (reason === "service file") {
       throw new Error(D5_SERVICE(normalized));
     } else if (reason === "kiro file") {
       // D5 kiro: check if the plan has a claude-code path for this ingredient

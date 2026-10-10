@@ -17,7 +17,7 @@ export interface DriftRow {
   reason: string | null;
 }
 
-/** D1–D17 messages. */
+/** D4: the path is not a file craftar manages. Shared by cli.ts and drift-promote.ts. */
 export const unmanaged = (p: string) =>
   `${p} is not a file craftar manages in this workspace — pass the workspace-relative path as \`craftar status\` prints it (forward slashes)`;
 
