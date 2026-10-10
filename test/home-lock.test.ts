@@ -39,7 +39,7 @@ describe("withLock", () => {
   });
 
   // On Windows the exclusive create answers EPERM while the previous holder's unlink is still pending.
-  // The hook stands in for that answer, so the three cases run on every platform.
+  // The hook stands in for that answer, so these cases run on every platform.
   const eperm = () => Object.assign(new Error("EPERM: operation not permitted, open"), { code: "EPERM" });
 
   it("win32: EPERM from the create is the release still landing — retried, the body runs once", async () => {
@@ -84,8 +84,46 @@ describe("withLock", () => {
     await fs.utimes(file, now, now);
     let attempts = 0;
     // Odd attempts answer EPERM, even ones reach the real create and find the lock held.
-    await expect(withLock(file, "the workspace registry", { platform: "win32", waitMs: 300, pollMs: 20, pendingDeleteMs: 10_000, beforeAttempt: async () => { if (++attempts % 2) throw eperm(); } }, async () => "ran")).rejects.toThrow(
+    // The EPERM wait (100 ms) is shorter than the lock's (400 ms): were it not started over by each
+    // EEXIST, the EPERM would be rethrown first.
+    await expect(withLock(file, "the workspace registry", { platform: "win32", waitMs: 400, pollMs: 20, pendingDeleteMs: 100, beforeAttempt: async () => { if (++attempts % 2) throw eperm(); } }, async () => "ran")).rejects.toThrow(
       `the workspace registry ${file} is busy (held by PID 4242)`,
     );
+  });
+
+  it("win32: a missing directory seen between two EPERMs starts the EPERM wait over", async () => {
+    const dir = await tmpDir();
+    const entry = path.join(dir, "entry");
+    let attempts = 0;
+    const out = await withLock(path.join(entry, "lock"), "x", {
+      platform: "win32",
+      createDir: true,
+      pollMs: 60,
+      pendingDeleteMs: 100,
+      // EPERM, then the directory gone at the write (ENOENT, retried), then EPERM again 120 ms after
+      // the first — past the wait of the first, inside its own — then the lock.
+      beforeAttempt: async () => {
+        attempts++;
+        if (attempts === 1 || attempts === 3) throw eperm();
+        if (attempts === 2) await fs.rm(entry, { recursive: true, force: true });
+      },
+    }, async () => "ran");
+    expect([out, attempts]).toEqual(["ran", 4]);
+  });
+
+  // The diagnosis itself: a name whose unlink is pending refuses an exclusive create. Only Windows
+  // can answer; elsewhere the unlink is immediate and the test would prove nothing.
+  it.skipIf(process.platform !== "win32")("win32, for real: a lock file deleted while a handle is open on it is waited out", async () => {
+    const dir = await tmpDir();
+    const file = path.join(dir, "registry.lock");
+    await fs.writeFile(file, "4242 2026-10-07T00:00:00.000Z\n");
+    const handle = await fs.open(file, "r");
+    await fs.rm(file, { force: true });
+    let attempts = 0;
+    const closing = new Promise<void>((res) => setTimeout(() => void handle.close().then(res), 150));
+    const out = await withLock(file, "x", { pollMs: 20, beforeAttempt: async () => void attempts++ }, async () => "ran");
+    await closing;
+    expect(out).toBe("ran");
+    expect(attempts).toBeGreaterThan(1);
   });
 });

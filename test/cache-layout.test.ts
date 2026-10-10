@@ -197,7 +197,9 @@ describe("removeEntry (§4.3)", () => {
       if (attempts === 1 || raced === 1) return;
       await until(() => released);
       raced++;
-      await fs.rmdir(entry);
+      // The pruner's unlink of its lock may still be landing on Windows: the directory is then not
+      // empty yet. The product's own rmdir ignores that; the staged one waits for it.
+      await until(() => fs.rmdir(entry).then(() => true, (e: NodeJS.ErrnoException) => { if (e.code !== "ENOTEMPTY" && e.code !== "EPERM") throw e; return false; }));
       goneAtWrite = (await ls(entry)) === null;
     };
     const out = await removeEntry(entry, async () => {
