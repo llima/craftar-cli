@@ -291,8 +291,53 @@ export interface Plan {
   warnings: string[];
   /** Per ingredient ref, each section it declares, with the layer that filled it (spec 11 §5.3, for `explain`). */
   sections: Map<string, Array<{ file: string; name: string; layer: SectionLayer }>>;
-  /** Each cited `{{key}}` no layer fills, the refs citing it, and the warning that says so (spec 24 §4.2). */
-  missingParams: Array<{ key: string; refs: string[]; warning: string }>;
+  /**
+   * Each cited `{{key}}` no layer fills, the refs citing it, and the warning that says so (spec 24 §4.2);
+   * `declaredBy` names the resolved ingredients that declare the key with no value — empty for a key nobody
+   * declares that way (spec 29 §4.1).
+   */
+  missingParams: Array<{ key: string; refs: string[]; warning: string; declaredBy: string[] }>;
+}
+
+/** Declared keys with no default that no layer fills, with the ingredients declaring them (spec 24 §4.2) — cited or not. */
+export function declaredWithoutValue(p: Pick<Plan, "resolution">): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const ing of p.resolution.ingredients) {
+    const values = paramsFor(ing, p.resolution);
+    // `paramsFor` already holds the ingredient's own default, so a key it lacks has neither default nor value.
+    for (const key of Object.keys(ing.meta.params ?? {})) {
+      if (Object.hasOwn(values, key)) continue;
+      out.set(key, [...(out.get(key) ?? []), ing.ref]);
+    }
+  }
+  return out;
+}
+
+/** A declared parameter with no value that a planned file cites: what refuses a sync (spec 29 §3). */
+export interface UnsetParam {
+  key: string;
+  declaredBy: string[];
+  citedBy: string[];
+}
+
+/** The unset declared parameters of a plan, in `missingParams` order (sorted by key). */
+export function unsetDeclared(p: Plan): UnsetParam[] {
+  return p.missingParams.filter((m) => m.declaredBy.length > 0).map((m) => ({ key: m.key, declaredBy: m.declaredBy, citedBy: m.refs }));
+}
+
+/** The refusal block of spec 29 §4.1, without the `error: ` prefix; `thenSync` is `init`'s fix line. */
+export function unsetRefusal(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): string {
+  const width = Math.max(...unset.map((u) => u.key.length));
+  return [
+    `${unset.length} declared parameter(s) have no value — nothing written`,
+    ...unset.map((u) => `  ${u.key.padEnd(width)}  declared by ${u.declaredBy.join(", ")} · cited by ${u.citedBy.join(", ")}`),
+    `  fix: set each under params in the profile, or under overrides.params in craftar.yaml${opts.thenSync ? ", then run craftar sync" : ""}`,
+  ].join("\n");
+}
+
+/** The refusal in one line, for a row that has no room for the block (`workspaces`, `forge impact`). */
+export function unsetSummary(unset: UnsetParam[]): string {
+  return `declared parameter(s) with no value: ${unset.map((u) => u.key).join(", ")}`;
 }
 
 /** A path as the Forge names it: relative to its root, POSIX separators. */
@@ -474,10 +519,11 @@ export async function plan(ws: Workspace): Promise<Plan> {
   }
   assertInsideWorkspace(files);
   const missing: Plan["missingParams"] = [];
+  const declared = declaredWithoutValue({ resolution });
   for (const [key, refs] of [...missingParams].sort(([a], [b]) => a.localeCompare(b))) {
     const warning = `param "${key}" has no value in any layer — left verbatim (${[...refs].sort().join(", ")})`;
     warnings.push(warning);
-    missing.push({ key, refs: [...refs].sort(), warning });
+    missing.push({ key, refs: [...refs].sort(), warning, declaredBy: [...(declared.get(key) ?? [])].sort((a, b) => a.localeCompare(b)) });
   }
   // Duplicate path guard
   const seen = new Map<string, string>();
@@ -615,6 +661,10 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   // A backstop, before the first write: `plan()` and `readLock()` already refuse such a path.
   const outside = statuses.find((s) => outsideWorkspace(s.path));
   if (outside) throw new Error(`${outside.path} is outside the workspace — refused`);
+  // The gate of spec 29 §4.1, `dryRun` included: a declared parameter nobody set never reaches a file. `src/cli.ts`
+  // asks first and prints the block itself; this is what no writer can go around.
+  const unset = unsetDeclared(p);
+  if (unset.length) throw new Error(unsetRefusal(unset));
   const written: string[] = [];
   const removed: string[] = [];
   const skipped: FileStatus[] = [];

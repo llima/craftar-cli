@@ -60,7 +60,7 @@ describe("readWorkspaceConfig / mergeWorkspaceConfig / loadForgeFor", () => {
     const s = await scenario(FORGE, { config: { profile: "acme" } });
     cleanups.push(s.cleanup);
     const p = await plan(await loadWorkspace(s.wsRoot));
-    expect(p.missingParams).toEqual([{ key: "who", refs: ["rule/a"], warning: 'param "who" has no value in any layer — left verbatim (rule/a)' }]);
+    expect(p.missingParams).toEqual([{ key: "who", refs: ["rule/a"], warning: 'param "who" has no value in any layer — left verbatim (rule/a)', declaredBy: ["rule/a"] }]);
     expect(p.warnings).toContain(p.missingParams[0].warning);
     await fs.rm(s.root, { recursive: true, force: true });
   });

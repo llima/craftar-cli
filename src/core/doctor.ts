@@ -7,8 +7,7 @@ import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
 import { isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus } from "./registry.js";
 import { FULL_SHA, cacheKey, classifyForge, inspectCache, type CacheSnapshot } from "./remote.js";
-import { paramsFor } from "./resolve.js";
-import { LOCK_FILE, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
+import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
 import { outName } from "../emitters/shared.js";
 
 /*
@@ -344,20 +343,6 @@ function lockMessage(e: unknown): string {
   if (Array.isArray(issues) && issues.length > 0) return issuesLine(`${LOCK_FILE} is not a valid lock`, issues);
   if (e instanceof SyntaxError) return `${LOCK_FILE} is not valid JSON (${oneLine(e)})`;
   return oneLine(e);
-}
-
-/** Declared keys with no default that no layer fills, with the ingredients declaring them (§4.2). */
-function declaredWithoutValue(p: Plan): Map<string, string[]> {
-  const out = new Map<string, string[]>();
-  for (const ing of p.resolution.ingredients) {
-    const values = paramsFor(ing, p.resolution);
-    // `paramsFor` already holds the ingredient's own default, so a key it lacks has neither default nor value.
-    for (const key of Object.keys(ing.meta.params ?? {})) {
-      if (Object.hasOwn(values, key)) continue;
-      out.set(key, [...(out.get(key) ?? []), ing.ref]);
-    }
-  }
-  return out;
 }
 
 /**
