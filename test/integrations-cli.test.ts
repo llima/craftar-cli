@@ -315,3 +315,11 @@ describe("Valid schema 3 Forge — key sets and lock unchanged", () => {
     );
   });
 });
+
+it("import --help says what a schema 3 Forge changes", () => {
+  const r = runCli(["import", "--help"]);
+  expect(r.code).toBe(0);
+  expect(r.stdout.replace(/\s+/g, " ")).toContain(
+    "reusing a templated base when it renders the workspace text or infers it into params or sections; in a schema 3 Forge, what the profile's integrations block provides is left to its recipe and reported",
+  );
+});

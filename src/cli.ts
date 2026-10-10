@@ -81,7 +81,7 @@ const REPORT_GATE: OutputGate = { what: "report", who: "import", outside: "write
 
 program
   .command("import")
-  .description("Import an existing workspace harness into a Forge: creates or updates ingredients, recipes and a profile, reusing a templated base when it renders the workspace text or infers it into params or sections")
+  .description("Import an existing workspace harness into a Forge: creates or updates ingredients, recipes and a profile, reusing a templated base when it renders the workspace text or infers it into params or sections; in a schema 3 Forge, what the profile's integrations block provides is left to its recipe and reported")
   .requiredOption("--from <tool>", "source tool: claude-code")
   .requiredOption("--forge <dir>", "Forge directory (created if missing)")
   .requiredOption("--profile <name>", "client profile to create or update")
