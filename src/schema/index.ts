@@ -72,6 +72,30 @@ const IngredientParam = z
 /** Slug-like pattern: starts with alphanumeric, then alphanumeric, dots, underscores or hyphens. Used by ingredient names and service `as`. */
 const SLUG = /^[a-z0-9][a-z0-9._-]*$/i;
 
+/* ------------------------------------------------------------------ */
+/* Compose fragment shape (spec 31)                                     */
+/* ------------------------------------------------------------------ */
+
+/** The five top-level maps a Compose fragment declares (spec 31 §4.1). */
+export const COMPOSE_MAPS = ["services", "volumes", "networks", "configs", "secrets"] as const;
+
+/**
+ * Compose fragment shape: must be a mapping; each of the five top-level maps, when present,
+ * must be a mapping and must not have a __proto__ key. `.passthrough()` keeps unknown keys
+ * (version, x-*, etc.). A map that is present and not a mapping fails zod's record parse
+ * with a message like "Expected object, received array".
+ */
+export const ComposeFragmentShape = z
+  .object({
+    services: noProtoKey(z.record(z.unknown())).optional(),
+    volumes: noProtoKey(z.record(z.unknown())).optional(),
+    networks: noProtoKey(z.record(z.unknown())).optional(),
+    configs: noProtoKey(z.record(z.unknown())).optional(),
+    secrets: noProtoKey(z.record(z.unknown())).optional(),
+  })
+  .passthrough();
+export type ComposeFragment = z.infer<typeof ComposeFragmentShape>;
+
 const IngredientBase = z.object({
   name: z.string().regex(SLUG, "ingredient names are slug-like"),
   description: z.string().optional(),

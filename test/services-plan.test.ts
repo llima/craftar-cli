@@ -264,11 +264,10 @@ include:
     });
     const secretWarnings = p.warnings.filter((w) => w.includes("secret-like"));
     expect(secretWarnings.length).toBe(1);
-    expect(secretWarnings[0]).toContain("github-token");
-    expect(secretWarnings[0]).toContain("service/x");
-    expect(secretWarnings[0]).toContain("compose.yaml");
-    // The token itself must not appear in the warnings JSON
-    expect(JSON.stringify(p.warnings)).not.toContain(token);
+    // Exact warning string: kind and line number
+    expect(secretWarnings[0]).toBe("service/x compose.yaml: holds a secret-like value (github-token) at line 5");
+    // The token itself must not appear anywhere in the warnings array
+    expect(p.warnings.some((w) => w.includes(token))).toBe(false);
   });
 
   it("test 11: binary: ['logo.png'] with bytes 00 01 02 → written as those bytes; not listed → plan rejects", async () => {
@@ -301,24 +300,29 @@ include:
     ).rejects.toThrow(/logo\.png.*binary/);
   });
 
-  it.skipIf(process.platform === "win32")("test 12: after sync on POSIX, executable file has mode & 0o111 non-zero", async () => {
+  it.skipIf(process.platform === "win32")("test 12: after sync on POSIX, executable file has mode & 0o111 non-zero; update also chmods", async () => {
     const s = await scenario(forgeS, { config: { profile: "acme" } });
     cleanups.push(s.cleanup);
     const ws = await loadWorkspace(s.wsRoot);
     const p = await plan(ws);
     const st = await status(ws, p, null);
+
+    // Verify PlannedFile has mode for the executable
+    const plannedExec = p.files.find((f) => f.path === ".craftar/services/echo/init/a.sh")!;
+    expect(plannedExec.mode).toBe(0o755);
+
     await apply(ws, p, st);
     const stat = await fs.stat(path.join(s.wsRoot, ".craftar/services/echo/init/a.sh"));
     expect(stat.mode & 0o111).not.toBe(0);
 
-    // Verify the lock entry has exactly 4 keys (no mode recorded)
-    const lock = await readLock(s.wsRoot);
-    const lockEntry = lock!.files.find((f) => f.path === ".craftar/services/echo/init/a.sh");
+    // Verify the lock entry has exactly 4 keys (no mode recorded) - check raw JSON to catch mutations
+    const lockJson = JSON.parse(await fs.readFile(path.join(s.wsRoot, "craftar.lock"), "utf8"));
+    const lockEntry = lockJson.files.find((f: { path: string }) => f.path === ".craftar/services/echo/init/a.sh");
     expect(lockEntry).toBeDefined();
-    expect(Object.keys(lockEntry!)).toEqual(["path", "hash", "target", "ingredient"]);
+    expect(Object.keys(lockEntry).sort()).toEqual(["hash", "ingredient", "path", "target"]);
 
-    // Test 12 part 2: an update of a file that existed as 0644 also gets chmod'd
-    // First, change the file to 0644
+    // Part 2: an update of a file that existed as 0644 also gets chmod'd
+    // First, change the file to 0644 (remove execute bits)
     await fs.chmod(path.join(s.wsRoot, ".craftar/services/echo/init/a.sh"), 0o644);
     let stat2 = await fs.stat(path.join(s.wsRoot, ".craftar/services/echo/init/a.sh"));
     expect(stat2.mode & 0o111).toBe(0);
@@ -369,14 +373,28 @@ include:
     let ws = await loadWorkspace(s.wsRoot);
     let p = await plan(ws);
     let st = await status(ws, p, null);
-    expect(st.filter((e) => e.target === "services").every((e) => e.state === "new")).toBe(true);
+    // Assert non-empty before filtering with every()
+    const newEntries = st.filter((e) => e.target === "services");
+    expect(newEntries.length).toBe(4);
+    expect(newEntries.every((e) => e.state === "new")).toBe(true);
     await apply(ws, p, st);
+
+    // Verify lock entries have exactly the expected keys: path, hash, target, ingredient (no mode) - check raw JSON
+    const lockJson = JSON.parse(await fs.readFile(path.join(s.wsRoot, "craftar.lock"), "utf8"));
+    const craftarEntries = lockJson.files.filter((f: { path: string }) => f.path.startsWith(".craftar/"));
+    expect(craftarEntries.length).toBe(4);
+    for (const entry of craftarEntries) {
+      expect(Object.keys(entry).sort()).toEqual(["hash", "ingredient", "path", "target"]);
+      expect(entry.target).toBe("services");
+    }
 
     // Second status: unchanged
     ws = await loadWorkspace(s.wsRoot);
     p = await plan(ws);
     st = await status(ws, p, await readLock(ws.root));
-    expect(st.filter((e) => e.target === "services").every((e) => e.state === "unchanged")).toBe(true);
+    const unchangedEntries = st.filter((e) => e.target === "services");
+    expect(unchangedEntries.length).toBe(4);
+    expect(unchangedEntries.every((e) => e.state === "unchanged")).toBe(true);
 
     // Hand edit → drift
     await fs.appendFile(path.join(s.wsRoot, ".craftar/services/echo/compose.yaml"), "# hand edit\n");
@@ -449,5 +467,114 @@ include:
     // apply() refuses
     const st = await status(ws, p, null);
     await expect(apply(ws, p, st)).rejects.toThrow(/declared parameter\(s\) have no value/);
+  });
+
+  it("test 16: dotslash paths are normalized — compose: './compose.yaml', files: ['./init/a.sh'], executable: ['init/a.sh']", async () => {
+    const { p } = await planned({
+      ingredients: [
+        {
+          meta: {
+            type: "service",
+            name: "echo",
+            compose: "./compose.yaml", // dotslash in compose
+            files: ["./init/a.sh"], // dotslash in files
+            executable: ["init/a.sh"], // no dotslash in executable (still matches)
+          },
+          files: {
+            "compose.yaml": "services:\n  echo:\n    image: alpine\n",
+            "init/a.sh": "#!/bin/sh\necho hi\n",
+          },
+        },
+      ],
+      recipes: [recipe("base", ["service/echo"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    // Paths are normalized: no dotslash in output
+    const paths = p.files.filter((f) => f.target === "services").map((f) => f.path).sort();
+    expect(paths).toEqual([
+      ".craftar/.gitattributes",
+      ".craftar/compose.yaml",
+      ".craftar/services/echo/compose.yaml",
+      ".craftar/services/echo/init/a.sh",
+    ]);
+    // Stack include line is also normalized
+    const stack = p.files.find((f) => f.path === ".craftar/compose.yaml")!;
+    expect(stack.content.toString("utf8")).toContain("  - path: services/echo/compose.yaml");
+    // Executable file has mode
+    const initSh = p.files.find((f) => f.path === ".craftar/services/echo/init/a.sh")!;
+    expect(initSh.mode).toBe(0o755);
+  });
+
+  it("test 17: volumes: [] rejects with 'volumes must be a mapping'", async () => {
+    await expect(
+      planned({
+        ingredients: [
+          {
+            meta: { type: "service", name: "echo", compose: "compose.yaml", files: [] },
+            files: { "compose.yaml": "services:\n  echo:\n    image: alpine\nvolumes: []\n" },
+          },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      }),
+    ).rejects.toThrow("service/echo compose.yaml: volumes must be a mapping");
+  });
+
+  it("test 18: a __proto__ key in services rejects with '__proto__ key is not allowed'", async () => {
+    // Write the YAML as text to ensure __proto__ is a real key
+    await expect(
+      planned({
+        ingredients: [
+          {
+            meta: { type: "service", name: "echo", compose: "compose.yaml", files: [] },
+            files: { "compose.yaml": "services:\n  __proto__:\n    image: x\n  echo:\n    image: y\n" },
+          },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      }),
+    ).rejects.toThrow("service/echo compose.yaml: a __proto__ key is not allowed");
+  });
+
+  it("test 19: a fragment that is not UTF-8 rejects with 'the fragment is not UTF-8 text'", async () => {
+    // Bytes ff fe 00 are not valid UTF-8
+    const badBytes = Buffer.from([0xff, 0xfe, 0x00]);
+    await expect(
+      planned({
+        ingredients: [
+          {
+            meta: { type: "service", name: "echo", compose: "compose.yaml", files: [] },
+            files: { "compose.yaml": badBytes },
+          },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      }),
+    ).rejects.toThrow("service/echo compose.yaml: the fragment is not UTF-8 text");
+  });
+
+  it("test 20: one fragment publishing same host port on two of its own services produces no warning", async () => {
+    // Same host port on two services in the SAME ingredient — Compose's own error to give, not ours
+    const { p } = await planned({
+      ingredients: [
+        {
+          meta: { type: "service", name: "echo", compose: "compose.yaml", files: [] },
+          files: {
+            "compose.yaml": `services:
+  web:
+    image: nginx
+    ports: ["8080:80"]
+  api:
+    image: nginx
+    ports: ["8080:8080"]
+`,
+          },
+        },
+      ],
+      recipes: [recipe("base", ["service/echo"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    // No warning about port 8080 — same ingredient
+    expect(p.warnings.filter((w) => w.includes("8080")).length).toBe(0);
   });
 });

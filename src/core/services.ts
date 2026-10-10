@@ -2,38 +2,31 @@
  * Service planning (spec 31 §4.1, §5.3): the files `sync` writes for service ingredients.
  * These are not a target's: they are planned by one function, called once after the target loop.
  */
+import path from "node:path";
 import YAML from "yaml";
 import type { EmitBase, PlannedFile } from "../emitters/types.js";
 import { outName } from "../emitters/shared.js";
 import { findSecrets } from "./secrets.js";
 import { isUtf8, stripBom, toLf } from "./text.js";
-import { normalizeDeclared, type Ingredient } from "../schema/index.js";
-
-/** Shape of a Compose fragment: must be a mapping with services, volumes, networks, configs, secrets as mappings. */
-interface ComposeFragment {
-  services?: Record<string, unknown>;
-  volumes?: Record<string, unknown>;
-  networks?: Record<string, unknown>;
-  configs?: Record<string, unknown>;
-  secrets?: Record<string, unknown>;
-  name?: unknown;
-  include?: unknown;
-  [key: string]: unknown;
-}
-
-/** Normalizes a service path for comparisons. */
-const norm = (p: string) => normalizeDeclared(p);
+import { normalizeDeclared, COMPOSE_MAPS, ComposeFragmentShape, type Ingredient } from "../schema/index.js";
 
 /** Whether a path is listed in the binary array. */
 function isBinary(meta: Extract<Ingredient, { type: "service" }>, file: string): boolean {
-  const normalized = norm(file);
-  return meta.binary.some((b) => norm(b) === normalized);
+  const normalized = normalizeDeclared(file);
+  return meta.binary.some((b) => normalizeDeclared(b) === normalized);
 }
 
 /** Whether a path is listed in the executable array. */
 function isExecutable(meta: Extract<Ingredient, { type: "service" }>, file: string): boolean {
-  const normalized = norm(file);
-  return meta.executable.some((e) => norm(e) === normalized);
+  const normalized = normalizeDeclared(file);
+  return meta.executable.some((e) => normalizeDeclared(e) === normalized);
+}
+
+/** Assert that the given bytes are valid UTF-8 text (no NUL). Throws with a contextual message. */
+function assertText(ref: string, file: string, bytes: Buffer, hint: string): void {
+  if (!isUtf8(bytes) || bytes.includes(0)) {
+    throw new Error(`${ref} ${file}: ${hint}`);
+  }
 }
 
 /**
@@ -58,11 +51,11 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
 
   // Track declared keys for conflict detection across fragments
   const declaredKeys = new Map<string, Map<string, string>>(); // map name -> key -> ingredient ref
-  for (const mapName of ["services", "volumes", "networks", "configs", "secrets"]) {
+  for (const mapName of COMPOSE_MAPS) {
     declaredKeys.set(mapName, new Map());
   }
 
-  // Track published host ports for warning
+  // Track published host ports for warning (per ingredient, then across)
   const publishedPorts = new Map<string, string>(); // port -> ingredient ref
 
   // Process each service
@@ -73,19 +66,14 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
 
     // Read and validate the fragment bytes first (for UTF-8 check)
     const fragmentBytes = await base.bytes(ing, fragmentPath);
-    if (!isUtf8(fragmentBytes)) {
-      throw new Error(`${ing.ref} ${fragmentPath}: not UTF-8 text — list it under binary in ingredient.yaml`);
-    }
-    if (fragmentBytes.includes(0)) {
-      throw new Error(`${ing.ref} ${fragmentPath}: not UTF-8 text — list it under binary in ingredient.yaml`);
-    }
+    assertText(ing.ref, fragmentPath, fragmentBytes, "the fragment is not UTF-8 text");
 
     // Render the fragment through ctx.text (sections, params)
     const fragmentText = await base.text(ing, fragmentPath);
     const fragmentContent = Buffer.from(toLf(stripBom(fragmentText)), "utf8");
 
     // Parse the rendered fragment to validate and check for conflicts
-    let parsed: ComposeFragment;
+    let parsed: Record<string, unknown>;
     try {
       parsed = YAML.parse(fragmentText);
     } catch (e) {
@@ -93,7 +81,7 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
       throw new Error(`${ing.ref} ${fragmentPath}: not valid YAML after rendering — ${msg}`);
     }
 
-    // Validate fragment shape
+    // Validate fragment shape: must be a mapping
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error(`${ing.ref} ${fragmentPath}: a fragment must be a YAML mapping`);
     }
@@ -103,12 +91,33 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
     if (Object.hasOwn(parsed, "include")) {
       throw new Error(`${ing.ref} ${fragmentPath}: a fragment must not declare include — every file of the stack is in craftar.lock`);
     }
-    if (!parsed.services || typeof parsed.services !== "object" || Object.keys(parsed.services).length === 0) {
+
+    // Validate each map shape using zod (catches volumes: [], __proto__ keys, etc.)
+    for (const mapName of COMPOSE_MAPS) {
+      const mapValue = parsed[mapName];
+      if (mapValue !== undefined) {
+        // Build a single-key object to test this specific map
+        const testObj = { [mapName]: mapValue };
+        const result = ComposeFragmentShape.safeParse(testObj);
+        if (!result.success) {
+          const issue = result.error.issues[0];
+          // Check if it's a __proto__ issue
+          if (issue.path.includes("__proto__")) {
+            throw new Error(`${ing.ref} ${fragmentPath}: a __proto__ key is not allowed`);
+          }
+          // Otherwise it's a shape issue (e.g., volumes: [])
+          throw new Error(`${ing.ref} ${fragmentPath}: ${mapName} must be a mapping`);
+        }
+      }
+    }
+
+    // Now validate services specifically
+    if (!parsed.services || typeof parsed.services !== "object" || Object.keys(parsed.services as object).length === 0) {
       throw new Error(`${ing.ref} ${fragmentPath}: a fragment must declare at least one service`);
     }
 
     // Check for duplicate keys in services, volumes, networks, configs, secrets
-    for (const mapName of ["services", "volumes", "networks", "configs", "secrets"] as const) {
+    for (const mapName of COMPOSE_MAPS) {
       const mapValue = parsed[mapName];
       if (mapValue && typeof mapValue === "object" && !Array.isArray(mapValue)) {
         const existing = declaredKeys.get(mapName)!;
@@ -122,21 +131,21 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
       }
     }
 
-    // Check for duplicate published host ports and warn
-    if (parsed.services && typeof parsed.services === "object") {
-      for (const [_svcName, svcDef] of Object.entries(parsed.services)) {
-        if (svcDef && typeof svcDef === "object" && !Array.isArray(svcDef)) {
-          const ports = (svcDef as Record<string, unknown>).ports;
-          if (Array.isArray(ports)) {
-            for (const port of ports) {
-              const hostPort = extractHostPort(port);
-              if (hostPort && !hostPort.includes("$")) {
-                const prev = publishedPorts.get(hostPort);
-                if (prev) {
-                  warn(`${prev} and ${ing.ref} both publish host port ${hostPort}`);
-                } else {
-                  publishedPorts.set(hostPort, ing.ref);
-                }
+    // Check for duplicate published host ports and warn (across different ingredients only)
+    const svcMap = parsed.services as Record<string, unknown>;
+    for (const svcDef of Object.values(svcMap)) {
+      if (svcDef && typeof svcDef === "object" && !Array.isArray(svcDef)) {
+        const ports = (svcDef as Record<string, unknown>).ports;
+        if (Array.isArray(ports)) {
+          for (const port of ports) {
+            const hostPort = extractHostPort(port);
+            if (hostPort && !hostPort.includes("$")) {
+              const prev = publishedPorts.get(hostPort);
+              // Only warn for different ingredients (same ingredient = Compose's own error)
+              if (prev && prev !== ing.ref) {
+                warn(`${prev} and ${ing.ref} both publish host port ${hostPort}`);
+              } else if (!prev) {
+                publishedPorts.set(hostPort, ing.ref);
               }
             }
           }
@@ -152,7 +161,7 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
 
     // Add the fragment file
     files.push({
-      path: `.craftar/services/${name}/${fragmentPath}`,
+      path: path.posix.join(".craftar/services", name, fragmentPath),
       content: fragmentContent,
       target: "services",
       ingredient: ing.ref,
@@ -160,7 +169,7 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
 
     // Process each file in the files list
     for (const file of meta.files) {
-      const filePath = `.craftar/services/${name}/${file}`;
+      const filePath = path.posix.join(".craftar/services", name, file);
 
       if (isBinary(meta, file)) {
         // Binary: copy as bytes
@@ -174,12 +183,7 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
       } else {
         // Text: validate UTF-8, render, check for secrets
         const bytes = await base.bytes(ing, file);
-        if (!isUtf8(bytes)) {
-          throw new Error(`${ing.ref} ${file}: not UTF-8 text — list it under binary in ingredient.yaml`);
-        }
-        if (bytes.includes(0)) {
-          throw new Error(`${ing.ref} ${file}: not UTF-8 text — list it under binary in ingredient.yaml`);
-        }
+        assertText(ing.ref, file, bytes, "not UTF-8 text — list it under binary in ingredient.yaml");
 
         const text = await base.text(ing, file);
         const content = Buffer.from(toLf(stripBom(text)), "utf8");
@@ -209,7 +213,7 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
   for (const ing of services) {
     const name = outName(ing.meta);
     const fragmentPath = ing.meta.compose;
-    stackLines.push(`  - path: services/${name}/${fragmentPath}`);
+    stackLines.push(`  - path: ${path.posix.join("services", name, fragmentPath)}`);
   }
   const stackContent = Buffer.from(stackLines.join("\n") + "\n", "utf8");
 

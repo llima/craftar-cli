@@ -295,10 +295,13 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
               : [`${type}/cap-${type}`];
 
           // Collect all files for this cell:
-          // - Files whose `ingredient` is one of the fixture refs
+          // - Files whose `ingredient` is one of the fixture refs AND `target` is this target
           // - Plus shared files: AGENTS.md for rule (ingredient = "rule/*"), MCP files (ingredient = "mcp/*")
+          // Note: service files have target: "services", not an AI coder target, so they belong to no cell.
           const cellFiles: PlannedFile[] = [];
           for (const f of plannedFiles) {
+            // Files must belong to this target (services files have target: "services", not the AI coder)
+            if (f.target !== target) continue;
             // Direct match to a fixture ref
             if (fixtureRefs.some((ref) => f.ingredient === ref)) {
               cellFiles.push(f);
@@ -317,34 +320,16 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
           }
 
           // Check rule 2: unsupported ⇔ no cell files AND a warning names each fixture ref AND output is empty
-          // EXCEPTION: service is unsupported in all targets, but planServices (spec 31 §5.3, choice 24) plans
-          // service files outside the walk, so files ARE planned. The walk only warns when targets: "*".
           if (cap.state === "unsupported") {
-            if (type === "service") {
-              // Service files ARE planned by planServices, not by the target's walk
-              // The service fixture has default targets: [], so no walk warning unless targets: "*"
-              // But this test uses targets: "*" (via makeCapabilityForge), so warnings appear
-              // We still expect the warning, but we expect files to be planned too
-              for (const ref of fixtureRefs) {
-                const hasWarning = warnings.some((w) => w.includes(ref) && w.includes("skipped"));
-                expect(hasWarning, `${cellName}: unsupported should have a skip warning for ${ref}`).toBe(true);
-              }
-              // And files ARE planned for services
-              expect(
-                cellFiles.length,
-                `${cellName}: service files should be planned by planServices`,
-              ).toBeGreaterThan(0);
-            } else {
-              expect(
-                cellFiles.length,
-                `${cellName}: unsupported should have no cell files, but found: ${cellFiles.map((f) => f.path).join(", ")}`,
-              ).toBe(0);
+            expect(
+              cellFiles.length,
+              `${cellName}: unsupported should have no cell files, but found: ${cellFiles.map((f) => f.path).join(", ")}`,
+            ).toBe(0);
 
-              // Should have a warning naming each fixture ingredient
-              for (const ref of fixtureRefs) {
-                const hasWarning = warnings.some((w) => w.includes(ref) && w.includes("skipped"));
-                expect(hasWarning, `${cellName}: unsupported should have a skip warning for ${ref}`).toBe(true);
-              }
+            // Should have a warning naming each fixture ingredient
+            for (const ref of fixtureRefs) {
+              const hasWarning = warnings.some((w) => w.includes(ref) && w.includes("skipped"));
+              expect(hasWarning, `${cellName}: unsupported should have a skip warning for ${ref}`).toBe(true);
             }
 
             // output should be empty
