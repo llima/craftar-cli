@@ -6566,7 +6566,7 @@ describe("diff — example file withholding (spec 27 §4.2, Ruling 4)", () => {
     // orphan-drift output is: header + explainSkip line
     expect(r.stdout).toBe(
       "--- .claude/settings.craftar.example.json (disk, orphan-drift)\n" +
-        "  no longer produced by the Forge but hand-edited — kept; delete it yourself if unwanted\n",
+        "  no longer produced by the Forge but hand-edited — kept; `craftar drift discard <path>` removes it, or delete it yourself\n",
     );
   });
 
