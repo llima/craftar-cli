@@ -228,7 +228,10 @@ describe("workspaces and forge impact with an unset declared parameter", () => {
     expect(row.files).toBeNull();
     expect(json.warnings.filter((w: string) => w.includes(path.basename(s.root)) && w.endsWith(": sync refused: declared parameter(s) with no value: org"))).toHaveLength(1);
     // the plan's own warning for that row is still said
-    expect(json.warnings.filter((w: string) => w.includes(path.basename(s.root)) && w.endsWith(`: ${WARN.slice("  warn ".length)}`))).toHaveLength(1);
+    const mine = json.warnings.filter((w: string) => w.includes(path.basename(s.root)));
+    expect(mine).toHaveLength(2);
+    expect(mine[0].endsWith(`: ${WARN.slice("  warn ".length)}`)).toBe(true);
+    expect(mine[1].endsWith(": sync refused: declared parameter(s) with no value: org")).toBe(true);
     const text = runCli(["workspaces"]);
     expect(text.stdout).toContain("error");
   });

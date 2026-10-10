@@ -5387,6 +5387,39 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     expect(fileUpdate.state).toBe("update");
   });
 
+  it("spec 29: a registered workspace whose sync is refused does not stop the proof — it compares planned bytes", async () => {
+    const root = await tmpDir("craftar-prune-refused-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const env = { CRAFTAR_HOME: path.join(root, "home") };
+    await makeForge(forge, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" }), rule("other", "Org: {{org}}\n")],
+      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme", ["rule/wf--acme"]), recipe("other", ["rule/other"])],
+      profiles: [profile("acme", ["base--acme"]), profile("globex", ["other"])],
+    });
+    const wsA = path.join(root, "a");
+    const wsG = path.join(root, "g");
+    await writeFiles(wsA, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    await writeFiles(wsG, { "craftar.yaml": `forge: ../forge\nprofile: globex\n` });
+    expect(runCli(["sync", "--workspace", wsA], { env }).code).toBe(0);
+    expect(runCli(["sync", "--workspace", wsG], { env }).code).toBe(0);
+    // globex's rule now declares the key it cites, with no value anywhere: its sync is refused
+    await writeFiles(forge, { "ingredients/rules/other/ingredient.yaml": "type: rule\nname: other\nparams:\n  org:\n    description: the organisation\n" });
+    gitInit(forge);
+    gitCommitAll(forge, "init");
+    expect(runCli(["sync", "--check", "--workspace", wsG], { env }).code).toBe(1);
+
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    const out = JSON.parse(j.stdout);
+    expect(out.recipes.pruned).toEqual([{ recipe: "base--acme", sibling: "base", profiles: ["profiles/acme/profile.yaml"] }]);
+    expect(out.recipes.kept).toEqual([]);
+    expect(out.warnings).toEqual([
+      "pruned against the 2 workspaces registered on this machine — a workspace synced elsewhere (CI, another machine, CRAFTAR_NO_REGISTRY) is not covered",
+    ]);
+    expect(await exists(path.join(forge, "recipes/base--acme.yaml"))).toBe(false);
+  });
+
   it("test 2: text mode of test 1 — whole stdout", async () => {
     const { root, forge, home } = await pruneFixture();
     const ws = path.join(root, "ws");

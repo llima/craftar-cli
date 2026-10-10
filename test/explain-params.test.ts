@@ -62,7 +62,7 @@ describe("explain — params", () => {
     expect(agents.stdout).not.toContain("  params");
   });
 
-  it("a citation in a file that is not a body file is listed too: explain names every key the refusal can name", async () => {
+  it("a citation in a file that is not a body file is listed too", async () => {
     const s = await scenario(
       {
         ingredients: [{ meta: { type: "skill", name: "x", layout: "dir", params: { org: { description: "o" } } }, files: { "SKILL.md": "# x\n", "run.sh": "echo {{org}}\n" } }],

@@ -539,7 +539,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
   for (const [key, refs] of [...missingParams].sort(([a], [b]) => a.localeCompare(b))) {
     const warning = `param "${key}" has no value in any layer — left verbatim (${[...refs].sort().join(", ")})`;
     warnings.push(warning);
-    missing.push({ key, refs: [...refs].sort(), warning, declaredBy: [...(declared.get(key) ?? [])].sort((a, b) => a.localeCompare(b)) });
+    missing.push({ key, refs: [...refs].sort(), warning, declaredBy: [...(declared.get(key) ?? [])].sort() });
   }
   const params: Plan["params"] = new Map();
   for (const [ref, { ing, keys }] of cited) {

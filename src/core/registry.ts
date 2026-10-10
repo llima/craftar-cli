@@ -289,14 +289,17 @@ export async function listWorkspaces(home: string, opts: { fetch: boolean }): Pr
     }
     const say = (w: string) => warnings.push(`${e.path}: ${w}`);
     let ws: Workspace | undefined;
+    let planSaid = false; // the plan's warnings, which open with the load's, were already said
     try {
       ws = await loadWorkspace(e.path, { mode: opts.fetch ? "read" : "no-fetch", home });
       const p = await plan(ws);
       // Spec 29 §4.1: a sync that would refuse is an `error` row, rebuilt from the entry like any other, its reason a
-      // warning after the plan's own. Asked before the lock is read, as `nextSync` asks, so both give the same reason.
+      // warning after the plan's, in a loaded row's order. Asked before the lock is read, as `nextSync` asks, so both
+      // give the same reason.
       const unset = unsetDeclared(p);
       if (unset.length) {
-        for (const w of p.warnings.slice(ws.warnings.length)) say(w);
+        for (const w of p.warnings) say(w);
+        planSaid = true;
         throw new Error(unsetSummary(unset));
       }
       const lock = await readLock(ws.root);
@@ -329,7 +332,7 @@ export async function listWorkspaces(home: string, opts: { fetch: boolean }): Pr
       for (const w of p.warnings) say(w);
     } catch (err) {
       rows.push(fromEntry(e, "error"));
-      for (const w of ws?.warnings ?? []) say(w);
+      if (!planSaid) for (const w of ws?.warnings ?? []) say(w);
       say(err instanceof Error ? err.message : String(err));
     }
   }

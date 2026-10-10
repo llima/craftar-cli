@@ -337,16 +337,13 @@ program
     if (o.check) {
       const bad = st.filter((s) => !["unchanged", "adopt"].includes(s.state));
       printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true, forgeLine(ws, lock));
-      // A refused sync is not "in sync", whatever the files say (spec 29 §4.1)
-      const refused = refusalBlock(unsetDeclared(p));
-      if (refused) process.exitCode = 1;
-      if (bad.length) {
-        console.log(pc.red(`\n${bad.length} file(s) out of sync`));
-        // On the refusal path the exit is exitCode's, so nothing queued is cut (spec 29 §4.1)
-        if (refused) return;
-        process.exit(1);
-      }
-      if (!refused) console.log(pc.green("\nworkspace in sync"));
+      const unset = unsetDeclared(p);
+      if (bad.length) console.log(pc.red(`\n${bad.length} file(s) out of sync`));
+      // A refused sync is not "in sync", whatever the files say: the listing, then the block, and the exit is
+      // exitCode's, so nothing queued is cut (spec 29 §4.1)
+      if (refusalBlock(unset)) process.exitCode = 1;
+      else if (bad.length) process.exit(1);
+      else console.log(pc.green("\nworkspace in sync"));
       return;
     }
     // Asked here, not left to apply()'s gate: the plan's warnings come before the block (spec 29 §4.1)
@@ -361,7 +358,7 @@ program
 /* ---------------------------------------------------------------- diff */
 program
   .command("diff")
-  .description("Unified diff between the files on disk and what the Forge would generate, orphans included (files the Forge no longer produces)")
+  .description("Unified diff between the files on disk and what the Forge would generate, orphans included (files the Forge no longer produces); also says when a declared parameter a file cites has no value, which sync refuses")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--exit-code", "exit 1 when there are differences (exactly when `sync --check` would fail); a [path] that names no file craftar manages becomes an error; with a remote Forge, a failed fetch exits 1 as `sync --check` does (--offline to use the cached copy)", false)
   .argument("[path]", "limit to one file")
