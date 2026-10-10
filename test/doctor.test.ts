@@ -597,4 +597,73 @@ describe("docker and services-env checks (spec 31 §4.7)", () => {
     // The marker value should not appear anywhere in the JSON output
     expect(JSON.stringify(r)).not.toContain(markerValue);
   });
+
+  it("a service with files: ['init/a.sh'] whose script holds ${ACME_SHELL} → no services-env finding names ACME_SHELL", async () => {
+    // An init script's ${NAME} is a shell variable, not Compose's (spec 31 §4.7)
+    const compose = `services:
+  echo:
+    image: alpine
+    environment:
+      TOKEN: \${ACME_TOKEN}
+`;
+    const initScript = '#!/bin/sh\necho "${ACME_SHELL:-default}"\n';
+    const f = await fixture({
+      ingredients: [
+        {
+          meta: { type: "service", name: "echo", files: ["init/a.sh"] },
+          files: { "compose.yaml": compose, "init/a.sh": initScript },
+        },
+        rule("style", "# Style\n"),
+      ],
+      recipes: [recipe("base", ["rule/style", "service/echo"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    const a = await f.ws("acme-a");
+    const r = await run({
+      home: f.home,
+      workspace: a,
+      dockerRunner: async () => ({ code: 0, stdout: "v2.30.0\n", stderr: "" }),
+    });
+    const envWarnings = of(r.checks, "services-env").filter((c) => c.level === "warn");
+    const warnedNames = envWarnings.map((c) => {
+      const m = /expects (\w+),/.exec(c.message);
+      return m ? m[1] : null;
+    });
+    // ACME_TOKEN is in the fragment → reported
+    expect(warnedNames).toContain("ACME_TOKEN");
+    // ACME_SHELL is in an init script, not a fragment → NOT reported
+    expect(warnedNames).not.toContain("ACME_SHELL");
+  });
+
+  it("plan failed, lock has a service → docker present, services-env absent", async () => {
+    // Sync a workspace with a service, then break the Forge so plan() throws
+    const compose = `services:
+  echo:
+    image: alpine
+`;
+    const f = await fixture({
+      ingredients: [
+        { meta: { type: "service", name: "echo" }, files: { "compose.yaml": compose } },
+        rule("style", "# Style\n"),
+      ],
+      recipes: [recipe("base", ["rule/style", "service/echo"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    const a = await f.ws("acme-a");
+    await syncAndRegister(f.home, a);
+    // Now break the Forge: remove the service's compose.yaml
+    await fs.rm(path.join(f.forgeRoot, "ingredients/services/echo/compose.yaml"));
+    const r = await run({
+      home: f.home,
+      workspace: a,
+      dockerRunner: async () => ({ code: 0, stdout: "v2.30.0\n", stderr: "" }),
+    });
+    // plan should be error
+    expect(one(r.checks, "plan").level).toBe("error");
+    // docker should be present (lock has a service)
+    expect(of(r.checks, "docker")).toHaveLength(1);
+    expect(one(r.checks, "docker")).toMatchObject({ level: "ok", message: "Docker Compose 2.30.0" });
+    // services-env should NOT be present (needs the planned fragments)
+    expect(of(r.checks, "services-env")).toHaveLength(0);
+  });
 });

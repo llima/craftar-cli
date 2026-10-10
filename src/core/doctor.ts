@@ -7,7 +7,7 @@ import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
 import { isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus } from "./registry.js";
 import { FULL_SHA, cacheKey, classifyForge, inspectCache, type CacheSnapshot } from "./remote.js";
-import { dockerVersion, dockerFault, dockerRunner as defaultDockerRunner, type DockerRunner } from "./services.js";
+import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
 import { outName } from "../emitters/shared.js";
@@ -410,19 +410,17 @@ async function dockerAndServicesEnv(
 ): Promise<void> {
   // "Has a service" = the plan holds a file with target === "services", or — when the plan failed — the lock does.
   const planHasService = p !== null && p.files.some((f) => f.target === "services");
-  const lockHasService = lock !== null && lock.files.some((f: { target: string }) => f.target === "services");
+  const all = lock?.files ?? [];
+  const lockHasService = all.some((f) => f.target === "services");
   if (!planHasService && !lockHasService) return;
 
   // docker check
   const d = await dockerVersion(runner);
-  const fault = dockerFault(d, true);
-  if (d.available && fault === null) {
+  const finding = dockerFinding(d, true);
+  if (finding === null) {
     w("docker", "ok", `Docker Compose ${d.compose}`);
   } else {
-    // Use dockerFault for the warning text; split at ` — ` for message and fix
-    const text = fault ?? "docker not found";
-    const parts = text.split(" — ");
-    w("docker", "warn", parts[0], parts[1] ?? "install Docker with the Compose plugin 2.20.0 or later");
+    w("docker", "warn", finding.message, finding.fix);
   }
 
   // services-env check: only when the plan is available (it has the rendered fragments)
@@ -444,12 +442,13 @@ async function dockerAndServicesEnv(
  * minus keys of `<root>/.env` (`NAME=` at line start; nothing after `=` is read).
  */
 async function servicesEnvUnset(root: string, p: Plan, env: NodeJS.ProcessEnv): Promise<Array<{ filePath: string; name: string }>> {
-  // Read .env key names (NAME= at line start, value ignored)
+  // Read .env key names (NAME= at line start, value ignored) — pattern built from ENV_NAME
   const dotEnvKeys = new Set<string>();
+  const dotEnvKeyPattern = new RegExp("^(" + ENV_NAME + ")=");
   try {
     const dotEnv = await fs.readFile(path.join(root, ".env"), "utf8");
     for (const line of dotEnv.split(/\r?\n/)) {
-      const m = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line);
+      const m = dotEnvKeyPattern.exec(line);
       if (m) dotEnvKeys.add(m[1]);
     }
   } catch {
@@ -459,9 +458,15 @@ async function servicesEnvUnset(root: string, p: Plan, env: NodeJS.ProcessEnv): 
   const out: Array<{ filePath: string; name: string }> = [];
   const seen = new Set<string>();
 
+  // Only scan the planned fragments — each ${NAME} in an init script is a shell variable, not Compose's
+  // (spec 31 §4.7: "each ${NAME} a planned fragment uses")
+  const stackFile = p.files.find((f) => f.path === ".craftar/compose.yaml");
+  const fragments = stackFile ? new Set(fragmentPaths(stackFile.content.toString("utf8"))) : new Set<string>();
+
   for (const f of p.files) {
     if (f.target !== "services") continue;
-    // Only text files (compose fragments and .sh scripts); binary files are copied as bytes
+    // Only the stack's fragments — init scripts' ${NAME} are shell variables
+    if (!fragments.has(f.path)) continue;
     const text = f.content.toString("utf8");
     for (const match of text.matchAll(SERVICES_ENV_REF)) {
       const name = match[1];

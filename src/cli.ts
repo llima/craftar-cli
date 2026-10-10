@@ -1170,7 +1170,7 @@ program
       for (const ing of result.ingredients) {
         const col1 = ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name;
         allCol1.push(col1);
-        allCol2.push(`targets ${ing.targets === "*" ? "*" : (ing.targets as string[]).join(", ")}`);
+        allCol2.push(`targets ${ing.targets === "*" ? "*" : ((ing.targets as string[]).join(", ") || "none")}`);
         allCol3.push(`in ${ing.recipes.length ? ing.recipes.join(", ") : "no recipe"}`);
       }
       for (const m of result.missing) {
@@ -1191,7 +1191,7 @@ program
         console.log(type);
         for (const ing of ings) {
           const col1 = ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name;
-          const col2 = `targets ${ing.targets === "*" ? "*" : (ing.targets as string[]).join(", ")}`;
+          const col2 = `targets ${ing.targets === "*" ? "*" : ((ing.targets as string[]).join(", ") || "none")}`;
           const col3 = `in ${ing.recipes.length ? ing.recipes.join(", ") : "no recipe"}`;
           const desc = ing.description ? `— ${ing.description}` : "";
           const disabled = ing.disabled ? "(disabled by this workspace)" : "";

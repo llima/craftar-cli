@@ -577,4 +577,45 @@ include:
     // No warning about port 8080 — same ingredient
     expect(p.warnings.filter((w) => w.includes("8080")).length).toBe(0);
   });
+
+  it("test 21: YAML syntax error message contains code and position, never the source line", async () => {
+    // Build a marker at runtime so we can search for it without it appearing in code
+    const marker = "MARKER-" + "SECRET" + "-" + Date.now();
+    // Invalid YAML: an unclosed bracket with the marker on the same line
+    const badYaml = `services:
+  echo:
+    image: [unclosed  # ${marker}
+`;
+    await expect(
+      planned({
+        ingredients: [
+          {
+            meta: { type: "service", name: "echo", compose: "compose.yaml", files: [] },
+            files: { "compose.yaml": badYaml },
+          },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      }),
+    ).rejects.toThrow(
+      /^service\/echo compose\.yaml: not valid YAML after rendering — [A-Z_]+ at line \d+, column \d+$/,
+    );
+    // Extra check: ensure the marker is not in the error message
+    let caughtMessage = "";
+    try {
+      await planned({
+        ingredients: [
+          {
+            meta: { type: "service", name: "echo", compose: "compose.yaml", files: [] },
+            files: { "compose.yaml": badYaml },
+          },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      });
+    } catch (e) {
+      caughtMessage = (e as Error).message;
+    }
+    expect(caughtMessage).not.toContain(marker);
+  });
 });

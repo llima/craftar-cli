@@ -6,11 +6,11 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
 import path from "node:path";
-import YAML from "yaml";
 import type { EmitBase, PlannedFile } from "../emitters/types.js";
 import { outName } from "../emitters/shared.js";
 import { findSecrets } from "./secrets.js";
 import { isUtf8, hashNormalized, stripBom, toLf } from "./text.js";
+import { parseYamlText, yamlFault } from "./yaml-read.js";
 import {
   normalizeDeclared,
   COMPOSE_MAPS,
@@ -58,13 +58,12 @@ function assertText(ref: string, file: string, bytes: Buffer, hint: string): voi
  * 7. Must declare at least one service
  */
 export function parseFragment(text: string): { ok: true; fragment: ComposeFragment } | { ok: false; reason: string } {
-  // 1. Parse YAML
+  // 1. Parse YAML — through parseYamlText so the error never includes the source line
   let parsed: unknown;
   try {
-    parsed = YAML.parse(text);
+    parsed = parseYamlText("fragment", text);
   } catch (e) {
-    const msg = e instanceof Error ? e.message.split("\n")[0] : String(e);
-    return { ok: false, reason: `not valid YAML after rendering — ${msg}` };
+    return { ok: false, reason: `not valid YAML after rendering — ${yamlFault(e)}` };
   }
 
   // 2. Must be a mapping
@@ -313,6 +312,16 @@ export const MIN_COMPOSE = "2.20.0";
 const STACK = ".craftar/compose.yaml";
 const DOCKER_FIX = `install Docker with the Compose plugin ${MIN_COMPOSE} or later`;
 
+/**
+ * The paths the planned stack includes — `.craftar/services/<name>/<compose>` for each service.
+ * Returns the workspace-relative POSIX paths (spec 31 §4.7: services-env scans only the planned fragments).
+ */
+export function fragmentPaths(stackText: string): string[] {
+  const parsed = ComposeStackShape.safeParse(parseYamlText("stack", stackText));
+  if (!parsed.success) return [];
+  return parsed.data.include.map((inc) => path.posix.join(".craftar", inc.path));
+}
+
 /** `craftar-<slug>-<hash>` (spec 31 §4.5): computed from the workspace's real path, never stored. */
 export function projectName(realRoot: string): string {
   const slug = path.basename(realRoot).toLowerCase().replace(/[^a-z0-9_-]/g, "-").slice(0, 40);
@@ -335,7 +344,7 @@ export interface Recorded {
 
 function yamlOrNull(text: string): unknown {
   try {
-    return YAML.parse(text);
+    return parseYamlText("stack", text);
   } catch {
     return null;
   }
@@ -361,10 +370,15 @@ export async function recordedServices(root: string, lock: Lock | null): Promise
   }
   const stack = intact.get(STACK);
   if (stack === undefined) return out;
-  const parsed = ComposeStackShape.safeParse(yamlOrNull(stack.toString("utf8")));
-  if (!parsed.success) throw new Error(`${STACK}: recorded by craftar.lock but not a craftar stack`);
-  for (const inc of parsed.data.include) {
-    const rel = path.posix.join(".craftar", inc.path);
+  // Read include list through fragmentPaths (spec 31 §4.7: fragment reading is one place)
+  let includes: string[];
+  try {
+    includes = fragmentPaths(stack.toString("utf8"));
+  } catch {
+    throw new Error(`${STACK}: recorded by craftar.lock but not a craftar stack`);
+  }
+  if (includes.length === 0) throw new Error(`${STACK}: recorded by craftar.lock but not a craftar stack`);
+  for (const rel of includes) {
     const entry = entries.find((e) => e.path === rel);
     if (!entry) {
       // The fragment was a collision at the last sync: a user's file, never handed to Compose.
@@ -493,12 +507,18 @@ export async function dockerVersion(run: DockerRunner): Promise<DockerInfo> {
   return { available: true, compose, belowFloor, reason: belowFloor ? "too old" : null };
 }
 
+/** The message and fix for a Docker that cannot serve the command; null when it can. `down` and `status` do not need the floor. */
+export function dockerFinding(d: DockerInfo, needFloor: boolean): { message: string; fix: string } | null {
+  if (d.reason === "no docker") return { message: "docker not found", fix: DOCKER_FIX };
+  if (d.reason === "no compose plugin") return { message: "the docker compose plugin is missing", fix: DOCKER_FIX };
+  if (d.reason === "too old" && needFloor) return { message: `Docker Compose ${d.compose} is older than ${MIN_COMPOSE}`, fix: "upgrade Docker Compose" };
+  return null;
+}
+
 /** The line and fix for a Docker that cannot serve the command; null when it can. `down` and `status` do not need the floor. */
 export function dockerFault(d: DockerInfo, needFloor: boolean): string | null {
-  if (d.reason === "no docker") return `docker not found — ${DOCKER_FIX}`;
-  if (d.reason === "no compose plugin") return `the docker compose plugin is missing — ${DOCKER_FIX}`;
-  if (d.reason === "too old" && needFloor) return `Docker Compose ${d.compose} is older than ${MIN_COMPOSE} — upgrade Docker Compose`;
-  return null;
+  const finding = dockerFinding(d, needFloor);
+  return finding ? `${finding.message} — ${finding.fix}` : null;
 }
 
 /** Runs `docker` with an argument array and no shell; resolves with the exit code, rejects when it cannot start. */
