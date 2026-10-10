@@ -1901,11 +1901,12 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
   });
 
-  it("55d. D16 same profile, outside — sibling AGENTS.md changes outside rule N", async () => {
+  it("55d. a same-profile sibling whose AGENTS.md changes only inside rule N is reported, not refused", async () => {
     // Three-target fixture: AGENTS.md has rule markers
     // ws2 disables rule/c, so its AGENTS.md is different from ws1's
     // When we promote rule/a, ws2's AGENTS.md changes inside rule/a's section (allowed)
-    // BUT if the promote also changes something outside that section, it should be refused
+    // (A change outside that section cannot be produced through the CLI: a promote edits rule N only.
+    //  The refusal for it is covered by the agentsBound unit tests, not here.)
     const home = await tmpDir("craftar-home-");
     cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
 
