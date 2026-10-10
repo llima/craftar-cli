@@ -11,6 +11,7 @@ import type { HunkTake, Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile, 
 import { ProfileSchema, RecipeSchema } from "../schema/index.js";
 import { collect, deriveHunk, prove, substitutedFile, bodyFile, emittedFile, type Extraction } from "./extract.js";
 import { firstMarkerLine, parseSections, SectionMarkerError } from "./sections.js";
+import { errorText } from "./schema-fault.js";
 import { sectionKey } from "./resolve.js";
 import { findProfileFile } from "./param-writes.js";
 import { deriveSections, prefillSections, proveSections, type MarkerInsertion, type SectionRun } from "./section-extract.js";
@@ -1174,7 +1175,7 @@ export async function pruneRecipes(
   try {
     left = await loadForge(forgeRoot);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = errorText(e);
     for (const c of candidates) {
       kept.push({ recipe: c.recipe, reason: `the Forge no longer loads when the prune reloads it: ${msg}` });
     }
@@ -1317,7 +1318,7 @@ export async function pruneRecipes(
         const edited = profileRecipesEdit(raw, path.relative(forgeRoot, prof.abs).split(path.sep).join("/"), candidate.recipe, candidate.sibling);
         profileWrites.push({ abs: prof.abs, content: edited });
       } catch (e) {
-        editFailed = e instanceof Error ? e.message : String(e);
+        editFailed = errorText(e);
         break;
       }
     }
@@ -1394,7 +1395,7 @@ export async function pruneRecipes(
           }
         }
       } catch (e) {
-        proofFailed = { path: entry.entry.path, reason: e instanceof Error ? e.message : String(e) };
+        proofFailed = { path: entry.entry.path, reason: errorText(e) };
       }
     }
 

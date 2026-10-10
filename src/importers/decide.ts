@@ -7,6 +7,7 @@ import { hashNormalized, stripBom, toLf } from "../core/text.js";
 import { deepMerge } from "../core/merge.js";
 import { citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
 import { canonicalValue, inferSections } from "../core/sections.js";
+import { errorText } from "../core/schema-fault.js";
 import { sectionKey } from "../core/resolve.js";
 import type { DirReader } from "../core/fingerprint.js";
 import { OverridesParamsSchema, SectionsSchema, stripForgeOnlyKeys, type Ingredient, type Sections } from "../schema/index.js";
@@ -290,7 +291,7 @@ export async function workspaceParams(ws: string, read: (abs: string) => Promise
       const params = OverridesParamsSchema.parse(doc?.overrides?.params ?? {});
       out = deepMerge(out, params);
     } catch (e) {
-      throw new Error(`${command}: ${f} does not load (${(e as Error).message})`);
+      throw new Error(`${command}: ${f} does not load (${errorText(e)})`);
     }
   }
   return out;
@@ -306,7 +307,7 @@ export async function workspaceSections(ws: string, read: (abs: string) => Promi
       const doc = (parseWorkspaceYaml(f, await read(abs)) ?? {}) as { overrides?: { params?: unknown; sections?: unknown } };
       out = deepMerge(out, SectionsSchema.parse(doc?.overrides?.sections ?? {}));
     } catch (e) {
-      throw new Error(`${command}: ${f} does not load (${(e as Error).message})`);
+      throw new Error(`${command}: ${f} does not load (${errorText(e)})`);
     }
   }
   return out;

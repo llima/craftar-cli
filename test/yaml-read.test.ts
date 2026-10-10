@@ -111,7 +111,7 @@ describe("loadForge on a Forge file with a YAML syntax error", () => {
     expect(calls()).toEqual([]);
   });
 
-  it("a schema error keeps its message: the file and zod's list (control)", async () => {
+  it("a schema error keeps its message: the file and the fields (control)", async () => {
     const root = await tmpDir("craftar-yaml-read-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
     await makeForge(root, { recipes: [recipe("base", [])], profiles: [profile("acme", ["base"])] });
@@ -120,7 +120,7 @@ describe("loadForge on a Forge file with a YAML syntax error", () => {
       () => null,
       (x: Error) => x,
     );
-    expect(e!.message).toMatch(/^invalid .*base\.yaml: \[/);
+    expect(e!.message).toMatch(/^invalid .*base\.yaml: name: /);
     expect(e!.message).toContain("Expected string, received number");
   });
 });

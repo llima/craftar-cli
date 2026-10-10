@@ -313,6 +313,11 @@ Later: `service` ingredients with compose fragments (`craftar services up`); `do
 
 ## Upgrading
 
+### to 0.22.1
+
+- **A schema refusal and a JSON error never print what the file holds.** A Forge or workspace file the schema refuses now reports `invalid <file>: <path>: <text>; …` (one semicolon-separated item per issue) with no `received` value; `craftar.lock is not valid JSON` with no JSON.parse message; a plan the schema refuses the same way. The format is always one line, quoting nothing the user wrote.
+- **No byte change**: no emitter and no lock changed. No workspace sees `update`.
+
 ### to 0.22.0
 
 - **New commands `craftar drift show`, `craftar drift discard` and `craftar drift promote`**: list hand-edited files, discard their edits, or carry one into the Forge. `drift show --json` and `drift promote --json` are new tooling contracts. The `sync` skip lines for `drift` and `orphan-drift` were reworded (prose, not a contract).

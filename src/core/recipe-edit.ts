@@ -3,6 +3,7 @@ import YAML from "yaml";
 import type { Forge } from "./forge.js";
 import { WorkspaceConfigSchema, type WorkspaceConfig } from "../schema/index.js";
 import { recipeOrder, resolve } from "./resolve.js";
+import { schemaFault } from "./schema-fault.js";
 import { editYamlText } from "./yaml-edit.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
 
@@ -186,6 +187,6 @@ export function editRecipesText(raw: string, after: RecipeLists, command: string
   const read = parseWorkspaceYaml("craftar.yaml", content) as Record<string, unknown>;
   if (!isDeepStrictEqual(read, { ...before, recipes: expected })) throw refuse("the edit does not read back as exactly recipes.add and recipes.remove set");
   const loaded = WorkspaceConfigSchema.safeParse(read);
-  if (!loaded.success) throw refuse(`it no longer loads: ${loaded.error.message}`);
+  if (!loaded.success) throw refuse(`it no longer loads: ${schemaFault(loaded.error)}`);
   return content;
 }

@@ -48,6 +48,7 @@ import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
+import { errorText } from "./core/schema-fault.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
@@ -1552,12 +1553,12 @@ forge
       try {
         parsed = parseYamlText(o.plan, await fs.readFile(o.plan, "utf8"));
       } catch (e) {
-        fail(e instanceof YamlSyntaxError ? e.message : `${o.plan}: ${e instanceof Error ? e.message : String(e)}`);
+        fail(e instanceof YamlSyntaxError ? e.message : `${o.plan}: ${errorText(e)}`);
       }
       try {
         loadedPlan = UnifyPlanSchema.parse(parsed);
       } catch (e) {
-        fail(`${o.plan}: ${e instanceof Error ? e.message : String(e)}`);
+        fail(`${o.plan}: ${errorText(e)}`);
       }
       // The plan must be for this exact invocation (Ruling 23) — checked before staleness, so a
       // right-ingredient-wrong-profile plan is named for what it is rather than misdiagnosed as
@@ -2032,7 +2033,7 @@ cache
     else printPrune(result);
   });
 
-program.parseAsync().catch((e) => fail(e instanceof Error ? e.message : String(e)));
+program.parseAsync().catch((e) => fail(errorText(e)));
 
 /* ---------------------------------------------------------------- helpers */
 

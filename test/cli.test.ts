@@ -522,8 +522,7 @@ describe("cli", () => {
     expect(r.stderr).toContain(planPath);
     // Finding 7: pin a fragment of the zod error itself, not just the file-path prefix any
     // message naming the path would satisfy — "profile" is one of the fields the fixture omits.
-    expect(r.stderr).toContain('"profile"');
-    expect(r.stderr).toContain("Required");
+    expect(r.stderr).toContain("profile: Required");
   });
 
   it("forge unify refuses a --plan whose base changed since it was saved", async () => {
@@ -4706,8 +4705,8 @@ describe("cli — forge impact (spec 25 §4.1)", () => {
     const r = s.run(["forge", "impact", "--forge", s.forge]);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    // The error comes from readRegistry which includes the JSON.parse error
-    expect(r.stderr).toBe(`error: cannot read ${s.registry}: Unexpected token 'o', \"not json\n\" is not valid JSON\n`);
+    // The error comes from readRegistry which reports "not valid JSON" without the parse message
+    expect(r.stderr).toBe(`error: cannot read ${s.registry}: not valid JSON\n`);
   });
 
   it("test 8: --workspace with remote Forge → code 1, exact error message", async () => {
