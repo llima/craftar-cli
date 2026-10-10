@@ -59,9 +59,10 @@ function assertText(ref: string, file: string, bytes: Buffer, hint: string): voi
  */
 export function parseFragment(text: string): { ok: true; fragment: ComposeFragment } | { ok: false; reason: string } {
   // 1. Parse YAML — through parseYamlText so the error never includes the source line
+  //    Compose honours merge keys (<<: *anchor), so parse with merge: true to see what Compose sees.
   let parsed: unknown;
   try {
-    parsed = parseYamlText("fragment", text);
+    parsed = parseYamlText("fragment", text, { merge: true });
   } catch (e) {
     return { ok: false, reason: `not valid YAML after rendering — ${yamlFault(e)}` };
   }

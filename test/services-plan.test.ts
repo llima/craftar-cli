@@ -619,3 +619,70 @@ include:
     expect(caughtMessage).not.toContain(marker);
   });
 });
+
+  it("test 22: a merge key that sneaks include past parseFragment is caught (spec 31 C1)", async () => {
+    // Compose honours a top-level YAML merge key, so <<: *a with x-a: &a { include: [...] }
+    // gives the fragment an include key parseFragment must detect via merge: true
+    const mergeInclude = `x-a: &a
+  include:
+    - path: ./evil.yaml
+services:
+  echo:
+    image: alpine
+<<: *a
+`;
+    await expect(
+      planned({
+        ingredients: [
+          { meta: { type: "service", name: "echo", compose: "compose.yaml", files: [] }, files: { "compose.yaml": mergeInclude } },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      }),
+    ).rejects.toThrow("service/echo compose.yaml: a fragment must not declare include — every file of the stack is in craftar.lock");
+  });
+
+  it("test 23: a merge key that sneaks name past parseFragment is caught", async () => {
+    const mergeName = `x-a: &a
+  name: evil
+services:
+  echo:
+    image: alpine
+<<: *a
+`;
+    await expect(
+      planned({
+        ingredients: [
+          { meta: { type: "service", name: "echo", compose: "compose.yaml", files: [] }, files: { "compose.yaml": mergeName } },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      }),
+    ).rejects.toThrow("service/echo compose.yaml: a fragment must not declare a top-level name — the project name is craftar's");
+  });
+
+  it("test 24: a merge key under services that hides a duplicate service is caught", async () => {
+    // Two fragments where the second uses a merge key to redeclare a service the first already has
+    const frag1 = `services:
+  echo:
+    image: example/a:1
+`;
+    const frag2 = `x-s: &s
+  echo:
+    image: example/b:1
+services:
+  <<: *s
+  other:
+    image: example/o:1
+`;
+    await expect(
+      planned({
+        ingredients: [
+          { meta: { type: "service", name: "a", compose: "compose.yaml", files: [] }, files: { "compose.yaml": frag1 } },
+          { meta: { type: "service", name: "b", compose: "compose.yaml", files: [] }, files: { "compose.yaml": frag2 } },
+        ],
+        recipes: [recipe("base", ["service/a", "service/b"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      }),
+    ).rejects.toThrow(/service\/a and service\/b both declare services\.echo/);
+  });

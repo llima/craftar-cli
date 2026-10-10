@@ -179,3 +179,19 @@ describe("one caller of YAML.parse", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("parseYamlText merge option (spec 31 C1)", () => {
+  it("default call leaves << as a plain key", () => {
+    const result = parseYamlText("x.yaml", "x-a: &a\n  b: 1\nfoo:\n  <<: *a\n");
+    expect(result).toEqual({ "x-a": { b: 1 }, foo: { "<<": { b: 1 } } });
+    expect(Object.hasOwn((result as { foo: object }).foo, "<<")).toBe(true);
+    expect(Object.hasOwn((result as { foo: object }).foo, "b")).toBe(false);
+  });
+
+  it("{ merge: true } resolves the merge key", () => {
+    const result = parseYamlText("x.yaml", "x-a: &a\n  b: 1\nfoo:\n  <<: *a\n", { merge: true });
+    expect(result).toEqual({ "x-a": { b: 1 }, foo: { b: 1 } });
+    expect(Object.hasOwn((result as { foo: object }).foo, "<<")).toBe(false);
+    expect(Object.hasOwn((result as { foo: object }).foo, "b")).toBe(true);
+  });
+});
