@@ -9,7 +9,7 @@ import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
 import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
-import { resolve } from "../core/resolve.js";
+import { resolve, type Resolution } from "../core/resolve.js";
 import { classifyForge, credentialFault } from "../core/remote.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { editYamlText } from "../core/yaml-edit.js";
@@ -19,6 +19,7 @@ import { renderMap } from "../core/template-import.js";
 import { firstMarkerLine } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
 import { deepMerge } from "../core/merge.js";
+import { outName } from "../emitters/shared.js";
 
 export interface ImportOptions {
   workspaceRoot: string;
@@ -363,6 +364,51 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     if (key) throw new Error(`import: ${l.source} holds {{${key}}} literally, but profile ${opts.profileName} sets ${key} — sync would render it`);
   }
 
+  // Spec 27 §5.3: report a declaration a profile loses — the run's MCP refs keyed by server name.
+  const afterMcp = new Map<string, { ref: string; authEnv?: string[] }>();
+  for (const ref of [...report.reused, ...report.variants.map((v) => v.name), ...report.created].filter((r) => r.startsWith("mcp/"))) {
+    // Read the final ingredient as written/reused.
+    const ingredientFile = path.join(forge, "ingredients", typeFolder("mcp"), ref.slice(4), "ingredient.yaml");
+    if (await stage.exists(ingredientFile)) {
+      const ing = parseYaml(ingredientFile, await stage.readText(ingredientFile), IngredientSchema);
+      if (ing.type === "mcp") {
+        const serverName = outName(ing);
+        afterMcp.set(serverName, { ref, authEnv: ing.authEnv });
+      }
+    }
+  }
+  // What the importing profile resolved before the run — only when the profile already exists.
+  // A profile new to the Forge has no *before*, so no lost-declaration warning.
+  if (loaded && loaded.profiles.has(opts.profileName)) {
+    let resolved: Resolution | null = null;
+    try {
+      resolved = resolve(loaded, WorkspaceConfigSchema.parse({ forge: ".", profile: opts.profileName }));
+    } catch (e) {
+      // The profile exists in the Forge but does not resolve (e.g. two recipes on one slot).
+      // Only warn when the Forge declares authEnv somewhere — otherwise 0.17.4 was silent (spec 27 §10 criterion 2).
+      const forgeDeclaresAuthEnv = [...loaded.ingredients.values()].some((ing) => ing.meta.type === "mcp" && ing.meta.authEnv && ing.meta.authEnv.length > 0);
+      if (forgeDeclaresAuthEnv) {
+        const msg = e instanceof Error ? e.message.replace(/[\r\n]+/g, " ") : String(e);
+        report.warnings.push(`profile ${opts.profileName} did not resolve before this import (${msg}) — authEnv declarations were not compared`);
+      }
+    }
+    if (resolved) {
+      const beforeMcp = new Map<string, { ref: string; authEnv?: string[] }>();
+      for (const ing of resolved.ingredients) {
+        if (ing.meta.type === "mcp") beforeMcp.set(outName(ing.meta), { ref: ing.ref, authEnv: ing.meta.authEnv });
+      }
+      for (const [serverName, before] of beforeMcp) {
+        const after = afterMcp.get(serverName);
+        if (!after) continue; // Server gone from workspace or rejected — nothing lost in the Forge.
+        const afterNames = after.authEnv ?? [];
+        const lost = (before.authEnv ?? []).filter((n) => !afterNames.includes(n));
+        if (lost.length > 0) {
+          report.warnings.push(`mcp/${serverName}: ${lost.join(", ")} declared by ${before.ref} is not declared by ${after.ref}`);
+        }
+      }
+    }
+  }
+
   /* ---- recipes ---- */
   const recipesDir = path.join(forge, "recipes");
   const isVariant = (ref: string) => report.variants.some((v) => v.name === ref);
@@ -620,6 +666,8 @@ async function writeIngredient(
   const ref = `${meta.type}/${name}`;
   const source = meta.origin?.path ?? ref;
   const sourceMeta = validateImported(meta);
+  // The authEnv to carry into a variant — from the decision (spec 27 §5.3).
+  let variantAuthEnv: string[] | undefined;
   if (await stage.exists(path.join(dir, "ingredient.yaml"))) {
     let why: string | undefined;
     const d = run ? await decide(run.ctx, dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases) : { kind: "literal" as const, warn: "" };
@@ -639,15 +687,31 @@ async function writeIngredient(
       return ref;
     } else {
       why = d.why;
+      // Capture the base's authEnv for a new variant (spec 27 §5.3).
+      variantAuthEnv = d.authEnv;
     }
     const as = meta.name;
     name = `${meta.name}--${profile}`;
     dir = path.join(forge, "ingredients", folder, name);
     report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge${why ? ` (${why})` : ""}` });
+
+    // Spec 27 §5.3: an existing variant's authEnv decides; a new one inherits the base's.
+    const variantFile = path.join(dir, "ingredient.yaml");
+    if (meta.type === "mcp") {
+      if (await stage.exists(variantFile)) {
+        const existingMeta = parseYaml(variantFile, await stage.readText(variantFile), IngredientSchema);
+        if (existingMeta.type === "mcp" && existingMeta.authEnv) {
+          meta = { ...meta, authEnv: existingMeta.authEnv } as Ingredient;
+        }
+      } else if (variantAuthEnv) {
+        meta = { ...meta, authEnv: variantAuthEnv } as Ingredient;
+      }
+    }
     meta = { ...meta, name, as } as Ingredient;
     validateImported(meta); // the variant name must be slug-like too (a `--profile` with a space is not)
+
     // I8: rewriting an existing variant another profile resolves would change its files there.
-    if (run?.ctx.forge && (await stage.exists(path.join(dir, "ingredient.yaml"))) && (await fingerprintDir(dir, stage.reader())) !== fingerprintOf(validateImported(meta), files)) {
+    if (run?.ctx.forge && (await stage.exists(variantFile)) && (await fingerprintDir(dir, stage.reader())) !== fingerprintOf(validateImported(meta), files)) {
       for (const q of run.ctx.forge.profiles.keys()) {
         if (q !== profile && resolvedBy(run.ctx.forge, q).has(`${meta.type}/${name}`)) {
           throw new Error(`import: ${meta.type}/${name} is also used by profile ${q} — its files would change there`);
@@ -662,8 +726,14 @@ async function writeIngredient(
     run.literal.push({ ref: `${meta.type}/${name}`, source, meta: sourceMeta, files });
   }
 
-  const yamlMeta: Record<string, unknown> = { ...meta };
-  if (yamlMeta.targets === "*") yamlMeta.targets = "*";
+  // Build the YAML preserving key order. For MCP, authEnv sits immediately before server.
+  const yamlMeta: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(meta)) {
+    if (k === "authEnv") continue;
+    // authEnv is emitted with server because only an mcp metadata can hold it (the schema refuses it elsewhere).
+    if (k === "server" && "authEnv" in meta) yamlMeta.authEnv = meta.authEnv;
+    yamlMeta[k] = v;
+  }
   stage.write(path.join(dir, "ingredient.yaml"), YAML.stringify(yamlMeta, { lineWidth: 0 }));
   for (const [rel, content] of Object.entries(files)) stage.write(path.join(dir, rel), content);
   return `${meta.type}/${name}`;

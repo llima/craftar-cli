@@ -1,6 +1,6 @@
 import { INGREDIENT_TYPES, TARGETS, type IngredientType, type Target } from "../schema/index.js";
 import type { Resolution, ResolvedIngredient } from "./resolve.js";
-import { appliesTo } from "../emitters/shared.js";
+import { appliesTo, EXAMPLE_SETTINGS } from "../emitters/shared.js";
 
 /* ------------------------------------------------------------------ */
 /* Capability states and the matrix (spec 16 §5.3)                     */
@@ -49,7 +49,7 @@ export const CAPABILITIES = {
     },
     mcp: {
       state: "native",
-      output: [".mcp.json"],
+      output: [".mcp.json", EXAMPLE_SETTINGS],
       note: null,
     },
     script: {

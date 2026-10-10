@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { climbsOut } from "../core/text.js";
+import { findSecrets } from "../core/secrets.js";
 
 /* ------------------------------------------------------------------ */
 /* __proto__ key refusal helper (tech-debt 2026-09-25-zod)              */
@@ -36,6 +37,19 @@ export const TargetSchema = z.enum(TARGETS);
 
 export const INGREDIENT_TYPES = ["rule", "agent", "command", "skill", "mcp", "script", "steering", "hook"] as const;
 export type IngredientType = (typeof INGREDIENT_TYPES)[number];
+
+/** The environment variable name pattern (spec 27 §5.1). Exported so doctor's NAME_REF can be built from it. */
+export const ENV_NAME = "[A-Za-z_][A-Za-z0-9_]*";
+
+/** Keys that exist in the Forge only and are stripped by import comparisons (spec 27 §5.2). */
+export const FORGE_ONLY_KEYS = ["params", "authEnv"] as const;
+
+/** Return a shallow copy of `meta` with FORGE_ONLY_KEYS removed (spec 27 §5.3). */
+export function stripForgeOnlyKeys(meta: Record<string, unknown>): Record<string, unknown> {
+  const copy = { ...meta };
+  for (const key of FORGE_ONLY_KEYS) delete copy[key];
+  return copy;
+}
 
 const Inclusion = z.enum(["always", "fileMatch", "manual", "auto"]);
 
@@ -126,6 +140,24 @@ export const McpIngredient = IngredientBase.extend({
       if (!r.success) for (const issue of r.error.issues) ctx.addIssue(issue);
     })
     .transform((v) => v as McpServer),
+  /** Environment variable names this MCP server needs (spec 27 §4.1). Optional with no default, so fingerprints of existing ingredients do not move. */
+  authEnv: z
+    .array(
+      z.string().regex(new RegExp(`^${ENV_NAME}$`), "an authEnv item is a variable name")
+    )
+    .superRefine((items, ctx) => {
+      for (let i = 0; i < items.length; i++) {
+        const finding = findSecrets(items[i])[0];
+        if (finding) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [i],
+            message: `looks like a token (${finding.kind}) — an authEnv item is a variable NAME`,
+          });
+        }
+      }
+    })
+    .optional(),
 });
 
 /**

@@ -63,7 +63,7 @@ async function makeCapabilityForge(root: string): Promise<void> {
     },
     // mcp
     {
-      meta: { type: "mcp", name: "cap-mcp", targets: "*", server: { command: "npx", args: ["cap-server"] } },
+      meta: { type: "mcp", name: "cap-mcp", targets: "*", authEnv: ["CAP_TOKEN"], server: { command: "npx", args: ["cap-server"] } },
     },
     // script
     {
@@ -152,6 +152,8 @@ async function isAsHeld(
   outName: string,
 ): Promise<boolean> {
   if (type === "mcp") {
+    // The example file is not a file rule 4 judges (spec 27 §4.4): return true for it.
+    if (f.path === ".claude/settings.craftar.example.json") return true;
     // MCP: check if the server object is deep-equal under the output name
     try {
       const planned = JSON.parse(f.content.toString("utf8"));
@@ -630,6 +632,31 @@ describe("emitFor and mcpServers (spec 18 §9.4)", () => {
     expect(Object.keys(clash)).toEqual(["one", "two"]);
     expect(clash.one).toEqual({ command: "c" });
     expect(w).toEqual(['kiro: two ingredients write the MCP server "one" into .kiro/settings/mcp.json: mcp/one and mcp/one--acme (last wins)']);
+  });
+
+  it("isAsHeld rule 4: the example file is not judged, only the server file (spec 27 §4.4)", async () => {
+    // A Forge with an MCP ingredient declaring authEnv produces both .mcp.json (native) and the example file.
+    // Rule 4 for MCP judges only .mcp.json, not the example file.
+    const s = await scenario(
+      { ingredients: [spec("mcp", "tracker", { authEnv: ["ACME_TOKEN"], server: { command: "npx", args: ["-y", "tracker"] } })], recipes: [recipe("base", ["mcp/tracker"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    walkCleanups.push(s.cleanup);
+    const p = await plan(await loadWorkspace(s.wsRoot));
+    // The plan should have both .mcp.json and the example file
+    const mcpJson = p.files.find((f) => f.path === ".mcp.json");
+    const exampleJson = p.files.find((f) => f.path === ".claude/settings.craftar.example.json");
+    expect(mcpJson).toBeDefined();
+    expect(exampleJson).toBeDefined();
+    // The example file should be in the plan with ingredient "mcp/*"
+    expect(exampleJson?.ingredient).toBe("mcp/*");
+    // Rule 4 reads the server file only: the example file is not judged, and a changed server still fails.
+    const ing = { dir: "", meta: { server: { command: "npx", args: ["-y", "tracker"] } } };
+    expect(await isAsHeld(exampleJson!, ing, "mcp", "tracker")).toBe(true);
+    expect(await isAsHeld(mcpJson!, ing, "mcp", "tracker")).toBe(true);
+    const changed = { ...mcpJson!, content: Buffer.from(mcpJson!.content.toString("utf8").replace('"tracker"\n', '"trackeR"\n')) };
+    expect(changed.content.equals(mcpJson!.content)).toBe(false);
+    expect(await isAsHeld(changed, ing, "mcp", "tracker")).toBe(false);
   });
 });
 

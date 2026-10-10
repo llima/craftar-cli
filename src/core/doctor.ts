@@ -2,7 +2,7 @@ import { promises as fs, constants as fsc } from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { Registry } from "../schema/index.js";
+import { ENV_NAME, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
 import { isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus } from "./registry.js";
@@ -69,7 +69,7 @@ async function defaultGitVersion(): Promise<string | null> {
 
 const MB = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 const short = (sha: string | null) => (sha ? sha.slice(0, 8) : "no git");
-const NAME_REF = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+const NAME_REF = new RegExp("\\$\\{(" + ENV_NAME + ")\\}", "g");
 const refLabel = (ref: string | null, defaultBranch: string | null) => ref ?? (defaultBranch ? `${defaultBranch} (default branch)` : "the default branch");
 const CACHE_FIX = "craftar cache prune";
 
@@ -361,22 +361,34 @@ function declaredWithoutValue(p: Plan): Map<string, string[]> {
 }
 
 /**
- * One finding per (server outName, NAME) across the targets that write MCP (§4.2). Each target's own
- * surviving server is read (last-wins per target, as its emitter writes it), so two targets writing the
- * same name from different ingredients are both checked.
+ * One finding per (server outName, NAME) across the targets that write MCP (§4.2, spec 27 §4.3). Each
+ * target's own surviving server is read (last-wins per target, as its emitter writes it), so two targets
+ * writing the same name from different ingredients are both checked. Names are the union of the
+ * ingredient's `authEnv` and every `${NAME}` in a string value of its server's `env`.
  */
 function mcpUnset(p: Plan, env: NodeJS.ProcessEnv): Array<{ server: string; name: string }> {
-  const servers: Array<[string, unknown]> = [];
+  const servers: Array<[string, unknown, string[] | undefined]> = [];
   for (const target of p.resolution.targets) {
     // `written()` yields only what the matrix says this target writes; the skip warnings were plan()'s.
     const walk = written(p.resolution, target, () => {});
-    const perTarget = new Map<string, unknown>();
-    for (const ing of walk) if (ing.meta.type === "mcp") perTarget.set(outName(ing.meta), ing.meta.server);
-    servers.push(...perTarget);
+    const perTarget = new Map<string, { server: unknown; authEnv: string[] | undefined }>();
+    for (const ing of walk)
+      if (ing.meta.type === "mcp") perTarget.set(outName(ing.meta), { server: ing.meta.server, authEnv: ing.meta.authEnv });
+    for (const [name, { server, authEnv }] of perTarget) servers.push([name, server, authEnv]);
   }
   const out: Array<{ server: string; name: string }> = [];
   const seen = new Set<string>();
-  for (const [server, def] of servers) {
+  for (const [server, def, authEnv] of servers) {
+    // Collect from authEnv first (spec 27 §4.3: union of authEnv and ${NAME} references).
+    if (authEnv) {
+      for (const name of authEnv) {
+        const key = `${server}\u0000${name}`;
+        if (seen.has(key) || env[name] !== undefined) continue;
+        seen.add(key);
+        out.push({ server, name });
+      }
+    }
+    // Then from ${NAME} references in env string values.
     const envBlock = def !== null && typeof def === "object" ? (def as { env?: unknown }).env : undefined;
     if (envBlock === null || typeof envBlock !== "object") continue;
     for (const value of Object.values(envBlock as Record<string, unknown>)) {

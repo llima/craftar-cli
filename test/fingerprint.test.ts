@@ -137,3 +137,23 @@ describe("fingerprintDir — validated metadata (spec 07)", () => {
     expect(await fingerprintDir(b)).toBe(await fingerprintDir(a));
   });
 });
+
+describe("authEnv fingerprint (spec 27)", () => {
+  const FINGERPRINT_WITHOUT_AUTHENV = "sha256:a2c5578c99995aca8d8d440d6a31a411a9b973ac0965b629d7c7d51523eb394e";
+
+  it("12. an MCP ingredient without authEnv keeps its fingerprint", () => {
+    const ing = IngredientSchema.parse({ type: "mcp", name: "a", server: { command: "npx", args: ["-y", "x"] } });
+    const fp = fingerprintOf(ing, {});
+    expect(fp).toBe(FINGERPRINT_WITHOUT_AUTHENV);
+  });
+
+  it("13. authEnv: ['A'] and authEnv: [] each have a different fingerprint from no authEnv", () => {
+    const base = { type: "mcp", name: "a", server: { command: "npx", args: ["-y", "x"] } };
+    const fpWithA = fingerprintOf(IngredientSchema.parse({ ...base, authEnv: ["A"] }), {});
+    const fpWithEmpty = fingerprintOf(IngredientSchema.parse({ ...base, authEnv: [] }), {});
+
+    expect(fpWithA).not.toBe(FINGERPRINT_WITHOUT_AUTHENV);
+    expect(fpWithEmpty).not.toBe(FINGERPRINT_WITHOUT_AUTHENV);
+    expect(fpWithA).not.toBe(fpWithEmpty);
+  });
+});
