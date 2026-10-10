@@ -12,6 +12,8 @@ export interface PlannedFile {
   ingredient: string;
   /** Human-readable note surfaced by `craftar explain`. */
   note?: string;
+  /** File mode (POSIX only); when set, writeFile sets this mode. */
+  mode?: number;
 }
 
 /** What every helper needs; an emitter also gets its walk (`EmitContext`). */

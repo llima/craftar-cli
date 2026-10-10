@@ -18,6 +18,7 @@ import { kiro } from "../emitters/kiro.js";
 import { agentsMd } from "../emitters/agents-md.js";
 import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
 import { written } from "./capabilities.js";
+import { planServices } from "./services.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
 export const LOCAL_FILE = "craftar.local.yaml";
@@ -473,9 +474,12 @@ export function assertInsideWorkspace(files: PlannedFile[]): void {
 export async function plan(ws: Workspace): Promise<Plan> {
   const resolution = resolve(ws.forge, ws.config);
   const warnings = [...ws.warnings, ...resolution.warnings];
+  const hasService = resolution.ingredients.some((ing) => ing.meta.type === "service");
   if (resolution.targets.length === 0) {
     warnings.push(
-      "no targets resolved — nothing will be emitted and every file in craftar.lock becomes an orphan (an empty list in craftar.local.yaml replaces the workspace's)",
+      hasService
+        ? "no target resolved — only the service files under .craftar/ are written"
+        : "no targets resolved — nothing will be emitted and every file in craftar.lock becomes an orphan (an empty list in craftar.local.yaml replaces the workspace's)",
     );
   }
   const sections = await sectionPass(ws.forge, resolution, warnings);
@@ -534,6 +538,10 @@ export async function plan(ws: Workspace): Promise<Plan> {
     }
     files.push(...(await emitFor(t, em, ctx)));
   }
+  // Service files are planned after the target loop (spec 31 §5.3, choice 24) and before the
+  // containment check, so assertInsideWorkspace, the missing-param collection and the duplicate-path
+  // guard all cover the service files.
+  files.push(...(await planServices(ctx)));
   assertInsideWorkspace(files);
   const missing: Plan["missingParams"] = [];
   const declared = declaredWithoutValue({ resolution });
@@ -775,4 +783,8 @@ async function writeFile(root: string, f: PlannedFile): Promise<void> {
   const abs = path.join(root, f.path);
   await fs.mkdir(path.dirname(abs), { recursive: true });
   await fs.writeFile(abs, f.content);
+  // Set mode after writing (fs.writeFile's mode applies only on creation, so chmod is needed for updates).
+  if (f.mode !== undefined && process.platform !== "win32") {
+    await fs.chmod(abs, f.mode);
+  }
 }

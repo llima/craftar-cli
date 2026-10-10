@@ -317,16 +317,34 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
           }
 
           // Check rule 2: unsupported ⇔ no cell files AND a warning names each fixture ref AND output is empty
+          // EXCEPTION: service is unsupported in all targets, but planServices (spec 31 §5.3, choice 24) plans
+          // service files outside the walk, so files ARE planned. The walk only warns when targets: "*".
           if (cap.state === "unsupported") {
-            expect(
-              cellFiles.length,
-              `${cellName}: unsupported should have no cell files, but found: ${cellFiles.map((f) => f.path).join(", ")}`,
-            ).toBe(0);
+            if (type === "service") {
+              // Service files ARE planned by planServices, not by the target's walk
+              // The service fixture has default targets: [], so no walk warning unless targets: "*"
+              // But this test uses targets: "*" (via makeCapabilityForge), so warnings appear
+              // We still expect the warning, but we expect files to be planned too
+              for (const ref of fixtureRefs) {
+                const hasWarning = warnings.some((w) => w.includes(ref) && w.includes("skipped"));
+                expect(hasWarning, `${cellName}: unsupported should have a skip warning for ${ref}`).toBe(true);
+              }
+              // And files ARE planned for services
+              expect(
+                cellFiles.length,
+                `${cellName}: service files should be planned by planServices`,
+              ).toBeGreaterThan(0);
+            } else {
+              expect(
+                cellFiles.length,
+                `${cellName}: unsupported should have no cell files, but found: ${cellFiles.map((f) => f.path).join(", ")}`,
+              ).toBe(0);
 
-            // Should have a warning naming each fixture ingredient
-            for (const ref of fixtureRefs) {
-              const hasWarning = warnings.some((w) => w.includes(ref) && w.includes("skipped"));
-              expect(hasWarning, `${cellName}: unsupported should have a skip warning for ${ref}`).toBe(true);
+              // Should have a warning naming each fixture ingredient
+              for (const ref of fixtureRefs) {
+                const hasWarning = warnings.some((w) => w.includes(ref) && w.includes("skipped"));
+                expect(hasWarning, `${cellName}: unsupported should have a skip warning for ${ref}`).toBe(true);
+              }
             }
 
             // output should be empty
@@ -682,8 +700,9 @@ describe("agents-md walks to the end with no rule (spec 18 §6.3)", () => {
 });
 
 describe("service ingredient with default targets (spec 31)", () => {
-  it("with default targets (no targets key) no warning mentions the service and no file is planned from it", async () => {
-    // A service with NO targets key (default: []) is not aimed at any target, so no warning
+  it("with default targets (no targets key) no warning mentions the service and service files ARE planned", async () => {
+    // A service with NO targets key (default: []) is not aimed at any target, so no warning from the walk
+    // But service files are still planned by planServices (choice 24: outside the walk)
     const s = await scenario(
       {
         ingredients: [
@@ -696,12 +715,15 @@ describe("service ingredient with default targets (spec 31)", () => {
     );
     walkCleanups.push(s.cleanup);
     const p = await plan(await loadWorkspace(s.wsRoot));
-    expect(p.warnings.some((w) => w.includes("service/echo"))).toBe(false);
-    expect(p.files.some((f) => f.ingredient === "service/echo")).toBe(false);
+    // No warning about the service from the walk (default targets: [], not aimed at any target)
+    expect(p.warnings.some((w) => w.includes("service/echo") && w.includes("equivalent"))).toBe(false);
+    // But service files ARE planned (spec 31 §5.3, choice 24)
+    expect(p.files.some((f) => f.ingredient === "service/echo")).toBe(true);
   });
 
-  it("with targets: '*' the three walk warnings appear and still no file is planned from it", async () => {
+  it("with targets: '*' the three walk warnings appear and service files are still planned", async () => {
     // A service with targets: "*" is aimed at all targets, so all three warn
+    // Service files are still planned by planServices (choice 24)
     const s = await scenario(
       {
         ingredients: [
@@ -719,6 +741,7 @@ describe("service ingredient with default targets (spec 31)", () => {
       "kiro: service service/echo has no Kiro equivalent — skipped",
       "agents-md: 1 service ingredient(s) have no AGENTS.md equivalent — skipped: service/echo",
     ]));
-    expect(p.files.some((f) => f.ingredient === "service/echo")).toBe(false);
+    // Service files ARE still planned (spec 31 §5.3, choice 24: planServices is outside the walk)
+    expect(p.files.some((f) => f.ingredient === "service/echo")).toBe(true);
   });
 });
