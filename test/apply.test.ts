@@ -702,7 +702,7 @@ describe("apply lock schema selection (spec 31 §5.2)", () => {
     while (cleanups.length) await cleanups.pop()!();
   });
 
-  // The golden lock TEXT, captured from origin/main @ 36645a1 (0.20.0).
+  // The lock text craftar 0.21.1 (npm) writes for this scenario — compared by hand on 2026-10-10; schema 2 must stay this, byte for byte.
   // Key order: schema, forge, profile, recipes, targets, generatedAt, files.
   // generatedAt is replaced by regex; forge.commit is null (the scenario Forge has no git).
   const GOLDEN_LOCK_TEXT_V2 = `{

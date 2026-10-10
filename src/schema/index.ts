@@ -7,6 +7,9 @@ import { findSecrets } from "../core/secrets.js";
 /* __proto__ key refusal helper (tech-debt 2026-09-25-zod)              */
 /* ------------------------------------------------------------------ */
 
+/** The message noProtoKey and parseFragment use for a __proto__ key — one spelling. */
+export const NO_PROTO_KEY = "a __proto__ key is not allowed";
+
 /**
  * Refuse `__proto__` as a key in the raw input: zod's `z.record()` silently strips it,
  * turning a write into a silent drop — the key appears in the source file yet vanishes
@@ -19,7 +22,7 @@ import { findSecrets } from "../core/secrets.js";
 function noProtoKey<T extends z.ZodTypeAny>(schema: T): z.ZodType<z.infer<T>> {
   return z.custom<unknown>().superRefine((v, ctx) => {
     if (v !== null && typeof v === "object" && !Array.isArray(v) && Object.hasOwn(v, "__proto__")) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["__proto__"], message: "a __proto__ key is not allowed" });
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["__proto__"], message: NO_PROTO_KEY });
     }
   }).pipe(schema);
 }

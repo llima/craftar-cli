@@ -1,6 +1,7 @@
 /**
- * Service planning (spec 31 §4.1, §5.3): the files `sync` writes for service ingredients.
- * These are not a target's: they are planned by one function, called once after the target loop.
+ * Service ingredients — planning (spec 31 §4.1, §5.3) and the read-only core of `craftar services`.
+ * Planning: the files `sync` writes for service ingredients, called once after the target loop.
+ * Services core: recordedServices, upRefusal, downArgv, and the Compose/Docker helpers.
  */
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -17,6 +18,7 @@ import {
   ComposeFragmentShape,
   ComposeStackShape,
   ComposePsRow,
+  NO_PROTO_KEY,
   type ComposeFragment,
   type Ingredient,
   type Lock,
@@ -91,8 +93,8 @@ export function parseFragment(text: string): { ok: true; fragment: ComposeFragme
     // The failing map is in issue.path[0]
     const failingMap = issue.path[0];
     // Check if it's a __proto__ issue (recognised by the message noProtoKey raises)
-    if (issue.message === "a __proto__ key is not allowed") {
-      return { ok: false, reason: "a __proto__ key is not allowed" };
+    if (issue.message === NO_PROTO_KEY) {
+      return { ok: false, reason: NO_PROTO_KEY };
     }
     // Otherwise it's a shape issue (e.g., volumes: [])
     return { ok: false, reason: `${failingMap} must be a mapping` };

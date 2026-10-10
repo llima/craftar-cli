@@ -533,7 +533,7 @@ describe("docker and services-env checks (spec 31 §4.7)", () => {
     expect(ids).not.toContain("services-env");
   });
 
-  it("fragment using ${ACME_A}, ${ACME_B:-x}, ${CRAFTAR_WORKSPACE}, ${ACME_C} with ACME_C set, ${ACME_D} with ACME_D in .env → warn names ACME_A only; .env value appears nowhere", async () => {
+  it("fragment using ${ACME_A}, ${ACME_B:-x}, ${CRAFTAR_WORKSPACE}, ${ACME_C} with ACME_C set, ${ACME_D} with ACME_D in .env → warn names ACME_A, ACME_E, ACME_F; .env value appears nowhere", async () => {
     // Use runtime-assembled marker so the literal cannot appear in the code
     const markerValue = "secret_" + "value_" + "xyz123";
     const compose = `services:

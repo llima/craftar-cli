@@ -1282,10 +1282,7 @@ program
     const result = listTargets(inUse);
 
     if (o.json) {
-      return console.log(JSON.stringify({
-        ...result,
-        warnings,
-      }, null, 2));
+      return console.log(JSON.stringify({ ...result, warnings }, null, 2));
     }
 
     // Text mode
