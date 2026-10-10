@@ -310,7 +310,7 @@ Later: `service` ingredients with compose fragments (`craftar services up`); `do
 
 ## Upgrading
 
-### to 0.x.0
+### to 0.20.0
 
 - **A declared parameter with no value now stops `sync`.** If an ingredient declares a key under `params` with no `default`, a file cites `{{key}}`, and no layer sets it, `craftar sync`, `sync --check`, `status` and `diff --exit-code` exit 1 and `sync` writes nothing. Before, the file was written with `{{key}}` in it and a warning. Run `craftar doctor` to list the keys; set each in the profile's `params` or in `overrides.params`. A `{{key}}` no ingredient declares is left verbatim with its warning, as before.
 - **`craftar doctor` reports such a key as `error`** (it was `warn`), so its exit code is 1 without `--strict`. A declared key no file cites stays a `warn`.
