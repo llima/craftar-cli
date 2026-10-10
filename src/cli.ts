@@ -53,6 +53,7 @@ import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { spawn } from "node:child_process";
 import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
+import { declaredTemplates, profileLabel, templateRows, type DeclaredEntry, type TemplateRow } from "./core/templates.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
@@ -936,6 +937,67 @@ program
     else printDoctor(report);
     // exitCode, not process.exit: a piped --json is never cut (spec 24 §5.1).
     if (report.summary.error > 0 || (o.strict && report.summary.warn > 0)) process.exitCode = 1;
+  });
+
+/* ---------------------------------------------------------------- templates */
+const templates = program.command("templates").description("Project templates the profile declares (dotnet new): list them, or install them into this user's dotnet template store");
+
+/** Load workspace and return the profile name and declared templates; refusal goes through `fail()`. */
+function declaredFor(ws: Workspace): { profile: string; declared: ReturnType<typeof declaredTemplates> } {
+  const profile = ws.forge.profiles.get(ws.config.profile);
+  if (!profile) throw new Error(`profile "${ws.config.profile}" not found in Forge`);
+  const labelPromise = profileLabel(ws.forge.root, profile.name);
+  const label = `profiles/${profile.name}/profile.yaml`;
+  try {
+    return { profile: profile.name, declared: declaredTemplates(profile, label) };
+  } catch (e) {
+    fail(e instanceof Error ? e.message : String(e));
+  }
+}
+
+templates
+  .command("list")
+  .description(
+    "What the profile's templates block declares: one line per package — kind, package, version or latest, source or default feeds — and one per entry this craftar cannot install. Runs no program and does not know what is installed",
+  )
+  .option("--json", "machine-readable output", false)
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
+  .action(async (o) => {
+    const ws = await loadWorkspace(o.workspace, load(o, "read"));
+    const { profile, declared } = declaredFor(ws);
+    const rows = templateRows(declared.entries);
+    const warnings = [...ws.warnings, ...declared.warnings];
+
+    if (o.json) {
+      console.log(JSON.stringify({ profile, templates: rows, warnings }, null, 2));
+      return;
+    }
+
+    warnStderr(warnings);
+
+    if (!declared.declared || declared.entries.length === 0) {
+      console.log(`no templates declared for profile ${profile}`);
+      return;
+    }
+
+    // Text mode: header and one line per row
+    const installableRows = rows.filter((r) => r.installable);
+    const kindWidth = Math.max(...rows.map((r) => r.kind.length));
+    const packageWidth = installableRows.length ? Math.max(...installableRows.map((r) => r.package!.length)) : 0;
+    const versionWidth = installableRows.length ? Math.max(...installableRows.map((r) => (r.version ?? "latest").length)) : 0;
+
+    console.log(pc.bold(`Templates of profile ${profile}`));
+    for (const row of rows) {
+      if (row.installable) {
+        const pkg = row.package!.padEnd(packageWidth);
+        const ver = (row.version ?? "latest").padEnd(versionWidth);
+        const src = row.source ?? "default feeds";
+        console.log(`  ${row.kind.padEnd(kindWidth)}  ${pkg}  ${ver}  ${src}`);
+      } else {
+        console.log(`  ${row.kind.padEnd(kindWidth)}  not installed by this craftar`);
+      }
+    }
   });
 
 /* ---------------------------------------------------------------- recipes */
