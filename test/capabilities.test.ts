@@ -701,7 +701,7 @@ describe("service ingredient with default targets (spec 31)", () => {
     walkCleanups.push(s.cleanup);
     const p = await plan(await loadWorkspace(s.wsRoot));
     // No warning about the service from the walk (default targets: [], not aimed at any target)
-    expect(p.warnings.some((w) => w.includes("service/echo") && w.includes("equivalent"))).toBe(false);
+    expect(p.warnings.some((w) => w.includes("service/echo"))).toBe(false);
     // But service files ARE planned (spec 31 §5.3, choice 24)
     expect(p.files.some((f) => f.ingredient === "service/echo")).toBe(true);
   });

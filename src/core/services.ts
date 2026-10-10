@@ -8,7 +8,7 @@ import type { EmitBase, PlannedFile } from "../emitters/types.js";
 import { outName } from "../emitters/shared.js";
 import { findSecrets } from "./secrets.js";
 import { isUtf8, stripBom, toLf } from "./text.js";
-import { normalizeDeclared, COMPOSE_MAPS, ComposeFragmentShape, type Ingredient } from "../schema/index.js";
+import { normalizeDeclared, COMPOSE_MAPS, ComposeFragmentShape, type ComposeFragment, type Ingredient } from "../schema/index.js";
 
 /** Whether a path is listed in the binary array. */
 function isBinary(meta: Extract<Ingredient, { type: "service" }>, file: string): boolean {
@@ -27,6 +27,72 @@ function assertText(ref: string, file: string, bytes: Buffer, hint: string): voi
   if (!isUtf8(bytes) || bytes.includes(0)) {
     throw new Error(`${ref} ${file}: ${hint}`);
   }
+}
+
+/**
+ * Parse a Compose fragment from YAML text.
+ *
+ * Returns `{ ok: true, fragment }` on success, or `{ ok: false, reason }` on failure.
+ * The reason does NOT include a `<ref> <compose>: ` prefix — the caller adds it.
+ *
+ * Checks:
+ * 1. Valid YAML
+ * 2. Must be a YAML mapping (not null, array, scalar)
+ * 3. Must not declare top-level `name`
+ * 4. Must not declare `include`
+ * 5. Each of services/volumes/networks/configs/secrets must be a mapping (via ComposeFragmentShape)
+ * 6. __proto__ keys are refused (via noProtoKey in the schema)
+ * 7. Must declare at least one service
+ */
+export function parseFragment(text: string): { ok: true; fragment: ComposeFragment } | { ok: false; reason: string } {
+  // 1. Parse YAML
+  let parsed: unknown;
+  try {
+    parsed = YAML.parse(text);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message.split("\n")[0] : String(e);
+    return { ok: false, reason: `not valid YAML after rendering — ${msg}` };
+  }
+
+  // 2. Must be a mapping
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, reason: "a fragment must be a YAML mapping" };
+  }
+
+  const obj = parsed as Record<string, unknown>;
+
+  // 3. Must not declare top-level name
+  if (Object.hasOwn(obj, "name")) {
+    return { ok: false, reason: "a fragment must not declare a top-level name — the project name is craftar's" };
+  }
+
+  // 4. Must not declare include
+  if (Object.hasOwn(obj, "include")) {
+    return { ok: false, reason: "a fragment must not declare include — every file of the stack is in craftar.lock" };
+  }
+
+  // 5 & 6. Validate shape through ComposeFragmentShape (catches __proto__ and non-mapping maps)
+  const result = ComposeFragmentShape.safeParse(obj);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    // The failing map is in issue.path[0]
+    const failingMap = issue.path[0];
+    // Check if it's a __proto__ issue (recognised by the message noProtoKey raises)
+    if (issue.message === "a __proto__ key is not allowed") {
+      return { ok: false, reason: "a __proto__ key is not allowed" };
+    }
+    // Otherwise it's a shape issue (e.g., volumes: [])
+    return { ok: false, reason: `${failingMap} must be a mapping` };
+  }
+
+  const fragment = result.data;
+
+  // 7. Must declare at least one service
+  if (!fragment.services || Object.keys(fragment.services).length === 0) {
+    return { ok: false, reason: "a fragment must declare at least one service" };
+  }
+
+  return { ok: true, fragment };
 }
 
 /**
@@ -72,53 +138,16 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
     const fragmentText = await base.text(ing, fragmentPath);
     const fragmentContent = Buffer.from(toLf(stripBom(fragmentText)), "utf8");
 
-    // Parse the rendered fragment to validate and check for conflicts
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = YAML.parse(fragmentText);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message.split("\n")[0] : String(e);
-      throw new Error(`${ing.ref} ${fragmentPath}: not valid YAML after rendering — ${msg}`);
+    // Parse the rendered fragment through parseFragment
+    const parseResult = parseFragment(fragmentText);
+    if (!parseResult.ok) {
+      throw new Error(`${ing.ref} ${fragmentPath}: ${parseResult.reason}`);
     }
-
-    // Validate fragment shape: must be a mapping
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error(`${ing.ref} ${fragmentPath}: a fragment must be a YAML mapping`);
-    }
-    if (Object.hasOwn(parsed, "name")) {
-      throw new Error(`${ing.ref} ${fragmentPath}: a fragment must not declare a top-level name — the project name is craftar's`);
-    }
-    if (Object.hasOwn(parsed, "include")) {
-      throw new Error(`${ing.ref} ${fragmentPath}: a fragment must not declare include — every file of the stack is in craftar.lock`);
-    }
-
-    // Validate each map shape using zod (catches volumes: [], __proto__ keys, etc.)
-    for (const mapName of COMPOSE_MAPS) {
-      const mapValue = parsed[mapName];
-      if (mapValue !== undefined) {
-        // Build a single-key object to test this specific map
-        const testObj = { [mapName]: mapValue };
-        const result = ComposeFragmentShape.safeParse(testObj);
-        if (!result.success) {
-          const issue = result.error.issues[0];
-          // Check if it's a __proto__ issue
-          if (issue.path.includes("__proto__")) {
-            throw new Error(`${ing.ref} ${fragmentPath}: a __proto__ key is not allowed`);
-          }
-          // Otherwise it's a shape issue (e.g., volumes: [])
-          throw new Error(`${ing.ref} ${fragmentPath}: ${mapName} must be a mapping`);
-        }
-      }
-    }
-
-    // Now validate services specifically
-    if (!parsed.services || typeof parsed.services !== "object" || Object.keys(parsed.services as object).length === 0) {
-      throw new Error(`${ing.ref} ${fragmentPath}: a fragment must declare at least one service`);
-    }
+    const fragment = parseResult.fragment;
 
     // Check for duplicate keys in services, volumes, networks, configs, secrets
     for (const mapName of COMPOSE_MAPS) {
-      const mapValue = parsed[mapName];
+      const mapValue = fragment[mapName as keyof ComposeFragment];
       if (mapValue && typeof mapValue === "object" && !Array.isArray(mapValue)) {
         const existing = declaredKeys.get(mapName)!;
         for (const key of Object.keys(mapValue)) {
@@ -132,7 +161,8 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
     }
 
     // Check for duplicate published host ports and warn (across different ingredients only)
-    const svcMap = parsed.services as Record<string, unknown>;
+    // fragment.services is guaranteed to exist and be non-empty by parseFragment
+    const svcMap = fragment.services!;
     for (const svcDef of Object.values(svcMap)) {
       if (svcDef && typeof svcDef === "object" && !Array.isArray(svcDef)) {
         const ports = (svcDef as Record<string, unknown>).ports;
