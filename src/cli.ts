@@ -1013,13 +1013,12 @@ templates
     const ws = await loadWorkspace(o.workspace, load(o, "read"));
     const { profile, declared } = await declaredFor(ws);
     const warnings = [...ws.warnings, ...declared.warnings];
+    warnStderr(warnings);
 
     if (!declared.declared || declared.entries.length === 0) {
       console.log(`no templates declared for profile ${profile}`);
       return;
     }
-
-    warnStderr(warnings);
 
     const hasInstallable = declared.entries.some((e) => e.installable);
     if (hasInstallable && !o.dryRun) {
