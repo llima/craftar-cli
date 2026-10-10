@@ -6324,6 +6324,11 @@ describe("cli — craftar init off a terminal (spec 28 §4.5)", () => {
     expect(r.stdout.split("\n").filter((l) => l.startsWith("  again "))).toEqual([]);
   });
 
+  it("--help of status and sync name the unset-parameter refusal (spec 29)", () => {
+    expect(runCli(["status", "--help"]).stdout.replace(/\s+/g, " ")).toContain("exits 1 when a declared parameter a file cites has no value");
+    expect(runCli(["sync", "--help"]).stdout.replace(/\s+/g, " ")).toContain("refuses, writing nothing, when a declared parameter a file cites has no value");
+  });
+
   it("test 10: --help shows the updated option descriptions", async () => {
     // Commander wraps lines at ~80 columns. The filter gets lines matching --forge or --profile,
     // which picks the first line of each option (before wrapping continues on indented lines).
