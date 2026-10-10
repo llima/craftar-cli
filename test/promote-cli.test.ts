@@ -194,39 +194,41 @@ describe("forge promote — the command", () => {
 
   });
 
-  it("22b. a workspace that adds or removes a recipe, or disables an ingredient, by name is warned about — one workspace per reference", async () => {
-    const cases: Array<[string, Record<string, unknown>, string[]]> = [
-      // adds the shared recipe naming the base: after the promotion that recipe gives it acme's text
-      ["adder", { profile: "initech", recipes: { add: ["base"] } }, [".claude/rules/workflow.md", ".kiro/steering/workflow.md"]],
-      // removes the shared recipe its profile named: the profile now names the copy, so nothing is removed
-      ["remover", { profile: "globex", recipes: { remove: ["base"] } }, [".claude/rules/style.md", ".claude/rules/workflow.md"]],
-      // disables the variant that is removed: the base comes back enabled
-      ["disabler", { profile: "acme", overrides: { ingredients: { disable: ["rule/workflow--acme"] } } }, [".claude/rules/workflow.md", ".kiro/steering/workflow.md"]],
-      // disables the base, which another ingredient now is
-      ["baser", { profile: "globex", overrides: { ingredients: { disable: ["rule/workflow"] } } }, [".claude/rules/workflow.md"]],
-    ];
-    for (const [name, config, files] of cases) {
-      const t = await scenario();
-      await t.workspace("initech");
-      const ws = path.join(t.root, `${name}-portal`);
-      await makeWorkspace(ws, t.forge, { config });
-      expect(t.cli(["sync", "--workspace", ws]).code, name).toBe(0);
-      const real = await fs.realpath(ws);
-      const r = t.promote();
-      expect(r.code, r.stderr).toBe(0);
-      const lines = r.stdout.split("\n");
-      expect(lines.filter((l) => l.startsWith("  warn ")), name).toEqual([
-        `  warn ${real} (craftar.yaml) adds or removes a recipe that names rule/workflow, or disables rule/workflow or rule/workflow--acme, by name — its next sync follows the Forge, not this promotion`,
-      ]);
-      // One line per workspace, in unify's wording, when any changes.
-      expect(lines.filter((l) => l.startsWith("  impact")).sort(), name).toEqual(
-        [
-          `  impact: ${await fs.realpath(path.join(t.root, "initech-portal"))} (initech) no effect`,
-          `  impact: ${real} (${config.profile}) ${files.length === 1 ? `1 file changes — ${files[0]}` : `${files.length} files change — ${files.join(", ")}`}`,
-        ].sort(),
-      );
-    }
-    // The object carries the same: keys of a row in unify's order, the changed files, the warning.
+  // Each case is a scenario of its own — a Forge, two workspaces, three runs of the CLI — so each is its own test:
+  // in one test they ran past the 30 s timeout on a Windows runner.
+  const BY_NAME: Array<[string, Record<string, unknown>, string[]]> = [
+    // adds the shared recipe naming the base: after the promotion that recipe gives it acme's text
+    ["adder", { profile: "initech", recipes: { add: ["base"] } }, [".claude/rules/workflow.md", ".kiro/steering/workflow.md"]],
+    // removes the shared recipe its profile named: the profile now names the copy, so nothing is removed
+    ["remover", { profile: "globex", recipes: { remove: ["base"] } }, [".claude/rules/style.md", ".claude/rules/workflow.md"]],
+    // disables the variant that is removed: the base comes back enabled
+    ["disabler", { profile: "acme", overrides: { ingredients: { disable: ["rule/workflow--acme"] } } }, [".claude/rules/workflow.md", ".kiro/steering/workflow.md"]],
+    // disables the base, which another ingredient now is
+    ["baser", { profile: "globex", overrides: { ingredients: { disable: ["rule/workflow"] } } }, [".claude/rules/workflow.md"]],
+  ];
+  it.each(BY_NAME)("22b. a workspace that adds or removes a recipe, or disables an ingredient, by name is warned about — %s", async (name, config, files) => {
+    const t = await scenario();
+    await t.workspace("initech");
+    const ws = path.join(t.root, `${name}-portal`);
+    await makeWorkspace(ws, t.forge, { config });
+    expect(t.cli(["sync", "--workspace", ws]).code, name).toBe(0);
+    const real = await fs.realpath(ws);
+    const r = t.promote();
+    expect(r.code, r.stderr).toBe(0);
+    const lines = r.stdout.split("\n");
+    expect(lines.filter((l) => l.startsWith("  warn ")), name).toEqual([
+      `  warn ${real} (craftar.yaml) adds or removes a recipe that names rule/workflow, or disables rule/workflow or rule/workflow--acme, by name — its next sync follows the Forge, not this promotion`,
+    ]);
+    // One line per workspace, in unify's wording, when any changes.
+    expect(lines.filter((l) => l.startsWith("  impact")).sort(), name).toEqual(
+      [
+        `  impact: ${await fs.realpath(path.join(t.root, "initech-portal"))} (initech) no effect`,
+        `  impact: ${real} (${config.profile}) ${files.length === 1 ? `1 file changes — ${files[0]}` : `${files.length} files change — ${files.join(", ")}`}`,
+      ].sort(),
+    );
+  });
+
+  it("22b. --json carries the same: a row's keys in unify's order, the changed files, the warning", async () => {
     const t = await scenario();
     const ws = path.join(t.root, "adder-portal");
     await makeWorkspace(ws, t.forge, { config: { profile: "initech", recipes: { add: ["base"] } } });
