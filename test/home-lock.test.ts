@@ -37,4 +37,55 @@ describe("withLock", () => {
     const file = path.join(dir, "absent", "registry.lock");
     await expect(withLock(file, "x", { waitMs: 60_000 }, async () => "ran")).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  // On Windows the exclusive create answers EPERM while the previous holder's unlink is still pending.
+  // The hook stands in for that answer, so the three cases run on every platform.
+  const eperm = () => Object.assign(new Error("EPERM: operation not permitted, open"), { code: "EPERM" });
+
+  it("win32: EPERM from the create is the release still landing — retried, the body runs once", async () => {
+    const dir = await tmpDir();
+    const file = path.join(dir, "registry.lock");
+    let attempts = 0;
+    let bodies = 0;
+    const out = await withLock(file, "x", { platform: "win32", pollMs: 10, beforeAttempt: async () => { if (++attempts <= 2) throw eperm(); } }, async () => {
+      bodies++;
+      return "ran";
+    });
+    expect([out, attempts, bodies]).toEqual(["ran", 3, 1]);
+    await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("win32: EPERM that lasts is a real refusal — rethrown once its own short wait runs out, whatever waitMs says", async () => {
+    const dir = await tmpDir();
+    let attempts = 0;
+    const start = Date.now();
+    const err = await withLock(path.join(dir, "registry.lock"), "x", { platform: "win32", waitMs: 60_000, pollMs: 10, pendingDeleteMs: 150, beforeAttempt: async () => { attempts++; throw eperm(); } }, async () => "ran").catch((e: NodeJS.ErrnoException) => e);
+    const took = Date.now() - start;
+    expect((err as NodeJS.ErrnoException).code).toBe("EPERM");
+    expect(attempts).toBeGreaterThan(1);
+    expect(took).toBeGreaterThanOrEqual(150);
+    expect(took).toBeLessThan(5_000);
+  });
+
+  it("elsewhere EPERM is a refusal at once: one attempt, no wait", async () => {
+    const dir = await tmpDir();
+    for (const platform of ["linux", "darwin"] as const) {
+      let attempts = 0;
+      const err = await withLock(path.join(dir, "registry.lock"), "x", { platform, waitMs: 60_000, pollMs: 10, beforeAttempt: async () => { attempts++; throw eperm(); } }, async () => "ran").catch((e: NodeJS.ErrnoException) => e);
+      expect([(err as NodeJS.ErrnoException).code, attempts]).toEqual(["EPERM", 1]);
+    }
+  });
+
+  it("win32: a held lock seen between two EPERMs keeps its own wait and its own message", async () => {
+    const dir = await tmpDir();
+    const file = path.join(dir, "registry.lock");
+    await fs.writeFile(file, "4242 2026-10-07T00:00:00.000Z\n");
+    const now = new Date();
+    await fs.utimes(file, now, now);
+    let attempts = 0;
+    // Odd attempts answer EPERM, even ones reach the real create and find the lock held.
+    await expect(withLock(file, "the workspace registry", { platform: "win32", waitMs: 300, pollMs: 20, pendingDeleteMs: 10_000, beforeAttempt: async () => { if (++attempts % 2) throw eperm(); } }, async () => "ran")).rejects.toThrow(
+      `the workspace registry ${file} is busy (held by PID 4242)`,
+    );
+  });
 });

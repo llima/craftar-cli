@@ -12,6 +12,8 @@ export interface LockTiming {
   waitMs?: number;
   pollMs?: number;
   staleMs?: number;
+  /** How long a Windows EPERM on the lock's creation is taken for a release still landing (2 s). */
+  pendingDeleteMs?: number;
 }
 
 /** Lock options, extending timing with behavior for directory creation. */
@@ -28,6 +30,8 @@ export interface LockOptions extends LockTiming {
    * Exists for tests (spec 26 §9's third ordering).
    */
   beforeAttempt?: () => Promise<void>;
+  /** Test seam: the platform whose create semantics apply; `process.platform` otherwise. */
+  platform?: NodeJS.Platform;
 }
 
 /** Thrown when a lock is busy and the wait has run out. */
@@ -50,7 +54,10 @@ export async function withLock<T>(file: string, label: string, timing: LockOptio
   const waitMs = timing.waitMs ?? 60_000;
   const pollMs = timing.pollMs ?? 200;
   const staleMs = timing.staleMs ?? 10 * 60 * 1000;
+  const pendingDeleteMs = timing.pendingDeleteMs ?? 2_000;
+  const windows = (timing.platform ?? process.platform) === "win32";
   const start = Date.now();
+  let pendingSince: number | null = null;
   for (;;) {
     try {
       if (timing.createDir) await fs.mkdir(path.dirname(file), { recursive: true });
@@ -65,6 +72,16 @@ export async function withLock<T>(file: string, label: string, timing: LockOptio
         await new Promise((r) => setTimeout(r, pollMs));
         continue;
       }
+      // Windows refuses to create a file whose unlink is still pending — the holder releasing the lock
+      // this very moment — with EPERM, not EEXIST. It clears in milliseconds; an EPERM that outlasts
+      // its own short wait is a real refusal (a directory that cannot be written) and is rethrown.
+      if (code === "EPERM" && windows) {
+        pendingSince ??= Date.now();
+        if (Date.now() - pendingSince >= pendingDeleteMs) throw e;
+        await new Promise((r) => setTimeout(r, pollMs));
+        continue;
+      }
+      pendingSince = null;
       if (code !== "EEXIST") throw e;
       const stat = await fs.stat(file).catch(() => null);
       if (stat && Date.now() - stat.mtimeMs > staleMs) {
