@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LockBusyError } from "../src/core/home-lock.js";
-import { REMOVING_PREFIX, cacheDir, cacheKey, ensureTree, inspectCache, pruneTrees, removeEntry, removeLeftover, withPruneLock } from "../src/core/remote.js";
+import { REMOVING_PREFIX, cacheDir, cacheKey, defaultGit, ensureTree, inspectCache, pruneTrees, removeEntry, removeLeftover, withPruneLock } from "../src/core/remote.js";
 import { profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
 import { git, remoteForge } from "./helpers/remote.js";
 
@@ -156,12 +156,26 @@ describe("removeEntry (§4.3)", () => {
     const h = await home();
     const { r, entry } = await cached(h);
     let attempts = 0;
+    let inFetch = false;
+    let removed = false;
+    let lockAtRmdir: boolean | null = null;
     let waiter: Promise<{ fetched: boolean }> | null = null;
+    // The waiter's fetch runs under its lock: held there until the removal has returned, so the rmdir
+    // falls while the lock file is in the entry. (Polling the entry for `lock` instead missed it when
+    // the whole read fitted between two polls.)
+    const git: typeof defaultGit = async (args, opts) => {
+      if (args.includes("fetch")) {
+        inFetch = true;
+        await until(() => removed);
+      }
+      return defaultGit(args, opts);
+    };
     const out = await removeEntry(entry, async () => {
-      waiter = ensureTree(r.url, null, { home: h, pollMs: 20, beforeAttempt: async () => void attempts++ });
+      waiter = ensureTree(r.url, null, { home: h, pollMs: 20, git, beforeAttempt: async () => void attempts++ });
       await until(() => attempts >= 1);
       return true;
-    }, { afterRelease: () => until(async () => (await ls(entry))?.includes("lock") ?? false) });
+    }, { afterRelease: async () => { await until(() => inFetch); lockAtRmdir = (await ls(entry))?.includes("lock") ?? false; } }).finally(() => { removed = true; });
+    expect(lockAtRmdir).toBe(true);
     expect(out).toEqual({ outcome: "removed", warnings: [] });
     expect((await waiter!).fetched).toBe(true);
     expect(await ls(entry)).toEqual(["fetched", "repo.git", "trees"]);
@@ -174,19 +188,43 @@ describe("removeEntry (§4.3)", () => {
     let attempts = 0;
     let released = false;
     let raced = 0;
+    let goneAtWrite: boolean | null = null;
     let waiter: Promise<{ fetched: boolean }> | null = null;
     const beforeAttempt = async () => {
       attempts++;
-      if (released && raced === 0) {
-        raced++;
-        await fs.rmdir(entry);
-      }
+      // The first attempt finds the pruner's lock (EEXIST). Every later one is held here, after its
+      // mkdir, until the pruner has released: left free, the waiter could take the lock in the window
+      // between the release and `released`, and the rmdir below would then fall on a later lock of the
+      // same read (the tree's), on an entry the fetch had filled — ENOTEMPTY, about half the Windows runs.
+      if (attempts === 1 || raced === 1) return;
+      await until(() => released);
+      raced++;
+      await fs.rmdir(entry);
+      goneAtWrite = (await ls(entry)) === null;
     };
     const out = await removeEntry(entry, async () => {
       waiter = ensureTree(r.url, null, { home: h, pollMs: 20, beforeAttempt });
       await until(() => attempts >= 1);
       return true;
     }, { afterRelease: async () => { released = true; await until(() => raced === 1); } });
+    expect(out).toEqual({ outcome: "removed", warnings: [] });
+    expect((await waiter!).fetched).toBe(true);
+    // The rmdir fell on the second attempt, between its mkdir and its write: that write found no directory.
+    expect([raced, goneAtWrite]).toEqual([1, true]);
+    expect(await ls(entry)).toEqual(["fetched", "repo.git", "trees"]);
+  });
+
+  it("the rmdir arriving after the waiter's fetch refilled the entry: it fails harmlessly, the read completes", async () => {
+    const h = await home();
+    const { r, entry } = await cached(h);
+    let attempts = 0;
+    let waiter: Promise<{ fetched: boolean }> | null = null;
+    const out = await removeEntry(entry, async () => {
+      waiter = ensureTree(r.url, null, { home: h, pollMs: 20, beforeAttempt: async () => void attempts++ });
+      await until(() => attempts >= 1);
+      return true;
+      // The pruner's own rmdir is held back until the waiter's fetch has refilled the entry.
+    }, { afterRelease: () => until(async () => (await ls(entry))?.includes("fetched") ?? false) });
     expect(out).toEqual({ outcome: "removed", warnings: [] });
     expect((await waiter!).fetched).toBe(true);
     expect(await ls(entry)).toEqual(["fetched", "repo.git", "trees"]);
