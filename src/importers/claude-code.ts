@@ -22,6 +22,7 @@ import { GENERATED_BANNER, kiroReport, type KiroReport } from "./kiro-report.js"
 import { deepMerge } from "../core/merge.js";
 import { outName } from "../emitters/shared.js";
 import { parseYamlText } from "../core/yaml-read.js";
+import type { WriteJournal } from "../core/unify.js";
 
 export interface ImportOptions {
   workspaceRoot: string;
@@ -464,6 +465,41 @@ export class ForgeStage {
     } catch (e) {
       const already = written.length ? `already written: ${written.join(", ")}` : "nothing was written yet";
       throw new Error(`${e instanceof Error ? e.message : String(e)}\nThe import failed while writing into the Forge (${already}); restore or remove those paths before re-running.`, { cause: e });
+    }
+  }
+
+  /** Staged paths in staging order, Forge-relative with `/`; `created` is false when the path exists on disk under `root`. */
+  async entries(): Promise<Array<{ rel: string; abs: string; created: boolean }>> {
+    const result: Array<{ rel: string; abs: string; created: boolean }> = [];
+    for (const [abs] of this.files) {
+      const rel = path.relative(this.root, abs).split(path.sep).join("/");
+      const created = !(await exists(abs));
+      result.push({ rel, abs, created });
+    }
+    return result;
+  }
+
+  /** Write every staged file under another root (same relative paths), in the order given by `order` (a comparator over `rel`), noting each in `journal` before it is touched. */
+  async flushTo(root: string, opts?: { order?: (a: string, b: string) => number; journal?: WriteJournal }): Promise<void> {
+    // Build entries in staging order
+    const entries: Array<{ rel: string; content: string | Buffer }> = [];
+    for (const [abs, content] of this.files) {
+      const rel = path.relative(this.root, abs).split(path.sep).join("/");
+      entries.push({ rel, content });
+    }
+    // Sort if order given
+    if (opts?.order) {
+      entries.sort((a, b) => opts.order!(a.rel, b.rel));
+    }
+    // Write each entry to the target root
+    for (const { rel, content } of entries) {
+      const targetAbs = path.join(root, rel);
+      const created = !(await exists(targetAbs));
+      if (opts?.journal) {
+        opts.journal.push({ abs: targetAbs, created });
+      }
+      await fs.mkdir(path.dirname(targetAbs), { recursive: true });
+      await fs.writeFile(targetAbs, content);
     }
   }
 }
