@@ -310,7 +310,7 @@ Later: `service` ingredients with compose fragments (`craftar services up`); `do
 
 ## Upgrading
 
-### to 0.x.0
+### to 0.21.0
 
 - **`craftar import --report <file.md>` is new** and additive: without the flag, `import` reads, writes and prints what it did before. Nothing to do.
 - **No byte change**: no emitter, no import decision and no lock changed. No workspace sees `update`.
