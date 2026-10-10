@@ -509,6 +509,9 @@ drift
     const stateOf = new Map(st.map((s) => [s.path, s.state]));
     const not = paths.filter((x) => stateOf.get(x) !== "drift" && stateOf.get(x) !== "orphan-drift");
     if (not.length) fail(`not drifted: ${not.map((x) => `${x} (${stateOf.get(x) ?? "not managed"})`).join(", ")} — nothing was written`);
+    // Check for unset params BEFORE any output (spec 29 §4.1, spec 30r1 commit 3 issue 1)
+    const unset = unsetDeclared(p);
+    if (unset.length) fail(unsetRefusal(unset));
     const overwritePaths = new Set(paths);
     console.log(`discarding ${paths.length} hand edit(s): ${st.filter((s) => overwritePaths.has(s.path)).map((s) => s.path).join(", ")}`);
     await applyAndReport(ws, p, st, lock, { dryRun: o.dryRun, overwritePaths });

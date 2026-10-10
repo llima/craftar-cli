@@ -350,6 +350,52 @@ describe("cli — drift discard", () => {
     expect([r.code, r.stdout, r.stderr]).toEqual([1, "", "error: missing required argument 'path'\n"]);
     expect((await lockBytes(f.ws)).equals(before)).toBe(true);
   });
+
+  it("a workspace with an unset param refuses exactly as sync does — nothing printed on stdout", async () => {
+    // A rule that declares a param with no default, and no layer sets it
+    // Build a workspace that can sync, then add the unset param to the Forge
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A one\n")],
+        recipes: [recipe("base", ["rule/a"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Drift the file
+    await fs.appendFile(path.join(s.wsRoot, A), "hand a\n");
+
+    // Now add the unset param to the Forge - must use correct YAML structure
+    const ingDir = path.join(s.forgeRoot, "ingredients/rules/a");
+    await fs.writeFile(path.join(ingDir, "ingredient.yaml"), `type: rule
+name: a
+targets: "*"
+tags: []
+params:
+  org: {}
+`);
+    await fs.writeFile(path.join(ingDir, "rule.md"), "Org: {{org}}\n");
+
+    // First check that sync refuses with this param
+    const syncR = runCli(["sync", "--workspace", s.wsRoot]);
+    expect(syncR.code).toBe(1);
+    const syncStderr = syncR.stderr;
+    expect(syncStderr).toContain("1 declared parameter(s) have no value");
+    expect(syncStderr).toContain("org");
+
+    // Now test discard - should refuse the same way
+    const lockBefore = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
+    const r = runCli(["drift", "discard", A, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    // The same stderr that sync prints
+    expect(r.stderr).toBe(syncStderr);
+    // Lock unchanged
+    expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
+  });
 });
 
 
