@@ -23,7 +23,8 @@ import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
-import { exists, gitDirty, gitIsRepo, gitUnheld, loadForge, type UnheldPath } from "./core/forge.js";
+import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, type UnheldPath } from "./core/forge.js";
+import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
   hunkAt,
@@ -61,7 +62,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.23.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.24.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -1991,21 +1992,7 @@ forge
 
     // Spec 25 §4.2: impact lines, one per workspace, with suffix format
     for (let i = 0; i < impactResults.length; i++) {
-      const ws = impactEntries[i];
-      const r = impactResults[i];
-      let stateStr: string;
-      if (r.state === "no-effect") {
-        stateStr = "no effect";
-      } else if (r.state === "changed") {
-        const n = r.files.length;
-        stateStr = n === 1 ? `1 file changes — ${r.files[0]}` : `${n} files change — ${r.files.join(", ")}`;
-      } else if (r.state === "missing") {
-        stateStr = "missing";
-      } else {
-        stateStr = `error: ${r.error}`;
-      }
-      const impactSuffix = matchSuffix(ws);
-      console.log(`  impact: ${ws.entry.path} (${ws.entry.profile}) ${stateStr}${impactSuffix}`);
+      console.log(`  ${impactLine(impactEntries[i], impactResults[i])}`);
     }
 
     // Spec 25 §4.2: the next: hint is printed only when no workspace was checked
@@ -2016,6 +2003,150 @@ forge
     if (!someChecked) {
       console.log(`  next: run \`craftar status --workspace <dir>\` in a workspace on profile ${o.profile} to see what moved`);
     }
+  });
+
+forge
+  .command("promote")
+  .description(
+    "Make a profile's variant the base: the base takes the variant's files, every other profile that resolves the old base gets it back as its own variant through a recipe it owns, and every profile is proved to resolve the same ingredients before anything is written. Writes to the Forge",
+  )
+  .argument("<type/name>", "base ingredient (rule/workflow)")
+  .requiredOption("--profile <p>", "the profile whose variant becomes the base")
+  .option("--forge <dir>", "Forge directory (instead of --workspace)")
+  .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
+  .option("--no-impact", "skip planning the registered workspaces of this Forge before and after the writes")
+  .option("--dry-run", "run every check and the first impact pass, print what would be written, and write nothing", false)
+  .option("--json", "machine-readable output", false)
+  .action(async (ref: string, o) => {
+    // Never through the cache, as `forge unify` (spec 13 §4.4).
+    const f = await resolveForge({
+      forge: o.forge,
+      workspace: o.workspace,
+      refuseRemote: (url) => `the Forge of this workspace is remote (${url}) — clone it and pass --forge <dir>`,
+    });
+    // P2 (spec 29 §4.4): git is the undo, so it must be there, hold a commit and be clean — before anything is planned.
+    if (f.commit === null) {
+      if (await gitIsRepo(f.root)) fail(`${f.root} has no commits yet — forge promote writes to the Forge and needs git as the undo`);
+      fail(`${f.root} is not a git repository — forge promote writes to the Forge and needs git as the undo`);
+    }
+    if (await gitDirty(f.root)) fail(`${f.root} is not a clean git checkout — commit or stash your changes first`);
+
+    const promotion = await planBasePromotion(f, ref, o.profile);
+    const forgeRel = (abs: string) => path.relative(f.root, abs).split(path.sep).join("/");
+    // Every path overwritten or deleted must be held by git; a path created must not be one git ignores, or `git clean` would not undo it.
+    const unheld = await gitUnheld(f.root, promotion.mustHold);
+    for (const w of promotion.writes) {
+      if (w.created && (await gitIgnored(f.root, forgeRel(w.abs)))) unheld.push({ path: forgeRel(w.abs), reason: "ignored" });
+    }
+    if (unheld.length) fail(unheldMessage("forge promote", f.root, unheld));
+    await proveBasePromotion(f, promotion);
+
+    // Spec 25 §4.2, as `forge unify`: the registered workspaces of this Forge, planned before and after the writes.
+    type ImpactRegistryState = RegistryState | "skipped" | "unreadable";
+    let impactState: ImpactRegistryState = "skipped";
+    let impactEntries: ForgeWorkspace[] = [];
+    let impactBefore: Planned[] = [];
+    const warnings: string[] = [...promotion.warnings];
+    if (o.impact) {
+      try {
+        const fw = await forgeWorkspaces(craftarHome(), f.root);
+        impactEntries = fw.workspaces;
+        warnings.push(...fw.warnings);
+        impactBefore = await planAll(fw.workspaces, f);
+        impactState = refineRegistryState(fw.state, impactBefore);
+      } catch (e) {
+        impactState = "unreadable";
+        warnings.push(`the registry could not be read (${e instanceof Error ? e.message : String(e)}) — no workspace was checked`);
+      }
+      if (impactState === "off") warnings.push("the registry is off — no workspace was checked");
+    }
+    // The references the Forge cannot see (spec 29 §4.4): a workspace adding a shared recipe that names the base, removing
+    // one this run copies for its profile, or disabling the base or the variant by name, follows the Forge at its next sync, not this promotion.
+    const shared = [...f.recipes.values()].filter((r) => r.ingredients.includes(promotion.base) && !promotion.recipes.edited.includes(r.name)).map((r) => r.name);
+    const split = promotion.recipes.created.map((r) => r.from);
+    const byName = (doc: unknown): boolean => {
+      const d = (typeof doc === "object" && doc !== null ? doc : {}) as { recipes?: { add?: unknown; remove?: unknown }; overrides?: { ingredients?: { disable?: unknown } } };
+      const add = Array.isArray(d.recipes?.add) ? d.recipes.add : [];
+      const remove = Array.isArray(d.recipes?.remove) ? d.recipes.remove : [];
+      const disable = Array.isArray(d.overrides?.ingredients?.disable) ? d.overrides.ingredients.disable : [];
+      // A removed recipe the profile no longer names (it names the copy) stops removing anything.
+      return add.some((r) => shared.includes(r)) || remove.some((r) => split.includes(r)) || disable.some((r) => r === promotion.base || r === promotion.removed);
+    };
+    for (const c of concerned(impactBefore, impactEntries, byName).concerned) {
+      warnings.push(
+        `${c.path} (${c.file}) adds or removes a recipe that names ${promotion.base}, or disables ${promotion.base} or ${promotion.removed}, by name — its next sync follows the Forge, not this promotion`,
+      );
+    }
+
+    const journal: WriteJournal = [];
+    if (!o.dryRun) {
+      try {
+        await applyBasePromotion(promotion, journal);
+      } catch (e) {
+        // After writing began: name what was touched and how git undoes it, and still exit 1.
+        fail(lateFailure(e, f.root, journal, "forge promote"));
+      }
+    }
+
+    const checked = impactState !== "skipped" && impactState !== "unreadable" && impactState !== "off";
+    let impactResults: ImpactResult[] = [];
+    if (!o.dryRun && checked && impactEntries.length > 0) {
+      let impactAfter: Planned[];
+      try {
+        impactAfter = await planAll(impactEntries, await loadForge(f.root));
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        impactAfter = impactEntries.map(() => ({ kind: "error", stage: "plan", message }));
+      }
+      impactResults = impactEntries.map((_, i) => impactOf(impactBefore[i], impactAfter[i]));
+    }
+
+    if (o.json) {
+      return console.log(
+        JSON.stringify(
+          {
+            base: promotion.base,
+            profile: promotion.profile,
+            dryRun: o.dryRun,
+            removed: promotion.removed,
+            // Every key is always present, `[]` when empty.
+            created: promotion.created,
+            recipes: promotion.recipes,
+            profiles: promotion.profiles,
+            impact: impactResults.map((r, i) => ({
+              path: impactEntries[i].entry.path,
+              profile: impactEntries[i].entry.profile,
+              match: impactEntries[i].match,
+              via: impactEntries[i].via,
+              ref: impactEntries[i].ref,
+              state: r.state,
+              files: r.files,
+              error: r.error,
+            })),
+            warnings,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+
+    const n = (count: number) => `${count} workspace(s)`;
+    console.log(pc.bold(`craftar forge promote ${promotion.base} ← ${promotion.profile}${o.dryRun ? " (dry run — nothing written)" : ""}`));
+    console.log(`  base     ${promotion.base} ${o.dryRun ? "would hold" : "now holds"} ${promotion.profile}'s text (was ${promotion.removed})`);
+    for (const c of promotion.created) console.log(`  variant  ${c} ${o.dryRun ? "would be created" : "created"} (the old base)`);
+    if (promotion.discarded) console.log(`  the old base is resolved by no profile — discarded (git holds it)`);
+    const recipeLines = [...promotion.detail.recipes.filter((r) => r.from === null), ...promotion.detail.recipes.filter((r) => r.from !== null)];
+    for (const r of recipeLines) console.log(`  recipe   ${r.name}${r.from === null ? "" : ` ${o.dryRun ? "would be created" : "created"} from ${r.from}`}: ${r.old} → ${r.new}`);
+    for (const p of promotion.detail.profiles) console.log(`  profile  ${p.file}: ${p.swaps.map((s) => `${s.old} → ${s.new}`).join(", ")}`);
+    for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+    if (checked) {
+      if (impactEntries.length === 0) console.log(`  impact   no workspace of this Forge is registered on this machine`);
+      else if (o.dryRun) console.log(`  impact   ${n(impactEntries.length)} planned: not written, not compared`);
+      else if (impactResults.every((r) => r.state === "no-effect")) console.log(`  impact   ${n(impactResults.length)} planned before and after: no effect`);
+      else for (let i = 0; i < impactResults.length; i++) console.log(`  ${impactLine(impactEntries[i], impactResults[i])}`);
+    }
+    if (promotion.created.length) console.log(`  next     craftar forge variants — the old base now shows as ${promotion.created.length} variant(s) to unify`);
   });
 
 /* ---------------------------------------------------------------- cache ---------------------------------------------------------------- */
@@ -2195,6 +2326,16 @@ function printWorkspaces(rows: WorkspaceRow[], warnings: string[], fetched: bool
 /** Warnings of loading the workspace, for commands whose stdout is not a report (a diff, `explain`, `ls`, `--json`). */
 function warnStderr(warnings: string[]): void {
   for (const w of warnings) console.error(`${pc.yellow("warn")} ${w}`);
+}
+
+/** One workspace's line after a Forge write was planned before and after (spec 25 §4.2) — `forge unify` and `forge promote` print the same. */
+function impactLine(ws: ForgeWorkspace, r: ImpactResult): string {
+  let state: string;
+  if (r.state === "no-effect") state = "no effect";
+  else if (r.state === "changed") state = r.files.length === 1 ? `1 file changes — ${r.files[0]}` : `${r.files.length} files change — ${r.files.join(", ")}`;
+  else if (r.state === "missing") state = "missing";
+  else state = `error: ${r.error}`;
+  return `impact: ${ws.entry.path} (${ws.entry.profile}) ${state}${matchSuffix(ws)}`;
 }
 
 /**

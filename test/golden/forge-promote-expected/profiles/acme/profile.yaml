@@ -1,0 +1,6 @@
+name: acme
+recipes:
+  - base--acme
+targets: [claude-code, kiro]
+params:
+  org: acme

@@ -1,0 +1,6 @@
+type: rule
+name: workflow--globex
+# the text every client started from
+inclusion: always
+file: rule.md
+as: workflow

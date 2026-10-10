@@ -1,0 +1,6 @@
+name: base--acme
+slot: core
+params:
+  org:
+    default: nobody
+ingredients: [rule/workflow--acme, rule/style]

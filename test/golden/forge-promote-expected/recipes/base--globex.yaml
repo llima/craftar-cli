@@ -1,0 +1,10 @@
+# The recipe every client shares.
+name: base--globex
+description: Shared rules
+slot: core
+params:
+  org:
+    default: nobody # a profile sets it
+ingredients:
+  - rule/workflow--globex # the rule being promoted
+  - rule/style

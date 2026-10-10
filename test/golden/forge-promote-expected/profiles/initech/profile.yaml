@@ -1,0 +1,4 @@
+name: initech
+recipes:
+  - base--initech # shared
+targets: [claude-code, kiro]

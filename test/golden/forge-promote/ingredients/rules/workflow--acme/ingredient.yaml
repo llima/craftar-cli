@@ -1,0 +1,8 @@
+type: rule
+name: workflow--acme
+as: workflow
+inclusion: always
+file: rule.md
+origin:
+  workspace: acme-portal
+  path: .claude/rules/workflow.md # where import read it
