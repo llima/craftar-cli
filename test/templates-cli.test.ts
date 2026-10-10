@@ -245,3 +245,27 @@ describe("templates install", () => {
     expect([await tree(s.root), await tree(home)]).toEqual(before);
   });
 });
+
+describe("templates --help", () => {
+  const flat = (s: string) => s.replace(/\s+/g, " ");
+  it("the group, list and install describe themselves as the README does", () => {
+    const group = runCli(["templates", "--help"], { env: NO_DOTNET });
+    expect(group.code).toBe(0);
+    expect(flat(group.stdout)).toContain("Project templates the profile declares (dotnet new): list them, or install them into this user's dotnet template store");
+    const list = runCli(["templates", "list", "--help"], { env: NO_DOTNET });
+    expect(flat(list.stdout)).toContain("Runs no program and does not know what is installed");
+    for (const flag of ["--json", "--workspace <dir>", "--offline"]) expect(list.stdout).toContain(flag);
+    const install = runCli(["templates", "install", "--help"], { env: NO_DOTNET });
+    expect(flat(install.stdout)).toContain("the packages land in this user's dotnet template store, shared by every workspace. Nothing else runs it. Exits 1 when an entry failed or was skipped");
+    expect(flat(install.stdout)).toContain("print each dotnet new install line; run nothing (needs no dotnet)");
+    for (const flag of ["--dry-run", "--force", "--interactive", "--workspace <dir>", "--offline"]) expect(install.stdout).toContain(flag);
+  });
+  it("craftar --help lists the group, and the README names both commands", async () => {
+    expect(runCli(["--help"], { env: NO_DOTNET }).stdout).toMatch(/\n\s+templates\b/);
+    const readme = await fs.readFile(path.resolve(__dirname, "..", "README.md"), "utf8");
+    expect(readme).toContain("`craftar templates list [--json] [--workspace <dir>] [--offline]`");
+    expect(readme).toContain("`craftar templates install [--dry-run] [--force] [--interactive] [--workspace <dir>] [--offline]`");
+    expect(readme).toContain("## Project templates");
+    expect(readme).toContain("dotnet new uninstall <package>");
+  });
+});
