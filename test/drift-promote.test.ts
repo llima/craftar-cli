@@ -559,6 +559,38 @@ describe("cli — drift promote", () => {
     );
   });
 
+  it("17b. CLI late-failure: stdout is empty, stderr shows lateFailure message", async () => {
+    // This test produces a late failure by making the variant directory writable but the file inside read-only
+    // Only works on Linux/macOS; skip on Windows
+    if (process.platform === "win32") return;
+
+    const f = await F();
+    gitInit(f.forgeRoot);
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+    await f.driftA();
+
+    // Create a read-only rules folder so that mkdir fails during apply
+    const rulesDir = path.join(f.forgeRoot, "ingredients/rules");
+    await fs.chmod(rulesDir, 0o555);
+    cleanups.push(async () => {
+      try {
+        await fs.chmod(rulesDir, 0o755);
+      } catch { /* ignore */ }
+    });
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    // stderr should contain lateFailure message
+    const forgeReal = await fs.realpath(f.forgeRoot);
+    expect(r.stderr).toContain(`drift promote had already started changing the Forge (${forgeReal}) when this failed:`);
+    expect(r.stderr).toContain("ingredients/rules/a--acme");
+    expect(r.stderr).toContain("recover with:");
+    expect(r.stderr).toContain("git -C");
+  });
+
   it("18. promote never registers and never touches the lock", async () => {
     const f = await F();
     gitInit(f.forgeRoot);
@@ -1802,7 +1834,7 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     expect((await fs.readFile(path.join(f.ws, "craftar.lock"))).equals(lockBefore)).toBe(true);
   });
 
-  it("55. D16 same profile, override — sections outcome is refused when ws2 fills the section", async () => {
+  it("55. D16 same profile, override — variant outcome is refused when ws2 fills the section", async () => {
     const home = await tmpDir("craftar-home-");
     cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
     const f = await S();
@@ -1905,8 +1937,7 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     // Three-target fixture: AGENTS.md has rule markers
     // ws2 disables rule/c, so its AGENTS.md is different from ws1's
     // When we promote rule/a, ws2's AGENTS.md changes inside rule/a's section (allowed)
-    // (A change outside that section cannot be produced through the CLI: a promote edits rule N only.
-    //  The refusal for it is covered by the agentsBound unit tests, not here.)
+    // A change OUTSIDE that section can occur (see 55d2); the bound check catches it.
     const home = await tmpDir("craftar-home-");
     cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
 
@@ -1935,6 +1966,58 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     expect(r.stderr).toBe("");
     // ws2 should show as changed (update for a.md + AGENTS.md)
     expect(r.stdout).toContain("1 other workspace(s) of profile acme read this Forge:");
+  });
+
+  it("55d2. D16 a same-profile sibling that disables rule/a and targets only agents-md — AGENTS.md change is refused", async () => {
+    // A sibling with targets: [agents-md] and overrides.ingredients.disable: [rule/a]
+    // When we promote rule/a, the sibling's AGENTS.md would gain rule/a — a change OUTSIDE its (nonexistent) section
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    // Create a fixture with rule/a and rule/b
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A one\nA two\n"), rule("b", "B one\n")],
+        recipes: [recipe("base", ["rule/a", "rule/b"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Create ws2: targets [agents-md] only, and disables rule/a
+    const ws2 = path.join(s.root, "ws2");
+    await makeWorkspace(ws2, s.forgeRoot, {
+      config: {
+        profile: "acme",
+        targets: ["agents-md"],
+        overrides: { ingredients: { disable: ["rule/a"] } },
+      },
+    });
+    expect(runCli(["sync", "--workspace", ws2], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // ws2's AGENTS.md should NOT have rule/a
+    const ws2AgentsMd = await fs.readFile(path.join(ws2, "AGENTS.md"), "utf8");
+    expect(ws2AgentsMd).not.toContain("<!-- rule: a -->");
+    expect(ws2AgentsMd).toContain("<!-- rule: b -->");
+
+    // Drift rule/a from ws1
+    await fs.appendFile(path.join(s.wsRoot, A), "hand a\n");
+    const lockBefore = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
+
+    // Promoting rule/a should be REFUSED: ws2's AGENTS.md would gain rule/a (outside the section bounds)
+    const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(
+      `error: promote would change ${ws2} beyond rule/a: AGENTS.md — the Forge was left untouched\n`,
+    );
+    // Forge untouched
+    expect(porcelain(s.forgeRoot)).toBe("");
+    // Lock unchanged
+    expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
   });
 
   it("55e. two recipes both Case 2 — profile edited twice through stage", async () => {

@@ -507,8 +507,12 @@ drift
     const not = paths.filter((x) => stateOf.get(x) !== "drift" && stateOf.get(x) !== "orphan-drift");
     if (not.length) fail(`not drifted: ${not.map((x) => `${x} (${stateOf.get(x) ?? "not managed"})`).join(", ")} — nothing was written`);
     // Check for unset params BEFORE any output (spec 29 §4.1, spec 30r1 commit 3 issue 1)
+    // Print plan warnings before the refusal, as sync does (spec 30r3 commit 3 issue 6)
     const unset = unsetDeclared(p);
-    if (unset.length) fail(unsetRefusal(unset));
+    if (unset.length) {
+      for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+      fail(unsetRefusal(unset));
+    }
     const overwritePaths = new Set(paths);
     console.log(`discarding ${paths.length} hand edit(s): ${st.filter((s) => overwritePaths.has(s.path)).map((s) => s.path).join(", ")}`);
     await applyAndReport(ws, p, st, lock, { dryRun: o.dryRun, overwritePaths });
@@ -582,6 +586,16 @@ drift
       };
       console.log(JSON.stringify(jsonObj, null, 2));
       return;
+    }
+
+    // Apply first (unless dry-run), print after — spec 30r3 §3.4: on late failure stdout is ""
+    const journal: WriteJournal = [];
+    if (!o.dryRun) {
+      try {
+        await applyPromote(promotePlan, journal);
+      } catch (e) {
+        fail(lateFailure(e, promotePlan.forgeRoot, journal, "drift promote"));
+      }
     }
 
     // Print the report
@@ -681,19 +695,11 @@ drift
 
     if (o.dryRun) {
       console.log("  dry run — the Forge was not written");
-      return;
-    }
-
-    const journal: WriteJournal = [];
-    try {
-      await applyPromote(promotePlan, journal);
-    } catch (e) {
-      fail(lateFailure(e, promotePlan.forgeRoot, journal, "drift promote"));
-    }
-
-    console.log("  the Forge is not committed — review with git, then commit and push it");
-    if (promotePlan.isUrlForge) {
-      console.log("  push the Forge for sync to see this");
+    } else {
+      console.log("  the Forge is not committed — review with git, then commit and push it");
+      if (promotePlan.isUrlForge) {
+        console.log("  push the Forge for sync to see this");
+      }
     }
   });
 

@@ -24,6 +24,7 @@ import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileSt
 import { driftList, unmanaged } from "../core/drift.js";
 import { hashNormalized, toLf } from "../core/text.js";
 import { fingerprintOf } from "../core/fingerprint.js";
+import { samePath } from "../core/registry.js";
 import {
   workspaceAgainst,
   forgeWorkspaces,
@@ -169,6 +170,8 @@ const D16_SAME_PROFILE_OUTSIDE = (wsPath: string, ingredient: string, changedPat
   `promote would change ${wsPath} beyond ${ingredient}: ${changedPath} — the Forge was left untouched`;
 const D16_SAME_PROFILE_OVERRIDE = (wsPath: string, ingredient: string) =>
   `${wsPath} fills ${ingredient} from its own overrides — a variant would silently stop applying them there; the Forge was left untouched`;
+const D16_BREAK = (wsPath: string, profile: string, errMsg: string) =>
+  `promote would break ${wsPath} (profile ${profile}): ${errMsg.split("\n")[0]} — the Forge was left untouched`;
 const D17 = (recipe: string, chain: string) =>
   `recipe ${recipe} reaches this workspace through ${chain} — promote does not fork a recipe chain; re-import the workspace or edit the recipes by hand`;
 const INTERNAL_REUSE = (p: string) => `internal: ${p} is drift but the Forge already renders it — please report this`;
@@ -325,7 +328,7 @@ async function checkOtherWorkspaces(
   const warnings: string[] = [];
 
   // Filter out this workspace
-  const otherEntries = fwResult.workspaces.filter((fw) => fw.entry.path !== thisWsRealPath);
+  const otherEntries = fwResult.workspaces.filter((fw) => !samePath(fw.entry.path, thisWsRealPath));
 
   if (otherEntries.length === 0 || fwResult.state === "off") {
     return {
@@ -366,6 +369,10 @@ async function checkOtherWorkspaces(
       continue;
     }
     if (bPlan.kind === "error" || aPlan.kind === "error") {
+      // A sibling that planned BEFORE but fails to plan AFTER is a refusal — the promote would break it
+      if (bPlan.kind === "planned" && aPlan.kind === "error") {
+        throw new Error(D16_BREAK(fw.entry.path, fw.entry.profile, aPlan.message));
+      }
       const errMsg = aPlan.kind === "error" ? aPlan.message : bPlan.kind === "error" ? bPlan.message : "";
       warnings.push(`${fw.entry.path}: error: ${errMsg}`);
       continue;
@@ -385,7 +392,7 @@ async function checkOtherWorkspaces(
       if (siblingAfterRefs.has(ingredientRef)) {
         // The sibling still resolves X beside the variant — this is D16 same-profile-outside
         // Use the file path that would be affected (the file X writes to)
-        const xPath = bPlan.plan.files.find((pf) => pf.ingredient === ingredientRef)?.path ?? ".claude/rules/unknown.md";
+        const xPath = bPlan.plan.files.find((pf) => pf.ingredient === ingredientRef)?.path ?? ingredientRef;
         throw new Error(D16_SAME_PROFILE_OUTSIDE(fw.entry.path, ingredientRef, xPath));
       }
     }

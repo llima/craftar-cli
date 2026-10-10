@@ -382,15 +382,17 @@ params:
     // First check that sync refuses with this param
     const syncR = runCli(["sync", "--workspace", s.wsRoot]);
     expect(syncR.code).toBe(1);
+    const syncStdout = syncR.stdout;
     const syncStderr = syncR.stderr;
     expect(syncStderr).toContain("1 declared parameter(s) have no value");
     expect(syncStderr).toContain("org");
 
-    // Now test discard - should refuse the same way
+    // Now test discard - should refuse the same way (warnings on stdout, refusal on stderr)
     const lockBefore = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
     const r = runCli(["drift", "discard", A, "--workspace", s.wsRoot]);
     expect(r.code).toBe(1);
-    expect(r.stdout).toBe("");
+    // The same stdout that sync prints (plan warnings before the refusal)
+    expect(r.stdout).toBe(syncStdout);
     // The same stderr that sync prints
     expect(r.stderr).toBe(syncStderr);
     // Lock unchanged
