@@ -37,6 +37,8 @@ import {
   type RecipeOptions,
 } from "./claude-code.js";
 import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
+import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
+import { sectionKey } from "../core/resolve.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import type { WriteJournal } from "../core/unify.js";
 import type { Ingredient, IngredientRef } from "../schema/index.js";
@@ -70,9 +72,9 @@ export class UnheldError extends Error {
 }
 
 export interface PromotePlan {
-  outcome: "variant" | "variant-updated";
-  /** The ref of the promoted ingredient. */
-  promoted: string;
+  outcome: "params" | "sections" | "variant" | "variant-updated";
+  /** The ref of the promoted ingredient (null for params/sections). */
+  promoted: string | null;
   profile: string;
   /** The path that was promoted, workspace-relative. */
   inputPath: string;
@@ -80,10 +82,10 @@ export interface PromotePlan {
   entries: PromoteEntry[];
   /** Keys edited per file, for the report. */
   editedKeys: Map<string, string[]>;
-  /** Params changed (step 30g placeholder). */
-  params: never[];
-  /** Sections changed (step 30g placeholder). */
-  sections: never[];
+  /** Params changed (for params outcome). */
+  params: Array<{ key: string; old: string | null; value: string }>;
+  /** Sections changed (for sections outcome). */
+  sections: Array<{ key: string; name: string; lines: number }>;
   /** Params and sections flattened by the variant. */
   flattened: { params: string[]; sections: string[] };
   /** Dependent workspace paths. */
@@ -122,6 +124,10 @@ const D8 = (p: string, ing: string) => `${p} of ${ing} is missing on disk — re
 const D9 = (ing: string, reason: string) => `${ing} looks like it holds a secret (${reason}) — nothing was written`;
 const D10 = (ing: string, q: string) => `${ing} is also used by profile ${q} — its files would change there`;
 const D11 = (p: string, line: number) => `${p}:${line} holds a section marker — a variant body cannot hold one; remove it and promote again`;
+const D12_SECTION = (ing: string, name: string) =>
+  `${ing} takes section "${name}" from this workspace's overrides (craftar.yaml) — a variant would silently stop applying it; edit craftar.yaml, or remove the override and sync first`;
+const D12_PARAM = (ing: string, key: string) =>
+  `${ing} takes param "${key}" from this workspace's overrides (craftar.yaml) — a variant would silently stop applying it; edit craftar.yaml, or remove the override and sync first`;
 const D13_EXISTS = (rel: string) => `${rel} already exists in the Forge — promote does not overwrite it`;
 const D13_IGNORED = (rel: string) => `${rel} is ignored by git — git could not show or undo it`;
 const D15 = (what: string) => `promote could not be proved for this workspace: ${what} — the Forge was left untouched`;
@@ -332,7 +338,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const decision = await decide(ctx, X.dir, stage.reader(), ingredientRef, sourceMeta, emitted.files, fingerprint, [], new Set());
 
   // Handle the decision
-  let outcome: "variant" | "variant-updated";
+  let outcome: "params" | "sections" | "variant" | "variant-updated";
   const N = outputName;
 
   // Determine if X is this profile's variant (name is `<N>--<p>` AND as is `<N>`)
@@ -345,13 +351,49 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const variantName = `${N}--${profile}`;
   const variantRef = `${meta.type}/${variantName}` as IngredientRef;
 
+  // Params/sections that changed for the profile, if outcome is params/sections
+  let paramsChanged: Array<{ key: string; old: string | null; value: string }> = [];
+  let sectionsChanged: Array<{ key: string; name: string; lines: number; value: string }> = [];
+
+  // For flattened reporting: track what the base cited that the variant no longer has
+  let flattenedParams: string[] = [];
+  let flattenedSections: string[] = [];
+
+  // Read the base to detect cited keys and sections
+  const base = await readBase(X.dir, stage.reader(), forge.root);
+  const ingKey = sectionKey(X.meta);
+  const PSk = ctx.PS[ingKey] ?? {};
+  const WSk = ctx.WS[ingKey] ?? {};
+  const S: Record<string, string> = { ...PSk, ...WSk };
+  const baseCitedKeys = citedKeys(expandedTexts(base, S));
+  const baseSectionNames = sectionNames(base);
+
   if (decision.kind === "reuse") {
     // No delta means the Forge already renders this — internal error
     if (!decision.delta?.length && !decision.sectioned?.length && !decision.sectionDelta?.length) {
       throw new Error(INTERNAL_REUSE(normalized));
     }
-    // Has delta: this step treats it as variant until step 30g implements params/sections
-    outcome = isOwnVariant ? "variant-updated" : "variant";
+    // Has delta: params outcome
+    if (decision.delta?.length) {
+      outcome = "params";
+      paramsChanged = decision.delta.map((d) => ({
+        key: d.key,
+        old: d.old,
+        value: d.value,
+      }));
+    } else if (decision.sectionDelta?.length) {
+      // Has sectionDelta: sections outcome
+      outcome = "sections";
+      sectionsChanged = decision.sectionDelta.map((d) => ({
+        key: d.key,
+        name: d.name,
+        lines: d.value.split("\n").filter((l) => l !== "").length || (d.value === "" ? 0 : 1),
+        value: d.value,
+      }));
+    } else {
+      // sectioned but no delta means the profile already had the value — internal error
+      throw new Error(INTERNAL_REUSE(normalized));
+    }
   } else if (decision.kind === "variant" || decision.kind === "literal") {
     // Check if this is updating an existing variant
     if (isOwnVariant) {
@@ -359,9 +401,31 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     } else {
       outcome = "variant";
     }
+    // For variant outcomes, track what was flattened
+    flattenedParams = [...baseCitedKeys].sort();
+    flattenedSections = baseSectionNames;
   } else {
     // literal — shouldn't happen with no others, treat as variant
     outcome = isOwnVariant ? "variant-updated" : "variant";
+    flattenedParams = [...baseCitedKeys].sort();
+    flattenedSections = baseSectionNames;
+  }
+
+  // D12: check workspace overrides before variant outcomes (not for params/sections)
+  if (outcome === "variant" || outcome === "variant-updated") {
+    // Check if the workspace sets a section of this ingredient
+    const wsIngSections = ctx.WS[ingKey];
+    if (wsIngSections) {
+      const firstName = Object.keys(wsIngSections).sort()[0];
+      if (firstName) {
+        throw new Error(D12_SECTION(ingredientRef, firstName));
+      }
+    }
+    // Check if the workspace sets a param the body cites
+    const wsCitedParam = [...baseCitedKeys].sort().find((k) => Object.hasOwn(ctx.W, k));
+    if (wsCitedParam) {
+      throw new Error(D12_PARAM(ingredientRef, wsCitedParam));
+    }
   }
 
   // D10: another profile resolves that variant (only for variant-updated)
@@ -373,11 +437,121 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     }
   }
 
-  // D11: marker check
-  const marker = markerIn(sourceMeta, emitted.files, normalized);
-  if (marker) throw new Error(D11(marker.where, marker.line));
+  // D11: marker check (only for variant outcomes)
+  if (outcome === "variant" || outcome === "variant-updated") {
+    const marker = markerIn(sourceMeta, emitted.files, normalized);
+    if (marker) throw new Error(D11(marker.where, marker.line));
+  }
 
-  // Build the variant ingredient
+  // For params/sections outcomes, stage the profile edit
+  if (outcome === "params" || outcome === "sections") {
+    const profileAbs = await findProfileFile(forgeDir, profile);
+    if (!profileAbs) throw new Error(`profile ${profile} not found`);
+
+    // D14 check: profile file must be held by git
+    const unheld = await gitUnheld(forgeDir, [profileAbs]);
+    if (unheld.length > 0) {
+      throw new UnheldError(realForgeDir, unheld);
+    }
+
+    const raw = await fs.readFile(profileAbs, "utf8");
+    const label = `profiles/${profile}/profile.yaml`;
+    const editKeys = outcome === "params" ? ["params"] : ["sections"];
+    const content = editYamlText(raw, { command: "drift promote", label, keys: editKeys }, (doc) => {
+      if (outcome === "params") {
+        for (const p of paramsChanged) {
+          doc.setIn(["params", p.key], p.value);
+        }
+      } else {
+        for (const s of sectionsChanged) {
+          doc.setIn(["sections", s.key, s.name], s.value);
+        }
+      }
+    });
+    stage.write(profileAbs, content);
+
+    const editedKeys = new Map<string, string[]>();
+    editedKeys.set(label, editKeys);
+
+    // Build proof in scratch copy
+    const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-promote-"));
+    try {
+      await fs.cp(forgeDir, scratchDir, {
+        recursive: true,
+        filter: (src) => {
+          const rel = path.relative(forgeDir, src);
+          if (rel === "") return true;
+          const firstPart = rel.split(path.sep)[0];
+          return firstPart !== ".git";
+        },
+      });
+      await stage.flushTo(scratchDir);
+
+      const scratchForge = await loadForge(scratchDir);
+      const wsScratch = await workspaceAgainst(root, scratchForge);
+      const p1 = await plan(wsScratch);
+
+      // Proof checks
+      const p0Paths = new Set(p0.files.map((f) => f.path));
+      const p1Paths = new Set(p1.files.map((f) => f.path));
+      if (p0Paths.size !== p1Paths.size || [...p0Paths].some((p) => !p1Paths.has(p))) {
+        throw new Error(D15(`the planned files would change (${p0Paths.size} → ${p1Paths.size})`));
+      }
+
+      // For each path in E, p1 content matches disk
+      for (const f of E) {
+        const p1File = p1.files.find((x) => x.path === f.path);
+        if (!p1File) throw new Error(D15(`${f.path} would not be planned`));
+        const diskContent = await fs.readFile(path.join(root, f.path));
+        if (hashNormalized(p1File.content) !== hashNormalized(diskContent)) {
+          throw new Error(D15(`${f.path} would not match the file on disk`));
+        }
+      }
+
+      // Every path not in E must be byte-equal (no dependent paths for params/sections)
+      let otherFilesUnchanged = 0;
+      for (const p0f of p0.files) {
+        if (EPaths.has(p0f.path)) continue;
+        const p1f = p1.files.find((x) => x.path === p0f.path);
+        if (!p1f) throw new Error(D15(`${p0f.path} would change`));
+        if (!p0f.content.equals(p1f.content)) {
+          throw new Error(D15(`${p0f.path} would change`));
+        }
+        otherFilesUnchanged++;
+      }
+
+      // Compute next sync statuses
+      const stScratch = await status(wsScratch, p1, lock);
+
+      // Impact
+      const fwResult = await forgeWorkspaces(home, forgeDir, env);
+
+      return {
+        outcome,
+        promoted: null,
+        profile,
+        inputPath: normalized,
+        entries: (await stage.entries()).map((e) => ({ rel: e.rel, created: e.created })),
+        editedKeys,
+        params: paramsChanged,
+        sections: sectionsChanged,
+        flattened: { params: [], sections: [] },
+        dependents: [],
+        otherFilesUnchanged,
+        nextSync: stScratch,
+        impact: { registry: fwResult.state, workspaces: [] },
+        warnings,
+        stage,
+        forgeRoot: realForgeDir,
+        mustHold: [profileAbs],
+        creates: [],
+      };
+    } finally {
+      await fs.rm(scratchDir, { recursive: true, force: true });
+    }
+  }
+
+  // Build the variant ingredient — strip params for flattened variants
   const variantMeta: Ingredient = {
     ...validateImported(sourceMeta),
     name: variantName,
@@ -387,6 +561,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       path: meta.type === "skill" && meta.layout === "dir" ? `.claude/skills/${N}/` : normalized,
     },
   } as Ingredient;
+  // Remove params from variant (they are flattened into the body)
+  if ("params" in variantMeta) delete (variantMeta as Record<string, unknown>).params;
 
   // Stage the variant files using typeFolder
   const folder = typeFolder(meta.type);
@@ -716,6 +892,18 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     // Impact: check for other workspaces (step 30h handles this fully)
     const fwResult = await forgeWorkspaces(home, forgeDir, env);
 
+    // Add warning for profile section values that are now unused by the variant
+    if (flattenedSections.length > 0) {
+      const profileSections = forge.profiles.get(profile)?.sections ?? {};
+      const ingKey = sectionKey(X.meta);
+      const profileIngSections = profileSections[ingKey] ?? {};
+      for (const name of flattenedSections) {
+        if (Object.hasOwn(profileIngSections, name)) {
+          warnings.push(`profile ${profile} still sets section ${ingKey} ${name}, which ${variantRef} no longer holds — every plan will warn until it is removed`);
+        }
+      }
+    }
+
     return {
       outcome,
       promoted: variantRef,
@@ -725,7 +913,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       editedKeys,
       params: [],
       sections: [],
-      flattened: { params: [], sections: [] },
+      flattened: { params: flattenedParams, sections: flattenedSections },
       dependents: [...dependentPaths],
       otherFilesUnchanged,
       nextSync: stScratch,

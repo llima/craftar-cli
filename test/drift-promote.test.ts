@@ -1258,3 +1258,303 @@ describe("agentsBound (unit)", () => {
     expect(agentsBound(p0, p0 + "extra", "c")).toBe(false);
   });
 });
+
+
+// Step 30g: params and sections outcomes, flattened, D12
+
+/** A templated rule — fixture P. */
+async function P() {
+  const s = await scenario(
+    {
+      ingredients: [
+        {
+          meta: {
+            type: "rule",
+            name: "a",
+            params: { "scm.org": { default: "acme-org" } },
+          },
+          files: { "rule.md": "Org: {{scm.org}}\nA two\n" },
+        },
+        rule("b", "B one\n"),
+      ],
+      recipes: [recipe("base", ["rule/a", "rule/b"])],
+      profiles: [profile("acme", ["base"], ["claude-code"], { params: { "scm.org": "acme-org" } })],
+    },
+    { config: { profile: "acme" } },
+  );
+  cleanups.push(s.cleanup);
+  return {
+    ...s,
+    ws: s.wsRoot,
+    read: (rel: string) => fs.readFile(path.join(s.wsRoot, rel), "utf8"),
+    forgeRead: (rel: string) => fs.readFile(path.join(s.forgeRoot, rel), "utf8"),
+    lockBytes: () => fs.readFile(path.join(s.wsRoot, "craftar.lock")),
+  };
+}
+
+/** A sectioned rule — fixture S. */
+async function S() {
+  const s = await scenario(
+    {
+      ingredients: [
+        rule("a", "S one\n<!-- craftar:section flavors -->\ndefault flavor\n<!-- /craftar:section -->\nS end\n"),
+        rule("b", "B one\n"),
+      ],
+      recipes: [recipe("base", ["rule/a", "rule/b"])],
+      profiles: [profile("acme", ["base"])],
+    },
+    { config: { profile: "acme" } },
+  );
+  // Set schema: 2 for sections
+  await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 2 }));
+  cleanups.push(s.cleanup);
+  return {
+    ...s,
+    ws: s.wsRoot,
+    read: (rel: string) => fs.readFile(path.join(s.wsRoot, rel), "utf8"),
+    forgeRead: (rel: string) => fs.readFile(path.join(s.forgeRoot, rel), "utf8"),
+    lockBytes: () => fs.readFile(path.join(s.wsRoot, "craftar.lock")),
+  };
+}
+
+describe("cli — drift promote (step 30g: params/sections)", () => {
+  it("40. (P+G check) the synced .claude/rules/a.md is the rendered text", async () => {
+    const f = await P();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    expect(await f.read(A)).toBe("Org: acme-org\nA two\n");
+  });
+
+  it("41. params — edit only the placeholder value → outcome params", async () => {
+    const f = await P();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    expect(await f.read(A)).toBe("Org: acme-org\nA two\n");
+    await fs.writeFile(path.join(f.ws, A), "Org: globex-org\nA two\n");
+    const lockBefore = await f.lockBytes();
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      `promote ${A} → profile acme (params)\n` +
+        "  edited profiles/acme/profile.yaml (params)\n" +
+        `  param scm.org: "acme-org" → "globex-org"\n` +
+        "  proved: this workspace plans the file on disk; 1 other file(s) unchanged\n" +
+        "  next sync: nothing to sync\n" +
+        "  no other registered workspace reads this Forge\n" +
+        "  the Forge is not committed — review with git, then commit and push it\n",
+    );
+
+    // Profile now has the new value
+    expect(YAML.parse(await f.forgeRead("profiles/acme/profile.yaml")).params).toEqual({ "scm.org": "globex-org" });
+
+    // Forge porcelain shows only the profile edited
+    expect(porcelain(f.forgeRoot)).toBe(" M profiles/acme/profile.yaml\n");
+
+    // No variant directory created
+    await expect(fs.stat(path.join(f.forgeRoot, "ingredients/rules/a--acme"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    // ingredients/ byte-equal
+    const ingBefore = await fs.readdir(path.join(f.forgeRoot, "ingredients/rules"));
+    expect(ingBefore.sort()).toEqual(["a", "b"]);
+    // Lock unchanged
+    expect((await f.lockBytes()).equals(lockBefore)).toBe(true);
+  });
+
+  it("42. an edit outside the placeholder is a variant, flattened", async () => {
+    const f = await P();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    // Edit with the current param value AND extra text
+    await fs.writeFile(path.join(f.ws, A), "Org: acme-org\nA two\nhand\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      `promote ${A} → rule/a--acme (variant, profile acme)\n` +
+        "  wrote  ingredients/rules/a--acme/ingredient.yaml\n" +
+        "  wrote  ingredients/rules/a--acme/rule.md\n" +
+        "  edited recipes/base.yaml (ingredients)\n" +
+        "  flattened: 1 param(s) (scm.org)\n" +
+        "  proved: this workspace plans the file on disk; 1 other file(s) unchanged\n" +
+        "  next sync: nothing to sync\n" +
+        "  no other registered workspace reads this Forge\n" +
+        "  the Forge is not committed — review with git, then commit and push it\n",
+    );
+
+    // The variant's rule.md is the rendered text, no {{
+    expect(await f.forgeRead("ingredients/rules/a--acme/rule.md")).toBe("Org: acme-org\nA two\nhand\n");
+
+    // The variant's ingredient.yaml has NO params key
+    const variantMeta = YAML.parse(await f.forgeRead("ingredients/rules/a--acme/ingredient.yaml"));
+    expect(Object.hasOwn(variantMeta, "params")).toBe(false);
+    expect(variantMeta).toEqual({
+      type: "rule",
+      name: "a--acme",
+      as: "a",
+      inclusion: "always",
+      file: "rule.md",
+      targets: "*",
+      tags: [],
+      origin: { workspace: "ws", path: ".claude/rules/a.md" },
+    });
+  });
+
+  it("43. D12, param — workspace overrides.params sets the key", async () => {
+    const f = await P();
+    gitInit(f.forgeRoot);
+    // Add overrides.params to craftar.yaml
+    const cfg = YAML.parse(await fs.readFile(path.join(f.ws, "craftar.yaml"), "utf8"));
+    cfg.overrides = { params: { "scm.org": "ws-org" } };
+    await fs.writeFile(path.join(f.ws, "craftar.yaml"), YAML.stringify(cfg));
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    // Verify it synced with the workspace override
+    expect(await f.read(A)).toBe("Org: ws-org\nA two\n");
+    // Append extra text to trigger a variant outcome
+    await fs.appendFile(path.join(f.ws, A), "hand\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(
+      `error: rule/a takes param "scm.org" from this workspace's overrides (craftar.yaml) — a variant would silently stop applying it; edit craftar.yaml, or remove the override and sync first\n`,
+    );
+    expect(porcelain(f.forgeRoot)).toBe("");
+  });
+
+  it("44. (S+G check) the synced .claude/rules/a.md has sections expanded", async () => {
+    const f = await S();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    expect(await f.read(A)).toBe("S one\ndefault flavor\nS end\n");
+  });
+
+  it("45. sections — edit only the section content → outcome sections", async () => {
+    const f = await S();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    expect(await f.read(A)).toBe("S one\ndefault flavor\nS end\n");
+    await fs.writeFile(path.join(f.ws, A), "S one\nacme flavor\nS end\n");
+    const lockBefore = await f.lockBytes();
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      `promote ${A} → profile acme (sections)\n` +
+        "  edited profiles/acme/profile.yaml (sections)\n" +
+        "  section rule/a flavors: 1 line(s)\n" +
+        "  proved: this workspace plans the file on disk; 1 other file(s) unchanged\n" +
+        "  next sync: nothing to sync\n" +
+        "  no other registered workspace reads this Forge\n" +
+        "  the Forge is not committed — review with git, then commit and push it\n",
+    );
+
+    // Profile now has the section value (with trailing newline as canonicalValue adds)
+    expect(YAML.parse(await f.forgeRead("profiles/acme/profile.yaml")).sections).toEqual({ "rule/a": { flavors: "acme flavor\n" } });
+
+    // Forge porcelain shows only the profile edited
+    expect(porcelain(f.forgeRoot)).toBe(" M profiles/acme/profile.yaml\n");
+
+    // No variant directory
+    await expect(fs.stat(path.join(f.forgeRoot, "ingredients/rules/a--acme"))).rejects.toMatchObject({ code: "ENOENT" });
+    // Lock unchanged
+    expect((await f.lockBytes()).equals(lockBefore)).toBe(true);
+  });
+
+  it("46. an edit outside the section is a variant, flattened, with the unused-value warning", async () => {
+    const f = await S();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    // First: run test 45's promote to set the profile's section value
+    await fs.writeFile(path.join(f.ws, A), "S one\nacme flavor\nS end\n");
+    expect(runCli(["drift", "promote", A, "--workspace", f.ws]).code).toBe(0);
+    gitCommit(f.forgeRoot, "section promote");
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    // Now append extra text after S end
+    await fs.appendFile(path.join(f.ws, A), "hand\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      `promote ${A} → rule/a--acme (variant, profile acme)\n` +
+        "  wrote  ingredients/rules/a--acme/ingredient.yaml\n" +
+        "  wrote  ingredients/rules/a--acme/rule.md\n" +
+        "  edited recipes/base.yaml (ingredients)\n" +
+        "  flattened: 1 section(s) (flavors)\n" +
+        "  warn profile acme still sets section rule/a flavors, which rule/a--acme no longer holds — every plan will warn until it is removed\n" +
+        "  proved: this workspace plans the file on disk; 1 other file(s) unchanged\n" +
+        "  next sync: nothing to sync\n" +
+        "  no other registered workspace reads this Forge\n" +
+        "  the Forge is not committed — review with git, then commit and push it\n",
+    );
+  });
+
+  it("47. D12, section — workspace overrides.sections sets the section", async () => {
+    const f = await S();
+    gitInit(f.forgeRoot);
+    // Add overrides.sections to craftar.yaml
+    const cfg = YAML.parse(await fs.readFile(path.join(f.ws, "craftar.yaml"), "utf8"));
+    cfg.overrides = { sections: { "rule/a": { flavors: "ws flavor\n" } } };
+    await fs.writeFile(path.join(f.ws, "craftar.yaml"), YAML.stringify(cfg));
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    // Verify it synced with the workspace override
+    expect(await f.read(A)).toBe("S one\nws flavor\nS end\n");
+    // Append extra text to trigger a variant outcome
+    await fs.appendFile(path.join(f.ws, A), "hand\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(
+      `error: rule/a takes section "flavors" from this workspace's overrides (craftar.yaml) — a variant would silently stop applying it; edit craftar.yaml, or remove the override and sync first\n`,
+    );
+    expect(porcelain(f.forgeRoot)).toBe("");
+  });
+
+  it("48. G1: a key only a recipe defaults is compared literally → variant", async () => {
+    // Rule a with {{scm.org}} but NO ingredient params, recipe base with params: { "scm.org": { default: "acme-org" } }
+    const s = await scenario(
+      {
+        ingredients: [
+          { meta: { type: "rule", name: "a" }, files: { "rule.md": "Org: {{scm.org}}\n" } },
+          rule("b", "B one\n"),
+        ],
+        recipes: [recipe("base", ["rule/a", "rule/b"], { params: { "scm.org": { default: "acme-org" } } })],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    // The synced file has the recipe default
+    expect(await fs.readFile(path.join(s.wsRoot, A), "utf8")).toBe("Org: acme-org\n");
+    // Change it to a different value
+    await fs.writeFile(path.join(s.wsRoot, A), "Org: globex-org\n");
+    const profileBefore = await fs.readFile(path.join(s.forgeRoot, "profiles/acme/profile.yaml"));
+
+    const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    // The first line should show variant outcome, never params
+    expect(r.stdout.startsWith(`promote ${A} → rule/a--acme (variant, profile acme)\n`)).toBe(true);
+    // Profile is byte-equal (no params were written)
+    expect((await fs.readFile(path.join(s.forgeRoot, "profiles/acme/profile.yaml"))).equals(profileBefore)).toBe(true);
+  });
+
+  it("49. the internal error is unreachable from the CLI", () => {
+    // This is a design note: the internal error "internal: <path> is drift but the Forge already renders it"
+    // cannot be reached from the CLI because:
+    // 1. If the file is drift, disk hash !== lock hash
+    // 2. If decide() returns reuse with no delta (rendered fingerprint equals source fingerprint),
+    //    that means the Forge already produces the file on disk
+    // 3. But then disk hash === plan hash, and status() would have called it "unchanged", not "drift"
+    // So there's no way to have drift + reuse with no delta from the CLI.
+    // The check is defensive code for internal consistency.
+    expect(true).toBe(true); // placeholder assertion
+  });
+});

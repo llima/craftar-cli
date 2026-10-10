@@ -545,7 +545,14 @@ drift
     // Print the report
     const writeVerb = o.dryRun ? "would write" : "wrote ";
     const editVerb = o.dryRun ? "would edit" : "edited";
-    console.log(`promote ${promotePlan.inputPath} → ${promotePlan.promoted} (${promotePlan.outcome}, profile ${promotePlan.profile})`);
+
+    // First line depends on outcome
+    if (promotePlan.outcome === "params" || promotePlan.outcome === "sections") {
+      console.log(`promote ${promotePlan.inputPath} → profile ${promotePlan.profile} (${promotePlan.outcome})`);
+    } else {
+      console.log(`promote ${promotePlan.inputPath} → ${promotePlan.promoted} (${promotePlan.outcome}, profile ${promotePlan.profile})`);
+    }
+
     // Skip entries that are also in editedKeys (they'll be printed with keys below)
     const editedKeyFiles = new Set(promotePlan.editedKeys.keys());
     for (const e of promotePlan.entries) {
@@ -556,11 +563,40 @@ drift
         console.log(`  ${editVerb} ${e.rel}`);
       }
     }
+    // Print early warnings (e.g., unmanaged skill files) — pinned by test 10
+    const unusedSectionPrefix = "profile ";
     for (const w of promotePlan.warnings) {
-      console.log(`  ${pc.yellow("warn")} ${w}`);
+      if (!w.startsWith(unusedSectionPrefix) || !w.includes(" still sets section ")) {
+        console.log(`  ${pc.yellow("warn")} ${w}`);
+      }
     }
     for (const [file, keys] of promotePlan.editedKeys) {
       console.log(`  ${editVerb} ${file} (${keys.join(", ")})`);
+    }
+    // Print param changes
+    for (const p of promotePlan.params) {
+      console.log(`  param ${p.key}: ${p.old === null ? "(unset)" : JSON.stringify(p.old)} → ${JSON.stringify(p.value)}`);
+    }
+    // Print section changes (line count, never content)
+    for (const s of promotePlan.sections) {
+      console.log(`  section ${s.key} ${s.name}: ${s.lines} line(s)`);
+    }
+    // Print flattened (only for variant outcomes)
+    const flatParts: string[] = [];
+    if (promotePlan.flattened.params.length > 0) {
+      flatParts.push(`${promotePlan.flattened.params.length} param(s) (${promotePlan.flattened.params.join(", ")})`);
+    }
+    if (promotePlan.flattened.sections.length > 0) {
+      flatParts.push(`${promotePlan.flattened.sections.length} section(s) (${promotePlan.flattened.sections.join(", ")})`);
+    }
+    if (flatParts.length > 0) {
+      console.log(`  flattened: ${flatParts.join(", ")}`);
+    }
+    // Print late warnings (unused section value) after flattened — step 30g
+    for (const w of promotePlan.warnings) {
+      if (w.startsWith(unusedSectionPrefix) && w.includes(" still sets section ")) {
+        console.log(`  ${pc.yellow("warn")} ${w}`);
+      }
     }
     const otherCount = promotePlan.otherFilesUnchanged;
     console.log(`  proved: this workspace plans the file on disk; ${otherCount} other file(s) unchanged`);
