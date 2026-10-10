@@ -143,7 +143,7 @@ describe("doctor with a templates key", () => {
 
   it("dotnet not found: a warn with its fix, never an error", async () => {
     const d = await doctor(await fixture([TOOLS]), null);
-    expect(d.of("dotnet")).toEqual([{ id: "dotnet", scope: "workspace", level: "warn", message: "dotnet is not available on PATH", fix: "install the .NET SDK" }]);
+    expect(d.of("dotnet")).toEqual([{ id: "dotnet", scope: "workspace", level: "warn", message: "the .NET SDK is not available: dotnet --version gave no version", fix: "install the .NET SDK and check PATH" }]);
     expect(d.report.summary.error).toBe(0);
   });
 });
@@ -162,6 +162,6 @@ describe("craftar doctor --json with a templates key", () => {
     const ok = await fixture([TOOLS]);
     const r2 = runCli(["doctor", "--json", "--workspace", ok.ws], { env: { PATH: "", Path: "", CRAFTAR_HOME: ok.home } });
     const dotnet = JSON.parse(r2.stdout).checks.filter((c: Check) => c.id === "dotnet");
-    expect(dotnet).toEqual([{ id: "dotnet", scope: "workspace", level: "warn", message: "dotnet is not available on PATH", fix: "install the .NET SDK" }]);
+    expect(dotnet).toEqual([{ id: "dotnet", scope: "workspace", level: "warn", message: "the .NET SDK is not available: dotnet --version gave no version", fix: "install the .NET SDK and check PATH" }]);
   });
 });

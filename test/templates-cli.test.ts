@@ -157,7 +157,7 @@ const FEED = (positions: string) =>
 const COLLISION = (ids: string) =>
   `error: a file or folder named like a declared package exists at the workspace root (${ids}) — dotnet would install it instead of the feed's package; nothing installed\n`;
 const DOTNET_MISSING =
-  "error: dotnet is not available on PATH — install the .NET SDK, then run craftar templates install again (--dry-run shows the lines without it)\n";
+  "error: the .NET SDK is not available: dotnet --version gave no version — install the .NET SDK and check PATH, then run craftar templates install again (--dry-run shows the lines without it)\n";
 const STORE = "into the dotnet template store of this user (remove a package with: dotnet new uninstall <package>)";
 const NUGET = { "nuget.config": "<configuration />\n" };
 

@@ -53,7 +53,7 @@ import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { spawn } from "node:child_process";
 import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
-import { declaredTemplates, dotnetVersion, feedMessage, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared } from "./core/templates.js";
+import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion, feedMessage, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared } from "./core/templates.js";
 import { capture, spawnInherited } from "./core/proc.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -1024,7 +1024,7 @@ templates
     if (hasInstallable && !o.dryRun) {
       const version = await dotnetVersion(capture, process.env, ws.root);
       if (version === null) {
-        fail("dotnet is not available on PATH — install the .NET SDK, then run craftar templates install again (--dry-run shows the lines without it)");
+        fail(`${DOTNET_MISSING} — ${DOTNET_MISSING_FIX}, then run craftar templates install again (--dry-run shows the lines without it)`);
       }
     }
 

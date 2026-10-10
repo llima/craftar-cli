@@ -11,7 +11,7 @@ import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, frag
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
 import { outName } from "../emitters/shared.js";
-import { declaredTemplates, dotnetVersion as defaultDotnetVersion, feedMessage, profileLabel, unpinnedSources } from "./templates.js";
+import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, profileLabel, unpinnedSources } from "./templates.js";
 import { capture } from "./proc.js";
 
 /*
@@ -317,7 +317,7 @@ async function workspaceChecks(
           const getDotnetVersion = opts.dotnetVersion ?? (() => defaultDotnetVersion(capture, env, root));
           const version = await getDotnetVersion();
           if (version !== null) w("dotnet", "ok", version);
-          else w("dotnet", "warn", "dotnet is not available on PATH", "install the .NET SDK");
+          else w("dotnet", "warn", DOTNET_MISSING, DOTNET_MISSING_FIX);
         }
       }
     }

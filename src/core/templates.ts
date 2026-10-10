@@ -13,6 +13,11 @@ import { capture as defaultCapture, type Probe, type Runner } from "./proc.js";
 
 const CREDENTIAL = "a source must not carry a user or a password: NuGet's own configuration holds credentials";
 
+/** The .NET SDK is missing: install + doctor use the same text (spec 32 §4.2 step 2). */
+export const DOTNET_MISSING = "the .NET SDK is not available: dotnet --version gave no version";
+/** The fix line for a missing .NET SDK. */
+export const DOTNET_MISSING_FIX = "install the .NET SDK and check PATH";
+
 export interface DotnetNewEntry {
   entry: number;
   kind: "dotnet-new";
