@@ -99,14 +99,14 @@ export interface RecipesListing {
  * Tolerant depth-first walk: skips unknown recipes, stops on cycles.
  * Returns the map and the warnings collected (profile name + text), in Forge profile order.
  */
-function computeProfilesForRecipes(forge: Forge): { map: Map<string, string[]>; warnings: string[] } {
+function computeProfilesForRecipes(forge: Forge): { map: Map<string, string[]>; warnings: { profile: string; text: string }[] } {
   const result = new Map<string, string[]>();
   for (const name of forge.recipes.keys()) result.set(name, []);
 
-  const warnings: string[] = [];
+  const warnings: { profile: string; text: string }[] = [];
   for (const [profileName, profile] of forge.profiles) {
     const { recipes, warning } = recipesOrWritten(forge, profile);
-    if (warning !== null) warnings.push(warning);
+    if (warning !== null) warnings.push({ profile: profileName, text: warning });
     const visited = new Set<string>();
     const stack: string[] = [...recipes];
     while (stack.length) {
@@ -139,8 +139,8 @@ export function listRecipes(forge: Forge, context: CatalogueContext | null): Rec
   const { map: profilesMap, warnings: walkWarnings } = computeProfilesForRecipes(forge);
   // Append walk warnings, but leave out the one for context.profile (catalogueContext already gives it)
   for (const w of walkWarnings) {
-    if (context && w.startsWith(`profile ${context.profile}:`)) continue;
-    warnings.push(w);
+    if (w.profile === context?.profile) continue;
+    warnings.push(w.text);
   }
 
   // Build the set of resolved recipes and their reasons

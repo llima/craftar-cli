@@ -154,6 +154,13 @@ describe("Catalogue", () => {
       extendedBy: [],
     });
   });
+
+  it("20. the walk's warning is left out by profile name, not by text", async () => {
+    // A profile name with a colon tests that the filter is by exact profile name, not by text prefix.
+    const { forgeRoot } = await at(3, ado({ profiles: [profile("acme:x", ["base"], ["claude-code"], { integrations: { pm: "x" } })] }));
+    const l = await forProfile(forgeRoot, "acme");
+    expect(l.warnings).toEqual(["profile acme:x: integrations.pm is not a mapping — its recipes are read as written"]);
+  });
 });
 
 describe("Recipe commands", () => {
