@@ -580,7 +580,15 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   }
   const row = rows[0];
   if (!row.promotable) {
-    // Build the right D5/D6/D18 message from the static reason
+    // Build the right D5/D6/D18 message from the static reason.
+    // Order of reasons in driftList: orphan → provided → kiro → AGENTS.md → .mcp.json.
+    // "no longer produced" cannot reach here: the state is `drift`, not `orphan-drift`.
+    // Decide D18 by the data (provided map lookup), not by the message text.
+    const prov = fileStatus.ingredient ? provided.get(fileStatus.ingredient) : undefined;
+    if (prov && !row.promotable) {
+      // D18: provided by the integrations block
+      throw new Error(D18(normalized, prov.recipe, profile, prov.slot, fileStatus.ingredient!));
+    }
     const reason = row.reason;
     if (reason === "service file") {
       throw new Error(D5_SERVICE(normalized));
@@ -594,10 +602,6 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       throw new Error(D5_AGENTSMD(normalized));
     } else if (reason === ".mcp.json") {
       throw new Error(D6(normalized));
-    } else if (reason?.startsWith("provided by integrations.")) {
-      // D18: provided by the integrations block
-      const prov = provided.get(fileStatus.ingredient!)!;
-      throw new Error(D18(normalized, prov.recipe, profile, prov.slot, fileStatus.ingredient!));
     } else {
       // Fallback for any other reason (shouldn't happen for drift state)
       throw new Error(D4_OTHER(normalized, fileStatus.state));

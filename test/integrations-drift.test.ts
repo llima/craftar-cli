@@ -88,6 +88,64 @@ describe("promote renders with the effective profile's params", () => {
     ]);
   });
 
+  it("1b. a hand edit of a declared param's value, in a body that also cites an integration param, is inferred — not made a variant", async () => {
+    // Build the spec by hand: rule that cites an integration param AND declares a param with a default
+    const spec: ForgeSpec = {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        rule("where", "Org {{integrations.pm.org}}\nTeam {{team}}\n", { params: { team: { default: "core" } } }),
+        rule("stories-azure-devops", STORIES),
+        mcp("azure-devops", { command: "npx", args: ["-y", "ado-mcp"] }),
+      ],
+      recipes: [
+        recipe("base", ["rule/workflow", "rule/where"]),
+        recipe("pm-azure-devops", ["mcp/azure-devops", "rule/stories-azure-devops"], { slot: "pm" }),
+      ],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"], { integrations: PM })],
+    };
+    const s = await forgeAt(3, spec);
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+
+    // Sync the workspace
+    await sync(s.wsRoot);
+    gitInit(s.forgeRoot);
+
+    // The synced file is "Org acme\nTeam core\n" (integration param rendered, declared default used)
+    // Hand edit: change the team param's value only
+    await fs.writeFile(path.join(s.wsRoot, ".claude/rules/where.md"), "Org acme\nTeam platform\n");
+
+    // Run drift promote --dry-run --json
+    const r = runCli(["drift", "promote", ".claude/rules/where.md", "--workspace", s.wsRoot, "--dry-run", "--json"], { env });
+
+    // With the effective params (correct code), the base renders as "Org acme\nTeam core\n".
+    // The hand edit is "Org acme\nTeam platform\n". The difference is only in the team param's value,
+    // so the outcome should be `params` — the profile gains `team: platform`, no variant.
+    expect(r.code).toBe(0);
+    const j = JSON.parse(r.stdout);
+
+    // Pin the whole JSON (temp paths built from test variables)
+    expect(j).toEqual({
+      workspace: s.wsRoot,
+      forge: s.forgeRoot,
+      profile: "acme",
+      dryRun: true,
+      path: ".claude/rules/where.md",
+      ingredient: "rule/where",
+      outcome: "params",
+      promoted: null,
+      written: [{ path: "profiles/acme/profile.yaml", action: "edited" }],
+      params: [{ key: "team", old: null, value: "platform" }],
+      sections: [],
+      flattened: { params: [], sections: [] },
+      dependents: [".kiro/steering/where.md"],
+      nextSync: { counts: { update: 1 } },
+      impact: { registry: "none", workspaces: [] },
+      warnings: [],
+    });
+  });
+
   it("control: the same Forge at schema 2 with the recipe listed by hand and the two keys in params", async () => {
     const spec: ForgeSpec = {
       ingredients: [
@@ -242,6 +300,45 @@ describe("drift × the integrations block", () => {
       [true, null],
       [true, null],
     ]);
+  });
+
+  it("7b. (control) schema 2, a full block the profile does not list by hand: drift show and promote are today's", async () => {
+    // At schema 2 the block is inert — the profile does NOT list pm-azure-devops by hand.
+    // sync writes only workflow.md and where.md (base's rules).
+    // The block's recipe is NOT selected, so stories-azure-devops is NOT written.
+    const s = await forgeAt(2, ado());
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+
+    await sync(s.wsRoot);
+    gitInit(s.forgeRoot);
+
+    // Check what sync wrote — should NOT include stories-azure-devops
+    const claudeDir = path.join(s.wsRoot, ".claude", "rules");
+    const files = await fs.readdir(claudeDir);
+    expect(files.sort()).toEqual(["where.md", "workflow.md"]);
+
+    // Append to where.md (a rule that is in base, not from the block)
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/where.md"), "by hand\n");
+
+    // drift show --json
+    const r1 = runCli(["drift", "show", "--workspace", s.wsRoot, "--json"], { env });
+    expect(r1.code).toBe(0);
+    const j1 = JSON.parse(r1.stdout);
+
+    // Claim: one row, .claude/rules/where.md, promotable: true, reason: null
+    expect(j1.files).toEqual([
+      { path: ".claude/rules/where.md", state: "drift", target: "claude-code", ingredient: "rule/where", forge: "same", promotable: true, reason: null },
+    ]);
+
+    // drift promote --dry-run --json
+    const r2 = runCli(["drift", "promote", ".claude/rules/where.md", "--workspace", s.wsRoot, "--dry-run", "--json"], { env });
+    expect(r2.code).toBe(0);
+    const j2 = JSON.parse(r2.stdout);
+
+    // Claim: exit 0, outcome is variant (the base has {{integrations.pm.org}} which renders verbatim at schema 2)
+    expect(j2.outcome).toBe("variant");
   });
 
   it("8. listed in base and in the integration recipe: promotable (not provided by the block alone)", async () => {
