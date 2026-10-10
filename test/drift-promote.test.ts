@@ -3160,3 +3160,137 @@ describe("profile label from real file (commit 1)", () => {
     );
   });
 });
+
+// Commit 2 tests: D16_BREAK and command parameter threading
+describe("D16_BREAK — sibling that planned before but fails after (commit 2)", () => {
+  const A = ".claude/rules/a.md";
+
+  it("R9. a sibling workspace broken by the promote → exit 1, stderr is the D16_BREAK message, Forge untouched, no scratch", async () => {
+    const home = await tmpDir("craftar-home-");
+    const forgeRoot = await tmpDir("craftar-forge-");
+    const wsRoot = await tmpDir("craftar-ws-");
+    const ws2Root = await tmpDir("craftar-ws2-");
+
+    // Create Forge with recipe "shared" having slot: core, and ingredients rule/a, rule/b
+    await fs.mkdir(path.join(forgeRoot, "ingredients", "rules", "a"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "ingredients", "rules", "a", "ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "a", targets: "*" }));
+    await fs.writeFile(path.join(forgeRoot, "ingredients", "rules", "a", "rule.md"), "rule a\n");
+
+    await fs.mkdir(path.join(forgeRoot, "ingredients", "rules", "b"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "ingredients", "rules", "b", "ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "b", targets: "*" }));
+    await fs.writeFile(path.join(forgeRoot, "ingredients", "rules", "b", "rule.md"), "rule b\n");
+
+    // Recipe "shared" with slot: core
+    await fs.mkdir(path.join(forgeRoot, "recipes"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "recipes", "shared.yaml"),
+      YAML.stringify({ name: "shared", slot: "core", ingredients: ["rule/a", "rule/b"] }));
+
+    // Profile "acme" with recipes: [shared]
+    await fs.mkdir(path.join(forgeRoot, "profiles", "acme"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "profiles", "acme", "profile.yaml"),
+      YAML.stringify({ name: "acme", recipes: ["shared"], targets: ["claude-code"] }));
+
+    // Profile "beta" with recipes: [shared]
+    await fs.mkdir(path.join(forgeRoot, "profiles", "beta"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "profiles", "beta", "profile.yaml"),
+      YAML.stringify({ name: "beta", recipes: ["shared"], targets: ["claude-code"] }));
+
+    await fs.writeFile(path.join(forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test", schema: 1 }));
+
+    gitInit(forgeRoot);
+
+    // Create ws on profile acme
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
+    expect(runCli(["sync", "--workspace", wsRoot], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Create ws2 on profile acme with recipes: { add: [shared] }
+    // This adds "shared" to the workspace's recipe list explicitly
+    await makeWorkspace(ws2Root, forgeRoot, { config: { profile: "acme", recipes: { add: ["shared"] } } });
+    expect(runCli(["sync", "--workspace", ws2Root], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Drift rule a in ws
+    await fs.appendFile(path.join(wsRoot, A), "hand a\n");
+
+    // Verify no scratch dir exists before
+    const scratchBefore = (await fs.readdir(home)).filter((f) => f.startsWith("scratch-"));
+    expect(scratchBefore.length).toBe(0);
+
+    // Porcelain should be empty before
+    expect(porcelain(forgeRoot)).toBe("");
+
+    const r = runCli(["drift", "promote", A, "--workspace", wsRoot], { env: { CRAFTAR_HOME: home } });
+
+    // Expected: exit 1, stderr is D16_BREAK message
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    const ws2Real = await fs.realpath(ws2Root);
+    expect(r.stderr).toBe(
+      `error: promote would break ${ws2Real} (profile acme): recipes "shared--acme" and "shared" both occupy slot "core" — the Forge was left untouched\n`,
+    );
+
+    // Forge porcelain empty (no writes happened)
+    expect(porcelain(forgeRoot)).toBe("");
+
+    // No scratch left
+    const scratchAfter = (await fs.readdir(home)).filter((f) => f.startsWith("scratch-"));
+    expect(scratchAfter.length).toBe(0);
+  });
+
+  it("R10. same as R9 but with --json: exit 1, stdout empty", async () => {
+    const home = await tmpDir("craftar-home-");
+    const forgeRoot = await tmpDir("craftar-forge-");
+    const wsRoot = await tmpDir("craftar-ws-");
+    const ws2Root = await tmpDir("craftar-ws2-");
+
+    // Same setup as R9
+    await fs.mkdir(path.join(forgeRoot, "ingredients", "rules", "a"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "ingredients", "rules", "a", "ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "a", targets: "*" }));
+    await fs.writeFile(path.join(forgeRoot, "ingredients", "rules", "a", "rule.md"), "rule a\n");
+
+    await fs.mkdir(path.join(forgeRoot, "ingredients", "rules", "b"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "ingredients", "rules", "b", "ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "b", targets: "*" }));
+    await fs.writeFile(path.join(forgeRoot, "ingredients", "rules", "b", "rule.md"), "rule b\n");
+
+    await fs.mkdir(path.join(forgeRoot, "recipes"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "recipes", "shared.yaml"),
+      YAML.stringify({ name: "shared", slot: "core", ingredients: ["rule/a", "rule/b"] }));
+
+    await fs.mkdir(path.join(forgeRoot, "profiles", "acme"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "profiles", "acme", "profile.yaml"),
+      YAML.stringify({ name: "acme", recipes: ["shared"], targets: ["claude-code"] }));
+
+    await fs.mkdir(path.join(forgeRoot, "profiles", "beta"), { recursive: true });
+    await fs.writeFile(path.join(forgeRoot, "profiles", "beta", "profile.yaml"),
+      YAML.stringify({ name: "beta", recipes: ["shared"], targets: ["claude-code"] }));
+
+    await fs.writeFile(path.join(forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test", schema: 1 }));
+
+    gitInit(forgeRoot);
+
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
+    expect(runCli(["sync", "--workspace", wsRoot], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    await makeWorkspace(ws2Root, forgeRoot, { config: { profile: "acme", recipes: { add: ["shared"] } } });
+    expect(runCli(["sync", "--workspace", ws2Root], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    await fs.appendFile(path.join(wsRoot, A), "hand a\n");
+
+    const r = runCli(["drift", "promote", A, "--json", "--workspace", wsRoot], { env: { CRAFTAR_HOME: home } });
+
+    // With --json, exit 1, stdout empty (stderr has the error)
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    const ws2Real = await fs.realpath(ws2Root);
+    expect(r.stderr).toBe(
+      `error: promote would break ${ws2Real} (profile acme): recipes "shared--acme" and "shared" both occupy slot "core" — the Forge was left untouched\n`,
+    );
+  });
+});
+
+// Note: The command parameter was threaded through workspaceParams/workspaceSections in decide.ts.
+// However, a broken craftar.local.yaml is caught earlier during workspace config load, so these
+// helpers are never reached with a broken file. No vacuous test is added per spec instructions.

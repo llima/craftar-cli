@@ -703,9 +703,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const readWs = (abs: string) => fs.readFile(abs, "utf8");
   const ctx: RunContext = {
     P: { ...(forge.profiles.get(profile)?.params ?? {}) },
-    W: await workspaceParams(root, readWs),
+    W: await workspaceParams(root, readWs, "drift promote"),
     PS: structuredClone(forge.profiles.get(profile)?.sections ?? {}),
-    WS: await workspaceSections(root, readWs),
+    WS: await workspaceSections(root, readWs, "drift promote"),
     pinned: new Map(),
     forge,
     markedBase: false,

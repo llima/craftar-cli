@@ -280,7 +280,7 @@ async function listAdmitted(ing: { dir: string; meta: Ingredient }): Promise<str
 }
 
 /** `W`: overrides.params of craftar.yaml and craftar.local.yaml, merged as loadWorkspace merges them (I6). */
-export async function workspaceParams(ws: string, read: (abs: string) => Promise<string>): Promise<Record<string, unknown>> {
+export async function workspaceParams(ws: string, read: (abs: string) => Promise<string>, command = "import"): Promise<Record<string, unknown>> {
   let out: Record<string, unknown> = {};
   for (const f of ["craftar.yaml", "craftar.local.yaml"]) {
     const abs = path.join(ws, f);
@@ -290,14 +290,14 @@ export async function workspaceParams(ws: string, read: (abs: string) => Promise
       const params = OverridesParamsSchema.parse(doc?.overrides?.params ?? {});
       out = deepMerge(out, params);
     } catch (e) {
-      throw new Error(`import: ${f} does not load (${(e as Error).message})`);
+      throw new Error(`${command}: ${f} does not load (${(e as Error).message})`);
     }
   }
   return out;
 }
 
 /** `WS`: overrides.sections of craftar.yaml and craftar.local.yaml, merged as loadWorkspace merges them (I6, spec 11 §6.7). */
-export async function workspaceSections(ws: string, read: (abs: string) => Promise<string>): Promise<Sections> {
+export async function workspaceSections(ws: string, read: (abs: string) => Promise<string>, command = "import"): Promise<Sections> {
   let out: Sections = {};
   for (const f of ["craftar.yaml", "craftar.local.yaml"]) {
     const abs = path.join(ws, f);
@@ -306,7 +306,7 @@ export async function workspaceSections(ws: string, read: (abs: string) => Promi
       const doc = (parseWorkspaceYaml(f, await read(abs)) ?? {}) as { overrides?: { params?: unknown; sections?: unknown } };
       out = deepMerge(out, SectionsSchema.parse(doc?.overrides?.sections ?? {}));
     } catch (e) {
-      throw new Error(`import: ${f} does not load (${(e as Error).message})`);
+      throw new Error(`${command}: ${f} does not load (${(e as Error).message})`);
     }
   }
   return out;
