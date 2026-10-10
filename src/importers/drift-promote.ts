@@ -181,6 +181,8 @@ const SYMLINK_REFUSAL = (rel: string) =>
   `${rel} is a symbolic link in the Forge — promote does not write through a link; replace it with the file and commit`;
 const SYMLINK_DIR_REFUSAL = (rel: string) =>
   `${rel} is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit`;
+const SYMLINK_OUT_OR_DANGLING = (rel: string) =>
+  `${rel} is a symbolic link out of the Forge, or to nothing — promote cannot copy the Forge to prove its edit; fix or remove it`;
 const NON_REGULAR_FILE_REFUSAL = (rel: string) =>
   `${rel} is not a regular file — promote cannot copy the Forge to prove its edit; remove it`;
 
@@ -230,9 +232,7 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string): P
           targetStat = await fs.stat(targetReal);
         } catch (e) {
           // Dangling link or unresolvable — refuse
-          throw new Error(
-            `${entRel} is a symbolic link out of the Forge, or to nothing — promote cannot copy the Forge to prove its edit; fix or remove it`,
-          );
+          throw new Error(SYMLINK_OUT_OR_DANGLING(entRel));
         }
 
         // If it's a directory (inside or outside Forge)
@@ -246,13 +246,19 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string): P
           continue;
         }
 
+        // Target is neither a directory nor a regular file (FIFO, socket, etc.) — refuse
+        // Check this BEFORE the "inside Forge" check so the message is clear
+        if (!targetStat.isFile()) {
+          throw new Error(NON_REGULAR_FILE_REFUSAL(entRel));
+        }
+
         // It's a file link — check if target is inside the Forge
         const relToForge = path.relative(forgeReal, targetReal);
-        if (relToForge.startsWith("..") || path.isAbsolute(relToForge)) {
+        // A name starting with ".." but not a ".." segment is valid (e.g. "..notes")
+        const isOutside = relToForge === ".." || relToForge.startsWith(".." + path.sep) || path.isAbsolute(relToForge);
+        if (isOutside) {
           // File link to outside the Forge — refuse
-          throw new Error(
-            `${entRel} is a symbolic link out of the Forge, or to nothing — promote cannot copy the Forge to prove its edit; fix or remove it`,
-          );
+          throw new Error(SYMLINK_OUT_OR_DANGLING(entRel));
         }
 
         // File link to inside the Forge — copy the target's bytes as a regular file (dereferenced)
@@ -356,9 +362,10 @@ async function provePromote(opts: {
   }
 
   // 2. For each path in E, p1 content matches disk
+  // Note: the "would not be planned" case is unreachable: step 1 ensures every p0 path is in p1,
+  // and E is a subset of p0.files, so every E path is guaranteed to be in p1.
   for (const f of E) {
-    const p1File = p1.files.find((x) => x.path === f.path);
-    if (!p1File) throw new Error(D15(`${f.path} would not be planned`));
+    const p1File = p1.files.find((x) => x.path === f.path)!;
     const diskContent = await fs.readFile(path.join(root, f.path));
     if (hashNormalized(p1File.content) !== hashNormalized(diskContent)) {
       throw new Error(D15(`${f.path} would not match the file on disk`));
@@ -639,7 +646,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         }
         if (found) break;
       }
-      if (!found) throw new Error(D2_URL(input.forgeDir));
+      if (!found) {
+        // D2: append any credential warnings so the user knows why the remote was not matched
+        const msg = warnings.length > 0 ? D2_URL(input.forgeDir) + "\n" + warnings.join("\n") : D2_URL(input.forgeDir);
+        throw new Error(msg);
+      }
     }
   } else {
     // No --forge: the workspace must have a path Forge (D1)

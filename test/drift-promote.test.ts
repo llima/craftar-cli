@@ -2916,6 +2916,73 @@ describe("copyForgeForProof — non-regular files and root directory links (comm
     );
   });
 
+  it("R5a. copyForgeForProof refuses a link to a FIFO (unit)", async () => {
+    // On Windows there is no FIFO; the test must early-return on win32
+    if (process.platform === "win32") {
+      // Windows has no FIFO; skip
+      return;
+    }
+    const { copyForgeForProof } = await import("../src/importers/drift-promote.js");
+    const f = await F();
+    gitInit(f.forgeRoot);
+
+    // Create a FIFO outside the Forge
+    const outsideFifo = await tmpDir("craftar-fifo-");
+    const fifoPath = path.join(outsideFifo, "zpipe");
+    execFileSync("mkfifo", [fifoPath]);
+    cleanups.push(() => fs.rm(outsideFifo, { recursive: true, force: true }));
+
+    // Create a symlink inside the Forge pointing to the FIFO
+    const linkPath = path.join(f.forgeRoot, "alink");
+    await fs.symlink(fifoPath, linkPath);
+    cleanups.push(() => fs.rm(linkPath, { force: true }));
+
+    const scratchDir = await tmpDir("craftar-scratch-");
+    cleanups.push(() => fs.rm(scratchDir, { recursive: true, force: true }));
+
+    // The call should reject promptly (not hang), with the refusal naming the LINK's path
+    await expect(copyForgeForProof(f.forgeRoot, scratchDir)).rejects.toThrow(
+      "alink is not a regular file — promote cannot copy the Forge to prove its edit; remove it",
+    );
+  });
+
+  it("R5b. copyForgeForProof copies a link to an in-Forge file named ..notes (unit)", async () => {
+    const { copyForgeForProof } = await import("../src/importers/drift-promote.js");
+    const f = await F();
+
+    // Create a file named '..notes' inside the Forge
+    const notesPath = path.join(f.forgeRoot, "..notes");
+    await fs.writeFile(notesPath, "notes content\n");
+    cleanups.push(() => fs.rm(notesPath, { force: true }));
+
+    // Create a symlink to that file
+    const linkPath = path.join(f.forgeRoot, "noteslink");
+    try {
+      await fs.symlink(notesPath, linkPath);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EPERM") {
+        // Windows without privilege — skip
+        return;
+      }
+      throw e;
+    }
+    cleanups.push(() => fs.rm(linkPath, { force: true }));
+
+    gitInit(f.forgeRoot);
+
+    const scratchDir = await tmpDir("craftar-scratch-");
+    cleanups.push(() => fs.rm(scratchDir, { recursive: true, force: true }));
+
+    // The call should succeed and copy the file content as a regular file
+    await copyForgeForProof(f.forgeRoot, scratchDir);
+
+    // The noteslink should be a regular file in the scratch, containing the original content
+    const stat = await fs.lstat(path.join(scratchDir, "noteslink"));
+    expect(stat.isFile()).toBe(true);
+    expect(stat.isSymbolicLink()).toBe(false);
+    expect(await fs.readFile(path.join(scratchDir, "noteslink"), "utf8")).toBe("notes content\n");
+  });
+
   it("R6a. copyForgeForProof refuses root directory link: ingredients", async () => {
     const { copyForgeForProof } = await import("../src/importers/drift-promote.js");
     const f = await F();
@@ -3214,8 +3281,7 @@ describe("D16_BREAK — sibling that planned before but fails after (commit 2)",
     await fs.appendFile(path.join(wsRoot, A), "hand a\n");
 
     // Verify no scratch dir exists before
-    const scratchBefore = (await fs.readdir(home)).filter((f) => f.startsWith("scratch-"));
-    expect(scratchBefore.length).toBe(0);
+    const scratchBefore = await scratchDirs();
 
     // Porcelain should be empty before
     expect(porcelain(forgeRoot)).toBe("");
@@ -3234,8 +3300,7 @@ describe("D16_BREAK — sibling that planned before but fails after (commit 2)",
     expect(porcelain(forgeRoot)).toBe("");
 
     // No scratch left
-    const scratchAfter = (await fs.readdir(home)).filter((f) => f.startsWith("scratch-"));
-    expect(scratchAfter.length).toBe(0);
+    expect(await scratchDirs()).toEqual(scratchBefore);
   });
 
   it("R10. same as R9 but with --json: exit 1, stdout empty", async () => {
@@ -3288,6 +3353,56 @@ describe("D16_BREAK — sibling that planned before but fails after (commit 2)",
     expect(r.stderr).toBe(
       `error: promote would break ${ws2Real} (profile acme): recipes "shared--acme" and "shared" both occupy slot "core" — the Forge was left untouched\n`,
     );
+  });
+
+  it("R11. D2 for URL Forge — clone's only remote URL has credentials → D2 with the credential warning", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    // Use remoteForge helper to create a bare repo with file:// URL
+    const { remoteForge } = await import("./helpers/remote.js");
+    const rf = await remoteForge({
+      ingredients: [rule("a", "A one\n")],
+      recipes: [recipe("base", ["rule/a"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    cleanups.push(rf.cleanup);
+
+    // Create a workspace whose forge: is the URL
+    const root = await tmpDir("craftar-ws-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.writeFile(path.join(root, "craftar.yaml"), `forge: ${rf.url}\nprofile: acme\n`);
+    expect(runCli(["sync", "--workspace", root], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+
+    // Create a clone where the only remote URL has credentials (user:password@...)
+    const cloneDir = await tmpDir("craftar-clone-");
+    cleanups.push(() => fs.rm(cloneDir, { recursive: true, force: true }));
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("git", ["init", "-q", cloneDir], { env: gitEnv() });
+    execFileSync("git", ["-C", cloneDir, "config", "maintenance.auto", "false"]);
+    execFileSync("git", ["-C", cloneDir, "config", "gc.auto", "0"]);
+    // Set the remote URL with credentials (password assembled at runtime to avoid detection)
+    // This URL intentionally DOES NOT match rf.url — the only remote is one with credentials
+    const password = "x".repeat(8);
+    execFileSync("git", ["-C", cloneDir, "remote", "add", "origin", `https://user:${password}@example.com/acme/forge.git`]);
+    // Make a commit so it's a valid repo
+    await fs.writeFile(path.join(cloneDir, "README.md"), "clone\n");
+    execFileSync("git", ["-C", cloneDir, "add", "-A"]);
+    execFileSync("git", ["-C", cloneDir, "commit", "-q", "-m", "init"], { env: gitEnv() });
+
+    await fs.appendFile(path.join(root, A), "hand a\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", root, "--forge", cloneDir], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    // The error should be D2 followed by the credential warning on its own line
+    expect(r.stderr).toBe(
+      `error: --forge ${cloneDir} is not a clone of this workspace's Forge — none of its git remotes matches\n` +
+        `remote origin of ${cloneDir} holds credentials in its URL — not matched\n`,
+    );
+    // And critically: the stderr should NOT contain the password
+    expect(r.stderr.includes(`user:`)).toBe(false);
+    expect(r.stderr.includes(password)).toBe(false);
   });
 });
 
