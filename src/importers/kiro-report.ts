@@ -5,6 +5,7 @@ import { parseFrontmatter } from "../core/frontmatter.js";
 import { loadWorkspaceConfig, plan, status } from "../core/sync.js";
 import { stripBom, toLf } from "../core/text.js";
 import type { Target } from "../schema/index.js";
+import { workspaceParams, workspaceSections } from "./decide.js";
 
 /** One `.kiro/` file that differs from what sync would generate for the imported profile (spec 29 §3). */
 export interface KiroCollision {
@@ -64,8 +65,11 @@ async function noteFor(workspaceRoot: string, rel: string, from: string, steerin
 
 /**
  * The Kiro part of an import report (spec 29 §4.2), from the flushed Forge: the workspace is built in memory — the
- * Forge, the imported profile, the targets import detected; its own `craftar.yaml`, `craftar.local.yaml` and lock are
- * not read — then planned, and `status()` with no lock says which `.kiro/` files are a `collision`. It is `status()`'s
+ * Forge, the imported profile, the targets import detected, and the workspace's own `overrides.params` and
+ * `overrides.sections`, read as import read them to prove a reuse (`workspaceParams`, `workspaceSections`): without
+ * them a file import reused through an override would read as a collision `sync` never has. Nothing else of its
+ * `craftar.yaml` or `craftar.local.yaml` is read, nor its lock. Then it is planned, and `status()` with no lock says
+ * which `.kiro/` files are a `collision`. It is `status()`'s
  * state, not a second comparison: a line-ending or JSON-formatting difference is an `adopt` there. Reads only; never
  * throws — an import that flushed has succeeded whatever the plan says. `deps.plan` is for tests.
  */
@@ -76,7 +80,9 @@ export async function kiroReport(
   const root = path.resolve(o.workspaceRoot);
   if (!(await exists(path.join(root, ".kiro")))) return { kind: "none" };
   try {
-    const ws = await loadWorkspaceConfig(root, { forge: path.resolve(o.forgeRoot), profile: o.profile, targets: o.targets }, null);
+    const read = (abs: string) => fs.readFile(abs, "utf8");
+    const overrides = { params: await workspaceParams(root, read), sections: await workspaceSections(root, read) };
+    const ws = await loadWorkspaceConfig(root, { forge: path.resolve(o.forgeRoot), profile: o.profile, targets: o.targets, overrides }, null);
     const p = await deps.plan(ws);
     const collisions: KiroCollision[] = [];
     for (const s of await status(ws, p, null)) {
@@ -95,9 +101,10 @@ export async function kiroReport(
     const found: string[] = [];
     for (const dir of SOURCED_DIRS) {
       const abs = path.join(root, dir);
-      if (await exists(abs)) for (const rel of await listFiles(abs)) found.push(`${dir}/${rel}`);
+      // Only a directory is walked: a file sitting where one is expected is not Kiro's, and not this report's.
+      if ((await fs.stat(abs).catch(() => null))?.isDirectory()) for (const rel of await listFiles(abs)) found.push(`${dir}/${rel}`);
     }
-    if (await exists(path.join(root, SOURCED_FILE))) found.push(SOURCED_FILE);
+    if ((await fs.stat(path.join(root, SOURCED_FILE)).catch(() => null))?.isFile()) found.push(SOURCED_FILE);
     return {
       kind: "computed",
       collisions: collisions.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),

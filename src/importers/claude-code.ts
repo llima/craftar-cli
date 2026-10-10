@@ -80,7 +80,6 @@ const BASE_RULES = new Set([
   "frontend-visual-verification",
 ]);
 
-
 /**
  * Import a Claude Code workspace into a Forge. The run happens in two phases: every read,
  * comparison and check that can throw runs first against an in-memory stage, and only then are the

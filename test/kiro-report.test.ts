@@ -103,14 +103,41 @@ describe("import with report: the Kiro part", () => {
     expect("kiro" in r).toBe(false);
   });
 
-  it("the workspace's own craftar.yaml, craftar.local.yaml and craftar.lock are not read", async () => {
+  it("the workspace's own forge, profile, targets and lock are not read", async () => {
     const s = await setup({ ...WORKSPACE, "craftar.yaml": "forge: ../nowhere\nprofile: someone-else\n", "craftar.local.yaml": "targets: []\n", "craftar.lock": "{ not json" });
     const r = await importClaudeCode({ workspaceRoot: s.ws, forgeRoot: s.forge, profileName: "acme", report: true });
     expect(r.kiro!.kind).toBe("computed");
     expect((r.kiro as { collisions: unknown[] }).collisions).toHaveLength(2);
   });
 
-  it("a plan that throws after the flush: not computed, one warning, the Forge written, no throw", async () => {
+  it("the workspace's overrides are honoured, as import honoured them to prove the reuse: no collision sync would not have", async () => {
+    const s = await setup({ ".claude/rules/deploy.md": "use acme-api here\n", ".kiro/steering/deploy.md": mirror("deploy", "use acme-api here\n") });
+    await importClaudeCode({ workspaceRoot: s.ws, forgeRoot: s.forge, profileName: "acme" });
+    // the Forge rule becomes a template; the value lives in the workspace's own overrides, not in the profile
+    await writeFiles(s.forge, { "ingredients/rules/deploy/rule.md": "use {{deploy.api}} here\n" });
+    const meta = path.join(s.forge, "ingredients/rules/deploy/ingredient.yaml");
+    await fs.writeFile(meta, (await fs.readFile(meta, "utf8")) + "params:\n  deploy.api:\n    default: globex-api\n");
+    await writeFiles(s.ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\noverrides:\n  params:\n    deploy.api: acme-api\n" });
+    const r = await importClaudeCode({ workspaceRoot: s.ws, forgeRoot: s.forge, profileName: "acme", report: true });
+    expect(r.reused).toContain("rule/deploy");
+    expect(r.kiro).toEqual({ kind: "computed", collisions: [], unsourced: [] });
+    // (control) without the override the same mirror is a collision: the plan renders the default
+    await fs.rm(path.join(s.ws, "craftar.yaml"));
+    const k = await kiroReport({ workspaceRoot: s.ws, forgeRoot: s.forge, profile: "acme", targets: ["claude-code", "kiro"] });
+    expect(k.kind === "computed" && k.collisions.map((c) => c.path)).toEqual([".kiro/steering/deploy.md"]);
+  });
+
+  it("a mirror that differs only by a BOM and its line endings is not a collision", async () => {
+    const { r } = await imported({ ".claude/rules/style.md": "# Style\n", ".kiro/steering/style.md": "\uFEFF" + mirror("style", "# Style\n", "\n") });
+    expect(r.kiro).toEqual({ kind: "computed", collisions: [], unsourced: [] });
+  });
+
+  it("a location that is a file, not a directory, is not listed and does not stop the report", async () => {
+    const { r } = await imported({ ".claude/rules/style.md": "# Style\n", ".kiro/steering/style.md": mirror("style", "# Style\n"), ".kiro/agents": "not a directory\n" });
+    expect(r.kiro).toEqual({ kind: "computed", collisions: [], unsourced: [] });
+  });
+
+  it("a plan that throws after the flush: not computed, with the first line of the message; the Forge written, no throw", async () => {
     const s = await setup();
     const r = await importClaudeCode({ workspaceRoot: s.ws, forgeRoot: s.forge, profileName: "acme" });
     expect(r.created).toContain("rule/workflow");

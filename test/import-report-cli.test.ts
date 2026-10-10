@@ -228,3 +228,42 @@ describe("import --report — values import reads from the workspace stay out of
     for (const leak of ["VALUE-ONE", "VALUE-TWO"]) expect(text).not.toContain(leak);
   });
 });
+
+describe("import --report — an import that succeeded is not undone by its report", () => {
+  it("the Kiro part cannot be computed: exit 0, the warning in the summary, 'not computed' in the file", async () => {
+    const s = await setup();
+    expect(run(s).code).toBe(0);
+    // a recipe the profile resolves now names a rule whose section marker is never closed: plan() throws on it
+    await writeFiles(s.forge, {
+      "ingredients/rules/broken/ingredient.yaml": "type: rule\nname: broken\n",
+      "ingredients/rules/broken/rule.md": "# Broken\n<!-- craftar:section who -->\nnever closed\n",
+      "recipes/extra.yaml": "name: extra\ningredients:\n  - rule/broken\n",
+    });
+    const prof = path.join(s.forge, "profiles/acme/profile.yaml");
+    await fs.writeFile(prof, (await fs.readFile(prof, "utf8")).replace("recipes:\n", "recipes:\n  - extra\n"));
+    const r = run(s, ["--report", s.out]);
+    expect(r.code, r.stderr).toBe(0);
+    const warn = r.stdout.split("\n").filter((l) => l.startsWith("  warn import report: Kiro sections not computed: "));
+    expect(warn).toHaveLength(1);
+    expect(warn[0]).toContain("section who is never closed");
+    const text = await fs.readFile(s.out, "utf8");
+    const message = warn[0].slice("  warn import report: Kiro sections not computed: ".length);
+    expect(text).toContain(`\n## Kiro collisions\nnot computed: ${message}\n\n## Unsourced Kiro files\nnot computed: ${message}\n`);
+    expect(text).toContain(`\n## Warnings (1)\n- import report: Kiro sections not computed: ${message}\n`);
+    expect(r.stdout.trimEnd().split("\n").at(-1)).toBe(`  report ${s.out}`);
+  });
+
+  it("the report cannot be written after all: the summary first, then the error, exit 1, the Forge written", async () => {
+    const s = await setup();
+    // --write-config creates craftar.yaml during the import, after the gate found nothing at that path
+    const target = path.join(s.ws, "craftar.yaml");
+    const r = run(s, ["--write-config", "--report", target]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toContain("created, 0 reused, 0 variants, 0 rejected");
+    expect(r.stdout).not.toContain("  report ");
+    expect(r.stderr).toContain("error: The Forge was written in full and the import succeeded; writing the report failed (");
+    expect(r.stderr).toContain("the summary above stands; re-run with another --report path to get the file");
+    expect((await listFiles(s.forge)).length).toBeGreaterThan(0);
+    expect(await fs.readFile(target, "utf8")).toContain("profile: acme"); // craftar.yaml, not a report
+  });
+});

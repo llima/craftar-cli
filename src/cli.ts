@@ -1282,8 +1282,6 @@ forge
       // Forge — so that is enforced, not assumed, and a plan never overwrites anything. Both
       // refusals come before any write; the comparison runs on real paths, so neither a `..`
       // segment nor a symlink can carry the target back into the Forge.
-      // Ruling 30: --save-plan skips the clean-tree check because the plan lives outside the Forge — so that is
-      // enforced, not assumed, and a plan never overwrites anything. Both refusals come before any write.
       const savePlanAbs = await gateOutsideForge(o.savePlan, f.root, SAVE_PLAN_GATE);
       const saved = await planFrom(base, variant, diff, o.profile);
       await fs.mkdir(path.dirname(savePlanAbs), { recursive: true });
