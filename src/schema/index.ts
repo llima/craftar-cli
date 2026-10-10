@@ -430,7 +430,14 @@ export const TEMPLATE_RULES = {
 export const TEMPLATE_KIND = /^[a-z][a-z0-9-]*$/;
 /** `<id>` or `<id>::<version>` (spec 32 §5.2): no separator, no space, no leading `-` or `.`. */
 export const TEMPLATE_PACKAGE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(::[0-9A-Za-z][0-9A-Za-z.+-]*)?$/;
-export const TEMPLATE_SOURCE = /^https:\/\/\S+$/;
+/**
+ * A source is an `https://` URL with a non-empty host of printable ASCII without `/`,
+ * then an optional path of printable ASCII. An empty authority hides a credential from
+ * `credentialFault`; no control character reaches a terminal.
+ */
+export const TEMPLATE_SOURCE = /^https:\/\/[\x21-\x2e\x30-\x7e]+(\/[\x21-\x7e]*)?$/;
+/** A key we can echo: an identifier-like name, nothing else (URLs, newlines) reaches an output. */
+export const TEMPLATE_KEY_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 export const DotnetNewTemplateSchema = z
   .object({
@@ -459,7 +466,11 @@ export const TemplatesSchema = z.array(
       if (!r.success) {
         for (const issue of r.error.issues) {
           if (issue.code === "unrecognized_keys") {
-            for (const key of issue.keys) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: TEMPLATE_RULES.unknownKey });
+            // An unknown key is named only when it is a name; otherwise the entry itself is the position.
+            for (const key of issue.keys) {
+              if (TEMPLATE_KEY_NAME.test(key)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: TEMPLATE_RULES.unknownKey });
+              else ctx.addIssue({ code: z.ZodIssueCode.custom, path: [], message: TEMPLATE_RULES.unknownKey });
+            }
           } else {
             ctx.addIssue({ code: z.ZodIssueCode.custom, path: issue.path, message: issue.message });
           }

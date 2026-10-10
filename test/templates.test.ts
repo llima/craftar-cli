@@ -148,6 +148,11 @@ describe("declaredTemplates — what the commands accept (spec 32 §5.2)", () =>
     expect(declaredTemplates({ name: "acme", templates: null }, LABEL)).toEqual({ declared: false, entries: [], warnings: [] });
     expect(declaredTemplates({ name: "acme", templates: [] }, LABEL)).toEqual({ declared: true, entries: [], warnings: [] });
   });
+
+  it("a source with a port, a path and a query is accepted as written", () => {
+    const source = "https://pkgs.example.com:8443/acme/nuget/v3/index.json?api-version=7.1&x=%20y";
+    expect(declaredTemplates({ name: "acme", templates: [{ kind: "dotnet-new", source, packages: ["A"] }] }, LABEL).entries[0]).toMatchObject({ source });
+  });
 });
 
 const LIST = "must be a list of entries, each with a kind";
@@ -190,6 +195,9 @@ describe("declaredTemplates — refusals name the position and the rule, never a
     ["a source starting with -", [dn({ source: `-${M}` })], at("templates[0].source", SRC)],
     ["a source with a space", [dn({ source: `https://${M}.example.com/a b` })], at("templates[0].source", SRC)],
     ["a source that is a number", [dn({ source: 7 })], at("templates[0].source", SRC)],
+    ["a source with no host", [dn({ source: `https:///user:${M}@pkgs.example.com/x` })], at("templates[0].source", SRC)],
+    ["a source with a control character", [dn({ source: `https://pkgs.example.com/\u001b[31m${M}` })], at("templates[0].source", SRC)],
+    ["an unknown key that is not a name", [dn({ [`https://u:${M}@h/x\nmore`]: 1 })], at("templates[0]", UNKNOWN_KEY)],
     ["a source with a user and a password", [dn({ source: `https://user:${M}@pkgs.example.com/v3/index.json` })], at("templates[0].source", CREDENTIAL)],
     ["a source with a user", [dn({ source: `https://${M}@pkgs.example.com/v3/index.json` })], at("templates[0].source", CREDENTIAL)],
     ["an unknown key on a dotnet-new entry", [dn({ feed: M })], at("templates[0].feed", UNKNOWN_KEY)],
