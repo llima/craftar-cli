@@ -18,6 +18,7 @@ import { stripBom, toLf } from "./text.js";
 import { editYamlText } from "./yaml-edit.js";
 import { concerned, workspaceAgainst, type ForgeWorkspace, type Planned, type RegistryState } from "./impact.js";
 import { plan, type MergedConfig } from "./sync.js";
+import { parseYamlText } from "./yaml-read.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
 // fidelity, correctness should not hinge on a glyph no diff viewer, editor or re-encoding shows.
@@ -797,7 +798,7 @@ async function findRecipeFile(recipesDir: string, name: string): Promise<string>
     const abs = path.join(recipesDir, f);
     let parsed: unknown;
     try {
-      parsed = YAML.parse(await fs.readFile(abs, "utf8"));
+      parsed = parseYamlText(f, await fs.readFile(abs, "utf8"));
     } catch {
       continue;
     }
@@ -1023,7 +1024,7 @@ export async function pruneCandidates(
     const rendered = await renderIngredientEdit(edit);
     let parsedRecipe: Recipe;
     try {
-      parsedRecipe = RecipeSchema.parse(YAML.parse(rendered));
+      parsedRecipe = RecipeSchema.parse(parseYamlText(edit.name, rendered));
     } catch {
       continue;
     }
@@ -1097,8 +1098,8 @@ export function profileRecipesEdit(raw: string, label: string, suffixed: string,
   });
 
   // Re-parse and verify
-  const parsed = ProfileSchema.parse(YAML.parse(stripBom(content)));
-  const original = ProfileSchema.parse(YAML.parse(stripBom(raw)));
+  const parsed = ProfileSchema.parse(parseYamlText(label, content));
+  const original = ProfileSchema.parse(parseYamlText(label, raw));
 
   // Build expected recipes list
   const origRecipes = [...original.recipes];
@@ -1334,7 +1335,7 @@ export async function pruneRecipes(
     for (const pw of profileWrites) {
       for (const prof of candidate.profiles) {
         if (prof.abs === pw.abs) {
-          const newProf = ProfileSchema.parse(YAML.parse(stripBom(pw.content)));
+          const newProf = ProfileSchema.parse(parseYamlText(prof.name, pw.content));
           editedProfiles.set(prof.name, newProf);
         }
       }

@@ -1,5 +1,5 @@
-import YAML from "yaml";
 import { toLf, stripBom } from "./text.js";
+import { parseYamlText } from "./yaml-read.js";
 
 export interface Parsed<T = Record<string, unknown>> {
   data: T;
@@ -19,7 +19,7 @@ export function parseFrontmatter<T = Record<string, unknown>>(input: string, opt
   let data: T;
   if (opts.loose) return { data: looseParse(m[1]) as T, body: text.slice(m[0].length), raw: m[1] };
   try {
-    data = (YAML.parse(m[1]) ?? {}) as T;
+    data = (parseYamlText("frontmatter", m[1]) ?? {}) as T;
   } catch {
     // Claude Code frontmatter is often "loose" (unquoted colons, commas). Fall back to line parsing.
     data = looseParse(m[1]) as T;

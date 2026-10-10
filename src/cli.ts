@@ -45,6 +45,7 @@ import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
+import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
@@ -1259,8 +1260,15 @@ forge
 
     let loadedPlan: UnifyPlan | undefined;
     if (o.plan) {
+      let parsed: unknown;
       try {
-        loadedPlan = UnifyPlanSchema.parse(YAML.parse(await fs.readFile(o.plan, "utf8")));
+        parsed = parseYamlText(o.plan, await fs.readFile(o.plan, "utf8"));
+      } catch (e) {
+        if (e instanceof YamlSyntaxError) fail(e.message);
+        throw e;
+      }
+      try {
+        loadedPlan = UnifyPlanSchema.parse(parsed);
       } catch (e) {
         fail(`${o.plan}: ${e instanceof Error ? e.message : String(e)}`);
       }

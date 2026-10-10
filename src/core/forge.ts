@@ -14,6 +14,7 @@ import {
   type Profile,
   type Recipe,
 } from "../schema/index.js";
+import { YamlSyntaxError, parseYamlText } from "./yaml-read.js";
 
 const execFileP = promisify(execFile);
 
@@ -46,10 +47,18 @@ export async function exists(p: string): Promise<boolean> {
 
 /** Parse YAML `text` read from `file` through `schema`; a syntax or schema error names the file. */
 export function parseYaml<T>(file: string, text: string, schema: { parse: (v: unknown) => T }): T {
+  const rel = path.relative(process.cwd(), file);
+  let parsed: unknown;
   try {
-    return schema.parse(YAML.parse(text) ?? {});
+    parsed = parseYamlText(rel, text) ?? {};
   } catch (e) {
-    throw new Error(`invalid ${path.relative(process.cwd(), file)}: ${(e as Error).message}`);
+    if (e instanceof YamlSyntaxError) throw e;
+    throw e;
+  }
+  try {
+    return schema.parse(parsed);
+  } catch (e) {
+    throw new Error(`invalid ${rel}: ${(e as Error).message}`);
   }
 }
 
