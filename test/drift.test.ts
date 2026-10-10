@@ -3,7 +3,9 @@ import path from "node:path";
 import YAML from "yaml";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCli } from "./helpers/cli.js";
-import { profile, recipe, rule, scenario } from "./helpers/forge.js";
+import { loadWorkspace, plan, readLock, status, apply } from "../src/core/sync.js";
+import { hashNormalized } from "../src/core/text.js";
+import { profile, recipe, rule, scenario, tmpDir } from "./helpers/forge.js";
 
 // Spec 30: what `sync`, `status` and `diff` do with a hand-edited file, and the `drift` commands over it.
 
@@ -259,5 +261,93 @@ describe("cli — drift show, columns", () => {
       "drift         .claude/rules/a.md             rule/a             forge: same  promote: yes\n" +
         "drift         .claude/rules/backend-node.md  rule/backend-node  forge: same  promote: yes\n",
     );
+  });
+});
+
+describe("cli — drift discard", () => {
+  const NOW_DRIFT = "hand-edited since last sync — `craftar drift show <path>`, then `craftar drift discard` or `craftar drift promote`";
+  const NOW_ORPHAN = "no longer produced by the Forge but hand-edited — kept; `craftar drift discard <path>` removes it, or delete it yourself";
+  const ONE =
+    `discarding 1 hand edit(s): ${A}\n` + HEADER + "  wrote 1, removed 0 orphan(s), skipped 2\n" + `  + ${A}\n` + `  ! ${B}  ${NOW_DRIFT}\n` + `  ! ${C}  ${NOW_ORPHAN}\n`;
+  const TWO = (verb: string) =>
+    `discarding 2 hand edit(s): ${A}, ${C}\n` + HEADER + `  ${verb} 1, removed 1 orphan(s), skipped 1\n` + `  + ${A}\n` + `  - ${C}  (hand-edited orphan: discarded)\n` + `  ! ${B}  ${NOW_DRIFT}\n`;
+  const lockBytes = (ws: string) => fs.readFile(path.join(ws, "craftar.lock"));
+  const hashes = async (f: Awaited<ReturnType<typeof F>>) => Object.fromEntries((await f.lock()).files.map((e) => [e.path, e.hash]));
+
+  it("one drifted file is regenerated; the other hand edits and their lock entries stay", async () => {
+    const f = await F3();
+    const r = runCli(["drift", "discard", A, "--workspace", f.ws]);
+    expect([r.code, r.stderr, r.stdout]).toEqual([0, "", ONE]);
+    expect([await f.read(A), await f.read(B), await f.read(C)]).toEqual(["A one\nA two\n", "B one\nB two\nhand b\n", "C one\nhand c\n"]);
+    expect(await hashes(f)).toEqual({ [A]: hashNormalized("A one\nA two\n"), [B]: HASH.b, [C]: HASH.c });
+    expect(hashNormalized("A one\nA two\n")).toBe(HASH.a);
+  });
+
+  it("a drift and a hand-edited orphan, arguments out of order: one regenerated, one removed", async () => {
+    const f = await F3();
+    const r = runCli(["drift", "discard", C, `./${A}`, "--workspace", f.ws]);
+    expect([r.code, r.stderr, r.stdout]).toEqual([0, "", TWO("wrote")]);
+    await expect(fs.stat(path.join(f.ws, C))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await f.lock()).files.map((e) => e.path)).toEqual([A, B]);
+  });
+
+  it("a repeated path counts once", async () => {
+    const f = await F3();
+    expect(runCli(["drift", "discard", A, A, "--workspace", f.ws]).stdout).toBe(ONE);
+  });
+
+  it("a path that is not drifted fails the whole run, naming every offender; nothing is written", async () => {
+    const f = await F();
+    await f.driftA();
+    const before = await lockBytes(f.ws);
+    const r = runCli(["drift", "discard", A, B, "nope.md", "--workspace", f.ws]);
+    expect([r.code, r.stdout, r.stderr]).toEqual([1, "", `error: not drifted: ${B} (unchanged), nope.md (not managed) — nothing was written\n`]);
+    expect(await f.read(A)).toBe("A one\nA two\nhand a\n");
+    expect((await lockBytes(f.ws)).equals(before)).toBe(true);
+  });
+
+  it("--dry-run says what it would do and touches neither the files nor the lock", async () => {
+    const f = await F3();
+    const before = await lockBytes(f.ws);
+    const r = runCli(["drift", "discard", C, `./${A}`, "--dry-run", "--workspace", f.ws]);
+    expect([r.code, r.stderr, r.stdout]).toEqual([0, "", TWO("would write")]);
+    expect([await f.read(A), await f.read(B), await f.read(C)]).toEqual(["A one\nA two\nhand a\n", "B one\nB two\nhand b\n", "C one\nhand c\n"]);
+    expect((await lockBytes(f.ws)).equals(before)).toBe(true);
+  });
+
+  it("the run is a sync: a pending update of another file is written with it", async () => {
+    const f = await F();
+    await f.driftA();
+    await f.updateB();
+    const r = runCli(["drift", "discard", A, "--workspace", f.ws]);
+    expect([r.code, r.stdout]).toEqual([0, `discarding 1 hand edit(s): ${A}\n` + HEADER + "  wrote 2, removed 0 orphan(s), skipped 0\n" + `  + ${A}\n` + `  + ${B}\n`]);
+    expect(await f.read(B)).toBe("B one\nB changed\n");
+  });
+
+  it("it registers the workspace as sync does, and not under --dry-run", async () => {
+    for (const dry of [false, true]) {
+      const s = await scenario(
+        { ingredients: [rule("a", "A one\nA two\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
+        { config: { profile: "acme" } },
+      );
+      cleanups.push(s.cleanup);
+      // Synced through the API, so nothing is registered before the command under test.
+      const w = await loadWorkspace(s.wsRoot);
+      const p = await plan(w);
+      await apply(w, p, await status(w, p, await readLock(w.root)));
+      await fs.appendFile(path.join(s.wsRoot, A), "hand a\n");
+      const env = { CRAFTAR_HOME: await tmpDir() };
+      expect(runCli(["drift", "discard", A, ...(dry ? ["--dry-run"] : []), "--workspace", s.wsRoot], { env }).code).toBe(0);
+      const listed = JSON.parse(runCli(["workspaces", "--json"], { env }).stdout).workspaces.map((x: { path: string }) => x.path);
+      expect(listed).toEqual(dry ? [] : [await fs.realpath(s.wsRoot)]);
+    }
+  });
+
+  it("no path is commander's own error; nothing is written", async () => {
+    const f = await F3();
+    const before = await lockBytes(f.ws);
+    const r = runCli(["drift", "discard", "--workspace", f.ws]);
+    expect([r.code, r.stdout, r.stderr]).toEqual([1, "", "error: missing required argument 'path'\n"]);
+    expect((await lockBytes(f.ws)).equals(before)).toBe(true);
   });
 });

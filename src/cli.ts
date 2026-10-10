@@ -174,7 +174,7 @@ function refusalBlock(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): b
  * A writing sync on a planned workspace, then its report: `apply`, the registration of spec 21 (unless
  * `CRAFTAR_NO_REGISTRY`), and the lines `sync` prints. `sync` and `init` both call it (spec 23 §5.2).
  */
-async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lock | null, opts: { dryRun?: boolean; overwriteDrift?: boolean } = {}): Promise<ApplyResult> {
+async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lock | null, opts: { dryRun?: boolean; overwriteDrift?: boolean; overwritePaths?: ReadonlySet<string> } = {}): Promise<ApplyResult> {
   const r = await apply(ws, p, st, opts);
   // A writing sync records the workspace (spec 21 §4.1); the registry is an index, so a failure is a warning.
   let registryWarning: string | null = null;
@@ -192,7 +192,7 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
   if (fl) console.log(fl);
   console.log(`  ${verb} ${pc.green(String(r.written.length))}, removed ${pc.magenta(String(r.removed.length))} orphan(s), skipped ${pc.yellow(String(r.skipped.length))}`);
   for (const f of r.written) console.log(`  ${pc.green("+")} ${f}`);
-  for (const f of r.removed) console.log(`  ${pc.magenta("-")} ${f}  (orphan: no longer produced by the Forge)`);
+  for (const f of r.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : "orphan: no longer produced by the Forge"})`);
   for (const s of r.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
   for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   if (registryWarning) console.log(`  ${pc.yellow("warn")} ${registryWarning}`);
@@ -489,6 +489,28 @@ drift
       console.log(pc.bold(`+++ ${named.path} (forge: no longer produced — \`craftar drift discard\` removes it)`));
       console.log(renderDiff((await readText(path.join(ws.root, named.path))) ?? "", "", DIFF_PAINT));
     } else await printFileDiff(ws.root, named);
+  });
+
+drift
+  .command("discard")
+  .description("Regenerate the named hand-edited files from the Forge (their edits are lost) and remove a named hand-edited file the Forge no longer produces; otherwise a sync like any other")
+  .argument("<path...>", "the hand-edited files, as `craftar status` prints them")
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--dry-run", "show the plan, write nothing", false)
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
+  .action(async (given: string[], o: { workspace: string; dryRun: boolean; offline: boolean }) => {
+    const ws = await loadWorkspace(o.workspace, load(o, "sync"));
+    const p = await plan(ws);
+    const lock = await readLock(ws.root);
+    const st = await status(ws, p, lock);
+    const paths = [...new Set(given.map(statusPath))];
+    // Every refusal comes before the first write: one path that is not a hand edit stops the whole run.
+    const stateOf = new Map(st.map((s) => [s.path, s.state]));
+    const not = paths.filter((x) => stateOf.get(x) !== "drift" && stateOf.get(x) !== "orphan-drift");
+    if (not.length) fail(`not drifted: ${not.map((x) => `${x} (${stateOf.get(x) ?? "not managed"})`).join(", ")} — nothing was written`);
+    const overwritePaths = new Set(paths);
+    console.log(`discarding ${paths.length} hand edit(s): ${st.filter((s) => overwritePaths.has(s.path)).map((s) => s.path).join(", ")}`);
+    await applyAndReport(ws, p, st, lock, { dryRun: o.dryRun, overwritePaths });
   });
 
 /* ---------------------------------------------------------------- add / remove recipe */
