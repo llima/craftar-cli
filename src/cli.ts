@@ -132,8 +132,8 @@ program
  * The refusal of spec 29 §4.1 for a command that goes on to print or exit by itself: the block on stderr, as
  * `fail()` would print it, without exiting. Says whether there was one.
  */
-function refusalBlock(unset: UnsetParam[]): boolean {
-  if (unset.length) console.error(pc.red("error: ") + unsetRefusal(unset));
+function refusalBlock(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): boolean {
+  if (unset.length) console.error(pc.red("error: ") + unsetRefusal(unset, opts));
   return unset.length > 0;
 }
 
@@ -305,7 +305,7 @@ program
       // first sync is not run. exitCode, not fail(): the `again` line still follows the block.
       if (unset.length) {
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
-        console.error(pc.red("error: ") + unsetRefusal(unset, { thenSync: true }));
+        refusalBlock(unset, { thenSync: true });
         again();
         process.exitCode = 1;
         return;
@@ -342,6 +342,8 @@ program
       if (refused) process.exitCode = 1;
       if (bad.length) {
         console.log(pc.red(`\n${bad.length} file(s) out of sync`));
+        // On the refusal path the exit is exitCode's, so nothing queued is cut (spec 29 §4.1)
+        if (refused) return;
         process.exit(1);
       }
       if (!refused) console.log(pc.green("\nworkspace in sync"));

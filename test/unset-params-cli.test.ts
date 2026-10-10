@@ -84,6 +84,16 @@ describe("sync with an unset declared parameter", () => {
   });
 });
 
+describe("sync --check with an unset declared parameter and files out of sync", () => {
+  it("(control) prints the listing, the block and the out-of-sync line, and exits 1", async () => {
+    const s = await fresh();
+    const r = runCli(["sync", "--check", "--workspace", s.wsRoot]);
+    expect([r.code, r.stderr]).toEqual([1, BLOCK]);
+    expect(r.stdout).toContain("2 file(s) out of sync");
+    expect(r.stdout).not.toContain("workspace in sync");
+  });
+});
+
 describe("status with an unset declared parameter", () => {
   it("prints its listing, then the block on stderr, and exits 1", async () => {
     const s = await fresh();
@@ -134,6 +144,8 @@ describe("diff with an unset declared parameter", () => {
     const s = await syncedThenDeclared();
     const r = runCli(["diff", "--exit-code", ".claude/rules/a.md", "--workspace", s.wsRoot]);
     expect(r.code).toBe(0);
+    // the block is still said: only the exit code answers for the one file
+    expect(r.stderr).toContain(BLOCK);
   });
 });
 
@@ -152,7 +164,7 @@ describe("init and the recipe commands with an unset declared parameter", () => 
     expect(r.code).toBe(1);
     expect(r.stderr).toBe(
       [
-        "error: 1 declared parameter(s) have no value — nothing written",
+        "error: 1 declared parameter(s) have no value — craftar.yaml written, sync not run",
         "  org  declared by rule/a · cited by rule/a, rule/b",
         "  fix: set each under params in the profile, or under overrides.params in craftar.yaml, then run craftar sync",
         "",

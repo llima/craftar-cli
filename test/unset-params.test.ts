@@ -126,6 +126,8 @@ describe("unset declared parameters — the block and the gate", () => {
         "  fix: set each under params in the profile, or under overrides.params in craftar.yaml",
       ].join("\n"),
     );
+    // init's form: it has just written craftar.yaml, so its first line does not say "nothing written"
+    expect(unsetRefusal(unset, { thenSync: true }).split("\n")[0]).toBe("2 declared parameter(s) have no value — craftar.yaml written, sync not run");
     expect(unsetRefusal(unset, { thenSync: true }).split("\n").at(-1)).toBe("  fix: set each under params in the profile, or under overrides.params in craftar.yaml, then run craftar sync");
     expect(unsetSummary(unset)).toBe("declared parameter(s) with no value: apiPort, org");
   });

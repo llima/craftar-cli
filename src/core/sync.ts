@@ -327,11 +327,14 @@ export function unsetDeclared(p: Plan): UnsetParam[] {
   return p.missingParams.filter((m) => m.declaredBy.length > 0).map((m) => ({ key: m.key, declaredBy: m.declaredBy, citedBy: m.refs }));
 }
 
-/** The refusal block of spec 29 §4.1, without the `error: ` prefix; `thenSync` is `init`'s fix line. */
+/**
+ * The refusal block of spec 29 §4.1, without the `error: ` prefix. `thenSync` is `init`'s form: it has just written
+ * `craftar.yaml`, so its first line says that instead of "nothing written", and its fix line ends with the sync to run.
+ */
 export function unsetRefusal(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): string {
   const width = Math.max(...unset.map((u) => u.key.length));
   return [
-    `${unset.length} declared parameter(s) have no value — nothing written`,
+    `${unset.length} declared parameter(s) have no value — ${opts.thenSync ? "craftar.yaml written, sync not run" : "nothing written"}`,
     ...unset.map((u) => `  ${u.key.padEnd(width)}  declared by ${u.declaredBy.join(", ")} · cited by ${u.citedBy.join(", ")}`),
     `  fix: set each under params in the profile, or under overrides.params in craftar.yaml${opts.thenSync ? ", then run craftar sync" : ""}`,
   ].join("\n");
