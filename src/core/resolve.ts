@@ -3,6 +3,12 @@ import type { IngredientRef, Profile, Sections, Target, WorkspaceConfig } from "
 import { deepMerge } from "./merge.js";
 import { outName } from "../emitters/shared.js";
 
+/** Builds the "profile not found" message (spec 28 §5.2, N5). */
+export function profileNotFoundMessage(profile: string, profileNames: string[]): string {
+  const names = profileNames.join(", ") || "none";
+  return `profile "${profile}" not found in Forge (${names})`;
+}
+
 export interface ResolvedIngredient extends LoadedIngredient {
   /** Recipe chain that brought this ingredient in (last one wins). */
   via: string[];
@@ -53,7 +59,7 @@ export function recipeOrder(forge: Forge, wanted: string[], origin: string): str
  */
 export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
   const profile = forge.profiles.get(ws.profile);
-  if (!profile) throw new Error(`profile "${ws.profile}" not found in Forge (${[...forge.profiles.keys()].join(", ") || "none"})`);
+  if (!profile) throw new Error(profileNotFoundMessage(ws.profile, [...forge.profiles.keys()]));
 
   const warnings: string[] = [];
   // recipeOrder takes one origin for the whole list, so a workspace's own names are checked first (spec 22 §14 item 7).

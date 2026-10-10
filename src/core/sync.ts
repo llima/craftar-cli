@@ -6,7 +6,7 @@ import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forg
 import { resolve, substitute, type Resolution, type ResolvedIngredient, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
 import { climbsOut, hashNormalized, isUtf8, legacyHash, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
-import { classifyForge, credentialFault, ensureTree, ForgeFetchError, NoCachedCopyError, type CachedTree } from "./remote.js";
+import { classifyForge, credentialFault, ensureTree, ForgeFetchError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
 import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
@@ -76,6 +76,16 @@ export interface LoadOptions {
   home?: string;
   /** Refuse a remote Forge with this message before anything is fetched (`forge unify`, spec 13 §4.4). */
   refuseRemote?: (url: string) => string;
+  /** Test seam: counts or fails the git calls of a remote load; absent, `defaultGit`. */
+  git?: GitRunner;
+}
+
+/** The result of loading a Forge by its source before a profile is known (spec 28 §5.2). */
+export interface LoadedForge {
+  forge: Forge;
+  origin: ForgeOrigin;
+  /** Warnings of the load itself: the path Forge's ignored ref, the --offline / fetch-failure line. */
+  warnings: string[];
 }
 
 
@@ -151,19 +161,44 @@ export function mergeWorkspaceConfig(base: unknown, localDoc: unknown | null): M
 export async function loadForgeFor(root: string, merged: MergedConfig, opts: LoadOptions = {}): Promise<Workspace> {
   root = path.resolve(root);
   const { config, fromLocalFile } = merged;
-  const warnings = [...merged.warnings];
-  if (classifyForge(config.forge) === "url") {
-    if (opts.refuseRemote) throw new Error(opts.refuseRemote(config.forge));
-    const { tree, origin, warning } = await remoteTree(config.forge, config.ref ?? null, opts, fromLocalFile);
+  const loaded = await loadForgeSource(root, config.forge, config.ref ?? null, { ...opts, fromLocalFile });
+  return workspaceOf(root, merged, loaded);
+}
+
+/**
+ * Builds a Workspace from an already-loaded Forge (spec 28 §5.2): the order of `Workspace.warnings`
+ * is path → `[...loaded.warnings, ...merged.warnings]`, remote → `[...merged.warnings, ...loaded.warnings]`.
+ */
+export function workspaceOf(root: string, merged: MergedConfig, loaded: LoadedForge): Workspace {
+  const warnings: string[] =
+    loaded.origin.kind === "path"
+      ? [...loaded.warnings, ...merged.warnings]
+      : [...merged.warnings, ...loaded.warnings];
+  return { root, config: merged.config, forge: loaded.forge, origin: loaded.origin, warnings };
+}
+
+/** `source` is the value `craftar.yaml › forge` holds: a URL, or a path relative to `root`. */
+export async function loadForgeSource(
+  root: string,
+  source: string,
+  ref: string | null,
+  opts: LoadOptions & { fromLocalFile?: boolean } = {},
+): Promise<LoadedForge> {
+  root = path.resolve(root);
+  const fromLocalFile = opts.fromLocalFile ?? false;
+  const warnings: string[] = [];
+  if (classifyForge(source) === "url") {
+    if (opts.refuseRemote) throw new Error(opts.refuseRemote(source));
+    const { tree, origin, warning } = await remoteTree(source, ref, opts, fromLocalFile);
     if (warning) warnings.push(warning);
-    return { root, config, forge: await loadForge(tree), origin, warnings };
+    return { forge: await loadForge(tree), origin, warnings };
   }
-  const forgeRoot = path.resolve(root, config.forge);
+  const forgeRoot = path.resolve(root, source);
   if (!(await exists(forgeRoot))) throw new Error(`Forge not found at ${forgeRoot}`);
   // A path means the working tree as it is; a ref beside it is ignored, said out loud (Ruling 9).
-  if (config.ref !== undefined) warnings.unshift(`ref "${config.ref}" is ignored: the Forge is a path (${config.forge}), read as its working tree`);
-  const origin: ForgeOrigin = { kind: "path", source: config.forge, ref: null, defaultBranch: null, fetched: false, fromLocalFile };
-  return { root, config, forge: await loadForge(forgeRoot), origin, warnings };
+  if (ref !== null) warnings.push(`ref "${ref}" is ignored: the Forge is a path (${source}), read as its working tree`);
+  const origin: ForgeOrigin = { kind: "path", source, ref: null, defaultBranch: null, fetched: false, fromLocalFile };
+  return { forge: await loadForge(forgeRoot), origin, warnings };
 }
 
 const short = (sha: string) => sha.slice(0, 8);
@@ -178,6 +213,7 @@ async function remoteTree(
   const home = resolveHome(opts.home);
   const mode = opts.mode ?? "read";
   const offline = opts.offline || mode === "no-fetch";
+  const git = opts.git;
   const origin = (t: CachedTree): ForgeOrigin => ({
     kind: "remote",
     source: url,
@@ -191,7 +227,7 @@ async function remoteTree(
   if (offline) {
     let t: CachedTree;
     try {
-      t = await ensureTree(url, ref, { home, offline: true });
+      t = await ensureTree(url, ref, { home, offline: true, git });
     } catch (e) {
       if (!(e instanceof NoCachedCopyError)) throw e;
       // `targets` (no-fetch) takes no --offline: point at a command that fetches.
@@ -200,7 +236,7 @@ async function remoteTree(
     return { tree: t.dir, origin: origin(t), warning: opts.offline ? `Forge ${url} not fetched (--offline) — using ${used(t)}` : null };
   }
   try {
-    const t = await ensureTree(url, ref, { home });
+    const t = await ensureTree(url, ref, { home, git });
     return { tree: t.dir, origin: origin(t), warning: null };
   } catch (e) {
     if (!(e instanceof ForgeFetchError)) throw e;
@@ -210,7 +246,7 @@ async function remoteTree(
       );
     if (mode === "sync")
       throw new Error(`cannot fetch the Forge ${url}: ${e.gitMessage} — run with --offline to use the cached copy (${short(e.cached.commit)} fetched ${e.cached.fetchedAt ?? "never"})`);
-    const t = await ensureTree(url, ref, { home, offline: true });
+    const t = await ensureTree(url, ref, { home, offline: true, git });
     return { tree: t.dir, origin: origin(t), warning: `Forge ${url} not fetched (${e.gitMessage}) — using ${used(t)}` };
   }
 }

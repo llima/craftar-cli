@@ -4324,10 +4324,14 @@ describe("cli — craftar init (spec 23 §9.2)", () => {
   });
 
   it("--forge and --profile are required (N2)", async () => {
+    // Test 1: --profile missing → N2 with our message (replaces pinned commander line)
     const s = await setup();
-    const r = s.run(["init", "--workspace", path.join(s.root, "ws"), "--forge", s.forge]);
+    const ws = path.join(s.root, "ws");
+    const r = s.run(["init", "--workspace", ws, "--forge", s.forge]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toBe("error: required option '--profile <name>' not specified\n");
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: --profile is required when craftar init does not run in a terminal — pass it, or run craftar init in a terminal to be asked\n");
+    expect(await exists(ws)).toBe(false);
   });
 });
 
@@ -6030,5 +6034,324 @@ describe("cli — craftar cache prune (spec 26 §4)", () => {
     const out = runCli(["cache", "prune", "--help"]);
     expect(out.code).toBe(0);
     for (const flag of ["--dry-run", "--workspace <dir>", "--json"]) expect(out.stdout).toContain(flag);
+  });
+});
+
+
+describe("cli — pinned before spec 28", () => {
+  /**
+   * Pin the order of two or more states on `craftar forge impact` rows and `next sync:` lines.
+   * The order reads NEXT_SYNC_STATES in src/cli.ts (and FILE_STATE_ORDER_MAP in src/core/impact.ts
+   * for --json); spec 28 will move the counting half of nextSyncLine to the core over the one
+   * FileState record. These tests fail when the order moves.
+   */
+
+  const SPEC = {
+    ingredients: [
+      rule("a", "# A\n"),
+      rule("b", "# B\n"),
+      rule("c", "# C\n"),
+      rule("d", "# D\n"),
+    ],
+    recipes: [recipe("base", ["rule/a", "rule/b", "rule/c"])],
+    profiles: [profile("acme", ["base"])],
+  };
+
+  async function setup() {
+    const root = await tmpDir("craftar-pinned-spec28-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const forge = path.join(root, "forge");
+    await makeForge(forge, SPEC);
+    const run = (args: string[], env: NodeJS.ProcessEnv = {}) => runCli(args, { env: { CRAFTAR_HOME: home, ...env } });
+    const registry = path.join(home, "registry.json");
+    return { root, home, forge, run, registry };
+  }
+
+  it("test 1: a row with three states in FileState order — new, update, drift, orphan", async () => {
+    const s = await setup();
+    // Create a workspace with rules a, b, c
+    const ws = path.join(s.root, "ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+    expect(s.run(["sync", "--workspace", ws]).code).toBe(0);
+
+    // Hand-edit rule a → drift
+    await fs.writeFile(path.join(ws, ".claude/rules/a.md"), "# A edited by hand\n");
+    // Change rule b in the Forge → update
+    await fs.writeFile(path.join(s.forge, "ingredients/rules/b/rule.md"), "# B changed in Forge\n");
+    // Add rule d to the recipe → new
+    const baseRecipe = YAML.parse(await fs.readFile(path.join(s.forge, "recipes/base.yaml"), "utf8"));
+    baseRecipe.ingredients.push("rule/d");
+    await fs.writeFile(path.join(s.forge, "recipes/base.yaml"), YAML.stringify(baseRecipe));
+    // Remove rule c from the recipe → orphan
+    baseRecipe.ingredients = baseRecipe.ingredients.filter((i: string) => i !== "rule/c");
+    await fs.writeFile(path.join(s.forge, "recipes/base.yaml"), YAML.stringify(baseRecipe));
+
+    const realWs = await fs.realpath(ws);
+    const realForge = await fs.realpath(s.forge);
+
+    const r = s.run(["forge", "impact", "--forge", s.forge]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+
+    expect(r.stdout).toBe(
+      `craftar forge impact — ${realForge} · 1 registered workspace (1 by path)\n` +
+      `  ${realWs}  acme  1 new, 1 update, 1 drift, 1 orphan\n`
+    );
+  });
+
+  it("test 2: the same counts through --json — keys in FileState order", async () => {
+    const s = await setup();
+    // Create a workspace with rules a, b, c
+    const ws = path.join(s.root, "ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+    expect(s.run(["sync", "--workspace", ws]).code).toBe(0);
+
+    // Hand-edit rule a → drift
+    await fs.writeFile(path.join(ws, ".claude/rules/a.md"), "# A edited by hand\n");
+    // Change rule b in the Forge → update
+    await fs.writeFile(path.join(s.forge, "ingredients/rules/b/rule.md"), "# B changed in Forge\n");
+    // Add rule d to the recipe → new
+    const baseRecipe = YAML.parse(await fs.readFile(path.join(s.forge, "recipes/base.yaml"), "utf8"));
+    baseRecipe.ingredients.push("rule/d");
+    await fs.writeFile(path.join(s.forge, "recipes/base.yaml"), YAML.stringify(baseRecipe));
+    // Remove rule c from the recipe → orphan
+    baseRecipe.ingredients = baseRecipe.ingredients.filter((i: string) => i !== "rule/c");
+    await fs.writeFile(path.join(s.forge, "recipes/base.yaml"), YAML.stringify(baseRecipe));
+
+    const realWs = await fs.realpath(ws);
+    const realForge = await fs.realpath(s.forge);
+
+    const r = s.run(["forge", "impact", "--forge", s.forge, "--json"]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+
+    const out = JSON.parse(r.stdout);
+    expect(out.forge).toBe(realForge);
+
+    // Find the workspace row
+    const row = out.workspaces.find((w: { path: string }) => w.path === realWs);
+    expect(row).toBeDefined();
+
+    // The counts object's keys must be in FileState order: new, update, drift, orphan
+    expect(JSON.stringify(Object.keys(row.counts))).toBe(JSON.stringify(["new", "update", "drift", "orphan"]));
+    expect(row.counts).toEqual({ new: 1, update: 1, drift: 1, orphan: 1 });
+  });
+
+  it("test 3: next sync: with new before collision — 3 new, 1 collision", async () => {
+    // A SEPARATE Forge for this test: four rules a, b, c, d
+    const SPEC2 = {
+      ingredients: [
+        rule("a", "# A\n"),
+        rule("b", "# B\n"),
+        rule("c", "# C\n"),
+        rule("d", "# D\n"),
+      ],
+      recipes: [recipe("base", ["rule/a", "rule/b", "rule/c", "rule/d"])],
+      profiles: [profile("acme", ["base"])],
+    };
+
+    const root = await tmpDir("craftar-pinned-spec28-nextsync-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const forge = path.join(root, "forge");
+    await makeForge(forge, SPEC2);
+    const run = (args: string[], env: NodeJS.ProcessEnv = {}) => runCli(args, { env: { CRAFTAR_HOME: home, ...env } });
+
+    // Create workspace dir with a pre-existing .claude/rules/a.md that differs → collision
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, {
+      ".claude/rules/a.md": "# My own A\n",
+    });
+
+    const r = run(["init", "--workspace", ws, "--forge", forge, "--profile", "acme", "--no-sync"]);
+    expect(r.code, r.stderr).toBe(0);
+
+    const lines = r.stdout.split("\n");
+    // The next sync: line must have new before collision
+    expect(lines[2]).toBe("next sync: 3 new, 1 collision — run `craftar sync`");
+  });
+});
+
+
+describe("cli — craftar init off a terminal (spec 28 §4.5)", () => {
+  const SPEC = {
+    ingredients: [rule("a", "# A\n"), rule("b", "# B\n"), rule("p", "# P {{nope}}\n")],
+    recipes: [recipe("base", ["rule/a"]), recipe("extra", ["rule/b"]), recipe("ph", ["rule/p"])],
+    profiles: [profile("acme", ["base"])],
+  };
+
+  /** A temporary root with its own CRAFTAR_HOME and a path Forge; workspaces are siblings of the Forge. */
+  async function setup() {
+    const root = await tmpDir("craftar-init-cli-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const forge = path.join(root, "forge");
+    await makeForge(forge, SPEC);
+    const run = (args: string[], env: NodeJS.ProcessEnv = {}) => runCli(args, { env: { CRAFTAR_HOME: home, ...env } });
+    const init = (ws: string, extra: string[] = [], env: NodeJS.ProcessEnv = {}) =>
+      run(["init", "--workspace", ws, "--forge", forge, "--profile", "acme", ...extra], env);
+    const registry = path.join(home, "registry.json");
+    return { root, home, forge, run, init, registry };
+  }
+
+  it("test 2: --forge missing → N2", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "ws");
+    const r = s.run(["init", "--workspace", ws, "--profile", "acme"]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: --forge is required when craftar init does not run in a terminal — pass it, or run craftar init in a terminal to be asked\n");
+    expect(await exists(ws)).toBe(false);
+  });
+
+  it("test 3: both --forge and --profile missing → N2", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "ws");
+    const r = s.run(["init", "--workspace", ws]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: --forge and --profile are required when craftar init does not run in a terminal — pass them, or run craftar init in a terminal to be asked\n");
+    expect(await exists(ws)).toBe(false);
+  });
+
+  it("test 4: N1 before N2 — craftar.yaml already exists", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: elsewhere\nprofile: other\n" });
+    const r = s.run(["init", "--workspace", ws, "--forge", s.forge]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(`error: craftar.yaml already exists in ${ws} — change recipes with craftar add recipe / remove recipe, or edit it\n`);
+    // craftar.yaml unchanged
+    expect(await fs.readFile(path.join(ws, "craftar.yaml"), "utf8")).toBe("forge: elsewhere\nprofile: other\n");
+  });
+
+  it("test 5: N9 before N2 — --workspace is a file", async () => {
+    const s = await setup();
+    const file = path.join(s.root, "a-file");
+    await fs.writeFile(file, "x\n");
+    const r = s.run(["init", "--workspace", file, "--forge", s.forge]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(`error: cannot use ${file} as a workspace: it is not a directory\n`);
+  });
+
+  it("test 6: N7 before N2 — unknown target", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "ws");
+    const r = s.run(["init", "--workspace", ws, "--forge", s.forge, "--targets", "nope"]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe('error: unknown target "nope" (claude-code, kiro, agents-md)\n');
+    expect(await exists(ws)).toBe(false);
+  });
+
+  it("test 7: N3 before N2 — credential in --forge, value never printed", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "ws");
+    const secret = "s3" + "cr3t";
+    const r = s.run(["init", "--workspace", ws, "--forge", `https://alice:${secret}@example.invalid/f.git`]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: --forge holds credentials in the URL — remove them and let git authenticate (credential helper, SSH agent; see README › Remote Forge)\n");
+    expect(r.stdout + r.stderr).not.toContain(secret);
+    expect(await exists(ws)).toBe(false);
+  });
+
+  it("test 8: N2 reads no file — craftar.local.yaml invalid YAML does not cause error before N2", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "ws");
+    await writeFiles(ws, { "craftar.local.yaml": "forge: [\n" });
+    const r = s.run(["init", "--workspace", ws, "--forge", s.forge]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    // N2 message, not a YAML error
+    expect(r.stderr).toBe("error: --profile is required when craftar init does not run in a terminal — pass it, or run craftar init in a terminal to be asked\n");
+    // craftar.local.yaml unchanged, no craftar.yaml created
+    expect(await fs.readFile(path.join(ws, "craftar.local.yaml"), "utf8")).toBe("forge: [\n");
+    expect(await exists(path.join(ws, "craftar.yaml"))).toBe(false);
+  });
+
+  it("test 9: flags mode is untouched by local file read once — no again line", async () => {
+    const s = await setup();
+    const ws = path.join(s.root, "ws");
+    await writeFiles(ws, { "craftar.local.yaml": "targets: [kiro]\n" });
+    const r = s.init(ws, ["--no-sync"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout.split("\n")[1]).toBe("  forge ../forge · profile acme · recipes base · targets kiro (from craftar.local.yaml)");
+    expect(r.stdout.split("\n").filter((l) => l.startsWith("  again "))).toEqual([]);
+  });
+
+  it("test 10: --help shows the updated option descriptions", async () => {
+    // Commander wraps lines at ~80 columns. The filter gets lines matching --forge or --profile,
+    // which picks the first line of each option (before wrapping continues on indented lines).
+    const out = runCli(["init", "--help"]);
+    expect(out.code).toBe(0);
+    // Check that the help text contains the new description keywords (wrapped across lines)
+    expect(out.stdout).toContain("--forge <dir|url>");
+    expect(out.stdout).toContain("--profile <name>");
+    // The text "asked for in a terminal when" appears before wrapping
+    expect(out.stdout).toContain("asked for in a terminal when");
+    // Check the starting parts match what we expect (lines are wrapped by commander)
+    const lines = out.stdout.split("\n").filter((l) => /^\s+--forge|^\s+--profile/.test(l)).map((l) => l.trim());
+    expect(lines).toEqual([
+      "--forge <dir|url>       the Forge: a directory (written relative to the",
+      "--profile <name>        the client profile in the Forge; asked for in a",
+    ]);
+  });
+});
+
+
+describe("cli — init under a file (spec 28 §14)", () => {
+  const SPEC = {
+    ingredients: [rule("a", "# A\n")],
+    recipes: [recipe("base", ["rule/a"])],
+    profiles: [profile("acme", ["base"])],
+  };
+
+  async function setup() {
+    const root = await tmpDir("craftar-init-under-file-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const forge = path.join(root, "forge");
+    await makeForge(forge, SPEC);
+    const run = (args: string[], env: NodeJS.ProcessEnv = {}) => runCli(args, { env: { CRAFTAR_HOME: home, ...env } });
+    return { root, home, forge, run };
+  }
+
+  it("test 1: init --workspace <file>/ws → N9 naming the file", async () => {
+    const s = await setup();
+    const f = path.join(s.root, "regular_file");
+    await fs.writeFile(f, "content\n");
+    const r = s.run(["init", "--workspace", `${f}/ws`, "--forge", s.forge, "--profile", "acme"]);
+    expect([r.code, r.stdout, r.stderr]).toEqual([1, "", `error: cannot use ${f} as a workspace: it is not a directory\n`]);
+    expect(await fs.readFile(f, "utf8")).toBe("content\n");
+  });
+
+  it("test 2: two levels down --workspace <file>/a/b → N9 naming the file", async () => {
+    const s = await setup();
+    const f = path.join(s.root, "regular_file");
+    await fs.writeFile(f, "content\n");
+    const r = s.run(["init", "--workspace", `${f}/a/b`, "--forge", s.forge, "--profile", "acme"]);
+    expect([r.code, r.stdout, r.stderr]).toEqual([1, "", `error: cannot use ${f} as a workspace: it is not a directory\n`]);
+  });
+
+  it("test 3: off a terminal with --profile missing and --workspace <file>/ws → N9, not N2", async () => {
+    const s = await setup();
+    const f = path.join(s.root, "regular_file");
+    await fs.writeFile(f, "content\n");
+    const r = s.run(["init", "--workspace", `${f}/ws`, "--forge", s.forge]);
+    expect([r.code, r.stdout, r.stderr]).toEqual([1, "", `error: cannot use ${f} as a workspace: it is not a directory\n`]);
+  });
+
+  it("test 4: --workspace <dir>/a/b/c where none exist → code 0, creates the workspace", async () => {
+    const s = await setup();
+    const dir = path.join(s.root, "existing_dir");
+    await fs.mkdir(dir);
+    const ws = path.join(dir, "a", "b", "c");
+    const r = s.run(["init", "--workspace", ws, "--forge", s.forge, "--profile", "acme"]);
+    expect(r.code).toBe(0);
+    expect(await fs.readFile(path.join(ws, "craftar.yaml"), "utf8")).toBe("forge: ../../../../forge\nprofile: acme\n");
   });
 });

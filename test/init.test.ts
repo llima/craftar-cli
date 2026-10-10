@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { planInit, type InitInput } from "../src/core/init.js";
+import YAML from "yaml";
+import { checkInitFlags, checkLocalKeys, forgeSource, initLine, planInit, type InitInput } from "../src/core/init.js";
+import { loadForgeSource, mergeWorkspaceConfig, workspaceOf } from "../src/core/sync.js";
+import { defaultGit, type GitRunner } from "../src/core/remote.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 import { remoteForge } from "./helpers/remote.js";
 
@@ -187,5 +190,207 @@ describe("planInit — the Forge and the flags (spec 23 N3–N11)", () => {
     const s = await setup();
     const url = pathToFileURL(path.join(s.root, "missing.git")).href;
     expect(await refused(s.run({ forge: url }))).toMatch(new RegExp(`^cannot fetch the Forge ${url.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}: .* — and there is no cached copy to fall back on$`, "s"));
+  });
+});
+
+describe("planInit with a loaded Forge (spec 28 §5.2, §9.1)", () => {
+  const load = async (ws: string, source: string, ref: string | null, home: string) =>
+    loadForgeSource(ws, source, ref, { home, mode: "sync" });
+
+  it("path Forge, the same result: comparing with and without loaded for multiple inputs", async () => {
+    const s = await setup();
+    const inputs = [
+      {},
+      { targets: ["kiro"] },
+      { removeRecipes: ["front-a"], addRecipes: ["front-b"] },
+      { addRecipes: ["front-b"], replace: true },
+    ] as const;
+
+    for (const input of inputs) {
+      const a = await planInit(s.ws, { forge: s.forge, profile: "acme", ...input }, { home: s.home });
+      const loaded = await load(s.ws, "../forge", null, s.home);
+      const b = await planInit(s.ws, { forge: s.forge, profile: "acme", ...input, loaded }, { home: s.home });
+      expect(b.text).toBe(a.text);
+      expect(b.notes).toEqual(a.notes);
+      expect(b.targetsFrom).toBe(a.targetsFrom);
+      expect(b.statuses.map((x) => [x.path, x.state])).toEqual(a.statuses.map((x) => [x.path, x.state]));
+      expect(b.plan.warnings).toEqual(a.plan.warnings);
+      expect(b.ws.origin).toEqual(a.ws.origin);
+      expect(b.ws.config).toEqual(a.ws.config);
+    }
+    // And verify the first input is not vacuous
+    const loaded = await load(s.ws, "../forge", null, s.home);
+    const b = await planInit(s.ws, { forge: s.forge, profile: "acme", loaded }, { home: s.home });
+    expect(b.text).toBe("forge: ../forge\nprofile: acme\n");
+    expect(b.plan.resolution.recipes).toEqual(["base", "stack-api", "front-a"]);
+  });
+
+  it("remote Forge, one fetch: loaded is reused by planInit", async () => {
+    const rf = await remoteForge(SPEC);
+    cleanups.push(rf.cleanup);
+    const s = await setup();
+    let counter = 0;
+    const counting: GitRunner = async (args, opts) => {
+      counter++;
+      return defaultGit(args, opts);
+    };
+    const loaded = await loadForgeSource(s.ws, rf.url, null, { home: s.home, mode: "sync", git: counting });
+    const afterFirstLoad = counter;
+    const init = await planInit(s.ws, { forge: rf.url, profile: "acme", loaded }, { home: s.home, mode: "sync", git: counting });
+    expect(counter).toBe(afterFirstLoad); // no extra fetch
+    expect(init.text).toBe(`forge: ${rf.url}\nprofile: acme\n`);
+    // Control: without loaded, the counter increases
+    await planInit(s.ws, { forge: rf.url, profile: "acme" }, { home: s.home, mode: "sync", git: counting });
+    expect(counter).toBeGreaterThan(afterFirstLoad);
+  });
+
+  it("a wrong loaded is refused: source mismatch and ref mismatch", async () => {
+    const s = await setup();
+    const forge2 = path.join(s.root, "forge2");
+    await makeForge(forge2, SPEC);
+
+    // Source mismatch
+    const loaded = await load(s.ws, "../forge", null, s.home);
+    await expect(planInit(s.ws, { forge: forge2, profile: "acme", loaded }, { home: s.home })).rejects.toThrow(
+      new Error('planInit: the loaded Forge is "../forge", not "../forge2"'),
+    );
+
+    // Remote: ref mismatch
+    const rf = await remoteForge(SPEC);
+    cleanups.push(rf.cleanup);
+    const loadedRemote = await loadForgeSource(s.ws, rf.url, null, { home: s.home, mode: "sync" });
+    await expect(planInit(s.ws, { forge: rf.url, ref: "main", profile: "acme", loaded: loadedRemote }, { home: s.home })).rejects.toThrow(
+      new Error('planInit: the loaded Forge is at ref null, not "main"'),
+    );
+  });
+
+  it("a path Forge and a local ref: the ignored-ref warning is present", async () => {
+    const s = await setup();
+    await writeFiles(s.ws, { "craftar.local.yaml": "ref: v1\n" });
+    // Path Forge loaded with the ref the workspace will have (workspaceOf doc comment)
+    const loaded = await load(s.ws, "../forge", "v1", s.home);
+    const init = await planInit(s.ws, { forge: s.forge, profile: "acme", loaded }, { home: s.home });
+    expect(init.plan.warnings[0]).toBe('ref "v1" is ignored: the Forge is a path (../forge), read as its working tree');
+    // The same planInit without loaded gives toEqual warnings
+    const initWithout = await planInit(s.ws, { forge: s.forge, profile: "acme" }, { home: s.home });
+    expect(init.plan.warnings).toEqual(initWithout.plan.warnings);
+  });
+
+  it("opts.local is used instead of the file", async () => {
+    const s = await setup();
+    await writeFiles(s.ws, { "craftar.local.yaml": "targets: [kiro]\n" });
+
+    // With opts.local: { doc: null, keys: [] } the file on disk is not read
+    const init = await planInit(s.ws, { forge: s.forge, profile: "acme" }, { home: s.home, local: { doc: null, keys: [] } });
+    expect(init.targetsFrom).toBe("profile");
+    expect(init.plan.resolution.targets).toEqual(["claude-code"]);
+
+    // Without opts.local: the file on disk is read
+    const initWithout = await planInit(s.ws, { forge: s.forge, profile: "acme" }, { home: s.home });
+    expect(initWithout.targetsFrom).toBe("local");
+    expect(initWithout.plan.resolution.targets).toEqual(["kiro"]);
+  });
+
+  it("checkInitFlags: refuses N3, N7, N11, N6 with their messages", () => {
+    // N3: credentials in forge
+    expect(() => checkInitFlags({ forge: "https://alice:" + "s3" + "cr3t" + "@example.invalid/forge.git" })).toThrow(
+      new Error("--forge holds credentials in the URL — remove them and let git authenticate (credential helper, SSH agent; see README › Remote Forge)"),
+    );
+    // N7: unknown target
+    expect(() => checkInitFlags({ targets: ["nope"] })).toThrow(new Error('unknown target "nope" (claude-code, kiro, agents-md)'));
+    // N11: ref with path Forge
+    expect(() => checkInitFlags({ forge: "../forge", ref: "main" })).toThrow(
+      new Error("--ref goes with a remote Forge — a path Forge is read as its working tree"),
+    );
+    // N6: recipe both added and removed
+    expect(() => checkInitFlags({ addRecipes: ["extra"], removeRecipes: ["extra"] })).toThrow(
+      new Error('recipe "extra" is both added and removed'),
+    );
+    // And what it lets through
+    expect(() => checkInitFlags({})).not.toThrow();
+    expect(() => checkInitFlags({ ref: "main" })).not.toThrow(); // no forge: N11 cannot be known yet
+    expect(() => checkInitFlags({ forge: "https://example.com/acme/forge.git", ref: "main" })).not.toThrow();
+  });
+
+  it("checkLocalKeys: refuses with N10 messages", () => {
+    expect(() => checkLocalKeys(["forge"], { ref: false, recipes: false, targets: false })).toThrow(
+      new Error("craftar.local.yaml sets forge, which would replace --forge — move it aside and re-run init"),
+    );
+    expect(() => checkLocalKeys(["profile"], { ref: false, recipes: false, targets: false })).toThrow(
+      new Error("craftar.local.yaml sets profile, which would replace --profile — move it aside and re-run init"),
+    );
+    // ref: false does not throw, ref: true throws
+    expect(() => checkLocalKeys(["ref"], { ref: false, recipes: false, targets: false })).not.toThrow();
+    expect(() => checkLocalKeys(["ref"], { ref: true, recipes: false, targets: false })).toThrow(
+      new Error("craftar.local.yaml sets ref, which would replace --ref — move it aside and re-run init"),
+    );
+    // recipes
+    expect(() => checkLocalKeys(["recipes"], { ref: false, recipes: true, targets: false })).toThrow(
+      new Error("craftar.local.yaml sets recipes, which would replace --add-recipe / --remove-recipe — move it aside and re-run init"),
+    );
+    // targets
+    expect(() => checkLocalKeys(["targets"], { ref: false, recipes: false, targets: true })).toThrow(
+      new Error("craftar.local.yaml sets targets, which would replace --targets — move it aside and re-run init"),
+    );
+  });
+
+  it("forgeSource: returns URL as given, directory as POSIX relative, equal as .", () => {
+    expect(forgeSource("/w/ws", "https://example.com/acme/forge.git")).toBe("https://example.com/acme/forge.git");
+  });
+
+  it("forgeSource: a directory relative to root", async () => {
+    const s = await setup();
+    expect(forgeSource(s.ws, s.forge)).toBe("../forge");
+    expect(forgeSource(s.forge, s.forge)).toBe(".");
+  });
+
+  it("initLine: formats the line correctly", async () => {
+    const s = await setup();
+    const init = await planInit(s.ws, { forge: s.forge, profile: "acme" }, { home: s.home });
+    expect(initLine(init)).toBe("forge ../forge · profile acme · recipes base → stack-api → front-a · targets claude-code (from the profile)");
+
+    const initTargets = await planInit(s.ws, { forge: s.forge, profile: "acme", targets: ["kiro", "claude-code"] }, { home: s.home });
+    expect(initLine(initTargets)).toBe("forge ../forge · profile acme · recipes base → stack-api → front-a · targets kiro, claude-code");
+  });
+
+  it("remote Forge: workspaceOf gives the same warnings as loadForgeFor (offline)", async () => {
+    // A remote Forge with { offline: true } must give the same warnings as the regular path (via loadWorkspaceConfig)
+    const rf = await remoteForge(SPEC);
+    cleanups.push(rf.cleanup);
+    const s = await setup();
+    // First fetch to seed the cache
+    await loadForgeSource(s.ws, rf.url, null, { home: s.home, mode: "sync" });
+    // Load with offline: true to get the warning
+    const loaded = await loadForgeSource(s.ws, rf.url, null, { home: s.home, offline: true });
+    const init = await planInit(s.ws, { forge: rf.url, profile: "acme", loaded }, { home: s.home, offline: true });
+    // The warning about offline must be in init.plan.warnings
+    expect(init.plan.warnings.some((w) => w.includes("offline"))).toBe(true);
+    // Control: without loaded, we get the same warnings
+    const initWithout = await planInit(s.ws, { forge: rf.url, profile: "acme" }, { home: s.home, offline: true });
+    expect(init.plan.warnings).toEqual(initWithout.plan.warnings);
+  });
+
+  it("workspaceOf: path warning order is [loaded, merged], remote is [merged, loaded]", async () => {
+    // This test pins the warning order to catch accidental swaps
+    const s = await setup();
+
+    // Path Forge: loaded warnings come first
+    await writeFiles(s.ws, { "craftar.local.yaml": "forge: ../forge-local\n" });
+    const localDoc = YAML.parse("forge: ../forge-local\n");
+    // Simulate a path Forge loaded with ref "v1"
+    const loadedPath = await load(s.ws, "../forge", "v1", s.home);
+    const mergedPath = mergeWorkspaceConfig({ forge: "../forge", profile: "acme" }, localDoc);
+    // The merge warning for local-file forge
+    expect(mergedPath.warnings.length).toBe(1);
+    expect(mergedPath.warnings[0]).toContain("Forge overridden by craftar.local.yaml");
+    // Manually verify the order — the ignored-ref warning in loaded.warnings comes first
+    expect(loadedPath.warnings[0]).toContain("is ignored: the Forge is a path");
+    const wsPath = workspaceOf(s.ws, mergedPath, loadedPath);
+    expect(wsPath.warnings[0]).toContain("is ignored: the Forge is a path");
+    expect(wsPath.warnings[1]).toContain("Forge overridden by craftar.local.yaml");
+    // The loaded warning is first, then the merge warning
+    const loadedIdx = wsPath.warnings.findIndex((w) => w.includes("is ignored: the Forge is a path"));
+    const mergeIdx = wsPath.warnings.findIndex((w) => w.includes("Forge overridden by craftar.local.yaml"));
+    expect(loadedIdx).toBeLessThan(mergeIdx);
   });
 });

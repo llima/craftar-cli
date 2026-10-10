@@ -4,7 +4,7 @@ import path from "node:path";
 import { makeForge, profile, recipe, rule, tmpDir } from "./helpers/forge.js";
 import { loadForge, type Forge } from "../src/core/forge.js";
 import { WorkspaceConfigSchema } from "../src/schema/index.js";
-import { editRecipesText, planRecipeEdit, recipeDiffLine } from "../src/core/recipe-edit.js";
+import { editRecipesText, planRecipeEdit, recipeDiffLine, slotHeld } from "../src/core/recipe-edit.js";
 
 /**
  * Spec 22 §9's Forge: `stack-api` extends `base`; `front-a`, `front-b` and `front-c` share slot
@@ -360,3 +360,32 @@ describe("editRecipesText (spec 22 §5.1, §5.2, §6 items 1–3)", () => {
   });
 });
 
+
+describe("slotHeld (spec 28 §5.2)", () => {
+  it("R3 caught: slotHeld returns the fields, message matches, constructor is Error, no extra keys", () => {
+    let e: unknown = null;
+    try {
+      planRecipeEdit(forge, config(), "add", ["front-b"]);
+    } catch (err) {
+      e = err;
+    }
+    expect(e).not.toBeNull();
+    expect(slotHeld(e)).toEqual({ recipe: "front-b", slot: "front", holder: "front-a" });
+    expect((e as Error).message).toBe('recipe "front-b" occupies slot "front", held by "front-a" — pass --replace to swap them');
+    expect((e as Error).constructor).toBe(Error);
+    expect(Object.keys(e as Error)).toEqual([]);
+  });
+
+  it("another refusal (R2) caught: slotHeld returns null; the text alone is not the tag", () => {
+    let e: unknown = null;
+    try {
+      planRecipeEdit(forge, config(), "add", ["nope"]);
+    } catch (err) {
+      e = err;
+    }
+    expect(e).not.toBeNull();
+    expect(slotHeld(e)).toBe(null);
+    expect(slotHeld("x")).toBe(null);
+    expect(slotHeld(new Error('recipe "front-b" occupies slot "front", held by "front-a" — pass --replace to swap them'))).toBe(null);
+  });
+});

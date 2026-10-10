@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkspace, plan } from "../src/core/sync.js";
-import { resolve, substitute } from "../src/core/resolve.js";
+import { profileNotFoundMessage, resolve, substitute } from "../src/core/resolve.js";
 import { profile, recipe, rule, scenario, writeFiles, type ForgeSpec, type WorkspaceSpec } from "./helpers/forge.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -179,5 +179,33 @@ describe("resolve — an unknown recipes.add name names craftar.yaml (spec 22 §
   it("an unknown name in both recipes.add and recipes.remove is filtered out, as before", async () => {
     const r = await resolved(forge, { config: { profile: "acme", recipes: { add: ["nope"], remove: ["nope"] } } });
     expect(r.recipes).toEqual(["base"]);
+  });
+});
+
+
+describe("profileNotFoundMessage — profile order (spec 28 §5.2)", () => {
+  // The helper must preserve the order of the given names (the Forge's own order), not sort them.
+  // A hand-built map tests this reliably, since fs.readdir order is filesystem-dependent.
+  it("lists profiles in Forge order, not sorted", async () => {
+    // Create a Forge with profiles in order: zeta, acme (not sorted)
+    const s = await scenario(
+      { recipes: [recipe("base", [])], profiles: [profile("zeta", ["base"]), profile("acme", ["base"])] },
+      { config: { profile: "nope" } },
+    );
+    cleanups.push(s.cleanup);
+    const w = await loadWorkspace(s.wsRoot);
+
+    // Reorder the profiles map: zeta first, then acme
+    const newProfiles = new Map<string, typeof w.forge.profiles extends Map<string, infer V> ? V : never>();
+    const zeta = w.forge.profiles.get("zeta")!;
+    const acme = w.forge.profiles.get("acme")!;
+    newProfiles.set("zeta", zeta);
+    newProfiles.set("acme", acme);
+    const forgeWithOrder = { ...w.forge, profiles: newProfiles };
+
+    // resolve() is sync and should throw with the exact order: zeta, acme (not "acme, zeta")
+    expect(() => resolve(forgeWithOrder, w.config)).toThrow(
+      new Error('profile "nope" not found in Forge (zeta, acme)'),
+    );
   });
 });

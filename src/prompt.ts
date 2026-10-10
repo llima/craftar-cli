@@ -1,0 +1,105 @@
+/**
+ * The readline adapter for the interactive `init` flow (spec 28 §5.2).
+ * This is the only module that imports `node:readline`.
+ *
+ * The adapter opens a readline interface for one question and closes it with the answer.
+ * Between questions there is no interface, so Ctrl-C is Node's default signal exit and
+ * git can read the terminal. In a terminal, Node's keypress decoder stays attached to
+ * the stream by design (it is set once by `emitKeypressEvents` and never removed).
+ *
+ * This module never touches `process` or `console`.
+ */
+
+import * as readline from "node:readline/promises";
+import type { Readable, Writable } from "node:stream";
+import type { InitIo } from "./core/init-flow.js";
+
+/** How long `confirm` waits while discarding input already waiting (ms). */
+export const DRAIN_MS = 50;
+
+/**
+ * Returns an `InitIo` backed by `node:readline/promises`.
+ *
+ * After `ask` or `confirm` resolves, the interface is closed (the terminal leaves raw mode
+ * and the stream is paused). In a terminal, Node's keypress decoder stays attached to
+ * the stream — removing it would break subsequent questions.
+ */
+export function readlineIo(
+  input: Readable,
+  output: Writable,
+  opts: { terminal: boolean },
+): InitIo {
+  return {
+    ask: (question: string) => askOne(input, output, opts.terminal, question),
+    confirm: (question: string) => confirmOne(input, output, opts.terminal, question),
+    say: (line: string) => { output.write(line + "\n"); },
+  };
+}
+
+/** Ask one question and return the answer, or `null` on interrupt/close. */
+async function askOne(
+  input: Readable,
+  output: Writable,
+  terminal: boolean,
+  question: string,
+): Promise<string | null> {
+  const rl = readline.createInterface({ input, output, terminal });
+  const questionPromise = rl.question(question);
+
+  let weCalledClose = false;
+
+  const result = await new Promise<string | null>((resolve) => {
+    const done = (value: string | null): void => {
+      resolve(value);
+    };
+
+    const onSigint = (): void => done(null);
+    const onClose = (): void => {
+      // Only resolve null if we did not call close ourselves
+      if (!weCalledClose) done(null);
+    };
+
+    rl.on("SIGINT", onSigint);
+    rl.on("close", onClose);
+
+    questionPromise.then(
+      (answer) => done(answer),
+      () => done(null),
+    );
+  });
+
+  // Close the interface in one place after the race settles
+  weCalledClose = true;
+  rl.close();
+
+  return result;
+}
+
+/**
+ * Discard what is already waiting on the input, then ask the question.
+ * On a real terminal this drops typed-ahead lines the kernel already delivered.
+ */
+async function confirmOne(
+  input: Readable,
+  output: Writable,
+  terminal: boolean,
+  question: string,
+): Promise<string | null> {
+  if (input.readableEnded || input.destroyed) return null;
+  const onData = (): void => { /* discard */ };
+  // An end consumed here would never reach the interface: the question would stay pending for good.
+  let ended = false;
+  const onEnd = (): void => { ended = true; };
+  input.on("data", onData);
+  input.once("end", onEnd);
+  input.resume();
+
+  await new Promise((r) => setTimeout(r, DRAIN_MS));
+
+  input.removeListener("data", onData);
+  input.removeListener("end", onEnd);
+  if (ended) return null;
+  input.pause();
+
+  return askOne(input, output, terminal, question);
+}

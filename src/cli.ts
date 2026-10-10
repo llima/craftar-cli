@@ -6,7 +6,7 @@ import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
-import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
+import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
@@ -37,9 +37,11 @@ import {
   type PruneResult,
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
-import { planInit } from "./core/init.js";
+import { checkInitFlags, initLine, planInit, type InitInput } from "./core/init.js";
+import { askInit, confirmInit, againLine, type InitAnswers } from "./core/init-flow.js";
+import { readlineIo } from "./prompt.js";
 import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
-import { localKeys } from "./core/workspace-yaml.js";
+import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -52,7 +54,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.17.4");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.18.0");
 
 /* ---------------------------------------------------------------- import */
 program
@@ -151,10 +153,10 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
 program
   .command("init")
   .description(
-    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync; refused when craftar.yaml already exists",
+    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync; in a terminal, asks for the Forge and the profile not given as flags; refused when craftar.yaml already exists",
   )
-  .requiredOption("--forge <dir|url>", "the Forge: a directory (written relative to the workspace) or a git URL")
-  .requiredOption("--profile <name>", "the client profile in the Forge")
+  .option("--forge <dir|url>", "the Forge: a directory (written relative to the workspace) or a git URL; asked for in a terminal when omitted")
+  .option("--profile <name>", "the client profile in the Forge; asked for in a terminal when omitted")
   .option("--ref <ref>", "branch, tag or full SHA of a remote Forge")
   .option("--targets <a,b>", "targets to write in craftar.yaml (claude-code, kiro, agents-md); omitted, the workspace follows the profile's")
   .option("--add-recipe <name>", "add a recipe to the profile's (repeatable)", collect, [])
@@ -165,8 +167,8 @@ program
   .option("--workspace <dir>", "workspace root, created when missing", ".")
   .action(
     async (o: {
-      forge: string;
-      profile: string;
+      forge?: string;
+      profile?: string;
       ref?: string;
       targets?: string;
       addRecipe: string[];
@@ -175,28 +177,96 @@ program
       sync: boolean;
       offline: boolean;
       workspace: string;
-    }) => {
+    }, cmd) => {
       const root = path.resolve(o.workspace);
+      // N1: craftar.yaml already exists
       const n1 = () => fail(`${WORKSPACE_FILE} already exists in ${root} — change recipes with craftar add recipe / remove recipe, or edit it`);
       const file = path.join(root, WORKSPACE_FILE);
       if (await exists(file)) n1();
-      const st = await fs.stat(root).catch(() => null);
-      if (st && !st.isDirectory()) fail(`cannot use ${root} as a workspace: it is not a directory`);
-      const init = await planInit(
-        root,
-        {
-          forge: o.forge,
-          profile: o.profile,
+      // N9: --workspace is a file, or any ancestor up to an existing path is a file
+      {
+        let p = root;
+        for (;;) {
+          const st = await fs.stat(p).catch(() => null);
+          if (st) {
+            if (!st.isDirectory()) fail(`cannot use ${p} as a workspace: it is not a directory`);
+            break; // found an existing directory
+          }
+          const parent = path.dirname(p);
+          if (parent === p) break; // reached filesystem root
+          p = parent;
+        }
+      }
+      // Check the flags that were given (N3, N7, N11, N6)
+      checkInitFlags({
+        forge: o.forge,
+        ref: o.ref,
+        targets: o.targets === undefined ? undefined : o.targets.split(",").map((t) => t.trim()),
+        addRecipes: o.addRecipe,
+        removeRecipes: o.removeRecipe,
+      });
+      // Mode: flags when both given; else interactive when both streams are TTYs; else N2
+      const bothGiven = o.forge !== undefined && o.profile !== undefined;
+      const isTTY = process.stdin.isTTY && process.stdout.isTTY;
+      if (!bothGiven && !isTTY) {
+        // N2: refuse with our message
+        if (o.forge === undefined && o.profile === undefined) {
+          fail("--forge and --profile are required when craftar init does not run in a terminal — pass them, or run craftar init in a terminal to be asked");
+        } else if (o.profile === undefined) {
+          fail("--profile is required when craftar init does not run in a terminal — pass it, or run craftar init in a terminal to be asked");
+        } else {
+          fail("--forge is required when craftar init does not run in a terminal — pass it, or run craftar init in a terminal to be asked");
+        }
+      }
+      // Read the local file once (after N1, N9 and flag checks, before any question or planInit)
+      const local = await readLocalFile(root);
+      let input: InitInput;
+      let answers: InitAnswers | null = null;
+      if (!bothGiven) {
+        const io = readlineIo(process.stdin, process.stdout, { terminal: true });
+        const result = await askInit(
+          root,
+          {
+            forge: o.forge,
+            profile: o.profile,
+            ref: o.ref,
+            targets: o.targets === undefined ? undefined : o.targets.split(",").map((t) => t.trim()),
+            addRecipes: o.addRecipe,
+            removeRecipes: o.removeRecipe,
+            replace: o.replace,
+          },
+          local,
+          io,
+          { ...load(o, "sync"), registryOff: registryOff() },
+        );
+        if (result.kind === "cancelled") fail("init cancelled — nothing written");
+        input = result.input;
+        answers = result.answers;
+      } else {
+        input = {
+          forge: o.forge!,
+          profile: o.profile!,
           ref: o.ref,
           targets: o.targets === undefined ? undefined : o.targets.split(",").map((t) => t.trim()),
           addRecipes: o.addRecipe,
           removeRecipes: o.removeRecipe,
           replace: o.replace,
-        },
-        load(o, "sync"),
-      );
+        };
+      }
+      const init = await planInit(root, input, { ...load(o, "sync"), local });
+      if (answers !== null) {
+        const io = readlineIo(process.stdin, process.stdout, { terminal: true });
+        const confirm = await confirmInit(init, root, io, { sync: o.sync });
+        if (confirm === "cancelled") fail("init cancelled — nothing written");
+      }
       const { ws, plan: p } = init;
-      // Every refusal is above: only now does the directory, and craftar.yaml, come to exist (§13 items 1, 9).
+      const workspaceGiven = cmd.getOptionValueSource("workspace") === "cli";
+      const again = () => {
+        if (answers !== null) {
+          console.log(againLine(answers, { workspace: workspaceGiven ? o.workspace : undefined, sync: o.sync, offline: o.offline }));
+        }
+      };
+      // Every refusal is above: only now does the directory, and craftar.yaml, come to exist
       await fs.mkdir(root, { recursive: true });
       try {
         await fs.writeFile(file, init.text, { flag: "wx" });
@@ -204,13 +274,13 @@ program
         if ((e as NodeJS.ErrnoException).code === "EEXIST") n1();
         throw e;
       }
-      const from = { flag: "", local: ` (from ${LOCAL_FILE})`, profile: " (from the profile)" }[init.targetsFrom];
       console.log(pc.bold(`craftar init — wrote ${WORKSPACE_FILE} in ${root}`));
-      console.log(`  forge ${ws.config.forge} · profile ${ws.config.profile} · recipes ${p.resolution.recipes.join(" → ")} · targets ${p.resolution.targets.join(", ")}${from}`);
+      console.log(`  ${initLine(init)}`);
       for (const n of init.notes) console.log(`  note ${n}`);
       if (!o.sync) {
         console.log(nextSyncLine(init.statuses));
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+        again();
         return;
       }
       const r = await applyAndReport(ws, p, init.statuses, init.lock);
@@ -219,6 +289,7 @@ program
         console.log(
           `  ${pc.yellow("warn")} ${collisions} file(s) already in the workspace differ from the Forge and were left as they are — to bring them into the Forge, run craftar import`,
         );
+      again();
     },
   );
 
@@ -297,15 +368,13 @@ program
   });
 
 /* ---------------------------------------------------------------- add / remove recipe */
-/** The states `next sync:` counts, in `FileState` declaration order (spec 22 §14 item 6); a new state does not compile until it is placed here. */
-const NEXT_SYNC: Record<Exclude<FileState, "unchanged">, true> = { new: true, update: true, drift: true, adopt: true, collision: true, orphan: true, "orphan-drift": true };
-const NEXT_SYNC_STATES = Object.keys(NEXT_SYNC) as Array<keyof typeof NEXT_SYNC>;
-
-/** Spec 22's line: what the next sync would do, over `NEXT_SYNC_STATES` (also `init --no-sync`, spec 23 §4.4). */
+/**
+ * Spec 22's line: what the next sync would do (also `init --no-sync`, spec 23 §4.4).
+ * Uses `countStates` from `src/core/impact.ts`; a new `FileState` does not compile until it is
+ * placed in `FILE_STATE_ORDER_MAP` there.
+ */
 function nextSyncLine(st: FileStatus[]): string {
-  const counts = NEXT_SYNC_STATES.map((k) => [k, st.filter((s) => s.state === k).length] as const)
-    .filter(([, n]) => n > 0)
-    .map(([k, n]) => `${n} ${k}`);
+  const counts = countStates(st).map(([k, n]) => `${n} ${k}`);
   return `next sync: ${counts.length ? `${counts.join(", ")} — run \`craftar sync\`` : "nothing to sync"}`;
 }
 

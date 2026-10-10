@@ -13,6 +13,22 @@ import { parseWorkspaceYaml } from "./workspace-yaml.js";
 
 export type RecipeOp = "add" | "remove";
 
+/**
+ * R3 told apart without reading its text (spec 28 §5.2): the fields of a slot refusal, or null for any other error.
+ * Not a subclass: vitest's `toThrow(new Error(..))` and any caller comparing constructors see the same plain Error as before.
+ */
+export interface SlotHeld {
+  recipe: string;
+  slot: string;
+  holder: string;
+}
+const SLOT_HELD = new WeakMap<Error, SlotHeld>();
+
+/** R3 told apart without reading its text (spec 28 §5.2): the fields of a slot refusal, or null for any other error. */
+export function slotHeld(e: unknown): SlotHeld | null {
+  return e instanceof Error ? SLOT_HELD.get(e) ?? null : null;
+}
+
 export interface RecipeLists {
   add: string[];
   remove: string[];
@@ -96,8 +112,11 @@ export function planRecipeEdit(
     const slot = forge.recipes.get(name)!.slot;
     if (slot) {
       const holders = order().filter((r) => r !== name && forge.recipes.get(r)!.slot === slot);
-      if (holders.length && !opts.replace)
-        throw new Error(`recipe "${name}" occupies slot "${slot}", held by "${holders[0]}" — pass --replace to swap them`);
+      if (holders.length && !opts.replace) {
+        const e = new Error(`recipe "${name}" occupies slot "${slot}", held by "${holders[0]}" — pass --replace to swap them`);
+        SLOT_HELD.set(e, { recipe: name, slot, holder: holders[0] });
+        throw e;
+      }
       for (const holder of holders) if (removeOne(holder)) touched = true;
     }
     return touched;
