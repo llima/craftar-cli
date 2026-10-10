@@ -185,3 +185,46 @@ describe("import --report — the Kiro part in the file", () => {
     expect(await fs.readFile(s.out, "utf8")).toContain("\n## Kiro collisions\nno .kiro/ in this workspace\n");
   });
 });
+
+describe("import --report — values import reads from the workspace stay out of the file", () => {
+  const importAs = (root: string, ws: string, profile: string, extra: string[] = []) =>
+    runCli(["import", "--from", "claude-code", "--forge", path.join(root, "forge"), "--profile", profile, "--workspace", ws, ...extra]);
+  /** A Forge whose `rule/deploy` is a template over `deploy.api`, with profile `acme` setting it. */
+  async function templated(body: string) {
+    const root = await tmpDir("craftar-import-report-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const ws = path.join(root, "acme-portal");
+    await writeFiles(ws, { ".claude/rules/deploy.md": body.replace(/\{\{deploy\.api\}\}/g, "acme-api") });
+    expect(importAs(root, ws, "acme").code).toBe(0);
+    const forge = path.join(root, "forge");
+    await fs.writeFile(path.join(forge, "ingredients/rules/deploy/rule.md"), body);
+    const meta = path.join(forge, "ingredients/rules/deploy/ingredient.yaml");
+    await fs.writeFile(meta, (await fs.readFile(meta, "utf8")) + "params:\n  deploy.api:\n    default: globex-api\n");
+    const prof = path.join(forge, "profiles/acme/profile.yaml");
+    await fs.writeFile(prof, (await fs.readFile(prof, "utf8")).replace("params: {}", "params:\n  deploy.api: acme-api"));
+    return { root, ws, out: path.join(root, "out", "report.md") };
+  }
+
+  it("a profile value the re-import changes: the terminal says it, the report does not", async () => {
+    const t = await templated("use {{deploy.api}} here\n");
+    await writeFiles(t.ws, { ".claude/rules/deploy.md": "use WORKSPACE-TEXT-v2 here\n" });
+    const r = importAs(t.root, t.ws, "acme", ["--report", t.out]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('profile acme now sets deploy.api to "WORKSPACE-TEXT-v2" (was "acme-api")');
+    const text = await fs.readFile(t.out, "utf8");
+    expect(text).toContain('- profile acme now sets deploy.api to "…" (was "…") — every workspace on acme renders it at its next sync; import cannot reach them');
+    expect(text).not.toContain("WORKSPACE-TEXT-v2");
+  });
+
+  it("a variant whose reason quotes the two lines that disagree: the report names the base only", async () => {
+    const t = await templated("use {{deploy.api}} here\nand {{deploy.api}} there\n");
+    const other = path.join(t.root, "globex-portal");
+    await writeFiles(other, { ".claude/rules/deploy.md": "use VALUE-ONE here\nand VALUE-TWO there\n" });
+    const r = importAs(t.root, other, "globex", ["--report", t.out]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("VALUE-ONE"); // the summary's own line, on the user's terminal
+    const text = await fs.readFile(t.out, "utf8");
+    expect(text).toContain("\n## Variants (1)\n- rule/deploy--globex — differs from rule/deploy\n");
+    for (const leak of ["VALUE-ONE", "VALUE-TWO"]) expect(text).not.toContain(leak);
+  });
+});

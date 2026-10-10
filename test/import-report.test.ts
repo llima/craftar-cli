@@ -70,7 +70,7 @@ describe("renderImportReport", () => {
         "- rule/parts — sections: who, where",
         "",
         "## Variants (1)",
-        "- rule/review--acme — differs from rule/review already in the Forge",
+        "- rule/review--acme — differs from rule/review",
         "",
         "## Rejected (0)",
         "",
@@ -129,5 +129,52 @@ describe("renderImportReport", () => {
     expect(text.includes("\r")).toBe(false);
     expect(text.charCodeAt(0)).not.toBe(0xfeff);
     expect(text.endsWith("\n") && !text.endsWith("\n\n")).toBe(true);
+  });
+
+  it("a variant's reason is never copied: it can quote the lines that differ — the line names the base, from the variant's own name", () => {
+    const text = render(
+      base({
+        variants: [
+          { name: "rule/deploy--acme", reason: 'differs from rule/deploy already in the Forge (deploy.api is "LINE-ONE-TEXT" in line 1 of rule.md but "LINE-TWO-TEXT" on line 2 of rule.md)' },
+          { name: "rule/odd", reason: 'whatever "LINE-THREE-TEXT"' },
+        ],
+      }),
+    );
+    expect(text).toContain("\n## Variants (2)\n- rule/deploy--acme — differs from rule/deploy\n- rule/odd\n");
+    for (const leak of ["LINE-ONE-TEXT", "LINE-TWO-TEXT", "LINE-THREE-TEXT"]) expect(text).not.toContain(leak);
+  });
+
+  it("a warning that quotes a value this run read from the workspace is written without it", () => {
+    const text = render(
+      base({
+        params: [{ key: "deploy.api", old: "OLD-WORKSPACE-TEXT", value: "NEW-WORKSPACE-TEXT", from: "rule/deploy" }],
+        sections: [{ key: "rule/a", name: "who", old: null, value: "SECTION-WORKSPACE-TEXT\n", from: "rule/a" }],
+        warnings: [
+          'profile acme now sets deploy.api to "NEW-WORKSPACE-TEXT" (was "OLD-WORKSPACE-TEXT") — every workspace on acme renders it at its next sync; import cannot reach them',
+          'a made-up warning quoting "SECRET-LOOKING-VALUE" and "SECTION-WORKSPACE-TEXT\\n"',
+          "skill dir x has no SKILL.md; skipped",
+        ],
+      }),
+    );
+    expect(text).toContain(
+      [
+        "## Warnings (3)",
+        '- profile acme now sets deploy.api to "…" (was "…") — every workspace on acme renders it at its next sync; import cannot reach them',
+        '- a made-up warning quoting "…" and "…"',
+        "- skill dir x has no SKILL.md; skipped",
+        "",
+      ].join("\n"),
+    );
+    for (const leak of ["NEW-WORKSPACE-TEXT", "OLD-WORKSPACE-TEXT", "SECRET-LOOKING-VALUE", "SECTION-WORKSPACE-TEXT"]) expect(text).not.toContain(leak);
+  });
+
+  it("a reuse that used no key and no section says only that it was rendered", () => {
+    expect(render(base({ reused: ["rule/bare"], rendered: [{ name: "rule/bare", keys: [] }] }))).toContain("\n## Reused (1)\n- rule/bare — rendered\n");
+  });
+
+  it("a long path stays on one line of the frontmatter", () => {
+    const long = "/work/" + "a very long directory name ".repeat(6) + "acme-portal";
+    const text = renderImportReport({ workspace: long, forge: "/f", report: base(), now: new Date("2026-10-09T14:03:22Z"), version: "9.9.9" });
+    expect(text.split("\n")[1]).toBe(`workspace: ${long}`);
   });
 });
