@@ -300,6 +300,16 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     forge: loaded,
     markedBase: false,
   };
+  /* ---- what the block provides is left to its recipe (spec 33 §5.3) ---- */
+  // Computed before --prefer-kiro so a named rule left to its recipe can be warned and skipped.
+  let provided: Map<string, { recipe: string; slot: string; refs: string[] }>;
+  try {
+    provided = loaded?.profiles.has(opts.profileName) ? providedByBlock(loaded, opts.profileName) : new Map();
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Error(`import: profile ${opts.profileName} does not resolve (${message}) — fix the Forge and re-run`);
+  }
+
   /* ---- --prefer-kiro: the named rules take their text from the steering mirror (spec 29 §4.3) ---- */
   // Before the secret scan and every decision, so the text built is scanned and decided like any source. The names are
   // looked up in what was read, never joined into a path.
@@ -311,6 +321,13 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     const set = Object.hasOwn(ctx.W, "kiro.banner") ? ctx.W["kiro.banner"] : resolvedParam(loaded, opts.profileName, "kiro.banner", existing.params);
     const banner = set === undefined || set === null ? null : String(set);
     for (const name of opts.preferKiro) {
+      // A rule left to its recipe is not compared: warn and skip (spec 33 V1 part 2).
+      const providedKey = `rule/${name}`;
+      if (provided.has(providedKey)) {
+        const p = provided.get(providedKey)!;
+        report.warnings.push(`--prefer-kiro ${name}: left to recipe ${p.recipe} (integrations.${p.slot}) — not read`);
+        continue;
+      }
       const q = rules.get(name);
       if (!q) throw new Error(`import: --prefer-kiro ${name}: there is no .claude/rules/${name}.md — --prefer-kiro takes rules; a steering file with no rule is already imported as steering`);
       const sm = steeringMeta.get(name);
@@ -328,15 +345,6 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
         preferred.push({ ref, source, steeringLines: textLines(sm.text), rule: `.claude/rules/${name}.md`, ruleLines: textLines(ruleText), differs: text !== ruleText });
       };
     }
-  }
-
-  /* ---- what the block provides is left to its recipe (spec 33 §5.3) ---- */
-  let provided: Map<string, { recipe: string; slot: string; refs: string[] }>;
-  try {
-    provided = loaded?.profiles.has(opts.profileName) ? providedByBlock(loaded, opts.profileName) : new Map();
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    throw new Error(`import: profile ${opts.profileName} does not resolve (${message}) — fix the Forge and re-run`);
   }
   // Filter the queue in place: skip every source whose `<type>/<outName>` is a key of `provided`.
   // For each skipped rule, push its name to `ruleNames` so the steering check does not import it.

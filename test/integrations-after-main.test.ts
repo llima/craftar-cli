@@ -33,27 +33,24 @@ function gitInit(dir: string) {
 
 describe("--prefer-kiro on a rule the block provides", () => {
   // C1. `synced(3, ado())` (33f case 8's workspace). Run import with --prefer-kiro on the rule the block provides.
-  // Expected: code 0; no Forge byte moved; stdout holds the `left to recipe` line and NO `prefer-kiro` line.
+  // Expected: code 0; no Forge byte moved; stdout holds the `left to recipe` line and NO `prefer-kiro` line;
+  // a warning about the --prefer-kiro rule being left to its recipe.
   it("C1. --prefer-kiro on a rule the block provides — untouched workspace", async () => {
     const s = await synced(3, ado());
     const before = await snapshot(s.forgeRoot);
     const r = runCli(["import", "--from", "claude-code", "--forge", s.forgeRoot, "--profile", "acme", "--workspace", s.wsRoot, "--prefer-kiro", "stories-azure-devops"]);
     const forgeFiles = await moved(s.forgeRoot, before);
 
-    console.log("--- C1 output ---");
-    console.log("code:", r.code);
-    console.log("stdout:", r.stdout);
-    console.log("stderr:", r.stderr);
-    console.log("Forge files moved:", forgeFiles);
-
     expect(r.code).toBe(0);
     expect(forgeFiles).toEqual([]);
     expect(r.stdout).toContain("left to recipe pm-azure-devops (integrations.pm): rule/stories-azure-devops, mcp/azure-devops");
     expect(r.stdout.split("\n").some((l) => l.trim().startsWith("prefer-kiro"))).toBe(false);
+    // The warning about --prefer-kiro on a rule left to its recipe (printed to stdout with other warnings).
+    expect(r.stdout).toContain("warn --prefer-kiro stories-azure-devops: left to recipe pm-azure-devops (integrations.pm) — not read");
   });
 
   // C2. Same but with the steering file edited by hand.
-  // Expected: same as C1, or a refusal.
+  // Expected: same as C1 — the rule is left to its recipe, so the steering file is not read regardless of edits.
   it("C2. --prefer-kiro on a rule the block provides — steering edited by hand", async () => {
     const s = await synced(3, ado());
     await fs.appendFile(path.join(s.wsRoot, ".kiro/steering/stories-azure-devops.md"), "by hand\n");
@@ -61,18 +58,12 @@ describe("--prefer-kiro on a rule the block provides", () => {
     const r = runCli(["import", "--from", "claude-code", "--forge", s.forgeRoot, "--profile", "acme", "--workspace", s.wsRoot, "--prefer-kiro", "stories-azure-devops"]);
     const forgeFiles = await moved(s.forgeRoot, before);
 
-    console.log("--- C2 output ---");
-    console.log("code:", r.code);
-    console.log("stdout:", r.stdout);
-    console.log("stderr:", r.stderr);
-    console.log("Forge files moved:", forgeFiles);
-
-    // The test expects code 0 and no Forge byte moved (the rule is left to its recipe, so nothing is read).
-    // If it refuses, that is FINDING C2.
     expect(r.code).toBe(0);
     expect(forgeFiles).toEqual([]);
     expect(r.stdout).toContain("left to recipe pm-azure-devops (integrations.pm): rule/stories-azure-devops, mcp/azure-devops");
     expect(r.stdout.split("\n").some((l) => l.trim().startsWith("prefer-kiro"))).toBe(false);
+    // The warning about --prefer-kiro on a rule left to its recipe (printed to stdout with other warnings).
+    expect(r.stdout).toContain("warn --prefer-kiro stories-azure-devops: left to recipe pm-azure-devops (integrations.pm) — not read");
   });
 
   // C3. (control) --prefer-kiro on a rule `base` lists.
@@ -81,13 +72,10 @@ describe("--prefer-kiro on a rule the block provides", () => {
     const s = await synced(3, ado());
     const r = runCli(["import", "--from", "claude-code", "--forge", s.forgeRoot, "--profile", "acme", "--workspace", s.wsRoot, "--prefer-kiro", "workflow"]);
 
-    console.log("--- C3 output ---");
-    console.log("code:", r.code);
-    console.log("stdout:", r.stdout);
-    console.log("stderr:", r.stderr);
-
     expect(r.code).toBe(0);
     expect(r.stdout.split("\n").some((l) => l.trim().startsWith("prefer-kiro rule/workflow"))).toBe(true);
     expect(r.stdout).toContain("left to recipe pm-azure-devops (integrations.pm):");
+    // No warning — the rule is not left to its recipe.
+    expect(r.stdout).not.toContain("warn --prefer-kiro workflow");
   });
 });
