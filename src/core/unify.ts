@@ -1335,7 +1335,7 @@ export async function pruneRecipes(
     for (const pw of profileWrites) {
       for (const prof of candidate.profiles) {
         if (prof.abs === pw.abs) {
-          const newProf = ProfileSchema.parse(parseYamlText(prof.name, pw.content));
+          const newProf = ProfileSchema.parse(parseYamlText(path.relative(process.cwd(), pw.abs), pw.content));
           editedProfiles.set(prof.name, newProf);
         }
       }

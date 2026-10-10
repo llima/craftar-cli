@@ -114,4 +114,21 @@ describe("forge unify --plan with a plan that is not valid YAML", () => {
     expect(r.stdout + r.stderr).not.toContain(M);
     expect(r.stderr).toBe(`error: invalid ${planPath}: MISSING_CHAR at line 3, column 1\n`);
   });
+
+  it("a plan that cannot be read still names the file first", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })], profiles: [profile("acme", [])] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+
+    const planDir = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(planDir, { recursive: true, force: true }));
+    const planPath = path.join(planDir, "absent.yaml");
+
+    const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--plan", planPath, "--forge", root]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(`error: ${planPath}: ENOENT: no such file or directory, open '${planPath}'\n`);
+  });
 });

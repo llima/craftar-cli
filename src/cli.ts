@@ -1264,8 +1264,7 @@ forge
       try {
         parsed = parseYamlText(o.plan, await fs.readFile(o.plan, "utf8"));
       } catch (e) {
-        if (e instanceof YamlSyntaxError) fail(e.message);
-        throw e;
+        fail(e instanceof YamlSyntaxError ? e.message : `${o.plan}: ${e instanceof Error ? e.message : String(e)}`);
       }
       try {
         loadedPlan = UnifyPlanSchema.parse(parsed);

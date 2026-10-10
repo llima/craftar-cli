@@ -146,6 +146,18 @@ describe("the other readers", () => {
   });
 });
 
+describe("yamlFault prints only a code and numbers", () => {
+  it("a code that is not upper-case letters and underscores is not printed", () => {
+    expect(yamlFault({ code: `bad ${M}`, linePos: [{ line: 1, col: 2 }] })).toBe("YAML syntax error");
+    expect(yamlFault({ code: 7 })).toBe("YAML syntax error");
+  });
+
+  it("a position that is not two integers is not printed", () => {
+    expect(yamlFault({ code: "MISSING_CHAR", linePos: [{ line: M, col: 1 }] })).toBe("MISSING_CHAR");
+    expect(yamlFault({ code: "MISSING_CHAR", linePos: [{ line: 3, col: 1 }] })).toBe("MISSING_CHAR at line 3, column 1");
+  });
+});
+
 describe("one caller of YAML.parse", () => {
   it("src/core/yaml-read.ts is the only file under src/ that calls YAML.parse(", async () => {
     const src = path.resolve(__dirname, "..", "src");
@@ -153,6 +165,16 @@ describe("one caller of YAML.parse", () => {
     for (const f of await listFiles(src)) {
       if (!f.endsWith(".ts") || f === "core/yaml-read.ts") continue;
       if (/\bYAML\.parse\(/.test(await fs.readFile(path.join(src, f), "utf8"))) offenders.push(f);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("no file under src/ imports a named parse from the yaml package", async () => {
+    const src = path.resolve(__dirname, "..", "src");
+    const offenders: string[] = [];
+    for (const f of await listFiles(src)) {
+      if (!f.endsWith(".ts")) continue;
+      if (/import\s*(?:YAML\s*,\s*)?\{[^}]*\bparse\b[^}]*\}\s*from\s*"yaml"/.test(await fs.readFile(path.join(src, f), "utf8"))) offenders.push(f);
     }
     expect(offenders).toEqual([]);
   });
