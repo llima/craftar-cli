@@ -245,7 +245,7 @@ describe("templates install", () => {
     expect([await tree(s.root), await tree(home)]).toEqual(before);
   });
 
-  it("nothing declared: a load warning is still printed, before the line (the same one list prints)", async () => {
+  it("nothing declared: a load warning is still printed (the same one list prints)", async () => {
     const s = await fresh();
     await writeFiles(s.wsRoot, { "craftar.yaml": "forge: ../forge\nref: v1\nprofile: acme\n" });
     const WARNING = 'warn ref "v1" is ignored: the Forge is a path (../forge), read as its working tree\n';
