@@ -1,13 +1,20 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { existsSync, promises as fs, realpathSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { existsSync, promises as fs, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { runCli } from "./helpers/cli.js";
 import { profile, recipe, rule, scenario, type IngredientSpec } from "./helpers/forge.js";
 
-// No test here runs Docker: the child's PATH holds only node's own directory, so `docker` is not found.
-const NODE_DIR = path.dirname(process.execPath);
-const DOCKER_THERE = existsSync(path.join(NODE_DIR, "docker")) || existsSync(path.join(NODE_DIR, "docker.exe"));
-const NO_DOCKER = { PATH: NODE_DIR, Path: NODE_DIR };
+// No test here runs Docker: the child's PATH holds only an empty temp dir, so `docker` is never found.
+let EMPTY_DIR: string;
+let NO_DOCKER: { PATH: string; Path: string };
+beforeAll(() => {
+  EMPTY_DIR = mkdtempSync(path.join(os.tmpdir(), "craftar-test-no-docker-"));
+  NO_DOCKER = { PATH: EMPTY_DIR, Path: EMPTY_DIR };
+});
+afterAll(() => {
+  if (EMPTY_DIR) rmSync(EMPTY_DIR, { recursive: true, force: true });
+});
 const NOT_FOUND = "docker not found — install Docker with the Compose plugin 2.20.0 or later";
 const NO_SERVICES = "no services in this workspace — craftar sync writes them when a recipe brings a service ingredient";
 const FRAGMENT = ".craftar/services/echo/compose.yaml";
@@ -60,7 +67,7 @@ async function tree(dir: string): Promise<Record<string, string>> {
 const up = (ws: string, ...more: string[]) => runCli(["services", "up", "--workspace", ws, ...more], { env: NO_DOCKER });
 const statusJson = (ws: string) => runCli(["services", "status", "--json", "--workspace", ws], { env: NO_DOCKER });
 
-describe.skipIf(DOCKER_THERE)("craftar services — without Docker (spec 31 §4.2–§4.4)", () => {
+describe("craftar services — without Docker (spec 31 §4.2–§4.4)", () => {
   it("sync wrote the three service files and a schema 3 lock (the ground the other cases stand on)", async () => {
     const s = await synced();
     const lock = JSON.parse(await fs.readFile(path.join(s.wsRoot, "craftar.lock"), "utf8"));
@@ -163,9 +170,12 @@ describe.skipIf(DOCKER_THERE)("craftar services — without Docker (spec 31 §4.
     await fs.writeFile(path.join(s.wsRoot, "craftar.lock"), '{"schema": 4}');
     const r = runCli(["services", "down", "--workspace", s.wsRoot], { env: NO_DOCKER });
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain("warn ");
+    // Verify ORDER: warn comes before error
+    const warnIdx = r.stderr.indexOf("warn ");
+    const errorIdx = r.stderr.indexOf(`error: ${NOT_FOUND}`);
+    expect(warnIdx).toBeGreaterThanOrEqual(0);
+    expect(errorIdx).toBeGreaterThan(warnIdx);
     expect(r.stderr).toContain("schema 4");
-    expect(r.stderr).toContain(`error: ${NOT_FOUND}`);
     expect(r.stderr).not.toContain("error: craftar.lock declares schema 4");
   });
 
@@ -174,8 +184,11 @@ describe.skipIf(DOCKER_THERE)("craftar services — without Docker (spec 31 §4.
     await fs.writeFile(path.join(s.wsRoot, "craftar.lock"), "<<<<<<< HEAD\n");
     const r = runCli(["services", "down", "--workspace", s.wsRoot], { env: NO_DOCKER });
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain("warn ");
-    expect(r.stderr).toContain(`error: ${NOT_FOUND}`);
+    // Verify ORDER: warn comes before error
+    const warnIdx = r.stderr.indexOf("warn ");
+    const errorIdx = r.stderr.indexOf(`error: ${NOT_FOUND}`);
+    expect(warnIdx).toBeGreaterThanOrEqual(0);
+    expect(errorIdx).toBeGreaterThan(warnIdx);
     expect(r.stderr).not.toContain("error: craftar.lock");
   });
 

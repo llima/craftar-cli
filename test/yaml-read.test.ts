@@ -194,4 +194,20 @@ describe("parseYamlText merge option (spec 31 C1)", () => {
     expect(Object.hasOwn((result as { foo: object }).foo, "<<")).toBe(false);
     expect(Object.hasOwn((result as { foo: object }).foo, "b")).toBe(true);
   });
+
+  it("{ merge: true } at top level — Compose honours this", () => {
+    // A top-level merge key: x-a: &a { include: [...] } then <<: *a gives the document an include key
+    const result = parseYamlText("x.yaml", "x-a: &a\n  include:\n    - path: services/echo/compose.yaml\n<<: *a\n", { merge: true });
+    expect((result as { include: unknown[] }).include).toEqual([{ path: "services/echo/compose.yaml" }]);
+    expect(Object.hasOwn(result as object, "<<")).toBe(false);
+  });
+
+  it("{ merge: true } with <<: [*b, *a] list form — Compose honours this", () => {
+    // The merge key can be a sequence of anchors: <<: [*b, *a] merges b then a
+    const text = "x-b: &b\n  from_b: 1\nx-a: &a\n  from_a: 2\nfoo:\n  <<: [*b, *a]\n  own: 3\n";
+    const result = parseYamlText("x.yaml", text, { merge: true });
+    const foo = (result as { foo: Record<string, number> }).foo;
+    expect(foo).toEqual({ from_b: 1, from_a: 2, own: 3 });
+    expect(Object.hasOwn(foo, "<<")).toBe(false);
+  });
 });

@@ -400,6 +400,51 @@ params:
     // Lock unchanged
     expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
   });
+
+  it.skipIf(process.platform === "win32")("an executable service file gets its mode restored on POSIX (E3)", async () => {
+    // A service ingredient with an executable file
+    const initScript = "#!/bin/sh\necho hello\n";
+    const s = await scenario(
+      {
+        ingredients: [
+          {
+            meta: { type: "service", name: "echo", compose: "compose.yaml", files: ["init/a.sh"], executable: ["init/a.sh"] },
+            files: { "compose.yaml": "services:\n  echo:\n    image: example/echo:1\n", "init/a.sh": initScript },
+          },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+
+    // Sync to create the files
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Verify the script has execute permission
+    const scriptPath = path.join(s.wsRoot, ".craftar/services/echo/init/a.sh");
+    let stat = await fs.stat(scriptPath);
+    expect(stat.mode & 0o111).not.toBe(0);
+
+    // Hand-edit the script (also removes execute permission as a side effect of write)
+    await fs.chmod(scriptPath, 0o644);
+    await fs.writeFile(scriptPath, initScript + "# hand edit\n");
+    stat = await fs.stat(scriptPath);
+    expect(stat.mode & 0o111).toBe(0); // no execute permission
+
+    // Verify it's drift
+    expect(runCli(["status", "--workspace", s.wsRoot]).stdout).toContain("drift");
+
+    // Discard the drift
+    const r = runCli(["drift", "discard", ".craftar/services/echo/init/a.sh", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+
+    // Verify the file is restored with correct content AND execute permission
+    expect(await fs.readFile(scriptPath, "utf8")).toBe(initScript);
+    stat = await fs.stat(scriptPath);
+    expect(stat.mode & 0o111).not.toBe(0); // execute permission restored
+  });
 });
 
 
