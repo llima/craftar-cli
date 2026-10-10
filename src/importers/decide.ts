@@ -167,7 +167,7 @@ async function inferParams(
 ): Promise<Decision> {
   // Holes (§3): declared, not reserved, not set by the workspace layer, and not pinned — a key this run already relied
   // on renders at its current value, like any fixed key (§6.5, §14 Q13).
-  const inferable = [...cited].filter((k) => base.meta.params?.[k] !== undefined && !reservedKey(k) && !Object.hasOwn(ctx.W, k));
+  const inferable = [...cited].filter((k) => base.meta.params?.[k] !== undefined && !reservedKey(k, ctx.forge?.manifest.schema ?? 1) && !Object.hasOwn(ctx.W, k));
   const holes = new Set(inferable.filter((k) => !ctx.pinned.has(k)));
   const pinnedHoles = inferable.filter((k) => ctx.pinned.has(k));
   if (!holes.size && !pinnedHoles.length) return { kind: "variant" };

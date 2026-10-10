@@ -1741,7 +1741,7 @@ forge
       return p && Object.hasOwn(p.sections, baseKey) ? p.sections[baseKey] : {};
     })();
 
-    const result = await applyPlan(base, variant, diff, toApply, { discardVariantMeta: o.take === "base", profileSections });
+    const result = await applyPlan(base, variant, diff, toApply, { discardVariantMeta: o.take === "base", profileSections, forgeSchema: f.manifest.schema });
     // Ruling 33, dry pass: every recipe `ingredients` rewrite the cascade will make is checked before
     // the first byte is written, so a refusal (an aliased reference) leaves the Forge untouched.
     const cascadeFiles = result.resolved ? await checkRecipeCascade(f, base.ref, variant.ref) : [];

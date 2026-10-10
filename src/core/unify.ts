@@ -172,6 +172,11 @@ export interface ApplyOptions {
    * step 7. Default `{}`.
    */
   profileSections?: Record<string, string>;
+  /**
+   * The Forge's `schema` (spec 33 §5.2): gates `reservedKey` for the `integrations.*` prefix.
+   * Default `1` (below every gate).
+   */
+  forgeSchema?: number;
 }
 
 /** One section a plan run creates or fills (spec 12 §4.5, §5.5). */
@@ -335,6 +340,7 @@ export async function applyPlan(
   const onlyInVariant = new Set(diff.onlyInVariant);
 
   const profileSections = opts.profileSections ?? {};
+  const forgeSchema = opts.forgeSchema ?? 1;
 
   // Ruling 29 (spec §8 refusal 7, in both directions): the plan must cover every file the diff
   // has — paired, base-only and variant-only — each exactly once. The walk below only visits the
@@ -487,7 +493,7 @@ export async function applyPlan(
         // Handle param hunks in the same file
         const templates: (string[] | undefined)[] = new Array(hunks.length);
         for (const [k, ph] of paramOf) {
-          const { lines, pairs } = deriveHunk(pf.file, k + 1, hunks[k], ph.params, base.meta.params);
+          const { lines, pairs } = deriveHunk(pf.file, k + 1, hunks[k], ph.params, base.meta.params, forgeSchema);
           templates[k] = lines;
           collect(extractions, pf.file, k + 1, pairs);
         }
@@ -546,7 +552,7 @@ export async function applyPlan(
         }
         const templates: (string[] | undefined)[] = new Array(hunks.length);
         for (const [k, ph] of paramOf) {
-          const { lines, pairs } = deriveHunk(pf.file, k + 1, hunks[k], ph.params, base.meta.params);
+          const { lines, pairs } = deriveHunk(pf.file, k + 1, hunks[k], ph.params, base.meta.params, forgeSchema);
           templates[k] = lines;
           collect(extractions, pf.file, k + 1, pairs);
         }
