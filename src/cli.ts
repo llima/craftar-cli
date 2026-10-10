@@ -470,9 +470,23 @@ drift
     const named = only === null ? null : st.find((s) => s.path === only);
     if (only !== null && !named) fail(unmanaged(only));
     const rows = driftList(named ? [named] : st);
-    if (o.json) return console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: p.warnings }, null, 2));
-    if (named && !rows.length) return console.log(`${named.path} is not drifted (${named.state})`);
-    if (!rows.length) return console.log("no drift");
+    // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
+    const unset = unsetDeclared(p);
+    if (o.json) {
+      console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: p.warnings, unsetParams: unset }, null, 2));
+      if (unset.length) process.exitCode = 1;
+      return;
+    }
+    if (named && !rows.length) {
+      console.log(`${named.path} is not drifted (${named.state})`);
+      if (refusalBlock(unset)) process.exitCode = 1;
+      return;
+    }
+    if (!rows.length) {
+      console.log("no drift");
+      if (refusalBlock(unset)) process.exitCode = 1;
+      return;
+    }
     // Columns as wide as their longest value, as the spec's example lines them up (§4.2).
     const wide = (pick: (r: DriftRow) => string) => Math.max(...rows.map((r) => pick(r).length));
     const [pathW, ingW, forgeW] = [wide((r) => r.path), wide((r) => r.ingredient), wide((r) => `forge: ${r.forge}`)];
@@ -480,13 +494,17 @@ drift
       console.log(
         `${color(r.state)(r.state.padEnd(13))} ${r.path.padEnd(pathW)}  ${pc.dim(r.ingredient.padEnd(ingW))}  ${`forge: ${r.forge}`.padEnd(forgeW)}  promote: ${r.promotable ? "yes" : `no (${r.reason})`}`,
       );
-    if (!named) return;
+    if (!named) {
+      if (refusalBlock(unset)) process.exitCode = 1;
+      return;
+    }
     if (named.state === "orphan-drift") {
       // The whole file as a removal: what `drift discard` would do to it.
       console.log(pc.bold(`--- ${named.path} (disk, orphan-drift)`));
       console.log(pc.bold(`+++ ${named.path} (forge: no longer produced — \`craftar drift discard\` removes it)`));
       console.log(renderDiff((await readText(path.join(ws.root, named.path))) ?? "", "", DIFF_PAINT));
     } else await printFileDiff(ws.root, named);
+    if (refusalBlock(unset)) process.exitCode = 1;
   });
 
 drift

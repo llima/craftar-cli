@@ -226,8 +226,9 @@ describe("cli — drift show", () => {
       profile: "acme",
       files: [row(A, "drift", "rule/a", "same", true, null), row(B, "drift", "rule/b", "same", true, null), row(C, "orphan-drift", "rule/c", "removed", false, "no longer produced")],
       warnings: [],
+      unsetParams: [],
     });
-    expect(Object.keys(parsed)).toEqual(["workspace", "profile", "files", "warnings"]);
+    expect(Object.keys(parsed)).toEqual(["workspace", "profile", "files", "warnings", "unsetParams"]);
     expect(Object.keys(parsed.files[0])).toEqual(["path", "state", "target", "ingredient", "forge", "promotable", "reason"]);
     expect(JSON.parse(runCli(["drift", "show", A, "--json", "--workspace", f.ws]).stdout).files).toEqual([row(A, "drift", "rule/a", "same", true, null)]);
     await fs.writeFile(path.join(f.ws, B), "B one\nB two\n");
@@ -397,6 +398,154 @@ params:
     expect(r.stderr).toBe(syncStderr);
     // Lock unchanged
     expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
+  });
+});
+
+
+describe("cli — drift show on refused workspaces (spec 30r5)", () => {
+  // A workspace with a declared param that has no value has its sync REFUSED.
+  // drift show decides the refused sync as status does:
+  // - text mode: the listing, then the refusal block on stderr, exit 1
+  // - --json: the object gains `unsetParams` (always present, after warnings), exit 1
+
+  /** A workspace with one drifted file AND a declared param with no value. */
+  async function refused() {
+    const s = await scenario(
+      {
+        ingredients: [
+          {
+            meta: { type: "rule", name: "a", params: { org: {} } },
+            files: { "rule.md": "Org: {{org}}\n" },
+          },
+        ],
+        recipes: [recipe("base", ["rule/a"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    // Write the file manually since sync refuses
+    await fs.mkdir(path.join(s.wsRoot, ".claude/rules"), { recursive: true });
+    await fs.writeFile(path.join(s.wsRoot, ".claude/rules/a.md"), "Org: {{org}}\n");
+    // Create a lock manually - must match LockSchemaV2
+    // Use the real hash to ensure forge: same
+    const fileHash = hashNormalized("Org: {{org}}\n");
+    await fs.writeFile(
+      path.join(s.wsRoot, "craftar.lock"),
+      JSON.stringify({
+        schema: 2,
+        generatedAt: new Date().toISOString(),
+        forge: { source: "path", ref: null, commit: null },
+        profile: "acme",
+        recipes: ["base"],
+        targets: ["claude-code"],
+        files: [{ path: ".claude/rules/a.md", hash: fileHash, target: "claude-code", ingredient: "rule/a" }],
+      }),
+    );
+    // Drift the file
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/a.md"), "hand\n");
+    return s;
+  }
+
+  it("text mode: listing, then the refusal block on stderr, exit 1", async () => {
+    const s = await refused();
+    // First run status to get its exact stderr
+    const statusR = runCli(["status", "--workspace", s.wsRoot]);
+    expect(statusR.code).toBe(1);
+    const expectedStderr = statusR.stderr;
+    expect(expectedStderr).toBe(
+      "error: 1 declared parameter(s) have no value — nothing written\n" +
+        "  org  declared by rule/a · cited by rule/a\n" +
+        "  fix: set each under params in the profile, or under overrides.params in craftar.yaml\n",
+    );
+
+    // Now run drift show
+    const r = runCli(["drift", "show", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe(expectedStderr);
+    expect(r.stdout).toBe("drift         .claude/rules/a.md  rule/a  forge: same  promote: yes\n");
+  });
+
+  it("--json: unsetParams is present (same value as status --json), exit 1", async () => {
+    const s = await refused();
+    // First run status --json to get its unsetParams
+    const statusR = runCli(["status", "--json", "--workspace", s.wsRoot]);
+    expect(statusR.code).toBe(1);
+    const statusParsed = JSON.parse(statusR.stdout);
+    expect(statusParsed.unsetParams).toEqual([{ key: "org", declaredBy: ["rule/a"], citedBy: ["rule/a"] }]);
+
+    // Now run drift show --json
+    const r = runCli(["drift", "show", "--json", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.unsetParams).toEqual(statusParsed.unsetParams);
+    expect(parsed.unsetParams).toEqual([{ key: "org", declaredBy: ["rule/a"], citedBy: ["rule/a"] }]);
+    // Check key order: unsetParams comes after warnings
+    expect(Object.keys(parsed)).toEqual(["workspace", "profile", "files", "warnings", "unsetParams"]);
+  });
+
+  it("with a path: the diff, then the refusal block, exit 1", async () => {
+    const s = await refused();
+    // First run status to get the exact stderr
+    const statusR = runCli(["status", "--workspace", s.wsRoot]);
+    const expectedStderr = statusR.stderr;
+
+    const r = runCli(["drift", "show", ".claude/rules/a.md", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe(expectedStderr);
+    // The stdout should have the row and the diff
+    expect(r.stdout).toBe(
+      "drift         .claude/rules/a.md  rule/a  forge: same  promote: yes\n" +
+        "--- .claude/rules/a.md (disk, drift)\n" +
+        "+++ .claude/rules/a.md (forge)\n" +
+        "  Org: {{org}}\n" +
+        "- hand\n",
+    );
+  });
+
+  it("no hand-edited files: the 'no drift' line, then the refusal block, exit 1", async () => {
+    // A workspace with no drift but a refused param
+    const s = await scenario(
+      {
+        ingredients: [
+          {
+            meta: { type: "rule", name: "a", params: { org: {} } },
+            files: { "rule.md": "Org: {{org}}\n" },
+          },
+        ],
+        recipes: [recipe("base", ["rule/a"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    // Write the file manually since sync refuses
+    await fs.mkdir(path.join(s.wsRoot, ".claude/rules"), { recursive: true });
+    await fs.writeFile(path.join(s.wsRoot, ".claude/rules/a.md"), "Org: {{org}}\n");
+    // Create a lock with the same hash (no drift) - must match LockSchemaV2
+    const hash = hashNormalized("Org: {{org}}\n");
+    await fs.writeFile(
+      path.join(s.wsRoot, "craftar.lock"),
+      JSON.stringify({
+        schema: 2,
+        generatedAt: new Date().toISOString(),
+        forge: { source: "path", ref: null, commit: null },
+        profile: "acme",
+        recipes: ["base"],
+        targets: ["claude-code"],
+        files: [{ path: ".claude/rules/a.md", hash, target: "claude-code", ingredient: "rule/a" }],
+      }),
+    );
+
+    // First run status to get the exact stderr
+    const statusR = runCli(["status", "--workspace", s.wsRoot]);
+    expect(statusR.code).toBe(1);
+    const expectedStderr = statusR.stderr;
+
+    const r = runCli(["drift", "show", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe(expectedStderr);
+    expect(r.stdout).toBe("no drift\n");
   });
 });
 
