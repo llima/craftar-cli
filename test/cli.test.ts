@@ -1439,6 +1439,36 @@ describe("cli — forge unify's cascade rewrites ingredients only (Ruling 42)", 
   }
 });
 
+describe("cli — forge unify --save-plan: the refusals' words (the gate import --report shares, spec 29)", () => {
+  async function forge() {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, { ingredients: [rule("wf", "a\n"), rule("wf--acme", "b\n", { as: "wf" })] });
+    gitInit(root);
+    gitCommitAll(root, "init");
+    return root;
+  }
+  const save = (root: string, target: string) => runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--save-plan", target, "--forge", root]);
+
+  it("inside the Forge: the whole line", async () => {
+    const root = await forge();
+    const target = path.join(root, "plan.yaml");
+    const r = save(root, target);
+    expect([r.code, r.stderr]).toEqual([1, `error: refusing to write the plan to ${target}: it resolves inside the Forge (${root}) — save plans outside the Forge\n`]);
+  });
+
+  it("an existing file: the whole line", async () => {
+    const root = await forge();
+    const out = await tmpDir("craftar-cli-plan-");
+    cleanups.push(() => fs.rm(out, { recursive: true, force: true }));
+    const target = path.join(out, "plan.yaml");
+    await fs.writeFile(target, "mine\n");
+    const r = save(root, target);
+    expect([r.code, r.stderr]).toEqual([1, `error: refusing to write the plan to ${target}: the file already exists — unify never overwrites; choose a new path\n`]);
+    expect(await fs.readFile(target, "utf8")).toBe("mine\n");
+  });
+});
+
 describe("cli — forge unify --save-plan through a dangling symlink (Ruling 30, CI round)", () => {
   // On Windows a directory junction needs no privilege, so this runs on both platforms.
   it("refuses a target whose path passes through a dangling symlink, and writes nothing", async () => {

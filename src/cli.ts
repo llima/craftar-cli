@@ -17,6 +17,7 @@ import { catalogueContext, listRecipes, listIngredients, checkType, type Catalog
 import { listTargets } from "./core/capabilities.js";
 import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
+import { renderImportReport } from "./core/import-report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { hashNormalized, toLf, stripBom } from "./core/text.js";
 import { exists, gitDirty, gitIsRepo, gitUnheld, loadForge } from "./core/forge.js";
@@ -58,6 +59,16 @@ const program = new Command();
 program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.20.0");
 
 /* ---------------------------------------------------------------- import */
+/** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
+interface OutputGate {
+  what: "plan" | "report";
+  who: "unify" | "import";
+  outside: string;
+  never: string;
+}
+const SAVE_PLAN_GATE: OutputGate = { what: "plan", who: "unify", outside: "save plans outside the Forge", never: "unify never overwrites" };
+const REPORT_GATE: OutputGate = { what: "report", who: "import", outside: "write the report outside the Forge", never: "import never overwrites" };
+
 program
   .command("import")
   .description("Import an existing workspace harness into a Forge: creates or updates ingredients, recipes and a profile, reusing a templated base when it renders the workspace text or infers it into params or sections")
@@ -66,10 +77,16 @@ program
   .requiredOption("--profile <name>", "client profile to create or update")
   .option("--workspace <dir>", "workspace to import", ".")
   .option("--write-config", "write craftar.yaml into the workspace, merging an existing one (forge, profile, targets)", false)
+  .option(
+    "--report <file.md>",
+    "also write a Markdown report of the import — what was created, reused, made a variant or rejected, and the .kiro/ files that differ from what Craftar would generate (paths and line counts, never content); refused when the path is inside the Forge or already exists",
+  )
   .action(async (o) => {
     if (o.from !== "claude-code") fail(`unsupported source "${o.from}" (only claude-code for now)`);
     // import writes a local Forge; a URL would become a directory named after it (spec 13 §4.4).
     if (classifyForge(o.forge) === "url") fail("--forge takes a directory; to read a remote Forge, run inside a workspace that names it");
+    // Spec 29 §4.2: the report's path is refused before the import reads anything, so a refusal leaves the Forge untouched.
+    const reportAbs = o.report === undefined ? null : await gateOutsideForge(o.report, o.forge, REPORT_GATE);
     const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig });
     console.log(pc.bold(`Imported ${path.resolve(o.workspace)} → ${path.resolve(o.forge)} as profile "${r.profile}"`));
     console.log(
@@ -103,6 +120,20 @@ program
           : `  workspace craftar.yaml edited (forge, profile, targets)`,
       );
     for (const w of r.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+    if (reportAbs !== null) {
+      const text = renderImportReport({ workspace: path.resolve(o.workspace), forge: path.resolve(o.forge), report: r, now: new Date(), version: program.version()! });
+      // After the summary, so a report that cannot be written never costs the summary of an import that succeeded.
+      try {
+        await fs.mkdir(path.dirname(reportAbs), { recursive: true });
+        await fs.writeFile(reportAbs, text, { flag: "wx" });
+      } catch (e) {
+        fail(
+          `The Forge was written in full and the import succeeded; writing the report failed (${e instanceof Error ? e.message : String(e)}) — ` +
+            `the summary above stands; re-run with another --report path to get the file`,
+        );
+      }
+      console.log(`  report ${o.report}`);
+    }
   });
 
 /* ---------------------------------------------------------------- status */
@@ -1251,21 +1282,9 @@ forge
       // Forge — so that is enforced, not assumed, and a plan never overwrites anything. Both
       // refusals come before any write; the comparison runs on real paths, so neither a `..`
       // segment nor a symlink can carry the target back into the Forge.
-      const savePlanAbs = path.resolve(o.savePlan);
-      let targetReal: string;
-      try {
-        targetReal = await realpathOfNearest(savePlanAbs);
-      } catch (e) {
-        fail(`refusing to write the plan to ${o.savePlan}: ${e instanceof Error ? e.message : String(e)}`);
-      }
-      const rootReal = await fs.realpath(path.resolve(f.root));
-      const rel = path.relative(rootReal, targetReal);
-      if (rel === "" || !(rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))) {
-        fail(`refusing to write the plan to ${o.savePlan}: it resolves inside the Forge (${f.root}) — save plans outside the Forge`);
-      }
-      if (await pathTaken(savePlanAbs)) {
-        fail(`refusing to write the plan to ${o.savePlan}: the file already exists — unify never overwrites; choose a new path`);
-      }
+      // Ruling 30: --save-plan skips the clean-tree check because the plan lives outside the Forge — so that is
+      // enforced, not assumed, and a plan never overwrites anything. Both refusals come before any write.
+      const savePlanAbs = await gateOutsideForge(o.savePlan, f.root, SAVE_PLAN_GATE);
       const saved = await planFrom(base, variant, diff, o.profile);
       await fs.mkdir(path.dirname(savePlanAbs), { recursive: true });
       await fs.writeFile(savePlanAbs, YAML.stringify(saved), { flag: "wx" });
@@ -1981,7 +2000,7 @@ async function readText(p: string): Promise<string | null> {
  * other outcome throws instead. A component `lstat` cannot inspect (a symlink loop or a permission
  * error on Linux) "cannot be inspected"; one it can inspect but `realpath` cannot follow (a
  * dangling symlink or junction, a loop on Windows) "exists but cannot be resolved". Resolving the
- * rest lexically would let a link that points into the Forge pass the containment check, so unify
+ * rest lexically would let a link that points into the Forge pass the containment check, so the gate
  * fails closed rather than guess where the target lands.
  */
 async function realpathOfNearest(abs: string): Promise<string> {
@@ -2010,13 +2029,39 @@ async function realpathOfNearest(abs: string): Promise<string> {
 }
 
 /**
- * The refusal for a `--save-plan` target that cannot be resolved. `what` is "cannot be inspected"
- * when `lstat` itself failed, so the path is not known to exist, and "exists but cannot be
+ * The refusal for a target that cannot be resolved; the caller adds which command cannot prove it. `what` is
+ * "cannot be inspected" when `lstat` itself failed, so the path is not known to exist, and "exists but cannot be
  * resolved" when `lstat` succeeded and `realpath` did not.
  */
 function cannotResolve(p: string, e: unknown, what: "cannot be inspected" | "exists but cannot be resolved"): Error {
   const code = (e as NodeJS.ErrnoException | null)?.code ?? (e instanceof Error ? e.message : String(e));
-  return new Error(`${p} ${what} (${code}) — unify cannot prove the target lies outside the Forge`);
+  return new Error(`${p} ${what} (${code})`);
+}
+
+/**
+ * The gate of a user-supplied output path (Ruling 30 of spec 06; spec 29 §4.2): the file a command writes where the
+ * user says must lie outside the Forge and must not exist. Both sides are compared as real paths, so neither a `..`
+ * segment nor a symlink can carry the target back into the Forge; the Forge side goes through its nearest existing
+ * ancestor too, since `import --forge` may name a directory that does not exist yet. Returns the absolute target, or
+ * fails before anything is written.
+ */
+async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate): Promise<string> {
+  const refusing = `refusing to write the ${w.what} to ${target}`;
+  const abs = path.resolve(target);
+  let targetReal: string;
+  let rootReal: string;
+  try {
+    targetReal = await realpathOfNearest(abs);
+    rootReal = await realpathOfNearest(path.resolve(forgeRoot));
+  } catch (e) {
+    fail(`${refusing}: ${e instanceof Error ? e.message : String(e)} — ${w.who} cannot prove the target lies outside the Forge`);
+  }
+  const rel = path.relative(rootReal, targetReal);
+  if (rel === "" || !(rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))) {
+    fail(`${refusing}: it resolves inside the Forge (${forgeRoot}) — ${w.outside}`);
+  }
+  if (await pathTaken(abs)) fail(`${refusing}: the file already exists — ${w.never}; choose a new path`);
+  return abs;
 }
 
 /** Whether anything — a file, a directory, even a dangling symlink — already sits at `p`. */
