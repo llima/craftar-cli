@@ -84,6 +84,17 @@ async function recipeFiles(root: string): Promise<Map<string, { abs: string; ste
   return out;
 }
 
+/** Whether something stands where a new directory would go: anything but nothing, or a directory holding no file. */
+async function occupied(dir: string): Promise<boolean> {
+  let stat;
+  try {
+    stat = await fs.lstat(dir);
+  } catch {
+    return false;
+  }
+  return !stat.isDirectory() || (await listFiles(dir)).length > 0;
+}
+
 /** Replace the plain scalar entries equal to `old` in the sequence under `key`; says how many it replaced. */
 function swapEntry(doc: YAML.Document, key: string, old: string, value: string): number {
   const seq = doc.get(key, true);
@@ -164,7 +175,8 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
   const createdWrites: PromotionWrite[] = [];
   for (const q of Q) {
     const dir = path.join(folder, `${base.meta.name}--${q}`);
-    if (variantOf(q) || forge.ingredients.has(variantRef(q)) || (await exists(dir))) {
+    // An empty directory is no ingredient: a late failure undone with git leaves one behind, and the re-run must pass.
+    if (variantOf(q) || forge.ingredients.has(variantRef(q)) || (await occupied(dir))) {
       throw new Error(
         `${COMMAND}: ${variantRef(q)} already exists, and profile ${q} also resolves ${X} — the Forge is inconsistent (both would write one file); remove one by hand, commit, and re-run`,
       );

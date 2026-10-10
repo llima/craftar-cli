@@ -2060,18 +2060,21 @@ forge
       }
       if (impactState === "off") warnings.push("the registry is off — no workspace was checked");
     }
-    // The references the Forge cannot see (spec 29 §4.4): a workspace adding a shared recipe that names the base, or
-    // disabling the base or the variant by name, follows the Forge at its next sync, not this promotion.
+    // The references the Forge cannot see (spec 29 §4.4): a workspace adding a shared recipe that names the base, removing
+    // one this run copies for its profile, or disabling the base or the variant by name, follows the Forge at its next sync, not this promotion.
     const shared = [...f.recipes.values()].filter((r) => r.ingredients.includes(promotion.base) && !promotion.recipes.edited.includes(r.name)).map((r) => r.name);
+    const split = promotion.recipes.created.map((r) => r.from);
     const byName = (doc: unknown): boolean => {
-      const d = (typeof doc === "object" && doc !== null ? doc : {}) as { recipes?: { add?: unknown }; overrides?: { ingredients?: { disable?: unknown } } };
+      const d = (typeof doc === "object" && doc !== null ? doc : {}) as { recipes?: { add?: unknown; remove?: unknown }; overrides?: { ingredients?: { disable?: unknown } } };
       const add = Array.isArray(d.recipes?.add) ? d.recipes.add : [];
+      const remove = Array.isArray(d.recipes?.remove) ? d.recipes.remove : [];
       const disable = Array.isArray(d.overrides?.ingredients?.disable) ? d.overrides.ingredients.disable : [];
-      return add.some((r) => shared.includes(r)) || disable.some((r) => r === promotion.base || r === promotion.removed);
+      // A removed recipe the profile no longer names (it names the copy) stops removing anything.
+      return add.some((r) => shared.includes(r)) || remove.some((r) => split.includes(r)) || disable.some((r) => r === promotion.base || r === promotion.removed);
     };
     for (const c of concerned(impactBefore, impactEntries, byName).concerned) {
       warnings.push(
-        `${c.path} (${c.file}) adds a recipe that names ${promotion.base}, or disables ${promotion.base} or ${promotion.removed}, by name — its next sync follows the Forge, not this promotion`,
+        `${c.path} (${c.file}) adds or removes a recipe that names ${promotion.base}, or disables ${promotion.base} or ${promotion.removed}, by name — its next sync follows the Forge, not this promotion`,
       );
     }
 
@@ -2134,7 +2137,7 @@ forge
     for (const c of promotion.created) console.log(`  variant  ${c} ${o.dryRun ? "would be created" : "created"} (the old base)`);
     if (promotion.discarded) console.log(`  the old base is resolved by no profile — discarded (git holds it)`);
     const recipeLines = [...promotion.detail.recipes.filter((r) => r.from === null), ...promotion.detail.recipes.filter((r) => r.from !== null)];
-    for (const r of recipeLines) console.log(`  recipe   ${r.name}${r.from === null ? "" : ` created from ${r.from}`}: ${r.old} → ${r.new}`);
+    for (const r of recipeLines) console.log(`  recipe   ${r.name}${r.from === null ? "" : ` ${o.dryRun ? "would be created" : "created"} from ${r.from}`}: ${r.old} → ${r.new}`);
     for (const p of promotion.detail.profiles) console.log(`  profile  ${p.file}: ${p.swaps.map((s) => `${s.old} → ${s.new}`).join(", ")}`);
     for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
     if (checked) {
@@ -2325,10 +2328,6 @@ function warnStderr(warnings: string[]): void {
   for (const w of warnings) console.error(`${pc.yellow("warn")} ${w}`);
 }
 
-/**
- * Spec 25 §4.1–§4.2: the suffix format for a workspace that is not a path match.
- * Used by both `forge impact` and `forge unify` so the format is shared.
- */
 /** One workspace's line after a Forge write was planned before and after (spec 25 §4.2) — `forge unify` and `forge promote` print the same. */
 function impactLine(ws: ForgeWorkspace, r: ImpactResult): string {
   let state: string;
@@ -2339,6 +2338,10 @@ function impactLine(ws: ForgeWorkspace, r: ImpactResult): string {
   return `impact: ${ws.entry.path} (${ws.entry.profile}) ${state}${matchSuffix(ws)}`;
 }
 
+/**
+ * Spec 25 §4.1–§4.2: the suffix format for a workspace that is not a path match.
+ * Used by both `forge impact` and `forge unify` so the format is shared.
+ */
 function matchSuffix(ws: ForgeWorkspace): string {
   let suffix = "";
   if (ws.match === "remote") suffix = ` · after push (${ws.via})`;

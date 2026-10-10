@@ -442,4 +442,36 @@ describe("proveBasePromotion and applyBasePromotion", () => {
     expect(git(f.dir, "status", "--porcelain")).toBe("");
     expect(await scratchDirs()).toEqual([]);
   });
+
+  it("18. a linked root directory is refused by the plan, and again by the writes — the link being the only thing wrong", async () => {
+    const swap = async (f: { root: string; dir: string }) => {
+      // The recipes directory moved out and linked back: every file still reads, and a write would land outside the Forge.
+      const outside = path.join(f.root, "recipes-elsewhere");
+      await fs.rename(path.join(f.dir, "recipes"), outside);
+      await fs.symlink(outside, path.join(f.dir, "recipes"), "junction");
+      return outside;
+    };
+    const message = "recipes is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit";
+    const atPlan = await forgeOf(THREE);
+    const outside = await swap(atPlan);
+    const before = await fs.readFile(path.join(outside, "base--acme.yaml"), "utf8");
+    await expect(planBasePromotion(await loadForge(atPlan.dir), "rule/workflow", "acme")).rejects.toThrow(message);
+
+    const atApply = await forgeOf(THREE);
+    const p = await planned(atApply);
+    const elsewhere = await swap(atApply);
+    const journal: WriteJournal = [];
+    await expect(applyBasePromotion(p, journal)).rejects.toThrow(message);
+    expect(journal).toEqual([]);
+    expect(await fs.readFile(path.join(elsewhere, "base--acme.yaml"), "utf8")).toBe(before);
+    expect(await exists(path.join(atApply.dir, "ingredients/rules/workflow--globex"))).toBe(false);
+  });
+
+  it("19. an empty directory where a variant would go is no ingredient: the plan passes and the writes land", async () => {
+    const f = await forgeOf(THREE);
+    await fs.mkdir(path.join(f.dir, "ingredients/rules/workflow--globex/notes"), { recursive: true });
+    const p = await planBasePromotion(await loadForge(f.dir), "rule/workflow", "acme");
+    await applyBasePromotion(p, []);
+    expect(await fs.readFile(path.join(f.dir, "ingredients/rules/workflow--globex/rule.md"), "utf8")).toBe("base text\n");
+  });
 });

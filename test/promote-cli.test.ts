@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -5,7 +6,7 @@ import YAML from "yaml";
 import { exists, listFiles } from "../src/core/forge.js";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
-import { git } from "./helpers/remote.js";
+import { git, gitEnv } from "./helpers/remote.js";
 
 // Spec 29 §4.4 — `craftar forge promote`: the gates, the output, --dry-run, --json, the impact passes, a late failure.
 
@@ -115,7 +116,10 @@ describe("forge promote — the command", () => {
         "  base     rule/workflow would hold acme's text (was rule/workflow--acme)",
         "  variant  rule/workflow--globex would be created (the old base)",
         "  variant  rule/workflow--initech would be created (the old base)",
-        ...LINES.slice(3),
+        LINES[3],
+        "  recipe   base--globex would be created from base: rule/workflow → rule/workflow--globex",
+        "  recipe   base--initech would be created from base: rule/workflow → rule/workflow--initech",
+        ...LINES.slice(6),
         "  impact   1 workspace(s) planned: not written, not compared",
         NEXT,
         "",
@@ -188,21 +192,68 @@ describe("forge promote — the command", () => {
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toBe(["craftar forge promote rule/workflow ← acme", ...LINES, "  impact   3 workspace(s) planned before and after: no effect", NEXT, ""].join("\n"));
 
+  });
+
+  it("22b. a workspace that adds or removes a recipe, or disables an ingredient, by name is warned about — one workspace per reference", async () => {
+    const cases: Array<[string, Record<string, unknown>, string[]]> = [
+      // adds the shared recipe naming the base: after the promotion that recipe gives it acme's text
+      ["adder", { profile: "initech", recipes: { add: ["base"] } }, [".claude/rules/workflow.md", ".kiro/steering/workflow.md"]],
+      // removes the shared recipe its profile named: the profile now names the copy, so nothing is removed
+      ["remover", { profile: "globex", recipes: { remove: ["base"] } }, [".claude/rules/style.md", ".claude/rules/workflow.md"]],
+      // disables the variant that is removed: the base comes back enabled
+      ["disabler", { profile: "acme", overrides: { ingredients: { disable: ["rule/workflow--acme"] } } }, [".claude/rules/workflow.md", ".kiro/steering/workflow.md"]],
+      // disables the base, which another ingredient now is
+      ["baser", { profile: "globex", overrides: { ingredients: { disable: ["rule/workflow"] } } }, [".claude/rules/workflow.md"]],
+    ];
+    for (const [name, config, files] of cases) {
+      const t = await scenario();
+      await t.workspace("initech");
+      const ws = path.join(t.root, `${name}-portal`);
+      await makeWorkspace(ws, t.forge, { config });
+      expect(t.cli(["sync", "--workspace", ws]).code, name).toBe(0);
+      const real = await fs.realpath(ws);
+      const r = t.promote();
+      expect(r.code, r.stderr).toBe(0);
+      const lines = r.stdout.split("\n");
+      expect(lines.filter((l) => l.startsWith("  warn ")), name).toEqual([
+        `  warn ${real} (craftar.yaml) adds or removes a recipe that names rule/workflow, or disables rule/workflow or rule/workflow--acme, by name — its next sync follows the Forge, not this promotion`,
+      ]);
+      // One line per workspace, in unify's wording, when any changes.
+      expect(lines.filter((l) => l.startsWith("  impact")).sort(), name).toEqual(
+        [
+          `  impact: ${await fs.realpath(path.join(t.root, "initech-portal"))} (initech) no effect`,
+          `  impact: ${real} (${config.profile}) ${files.length === 1 ? `1 file changes — ${files[0]}` : `${files.length} files change — ${files.join(", ")}`}`,
+        ].sort(),
+      );
+    }
+    // The object carries the same: keys of a row in unify's order, the changed files, the warning.
     const t = await scenario();
-    for (const q of ["acme", "globex", "initech"]) await t.workspace(q);
-    const adder = path.join(t.root, "adder-portal");
-    await makeWorkspace(adder, t.forge, { config: { profile: "acme", recipes: { add: ["base"] }, overrides: { ingredients: { disable: ["rule/workflow"] } } } });
-    expect(t.cli(["sync", "--workspace", adder]).code).toBe(0);
-    const j = t.promote(["--json"]);
-    expect(j.code, j.stderr).toBe(0);
-    const out = JSON.parse(j.stdout);
-    expect(out.impact.map((x: { profile: string; state: string }) => [x.profile, x.state]).sort()).toEqual([["acme", "changed"], ["acme", "no-effect"], ["globex", "no-effect"], ["initech", "no-effect"]]);
+    const ws = path.join(t.root, "adder-portal");
+    await makeWorkspace(ws, t.forge, { config: { profile: "initech", recipes: { add: ["base"] } } });
+    expect(t.cli(["sync", "--workspace", ws]).code).toBe(0);
+    const out = JSON.parse(t.promote(["--json"]).stdout);
     expect(Object.keys(out.impact[0])).toEqual(["path", "profile", "match", "via", "ref", "state", "files", "error"]);
-    const realAdder = await fs.realpath(adder);
-    expect(out.warnings).toEqual([
-      `${realAdder} (craftar.yaml) adds a recipe that names rule/workflow, or disables rule/workflow or rule/workflow--acme, by name — its next sync follows the Forge, not this promotion`,
-    ]);
-    expect(out.impact.find((x: { path: string }) => x.path === realAdder).files).toEqual([".claude/rules/workflow.md", ".kiro/steering/workflow.md"]);
+    expect(out.impact.map((x: { state: string; files: string[] }) => [x.state, x.files])).toEqual([["changed", [".claude/rules/workflow.md", ".kiro/steering/workflow.md"]]]);
+    expect(out.warnings).toHaveLength(1);
+  });
+
+  it("22c. no other profile on the base: the discarded line and no next line; an empty registry: its own impact line", async () => {
+    const s = await scenario();
+    for (const q of ["globex", "initech"]) await fs.rm(path.join(s.forge, "profiles", q), { recursive: true });
+    git(s.forge, "add", "-A");
+    git(s.forge, "commit", "-q", "-m", "acme alone");
+    const r = s.promote();
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe(
+      [
+        "craftar forge promote rule/workflow ← acme",
+        LINES[0],
+        "  the old base is resolved by no profile — discarded (git holds it)",
+        LINES[3],
+        "  impact   no workspace of this Forge is registered on this machine",
+        "",
+      ].join("\n"),
+    );
   });
 
   it("23. the registry off or unreadable: the command runs, and warns that no workspace was checked", async () => {
@@ -237,6 +288,12 @@ describe("forge promote — the command", () => {
     // Nothing after the failed write was touched: no recipe, no profile — and the removals come last, so the variant is still there.
     await fs.chmod(locked, 0o755);
     expect(git(s.forge, "status", "--porcelain", "recipes", "profiles", "ingredients/rules/workflow--acme")).toBe("");
+    // The recovery, run as printed, gives back a Forge the same command accepts — and then writes.
+    for (const line of r.stderr.split("\n").filter((l) => l.startsWith("  git -C "))) execSync(line.trim(), { env: gitEnv() });
+    expect(git(s.forge, "status", "--porcelain")).toBe("");
+    const again = s.promote(["--no-impact"]);
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.stdout).toBe(["craftar forge promote rule/workflow ← acme", ...LINES, NEXT, ""].join("\n"));
   });
 
   it("25. --help names the argument, every option and that it writes to the Forge", () => {
