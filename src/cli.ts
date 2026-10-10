@@ -111,6 +111,8 @@ program
     for (const v of r.variants) console.log(`  ${pc.yellow("variant")} ${v.name} — ${v.reason}`);
     for (const x of r.rejected) console.log(`  ${pc.red("rejected")} ${x.name} — ${x.reason}`);
     for (const x of r.preferKiro ?? []) console.log(`  ${pc.cyan("prefer-kiro")} ${preferredLine(x)}`);
+    // Spec 33 §5.3: what the block provides is left to its recipe.
+    for (const x of r.leftToRecipes) console.log(`  left to recipe ${x.recipe} (integrations.${x.slot}): ${x.refs.join(", ")} — not compared; when this workspace resolves that recipe, craftar status shows whether its copies differ`);
     // Spec 10 §4.2: how a templated base was reused, and what the profile gained.
     // Spec 11 §4.3: `; sections …` when a section value filled the render.
     for (const x of r.rendered) {

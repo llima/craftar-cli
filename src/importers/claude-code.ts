@@ -17,6 +17,7 @@ import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
 import { decide, forgeBefore, pin, sourceKeys, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
+import { providedByBlock } from "./provided.js";
 import { renderMap } from "../core/template-import.js";
 import { firstMarkerLine } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
@@ -60,6 +61,8 @@ export interface ImportReport {
   sections: { key: string; name: string; old: string | null; value: string; from: string }[];
   /** Shared recipes this run did not use for the profile, and the owned recipe it used instead (spec 10 §6.7). */
   recipeSplits: { shared: string; owned: string; reason: string }[];
+  /** Sources left to an integration recipe: not scanned, not compared, not written (spec 33 §5.3). */
+  leftToRecipes: { recipe: string; slot: string; refs: string[] }[];
   /** What happened to profiles/<p>/profile.yaml. */
   profileWrite: { path: string; action: "created" | "edited" | "unchanged"; fields: string[] };
   /** What happened to craftar.forge.yaml: created, bumped to `schema: 2`, or left alone (spec 11 §6.14). */
@@ -152,7 +155,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const ws = path.resolve(opts.workspaceRoot);
   const forge = stage.root;
   const report: ImportReport = {
-    created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [], rendered: [], inferred: [], params: [], sectioned: [], sections: [], recipeSplits: [],
+    created: [], reused: [], variants: [], rejected: [], recipes: [], profile: opts.profileName, warnings: [], rendered: [], inferred: [], params: [], sectioned: [], sections: [], recipeSplits: [], leftToRecipes: [],
     profileWrite: { path: `profiles/${opts.profileName}/profile.yaml`, action: "unchanged", fields: [] },
     manifestWrite: "unchanged",
     configWrite: null,
@@ -325,6 +328,48 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
         preferred.push({ ref, source, steeringLines: textLines(sm.text), rule: `.claude/rules/${name}.md`, ruleLines: textLines(ruleText), differs: text !== ruleText });
       };
     }
+  }
+
+  /* ---- what the block provides is left to its recipe (spec 33 §5.3) ---- */
+  let provided: Map<string, { recipe: string; slot: string; refs: string[] }>;
+  try {
+    provided = loaded?.profiles.has(opts.profileName) ? providedByBlock(loaded, opts.profileName) : new Map();
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Error(`import: profile ${opts.profileName} does not resolve (${message}) — fix the Forge and re-run`);
+  }
+  // Filter the queue in place: skip every source whose `<type>/<outName>` is a key of `provided`.
+  // For each skipped rule, push its name to `ruleNames` so the steering check does not import it.
+  // Track recipes in the order the first skipped source of each was read (queue order).
+  const recipeOrder: string[] = [];
+  const recipeData = new Map<string, { slot: string; refs: string[] }>();
+  // Iterate forward through queue to record order, but splice backward to avoid index issues.
+  const toSplice: number[] = [];
+  for (let i = 0; i < queue.length; i++) {
+    const src = queue[i];
+    const key = `${src.meta.type}/${outName(src.meta)}`;
+    const p = provided.get(key);
+    if (p) {
+      toSplice.push(i);
+      if (src.meta.type === "rule") ruleNames.push(src.meta.name);
+      // Track the recipe in the order the first skipped source of each was read.
+      if (!recipeData.has(p.recipe)) {
+        recipeOrder.push(p.recipe);
+        recipeData.set(p.recipe, { slot: p.slot, refs: [] });
+      }
+      // Add refs (unique, in resolution order from providedByBlock).
+      const entry = recipeData.get(p.recipe)!;
+      for (const r of p.refs) if (!entry.refs.includes(r)) entry.refs.push(r);
+    }
+  }
+  // Splice in reverse order to avoid index shifting.
+  for (let i = toSplice.length - 1; i >= 0; i--) {
+    queue.splice(toSplice[i], 1);
+  }
+  // Build the report in the order the first skipped source of each recipe was read.
+  for (const recipe of recipeOrder) {
+    const { slot, refs } = recipeData.get(recipe)!;
+    report.leftToRecipes.push({ recipe, slot, refs });
   }
   // F9 (§6.5): a source rejected for a secret or skipped is never decided. Its base stays in the Forge-wide scan (b),
   // and its text leaves the literal check (c). `ruleNames` fills only as rules are decided, so each set errs on its
