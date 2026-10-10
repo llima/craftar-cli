@@ -515,3 +515,86 @@ describe("mcp-env — authEnv (spec 27)", () => {
     ]);
   });
 });
+
+describe("docker and services-env checks (spec 31 §4.7)", () => {
+  // Helper to create a service ingredient
+  const service = (name: string, composeContent: string, extra: Record<string, unknown> = {}) => ({
+    meta: { type: "service", name, ...extra },
+    files: { "compose.yaml": composeContent },
+  });
+
+  it("no service → neither id in checks", async () => {
+    const f = await fixture();
+    const a = await f.ws("acme-a");
+    await syncAndRegister(f.home, a);
+    const r = await run({ home: f.home, workspace: a });
+    const ids = r.checks.map((c) => c.id);
+    expect(ids).not.toContain("docker");
+    expect(ids).not.toContain("services-env");
+  });
+
+  it("fragment using ${ACME_A}, ${ACME_B:-x}, ${CRAFTAR_WORKSPACE}, ${ACME_C} with ACME_C set, ${ACME_D} with ACME_D in .env → warn names ACME_A only; .env value appears nowhere", async () => {
+    // Use runtime-assembled marker so the literal cannot appear in the code
+    const markerValue = "secret_" + "value_" + "xyz123";
+    const compose = `services:
+  test:
+    image: alpine
+    environment:
+      A: \${ACME_A}
+      B: \${ACME_B:-default}
+      W: \${CRAFTAR_WORKSPACE}
+      C: \${ACME_C}
+      D: \${ACME_D}
+      E: \${ACME_E?required}
+      F: \${ACME_F:?must be set}
+      G: \${ACME_G+yes}
+      H: \${ACME_H:+yes}
+      I: \${ACME_I-default}
+      ESC: $\${NOT_A_REF}
+`;
+    const f = await fixture({
+      ingredients: [
+        service("echo", compose),
+        rule("style", "# Style\n"),
+      ],
+      recipes: [recipe("base", ["rule/style", "service/echo"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    const a = await f.ws("acme-a");
+    // Write .env file with ACME_D=<marker>
+    await writeFiles(a, { ".env": `ACME_D=${markerValue}\n` });
+    const r = await run({
+      home: f.home,
+      workspace: a,
+      env: { ACME_C: "set_value" },
+      // Inject a docker runner that returns available compose
+      dockerRunner: async () => ({ code: 0, stdout: "v2.30.0\n", stderr: "" }),
+    });
+    // Should have docker and services-env checks
+    expect(of(r.checks, "docker")).toHaveLength(1);
+    expect(of(r.checks, "services-env").length).toBeGreaterThan(0);
+    // docker should be ok
+    expect(one(r.checks, "docker")).toMatchObject({ level: "ok", message: "Docker Compose 2.30.0" });
+    // services-env should warn for ACME_A (no default), ACME_E (?), ACME_F (:?)
+    // But NOT for ACME_B (:-default), ACME_C (set in env), ACME_D (in .env), CRAFTAR_WORKSPACE (set by up),
+    // ACME_G (+), ACME_H (:+), ACME_I (-), NOT_A_REF (escaped $$)
+    const envWarnings = of(r.checks, "services-env").filter((c) => c.level === "warn");
+    const warnedNames = envWarnings.map((c) => {
+      const m = /expects (\w+),/.exec(c.message);
+      return m ? m[1] : null;
+    });
+    expect(warnedNames).toContain("ACME_A");
+    expect(warnedNames).toContain("ACME_E");
+    expect(warnedNames).toContain("ACME_F");
+    expect(warnedNames).not.toContain("ACME_B");
+    expect(warnedNames).not.toContain("CRAFTAR_WORKSPACE");
+    expect(warnedNames).not.toContain("ACME_C");
+    expect(warnedNames).not.toContain("ACME_D");
+    expect(warnedNames).not.toContain("ACME_G");
+    expect(warnedNames).not.toContain("ACME_H");
+    expect(warnedNames).not.toContain("ACME_I");
+    expect(warnedNames).not.toContain("NOT_A_REF");
+    // The marker value should not appear anywhere in the JSON output
+    expect(JSON.stringify(r)).not.toContain(markerValue);
+  });
+});
