@@ -4,7 +4,7 @@ import { REGISTRY_SCHEMAS, RegistrySchema, type Lock, type Registry, type Regist
 import { exists } from "./forge.js";
 import { withLock, type LockTiming } from "./home-lock.js";
 import { cacheKey } from "./remote.js";
-import { loadWorkspace, plan, readLock, status, WORKSPACE_FILE, type FileStatus, type Plan, type Workspace } from "./sync.js";
+import { loadWorkspace, plan, readLock, status, unsetDeclared, unsetSummary, WORKSPACE_FILE, type FileStatus, type Plan, type Workspace } from "./sync.js";
 
 /*
  * The workspace registry (spec 21): `$CRAFTAR_HOME/registry.json`, one entry per workspace a
@@ -294,6 +294,9 @@ export async function listWorkspaces(home: string, opts: { fetch: boolean }): Pr
       const p = await plan(ws);
       const lock = await readLock(ws.root);
       const st = await status(ws, p, lock);
+      // Spec 29 §4.1: a sync that would refuse is an `error` row, rebuilt from the entry like any other, its reason a warning.
+      const unset = unsetDeclared(p);
+      if (unset.length) throw new Error(`sync refused: ${unsetSummary(unset)}`);
       const commit = ws.forge.commit;
       const lockCommit = lock?.forge.commit ?? null;
       rows.push({

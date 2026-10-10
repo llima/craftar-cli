@@ -204,3 +204,36 @@ describe("init and the recipe commands with an unset declared parameter", () => 
     expect(back.stdout.split("\n")).toContain("next sync: nothing to sync");
   });
 });
+
+describe("workspaces and forge impact with an unset declared parameter", () => {
+  it("workspaces: the row is error, the reason is a warning line, and no key or value is new", async () => {
+    const s = await syncedThenDeclared(); // the sync registered it
+    const r = runCli(["workspaces", "--json"]);
+    expect(r.code).toBe(0);
+    const json = JSON.parse(r.stdout);
+    const row = json.workspaces.find((w: { path: string }) => w.path.includes(path.basename(s.root)));
+    expect(row.status).toBe("error");
+    expect(row.files).toBeNull();
+    expect(json.warnings.filter((w: string) => w.includes(path.basename(s.root)) && w.endsWith(": sync refused: declared parameter(s) with no value: org"))).toHaveLength(1);
+    const text = runCli(["workspaces"]);
+    expect(text.stdout).toContain("error");
+  });
+
+  it("forge impact: the workspace's state is error with the reason; exit and shape as for any error row", async () => {
+    const s = await syncedThenDeclared();
+    const r = runCli(["forge", "impact", "--forge", s.forgeRoot, "--json"]);
+    const json = JSON.parse(r.stdout);
+    const row = json.workspaces.find((w: { path: string }) => w.path.includes(path.basename(s.root)));
+    expect(Object.keys(row)).toEqual(["path", "profile", "match", "via", "ref", "state", "counts", "error"]);
+    expect([row.state, row.counts, row.error]).toEqual(["error", {}, "sync refused: declared parameter(s) with no value: org"]);
+  });
+
+  it("(control) before the declaration both read the workspace as in sync", async () => {
+    const s = await fresh(false);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    const row = JSON.parse(runCli(["workspaces", "--json"]).stdout).workspaces.find((w: { path: string }) => w.path.includes(path.basename(s.root)));
+    expect(row.status).toBe("up-to-date");
+    const imp = JSON.parse(runCli(["forge", "impact", "--forge", s.forgeRoot, "--json"]).stdout).workspaces.find((w: { path: string }) => w.path.includes(path.basename(s.root)));
+    expect(imp.state).toBe("unchanged");
+  });
+});
