@@ -53,7 +53,7 @@ import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { spawn } from "node:child_process";
 import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
-import { declaredTemplates, dotnetVersion, feedMessage, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared } from "./core/templates.js";
+import { declaredTemplates, dotnetVersion, feedMessage, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared } from "./core/templates.js";
 import { capture, spawnInherited } from "./core/proc.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -1035,30 +1035,17 @@ templates
     }
 
     const announce = (entry: number, line: string) => console.log(`templates[${entry}]: ${line}`);
-    let result;
+    let result: import("./core/templates.js").InstallResult;
     try {
       result = await installTemplates(declared.entries, ws.root, { dryRun: o.dryRun, force: o.force, interactive: o.interactive, env: process.env, announce }, spawnInherited);
     } catch (e) {
       fail(errorText(e));
     }
 
-    if (o.dryRun) {
-      for (const l of result.lines) console.log(l.line);
-      console.log(`dry run: ${result.lines.length} would run, ${result.skipped.length} skipped — nothing installed`);
-      return;
-    }
-
-    for (const f of result.failed) {
-      const msg = f.code === null ? "dotnet did not exit" : `dotnet exited ${f.code}`;
-      errorLine(`templates[${f.entry}] failed — ${msg}`);
-    }
-
-    const store = "into the dotnet template store of this user (remove a package with: dotnet new uninstall <package>)";
-    console.log(`templates: ${result.installed.length} installed, ${result.failed.length} failed, ${result.skipped.length} skipped — ${store}`);
-
-    if (result.failed.length > 0 || result.skipped.length > 0) {
-      process.exitCode = 1;
-    }
+    const report = installReport(result, o.dryRun);
+    for (const l of report.err) errorLine(l);
+    for (const l of report.out) console.log(l);
+    if (report.exitCode) process.exitCode = 1;
   });
 
 /* ---------------------------------------------------------------- recipes */

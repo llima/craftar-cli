@@ -292,7 +292,7 @@ async function workspaceChecks(
     const profile = ws.forge.profiles.get(ws.config.profile);
     if (profile) {
       const label = await profileLabel(ws.forge.root, profile.name);
-      let declared;
+      let declared: import("./templates.js").Declared | undefined;
       try {
         declared = declaredTemplates(profile, label);
       } catch (e) {

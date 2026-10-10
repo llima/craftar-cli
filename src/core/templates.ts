@@ -188,6 +188,32 @@ export interface InstallResult {
   skipped: number[];
 }
 
+export interface InstallReport {
+  out: string[];
+  err: string[];
+  exitCode: 0 | 1;
+}
+
+/** What `install` prints and how it exits — pure, tested. */
+export function installReport(result: InstallResult, dryRun: boolean): InstallReport {
+  const store = "into the dotnet template store of this user (remove a package with: dotnet new uninstall <package>)";
+  if (dryRun) {
+    return {
+      err: [],
+      out: [...result.lines.map((l) => l.line), `dry run: ${result.lines.length} would run, ${result.skipped.length} skipped — nothing installed`],
+      exitCode: 0,
+    };
+  }
+  const err: string[] = [];
+  for (const f of result.failed) {
+    const msg = f.code === null ? "dotnet did not exit" : `dotnet exited ${f.code}`;
+    err.push(`templates[${f.entry}] failed — ${msg}`);
+  }
+  const out = [`templates: ${result.installed.length} installed, ${result.failed.length} failed, ${result.skipped.length} skipped — ${store}`];
+  const exitCode: 0 | 1 = result.failed.length > 0 || result.skipped.length > 0 ? 1 : 0;
+  return { err, out, exitCode };
+}
+
 /** Throws messages.md §4 before any run when an ID collides — `dryRun` included. */
 export async function installTemplates(entries: DeclaredEntry[], root: string, opts: InstallOptions, run: Runner): Promise<InstallResult> {
   const collisions = await rootCollisions(entries, root);

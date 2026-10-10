@@ -242,7 +242,7 @@ describe("one reader (spec 32 §8)", () => {
   });
 });
 
-import { dotnetVersion, feedMessage, installArgv, installLine, installTemplates, rootCollisions, unpinnedSources, type DeclaredEntry, type DotnetNewEntry } from "../src/core/templates.js";
+import { dotnetVersion, feedMessage, installArgv, installLine, installReport, installTemplates, rootCollisions, unpinnedSources, type DeclaredEntry, type DotnetNewEntry } from "../src/core/templates.js";
 import type { RunRequest } from "../src/core/proc.js";
 import { tmpDir } from "./helpers/forge.js";
 
@@ -449,5 +449,30 @@ describe("dotnetVersion (spec 32 §4.2 step 2, design D5)", () => {
     expect(await dotnetVersion(run, {}, "/some/root")).toBe("10.0.401");
     expect(await dotnetVersion(run, {})).toBe("10.0.401");
     expect(seen).toEqual(["/some/root", undefined]);
+  });
+});
+
+describe("installReport — what install prints and how it exits (spec 32 §4.2 step 5)", () => {
+  const STORE = "into the dotnet template store of this user (remove a package with: dotnet new uninstall <package>)";
+  const lines = [
+    { entry: 0, line: LINE_API },
+    { entry: 2, line: LINE_TOOLS },
+  ];
+  it("a real run: one line per failed entry, the summary, exit 1 when anything failed or was skipped", () => {
+    expect(installReport({ lines, installed: [3], failed: [{ entry: 0, code: 103 }, { entry: 2, code: null }], skipped: [1] }, false)).toEqual({
+      err: ["templates[0] failed — dotnet exited 103", "templates[2] failed — dotnet did not exit"],
+      out: [`templates: 1 installed, 2 failed, 1 skipped — ${STORE}`],
+      exitCode: 1,
+    });
+    expect(installReport({ lines, installed: [0, 2], failed: [], skipped: [] }, false)).toEqual({ err: [], out: [`templates: 2 installed, 0 failed, 0 skipped — ${STORE}`], exitCode: 0 });
+    expect(installReport({ lines: [], installed: [], failed: [], skipped: [1] }, false).exitCode).toBe(1);
+    expect(installReport({ lines, installed: [0], failed: [{ entry: 2, code: 1 }], skipped: [] }, false).exitCode).toBe(1);
+  });
+  it("a dry run: the bare lines, the count, exit 0 even with a skipped entry", () => {
+    expect(installReport({ lines, installed: [], failed: [], skipped: [1] }, true)).toEqual({
+      err: [],
+      out: [LINE_API, LINE_TOOLS, "dry run: 2 would run, 1 skipped — nothing installed"],
+      exitCode: 0,
+    });
   });
 });
