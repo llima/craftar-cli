@@ -286,3 +286,20 @@ describe("readlineIo", () => {
     expect(calls).toEqual([true, false]);
   });
 });
+
+describe("readlineIo — the input ends before the confirmation (review round 1)", () => {
+  it("an input that ended while nothing was asked: confirm resolves null", { timeout: 2000 }, async () => {
+    const { input, output } = createStreams();
+    const io = readlineIo(input, output, { terminal: false });
+    input.end();
+    expect(await io.confirm("Write [yes]: ")).toBe(null);
+  });
+
+  it("an input that ends during the discard: confirm resolves null", { timeout: 2000 }, async () => {
+    const { input, output } = createStreams();
+    const io = readlineIo(input, output, { terminal: false });
+    const p = io.confirm("Write [yes]: ");
+    input.end();
+    expect(await p).toBe(null);
+  });
+});

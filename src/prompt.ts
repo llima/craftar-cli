@@ -72,7 +72,6 @@ async function askOne(
   weCalledClose = true;
   rl.close();
 
-  questionPromise.catch(() => { /* swallow any rejection */ });
   return result;
 }
 
@@ -86,13 +85,20 @@ async function confirmOne(
   terminal: boolean,
   question: string,
 ): Promise<string | null> {
+  if (input.readableEnded || input.destroyed) return null;
   const onData = (): void => { /* discard */ };
+  // An end consumed here would never reach the interface: the question would stay pending for good.
+  let ended = false;
+  const onEnd = (): void => { ended = true; };
   input.on("data", onData);
+  input.once("end", onEnd);
   input.resume();
 
   await new Promise((r) => setTimeout(r, DRAIN_MS));
 
   input.removeListener("data", onData);
+  input.removeListener("end", onEnd);
+  if (ended) return null;
   input.pause();
 
   return askOne(input, output, terminal, question);
