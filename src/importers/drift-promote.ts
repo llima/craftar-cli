@@ -183,22 +183,72 @@ interface OtherWorkspaceCheck {
 }
 
 /**
- * Copy the Forge to a scratch directory without `.git` and with all symbolic links dereferenced.
+ * Copy the Forge to a scratch directory without `.git`.
+ * - A regular file or directory inside the Forge: copied.
+ * - A symbolic link to a FILE whose real path is inside the Forge: copied as a regular file.
+ * - A symbolic link to a DIRECTORY (inside or outside): NOT copied and not followed.
+ * - A symbolic link that is dangling, or whose target is a file OUTSIDE the Forge: throws.
  * Exported so tests can verify the copy behaviour directly.
  */
 export async function copyForgeForProof(forgeDir: string, scratchDir: string): Promise<void> {
-  await fs.cp(forgeDir, scratchDir, {
-    recursive: true,
-    dereference: true, // follow symlinks, copy the target file
-    filter: (src) => {
-      const rel = path.relative(forgeDir, src);
-      // Allow the root directory itself
-      if (rel === "") return true;
-      // Filter out .git (file or directory)
-      const firstPart = rel.split(path.sep)[0];
-      return firstPart !== ".git";
-    },
-  });
+  const forgeReal = await fs.realpath(forgeDir);
+
+  async function walk(rel: string): Promise<void> {
+    const src = path.join(forgeDir, rel);
+    const dest = path.join(scratchDir, rel);
+
+    const entries = await fs.readdir(src, { withFileTypes: true });
+    for (const ent of entries) {
+      const entRel = rel ? `${rel}/${ent.name}` : ent.name;
+      const entSrc = path.join(src, ent.name);
+      const entDest = path.join(dest, ent.name);
+
+      // Skip .git at the top level
+      if (rel === "" && ent.name === ".git") continue;
+
+      if (ent.isSymbolicLink()) {
+        // First, check if we can resolve the symlink at all
+        let targetReal: string;
+        let targetStat;
+        try {
+          targetReal = await fs.realpath(entSrc);
+          targetStat = await fs.stat(targetReal);
+        } catch (e) {
+          // Dangling link or unresolvable — refuse
+          throw new Error(
+            `${entRel} is a symbolic link out of the Forge, or to nothing — promote cannot copy the Forge to prove its edit; fix or remove it`,
+          );
+        }
+
+        // If it's a directory (inside or outside Forge), skip it entirely — loadForge doesn't traverse these
+        if (targetStat.isDirectory()) {
+          continue;
+        }
+
+        // It's a file link — check if target is inside the Forge
+        const relToForge = path.relative(forgeReal, targetReal);
+        if (relToForge.startsWith("..") || path.isAbsolute(relToForge)) {
+          // File link to outside the Forge — refuse
+          throw new Error(
+            `${entRel} is a symbolic link out of the Forge, or to nothing — promote cannot copy the Forge to prove its edit; fix or remove it`,
+          );
+        }
+
+        // File link to inside the Forge — copy the target's bytes as a regular file
+        await fs.copyFile(targetReal, entDest);
+      } else if (ent.isDirectory()) {
+        await fs.mkdir(entDest, { recursive: true });
+        await walk(entRel);
+      } else {
+        // Regular file
+        await fs.copyFile(entSrc, entDest);
+      }
+    }
+  }
+
+  // Create the scratch root
+  await fs.mkdir(scratchDir, { recursive: true });
+  await walk("");
 }
 
 /**
@@ -211,7 +261,7 @@ async function checkStagedSymlinks(forgeDir: string, stage: ForgeStage): Promise
   for (const entry of entries) {
     // Check the path and every ancestor up to but not including forgeDir
     let current = entry.abs;
-    while (current.length > forgeDir.length) {
+    while (path.relative(forgeDir, current) !== "") {
       if (checked.has(current)) break;
       checked.add(current);
       // Check if current exists and is a symlink
