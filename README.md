@@ -150,7 +150,7 @@ server:
   timeout: 30
 ```
 
-`authEnv` names the environment variables the server needs — names only, never a value. It is a declaration: the server is emitted exactly as written (write `${NAME}` in `server` yourself; the tool expands it, Craftar does not). An item that is a token of a known format fails the load.
+`authEnv` names the environment variables the server needs — names only, never a value. It is a declaration: the server is emitted exactly as written (how the server receives the variable is yours to write: a `${NAME}` reference where the tool expands one, or nothing at all for a server that inherits the environment — Craftar never expands it). An item that is a token of a known format fails the load.
 
 **Sections.** A body (its **body files**: the `file` of a rule, agent, command or steering — `rule.md` etc. by default; `SKILL.md` of a file-layout skill; every `.md`, `.txt`, `.json`, `.yaml` or `.yml` file of a dir-layout skill; the text files listed in `files` of a script or hook — a body file stays inside the ingredient directory; one declared outside it, or behind a symlinked directory, or spelled differently from the file on disk (letter case, on a case-insensitive file system), fails `sync`, `status`, `diff`, `explain` and `ls`, naming it) can hold blocks a profile or a workspace replaces. A file no target emits (a `notes.md` beside `rule.md`) is ignored — for sections and for `{{param}}` citations alike; a file a target emits but does not render as text is copied (see below). A block sits between two marker lines, and its content is the default:
 
