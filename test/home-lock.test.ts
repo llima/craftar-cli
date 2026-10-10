@@ -38,11 +38,11 @@ describe("withLock", () => {
     await expect(withLock(file, "x", { waitMs: 60_000 }, async () => "ran")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  // On Windows the exclusive create answers EPERM while the previous holder's unlink is still pending.
-  // The hook stands in for that answer, so these cases run on every platform.
+  // windows-latest once answered EPERM at the exclusive create as the holder released the lock (not
+  // reproduced since). The hook stands in for that answer, so these cases run on every platform.
   const eperm = () => Object.assign(new Error("EPERM: operation not permitted, open"), { code: "EPERM" });
 
-  it("win32: EPERM from the create is the release still landing — retried, the body runs once", async () => {
+  it("win32: EPERM from the create is taken for the release still landing — retried, the body runs once", async () => {
     const dir = await tmpDir();
     const file = path.join(dir, "registry.lock");
     let attempts = 0;

@@ -78,10 +78,10 @@ export async function withLock<T>(file: string, label: string, timing: LockOptio
         await new Promise((r) => setTimeout(r, pollMs));
         continue;
       }
-      // Windows refuses to create a file while its unlink is in flight — the holder releasing the lock
-      // this very moment — with EPERM, not EEXIST, and answers the same for a directory in that state
-      // (the mkdir under createDir). It clears in milliseconds; an EPERM that outlasts its own short
-      // wait is a real refusal (a directory that cannot be written) and is rethrown.
+      // windows-latest once answered EPERM, not EEXIST, at this create, as the holder released the lock;
+      // the cause is not reproduced. It is taken for that release still in flight and waited out for a
+      // short time of its own (the mkdir under createDir shares the try, and the wait). An EPERM that
+      // outlasts it is a real refusal — a directory that cannot be written — and is rethrown.
       if (code === "EPERM" && windows) {
         pendingSince ??= Date.now();
         if (Date.now() - pendingSince >= pendingDeleteMs) throw e;
