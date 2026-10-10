@@ -53,6 +53,7 @@ import {
 import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
 import { sectionKey } from "../core/resolve.js";
+import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import type { WriteJournal } from "../core/unify.js";
 import type { Ingredient, IngredientRef, Lock } from "../schema/index.js";
@@ -1056,8 +1057,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     try {
       const existingYaml = await fs.readFile(ingredientYamlPath, "utf8");
       // Compare parsed YAML to ignore formatting differences
-      const existingParsed = YAML.parse(existingYaml);
-      const newParsed = YAML.parse(ingredientYaml);
+      const label = path.relative(forgeDir, ingredientYamlPath).split(path.sep).join("/");
+      const existingParsed = parseYamlText(label, existingYaml);
+      const newParsed = parseYamlText(label, ingredientYaml);
       // Deep compare the objects
       if (isDeepStrictEqual(existingParsed, newParsed)) {
         shouldWrite = false;
