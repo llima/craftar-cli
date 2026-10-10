@@ -283,7 +283,9 @@ describe("templates --help", () => {
 
 describe("a dotnet planted at the workspace root (spec 32 §7: dotnet is found on PATH only)", () => {
   it("is never run by templates install or by doctor — PATH empty or '.'", async () => {
-    // A program that would answer the probe and leave a mark. On Windows it is a .cmd, as a repository would carry it.
+    // A program that would answer the probe and leave a mark. Off Windows this fails without onPath (the script runs).
+    // On Windows the planted file is a .cmd, which no shell-less spawn runs either way: there the proof is
+    // test/proc.test.ts, which plants a real executable.
     const planted: Record<string, string> =
       process.platform === "win32"
         ? { "dotnet.cmd": "@echo ran> planted-ran.txt\r\n@echo 10.0.401\r\n" }
