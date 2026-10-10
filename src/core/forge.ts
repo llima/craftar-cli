@@ -256,3 +256,135 @@ export async function listFiles(dir: string, rel = ""): Promise<string[]> {
   }
   return out.sort();
 }
+
+/* ---- the scratch copy a Forge proof runs on, and the link check its writes share (spec 30 `drift promote`, spec 29 `forge promote`) ---- */
+
+const SYMLINK_REFUSAL = (rel: string) =>
+  `${rel} is a symbolic link in the Forge — promote does not write through a link; replace it with the file and commit`;
+const SYMLINK_DIR_REFUSAL = (rel: string) =>
+  `${rel} is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit`;
+const SYMLINK_OUT_OR_DANGLING = (rel: string) =>
+  `${rel} is a symbolic link out of the Forge, or to nothing — promote cannot copy the Forge to prove its edit; fix or remove it`;
+const NON_REGULAR_FILE_REFUSAL = (rel: string) =>
+  `${rel} is not a regular file — promote cannot copy the Forge to prove its edit; remove it`;
+
+/** The root directories loadForge reads; a link there causes the scratch to differ from the real Forge. */
+const ROOT_DIRS = new Set(["ingredients", "recipes", "profiles"]);
+
+/**
+ * Copy the Forge to a scratch directory without `.git`, for the proof.
+ * - A regular file: copied.
+ * - A directory: recursed.
+ * - A symbolic link to a FILE whose real path is inside the Forge: copied as a regular file (dereferenced).
+ * - A symbolic link to a DIRECTORY (inside or outside): skipped — except a root directory link
+ *   (ingredients, recipes, profiles), which is refused because loadForge follows it and the scratch would not.
+ * - A symbolic link that is dangling, or whose target is a file OUTSIDE the Forge: refused.
+ * - A non-regular file (FIFO, socket, device): refused.
+ * Exported so tests can verify the copy behaviour directly.
+ */
+export async function copyForgeForProof(forgeDir: string, scratchDir: string): Promise<void> {
+  const forgeReal = await fs.realpath(forgeDir);
+
+  async function walk(rel: string): Promise<void> {
+    const src = path.join(forgeDir, rel);
+    const dest = path.join(scratchDir, rel);
+
+    const entries = await fs.readdir(src, { withFileTypes: true });
+    for (const ent of entries) {
+      const entRel = rel ? `${rel}/${ent.name}` : ent.name;
+      const entSrc = path.join(src, ent.name);
+      const entDest = path.join(dest, ent.name);
+
+      // Skip .git at the top level
+      if (rel === "" && ent.name === ".git") continue;
+
+      if (ent.isSymbolicLink()) {
+        // First, check if we can resolve the symlink at all
+        let targetReal: string;
+        let targetStat;
+        try {
+          targetReal = await fs.realpath(entSrc);
+          targetStat = await fs.stat(targetReal);
+        } catch (e) {
+          // Dangling link or unresolvable — refuse
+          throw new Error(SYMLINK_OUT_OR_DANGLING(entRel));
+        }
+
+        // If it's a directory (inside or outside Forge)
+        if (targetStat.isDirectory()) {
+          // A root directory link (ingredients, recipes, profiles) is refused: loadForge follows it
+          // but the scratch would skip it, so the scratch would not load the same as the real Forge.
+          if (rel === "" && ROOT_DIRS.has(ent.name)) {
+            throw new Error(SYMLINK_DIR_REFUSAL(ent.name));
+          }
+          // Other directory links are skipped entirely — loadForge doesn't traverse them
+          continue;
+        }
+
+        // Target is neither a directory nor a regular file (FIFO, socket, etc.) — refuse
+        // Check this BEFORE the "inside Forge" check so the message is clear
+        if (!targetStat.isFile()) {
+          throw new Error(NON_REGULAR_FILE_REFUSAL(entRel));
+        }
+
+        // It's a file link — check if target is inside the Forge
+        const relToForge = path.relative(forgeReal, targetReal);
+        // A name starting with ".." but not a ".." segment is valid (e.g. "..notes")
+        const isOutside = relToForge === ".." || relToForge.startsWith(".." + path.sep) || path.isAbsolute(relToForge);
+        if (isOutside) {
+          // File link to outside the Forge — refuse
+          throw new Error(SYMLINK_OUT_OR_DANGLING(entRel));
+        }
+
+        // File link to inside the Forge — copy the target's bytes as a regular file (dereferenced)
+        await fs.copyFile(targetReal, entDest);
+      } else if (ent.isDirectory()) {
+        await fs.mkdir(entDest, { recursive: true });
+        await walk(entRel);
+      } else if (ent.isFile()) {
+        // Regular file
+        await fs.copyFile(entSrc, entDest);
+      } else {
+        // Non-regular file (FIFO, socket, device, etc.) — refuse
+        throw new Error(NON_REGULAR_FILE_REFUSAL(entRel));
+      }
+    }
+  }
+
+  // Create the scratch root
+  await fs.mkdir(scratchDir, { recursive: true });
+  await walk("");
+}
+
+/**
+ * Refuse a write through a symbolic link: every path, and every ancestor between it and `forgeDir`, that exists must
+ * not be one. A path that does not exist yet is fine — it will be created.
+ */
+export async function assertNoLinkOnPath(forgeDir: string, paths: string[]): Promise<void> {
+  const checked = new Set<string>();
+  for (const abs of paths) {
+    // The path and every ancestor up to but not including forgeDir
+    let current = abs;
+    while (path.relative(forgeDir, current) !== "") {
+      if (checked.has(current)) break;
+      checked.add(current);
+      try {
+        const stat = await fs.lstat(current);
+        if (stat.isSymbolicLink()) {
+          const rel = path.relative(forgeDir, current).split(path.sep).join("/");
+          // The directory-specific message for a root directory (ingredients, recipes, profiles)
+          if (ROOT_DIRS.has(rel)) {
+            throw new Error(SYMLINK_DIR_REFUSAL(rel));
+          }
+          throw new Error(SYMLINK_REFUSAL(rel));
+        }
+      } catch (e) {
+        // ENOENT means the path doesn't exist yet (it will be created) — that's fine
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw e;
+        }
+      }
+      current = path.dirname(current);
+    }
+  }
+}
