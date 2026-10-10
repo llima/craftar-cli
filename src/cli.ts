@@ -441,12 +441,15 @@ async function printFileDiff(root: string, s: FileStatus): Promise<void> {
     console.log(pc.bold(`+++ ${s.path} (forge)`));
     // Spec 27 §4.2, Ruling 4: do not print on-disk content of the example file for drift/collision
     if (s.path === EXAMPLE_SETTINGS && (s.state === "drift" || s.state === "collision")) {
-      console.log("  content not shown: an example file may hold a value typed by hand");
+      console.log(EXAMPLE_CONTENT_HIDDEN);
     } else {
       console.log(renderDiff(disk ?? "", next, DIFF_PAINT));
     }
   }
 }
+
+/** Spec 27 Ruling 4: the on-disk content of the example file is never printed. */
+const EXAMPLE_CONTENT_HIDDEN = "  content not shown: an example file may hold a value typed by hand";
 
 /** A path as the user may type it, to the spelling `status` prints: forward slashes, no leading `./`. */
 const statusPath = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, "");
@@ -502,7 +505,12 @@ drift
       // The whole file as a removal: what `drift discard` would do to it.
       console.log(pc.bold(`--- ${named.path} (disk, orphan-drift)`));
       console.log(pc.bold(`+++ ${named.path} (forge: no longer produced — \`craftar drift discard\` removes it)`));
-      console.log(renderDiff((await readText(path.join(ws.root, named.path))) ?? "", "", DIFF_PAINT));
+      // Spec 27 Ruling 4: the on-disk content of the example file is never printed.
+      if (named.path === EXAMPLE_SETTINGS) {
+        console.log(EXAMPLE_CONTENT_HIDDEN);
+      } else {
+        console.log(renderDiff((await readText(path.join(ws.root, named.path))) ?? "", "", DIFF_PAINT));
+      }
     } else await printFileDiff(ws.root, named);
     if (refusalBlock(unset)) process.exitCode = 1;
   });

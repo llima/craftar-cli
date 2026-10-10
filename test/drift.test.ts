@@ -553,6 +553,7 @@ describe("cli — drift show on refused workspaces (spec 30r5)", () => {
 describe("cli — drift show and the example file (spec 27 Ruling 4)", () => {
   const EX = ".claude/settings.craftar.example.json";
   const MARKER = "MARKER_TYPED_30";
+  const MARKER_30B = "MARKER_TYPED_30B";
   const mcp = { meta: { type: "mcp", name: "tracker", authEnv: ["ACME_TRACKER_TOKEN"], server: { command: "npx" } } };
 
   it("drift show withholds the example file's content, as diff does", async () => {
@@ -575,6 +576,51 @@ describe("cli — drift show and the example file (spec 27 Ruling 4)", () => {
         "  content not shown: an example file may hold a value typed by hand\n",
     );
     expect(r.stdout.includes(MARKER)).toBe(false);
+  });
+
+  it("drift show withholds an orphan-drift example file's content", async () => {
+    // Build the reviewer's exact case: mcp ingredient with authEnv, sync, type a value, drop the ingredient from the recipe
+    const s = await scenario(
+      { ingredients: [mcp], recipes: [recipe("base", ["mcp/tracker"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    runCli(["sync", "--workspace", s.wsRoot]);
+    // Overwrite the example file with a value containing the marker (typed by hand)
+    const drifted = '{\n  "env": {\n    "ACME_TRACKER_TOKEN": "' + MARKER_30B + '"\n  }\n}\n';
+    await fs.writeFile(path.join(s.wsRoot, EX), drifted);
+    // Drop the ingredient from the recipe — the file is now orphan-drift
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), YAML.stringify(recipe("base", [])));
+    const r = runCli(["drift", "show", EX, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toBe(
+      `orphan-drift  ${EX}  mcp/*  forge: removed  promote: no (no longer produced)\n` +
+        `--- ${EX} (disk, orphan-drift)\n` +
+        `+++ ${EX} (forge: no longer produced — \`craftar drift discard\` removes it)\n` +
+        "  content not shown: an example file may hold a value typed by hand\n",
+    );
+    expect(r.stdout.includes(MARKER_30B)).toBe(false);
+  });
+
+  it("drift show (no path) lists an orphan-drift example file without its content", async () => {
+    const s = await scenario(
+      { ingredients: [mcp], recipes: [recipe("base", ["mcp/tracker"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    runCli(["sync", "--workspace", s.wsRoot]);
+    // Overwrite the example file with a value containing the marker (typed by hand)
+    const drifted = '{\n  "env": {\n    "ACME_TRACKER_TOKEN": "' + MARKER_30B + '"\n  }\n}\n';
+    await fs.writeFile(path.join(s.wsRoot, EX), drifted);
+    // Drop the ingredient from the recipe — the file is now orphan-drift
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), YAML.stringify(recipe("base", [])));
+    const r = runCli(["drift", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    // The listing row only, no content
+    expect(r.stdout).toBe(`orphan-drift  ${EX}  mcp/*  forge: removed  promote: no (no longer produced)\n`);
+    expect(r.stdout.includes(MARKER_30B)).toBe(false);
   });
 });
 
