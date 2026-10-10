@@ -340,7 +340,14 @@ export async function proveBasePromotion(forge: Forge, promotion: BasePromotion)
   const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-forge-promote-"));
   try {
     await copyForgeForProof(forge.root, scratch);
-    await writeInto(scratch, promotion);
+    try {
+      await writeInto(scratch, promotion);
+    } catch (e) {
+      // The copy carries each file's mode, so what cannot be written there cannot be written in the Forge either.
+      const at = (e as NodeJS.ErrnoException).path;
+      const code = (e as NodeJS.ErrnoException).code ?? "the write failed";
+      throw new Error(`${COMMAND}: ${at ? posix(scratch, at) : "a file"} could not be written on the scratch copy the edit is proved on (${code}) — it cannot be written in the Forge either; nothing written`);
+    }
     const edited = await loadForge(scratch);
     const mine = (q: string) => promotion.created.find((c) => c === `${promotion.base}--${q}`);
     for (const [q, was] of before) {

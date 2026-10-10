@@ -428,4 +428,18 @@ describe("proveBasePromotion and applyBasePromotion", () => {
     expect(message).toContain("already exists, and profile globex also resolves rule/workflow");
     expect(await fs.readdir(elsewhere)).toEqual([]);
   });
+
+  // Root ignores the read-only bit, so the scenario cannot fail there.
+  it.skipIf(process.getuid?.() === 0)("17. a file the promotion must overwrite and cannot is refused by the proof, by its Forge path, with nothing written", async () => {
+    const f = await forgeOf(THREE);
+    const locked = path.join(f.dir, "profiles/initech/profile.yaml");
+    cleanups.push(() => fs.chmod(locked, 0o644).catch(() => undefined));
+    await fs.chmod(locked, 0o444);
+    const p = await planned(f);
+    await expect(proveBasePromotion(await loadForge(f.dir), p)).rejects.toThrow(
+      /^forge promote: profiles\/initech\/profile\.yaml could not be written on the scratch copy the edit is proved on \((EACCES|EPERM)\) — it cannot be written in the Forge either; nothing written$/,
+    );
+    expect(git(f.dir, "status", "--porcelain")).toBe("");
+    expect(await scratchDirs()).toEqual([]);
+  });
 });
