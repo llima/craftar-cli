@@ -238,3 +238,27 @@ describe("holdsBaseCitations", () => {
     expect(holdsBaseCitations(r, IngredientSchema.parse({ type: "rule", name: "r--acme", as: "r" }))).toBe(false);
   });
 });
+
+describe("a server that refers back to itself (a YAML alias)", () => {
+  const CYCLIC = "ingredient metadata is cyclic (a YAML alias refers back to itself)";
+  const cyclic = (): McpMeta => {
+    const server: Record<string, unknown> = { url: "{{org}}" };
+    server.again = { deeper: [server] };
+    // Built by hand: the schema would walk the cycle. `loadForge` hands such an object over as YAML parsed it.
+    return { type: "mcp", name: "idp", targets: "*", tags: [], params: { org: {} }, server } as unknown as McpMeta;
+  };
+
+  it("renderServer and serverCitations refuse it by name instead of overflowing the stack", () => {
+    expect(() => renderServer(cyclic(), P({ org: "acme" }))).toThrow(new Error(CYCLIC));
+    expect(() => serverCitations(cyclic())).toThrow(new Error(CYCLIC));
+  });
+
+  it("(control) the same object reached twice without a cycle is rendered twice", () => {
+    const shared = { "X-Org": "{{org}}" };
+    const m = meta({ type: "http", headers: shared, more: { headers: shared } });
+    const r = renderServer(m, P({ org: "acme" }));
+    expect(json(r.server)).toBe(json({ type: "http", headers: { "X-Org": "acme" }, more: { headers: { "X-Org": "acme" } } }));
+    expect(r.substituted.map((l) => l.path)).toEqual(["headers.X-Org", "more.headers.X-Org"]);
+    expect(serverCitations(m)).toEqual([{ key: "org", declared: true }]);
+  });
+});

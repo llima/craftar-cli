@@ -13,6 +13,9 @@ type McpMeta = Extract<Ingredient, { type: "mcp" }>;
 /** The placeholder pattern, same as `substitute`'s in resolve.ts. */
 const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 
+/** Named as `fingerprintOf` names it: a YAML alias can make a server refer back to itself, and a walk would not end. */
+const CYCLIC = "ingredient metadata is cyclic (a YAML alias refers back to itself)";
+
 /** Whether this Forge's servers are rendered (spec 34 §4.1: schema 4 or above). */
 export function rendersServers(manifest: { schema: number }): boolean {
   return manifest.schema >= FORGE_SCHEMA_SERVER_PARAMS;
@@ -48,6 +51,7 @@ export function renderServer(meta: McpMeta, params: Record<string, unknown>): Re
    * Walk a value, substituting string leaves. Returns the same object when nothing changed,
    * a new object (on null prototype) when something did.
    */
+  const ancestors = new Set<object>();
   function walk(value: unknown, path: string, under: string): unknown {
     if (typeof value === "string") {
       let changed = false;
@@ -89,35 +93,37 @@ export function renderServer(meta: McpMeta, params: Record<string, unknown>): Re
       return value;
     }
 
-    if (Array.isArray(value)) {
-      let changed = false;
-      const items: unknown[] = [];
-      for (let i = 0; i < value.length; i++) {
-        const item = value[i];
-        const newItem = walk(item, `${path}[${i}]`, under);
-        items.push(newItem);
-        if (newItem !== item) changed = true;
-      }
-      return changed ? items : value;
+    if (value === null || typeof value !== "object") return value; // numbers, booleans, null — as they are
+    if (ancestors.has(value)) throw new Error(CYCLIC);
+    ancestors.add(value);
+    try {
+      return Array.isArray(value) ? walkArray(value, path, under) : walkObject(value as Record<string, unknown>, path, under);
+    } finally {
+      ancestors.delete(value);
     }
+  }
 
-    if (value !== null && typeof value === "object") {
-      let changed = false;
-      // Create with null prototype so __proto__ stays an entry
-      const result: Record<string, unknown> = Object.create(null);
-      // Enumerate with Object.keys (own enumerable keys) — never follows prototype
-      for (const k of Object.keys(value)) {
-        const v = (value as Record<string, unknown>)[k];
-        const newPath = path ? `${path}.${k}` : k;
-        const newV = walk(v, newPath, path ? under : k);
-        result[k] = newV;
-        if (newV !== v) changed = true;
-      }
-      return changed ? result : value;
+  function walkArray(value: unknown[], path: string, under: string): unknown {
+    let changed = false;
+    const items: unknown[] = [];
+    for (let i = 0; i < value.length; i++) {
+      const item = walk(value[i], `${path}[${i}]`, under);
+      items.push(item);
+      if (item !== value[i]) changed = true;
     }
+    return changed ? items : value;
+  }
 
-    // Numbers, booleans, null — returned as they are
-    return value;
+  function walkObject(value: Record<string, unknown>, path: string, under: string): unknown {
+    let changed = false;
+    // A null prototype, so a `__proto__` key stays an entry; own enumerable keys only, in the source's order.
+    const result: Record<string, unknown> = Object.create(null);
+    for (const k of Object.keys(value)) {
+      const v = walk(value[k], path ? `${path}.${k}` : k, path ? under : k);
+      result[k] = v;
+      if (v !== value[k]) changed = true;
+    }
+    return changed ? result : value;
   }
 
   const server = walk(meta.server, "", "") as McpServer;
@@ -137,6 +143,7 @@ export function serverCitations(meta: Ingredient): Array<{ key: string; declared
   const declared: Record<string, unknown> = meta.params ?? {};
   const result: Array<{ key: string; declared: boolean }> = [];
   const seen = new Set<string>();
+  const ancestors = new Set<object>();
 
   function walk(value: unknown): void {
     if (typeof value === "string") {
@@ -153,17 +160,12 @@ export function serverCitations(meta: Ingredient): Array<{ key: string; declared
       return;
     }
 
-    if (Array.isArray(value)) {
-      for (const item of value) walk(item);
-      return;
-    }
-
-    if (value !== null && typeof value === "object") {
-      // Walk values only, not keys (keys are never scanned for placeholders)
-      for (const k of Object.keys(value)) {
-        walk((value as Record<string, unknown>)[k]);
-      }
-    }
+    if (value === null || typeof value !== "object") return;
+    if (ancestors.has(value)) throw new Error(CYCLIC);
+    ancestors.add(value);
+    // Walk values only, not keys (keys are never scanned for placeholders)
+    for (const v of Array.isArray(value) ? value : Object.keys(value).map((k) => (value as Record<string, unknown>)[k])) walk(v);
+    ancestors.delete(value);
   }
 
   walk(meta.server);
