@@ -188,3 +188,11 @@ describe("read-only commands print at schema 4 what they print at 3", () => {
     expect(b.hash).not.toEqual(a.hash);
   });
 });
+
+describe("README", () => {
+  it("the README names the gate, the refusal and the kinds the code uses", async () => {
+    const readme = await fs.readFile(path.resolve(__dirname, "../README.md"), "utf8");
+    for (const s of ["schema: 4", "url-credentials", "high-entropy-value", "not declared in the ingredient's params — left verbatim", "craftar.local.yaml"]) expect(readme, s).toContain(s);
+    expect(readme).not.toMatch(/expands? `?\$\{NAME\}`? in (url|headers|args)/i);
+  });
+});
