@@ -58,15 +58,18 @@ function pathOf(env: NodeJS.ProcessEnv): string | undefined {
 
 /**
  * `env` with its PATH reduced to the entries `onPath` looks in, so that what the program starts in turn (git
- * starts ssh, a credential helper, a hook) is not looked for in the working directory either. A copy: the
- * caller's object is not changed. On win32 every spelling of the key is replaced by one `PATH`.
+ * starts ssh, a credential helper, a hook) is not looked for in the working directory either. When no absolute
+ * entry is left the child gets NO PATH: an empty one makes the platform look in the working directory, an absent
+ * one makes it use its default path. A copy: the caller's object is not changed. Only the PATH key is replaced —
+ * on win32 every spelling of it, by one `PATH`; elsewhere `Path` and `path` are other variables.
  */
 function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(env)) {
-    if (k.toUpperCase() !== "PATH") result[k] = v;
+    if ((WIN ? k.toUpperCase() : k) !== "PATH") result[k] = v;
   }
-  result.PATH = pathEntries(pathOf(env) ?? "").join(path.delimiter);
+  const entries = pathEntries(pathOf(env) ?? "");
+  if (entries.length > 0) result.PATH = entries.join(path.delimiter);
   return result;
 }
 

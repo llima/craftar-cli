@@ -220,4 +220,21 @@ describe("the child's own PATH holds absolute entries only", () => {
     expect((await execProgram(TOOL, ["-e", "console.log(process.env.CRAFTAR_PROBE)"], { env })).stdout).toBe("kept\n");
     expect(env).toEqual(before);
   });
+
+  it("with no absolute entry left the child gets NO PATH — an empty one would be a working-directory lookup", async () => {
+    const has = ["-e", "console.log(Object.keys(process.env).some((k) => k.toUpperCase() === 'PATH'))"];
+    for (const value of ["", ".", ["", ".", "bin"].join(path.delimiter)]) {
+      expect((await execProgram(process.execPath, has, { env: withPath(value) })).stdout, `PATH=${JSON.stringify(value)}`).toBe("false\n");
+    }
+    const unset: NodeJS.ProcessEnv = { ...withPath("") };
+    delete unset.PATH;
+    expect((await execProgram(process.execPath, has, { env: unset })).stdout).toBe("false\n");
+    expect((await execProgram(process.execPath, has, { env: withPath(PLANTED) })).stdout).toBe("true\n");
+  });
+
+  it.runIf(process.platform !== "win32")("off Windows only PATH is replaced: Path and path are other variables", async () => {
+    const env = { ...withPath(["", PLANTED].join(path.delimiter)), Path: "keep-1", path: "keep-2" };
+    const script = "console.log([process.env.PATH, process.env.Path, process.env.path].join('|'))";
+    expect((await execProgram(TOOL, ["-e", script], { env })).stdout).toBe(`${PLANTED}|keep-1|keep-2\n`);
+  });
 });
