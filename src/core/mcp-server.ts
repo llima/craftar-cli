@@ -3,7 +3,7 @@
  * The one place a server is rendered or scanned for placeholders.
  */
 
-import type { ForgeManifest, Ingredient, McpServer } from "../schema/index.js";
+import type { Ingredient, McpServer } from "../schema/index.js";
 import { FORGE_SCHEMA_SERVER_PARAMS } from "../schema/index.js";
 import { findSecrets, looksLikeSecretValue, secretValueKind } from "./secrets.js";
 import { urlCredentialIn } from "./remote.js";
@@ -14,7 +14,7 @@ type McpMeta = Extract<Ingredient, { type: "mcp" }>;
 const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 
 /** Whether this Forge's servers are rendered (spec 34 §4.1: schema 4 or above). */
-export function rendersServers(manifest: Pick<ForgeManifest, "schema">): boolean {
+export function rendersServers(manifest: { schema: number }): boolean {
   return manifest.schema >= FORGE_SCHEMA_SERVER_PARAMS;
 }
 
