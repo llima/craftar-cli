@@ -1,0 +1,95 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { exists, listFiles } from "../src/core/forge.js";
+import { onPath } from "../src/core/proc.js";
+import { runCli } from "./helpers/cli.js";
+import { profile, recipe, rule, scenario, writeFiles } from "./helpers/forge.js";
+
+// git is looked for in the absolute entries of PATH only — never in craftar's working directory, which is a
+// workspace or a Forge: directories that come from a clone. A `git` planted there must not run.
+// Off Windows the planted program is a script that leaves a mark and answers like git: without the lookup it RUNS
+// for an empty PATH entry. On Windows it is a .cmd, which no shell-less spawn runs either way — there the proof is
+// test/proc.test.ts (a real executable planted in the child's directory) and the scan below.
+
+const cleanups: Array<() => Promise<unknown>> = [];
+afterEach(async () => {
+  while (cleanups.length) await cleanups.pop()!();
+});
+
+const WIN = process.platform === "win32";
+const FAKE_SHA = "feedface".repeat(5);
+const MARK = "planted-git-ran.txt";
+const PLANTED: Record<string, string> = WIN
+  ? { "git.cmd": `@echo ran>> ${MARK}\r\n@echo ${FAKE_SHA}\r\n` }
+  : { git: `#!/bin/sh\necho ran >> ${MARK}\ncase "$1" in --version) echo "git version 9.9.9";; *) echo ${FAKE_SHA};; esac\n` };
+
+async function planted() {
+  const s = await scenario(
+    { ingredients: [rule("style", "# Style\n")], recipes: [recipe("base", ["rule/style"])], profiles: [profile("acme", ["base"])] },
+    { config: { profile: "acme" } },
+  );
+  cleanups.push(s.cleanup);
+  for (const root of [s.wsRoot, s.forgeRoot]) {
+    await writeFiles(root, PLANTED);
+    if (!WIN) await fs.chmod(path.join(root, "git"), 0o755);
+  }
+  return s;
+}
+/** PATH values under which the platform's own lookup reaches the working directory before, or instead of, the real git. */
+async function paths(): Promise<string[]> {
+  const real = await onPath("git", process.env);
+  expect(real, "the real git must be on an absolute PATH entry to run this test").not.toBeNull();
+  const dir = path.dirname(real!);
+  return ["", ".", `${path.delimiter}${dir}`, `.${path.delimiter}${dir}`];
+}
+const run = (args: string[], cwd: string, PATH: string) => runCli(args, { cwd, env: { PATH, Path: PATH } });
+
+describe("a git planted in craftar's working directory is never run", () => {
+  it("in a workspace: status, doctor and explain", async () => {
+    const s = await planted();
+    for (const PATH of await paths()) {
+      for (const args of [["status"], ["doctor"], ["doctor", "--json"], ["ls"]]) {
+        const r = run(args, s.wsRoot, PATH);
+        expect(r.stdout + r.stderr, `${args.join(" ")}, PATH=${JSON.stringify(PATH)}`).not.toContain(FAKE_SHA);
+        expect(r.stdout + r.stderr, `${args.join(" ")}, PATH=${JSON.stringify(PATH)}`).not.toContain("9.9.9");
+      }
+    }
+    expect(await exists(path.join(s.wsRoot, MARK))).toBe(false);
+    expect(await exists(path.join(s.forgeRoot, MARK))).toBe(false);
+  });
+
+  it("in a Forge: forge variants, recipes and ingredients with --forge .", async () => {
+    const s = await planted();
+    for (const PATH of await paths()) {
+      for (const args of [["forge", "variants", "--forge", "."], ["recipes", "--forge", "."], ["ingredients", "--forge", ".", "--profile", "acme"]]) {
+        const r = run(args, s.forgeRoot, PATH);
+        expect(r.code, `${args.join(" ")}, PATH=${JSON.stringify(PATH)}`).toBe(0);
+        expect(r.stdout + r.stderr, `${args.join(" ")}, PATH=${JSON.stringify(PATH)}`).not.toContain(FAKE_SHA);
+      }
+    }
+    expect(await exists(path.join(s.forgeRoot, MARK))).toBe(false);
+  });
+
+  it("with the real git on PATH after an empty entry, the commands answer as they do with a clean PATH (control)", async () => {
+    const s = await planted();
+    const dir = path.dirname((await onPath("git", process.env))!);
+    for (const args of [["status"], ["ls"]]) {
+      const clean = run(args, s.wsRoot, dir);
+      const dirty = run(args, s.wsRoot, `${dir}${path.delimiter}`);
+      expect([dirty.code, dirty.stdout], args.join(" ")).toEqual([clean.code, clean.stdout]);
+    }
+  });
+});
+
+describe("one runner (the lookup cannot be bypassed)", () => {
+  it("src/core/proc.ts is the only file under src/ that imports node:child_process", async () => {
+    const src = path.resolve(__dirname, "..", "src");
+    const offenders: string[] = [];
+    for (const f of await listFiles(src)) {
+      if (!f.endsWith(".ts") || f === "core/proc.ts") continue;
+      if (/["']node:child_process["']|["']child_process["']/.test(await fs.readFile(path.join(src, f), "utf8"))) offenders.push(f);
+    }
+    expect(offenders).toEqual([]);
+  });
+});
