@@ -59,9 +59,12 @@ function pathOf(env: NodeJS.ProcessEnv): string | undefined {
 /**
  * `env` with its PATH reduced to the entries `onPath` looks in, so that what the program starts in turn (git
  * starts ssh, a credential helper, a hook) is not looked for in the working directory either. When no absolute
- * entry is left the child gets NO PATH: an empty one makes the platform look in the working directory, an absent
- * one makes it use its default path. A copy: the caller's object is not changed. Only the PATH key is replaced —
- * on win32 every spelling of it, by one `PATH`; elsewhere `Path` and `path` are other variables.
+ * entry is left, off Windows the child gets NO PATH: an empty one makes the platform look in the working
+ * directory, an absent one makes it use its default path. On win32 the key is always set, empty if need be: Node
+ * gives a child with no PATH key the parent's own, unfiltered (read in libuv, not measured). No caller reaches
+ * that case today — a bare `git` or `dotnet` is not found first. A copy: the caller's object is not changed.
+ * Only the PATH key is replaced — on win32 every spelling of it, by one `PATH`; elsewhere `Path` and `path` are
+ * other variables.
  */
 function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = {};
@@ -69,7 +72,7 @@ function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     if ((WIN ? k.toUpperCase() : k) !== "PATH") result[k] = v;
   }
   const entries = pathEntries(pathOf(env) ?? "");
-  if (entries.length > 0) result.PATH = entries.join(path.delimiter);
+  if (WIN || entries.length > 0) result.PATH = entries.join(path.delimiter);
   return result;
 }
 

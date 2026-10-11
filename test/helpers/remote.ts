@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { makeForge, tmpDir, writeFiles, type ForgeSpec } from "./forge.js";
@@ -13,9 +12,6 @@ export function gitEnv(): NodeJS.ProcessEnv {
     GIT_AUTHOR_EMAIL: "test@example.invalid",
     GIT_COMMITTER_NAME: "craftar-test",
     GIT_COMMITTER_EMAIL: "test@example.invalid",
-    // The developer's git configuration (signing, hooks path, templates) must not reach a test's repository.
-    GIT_CONFIG_GLOBAL: os.devNull,
-    GIT_CONFIG_NOSYSTEM: "1",
   };
 }
 

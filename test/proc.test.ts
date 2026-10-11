@@ -221,7 +221,9 @@ describe("the child's own PATH holds absolute entries only", () => {
     expect(env).toEqual(before);
   });
 
-  it("with no absolute entry left the child gets NO PATH — an empty one would be a working-directory lookup", async () => {
+  // Off Windows only: there an absent PATH makes the platform use its default path. On win32 Node (libuv) gives a
+  // child with no PATH key the parent's own, so childEnv always sets the key there — not measured on Windows.
+  it.runIf(process.platform !== "win32")("with no absolute entry left the child gets NO PATH — an empty one would be a working-directory lookup", async () => {
     const has = ["-e", "console.log(Object.keys(process.env).some((k) => k.toUpperCase() === 'PATH'))"];
     for (const value of ["", ".", ["", ".", "bin"].join(path.delimiter)]) {
       expect((await execProgram(process.execPath, has, { env: withPath(value) })).stdout, `PATH=${JSON.stringify(value)}`).toBe("false\n");
