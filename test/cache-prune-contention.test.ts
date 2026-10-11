@@ -100,20 +100,26 @@ describe("the prune lock (§4.2 step 0, §13 item 15)", () => {
 
   it("the run refreshes prune.lock's mtime as it goes, so a prune started past the stale bound still waits", async () => {
     const s = await setup();
-    for (const n of ["globex", "initech"]) {
-      const extra = await remoteForge(SPEC);
-      cleanups.push(extra.cleanup);
-      await ensureTree(extra.url, null, { home: s.home });
-      void n;
-    }
-    const slow = () => new Promise<void>((r) => setTimeout(r, 1200));
-    const first = pruneCache(s.home, { ...RUN, staleMs: 3000, beforeStep: slow });
-    await new Promise((r) => setTimeout(r, 3300));
-    const second = await pruneCache(s.home, { ...RUN, staleMs: 3000, waitMs: 100, pollMs: 20 }).catch((e: Error) => e);
-    expect(second).toBeInstanceOf(Error);
-    expect((second as Error).message).toBe(`the Forge cache prune lock ${path.join(s.forges, "prune.lock")} is busy (held by PID ${process.pid})`);
-    expect((await first).report.removed.map((x) => x.kind)).toEqual(["entry", "entry", "entry"]);
-  }, 20_000);
+    // Two more orphan entries, written by hand: a prune reads `fetched` and moves directories, so no git runs for them.
+    for (const key of ["example.com-globex-0a1b2c3d4e5f", "example.com-initech-0a1b2c3d4e5f"])
+      await writeFiles(path.join(s.forges, key), { fetched: "2026-10-08T00:00:00.000Z\n", "repo.git/HEAD": "x" });
+    const lock = path.join(s.forges, "prune.lock");
+    const busy = `the Forge cache prune lock ${lock} is busy (held by PID ${process.pid})`;
+    const fresh: boolean[] = [];
+    const seconds: string[] = [];
+    // Called right after each step's refresh, with the first prune held here. No clock is waited on: each step
+    // leaves the lock dated 2020 — past any stale bound — so only the next step's refresh can make it fresh again.
+    const beforeStep = async () => {
+      fresh.push(await fs.stat(lock).then((st) => st.mtimeMs > old.getTime(), () => false));
+      if (fresh.length > 1)
+        seconds.push(await pruneCache(s.home, { ...RUN, waitMs: 100, pollMs: 20 }).then(() => "took the lock over", (e: Error) => e.message));
+      await fs.utimes(lock, old, old).catch(() => {});
+    };
+    const first = await pruneCache(s.home, { ...RUN, beforeStep });
+    expect(fresh).toEqual([true, true, true]);
+    expect(seconds).toEqual([busy, busy]);
+    expect(first.report.removed.map((x) => x.kind)).toEqual(["entry", "entry", "entry"]);
+  });
 });
 
 describe("a file held open, leftovers, and a key shaped like a removal directory", () => {
