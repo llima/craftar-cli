@@ -13,8 +13,11 @@ type McpMeta = Extract<Ingredient, { type: "mcp" }>;
 /** The placeholder pattern, same as `substitute`'s in resolve.ts. */
 const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 
-/** Named as `fingerprintOf` names it: a YAML alias can make a server refer back to itself, and a walk would not end. */
-const CYCLIC = "ingredient metadata is cyclic (a YAML alias refers back to itself)";
+/**
+ * A YAML alias can make a server refer back to itself, and a walk would not end. Worded as `fingerprintOf` words it, behind
+ * the ingredient's ref — as every message about a server starts.
+ */
+const cyclic = (meta: Ingredient) => new Error(`${meta.type}/${meta.name}: ingredient metadata is cyclic (a YAML alias refers back to itself)`);
 
 /** Whether this Forge's servers are rendered (spec 34 §4.1: schema 4 or above). */
 export function rendersServers(manifest: { schema: number }): boolean {
@@ -94,7 +97,7 @@ export function renderServer(meta: McpMeta, params: Record<string, unknown>): Re
     }
 
     if (value === null || typeof value !== "object") return value; // numbers, booleans, null — as they are
-    if (ancestors.has(value)) throw new Error(CYCLIC);
+    if (ancestors.has(value)) throw cyclic(meta);
     ancestors.add(value);
     try {
       return Array.isArray(value) ? walkArray(value, path, under) : walkObject(value as Record<string, unknown>, path, under);
@@ -161,7 +164,7 @@ export function serverCitations(meta: Ingredient): Array<{ key: string; declared
     }
 
     if (value === null || typeof value !== "object") return;
-    if (ancestors.has(value)) throw new Error(CYCLIC);
+    if (ancestors.has(value)) throw cyclic(meta);
     ancestors.add(value);
     // Walk values only, not keys (keys are never scanned for placeholders)
     for (const v of Array.isArray(value) ? value : Object.keys(value).map((k) => (value as Record<string, unknown>)[k])) walk(v);

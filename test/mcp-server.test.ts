@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { credentialIn, credentialMessage, entropyMessage, holdsBaseCitations, rendersServers, renderServer, serverCitations, undeclaredMessage, type SubstitutedLeaf } from "../src/core/mcp-server.js";
+import { credentialIn, credentialMessage, entropyMessage, holdsBaseCitations, rendersServers, renderServer, serverCitations, serverSecret, undeclaredMessage, type SubstitutedLeaf } from "../src/core/mcp-server.js";
 import { IngredientSchema, type Ingredient } from "../src/schema/index.js";
 
 // Spec 34 §9 — the one place a server is rendered or scanned for placeholders.
@@ -240,7 +240,7 @@ describe("holdsBaseCitations", () => {
 });
 
 describe("a server that refers back to itself (a YAML alias)", () => {
-  const CYCLIC = "ingredient metadata is cyclic (a YAML alias refers back to itself)";
+  const CYCLIC = "mcp/idp: ingredient metadata is cyclic (a YAML alias refers back to itself)";
   const cyclic = (): McpMeta => {
     const server: Record<string, unknown> = { url: "{{org}}" };
     server.again = { deeper: [server] };
@@ -248,7 +248,7 @@ describe("a server that refers back to itself (a YAML alias)", () => {
     return { type: "mcp", name: "idp", targets: "*", tags: [], params: { org: {} }, server } as unknown as McpMeta;
   };
 
-  it("renderServer and serverCitations refuse it by name instead of overflowing the stack", () => {
+  it("renderServer and serverCitations refuse it, naming the ingredient, instead of overflowing the stack", () => {
     expect(() => renderServer(cyclic(), P({ org: "acme" }))).toThrow(new Error(CYCLIC));
     expect(() => serverCitations(cyclic())).toThrow(new Error(CYCLIC));
   });
@@ -260,5 +260,16 @@ describe("a server that refers back to itself (a YAML alias)", () => {
     expect(json(r.server)).toBe(json({ type: "http", headers: { "X-Org": "acme" }, more: { headers: { "X-Org": "acme" } } }));
     expect(r.substituted.map((l) => l.path)).toEqual(["headers.X-Org", "more.headers.X-Org"]);
     expect(serverCitations(m)).toEqual([{ key: "org", declared: true }]);
+  });
+});
+
+describe("serverSecret — import's scan of a server it read", () => {
+  const HIGH = ["a1b2c3d4", "e5f6", "7890", "abcd", "ef1234567890"].join("-"); // a GUID the entropy rule matches (spec §4.3)
+
+  it("the entropy rule is for env and args only; a known token is found in every field", () => {
+    expect(serverSecret("idp", { env: { ACME_KEY: HIGH } })).toBe("secret-like value (high-entropy-value) in .mcp.json → mcpServers.idp.env.ACME_KEY");
+    expect(serverSecret("idp", { args: ["-y", HIGH] })).toBe("secret-like value (high-entropy-value) in .mcp.json → mcpServers.idp.args[1]");
+    expect(serverSecret("idp", { headers: { "X-Id": HIGH }, url: `https://idp.example.com/${HIGH}` })).toBeNull();
+    expect(serverSecret("idp", { headers: { Authorization: `Bearer ${GHP}` } })).toBe("secret-like value (github-token) in .mcp.json → mcpServers.idp.headers.Authorization");
   });
 });
