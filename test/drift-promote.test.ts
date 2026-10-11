@@ -74,9 +74,9 @@ async function F() {
   };
 }
 
-/** List directories in os.tmpdir() matching craftar-promote-* */
-async function scratchDirs(): Promise<string[]> {
-  const entries = await fs.readdir(os.tmpdir());
+/** List directories in the given directory (or os.tmpdir() by default) matching craftar-promote-* */
+async function scratchDirs(dir: string = os.tmpdir()): Promise<string[]> {
+  const entries = await fs.readdir(dir);
   return entries.filter((e) => e.startsWith("craftar-promote-"));
 }
 
@@ -511,19 +511,23 @@ describe("cli — drift promote", () => {
     gitInit(f.forgeRoot);
     expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
     await f.driftA();
-    const scratchBefore = await scratchDirs();
+
+    // Use a private temp directory so parallel workers don't interfere
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-tmp-"));
+    cleanups.push(() => fs.rm(tmp, { recursive: true, force: true }));
 
     // Add an override that disables the variant that will be created
     const cfg = YAML.parse(await fs.readFile(path.join(f.ws, "craftar.yaml"), "utf8"));
     cfg.overrides = { ingredients: { disable: ["rule/a--acme"] } };
     await fs.writeFile(path.join(f.ws, "craftar.yaml"), YAML.stringify(cfg));
 
-    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws], { env: { TMPDIR: tmp, TEMP: tmp, TMP: tmp } });
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
     expect(r.stderr).toBe("error: promote could not be proved for this workspace: the planned files would change (3 → 2) — the Forge was left untouched\n");
     expect(porcelain(f.forgeRoot)).toBe("");
-    expect(await scratchDirs()).toEqual(scratchBefore);
+    // The private temp dir should have no craftar scratch left (proves the child used it)
+    expect(await scratchDirs(tmp)).toEqual([]);
   });
 
   it("17. a late write failure names the restore (unit, no CLI)", async () => {
@@ -2747,13 +2751,17 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
       throw e;
     }
 
+    // Use a private temp directory so parallel workers don't interfere
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-tmp-"));
+    cleanups.push(() => fs.rm(tmp, { recursive: true, force: true }));
+
     expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
     await fs.writeFile(path.join(f.ws, A), "A edited\n");
     const lockBefore = await f.lockBytes();
     // Capture porcelain BEFORE promote - the dangling link is untracked
     const porcelainBefore = porcelain(f.forgeRoot);
 
-    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws], { env: { TMPDIR: tmp, TEMP: tmp, TMP: tmp } });
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
     expect(r.stderr).toBe(
@@ -2764,11 +2772,8 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     // Lock unchanged
     expect((await f.lockBytes()).equals(lockBefore)).toBe(true);
 
-    // No craftar-promote-* scratch left in os.tmpdir()
-    const osTemp = await import("node:os");
-    const tmpContents = await fs.readdir(osTemp.tmpdir());
-    const promoteLeftovers = tmpContents.filter((n) => n.startsWith("craftar-promote-"));
-    expect(promoteLeftovers).toEqual([]);
+    // No craftar-promote-* scratch left in the private temp dir
+    expect(await scratchDirs(tmp)).toEqual([]);
   });
 
   it("65. CLI: link to '.' → promote succeeds (not ELOOP)", async () => {
