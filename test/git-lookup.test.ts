@@ -5,6 +5,7 @@ import { exists, listFiles } from "../src/core/forge.js";
 import { onPath } from "../src/core/proc.js";
 import { runCli } from "./helpers/cli.js";
 import { profile, recipe, rule, scenario, writeFiles } from "./helpers/forge.js";
+import { git } from "./helpers/remote.js";
 
 // git is looked for in the absolute entries of PATH only — never in craftar's working directory, which is a
 // workspace or a Forge: directories that come from a clone. A `git` planted there must not run.
@@ -46,7 +47,7 @@ async function paths(): Promise<string[]> {
 const run = (args: string[], cwd: string, PATH: string) => runCli(args, { cwd, env: { PATH, Path: PATH } });
 
 describe("a git planted in craftar's working directory is never run", () => {
-  it("in a workspace: status, doctor and explain", async () => {
+  it("in a workspace: status, doctor and ls", async () => {
     const s = await planted();
     for (const PATH of await paths()) {
       for (const args of [["status"], ["doctor"], ["doctor", "--json"], ["ls"]]) {
@@ -103,5 +104,39 @@ describe("one runner (the lookup cannot be bypassed)", () => {
       if (/["']node:child_process["']|["']child_process["']/.test(await fs.readFile(path.join(src, f), "utf8"))) offenders.push(f);
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("a workspace in sync whose git is no longer found", () => {
+  it("the next writing sync rewrites craftar.lock once, forge.commit going from the sha to null; no file changes, no gate flips", async () => {
+    const s = await scenario(
+      { ingredients: [rule("style", "# Style\n")], recipes: [recipe("base", ["rule/style"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    git(s.forgeRoot, "init", "-q");
+    git(s.forgeRoot, "add", "-A");
+    git(s.forgeRoot, "commit", "-q", "-m", "forge");
+    const sha = git(s.forgeRoot, "rev-parse", "HEAD").trim();
+    const dir = path.dirname((await onPath("git", process.env))!);
+    const lock = async () => JSON.parse(await fs.readFile(path.join(s.wsRoot, "craftar.lock"), "utf8"));
+    const files = async () => Object.fromEntries(await Promise.all((await listFiles(s.wsRoot)).filter((f) => f !== "craftar.lock").map(async (f) => [f, await fs.readFile(path.join(s.wsRoot, f), "base64")] as const)));
+
+    expect(run(["sync"], s.wsRoot, dir).code).toBe(0);
+    expect((await lock()).forge.commit).toBe(sha);
+    const before = await files();
+
+    // git only behind a relative entry: not found
+    const relative = `.${path.delimiter}bin`;
+    expect(run(["sync", "--check"], s.wsRoot, relative).code).toBe(0);
+    expect(run(["status"], s.wsRoot, relative).code).toBe(0);
+    expect((await lock()).forge.commit).toBe(sha);
+    expect(run(["sync"], s.wsRoot, relative).code).toBe(0);
+    expect((await lock()).forge.commit).toBeNull();
+    expect(await files()).toEqual(before);
+
+    // found again: the commit comes back
+    expect(run(["sync"], s.wsRoot, dir).code).toBe(0);
+    expect((await lock()).forge.commit).toBe(sha);
   });
 });
