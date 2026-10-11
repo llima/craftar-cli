@@ -74,8 +74,9 @@ async function F() {
   };
 }
 
-/** List directories in the given directory (or os.tmpdir() by default) matching craftar-promote-* */
-async function scratchDirs(dir: string = os.tmpdir()): Promise<string[]> {
+/** List directories in the given directory matching craftar-promote-* */
+async function scratchDirs(dir: string): Promise<string[]> {
+  if (dir === undefined) throw new Error("scratchDirs needs a private directory");
   const entries = await fs.readdir(dir);
   return entries.filter((e) => e.startsWith("craftar-promote-"));
 }
@@ -87,10 +88,13 @@ describe("cli — drift promote", () => {
     expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
     await f.driftA();
     const lockBefore = await f.lockBytes();
-    const scratchBefore = await scratchDirs();
+
+    // Use a private temp directory so parallel workers don't interfere
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-tmp-"));
+    cleanups.push(() => fs.rm(tmp, { recursive: true, force: true }));
 
     const P = ["drift", "promote", A, "--workspace", f.ws];
-    const r = runCli(P);
+    const r = runCli(P, { env: { TMPDIR: tmp, TEMP: tmp, TMP: tmp } });
 
     expect(r.code).toBe(0);
     expect(r.stderr).toBe("");
@@ -143,7 +147,7 @@ describe("cli — drift promote", () => {
     );
 
     // No scratch directory left
-    expect(await scratchDirs()).toEqual(scratchBefore);
+    expect(await scratchDirs(tmp)).toEqual([]);
   });
 
   it("2. --dry-run", async () => {
@@ -151,10 +155,13 @@ describe("cli — drift promote", () => {
     gitInit(f.forgeRoot);
     expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
     await f.driftA();
-    const scratchBefore = await scratchDirs();
+
+    // Use a private temp directory so parallel workers don't interfere
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-tmp-"));
+    cleanups.push(() => fs.rm(tmp, { recursive: true, force: true }));
 
     const P = ["drift", "promote", A, "--workspace", f.ws, "--dry-run"];
-    const r = runCli(P);
+    const r = runCli(P, { env: { TMPDIR: tmp, TEMP: tmp, TMP: tmp } });
 
     expect(r.code).toBe(0);
     expect(r.stderr).toBe("");
@@ -173,7 +180,7 @@ describe("cli — drift promote", () => {
     expect(porcelain(f.forgeRoot)).toBe("");
 
     // No scratch directory left
-    expect(await scratchDirs()).toEqual(scratchBefore);
+    expect(await scratchDirs(tmp)).toEqual([]);
   });
 
   it("3. the recipe's comment survives", async () => {
@@ -3114,9 +3121,12 @@ describe("copyForgeForProof — non-regular files and root directory links (comm
     // Trigger params outcome: change only the param value
     await fs.writeFile(path.join(s.wsRoot, A), "Org: globex-org\nA two\n");
     const lockBefore = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
-    const scratchBefore = await scratchDirs();
+
+    // Use a private temp directory so parallel workers don't interfere
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-tmp-"));
+    cleanups.push(() => fs.rm(tmp, { recursive: true, force: true }));
     
-    const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
+    const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home, TMPDIR: tmp, TEMP: tmp, TMP: tmp } });
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
     expect(r.stderr).toBe(
@@ -3129,7 +3139,7 @@ describe("copyForgeForProof — non-regular files and root directory links (comm
     // Lock unchanged
     expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
     // No scratch left
-    expect(await scratchDirs()).toEqual(scratchBefore);
+    expect(await scratchDirs(tmp)).toEqual([]);
   });
 });
 
@@ -3286,13 +3296,14 @@ describe("D16_BREAK — sibling that planned before but fails after (commit 2)",
     // Drift rule a in ws
     await fs.appendFile(path.join(wsRoot, A), "hand a\n");
 
-    // Verify no scratch dir exists before
-    const scratchBefore = await scratchDirs();
+    // Use a private temp directory so parallel workers don't interfere
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-tmp-"));
+    cleanups.push(() => fs.rm(tmp, { recursive: true, force: true }));
 
     // Porcelain should be empty before
     expect(porcelain(forgeRoot)).toBe("");
 
-    const r = runCli(["drift", "promote", A, "--workspace", wsRoot], { env: { CRAFTAR_HOME: home } });
+    const r = runCli(["drift", "promote", A, "--workspace", wsRoot], { env: { CRAFTAR_HOME: home, TMPDIR: tmp, TEMP: tmp, TMP: tmp } });
 
     // Expected: exit 1, stderr is D16_BREAK message
     expect(r.code).toBe(1);
@@ -3306,7 +3317,7 @@ describe("D16_BREAK — sibling that planned before but fails after (commit 2)",
     expect(porcelain(forgeRoot)).toBe("");
 
     // No scratch left
-    expect(await scratchDirs()).toEqual(scratchBefore);
+    expect(await scratchDirs(tmp)).toEqual([]);
   });
 
   it("R10. same as R9 but with --json: exit 1, stdout empty", async () => {
