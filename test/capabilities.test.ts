@@ -597,13 +597,15 @@ describe("written() — the walk decides and warns from the matrix (spec 18 §9.
 
 function baseOf(resolution: Resolution, warnings: string[]): EmitBase {
   return {
-    forge: undefined as never, // not read by the stubs below
+    forge: { manifest: { schema: 1 } } as never, // only manifest.schema is read by mcpServers
     resolution,
     workspaceRoot: "/nowhere",
     readExisting: async () => null,
     text: async () => "",
     bytes: async () => Buffer.alloc(0),
     warn: (m: string) => warnings.push(m),
+    missing: () => {},
+    warnOnce: (m: string) => warnings.push(m),
   };
 }
 
