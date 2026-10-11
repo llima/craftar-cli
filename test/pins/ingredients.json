@@ -1,0 +1,118 @@
+{
+  "forge": {
+    "name": "test-forge",
+    "commit": null
+  },
+  "context": {
+    "kind": "workspace",
+    "profile": "acme",
+    "recipes": [
+      "base"
+    ]
+  },
+  "recipe": null,
+  "ingredients": [
+    {
+      "ref": "rule/adopted",
+      "type": "rule",
+      "name": "adopted",
+      "outputName": "adopted",
+      "description": null,
+      "targets": "*",
+      "recipes": [
+        "base"
+      ],
+      "inUse": true,
+      "disabled": false
+    },
+    {
+      "ref": "rule/clash",
+      "type": "rule",
+      "name": "clash",
+      "outputName": "clash",
+      "description": null,
+      "targets": "*",
+      "recipes": [
+        "base"
+      ],
+      "inUse": true,
+      "disabled": false
+    },
+    {
+      "ref": "rule/edited",
+      "type": "rule",
+      "name": "edited",
+      "outputName": "edited",
+      "description": null,
+      "targets": "*",
+      "recipes": [
+        "base"
+      ],
+      "inUse": true,
+      "disabled": false
+    },
+    {
+      "ref": "rule/fresh",
+      "type": "rule",
+      "name": "fresh",
+      "outputName": "fresh",
+      "description": null,
+      "targets": "*",
+      "recipes": [
+        "base"
+      ],
+      "inUse": true,
+      "disabled": false
+    },
+    {
+      "ref": "rule/gone",
+      "type": "rule",
+      "name": "gone",
+      "outputName": "gone",
+      "description": null,
+      "targets": "*",
+      "recipes": [],
+      "inUse": false,
+      "disabled": false
+    },
+    {
+      "ref": "rule/gone-edited",
+      "type": "rule",
+      "name": "gone-edited",
+      "outputName": "gone-edited",
+      "description": null,
+      "targets": "*",
+      "recipes": [],
+      "inUse": false,
+      "disabled": false
+    },
+    {
+      "ref": "rule/keep",
+      "type": "rule",
+      "name": "keep",
+      "outputName": "keep",
+      "description": null,
+      "targets": "*",
+      "recipes": [
+        "base"
+      ],
+      "inUse": true,
+      "disabled": false
+    },
+    {
+      "ref": "rule/moved",
+      "type": "rule",
+      "name": "moved",
+      "outputName": "moved",
+      "description": null,
+      "targets": "*",
+      "recipes": [
+        "base"
+      ],
+      "inUse": true,
+      "disabled": false
+    }
+  ],
+  "missing": [],
+  "warnings": []
+}
