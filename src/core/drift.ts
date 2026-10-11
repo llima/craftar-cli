@@ -21,24 +21,33 @@ export interface DriftRow {
 export const unmanaged = (p: string) =>
   `${p} is not a file craftar manages in this workspace — pass the workspace-relative path as \`craftar status\` prints it (forward slashes)`;
 
-/** The static half of promote's refusals: it reads the status, never the Forge's git state. */
-function staticReason(s: FileStatus): string | null {
+/**
+ * The static half of promote's refusals: it reads the status, never the Forge's git state.
+ * The order is: orphan, then service file (spec 31), then provided (spec 33i), then kiro, then AGENTS.md, then .mcp.json.
+ */
+function staticReason(s: FileStatus, provided: Map<string, { slot: string; recipe: string }>): string | null {
   if (s.state === "orphan-drift") return "no longer produced";
   if (s.target === "services") return "service file";
+  // Provided by integrations block — after "no longer produced" and "service file", before "kiro file"
+  const prov = s.ingredient ? provided.get(s.ingredient) : undefined;
+  if (prov) return `provided by integrations.${prov.slot}`;
   if (s.target === "kiro") return "kiro file";
   if (s.target === "agents-md") return "AGENTS.md";
   if (s.ingredient?.startsWith("mcp/")) return ".mcp.json";
   return null;
 }
 
-/** The hand-edited files among `statuses`, in the order given. Pure. */
-export function driftList(statuses: FileStatus[]): DriftRow[] {
+/**
+ * The hand-edited files among `statuses`, in the order given. Pure.
+ * @param provided - Map from Forge ref to { slot, recipe } for ingredients the block provides (spec 33i).
+ */
+export function driftList(statuses: FileStatus[], provided: Map<string, { slot: string; recipe: string }> = new Map()): DriftRow[] {
   const rows: DriftRow[] = [];
   for (const s of statuses) {
     if (s.state !== "drift" && s.state !== "orphan-drift") continue;
     // `same`: the lock's hash is the plan's, so only the hand edit separates the disk from the Forge.
     const forge: ForgeSide = s.state === "orphan-drift" ? "removed" : s.lock!.hash === hashNormalized(s.planned!.content) ? "same" : "changed";
-    const reason = staticReason(s);
+    const reason = staticReason(s, provided);
     rows.push({ path: s.path, state: s.state, target: s.target!, ingredient: s.ingredient ?? "", forge, promotable: reason === null, reason });
   }
   return rows;

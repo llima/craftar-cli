@@ -6,6 +6,7 @@ import YAML from "yaml";
 import { IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type IngredientRef } from "../schema/index.js";
 import { fingerprintDir } from "./fingerprint.js";
 import { assertNoLinkOnPath, copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
+import { effectiveProfile } from "./integrations.js";
 import { findProfileFile } from "./param-writes.js";
 import { resolve, type Resolution } from "./resolve.js";
 import { note, type WriteJournal } from "./unify.js";
@@ -243,7 +244,12 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
       const res = before.get(q) as Resolution;
       if (!res.recipes.includes(name)) continue;
       if (!res.profile.recipes.includes(name)) {
-        throw new Error(`${COMMAND}: profile ${q} reaches recipe ${name} (which names ${X}) through ${chainTo(forge, res.profile.recipes, name)} — promote would have to copy that chain; edit the Forge by hand`);
+        const eff = effectiveProfile(forge, res.profile);
+        const sel = eff.selected.find((s) => s.recipe === name);
+        if (sel) {
+          throw new Error(`${COMMAND}: profile ${q} selects recipe ${name} (which names ${X}) through integrations.${sel.slot} — promote cannot repoint a recipe a block selects by editing a recipes list; edit the Forge by hand`);
+        }
+        throw new Error(`${COMMAND}: profile ${q} reaches recipe ${name} (which names ${X}) through ${chainTo(forge, eff.recipes, name)} — promote would have to copy that chain; edit the Forge by hand`);
       }
       const copy = `${name}--${q}`;
       const abs = path.join(forge.root, "recipes", `${copy}.yaml`);

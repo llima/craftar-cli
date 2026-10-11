@@ -3,6 +3,7 @@
  * Pure data: no console, no process.exit, no picocolors, no file reads.
  */
 import type { Forge } from "./forge.js";
+import { effectiveProfile, recipesOrWritten } from "./integrations.js";
 import { recipeOrder, resolve, type Resolution } from "./resolve.js";
 import { outName } from "../emitters/shared.js";
 import { INGREDIENT_TYPES, WorkspaceConfigSchema, type IngredientRef, type IngredientType, type Target, type WorkspaceConfig } from "../schema/index.js";
@@ -96,14 +97,18 @@ export interface RecipesListing {
 /**
  * Compute which profiles reach a recipe, directly or through extends (rule 8).
  * Tolerant depth-first walk: skips unknown recipes, stops on cycles.
+ * Returns the map and the warnings collected (profile name + text), in Forge profile order.
  */
-function computeProfilesForRecipes(forge: Forge): Map<string, string[]> {
+function computeProfilesForRecipes(forge: Forge): { map: Map<string, string[]>; warnings: { profile: string; text: string }[] } {
   const result = new Map<string, string[]>();
   for (const name of forge.recipes.keys()) result.set(name, []);
 
+  const warnings: { profile: string; text: string }[] = [];
   for (const [profileName, profile] of forge.profiles) {
+    const { recipes, warning } = recipesOrWritten(forge, profile);
+    if (warning !== null) warnings.push({ profile: profileName, text: warning });
     const visited = new Set<string>();
-    const stack: string[] = [...profile.recipes];
+    const stack: string[] = [...recipes];
     while (stack.length) {
       const name = stack.pop()!;
       if (visited.has(name)) continue;
@@ -119,7 +124,7 @@ function computeProfilesForRecipes(forge: Forge): Map<string, string[]> {
   for (const [name, profiles] of result) {
     result.set(name, [...new Set(profiles)].sort());
   }
-  return result;
+  return { map: result, warnings };
 }
 
 export function listRecipes(forge: Forge, context: CatalogueContext | null): RecipesListing {
@@ -131,7 +136,12 @@ export function listRecipes(forge: Forge, context: CatalogueContext | null): Rec
     : null;
 
   const warnings = context ? [...context.warnings] : [];
-  const profilesMap = computeProfilesForRecipes(forge);
+  const { map: profilesMap, warnings: walkWarnings } = computeProfilesForRecipes(forge);
+  // Append walk warnings, but leave out the one for context.profile (catalogueContext already gives it)
+  for (const w of walkWarnings) {
+    if (w.profile === context?.profile) continue;
+    warnings.push(w.text);
+  }
 
   // Build the set of resolved recipes and their reasons
   const resolvedSet = new Set(resolves ? context.resolution!.recipes : []);
@@ -156,13 +166,14 @@ export function listRecipes(forge: Forge, context: CatalogueContext | null): Rec
   const byMap = new Map<string, Array<"profile" | "workspace" | "extends">>();
   if (resolves && context) {
     const config = context.config;
-    const profileRecipes = new Set(forge.profiles.get(context.profile)?.recipes ?? []);
+    // Use the effective recipes for the context's profile (it resolved, so this cannot throw)
+    const profileRecipes = new Set(effectiveProfile(forge, forge.profiles.get(context.profile)!).recipes);
     const addRecipes = new Set(config.recipes.add);
     const removeRecipes = new Set(config.recipes.remove);
 
     for (const name of context.resolution!.recipes) {
       const by: Array<"profile" | "workspace" | "extends"> = [];
-      // profile: profile lists it AND remove does not name it
+      // profile: profile's effective recipes include it AND remove does not name it
       if (profileRecipes.has(name) && !removeRecipes.has(name)) by.push("profile");
       // workspace: add lists it AND remove does not name it
       if (addRecipes.has(name) && !removeRecipes.has(name)) by.push("workspace");

@@ -20,6 +20,7 @@ import { editYamlText } from "./yaml-edit.js";
 import { concerned, workspaceAgainst, type ForgeWorkspace, type Planned, type RegistryState } from "./impact.js";
 import { plan, type MergedConfig } from "./sync.js";
 import { parseYamlText } from "./yaml-read.js";
+import { effectiveProfile, recipesOrWritten } from "./integrations.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
 // fidelity, correctness should not hinge on a glyph no diff viewer, editor or re-encoding shows.
@@ -172,6 +173,11 @@ export interface ApplyOptions {
    * step 7. Default `{}`.
    */
   profileSections?: Record<string, string>;
+  /**
+   * The Forge's `schema` (spec 33 §5.2): gates `reservedKey` for the `integrations.*` prefix.
+   * Default `1` (below every gate).
+   */
+  forgeSchema?: number;
 }
 
 /** One section a plan run creates or fills (spec 12 §4.5, §5.5). */
@@ -335,6 +341,7 @@ export async function applyPlan(
   const onlyInVariant = new Set(diff.onlyInVariant);
 
   const profileSections = opts.profileSections ?? {};
+  const forgeSchema = opts.forgeSchema ?? 1;
 
   // Ruling 29 (spec §8 refusal 7, in both directions): the plan must cover every file the diff
   // has — paired, base-only and variant-only — each exactly once. The walk below only visits the
@@ -487,7 +494,7 @@ export async function applyPlan(
         // Handle param hunks in the same file
         const templates: (string[] | undefined)[] = new Array(hunks.length);
         for (const [k, ph] of paramOf) {
-          const { lines, pairs } = deriveHunk(pf.file, k + 1, hunks[k], ph.params, base.meta.params);
+          const { lines, pairs } = deriveHunk(pf.file, k + 1, hunks[k], ph.params, base.meta.params, forgeSchema);
           templates[k] = lines;
           collect(extractions, pf.file, k + 1, pairs);
         }
@@ -546,7 +553,7 @@ export async function applyPlan(
         }
         const templates: (string[] | undefined)[] = new Array(hunks.length);
         for (const [k, ph] of paramOf) {
-          const { lines, pairs } = deriveHunk(pf.file, k + 1, hunks[k], ph.params, base.meta.params);
+          const { lines, pairs } = deriveHunk(pf.file, k + 1, hunks[k], ph.params, base.meta.params, forgeSchema);
           templates[k] = lines;
           collect(extractions, pf.file, k + 1, pairs);
         }
@@ -996,21 +1003,43 @@ export interface PruneCandidate {
   profiles: Array<{ name: string; abs: string }>;
   /** Profiles that list this candidate but whose file could not be found. */
   missingProfiles: string[];
+  /** Profiles that select this candidate through `integrations`, sorted (spec 33 §4.4). */
+  viaIntegrations: string[];
 }
 
 /**
  * Candidates in the dry pass (spec 25 §4.4 step 1): for every cascade edit whose recipe name ends
  * `--<profile>`, render it, parse through RecipeSchema, and compare with the sibling exactly as
  * `identicalToSibling` compares. Writes nothing.
+ *
+ * `viaIntegrations` holds the names of profiles that select this candidate through `integrations`,
+ * sorted (spec 33 §4.4). A profile whose block cannot be read is skipped and warned about.
  */
 export async function pruneCandidates(
   forge: Forge,
   baseRef: IngredientRef,
   variantRef: IngredientRef,
   profile: string,
+  warn?: (w: string) => void,
 ): Promise<PruneCandidate[]> {
   const suffix = `--${profile}`;
   const out: PruneCandidate[] = [];
+
+  // Compute selectedBy once for all profiles (spec 33 §4.4): recipe → profile names that select it.
+  const selectedBy = new Map<string, string[]>();
+  for (const [pName, prof] of forge.profiles) {
+    try {
+      for (const s of effectiveProfile(forge, prof).selected) {
+        const arr = selectedBy.get(s.recipe);
+        if (arr) arr.push(pName);
+        else selectedBy.set(s.recipe, [pName]);
+      }
+    } catch {
+      // effectiveProfile threw on a malformed block — warn via recipesOrWritten's message.
+      const row = recipesOrWritten(forge, prof);
+      if (row.warning) warn?.(row.warning);
+    }
+  }
 
   // Get the cascade edits
   const edits = await ingredientEdits(forge, baseRef, variantRef);
@@ -1033,7 +1062,7 @@ export async function pruneCandidates(
     // Compare with the sibling using the shared comparison function
     if (!recipesSame(parsedRecipe, siblingRecipe)) continue;
 
-    // Find profiles that list this candidate
+    // Find profiles that list this candidate in their written recipes
     const profiles: Array<{ name: string; abs: string }> = [];
     const missingProfiles: string[] = [];
     for (const [pName, prof] of forge.profiles) {
@@ -1047,7 +1076,10 @@ export async function pruneCandidates(
       }
     }
 
-    out.push({ recipe: edit.name, sibling, file: edit.file, profiles, missingProfiles });
+    // viaIntegrations: profiles that select this recipe through integrations (spec 33 §4.4, choice B10).
+    const viaIntegrations = [...(selectedBy.get(edit.name) ?? [])].sort();
+
+    out.push({ recipe: edit.name, sibling, file: edit.file, profiles, missingProfiles, viaIntegrations });
   }
 
   return out;
@@ -1154,6 +1186,7 @@ export interface PruneContext {
  * `content: null` means delete. Reasons, in order, first one wins:
  * - the Forge no longer loads when the prune reloads it (every candidate kept with `the Forge no longer loads when the prune reloads it: <message>`)
  * - another recipe's `extends` names it
+ * - profile <names, ", "> selects it through integrations (spec 33 §4.4)
  * - registry state not `read` (various messages)
  * - a workspace's `recipes.add` or `recipes.remove` names it
  * - the edit throws
@@ -1203,6 +1236,15 @@ export async function pruneRecipes(
       kept.push({
         recipe: candidate.recipe,
         reason: `recipe ${extendedBy.sort().join(", ")} extends it`,
+      });
+      continue;
+    }
+
+    // Check 1c: a profile selects it through integrations (spec 33 §4.4)
+    if (candidate.viaIntegrations.length > 0) {
+      kept.push({
+        recipe: candidate.recipe,
+        reason: `profile ${candidate.viaIntegrations.join(", ")} selects it through integrations`,
       });
       continue;
     }

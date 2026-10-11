@@ -24,7 +24,7 @@ export function manifestWithSections(raw: string, command: "import" | "unify"): 
     throw refuse("it is not a YAML mapping");
   }
 
-  if ((before as { schema?: unknown }).schema === FORGE_SCHEMA_SECTIONS) {
+  if (typeof (before as { schema?: unknown }).schema === "number" && (before as { schema: number }).schema >= FORGE_SCHEMA_SECTIONS) {
     return null;
   }
 

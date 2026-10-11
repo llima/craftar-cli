@@ -1,6 +1,6 @@
 import path from "node:path";
-import type { Ingredient, PlanParam } from "../schema/index.js";
-import { normalizeDeclared } from "../schema/index.js";
+import { FORGE_SCHEMA_INTEGRATIONS, normalizeDeclared, type Ingredient, type PlanParam } from "../schema/index.js";
+import { INTEGRATIONS_PREFIX } from "./integrations.js";
 import { changedRegions } from "./classify.js";
 import { TEXT_EXT } from "../emitters/claude-code.js";
 import { KIRO_TEXT_EXT } from "../emitters/kiro.js";
@@ -25,9 +25,14 @@ export interface Extraction {
 
 const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 
-/** Keys `unify` never extracts: a global param an emitter reads directly, or a name `substitute` once resolved to a built-in (P9). */
-export function reservedKey(key: string): boolean {
-  return key === "kiro.banner" || key in Object.prototype;
+/**
+ * Keys `unify` never extracts: a global param an emitter reads directly, or a name `substitute`
+ * once resolved to a built-in (P9). At schema 3+, also keys under `integrations.` — the prefix
+ * the block gives (spec 33 §5.2).
+ */
+export function reservedKey(key: string, schema: number): boolean {
+  if (key === "kiro.banner" || key in Object.prototype) return true;
+  return schema >= FORGE_SCHEMA_INTEGRATIONS && key.startsWith(INTEGRATIONS_PREFIX);
 }
 
 /**
@@ -130,6 +135,7 @@ export function deriveHunk(
   h: Hunk,
   params: PlanParam[] | undefined,
   declared: Ingredient["params"],
+  schema: number,
 ): { lines: string[]; pairs: Array<{ key: string; default: string; value: string; reused: boolean }> } {
   const where = `unify plan: "${file}" hunk ${n}`;
   if (!params?.length) throw new Error(`${where} is take: param but names no params`);
@@ -142,7 +148,7 @@ export function deriveHunk(
   const byToken = new Map<string, PlanParam>();
   for (const p of params) {
     if (byToken.has(p.token)) throw new Error(`${where} names token "${p.token}" twice`);
-    if (reservedKey(p.key)) throw new Error(`${where}: key ${p.key} is reserved`);
+    if (reservedKey(p.key, schema)) throw new Error(`${where}: key ${p.key} is reserved`);
     byToken.set(p.token, p);
   }
 

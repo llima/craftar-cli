@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import type { Forge } from "./forge.js";
+import { effectiveProfile } from "./integrations.js";
 import { WorkspaceConfigSchema, type WorkspaceConfig } from "../schema/index.js";
 import { recipeOrder, resolve } from "./resolve.js";
 import { schemaFault } from "./schema-fault.js";
@@ -57,6 +58,8 @@ export function planRecipeEdit(
 ): RecipeEdit {
   const profile = forge.profiles.get(config.profile);
   if (!profile) throw new Error(`profile "${config.profile}" not found in Forge (${[...forge.profiles.keys()].join(", ") || "none"})`);
+  // Use the effective profile's recipes (spec 33 §4.4): a block-selected recipe is the profile's.
+  const own = effectiveProfile(forge, profile).recipes;
   const original: RecipeLists = { add: [...config.recipes.add], remove: [...config.recipes.remove] };
   const lists: RecipeLists = { add: [...original.add], remove: [...original.remove] };
 
@@ -74,7 +77,7 @@ export function planRecipeEdit(
     if (!known(name) && !cleanup) throw notFound(name);
   }
 
-  const top = () => [...profile.recipes, ...lists.add].filter((r) => !lists.remove.includes(r) && known(r));
+  const top = () => [...own, ...lists.add].filter((r) => !lists.remove.includes(r) && known(r));
   // The "resolved" walk: through `extends`, without the slot check, over the names the Forge holds (§3.1).
   const order = () => recipeOrder(forge, top(), `profile ${profile.name}`);
   // Every occurrence: a name written twice by hand must not survive in the list (§10 criterion 4).
@@ -88,7 +91,7 @@ export function planRecipeEdit(
     // An unknown name is only cleaned out of the list that holds it (§14 item 9).
     if (!known(name)) return [without(lists.add, name), without(lists.remove, name)].some(Boolean);
     let touched = without(lists.add, name);
-    if (profile.recipes.includes(name) && !lists.remove.includes(name)) {
+    if (own.includes(name) && !lists.remove.includes(name)) {
       lists.remove.push(name);
       touched = true;
     }

@@ -53,8 +53,10 @@ import {
   type EmittedSource,
 } from "./claude-code.js";
 import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
+import { providedRefs } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
 import { sectionKey } from "../core/resolve.js";
+import { effectiveProfile } from "../core/integrations.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import type { WriteJournal } from "../core/unify.js";
@@ -182,6 +184,10 @@ const D16_BREAK = (wsPath: string, profile: string, errMsg: string) =>
   `promote would break ${wsPath} (profile ${profile}): ${errMsg.split("\n")[0]} — the Forge was left untouched`;
 const D17 = (recipe: string, chain: string) =>
   `recipe ${recipe} reaches this workspace through ${chain} — promote does not fork a recipe chain; re-import the workspace or edit the recipes by hand`;
+const D18 = (p: string, recipe: string, profile: string, slot: string, ref: string) =>
+  `${p} comes from recipe ${recipe}, which profile ${profile} selects through integrations.${slot} — edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
+const D19 = (p: string, recipe: string, profile: string, slot: string, ref: string) =>
+  `${p} reaches this workspace through recipe ${recipe}, which profile ${profile} selects through integrations.${slot} and another profile also resolves — promote cannot fork a recipe a block selects; edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
 const INTERNAL_REUSE = (p: string) => `internal: ${p} is drift but the Forge already renders it — please report this`;
 interface OtherWorkspaceCheck {
   entries: ForgeWorkspace[];
@@ -552,8 +558,17 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const p0 = await plan(ws);
   const lock = await readLock(root);
   const st = await status(ws, p0, lock);
+  const profile = ws.config.profile;
 
-  // Step 2: Classify the path (D4, D5, D6)
+  // Spec 33i: compute the provided map; unlike drift show, a throw here is NOT swallowed.
+  let provided: Map<string, { slot: string; recipe: string }>;
+  try {
+    provided = providedRefs(forge, profile);
+  } catch (e) {
+    throw new Error(`drift promote: profile ${profile} does not resolve (${(e as Error).message})`);
+  }
+
+  // Step 2: Classify the path (D4, D5, D6, D18)
   const normalized = inputPath.replace(/\\/g, "/").replace(/^\.\//, "");
   const fileStatus = st.find((s) => s.path === normalized);
   if (!fileStatus) throw new Error(unmanaged(normalized));
@@ -561,17 +576,26 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   if (fileStatus.state !== "drift") throw new Error(D4_OTHER(normalized, fileStatus.state));
 
   // Static checks (promotability) using driftList's row
-  const rows = driftList([fileStatus]);
+  const rows = driftList([fileStatus], provided);
   if (rows.length === 0) {
     throw new Error(D4_OTHER(normalized, fileStatus.state));
   }
   const row = rows[0];
   if (!row.promotable) {
-    // Build the right D5/D6 message from the static reason
+    // Build the right D5/D6/D18 message from the static reason.
+    // Order of reasons in driftList: orphan → service file → provided → kiro → AGENTS.md → .mcp.json.
+    // "no longer produced" cannot reach here: the state is `drift`, not `orphan-drift`.
     const reason = row.reason;
     if (reason === "service file") {
       throw new Error(D5_SERVICE(normalized));
-    } else if (reason === "kiro file") {
+    }
+    // Decide D18 by the data (provided map lookup), not by the message text.
+    const prov = fileStatus.ingredient ? provided.get(fileStatus.ingredient) : undefined;
+    if (prov) {
+      // D18: provided by the integrations block
+      throw new Error(D18(normalized, prov.recipe, profile, prov.slot, fileStatus.ingredient!));
+    }
+    if (reason === "kiro file") {
       // D5 kiro: check if the plan has a claude-code path for this ingredient
       const ingredientRef = fileStatus.ingredient;
       const claudePath = ingredientRef ? p0.files.find((f) => f.ingredient === ingredientRef && f.target === "claude-code")?.path : null;
@@ -587,7 +611,6 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     }
   }
 
-  const profile = ws.config.profile;
   const ingredientRef = fileStatus.ingredient! as IngredientRef;
 
   // Step 3: The emitted set E — every file the plan emits for this ingredient on claude-code
@@ -608,7 +631,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     if (s.state === "drift" || s.state === "update" || s.state === "collision" || s.state === "adopt") {
       if (s.state === "drift") {
         // Get forge side from driftList
-        const driftRow = driftList([s])[0];
+        const driftRow = driftList([s], provided)[0];
         if (driftRow && driftRow.forge === "changed") {
           throw new Error(D7(ingredientRef, f.path, "drift, forge changed", profile));
         }
@@ -707,10 +730,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Step 5: Decide the outcome
   const stage = new ForgeStage(forgeDir);
   const readWs = (abs: string) => fs.readFile(abs, "utf8");
+  const profileObj = forge.profiles.get(profile)!;
   const ctx: RunContext = {
-    P: { ...(forge.profiles.get(profile)?.params ?? {}) },
+    P: { ...effectiveProfile(forge, profileObj).params },
     W: await workspaceParams(root, readWs, "drift promote"),
-    PS: structuredClone(forge.profiles.get(profile)?.sections ?? {}),
+    PS: structuredClone(profileObj.sections ?? {}),
     WS: await workspaceSections(root, readWs, "drift promote"),
     pinned: new Map(),
     forge,
@@ -982,10 +1006,14 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // For variant-updated, no recipe changes needed
   const viaRecipes = X.via;
   const editedKeys = new Map<string, string[]>();
+  // The WRITTEN list on purpose: it asks which file lists R, to edit it. A recipe the block selects never reaches the fork or D17 below — D19 refuses it first.
   const profileRecipes = forge.profiles.get(profile)?.recipes ?? [];
 
   // The ref we're replacing in recipes: X.ref (not T/N, because X might be another profile's variant)
   const refToReplace = X.ref;
+
+  // Build a map of recipes the profile's integrations block selects: recipe → slot
+  const selectedBy = new Map(effectiveProfile(forge, profileObj).selected.map((s) => [s.recipe, s.slot]));
 
   if (outcome === "variant") {
     // Check which recipes need to be edited or forked
@@ -999,6 +1027,15 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
           otherOwns = true;
           break;
         }
+      }
+
+      // D19: if the block selects R and another profile resolves it, promote cannot fork it
+      // The ONLY allowed case is "profile owns it alone → edit in place" (profileOwns && !otherOwns)
+      const selectedSlot = selectedBy.get(R);
+      if (selectedSlot && !(profileOwns && !otherOwns)) {
+        // Find the ref for the D19 message (the first ref of type matching X's type)
+        const ref = ingredientRef;
+        throw new Error(D19(normalized, R, profile, selectedSlot, ref));
       }
 
       // Find the extends chain to R

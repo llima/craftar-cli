@@ -6,6 +6,7 @@ import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
+import { providedRefs } from "./importers/provided.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
@@ -66,7 +67,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.26.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.27.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -81,7 +82,7 @@ const REPORT_GATE: OutputGate = { what: "report", who: "import", outside: "write
 
 program
   .command("import")
-  .description("Import an existing workspace harness into a Forge: creates or updates ingredients, recipes and a profile, reusing a templated base when it renders the workspace text or infers it into params or sections")
+  .description("Import an existing workspace harness into a Forge: creates or updates ingredients, recipes and a profile, reusing a templated base when it renders the workspace text or infers it into params or sections; in a schema 3 Forge, what the profile's integrations block provides is left to its recipe and reported")
   .requiredOption("--from <tool>", "source tool: claude-code")
   .requiredOption("--forge <dir>", "Forge directory (created if missing)")
   .requiredOption("--profile <name>", "client profile to create or update")
@@ -111,6 +112,8 @@ program
     for (const v of r.variants) console.log(`  ${pc.yellow("variant")} ${v.name} — ${v.reason}`);
     for (const x of r.rejected) console.log(`  ${pc.red("rejected")} ${x.name} — ${x.reason}`);
     for (const x of r.preferKiro ?? []) console.log(`  ${pc.cyan("prefer-kiro")} ${preferredLine(x)}`);
+    // Spec 33 §5.3: what the block provides is left to its recipe.
+    for (const x of r.leftToRecipes) console.log(`  left to recipe ${x.recipe} (integrations.${x.slot}): ${x.refs.join(", ")} — not compared; when this workspace resolves that recipe, craftar status shows whether its copies differ`);
     // Spec 10 §4.2: how a templated base was reused, and what the profile gained.
     // Spec 11 §4.3: `; sections …` when a section value filled the render.
     for (const x of r.rendered) {
@@ -493,14 +496,25 @@ drift
     const only = given === undefined ? null : statusPath(given);
     const named = only === null ? null : st.find((s) => s.path === only);
     if (only !== null && !named) fail(unmanaged(only));
-    const rows = driftList(named ? [named] : st);
+    // Spec 33i: compute the provided map; a throw (profile that resolves only because recipes.remove silences something) gives an empty map.
+    let provided = new Map<string, { slot: string; recipe: string }>();
+    const providedWarnings: string[] = [];
+    try {
+      provided = providedRefs(ws.forge, ws.config.profile);
+    } catch (e) {
+      // The profile's effective recipes don't resolve — drift show never fails for this.
+      // Below schema 3, providedRefs returns early (line "if (!eff.selected.length) return new Map()") before resolve(), so it cannot throw.
+      providedWarnings.push(`profile ${ws.config.profile} does not resolve on its own (${(e as Error).message}) — what its integrations provide was not computed, and craftar drift promote will refuse`);
+    }
+    const rows = driftList(named ? [named] : st, provided);
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
-      console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: p.warnings, unsetParams: unset }, null, 2));
+      console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: [...p.warnings, ...providedWarnings], unsetParams: unset }, null, 2));
       if (unset.length) process.exitCode = 1;
       return;
     }
+    warnStderr(providedWarnings);
     if (named && !rows.length) {
       console.log(`${named.path} is not drifted (${named.state})`);
       if (refusalBlock(unset)) process.exitCode = 1;
@@ -1741,13 +1755,15 @@ forge
       return p && Object.hasOwn(p.sections, baseKey) ? p.sections[baseKey] : {};
     })();
 
-    const result = await applyPlan(base, variant, diff, toApply, { discardVariantMeta: o.take === "base", profileSections });
+    const result = await applyPlan(base, variant, diff, toApply, { discardVariantMeta: o.take === "base", profileSections, forgeSchema: f.manifest.schema });
     // Ruling 33, dry pass: every recipe `ingredients` rewrite the cascade will make is checked before
     // the first byte is written, so a refusal (an aliased reference) leaves the Forge untouched.
     const cascadeFiles = result.resolved ? await checkRecipeCascade(f, base.ref, variant.ref) : [];
     // Spec 25 §4.4: prune candidates, computed in the dry pass
+    // Spec 33 §4.4: pruneCandidates warns once per profile whose block cannot be read
+    const pruneWarnings: string[] = [];
     const candidates: PruneCandidate[] = o.pruneRecipes && result.resolved
-      ? await pruneCandidates(f, base.ref, variant.ref, o.profile)
+      ? await pruneCandidates(f, base.ref, variant.ref, o.profile, (w) => pruneWarnings.push(w))
       : [];
     // Spec 09 & 12: the Forge-level rows and YAML edits for parameter and section extractions, rendered before any write.
     const paramWrites = result.params.length || result.sections.length
@@ -1881,6 +1897,8 @@ forge
     }
     // Spec 25 §4.2: push warnings from forgeWorkspaces (credential lines)
     warnings.push(...impactWarnings);
+    // Spec 33 §4.4: push warnings from pruneCandidates (malformed blocks)
+    warnings.push(...pruneWarnings);
 
     if (result.metaDiffers.length) {
       warnings.push(

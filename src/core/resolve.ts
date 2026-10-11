@@ -2,6 +2,7 @@ import type { Forge, LoadedIngredient } from "./forge.js";
 import type { IngredientRef, Profile, Sections, Target, WorkspaceConfig } from "../schema/index.js";
 import { deepMerge } from "./merge.js";
 import { outName } from "../emitters/shared.js";
+import { effectiveProfile, integrationOrigin } from "./integrations.js";
 
 /** Builds the "profile not found" message (spec 28 §5.2, N5). */
 export function profileNotFoundMessage(profile: string, profileNames: string[]): string {
@@ -66,11 +67,21 @@ export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
   const profile = forge.profiles.get(ws.profile);
   if (!profile) throw new Error(profileNotFoundMessage(ws.profile, [...forge.profiles.keys()]));
 
-  const warnings: string[] = [];
+  // The effective profile once integrations are applied (spec 33 §5.2).
+  const eff = effectiveProfile(forge, profile);
+  const warnings: string[] = [...eff.warnings];
+
+  // Check unknown integration recipes before recipes.add (spec 33 §4.3, design.md item 4).
+  for (const s of eff.selected) {
+    if (!ws.recipes.remove.includes(s.recipe) && !forge.recipes.has(s.recipe)) {
+      throw new Error(`recipe "${s.recipe}" not found (referenced by ${integrationOrigin(s.slot, profile.name)})`);
+    }
+  }
+
   // recipeOrder takes one origin for the whole list, so a workspace's own names are checked first (spec 22 §14 item 7).
   for (const r of ws.recipes.add)
     if (!ws.recipes.remove.includes(r) && !forge.recipes.has(r)) throw new Error(`recipe "${r}" not found (referenced by craftar.yaml recipes.add)`);
-  const wanted = [...profile.recipes, ...ws.recipes.add].filter((r) => !ws.recipes.remove.includes(r));
+  const wanted = [...eff.recipes, ...ws.recipes.add].filter((r) => !ws.recipes.remove.includes(r));
   const order = recipeOrder(forge, wanted, `profile ${profile.name}`);
 
   // Slot exclusivity
@@ -93,7 +104,7 @@ export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
       recipeParams.set(k, name);
     }
   }
-  Object.assign(params, profile.params, ws.overrides.params);
+  Object.assign(params, eff.params, ws.overrides.params);
 
   // Sections: body default → profile → workspace (craftar.yaml under craftar.local.yaml, merged by
   // loadWorkspace). Deep, so a workspace setting one section of a key keeps the profile's others (P4).
@@ -124,7 +135,7 @@ export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
     params,
     sections,
     sectionLayers: { profile: profile.sections, workspace: ws.overrides.sections },
-    paramLayers: { recipes: recipeParams, profile: profile.params, workspace: ws.overrides.params },
+    paramLayers: { recipes: recipeParams, profile: eff.params, workspace: ws.overrides.params },
     ingredients: [...picked.values()],
     disabled,
     warnings,
