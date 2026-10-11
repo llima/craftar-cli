@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { exists, listFiles } from "../src/core/forge.js";
@@ -87,11 +88,25 @@ describe("a git planted in craftar's working directory is never run", () => {
     await writeFiles(s.wsRoot, { ssh: `#!/bin/sh\necho ran >> planted-ssh-ran.txt\nexit 1\n`, "craftar.yaml": "forge: ssh://git@127.0.0.1:1/acme/forge.git\nprofile: acme\n" });
     await fs.chmod(path.join(s.wsRoot, "ssh"), 0o755);
     const dir = path.dirname((await onPath("git", process.env))!);
+    const mark = path.join(s.wsRoot, "planted-ssh-ran.txt");
+    // Nothing of the developer's git or ssh setup decides which ssh git starts.
+    const status = (PATH: string) =>
+      runCli(["status"], { cwd: s.wsRoot, env: { PATH, Path: PATH, GIT_SSH: undefined, GIT_SSH_COMMAND: undefined, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1" } });
+
     for (const PATH of [`${path.delimiter}${dir}`, `.${path.delimiter}${dir}`]) {
-      const r = run(["status"], s.wsRoot, PATH);
-      expect(r.code, `PATH=${JSON.stringify(PATH)}`).toBe(1);
+      expect(status(PATH).code, `PATH=${JSON.stringify(PATH)}`).toBe(1);
     }
-    expect(await exists(path.join(s.wsRoot, "planted-ssh-ran.txt"))).toBe(false);
+    expect(await exists(mark)).toBe(false);
+
+    // Positive control: the same ssh in a directory PATH names by its absolute path IS what git starts (it leaves
+    // its mark in git's working directory, the workspace) — so its absence above is the lookup's doing, not this
+    // environment's.
+    const tools = path.join(s.root, "tools");
+    await fs.mkdir(tools);
+    await fs.copyFile(path.join(s.wsRoot, "ssh"), path.join(tools, "ssh"));
+    await fs.chmod(path.join(tools, "ssh"), 0o755);
+    expect(status(`${tools}${path.delimiter}${dir}`).code).toBe(1);
+    expect(await exists(mark)).toBe(true);
   });
 });
 
@@ -134,6 +149,11 @@ describe("a workspace in sync whose git is no longer found", () => {
     expect(run(["sync"], s.wsRoot, relative).code).toBe(0);
     expect((await lock()).forge.commit).toBeNull();
     expect(await files()).toEqual(before);
+
+    // once: a second writing sync under the same PATH leaves the lock's bytes alone
+    const bytes = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
+    expect(run(["sync"], s.wsRoot, relative).code).toBe(0);
+    expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(bytes)).toBe(true);
 
     // found again: the commit comes back
     expect(run(["sync"], s.wsRoot, dir).code).toBe(0);
