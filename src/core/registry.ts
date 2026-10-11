@@ -299,9 +299,10 @@ function counts(statuses: FileStatus[]): Record<string, number> {
 
 /**
  * Every entry with its status computed now (§4.2): the Forge from its path or the cache, never the
- * network unless `fetch`. Writes nothing to the registry, a workspace or a lock.
+ * network unless `fetch`. Writes nothing to the registry, a workspace or a lock. `reason` words the
+ * warning of an `error` row (spec 36 §4.5: `craftar ui` passes its own); absent, the error's message.
  */
-export async function listWorkspaces(home: string, opts: { fetch: boolean }): Promise<WorkspaceTable> {
+export async function listWorkspaces(home: string, opts: { fetch: boolean; reason?: (e: unknown) => string }): Promise<WorkspaceTable> {
   const reg = await readRegistry(home);
   const rows: WorkspaceRow[] = [];
   const warnings: string[] = [];
@@ -357,7 +358,7 @@ export async function listWorkspaces(home: string, opts: { fetch: boolean }): Pr
     } catch (err) {
       rows.push(fromEntry(e, "error"));
       if (!planSaid) for (const w of ws?.warnings ?? []) say(w);
-      say(err instanceof Error ? err.message : String(err));
+      say((opts.reason ?? ((e: unknown) => (e instanceof Error ? e.message : String(e))))(err));
     }
   }
   return { registry: registryFile(home), rows, warnings };
