@@ -221,8 +221,8 @@ describe("the child's own PATH holds absolute entries only", () => {
     expect(env).toEqual(before);
   });
 
-  // Off Windows only: there an absent PATH makes the platform use its default path. On win32 Node (libuv) gives a
-  // child with no PATH key the parent's own, so childEnv always sets the key there — not measured on Windows.
+  // Off Windows an absent PATH makes the platform use its default path. On win32 Node (libuv) gives a child with
+  // no PATH key the parent's own, so childEnv always sets the key there: the test after this one.
   it.runIf(process.platform !== "win32")("with no absolute entry left the child gets NO PATH — an empty one would be a working-directory lookup", async () => {
     const has = ["-e", "console.log(Object.keys(process.env).some((k) => k.toUpperCase() === 'PATH'))"];
     for (const value of ["", ".", ["", ".", "bin"].join(path.delimiter)]) {
@@ -232,6 +232,19 @@ describe("the child's own PATH holds absolute entries only", () => {
     delete unset.PATH;
     expect((await execProgram(process.execPath, has, { env: unset })).stdout).toBe("false\n");
     expect((await execProgram(process.execPath, has, { env: withPath(PLANTED) })).stdout).toBe("true\n");
+  });
+
+  // Written from Node's and libuv's sources; it has not run until a Windows CI job runs it. The value is asserted,
+  // not the key: without the win32 arm of childEnv the child would get the runner's own non-empty PATH.
+  it.runIf(process.platform === "win32")("on Windows the child's PATH is set and empty when no absolute entry is left — never the parent's", async () => {
+    const show = ["-e", "console.log(JSON.stringify(process.env.PATH ?? ''))"];
+    for (const value of ["", ".", ["", ".", "bin"].join(path.delimiter)]) {
+      expect((await execProgram(process.execPath, show, { env: withPath(value) })).stdout, `PATH=${JSON.stringify(value)}`).toBe('""\n');
+    }
+    const unset: NodeJS.ProcessEnv = { ...withPath("") };
+    delete unset.PATH;
+    expect((await execProgram(process.execPath, show, { env: unset })).stdout).toBe('""\n');
+    expect((await execProgram(process.execPath, show, { env: withPath(PLANTED) })).stdout).toBe(`${JSON.stringify(PLANTED)}\n`);
   });
 
   it.runIf(process.platform !== "win32")("off Windows only PATH is replaced: Path and path are other variables", async () => {
