@@ -4,7 +4,7 @@ import path from "node:path";
 import { MCP_FILES, eightStates, explained, mcpWorkspace, moveTracker, syncOnce, type Scenario } from "./helpers/states.js";
 import { withLoadWarnings } from "../src/core/catalogue.js";
 import { readWorkspaceConfig, loadWorkspace, plan, readLock, status, type FileStatus } from "../src/core/sync.js";
-import { EXAMPLE_CONTENT_HIDDEN, MCP_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, notProduced, statusPath, statusReport, targetsReport } from "../src/core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, MCP_CONTENT_HIDDEN, cachedCopyLine, diffReport, explainFile, explainSkip, notProduced, statusPath, statusReport, targetsReport } from "../src/core/report.js";
 
 // Spec 35 §5.1 (and spec 36 §17): the builders the commands, the MCP server and the dashboard share — tested directly.
 
@@ -167,5 +167,17 @@ describe("withLoadWarnings", () => {
     expect(withLoadWarnings(listing, ["load 1", "load 2"])).toBe(listing);
     expect(listing.warnings).toEqual(["load 1", "load 2", "own"]);
     expect(withLoadWarnings({ warnings: [] as string[] }, []).warnings).toEqual([]);
+  });
+});
+
+describe("cachedCopyLine", () => {
+  const ws = (origin: object, commit: string | null = "0123456789abcdef0123456789abcdef01234567") => ({ origin: { kind: "remote", source: "https://example.com/forge.git", ref: null, defaultBranch: "main", fetched: false, fromLocalFile: false, ...origin }, forge: { commit } }) as any;
+  it("words the line for a remote Forge read without a fetch, and is null in the three other cases", () => {
+    expect(cachedCopyLine(ws({ fetchedAt: "2026-10-10T23:21:13.529Z" }), false)).toBe("Forge https://example.com/forge.git read from the copy cached 2026-10-10T23:21:13.529Z (commit 01234567) — craftar mcp was started without --fetch");
+    expect(cachedCopyLine(ws({}), false)).toBe("Forge https://example.com/forge.git read from the copy cached (time unknown) (commit 01234567) — craftar mcp was started without --fetch");
+    expect(cachedCopyLine(ws({ ref: "v1", fetchedAt: "T" }), false)).toContain("read from the copy cached T ");
+    expect(cachedCopyLine(ws({ fetchedAt: "T" }), true)).toBeNull();
+    expect(cachedCopyLine(ws({ kind: "path", source: "../forge" }), false)).toBeNull();
+    expect(cachedCopyLine(ws({ ref: "0123456789abcdef0123456789abcdef01234567" }), false)).toBeNull();
   });
 });

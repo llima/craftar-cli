@@ -6,6 +6,7 @@ import { listTargets, type ListTargetsResult } from "./capabilities.js";
 import { diffOps } from "./diff.js";
 import { mcpTagged } from "./drift.js";
 import type { PlannedFile } from "../emitters/types.js";
+import { FULL_SHA } from "./remote.js";
 import { resolve, type ParamLayer } from "./resolve.js";
 import { loadForgeFor, unsetDeclared, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
@@ -201,4 +202,15 @@ export async function targetsReport(
     // Load or resolve failed — a warning, not an error
     return notShown(e instanceof Error ? e.message : String(e));
   }
+}
+
+/**
+ * For a reader started without `--fetch` (`craftar mcp`, spec 35 §4.4): the line that says a remote Forge was read
+ * from its cached copy, so an answer for a Forge that has moved is never silent. Null when the caller fetches (the
+ * fallback warning is then the signal), for a path Forge, and for a full-SHA `ref`, which cannot go stale.
+ */
+export function cachedCopyLine(ws: Pick<Workspace, "origin" | "forge">, fetch: boolean): string | null {
+  const o = ws.origin;
+  if (fetch || o.kind !== "remote" || (o.ref !== null && FULL_SHA.test(o.ref))) return null;
+  return `Forge ${o.source} read from the copy cached ${o.fetchedAt ?? "(time unknown)"} (commit ${ws.forge.commit?.slice(0, 8) ?? "no git"}) — craftar mcp was started without --fetch`;
 }
