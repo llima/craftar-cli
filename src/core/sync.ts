@@ -11,13 +11,14 @@ import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile } from "./extract.js";
-import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type Target, type WorkspaceConfig } from "../schema/index.js";
+import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockV2, type LockV3, type Owner, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
 import { agentsMd } from "../emitters/agents-md.js";
 import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
 import { written } from "./capabilities.js";
+import { planServices } from "./services.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
 export const LOCAL_FILE = "craftar.local.yaml";
@@ -473,9 +474,12 @@ export function assertInsideWorkspace(files: PlannedFile[]): void {
 export async function plan(ws: Workspace): Promise<Plan> {
   const resolution = resolve(ws.forge, ws.config);
   const warnings = [...ws.warnings, ...resolution.warnings];
+  const hasService = resolution.ingredients.some((ing) => ing.meta.type === "service");
   if (resolution.targets.length === 0) {
     warnings.push(
-      "no targets resolved — nothing will be emitted and every file in craftar.lock becomes an orphan (an empty list in craftar.local.yaml replaces the workspace's)",
+      hasService
+        ? "no target resolved — only the service files under .craftar/ are written"
+        : "no targets resolved — nothing will be emitted and every file in craftar.lock becomes an orphan (an empty list in craftar.local.yaml replaces the workspace's)",
     );
   }
   const sections = await sectionPass(ws.forge, resolution, warnings);
@@ -534,6 +538,10 @@ export async function plan(ws: Workspace): Promise<Plan> {
     }
     files.push(...(await emitFor(t, em, ctx)));
   }
+  // Service files are planned after the target loop (spec 31 §5.3, choice 24) and before the
+  // containment check, so assertInsideWorkspace, the missing-param collection and the duplicate-path
+  // guard all cover the service files.
+  files.push(...(await planServices(ctx)));
   assertInsideWorkspace(files);
   const missing: Plan["missingParams"] = [];
   const declared = declaredWithoutValue({ resolution });
@@ -608,14 +616,14 @@ export type FileState =
 export interface FileStatus {
   path: string;
   state: FileState;
-  target?: Target;
+  target?: Owner;
   ingredient?: string;
   planned?: PlannedFile;
-  lock?: LockEntry;
+  lock?: LockEntry | LockEntryV3;
 }
 
 /** Does the disk content match the lock entry? Recognises both current and pre-0.17.4 hashes for non-UTF-8 files. */
-function matchesLock(disk: Buffer, entry: LockEntry): boolean {
+function matchesLock(disk: Buffer, entry: LockEntry | LockEntryV3): boolean {
   return hashNormalized(disk) === entry.hash || (!isUtf8(disk) && legacyHash(disk) === entry.hash);
 }
 
@@ -698,7 +706,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   const written: string[] = [];
   const removed: string[] = [];
   const skipped: FileStatus[] = [];
-  const entries: LockEntry[] = [];
+  const entries: LockEntryV3[] = [];
 
   for (const s of statuses) {
     switch (s.state) {
@@ -742,16 +750,22 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
     }
   }
 
-  // Schema 2, in this key order (spec 13 §5.2): what the sync used, not only what it wrote.
-  const built: Lock = {
-    schema: 2,
+  // Schema 3 when any entry has target `services`; otherwise schema 2 (spec 31 §5.2, spec 13 §5.2).
+  const sortedEntries = entries.sort((a, b) => a.path.localeCompare(b.path));
+  const hasServices = entries.some((e) => e.target === "services");
+  // Build the shared part once; the two branches differ only in `schema` and in the entry type.
+  const base = {
     forge: { source: ws.config.forge, ref: ws.origin.ref, commit: ws.forge.commit },
     profile: ws.config.profile,
     recipes: p.resolution.recipes,
     targets: p.resolution.targets,
     generatedAt: new Date().toISOString(),
-    files: entries.sort((a, b) => a.path.localeCompare(b.path)),
   };
+  const built: LockV2 | LockV3 = hasServices
+    ? { schema: 3, ...base, files: sortedEntries }
+    // The narrowing cast is sound: hasServices is false, so no entry has target "services",
+    // thus every entry's target is a Target (claude-code | kiro | agents-md).
+    : { schema: 2, ...base, files: sortedEntries as LockEntry[] };
   // Rewritten only when its content changes: generatedAt is when it last did (Ruling 10). A schema 1
   // lock always differs, so the first sync with this craftar upgrades it.
   const onDisk = opts.dryRun ? null : await readLock(ws.root);
@@ -761,7 +775,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   return { written, removed, skipped, lock };
 }
 
-function entry(f: PlannedFile): LockEntry {
+function entry(f: PlannedFile): LockEntryV3 {
   return { path: f.path, hash: hashNormalized(f.content), target: f.target, ingredient: f.ingredient };
 }
 
@@ -769,4 +783,8 @@ async function writeFile(root: string, f: PlannedFile): Promise<void> {
   const abs = path.join(root, f.path);
   await fs.mkdir(path.dirname(abs), { recursive: true });
   await fs.writeFile(abs, f.content);
+  // Set mode after writing (fs.writeFile's mode applies only on creation, so chmod is needed for updates).
+  if (f.mode !== undefined && process.platform !== "win32") {
+    await fs.chmod(abs, f.mode);
+  }
 }

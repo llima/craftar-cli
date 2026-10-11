@@ -698,3 +698,133 @@ describe("apply — overwritePaths (spec 30)", () => {
     expect(await read(s.wsRoot, A)).toBe("A one\nA two\nhand a\n");
   });
 });
+
+describe("apply lock schema selection (spec 31 §5.2)", () => {
+  const cleanups: Array<() => Promise<void>> = [];
+  afterEach(async () => {
+    while (cleanups.length) await cleanups.pop()!();
+  });
+
+  // The lock text craftar 0.21.1 (npm) writes for this scenario — compared by hand on 2026-10-10; schema 2 must stay this, byte for byte.
+  // Key order: schema, forge, profile, recipes, targets, generatedAt, files.
+  // generatedAt is replaced by regex; forge.commit is null (the scenario Forge has no git).
+  const GOLDEN_LOCK_TEXT_V2 = `{
+  "schema": 2,
+  "forge": {
+    "source": "../forge",
+    "ref": null,
+    "commit": null
+  },
+  "profile": "acme",
+  "recipes": [
+    "base"
+  ],
+  "targets": [
+    "claude-code"
+  ],
+  "generatedAt": "<replaced>",
+  "files": [
+    {
+      "path": ".claude/rules/a.md",
+      "hash": "sha256:aa1237b773c38dbddef583c4868aaea7a44c5237ea7923aecca5513764b42d80",
+      "target": "claude-code",
+      "ingredient": "rule/a"
+    }
+  ]
+}
+`;
+
+  // The golden lock TEXT for schema 3, with a services entry.
+  const GOLDEN_LOCK_TEXT_V3 = `{
+  "schema": 3,
+  "forge": {
+    "source": "../forge",
+    "ref": null,
+    "commit": null
+  },
+  "profile": "acme",
+  "recipes": [
+    "base"
+  ],
+  "targets": [
+    "claude-code"
+  ],
+  "generatedAt": "<replaced>",
+  "files": [
+    {
+      "path": ".claude/rules/a.md",
+      "hash": "sha256:aa1237b773c38dbddef583c4868aaea7a44c5237ea7923aecca5513764b42d80",
+      "target": "claude-code",
+      "ingredient": "rule/a"
+    },
+    {
+      "path": ".craftar/compose.yaml",
+      "hash": "sha256:fa6ccea1ca4e3a031d9e99f25cc05db803aa9bac642c000ddab14f6d9da54b52",
+      "target": "services",
+      "ingredient": "service/db"
+    }
+  ]
+}
+`;
+
+  /** Reads the lock text and replaces generatedAt for comparison. */
+  async function readLockText(wsRoot: string): Promise<string> {
+    const text = await fs.readFile(path.join(wsRoot, "craftar.lock"), "utf8");
+    return text.replace(/"generatedAt": "[^"]+"/g, '"generatedAt": "<replaced>"');
+  }
+
+  it("apply() over a plan with no service file writes schema 2, exact text matches the golden", async () => {
+    const s = await scenario(
+      { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const w = await loadWorkspace(s.wsRoot);
+    const p = await plan(w);
+    const st = await status(w, p, null);
+    await apply(w, p, st);
+    const text = await readLockText(s.wsRoot);
+    expect(text).toBe(GOLDEN_LOCK_TEXT_V2);
+  });
+
+  it("apply() over statuses holding one planned file with target services writes schema 3, exact text", async () => {
+    const s = await scenario(
+      { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const w = await loadWorkspace(s.wsRoot);
+    const p = await plan(w);
+    // Inject a service file into the plan
+    p.files.push({ path: ".craftar/compose.yaml", content: Buffer.from("services: {}\n"), target: "services", ingredient: "service/db" });
+    const st = await status(w, p, null);
+    await apply(w, p, st);
+    const text = await readLockText(s.wsRoot);
+    expect(text).toBe(GOLDEN_LOCK_TEXT_V3);
+  });
+
+  it("a kept drift entry owned by services still writes schema 3", async () => {
+    const s = await scenario(
+      { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const w = await loadWorkspace(s.wsRoot);
+    const p = await plan(w);
+    // Hand-build a drift status with target: services (no planned service file otherwise)
+    const serviceEntry = { path: ".craftar/compose.yaml", hash: "sha256:old", target: "services" as const, ingredient: "service/db" };
+    const servicePlanned = { path: ".craftar/compose.yaml", content: Buffer.from("services: {}\n"), target: "services" as const, ingredient: "service/db" };
+    // Write the file with different content to make it drift
+    await fs.mkdir(path.join(s.wsRoot, ".craftar"), { recursive: true });
+    await fs.writeFile(path.join(s.wsRoot, ".craftar/compose.yaml"), "# hand edit\n");
+    const st = await status(w, p, null);
+    // Add the drift entry
+    st.push({ path: ".craftar/compose.yaml", state: "drift", target: "services", ingredient: "service/db", planned: servicePlanned, lock: serviceEntry });
+    const { lock } = await apply(w, p, st);
+    expect(lock.schema).toBe(3);
+    // The drift entry is kept with the old hash
+    const kept = lock.files.find((f) => f.path === ".craftar/compose.yaml");
+    expect(kept?.target).toBe("services");
+    expect(kept?.hash).toBe("sha256:old");
+  });
+});

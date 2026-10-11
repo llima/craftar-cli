@@ -157,6 +157,7 @@ const D4_OTHER = (p: string, state: string) => `${p} is not drifted (${state}) �
 const D4_ORPHAN = (p: string) => `${p} is no longer produced by the Forge — nothing to promote into; \`craftar drift discard ${p}\` removes it`;
 const D5_KIRO = (p: string, hint: string) => `${p} is a kiro file — promote reads only what the claude-code target wrote${hint}`;
 const D5_AGENTSMD = (p: string) => `${p} holds several rules in one file — promote reads only what the claude-code target wrote`;
+const D5_SERVICE = (p: string) => `${p} is a service file — promote reads only what the claude-code target wrote; change the service ingredient in the Forge`;
 const D6 = (p: string) => `${p} holds every mcp ingredient in one file — edit the mcp ingredient in the Forge`;
 const D7 = (ing: string, p: string, state: string, profile: string) =>
   `the Forge changed ${ing} since the last sync (${p}: ${state}) — a variant taken from the disk would undo that change for profile ${profile}; sync the rest, redo the edit on top, and promote again`;
@@ -568,7 +569,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   if (!row.promotable) {
     // Build the right D5/D6 message from the static reason
     const reason = row.reason;
-    if (reason === "kiro file") {
+    if (reason === "service file") {
+      throw new Error(D5_SERVICE(normalized));
+    } else if (reason === "kiro file") {
       // D5 kiro: check if the plan has a claude-code path for this ingredient
       const ingredientRef = fileStatus.ingredient;
       const claudePath = ingredientRef ? p0.files.find((f) => f.ingredient === ingredientRef && f.target === "claude-code")?.path : null;

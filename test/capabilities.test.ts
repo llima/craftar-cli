@@ -80,6 +80,11 @@ async function makeCapabilityForge(root: string): Promise<void> {
       meta: { type: "hook", name: "cap-hook", targets: "*", files: ["on-event.sh"] },
       files: { "on-event.sh": `#!/bin/bash\n# ${REFERENCE}\necho hook\n` },
     },
+    // service (aimed at all targets with targets: "*" for the test)
+    {
+      meta: { type: "service", name: "cap-service", targets: "*" },
+      files: { "compose.yaml": `services:\n  echo:\n    image: alpine\n` },
+    },
   ];
 
   // Write all ingredients
@@ -290,10 +295,13 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
               : [`${type}/cap-${type}`];
 
           // Collect all files for this cell:
-          // - Files whose `ingredient` is one of the fixture refs
+          // - Files whose `ingredient` is one of the fixture refs AND `target` is this target
           // - Plus shared files: AGENTS.md for rule (ingredient = "rule/*"), MCP files (ingredient = "mcp/*")
+          // Note: service files have target: "services", not an AI coder target, so they belong to no cell.
           const cellFiles: PlannedFile[] = [];
           for (const f of plannedFiles) {
+            // Files must belong to this target (services files have target: "services", not the AI coder)
+            if (f.target !== target) continue;
             // Direct match to a fixture ref
             if (fixtureRefs.some((ref) => f.ingredient === ref)) {
               cellFiles.push(f);
@@ -435,7 +443,7 @@ describe("capability notes are plain text (spec 16 §4.4)", () => {
     );
   });
 
-  it("no note of the 24 cells holds a backtick; native notes are null; unsupported notes are the one sentence", () => {
+  it("no note of the 27 cells holds a backtick; native notes are null; unsupported notes are the one sentence", () => {
     const bad: string[] = [];
     for (const t of TARGETS)
       for (const ty of INGREDIENT_TYPES) {
@@ -467,6 +475,7 @@ function spec(type: string, name: string, extra: Record<string, unknown> = {}): 
     files[`${name}.sh`] = "echo\n";
   }
   if (type === "mcp" && !("server" in extra)) meta.server = { command: "npx" };
+  if (type === "service") files["compose.yaml"] = `services:\n  ${name}:\n    image: alpine\n`;
   return { meta: meta as IngredientSpec["meta"], files };
 }
 
@@ -494,16 +503,18 @@ function record(resolution: Resolution, target: Target, matrix?: Record<Target, 
 
 const UNSUPPORTED: Array<[Target, string, string]> = [
   ["claude-code", "steering", "claude-code: steering steering/x has no Claude Code equivalent — skipped"],
+  ["claude-code", "service", "claude-code: service service/x has no Claude Code equivalent — skipped"],
   ["kiro", "script", "kiro: script script/x has no Kiro equivalent — skipped"],
   ["kiro", "hook", "kiro: hook hook/x has no Kiro equivalent — skipped"],
-  ...(["agent", "command", "skill", "mcp", "script", "steering", "hook"] as const).map(
+  ["kiro", "service", "kiro: service service/x has no Kiro equivalent — skipped"],
+  ...(["agent", "command", "skill", "mcp", "script", "steering", "hook", "service"] as const).map(
     (ty) => ["agents-md", ty, `agents-md: 1 ${ty} ingredient(s) have no AGENTS.md equivalent — skipped: ${ty}/x`] as [Target, string, string],
   ),
 ];
 
 describe("written() — the walk decides and warns from the matrix (spec 18 §9.3)", () => {
-  it("the ten unsupported cells: not yielded, today's text; not aimed → no warning", async () => {
-    expect(UNSUPPORTED).toHaveLength(10);
+  it("the 13 unsupported cells: not yielded, today's text; not aimed → no warning", async () => {
+    expect(UNSUPPORTED).toHaveLength(13);
     for (const [target, type, text] of UNSUPPORTED) {
       expect(record(await resolutionOf([spec(type, "x")]), target), `${target} · ${type}`).toEqual([`warn ${text}`]);
       const other = target === "claude-code" ? ["kiro"] : ["claude-code"];
@@ -670,5 +681,52 @@ describe("agents-md walks to the end with no rule (spec 18 §6.3)", () => {
     const p = await plan(await loadWorkspace(s.wsRoot));
     expect(p.files).toEqual([]);
     expect(p.warnings).toEqual(["agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/a"]);
+  });
+});
+
+describe("service ingredient with default targets (spec 31)", () => {
+  it("with default targets (no targets key) no warning mentions the service and service files ARE planned", async () => {
+    // A service with NO targets key (default: []) is not aimed at any target, so no warning from the walk
+    // But service files are still planned by planServices (choice 24: outside the walk)
+    const s = await scenario(
+      {
+        ingredients: [
+          { meta: { type: "service", name: "echo" }, files: { "compose.yaml": "services:\n  echo:\n    image: alpine\n" } },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    walkCleanups.push(s.cleanup);
+    const p = await plan(await loadWorkspace(s.wsRoot));
+    // No warning about the service from the walk (default targets: [], not aimed at any target)
+    expect(p.warnings.some((w) => w.includes("service/echo"))).toBe(false);
+    // But service files ARE planned (spec 31 §5.3, choice 24)
+    expect(p.files.some((f) => f.ingredient === "service/echo")).toBe(true);
+  });
+
+  it("with targets: '*' the three walk warnings appear and service files are still planned", async () => {
+    // A service with targets: "*" is aimed at all targets, so all three warn
+    // Service files are still planned by planServices (choice 24)
+    const s = await scenario(
+      {
+        ingredients: [
+          { meta: { type: "service", name: "echo", targets: "*" }, files: { "compose.yaml": "services:\n  echo:\n    image: alpine\n" } },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    walkCleanups.push(s.cleanup);
+    const p = await plan(await loadWorkspace(s.wsRoot));
+    expect(p.warnings).toEqual(expect.arrayContaining([
+      "claude-code: service service/echo has no Claude Code equivalent — skipped",
+      "kiro: service service/echo has no Kiro equivalent — skipped",
+      "agents-md: 1 service ingredient(s) have no AGENTS.md equivalent — skipped: service/echo",
+    ]));
+    // Service files ARE still planned (spec 31 §5.3, choice 24: planServices is outside the walk)
+    expect(p.files.some((f) => f.ingredient === "service/echo")).toBe(true);
   });
 });

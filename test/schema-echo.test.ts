@@ -153,10 +153,10 @@ describe("a craftar.lock that does not read", () => {
   it("a schema this craftar does not read: the number is printed, anything else is not", async () => {
     const s = await fresh();
     const file = path.join(s.wsRoot, "craftar.lock");
-    await fs.writeFile(file, JSON.stringify({ schema: 3 }) + "\n");
+    await fs.writeFile(file, JSON.stringify({ schema: 4 }) + "\n");
     const n = runCli(["status", "--workspace", s.wsRoot]);
     expect(n.code).toBe(1);
-    expect(n.stderr).toBe("error: craftar.lock declares schema 3, which this craftar does not read — upgrade craftar\n");
+    expect(n.stderr).toBe("error: craftar.lock declares schema 4, which this craftar does not read — upgrade craftar\n");
 
     await fs.writeFile(file, JSON.stringify({ schema: M }) + "\n");
     for (const command of [["status"], ["sync"], ["diff"]]) {
@@ -238,5 +238,100 @@ describe("forge unify --plan with a plan the schema refuses", () => {
     expect(r.stdout).toBe("");
     expect(r.stdout + r.stderr).not.toContain(M);
     expect(r.stderr).toBe(`error: ${planPath}: schema: Invalid literal value, expected 1; base: Invalid input; profile: Required; variant: Invalid input; baseFingerprint: Required; variantFingerprint: Required\n`);
+  });
+});
+
+describe("a service ingredient the schema refuses, with a marker-holding duplicated value", () => {
+  // E1: the services commands and a service fixture whose refused value is a runtime-assembled marker must not print the marker
+
+  it("the refusal message does not print the marker through status and sync", async () => {
+    // Create a service ingredient with duplicated files holding a marker in the path
+    const s = await scenario(
+      {
+        ingredients: [
+          rule("a", "A\n"),
+          {
+            meta: { type: "service", name: "echo", files: [`${M}.sh`, `./${M}.sh`] }, // duplicate
+            files: { "compose.yaml": "services:\n  echo:\n    image: example/echo:1\n", [`${M}.sh`]: "#!/bin/sh\necho ok\n" },
+          },
+        ],
+        recipes: [recipe("base", ["rule/a", "service/echo"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+
+    // The fixture write above creates a service with duplicated files entries
+    // but the makeForge helper writes the ingredient.yaml without our invalid files array
+    // We need to overwrite ingredient.yaml to have the invalid duplicate
+    await writeFiles(s.forgeRoot, {
+      "ingredients/services/echo/ingredient.yaml": `type: service\nname: echo\nfiles:\n  - ${M}.sh\n  - ./${M}.sh\n`,
+    });
+
+    for (const command of [["status"], ["sync"]]) {
+      const r = runCli([...command, "--workspace", s.wsRoot]);
+      const where = command.join(" ");
+      expect(r.code, where).toBe(1);
+      expect(r.stdout + r.stderr, where).not.toContain(M);
+      // The error should name the file and indices, not the value
+      expect(r.stderr, where).toMatch(/files\[1\] repeats files\[0\]/);
+    }
+  });
+
+  it("a lock with a marker in an entry's target is not printed by services up, status or down", async () => {
+    // Sync a valid service, then tamper with the lock to have a marker in an entry's target
+    const s = await scenario(
+      {
+        ingredients: [
+          rule("a", "A\n"),
+          {
+            meta: { type: "service", name: "echo" },
+            files: { "compose.yaml": "services:\n  echo:\n    image: example/echo:1\n" },
+          },
+        ],
+        recipes: [recipe("base", ["rule/a", "service/echo"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+
+    // Sync to get the lock
+    const syncR = runCli(["sync", "--workspace", s.wsRoot]);
+    expect(syncR.code).toBe(0);
+
+    // Read the lock and tamper with one entry's target to be the marker
+    const lockPath = path.join(s.wsRoot, "craftar.lock");
+    const lockText = await fs.readFile(lockPath, "utf8");
+    // Build a marker at runtime that won't appear in code
+    const marker = ["ZZ", "MARK", "ZZ"].join("");
+    const tamperedLock = lockText.replace(/"target":\s*"services"/, `"target": "${marker}"`);
+    expect(tamperedLock).toContain(marker); // sanity check
+    await fs.writeFile(lockPath, tamperedLock);
+
+    // Create an empty temp directory so docker is never found
+    const emptyDir = path.join(s.wsRoot, ".craftar-test-no-docker");
+    await fs.mkdir(emptyDir, { recursive: true });
+    const noDocker = { PATH: emptyDir, Path: emptyDir };
+
+    // services up: exit 1 with lock error, never prints marker
+    const upR = runCli(["services", "up", "--workspace", s.wsRoot], { env: noDocker });
+    expect(upR.code).toBe(1);
+    expect(upR.stdout + upR.stderr).not.toContain(marker);
+    expect(upR.stderr).toMatch(/^error: craftar\.lock is not a valid lock: /);
+
+    // services status --json: exit 1 with lock error, never prints marker
+    const statusR = runCli(["services", "status", "--json", "--workspace", s.wsRoot], { env: noDocker });
+    expect(statusR.code).toBe(1);
+    expect(statusR.stdout + statusR.stderr).not.toContain(marker);
+
+    // services down: warns about lock but still attempts to stop by project name
+    // (down uses projectName-only when the lock is unreadable)
+    const downR = runCli(["services", "down", "--workspace", s.wsRoot], { env: noDocker });
+    expect(downR.code).toBe(1); // docker not found
+    expect(downR.stdout + downR.stderr).not.toContain(marker);
+    expect(downR.stderr).toContain("warn craftar.lock is not a valid lock:");
+    expect(downR.stderr).toContain("docker not found");
   });
 });

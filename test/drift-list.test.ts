@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { driftList } from "../src/core/drift.js";
 import type { FileStatus } from "../src/core/sync.js";
+import type { Owner } from "../src/schema/index.js";
 import { hashNormalized } from "../src/core/text.js";
 
 // Spec 30 §4.2: the rows of `craftar drift show`, as data.
 
-const planned = (p: string, target: "claude-code" | "kiro" | "agents-md", ingredient: string, body: string) => ({ path: p, content: Buffer.from(body), target, ingredient });
-const drift = (p: string, target: "claude-code" | "kiro" | "agents-md", ingredient: string, lockBody: string, planBody: string): FileStatus => ({
+const planned = (p: string, target: Owner, ingredient: string, body: string) => ({ path: p, content: Buffer.from(body), target, ingredient });
+const drift = (p: string, target: Owner, ingredient: string, lockBody: string, planBody: string): FileStatus => ({
   path: p,
   state: "drift",
   target,
@@ -14,7 +15,7 @@ const drift = (p: string, target: "claude-code" | "kiro" | "agents-md", ingredie
   planned: planned(p, target, ingredient, planBody),
   lock: { path: p, hash: hashNormalized(lockBody), target, ingredient },
 });
-const orphanDrift = (p: string, target: "claude-code" | "kiro" | "agents-md", ingredient: string): FileStatus => ({
+const orphanDrift = (p: string, target: Owner, ingredient: string): FileStatus => ({
   path: p,
   state: "orphan-drift",
   target,
@@ -33,14 +34,16 @@ describe("driftList", () => {
     ]);
   });
 
-  it("the first static reason that applies: orphan, then kiro, then AGENTS.md, then .mcp.json", () => {
+  it("the first static reason that applies: orphan, then service, then kiro, then AGENTS.md, then .mcp.json", () => {
     const rows = driftList([
+      drift(".craftar/services/echo/compose.yaml", "services", "service/echo", "x\n", "x\n"),
       drift(".kiro/steering/a.md", "kiro", "rule/a", "x\n", "x\n"),
       drift("AGENTS.md", "agents-md", "rule/*", "x\n", "x\n"),
       drift(".mcp.json", "claude-code", "mcp/*", "x\n", "x\n"),
       orphanDrift(".kiro/steering/old.md", "kiro", "rule/old"),
     ]);
     expect(rows.map((r) => [r.path, r.promotable, r.reason])).toEqual([
+      [".craftar/services/echo/compose.yaml", false, "service file"],
       [".kiro/steering/a.md", false, "kiro file"],
       ["AGENTS.md", false, "AGENTS.md"],
       [".mcp.json", false, ".mcp.json"],

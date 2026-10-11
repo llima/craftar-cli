@@ -22,9 +22,9 @@ export function yamlFault(e: unknown): string {
 }
 
 /** Parse YAML text read from `name`: BOM stripped, no yaml warning emitted, and a syntax error is `invalid <name>: <fault>`. */
-export function parseYamlText(name: string, text: string): unknown {
+export function parseYamlText(name: string, text: string, opts?: { merge?: boolean }): unknown {
   try {
-    return YAML.parse(stripBom(text), { logLevel: "error" });
+    return YAML.parse(stripBom(text), { logLevel: "error", merge: opts?.merge });
   } catch (e) {
     throw new YamlSyntaxError(name, yamlFault(e));
   }

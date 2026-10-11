@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import YAML from "yaml";
 import { afterEach, describe, expect, it } from "vitest";
@@ -399,6 +400,51 @@ params:
     // Lock unchanged
     expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
   });
+
+  it.skipIf(process.platform === "win32")("an executable service file gets its mode restored on POSIX (E3)", async () => {
+    // A service ingredient with an executable file
+    const initScript = "#!/bin/sh\necho hello\n";
+    const s = await scenario(
+      {
+        ingredients: [
+          {
+            meta: { type: "service", name: "echo", compose: "compose.yaml", files: ["init/a.sh"], executable: ["init/a.sh"] },
+            files: { "compose.yaml": "services:\n  echo:\n    image: example/echo:1\n", "init/a.sh": initScript },
+          },
+        ],
+        recipes: [recipe("base", ["service/echo"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+
+    // Sync to create the files
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Verify the script has execute permission
+    const scriptPath = path.join(s.wsRoot, ".craftar/services/echo/init/a.sh");
+    let stat = await fs.stat(scriptPath);
+    expect(stat.mode & 0o111).not.toBe(0);
+
+    // Hand-edit the script (also removes execute permission as a side effect of write)
+    await fs.chmod(scriptPath, 0o644);
+    await fs.writeFile(scriptPath, initScript + "# hand edit\n");
+    stat = await fs.stat(scriptPath);
+    expect(stat.mode & 0o111).toBe(0); // no execute permission
+
+    // Verify it's drift
+    expect(runCli(["status", "--workspace", s.wsRoot]).stdout).toContain("drift");
+
+    // Discard the drift
+    const r = runCli(["drift", "discard", ".craftar/services/echo/init/a.sh", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+
+    // Verify the file is restored with correct content AND execute permission
+    expect(await fs.readFile(scriptPath, "utf8")).toBe(initScript);
+    stat = await fs.stat(scriptPath);
+    expect(stat.mode & 0o111).not.toBe(0); // execute permission restored
+  });
 });
 
 
@@ -650,5 +696,159 @@ describe("cli — drift --help", () => {
         "                               the cache\n" +
         "  help [command]               display help for command\n",
     );
+  });
+});
+
+// Spec 31 §16.2: service files are drifted like any other file, but promote refuses them.
+describe("cli — drift with service files (spec 31 §16.2)", () => {
+  const FRAGMENT = ".craftar/services/echo/compose.yaml";
+  const echo = {
+    meta: { type: "service", name: "echo" },
+    files: { "compose.yaml": "services:\n  echo:\n    image: example/echo:1\n" },
+  };
+
+  it("1. drift show --json: a hand-edited service file has target services, promotable false, reason 'service file'", async () => {
+    const s = await scenario(
+      {
+        ingredients: [echo, rule("a", "A\n")],
+        recipes: [recipe("base", ["service/echo", "rule/a"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.appendFile(path.join(s.wsRoot, FRAGMENT), "# hand edit\n");
+
+    const r = runCli(["drift", "show", "--json", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.files.length).toBe(1);
+    const row = parsed.files[0];
+    expect(row.path).toBe(FRAGMENT);
+    expect(row.state).toBe("drift");
+    expect(row.target).toBe("services");
+    expect(row.ingredient).toBe("service/echo");
+    expect(row.promotable).toBe(false);
+    expect(row.reason).toBe("service file");
+  });
+
+  it("2. drift promote refuses a service file with the expected message, and the Forge is unchanged", async () => {
+    const s = await scenario(
+      {
+        ingredients: [echo, rule("a", "A\n")],
+        recipes: [recipe("base", ["service/echo", "rule/a"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    // Git init and sync
+    execFileSync("git", ["init", "-q", s.forgeRoot]);
+    execFileSync("git", ["-C", s.forgeRoot, "config", "maintenance.auto", "false"]);
+    execFileSync("git", ["-C", s.forgeRoot, "config", "gc.auto", "0"]);
+    execFileSync("git", ["-C", s.forgeRoot, "add", "-A"]);
+    execFileSync("git", ["-C", s.forgeRoot, "commit", "-q", "-m", "init"], {
+      env: { ...process.env, GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "test@example.invalid", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "test@example.invalid" },
+    });
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.appendFile(path.join(s.wsRoot, FRAGMENT), "# hand edit\n");
+
+    // Snapshot the Forge before
+    const forgeBefore = await snapshot(s.forgeRoot);
+
+    const r = runCli(["drift", "promote", FRAGMENT, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(
+      `error: ${FRAGMENT} is a service file — promote reads only what the claude-code target wrote; change the service ingredient in the Forge\n`,
+    );
+
+    // Forge unchanged
+    expect(await snapshot(s.forgeRoot)).toEqual(forgeBefore);
+  });
+
+  it("3. drift discard regenerates a hand-edited service file; sync --check exits 0, lock stays schema 3", async () => {
+    const s = await scenario(
+      {
+        ingredients: [echo, rule("a", "A\n")],
+        recipes: [recipe("base", ["service/echo", "rule/a"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    const lockBefore = JSON.parse(await fs.readFile(path.join(s.wsRoot, "craftar.lock"), "utf8"));
+    expect(lockBefore.schema).toBe(3);
+
+    await fs.appendFile(path.join(s.wsRoot, FRAGMENT), "# hand edit\n");
+    expect(runCli(["sync", "--check", "--workspace", s.wsRoot]).code).toBe(1);
+
+    const r = runCli(["drift", "discard", FRAGMENT, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+
+    // sync --check now exits 0
+    expect(runCli(["sync", "--check", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Lock is still schema 3
+    const lockAfter = JSON.parse(await fs.readFile(path.join(s.wsRoot, "craftar.lock"), "utf8"));
+    expect(lockAfter.schema).toBe(3);
+  });
+
+  it("4. a hand-edited orphan-drift service file: sync removes the other orphans and keeps the lock at schema 3; drift discard removes it and the lock becomes schema 2", async () => {
+    // Two services, then one is removed from the recipe; sync its fragment by hand first
+    const s = await scenario(
+      {
+        ingredients: [
+          echo,
+          { meta: { type: "service", name: "cache" }, files: { "compose.yaml": "services:\n  cache:\n    image: example/cache:1\n" } },
+          rule("a", "A\n"),
+        ],
+        recipes: [recipe("base", ["service/echo", "service/cache", "rule/a"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    expect(JSON.parse(await fs.readFile(path.join(s.wsRoot, "craftar.lock"), "utf8")).schema).toBe(3);
+
+    // Hand-edit the fragment of echo, leave cache alone
+    await fs.appendFile(path.join(s.wsRoot, FRAGMENT), "# hand edit\n");
+
+    // Remove echo from the recipe (cache stays)
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), YAML.stringify(recipe("base", ["service/cache", "rule/a"])));
+
+    // Run sync: echo's files become orphan and orphan-drift, cache stays, lock stays schema 3
+    const syncR = runCli(["sync", "--workspace", s.wsRoot]);
+    expect(syncR.code).toBe(0);
+    // The hand-edited fragment should be skipped (orphan-drift message: "no longer produced by the Forge but hand-edited")
+    expect(syncR.stdout).toContain("no longer produced by the Forge but hand-edited");
+    // Check the fragment is still there
+    expect(await fs.readFile(path.join(s.wsRoot, FRAGMENT), "utf8")).toBe("services:\n  echo:\n    image: example/echo:1\n# hand edit\n");
+    // Lock is schema 3 (services still in the lock)
+    expect(JSON.parse(await fs.readFile(path.join(s.wsRoot, "craftar.lock"), "utf8")).schema).toBe(3);
+
+    // Now remove the service entirely from the recipe: remove cache too, only rule remains
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), YAML.stringify(recipe("base", ["rule/a"])));
+
+    // Run sync again: cache files are removed, echo's hand-edited fragment remains orphan-drift
+    const syncR2 = runCli(["sync", "--workspace", s.wsRoot]);
+    expect(syncR2.code).toBe(0);
+    // The hand-edited fragment should still be there
+    expect(await fs.readFile(path.join(s.wsRoot, FRAGMENT), "utf8")).toBe("services:\n  echo:\n    image: example/echo:1\n# hand edit\n");
+    // Lock is schema 3 (the orphan-drift entry keeps it at 3)
+    expect(JSON.parse(await fs.readFile(path.join(s.wsRoot, "craftar.lock"), "utf8")).schema).toBe(3);
+
+    // drift discard removes the hand-edited orphan
+    const discardR = runCli(["drift", "discard", FRAGMENT, "--workspace", s.wsRoot]);
+    expect(discardR.code).toBe(0);
+    // The file is gone
+    await expect(fs.stat(path.join(s.wsRoot, FRAGMENT))).rejects.toMatchObject({ code: "ENOENT" });
+    // Lock is now schema 2 (no services entries left)
+    const lockFinal = JSON.parse(await fs.readFile(path.join(s.wsRoot, "craftar.lock"), "utf8"));
+    expect(lockFinal.schema).toBe(2);
   });
 });

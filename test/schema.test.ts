@@ -15,6 +15,7 @@ const MINIMAL: Record<(typeof INGREDIENT_TYPES)[number], Record<string, unknown>
   script: { type: "script", name: "x", files: ["x.sh"] },
   steering: { type: "steering", name: "x" },
   hook: { type: "hook", name: "x", files: ["x.sh"] },
+  service: { type: "service", name: "echo" },
 };
 
 describe("strict ingredient keys", () => {
@@ -514,5 +515,265 @@ describe("authEnv (spec 27)", () => {
     } catch (e) {
       expect((e as Error).message).not.toContain(gh);
     }
+  });
+});
+
+describe("service ingredient (spec 31)", () => {
+  it("parses minimal service with defaults", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "echo" });
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data).toMatchObject({
+      type: "service",
+      name: "echo",
+      compose: "compose.yaml",
+      files: [],
+      executable: [],
+      binary: [],
+      targets: [],
+    });
+  });
+
+  it("refuses files with ../x (climbs out)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["../x"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 0], message: "a service path must not climb out with a .. segment" })]);
+  });
+
+  it("refuses files with /abs (absolute)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["/abs"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 0], message: "a service path must not be absolute" })]);
+  });
+
+  it("refuses files with a\\b (backslash)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["a\\b"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 0], message: "a service path must not contain a backslash" })]);
+  });
+
+  it("refuses files with ingredient.yaml", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["ingredient.yaml"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 0], message: "a service path must not be ingredient.yaml" })]);
+  });
+
+  it("refuses compose with ../c.yaml (climbs out)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "../c.yaml" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path must not climb out with a .. segment" })]);
+  });
+
+  it("refuses executable not in files", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: [], executable: ["x.sh"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["executable", 0], message: "executable must be a subset of files" })]);
+  });
+
+  it("refuses binary not in files", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: [], binary: ["x.bin"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["binary", 0], message: "binary must be a subset of files" })]);
+  });
+
+  it("refuses as with a/b (has separator)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", as: "a/b" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["as"], message: "a service as must be slug-like (like name)" })]);
+  });
+
+  it("refuses as: '..' (climbs out)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", as: ".." });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues.some((i) => JSON.stringify(i.path) === JSON.stringify(["as"]) && i.message.includes("climb out"))).toBe(true);
+  });
+
+  it("refuses unknown key ports: []", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", ports: [] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues.some((i) => i.code === "unrecognized_keys" && (i as { keys: string[] }).keys.includes("ports"))).toBe(true);
+  });
+
+  it("accepts files with ./init/a.sh and executable with normalized init/a.sh", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["./init/a.sh"], executable: ["init/a.sh"] });
+    expect(r.success).toBe(true);
+  });
+
+  it("refuses compose with drive letter C:/x (absolute on Windows)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "C:/x.yaml" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path must not be absolute" })]);
+  });
+
+  it("refuses executable with ../x even when files is empty (climb check on executable path itself)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: [], executable: ["../x"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    // The climb check on the path itself fires first; there may also be a subset error
+    expect(r.error.issues.some((i) => JSON.stringify(i.path) === JSON.stringify(["executable", 0]) && i.message === "a service path must not climb out with a .. segment")).toBe(true);
+  });
+
+  it("accepts as: 'Echo_1.x' (slug-like)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", as: "Echo_1.x" });
+    expect(r.success).toBe(true);
+  });
+
+  it("minimal service has as: undefined", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "echo" });
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data.as).toBeUndefined();
+  });
+
+  it("a rule with as: 'a/b' still loads (the slug rule is service-only)", () => {
+    const r = IngredientSchema.safeParse({ type: "rule", name: "r", as: "a/b" });
+    expect(r.success).toBe(true);
+  });
+
+  // C2: ServicePath segment validation and superRefine checks
+  it("C2: refuses compose: 'a #b.yaml' (segment has space)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "a #b.yaml" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path holds only letters, digits and . _ @ + - in each segment" })]);
+  });
+
+  it("C2: refuses compose: 'a\\nb.yaml' (segment has newline)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "a\nb.yaml" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path holds only letters, digits and . _ @ + - in each segment" })]);
+  });
+
+  it("C2: refuses compose: '' (empty)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path holds only letters, digits and . _ @ + - in each segment" })]);
+  });
+
+  it("C2: refuses compose: 'a/../b.yaml' (has .. segment)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "a/../b.yaml" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path must not hold a .. segment" })]);
+  });
+
+  it("C2: refuses compose: './ingredient.yaml' (is ingredient.yaml)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "./ingredient.yaml" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path must not be ingredient.yaml" })]);
+  });
+
+  it("C2: refuses compose: 'dir/' (trailing slash)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "dir/" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["compose"], message: "a service path holds only letters, digits and . _ @ + - in each segment" })]);
+  });
+
+  it("C2: refuses files: ['a b.sh'] (segment has space)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["a b.sh"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 0], message: "a service path holds only letters, digits and . _ @ + - in each segment" })]);
+  });
+
+  it("C2: refuses files: ['compose.yaml'] when compose defaults (compose in files)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["compose.yaml"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 0], message: "files must not list the compose file" })]);
+  });
+
+  it("C2: refuses files: ['a.sh', './a.sh'] (duplicate after normalisation)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["a.sh", "./a.sh"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 1], message: "files[1] repeats files[0]" })]);
+  });
+
+  it("C2: accepts compose: './compose.yaml' (valid with leading ./)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "./compose.yaml" });
+    expect(r.success).toBe(true);
+  });
+
+  it("C2: accepts compose: 'docker/compose.dev.yaml' (valid with directory)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "docker/compose.dev.yaml" });
+    expect(r.success).toBe(true);
+  });
+
+  it("C2: accepts files: ['init/01-create_queues.sh', 'conf/app@2x+1.conf'] (valid chars)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["init/01-create_queues.sh", "conf/app@2x+1.conf"] });
+    expect(r.success).toBe(true);
+  });
+
+  // E1: refusal messages name the place (index), never the value
+  it("E1: files repeat message is 'files[i] repeats files[j]', with no value", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["a.sh", "./a.sh"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues).toEqual([expect.objectContaining({ path: ["files", 1], message: "files[1] repeats files[0]" })]);
+  });
+
+  it("E1: with a marker-holding duplicated value, the issue text does not contain the marker", () => {
+    const M = ["ZZ", "MARKER", "ZZ"].join("");
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: [`${M}.sh`, `./${M}.sh`] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues[0].message).not.toContain(M);
+    expect(r.error.issues[0].message).toBe("files[1] repeats files[0]");
+  });
+
+  it("E1: refuses compose: '.' (segment is exactly '.')", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "." });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues[0].message).toBe("a service path holds only letters, digits and . _ @ + - in each segment");
+  });
+
+  it("E1: refuses files: ['a/./b'] (segment is exactly '.')", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["a/./b"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues[0].message).toBe("a service path holds only letters, digits and . _ @ + - in each segment");
+  });
+
+  it("E1: accepts files: ['./a.sh'] (leading ./ is stripped before segment check)", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["./a.sh"] });
+    expect(r.success).toBe(true);
+  });
+
+  it("E1: refuses compose: 'INGREDIENT.YAML' case-insensitively", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", compose: "INGREDIENT.YAML" });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues[0].message).toBe("a service path must not be ingredient.yaml");
+  });
+
+  it("E1: refuses files: ['Compose.yaml'] when compose defaults, case-insensitively", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["Compose.yaml"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues[0].message).toBe("files must not list the compose file");
+  });
+
+  it("E1: refuses files: ['init/a.sh', 'init/A.sh'] as duplicate case-insensitively", () => {
+    const r = IngredientSchema.safeParse({ type: "service", name: "s", files: ["init/a.sh", "init/A.sh"] });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error.issues[0].message).toBe("files[1] repeats files[0]");
   });
 });

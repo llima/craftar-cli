@@ -1,0 +1,48 @@
+{
+  "schema": 3,
+  "forge": {
+    "source": "../forge",
+    "ref": null,
+    "commit": null
+  },
+  "profile": "acme",
+  "recipes": [
+    "base"
+  ],
+  "targets": [
+    "claude-code"
+  ],
+  "generatedAt": "2026-10-10T15:28:38.109Z",
+  "files": [
+    {
+      "path": ".claude/rules/workflow.md",
+      "hash": "sha256:ea6973973c3dce9262f1ffc1a60767d1a39482fa71c4508b1888a838f4f61a85",
+      "target": "claude-code",
+      "ingredient": "rule/workflow"
+    },
+    {
+      "path": ".craftar/.gitattributes",
+      "hash": "sha256:705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+      "target": "services",
+      "ingredient": "service/*"
+    },
+    {
+      "path": ".craftar/compose.yaml",
+      "hash": "sha256:b77dbc84c68691bc9c0880a56062cfddfd7dd67e96fd75eb2e2253a5f326b87f",
+      "target": "services",
+      "ingredient": "service/*"
+    },
+    {
+      "path": ".craftar/services/echo/compose.yaml",
+      "hash": "sha256:5e711fc8e61402e0cba86ea47c5b98a5dbc91e214db580e14c5313a760e364dc",
+      "target": "services",
+      "ingredient": "service/echo"
+    },
+    {
+      "path": ".craftar/services/echo/init/setup.sh",
+      "hash": "sha256:af41c588c02c86b8f64e91eeecbd5e9f3b9db9cba772017685b78325328451dd",
+      "target": "services",
+      "ingredient": "service/echo"
+    }
+  ]
+}

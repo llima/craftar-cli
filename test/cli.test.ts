@@ -3,7 +3,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import YAML from "yaml";
-import { makeForge, profile, recipe, rule, scenario, tmpDir, writeFiles } from "./helpers/forge.js";
+import { makeForge, profile, recipe, rule, scenario, tmpDir, writeFiles, type IngredientSpec } from "./helpers/forge.js";
 import { runCli } from "./helpers/cli.js";
 import { git, remoteForge } from "./helpers/remote.js";
 import { TSX_LOADER } from "./helpers/tsx-loader.js";
@@ -322,6 +322,31 @@ describe("cli", () => {
     expect(none.code).toBe(0);
     expect(none.stdout).toContain("no variants");
     expect(none.stdout).not.toContain("bases with variants");
+  });
+
+  it("forge variants lists a service pair with an image difference", async () => {
+    const root = await tmpDir("craftar-cli-forge-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const service = (name: string, image: string, extra: Record<string, unknown> = {}): IngredientSpec => ({
+      meta: { type: "service", name, ...extra },
+      files: { "compose.yaml": `services:\n  echo:\n    image: ${image}\n` },
+    });
+    await makeForge(root, {
+      ingredients: [service("echo", "example/echo:1"), service("echo--acme", "acme/echo:2", { as: "echo" })],
+    });
+
+    const r = runCli(["forge", "variants", "--forge", root, "--json"]);
+    expect(r.code).toBe(0);
+    const { groups } = JSON.parse(r.stdout);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].base).toBe("service/echo");
+    expect(groups[0].variants[0].profile).toBe("acme");
+    expect(groups[0].variants[0].distance.hunks).toBe(1);
+
+    const text = runCli(["forge", "variants", "--forge", root]);
+    expect(text.code).toBe(0);
+    expect(text.stdout).toContain("service/echo");
+    expect(text.stdout).toContain("acme (");
   });
 
   it("forge diff prints hunks per variant, exits 1 on a bad ref or profile, and writes nothing", async () => {
@@ -2520,11 +2545,11 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     expect(j.warnings).toEqual([GONE]);
   });
 
-  it("targets --json: exactly the key set of §4.4 at every level, 24 cells", async () => {
+  it("targets --json: exactly the key set of §4.4 at every level, 27 cells", async () => {
     const dir = await bare();
     const j = json(runCli(["targets", "--json"], { cwd: dir }));
     expect(keys(j)).toEqual(["ingredientTypes", "targets", "warnings"]);
-    expect(j.ingredientTypes).toEqual(["rule", "agent", "command", "skill", "mcp", "script", "steering", "hook"]);
+    expect(j.ingredientTypes).toEqual(["rule", "agent", "command", "skill", "mcp", "script", "steering", "hook", "service"]);
     expect(j.targets.map((t: { name: string }) => t.name)).toEqual(["claude-code", "kiro", "agents-md"]);
     let cells = 0;
     for (const t of j.targets) {
@@ -2535,7 +2560,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
         cells++;
       }
     }
-    expect(cells).toBe(24);
+    expect(cells).toBe(27);
     expect(j.targets[1].capabilities.rule).toEqual({
       state: "converted",
       output: [".kiro/steering/<name>.md"],
@@ -2606,7 +2631,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     const r1 = runCli(["ingredients", "--recipe", "nope", "--workspace", s.wsRoot]);
     expect([r1.code, r1.stderr]).toEqual([1, 'error: recipe "nope" not found in this Forge (base, stack-angular)\n']);
     const r2 = runCli(["ingredients", "--type", "widget", "--workspace", s.wsRoot]);
-    expect([r2.code, r2.stderr]).toEqual([1, 'error: unknown ingredient type "widget" — one of rule, agent, command, skill, mcp, script, steering, hook\n']);
+    expect([r2.code, r2.stderr]).toEqual([1, 'error: unknown ingredient type "widget" — one of rule, agent, command, skill, mcp, script, steering, hook, service\n']);
   });
 
   it("targets: no craftar.yaml (a bare dir, a Forge dir) → every inUse null, exit 0", async () => {
@@ -2708,7 +2733,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     expect(gl.find((l) => l.includes("rule/gone"))).toMatch(/^  ✗ rule\/gone\s+not in this Forge$/);
   });
 
-  it("text mode: targets header, matrix, legend and one paths line per writing cell (14)", async () => {
+  it("text mode: targets header, matrix, legend and one paths line per writing cell (14) plus services", async () => {
     const s = await cat();
     const r = runCli(["targets"], { cwd: s.wsRoot });
     expect(r.code).toBe(0);
@@ -2730,7 +2755,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     expect(norm).toContain("converted written in another form — see its line below");
     expect(norm).toContain("unsupported not written; sync warns and names an ingredient aimed at this target");
     const p = norm.indexOf("paths");
-    expect(norm.slice(p + 1)).toEqual([
+    expect(norm.slice(p + 1, -2)).toEqual([
       "claude-code · rule .claude/rules/<name>.md",
       "kiro · rule .kiro/steering/<name>.md — inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)",
       "agents-md · rule AGENTS.md — always-on rules are embedded in AGENTS.md; a scoped rule is listed at the file another target writes, or embedded when none does; .claude/rules/ references in the bodies, link text included, point at the file a target writes or the rule's place in AGENTS.md, or read <x> (rule not in this workspace) with a warning",
@@ -2746,6 +2771,8 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       "kiro · steering .kiro/steering/<name>.md",
       "claude-code · hook .claude/hooks/<file>",
     ]);
+    // Services are not a target; they get their own line after the paths block (spec 31 §4.7)
+    expect(norm[norm.length - 1]).toBe("service: written by sync under .craftar/ for no target; see craftar services");
     const bareRun = runCli(["targets"], { cwd: await bare() });
     expect(bareRun.stdout.split("\n")[0]).toBe("craftar targets — claude-code · kiro · agents-md");
   });

@@ -2,11 +2,12 @@ import { promises as fs, constants as fsc } from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { ENV_NAME, type Registry } from "../schema/index.js";
+import { ENV_NAME, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
 import { isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus } from "./registry.js";
 import { FULL_SHA, cacheKey, classifyForge, inspectCache, type CacheSnapshot } from "./remote.js";
+import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
 import { outName } from "../emitters/shared.js";
@@ -54,6 +55,8 @@ export interface DoctorOptions {
   /** Test seams: the Node version and `git --version` (null when git is not found). */
   nodeVersion?: string;
   gitVersion?: () => Promise<string | null>;
+  /** Test seam: injected runner for `docker compose version --short` (spec 31 §4.7). */
+  dockerRunner?: DockerRunner;
 }
 
 const execFileP = promisify(execFile);
@@ -267,6 +270,11 @@ async function workspaceChecks(
       for (const { server, name } of unset) w("mcp-env", "warn", `server "${server}" expects ${name}, not set`, `export ${name}`);
     }
 
+    // docker, services-env: present only when the plan or the lock has a service (spec 31 §4.7)
+    // Read lock here so we can check for services in it when plan failed
+    const lock = await readLock(root).catch(() => null);
+    await dockerAndServicesEnv(root, p, lock, opts.dockerRunner ?? defaultDockerRunner, w, env);
+
     // lock, status
     await lockAndStatus(root, ws, p, w);
 
@@ -368,6 +376,108 @@ function mcpUnset(p: Plan, env: NodeJS.ProcessEnv): Array<{ server: string; name
         seen.add(key);
         out.push({ server, name });
       }
+    }
+  }
+  return out;
+}
+
+const SERVICES_ENV_FIX = "export NAME, or add it to .env";
+
+/**
+ * Pattern for `${NAME}` with no default: `${NAME}` and `${NAME?msg}` / `${NAME:?msg}` are "no default";
+ * `${NAME:-...}`, `${NAME-...}`, `${NAME:+...}`, `${NAME+...}` have defaults and are not reported.
+ * Unbraced `$NAME` is not read. `$${NAME}` (escaped) is not a reference.
+ * Built from ENV_NAME so the pattern is never spelled twice.
+ */
+const SERVICES_ENV_REF = new RegExp(
+  // Negative lookbehind for $$ (escape), then ${NAME} or ${NAME?...} or ${NAME:?...}
+  "(?<!\\$)\\$\\{(" + ENV_NAME + ")(?::\\?[^}]*|\\?[^}]*)?\\}",
+  "g",
+);
+
+/**
+ * `docker` and `services-env` checks (spec 31 §4.7): present only when the plan or the lock has a service.
+ * When the plan is available, both checks are present; when only the lock indicates services, only `docker`
+ * is reported (services-env needs the planned fragments).
+ */
+async function dockerAndServicesEnv(
+  root: string,
+  p: Plan | null,
+  lock: Lock | null,
+  runner: DockerRunner,
+  w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  // "Has a service" = the plan holds a file with target === "services", or — when the plan failed — the lock does.
+  const planHasService = p !== null && p.files.some((f) => f.target === "services");
+  const all = lock?.files ?? [];
+  const lockHasService = all.some((f) => f.target === "services");
+  if (!planHasService && !lockHasService) return;
+
+  // docker check
+  const d = await dockerVersion(runner);
+  const finding = dockerFinding(d, true);
+  if (finding === null) {
+    w("docker", "ok", `Docker Compose ${d.compose}`);
+  } else {
+    w("docker", "warn", finding.message, finding.fix);
+  }
+
+  // services-env check: only when the plan is available (it has the rendered fragments)
+  if (p === null) return;
+  const unset = await servicesEnvUnset(root, p, env);
+  if (unset.length === 0) {
+    w("services-env", "ok", "every variable a service fragment expects is set");
+  } else {
+    for (const { filePath, name } of unset) {
+      w("services-env", "warn", `service fragment ${filePath} expects ${name}, not set`, SERVICES_ENV_FIX.replace("NAME", name));
+    }
+  }
+}
+
+/**
+ * Find unset environment variables in service fragments (spec 31 §4.7).
+ * Reads `${NAME}` and `${NAME?msg}` / `${NAME:?msg}` forms with no `:-`/`-` default,
+ * minus `CRAFTAR_WORKSPACE` (set by `up`), minus names set in the environment,
+ * minus keys of `<root>/.env` (`NAME=` at line start; nothing after `=` is read).
+ */
+async function servicesEnvUnset(root: string, p: Plan, env: NodeJS.ProcessEnv): Promise<Array<{ filePath: string; name: string }>> {
+  // Read .env key names (NAME= at line start, value ignored) — pattern built from ENV_NAME
+  const dotEnvKeys = new Set<string>();
+  const dotEnvKeyPattern = new RegExp("^(" + ENV_NAME + ")=");
+  try {
+    const dotEnv = await fs.readFile(path.join(root, ".env"), "utf8");
+    for (const line of dotEnv.split(/\r?\n/)) {
+      const m = dotEnvKeyPattern.exec(line);
+      if (m) dotEnvKeys.add(m[1]);
+    }
+  } catch {
+    // .env does not exist or is not readable: no keys excluded
+  }
+
+  const out: Array<{ filePath: string; name: string }> = [];
+  const seen = new Set<string>();
+
+  // Only scan the planned fragments — each ${NAME} in an init script is a shell variable, not Compose's
+  // (spec 31 §4.7: "each ${NAME} a planned fragment uses")
+  const stackFile = p.files.find((f) => f.path === ".craftar/compose.yaml");
+  const fragments = stackFile ? new Set(fragmentPaths(stackFile.content.toString("utf8"))) : new Set<string>();
+
+  for (const f of p.files) {
+    if (f.target !== "services") continue;
+    // Only the stack's fragments — init scripts' ${NAME} are shell variables
+    if (!fragments.has(f.path)) continue;
+    const text = f.content.toString("utf8");
+    for (const match of text.matchAll(SERVICES_ENV_REF)) {
+      const name = match[1];
+      // Skip if already reported, set in environment, in .env, or is CRAFTAR_WORKSPACE
+      const key = `${f.path}\u0000${name}`;
+      if (seen.has(key)) continue;
+      if (name === "CRAFTAR_WORKSPACE") continue;
+      if (env[name] !== undefined) continue;
+      if (dotEnvKeys.has(name)) continue;
+      seen.add(key);
+      out.push({ filePath: f.path, name });
     }
   }
   return out;

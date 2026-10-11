@@ -1,3 +1,4 @@
+import path from "node:path";
 import { z } from "zod";
 import { climbsOut } from "../core/text.js";
 import { findSecrets } from "../core/secrets.js";
@@ -5,6 +6,9 @@ import { findSecrets } from "../core/secrets.js";
 /* ------------------------------------------------------------------ */
 /* __proto__ key refusal helper (tech-debt 2026-09-25-zod)              */
 /* ------------------------------------------------------------------ */
+
+/** The message noProtoKey and parseFragment use for a __proto__ key — one spelling. */
+export const NO_PROTO_KEY = "a __proto__ key is not allowed";
 
 /**
  * Refuse `__proto__` as a key in the raw input: zod's `z.record()` silently strips it,
@@ -18,7 +22,7 @@ import { findSecrets } from "../core/secrets.js";
 function noProtoKey<T extends z.ZodTypeAny>(schema: T): z.ZodType<z.infer<T>> {
   return z.custom<unknown>().superRefine((v, ctx) => {
     if (v !== null && typeof v === "object" && !Array.isArray(v) && Object.hasOwn(v, "__proto__")) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["__proto__"], message: "a __proto__ key is not allowed" });
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["__proto__"], message: NO_PROTO_KEY });
     }
   }).pipe(schema);
 }
@@ -31,11 +35,16 @@ export const TARGETS = ["claude-code", "kiro", "agents-md"] as const;
 export type Target = (typeof TARGETS)[number];
 export const TargetSchema = z.enum(TARGETS);
 
+/** Owners of lock entries: AI-coder targets (`claude-code`, `kiro`, `agents-md`) plus `services`. */
+export const OWNERS = [...TARGETS, "services"] as const;
+export type Owner = (typeof OWNERS)[number];
+export const OwnerSchema = z.enum(OWNERS);
+
 /* ------------------------------------------------------------------ */
 /* Ingredients                                                          */
 /* ------------------------------------------------------------------ */
 
-export const INGREDIENT_TYPES = ["rule", "agent", "command", "skill", "mcp", "script", "steering", "hook"] as const;
+export const INGREDIENT_TYPES = ["rule", "agent", "command", "skill", "mcp", "script", "steering", "hook", "service"] as const;
 export type IngredientType = (typeof INGREDIENT_TYPES)[number];
 
 /** The environment variable name pattern (spec 27 §5.1). Exported so doctor's NAME_REF can be built from it. */
@@ -63,8 +72,66 @@ const IngredientParam = z
   })
   .strict();
 
+/** Slug-like pattern: starts with alphanumeric, then alphanumeric, dots, underscores or hyphens. Used by ingredient names and service `as`. */
+const SLUG = /^[a-z0-9][a-z0-9._-]*$/i;
+
+/* ------------------------------------------------------------------ */
+/* Compose fragment shape (spec 31)                                     */
+/* ------------------------------------------------------------------ */
+
+/** The five top-level maps a Compose fragment declares (spec 31 §4.1). */
+export const COMPOSE_MAPS = ["services", "volumes", "networks", "configs", "secrets"] as const;
+
+/**
+ * Compose fragment shape: must be a mapping; each of the five top-level maps, when present,
+ * must be a mapping and must not have a __proto__ key. `.passthrough()` keeps unknown keys
+ * (version, x-*, etc.). A map that is present and not a mapping fails zod's record parse
+ * with a message like "Expected object, received array".
+ */
+export const ComposeFragmentShape = z
+  .object({
+    services: noProtoKey(z.record(z.unknown())).optional(),
+    volumes: noProtoKey(z.record(z.unknown())).optional(),
+    networks: noProtoKey(z.record(z.unknown())).optional(),
+    configs: noProtoKey(z.record(z.unknown())).optional(),
+    secrets: noProtoKey(z.record(z.unknown())).optional(),
+  })
+  .passthrough();
+export type ComposeFragment = z.infer<typeof ComposeFragmentShape>;
+
+/**
+ * The stack file shape: the `include` array is REQUIRED and contains objects with a `path` key.
+ * Used by `recordedServices` to parse the stack without casts.
+ */
+export const ComposeStackShape = z.object({
+  include: z.array(z.object({ path: z.string() }).passthrough()),
+}).passthrough();
+export type ComposeStack = z.infer<typeof ComposeStackShape>;
+
+/**
+ * A row from `docker compose ps --format json` (spec 31 §4.4).
+ * The schema validates the shape; `readPs` transforms it to `PsContainer`.
+ * Unknown keys are ignored (no `.strict()`).
+ */
+export const ComposePsRow = z.object({
+  Service: z.string(),
+  State: z.string(),
+  Health: z.string().optional().nullable(),
+  Publishers: z
+    .array(
+      z.object({
+        TargetPort: z.number(),
+        PublishedPort: z.number(),
+        Protocol: z.string(),
+      }).passthrough(),
+    )
+    .optional()
+    .nullable(),
+}).passthrough();
+export type ComposePsRowData = z.infer<typeof ComposePsRow>;
+
 const IngredientBase = z.object({
-  name: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/i, "ingredient names are slug-like"),
+  name: z.string().regex(SLUG, "ingredient names are slug-like"),
   description: z.string().optional(),
   /** Which targets receive this ingredient. Default: all. */
   targets: z.array(TargetSchema).or(z.literal("*")).default("*"),
@@ -72,7 +139,7 @@ const IngredientBase = z.object({
   as: z
     .string()
     // Every emitter joins it into an output path (`outName`): `..` there wrote outside the workspace (0.17.3).
-    .refine((v) => !climbsOut(v), 'as must not climb out of its folder with a .. segment')
+    .refine((v) => !climbsOut(v), "as must not climb out of its folder with a .. segment")
     .optional(),
   /** Free-form tags used by recipes and `craftar explain`. */
   tags: z.array(z.string()).default([]),
@@ -183,7 +250,85 @@ export const HookIngredient = IngredientBase.extend({
   files: z.array(EmittedFile).min(1),
 });
 
-export const IngredientSchema = z.discriminatedUnion("type", [
+/**
+ * A service path: `compose`, and every entry of `files`, `executable` and `binary`.
+ *
+ * Every `/`-separated segment must match `/^[A-Za-z0-9._@+-]+$/` (letters, digits, . _ @ + -)
+ * after an optional leading `./`. Refused when:
+ * - climbsOut (the path escapes the directory)
+ * - Any segment is `..` (even `a/../b` that stays inside is refused)
+ * - Absolute (starts with `/` or a Windows drive letter)
+ * - Contains a backslash
+ * - Any segment does not match the allowed chars (including empty string, trailing `/`, `a//b`, spaces, `#`, newlines, `:`)
+ * - Equals `ingredient.yaml` after normalization
+ */
+const SEGMENT_OK = /^[A-Za-z0-9._@+-]+$/;
+
+const ServicePath = z
+  .string()
+  .superRefine((v, ctx) => {
+    // First: check if it actually climbs out (escapes the directory)
+    if (climbsOut(v)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path must not climb out with a .. segment" });
+      return; // short-circuit
+    }
+    const stripped = v.startsWith("./") ? v.slice(2) : v;
+    // Second: check for .. segment even in paths that don't climb out (a/../b)
+    if (stripped.split("/").includes("..")) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path must not hold a .. segment" });
+      return; // short-circuit
+    }
+    // Third: absolute path (before segment check, so /abs fails as absolute, not as bad segment)
+    if (/^\/|^[A-Za-z]:/.test(v)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path must not be absolute" });
+      return;
+    }
+    // Fourth: backslash (before segment check, so a\b fails as backslash, not as bad segment)
+    if (v.includes("\\")) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path must not contain a backslash" });
+      return;
+    }
+    // Fifth: check segment characters — SEGMENT_OK matches "." but "." alone is not a valid segment
+    if (stripped === "" || !stripped.split("/").every((seg) => SEGMENT_OK.test(seg) && seg !== ".")) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path holds only letters, digits and . _ @ + - in each segment" });
+      return;
+    }
+    // Sixth: ingredient.yaml (case-insensitive: on case-insensitive disks INGREDIENT.YAML aliases ingredient.yaml)
+    if (normalizeDeclared(v).toLowerCase() === "ingredient.yaml") {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a service path must not be ingredient.yaml" });
+    }
+  });
+
+/**
+ * Service ingredient: a Compose fragment plus the files it mounts or builds from.
+ * NOTE: This is the base shape for parsing; the subset validations (executable ⊆ files, binary ⊆ files)
+ * are done in the IngredientSchema wrapper below.
+ */
+export const ServiceIngredient = IngredientBase
+  .omit({ as: true }) // Remove the base `as` to add our own with slug validation
+  .extend({
+    type: z.literal("service"),
+    /** The compose fragment, relative to the ingredient directory. */
+    compose: ServicePath.default("compose.yaml"),
+    /** Other files to write next to the fragment. */
+    files: z.array(ServicePath).default([]),
+    /** A subset of files written with mode 0755 on POSIX. */
+    executable: z.array(ServicePath).default([]),
+    /** A subset of files copied as bytes (no {{param}}, no sections, no secret scan). */
+    binary: z.array(ServicePath).default([]),
+    /** A service is aimed at no AI coder by default. */
+    targets: z.array(TargetSchema).or(z.literal("*")).default([]),
+    /** For a service, `as` must be slug-like (spec 31 §7). */
+    as: z
+      .string()
+      .refine((v) => !climbsOut(v), "as must not climb out of its folder with a .. segment")
+      .refine((v) => SLUG.test(v), "a service as must be slug-like (like name)")
+      .optional(),
+  })
+  .strict();
+
+// The base discriminated union of all ingredient types
+const IngredientSchemaBase = z.discriminatedUnion("type", [
   RuleIngredient,
   AgentIngredient,
   CommandIngredient,
@@ -192,8 +337,63 @@ export const IngredientSchema = z.discriminatedUnion("type", [
   ScriptIngredient,
   SteeringIngredient,
   HookIngredient,
+  ServiceIngredient,
 ]);
-export type Ingredient = z.infer<typeof IngredientSchema>;
+
+/**
+ * Normalize a declared service path for subset checks: resolves `./foo` to `foo`.
+ * Used by schema validation (executable ⊆ files, binary ⊆ files) and by extract.ts.
+ */
+export const normalizeDeclared = (p: string) => path.posix.normalize(p);
+
+/**
+ * The full ingredient schema: parses with the discriminated union, then validates
+ * service-specific constraints (executable ⊆ files, binary ⊆ files, compose not in files,
+ * no duplicate files entries).
+ *
+ * NOTE: We use superRefine on the union instead of on ServiceIngredient itself because
+ * zod's discriminatedUnion does not propagate refinements from its members — a refine
+ * on ServiceIngredient would never run when parsed through this union.
+ */
+export const IngredientSchema = IngredientSchemaBase.superRefine((data, ctx) => {
+  if (data.type !== "service") return;
+  // Case-insensitive: on case-insensitive disks Compose.yaml aliases compose.yaml
+  const composeNorm = normalizeDeclared(data.compose).toLowerCase();
+  const filesSet = new Set(data.files.map((f) => normalizeDeclared(f).toLowerCase()));
+
+  // Check that compose is not in files (case-insensitive)
+  for (let i = 0; i < data.files.length; i++) {
+    if (normalizeDeclared(data.files[i]).toLowerCase() === composeNorm) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["files", i], message: "files must not list the compose file" });
+    }
+  }
+
+  // Check for duplicate files entries (case-insensitive; message names the place, never the value)
+  const seen = new Map<string, number>(); // normalized lower -> first index
+  for (let i = 0; i < data.files.length; i++) {
+    const norm = normalizeDeclared(data.files[i]).toLowerCase();
+    const prev = seen.get(norm);
+    if (prev !== undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["files", i], message: `files[${i}] repeats files[${prev}]` });
+    } else {
+      seen.set(norm, i);
+    }
+  }
+
+  // executable ⊆ files stays exact (a subset names the entry as written)
+  const filesSetExact = new Set(data.files.map(normalizeDeclared));
+  for (let i = 0; i < data.executable.length; i++) {
+    if (!filesSetExact.has(normalizeDeclared(data.executable[i]))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["executable", i], message: "executable must be a subset of files" });
+    }
+  }
+  for (let i = 0; i < data.binary.length; i++) {
+    if (!filesSetExact.has(normalizeDeclared(data.binary[i]))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["binary", i], message: "binary must be a subset of files" });
+    }
+  }
+});
+export type Ingredient = z.infer<typeof IngredientSchemaBase>;
 
 /** `type/name`, the way recipes refer to ingredients. */
 export type IngredientRef = `${IngredientType}/${string}`;
@@ -307,12 +507,15 @@ export type WorkspaceConfig = z.infer<typeof WorkspaceConfigSchema>;
 /* Lockfile (craftar.lock)                                              */
 /* ------------------------------------------------------------------ */
 
+/** Lock entry for schema 1 and 2: target is an AI-coder target. */
 export const LockEntrySchema = z.object({
   path: z.string(),
   hash: z.string(),
   target: TargetSchema,
   ingredient: z.string(),
 });
+/** Lock entry for schema 3: target is any owner (AI-coder targets plus `services`). Derived from LockEntrySchema. */
+export const LockEntrySchemaV3 = LockEntrySchema.extend({ target: OwnerSchema });
 /** Lock schema 1 (craftar ≤ 0.10.x): read, never written since 0.11.0. */
 export const LockSchemaV1 = z.object({
   schema: z.literal(1),
@@ -340,17 +543,24 @@ export const LockSchemaV2 = z.object({
   generatedAt: z.string(),
   files: z.array(LockEntrySchema),
 });
+/** Lock schema 3 (spec 31 §5.2): entry targets include internal owners like `services`. Derived from LockSchemaV2. */
+export const LockSchemaV3 = LockSchemaV2.extend({
+  schema: z.literal(3),
+  files: z.array(LockEntrySchemaV3),
+});
 /** Supported lock schemas; anything else is refused by name in `readLock`. */
-export const LOCK_SCHEMAS: readonly unknown[] = [1, 2];
+export const LOCK_SCHEMAS: readonly unknown[] = [1, 2, 3];
 // A lock with no `schema` key is version 1, as `.default(1)` read it before. A discriminated union
 // rejects a missing discriminator, so the key is supplied before the union sees it.
 export const LockSchema = z.preprocess(
   (v) => (v !== null && typeof v === "object" && !Array.isArray(v) && !Object.hasOwn(v, "schema") ? { ...v, schema: 1 } : v),
-  z.discriminatedUnion("schema", [LockSchemaV1, LockSchemaV2]),
+  z.discriminatedUnion("schema", [LockSchemaV1, LockSchemaV2, LockSchemaV3]),
 );
 export type Lock = z.infer<typeof LockSchema>;
 export type LockV2 = z.infer<typeof LockSchemaV2>;
+export type LockV3 = z.infer<typeof LockSchemaV3>;
 export type LockEntry = z.infer<typeof LockEntrySchema>;
+export type LockEntryV3 = z.infer<typeof LockEntrySchemaV3>;
 
 /* ------------------------------------------------------------------ */
 /* Workspace registry — $CRAFTAR_HOME/registry.json (spec 21 §5.2)      */

@@ -50,6 +50,8 @@ import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
+import { spawn } from "node:child_process";
+import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
@@ -62,7 +64,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.24.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.25.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -1168,7 +1170,7 @@ program
       for (const ing of result.ingredients) {
         const col1 = ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name;
         allCol1.push(col1);
-        allCol2.push(`targets ${ing.targets === "*" ? "*" : (ing.targets as string[]).join(", ")}`);
+        allCol2.push(`targets ${ing.targets === "*" ? "*" : ((ing.targets as string[]).join(", ") || "none")}`);
         allCol3.push(`in ${ing.recipes.length ? ing.recipes.join(", ") : "no recipe"}`);
       }
       for (const m of result.missing) {
@@ -1189,7 +1191,7 @@ program
         console.log(type);
         for (const ing of ings) {
           const col1 = ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name;
-          const col2 = `targets ${ing.targets === "*" ? "*" : (ing.targets as string[]).join(", ")}`;
+          const col2 = `targets ${ing.targets === "*" ? "*" : ((ing.targets as string[]).join(", ") || "none")}`;
           const col3 = `in ${ing.recipes.length ? ing.recipes.join(", ") : "no recipe"}`;
           const desc = ing.description ? `— ${ing.description}` : "";
           const disabled = ing.disabled ? "(disabled by this workspace)" : "";
@@ -1327,6 +1329,9 @@ program
     for (const line of pathLines) {
       console.log(`  ${line.label.padEnd(maxLabelLen)}  ${line.content}`);
     }
+    console.log();
+    // Service line — text mode only (spec 31 §4.7: no JSON key, one line in the paths block)
+    console.log("  service: written by sync under .craftar/ for no target; see craftar services");
 
     for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   });
@@ -2147,6 +2152,118 @@ forge
       else for (let i = 0; i < impactResults.length; i++) console.log(`  ${impactLine(impactEntries[i], impactResults[i])}`);
     }
     if (promotion.created.length) console.log(`  next     craftar forge variants — the old base now shows as ${promotion.created.length} variant(s) to unify`);
+  });
+
+/* ---------------------------------------------------------------- services ---------------------------------------------------------------- */
+const services = program.command("services").description("Local services of this workspace: run Docker Compose on what craftar.lock records under .craftar/");
+
+/** The workspace's lock, read without the Forge: these commands need no plan and no network (spec 31 §4.2). */
+async function servicesContext(dir: string): Promise<{ root: string; real: string; recorded: Recorded }> {
+  const { root, real } = await servicesBase(dir);
+  return { root, real, recorded: await recordedServices(root, await readLock(root)) };
+}
+
+/** The base workspace info without the lock read — `down` catches the lock read separately. */
+async function servicesBase(dir: string): Promise<{ root: string; real: string }> {
+  const root = path.resolve(dir);
+  if (!(await exists(path.join(root, WORKSPACE_FILE)))) fail(`no ${WORKSPACE_FILE} in ${root} — run craftar services inside a workspace, or pass --workspace <dir>`);
+  return { root, real: await fs.realpath(root) };
+}
+
+/** Helper to get the .env file path if it exists, or null. */
+async function envFileOrNull(root: string): Promise<string | null> {
+  const env = path.join(root, ".env");
+  return (await exists(env)) ? env : null;
+}
+
+/** Runs `docker compose` with the terminal's own streams and resolves with its exit code. No shell. */
+function runCompose(argv: string[], real: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("docker", argv, { stdio: "inherit", env: { ...process.env, CRAFTAR_WORKSPACE: real } });
+    child.on("error", reject);
+    child.on("close", (code) => resolve(code ?? 1));
+  });
+}
+
+services
+  .command("up")
+  .description("Start the services (docker compose up -d) — refused when a recorded file is missing or edited")
+  .argument("[service...]", "Compose service names to start (default: all)")
+  .option("--wait", "wait until the services are running or healthy", false)
+  .option("--workspace <dir>", "workspace root", ".")
+  .action(async (names: string[], o) => {
+    try {
+      const { root, real, recorded } = await servicesContext(o.workspace);
+      const refusal = upRefusal(recorded, names);
+      if (refusal.length) fail(refusal.join("\n"));
+      const fault = dockerFault(await dockerVersion(dockerRunner), true);
+      if (fault !== null) fail(fault);
+      const argv = composeArgv("up", { project: projectName(real), stack: path.join(root, ".craftar", "compose.yaml"), envFile: await envFileOrNull(root), wait: o.wait, services: names });
+      process.exitCode = await runCompose(argv, real);
+    } catch (e) {
+      fail(e instanceof Error ? e.message : String(e));
+    }
+  });
+
+services
+  .command("down")
+  .description("Stop the services (docker compose down) — never refused on the files")
+  .option("--volumes", "also remove the volumes the stack declares", false)
+  .option("--workspace <dir>", "workspace root", ".")
+  .action(async (o) => {
+    try {
+      const { root, real } = await servicesBase(o.workspace);
+      // Try to read the lock — if it fails, warn and stop by name only
+      let recorded: Recorded | null = null;
+      try {
+        recorded = await recordedServices(root, await readLock(root));
+      } catch (e) {
+        console.error(`${pc.yellow("warn")} ${errorText(e)}`);
+      }
+      const docker = await dockerVersion(dockerRunner);
+      const fault = dockerFault(docker, false);
+      if (fault !== null) fail(fault);
+      // Use downArgv for the full decision — `-f` and `--env-file` only when lock was read and stack is usable
+      const argv = downArgv(projectName(real), recorded, docker, path.join(root, ".craftar", "compose.yaml"), await envFileOrNull(root), o.volumes);
+      process.exitCode = await runCompose(argv, real);
+    } catch (e) {
+      fail(e instanceof Error ? e.message : String(e));
+    }
+  });
+
+services
+  .command("status")
+  .description("The declared services and their containers — reports, never refused on the files")
+  .option("--json", "machine-readable output", false)
+  .option("--workspace <dir>", "workspace root", ".")
+  .action(async (o) => {
+    try {
+      const { real, recorded } = await servicesContext(o.workspace);
+      const docker = await dockerVersion(dockerRunner);
+      let ps: ReturnType<typeof readPs> | null = null;
+      let psFault = dockerFault(docker, false);
+      if (psFault === null) {
+        const r = await dockerRunner("docker", composeArgv("ps", { project: projectName(real), stack: null, envFile: null }));
+        if (r.code === 0) ps = readPs(r.stdout);
+        else psFault = `docker compose ps failed — ${r.stderr.trim().split("\n")[0] || `exit ${r.code}`}`;
+      }
+      const report = statusReport(real, recorded, docker, ps, psFault);
+      if (o.json) console.log(JSON.stringify(report, null, 2));
+      else {
+        console.log(pc.bold(`craftar services — project ${report.project}`));
+        if (report.services.length === 0) console.log("  no service declared");
+        const w = Math.max(0, ...report.services.map((s) => s.name.length));
+        for (const s of report.services) {
+          const ports = s.ports.map((p) => `${p.host}:${p.container}/${p.protocol}`).join(", ");
+          console.log(`  ${s.name.padEnd(w)}  ${s.ingredient ?? "(not declared)"}  ${s.state}${s.health ? ` (${s.health})` : ""}${ports ? `  ${ports}` : ""}`);
+        }
+        for (const p of report.pending) console.log(`  ${pc.yellow(pendingLine(p))}`);
+        for (const x of report.warnings) console.error(`${pc.yellow("warn")} ${x}`);
+      }
+      if (psFault !== null) process.exitCode = 1;
+    } catch (e) {
+      fail(e instanceof Error ? e.message : String(e));
+    }
   });
 
 /* ---------------------------------------------------------------- cache ---------------------------------------------------------------- */
