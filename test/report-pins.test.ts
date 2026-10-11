@@ -29,6 +29,7 @@ const H = {
   goneEdited: "sha256:e97174db0e15246c338a6acdd2ca26d6ba371ee5553f8fb7136a1b98eb18b6c5",
   gone: "sha256:179bbd94af11271d3a62e9aae6dd5527305d5950292f8639d66b30958cb8c48b",
   keep: "sha256:9a75bf85a4bb172834fe5d5b052612c0dedc2859adda6afbbbeb76005c6c1195",
+  moved: "sha256:69b6bbadb67faf0860df534ac0799a6d129c6041bdafe44efdaedee0c3babe4a",
 };
 
 const DIFF_ALL =
@@ -45,8 +46,6 @@ describe("pins — a workspace holding one file in each state", () => {
     const r = runCli(["status", "--json", "--workspace", s.wsRoot]);
     expect(r.code).toBe(0);
     expect(r.stderr).toBe("");
-    const moved = JSON.parse(r.stdout).statuses[7].lock.hash as string;
-    expect(moved).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(r.stdout).toBe(
       JSON.stringify(
         {
@@ -59,7 +58,7 @@ describe("pins — a workspace holding one file in each state", () => {
             row("gone-edited", "orphan-drift", H.goneEdited),
             row("gone", "orphan", H.gone),
             row("keep", "unchanged", H.keep),
-            row("moved", "update", moved),
+            row("moved", "update", H.moved),
           ],
           warnings: [],
           unsetParams: [],
@@ -136,7 +135,9 @@ describe("pins — a workspace holding one file in each state", () => {
     );
   });
 
-  // The two long documents are pinned as snapshot files, written ONCE by this step on the commit before the lift.
+  // The two long documents are pinned as snapshot files, written ONCE on the commit before the lift. Outside CI
+  // vitest re-creates a snapshot file that is missing — so a deleted pin passes locally: never delete one, and
+  // never run with -u; `git status test/pins` must stay empty.
   it("ingredients --json and targets --json (in a workspace, and in a directory with no craftar.yaml): the exact stdout", async () => {
     const s = kept(await eightStates());
     await expect(runCli(["ingredients", "--json", "--workspace", s.wsRoot]).stdout).toMatchFileSnapshot("./pins/ingredients.json");

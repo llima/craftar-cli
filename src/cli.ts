@@ -433,10 +433,8 @@ program
     let shown = 0;
     for (const s of st) {
       if (only && s.path !== only) continue;
-      // Spec 19 §3.2: show the six states sync --check refuses (skip unchanged and adopt)
-      if (["unchanged", "adopt"].includes(s.state)) continue;
-      shown++;
-      await printFileDiff(ws.root, s);
+      // Spec 19 §3.2: the six states sync --check refuses are shown; which those are is diffReport's to say
+      if (await printFileDiff(ws.root, s)) shown++;
     }
     if (!shown) console.log(pc.green("no differences"));
     // exitCode, not process.exit: exit drops a piped diff still queued for a slow reader (spec 19 §3.1)
@@ -448,10 +446,11 @@ program
 const DIFF_PAINT = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
 
 /** What `craftar diff` prints for one file `sync --check` refuses; `drift show <path>` prints the same for a drifted one. */
-async function printFileDiff(root: string, s: FileStatus): Promise<void> {
+async function printFileDiff(root: string, s: FileStatus): Promise<boolean> {
   // What to show is decided in the core (`diffReport`); the headers and the paint are this command's.
   const [row] = await diffReport({ root }, [s], { withholdMcp: false });
-  if (!row) return;
+  // Nothing to show for `unchanged` and `adopt`: says so, for the caller's count
+  if (!row) return false;
   if (s.state === "orphan-drift") {
     // Header and one line, no body: sync keeps this file
     console.log(pc.bold(`--- ${s.path} (disk, orphan-drift)`));
@@ -466,6 +465,7 @@ async function printFileDiff(root: string, s: FileStatus): Promise<void> {
   // Spec 27 §4.2, Ruling 4: a note stands in for the on-disk content of the example file in drift / collision
   if (row.note !== null) console.log(`  ${row.note}`);
   else console.log(renderDiff(row.disk ?? "", row.forge ?? "", DIFF_PAINT));
+  return true;
 }
 
 /* ---------------------------------------------------------------- drift */

@@ -252,6 +252,8 @@ describe("warnings", () => {
     expect(data(await one("targets", m)).warnings).toEqual([]);
     const forge = data(await one("doctor", m)).checks.find((c: any) => c.id === "forge");
     expect(forge.message).toBe(`${r.url} @ main (default branch) ${nf.forge.commit!.slice(0, 8)}, cached ${nf.origin.fetchedAt}`);
+    // (control) the seam is the one the loads use: it saw their local git calls — and none that reaches the remote
+    expect(calls.length).toBeGreaterThan(0);
     expect(calls.filter((a) => a.includes("fetch") || a.includes("ls-remote"))).toEqual([]);
   });
 

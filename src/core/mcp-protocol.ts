@@ -191,11 +191,11 @@ export async function handle(message: unknown, ctx: McpContext, state: McpState)
   if (m.method !== "tools/call") return error(id, -32601, "Method not found");
 
   const params = (m.params !== null && typeof m.params === "object" ? m.params : {}) as { name?: unknown; arguments?: unknown };
-  // The name asked for is not echoed: no answer relays a request
+  // The name asked for is not echoed
   if (typeof params.name !== "string" || !(TOOL_NAMES as readonly string[]).includes(params.name)) return error(id, -32602, UNKNOWN_TOOL);
   const name = params.name as ToolName;
   const parsed = TOOLS[name].args.safeParse(params.arguments ?? {});
-  // schemaFault names the key and what was expected, never the value received
+  // schemaFault names the key — an unrecognized one by the name the caller gave it — and what was expected, never a value
   if (!parsed.success) return error(id, -32602, `invalid arguments for ${name}: ${schemaFault(parsed.error)}`);
   try {
     return result(id, toolResult(await call(name, parsed.data as ToolArguments, ctx)));
