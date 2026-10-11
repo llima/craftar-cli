@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { MCP_FILES, eightStates, explained, mcpWorkspace, moveTracker, syncOnce, type Scenario } from "./helpers/states.js";
-import { loadWorkspace, plan, readLock, status, type FileStatus } from "../src/core/sync.js";
-import { EXAMPLE_CONTENT_HIDDEN, MCP_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, notProduced, statusPath, statusReport } from "../src/core/report.js";
+import { withLoadWarnings } from "../src/core/catalogue.js";
+import { readWorkspaceConfig, loadWorkspace, plan, readLock, status, type FileStatus } from "../src/core/sync.js";
+import { EXAMPLE_CONTENT_HIDDEN, MCP_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, notProduced, statusPath, statusReport, targetsReport } from "../src/core/report.js";
 
 // Spec 35 §5.1 (and spec 36 §17): the builders the commands, the MCP server and the dashboard share — tested directly.
 
@@ -141,5 +142,30 @@ describe("explainFile", () => {
     expect(explainFile(ws, p, "AGENTS.md")).toMatchObject({ ingredient: "rule/*", origin: null, via: null, sections: [], params: [] });
     expect(explainFile(ws, p, `${R}/nope.md`)).toBeNull();
     expect(explainFile(ws, p, `./${R}/api.md`)).toBeNull();
+  });
+});
+
+describe("targetsReport", () => {
+  it("nothing: unmarked, no warning; a configuration: the targets in use; a reason: unmarked with the one wording", async () => {
+    const s = kept(await mcpWorkspace());
+    const bare = await targetsReport(s.wsRoot, HOME, null);
+    expect(Object.keys(bare)).toEqual(["ingredientTypes", "targets", "warnings"]);
+    expect([bare.targets.map((t) => t.inUse), bare.warnings]).toEqual([[null, null, null], []]);
+    const marked = await targetsReport(s.wsRoot, HOME, { merged: await readWorkspaceConfig(s.wsRoot) });
+    expect([marked.targets.map((t) => [t.name, t.inUse]), marked.warnings]).toEqual([[["claude-code", true], ["kiro", true], ["agents-md", false]], []]);
+    const why = await targetsReport(s.wsRoot, HOME, { reason: "because" });
+    expect([why.targets.map((t) => t.inUse), why.warnings]).toEqual([[null, null, null], ["targets in use not shown: because"]]);
+    const merged = await readWorkspaceConfig(s.wsRoot);
+    await fs.rm(s.forgeRoot, { recursive: true });
+    expect((await targetsReport(s.wsRoot, HOME, { merged })).warnings).toEqual([`targets in use not shown: Forge not found at ${s.forgeRoot}`]);
+  });
+});
+
+describe("withLoadWarnings", () => {
+  it("puts the load warnings first, in order, in the same object", () => {
+    const listing = { recipes: [], warnings: ["own"] };
+    expect(withLoadWarnings(listing, ["load 1", "load 2"])).toBe(listing);
+    expect(listing.warnings).toEqual(["load 1", "load 2", "own"]);
+    expect(withLoadWarnings({ warnings: [] as string[] }, []).warnings).toEqual([]);
   });
 });

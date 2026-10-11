@@ -14,16 +14,15 @@ import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistry
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, readWorkspaceConfig, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock } from "./schema/index.js";
-import { resolve, sectionKey, type ParamLayer } from "./core/resolve.js";
-import { catalogueContext, listRecipes, listIngredients, checkType, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
-import { listTargets } from "./core/capabilities.js";
+import { sectionKey, type ParamLayer } from "./core/resolve.js";
+import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
 import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
-import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, notProduced, readText, statusPath, statusReport } from "./core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, notProduced, readText, statusPath, statusReport, targetsReport } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
@@ -49,7 +48,7 @@ import { askInit, confirmInit, againLine, type InitAnswers } from "./core/init-f
 import { readlineIo } from "./prompt.js";
 import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
-import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
+import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type UnifyPlan } from "./schema/index.js";
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
@@ -1077,7 +1076,7 @@ program
 
     const r = listRecipes(forg, context);
     // Loading the workspace may warn (spec 13 §4.2); those come first, as in `plan()`.
-    if (workspace) r.warnings.unshift(...workspace.warnings);
+    if (workspace) withLoadWarnings(r, workspace.warnings);
 
     if (o.json) {
       return console.log(JSON.stringify(r, null, 2));
@@ -1203,7 +1202,7 @@ program
     } catch (e) {
       fail(e instanceof Error ? e.message : String(e));
     }
-    if (workspace) result.warnings.unshift(...workspace.warnings);
+    if (workspace) withLoadWarnings(result, workspace.warnings);
 
     if (o.json) {
       return console.log(JSON.stringify(result, null, 2));
@@ -1362,36 +1361,31 @@ program
   .option("--workspace <dir>", "workspace whose targets to mark (default: . when it holds a craftar.yaml)")
   .option("--json", "machine-readable output", false)
   .action(async (o) => {
-    let inUse: Target[] | null = null;
-    const warnings: string[] = [];
-
     const root = o.workspace ?? ".";
+    let input: Parameters<typeof targetsReport>[2] = null;
     if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
-      // craftar.yaml does not exist
+      // Explicit --workspace without craftar.yaml: exit 1 with the load's own message. No --workspace: unmarked, no warning.
       if (o.workspace !== undefined) {
-        // Explicit --workspace: exit 1 with loadWorkspace's message
         try {
-          await loadWorkspace(root, load({}, "no-fetch"));
+          await readWorkspaceConfig(root);
         } catch (e) {
           fail(e instanceof Error ? e.message : String(e));
         }
       }
-      // No --workspace: just show unmarked, no warning
     } else {
-      // craftar.yaml exists, try to load
+      // craftar.yaml exists: a configuration that does not read is a warning, as a Forge that does not load is
       try {
-        const ws = await loadWorkspace(root, load({}, "no-fetch"));
-        inUse = resolve(ws.forge, ws.config).targets;
+        input = { merged: await readWorkspaceConfig(root) };
       } catch (e) {
-        // Load or resolve failed — warning, not error
-        warnings.push(`targets in use not shown: ${e instanceof Error ? e.message : String(e)}`);
+        input = { reason: e instanceof Error ? e.message : String(e) };
       }
     }
 
-    const result = listTargets(inUse);
+    const result = await targetsReport(root, { home: load({}, "no-fetch").home }, input);
+    const warnings = result.warnings;
 
     if (o.json) {
-      return console.log(JSON.stringify({ ...result, warnings }, null, 2));
+      return console.log(JSON.stringify(result, null, 2));
     }
 
     // Text mode

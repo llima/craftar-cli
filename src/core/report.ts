@@ -2,11 +2,12 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { EXAMPLE_SETTINGS } from "../emitters/shared.js";
 import type { Lock } from "../schema/index.js";
+import { listTargets, type ListTargetsResult } from "./capabilities.js";
 import { diffOps } from "./diff.js";
 import { mcpTagged } from "./drift.js";
 import type { PlannedFile } from "../emitters/types.js";
-import type { ParamLayer } from "./resolve.js";
-import { unsetDeclared, type FileStatus, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
+import { resolve, type ParamLayer } from "./resolve.js";
+import { loadForgeFor, unsetDeclared, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
 
 /*
@@ -175,4 +176,29 @@ export function explainFile(ws: Workspace, p: Plan, file: string): ExplainedFile
     recipes: [...p.resolution.recipes],
     hash: hashNormalized(f.content),
   };
+}
+
+/** The document `craftar targets --json` prints (spec 16 §4.4). */
+export type TargetsReport = ListTargetsResult & { warnings: string[] };
+
+/**
+ * The capability matrix with the targets a workspace uses marked. `input` is the configuration to load from
+ * (never fetched: `no-fetch`), a reason not to load — worded as a failed load is — or null for no workspace at
+ * all: the matrix unmarked, no warning. It never throws for a workspace that does not load or resolve.
+ */
+export async function targetsReport(
+  root: string,
+  opts: Pick<LoadOptions, "home" | "git">,
+  input: { merged: MergedConfig } | { reason: string } | null,
+): Promise<TargetsReport> {
+  if (input === null) return { ...listTargets(null), warnings: [] };
+  const notShown = (why: string) => ({ ...listTargets(null), warnings: [`targets in use not shown: ${why}`] });
+  if ("reason" in input) return notShown(input.reason);
+  try {
+    const ws = await loadForgeFor(root, input.merged, { ...opts, mode: "no-fetch" });
+    return { ...listTargets(resolve(ws.forge, ws.config).targets), warnings: [] };
+  } catch (e) {
+    // Load or resolve failed — a warning, not an error
+    return notShown(e instanceof Error ? e.message : String(e));
+  }
 }

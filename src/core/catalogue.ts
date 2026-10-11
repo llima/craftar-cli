@@ -394,3 +394,9 @@ export function listIngredients(
 
   return { forge: forgeJson, context: contextJson, recipe: recipeJson, ingredients, missing, warnings };
 }
+
+/** The warnings of loading the workspace go first, as `plan()` puts them (spec 13 §4.2). Mutates and returns `listing`. */
+export function withLoadWarnings<T extends { warnings: string[] }>(listing: T, loadWarnings: readonly string[]): T {
+  listing.warnings.unshift(...loadWarnings);
+  return listing;
+}
