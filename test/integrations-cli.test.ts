@@ -330,7 +330,7 @@ describe("Valid schema 3 Forge — key sets and lock unchanged", () => {
   });
 });
 
-it("import --help says what a schema 3 Forge changes", () => {
+it("import --help says what a Forge at schema 3 or above changes", () => {
   const r = runCli(["import", "--help"]);
   expect(r.code).toBe(0);
   expect(r.stdout.replace(/\s+/g, " ")).toContain(
