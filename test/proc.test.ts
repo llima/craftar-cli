@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { capture, onPath, pathEntries, spawnInherited } from "../src/core/proc.js";
 import { tmpDir } from "./helpers/forge.js";
 
@@ -61,13 +61,17 @@ describe("spawnInherited", () => {
 // every platform, so "it did not run" is a fact about the lookup and not about the file.
 const TOOL = "craftar-fake-tool";
 const EXE = process.platform === "win32" ? ".exe" : "";
-async function planted(): Promise<string> {
-  const dir = await fs.realpath(await tmpDir("craftar-proc-planted-"));
-  cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
-  await fs.copyFile(process.execPath, path.join(dir, TOOL + EXE));
-  await fs.chmod(path.join(dir, TOOL + EXE), 0o755);
-  return dir;
-}
+
+// One copy of node for the whole file (it is tens of MB): under node_modules/ so that a PATH entry can also be
+// spelled relative to this process on every platform (a temp directory is on another drive on Windows CI).
+let PLANTED = "";
+beforeAll(async () => {
+  PLANTED = await fs.realpath(await fs.mkdtemp(path.join(process.cwd(), "node_modules", ".craftar-proc-")));
+  await fs.copyFile(process.execPath, path.join(PLANTED, TOOL + EXE));
+  await fs.chmod(path.join(PLANTED, TOOL + EXE), 0o755);
+});
+afterAll(() => fs.rm(PLANTED, { recursive: true, force: true }));
+
 /** The process environment with PATH replaced, whatever the key's case (Windows spells it `Path`). */
 function withPath(value: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
@@ -78,7 +82,7 @@ function withPath(value: string): NodeJS.ProcessEnv {
 
 describe("the program lookup never uses the child's working directory", () => {
   it("capture does not run a program planted there — PATH empty, '.', with an empty entry, or without that directory", async () => {
-    const cwd = await planted();
+    const cwd = PLANTED;
     const elsewhere = await fs.realpath(await tmpDir("craftar-proc-elsewhere-"));
     cleanups.push(() => fs.rm(elsewhere, { recursive: true, force: true }));
     for (const value of ["", ".", `${elsewhere}${path.delimiter}`, elsewhere]) {
@@ -87,14 +91,14 @@ describe("the program lookup never uses the child's working directory", () => {
   });
 
   it("spawnInherited does not run it either", async () => {
-    const cwd = await planted();
+    const cwd = PLANTED;
     for (const value of ["", "."]) {
       await expect(spawnInherited({ file: TOOL, args: ["-e", "process.exit(0)"], cwd, env: withPath(value), stdin: "ignore" }), `PATH=${JSON.stringify(value)}`).rejects.toMatchObject({ code: "ENOENT" });
     }
   });
 
   it("the same program on PATH, as an absolute entry, is found and runs — from another working directory (control)", async () => {
-    const dir = await planted();
+    const dir = PLANTED;
     const cwd = await fs.realpath(await tmpDir("craftar-proc-cwd-"));
     cleanups.push(() => fs.rm(cwd, { recursive: true, force: true }));
     expect(await capture(TOOL, ["-e", "console.log('ran')"], withPath(dir), cwd)).toBe("ran\n");
@@ -105,12 +109,12 @@ describe("the program lookup never uses the child's working directory", () => {
 
 describe("onPath — where a program is looked for", () => {
   it("finds it in an absolute PATH entry, skipping the empty and the relative ones, and returns its absolute path", async () => {
-    const dir = await planted();
+    const dir = PLANTED;
     expect(await onPath(TOOL, withPath(`${path.delimiter}.${path.delimiter}${dir}`))).toBe(path.join(dir, TOOL + EXE));
   });
 
   it("is null when it is on no absolute entry, when PATH is absent, for a relative path, and for a directory of that name", async () => {
-    const dir = await planted();
+    const dir = PLANTED;
     expect(await onPath(TOOL, withPath(""))).toBeNull();
     expect(await onPath(TOOL, withPath("."))).toBeNull();
     expect(await onPath(TOOL, {})).toBeNull();
@@ -126,7 +130,7 @@ describe("onPath — where a program is looked for", () => {
   });
 
   it.runIf(process.platform === "win32")("on Windows: PATH is read whatever its key's case, and a .cmd is not a program", async () => {
-    const dir = await planted();
+    const dir = PLANTED;
     expect(await onPath(TOOL, { Path: dir })).toBe(path.join(dir, `${TOOL}.exe`));
     expect(await onPath(TOOL, { PATH: `"${dir}"` })).toBe(path.join(dir, `${TOOL}.exe`));
     const cmds = await fs.realpath(await tmpDir("craftar-proc-cmd-"));
@@ -143,17 +147,11 @@ describe("onPath — where a program is looked for", () => {
   });
 
   it("a relative PATH entry is not looked in, even when it leads to the program from craftar's own working directory", async () => {
-    // Under node_modules/ so that the entry can be spelled relative to this process on every platform (a temp
-    // directory is on another drive on Windows CI).
-    const dir = await fs.mkdtemp(path.join(process.cwd(), "node_modules", ".craftar-proc-rel-"));
-    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
-    await fs.copyFile(process.execPath, path.join(dir, TOOL + EXE));
-    await fs.chmod(path.join(dir, TOOL + EXE), 0o755);
-    const relative = path.relative(process.cwd(), dir);
+    const relative = path.relative(process.cwd(), PLANTED);
     expect(path.isAbsolute(relative)).toBe(false);
     expect(await onPath(TOOL, withPath(relative))).toBeNull();
     expect(await onPath(TOOL, withPath(`.${path.sep}${relative}`))).toBeNull();
-    expect(await onPath(TOOL, withPath(dir))).toBe(path.join(dir, TOOL + EXE));
+    expect(await onPath(TOOL, withPath(PLANTED))).toBe(path.join(PLANTED, TOOL + EXE));
   });
 });
 
@@ -165,12 +163,11 @@ describe("pathEntries — which entries of PATH a program is looked for in", () 
   });
 
   it("win32: a drive or a UNC host, with or without wrapping quotes; never a rooted entry without a drive", () => {
-    expect(pathEntries('C:\\Windows;"C:\\Program Files\\dotnet";c:/tools;\\\\host\\share\\bin', true)).toEqual([
-      "C:\\Windows",
-      "C:\\Program Files\\dotnet",
-      "c:/tools",
-      "\\\\host\\share\\bin",
-    ]);
-    expect(pathEntries(';.;bin;.\\bin;\\tools;/tools;C:tools;\\\;\\\\\\tools;"";"."', true)).toEqual([]);
+    const kept = ["C:\\Windows", "C:\\Program Files\\dotnet", "c:/tools", "\\\\host\\share\\bin", "//host/share/bin"];
+    expect(pathEntries(["C:\\Windows", '"C:\\Program Files\\dotnet"', "c:/tools", "\\\\host\\share\\bin", "//host/share/bin"].join(";"), true)).toEqual(kept);
+    // empty, relative, rooted without a drive, drive-relative, a bare UNC prefix, quoted nothing, quoted relative
+    const dropped = ["", ".", "bin", ".\\bin", "\\tools", "/tools", "C:tools", "\\\\", "\\\\\\tools", "//", "///tools", '""', '"."'];
+    expect(pathEntries(dropped.join(";"), true)).toEqual([]);
+    for (const entry of dropped) expect(pathEntries(entry, true), JSON.stringify(entry)).toEqual([]);
   });
 });

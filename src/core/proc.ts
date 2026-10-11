@@ -28,8 +28,9 @@ const WIN = process.platform === "win32";
 
 /**
  * The entries of a PATH value a program is looked for in: the absolute ones, in order. On win32 an entry may be
- * wrapped in quotes, and must start with a drive (`X:\`, `X:/`) or be a UNC path (`\\host\…`) — a rooted entry
- * without a drive depends on the current directory's drive. Empty and relative entries are dropped everywhere.
+ * wrapped in quotes (quotes are removed only when they wrap the whole entry), and must start with a drive (`X:\`,
+ * `X:/`) or be a UNC path (`\\host\…`, `//host/…`) — a rooted entry without a drive depends on the current
+ * directory's drive. Empty and relative entries are dropped everywhere.
  */
 export function pathEntries(value: string, win: boolean = WIN): string[] {
   const raw = value.split(win ? ";" : ":");
@@ -38,7 +39,7 @@ export function pathEntries(value: string, win: boolean = WIN): string[] {
     if (win && e.startsWith('"') && e.endsWith('"')) e = e.slice(1, -1);
     if (e === "") continue;
     if (win) {
-      if (/^[A-Za-z]:[\\/]/.test(e) || /^\\\\[^\\/]/.test(e)) entries.push(e);
+      if (/^[A-Za-z]:[\\/]/.test(e) || /^[\\/]{2}[^\\/]/.test(e)) entries.push(e);
     } else {
       if (e.startsWith("/")) entries.push(e);
     }
