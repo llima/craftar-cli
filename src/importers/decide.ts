@@ -9,6 +9,7 @@ import { citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerpri
 import { canonicalValue, inferSections } from "../core/sections.js";
 import { errorText } from "../core/schema-fault.js";
 import { sectionKey } from "../core/resolve.js";
+import { rendersServers, serverCitations } from "../core/mcp-server.js";
 import type { DirReader } from "../core/fingerprint.js";
 import { OverridesParamsSchema, SectionsSchema, stripForgeOnlyKeys, type Ingredient, type Sections } from "../schema/index.js";
 
@@ -99,6 +100,13 @@ export async function decide(
   const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."));
   // The base's authEnv, to carry into the variant answer (spec 27 §5.3).
   const baseAuthEnv = base.meta.type === "mcp" ? base.meta.authEnv : undefined;
+  // Augment a variant decision with the base's authEnv for the importer to carry (spec 27 §5.3).
+  const withAuthEnv = (d: Decision): Decision => (d.kind === "variant" && baseAuthEnv ? { ...d, authEnv: baseAuthEnv } : d);
+
+  // Spec 34 §5.2: schema and the declared server citations (at the gate, else []).
+  const schema = ctx.forge?.manifest.schema ?? 1;
+  const serverKeys = rendersServers({ schema }) ? serverCitations(base.meta).filter((c) => c.declared).map((c) => c.key) : [];
+
   const key = sectionKey(base.meta);
   const PSk = valuesAt(ctx.PS, key);
   const WSk = valuesAt(ctx.WS, key);
@@ -117,23 +125,28 @@ export async function decide(
         if (r.params[k]?.default !== undefined) return { kind: "literal", warn: `${ref} cites {{${k}}}, which recipe ${name} defaults — compared literally` };
       }
     }
+    // G1 for a server (spec 34 §5.3): a declared citation a recipe defaults — variant, not reuse.
+    for (const k of serverKeys) {
+      if (Object.hasOwn(ctx.P, k) || Object.hasOwn(ctx.W, k)) continue;
+      for (const [name, r] of ctx.forge.recipes) {
+        if (r.params[k]?.default !== undefined) return withAuthEnv({ kind: "variant", why: `recipe ${name} defaults ${k}, which the server cites` });
+      }
+    }
   }
 
   const map = renderMap(base.meta, ctx.P, ctx.W);
-  if (renderedFingerprint(base, map, S) === fingerprint) {
-    pin(ctx, cited, map);
+  if (renderedFingerprint(base, map, S, schema) === fingerprint) {
+    pin(ctx, [...cited, ...serverKeys], map);
     const changed = [...cited].filter((k) => Object.hasOwn(map, k));
     const filled = names.filter((n) => Object.hasOwn(S, n));
     return { kind: "reuse", rendered: changed.length ? changed.sort() : undefined, renderedSections: filled.length ? filled : undefined };
   }
 
   // Param inference first (Ruling 16): the narrower claim. A base with no open section stops there, as in 0.6.2.
-  const param = await inferParams(ctx, base, S, map, cited, ref, meta, files, fingerprint, others, runBases);
+  const param = await inferParams(ctx, base, S, map, cited, ref, meta, files, fingerprint, others, runBases, schema, serverKeys);
   const open = names.filter((n) => !Object.hasOwn(WSk, n));
-  // Augment a variant decision with the base's authEnv for the importer to carry (spec 27 §5.3).
-  const withAuthEnv = (d: Decision): Decision => (d.kind === "variant" && baseAuthEnv ? { ...d, authEnv: baseAuthEnv } : d);
   if (param.kind === "reuse" || !open.length) return withAuthEnv(param);
-  return withAuthEnv(inferSectionValues(ctx, base, key, PSk, WSk, map, ref, meta, files, fingerprint));
+  return withAuthEnv(inferSectionValues(ctx, base, key, PSk, WSk, map, ref, meta, files, fingerprint, schema));
 }
 
 /** A key's section values in a layer, or none. */
@@ -164,6 +177,8 @@ async function inferParams(
   fingerprint: string,
   others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>,
   runBases: Set<string>,
+  schema: 1 | 2 | 3 | 4,
+  serverKeys: string[],
 ): Promise<Decision> {
   // Holes (§3): declared, not reserved, not set by the workspace layer, and not pinned — a key this run already relied
   // on renders at its current value, like any fixed key (§6.5, §14 Q13).
@@ -203,7 +218,7 @@ async function inferParams(
     .map(([key, value]) => ({ key, old: valueOf(ctx.P, key) ?? null, value }));
 
   // F10: the proof, through the same expansion and substitution ctx.text uses.
-  if (renderedFingerprint(base, { ...map, ...sigma }, S) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
+  if (renderedFingerprint(base, { ...map, ...sigma }, S, schema) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
 
   // F9: a profile change must not move anything else the profile renders — its files, or a section value
   // that applies to it under this profile or workspace (spec 11 §6.11).
@@ -218,6 +233,11 @@ async function inferParams(
         for (const v of Object.values(valuesAt(values, sectionKey(ing.meta)))) {
           if (placeholders(v).includes(key)) return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
         }
+        // F9 for servers (spec 34 §5.2): a declared citation of a server this key would change.
+        if (rendersServers({ schema })) {
+          const declaredCitations = serverCitations(ing.meta).filter((c) => c.declared).map((c) => c.key);
+          if (declaredCitations.includes(key)) return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
+        }
       }
     }
     for (const o of others) {
@@ -226,7 +246,7 @@ async function inferParams(
   }
 
   for (const d of delta) ctx.P[d.key] = d.value;
-  pin(ctx, cited, { ...map, ...sigma });
+  pin(ctx, [...cited, ...serverKeys], { ...map, ...sigma });
   return { kind: "reuse", inferred: sigma, delta };
 }
 
@@ -246,6 +266,7 @@ function inferSectionValues(
   meta: Ingredient,
   files: Record<string, string | Buffer>,
   fingerprint: string,
+  schema: 1 | 2 | 3 | 4,
 ): Decision {
   const shape = shapeDiffers(base, meta, files);
   if (shape) return { kind: "variant", why: shape };
@@ -259,7 +280,7 @@ function inferSectionValues(
   }
   const S = { ...PSk, ...WSk, ...sigma };
   // F14: the proof, through the same expansion and substitution ctx.text uses.
-  if (renderedFingerprint(base, map, S) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
+  if (renderedFingerprint(base, map, S, schema) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
 
   const assigned = sectionNames(base).filter((n) => Object.hasOwn(sigma, n));
   const sectionDelta: SectionChange[] = [];
