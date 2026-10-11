@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import YAML from "yaml";
 import { catalogueContext, listRecipes } from "../src/core/catalogue.js";
 import { loadForge } from "../src/core/forge.js";
 import { planRecipeEdit } from "../src/core/recipe-edit.js";
@@ -157,7 +158,13 @@ describe("Catalogue", () => {
 
   it("20. the walk's warning is left out by profile name, not by text", async () => {
     // A profile name with a colon tests that the filter is by exact profile name, not by text prefix.
-    const { forgeRoot } = await at(3, ado({ profiles: [profile("acme:x", ["base"], ["claude-code"], { integrations: { pm: "x" } })] }));
+    // Windows refuses a colon in a directory name, so create the profile under "acme-x" and then
+    // rewrite profile.yaml so its `name` is "acme:x" — loadForge keys by the name field, not the folder.
+    const { forgeRoot } = await at(3, ado({ profiles: [profile("acme-x", ["base"], ["claude-code"], { integrations: { pm: "x" } })] }));
+    const profilePath = path.join(forgeRoot, "profiles/acme-x/profile.yaml");
+    const doc = YAML.parseDocument(await fs.readFile(profilePath, "utf8"));
+    doc.set("name", "acme:x");
+    await fs.writeFile(profilePath, YAML.stringify(doc));
     const l = await forProfile(forgeRoot, "acme");
     expect(l.warnings).toEqual(["profile acme:x: integrations.pm is not a mapping — its recipes are read as written"]);
   });

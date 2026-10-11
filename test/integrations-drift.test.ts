@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { promises as fs } from "node:fs";
+import { promises as fs, realpathSync } from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runCli } from "./helpers/cli.js";
@@ -125,10 +125,11 @@ describe("promote renders with the effective profile's params", () => {
     expect(r.code).toBe(0);
     const j = JSON.parse(r.stdout);
 
-    // Pin the whole JSON (temp paths built from test variables)
+    // Pin the whole JSON (temp paths built from test variables).
+    // realpathSync.native: the CLI prints the native realpath; on Windows CI os.tmpdir() is an 8.3 short path.
     expect(j).toEqual({
-      workspace: s.wsRoot,
-      forge: s.forgeRoot,
+      workspace: realpathSync.native(s.wsRoot),
+      forge: realpathSync.native(s.forgeRoot),
       profile: "acme",
       dryRun: true,
       path: ".claude/rules/where.md",
@@ -348,8 +349,8 @@ describe("drift × the integrations block", () => {
     const j2 = JSON.parse(r2.stdout);
 
     expect(j2).toEqual({
-      workspace: s.wsRoot,
-      forge: s.forgeRoot,
+      workspace: realpathSync.native(s.wsRoot),
+      forge: realpathSync.native(s.forgeRoot),
       profile: "acme",
       dryRun: true,
       path: ".claude/rules/where.md",
@@ -741,8 +742,8 @@ describe("promote and a recipe the block selects, shared with another profile", 
     expect(r.stderr).toBe("");
     const j = JSON.parse(r.stdout);
     expect(j).toEqual({
-      workspace: s.wsRoot,
-      forge: s.forgeRoot,
+      workspace: realpathSync.native(s.wsRoot),
+      forge: realpathSync.native(s.forgeRoot),
       profile: "acme",
       dryRun: true,
       path: ".claude/rules/stories-azure-devops.md",
