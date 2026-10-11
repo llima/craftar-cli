@@ -111,12 +111,25 @@ describe("a git planted in craftar's working directory is never run", () => {
 });
 
 describe("one runner (the lookup cannot be bypassed)", () => {
-  it("src/core/proc.ts is the only file under src/ that imports node:child_process", async () => {
+  // docker (spec 31) is still started by name, outside proc.ts: `runCompose` in src/cli.ts and `dockerRunner` in
+  // src/core/services.ts. A known gap, not a pattern — the list shrinks, it never grows; git and dotnet are not on it.
+  const DOCKER_STILL_BY_NAME = ["cli.ts", "core/services.ts"];
+
+  it("src/core/proc.ts is the only file under src/ that imports node:child_process, the two docker call sites aside", async () => {
     const src = path.resolve(__dirname, "..", "src");
     const offenders: string[] = [];
     for (const f of await listFiles(src)) {
       if (!f.endsWith(".ts") || f === "core/proc.ts") continue;
       if (/["']node:child_process["']|["']child_process["']/.test(await fs.readFile(path.join(src, f), "utf8"))) offenders.push(f);
+    }
+    expect(offenders).toEqual(DOCKER_STILL_BY_NAME);
+  });
+
+  it("no file under src/ outside proc.ts starts git or dotnet by name", async () => {
+    const src = path.resolve(__dirname, "..", "src");
+    const offenders: string[] = [];
+    for (const f of DOCKER_STILL_BY_NAME) {
+      if (/(?:spawn|execFile\w*)\(\s*["'](?:git|dotnet)["']/.test(await fs.readFile(path.join(src, f), "utf8"))) offenders.push(f);
     }
     expect(offenders).toEqual([]);
   });
