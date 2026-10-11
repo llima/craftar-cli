@@ -1,8 +1,11 @@
 /**
- * External-process execution (design D3): capture (stdout of a finished process, execFile)
- * and spawnInherited (inherited output, spawn). A program is resolved by onPath before it is run. No shell.
+ * External-process execution (design D3): every external program craftar runs — git, dotnet — is run
+ * from here; `process.env` is read only as `execProgram`'s default. capture (stdout of a finished process,
+ * execFile), execProgram (stdout and stderr, resolved by onPath) and spawnInherited (inherited output, spawn).
+ * A program is resolved by onPath before it is run. No shell.
  */
 import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 import { promises as fs, constants } from "node:fs";
 import path from "node:path";
 
@@ -80,22 +83,27 @@ export async function onPath(file: string, env: NodeJS.ProcessEnv): Promise<stri
   return null;
 }
 
-/** Reject with an ENOENT error for a file not on PATH. */
+/** Reject with an ENOENT error for a file not on PATH, matching what Node gives for a program it cannot find. */
 function notOnPath(file: string): Error {
-  return Object.assign(new Error(`${file} is not on PATH`), { code: "ENOENT" });
+  return Object.assign(new Error(`spawn ${file} ENOENT`), { code: "ENOENT", errno: -2, syscall: `spawn ${file}`, path: file });
+}
+
+export interface ExecOptions { env?: NodeJS.ProcessEnv; cwd?: string; maxBuffer?: number; timeout?: number }
+/**
+ * stdout and stderr of a program that exited 0, the program resolved by `onPath` over `opts.env` (the process's
+ * environment when none is given) — never by the platform's lookup. Rejects as `execFile` does: with `code`,
+ * `stdout` and `stderr` on a non-zero exit, and with `code: "ENOENT"` when the program is on no absolute PATH entry.
+ */
+export async function execProgram(file: string, args: string[], opts: ExecOptions = {}): Promise<{ stdout: string; stderr: string }> {
+  const program = await onPath(file, opts.env ?? process.env);
+  if (program === null) throw notOnPath(file);
+  const { stdout, stderr } = await promisify(execFile)(program, args, { ...opts, encoding: "utf8" });
+  return { stdout, stderr };
 }
 
 /** stdout of a process that exited 0; rejects otherwise (ENOENT when it cannot start). No shell. */
-export const capture: Probe = async (file, args, env, cwd) => {
-  const program = await onPath(file, env);
-  if (program === null) throw notOnPath(file);
-  return new Promise((resolve, reject) => {
-    execFile(program, args, { env, cwd, timeout: PROBE_TIMEOUT_MS }, (error, stdout) => {
-      if (error) reject(error);
-      else resolve(stdout);
-    });
-  });
-};
+export const capture: Probe = async (file, args, env, cwd) =>
+  (await execProgram(file, args, { env, cwd, timeout: PROBE_TIMEOUT_MS })).stdout;
 
 /** Output inherited, stdin as asked; resolves with the exit code (null when killed by a signal); rejects when it cannot start. No shell. */
 export const spawnInherited: Runner = async (req) => {

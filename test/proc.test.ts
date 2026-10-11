@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { capture, onPath, pathEntries, spawnInherited } from "../src/core/proc.js";
+import { capture, execProgram, onPath, pathEntries, spawnInherited } from "../src/core/proc.js";
 import { tmpDir } from "./helpers/forge.js";
 
 // design D3 — the two ways craftar runs an external program besides git: no shell, an argument array.
@@ -169,5 +169,38 @@ describe("pathEntries — which entries of PATH a program is looked for in", () 
     const dropped = ["", ".", "bin", ".\\bin", "\\tools", "/tools", "C:tools", "\\\\", "\\\\\\tools", "//", "///tools", '""', '"."'];
     expect(pathEntries(dropped.join(";"), true)).toEqual([]);
     for (const entry of dropped) expect(pathEntries(entry, true), JSON.stringify(entry)).toEqual([]);
+  });
+});
+
+
+describe("execProgram — a finished program, resolved by onPath", () => {
+  it("returns stdout and stderr of a program found on an absolute PATH entry, run in the given directory", async () => {
+    const cwd = await fs.realpath(await tmpDir("craftar-proc-exec-"));
+    cleanups.push(() => fs.rm(cwd, { recursive: true, force: true }));
+    const script = "console.log(require('node:fs').realpathSync(process.cwd())); console.error('note')";
+    expect(await execProgram(TOOL, ["-e", script], { env: withPath(PLANTED), cwd })).toEqual({ stdout: `${cwd}\n`, stderr: "note\n" });
+  });
+
+  it("does not run a program planted in the working directory — PATH empty, '.', or with an empty entry", async () => {
+    const elsewhere = await fs.realpath(await tmpDir("craftar-proc-elsewhere-"));
+    cleanups.push(() => fs.rm(elsewhere, { recursive: true, force: true }));
+    for (const value of ["", ".", `${path.delimiter}${elsewhere}`, `${elsewhere}${path.delimiter}`]) {
+      await expect(execProgram(TOOL, ["-e", "console.log('ran')"], { env: withPath(value), cwd: PLANTED }), `PATH=${JSON.stringify(value)}`).rejects.toMatchObject({
+        code: "ENOENT",
+        message: `spawn ${TOOL} ENOENT`,
+      });
+    }
+  });
+
+  it("rejects as execFile does on a non-zero exit: the code, and what the program wrote", async () => {
+    await expect(execProgram(TOOL, ["-e", "console.log('out'); console.error('fatal: boom'); process.exit(3)"], { env: withPath(PLANTED) })).rejects.toMatchObject({
+      code: 3,
+      stdout: "out\n",
+      stderr: "fatal: boom\n",
+    });
+  });
+
+  it("reads PATH from the process when no env is given", async () => {
+    expect((await execProgram(process.execPath, ["-e", "console.log('ok')"])).stdout).toBe("ok\n");
   });
 });
