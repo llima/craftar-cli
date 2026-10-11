@@ -209,7 +209,9 @@ describe("craftar services — without Docker (spec 31 §4.2–§4.4)", () => {
     expect(Object.keys(j)).toEqual(["workspace", "project", "composeFile", "docker", "services", "pending", "warnings"]);
     expect(j.project).toMatch(/^craftar-ws-[0-9a-f]{8}$/);
     expect({ ...j, project: "<p>" }).toEqual({
-      workspace: realpathSync(s.wsRoot),
+      // The CLI resolves the workspace with fs.promises.realpath, which is the native call: on Windows
+      // it expands an 8.3 short name (the CI runner's temp dir), and the JS realpathSync does not.
+      workspace: realpathSync.native(s.wsRoot),
       project: "<p>",
       composeFile: ".craftar/compose.yaml",
       docker: { available: false, compose: null },
