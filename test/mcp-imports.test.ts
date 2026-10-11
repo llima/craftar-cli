@@ -47,8 +47,9 @@ export function scan(source: string): Scan {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) other.push("dynamic import");
       if (ts.isIdentifier(node.expression) && node.expression.text === "require") other.push("require");
     }
-    // The process and the console, however they are reached: by name, or as a property or a string key of anything
-    if (ts.isIdentifier(node) && ["process", "console", "globalThis", "getBuiltinModule"].includes(node.text)) {
+    // The process and the console by name, the globals they hang from, and the two ways to evaluate a string. A key
+    // computed at run time is not covered: this scan is one level deep, and the tree comparison is the proof.
+    if (ts.isIdentifier(node) && ["process", "console", "globalThis", "global", "eval", "Function", "getBuiltinModule"].includes(node.text)) {
       const parent = node.parent;
       const isKey = (ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent)) && parent.name === node;
       if (!isKey) other.push(node.text);
@@ -116,6 +117,9 @@ describe("the scan", () => {
     ["process, destructured", "const { stdout } = process;", "process"],
     ["process through globalThis", 'const p = globalThis["process"];', "globalThis"],
     ["console", 'console.error("x");', "console"],
+    ["process through global", 'const k = "pro" + "cess"; const p = (global as any)[k];', "global"],
+    ["process through Function", 'const p = Function("return process")();', "Function"],
+    ["process through eval", 'const p = (0, eval)("process");', "eval"],
     ["a string key", 'const p = (0, eval)("this")["process"];', '["process"]'],
   ])("reports %s", (_name, source, finding) => {
     expect(scan(source).other).toContain(finding);

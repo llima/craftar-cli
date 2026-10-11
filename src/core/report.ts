@@ -8,6 +8,7 @@ import { mcpTagged } from "./drift.js";
 import type { PlannedFile } from "../emitters/types.js";
 import { FULL_SHA } from "./remote.js";
 import { resolve, type ParamLayer } from "./resolve.js";
+import { errorText } from "./schema-fault.js";
 import { loadForgeFor, unsetDeclared, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
 
@@ -200,7 +201,7 @@ export async function targetsReport(
     return { ...listTargets(resolve(ws.forge, ws.config).targets), warnings: [] };
   } catch (e) {
     // Load or resolve failed — a warning, not an error
-    return notShown(e instanceof Error ? e.message : String(e));
+    return notShown(errorText(e));
   }
 }
 
