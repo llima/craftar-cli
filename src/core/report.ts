@@ -4,8 +4,10 @@ import { EXAMPLE_SETTINGS } from "../emitters/shared.js";
 import type { Lock } from "../schema/index.js";
 import { diffOps } from "./diff.js";
 import { mcpTagged } from "./drift.js";
-import { unsetDeclared, type FileStatus, type Plan, type UnsetParam, type Workspace } from "./sync.js";
-import { stripBom, toLf } from "./text.js";
+import type { PlannedFile } from "../emitters/types.js";
+import type { ParamLayer } from "./resolve.js";
+import { unsetDeclared, type FileStatus, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
+import { hashNormalized, stripBom, toLf } from "./text.js";
 
 /*
  * What the reading commands answer, as data (spec 35 §5.1): one builder per shape, called by the CLI, by
@@ -137,4 +139,40 @@ export async function diffReport(ws: Pick<Workspace, "root">, rows: FileStatus[]
     });
   }
   return out;
+}
+
+/** What `craftar explain` says about one generated file, as data (spec 35 §4.5). */
+export interface ExplainedFile {
+  path: string;
+  target: PlannedFile["target"];
+  ingredient: string;
+  /** Where an imported ingredient came from; null when it was not imported, or the file is no single ingredient's. */
+  origin: { workspace: string; path: string } | null;
+  /** The recipes that bring the ingredient; null for a file that is no single ingredient's (AGENTS.md, the MCP files). */
+  via: string[] | null;
+  sections: Array<{ name: string; layer: SectionLayer }>;
+  params: Array<{ key: string; layer: ParamLayer }>;
+  profile: string;
+  recipes: string[];
+  hash: string;
+}
+
+/** The planned file at `file`, compared as given (the caller normalizes); null when the Forge does not produce it. */
+export function explainFile(ws: Workspace, p: Plan, file: string): ExplainedFile | null {
+  const f = p.files.find((x) => x.path === file);
+  if (!f) return null;
+  // AGENTS.md (rule/*) and the MCP files (mcp/*) are not one ingredient: nothing resolved has their ref.
+  const ing = p.resolution.ingredients.find((i) => i.ref === f.ingredient);
+  return {
+    path: f.path,
+    target: f.target,
+    ingredient: f.ingredient,
+    origin: ing?.meta.origin ? { workspace: ing.meta.origin.workspace, path: ing.meta.origin.path } : null,
+    via: ing ? [...ing.via] : null,
+    sections: (p.sections.get(f.ingredient) ?? []).map((x) => ({ name: x.name, layer: x.layer })),
+    params: (p.params.get(f.ingredient) ?? []).map((x) => ({ key: x.key, layer: x.layer })),
+    profile: ws.config.profile,
+    recipes: [...p.resolution.recipes],
+    hash: hashNormalized(f.content),
+  };
 }

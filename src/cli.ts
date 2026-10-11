@@ -23,9 +23,8 @@ import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
-import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainSkip, readText, statusPath, statusReport } from "./core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, notProduced, readText, statusPath, statusReport } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
-import { hashNormalized } from "./core/text.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { fingerprintDir } from "./core/fingerprint.js";
@@ -831,27 +830,24 @@ program
     const ws = await loadWorkspace(o.workspace, load(o, "read"));
     warnStderr(ws.warnings);
     const p = await plan(ws);
-    const f = p.files.find((x) => x.path === file.replace(/\\/g, "/"));
-    if (!f) fail(`${file} is not produced by the Forge for profile ${ws.config.profile}`);
-    const ing = p.resolution.ingredients.find((i) => i.ref === f.ingredient);
+    const f = explainFile(ws, p, file.replace(/\\/g, "/"));
+    if (!f) fail(notProduced(file, ws.config.profile));
     console.log(pc.bold(f.path));
     console.log(`  target      ${f.target}`);
-    console.log(`  ingredient  ${f.ingredient}${ing?.meta.origin ? pc.dim(`  (imported from ${ing.meta.origin.workspace}:${ing.meta.origin.path})`) : ""}`);
-    if (ing) console.log(`  via recipes ${ing.via.join(" → ")}`);
+    console.log(`  ingredient  ${f.ingredient}${f.origin ? pc.dim(`  (imported from ${f.origin.workspace}:${f.origin.path})`) : ""}`);
+    if (f.via) console.log(`  via recipes ${f.via.join(" → ")}`);
     // Spec 11 §4.2 (Ruling 15): which layer filled each section. AGENTS.md (rule/*) is not one ingredient.
-    const sections = p.sections.get(f.ingredient);
-    if (sections?.length) {
+    if (f.sections.length) {
       const layer = (l: SectionLayer) => (l === "profile" ? `profile ${p.resolution.profile.name}` : l);
-      console.log(`  sections    ${sections.map((x) => `${x.name} (${layer(x.layer)})`).join(", ")}`);
+      console.log(`  sections    ${f.sections.map((x) => `${x.name} (${layer(x.layer)})`).join(", ")}`);
     }
     // Spec 29 §4.1: which layer filled each parameter the file's ingredient cites — or `unset`.
-    const params = p.params.get(f.ingredient);
-    if (params?.length) {
+    if (f.params.length) {
       const layer = (l: ParamLayer) => (typeof l === "string" ? l : "recipe" in l ? `recipe ${l.recipe}` : `profile ${l.profile}`);
-      console.log(`  params      ${params.map((x) => `${x.key} (${layer(x.layer)})`).join(", ")}`);
+      console.log(`  params      ${f.params.map((x) => `${x.key} (${layer(x.layer)})`).join(", ")}`);
     }
-    console.log(`  profile     ${ws.config.profile}  (recipes: ${p.resolution.recipes.join(", ")})`);
-    console.log(`  hash        ${hashNormalized(f.content)}`);
+    console.log(`  profile     ${f.profile}  (recipes: ${f.recipes.join(", ")})`);
+    console.log(`  hash        ${f.hash}`);
   });
 
 /* ---------------------------------------------------------------- forge ls */

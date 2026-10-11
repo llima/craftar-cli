@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { MCP_FILES, eightStates, mcpWorkspace, moveTracker, syncOnce, type Scenario } from "./helpers/states.js";
+import { MCP_FILES, eightStates, explained, mcpWorkspace, moveTracker, syncOnce, type Scenario } from "./helpers/states.js";
 import { loadWorkspace, plan, readLock, status, type FileStatus } from "../src/core/sync.js";
-import { EXAMPLE_CONTENT_HIDDEN, MCP_CONTENT_HIDDEN, diffReport, explainSkip, notProduced, statusPath, statusReport } from "../src/core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, MCP_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, notProduced, statusPath, statusReport } from "../src/core/report.js";
 
 // Spec 35 §5.1 (and spec 36 §17): the builders the commands, the MCP server and the dashboard share — tested directly.
 
@@ -127,5 +127,19 @@ describe("diffReport", () => {
     const got = await diffReport(ws, rows, { withholdMcp });
     expect(got.map((r) => [r.state, r.note, r.disk, r.forge])).toEqual([0, 1, 2].map(() => ["orphan-drift", explainSkip({ path: "", state: "orphan-drift" }), null, null]));
     expect(JSON.stringify(got)).not.toContain("SENTINEL-DISK");
+  });
+});
+
+describe("explainFile", () => {
+  it("the object of spec 35 §4.5 without warnings; null for a path the plan does not hold; the path is compared as given", async () => {
+    const { ws, p } = await loaded(kept(await explained()));
+    const api = explainFile(ws, p, `${R}/api.md`)!;
+    expect(Object.keys(api)).toEqual(["path", "target", "ingredient", "origin", "via", "sections", "params", "profile", "recipes", "hash"]);
+    expect(api.sections).toEqual([{ name: "review", layer: "profile" }]);
+    expect(api.params).toEqual([{ key: "api.port", layer: "default" }, { key: "region", layer: "workspace" }, { key: "team", layer: { profile: "acme" } }]);
+    expect(explainFile(ws, p, `${R}/legacy.md`)!.origin).toEqual({ workspace: "acme-portal", path: ".claude/rules/legacy.md" });
+    expect(explainFile(ws, p, "AGENTS.md")).toMatchObject({ ingredient: "rule/*", origin: null, via: null, sections: [], params: [] });
+    expect(explainFile(ws, p, `${R}/nope.md`)).toBeNull();
+    expect(explainFile(ws, p, `./${R}/api.md`)).toBeNull();
   });
 });
