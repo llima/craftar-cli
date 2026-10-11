@@ -12,9 +12,11 @@ import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
+import { launchRefusal, pinOf } from "./core/mcp-protocol.js";
+import { serve } from "./mcp.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, readWorkspaceConfig, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, readWorkspaceConfig, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -1044,6 +1046,39 @@ templates
     for (const l of report.err) errorLine(l);
     for (const l of report.out) console.log(l);
     if (report.exitCode) process.exitCode = 1;
+  });
+
+/* ---------------------------------------------------------------- mcp */
+program
+  .command("mcp")
+  .description(
+    "Serve this workspace to an AI coder over the Model Context Protocol, on stdin and stdout: seven reading tools — status, diff, explain, recipes, ingredients, targets, doctor — with the data those commands print. Started by the AI coder, not typed. Reads only; reads without the network unless --fetch",
+  )
+  .option("--workspace <dir>", "the workspace to serve", ".")
+  .option("--fetch", "let a tool call fetch a remote Forge instead of reading the cached copy", false)
+  .action(async (o: { workspace: string; fetch: boolean }) => {
+    // The bound workspace, resolved once: no tool takes a directory (spec 35 §4.1).
+    const root = path.resolve(o.workspace);
+    const refusal = launchRefusal(process.stdin.isTTY === true, await exists(path.join(root, WORKSPACE_FILE)), root);
+    if (refusal !== null) fail(refusal);
+    // The configuration must read at launch — its forge, ref and profile are the pin. The Forge need not load: each call says so.
+    let merged: MergedConfig;
+    try {
+      merged = await readWorkspaceConfig(root);
+    } catch (e) {
+      fail(errorText(e));
+    }
+    // From here stdout carries protocol lines only, and stderr nothing (spec 35 §4.1, §7). Stdin ending ends the process, exit 0.
+    await serve(process.stdin, process.stdout, {
+      root,
+      fetch: o.fetch,
+      home: craftarHome(),
+      version: program.version() ?? "unknown",
+      registryOff: registryOff(),
+      env: process.env,
+      pin: pinOf(merged),
+    });
+  });
   });
 
 /* ---------------------------------------------------------------- recipes */
