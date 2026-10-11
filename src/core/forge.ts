@@ -1,7 +1,5 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import {
   ForgeManifestSchema,
   IngredientSchema,
@@ -15,8 +13,7 @@ import {
 } from "../schema/index.js";
 import { parseYamlText } from "./yaml-read.js";
 import { SchemaError, schemaIssues } from "./schema-fault.js";
-
-const execFileP = promisify(execFile);
+import { execProgram } from "./proc.js";
 
 export interface LoadedIngredient {
   ref: IngredientRef;
@@ -113,7 +110,7 @@ export async function loadForge(root: string): Promise<Forge> {
 
 async function gitHead(dir: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileP("git", ["-C", dir, "rev-parse", "HEAD"]);
+    const { stdout } = await execProgram("git", ["-C", dir, "rev-parse", "HEAD"]);
     return stdout.trim() || null;
   } catch {
     return null;
@@ -128,7 +125,7 @@ async function gitHead(dir: string): Promise<string | null> {
  */
 export async function gitIsRepo(dir: string): Promise<boolean> {
   try {
-    const { stdout } = await execFileP("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"]);
+    const { stdout } = await execProgram("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"]);
     return stdout.trim() === "true";
   } catch {
     return false;
@@ -141,7 +138,7 @@ export async function gitIsRepo(dir: string): Promise<boolean> {
  */
 export async function gitHasCommit(dir: string): Promise<boolean> {
   try {
-    const { stdout } = await execFileP("git", ["-C", dir, "rev-parse", "HEAD"]);
+    const { stdout } = await execProgram("git", ["-C", dir, "rev-parse", "HEAD"]);
     return stdout.trim().length > 0;
   } catch {
     return false;
@@ -154,7 +151,7 @@ export async function gitHasCommit(dir: string): Promise<boolean> {
  */
 export async function gitIgnored(dir: string, rel: string): Promise<boolean> {
   try {
-    await execFileP("git", ["-C", dir, "check-ignore", "-q", "--", rel]);
+    await execProgram("git", ["-C", dir, "check-ignore", "-q", "--", rel]);
     return true; // exit 0 means ignored
   } catch (e) {
     // exit 1 means not ignored; any other error fails closed
@@ -172,7 +169,7 @@ export async function gitIgnored(dir: string, rel: string): Promise<boolean> {
  */
 export async function gitDirty(dir: string): Promise<boolean> {
   try {
-    const { stdout } = await execFileP("git", ["-C", dir, "status", "--porcelain"]);
+    const { stdout } = await execProgram("git", ["-C", dir, "status", "--porcelain"]);
     return stdout.trim().length > 0;
   } catch {
     return true;
@@ -197,7 +194,7 @@ export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPa
   if (paths.length === 0) return [];
   const rel = paths.map((p) => path.relative(root, p).split(path.sep).join("/") || ".");
   try {
-    const { stdout } = await execFileP(
+    const { stdout } = await execProgram(
       "git",
       ["-C", root, "status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--", ...rel],
       { maxBuffer: 64 * 1024 * 1024 },
@@ -205,7 +202,7 @@ export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPa
     // `status --porcelain` names paths from the repository root, which is not the Forge root when
     // the Forge sits inside a larger repo; strip the Forge's prefix so every path unify prints —
     // here and in the late-failure message — is Forge-relative. `ls-files` below already is.
-    const { stdout: prefixOut } = await execFileP("git", ["-C", root, "rev-parse", "--show-prefix"]);
+    const { stdout: prefixOut } = await execProgram("git", ["-C", root, "rev-parse", "--show-prefix"]);
     const prefix = prefixOut.trim();
     const forgeRel = (p: string) => (prefix && p.startsWith(prefix) ? p.slice(prefix.length) : p) || ".";
     const out: UnheldPath[] = [];
@@ -222,7 +219,7 @@ export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPa
     // assume-unchanged reports clean however much its file was edited — and that edit exists
     // nowhere git can restore it from. `ls-files -v` shows the flag: `S` for skip-worktree, a
     // lowercase tag for assume-unchanged.
-    const { stdout: listed } = await execFileP("git", ["-C", root, "ls-files", "-v", "-z", "--", ...rel], {
+    const { stdout: listed } = await execProgram("git", ["-C", root, "ls-files", "-v", "-z", "--", ...rel], {
       maxBuffer: 64 * 1024 * 1024,
     });
     for (const e of listed.split("\0")) {
