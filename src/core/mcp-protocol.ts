@@ -1,6 +1,11 @@
 import { z } from "zod";
+import { catalogueContext, checkType, listIngredients, listRecipes, withLoadWarnings } from "./catalogue.js";
+import { renderDiff } from "./diff.js";
+import { runDoctor, workspaceReport } from "./doctor.js";
+import { unmanaged } from "./drift.js";
+import { cachedCopyLine, diffReport, explainFile, notProduced, statusPath, statusReport, targetsReport } from "./report.js";
 import { errorText, schemaFault } from "./schema-fault.js";
-import type { LoadOptions, MergedConfig } from "./sync.js";
+import { loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig } from "./sync.js";
 
 /*
  * `craftar mcp` (spec 35): the Model Context Protocol, revision 2025-06-18, as a function from one message to
@@ -201,7 +206,67 @@ export async function handle(message: unknown, ctx: McpContext, state: McpState)
 
 type ToolArguments = { path?: string; recipe?: string; type?: string };
 
-/** The tools themselves: step 35e. */
-async function call(_name: ToolName, _args: ToolArguments, _ctx: McpContext): Promise<object> {
-  throw new Error("not implemented");
+/**
+ * One tool call (spec 35 §4.3–§4.5). The configuration is read ONCE, the pin is checked on that very object, and
+ * the Forge is loaded from it — never through `loadWorkspace`, which would read the files again and could load
+ * what the check did not see. Nothing but the pin is kept between calls.
+ */
+async function call(name: ToolName, args: ToolArguments, ctx: McpContext): Promise<object> {
+  const seam = { home: ctx.home, git: ctx.git };
+  let merged: MergedConfig;
+  try {
+    merged = await (ctx.readConfig ?? readWorkspaceConfig)(ctx.root);
+  } catch (e) {
+    // `targets` answers as its command does when a workspace does not load: unmarked, with the reason as a warning
+    if (name === "targets") return targetsReport(ctx.root, seam, { reason: errorText(e) });
+    throw e;
+  }
+  if (name === "targets") return targetsReport(ctx.root, seam, { merged });
+  if (name === "doctor")
+    return workspaceReport(
+      await runDoctor({ version: ctx.version, home: ctx.home, workspace: ctx.root, fetch: ctx.fetch, strict: false, registryOff: ctx.registryOff, env: ctx.env, merged, git: ctx.git }),
+    );
+
+  const ws = await loadForgeFor(ctx.root, merged, { ...seam, mode: ctx.fetch ? "read" : "no-fetch" });
+  const cached = cachedCopyLine(ws, ctx.fetch);
+  const loadWarnings = cached === null ? ws.warnings : [cached, ...ws.warnings];
+
+  if (name === "recipes" || name === "ingredients") {
+    if (args.type !== undefined) checkType(args.type);
+    const context = catalogueContext(ws.forge, { kind: "workspace", config: ws.config });
+    const listing = name === "recipes" ? listRecipes(ws.forge, context) : listIngredients(ws.forge, context, { recipe: args.recipe, type: args.type });
+    return withLoadWarnings(listing, loadWarnings);
+  }
+
+  const p = await plan(ws);
+  if (name === "explain") {
+    const given = args.path ?? "";
+    const file = explainFile(ws, p, statusPath(given));
+    if (file === null) throw new Error(notProduced(given, ws.config.profile));
+    return { ...file, warnings: loadWarnings };
+  }
+
+  const lock = await readLock(ws.root);
+  const statuses = await status(ws, p, lock);
+  const report = statusReport(ws, p, lock, statuses);
+  // The plan's warnings already open with the load's; only the cached-copy line is added
+  if (name === "status") return cached === null ? report : { ...report, warnings: [cached, ...report.warnings] };
+
+  // diff: the argument selects a row among the files status() returned — it is never joined into a path
+  let rows = statuses;
+  if (args.path !== undefined) {
+    const only = statusPath(args.path);
+    rows = statuses.filter((s) => s.path === only);
+    if (rows.length === 0) throw new Error(unmanaged(args.path));
+  }
+  const files = (await diffReport(ws, rows, { withholdMcp: true })).map((row) => ({
+    path: row.path,
+    state: row.state,
+    added: row.added,
+    removed: row.removed,
+    // A body is returned for the one named file; the list form carries counts only. The two texts stay here.
+    diff: args.path !== undefined && row.note === null ? renderDiff(row.disk ?? "", row.forge ?? "") : null,
+    note: row.note,
+  }));
+  return { files, warnings: loadWarnings, unsetParams: report.unsetParams };
 }
