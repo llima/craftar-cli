@@ -765,3 +765,76 @@ describe("promote and a recipe the block selects, shared with another profile", 
     });
   });
 });
+
+
+// Spec 33l: drift promote and drift show give the same reason for a service file the block provides.
+describe("service file provided by integrations block", () => {
+  const FRAGMENT = ".craftar/services/echo/compose.yaml";
+  const echo = {
+    meta: { type: "service", name: "echo" },
+    files: { "compose.yaml": "services:\n  echo:\n    image: example/echo:1\n" },
+  };
+
+  it("1. drift show --json: a service file from a block-selected recipe has target services, promotable false, reason 'service file'", async () => {
+    // schema 3 Forge, recipe pm-jira with service/echo, profile acme with integrations.pm.kind: jira
+    const spec: ForgeSpec = {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        echo,
+      ],
+      recipes: [
+        recipe("base", ["rule/workflow"]),
+        recipe("pm-jira", ["service/echo"], { slot: "pm" }),
+      ],
+      profiles: [profile("acme", ["base"], ["claude-code"], { integrations: { pm: { kind: "jira" } } })],
+    };
+    const s = await forgeAt(3, spec);
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+
+    await sync(s.wsRoot);
+    await fs.appendFile(path.join(s.wsRoot, FRAGMENT), "# hand edit\n");
+
+    const r = runCli(["drift", "show", "--json", "--workspace", s.wsRoot], { env });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.files.length).toBe(1);
+    const row = parsed.files[0];
+    expect(row.path).toBe(FRAGMENT);
+    expect(row.target).toBe("services");
+    expect(row.promotable).toBe(false);
+    expect(row.reason).toBe("service file");
+  });
+
+  it("2. drift promote on that path exits 1 with the D5_SERVICE message, not D18", async () => {
+    const spec: ForgeSpec = {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        echo,
+      ],
+      recipes: [
+        recipe("base", ["rule/workflow"]),
+        recipe("pm-jira", ["service/echo"], { slot: "pm" }),
+      ],
+      profiles: [profile("acme", ["base"], ["claude-code"], { integrations: { pm: { kind: "jira" } } })],
+    };
+    const s = await forgeAt(3, spec);
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+
+    gitInit(s.forgeRoot);
+    await sync(s.wsRoot);
+    await fs.appendFile(path.join(s.wsRoot, FRAGMENT), "# hand edit\n");
+
+    const r = runCli(["drift", "promote", FRAGMENT, "--workspace", s.wsRoot], { env });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(
+      `error: ${FRAGMENT} is a service file — promote reads only what the claude-code target wrote; change the service ingredient in the Forge\n`,
+    );
+    expect(porcelain(s.forgeRoot)).toBe("");
+  });
+});

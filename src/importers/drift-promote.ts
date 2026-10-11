@@ -583,18 +583,19 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const row = rows[0];
   if (!row.promotable) {
     // Build the right D5/D6/D18 message from the static reason.
-    // Order of reasons in driftList: orphan → provided → kiro → AGENTS.md → .mcp.json.
+    // Order of reasons in driftList: orphan → service file → provided → kiro → AGENTS.md → .mcp.json.
     // "no longer produced" cannot reach here: the state is `drift`, not `orphan-drift`.
-    // Decide D18 by the data (provided map lookup), not by the message text.
-    const prov = fileStatus.ingredient ? provided.get(fileStatus.ingredient) : undefined;
-    if (prov && !row.promotable) {
-      // D18: provided by the integrations block
-      throw new Error(D18(normalized, prov.recipe, profile, prov.slot, fileStatus.ingredient!));
-    }
     const reason = row.reason;
     if (reason === "service file") {
       throw new Error(D5_SERVICE(normalized));
-    } else if (reason === "kiro file") {
+    }
+    // Decide D18 by the data (provided map lookup), not by the message text.
+    const prov = fileStatus.ingredient ? provided.get(fileStatus.ingredient) : undefined;
+    if (prov) {
+      // D18: provided by the integrations block
+      throw new Error(D18(normalized, prov.recipe, profile, prov.slot, fileStatus.ingredient!));
+    }
+    if (reason === "kiro file") {
       // D5 kiro: check if the plan has a claude-code path for this ingredient
       const ingredientRef = fileStatus.ingredient;
       const claudePath = ingredientRef ? p0.files.find((f) => f.ingredient === ingredientRef && f.target === "claude-code")?.path : null;
