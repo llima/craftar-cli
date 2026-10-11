@@ -413,6 +413,75 @@ export const SectionsSchema = z.record(SectionKey, z.record(z.string().regex(SEC
 export type Sections = z.infer<typeof SectionsSchema>;
 
 /* ------------------------------------------------------------------ */
+/* Templates (spec 32)                                                  */
+/* ------------------------------------------------------------------ */
+
+/** Rule texts of spec 32 §5.2 — each refusal names its position and one of these, never a value from the block. */
+export const TEMPLATE_RULES = {
+  list: "must be a list of entries, each with a kind",
+  entry: "an entry is a mapping with a kind",
+  kind: 'a kind is a lowercase name: a-z, 0-9 and "-", starting with a letter',
+  packages: "a dotnet-new entry lists at least one package",
+  package: 'a package is a NuGet ID, optionally <id>::<version>: no path, no space, no leading "-" or "."',
+  source: "a source is an https:// URL",
+  unknownKey: "a dotnet-new entry has no such key (it has kind, packages and source)",
+} as const;
+
+export const TEMPLATE_KIND = /^[a-z][a-z0-9-]*$/;
+/** `<id>` or `<id>::<version>` (spec 32 §5.2): no separator, no space, no leading `-` or `.`. */
+export const TEMPLATE_PACKAGE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(::[0-9A-Za-z][0-9A-Za-z.+-]*)?$/;
+/**
+ * A source is an `https://` URL with a non-empty host of printable ASCII without `/`,
+ * then an optional path of printable ASCII. An empty authority hides a credential from
+ * `credentialFault`; no control character reaches a terminal.
+ */
+export const TEMPLATE_SOURCE = /^https:\/\/[\x21-\x2e\x30-\x7e]+(\/[\x21-\x7e]*)?$/;
+/** A key we can echo: an identifier-like name, nothing else (URLs, newlines) reaches an output. */
+export const TEMPLATE_KEY_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+
+export const DotnetNewTemplateSchema = z
+  .object({
+    kind: z.literal("dotnet-new"),
+    packages: z
+      .array(
+        z.string({ invalid_type_error: TEMPLATE_RULES.package, required_error: TEMPLATE_RULES.package }).regex(TEMPLATE_PACKAGE, TEMPLATE_RULES.package),
+        { invalid_type_error: TEMPLATE_RULES.packages, required_error: TEMPLATE_RULES.packages }
+      )
+      .min(1, TEMPLATE_RULES.packages),
+    source: z.string({ invalid_type_error: TEMPLATE_RULES.source }).regex(TEMPLATE_SOURCE, TEMPLATE_RULES.source).optional(),
+  })
+  .strict();
+export type DotnetNewTemplate = z.infer<typeof DotnetNewTemplateSchema>;
+
+/** An entry with any kind: validated as a record with a kind, then `dotnet-new` is re-checked with DotnetNewTemplateSchema. */
+export const TemplatesSchema = z.array(
+  noProtoKey(z.record(z.unknown(), { invalid_type_error: TEMPLATE_RULES.entry })).superRefine((entry, ctx) => {
+    const kind = (entry as Record<string, unknown>).kind;
+    if (typeof kind !== "string" || !TEMPLATE_KIND.test(kind)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["kind"], message: TEMPLATE_RULES.kind });
+      return;
+    }
+    if (kind === "dotnet-new") {
+      const r = DotnetNewTemplateSchema.safeParse(entry);
+      if (!r.success) {
+        for (const issue of r.error.issues) {
+          if (issue.code === "unrecognized_keys") {
+            // An unknown key is named only when it is a name; otherwise the entry itself is the position.
+            for (const key of issue.keys) {
+              if (TEMPLATE_KEY_NAME.test(key)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: TEMPLATE_RULES.unknownKey });
+              else ctx.addIssue({ code: z.ZodIssueCode.custom, path: [], message: TEMPLATE_RULES.unknownKey });
+            }
+          } else {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, path: issue.path, message: issue.message });
+          }
+        }
+      }
+    }
+  }),
+  { invalid_type_error: TEMPLATE_RULES.list, required_error: TEMPLATE_RULES.list }
+);
+
+/* ------------------------------------------------------------------ */
 /* Recipes                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -461,6 +530,8 @@ export const ProfileSchema = z.object({
   repos: z.array(noProtoKey(z.record(z.unknown()))).default([]),
   /** Section values for this profile, keyed `<type>/<outName>` then section name (spec 11 §5.1). */
   sections: SectionsSchema,
+  /** Project templates (spec 32 §5.1): kept as written, NOT validated at load — `declaredTemplates` is its one reader. */
+  templates: z.unknown().optional(),
 });
 export type Profile = z.infer<typeof ProfileSchema>;
 

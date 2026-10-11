@@ -53,6 +53,8 @@ import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { spawn } from "node:child_process";
 import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
+import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion, feedMessage, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared, type InstallResult } from "./core/templates.js";
+import { capture, spawnInherited } from "./core/proc.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
@@ -64,7 +66,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.25.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.26.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -186,7 +188,7 @@ program
  * `fail()` would print it, without exiting. Says whether there was one.
  */
 function refusalBlock(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): boolean {
-  if (unset.length) console.error(pc.red("error: ") + unsetRefusal(unset, opts));
+  if (unset.length) errorLine(unsetRefusal(unset, opts));
   return unset.length > 0;
 }
 
@@ -910,7 +912,7 @@ workspaces
 program
   .command("doctor")
   .description(
-    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, lock, status, registration): one line per finding — ok, warn or error — each with its fix. Reports only; reads without the network unless --fetch",
+    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, the profile's templates block and dotnet when it has one, lock, status, registration): one line per finding — ok, warn or error — each with its fix. Reports only; reads without the network unless --fetch",
   )
   // No commander default: an explicit --workspace without craftar.yaml exits 1, the current directory without one runs the machine checks (spec 24 §4.1).
   .option("--workspace <dir>", "the workspace to check (default: the current directory, when it holds craftar.yaml)")
@@ -936,6 +938,113 @@ program
     else printDoctor(report);
     // exitCode, not process.exit: a piped --json is never cut (spec 24 §5.1).
     if (report.summary.error > 0 || (o.strict && report.summary.warn > 0)) process.exitCode = 1;
+  });
+
+/* ---------------------------------------------------------------- templates */
+const templates = program.command("templates").description("Project templates the profile declares (dotnet new): list them, or install them into this user's dotnet template store");
+
+/** The profile's declared templates (spec 32 §5.2); a refused block is the command's error. */
+async function declaredFor(ws: Workspace): Promise<{ profile: string; declared: Declared }> {
+  const profile = ws.forge.profiles.get(ws.config.profile);
+  if (!profile) fail(`profile "${ws.config.profile}" not found in Forge`);
+  try {
+    return { profile: profile.name, declared: declaredTemplates(profile, await profileLabel(ws.forge.root, profile.name)) };
+  } catch (e) {
+    fail(errorText(e));
+  }
+}
+
+templates
+  .command("list")
+  .description(
+    "What the profile's templates block declares: one line per package — kind, package, version or latest, source or default feeds — and one per entry this craftar cannot install. Runs no program and does not know what is installed",
+  )
+  .option("--json", "machine-readable output", false)
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
+  .action(async (o) => {
+    const ws = await loadWorkspace(o.workspace, load(o, "read"));
+    const { profile, declared } = await declaredFor(ws);
+    const rows = templateRows(declared.entries);
+    const warnings = [...ws.warnings, ...declared.warnings];
+
+    if (o.json) {
+      console.log(JSON.stringify({ profile, templates: rows, warnings }, null, 2));
+      return;
+    }
+
+    warnStderr(warnings);
+
+    if (!declared.declared || declared.entries.length === 0) {
+      console.log(`no templates declared for profile ${profile}`);
+      return;
+    }
+
+    // Text mode: header and one line per row
+    const installableRows = rows.filter((r) => r.installable);
+    const kindWidth = Math.max(...rows.map((r) => r.kind.length));
+    const packageWidth = installableRows.length ? Math.max(...installableRows.map((r) => (r.package ?? "").length)) : 0;
+    const versionWidth = installableRows.length ? Math.max(...installableRows.map((r) => (r.version ?? "latest").length)) : 0;
+
+    console.log(pc.bold(`Templates of profile ${profile}`));
+    for (const row of rows) {
+      if (row.installable) {
+        const pkg = (row.package ?? "").padEnd(packageWidth);
+        const ver = (row.version ?? "latest").padEnd(versionWidth);
+        const src = row.source ?? "default feeds";
+        console.log(`  ${row.kind.padEnd(kindWidth)}  ${pkg}  ${ver}  ${src}`);
+      } else {
+        console.log(`  ${row.kind.padEnd(kindWidth)}  not installed by this craftar`);
+      }
+    }
+  });
+
+templates
+  .command("install")
+  .description(
+    "Run dotnet new install once per dotnet-new entry, in the profile's order, at the workspace root; the packages land in this user's dotnet template store, shared by every workspace. Nothing else runs it. Exits 1 when an entry failed or was skipped (--dry-run exits 0 over an accepted block)",
+  )
+  .option("--dry-run", "print each dotnet new install line; run nothing (needs no dotnet)", false)
+  .option("--force", "pass --force to dotnet new install", false)
+  .option("--interactive", "pass --interactive to dotnet new install and give it the terminal's input", false)
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
+  .action(async (o) => {
+    const ws = await loadWorkspace(o.workspace, load(o, "read"));
+    const { profile, declared } = await declaredFor(ws);
+    const warnings = [...ws.warnings, ...declared.warnings];
+    warnStderr(warnings);
+
+    if (!declared.declared || declared.entries.length === 0) {
+      console.log(`no templates declared for profile ${profile}`);
+      return;
+    }
+
+    const hasInstallable = declared.entries.some((e) => e.installable);
+    if (hasInstallable && !o.dryRun) {
+      const version = await dotnetVersion(capture, process.env, ws.root);
+      if (version === null) {
+        fail(`${DOTNET_MISSING} — ${DOTNET_MISSING_FIX}, then run craftar templates install again (--dry-run shows the lines without it)`);
+      }
+    }
+
+    const unpinned = await unpinnedSources(declared.entries, ws.root);
+    if (unpinned.length > 0) {
+      warnStderr([`templates: ${feedMessage(unpinned)}`]);
+    }
+
+    const announce = (entry: number, line: string) => console.log(`templates[${entry}]: ${line}`);
+    let result: InstallResult;
+    try {
+      result = await installTemplates(declared.entries, ws.root, { dryRun: o.dryRun, force: o.force, interactive: o.interactive, env: process.env, announce }, spawnInherited);
+    } catch (e) {
+      fail(errorText(e));
+    }
+
+    const report = installReport(result, o.dryRun);
+    for (const l of report.err) errorLine(l);
+    for (const l of report.out) console.log(l);
+    if (report.exitCode) process.exitCode = 1;
   });
 
 /* ---------------------------------------------------------------- recipes */
@@ -2491,8 +2600,13 @@ function forgeJson(ws: Workspace, lock: Lock | null) {
   };
 }
 
-function fail(msg: string): never {
+/** One line on stderr with the `error: ` prefix, without exiting — `fail()` is this, then exit 1. */
+function errorLine(msg: string): void {
   console.error(pc.red("error: ") + msg);
+}
+
+function fail(msg: string): never {
+  errorLine(msg);
   process.exit(1);
 }
 
