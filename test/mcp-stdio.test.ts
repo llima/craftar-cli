@@ -80,6 +80,16 @@ describe("craftar mcp — lines in, lines out", () => {
     expect(await run([`${line}\n`])).toEqual([pong(7)]);
   });
 
+  it("the cap is on the line, not on its line ending: exactly 1 MiB ending in CRLF is answered, one byte more is not", async () => {
+    const head = '{"jsonrpc":"2.0","id":7,"method":"ping","pad":"';
+    const line = `${head}${"x".repeat(MAX_LINE_BYTES - head.length - 2)}"}`;
+    expect(await run([`${line}\r\n${ping(8)}\r\n`])).toEqual([pong(7), pong(8)]);
+    const over = `${head}${"x".repeat(MAX_LINE_BYTES - head.length - 1)}"}`;
+    expect(Buffer.byteLength(over)).toBe(MAX_LINE_BYTES + 1);
+    expect(await run([`${over}\n${ping(8)}\n`])).toEqual([pong(8)]);
+    expect(await run([`${over}\r\n${ping(8)}\r\n`])).toEqual([pong(8)]);
+  });
+
   it("one call at a time: a second request is not started before the first was answered", async () => {
     const events: string[] = [];
     let n = 0;
@@ -107,19 +117,22 @@ describe("craftar mcp — lines in, lines out", () => {
   it("an input that fails or closes without ending still resolves, with the answers already owed written", async () => {
     const s = await scenario({ ingredients: [rule("keep", "# Keep\n")], recipes: [recipe("base", ["rule/keep"])], profiles: [profile("acme", ["base"])] }, { config: { profile: "acme" } });
     cleanups.push(s.cleanup);
-    const ctx: McpContext = { root: s.wsRoot, fetch: false, home: process.env.CRAFTAR_HOME!, version: "9.9.9", registryOff: false, env: {}, pin: pinOf(await readWorkspaceConfig(s.wsRoot)) };
+    const slow = async (root: string) => (await new Promise((r) => setTimeout(r, 40)), readWorkspaceConfig(root));
+    const ctx: McpContext = { root: s.wsRoot, fetch: false, home: process.env.CRAFTAR_HOME!, version: "9.9.9", registryOff: false, env: {}, pin: pinOf(await readWorkspaceConfig(s.wsRoot)), readConfig: slow };
     for (const how of ["error", "close"] as const) {
       const input = new PassThrough();
       const output = new PassThrough();
       let text = "";
       output.on("data", (c: Buffer) => (text += c.toString("utf8")));
       const done = serve(input, output, ctx);
-      input.write(`${ping(1)}\n`);
-      await new Promise((r) => setImmediate(r));
+      // a call still running when the input goes: its answer is owed, and written before serve resolves
+      input.write(`${INIT}\n${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "targets" } })}\n${ping(2)}`);
+      await new Promise((r) => setTimeout(r, 10));
       // a pipe that resets (EIO), or one destroyed with no `end`: neither may throw or leave serve pending
       input.destroy(how === "error" ? new Error("EIO") : undefined);
       await done;
-      expect(text, how).toBe(JSON.stringify(pong(1)) + "\n");
+      // the unterminated tail (`ping 2`) is dropped: only a real end makes a last line whole
+      expect(text.trimEnd().split("\n").map((l) => JSON.parse(l).id), how).toEqual([0, 1]);
     }
   });
 

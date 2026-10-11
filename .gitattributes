@@ -1,2 +1,4 @@
 # Golden workspaces are compared byte for byte: git must not rewrite their line endings.
 test/golden/** -text
+# The pins of the reading commands are compared byte for byte too (test/report-pins.test.ts).
+test/pins/** -text

@@ -25,7 +25,8 @@ export function serve(input: NodeJS.ReadableStream, output: NodeJS.WritableStrea
 
   const line = (bytes: Buffer) => {
     const end = bytes.length > 0 && bytes[bytes.length - 1] === 0x0d ? bytes.length - 1 : bytes.length;
-    if (end === 0) return;
+    // The cap is on the line itself: a CR before the newline is not counted against it
+    if (end === 0 || end > MAX_LINE_BYTES) return;
     const text = bytes.toString("utf8", 0, end);
     queue = queue.then(async () => {
       // A tool that fails is an answer. Anything else that throws — the handling itself, or a write to a reader
@@ -45,7 +46,8 @@ export function serve(input: NodeJS.ReadableStream, output: NodeJS.WritableStrea
       const newline = chunk.indexOf(0x0a, from);
       const piece = chunk.subarray(from, newline === -1 ? chunk.length : newline);
       if (!skipping) {
-        if (size + piece.length > MAX_LINE_BYTES) {
+        // One byte of slack while buffering, for that CR; `line()` holds the cap itself
+        if (size + piece.length > MAX_LINE_BYTES + 1) {
           skipping = true;
           parts = [];
           size = 0;
