@@ -3,9 +3,11 @@ import path from "node:path";
 import { ENV_NAME, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
+import { renderServer, rendersServers } from "./mcp-server.js";
 import { isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus } from "./registry.js";
 import { FULL_SHA, cacheKey, classifyForge, inspectCache, type CacheSnapshot } from "./remote.js";
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
+import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
 import { outName } from "../emitters/shared.js";
@@ -264,7 +266,7 @@ async function workspaceChecks(
         );
       }
 
-      const unset = mcpUnset(p, env);
+      const unset = mcpUnset(p, env, ws.forge.manifest.schema);
       if (unset.length === 0) w("mcp-env", "ok", "every variable a written MCP server expects is set");
       for (const { server, name } of unset) w("mcp-env", "warn", `server "${server}" expects ${name}, not set`, `export ${name}`);
     }
@@ -374,15 +376,23 @@ function oneLine(e: unknown): string {
  * target's own surviving server is read (last-wins per target, as its emitter writes it), so two targets
  * writing the same name from different ingredients are both checked. Names are the union of the
  * ingredient's `authEnv` and every `${NAME}` in a string value of its server's `env`.
+ *
+ * At schema 4, the server is rendered first, so a `${NAME}` a value brings into `env` is checked (spec 34 §4.4).
  */
-function mcpUnset(p: Plan, env: NodeJS.ProcessEnv): Array<{ server: string; name: string }> {
+function mcpUnset(p: Plan, env: NodeJS.ProcessEnv, schema: 1 | 2 | 3 | 4): Array<{ server: string; name: string }> {
   const servers: Array<[string, unknown, string[] | undefined]> = [];
   for (const target of p.resolution.targets) {
     // `written()` yields only what the matrix says this target writes; the skip warnings were plan()'s.
     const walk = written(p.resolution, target, () => {});
     const perTarget = new Map<string, { server: unknown; authEnv: string[] | undefined }>();
-    for (const ing of walk)
-      if (ing.meta.type === "mcp") perTarget.set(outName(ing.meta), { server: ing.meta.server, authEnv: ing.meta.authEnv });
+    for (const ing of walk) {
+      if (ing.meta.type !== "mcp") continue;
+      // At schema 4, render the server (spec 34 §4.4); below 4, read as written.
+      const serverDef = rendersServers({ schema })
+        ? renderServer(ing.meta, paramsFor(ing, p.resolution)).server
+        : ing.meta.server;
+      perTarget.set(outName(ing.meta), { server: serverDef, authEnv: ing.meta.authEnv });
+    }
     for (const [name, { server, authEnv }] of perTarget) servers.push([name, server, authEnv]);
   }
   const out: Array<{ server: string; name: string }> = [];
