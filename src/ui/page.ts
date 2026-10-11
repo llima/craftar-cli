@@ -53,7 +53,6 @@ td.path { overflow-wrap: anywhere; }
 pre { margin: 6px 0 0; overflow-x: auto; white-space: pre; }
 pre .add { color: var(--add); }
 pre .del { color: var(--del); }
-pre .hunk { color: var(--dim); }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; margin: 0; }
 dt { color: var(--dim); }
 dd { margin: 0; overflow-wrap: anywhere; }
@@ -129,6 +128,10 @@ export const PAGE_JS = String.raw`"use strict";
   }
   function short(commit) {
     return commit ? commit.slice(0, 7) : "no git";
+  }
+  /* A path as one word of a command line: quoted when it holds anything a shell would split or expand. */
+  function shellWord(text) {
+    return /^[A-Za-z0-9_.,:=@%+\/\\-]+$/.test(text) ? text : JSON.stringify(text);
   }
   function forgeLine(forge) {
     return forge.source + (forge.ref ? " (ref " + forge.ref + ")" : "") + " @ " + short(forge.commit);
@@ -264,7 +267,7 @@ export const PAGE_JS = String.raw`"use strict";
         add(title, el("span", "state s-" + state, state), document.createTextNode(" · " + files.length));
         add(body, title);
         if (SYNC_ACTS[state] && !doc.unsetParams.length) {
-          add(body, add(el("p", "dim", "to apply, run in a terminal: "), el("code", "cmd", "craftar sync --workspace " + doc.path)));
+          add(body, add(el("p", "dim", "to apply, run in a terminal: "), el("code", "cmd", "craftar sync --workspace " + shellWord(doc.path))));
         }
         files.forEach(function (f) { add(body, fileRow(w, doc, f)); });
       });
@@ -305,7 +308,7 @@ export const PAGE_JS = String.raw`"use strict";
     if (lines.length && lines[lines.length - 1] === "") lines.pop();
     var pre = el("pre");
     lines.slice(0, MAX_DIFF_LINES).forEach(function (line) {
-      var kind = line.charAt(0) === "+" ? "add" : line.charAt(0) === "-" ? "del" : line.charAt(0) === "@" ? "hunk" : "";
+      var kind = line.charAt(0) === "+" ? "add" : line.charAt(0) === "-" ? "del" : "";
       add(pre, el("span", kind, line), document.createTextNode("\n"));
     });
     add(into, pre);
@@ -348,6 +351,7 @@ export const PAGE_JS = String.raw`"use strict";
         })
       ));
       if (doc.warnings.length) add(recipes, el("h3", "", "warnings"), list(doc.warnings));
+      var said = doc.warnings;
       load("/api/workspaces/" + w.id + "/ingredients", ingredients, undefined, function (ing) {
         add(ingredients, grid(
           ["ingredient", "type", "written as", "recipes", "targets", "here"],
@@ -356,6 +360,8 @@ export const PAGE_JS = String.raw`"use strict";
             return [i.ref, i.type, i.outputName, i.recipes.join(", "), i.targets === "*" ? "every target" : i.targets.join(", "), here];
           })
         ));
+        var more = ing.warnings.filter(function (w) { return said.indexOf(w) === -1; });
+        if (more.length) add(ingredients, el("h3", "", "warnings"), list(more));
         if (ing.missing.length) {
           add(ingredients, el("h3", "", "named by a recipe, not in the Forge"), list(ing.missing.map(function (m) { return m.ref + " — " + m.recipes.join(", "); })));
         }

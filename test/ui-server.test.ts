@@ -265,3 +265,56 @@ describe("one importer", () => {
     expect(hits).toEqual(["ui/server.ts"]);
   });
 });
+
+describe("review: a header given twice, and what close() leaves behind", () => {
+  const raw = (port: number, text: string) =>
+    new Promise<string>((resolve) => {
+      const s = net.connect(port, "127.0.0.1", () => s.write(text));
+      let out = "";
+      s.setEncoding("utf8").on("data", (c) => (out += c)).on("close", () => resolve(out));
+    });
+
+  it("Host, Origin, Sec-Fetch-Site or Authorization given twice is 403, whichever value comes first", async () => {
+    const u = await start();
+    const good = { Host: `127.0.0.1:${u.port}`, Authorization: `Bearer ${TOKEN}` };
+    const twice: Array<[string, string, string]> = [
+      ["Host", good.Host, "evil.example.com"],
+      ["Authorization", good.Authorization, "Bearer wrong"],
+      ["Origin", `http://127.0.0.1:${u.port}`, "http://evil.example.com"],
+      ["Sec-Fetch-Site", "same-origin", "cross-site"],
+    ];
+    for (const [name, right, wrong] of twice)
+      for (const pair of [[right, wrong], [wrong, right]]) {
+        const headers = Object.entries({ ...good, [name]: undefined })
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => `${k}: ${v}\r\n`)
+          .join("");
+        const answer = await raw(u.port, `GET ${DATA} HTTP/1.1\r\n${headers}${name}: ${pair[0]}\r\n${name}: ${pair[1]}\r\nConnection: close\r\n\r\n`);
+        expect(answer.split("\r\n")[0], `${name}: ${pair[0] === right ? "right first" : "wrong first"}`).toBe("HTTP/1.1 403 Forbidden");
+        expect(answer).toContain(FORBIDDEN);
+      }
+    // (control) each header once: data
+    expect((await raw(u.port, `GET ${DATA} HTTP/1.1\r\nHost: ${good.Host}\r\nAuthorization: ${good.Authorization}\r\nConnection: close\r\n\r\n`)).split("\r\n")[0]).toBe("HTTP/1.1 200 OK");
+  });
+
+  it("a data request still queued when close() is called never reaches the route", async () => {
+    let started = 0;
+    let release: () => void = () => {};
+    const first = new Promise<void>((resolve) => (release = resolve));
+    const u = await start({
+      route: async () => {
+        started++;
+        await first;
+        return OK;
+      },
+    });
+    const asked = [1, 2, 3].map(() => ask(u, DATA).catch(() => null));
+    while (started === 0) await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 50)); // the two others are accepted and queued
+    await u.close();
+    release();
+    await Promise.all(asked);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(started).toBe(1);
+  });
+});

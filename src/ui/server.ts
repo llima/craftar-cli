@@ -53,8 +53,14 @@ const STATIC: Record<string, readonly [type: string, body: string]> = {
   "/app.css": ["text/css; charset=utf-8", PAGE_CSS],
 };
 
-/** A header given twice reads as one value no allowed spelling equals. */
-const one = (h: string | string[] | undefined): string | undefined => (Array.isArray(h) ? h.join(", ") : h);
+/**
+ * A header as sent, once — read from `headersDistinct`, because Node keeps only the first `Host` or `Authorization`
+ * of a request that gives two. Given twice, it reads as one value no allowed spelling equals, whichever came first.
+ */
+const one = (req: http.IncomingMessage, name: string): string | undefined => {
+  const values = req.headersDistinct[name];
+  return values === undefined ? undefined : values.length === 1 ? values[0] : values.join(", ");
+};
 
 /** Starts listening; rejects with the bind error, its `code` kept. */
 export function startUi(opts: UiOptions): Promise<UiServer> {
@@ -64,6 +70,7 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
   // One data request at a time: each loads a Forge and plans a workspace.
   let queue: Promise<void> = Promise.resolve();
   let port = opts.port;
+  let closed = false;
 
   const server = http.createServer((req, res) => {
     const send = (status: number, type: string, body: string, extra: Record<string, string> = {}): void => {
@@ -84,8 +91,8 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
     if (req.method !== "GET") return json(405, { error: "GET only" }, { Allow: "GET" });
     const target = req.url ?? "/";
     if (Buffer.byteLength(target, "utf8") > MAX_TARGET_BYTES) return json(414, { error: "request too long" });
-    if (!hostAllowed(one(req.headers.host), port)) return forbidden();
-    if (!originAllowed(one(req.headers.origin), port) || !siteAllowed(one(req.headers["sec-fetch-site"]))) return forbidden();
+    if (!hostAllowed(one(req, "host"), port)) return forbidden();
+    if (!originAllowed(one(req, "origin"), port) || !siteAllowed(one(req, "sec-fetch-site"))) return forbidden();
 
     // The path is split from the query by hand: no URL is built from the request.
     const q = target.indexOf("?");
@@ -96,10 +103,12 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
     if (pattern === null) return json(404, { error: "not found" });
 
     // The token: in the Authorization header and nowhere else, compared in constant time.
-    const got = Buffer.from(one(req.headers.authorization) ?? "", "utf8");
+    const got = Buffer.from(one(req, "authorization") ?? "", "utf8");
     if (got.length !== want.length || !timingSafeEqual(got, want)) return forbidden();
 
     queue = queue.then(async () => {
+      // Work still queued when the server closed is dropped: its connection is gone, and nothing should keep loading.
+      if (closed) return;
       try {
         const answer = await run({ path, query: q === -1 ? "" : target.slice(q + 1) }, { home: opts.home, version: opts.version });
         json(answer.status, answer.body);
@@ -125,8 +134,9 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
         address,
         close: () =>
           new Promise<void>((done) => {
+            closed = true;
             server.close(() => done());
-            // A browser's keep-alive connection, or a route still running, would hold the listener open.
+            // A browser's keep-alive connection, or a route still running, would hold the listener open; that route's answer is abandoned.
             server.closeAllConnections();
           }),
       });

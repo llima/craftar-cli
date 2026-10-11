@@ -3,7 +3,8 @@ import { renderDiff } from "../core/diff.js";
 import { oneLine } from "../core/doctor.js";
 import { isMissing, listWorkspaces, readRegistry } from "../core/registry.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, statusReport } from "../core/report.js";
-import { loadWorkspace, plan, readLock, status, type Workspace } from "../core/sync.js";
+import type { Lock } from "../schema/index.js";
+import { loadWorkspace, plan, readLock, status, type FileStatus, type Plan, type Workspace } from "../core/sync.js";
 import { hashNormalized } from "../core/text.js";
 
 /**
@@ -80,7 +81,11 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
   const entry = (await readRegistry(deps.home)).workspaces.find((e) => workspaceId(e.path) === id);
   if (!entry) return { status: 404, body: NOT_FOUND };
   if (await isMissing(entry)) return { status: 409, body: { error: MISSING, warnings: [] } };
+  // What cannot be loaded, planned or read is this workspace's state: 409, in one line. A failure past that point is ours: 500.
   let ws: Workspace | undefined;
+  let p: Plan;
+  let lock: Lock | null;
+  let st: FileStatus[];
   try {
     ws = await loadWorkspace(entry.path, { mode: "no-fetch", home: deps.home });
     if (what === "recipes" || what === "ingredients") {
@@ -89,41 +94,40 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
       const listing = what === "recipes" ? listRecipes(ws.forge, context) : listIngredients(ws.forge, context);
       return { status: 200, body: withLoadWarnings(listing, ws.warnings) };
     }
-    const p = await plan(ws);
-    const lock = await readLock(ws.root);
-    const st = await status(ws, p, lock);
-    if (what === undefined) {
-      return {
-        status: 200,
-        body: { id, path: entry.path, profile: ws.config.profile, recipes: p.resolution.recipes, targets: p.resolution.targets, ...statusReport(ws, p, lock, st) },
-      };
-    }
-    if (what === "explain") {
-      // Never `notProduced`'s message: it quotes the path asked.
-      const explained = explainFile(ws, p, wanted);
-      return explained ? { status: 200, body: explained } : { status: 404, body: NOT_FOUND };
-    }
-    // The row whose path is the string asked, character for character: nothing is opened that status() did not name.
-    const row = st.find((s) => s.path === wanted);
-    if (!row) return { status: 404, body: NOT_FOUND };
-    const [d] = await diffReport(ws, [row], { withholdMcp: false });
-    if (!d) return { status: 200, body: { path: row.path, state: row.state, from: null, to: null, hidden: false, note: null, diff: null } };
-    const from = `${row.path} (disk, ${row.state})`;
-    const to =
-      row.state === "orphan-drift" ? null : row.state === "orphan" ? `${row.path} (forge: no longer produced — sync removes it)` : `${row.path} (forge)`;
-    return {
-      status: 200,
-      body: {
-        path: row.path,
-        state: row.state,
-        from,
-        to,
-        hidden: d.note === EXAMPLE_CONTENT_HIDDEN,
-        note: d.note,
-        diff: d.note === null ? renderDiff(d.disk ?? "", d.forge ?? "") : null,
-      },
-    };
+    p = await plan(ws);
+    lock = await readLock(ws.root);
+    st = await status(ws, p, lock);
   } catch (e) {
     return { status: 409, body: { error: routeReason(e), warnings: ws?.warnings ?? [] } };
   }
+  if (what === undefined) {
+    return {
+      status: 200,
+      body: { id, path: entry.path, profile: ws.config.profile, recipes: p.resolution.recipes, targets: p.resolution.targets, ...statusReport(ws, p, lock, st) },
+    };
+  }
+  if (what === "explain") {
+    // Never `notProduced`'s message: it quotes the path asked.
+    const explained = explainFile(ws, p, wanted);
+    return explained ? { status: 200, body: explained } : { status: 404, body: NOT_FOUND };
+  }
+  // The row whose path is the string asked, character for character: nothing is opened that status() did not name.
+  const row = st.find((s) => s.path === wanted);
+  if (!row) return { status: 404, body: NOT_FOUND };
+  const [d] = await diffReport(ws, [row], { withholdMcp: false });
+  if (!d) return { status: 200, body: { path: row.path, state: row.state, from: null, to: null, hidden: false, note: null, diff: null } };
+  const from = `${row.path} (disk, ${row.state})`;
+  const to = row.state === "orphan-drift" ? null : row.state === "orphan" ? `${row.path} (forge: no longer produced — sync removes it)` : `${row.path} (forge)`;
+  return {
+    status: 200,
+    body: {
+      path: row.path,
+      state: row.state,
+      from,
+      to,
+      hidden: d.note === EXAMPLE_CONTENT_HIDDEN,
+      note: d.note,
+      diff: d.note === null ? renderDiff(d.disk ?? "", d.forge ?? "") : null,
+    },
+  };
 }

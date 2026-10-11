@@ -300,6 +300,54 @@ describe("explain, recipes, ingredients", () => {
   });
 });
 
+describe("/api/workspaces/<id> on a remote Forge (spec 36 §10.2)", () => {
+  const OFFLINE = "not fetched (--offline)";
+  /** `status --json --offline`, with the one warning that says it did not fetch taken out — found by its text. */
+  const offline = (ws: string) => {
+    const r = runCli(["status", "--json", "--offline", "--workspace", ws]);
+    expect(r.code, r.stderr).toBe(0);
+    const doc = JSON.parse(r.stdout);
+    expect(doc.warnings.filter((w: string) => w.includes(OFFLINE))).toHaveLength(1);
+    return { ...doc, warnings: doc.warnings.filter((w: string) => !w.includes(OFFLINE)) };
+  };
+
+  it("the document of status --json --offline, without its not-fetched warning", async () => {
+    const r = kept(await remoteForge(BASE));
+    const ws = await tmpDir();
+    cleanups.push(() => fs.rm(ws, { recursive: true, force: true }));
+    await fs.writeFile(path.join(ws, "craftar.yaml"), YAML.stringify({ forge: r.url, profile: "acme" }));
+    const { id, path: real } = await syncRegistered(ws);
+    const got = await get(`/api/workspaces/${id}`);
+    expect(got.status).toBe(200);
+    expect(JSON.stringify(got.body)).not.toContain(OFFLINE);
+    expect(JSON.parse(JSON.stringify(got.body))).toEqual({ id, path: real, profile: "acme", recipes: ["base"], targets: ["claude-code"], ...offline(ws) });
+    expect((got.body as any).forge).toMatchObject({ kind: "remote", source: r.url, fetched: false });
+  });
+
+  it("the same with the Forge named by craftar.local.yaml", async () => {
+    const r = kept(await remoteForge(BASE));
+    const ws = await tmpDir();
+    cleanups.push(() => fs.rm(ws, { recursive: true, force: true }));
+    await fs.writeFile(path.join(ws, "craftar.yaml"), YAML.stringify({ forge: "../no-such-forge", profile: "acme" }));
+    await fs.writeFile(path.join(ws, "craftar.local.yaml"), YAML.stringify({ forge: r.url }));
+    const { id, path: real } = await syncRegistered(ws);
+    const got = await get(`/api/workspaces/${id}`);
+    expect(got.status).toBe(200);
+    expect(JSON.parse(JSON.stringify(got.body))).toEqual({ id, path: real, profile: "acme", recipes: ["base"], targets: ["claude-code"], ...offline(ws) });
+    expect((got.body as any).forge).toMatchObject({ kind: "remote", source: r.url });
+  });
+});
+
+describe("routeReason on a schema refusal", () => {
+  it("the first issue and a count, as doctor words it", async () => {
+    const s = kept(await scenario(BASE, { config: { profile: "acme" } }));
+    await syncRegistered(s.wsRoot);
+    await fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), "forge: ../forge\nprofile: acme\ntargets: [nope, neither]\n");
+    const thrown: unknown = await loadWorkspace(s.wsRoot, { mode: "no-fetch", home: HOME() }).then(() => null, (e: unknown) => e);
+    expect(routeReason(thrown)).toBe("invalid craftar.yaml (targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md', and 1 more)");
+  });
+});
+
 describe("what the routes never do", () => {
   const ALL = (id: string) => ["/api/workspaces", `/api/workspaces/${id}`, `/api/workspaces/${id}/recipes`, `/api/workspaces/${id}/ingredients`, `/api/workspaces/${id}/diff?path=${enc(`${R}/edited.md`)}`, `/api/workspaces/${id}/explain?path=${enc(`${R}/keep.md`)}`, `/api/workspaces/${id}/diff?path=nope`, "/api/workspaces/0000000000000000"];
 
