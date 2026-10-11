@@ -147,9 +147,7 @@ describe("rendered server in MCP files", () => {
     const spec = forge({ command: "npx", args: ["-y", "x", "{{free}}", "{{ 'X' | localize }}", "${HOME}"] });
     const { p } = await planned(4, spec);
     const content = file(p, ".mcp.json")!;
-    expect(content).toContain('"{{free}}"');
-    expect(content).toContain('"{{ \'X\' | localize }}"');
-    expect(content).toContain('"${HOME}"');
+    expect(content).toBe(mcpJson({ idp: { command: "npx", args: ["-y", "x", "{{free}}", "{{ 'X' | localize }}", "${HOME}"] } }));
   });
 
   it("case 10: row T fails the plan, in the spec's words, without the value", async () => {
@@ -185,8 +183,7 @@ describe("rendered server in MCP files", () => {
       { declare: { user: {}, pass: {} }, params: { user: "u", pass: "p" } }
     );
     const m2 = await failure(4, spec2);
-    expect(m2).toContain("server.url");
-    expect(m2).toContain("url-credentials");
+    expect(m2).toBe("mcp/idp: the value rendered into server.url holds a URL with credentials (url-credentials) — a generated file is committed, so a secret cannot come from a param; have the server read it from the environment");
     expect(m2.includes("u:p")).toBe(false);
 
     // §6.11: literal credentials with one placeholder for host
@@ -195,8 +192,7 @@ describe("rendered server in MCP files", () => {
       { declare: { host: {} }, params: { host: "idp.example.com" } }
     );
     const m3 = await failure(4, spec3);
-    expect(m3).toContain("server.url");
-    expect(m3).toContain("url-credentials");
+    expect(m3).toBe("mcp/idp: the value rendered into server.url holds a URL with credentials (url-credentials) — a generated file is committed, so a secret cannot come from a param; have the server read it from the environment");
 
     // Control: same literal with no placeholder — passes
     const spec4 = forge({ url: "https://u:p@idp.example.com/" });
@@ -209,8 +205,7 @@ describe("rendered server in MCP files", () => {
       { declare: { rest: {} }, params: { rest: "x".repeat(36) } }
     );
     const m5 = await failure(4, spec5);
-    expect(m5).toContain("server.headers.A");
-    expect(m5).toContain("github-token");
+    expect(m5).toBe("mcp/idp: the value rendered into server.headers.A looks like a credential (github-token) — a generated file is committed, so a secret cannot come from a param; have the server read it from the environment");
     expect(m5.includes(GHP)).toBe(false);
   });
 

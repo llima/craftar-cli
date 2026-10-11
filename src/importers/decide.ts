@@ -143,7 +143,7 @@ export async function decide(
   }
 
   // Param inference first (Ruling 16): the narrower claim. A base with no open section stops there, as in 0.6.2.
-  const param = await inferParams(ctx, base, S, map, cited, ref, meta, files, fingerprint, others, runBases, schema, serverKeys);
+  const param = await inferParams(ctx, base, S, map, cited, ref, meta, files, fingerprint, others, runBases, schema);
   const open = names.filter((n) => !Object.hasOwn(WSk, n));
   if (param.kind === "reuse" || !open.length) return withAuthEnv(param);
   return withAuthEnv(inferSectionValues(ctx, base, key, PSk, WSk, map, ref, meta, files, fingerprint, schema));
@@ -178,7 +178,6 @@ async function inferParams(
   others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>,
   runBases: Set<string>,
   schema: 1 | 2 | 3 | 4,
-  serverKeys: string[],
 ): Promise<Decision> {
   // Holes (§3): declared, not reserved, not set by the workspace layer, and not pinned — a key this run already relied
   // on renders at its current value, like any fixed key (§6.5, §14 Q13).
@@ -246,7 +245,7 @@ async function inferParams(
   }
 
   for (const d of delta) ctx.P[d.key] = d.value;
-  pin(ctx, [...cited, ...serverKeys], { ...map, ...sigma });
+  pin(ctx, cited, { ...map, ...sigma });
   return { kind: "reuse", inferred: sigma, delta };
 }
 

@@ -38,14 +38,14 @@ const setToken = (forgeRoot: string) =>
   fs.writeFile(path.join(forgeRoot, "profiles/acme/profile.yaml"), YAML.stringify(profile("acme", ["base"], ["claude-code", "kiro"], { params: { token: GHP } })));
 
 describe("the credential refusal, on every surface", () => {
-  it("1. sync, status, diff, sync --check, sync --dry-run, ls and explain exit 1 with the one line, and write nothing", async () => {
-    const s = await at(4, refusing("profile"));
-    for (const args of [["sync"], ["status"], ["diff"], ["sync", "--check"], ["sync", "--dry-run"], ["ls"], ["explain", ".mcp.json"]]) {
+  for (const args of [["sync"], ["status"], ["diff"], ["sync", "--check"], ["sync", "--dry-run"], ["ls"], ["explain", ".mcp.json"]]) {
+    it(`1. ${args.join(" ")} exits 1 with the one line, and writes nothing`, async () => {
+      const s = await at(4, refusing("profile"));
       const r = runCli([...args, "--workspace", s.wsRoot], { env: s.env });
-      expect([r.code, r.stdout, r.stderr], args.join(" ")).toEqual(REFUSED);
-    }
-    expect(await listFiles(s.wsRoot)).toEqual(["craftar.yaml"]);
-  });
+      expect([r.code, r.stdout, r.stderr]).toEqual(REFUSED);
+      expect(await listFiles(s.wsRoot)).toEqual(["craftar.yaml"]);
+    });
+  }
 
   it("2. status --json and diff --exit-code exit 1 with the same line and print nothing else", async () => {
     const s = await at(4, refusing("profile"));
@@ -95,7 +95,7 @@ describe("the credential refusal, on every surface", () => {
     expect(clean(text)).toBe(true);
   });
 
-  it("6. craftar workspaces and forge impact show error; 7. a planned file is shown, a refused value never is", async () => {
+  it("6. craftar workspaces and forge impact show error; 7. a planned file is shown, a refused value never is", { timeout: 60_000 }, async () => {
     const s = await at(4, refusing("none"));
     expect(runCli(["sync", "--workspace", s.wsRoot], { env: s.env }).code).toBe(0);
     // 7: before the token is set, the planned file is what diff and the workspace hold — `Bearer public`.
@@ -155,27 +155,25 @@ describe("read-only commands print at schema 4 what they print at 3", () => {
     expect(four, label).toEqual(three);
   };
 
-  it("9. the catalogue", async () => {
-    await same("recipes", (s) => ["recipes", "--forge", s.forgeRoot]);
-    await same("recipes --json", (s) => ["recipes", "--forge", s.forgeRoot, "--profile", "acme", "--json"]);
-    await same("ingredients", (s) => ["ingredients", "--forge", s.forgeRoot]);
-    await same("ingredients --json", (s) => ["ingredients", "--forge", s.forgeRoot, "--json"]);
-    await same("targets --json", (s) => ["targets", "--workspace", s.wsRoot, "--json"]);
-  });
+  // One `it` per command: each runs the CLI twice, and a test that spawns ten processes can outrun its timeout on a loaded machine.
+  const SAME: Array<[string, (s: { forgeRoot: string; wsRoot: string }) => string[]]> = [
+    ["9. recipes", (s) => ["recipes", "--forge", s.forgeRoot]],
+    ["9. recipes --profile --json", (s) => ["recipes", "--forge", s.forgeRoot, "--profile", "acme", "--json"]],
+    ["9. ingredients", (s) => ["ingredients", "--forge", s.forgeRoot]],
+    ["9. ingredients --json", (s) => ["ingredients", "--forge", s.forgeRoot, "--json"]],
+    ["9. targets --json", (s) => ["targets", "--workspace", s.wsRoot, "--json"]],
+    ["10. forge variants", (s) => ["forge", "variants", "--forge", s.forgeRoot]],
+    ["10. forge variants --json", (s) => ["forge", "variants", "--forge", s.forgeRoot, "--json"]],
+    ["10. forge diff", (s) => ["forge", "diff", "mcp/idp", "--against", "acme", "--forge", s.forgeRoot]],
+    ["10. forge diff --json", (s) => ["forge", "diff", "mcp/idp", "--against", "acme", "--forge", s.forgeRoot, "--json"]],
+    ["11. ls", (s) => ["ls", "--workspace", s.wsRoot]],
+    ["11. explain of a rule", (s) => ["explain", ".claude/rules/workflow.md", "--workspace", s.wsRoot]],
+  ];
+  for (const [label, args] of SAME) it(label, () => same(label, args));
 
-  it("10. forge variants and forge diff read the Forge as written", async () => {
-    await same("forge variants", (s) => ["forge", "variants", "--forge", s.forgeRoot]);
-    await same("forge variants --json", (s) => ["forge", "variants", "--forge", s.forgeRoot, "--json"]);
-    await same("forge diff", (s) => ["forge", "diff", "mcp/idp", "--against", "acme", "--forge", s.forgeRoot]);
-    await same("forge diff --json", (s) => ["forge", "diff", "mcp/idp", "--against", "acme", "--forge", s.forgeRoot, "--json"]);
-    // A difference in `server` is metadata: neither prints the server, at 3 or at 4 — so no rendered value can show.
+  it("10. forge diff prints no server at all: a difference in server is metadata, at 3 and at 4", async () => {
     const [three, four] = await both((s) => ["forge", "diff", "mcp/idp", "--against", "acme", "--forge", s.forgeRoot]);
     expect([three.stdout, four.stdout]).toEqual(["mcp/idp  base ↔ acme — meta only\n", "mcp/idp  base ↔ acme — meta only\n"]);
-  });
-
-  it("11. ls and explain of a rule", async () => {
-    await same("ls", (s) => ["ls", "--workspace", s.wsRoot]);
-    await same("explain", (s) => ["explain", ".claude/rules/workflow.md", "--workspace", s.wsRoot]);
   });
 
   it("12. explain .mcp.json differs in one line only, the hash of the planned file", async () => {

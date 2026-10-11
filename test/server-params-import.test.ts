@@ -410,3 +410,19 @@ describe("the citation scans", () => {
     expect(st[".mcp.json"]).toBe("drift");
   });
 });
+
+describe("only declared citations count (spec 34 §5.2)", () => {
+  it("16. a key the server cites WITHOUT declaring it, which a recipe defaults: G1 does not fire — the base is reused", async () => {
+    // An undeclared placeholder is never substituted, so no recipe default can move the server's bytes.
+    const server = { type: "http", url: URL, headers: { "X-Org": "{{org}}" } };
+    const s = await synced(4, listed({ idp: IDP({}, server), shared: { org: { default: "acme" } } }));
+    const { r, changed, before, after, cli } = await importThenSync(s);
+    expect(changed).toEqual([]);
+    expect(r.variants).toEqual([]);
+    expect(r.reused).toEqual(["rule/workflow", "mcp/idp"]);
+    expect(after).toBe(before);
+    expect(JSON.parse(after).mcpServers.idp).toEqual(server);
+    expect(cli.code).toBe(0);
+    expect(cli.stdout.split("\n")).toContain("  warn mcp/idp: server cites {{org}}, which has a value but is not declared in the ingredient's params — left verbatim");
+  });
+});
