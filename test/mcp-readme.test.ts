@@ -29,6 +29,9 @@ describe("craftar mcp — README and --help", () => {
     expect(README).not.toContain("`craftar ui`, `craftar mcp`) is not built yet");
     expect(README).not.toContain("`craftar mcp` + Claude Code");
     expect(README).toContain("`craftar ui`) is not built yet");
-    expect(README).toContain("`craftar ui`; Claude Code / Agent Plugin packaging");
+    expect(README).toContain("`craftar ui`; writing tools for `craftar mcp` (`sync`, `add recipe`) and its Claude Code / Agent Plugin packaging.");
+    // the roadmap still names the shipped command, and the results paragraph says what is left out
+    expect(count("Shipped ahead of its phase: `craftar mcp`, the read-only MCP server")).toBe(1);
+    expect(count("with three things left out")).toBe(1);
   });
 });
