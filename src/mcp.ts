@@ -28,9 +28,14 @@ export function serve(input: NodeJS.ReadableStream, output: NodeJS.WritableStrea
     if (end === 0) return;
     const text = bytes.toString("utf8", 0, end);
     queue = queue.then(async () => {
-      // A tool that fails is an answer; anything else that throws drops the line, and the server reads on.
-      const answer = await handleLine(text, ctx, state).catch(() => null);
-      if (answer !== null) output.write(answer + "\n");
+      // A tool that fails is an answer. Anything else that throws — the handling itself, or a write to a reader
+      // that went away — drops this line only: the queue goes on, and nothing is said on any stream.
+      try {
+        const answer = await handleLine(text, ctx, state);
+        if (answer !== null) output.write(answer + "\n");
+      } catch {
+        /* dropped */
+      }
     });
   };
 
@@ -59,11 +64,19 @@ export function serve(input: NodeJS.ReadableStream, output: NodeJS.WritableStrea
   };
 
   return new Promise((resolve) => {
-    input.on("data", (chunk: Buffer | string) => feed(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk));
-    input.on("end", () => {
-      // A last line with no newline is still a line
-      if (!skipping && size > 0) line(Buffer.concat(parts));
+    let over = false;
+    // The input is over once: at its end, or when it fails or closes without one (a pipe that resets). What was
+    // already read is still answered; a stream error never reaches the process as an uncaught exception.
+    const finish = (ended: boolean) => {
+      if (over) return;
+      over = true;
+      // A last line with no newline is still a line — only when the input really ended
+      if (ended && !skipping && size > 0) line(Buffer.concat(parts));
       void queue.then(resolve);
-    });
+    };
+    input.on("data", (chunk: Buffer | string) => feed(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk));
+    input.on("end", () => finish(true));
+    input.on("error", () => finish(false));
+    input.on("close", () => finish(false));
   });
 }

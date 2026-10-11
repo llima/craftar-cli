@@ -103,4 +103,37 @@ describe("craftar mcp — lines in, lines out", () => {
     expect(lines.map((l) => l.id)).toEqual([0, 1]);
     expect(lines[1].result.structuredContent.statuses).toHaveLength(1);
   });
+
+  it("an input that fails or closes without ending still resolves, with the answers already owed written", async () => {
+    const s = await scenario({ ingredients: [rule("keep", "# Keep\n")], recipes: [recipe("base", ["rule/keep"])], profiles: [profile("acme", ["base"])] }, { config: { profile: "acme" } });
+    cleanups.push(s.cleanup);
+    const ctx: McpContext = { root: s.wsRoot, fetch: false, home: process.env.CRAFTAR_HOME!, version: "9.9.9", registryOff: false, env: {}, pin: pinOf(await readWorkspaceConfig(s.wsRoot)) };
+    for (const how of ["error", "close"] as const) {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      let text = "";
+      output.on("data", (c: Buffer) => (text += c.toString("utf8")));
+      const done = serve(input, output, ctx);
+      input.write(`${ping(1)}\n`);
+      await new Promise((r) => setImmediate(r));
+      // a pipe that resets (EIO), or one destroyed with no `end`: neither may throw or leave serve pending
+      input.destroy(how === "error" ? new Error("EIO") : undefined);
+      await done;
+      expect(text, how).toBe(JSON.stringify(pong(1)) + "\n");
+    }
+  });
+
+  it("an output that throws on write does not stop the queue: serve still resolves", async () => {
+    const s = await scenario({ ingredients: [rule("keep", "# Keep\n")], recipes: [recipe("base", ["rule/keep"])], profiles: [profile("acme", ["base"])] }, { config: { profile: "acme" } });
+    cleanups.push(s.cleanup);
+    const ctx: McpContext = { root: s.wsRoot, fetch: false, home: process.env.CRAFTAR_HOME!, version: "9.9.9", registryOff: false, env: {}, pin: pinOf(await readWorkspaceConfig(s.wsRoot)) };
+    const input = new PassThrough();
+    const written: string[] = [];
+    let n = 0;
+    const output = { write: (x: string) => { if (++n === 1) throw new Error("EPIPE"); written.push(x); return true; } } as unknown as NodeJS.WritableStream;
+    const done = serve(input, output, ctx);
+    input.end(`${ping(1)}\n${ping(2)}\n`);
+    await done;
+    expect(written).toEqual([JSON.stringify(pong(2)) + "\n"]);
+  });
 });
