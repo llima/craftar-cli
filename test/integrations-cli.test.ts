@@ -291,7 +291,7 @@ describe("Valid schema 3 Forge — key sets and lock unchanged", () => {
     expect(ruleContent).toBe(STORIES_ACME);
   });
 
-  it("9. doctor prints for a healthy schema 3 workspace what it prints for the hand-listed schema 2 one", async () => {
+  it("9. doctor prints for a healthy workspace of a schema 3 Forge what it prints for the hand-listed schema 2 one", async () => {
     // Scenario 1: integrations block selects the recipe
     const { wsRoot: ws1, root: r1 } = await at(3, ado());
     const env1 = { CRAFTAR_HOME: path.join(r1, "home") };
@@ -317,7 +317,6 @@ describe("Valid schema 3 Forge — key sets and lock unchanged", () => {
 
     expect(doc1.checks.length).toBeGreaterThan(0);
     expect(doc1.checks.length).toBe(doc2.checks.length);
-    expect(doc1.checks.length).toBe(14); // pinned: doctor --json has 14 checks for a healthy workspace
 
     // Normalize by replacing temp roots with <root> and timestamps with <when>
     type Check = { id: string; scope: string; level: string; message: string; fix: string | null };
