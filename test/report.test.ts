@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { eightStates, type Scenario } from "./helpers/states.js";
+import { MCP_FILES, eightStates, mcpWorkspace, moveTracker, syncOnce, type Scenario } from "./helpers/states.js";
 import { loadWorkspace, plan, readLock, status, type FileStatus } from "../src/core/sync.js";
-import { EXAMPLE_CONTENT_HIDDEN, MCP_CONTENT_HIDDEN, explainSkip, notProduced, statusPath, statusReport } from "../src/core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, MCP_CONTENT_HIDDEN, diffReport, explainSkip, notProduced, statusPath, statusReport } from "../src/core/report.js";
 
 // Spec 35 §5.1 (and spec 36 §17): the builders the commands, the MCP server and the dashboard share — tested directly.
 
@@ -48,5 +48,84 @@ describe("statusReport", () => {
     expect(r.warnings).toBe(p.warnings);
     expect(r.unsetParams).toEqual([]);
     expect(st[7].planned).toBeDefined(); // the caller's rows are not touched
+  });
+});
+
+describe("diffReport", () => {
+  it("one row per file in a state sync --check refuses, with counts and the two texts", async () => {
+    const { ws, st } = await loaded(kept(await eightStates()));
+    expect(await diffReport(ws, st, { withholdMcp: false })).toEqual([
+      { path: `${R}/clash.md`, state: "collision", added: 1, removed: 1, note: null, disk: "# Clash\ndisk side\n", forge: "# Clash\nforge side\n" },
+      { path: `${R}/edited.md`, state: "drift", added: 1, removed: 1, note: null, disk: "# Edited\nby hand\n", forge: "# Edited\nby the forge\n" },
+      { path: `${R}/fresh.md`, state: "new", added: 1, removed: 0, note: null, disk: "", forge: "# Fresh\n" },
+      { path: `${R}/gone-edited.md`, state: "orphan-drift", added: null, removed: null, note: "no longer produced by the Forge but hand-edited — kept; `craftar drift discard <path>` removes it, or delete it yourself", disk: null, forge: null },
+      { path: `${R}/gone.md`, state: "orphan", added: 0, removed: 1, note: null, disk: "# Gone\n", forge: "" },
+      { path: `${R}/moved.md`, state: "update", added: 1, removed: 1, note: null, disk: "# Moved\nold line\n", forge: "# Moved\nnew line\n" },
+    ]);
+    expect(await diffReport(ws, st.filter((s) => s.state === "unchanged" || s.state === "adopt"), { withholdMcp: true })).toEqual([]);
+  });
+
+  it("a CRLF file with a BOM on disk is compared as LF text without it", async () => {
+    const s = kept(await eightStates());
+    await fs.writeFile(path.join(s.wsRoot, `${R}/edited.md`), "﻿# Edited\r\nby hand\r\n");
+    const { ws, st } = await loaded(s);
+    const [row] = await diffReport(ws, st.filter((x) => x.path === `${R}/edited.md`), { withholdMcp: false });
+    expect(row.disk).toBe("# Edited\nby hand\n");
+  });
+
+  async function touched(state: "drift" | "collision" | "update" | "orphan" | "orphan-drift") {
+    const s = kept(await mcpWorkspace());
+    const mark = async () => {
+      for (const f of MCP_FILES) {
+        await fs.mkdir(path.dirname(path.join(s.wsRoot, f)), { recursive: true });
+        await fs.appendFile(path.join(s.wsRoot, f), "SENTINEL-DISK\n");
+      }
+    };
+    if (state === "collision") await mark();
+    else {
+      await syncOnce(s.wsRoot);
+      if (state === "update") await moveTracker(s.forgeRoot);
+      if (state === "orphan" || state === "orphan-drift") await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), "name: base\ningredients: [rule/keep]\n");
+      if (state === "drift" || state === "orphan-drift") await mark();
+    }
+    const { ws, st } = await loaded(s);
+    const rows = st.filter((x) => (MCP_FILES as readonly string[]).includes(x.path));
+    return { ws, rows };
+  }
+  const byPath = (rows: Array<{ path: string }>) => Object.fromEntries(rows.map((r) => [r.path, r])) as Record<string, any>;
+
+  it.each(["drift", "collision"] as const)("withholdMcp false, %s: the example file alone is withheld; the two MCP files give their texts", async (state) => {
+    const { ws, rows } = await touched(state);
+    expect(rows.map((r) => r.state)).toEqual([state, state, state]);
+    const got = byPath(await diffReport(ws, rows, { withholdMcp: false }));
+    expect(got[MCP_FILES[2]]).toEqual({ path: MCP_FILES[2], state, added: null, removed: null, note: EXAMPLE_CONTENT_HIDDEN, disk: null, forge: null });
+    expect(JSON.stringify(got[MCP_FILES[2]])).not.toContain("SENTINEL-DISK");
+    for (const f of [MCP_FILES[0], MCP_FILES[1]]) {
+      expect(got[f].note).toBeNull();
+      expect(got[f].disk).toContain("SENTINEL-DISK");
+    }
+  });
+
+  it.each(["drift", "collision"] as const)("withholdMcp true, %s: all three are withheld with the MCP sentence, the example file included", async (state) => {
+    const { ws, rows } = await touched(state);
+    const got = await diffReport(ws, rows, { withholdMcp: true });
+    expect(got.map((r) => [r.note, r.disk, r.forge, r.added, r.removed])).toEqual([0, 1, 2].map(() => [MCP_CONTENT_HIDDEN, null, null, null, null]));
+    expect(JSON.stringify(got)).not.toContain("SENTINEL-DISK");
+  });
+
+  it.each([true, false])("update and orphan are never withheld (withholdMcp %s): the disk side is what craftar wrote", async (withholdMcp) => {
+    const up = await touched("update");
+    // the example file lists names only, so moving the server's args leaves it unchanged
+    expect((await diffReport(up.ws, up.rows, { withholdMcp })).map((r) => [r.path, r.state, r.note])).toEqual([[MCP_FILES[1], "update", null], [MCP_FILES[0], "update", null]]);
+    const gone = await touched("orphan");
+    const rows = await diffReport(gone.ws, gone.rows, { withholdMcp });
+    expect(rows.map((r) => [r.state, r.note, r.forge])).toEqual([0, 1, 2].map(() => ["orphan", null, ""]));
+  });
+
+  it.each([true, false])("orphan-drift gives explainSkip's line for every file, texts null (withholdMcp %s)", async (withholdMcp) => {
+    const { ws, rows } = await touched("orphan-drift");
+    const got = await diffReport(ws, rows, { withholdMcp });
+    expect(got.map((r) => [r.state, r.note, r.disk, r.forge])).toEqual([0, 1, 2].map(() => ["orphan-drift", explainSkip({ path: "", state: "orphan-drift" }), null, null]));
+    expect(JSON.stringify(got)).not.toContain("SENTINEL-DISK");
   });
 });

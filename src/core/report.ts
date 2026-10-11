@@ -1,5 +1,9 @@
 import { promises as fs } from "node:fs";
+import path from "node:path";
+import { EXAMPLE_SETTINGS } from "../emitters/shared.js";
 import type { Lock } from "../schema/index.js";
+import { diffOps } from "./diff.js";
+import { mcpTagged } from "./drift.js";
 import { unsetDeclared, type FileStatus, type Plan, type UnsetParam, type Workspace } from "./sync.js";
 import { stripBom, toLf } from "./text.js";
 
@@ -76,4 +80,61 @@ export function statusReport(ws: Workspace, p: Plan, lock: Lock | null, statuses
     warnings: p.warnings,
     unsetParams: unsetDeclared(p),
   };
+}
+
+/** One file `sync --check` refuses, as `diff` decides it: a note in place of a body, or the two texts to render. */
+export interface DiffRow {
+  path: string;
+  state: FileStatus["state"];
+  /** Lines the Forge's side adds and removes; null when a note stands in for the body. */
+  added: number | null;
+  removed: number | null;
+  note: string | null;
+  /** The disk side and the Forge's side, LF and without a BOM; both null when there is a note. */
+  disk: string | null;
+  forge: string | null;
+}
+
+/**
+ * What `diff` shows for each row in a state `sync --check` refuses (spec 19 §3.2: `unchanged` and `adopt` are
+ * skipped). It never renders: the caller owns the header lines and the paint. `withholdMcp` widens the one
+ * withholding of spec 27 Ruling 4 — the example file — to every file tagged `mcp/*`, for a reader that is a model
+ * (spec 35 §4.5). The disk is read at the row's path, never at one a caller typed.
+ */
+export async function diffReport(ws: Pick<Workspace, "root">, rows: FileStatus[], opts: { withholdMcp: boolean }): Promise<DiffRow[]> {
+  const out: DiffRow[] = [];
+  for (const s of rows) {
+    if (s.state === "unchanged" || s.state === "adopt") continue;
+    const noted = (note: string): DiffRow => ({ path: s.path, state: s.state, added: null, removed: null, note, disk: null, forge: null });
+    if (s.state === "orphan-drift") {
+      // No body: sync keeps this file
+      out.push(noted(explainSkip(s)));
+      continue;
+    }
+    // Only where a hand has touched the file: in `update` and `orphan` the disk side is what craftar wrote.
+    if (s.state === "drift" || s.state === "collision") {
+      if (opts.withholdMcp && mcpTagged(s)) {
+        out.push(noted(MCP_CONTENT_HIDDEN));
+        continue;
+      }
+      if (s.path === EXAMPLE_SETTINGS) {
+        out.push(noted(EXAMPLE_CONTENT_HIDDEN));
+        continue;
+      }
+    }
+    const disk = (await readText(path.join(ws.root, s.path))) ?? "";
+    // An orphan is the removal of the whole file
+    const forge = s.state === "orphan" || !s.planned ? "" : toLf(stripBom(s.planned.content.toString("utf8")));
+    const ops = diffOps(disk, forge);
+    out.push({
+      path: s.path,
+      state: s.state,
+      added: ops.filter((o) => o.kind === "add").length,
+      removed: ops.filter((o) => o.kind === "del").length,
+      note: null,
+      disk,
+      forge,
+    });
+  }
+  return out;
 }

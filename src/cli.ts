@@ -23,9 +23,9 @@ import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
-import { EXAMPLE_CONTENT_HIDDEN, explainSkip, readText, statusPath, statusReport } from "./core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainSkip, readText, statusPath, statusReport } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
-import { hashNormalized, toLf, stripBom } from "./core/text.js";
+import { hashNormalized } from "./core/text.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { fingerprintDir } from "./core/fingerprint.js";
@@ -449,29 +449,23 @@ const DIFF_PAINT = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
 
 /** What `craftar diff` prints for one file `sync --check` refuses; `drift show <path>` prints the same for a drifted one. */
 async function printFileDiff(root: string, s: FileStatus): Promise<void> {
+  // What to show is decided in the core (`diffReport`); the headers and the paint are this command's.
+  const [row] = await diffReport({ root }, [s], { withholdMcp: false });
+  if (!row) return;
   if (s.state === "orphan-drift") {
     // Header and one line, no body: sync keeps this file
     console.log(pc.bold(`--- ${s.path} (disk, orphan-drift)`));
-    console.log(`  ${explainSkip(s)}`);
-    return;
-  }
-  const disk = await readText(path.join(root, s.path));
-  if (s.state === "orphan") {
+  } else if (s.state === "orphan") {
     // A removal: the file exists on disk but the Forge no longer produces it
     console.log(pc.bold(`--- ${s.path} (disk, orphan)`));
     console.log(pc.bold(`+++ ${s.path} (forge: no longer produced — sync removes it)`));
-    console.log(renderDiff(disk ?? "", "", DIFF_PAINT));
   } else {
-    const next = s.planned ? toLf(stripBom(s.planned.content.toString("utf8"))) : "";
     console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
     console.log(pc.bold(`+++ ${s.path} (forge)`));
-    // Spec 27 §4.2, Ruling 4: do not print on-disk content of the example file for drift/collision
-    if (s.path === EXAMPLE_SETTINGS && (s.state === "drift" || s.state === "collision")) {
-      console.log(`  ${EXAMPLE_CONTENT_HIDDEN}`);
-    } else {
-      console.log(renderDiff(disk ?? "", next, DIFF_PAINT));
-    }
   }
+  // Spec 27 §4.2, Ruling 4: a note stands in for the on-disk content of the example file in drift / collision
+  if (row.note !== null) console.log(`  ${row.note}`);
+  else console.log(renderDiff(row.disk ?? "", row.forge ?? "", DIFF_PAINT));
 }
 
 /* ---------------------------------------------------------------- drift */
