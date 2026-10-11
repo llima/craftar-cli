@@ -50,6 +50,26 @@ export function pathEntries(value: string, win: boolean = WIN): string[] {
   return entries;
 }
 
+/** The PATH value from `env`, reading the key as `onPath` reads it (on win32: whatever case). */
+function pathOf(env: NodeJS.ProcessEnv): string | undefined {
+  const key = WIN ? Object.keys(env).find((k) => k.toUpperCase() === "PATH") : "PATH";
+  return key === undefined ? undefined : env[key];
+}
+
+/**
+ * `env` with its PATH reduced to the entries `onPath` looks in, so that what the program starts in turn (git
+ * starts ssh, a credential helper, a hook) is not looked for in the working directory either. A copy: the
+ * caller's object is not changed. On win32 every spelling of the key is replaced by one `PATH`.
+ */
+function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (k.toUpperCase() !== "PATH") result[k] = v;
+  }
+  result.PATH = pathEntries(pathOf(env) ?? "").join(path.delimiter);
+  return result;
+}
+
 /** A file; off win32 also executable; any error → false. */
 async function isProgram(file: string): Promise<boolean> {
   try {
@@ -67,12 +87,13 @@ async function isProgram(file: string): Promise<boolean> {
  * The platform's own lookup is not used: it also searches the child's working directory (on Windows always; elsewhere
  * for an empty or relative PATH entry), and craftar runs `dotnet` with the workspace root as working directory
  * (spec 32 §7: a program is found on PATH only). An absolute `file` is returned as given; a relative path is null.
+ * The first candidate that is an executable file is taken — unlike the platform, craftar does not go on to the
+ * next entry when that file then fails to start.
  */
 export async function onPath(file: string, env: NodeJS.ProcessEnv): Promise<string | null> {
   if (path.isAbsolute(file)) return file;
   if (file === "" || file !== path.basename(file)) return null;
-  const key = WIN ? Object.keys(env).find((k) => k.toUpperCase() === "PATH") : "PATH";
-  const entries = pathEntries((key === undefined ? undefined : env[key]) ?? "");
+  const entries = pathEntries(pathOf(env) ?? "");
   const names = WIN && !WIN_EXTENSIONS.some((ext) => file.toLowerCase().endsWith(ext)) ? WIN_EXTENSIONS.map((ext) => file + ext) : [file];
   for (const entry of entries) {
     for (const name of names) {
@@ -88,16 +109,24 @@ function notOnPath(file: string): Error {
   return Object.assign(new Error(`spawn ${file} ENOENT`), { code: "ENOENT", errno: -2, syscall: `spawn ${file}`, path: file });
 }
 
-export interface ExecOptions { env?: NodeJS.ProcessEnv; cwd?: string; maxBuffer?: number; timeout?: number }
+/** Options for `execProgram`. */
+export interface ExecOptions {
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  maxBuffer?: number;
+  timeout?: number;
+}
+
 /**
  * stdout and stderr of a program that exited 0, the program resolved by `onPath` over `opts.env` (the process's
  * environment when none is given) — never by the platform's lookup. Rejects as `execFile` does: with `code`,
  * `stdout` and `stderr` on a non-zero exit, and with `code: "ENOENT"` when the program is on no absolute PATH entry.
  */
 export async function execProgram(file: string, args: string[], opts: ExecOptions = {}): Promise<{ stdout: string; stderr: string }> {
-  const program = await onPath(file, opts.env ?? process.env);
+  const env = opts.env ?? process.env;
+  const program = await onPath(file, env);
   if (program === null) throw notOnPath(file);
-  const { stdout, stderr } = await promisify(execFile)(program, args, { ...opts, encoding: "utf8" });
+  const { stdout, stderr } = await promisify(execFile)(program, args, { ...opts, env: childEnv(env), encoding: "utf8" });
   return { stdout, stderr };
 }
 
@@ -112,7 +141,7 @@ export const spawnInherited: Runner = async (req) => {
   return new Promise((resolve, reject) => {
     const child = spawn(program, req.args, {
       cwd: req.cwd,
-      env: req.env,
+      env: childEnv(req.env),
       stdio: [req.stdin, "inherit", "inherit"],
     });
     child.on("error", reject);

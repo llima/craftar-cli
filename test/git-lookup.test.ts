@@ -80,6 +80,18 @@ describe("a git planted in craftar's working directory is never run", () => {
       expect([dirty.code, dirty.stdout], args.join(" ")).toEqual([clean.code, clean.stdout]);
     }
   });
+
+  it.runIf(!WIN)("an ssh planted there is not what git starts for an ssh Forge", async () => {
+    const s = await planted();
+    await writeFiles(s.wsRoot, { ssh: `#!/bin/sh\necho ran >> planted-ssh-ran.txt\nexit 1\n`, "craftar.yaml": "forge: ssh://git@127.0.0.1:1/acme/forge.git\nprofile: acme\n" });
+    await fs.chmod(path.join(s.wsRoot, "ssh"), 0o755);
+    const dir = path.dirname((await onPath("git", process.env))!);
+    for (const PATH of [`${path.delimiter}${dir}`, `.${path.delimiter}${dir}`]) {
+      const r = run(["status"], s.wsRoot, PATH);
+      expect(r.code, `PATH=${JSON.stringify(PATH)}`).toBe(1);
+    }
+    expect(await exists(path.join(s.wsRoot, "planted-ssh-ran.txt"))).toBe(false);
+  });
 });
 
 describe("one runner (the lookup cannot be bypassed)", () => {

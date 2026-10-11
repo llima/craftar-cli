@@ -106,7 +106,6 @@ describe("the program lookup never uses the child's working directory", () => {
   });
 });
 
-
 describe("onPath — where a program is looked for", () => {
   it("finds it in an absolute PATH entry, skipping the empty and the relative ones, and returns its absolute path", async () => {
     const dir = PLANTED;
@@ -172,7 +171,6 @@ describe("pathEntries — which entries of PATH a program is looked for in", () 
   });
 });
 
-
 describe("execProgram — a finished program, resolved by onPath", () => {
   it("returns stdout and stderr of a program found on an absolute PATH entry, run in the given directory", async () => {
     const cwd = await fs.realpath(await tmpDir("craftar-proc-exec-"));
@@ -202,5 +200,24 @@ describe("execProgram — a finished program, resolved by onPath", () => {
 
   it("reads PATH from the process when no env is given", async () => {
     expect((await execProgram(process.execPath, ["-e", "console.log('ok')"])).stdout).toBe("ok\n");
+  });
+});
+
+describe("the child's own PATH holds absolute entries only", () => {
+  const printPath = ["-e", "console.log(process.env.PATH)"];
+  it("execProgram and spawnInherited hand the child the entries onPath looks in, in order — no empty or relative one", async () => {
+    const other = await fs.realpath(await tmpDir("craftar-proc-other-"));
+    cleanups.push(() => fs.rm(other, { recursive: true, force: true }));
+    const dirty = ["", ".", PLANTED, "bin", other, ""].join(path.delimiter);
+    expect((await execProgram(TOOL, printPath, { env: withPath(dirty) })).stdout).toBe(`${[PLANTED, other].join(path.delimiter)}\n`);
+    const script = `process.exit(process.env.PATH === ${JSON.stringify([PLANTED, other].join(path.delimiter))} ? 0 : 9)`;
+    expect(await spawnInherited({ file: TOOL, args: ["-e", script], cwd: other, env: withPath(dirty), stdin: "ignore" })).toEqual({ code: 0 });
+  });
+
+  it("the rest of the environment is passed as given, and the caller's object is not changed", async () => {
+    const env = { ...withPath(["", PLANTED].join(path.delimiter)), CRAFTAR_PROBE: "kept" };
+    const before = { ...env };
+    expect((await execProgram(TOOL, ["-e", "console.log(process.env.CRAFTAR_PROBE)"], { env })).stdout).toBe("kept\n");
+    expect(env).toEqual(before);
   });
 });
