@@ -17,6 +17,7 @@ describe("README — craftar ui", () => {
   it("no longer listed as not built, nor under Later", () => {
     const unbuilt = README.split("\n").filter((l) => l.includes("is not built yet."));
     expect(unbuilt).toHaveLength(1);
+    expect(unbuilt[0]).toContain("Everything else in the spec");
     expect(unbuilt[0].slice(unbuilt[0].lastIndexOf("Everything else in the spec"))).not.toContain("craftar ui");
     const later = README.split("\n").filter((l) => l.startsWith("Later:"));
     expect(later).toHaveLength(1);

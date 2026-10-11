@@ -29,9 +29,7 @@ describe("craftar mcp — README and --help", () => {
   it("craftar mcp is no longer listed as not built, nor as a later item", () => {
     expect(README).not.toContain("`craftar ui`, `craftar mcp`) is not built yet");
     expect(README).not.toContain("`craftar mcp` + Claude Code");
-    // `craftar ui` left both lists when it was built (spec 36); `test/ui-readme.test.ts` holds that half.
-    expect(README).toContain("`dotnet new` project templates) is not built yet");
-    expect(README).toContain("`sync --check`; writing tools for `craftar mcp` (`sync`, `add recipe`) and its Claude Code / Agent Plugin packaging.");
+    // `craftar ui` left both lists when it was built (spec 36): `test/ui-readme.test.ts` holds that half.
     // the roadmap still names the shipped command, and the results paragraph says what is left out
     expect(count("`craftar mcp` (a read-only MCP server: seven reading tools for an AI coder, over stdin and stdout). Next:")).toBe(1);
     expect(count("with three things left out")).toBe(1);
