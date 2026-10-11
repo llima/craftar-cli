@@ -106,17 +106,24 @@ describe("the prune lock (§4.2 step 0, §13 item 15)", () => {
     const lock = path.join(s.forges, "prune.lock");
     const busy = `the Forge cache prune lock ${lock} is busy (held by PID ${process.pid})`;
     const fresh: boolean[] = [];
+    const dated: boolean[] = [];
     const seconds: string[] = [];
+    let mark = Date.now();
     // Called right after each step's refresh, with the first prune held here. No clock is waited on: each step
     // leaves the lock dated 2020 — past any stale bound — so only the next step's refresh can make it fresh again.
     const beforeStep = async () => {
-      fresh.push(await fs.stat(lock).then((st) => st.mtimeMs > old.getTime(), () => false));
+      // Fresh is stamped now — not before the previous step ended, 50 ms allowed for how a file system rounds a time.
+      // From the second step on that step held a second prune for its 100 ms wait, so a stamp taken once would read old.
+      fresh.push(await fs.stat(lock).then((st) => st.mtimeMs >= mark - 50, () => false));
       if (fresh.length > 1)
         seconds.push(await pruneCache(s.home, { ...RUN, waitMs: 100, pollMs: 20 }).then(() => "took the lock over", (e: Error) => e.message));
-      await fs.utimes(lock, old, old).catch(() => {});
+      // A backdate that did not land would leave the lock fresh, and every later answer true for nothing.
+      dated.push(await fs.utimes(lock, old, old).then(() => fs.stat(lock)).then((st) => st.mtimeMs === old.getTime(), () => false));
+      mark = Date.now();
     };
     const first = await pruneCache(s.home, { ...RUN, beforeStep });
     expect(fresh).toEqual([true, true, true]);
+    expect(dated).toEqual([true, true, true]);
     expect(seconds).toEqual([busy, busy]);
     expect(first.report.removed.map((x) => x.kind)).toEqual(["entry", "entry", "entry"]);
   });
