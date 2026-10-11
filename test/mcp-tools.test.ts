@@ -8,6 +8,7 @@ import { remoteForge } from "./helpers/remote.js";
 import { MCP_FILES, eightStates, explained, mcpWorkspace, moveTracker, syncOnce, type Scenario } from "./helpers/states.js";
 import { catalogueContext, listIngredients, listRecipes } from "../src/core/catalogue.js";
 import { renderDiff } from "../src/core/diff.js";
+import { PIN_CHANGED } from "../src/core/mcp-protocol.js";
 import { statusReport } from "../src/core/report.js";
 import { defaultGit, type GitRunner } from "../src/core/remote.js";
 import { loadWorkspace, plan, readLock, readWorkspaceConfig, status } from "../src/core/sync.js";
@@ -357,5 +358,82 @@ describe("a workspace that does not load", () => {
     expect(t.warnings[0]).toMatch(/^targets in use not shown: craftar\.yaml not found in /);
     await fs.writeFile(file, text);
     expect(data(await one("status", m)).statuses).toHaveLength(8);
+  });
+});
+
+describe("the pin", () => {
+  const TOOLS = [["status"], ["diff"], ["explain", { path: `${R}/keep.md` }], ["recipes"], ["ingredients"], ["doctor"]] as const;
+  async function pinned() {
+    const s = kept(await scenario(BASE, { config: { profile: "acme" } }));
+    const other = path.join(s.root, "forge-SENTINEL-OTHER");
+    await fs.cp(s.forgeRoot, other, { recursive: true });
+    const calls: string[][] = [];
+    const git: GitRunner = (args, o) => (calls.push(args), defaultGit(args, o));
+    return { s, calls, m: await session(s.wsRoot, { git }), yaml: path.join(s.wsRoot, "craftar.yaml"), local: path.join(s.wsRoot, "craftar.local.yaml") };
+  }
+  const refused = async (m: Awaited<ReturnType<typeof session>>) => {
+    for (const [name, args] of TOOLS) {
+      const a = await one(name, m, args as any);
+      expect(failed(a), name).toBe(PIN_CHANGED);
+      expect(JSON.stringify(a)).not.toMatch(/SENTINEL|globex|v9/);
+    }
+    const t = data(await one("targets", m));
+    expect(t.targets.map((x: any) => x.inUse)).toEqual([null, null, null]);
+    expect(t.warnings).toEqual([`targets in use not shown: ${PIN_CHANGED}`]);
+  };
+
+  it("the message is the spec's, and holds no value", () => {
+    expect(PIN_CHANGED).toBe("the Forge or the profile of this workspace changed since craftar mcp started (forge, ref or profile in craftar.yaml / craftar.local.yaml) — restart the server to read the new one");
+  });
+
+  it.each([
+    ["forge: in craftar.yaml points at a second Forge", (x: any) => fs.writeFile(x.yaml, YAML.stringify({ forge: "../forge-SENTINEL-OTHER", profile: "acme" }))],
+    ["a craftar.local.yaml appears with another forge:", (x: any) => fs.writeFile(x.local, YAML.stringify({ forge: "../forge-SENTINEL-OTHER" }))],
+    ["a URL forge: (nothing is fetched)", (x: any) => fs.writeFile(x.yaml, YAML.stringify({ forge: "https://example.com/SENTINEL.git", profile: "acme" }))],
+    ["ref changes", (x: any) => fs.appendFile(x.yaml, "ref: v9\n")],
+    ["profile names another profile of the same Forge", (x: any) => fs.writeFile(x.yaml, YAML.stringify({ forge: "../forge", profile: "globex" }))],
+  ])("%s: every tool but targets stops, no git call, and restoring the value brings them back", async (_n, edit) => {
+    const x = await pinned();
+    const before = await fs.readFile(x.yaml, "utf8");
+    await edit(x);
+    await refused(x.m);
+    expect(x.calls).toEqual([]);
+    await fs.writeFile(x.yaml, before);
+    await fs.rm(x.local, { force: true });
+    expect(data(await one("status", x.m)).statuses).toHaveLength(1);
+  });
+
+  it("an edit of recipes in craftar.yaml is not pinned: the next call reads it", async () => {
+    const x = await pinned();
+    await fs.appendFile(x.yaml, "recipes:\n  remove: [base]\n");
+    expect(data(await one("status", x.m)).statuses).toEqual([]);
+  });
+
+  it("one read per call, and the call loads the configuration it checked", async () => {
+    const x = await pinned();
+    let n = 0;
+    const m = await session(x.s.wsRoot, { readConfig: async (root) => (n++, readWorkspaceConfig(root)) });
+    for (const [name, args] of [...TOOLS, ["targets"]] as const) {
+      n = 0;
+      const read = vi.spyOn(fs, "readFile");
+      await one(name, m, args as any);
+      expect(n, name).toBe(1);
+      expect(read.mock.calls.filter((c) => String(c[0]).endsWith("craftar.yaml")), name).toHaveLength(1);
+      read.mockRestore();
+    }
+    // Swapped right after the read: the wrapper returns what it read, then rewrites the file. The call must not load the second Forge.
+    await fs.writeFile(path.join(x.s.root, "forge-SENTINEL-OTHER/ingredients/rules/keep/rule.md"), "# SENTINEL-SWAPPED\n");
+    const before = await fs.readFile(x.yaml, "utf8");
+    const swap = await session(x.s.wsRoot, {
+      readConfig: async (root) => {
+        const merged = await readWorkspaceConfig(root);
+        await fs.writeFile(x.yaml, YAML.stringify({ forge: "../forge-SENTINEL-OTHER", profile: "acme" }));
+        return merged;
+      },
+    });
+    const a = await one("diff", swap, { path: `${R}/keep.md` });
+    expect(data(a).files).toEqual([{ path: `${R}/keep.md`, state: "new", added: 1, removed: 0, diff: "+ # Keep", note: null }]);
+    expect(JSON.stringify(a)).not.toContain("SENTINEL");
+    await fs.writeFile(x.yaml, before);
   });
 });

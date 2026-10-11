@@ -216,6 +216,8 @@ async function call(name: ToolName, args: ToolArguments, ctx: McpContext): Promi
   let merged: MergedConfig;
   try {
     merged = await (ctx.readConfig ?? readWorkspaceConfig)(ctx.root);
+    const now = pinOf(merged);
+    if (now.forge !== ctx.pin.forge || now.ref !== ctx.pin.ref || now.profile !== ctx.pin.profile) throw new Error(PIN_CHANGED);
   } catch (e) {
     // `targets` answers as its command does when a workspace does not load: unmarked, with the reason as a warning
     if (name === "targets") return targetsReport(ctx.root, seam, { reason: errorText(e) });
