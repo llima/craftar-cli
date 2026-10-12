@@ -66,7 +66,7 @@ export function urlCredentialIn(text: string): boolean {
     // lookahead: a long run of line breaks is walked once.
     let authorityEnd = -1;
     for (let i = 0; i < afterScheme.length; i++) {
-      const c = afterScheme[i];;
+      const c = afterScheme[i];
       if (!/[/?#\s"',;]/.test(c)) continue;
       if (c === "\t" || c === "\n" || c === "\r") {
         let j = i + 1;
