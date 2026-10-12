@@ -55,6 +55,10 @@ const FINDING: Array<[string, string]> = [
   ["another scheme, a password, then a line feed", "ssh://git:pw\n@host/x"],
   ["refused though it is prose: a URL with no path, then a mention on the next line", "see https://example.com\n@alice"],
   ["refused though it is no secret: a registry, then a scoped package on the next line", "https://registry.npmjs.org\n@acme/pkg"],
+  ["a run before the last of two @", "https://a\n@b@host/"],
+  ["the empty authority and a line feed before the @, together", "https:///tok\n@host/"],
+  ["refused though it is no secret: a URL, a tab, a handle", "https://example.com\t@handle"],
+  ["a tab inside the scheme does not save a password", "ht\ttps://u:p@host/"],
 ];
 
 const NONE: Array<[string, string]> = [
@@ -123,6 +127,10 @@ const NONE: Array<[string, string]> = [
   ["a markdown link, a space, a mention", "[site](https://example.com) @alice"],
   ["a registry, a space, a scoped package", "https://registry.npmjs.org @acme/pkg"],
   ["a host and a port, a space, a mention", "postgres://db.internal:5432 @replica"],
+  ["a line feed and no @ after it", "https://tok\n\n\n"],
+  ["ssh, a line feed, a mention — no colon before the @", "ssh://host\n@alice"],
+  ["a tab inside the :// — still passes, though it holds a password", "https:\t//u:p@host/"],
+  ["a tab inside the scheme, a bare user — still passes", "ht\ttps://tok@host/"],
 ];
 
 describe("urlCredentialIn — row U", () => {
