@@ -25,6 +25,16 @@ const FINDING: Array<[string, string]> = [
   ["no terminator after the host", "https://u:p@host"],
   ["a clean URL first, a credential URL later", "x https://ok.example.com y https://u@h z"],
   ["two @ in the authority, the user part a reference", "https://${A}@b:c@host/"],
+  // An empty authority: curl reads past the extra slashes, so the userinfo after them counts (every scheme but file).
+  ["an empty authority, then a user and a password", "https:///u:p@idp.example.com/"],
+  ["the same inside a longer leaf", "--url=https:///u:p@idp.example.com/"],
+  ["four slashes", "https:////u:p@host/"],
+  ["a backslash among the separators", "https://\\/u:p@host/"],
+  ["an empty authority, then a bare user on https", "https:///tok@host/x"],
+  ["an empty authority on another scheme, with a password", "ssh:///git:pw@host/x"],
+  ["an empty authority after an empty scheme", ":///u:p@host/"],
+  ["only file itself is exempt, not a scheme that holds it", "file+x:///u:p@host/"],
+  ["an empty authority, a literal mixed with a reference", "https:///acme:${DB_PASS}@db.example.com/app"],
 ];
 
 const NONE: Array<[string, string]> = [
@@ -62,6 +72,14 @@ const NONE: Array<[string, string]> = [
   ["the empty string", ""],
   ["a bare ://", "://"],
   ["a scheme and nothing else", "https://"],
+  // An empty authority that hides nothing, and the one scheme where it is the norm.
+  ["file with an empty authority: the rest is a path", "file:///home/u:p@x/y"],
+  ["file compared without case", "FILE:///home/u:p@x/y"],
+  ["an empty authority and no userinfo", "https:///idp.example.com/mcp"],
+  ["an empty authority, then the remedy", "https:///${IDP_TOKEN}@idp.example.com/mcp"],
+  ["an empty authority on ssh with a bare user", "ssh:///git@host/x"],
+  ["an empty authority, then an @ only in the path", "https:///host/a:b@c"],
+  ["slashes and nothing else", "https:////"],
 ];
 
 describe("urlCredentialIn — row U", () => {
