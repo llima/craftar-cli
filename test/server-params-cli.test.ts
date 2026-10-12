@@ -38,7 +38,7 @@ const setToken = (forgeRoot: string) =>
   fs.writeFile(path.join(forgeRoot, "profiles/acme/profile.yaml"), YAML.stringify(profile("acme", ["base"], ["claude-code", "kiro"], { params: { token: GHP } })));
 
 describe("the credential refusal, on every surface", () => {
-  for (const args of [["sync"], ["status"], ["diff"], ["sync", "--check"], ["sync", "--dry-run"], ["ls"], ["explain", ".mcp.json"]]) {
+  for (const args of [["sync"], ["status"], ["diff"], ["sync", "--check"], ["sync", "--dry-run"], ["ls"], ["explain", ".mcp.json"], ["drift", "show"], ["drift", "show", "--json"]]) {
     it(`1. ${args.join(" ")} exits 1 with the one line, and writes nothing`, async () => {
       const s = await at(4, refusing("profile"));
       const r = runCli([...args, "--workspace", s.wsRoot], { env: s.env });

@@ -56,7 +56,7 @@ export function urlCredentialIn(text: string): boolean {
     // An empty authority is not the end of it: curl takes up to three slashes after the scheme and reads what
     // follows as the authority, so `https:///<userinfo>@host/…` reaches the host with the userinfo. Every scheme
     // but `file` (where an empty authority is the norm and the rest is a path) is read past the leading
-    // separators — as `credentialFault` reads a Forge URL.
+    // separators.
     const rest = text.slice(sep + 3);
     const afterScheme = scheme === "file" ? rest : rest.replace(/^[/\\]+/, "");
     const authorityEnd = afterScheme.search(/[/?#\s"',;]/);

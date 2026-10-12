@@ -35,6 +35,9 @@ const FINDING: Array<[string, string]> = [
   ["an empty authority after an empty scheme", ":///u:p@host/"],
   ["only file itself is exempt, not a scheme that holds it", "file+x:///u:p@host/"],
   ["an empty authority, a literal mixed with a reference", "https:///acme:${DB_PASS}@db.example.com/app"],
+  // Refused though it is no credential: with an empty authority the first path segment is read as one (README).
+  ["an empty authority and a path whose first segment reads as a userinfo", "sqlite:///a:b@c.db"],
+  ["the same on https, where an @ alone is enough", "https:///ops@example.com"],
 ];
 
 const NONE: Array<[string, string]> = [
@@ -80,6 +83,7 @@ const NONE: Array<[string, string]> = [
   ["an empty authority on ssh with a bare user", "ssh:///git@host/x"],
   ["an empty authority, then an @ only in the path", "https:///host/a:b@c"],
   ["slashes and nothing else", "https:////"],
+  ["an empty authority with the @ deeper in the path", "unix:///run/a:b@c/x.sock"],
 ];
 
 describe("urlCredentialIn — row U", () => {
