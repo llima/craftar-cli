@@ -53,7 +53,7 @@ import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type UnifyPlan } from "./schema/index.js";
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
-import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
+import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport as servicesStatusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion, feedMessage, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared, type InstallResult } from "./core/templates.js";
 import { capture, spawnInherited } from "./core/proc.js";
@@ -1078,7 +1078,6 @@ program
       env: process.env,
       pin: pinOf(merged),
     });
-  });
   });
 
 /* ---------------------------------------------------------------- recipes */
@@ -2392,7 +2391,7 @@ services
         if (r.code === 0) ps = readPs(r.stdout);
         else psFault = `docker compose ps failed — ${r.stderr.trim().split("\n")[0] || `exit ${r.code}`}`;
       }
-      const report = statusReport(real, recorded, docker, ps, psFault);
+      const report = servicesStatusReport(real, recorded, docker, ps, psFault);
       if (o.json) console.log(JSON.stringify(report, null, 2));
       else {
         console.log(pc.bold(`craftar services — project ${report.project}`));
