@@ -7,7 +7,8 @@
     "mcp",
     "script",
     "steering",
-    "hook"
+    "hook",
+    "service"
   ],
   "targets": [
     {
@@ -69,6 +70,11 @@
             ".claude/hooks/<file>"
           ],
           "note": null
+        },
+        "service": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
         }
       }
     },
@@ -127,6 +133,11 @@
           "state": "unsupported",
           "output": [],
           "note": "skipped with a warning when aimed at this target"
+        },
+        "service": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
         }
       }
     },
@@ -172,6 +183,11 @@
           "note": "skipped with a warning when aimed at this target"
         },
         "hook": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "service": {
           "state": "unsupported",
           "output": [],
           "note": "skipped with a warning when aimed at this target"
