@@ -126,7 +126,7 @@ const TOOLS: Record<ToolName, { title: string; description: string; args: z.ZodT
   doctor: {
     title: "Workspace checks",
     description:
-      "One finding per check about this workspace — configuration, Forge, plan, declared parameters, MCP environment variable names, lock, status, registration — each with its fix. Reads only.",
+      "One finding per check about this workspace — configuration, Forge, plan, declared parameters, MCP environment variable names, the profile's templates block and dotnet, Docker Compose and the variables a service fragment expects, lock, status, registration — each with its fix. Reads only; like the command, it asks docker compose and dotnet for their version when the workspace uses them.",
     args: noArguments,
     inputSchema: NO_PROPERTIES,
   },
