@@ -47,6 +47,14 @@ const FINDING: Array<[string, string]> = [
   ["a space directly after ://", "https:// u:p@host/"],
   ["a tab among the separators, then a bare user on https", "https://\t/tok@host/x"],
   ["refused though it is prose: white space after ://, then x:y@", "see :// a:b@c"],
+  // A tab or a line break directly before the @ does not end the authority: a URL parser deletes them and reads the userinfo.
+  ["a token followed by a line feed — a YAML block scalar", "https://tok\n@host/"],
+  ["a token followed by CR LF", "https://tok\r\n@host/"],
+  ["a user and a password followed by a tab", "https://u:p\t@host/"],
+  ["a mixed run of tab, CR and LF before the @", "https://tok\t\r\n\n@host/"],
+  ["another scheme, a password, then a line feed", "ssh://git:pw\n@host/x"],
+  ["refused though it is prose: a URL with no path, then a mention on the next line", "see https://example.com\n@alice"],
+  ["refused though it is no secret: a registry, then a scoped package on the next line", "https://registry.npmjs.org\n@acme/pkg"],
 ];
 
 const NONE: Array<[string, string]> = [
@@ -98,6 +106,23 @@ const NONE: Array<[string, string]> = [
   ["white space, then a host and an @ only in the path", "https:// host/a:b@c"],
   ["a tab among the separators, then the remedy", "https://\t/${IDP_TOKEN}@host/"],
   ["two clean URLs separated by a space", "https://a.example.com https://b.example.com"],
+  // What still ends the authority: a space before the @, and white space that is not directly before it.
+  ["a token followed by a space — still passes, though it is a secret", "https://tok @host/"],
+  ["a line feed, then a space, before the @", "https://tok\n @host/"],
+  ["a space, then a line feed, before the @", "https://tok \n@host/"],
+  ["a tab inside the userinfo, not before the @", "https://u\t:p@host/"],
+  ["the remedy followed by a line feed", "https://${IDP_TOKEN}\n@host/"],
+  ["ssh with a bare user followed by a line feed", "ssh://git\n@host/x"],
+  ["prose: a URL, words, a mail address", "see https://example.com or mail ops@example.com"],
+  ["two lines: a URL, then a mail address", "https://example.com\nops@example.com"],
+  ["two lines, labelled", "site: https://example.com\nmail: ops@example.com"],
+  ["a list with a comma and a space", "--allow=https://a.example.com, ops@example.com"],
+  ["a URL with a path, then a mention", "https://example.com/docs @alice"],
+  ["a URL, then a quoted mail address", 'https://example.com "ops@example.com"'],
+  ["a URL with no path, a space, a mention", "see https://example.com @alice"],
+  ["a markdown link, a space, a mention", "[site](https://example.com) @alice"],
+  ["a registry, a space, a scoped package", "https://registry.npmjs.org @acme/pkg"],
+  ["a host and a port, a space, a mention", "postgres://db.internal:5432 @replica"],
 ];
 
 describe("urlCredentialIn — row U", () => {
