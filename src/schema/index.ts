@@ -432,8 +432,9 @@ export const TEMPLATE_KIND = /^[a-z][a-z0-9-]*$/;
 export const TEMPLATE_PACKAGE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(::[0-9A-Za-z][0-9A-Za-z.+-]*)?$/;
 /**
  * A source is an `https://` URL with a non-empty host of printable ASCII without `/`,
- * then an optional path of printable ASCII. An empty authority hides a credential from
- * `credentialFault`; no control character reaches a terminal.
+ * then an optional path of printable ASCII. An empty authority spelled with slashes is refused here
+ * as well as by `credentialFault`, which reads past it; spelled with a backslash (a character of the
+ * host class) it is `credentialFault`'s alone. No control character reaches a terminal.
  */
 export const TEMPLATE_SOURCE = /^https:\/\/[\x21-\x2e\x30-\x7e]+(\/[\x21-\x7e]*)?$/;
 /** A key we can echo: an identifier-like name, nothing else (URLs, newlines) reaches an output. */

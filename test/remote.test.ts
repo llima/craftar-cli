@@ -56,6 +56,45 @@ describe("credentials (spec 13 §4.3, §6.1)", () => {
     ])
       expect(credentialFault(v), v).toBe(false);
   });
+  // An empty authority: curl accepts up to three slashes after the scheme and reads what follows as
+  // the authority, so `https:///<userinfo>@host/…` reaches the host with the userinfo (measured with
+  // git 2.53 / curl 8.18). Assembled at runtime: no credential-shaped literal in the repo.
+  const CRED = ["user", "pw" + "x".repeat(6)].join(":") + "@";
+  const TOKEN = "tok" + "x".repeat(6) + "@";
+  const masked = (v: string): string => v.replace(CRED, "<cred>").replace(TOKEN, "<token>");
+  it("refused with an empty authority", () => {
+    for (const v of [
+      `https:///${CRED}example.invalid/acme/forge.git`,
+      `http:///${CRED}example.invalid/acme/forge.git`,
+      `HTTPS:///${CRED}example.invalid/acme/forge.git`,
+      `https:///${TOKEN}example.invalid/acme/forge.git`,
+      `https:////${CRED}example.invalid/acme/forge.git`,
+      `https:///\\${CRED}example.invalid/acme/forge.git`,
+      `https://\\/${CRED}example.invalid/acme/forge.git`,
+      `ssh:///${CRED}example.invalid/acme/forge.git`,
+      `git:///${CRED}example.invalid/acme/forge.git`,
+      ` https:///${CRED}example.invalid/acme/forge.git`,
+    ])
+      expect(credentialFault(v), masked(v)).toBe(true);
+  });
+  it("accepted with an empty authority: nothing that reads as userinfo follows, or the scheme is file", () => {
+    for (const v of [
+      "https:///example.invalid/acme/forge.git",
+      "https:///example.invalid:8443/acme/forge.git",
+      "https:///@example.invalid/acme/forge.git",
+      "https:///example.invalid/p@x",
+      "ssh:///git@example.invalid/acme/forge.git",
+      `file:///${CRED}dir/forge.git`,
+      `FILE:///${CRED}dir/forge.git`,
+      `file:///tmp/${CRED}dir/forge.git`,
+    ])
+      expect(credentialFault(v), masked(v)).toBe(false);
+  });
+  it("the cache key of a refused spelling would have held the password — why the check comes first", () => {
+    const v = `https:///${CRED}example.invalid/acme/forge.git`;
+    expect(credentialFault(v)).toBe(true);
+    expect(cacheKey(v)).toContain("pw" + "x".repeat(6));
+  });
 });
 
 describe("the cache key (spec 13 §6.3)", () => {

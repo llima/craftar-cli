@@ -26,7 +26,10 @@ export function classifyForge(value: string): "url" | "path" {
 /**
  * True when a `forge:` value carries a credential: a user or password in an `http(s)` URL, a password
  * in any other scheme, or a `<x>:<y>@` before the first `/` or `\` whatever the value reads as — so a
- * password never reaches a message that prints the value (spec 13 §6.1, §14 item 11).
+ * password never reaches a message that prints the value (spec 13 §6.1, §14 item 11). An empty
+ * authority (`https:///…`) is read past, for every scheme but `file`: what follows the extra
+ * separators is the authority some clients use — curl past up to three slashes, a WHATWG parser
+ * past a `\` too.
  */
 export function credentialFault(raw: string): boolean {
   const value = raw.trim();
@@ -37,7 +40,12 @@ export function credentialFault(raw: string): boolean {
   // Read the authority as written, never through a parser: a spelling WHATWG URL rejects
   // (`host:badport`) must not slip through and be printed later. It runs to the first `/`, as git
   // reads an ssh URL — a `?` or `#` in a password stays inside it. Fail closed.
-  const rest = value.slice(scheme[0].length);
+  // An empty authority is not the end of it: curl takes up to three slashes after the scheme and
+  // reads what follows as the authority, so `https:///<userinfo>@host/…` reaches the host with the
+  // userinfo. Every scheme but `file` (where an empty authority is the norm and the rest is a path)
+  // is read past the leading separators.
+  const after = value.slice(scheme[0].length);
+  const rest = /^file:\/\/$/i.test(scheme[0]) ? after : after.replace(/^[/\\]+/, "");
   const authority = rest.slice(0, rest.search(/\/|$/));
   const at = authority.lastIndexOf("@");
   if (at === -1) return false;

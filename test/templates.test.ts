@@ -200,6 +200,7 @@ describe("declaredTemplates — refusals name the position and the rule, never a
     ["an unknown key that is not a name", [dn({ [`https://u:${M}@h/x\nmore`]: 1 })], at("templates[0]", UNKNOWN_KEY)],
     ["a source with a user and a password", [dn({ source: `https://user:${M}@pkgs.example.com/v3/index.json` })], at("templates[0].source", CREDENTIAL)],
     ["a source with a user", [dn({ source: `https://${M}@pkgs.example.com/v3/index.json` })], at("templates[0].source", CREDENTIAL)],
+    ["a source with a user and a password behind a backslash and a slash", [dn({ source: `https://\\/user:${M}@pkgs.example.com/x` })], at("templates[0].source", CREDENTIAL)],
     ["an unknown key on a dotnet-new entry", [dn({ feed: M })], at("templates[0].feed", UNKNOWN_KEY)],
     ["a __proto__ key", JSON.parse(`[{"kind":"npm-create","__proto__":"${M}"}]`), at("templates[0].__proto__", "a __proto__ key is not allowed")],
     ["the second entry", [dn(), { kind: `${M} ` }], at("templates[1].kind", KIND)],
