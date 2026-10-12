@@ -26,7 +26,9 @@ export function classifyForge(value: string): "url" | "path" {
 /**
  * True when a `forge:` value carries a credential: a user or password in an `http(s)` URL, a password
  * in any other scheme, or a `<x>:<y>@` before the first `/` or `\` whatever the value reads as — so a
- * password never reaches a message that prints the value (spec 13 §6.1, §14 item 11).
+ * password never reaches a message that prints the value (spec 13 §6.1, §14 item 11). An empty
+ * authority (`https:///…`) is read past, for every scheme but `file`: what follows the extra
+ * separators is the authority a client such as curl uses.
  */
 export function credentialFault(raw: string): boolean {
   const value = raw.trim();
