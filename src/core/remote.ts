@@ -28,7 +28,8 @@ export function classifyForge(value: string): "url" | "path" {
  * in any other scheme, or a `<x>:<y>@` before the first `/` or `\` whatever the value reads as — so a
  * password never reaches a message that prints the value (spec 13 §6.1, §14 item 11). An empty
  * authority (`https:///…`) is read past, for every scheme but `file`: what follows the extra
- * separators is the authority a client such as curl uses.
+ * separators is the authority some clients use — curl past up to three slashes, a WHATWG parser
+ * past a `\` too.
  */
 export function credentialFault(raw: string): boolean {
   const value = raw.trim();
