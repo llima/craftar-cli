@@ -72,7 +72,7 @@ describe("the tools answer with the commands' data (a path Forge)", () => {
   it("an unknown type or recipe is a tool error with the core's message", async () => {
     const s = kept(await eightStates());
     const m = await session(s.wsRoot);
-    expect(failed(await one("ingredients", m, { type: "widget" }))).toBe('unknown ingredient type "widget" — one of rule, agent, command, skill, mcp, script, steering, hook');
+    expect(failed(await one("ingredients", m, { type: "widget" }))).toBe('unknown ingredient type "widget" — one of rule, agent, command, skill, mcp, script, steering, hook, service');
     expect(failed(await one("ingredients", m, { recipe: "nope" }))).toBe('recipe "nope" not found in this Forge (base)');
   });
 
