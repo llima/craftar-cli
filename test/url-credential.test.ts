@@ -38,6 +38,15 @@ const FINDING: Array<[string, string]> = [
   // Refused though it is no credential: with an empty authority the first path segment is read as one (README).
   ["an empty authority and a path whose first segment reads as a userinfo", "sqlite:///a:b@c.db"],
   ["the same on https, where an @ alone is enough", "https:///ops@example.com"],
+  // White space among the leading separators is read past too: a URL parser drops a tab or a newline and still reads the userinfo.
+  ["a tab among the separators", "https://\t/u:p@host/"],
+  ["a newline among the separators", "https://\n//u:p@host/"],
+  ["a carriage return among the separators", "https://\r/u:p@host/"],
+  ["a space after the slashes", "https:/// u:p@host/"],
+  ["a tab and no slash before the userinfo", "https://\tu:p@host/"],
+  ["a space directly after ://", "https:// u:p@host/"],
+  ["a tab among the separators, then a bare user on https", "https://\t/tok@host/x"],
+  ["refused though it is prose: white space after ://, then x:y@", "see :// a:b@c"],
 ];
 
 const NONE: Array<[string, string]> = [
@@ -84,6 +93,11 @@ const NONE: Array<[string, string]> = [
   ["an empty authority, then an @ only in the path", "https:///host/a:b@c"],
   ["slashes and nothing else", "https:////"],
   ["an empty authority with the @ deeper in the path", "unix:///run/a:b@c/x.sock"],
+  ["file keeps its exemption behind a tab", "file://\t/u:p@host/"],
+  ["white space and nothing after", "https:// "],
+  ["white space, then a host and an @ only in the path", "https:// host/a:b@c"],
+  ["a tab among the separators, then the remedy", "https://\t/${IDP_TOKEN}@host/"],
+  ["two clean URLs separated by a space", "https://a.example.com https://b.example.com"],
 ];
 
 describe("urlCredentialIn — row U", () => {

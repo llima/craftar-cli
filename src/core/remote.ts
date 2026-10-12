@@ -56,9 +56,10 @@ export function urlCredentialIn(text: string): boolean {
     // An empty authority is not the end of it: curl takes up to three slashes after the scheme and reads what
     // follows as the authority, so `https:///<userinfo>@host/…` reaches the host with the userinfo. Every scheme
     // but `file` (where an empty authority is the norm and the rest is a path) is read past the leading
-    // separators.
+    // separators. White space among them is read past too: a URL parser drops a tab or a newline,
+    // percent-encodes a space, and still reads the userinfo that follows.
     const rest = text.slice(sep + 3);
-    const afterScheme = scheme === "file" ? rest : rest.replace(/^[/\\]+/, "");
+    const afterScheme = scheme === "file" ? rest : rest.replace(/^[/\\\s]+/, "");
     const authorityEnd = afterScheme.search(/[/?#\s"',;]/);
     const authority = authorityEnd === -1 ? afterScheme : afterScheme.slice(0, authorityEnd);
 
