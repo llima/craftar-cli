@@ -540,4 +540,3 @@ export function workspaceReport(report: DoctorReport): DoctorReport {
   for (const c of checks) summary[c.level]++;
   return { version: report.version, workspace: report.workspace, fetch: report.fetch, strict: report.strict, checks, summary };
 }
-}
