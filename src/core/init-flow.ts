@@ -5,7 +5,7 @@ import { resolveHome } from "./home-lock.js";
 import { checkInitFlags, checkLocalKeys, forgeSource, initLine, type InitInput, type InitPlan } from "./init.js";
 import { planRecipeEdit, slotHeld } from "./recipe-edit.js";
 import { readRegistry } from "./registry.js";
-import { classifyForge, credentialFault } from "./remote.js";
+import { classifyForge, credentialFault, CREDENTIAL_HIDDEN, refHoldsCredentials } from "./remote.js";
 import { profileNotFoundMessage, resolve } from "./resolve.js";
 import { loadForgeSource, mergeWorkspaceConfig, unsetDeclared, unsetRefused, type LoadedForge, type LoadOptions } from "./sync.js";
 import type { LocalKey } from "./workspace-yaml.js";
@@ -280,7 +280,8 @@ export async function askInit(
         answeredRef = given.ref;
       } else if (local.keys.includes("ref")) {
         const localRef = localConfig?.ref ?? null;
-        if (localRef !== null) io.say(`Ref: ${localRef} (from craftar.local.yaml)`);
+        // A URL with credentials typed into `ref:` is never said back.
+        if (localRef !== null) io.say(`Ref: ${refHoldsCredentials(localRef) ? CREDENTIAL_HIDDEN : localRef} (from craftar.local.yaml)`);
         refValue = localRef;
       } else {
         const refQ = refDefault !== null && refDefault !== "the default branch"
@@ -298,6 +299,11 @@ export async function askInit(
             answeredRef = undefined;
           }
         } else {
+          // Refused on entry, as the Forge answer is: kept, it would come back in the next question's default.
+          if (refHoldsCredentials(trimmed)) {
+            io.say("the answer holds credentials in a URL — a ref is a branch, a tag or a full SHA");
+            continue forgeLoop;
+          }
           refValue = trimmed;
           answeredRef = refValue;
         }

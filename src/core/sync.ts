@@ -6,7 +6,7 @@ import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forg
 import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
 import { climbsOut, hashNormalized, isUtf8, legacyHash, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
-import { classifyForge, credentialFault, ensureTree, ForgeFetchError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
+import { classifyForge, credentialFault, ensureTree, refHoldsCredentials, shownRef, ForgeFetchError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
 import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
@@ -198,7 +198,7 @@ export async function loadForgeSource(
   const forgeRoot = path.resolve(root, source);
   if (!(await exists(forgeRoot))) throw new Error(`Forge not found at ${forgeRoot}`);
   // A path means the working tree as it is; a ref beside it is ignored, said out loud (Ruling 9).
-  if (ref !== null) warnings.push(`ref "${ref}" is ignored: the Forge is a path (${source}), read as its working tree`);
+  if (ref !== null) warnings.push(`${shownRef(ref)} is ignored: the Forge is a path (${source}), read as its working tree`);
   const origin: ForgeOrigin = { kind: "path", source, ref: null, defaultBranch: null, fetched: false, fromLocalFile };
   return { forge: await loadForge(forgeRoot), origin, warnings };
 }
@@ -244,7 +244,7 @@ async function remoteTree(
     if (!(e instanceof ForgeFetchError)) throw e;
     if (!e.cached)
       throw new Error(
-        `cannot fetch the Forge ${url}: ${e.gitMessage} — ${e.haveCopy ? `and the cached copy cannot resolve ${ref ?? "the default branch"}` : "and there is no cached copy to fall back on"}`,
+        `cannot fetch the Forge ${url}: ${e.gitMessage} — ${e.haveCopy ? `and the cached copy cannot resolve ${ref === null ? "the default branch" : refHoldsCredentials(ref) ? shownRef(ref) : ref}` : "and there is no cached copy to fall back on"}`,
       );
     if (mode === "sync")
       throw new Error(`cannot fetch the Forge ${url}: ${e.gitMessage} — run with --offline to use the cached copy (${short(e.cached.commit)} fetched ${e.cached.fetchedAt ?? "never"})`);
