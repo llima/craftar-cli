@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { capture, onPath, pathEntries, spawnInherited } from "../src/core/proc.js";
+import { capture, execProgram, onPath, pathEntries, spawnInherited } from "../src/core/proc.js";
 import { tmpDir } from "./helpers/forge.js";
 
 // design D3 — the two ways craftar runs an external program besides git: no shell, an argument array.
@@ -106,7 +106,6 @@ describe("the program lookup never uses the child's working directory", () => {
   });
 });
 
-
 describe("onPath — where a program is looked for", () => {
   it("finds it in an absolute PATH entry, skipping the empty and the relative ones, and returns its absolute path", async () => {
     const dir = PLANTED;
@@ -169,5 +168,88 @@ describe("pathEntries — which entries of PATH a program is looked for in", () 
     const dropped = ["", ".", "bin", ".\\bin", "\\tools", "/tools", "C:tools", "\\\\", "\\\\\\tools", "//", "///tools", '""', '"."'];
     expect(pathEntries(dropped.join(";"), true)).toEqual([]);
     for (const entry of dropped) expect(pathEntries(entry, true), JSON.stringify(entry)).toEqual([]);
+  });
+});
+
+describe("execProgram — a finished program, resolved by onPath", () => {
+  it("returns stdout and stderr of a program found on an absolute PATH entry, run in the given directory", async () => {
+    const cwd = await fs.realpath(await tmpDir("craftar-proc-exec-"));
+    cleanups.push(() => fs.rm(cwd, { recursive: true, force: true }));
+    const script = "console.log(require('node:fs').realpathSync(process.cwd())); console.error('note')";
+    expect(await execProgram(TOOL, ["-e", script], { env: withPath(PLANTED), cwd })).toEqual({ stdout: `${cwd}\n`, stderr: "note\n" });
+  });
+
+  it("does not run a program planted in the working directory — PATH empty, '.', or with an empty entry", async () => {
+    const elsewhere = await fs.realpath(await tmpDir("craftar-proc-elsewhere-"));
+    cleanups.push(() => fs.rm(elsewhere, { recursive: true, force: true }));
+    for (const value of ["", ".", `${path.delimiter}${elsewhere}`, `${elsewhere}${path.delimiter}`]) {
+      await expect(execProgram(TOOL, ["-e", "console.log('ran')"], { env: withPath(value), cwd: PLANTED }), `PATH=${JSON.stringify(value)}`).rejects.toMatchObject({
+        code: "ENOENT",
+        message: `spawn ${TOOL} ENOENT`,
+      });
+    }
+  });
+
+  it("rejects as execFile does on a non-zero exit: the code, and what the program wrote", async () => {
+    await expect(execProgram(TOOL, ["-e", "console.log('out'); console.error('fatal: boom'); process.exit(3)"], { env: withPath(PLANTED) })).rejects.toMatchObject({
+      code: 3,
+      stdout: "out\n",
+      stderr: "fatal: boom\n",
+    });
+  });
+
+  it("reads PATH from the process when no env is given", async () => {
+    expect((await execProgram(process.execPath, ["-e", "console.log('ok')"])).stdout).toBe("ok\n");
+  });
+});
+
+describe("the child's own PATH holds absolute entries only", () => {
+  const printPath = ["-e", "console.log(process.env.PATH)"];
+  it("execProgram and spawnInherited hand the child the entries onPath looks in, in order — no empty or relative one", async () => {
+    const other = await fs.realpath(await tmpDir("craftar-proc-other-"));
+    cleanups.push(() => fs.rm(other, { recursive: true, force: true }));
+    const dirty = ["", ".", PLANTED, "bin", other, ""].join(path.delimiter);
+    expect((await execProgram(TOOL, printPath, { env: withPath(dirty) })).stdout).toBe(`${[PLANTED, other].join(path.delimiter)}\n`);
+    const script = `process.exit(process.env.PATH === ${JSON.stringify([PLANTED, other].join(path.delimiter))} ? 0 : 9)`;
+    expect(await spawnInherited({ file: TOOL, args: ["-e", script], cwd: other, env: withPath(dirty), stdin: "ignore" })).toEqual({ code: 0 });
+  });
+
+  it("the rest of the environment is passed as given, and the caller's object is not changed", async () => {
+    const env = { ...withPath(["", PLANTED].join(path.delimiter)), CRAFTAR_PROBE: "kept" };
+    const before = { ...env };
+    expect((await execProgram(TOOL, ["-e", "console.log(process.env.CRAFTAR_PROBE)"], { env })).stdout).toBe("kept\n");
+    expect(env).toEqual(before);
+  });
+
+  // Off Windows an absent PATH makes the platform use its default path. On win32 Node (libuv) gives a child with
+  // no PATH key the parent's own, so childEnv always sets the key there: the test after this one.
+  it.runIf(process.platform !== "win32")("with no absolute entry left the child gets NO PATH — an empty one would be a working-directory lookup", async () => {
+    const has = ["-e", "console.log(Object.keys(process.env).some((k) => k.toUpperCase() === 'PATH'))"];
+    for (const value of ["", ".", ["", ".", "bin"].join(path.delimiter)]) {
+      expect((await execProgram(process.execPath, has, { env: withPath(value) })).stdout, `PATH=${JSON.stringify(value)}`).toBe("false\n");
+    }
+    const unset: NodeJS.ProcessEnv = { ...withPath("") };
+    delete unset.PATH;
+    expect((await execProgram(process.execPath, has, { env: unset })).stdout).toBe("false\n");
+    expect((await execProgram(process.execPath, has, { env: withPath(PLANTED) })).stdout).toBe("true\n");
+  });
+
+  // Written from Node's and libuv's sources; it has not run until a Windows CI job runs it. The value is asserted,
+  // not the key: without the win32 arm of childEnv the child would get the runner's own non-empty PATH.
+  it.runIf(process.platform === "win32")("on Windows the child's PATH is set and empty when no absolute entry is left — never the parent's", async () => {
+    const show = ["-e", "console.log(JSON.stringify(process.env.PATH ?? ''))"];
+    for (const value of ["", ".", ["", ".", "bin"].join(path.delimiter)]) {
+      expect((await execProgram(process.execPath, show, { env: withPath(value) })).stdout, `PATH=${JSON.stringify(value)}`).toBe('""\n');
+    }
+    const unset: NodeJS.ProcessEnv = { ...withPath("") };
+    delete unset.PATH;
+    expect((await execProgram(process.execPath, show, { env: unset })).stdout).toBe('""\n');
+    expect((await execProgram(process.execPath, show, { env: withPath(PLANTED) })).stdout).toBe(`${JSON.stringify(PLANTED)}\n`);
+  });
+
+  it.runIf(process.platform !== "win32")("off Windows only PATH is replaced: Path and path are other variables", async () => {
+    const env = { ...withPath(["", PLANTED].join(path.delimiter)), Path: "keep-1", path: "keep-2" };
+    const script = "console.log([process.env.PATH, process.env.Path, process.env.path].join('|'))";
+    expect((await execProgram(TOOL, ["-e", script], { env })).stdout).toBe(`${PLANTED}|keep-1|keep-2\n`);
   });
 });

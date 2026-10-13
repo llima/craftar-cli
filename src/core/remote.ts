@@ -1,10 +1,9 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { exists } from "./forge.js";
 import { LockBusyError, withLock, type LockOptions, type LockTiming } from "./home-lock.js";
 import { hashNormalized } from "./text.js";
+import { execProgram } from "./proc.js";
 
 /** A removal directory's prefix; `~` is a character `cacheKey` never emits (spec 26 §3, §13 item 14). */
 export const REMOVING_PREFIX = "~removing-";
@@ -206,14 +205,12 @@ export class NoCachedCopyError extends Error {
   }
 }
 
-const execFileP = promisify(execFile);
-
 export const defaultGit: GitRunner = async (args, opts = {}) => {
   const env = { ...process.env };
   // CI fails fast instead of hanging on a credential prompt; a terminal may still prompt (spec 13 §14 item 4).
   if (opts.remote && !process.stdin.isTTY) env.GIT_TERMINAL_PROMPT = "0";
   try {
-    const { stdout } = await execFileP("git", args, { env, maxBuffer: 64 * 1024 * 1024 });
+    const { stdout } = await execProgram("git", args, { env, maxBuffer: 64 * 1024 * 1024 });
     return stdout;
   } catch (e) {
     const err = e as { stderr?: string; message: string };

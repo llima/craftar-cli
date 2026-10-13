@@ -2,11 +2,9 @@
  * Impact analysis (spec 25 §5.1): which registered workspaces read a Forge, planned against it.
  * Reads only — never writes to a workspace, the registry, or the cache.
  */
-import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { promisify } from "node:util";
 import type { Forge } from "./forge.js";
 import { isMissing, readRegistry, samePath } from "./registry.js";
 import { cacheKey, classifyForge, credentialFault } from "./remote.js";
@@ -24,8 +22,7 @@ import {
   type Workspace,
 } from "./sync.js";
 import type { Lock, RegistryEntry } from "../schema/index.js";
-
-const execFileP = promisify(execFile);
+import { execProgram } from "./proc.js";
 
 export type MatchKind = "path" | "remote" | "clone";
 export type RegistryState = "read" | "partial" | "none" | "off";
@@ -62,7 +59,7 @@ export interface ForgeWorkspaces {
 /** Run git and return stdout, or null if git fails (not a repository, etc.). */
 async function gitSafe(cwd: string, ...args: string[]): Promise<string | null> {
   try {
-    const { stdout } = await execFileP("git", ["-C", cwd, ...args], { encoding: "utf8" });
+    const { stdout } = await execProgram("git", ["-C", cwd, ...args]);
     return stdout;
   } catch {
     return null;

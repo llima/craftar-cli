@@ -1,7 +1,5 @@
 import { promises as fs, constants as fsc } from "node:fs";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { ENV_NAME, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
@@ -12,7 +10,7 @@ import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
 import { outName } from "../emitters/shared.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
-import { capture } from "./proc.js";
+import { capture, execProgram } from "./proc.js";
 
 /*
  * `craftar doctor` (spec 24): every check Craftar can make about this machine and, inside one, this
@@ -62,11 +60,9 @@ export interface DoctorOptions {
   dockerRunner?: DockerRunner;
 }
 
-const execFileP = promisify(execFile);
-
 async function defaultGitVersion(): Promise<string | null> {
   try {
-    const { stdout } = await execFileP("git", ["--version"]);
+    const { stdout } = await execProgram("git", ["--version"]);
     return stdout.trim().replace(/^git version\s*/, "") || "unknown";
   } catch {
     return null;

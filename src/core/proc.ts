@@ -1,8 +1,11 @@
 /**
- * External-process execution (design D3): capture (stdout of a finished process, execFile)
- * and spawnInherited (inherited output, spawn). A program is resolved by onPath before it is run. No shell.
+ * External-process execution (design D3): every external program craftar runs — git, dotnet — is run
+ * from here; `process.env` is read only as `execProgram`'s default. capture (stdout of a finished process,
+ * execFile), execProgram (stdout and stderr, resolved by onPath) and spawnInherited (inherited output, spawn).
+ * A program is resolved by onPath before it is run. No shell.
  */
 import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 import { promises as fs, constants } from "node:fs";
 import path from "node:path";
 
@@ -47,6 +50,32 @@ export function pathEntries(value: string, win: boolean = WIN): string[] {
   return entries;
 }
 
+/** The PATH value from `env`, reading the key as `onPath` reads it (on win32: whatever case). */
+function pathOf(env: NodeJS.ProcessEnv): string | undefined {
+  const key = WIN ? Object.keys(env).find((k) => k.toUpperCase() === "PATH") : "PATH";
+  return key === undefined ? undefined : env[key];
+}
+
+/**
+ * `env` with its PATH reduced to the entries `onPath` looks in, so that what the program starts in turn (git
+ * starts ssh, a credential helper, a hook) is not looked for in the working directory either. When no absolute
+ * entry is left, off Windows the child gets NO PATH: an empty one makes the platform look in the working
+ * directory, an absent one makes it use its default path. On win32 the key is always set, empty if need be: Node
+ * gives a child with no PATH key the parent's own, unfiltered (read in libuv, not measured). No caller reaches
+ * that case today — a bare `git` or `dotnet` is not found first. A copy: the caller's object is not changed.
+ * Only the PATH key is replaced — on win32 every spelling of it, by one `PATH`; elsewhere `Path` and `path` are
+ * other variables.
+ */
+function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(env)) {
+    if ((WIN ? k.toUpperCase() : k) !== "PATH") result[k] = v;
+  }
+  const entries = pathEntries(pathOf(env) ?? "");
+  if (WIN || entries.length > 0) result.PATH = entries.join(path.delimiter);
+  return result;
+}
+
 /** A file; off win32 also executable; any error → false. */
 async function isProgram(file: string): Promise<boolean> {
   try {
@@ -64,12 +93,13 @@ async function isProgram(file: string): Promise<boolean> {
  * The platform's own lookup is not used: it also searches the child's working directory (on Windows always; elsewhere
  * for an empty or relative PATH entry), and craftar runs `dotnet` with the workspace root as working directory
  * (spec 32 §7: a program is found on PATH only). An absolute `file` is returned as given; a relative path is null.
+ * The first candidate that is an executable file is taken — unlike the platform, craftar does not go on to the
+ * next entry when that file then fails to start.
  */
 export async function onPath(file: string, env: NodeJS.ProcessEnv): Promise<string | null> {
   if (path.isAbsolute(file)) return file;
   if (file === "" || file !== path.basename(file)) return null;
-  const key = WIN ? Object.keys(env).find((k) => k.toUpperCase() === "PATH") : "PATH";
-  const entries = pathEntries((key === undefined ? undefined : env[key]) ?? "");
+  const entries = pathEntries(pathOf(env) ?? "");
   const names = WIN && !WIN_EXTENSIONS.some((ext) => file.toLowerCase().endsWith(ext)) ? WIN_EXTENSIONS.map((ext) => file + ext) : [file];
   for (const entry of entries) {
     for (const name of names) {
@@ -80,22 +110,35 @@ export async function onPath(file: string, env: NodeJS.ProcessEnv): Promise<stri
   return null;
 }
 
-/** Reject with an ENOENT error for a file not on PATH. */
+/** Reject with an ENOENT error for a file not on PATH, matching what Node gives for a program it cannot find. */
 function notOnPath(file: string): Error {
-  return Object.assign(new Error(`${file} is not on PATH`), { code: "ENOENT" });
+  return Object.assign(new Error(`spawn ${file} ENOENT`), { code: "ENOENT", errno: -2, syscall: `spawn ${file}`, path: file });
+}
+
+/** Options for `execProgram`. */
+export interface ExecOptions {
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  maxBuffer?: number;
+  timeout?: number;
+}
+
+/**
+ * stdout and stderr of a program that exited 0, the program resolved by `onPath` over `opts.env` (the process's
+ * environment when none is given) — never by the platform's lookup. Rejects as `execFile` does: with `code`,
+ * `stdout` and `stderr` on a non-zero exit, and with `code: "ENOENT"` when the program is on no absolute PATH entry.
+ */
+export async function execProgram(file: string, args: string[], opts: ExecOptions = {}): Promise<{ stdout: string; stderr: string }> {
+  const env = opts.env ?? process.env;
+  const program = await onPath(file, env);
+  if (program === null) throw notOnPath(file);
+  const { stdout, stderr } = await promisify(execFile)(program, args, { ...opts, env: childEnv(env), encoding: "utf8" });
+  return { stdout, stderr };
 }
 
 /** stdout of a process that exited 0; rejects otherwise (ENOENT when it cannot start). No shell. */
-export const capture: Probe = async (file, args, env, cwd) => {
-  const program = await onPath(file, env);
-  if (program === null) throw notOnPath(file);
-  return new Promise((resolve, reject) => {
-    execFile(program, args, { env, cwd, timeout: PROBE_TIMEOUT_MS }, (error, stdout) => {
-      if (error) reject(error);
-      else resolve(stdout);
-    });
-  });
-};
+export const capture: Probe = async (file, args, env, cwd) =>
+  (await execProgram(file, args, { env, cwd, timeout: PROBE_TIMEOUT_MS })).stdout;
 
 /** Output inherited, stdin as asked; resolves with the exit code (null when killed by a signal); rejects when it cannot start. No shell. */
 export const spawnInherited: Runner = async (req) => {
@@ -104,7 +147,7 @@ export const spawnInherited: Runner = async (req) => {
   return new Promise((resolve, reject) => {
     const child = spawn(program, req.args, {
       cwd: req.cwd,
-      env: req.env,
+      env: childEnv(req.env),
       stdio: [req.stdin, "inherit", "inherit"],
     });
     child.on("error", reject);
