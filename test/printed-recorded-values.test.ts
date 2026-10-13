@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { pruneCache } from "../src/core/cache.js";
 import { runDoctor, type DoctorOptions } from "../src/core/doctor.js";
+import { askInit, type InitIo } from "../src/core/init-flow.js";
 import { listWorkspaces, register, registryFile } from "../src/core/registry.js";
 import { cacheKey, credentialFault, ensureTree, parseLsRemote, resolveRef, type GitRunner } from "../src/core/remote.js";
 import { apply, loadForgeSource, loadWorkspace, loadWorkspaceConfig, plan, readLock, status } from "../src/core/sync.js";
@@ -136,6 +137,23 @@ describe("a Forge URL with credentials recorded by an earlier release", () => {
     expectClean(report);
   });
 
+  it("cache prune: a failure thrown from inside such an entry names it by the label", async () => {
+    const h = await recordedHome();
+    // What a file system error looks like: it carries the path it failed on, and the entry's name is in it.
+    const inside = path.join(h.home, "forges", h.oldKey, "trees");
+    const beforeStep = async () => {
+      throw Object.assign(new Error(`EBUSY: resource busy or locked, rmdir '${inside}'`), { code: "EBUSY" });
+    };
+    for (const dryRun of [true, false]) {
+      const message = await pruneCache(h.home, { dryRun, workspace: null, registryOff: false, beforeStep }).then(
+        () => "",
+        (e: unknown) => (e as Error).message,
+      );
+      expect(message).toBe(`EBUSY: resource busy or locked, rmdir '${path.join(h.home, "forges", LABEL, "trees")}'`);
+      expectClean(message);
+    }
+  });
+
   it("cache prune: an entry nothing with credentials names keeps its name", async () => {
     const root = await tmpDir("craftar-recorded-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
@@ -207,6 +225,37 @@ describe("a forge: spelled with backslashes after the scheme", () => {
 
 describe("a ref: that holds a URL with credentials", () => {
   const REF = `https://${CRED}example.invalid/acme/forge.git`;
+
+  /** An `InitIo` that answers from a list, then cancels; everything asked and said is kept. */
+  function script(answers: string[]) {
+    const asked: string[] = [];
+    const said: string[] = [];
+    const next = async (q: string) => (asked.push(q), answers.shift() ?? null);
+    const io: InitIo = { ask: next, confirm: next, say: (l) => void said.push(l) };
+    return { io, asked, said };
+  }
+  const GIVEN = { addRecipes: [], removeRecipes: [], replace: false };
+
+  it("interactive init: a ref from craftar.local.yaml is said back as the label", async () => {
+    const c = await cachedRemote();
+    const sc = script([c.url]);
+    const result = await askInit(path.join(c.root, "ws"), GIVEN, { doc: { ref: REF }, keys: ["ref"] }, sc.io, { home: c.home, registryOff: false });
+    expect(result.kind).toBe("cancelled");
+    expect(sc.said[0]).toBe(`Ref: ${LABEL} (from craftar.local.yaml)`);
+    expect(sc.said).toHaveLength(2); // that line, then why the load failed
+    expectClean([sc.said, sc.asked]);
+  });
+
+  it("interactive init: a ref answer that holds one is refused on entry and never offered back", async () => {
+    const c = await cachedRemote();
+    const sc = script([c.url, REF, c.url]);
+    const result = await askInit(path.join(c.root, "ws"), GIVEN, { doc: null, keys: [] }, sc.io, { home: c.home, registryOff: false });
+    expect(result.kind).toBe("cancelled");
+    expect(sc.said).toEqual(["the answer holds credentials in a URL — a ref is a branch, a tag or a full SHA"]);
+    expect(sc.asked).toHaveLength(4); // Forge, Ref, Forge again, Ref again — then the script ends
+    expect(sc.asked[3]).toBe("Ref — a branch, a tag or a full SHA [the default branch]: ");
+    expectClean([sc.said, sc.asked]);
+  });
 
   it("a path Forge: the warning that the ref is ignored gives the label, not the value", async () => {
     const root = await tmpDir("craftar-ref-");
