@@ -186,7 +186,7 @@ What `sync` does with a `{{key}}` in a server, at schema 4:
 | not declared by the ingredient, while some layer gives the key a value | left as written, with one warning per ingredient and key: `mcp/idp: server cites {{org}}, which has a value but is not declared in the ingredient's params — left verbatim` |
 | not declared, and no layer gives it a value | left as written, silently: braces that belong to the tool |
 
-**The credential check.** `.mcp.json` is generated and committed, and a param's value can come from any hand-written layer — the gitignored `craftar.local.yaml` among them. So at schema 4 every **substituted** value of every server a target writes is checked before a plan is returned:
+**The credential check.** `.mcp.json` is generated and committed, and a param's value can come from any hand-written layer — the gitignored `craftar.local.yaml` among them. This is not the check on a `forge:` URL (see *Remote Forge*): the two read a URL by different rules. So at schema 4 every **substituted** value of every server a target writes is checked before a plan is returned:
 
 - a URL with credentials (`url-credentials`), as the whole value or inside it, or a token of a known format (its kind, such as `github-token`) **fails the plan**: `sync` (also `--check` and `--dry-run`), `status`, `diff`, `ls` and `explain` exit 1 and write nothing, the `drift` commands fail the same way, `add recipe`, `remove recipe` and `init` refuse before they write, `doctor` reports it under `plan`, `craftar workspaces` and `forge impact` show `error`;
 - a high-entropy value under `env` or `args` (`high-entropy-value`) **warns**, and the plan stands — organisation and project names in `args` can look like one. (A warning fails `doctor --strict`.)
@@ -470,11 +470,12 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; `craftar docs validate`;
 
 ### to 0.28.0
 
-- **A Forge can declare `schema: 4`**, which includes 3 and 2. Every craftar before `0.28.0` refuses such a Forge at `craftar.forge.yaml` — `0.27.0`, which reads a Forge at `schema: 3`, included — so none can write a templated server with its braces. Upgrade every machine and CI that reads the Forge before setting it. Nothing changes for a Forge at 1, 2 or 3.
+- **A Forge can declare `schema: 4`**, which includes 3 and 2. Every craftar before `0.28.0` refuses such a Forge at `craftar.forge.yaml` — `0.27.0` to `0.27.2`, which read a Forge at `schema: 3`, included — so none can write a templated server with its braces. Upgrade every machine and CI that reads the Forge before setting it. Nothing changes for a Forge at 1, 2 or 3.
 - **Moving a Forge to 4** renders every server placeholder that is declared and valued: its workspaces see `update` on `.mcp.json` / `.kiro/settings/mcp.json` at their next `sync`. An undeclared placeholder whose key has a value becomes a plan warning (and fails `doctor --strict`); a declared one with no value refuses the sync. A Forge that moves to 4 from 1 or 2 also gets its profiles' `integrations` blocks read — 4 includes 3; see *to 0.27.0*.
 - **At schema 4, a param value that looks like a credential stops the plan** when it is rendered into a server (see *The credential check*): `sync`, `status` and `diff` exit 1 and write nothing.
 - **At schema 4, `craftar import` compares an MCP base as `sync` renders it**: a workspace whose server equals the rendered base reuses it, where it was a variant before; `forge unify` refuses a `take: param` plan that would write a profile param a server cites as a declared key.
 - **`forge unify --json`**: `metaDiffers` can hold `params` for an MCP pair at schema 4 — a value in the list, not a key.
+- **The message for an invalid manifest `schema` value** now lists `expected 4` among its alternatives.
 
 ### to 0.27.2
 
