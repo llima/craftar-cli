@@ -33,7 +33,7 @@ describe("CI contract", () => {
   });
 
   it("bounds the job so a hang doesn't burn the runner", () => {
-    expect(ci.jobs.test["timeout-minutes"]).toBe(15);
+    expect(ci.jobs.test["timeout-minutes"]).toBe(25);
   });
 
   it("supersedes runs on feature branches but never on main, where a cancelled run would skip a release", () => {
