@@ -2789,23 +2789,26 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     );
   });
 
-  it("the three commands write nothing in the workspace or the Forge", async () => {
-    const s = await cat();
-    const before = { forge: await snapshot(s.forgeRoot), ws: await snapshot(s.wsRoot) };
-    for (const args of [
-      ["recipes"],
-      ["recipes", "--json"],
-      ["ingredients"],
-      ["ingredients", "--json", "--recipe", "stack-angular", "--type", "rule"],
-      ["targets"],
-      ["targets", "--json"],
-    ]) {
-      expect(runCli([...args, "--workspace", s.wsRoot]).code, args.join(" ")).toBe(0);
-      expect(runCli(args, { cwd: s.wsRoot }).code, args.join(" ")).toBe(0);
-    }
-    expect(json(runCli(["recipes", "--json", "--forge", s.forgeRoot, "--profile", "acme"])).context).not.toBeNull();
-    expect({ forge: await snapshot(s.forgeRoot), ws: await snapshot(s.wsRoot) }).toEqual(before);
-  });
+  // One test per command: a single test starting all thirteen children passed the 30 s limit on a Windows runner.
+  // Each command is run as before — text and --json, by --workspace and from inside the workspace — and the
+  // Forge and the workspace are compared with what they held before it.
+  const WRITES_NOTHING: Array<[string, string[][]]> = [
+    ["recipes", [["recipes"], ["recipes", "--json"]]],
+    ["ingredients", [["ingredients"], ["ingredients", "--json", "--recipe", "stack-angular", "--type", "rule"]]],
+    ["targets", [["targets"], ["targets", "--json"]]],
+  ];
+  for (const [command, runs] of WRITES_NOTHING) {
+    it(`${command} writes nothing in the workspace or the Forge`, async () => {
+      const s = await cat();
+      const before = { forge: await snapshot(s.forgeRoot), ws: await snapshot(s.wsRoot) };
+      for (const args of runs) {
+        expect(runCli([...args, "--workspace", s.wsRoot]).code, args.join(" ")).toBe(0);
+        expect(runCli(args, { cwd: s.wsRoot }).code, args.join(" ")).toBe(0);
+      }
+      if (command === "recipes") expect(json(runCli(["recipes", "--json", "--forge", s.forgeRoot, "--profile", "acme"])).context).not.toBeNull();
+      expect({ forge: await snapshot(s.forgeRoot), ws: await snapshot(s.wsRoot) }).toEqual(before);
+    });
+  }
 });
 
 
