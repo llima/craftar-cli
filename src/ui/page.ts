@@ -129,9 +129,12 @@ export const PAGE_JS = String.raw`"use strict";
   function short(commit) {
     return commit ? commit.slice(0, 7) : "no git";
   }
-  /* A path as one word of a command line: quoted when it holds anything a shell would split or expand. */
+  /* A path as one word of a command line: as it is when plain; single-quoted for a POSIX path (nothing expands
+     inside single quotes); double-quoted, only the quote escaped, otherwise. */
   function shellWord(text) {
-    return /^[A-Za-z0-9_.,:=@%+\/\\-]+$/.test(text) ? text : JSON.stringify(text);
+    if (/^[A-Za-z0-9_.,:=@%+\/\\-]+$/.test(text)) return text;
+    if (text.charAt(0) === "/") return "'" + text.replace(/'/g, "'\\''") + "'";
+    return '"' + text.replace(/"/g, '\\"') + '"';
   }
   function forgeLine(forge) {
     return forge.source + (forge.ref ? " (ref " + forge.ref + ")" : "") + " @ " + short(forge.commit);

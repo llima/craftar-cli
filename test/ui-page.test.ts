@@ -52,4 +52,18 @@ describe("craftar ui — the page's source", () => {
   it("the sentences the spec fixes are on the page", () => {
     for (const s of ["status read offline from the Forge cache", "read from the cached copy of the Forge — not fetched", "craftar sync --workspace "]) expect(PAGE_JS, s).toContain(s);
   });
+
+  it("the path in the command to copy is one shell word: single-quoted when it starts with /, double-quoted otherwise", () => {
+    const src = /function shellWord\(text\) \{[\s\S]*?\n  \}/.exec(PAGE_JS);
+    expect(src, "shellWord not found in the script").not.toBeNull();
+    // The test evaluates the page's own function; the page itself never evaluates a string (first test of this file).
+    const shellWord = new Function(`${src![0]}; return shellWord;`)() as (t: string) => string;
+    expect(shellWord("/home/me/ws")).toBe("/home/me/ws");
+    expect(shellWord("/home/me/my ws")).toBe("'/home/me/my ws'");
+    expect(shellWord("/home/me/a$b`c")).toBe("'/home/me/a$b`c'");
+    expect(shellWord("/home/me/it's")).toBe("'/home/me/it'\\''s'");
+    expect(shellWord("C:\\Users\\me\\ws")).toBe("C:\\Users\\me\\ws");
+    expect(shellWord("C:\\Users\\me\\my ws")).toBe('"C:\\Users\\me\\my ws"');
+    expect(shellWord('C:\\a "b" c')).toBe('"C:\\a \\"b\\" c"');
+  });
 });
