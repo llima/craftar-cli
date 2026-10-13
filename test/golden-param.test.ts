@@ -102,18 +102,20 @@ describe("two-profile sync proof (spec 09 §11.4)", () => {
   const states = (ws: string) =>
     (JSON.parse(runCli(["status", "--workspace", ws, "--json"]).stdout).statuses as Array<{ path: string; state: string }>).map((s) => [s.path, s.state]);
 
-  it("after both extractions every file of both workspaces is unchanged, byte for byte", async () => {
-    const { tmp, forge } = await freshForge();
-    const ws = await workspaces(tmp, forge);
-    const before = { acme: await snapshot(ws.acme), globex: await snapshot(ws.globex) };
-    expect(Object.keys(before.acme)).toEqual(expect.arrayContaining([".claude/rules/deploy.md", ".kiro/steering/deploy.md", "AGENTS.md"]));
-    await unifyBoth(forge);
-    for (const p of ["acme", "globex"] as const) {
+  // One test per workspace: a single test checking both passed the 30 s limit on a Windows runner. The Forge,
+  // the two workspaces and the two extractions are set up as before; each test checks one workspace.
+  for (const p of ["acme", "globex"] as const) {
+    it(`after both extractions every file of the ${p} workspace is unchanged, byte for byte`, async () => {
+      const { tmp, forge } = await freshForge();
+      const ws = await workspaces(tmp, forge);
+      const before = { acme: await snapshot(ws.acme), globex: await snapshot(ws.globex) };
+      if (p === "acme") expect(Object.keys(before.acme)).toEqual(expect.arrayContaining([".claude/rules/deploy.md", ".kiro/steering/deploy.md", "AGENTS.md"]));
+      await unifyBoth(forge);
       expect(states(ws[p]).filter(([, s]) => s !== "unchanged"), p).toEqual([]);
       expect(runCli(["sync", "--check", "--workspace", ws[p]]).code, p).toBe(0);
       expect(await snapshot(ws[p]), p).toEqual(before[p]);
-    }
-  });
+    });
+  }
 
   it("negative control: without acme's profile values its generated files would change", async () => {
     const { tmp, forge } = await freshForge();

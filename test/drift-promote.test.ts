@@ -198,50 +198,47 @@ describe("cli — drift promote", () => {
     expect(await f.forgeRead("recipes/base.yaml")).toBe("name: base\ningredients:\n  - rule/a--acme # the first\n  - rule/b\n  - rule/c\n");
   });
 
-  it("4. D4 — three cases: unmanaged, clean, orphan-drift", async () => {
-    // Test 1: unmanaged
-    {
-      const f = await F();
-      gitInit(f.forgeRoot);
-      expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
-      await f.driftA();
+  // D4 was one test of three cases; each starts two CLI children and a git repository, and together they passed
+  // the 30 s limit on a Windows runner. One test per case, every assertion kept.
+  it("4a. D4 — unmanaged: a path craftar does not manage is refused", async () => {
+    const f = await F();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await f.driftA();
 
-      const r1 = runCli(["drift", "promote", "nope.md", "--workspace", f.ws]);
-      expect(r1.code).toBe(1);
-      expect(r1.stdout).toBe("");
-      expect(r1.stderr).toBe(
-        "error: nope.md is not a file craftar manages in this workspace — pass the workspace-relative path as `craftar status` prints it (forward slashes)\n",
-      );
-      expect(porcelain(f.forgeRoot)).toBe("");
-    }
+    const r1 = runCli(["drift", "promote", "nope.md", "--workspace", f.ws]);
+    expect(r1.code).toBe(1);
+    expect(r1.stdout).toBe("");
+    expect(r1.stderr).toBe(
+      "error: nope.md is not a file craftar manages in this workspace — pass the workspace-relative path as `craftar status` prints it (forward slashes)\n",
+    );
+    expect(porcelain(f.forgeRoot)).toBe("");
+  });
 
-    // Test 2: Clean (unchanged)
-    {
-      const f = await F();
-      gitInit(f.forgeRoot);
-      expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
-      await f.driftA(); // Only drift A
+  it("4b. D4 — clean: an unchanged file is refused", async () => {
+    const f = await F();
+    gitInit(f.forgeRoot);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await f.driftA(); // Only drift A
 
-      const r2 = runCli(["drift", "promote", B, "--workspace", f.ws]);
-      expect(r2.code).toBe(1);
-      expect(r2.stdout).toBe("");
-      expect(r2.stderr).toBe(`error: ${B} is not drifted (unchanged) — nothing to promote\n`);
-      expect(porcelain(f.forgeRoot)).toBe("");
-    }
+    const r2 = runCli(["drift", "promote", B, "--workspace", f.ws]);
+    expect(r2.code).toBe(1);
+    expect(r2.stdout).toBe("");
+    expect(r2.stderr).toBe(`error: ${B} is not drifted (unchanged) — nothing to promote\n`);
+    expect(porcelain(f.forgeRoot)).toBe("");
+  });
 
-    // Test 3: Orphan-drift
-    {
-      const f = await F();
-      expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
-      await f.orphanDriftC();
-      gitInit(f.forgeRoot); // Git init after the recipe change
+  it("4c. D4 — orphan-drift: a file the Forge no longer produces is refused", async () => {
+    const f = await F();
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await f.orphanDriftC();
+    gitInit(f.forgeRoot); // Git init after the recipe change
 
-      const r3 = runCli(["drift", "promote", C, "--workspace", f.ws]);
-      expect(r3.code).toBe(1);
-      expect(r3.stdout).toBe("");
-      expect(r3.stderr).toBe(`error: ${C} is no longer produced by the Forge — nothing to promote into; \`craftar drift discard ${C}\` removes it\n`);
-      expect(porcelain(f.forgeRoot)).toBe("");
-    }
+    const r3 = runCli(["drift", "promote", C, "--workspace", f.ws]);
+    expect(r3.code).toBe(1);
+    expect(r3.stdout).toBe("");
+    expect(r3.stderr).toBe(`error: ${C} is no longer produced by the Forge — nothing to promote into; \`craftar drift discard ${C}\` removes it\n`);
+    expect(porcelain(f.forgeRoot)).toBe("");
   });
 
   it("5. D3 — not a git repository", async () => {
