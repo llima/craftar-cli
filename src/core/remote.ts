@@ -162,7 +162,7 @@ export function credentialFault(raw: string): boolean {
 }
 
 /** Whether a `ref:` holds a URL with credentials — as the whole value, or anywhere in it (`refs/heads/<url>`). */
-const refHoldsCredentials = (ref: string): boolean => credentialFault(ref) || urlCredentialIn(ref);
+export const refHoldsCredentials = (ref: string): boolean => credentialFault(ref) || urlCredentialIn(ref);
 
 /**
  * A `ref:` as a message names it: quoted — or, when it holds a URL with credentials (typed into
