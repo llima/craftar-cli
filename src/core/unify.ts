@@ -21,6 +21,7 @@ import { concerned, workspaceAgainst, type ForgeWorkspace, type Planned, type Re
 import { plan, type MergedConfig } from "./sync.js";
 import { parseYamlText } from "./yaml-read.js";
 import { effectiveProfile, recipesOrWritten } from "./integrations.js";
+import { rendersServers } from "./mcp-server.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
 // fidelity, correctness should not hinge on a glyph no diff viewer, editor or re-encoding shows.
@@ -154,11 +155,14 @@ function comparableMeta(meta: Ingredient): Record<string, unknown> {
  * the differing fields can be named — never through `JSON.stringify(x, keys)`, whose key-array
  * replacer filters at every depth and sees two different nested `server` objects as the same `{}`.
  */
-export function metaDifferences(base: LoadedIngredient, variant: LoadedIngredient): string[] {
+export function metaDifferences(base: LoadedIngredient, variant: LoadedIngredient, schema = 1): string[] {
   const a = comparableMeta(base.meta);
   const b = comparableMeta(variant.meta);
   // A variant never needs declarations of its own; the base's are what an extraction added (spec 09 §6.6).
-  if (b.params === undefined) delete a.params;
+  // Not for an MCP pair in a Forge whose servers are rendered (spec 34 §5.2): there the declaration decides the
+  // server's bytes, so a variant with no `params` under a base that declares a key differs — and stays.
+  const declares = base.meta.type === "mcp" && variant.meta.type === "mcp" && Object.keys(base.meta.params ?? {}).length > 0;
+  if (b.params === undefined && !(rendersServers({ schema }) && declares)) delete a.params;
   return [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => !isDeepStrictEqual(a[k], b[k])).sort();
 }
 
@@ -625,7 +629,7 @@ export async function applyPlan(
 
   await checkMarkers(base, write, remove, newSectionNames);
 
-  const metaDiffers = opts.discardVariantMeta ? [] : metaDifferences(base, variant);
+  const metaDiffers = opts.discardVariantMeta ? [] : metaDifferences(base, variant, forgeSchema);
   const params = [...extractions.values()];
   const sections = sectionExtractions;
 

@@ -544,10 +544,12 @@ export type Profile = z.infer<typeof ProfileSchema>;
 export const FORGE_SCHEMA_SECTIONS = 2;
 /** The manifest schema a Forge must declare for its profiles' integrations blocks to be read (spec 33 §4.2): a craftar that does not know schema 3 refuses the Forge at load. */
 export const FORGE_SCHEMA_INTEGRATIONS = 3;
+/** The manifest schema a Forge must declare for an MCP server to take the params its ingredient declares (spec 34 §4.1): every craftar that does not substitute refuses it at load. */
+export const FORGE_SCHEMA_SERVER_PARAMS = 4;
 
 export const ForgeManifestSchema = z.object({
   name: z.string(),
-  schema: z.union([z.literal(1), z.literal(FORGE_SCHEMA_SECTIONS), z.literal(FORGE_SCHEMA_INTEGRATIONS)]).default(1),
+  schema: z.union([z.literal(1), z.literal(FORGE_SCHEMA_SECTIONS), z.literal(FORGE_SCHEMA_INTEGRATIONS), z.literal(FORGE_SCHEMA_SERVER_PARAMS)]).default(1),
   description: z.string().optional(),
 });
 export type ForgeManifest = z.infer<typeof ForgeManifestSchema>;

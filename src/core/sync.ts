@@ -487,6 +487,8 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const missingParams = new Map<string, Set<string>>();
   /** Ingredient ref → the placeholders the files rendered for it cite, after section expansion. */
   const cited = new Map<string, { ing: ResolvedIngredient; keys: Set<string> }>();
+  /** Warnings said once per plan, for warnOnce (spec 34 §5.2). */
+  const warnedOnce = new Set<string>();
   const ctx: EmitBase = {
     forge: ws.forge,
     resolution,
@@ -527,6 +529,15 @@ export async function plan(ws: Workspace): Promise<Plan> {
     },
     warn(msg: string) {
       warnings.push(msg);
+    },
+    missing(key: string, ref: string) {
+      missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ref));
+    },
+    warnOnce(msg: string) {
+      if (!warnedOnce.has(msg)) {
+        warnedOnce.add(msg);
+        warnings.push(msg);
+      }
     },
   };
   const files: PlannedFile[] = [];

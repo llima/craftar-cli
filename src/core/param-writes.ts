@@ -1,10 +1,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema } from "../schema/index.js";
+import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema, type ForgeManifest } from "../schema/index.js";
 import { placeholders, bodyFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
 import { manifestWithSections } from "./manifest-edit.js";
+import { rendersServers, serverCitations } from "./mcp-server.js";
 import { resolve, sectionKey } from "./resolve.js";
 import { errorText } from "./schema-fault.js";
 import { canonicalValue } from "./sections.js";
@@ -67,13 +68,17 @@ export function resolvedBy(forge: Forge, profile: string): Set<string> {
   return new Set(r.ingredients.map((i) => i.ref));
 }
 
-/** Whether any body file an ingredient reads through `ctx.text` cites `{{key}}`. */
-async function cites(ing: LoadedIngredient, key: string): Promise<boolean> {
+/**
+ * Whether any body file an ingredient reads through `ctx.text` cites `{{key}}` — or, in a Forge whose servers are
+ * rendered (`schema`, spec 34 §5.2), whether its MCP server cites it as a key the ingredient declares: an undeclared
+ * citation is never substituted, so a value under it moves no byte.
+ */
+async function cites(ing: LoadedIngredient, key: string, schema: ForgeManifest["schema"]): Promise<boolean> {
   for (const rel of await listFiles(ing.dir)) {
     if (rel === "ingredient.yaml" || !bodyFile(ing.meta, rel, ing.dir)) continue;
     if (placeholders(await readIngredientText(ing, rel)).includes(key)) return true;
   }
-  return false;
+  return rendersServers({ schema }) && serverCitations(ing.meta).some((c) => c.declared && c.key === key);
 }
 
 /**
@@ -121,13 +126,13 @@ export async function checkParamWrites(
     }
     if (!decl) declare.push(e);
     // P14: an undeclared {{key}} already in the base, or any in the variant, would start resolving.
-    if (!decl && (await cites(base, e.key))) throw new Error(`unify: ${base.ref} already uses {{${e.key}}}`);
+    if (!decl && (await cites(base, e.key, forge.manifest.schema))) throw new Error(`unify: ${base.ref} already uses {{${e.key}}}`);
     // …and so would one in any profile's section value for the base's key: the default reaches every profile (spec 11 §6.11).
     for (const [q, p] of decl ? [] : forge.profiles) {
       const where = citingSection(p, sectionKey(base.meta), e.key);
       if (where) throw new Error(`unify: profile ${q} ${where} already uses {{${e.key}}}`);
     }
-    if (await cites(variant, e.key)) throw new Error(`unify: ${variant.ref} already uses {{${e.key}}}`);
+    if (await cites(variant, e.key, forge.manifest.schema)) throw new Error(`unify: ${variant.ref} already uses {{${e.key}}}`);
     // P15, P16: a stronger layer that sets the key would override the base's default. Not for a
     // reused key: the base already renders {{key}} through every layer, so nothing it sees moves.
     for (const [name, r] of e.reused ? [] : forge.recipes) {
@@ -152,7 +157,7 @@ export async function checkParamWrites(
     // P18: the new profile value would reach every other ingredient citing the key (checked Forge-wide, spec 09 Q3).
     for (const ing of forge.ingredients.values()) {
       if (ing.ref === base.ref || ing.ref === variant.ref) continue;
-      if (await cites(ing, e.key)) throw new Error(`unify: ${ing.ref} also uses {{${e.key}}} under profile ${profile} — its text would change`);
+      if (await cites(ing, e.key, forge.manifest.schema)) throw new Error(`unify: ${ing.ref} also uses {{${e.key}}} under profile ${profile} — its text would change`);
     }
     // …and so would the profile's own section values (spec 11 §6.11). Every key a Forge ingredient
     // has, the base's included: a value of this profile for the base that cites the key renders

@@ -28,6 +28,10 @@ export interface EmitBase {
   /** Raw bytes of a file inside an ingredient dir (binary-safe, no substitution). */
   bytes(ing: ResolvedIngredient, file: string): Promise<Buffer>;
   warn(msg: string): void;
+  /** Joins a missing declared parameter to the plan's `missingParams` (spec 34 §5.2). */
+  missing(key: string, ref: string): void;
+  /** A warning said once per plan, whichever targets raise it (spec 34 §5.2). */
+  warnOnce(msg: string): void;
 }
 
 /** An emitter's context: the base, plus the ingredients the matrix says target T writes (spec 18 §3.1). */

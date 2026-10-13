@@ -7,6 +7,7 @@ import { importClaudeCode } from "./importers/claude-code.js";
 import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
+import { holdsBaseCitations, rendersServers } from "./core/mcp-server.js";
 import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
@@ -67,7 +68,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.27.2");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.28.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -82,7 +83,7 @@ const REPORT_GATE: OutputGate = { what: "report", who: "import", outside: "write
 
 program
   .command("import")
-  .description("Import an existing workspace harness into a Forge: creates or updates ingredients, recipes and a profile, reusing a templated base when it renders the workspace text or infers it into params or sections; in a schema 3 Forge, what the profile's integrations block provides is left to its recipe and reported")
+  .description("Import an existing workspace harness into a Forge: creates or updates ingredients, recipes and a profile, reusing a templated base when it renders the workspace text or infers it into params or sections; in a Forge at schema 3 or above, what the profile's integrations block provides is left to its recipe and reported")
   .requiredOption("--from <tool>", "source tool: claude-code")
   .requiredOption("--forge <dir>", "Forge directory (created if missing)")
   .requiredOption("--profile <name>", "client profile to create or update")
@@ -1905,6 +1906,12 @@ forge
         `ingredient.yaml differs in ${result.metaDiffers.join(", ")} — unify cannot merge ingredient.yaml, so ${variant.ref} stays; ` +
           `resolve it by hand, or use --take base to discard the variant`,
       );
+      // Spec 34 §5.2: the variant kept for its missing `params` holds the braces a workspace wrote.
+      if (rendersServers(f.manifest) && holdsBaseCitations(base.meta, variant.meta)) {
+        warnings.push(
+          `${variant.ref} holds its server as a workspace wrote it; discarding it, or giving it the base's params, can make the next sync render those params into that workspace's MCP files`,
+        );
+      }
     }
     // Ruling 42: a suffixed recipe left identical to its sibling is reported, never deleted — a
     // workspace's recipes.add or an extends chain may name the sibling, and removing the suffixed

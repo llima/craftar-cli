@@ -3,6 +3,7 @@ import { IngredientSchema, stripForgeOnlyKeys, type Ingredient } from "../schema
 import { placeholders, bodyFile } from "./extract.js";
 import { fingerprintOf, type DirReader } from "./fingerprint.js";
 import { parseYaml } from "./forge.js";
+import { renderServer, rendersServers } from "./mcp-server.js";
 import { substitute } from "./resolve.js";
 import { checkDeclaredOnce, expandSections, parseSections, SectionMarkerError, type ParsedSections } from "./sections.js";
 import { stripBom, toLf } from "./text.js";
@@ -90,15 +91,23 @@ export function citedKeys(texts: Map<string, string>): Set<string> {
  * The fingerprint of a base rendered through `map` (spec 10 §6.2): its metadata without the
  * Forge-only keys (a workspace cannot express a declaration), body files expanded with the section
  * values `sections` and then substituted, exactly as `ctx.text` does (spec 11 §6.4, §6.7), every
- * other file as bytes. With no declaration, no marker and nothing set, this is `fingerprintDir`.
+ * other file as bytes. At schema 4 and for an `mcp` base, the server is rendered (spec 34 §5.3).
+ * With no declaration, no marker and nothing set, this is `fingerprintDir`.
  */
-export function renderedFingerprint(base: ImportBase, map: Record<string, unknown>, sections: Record<string, string> = {}): string {
-  const meta = stripForgeOnlyKeys({ ...base.meta });
+export function renderedFingerprint(base: ImportBase, map: Record<string, unknown>, sections: Record<string, string> = {}, schema: 1 | 2 | 3 | 4 = 1): string {
+  // At the gate, render the server before stripForgeOnlyKeys (it needs params).
+  let meta: Ingredient;
+  if (rendersServers({ schema }) && base.meta.type === "mcp") {
+    const rendered = renderServer(base.meta, map);
+    meta = stripForgeOnlyKeys({ ...base.meta, server: rendered.server }) as Ingredient;
+  } else {
+    meta = stripForgeOnlyKeys({ ...base.meta }) as Ingredient;
+  }
   const files: Record<string, string | Buffer> = {};
   for (const [rel, text] of expandedTexts(base, sections)) files[rel] = substitute(text, map);
   for (const [rel, b] of base.bytes) files[rel] = b;
   try {
-    return fingerprintOf(meta as Ingredient, files);
+    return fingerprintOf(meta, files);
   } catch (e) {
     // Named the way fingerprintDir names it: a cyclic alias is a fact about this file.
     throw new Error(`invalid ${path.relative(process.cwd(), base.metaFile)}: ${(e as Error).message}`);

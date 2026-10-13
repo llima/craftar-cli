@@ -1,7 +1,9 @@
 import { detectEol, hasBom, withEol, type Eol } from "../core/text.js";
 import type { EmitBase, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
+import { paramsFor } from "../core/resolve.js";
 import type { Ingredient } from "../schema/index.js";
+import { rendersServers, renderServer, credentialIn, credentialMessage, entropyMessage, undeclaredMessage } from "../core/mcp-server.js";
 
 export function appliesTo(targets: "*" | string[], target: string): boolean {
   return targets === "*" || targets.includes(target);
@@ -451,6 +453,8 @@ function mcpSurvivors(collected: readonly ResolvedIngredient[]): McpSurvivorsRes
  * (spec 18 §3.3). Keyed by `outName` so a variant keeps the server name its workspace uses. The
  * file holds one entry per name, so when two ingredients write the same name the earlier one is
  * dropped — said out loud, never silently.
+ *
+ * At schema 4, renders the server's declared params and checks the substituted values (spec 34 §4.2–§4.3).
  */
 export function mcpServers(ctx: EmitBase, target: string, file: string, collected: readonly ResolvedIngredient[]): Record<string, unknown> {
   const { survivors, collisions } = mcpSurvivors(collected);
@@ -460,7 +464,23 @@ export function mcpServers(ctx: EmitBase, target: string, file: string, collecte
   // A null prototype, so a server named `__proto__` is an entry and not the object's prototype.
   const servers: Record<string, unknown> = Object.create(null);
   for (const [key, ing] of survivors) {
-    servers[key] = ing.meta.server;
+    // Below schema 4: emit as written
+    if (!rendersServers(ctx.forge.manifest)) {
+      servers[key] = ing.meta.server;
+      continue;
+    }
+    // At schema 4: render the server's declared params
+    const params = paramsFor(ing, ctx.resolution);
+    const r = renderServer(ing.meta, params);
+    // Missing: declared, cited, no value
+    for (const k of r.missing) ctx.missing(k, ing.ref);
+    // Undeclared but valued: left and warned once
+    for (const k of r.undeclared) ctx.warnOnce(undeclaredMessage(ing.ref, k));
+    // Credential check
+    const check = credentialIn(r.substituted);
+    if (check.error) throw new Error(credentialMessage(ing.ref, check.error));
+    for (const w of check.warnings) ctx.warnOnce(entropyMessage(ing.ref, w));
+    servers[key] = r.server;
   }
   return servers;
 }
