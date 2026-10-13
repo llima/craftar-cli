@@ -1,5 +1,5 @@
 /**
- * External-process execution (design D3): every external program craftar runs — git, dotnet — is run
+ * External-process execution (design D3): every external program craftar runs — git, dotnet, docker — is run
  * from here; `process.env` is read only as `execProgram`'s default. capture (stdout of a finished process,
  * execFile), execProgram (stdout and stderr, resolved by onPath) and spawnInherited (inherited output, spawn).
  * A program is resolved by onPath before it is run. No shell.
@@ -30,17 +30,38 @@ const WIN_EXTENSIONS = [".exe", ".com"];
 const WIN = process.platform === "win32";
 
 /**
+ * Whether `entry` is `<dir>/node_modules/.bin` for `cwd` or a directory above it — the entries `npm` and `npx`
+ * put first on PATH. craftar runs in a workspace or a Forge, so a program committed there would be the one it
+ * runs. Lexical: separators, `.` and `..` are normalised and a trailing separator dropped (on win32 without
+ * case), and no link is followed. A `node_modules/.bin` anywhere else is not one of them.
+ */
+export function isLocalBin(entry: string, cwd: string, win: boolean = WIN): boolean {
+  const p = win ? path.win32 : path.posix;
+  const norm = (s: string): string => {
+    const n = p.normalize(s).replace(/[\\/]+$/, "");
+    return win ? n.toLowerCase() : n;
+  };
+  const suffix = `${p.sep}node_modules${p.sep}.bin`;
+  const e = norm(entry);
+  if (!e.endsWith(suffix)) return false;
+  const dir = e.slice(0, -suffix.length);
+  const c = norm(cwd);
+  return c === dir || c.startsWith(dir + p.sep);
+}
+
+/**
  * The entries of a PATH value a program is looked for in: the absolute ones, in order. On win32 an entry may be
  * wrapped in quotes (quotes are removed only when they wrap the whole entry), and must start with a drive (`X:\`,
  * `X:/`) or be a UNC path (`\\host\…`, `//host/…`) — a rooted entry without a drive depends on the current
- * directory's drive. Empty and relative entries are dropped everywhere.
+ * directory's drive. Empty and relative entries are dropped everywhere, and so is a `node_modules/.bin` of `cwd`
+ * (the directory craftar runs in) or of a directory above it (`isLocalBin`).
  */
-export function pathEntries(value: string, win: boolean = WIN): string[] {
+export function pathEntries(value: string, win: boolean = WIN, cwd: string = process.cwd()): string[] {
   const raw = value.split(win ? ";" : ":");
   const entries: string[] = [];
   for (let e of raw) {
     if (win && e.startsWith('"') && e.endsWith('"')) e = e.slice(1, -1);
-    if (e === "") continue;
+    if (e === "" || isLocalBin(e, cwd, win)) continue;
     if (win) {
       if (/^[A-Za-z]:[\\/]/.test(e) || /^[\\/]{2}[^\\/]/.test(e)) entries.push(e);
     } else {
@@ -58,7 +79,8 @@ function pathOf(env: NodeJS.ProcessEnv): string | undefined {
 
 /**
  * `env` with its PATH reduced to the entries `onPath` looks in, so that what the program starts in turn (git
- * starts ssh, a credential helper, a hook) is not looked for in the working directory either. When no absolute
+ * starts ssh, a credential helper, a hook) is not looked for in the working directory — nor in a
+ * `node_modules/.bin` of it or above it — either. When no absolute
  * entry is left, off Windows the child gets NO PATH: an empty one makes the platform look in the working
  * directory, an absent one makes it use its default path. On win32 the key is always set, empty if need be: Node
  * gives a child with no PATH key the parent's own, unfiltered (read in libuv, not measured). No caller reaches
@@ -94,12 +116,13 @@ async function isProgram(file: string): Promise<boolean> {
  * for an empty or relative PATH entry), and craftar runs `dotnet` with the workspace root as working directory
  * (spec 32 §7: a program is found on PATH only). An absolute `file` is returned as given; a relative path is null.
  * The first candidate that is an executable file is taken — unlike the platform, craftar does not go on to the
- * next entry when that file then fails to start.
+ * next entry when that file then fails to start. `cwd` is the directory whose `node_modules/.bin` entries, and
+ * those above it, are skipped: the one craftar runs in, unless a test gives another.
  */
-export async function onPath(file: string, env: NodeJS.ProcessEnv): Promise<string | null> {
+export async function onPath(file: string, env: NodeJS.ProcessEnv, cwd: string = process.cwd()): Promise<string | null> {
   if (path.isAbsolute(file)) return file;
   if (file === "" || file !== path.basename(file)) return null;
-  const entries = pathEntries(pathOf(env) ?? "");
+  const entries = pathEntries(pathOf(env) ?? "", WIN, cwd);
   const names = WIN && !WIN_EXTENSIONS.some((ext) => file.toLowerCase().endsWith(ext)) ? WIN_EXTENSIONS.map((ext) => file + ext) : [file];
   for (const entry of entries) {
     for (const name of names) {

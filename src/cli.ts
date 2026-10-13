@@ -52,7 +52,6 @@ import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
-import { spawn } from "node:child_process";
 import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion, feedMessage, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared, type InstallResult } from "./core/templates.js";
@@ -68,7 +67,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.28.1");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.28.2");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -2310,13 +2309,10 @@ async function envFileOrNull(root: string): Promise<string | null> {
   return (await exists(env)) ? env : null;
 }
 
-/** Runs `docker compose` with the terminal's own streams and resolves with its exit code. No shell. */
-function runCompose(argv: string[], real: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("docker", argv, { stdio: "inherit", env: { ...process.env, CRAFTAR_WORKSPACE: real } });
-    child.on("error", reject);
-    child.on("close", (code) => resolve(code ?? 1));
-  });
+/** Runs `docker compose` with the terminal's own streams and resolves with its exit code. No shell; `docker` is found as git and dotnet are. */
+async function runCompose(argv: string[], real: string): Promise<number> {
+  const { code } = await spawnInherited({ file: "docker", args: argv, cwd: process.cwd(), env: { ...process.env, CRAFTAR_WORKSPACE: real }, stdin: "inherit" });
+  return code ?? 1;
 }
 
 services

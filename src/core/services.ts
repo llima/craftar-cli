@@ -5,10 +5,10 @@
  */
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { execFile } from "node:child_process";
 import path from "node:path";
 import type { EmitBase, PlannedFile } from "../emitters/types.js";
 import { outName } from "../emitters/shared.js";
+import { execProgram } from "./proc.js";
 import { findSecrets } from "./secrets.js";
 import { isUtf8, hashNormalized, stripBom, toLf } from "./text.js";
 import { parseYamlText, yamlFault } from "./yaml-read.js";
@@ -569,16 +569,22 @@ export function dockerFault(d: DockerInfo, needFloor: boolean): string | null {
   return finding ? `${finding.message} — ${finding.fix}` : null;
 }
 
-/** Runs `docker` with an argument array and no shell; resolves with the exit code, rejects when it cannot start. */
-export const dockerRunner: DockerRunner = (file, args) =>
-  new Promise((resolve, reject) => {
-    execFile(file, args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error === null) return resolve({ code: 0, stdout, stderr });
-      // A numeric code is the child's exit code; anything else (ENOENT, EACCES, a signal) means it did not run to an exit.
-      if (typeof error.code === "number") return resolve({ code: error.code, stdout, stderr });
-      reject(error);
-    });
-  });
+/**
+ * Runs `docker` with an argument array and no shell; resolves with the exit code, rejects when it cannot start.
+ * The program is found as git and dotnet are (`execProgram`): in the absolute entries of PATH, a
+ * `node_modules/.bin` of the directory craftar runs in or above it aside — never by the platform's own lookup.
+ */
+export const dockerRunner: DockerRunner = async (file, args) => {
+  try {
+    const { stdout, stderr } = await execProgram(file, args, { maxBuffer: 16 * 1024 * 1024 });
+    return { code: 0, stdout, stderr };
+  } catch (e) {
+    const error = e as { code?: unknown; stdout?: unknown; stderr?: unknown };
+    // A numeric code is the child's exit code; anything else (ENOENT, EACCES, a signal) means it did not run to an exit.
+    if (typeof error.code !== "number") throw e;
+    return { code: error.code, stdout: typeof error.stdout === "string" ? error.stdout : "", stderr: typeof error.stderr === "string" ? error.stderr : "" };
+  }
+};
 
 export interface ServiceRow { name: string; ingredient: string | null; state: string; health: string | null; ports: Port[] }
 /** `services status --json` (spec 31 §4.4): a tooling contract, keys in this order. */
