@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { pruneCache } from "../src/core/cache.js";
 import { runDoctor, type DoctorOptions } from "../src/core/doctor.js";
 import { listWorkspaces, register, registryFile } from "../src/core/registry.js";
-import { cacheKey, credentialFault, ensureTree, parseLsRemote, resolveRef } from "../src/core/remote.js";
+import { cacheKey, credentialFault, ensureTree, parseLsRemote, resolveRef, type GitRunner } from "../src/core/remote.js";
 import { apply, loadForgeSource, loadWorkspace, loadWorkspaceConfig, plan, readLock, status } from "../src/core/sync.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
 import { remoteForge } from "./helpers/remote.js";
@@ -104,11 +104,36 @@ describe("a Forge URL with credentials recorded by an earlier release", () => {
     for (const dryRun of [true, false]) {
       const { report } = await pruneCache(h.home, { dryRun, workspace: null, registryOff: false });
       expect(report.kept).toEqual([{ path: `forges/${LABEL}`, reason: "named", namedBy: h.dirs }]);
-      expect(report.removed.every((r) => r.path.startsWith(`forges/${LABEL}/trees/`))).toBe(true);
+      expect(report.removed).toEqual([]);
       expectClean(report);
     }
     // The entry itself is untouched: the label is what is printed, not a rename.
     expect(await fs.readdir(path.join(h.home, "forges"))).toContain(h.oldKey);
+  });
+
+  it("cache prune: an entry it would remove, and a removal directory left behind, are named by the label", async () => {
+    const h = await recordedHome();
+    // No completed fetch: the entry is removed although a row names it. A leftover of an interrupted prune carries the key too.
+    await fs.rm(path.join(h.home, "forges", h.oldKey, "fetched"));
+    await fs.mkdir(path.join(h.home, "forges", `~removing-${h.oldKey}-4242`));
+    const { report } = await pruneCache(h.home, { dryRun: true, workspace: null, registryOff: false });
+    expect(report.removed.map((r) => [r.path, r.kind, r.reason])).toEqual([
+      [`forges/${LABEL}`, "entry", "incomplete"],
+      [`forges/~removing-${LABEL}-4242`, "leftover", "interrupted"],
+    ]);
+    expectClean(report);
+  });
+
+  it("cache prune: a warning about such an entry names it by the label", async () => {
+    const h = await recordedHome();
+    await fs.rm(path.join(h.home, "forges", h.oldKey, "fetched"));
+    const rename = async () => {
+      throw Object.assign(new Error("held"), { code: "EPERM" });
+    };
+    const { report } = await pruneCache(h.home, { dryRun: false, workspace: null, registryOff: false, rename });
+    expect(report.warnings).toEqual([`${LABEL} is held open (EPERM) — kept`]);
+    expect(report.kept.map((k) => [k.path, k.reason])).toEqual([[`forges/${LABEL}`, "held-open"]]);
+    expectClean(report);
   });
 
   it("cache prune: an entry nothing with credentials names keeps its name", async () => {
@@ -209,5 +234,59 @@ describe("a ref: that holds a URL with credentials", () => {
     }
     expect(() => resolveRef(refs, REF, url)).toThrow(`ref ${LABEL} not found in ${url}`);
     expect(() => resolveRef(refs, "v9", url)).toThrow(`ref "v9" not found in ${url}`);
+  });
+
+  it("a remote Forge: a ref that is both a branch and a tag is named by the label, with no hint that spells it", () => {
+    const sha = "a".repeat(40);
+    const url = "https://example.invalid/acme/forge.git";
+    const both = (ref: string) => parseLsRemote(`${sha}\trefs/heads/${ref}\n${sha}\trefs/tags/${ref}\n`);
+    expect(() => resolveRef(both(REF), REF, url)).toThrow(new Error(`ref ${LABEL} is both a branch and a tag in ${url}`));
+    expect(() => resolveRef(both("v1"), "v1", url)).toThrow(new Error(`ref "v1" is both a branch and a tag in ${url} — write refs/heads/v1 or refs/tags/v1`));
+  });
+
+  /** A home holding a cached copy of a remote Forge, and the message a failing load gives. */
+  async function cachedRemote() {
+    const root = await tmpDir("craftar-ref-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    await fs.mkdir(home);
+    const r = await remoteForge(SPEC);
+    cleanups.push(r.cleanup);
+    await ensureTree(r.url, null, { home });
+    const messageOf = (p: Promise<unknown>) => p.then(() => "", (e: unknown) => (e as Error).message);
+    return { root, home, url: r.url, messageOf };
+  }
+
+  it("a remote Forge that cannot be fetched: the cached copy that cannot resolve the ref names it by the label", async () => {
+    const c = await cachedRemote();
+    // The remote does not answer, and the cached copy lists no ref.
+    const git: GitRunner = async (args) => {
+      if (args.includes("ls-remote")) throw new Error("the remote does not answer");
+      return "";
+    };
+    for (const mode of ["read", "sync"] as const) {
+      const message = await c.messageOf(loadForgeSource(c.root, c.url, REF, { home: c.home, git, mode }));
+      expect(message).toBe(`cannot fetch the Forge ${c.url}: the remote does not answer — and the cached copy cannot resolve ref ${LABEL}`);
+      expectClean(message);
+    }
+    // A plain ref is named bare, as before.
+    const plain = await c.messageOf(loadForgeSource(c.root, c.url, "v9", { home: c.home, git, mode: "read" }));
+    expect(plain).toBe(`cannot fetch the Forge ${c.url}: the remote does not answer — and the cached copy cannot resolve v9`);
+  });
+
+  it("a remote Forge whose ref resolves to a commit the copy does not hold: named by the label, fetching and offline", async () => {
+    const c = await cachedRemote();
+    const sha = "b".repeat(40);
+    // The remote and the cached copy both list the ref; no commit is ever found.
+    const git: GitRunner = async (args) => {
+      if (args.includes("cat-file")) throw new Error("no such commit");
+      if (args.includes("ls-remote") || args.includes("for-each-ref")) return args.includes("ls-remote") ? `${sha}\trefs/heads/${REF}\n` : `${sha}\trefs/heads/${REF}\t\n`;
+      return "";
+    };
+    for (const offline of [false, true]) {
+      const message = await c.messageOf(ensureTree(c.url, REF, { home: c.home, git, offline }));
+      expect(message).toBe(`ref ${LABEL} not found in ${c.url}`);
+      expectClean(message);
+    }
   });
 });
