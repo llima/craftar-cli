@@ -2,10 +2,13 @@ import { catalogueContext, listIngredients, listRecipes, withLoadWarnings } from
 import { renderDiff } from "../core/diff.js";
 import { oneLine } from "../core/doctor.js";
 import { isMissing, listWorkspaces, readRegistry } from "../core/registry.js";
+import { credentialFault } from "../core/remote.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, statusReport } from "../core/report.js";
 import type { Lock } from "../schema/index.js";
 import { loadWorkspace, plan, readLock, status, type FileStatus, type Plan, type Workspace } from "../core/sync.js";
 import { hashNormalized } from "../core/text.js";
+
+const SOURCE_HIDDEN = "(a URL with credentials — not shown)";
 
 /**
  * The data routes of `craftar ui` (spec 36 §4.4, §5.2), as one function with no HTTP in it: a path and a query
@@ -64,9 +67,16 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
   if (pattern === null) return { status: 404, body: NOT_FOUND };
   if (pattern === "/api/workspaces") {
     const t = await listWorkspaces(deps.home, { fetch: false, reason: routeReason });
+    const rows = t.rows.map((r) => {
+      const row = { id: workspaceId(r.path), ...r };
+      if (credentialFault(r.forge.source)) {
+        row.forge = { ...r.forge, source: SOURCE_HIDDEN, key: null };
+      }
+      return row;
+    });
     return {
       status: 200,
-      body: { version: deps.version, registry: t.registry, fetch: false, workspaces: t.rows.map((r) => ({ id: workspaceId(r.path), ...r })), warnings: t.warnings },
+      body: { version: deps.version, registry: t.registry, fetch: false, workspaces: rows, warnings: t.warnings },
     };
   }
   const [, , , id, what] = req.path.split("/");

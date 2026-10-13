@@ -9,7 +9,7 @@ import { remoteForge } from "./helpers/remote.js";
 import { MCP_FILES, eightStates, explained, mcpWorkspace, syncOnce, type Scenario } from "./helpers/states.js";
 import { HOME, get, syncRegistered } from "./helpers/ui.js";
 import { renderDiff } from "../src/core/diff.js";
-import { registryFile } from "../src/core/registry.js";
+import { registryFile, listWorkspaces } from "../src/core/registry.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import { register } from "../src/core/registry.js";
 import { hashNormalized } from "../src/core/text.js";
@@ -398,5 +398,129 @@ describe("what the routes never do", () => {
     } finally {
       delete process.env.ACME_TOKEN;
     }
+  });
+});
+
+describe("a Forge URL recorded with credentials is never served (spec 36 §7.5)", () => {
+  const USER = ["some", "user"].join("");
+  const PW = ["PLACE", "HOLDER", "PW"].join("");
+  const BAD = `https:///${USER}:${PW}@forge.example.invalid/acme/forge.git`;
+  const BAD_KEY = `${USER}-${PW.toLowerCase()}-forge.example.invalid-acme-forge-000000000000`;
+
+  it("an error row: source is hidden, key is null, the response holds no credential", async () => {
+    // Register a workspace the usual way
+    const s = kept(await scenario(BASE, { config: { profile: "acme" } }));
+    const { id, path: real } = await syncRegistered(s.wsRoot);
+
+    // Rewrite the registry entry so forge.source and forge.key carry credentials
+    const regPath = registryFile(HOME());
+    const reg = JSON.parse(await fs.readFile(regPath, "utf8"));
+    const entry = reg.workspaces.find((e: any) => e.path === real);
+    entry.forge.source = BAD;
+    entry.forge.key = BAD_KEY;
+    entry.forge.kind = "remote";
+    await fs.writeFile(regPath, JSON.stringify(reg, null, 2));
+
+    // Break the workspace config so it becomes an error row
+    await fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), `forge: "${BAD}"\nprofile: acme\n`);
+
+    const answer = await get("/api/workspaces");
+    expect(answer.status).toBe(200);
+    const rows = (answer.body as any).workspaces;
+    const row = rows.find((r: any) => r.id === id);
+    expect(row.status).toBe("error");
+    expect(row.forge.source).toBe("(a URL with credentials — not shown)");
+    expect(row.forge.key).toBeNull();
+    const json = JSON.stringify(answer.body);
+    expect(json).not.toContain(USER);
+    expect(json).not.toContain(PW);
+    expect(json).not.toContain(PW.toLowerCase());
+  });
+
+  it("a missing row: source is hidden, key is null, the response holds no credential", async () => {
+    // Register a workspace the usual way
+    const s = kept(await scenario(BASE, { config: { profile: "acme" } }));
+    const { id, path: real } = await syncRegistered(s.wsRoot);
+
+    // Rewrite the registry entry so forge.source and forge.key carry credentials
+    const regPath = registryFile(HOME());
+    const reg = JSON.parse(await fs.readFile(regPath, "utf8"));
+    const entry = reg.workspaces.find((e: any) => e.path === real);
+    entry.forge.source = BAD;
+    entry.forge.key = BAD_KEY;
+    entry.forge.kind = "remote";
+    await fs.writeFile(regPath, JSON.stringify(reg, null, 2));
+
+    // Remove the workspace directory to make it a missing row
+    await fs.rm(s.wsRoot, { recursive: true, force: true });
+
+    const answer = await get("/api/workspaces");
+    expect(answer.status).toBe(200);
+    const rows = (answer.body as any).workspaces;
+    const row = rows.find((r: any) => r.id === id);
+    expect(row.status).toBe("missing");
+    expect(row.forge.source).toBe("(a URL with credentials — not shown)");
+    expect(row.forge.key).toBeNull();
+    const json = JSON.stringify(answer.body);
+    expect(json).not.toContain(USER);
+    expect(json).not.toContain(PW);
+    expect(json).not.toContain(PW.toLowerCase());
+  });
+
+  it("a control: a healthy workspace keeps its real forge.source and forge.key", async () => {
+    // The control workspace
+    const healthy = kept(await scenario(BASE, { config: { profile: "acme" } }));
+    const { id: healthyId } = await syncRegistered(healthy.wsRoot);
+
+    // The bad workspace beside it (to ensure the filter is per-row)
+    const bad = kept(await scenario(BASE, { config: { profile: "acme" } }));
+    const { id: badId, path: badReal } = await syncRegistered(bad.wsRoot);
+
+    // Rewrite the bad entry
+    const regPath = registryFile(HOME());
+    const reg = JSON.parse(await fs.readFile(regPath, "utf8"));
+    const badEntry = reg.workspaces.find((e: any) => e.path === badReal);
+    badEntry.forge.source = BAD;
+    badEntry.forge.key = BAD_KEY;
+    badEntry.forge.kind = "remote";
+    await fs.writeFile(regPath, JSON.stringify(reg, null, 2));
+    await fs.rm(bad.wsRoot, { recursive: true, force: true });
+
+    // Compare with direct listWorkspaces call
+    const direct = await listWorkspaces(HOME(), { fetch: false });
+    const healthyRealPath = await fs.realpath(healthy.wsRoot);
+    const directRow = direct.rows.find((r) => r.path === healthyRealPath);
+
+    const answer = await get("/api/workspaces");
+    const rows = (answer.body as any).workspaces;
+    const healthyRow = rows.find((r: any) => r.id === healthyId);
+
+    // The healthy row should have unchanged forge.source and forge.key
+    expect(healthyRow.forge.source).toBe(directRow!.forge.source);
+    expect(healthyRow.forge.key).toBe(directRow!.forge.key);
+  });
+
+  it("the other routes stay clean: /api/workspaces/<id> on an error workspace has no credential in 409", async () => {
+    // Register a workspace the usual way
+    const s = kept(await scenario(BASE, { config: { profile: "acme" } }));
+    const { id, path: real } = await syncRegistered(s.wsRoot);
+
+    // Rewrite the registry entry so forge.source and forge.key carry credentials
+    const regPath = registryFile(HOME());
+    const reg = JSON.parse(await fs.readFile(regPath, "utf8"));
+    const entry = reg.workspaces.find((e: any) => e.path === real);
+    entry.forge.source = BAD;
+    entry.forge.key = BAD_KEY;
+    entry.forge.kind = "remote";
+    await fs.writeFile(regPath, JSON.stringify(reg, null, 2));
+
+    // Break the workspace config so it becomes an error row
+    await fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), `forge: "${BAD}"\nprofile: acme\n`);
+
+    const answer = await get(`/api/workspaces/${id}`);
+    expect(answer.status).toBe(409);
+    const json = JSON.stringify(answer.body);
+    expect(json).not.toContain(USER);
+    expect(json).not.toContain(PW);
   });
 });
