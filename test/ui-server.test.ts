@@ -216,6 +216,18 @@ describe("the route seam", () => {
     expect((await ask(u, "/")).status).toBe(200);
   });
 
+  it("a failure while answering a failure closes that connection, and the queue goes on", async () => {
+    let calls = 0;
+    const u = await start({
+      route: async () => { if (++calls === 1) throw new Error("route throws"); return OK; },
+      onError: () => { throw new Error("the terminal is gone"); },
+    });
+    const url = `http://127.0.0.1:${u.port}${DATA}`;
+    const headers = { Authorization: `Bearer ${TOKEN}` };
+    await expect(fetch(url, { headers, signal: AbortSignal.timeout(3000) })).rejects.not.toMatchObject({ name: "TimeoutError" });
+    expect((await ask(u, DATA)).status).toBe(200);
+  });
+
   it("one at a time: a second data request starts after the first ended", async () => {
     const events: string[] = [];
     let n = 0;

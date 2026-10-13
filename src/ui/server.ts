@@ -106,7 +106,7 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
     const got = Buffer.from(one(req, "authorization") ?? "", "utf8");
     if (got.length !== want.length || !timingSafeEqual(got, want)) return forbidden();
 
-    // A rejection must not poison the queue: every later request would wait for its timeout.
+    // One request's failure must neither end the process nor stop the queue (see the catch at the end).
     queue = queue.then(async () => {
       // Work still queued when the server closed is dropped: its connection is gone, and nothing should keep loading.
       if (closed) return;
@@ -118,7 +118,11 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
         opts.onError(`ui: ${pattern}: ${errorText(e).split("\n")[0]}`);
         json(500, { error: "internal error" });
       }
-    }).catch(() => {});
+    }).catch(() => {
+      // Only the catch above can throw: a failing `onError`, or an answer that can no longer be written. Nothing
+      // more can be said then; the connection is closed rather than left unanswered, and the queue goes on.
+      res.destroy();
+    });
   });
   server.headersTimeout = 10_000;
   server.requestTimeout = 30_000;
