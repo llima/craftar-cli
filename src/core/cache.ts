@@ -88,6 +88,9 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
   }
 
   const cleanupMs = opts.cleanupMs ?? 14 * 24 * 60 * 60 * 1000;
+  // The keys the registry records for a URL with credentials: an entry's name is its key, and such a
+  // key holds them in clear. Filled once the registry is read; nothing this run says names one.
+  const hide: string[] = [];
 
   // The actual prune work: under the prune lock for a run, no lock for dry-run.
   // Everything after the "no forges/" check runs under the prune lock (§4.2 step 0).
@@ -124,6 +127,8 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
     }
 
     const named = whyNot === null ? namedCacheKeys(reg!, checked) : new Map<string, string[]>();
+    hide.length = 0;
+    if (reg !== null) hide.push(...credentialKeys(reg));
 
     // Step 3: Snapshot the cache — under the lock.
     let snapshot: CacheSnapshot;
@@ -297,9 +302,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
 
     const freedBytes = removed.reduce((sum, r) => sum + r.bytes, 0);
 
-    // An entry's name is its key, and a key the registry records for a URL with credentials holds
-    // them in clear: the report names such an entry by the fixed label, in every path and warning.
-    const hide = reg === null ? [] : credentialKeys(reg);
+    // The report names such an entry by the fixed label, in every path and warning.
     const shown = <T extends { path: string }>(rows: T[]): T[] => (hide.length === 0 ? rows : rows.map((r) => ({ ...r, path: hideKeys(r.path, hide) })));
 
     return {
@@ -308,11 +311,22 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
     };
   };
 
+  // A failure thrown out of the work names an entry by the label too: a file system or git error
+  // carries the path it failed on, and the entry's name is in it.
+  const guarded = async (lock: { refresh: () => Promise<void>; bytes: number }) => {
+    try {
+      return await doPrune(lock);
+    } catch (e) {
+      if (!(e instanceof Error) || hideKeys(e.message, hide) === e.message) throw e;
+      throw new Error(hideKeys(e.message, hide));
+    }
+  };
+
   // Under prune lock for a run, no lock for dry-run.
   if (opts.dryRun) {
     // No lock for dry-run; refresh is a no-op, bytes is 0.
-    return doPrune({ refresh: async () => {}, bytes: 0 });
+    return guarded({ refresh: async () => {}, bytes: 0 });
   } else {
-    return withPruneLock(home, opts, doPrune);
+    return withPruneLock(home, opts, guarded);
   }
 }

@@ -157,7 +157,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
     // One cause, one line (§13 item 12): a home that is not a directory is `home`'s error.
     m("cache", "ok", "not checked ($CRAFTAR_HOME is not a directory)");
   } else if (snapshot === null) {
-    m("cache", "warn", `cannot read the Forge cache: ${snapshotError}`, `fix or move $CRAFTAR_HOME (${home})`);
+    m("cache", "warn", `cannot read the Forge cache: ${hideKeys(snapshotError ?? "", reg === null ? [] : credentialKeys(reg))}`, `fix or move $CRAFTAR_HOME (${home})`);
   } else {
     const summary = `${snapshot.entries.length} entr${snapshot.entries.length === 1 ? "y" : "ies"}, ${MB(snapshot.bytes)}`;
     let skip: string | null = registryWhyNot;
