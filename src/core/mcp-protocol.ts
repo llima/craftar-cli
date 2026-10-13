@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { catalogueContext, checkType, listIngredients, listRecipes, withLoadWarnings } from "./catalogue.js";
 import { renderDiff } from "./diff.js";
-import { runDoctor, workspaceReport } from "./doctor.js";
+import { runDoctor, workspaceReport, type DoctorOptions } from "./doctor.js";
 import { unmanaged } from "./drift.js";
 import { cachedCopyLine, diffReport, explainFile, notProduced, statusPath, statusReport, targetsReport } from "./report.js";
 import { errorText, schemaFault } from "./schema-fault.js";
@@ -54,6 +54,11 @@ export interface McpContext {
   git?: LoadOptions["git"];
   /** Test seam: the one reader of the configuration; absent, `readWorkspaceConfig`. */
   readConfig?: (root: string) => Promise<MergedConfig>;
+  /** Test seams, handed to `doctor` as they are: absent, doctor's own probes (`git --version`, `dotnet --version`, `docker compose version --short`). */
+  nodeVersion?: DoctorOptions["nodeVersion"];
+  gitVersion?: DoctorOptions["gitVersion"];
+  dotnetVersion?: DoctorOptions["dotnetVersion"];
+  dockerRunner?: DoctorOptions["dockerRunner"];
 }
 
 export interface McpState {
@@ -226,7 +231,7 @@ async function call(name: ToolName, args: ToolArguments, ctx: McpContext): Promi
   if (name === "targets") return targetsReport(ctx.root, seam, { merged });
   if (name === "doctor")
     return workspaceReport(
-      await runDoctor({ version: ctx.version, home: ctx.home, workspace: ctx.root, fetch: ctx.fetch, strict: false, registryOff: ctx.registryOff, env: ctx.env, merged, git: ctx.git }),
+      await runDoctor({ version: ctx.version, home: ctx.home, workspace: ctx.root, fetch: ctx.fetch, strict: false, registryOff: ctx.registryOff, env: ctx.env, merged, git: ctx.git, nodeVersion: ctx.nodeVersion, gitVersion: ctx.gitVersion, dotnetVersion: ctx.dotnetVersion, dockerRunner: ctx.dockerRunner }),
     );
 
   const ws = await loadForgeFor(ctx.root, merged, { ...seam, mode: ctx.fetch ? "read" : "no-fetch" });

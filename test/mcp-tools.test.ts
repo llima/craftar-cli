@@ -525,7 +525,7 @@ describe("doctor — the checks 0.25–0.27 added, through injected runners", ()
 
     // docker: the level is warn when compose is not found (code 127)
     expect(of("docker")[0].level).toBe("warn");
-    expect(of("docker")[0].message).toMatch(/not available|not found/i);
+    expect(of("docker")[0].message).toMatch(/missing/i);
   });
 
   it("without a service or a templates block the runners are not called", async () => {
