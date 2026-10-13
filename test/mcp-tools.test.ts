@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { profile, recipe, rule, scenario, tmpDir } from "./helpers/forge.js";
+import { makeForge, makeWorkspace, profile, recipe, rule, scenario, tmpDir, writeFiles } from "./helpers/forge.js";
+import { DOTNET_MISSING } from "../src/core/templates.js";
 import { session } from "./helpers/mcp.js";
 import { remoteForge } from "./helpers/remote.js";
 import { MCP_FILES, eightStates, explained, mcpWorkspace, moveTracker, syncOnce, type Scenario } from "./helpers/states.js";
@@ -437,5 +438,117 @@ describe("the pin", () => {
     expect(data(a).files).toEqual([{ path: `${R}/keep.md`, state: "new", added: 1, removed: 0, diff: "+ # Keep", note: null }]);
     expect(JSON.stringify(a)).not.toContain("SENTINEL");
     await fs.writeFile(x.yaml, before);
+  });
+});
+
+describe("doctor — the checks 0.25–0.27 added, through injected runners", () => {
+  // Fixture: one Forge and workspace with a rule, one service ingredient, and a templates block with an installable dotnet-new entry
+  const serviceCompose = `services:
+  echo:
+    image: alpine
+    environment:
+      TOKEN: \${ACME_TOKEN}
+`;
+  const service = (name: string) => ({
+    meta: { type: "service", name },
+    files: { "compose.yaml": serviceCompose },
+  });
+  const API = { kind: "dotnet-new", source: "https://pkgs.example.com/acme/nuget/v3/index.json", packages: ["Acme.Templates.Api"] };
+  async function fixtureWithServiceAndTemplates() {
+    const root = await tmpDir("craftar-mcp-doctor-seams-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const ws = path.join(root, "ws");
+    await makeForge(forgeRoot, {
+      ingredients: [
+        rule("style", "# Style\n"),
+        service("echo"),
+      ],
+      recipes: [recipe("base", ["rule/style", "service/echo"])],
+      profiles: [profile("acme", ["base"], ["claude-code"], { templates: [API] })],
+    });
+    await makeWorkspace(ws, forgeRoot, { config: { profile: "acme" } });
+    // sync once so there is a lock
+    await syncOnce(ws);
+    return { root, forgeRoot, ws };
+  }
+
+  it("the tool returns the docker, services-env, templates and dotnet checks, from the injected runners", async () => {
+    const f = await fixtureWithServiceAndTemplates();
+    const calls: string[] = [];
+    const s = await session(f.ws, {
+      nodeVersion: "22.11.0",
+      gitVersion: async () => (calls.push("git --version"), "2.53.0"),
+      dotnetVersion: async () => (calls.push("dotnet --version"), "10.0.401"),
+      dockerRunner: async (file, args) => (calls.push([file, ...args].join(" ")), { code: 0, stdout: "v2.30.0\n", stderr: "" }),
+    });
+    const report = data(await one("doctor", s));
+    const of = (id: string) => report.checks.filter((c: { id: string }) => c.id === id);
+
+    // Each runner called exactly once
+    expect([...calls].sort()).toEqual(["docker compose version --short", "dotnet --version", "git --version"]);
+
+    // All four checks present
+    expect(of("docker").length).toBeGreaterThanOrEqual(1);
+    expect(of("dotnet").length).toBeGreaterThanOrEqual(1);
+    expect(of("templates").length).toBeGreaterThanOrEqual(1);
+    expect(of("services-env").length).toBeGreaterThanOrEqual(1);
+
+    // Messages contain the injected versions
+    expect(of("docker")[0].message).toContain("2.30.0");
+    expect(of("dotnet")[0].message).toContain("10.0.401");
+    expect(of("git")[0].message).toContain("2.53.0");
+    expect(report.checks.find((c: { id: string }) => c.id === "node").message).toContain("22.11.0");
+
+    // workspaceReport keeps scope=workspace plus node and git (the real rule from doctor.ts)
+    for (const c of report.checks) {
+      expect(c.scope === "workspace" || c.id === "node" || c.id === "git").toBe(true);
+    }
+  });
+
+  it("a runner that finds nothing is reported, not thrown", async () => {
+    const f = await fixtureWithServiceAndTemplates();
+    const s = await session(f.ws, {
+      nodeVersion: "22.11.0",
+      gitVersion: async () => "2.53.0",
+      dotnetVersion: async () => null,
+      dockerRunner: async () => ({ code: 127, stdout: "", stderr: "" }),
+    });
+    const report = data(await one("doctor", s));
+    const of = (id: string) => report.checks.filter((c: { id: string }) => c.id === id);
+
+    // Not an error result
+    expect((await one("doctor", s)).isError).toBeUndefined();
+
+    // dotnet missing: the message is DOTNET_MISSING from templates.ts
+    expect(of("dotnet")[0].message).toBe(DOTNET_MISSING);
+
+    // docker: the level is warn when compose is not found (code 127)
+    expect(of("docker")[0].level).toBe("warn");
+    expect(of("docker")[0].message).toMatch(/not available|not found/i);
+  });
+
+  it("without a service or a templates block the runners are not called", async () => {
+    // Use BASE shape: rule only, no service, no templates
+    const s = kept(await scenario(BASE, { config: { profile: "acme" } }));
+    await syncOnce(s.wsRoot);
+    const calls: string[] = [];
+    const m = await session(s.wsRoot, {
+      nodeVersion: "22.11.0",
+      gitVersion: async () => (calls.push("git --version"), "2.53.0"),
+      dotnetVersion: async () => (calls.push("dotnet --version"), "10.0.401"),
+      dockerRunner: async (file, args) => (calls.push([file, ...args].join(" ")), { code: 0, stdout: "v2.30.0\n", stderr: "" }),
+    });
+    const report = data(await one("doctor", m));
+    const of = (id: string) => report.checks.filter((c: { id: string }) => c.id === id);
+
+    // Only git runner called (git is always probed)
+    expect(calls).toEqual(["git --version"]);
+
+    // None of the service/templates checks present
+    expect(of("docker")).toEqual([]);
+    expect(of("dotnet")).toEqual([]);
+    expect(of("templates")).toEqual([]);
+    expect(of("services-env")).toEqual([]);
   });
 });
