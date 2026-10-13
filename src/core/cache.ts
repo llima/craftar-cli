@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { LockBusyError, type LockTiming } from "./home-lock.js";
-import { namedCacheKeys, readRegistry } from "./registry.js";
+import { credentialKeys, hideKeys, namedCacheKeys, readRegistry } from "./registry.js";
 import type { Registry } from "../schema/index.js";
 import {
   cacheDir,
@@ -297,8 +297,13 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
 
     const freedBytes = removed.reduce((sum, r) => sum + r.bytes, 0);
 
+    // An entry's name is its key, and a key the registry records for a URL with credentials holds
+    // them in clear: the report names such an entry by the fixed label, in every path and warning.
+    const hide = reg === null ? [] : credentialKeys(reg);
+    const shown = <T extends { path: string }>(rows: T[]): T[] => (hide.length === 0 ? rows : rows.map((r) => ({ ...r, path: hideKeys(r.path, hide) })));
+
     return {
-      report: { home, dryRun: opts.dryRun, removed, kept, freedBytes, warnings },
+      report: { home, dryRun: opts.dryRun, removed: shown(removed), kept: shown(kept), freedBytes, warnings: warnings.map((w) => hideKeys(w, hide)) },
       header,
     };
   };

@@ -17,6 +17,12 @@ const SCHEME_URL = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
 /** The SCP-like form `<user>@<host>:<path>`; without a user, `host:path` stays a path (a drive letter looks the same). */
 const SCP_URL = /^[^\s/\\:@]+@[^\s/\\:]+:/;
 
+/** A scheme and the run of `/` and `\` after it, whatever the run is (`credentialFault` reads it when it is not `//`). */
+const BACKSLASH_URL = /^([A-Za-z][A-Za-z0-9+.-]*):([/\\]+)/;
+
+/** What is printed in place of a value `credentialFault` flags, where one written or recorded earlier would be shown. */
+export const CREDENTIAL_HIDDEN = "(a URL with credentials — not shown)";
+
 /** A `forge:` value is a git URL (a remote Forge) or a path resolved from the workspace root. */
 export function classifyForge(value: string): "url" | "path" {
   const v = value.trim();
@@ -116,14 +122,28 @@ export function urlCredentialIn(text: string): boolean {
  * password never reaches a message that prints the value (spec 13 §6.1, §14 item 11). An empty
  * authority (`https:///…`) is read past, for every scheme but `file`: what follows the extra
  * separators is the authority some clients use — curl past up to three slashes, a WHATWG parser
- * past a `\` too.
+ * past a `\` too. A scheme followed by separators that are not `//` and hold a `\` (`https:\\…`,
+ * `https:/\…`) is read the same way: a WHATWG parser takes each `\` for a `/`, while
+ * `classifyForge` reads the value as a path — and a path is printed.
  */
 export function credentialFault(raw: string): boolean {
   const value = raw.trim();
   const head = value.split(/[/\\]/, 1)[0];
   if (/^[^@]*:[^@]*@/.test(head) && !SCHEME_URL.test(value)) return true;
   const scheme = SCHEME_URL.exec(value);
-  if (!scheme) return false;
+  if (!scheme) {
+    // No `://`: only a separator run holding a backslash is read as one. The authority ends at the
+    // first `/` or `\`; the rules are the ones below, by the scheme's name. A drive path (`C:\dir`)
+    // has no `@` there.
+    const loose = BACKSLASH_URL.exec(value);
+    if (!loose || !loose[2].includes("\\") || /^file$/i.test(loose[1])) return false;
+    const tail = value.slice(loose[0].length);
+    const looseAuthority = tail.slice(0, tail.search(/[/\\]|$/));
+    const looseAt = looseAuthority.lastIndexOf("@");
+    if (looseAt === -1) return false;
+    const looseUser = looseAuthority.slice(0, looseAt);
+    return /^https?$/i.test(loose[1]) ? looseUser !== "" : looseUser.includes(":");
+  }
   // Read the authority as written, never through a parser: a spelling WHATWG URL rejects
   // (`host:badport`) must not slip through and be printed later. It runs to the first `/`, as git
   // reads an ssh URL — a `?` or `#` in a password stays inside it. Fail closed.
@@ -139,6 +159,17 @@ export function credentialFault(raw: string): boolean {
   const userinfo = authority.slice(0, at);
   if (/^https?:\/\/$/i.test(scheme[0])) return userinfo !== "";
   return userinfo.includes(":");
+}
+
+/** Whether a `ref:` holds a URL with credentials — as the whole value, or anywhere in it (`refs/heads/<url>`). */
+const refHoldsCredentials = (ref: string): boolean => credentialFault(ref) || urlCredentialIn(ref);
+
+/**
+ * A `ref:` as a message names it: quoted — or, when it holds a URL with credentials (typed into
+ * `ref:` by mistake), the fixed label and never the value.
+ */
+export function shownRef(ref: string): string {
+  return refHoldsCredentials(ref) ? `ref ${CREDENTIAL_HIDDEN}` : `ref "${ref}"`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -229,15 +260,15 @@ export function resolveRef(refs: LsRemote, ref: string | null, url: string): { c
   const qualified = /^refs\/(heads|tags)\/(.+)$/.exec(ref);
   if (qualified) {
     const commit = (qualified[1] === "heads" ? refs.heads : refs.tags).get(qualified[2]);
-    if (commit === undefined) throw new Error(`ref "${ref}" not found in ${url}`);
+    if (commit === undefined) throw new Error(`${shownRef(ref)} not found in ${url}`);
     return { commit, defaultBranch: null };
   }
   const branch = refs.heads.get(ref);
   const tag = refs.tags.get(ref);
   if (branch !== undefined && tag !== undefined)
-    throw new Error(`ref "${ref}" is both a branch and a tag in ${url} — write refs/heads/${ref} or refs/tags/${ref}`);
+    throw new Error(`${shownRef(ref)} is both a branch and a tag in ${url}${refHoldsCredentials(ref) ? "" : ` — write refs/heads/${ref} or refs/tags/${ref}`}`);
   const commit = branch ?? tag;
-  if (commit === undefined) throw new Error(`ref "${ref}" not found in ${url}`);
+  if (commit === undefined) throw new Error(`${shownRef(ref)} not found in ${url}`);
   return { commit, defaultBranch: null };
 }
 
@@ -320,7 +351,7 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
   // A copy exists once a fetch completed: an init whose fetch then failed leaves no stamp.
   const haveCopy = await exists(stamp);
   const fetchedAt = async () => ((await exists(stamp)) ? readFetchedStamp(stamp) : null);
-  const label = ref ?? "the default branch";
+  const label = ref === null ? `ref "the default branch"` : shownRef(ref);
 
   // A full SHA already in the cache names the same commit whatever the remote does: no fetch (§14 item 3).
   const cachedSha = ref !== null && FULL_SHA.test(ref) && haveCopy && (await hasCommit(git, repo, ref));
@@ -330,7 +361,7 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
   if (opts.offline || cachedSha) {
     if (!haveCopy) throw new NoCachedCopyError(url);
     resolved = cachedSha ? { commit: ref!, defaultBranch: null } : resolveRef(await cachedRefs(git, repo), ref, url);
-    if (!(await hasCommit(git, repo, resolved.commit))) throw new Error(`ref "${label}" not found in ${url}`);
+    if (!(await hasCommit(git, repo, resolved.commit))) throw new Error(`${label} not found in ${url}`);
   } else {
     let refs: LsRemote;
     try {
@@ -356,7 +387,7 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
       await fs.writeFile(stamp, new Date().toISOString() + "\n");
     });
     fetched = true;
-    if (!(await hasCommit(git, repo, resolved.commit))) throw new Error(`ref "${label}" not found in ${url}`);
+    if (!(await hasCommit(git, repo, resolved.commit))) throw new Error(`${label} not found in ${url}`);
   }
 
   const dir = await treeFor(git, entry, repo, resolved.commit, opts);

@@ -4,7 +4,7 @@ import { REGISTRY_SCHEMAS, RegistrySchema, type Lock, type Registry, type Regist
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { exists } from "./forge.js";
 import { withLock, type LockTiming } from "./home-lock.js";
-import { cacheKey } from "./remote.js";
+import { cacheKey, credentialFault, CREDENTIAL_HIDDEN } from "./remote.js";
 import { loadWorkspace, plan, readLock, status, unsetDeclared, unsetSummary, WORKSPACE_FILE, type FileStatus, type Plan, type Workspace } from "./sync.js";
 
 /*
@@ -152,6 +152,24 @@ export async function isMissing(entry: RegistryEntry): Promise<boolean> {
   }
 }
 
+/**
+ * The cache keys of the entries whose recorded Forge URL `credentialFault` flags. A release whose
+ * check was narrower recorded such a URL, and the key built from it — the name of the cache entry —
+ * holds the user and the password in clear.
+ */
+export function credentialKeys(reg: Registry): string[] {
+  const keys = new Set<string>();
+  for (const e of reg.workspaces) if (e.forge.key !== null && credentialFault(e.forge.source)) keys.add(e.forge.key);
+  return [...keys];
+}
+
+/** `text` with every one of `keys` replaced by the fixed label: what `cache prune` and `doctor` print of a cache entry. */
+export function hideKeys(text: string, keys: readonly string[]): string {
+  let out = text;
+  for (const k of keys) out = out.split(k).join(CREDENTIAL_HIDDEN);
+  return out;
+}
+
 /** Whether `dir` has a registry entry — by real path, without case on Windows, as `register` keys it (spec 24 §5.1). */
 export async function isRegistered(reg: Registry, dir: string): Promise<boolean> {
   const target = await realOrResolved(dir);
@@ -241,8 +259,13 @@ export interface WorkspaceTable {
   warnings: string[];
 }
 
-/** A `missing` or `error` row: what the last sync recorded (§4.5). */
+/**
+ * A `missing` or `error` row: what the last sync recorded (§4.5) — except a Forge URL that
+ * `credentialFault` flags, recorded by a release whose check was narrower: the fixed label stands
+ * for it, and the key built from it is not given.
+ */
 function fromEntry(e: RegistryEntry, rowStatus: "missing" | "error"): WorkspaceRow {
+  const hidden = credentialFault(e.forge.source);
   return {
     name: path.basename(e.path),
     path: e.path,
@@ -252,8 +275,8 @@ function fromEntry(e: RegistryEntry, rowStatus: "missing" | "error"): WorkspaceR
     targets: e.targets,
     forge: {
       kind: e.forge.kind,
-      source: e.forge.source,
-      key: e.forge.key,
+      source: hidden ? CREDENTIAL_HIDDEN : e.forge.source,
+      key: hidden ? null : e.forge.key,
       ref: e.forge.ref,
       defaultBranch: null,
       commit: e.forge.commit,

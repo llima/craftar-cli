@@ -4,7 +4,7 @@ import { ENV_NAME, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
 import { renderServer, rendersServers } from "./mcp-server.js";
-import { isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus } from "./registry.js";
+import { credentialKeys, hideKeys, isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus } from "./registry.js";
 import { FULL_SHA, cacheKey, classifyForge, inspectCache, type CacheSnapshot } from "./remote.js";
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
@@ -163,8 +163,10 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
     let skip: string | null = registryWhyNot;
     if (skip === null && root !== null && merged === null) skip = "the checked craftar.yaml does not read";
     const findings: Check[] = [];
+    // A key the registry records for a URL with credentials is never printed (the name holds them).
+    const hide = reg === null ? [] : credentialKeys(reg);
     for (const e of snapshot.entries) {
-      if (!e.fetched) findings.push({ id: "cache", scope: "machine", level: "warn", message: `${e.key} — a fetch never completed`, fix: CACHE_FIX });
+      if (!e.fetched) findings.push({ id: "cache", scope: "machine", level: "warn", message: `${hideKeys(e.key, hide)} — a fetch never completed`, fix: CACHE_FIX });
     }
     if (skip === null && reg !== null) {
       const checked = remote && root !== null ? { key: cacheKey(merged!.config.forge.trim()), path: root } : null;

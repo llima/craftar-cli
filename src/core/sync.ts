@@ -6,7 +6,7 @@ import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forg
 import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
 import { climbsOut, hashNormalized, isUtf8, legacyHash, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
-import { classifyForge, credentialFault, ensureTree, ForgeFetchError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
+import { classifyForge, credentialFault, ensureTree, shownRef, ForgeFetchError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
 import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
@@ -198,7 +198,7 @@ export async function loadForgeSource(
   const forgeRoot = path.resolve(root, source);
   if (!(await exists(forgeRoot))) throw new Error(`Forge not found at ${forgeRoot}`);
   // A path means the working tree as it is; a ref beside it is ignored, said out loud (Ruling 9).
-  if (ref !== null) warnings.push(`ref "${ref}" is ignored: the Forge is a path (${source}), read as its working tree`);
+  if (ref !== null) warnings.push(`${shownRef(ref)} is ignored: the Forge is a path (${source}), read as its working tree`);
   const origin: ForgeOrigin = { kind: "path", source, ref: null, defaultBranch: null, fetched: false, fromLocalFile };
   return { forge: await loadForge(forgeRoot), origin, warnings };
 }
