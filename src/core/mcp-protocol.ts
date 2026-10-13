@@ -54,7 +54,7 @@ export interface McpContext {
   git?: LoadOptions["git"];
   /** Test seam: the one reader of the configuration; absent, `readWorkspaceConfig`. */
   readConfig?: (root: string) => Promise<MergedConfig>;
-  /** Test seams, handed to `doctor` as they are: absent, doctor's own probes (`git --version`, `dotnet --version`, `docker compose version --short`). */
+  /** Test seams, handed to `doctor` as they are: absent, the running Node's version and doctor's own probes (`git --version`, `dotnet --version`, `docker compose version --short`). */
   nodeVersion?: DoctorOptions["nodeVersion"];
   gitVersion?: DoctorOptions["gitVersion"];
   dotnetVersion?: DoctorOptions["dotnetVersion"];

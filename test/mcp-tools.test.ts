@@ -514,11 +514,8 @@ describe("doctor — the checks 0.25–0.27 added, through injected runners", ()
       dotnetVersion: async () => null,
       dockerRunner: async () => ({ code: 127, stdout: "", stderr: "" }),
     });
-    const report = data(await one("doctor", s));
+    const report = data(await one("doctor", s)); // data() asserts the answer is not an error
     const of = (id: string) => report.checks.filter((c: { id: string }) => c.id === id);
-
-    // Not an error result
-    expect((await one("doctor", s)).isError).toBeUndefined();
 
     // dotnet missing: the message is DOTNET_MISSING from templates.ts
     expect(of("dotnet")[0].message).toBe(DOTNET_MISSING);
