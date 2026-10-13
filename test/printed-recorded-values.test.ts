@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { pruneCache } from "../src/core/cache.js";
 import { runDoctor, type DoctorOptions } from "../src/core/doctor.js";
 import { askInit, type InitIo } from "../src/core/init-flow.js";
-import { listWorkspaces, register, registryFile } from "../src/core/registry.js";
+import { credentialKeys, hideKeys, listWorkspaces, readRegistry, register, registryFile } from "../src/core/registry.js";
 import { cacheKey, credentialFault, ensureTree, parseLsRemote, resolveRef, type GitRunner } from "../src/core/remote.js";
 import { apply, loadForgeSource, loadWorkspace, loadWorkspaceConfig, plan, readLock, status } from "../src/core/sync.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
@@ -178,6 +178,33 @@ describe("a Forge URL with credentials recorded by an earlier release", () => {
   });
 });
 
+describe("the keys the registry records for a URL with credentials", () => {
+  it("credentialKeys gives them once; hideKeys puts the label wherever one stands in a message — doctor's unreadable-cache line among them", async () => {
+    const h = await recordedHome();
+    const keys = credentialKeys(await readRegistry(h.home));
+    expect(keys).toEqual([h.oldKey]);
+    // The shapes a file system error takes: a path inside the entry, and inside a removal directory.
+    const inTree = path.join(h.home, "forges", h.oldKey, "trees", "a".repeat(40));
+    const inLeftover = path.join(h.home, "forges", `~removing-${h.oldKey}-4242`, "repo.git");
+    const said = hideKeys(`EACCES: permission denied, scandir '${inTree}'; ENOTEMPTY: directory not empty, rmdir '${inLeftover}'`, keys);
+    expect(said).toBe(
+      `EACCES: permission denied, scandir '${path.join(h.home, "forges", LABEL, "trees", "a".repeat(40))}'; ` +
+        `ENOTEMPTY: directory not empty, rmdir '${path.join(h.home, "forges", `~removing-${LABEL}-4242`, "repo.git")}'`,
+    );
+    expectClean(said);
+    // No key, or a message that names none: the text is given as it is.
+    expect(hideKeys(`scandir '${inTree}'`, [])).toBe(`scandir '${inTree}'`);
+    expect(hideKeys("cannot read the Forge cache", keys)).toBe("cannot read the Forge cache");
+  });
+
+  it("a row with a clean URL, or a path Forge, gives no key to hide", async () => {
+    const h = await recordedHome();
+    const reg = await readRegistry(h.home);
+    for (const e of reg.workspaces) e.forge.source = "https://example.invalid/acme/forge.git";
+    expect(credentialKeys(reg)).toEqual([]);
+  });
+});
+
 describe("a forge: spelled with backslashes after the scheme", () => {
   const BACK = "\\";
   const spellings = [
@@ -254,6 +281,17 @@ describe("a ref: that holds a URL with credentials", () => {
     expect(sc.said).toEqual(["the answer holds credentials in a URL — a ref is a branch, a tag or a full SHA"]);
     expect(sc.asked).toHaveLength(4); // Forge, Ref, Forge again, Ref again — then the script ends
     expect(sc.asked[3]).toBe("Ref — a branch, a tag or a full SHA [the default branch]: ");
+    expectClean([sc.said, sc.asked]);
+  });
+
+  it("interactive init with --forge given: the refused ref answer is asked again, and only the ref", async () => {
+    const c = await cachedRemote();
+    const sc = script([REF, REF]);
+    const result = await askInit(path.join(c.root, "ws"), { ...GIVEN, forge: c.url }, { doc: null, keys: [] }, sc.io, { home: c.home, registryOff: false });
+    expect(result.kind).toBe("cancelled");
+    const refQuestion = "Ref — a branch, a tag or a full SHA [the default branch]: ";
+    expect(sc.asked).toEqual([refQuestion, refQuestion, refQuestion]);
+    expect(sc.said).toEqual(Array(2).fill("the answer holds credentials in a URL — a ref is a branch, a tag or a full SHA"));
     expectClean([sc.said, sc.asked]);
   });
 

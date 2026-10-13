@@ -318,6 +318,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
       return await doPrune(lock);
     } catch (e) {
       if (!(e instanceof Error) || hideKeys(e.message, hide) === e.message) throw e;
+      // A new error on purpose — no `cause`, no copied `code`: the original carries the name.
       throw new Error(hideKeys(e.message, hide));
     }
   };
