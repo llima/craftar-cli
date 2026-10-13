@@ -132,8 +132,8 @@ export const PAGE_JS = String.raw`"use strict";
   /* A path as one word of a command line: as it is when plain; single-quoted for a POSIX path (nothing expands
      inside single quotes); double-quoted, only the quote escaped, otherwise. */
   function shellWord(text) {
+    if (text.charAt(0) === "/") return /^[A-Za-z0-9_.,:=@%+\/-]+$/.test(text) ? text : "'" + text.replace(/'/g, "'\\''") + "'";
     if (/^[A-Za-z0-9_.,:=@%+\/\\-]+$/.test(text)) return text;
-    if (text.charAt(0) === "/") return "'" + text.replace(/'/g, "'\\''") + "'";
     return '"' + text.replace(/"/g, '\\"') + '"';
   }
   function forgeLine(forge) {

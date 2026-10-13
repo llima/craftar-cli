@@ -62,6 +62,7 @@ describe("craftar ui — the page's source", () => {
     expect(shellWord("/home/me/my ws")).toBe("'/home/me/my ws'");
     expect(shellWord("/home/me/a$b`c")).toBe("'/home/me/a$b`c'");
     expect(shellWord("/home/me/it's")).toBe("'/home/me/it'\\''s'");
+    expect(shellWord("/home/me/a\\b")).toBe("'/home/me/a\\b'");
     expect(shellWord("C:\\Users\\me\\ws")).toBe("C:\\Users\\me\\ws");
     expect(shellWord("C:\\Users\\me\\my ws")).toBe('"C:\\Users\\me\\my ws"');
     expect(shellWord('C:\\a "b" c')).toBe('"C:\\a \\"b\\" c"');
