@@ -1,14 +1,12 @@
 import { catalogueContext, listIngredients, listRecipes, withLoadWarnings } from "../core/catalogue.js";
 import { renderDiff } from "../core/diff.js";
 import { oneLine } from "../core/doctor.js";
-import { isMissing, listWorkspaces, readRegistry } from "../core/registry.js";
-import { credentialFault } from "../core/remote.js";
+import { isMissing, listWorkspaces, readRegistry, type WorkspaceRow } from "../core/registry.js";
+import { credentialFault, CREDENTIAL_HIDDEN } from "../core/remote.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, statusReport } from "../core/report.js";
 import type { Lock } from "../schema/index.js";
 import { loadWorkspace, plan, readLock, status, type FileStatus, type Plan, type Workspace } from "../core/sync.js";
 import { hashNormalized } from "../core/text.js";
-
-const SOURCE_HIDDEN = "(a URL with credentials — not shown)";
 
 /**
  * The data routes of `craftar ui` (spec 36 §4.4, §5.2), as one function with no HTTP in it: a path and a query
@@ -62,18 +60,23 @@ function onePath(query: string): string | null {
   }
 }
 
+/**
+ * A row of the table as the page is given it: its id, and — whatever the core answered — never a Forge URL that
+ * `credentialFault` flags. Since 0.28.1 the core gives the label itself for a `missing` or an `error` row; this
+ * is the page's own check, a second line: the label is the core's (`CREDENTIAL_HIDDEN`), and the key goes with it.
+ */
+export function servedRow(r: WorkspaceRow): WorkspaceRow & { id: string } {
+  const row = { id: workspaceId(r.path), ...r };
+  if (credentialFault(r.forge.source)) row.forge = { ...r.forge, source: CREDENTIAL_HIDDEN, key: null };
+  return row;
+}
+
 export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAnswer> {
   const pattern = routePattern(req.path);
   if (pattern === null) return { status: 404, body: NOT_FOUND };
   if (pattern === "/api/workspaces") {
     const t = await listWorkspaces(deps.home, { fetch: false, reason: routeReason });
-    const rows = t.rows.map((r) => {
-      const row = { id: workspaceId(r.path), ...r };
-      if (credentialFault(r.forge.source)) {
-        row.forge = { ...r.forge, source: SOURCE_HIDDEN, key: null };
-      }
-      return row;
-    });
+    const rows = t.rows.map(servedRow);
     return {
       status: 200,
       body: { version: deps.version, registry: t.registry, fetch: false, workspaces: rows, warnings: t.warnings },

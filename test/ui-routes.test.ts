@@ -13,7 +13,8 @@ import { registryFile, listWorkspaces } from "../src/core/registry.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import { register } from "../src/core/registry.js";
 import { hashNormalized } from "../src/core/text.js";
-import { routePattern, routeReason, workspaceId } from "../src/ui/routes.js";
+import { CREDENTIAL_HIDDEN } from "../src/core/remote.js";
+import { routePattern, routeReason, servedRow, workspaceId } from "../src/ui/routes.js";
 
 // Spec 36 §4.4, §4.5, §6, §7.3, §7.5, §10.2 — every answer of the data routes, without a socket.
 
@@ -429,7 +430,7 @@ describe("a Forge URL recorded with credentials is never served (spec 36 §7.5)"
     const rows = (answer.body as any).workspaces;
     const row = rows.find((r: any) => r.id === id);
     expect(row.status).toBe("error");
-    expect(row.forge.source).toBe("(a URL with credentials — not shown)");
+    expect(row.forge.source).toBe(CREDENTIAL_HIDDEN);
     expect(row.forge.key).toBeNull();
     const json = JSON.stringify(answer.body);
     expect(json).not.toContain(USER);
@@ -459,12 +460,41 @@ describe("a Forge URL recorded with credentials is never served (spec 36 §7.5)"
     const rows = (answer.body as any).workspaces;
     const row = rows.find((r: any) => r.id === id);
     expect(row.status).toBe("missing");
-    expect(row.forge.source).toBe("(a URL with credentials — not shown)");
+    expect(row.forge.source).toBe(CREDENTIAL_HIDDEN);
     expect(row.forge.key).toBeNull();
     const json = JSON.stringify(answer.body);
     expect(json).not.toContain(USER);
     expect(json).not.toContain(PW);
     expect(json).not.toContain(PW.toLowerCase());
+  });
+
+  it("the page's own check: a row that reaches it with such a URL is given the core's label and no key", async () => {
+    // Since 0.28.1 the core labels a missing or an error row itself, so the two cases above no longer reach this
+    // check. It is exercised here on a row as the core would hand it if it ever let one through.
+    const s = kept(await scenario(BASE, { config: { profile: "acme" } }));
+    await syncRegistered(s.wsRoot);
+    const loaded = (await listWorkspaces(HOME(), { fetch: false })).rows[0];
+    const through = { ...loaded, forge: { ...loaded.forge, kind: "remote" as const, source: BAD, key: BAD_KEY } };
+    const served = servedRow(through);
+    expect(served.forge.source).toBe(CREDENTIAL_HIDDEN);
+    expect(served.forge.key).toBeNull();
+    expect(served.id).toBe(workspaceId(loaded.path));
+    const json = JSON.stringify(served);
+    expect(json).not.toContain(USER);
+    expect(json).not.toContain(PW);
+    expect(json).not.toContain(PW.toLowerCase());
+    // A row with nothing to hide is served as it is, with its id.
+    expect(servedRow(loaded)).toEqual({ id: workspaceId(loaded.path), ...loaded });
+  });
+
+  it("one label: the page takes the core's, and spells none of its own", async () => {
+    // What the page shows and the README names; a change here is a change to both.
+    expect(CREDENTIAL_HIDDEN).toBe("(a URL with credentials — not shown)");
+    const dir = path.resolve(__dirname, "..", "src", "ui");
+    for (const f of await fs.readdir(dir)) {
+      if (!f.endsWith(".ts")) continue;
+      expect(await fs.readFile(path.join(dir, f), "utf8"), f).not.toMatch(/a URL with credentials/);
+    }
   });
 
   it("a control: a healthy workspace keeps its real forge.source and forge.key", async () => {
