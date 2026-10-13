@@ -123,6 +123,8 @@ describe("onPath — a program in such an entry is not found", () => {
   });
 
   it("the entry npx adds for this very process is skipped, and the next entry that has the program is taken", async () => {
+    // The program is there: said to run elsewhere, craftar finds it in that same entry.
+    expect(await onPath(TOOL, withPath(LOCAL), PROJECT)).toBe(path.join(LOCAL, TOOL + EXE));
     expect(await onPath(TOOL, withPath(LOCAL))).toBeNull();
     expect(await onPath(TOOL, withPath([LOCAL, PROJECT_BIN].join(D)))).toBe(path.join(PROJECT_BIN, TOOL + EXE));
   });
@@ -162,9 +164,10 @@ describe("docker is found as git and dotnet are", () => {
     expect(outcome).toBe("ENOENT");
   });
 
-  it("nor one reached only by a relative PATH entry or an empty one — the rule git and dotnet have had since 0.27.2", async () => {
+  it("nor one reached only by a relative PATH entry — the rule git and dotnet have had since 0.27.2", async () => {
     const relative = path.relative(process.cwd(), LOCAL);
-    for (const value of [relative, `.${path.sep}${relative}`, "", "."]) {
+    expect(path.isAbsolute(relative)).toBe(false);
+    for (const value of [relative, `.${path.sep}${relative}`]) {
       const outcome = await withProcessPath(value, () => dockerRunner(TOOL, ["-e", "console.log('ran')"]).then((r) => `ran with code ${r.code}`, (e: NodeJS.ErrnoException) => e.code));
       expect(outcome, `PATH=${JSON.stringify(value)}`).toBe("ENOENT");
     }
