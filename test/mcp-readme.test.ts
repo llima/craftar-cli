@@ -31,7 +31,7 @@ describe("craftar mcp — README and --help", () => {
     expect(README).not.toContain("`craftar mcp` + Claude Code");
     // `craftar ui` left both lists when it was built (spec 36): `test/ui-readme.test.ts` holds that half.
     // the roadmap still names the shipped command, and the results paragraph says what is left out
-    expect(count("`craftar mcp` (a read-only MCP server: seven reading tools for an AI coder, over stdin and stdout). Next:")).toBe(1);
+    expect(count("`craftar mcp` (a read-only MCP server: seven reading tools for an AI coder, over stdin and stdout);")).toBe(1);
     expect(count("with three things left out")).toBe(1);
   });
 });

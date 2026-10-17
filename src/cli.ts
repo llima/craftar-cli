@@ -914,7 +914,7 @@ workspaces
 program
   .command("ui")
   .description(
-    "A local dashboard: the table of `craftar workspaces` and, for one workspace, its file states, a file's diff and explanation, and its Forge's recipes and ingredients — in a browser, on 127.0.0.1 only, behind an address that works for this run. Reads only, writes nothing, reaches no network; Ctrl-C stops it",
+    "A local dashboard: the table of `craftar workspaces` and, for one workspace, its file states, a file's diff and explanation, and its Forge's recipes and ingredients — in a browser, on 127.0.0.1 only, behind an address that works for this run. Reads only — writes no workspace, lock, registry or Forge — and reaches no network; Ctrl-C stops it",
   )
   .option("--port <n>", "the port to listen on, 0 to 65535; 0 takes a free one", "4747")
   .action(async (o: { port: string }) => {

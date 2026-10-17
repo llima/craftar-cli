@@ -12,6 +12,8 @@ describe("README — craftar ui", () => {
     expect(count("| `craftar ui [--port <n>]` |")).toBe(1);
     expect(count("it listens on `127.0.0.1`")).toBe(1);
     expect(count("needs a token generated for that run")).toBe(1);
+    expect(count("`craftar ui` (a local, read-only dashboard of the registered workspaces, on `127.0.0.1` only). Next:")).toBe(1);
+    expect(count("### to 0.30.0")).toBe(1);
   });
 
   it("no longer listed as not built, nor under Later", () => {

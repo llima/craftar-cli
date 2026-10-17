@@ -189,7 +189,7 @@ describe("craftar ui — started (spec 36 §4.3, §4.6)", () => {
     const help = runCli(["ui", "--help"]).stdout;
     expect(help).toContain("--port <n>");
     expect(help.replace(/\s+/g, " ")).toContain(
-      "A local dashboard: the table of `craftar workspaces` and, for one workspace, its file states, a file's diff and explanation, and its Forge's recipes and ingredients — in a browser, on 127.0.0.1 only, behind an address that works for this run. Reads only, writes nothing, reaches no network; Ctrl-C stops it",
+      "A local dashboard: the table of `craftar workspaces` and, for one workspace, its file states, a file's diff and explanation, and its Forge's recipes and ingredients — in a browser, on 127.0.0.1 only, behind an address that works for this run. Reads only — writes no workspace, lock, registry or Forge — and reaches no network; Ctrl-C stops it",
     );
     for (const refused of ["--host", "--fetch", "--open", "--json", "--workspace"]) expect(help, refused).not.toContain(refused);
   });
