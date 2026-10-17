@@ -140,6 +140,25 @@ describe("effectiveProfile — schema 3", () => {
   it("the same malformed blocks are silent below the gate", () => {
     for (const block of [{ "my-slot": 1 }, { pm: "x" }, { pm: { "a.b": 1 } }, { pm: { kind: 5 } }]) expect(err(block, 2)).toBeNull();
   });
+
+  it("a slot or a key that is not shaped like a name is named by its position, never echoed (tech-debt integrations item 7)", () => {
+    const user = "some" + "user";
+    const pw = "PLACE" + "HOLDER" + "pw";
+    const url = "https://" + user + ":" + pw + "@forge.example.com/acme";
+    const slotMsg = err({ pm: { kind: "x" }, [url]: {} });
+    expect(slotMsg).toBe("profile acme: integrations key #2 is not a slot name — letters, digits and _, starting with a letter (not shown: not shaped like a name)");
+    const keyMsg = err({ pm: { org: "acme", [url]: "x" } });
+    expect(keyMsg).toBe("profile acme: integrations.pm key #2 is not a key name — letters, digits and _ only (not shown: not shaped like a name)");
+    for (const m of [slotMsg, keyMsg]) {
+      expect(m).not.toContain(user);
+      expect(m).not.toContain(pw);
+    }
+    // A bad name that looks like a name is still named, as before.
+    expect(err({ "my-slot": { kind: "x" } })).toBe(SLOT("my-slot"));
+    expect(err({ pm: { "api-url": "x" } })).toBe(KEY("api-url"));
+    // A name-like key longer than 64 characters is not echoed either.
+    expect(err({ pm: { ["k".repeat(70) + "-"]: "x" } })).toBe("profile acme: integrations.pm key #1 is not a key name — letters, digits and _ only (not shown: not shaped like a name)");
+  });
 });
 
 describe("integrationOrigin and recipesOrWritten", () => {
