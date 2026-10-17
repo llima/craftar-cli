@@ -1108,13 +1108,18 @@ function resolvedParam(forge: import("../core/forge.js").Forge | null, profile: 
   return Object.hasOwn(own, key) ? own[key] : undefined;
 }
 
-/** The recipes a profile resolves inside the Forge; fails closed — a profile that does not resolve counts as using everything. */
-export function recipesOf(forge: import("../core/forge.js").Forge, profile: string): { has(name: string): boolean } {
+/** The recipes a profile resolves inside the Forge, or null when `resolve` throws — the profile does not resolve. */
+export function resolvedRecipes(forge: import("../core/forge.js").Forge, profile: string): Set<string> | null {
   try {
     return new Set(resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile })).recipes);
   } catch {
-    return { has: () => true };
+    return null;
   }
+}
+
+/** The recipes a profile resolves inside the Forge; fails closed — a profile that does not resolve counts as using everything. */
+export function recipesOf(forge: import("../core/forge.js").Forge, profile: string): { has(name: string): boolean } {
+  return resolvedRecipes(forge, profile) ?? { has: () => true };
 }
 
 /**
