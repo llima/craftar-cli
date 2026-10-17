@@ -487,6 +487,22 @@ describe("a Forge URL recorded with credentials is never served (spec 36 §7.5)"
     expect(servedRow(loaded)).toEqual({ id: workspaceId(loaded.path), ...loaded });
   });
 
+  it("a recorded ref that holds a URL with credentials is served as the label, the rest of the row untouched", async () => {
+    const s = kept(await scenario(BASE, { config: { profile: "acme" } }));
+    await syncRegistered(s.wsRoot);
+    const loaded = (await listWorkspaces(HOME(), { fetch: false })).rows[0];
+    const through = { ...loaded, forge: { ...loaded.forge, ref: BAD } };
+    const served = servedRow(through);
+    expect(served.forge.ref).toBe(CREDENTIAL_HIDDEN);
+    expect(served.forge.source).toBe(loaded.forge.source);
+    const json = JSON.stringify(served);
+    expect(json).not.toContain(USER);
+    expect(json).not.toContain(PW);
+    // A plain ref is served as it is.
+    const plain = { ...loaded, forge: { ...loaded.forge, ref: "main" } };
+    expect(servedRow(plain).forge.ref).toBe("main");
+  });
+
   it("one label: the page takes the core's, and spells none of its own", async () => {
     // What the page shows and the README names; a change here is a change to both.
     expect(CREDENTIAL_HIDDEN).toBe("(a URL with credentials — not shown)");

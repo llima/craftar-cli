@@ -2,7 +2,7 @@ import { catalogueContext, listIngredients, listRecipes, withLoadWarnings } from
 import { renderDiff } from "../core/diff.js";
 import { oneLine } from "../core/doctor.js";
 import { isMissing, listWorkspaces, readRegistry, type WorkspaceRow } from "../core/registry.js";
-import { credentialFault, CREDENTIAL_HIDDEN } from "../core/remote.js";
+import { credentialFault, CREDENTIAL_HIDDEN, refHoldsCredentials } from "../core/remote.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, statusReport } from "../core/report.js";
 import type { Lock } from "../schema/index.js";
 import { loadWorkspace, plan, readLock, status, type FileStatus, type Plan, type Workspace } from "../core/sync.js";
@@ -64,10 +64,12 @@ function onePath(query: string): string | null {
  * A row of the table as the page is given it: its id, and — whatever the core answered — never a Forge URL that
  * `credentialFault` flags. Since 0.28.1 the core gives the label itself for a `missing` or an `error` row; this
  * is the page's own check, a second line: the label is the core's (`CREDENTIAL_HIDDEN`), and the key goes with it.
+ * A recorded `ref` that `refHoldsCredentials` flags is given the same label (`CREDENTIAL_HIDDEN`).
  */
 export function servedRow(r: WorkspaceRow): WorkspaceRow & { id: string } {
   const row = { id: workspaceId(r.path), ...r };
   if (credentialFault(r.forge.source)) row.forge = { ...r.forge, source: CREDENTIAL_HIDDEN, key: null };
+  if (r.forge.ref !== null && refHoldsCredentials(r.forge.ref)) row.forge = { ...row.forge, ref: CREDENTIAL_HIDDEN };
   return row;
 }
 
