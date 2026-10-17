@@ -466,8 +466,10 @@ export function concerned(
     } else if (test(merged.base, merged.config)) {
       result.concerned.push({ path: entry.entry.path, file: "craftar.yaml" });
     }
-    // No else: this branch is reached only when a test reads the fields it locates from `doc` —
-    // the merged config is built from base + local via deepMerge, so the value must exist in one of them.
+    // No else: unreachable while a test reads at most one located field from `doc` and the rest from `merged` — arrays
+    // replace on merge, so the merged value is local's or base's. A test that needs two `doc` fields held in different
+    // files reaches it and drops the workspace silently (the forge promote removal warning did, before it read `profile`
+    // from `merged`).
   }
 
   return result;
