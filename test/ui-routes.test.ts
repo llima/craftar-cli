@@ -10,7 +10,7 @@ import { MCP_FILES, eightStates, explained, mcpWorkspace, syncOnce, type Scenari
 import { HOME, get, syncRegistered } from "./helpers/ui.js";
 import { renderDiff } from "../src/core/diff.js";
 import { registryFile, listWorkspaces } from "../src/core/registry.js";
-import { loadWorkspace, plan } from "../src/core/sync.js";
+import { loadWorkspace, plan, unsetSummary } from "../src/core/sync.js";
 import { register } from "../src/core/registry.js";
 import { hashNormalized } from "../src/core/text.js";
 import { CREDENTIAL_HIDDEN } from "../src/core/remote.js";
@@ -122,9 +122,10 @@ describe("/api/workspaces/<id>", () => {
     const cli = JSON.parse(runCli(["status", "--json", "--workspace", s.wsRoot]).stdout);
     const got = await get(`/api/workspaces/${id}`);
     expect(got.status).toBe(200);
-    expect(Object.keys(got.body as object)).toEqual(["id", "path", "profile", "recipes", "targets", "forge", "statuses", "warnings", "unsetParams"]);
-    expect(JSON.parse(JSON.stringify(got.body))).toEqual({ id, path: real, profile: "acme", recipes: ["base"], targets: ["claude-code"], ...cli });
+    expect(Object.keys(got.body as object)).toEqual(["id", "path", "profile", "recipes", "targets", "forge", "statuses", "warnings", "unsetParams", "refused"]);
+    expect(JSON.parse(JSON.stringify(got.body))).toEqual({ id, path: real, profile: "acme", recipes: ["base"], targets: ["claude-code"], ...cli, refused: null });
     expect(JSON.stringify(got.body)).not.toContain('"planned"');
+    expect((got.body as any).refused).toBeNull();
   });
 
   it("an unknown id is 404; a missing workspace is 409 with the fixed sentence", async () => {
@@ -142,6 +143,7 @@ describe("/api/workspaces/<id>", () => {
     const got = await get(`/api/workspaces/${workspaceId(entry.path)}`);
     expect([got.status, (got.body as any).unsetParams]).toEqual([200, [{ key: "api.port", declaredBy: ["rule/api"], citedBy: ["rule/api"] }]]);
     expect(((await get("/api/workspaces")).body as any).workspaces[0].status).toBe("error");
+    expect((got.body as any).refused).toBe(unsetSummary([{ key: "api.port", declaredBy: ["rule/api"], citedBy: ["rule/api"] }]));
   });
 
   it("what cannot be shown is 409 with one line: a Forge that is gone, a broken lock, a refused lock, a refused craftar.yaml", async () => {
@@ -321,7 +323,7 @@ describe("/api/workspaces/<id> on a remote Forge (spec 36 §10.2)", () => {
     const got = await get(`/api/workspaces/${id}`);
     expect(got.status).toBe(200);
     expect(JSON.stringify(got.body)).not.toContain(OFFLINE);
-    expect(JSON.parse(JSON.stringify(got.body))).toEqual({ id, path: real, profile: "acme", recipes: ["base"], targets: ["claude-code"], ...offline(ws) });
+    expect(JSON.parse(JSON.stringify(got.body))).toEqual({ id, path: real, profile: "acme", recipes: ["base"], targets: ["claude-code"], ...offline(ws), refused: null });
     expect((got.body as any).forge).toMatchObject({ kind: "remote", source: r.url, fetched: false });
   });
 
@@ -334,7 +336,7 @@ describe("/api/workspaces/<id> on a remote Forge (spec 36 §10.2)", () => {
     const { id, path: real } = await syncRegistered(ws);
     const got = await get(`/api/workspaces/${id}`);
     expect(got.status).toBe(200);
-    expect(JSON.parse(JSON.stringify(got.body))).toEqual({ id, path: real, profile: "acme", recipes: ["base"], targets: ["claude-code"], ...offline(ws) });
+    expect(JSON.parse(JSON.stringify(got.body))).toEqual({ id, path: real, profile: "acme", recipes: ["base"], targets: ["claude-code"], ...offline(ws), refused: null });
     expect((got.body as any).forge).toMatchObject({ kind: "remote", source: r.url });
   });
 });

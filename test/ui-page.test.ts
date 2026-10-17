@@ -79,4 +79,9 @@ describe("craftar ui — the page's source", () => {
     expect(PAGE_JS).not.toMatch(/var STATES = \["/);
     expect(PAGE_JS).not.toContain('f.state !== "unchanged"');
   });
+
+  it("the page prints the core's refusal line, not one of its own", () => {
+    expect(PAGE_JS).not.toContain("sync is refused");
+    expect(PAGE_JS).toContain("doc.refused");
+  });
 });

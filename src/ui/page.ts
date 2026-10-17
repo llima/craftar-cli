@@ -277,7 +277,7 @@ export const PAGE_JS = String.raw`"use strict";
       ].forEach(function (pair) { add(facts, el("dt", "", pair[0]), el("dd", "", pair[1])); });
       add(body, facts);
       if (doc.unsetParams.length) {
-        add(body, note("sync is refused: " + doc.unsetParams.length + " declared parameter(s) have no value — set each in the profile or in craftar.yaml", "bad"));
+        add(body, note(doc.refused, "bad"));
         add(body, list(doc.unsetParams.map(function (u) {
           return u.key + " — declared by " + u.declaredBy.join(", ") + "; cited by " + u.citedBy.join(", ");
         })));

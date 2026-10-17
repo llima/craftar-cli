@@ -5,7 +5,7 @@ import { isMissing, listWorkspaces, readRegistry, type WorkspaceRow } from "../c
 import { credentialFault, CREDENTIAL_HIDDEN, refHoldsCredentials } from "../core/remote.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, statusReport } from "../core/report.js";
 import type { Lock } from "../schema/index.js";
-import { loadWorkspace, plan, readLock, status, type FileStatus, type Plan, type Workspace } from "../core/sync.js";
+import { loadWorkspace, plan, readLock, status, unsetSummary, type FileStatus, type Plan, type Workspace } from "../core/sync.js";
 import { hashNormalized } from "../core/text.js";
 
 /**
@@ -116,9 +116,10 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
     return { status: 409, body: { error: routeReason(e), warnings: ws?.warnings ?? [] } };
   }
   if (what === undefined) {
+    const report = statusReport(ws, p, lock, st);
     return {
       status: 200,
-      body: { id, path: entry.path, profile: ws.config.profile, recipes: p.resolution.recipes, targets: p.resolution.targets, ...statusReport(ws, p, lock, st) },
+      body: { id, path: entry.path, profile: ws.config.profile, recipes: p.resolution.recipes, targets: p.resolution.targets, ...report, refused: report.unsetParams.length ? unsetSummary(report.unsetParams) : null },
     };
   }
   if (what === "explain") {
