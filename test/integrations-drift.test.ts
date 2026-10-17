@@ -796,6 +796,44 @@ describe("promote and a recipe the block selects, shared with another profile", 
     );
     expect(porcelain(s.forgeRoot)).toBe("");
   });
+
+  it("P6. (control) listed by hand, no block, and a sibling profile that does not resolve — still forks, never edits in place", async () => {
+    const spec: ForgeSpec = {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        rule("where", "Org {{integrations.pm.org}}\n"),
+        rule("stories-azure-devops", STORIES),
+        mcp("azure-devops", { command: "npx", args: ["-y", "ado-mcp"] }),
+      ],
+      recipes: [
+        recipe("base", ["rule/workflow", "rule/where"]),
+        recipe("pm-azure-devops", ["mcp/azure-devops", "rule/stories-azure-devops"], { slot: "pm" }),
+      ],
+      // globex does not resolve: promote cannot tell whether it uses pm-azure-devops, so it must not edit that recipe in place.
+      profiles: [
+        profile("acme", ["base", "pm-azure-devops"], ["claude-code", "kiro"], { integrations: {} }),
+        profile("globex", ["no-such-recipe"], ["claude-code"]),
+      ],
+    };
+    const s = await forgeAt(3, spec);
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+    gitInit(s.forgeRoot);
+    await sync(s.wsRoot);
+    const rulePath = path.join(s.wsRoot, ".claude/rules/stories-azure-devops.md");
+    await fs.writeFile(rulePath, (await fs.readFile(rulePath, "utf8")).replace("organisation {{integrations.pm.org}}", "organisation other"));
+    const r = runCli(["drift", "promote", ".claude/rules/stories-azure-devops.md", "--workspace", s.wsRoot, "--dry-run", "--json"], { env });
+    expect(r.code, r.stderr).toBe(0);
+    const j = JSON.parse(r.stdout);
+    expect(j.outcome).toBe("variant");
+    expect(j.written.map((w: { path: string }) => w.path)).toEqual([
+      "ingredients/rules/stories-azure-devops--acme/ingredient.yaml",
+      "ingredients/rules/stories-azure-devops--acme/rule.md",
+      "recipes/pm-azure-devops--acme.yaml",
+      "profiles/acme/profile.yaml",
+    ]);
+  });
 });
 
 

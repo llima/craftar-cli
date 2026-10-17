@@ -1036,11 +1036,13 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
           break;
         }
       }
+      // A profile that does not resolve may use the recipe — it counted as owning everything before D19_UNRESOLVED.
+      const othersMay = otherOwns || unresolvedProfile !== undefined;
 
       // D19: if the block selects R and another profile resolves it (or might — a profile that does not resolve), promote cannot fork it
-      // The ONLY allowed case is "profile owns it alone → edit in place" (profileOwns && !otherOwns && !unresolvedProfile)
+      // The ONLY allowed case is "profile owns it alone → edit in place" (profileOwns && !othersMay)
       const selectedSlot = selectedBy.get(R);
-      if (selectedSlot && !(profileOwns && !otherOwns && !unresolvedProfile)) {
+      if (selectedSlot && !(profileOwns && !othersMay)) {
         // Find the ref for the D19 message (the first ref of type matching X's type)
         const ref = ingredientRef;
         // D19_UNRESOLVED when the only "other" is a profile that does not resolve
@@ -1055,7 +1057,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       // Check if any other resolved recipe extends R
       const extendedByOther = isExtendedByOtherResolved(forge, p0.resolution.recipes, R);
 
-      if (profileOwns && !otherOwns) {
+      if (profileOwns && !othersMay) {
         // Case 1: profile owns it alone — edit recipe in place
         const recipeOpts = { stage, dir: path.join(forgeDir, "recipes") };
         const recFile = await recipeFile(recipeOpts, R, "drift promote");
