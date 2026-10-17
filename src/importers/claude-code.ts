@@ -127,7 +127,8 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
   if (config?.action === "created") report.created.push("craftar.yaml (workspace)");
   // Spec 29 §4.2: after the flush, and never able to fail an import that succeeded.
   if (opts.report) {
-    report.kiro = await kiroReport({ workspaceRoot: opts.workspaceRoot, forgeRoot: opts.forgeRoot, profile: opts.profileName, targets: planned.targets, preferred: opts.preferKiro ?? [] });
+    const preferred = (report.preferKiro ?? []).map((x) => x.source.replace(/^\.kiro\/steering\//, "").replace(/\.md$/, ""));
+    report.kiro = await kiroReport({ workspaceRoot: opts.workspaceRoot, forgeRoot: opts.forgeRoot, profile: opts.profileName, targets: planned.targets, preferred });
     if (report.kiro.kind === "not-computed") report.warnings.push(`import report: Kiro sections not computed: ${report.kiro.message}`);
   }
   return report;

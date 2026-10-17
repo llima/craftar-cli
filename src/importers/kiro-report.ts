@@ -84,6 +84,7 @@ export async function kiroReport(
 ): Promise<KiroReport> {
   const root = path.resolve(o.workspaceRoot);
   if (!(await exists(path.join(root, ".kiro")))) return { kind: "none" };
+  // The rules this run took from their steering file (`report.preferKiro`).
   const preferred = o.preferred ?? [];
   try {
     const read = (abs: string) => fs.readFile(abs, "utf8");
