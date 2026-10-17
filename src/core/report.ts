@@ -9,7 +9,7 @@ import type { PlannedFile } from "../emitters/types.js";
 import { FULL_SHA } from "./remote.js";
 import { resolve, type ParamLayer } from "./resolve.js";
 import { errorText } from "./schema-fault.js";
-import { loadForgeFor, unsetDeclared, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
+import { loadForgeFor, unsetDeclared, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
 
 /*
@@ -17,6 +17,11 @@ import { hashNormalized, stripBom, toLf } from "./text.js";
  * `craftar mcp` and by anything else that shows the same thing. Nothing here prints, and none of them selects,
  * normalizes or refuses a path — each caller keeps its own rule.
  */
+
+/** The one test of which states `diff` shows — the states `sync --check` refuses. */
+export function diffShows(state: FileState): boolean {
+  return state !== "unchanged" && state !== "adopt";
+}
 
 /** Spec 27 Ruling 4: the on-disk content of the example file is never shown. No indentation: the caller's. */
 export const EXAMPLE_CONTENT_HIDDEN = "content not shown: an example file may hold a value typed by hand";
@@ -109,7 +114,7 @@ export interface DiffRow {
 export async function diffReport(ws: Pick<Workspace, "root">, rows: FileStatus[], opts: { withholdMcp: boolean }): Promise<DiffRow[]> {
   const out: DiffRow[] = [];
   for (const s of rows) {
-    if (s.state === "unchanged" || s.state === "adopt") continue;
+    if (!diffShows(s.state)) continue;
     const noted = (note: string): DiffRow => ({ path: s.path, state: s.state, added: null, removed: null, note, disk: null, forge: null });
     if (s.state === "orphan-drift") {
       // No body: sync keeps this file

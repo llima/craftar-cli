@@ -9,7 +9,7 @@ import { planPromote, applyPromote, UnheldError } from "./importers/drift-promot
 import { providedRefs } from "./importers/provided.js";
 import { holdsBaseCitations, rendersServers } from "./core/mcp-server.js";
 import { classifyForge } from "./core/remote.js";
-import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
+import { forget, listWorkspaces, prune, readRegistry, register, registryFile, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { launchRefusal, pinOf } from "./core/mcp-protocol.js";
@@ -17,7 +17,7 @@ import { serve } from "./mcp.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
 import { loadWorkspace, readWorkspaceConfig, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
-import type { Lock } from "./schema/index.js";
+import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
 import { canonicalValue } from "./core/sections.js";
@@ -57,6 +57,7 @@ import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs
 import { errorText } from "./core/schema-fault.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion, feedMessage, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared, type InstallResult } from "./core/templates.js";
 import { capture, spawnInherited } from "./core/proc.js";
+import { startUi, type UiServer } from "./ui/server.js";
 
 process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE") process.exit(0); });
 
@@ -68,7 +69,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.29.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.30.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -907,6 +908,52 @@ workspaces
     const gone = await prune(craftarHome());
     if (gone.length === 0) console.log("nothing to prune");
     for (const p of gone) console.log(`pruned ${p}`);
+  });
+
+/* ---------------------------------------------------------------- ui */
+program
+  .command("ui")
+  .description(
+    "A local dashboard: the table of `craftar workspaces` and, for one workspace, its file states, a file's diff and explanation, and its Forge's recipes and ingredients — in a browser, on 127.0.0.1 only, behind an address that works for this run. Reads only — writes no workspace, lock, registry or Forge — and reaches no network; Ctrl-C stops it",
+  )
+  .option("--port <n>", "the port to listen on, 0 to 65535; 0 takes a free one", "4747")
+  .action(async (o: { port: string }) => {
+    // Every refusal comes before the bind (spec 36 §4.2).
+    const port = parsePort(o.port);
+    if (port === null) fail("--port takes a whole number from 0 to 65535");
+    registryGate();
+    let reg: Registry;
+    try {
+      reg = await readRegistry(craftarHome());
+    } catch (e) {
+      fail(errorText(e));
+    }
+    const version = program.version() ?? "unknown";
+    let ui: UiServer;
+    try {
+      // The one line a failing request leaves in the terminal; nothing is printed per request otherwise.
+      ui = await startUi({ home: craftarHome(), version, port, onError: (line) => console.error(line) });
+    } catch (e) {
+      // The code only, never the message.
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === "EADDRINUSE") fail(`port ${port} is in use on 127.0.0.1 — pass --port <other>, or --port 0 for a free one`);
+      fail(`cannot listen on 127.0.0.1:${port}: ${code ?? "unknown"}`);
+    }
+    console.log(pc.bold(`craftar ui — craftar ${version} · read-only · ${reg.workspaces.length} registered`));
+    console.log(`  open  ${ui.url}`);
+    console.log("  the address works for this run only, on this machine — Ctrl-C stops it");
+    // The first signal closes the listener and lets the process end; a second one, while closing, ends it at once.
+    let closing = false;
+    const stop = (): void => {
+      if (closing) process.exit(0);
+      closing = true;
+      void ui.close().then(() => {
+        console.log("stopped");
+        process.exitCode = 0;
+      });
+    };
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
   });
 
 /* ---------------------------------------------------------------- doctor */
@@ -2542,6 +2589,13 @@ function printPrune(result: CachePruneResult): void {
 /** `CRAFTAR_NO_REGISTRY` — "no registry", read like NO_COLOR: any non-empty value turns it off (spec 21 §4.1). */
 function registryOff(): boolean {
   return Boolean(process.env.CRAFTAR_NO_REGISTRY);
+}
+
+/** `--port` as typed: digits only, 0 to 65535 — `0x10`, `1e3`, `+80` and `80.0` are not ports. */
+function parsePort(text: string): number | null {
+  if (!/^\d{1,5}$/.test(text)) return null;
+  const n = Number(text);
+  return n <= 65535 ? n : null;
 }
 
 function registryGate(): void {

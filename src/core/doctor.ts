@@ -367,7 +367,7 @@ async function lockAndStatus(
  * Any caught error as one line (§3: each check's message is one line). A SchemaError carries its issues;
  * its first issue is shown with the count of any that follow. Everything else goes through `errorText`.
  */
-function oneLine(e: unknown): string {
+export function oneLine(e: unknown): string {
   if (e instanceof SchemaError && e.issues.length > 0) {
     const first = e.issues[0];
     const n = e.issues.length;
