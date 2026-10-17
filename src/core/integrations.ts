@@ -2,11 +2,12 @@
  * The one reader of `profile.integrations` (spec 33 §5.2): below schema 3 the block is ignored;
  * at 3 it selects integration recipes and derives params.
  *
- * This module is pure — it imports types and the schema constant only, never resolve.ts (which
- * imports it).
+ * This module is pure — it imports types, the schema constant and `findSecrets` only, never
+ * resolve.ts (which imports it).
  */
 
 import { FORGE_SCHEMA_INTEGRATIONS, type ForgeManifest, type Profile } from "../schema/index.js";
+import { findSecrets } from "./secrets.js";
 import type { Forge } from "./forge.js";
 
 /* ------------------------------------------------------------------ */
@@ -30,18 +31,20 @@ const KEY_RE = /^[A-Za-z0-9_]+$/;
 const KIND_RE = /^[a-z0-9][a-z0-9._-]*$/;
 
 /**
- * What a refused slot or key may be named by: a string shaped like a name; anything else — a URL
- * pasted where a key goes, say — is named by its position, so a credential in it is never printed
- * (tech-debt 2026-10-11 item 7; the user's ruling of 2026-10-17).
+ * What a refused slot or key may be named by: a string shaped like a name and not a token of a
+ * known format (`findSecrets`); anything else — a URL pasted where a key goes, say — is named by
+ * its position, so a credential in it is never printed (tech-debt 2026-10-11 item 7; the user's
+ * ruling of 2026-10-17).
  */
 const NAME_LIKE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /**
- * Returns the name to show in an error message: JSON.stringify(name) when it looks like a name,
- * otherwise `#${index + 1}` with the "(not shown: not shaped like a name)" suffix.
+ * Returns the name to show in an error message: JSON.stringify(name) when it looks like a name
+ * and is not a token of a known format (`findSecrets`), otherwise `#${index + 1}` with the
+ * "(not shown: not shaped like a name)" suffix.
  */
 function shownName(name: string, index: number): { shown: string; suffix: string } {
-  if (NAME_LIKE.test(name)) {
+  if (NAME_LIKE.test(name) && findSecrets(name).length === 0) {
     return { shown: JSON.stringify(name), suffix: "" };
   }
   return { shown: `#${index + 1}`, suffix: " (not shown: not shaped like a name)" };

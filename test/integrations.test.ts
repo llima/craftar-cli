@@ -159,6 +159,13 @@ describe("effectiveProfile — schema 3", () => {
     // A name-like key longer than 64 characters is not echoed either.
     expect(err({ pm: { ["k".repeat(70) + "-"]: "x" } })).toBe("profile acme: integrations.pm key #1 is not a key name — letters, digits and _ only (not shown: not shaped like a name)");
   });
+
+  it("a slot or a key that is a token of a known format is not named either, even when it is shaped like a name", () => {
+    const sk = "sk-" + "a".repeat(40);
+    const slack = "xoxb-" + "1234567890" + "-" + "abcdefghij";
+    expect(err({ pm: { kind: "x" }, [sk]: {} })).toBe("profile acme: integrations key #2 is not a slot name — letters, digits and _, starting with a letter (not shown: not shaped like a name)");
+    expect(err({ pm: { [slack]: "x" } })).toBe("profile acme: integrations.pm key #1 is not a key name — letters, digits and _ only (not shown: not shaped like a name)");
+  });
 });
 
 describe("integrationOrigin and recipesOrWritten", () => {
