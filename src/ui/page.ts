@@ -6,6 +6,9 @@
  * is a by-hand run.
  */
 
+import type { FileState } from "../core/sync.js";
+import { diffShows } from "../core/report.js";
+
 export const PAGE_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -60,14 +63,32 @@ ul { margin: 4px 0; padding-left: 18px; }
 code.cmd { background: var(--soft); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; user-select: all; }
 `;
 
+/**
+ * How the page lists each file state — a `Record` over every `FileState`, so a new state does not compile until it is placed here,
+ * as `FILE_STATE_ORDER_MAP` does for the CLI: `order` on the page, `syncActs` (sync writes or removes it without a flag, so the page
+ * offers the command), and `diff` (the core's `diffShows`).
+ */
+export const PAGE_STATES: Record<FileState, { order: number; syncActs: boolean; diff: boolean }> = {
+  new: { order: 0, syncActs: true, diff: diffShows("new") },
+  update: { order: 1, syncActs: true, diff: diffShows("update") },
+  adopt: { order: 2, syncActs: true, diff: diffShows("adopt") },
+  drift: { order: 3, syncActs: false, diff: diffShows("drift") },
+  collision: { order: 4, syncActs: false, diff: diffShows("collision") },
+  orphan: { order: 5, syncActs: true, diff: diffShows("orphan") },
+  "orphan-drift": { order: 6, syncActs: false, diff: diffShows("orphan-drift") },
+  unchanged: { order: 7, syncActs: false, diff: diffShows("unchanged") },
+};
+
 export const PAGE_JS = String.raw`"use strict";
 (function () {
   var NO_TOKEN = "open the address printed by craftar ui — this tab has no token";
   var KEY = "craftar-ui-token";
   var MAX_DIFF_LINES = 2000;
-  var STATES = ["new", "update", "adopt", "drift", "collision", "orphan", "orphan-drift", "unchanged"];
+  var _PS = ${JSON.stringify(PAGE_STATES)};
+  var STATES = Object.keys(_PS).sort(function(a, b) { return _PS[a].order - _PS[b].order; });
   /* The states sync acts on without a flag. */
-  var SYNC_ACTS = { "new": true, "update": true, "adopt": true, "orphan": true };
+  var SYNC_ACTS = ${JSON.stringify(Object.fromEntries(Object.entries(PAGE_STATES).filter(([, v]) => v.syncActs).map(([k]) => [k, true])))};
+  var HAS_DIFF = ${JSON.stringify(Object.fromEntries(Object.entries(PAGE_STATES).map(([k, v]) => [k, v.diff])))};
   var app = document.getElementById("app");
   var table = null;
 
@@ -283,7 +304,7 @@ export const PAGE_JS = String.raw`"use strict";
     detail.hidden = true;
     var bar = add(el("div", "bar"), el("span", "mono", f.path), el("span", "dim", [f.target, f.ingredient].filter(Boolean).join(" · ")));
     var query = "?path=" + encodeURIComponent(f.path);
-    if (f.state !== "unchanged" && f.state !== "adopt") {
+    if (HAS_DIFF[f.state] !== false) {
       add(bar, button("diff", function () {
         detail.hidden = false;
         load("/api/workspaces/" + w.id + "/diff" + query, detail, f.path, function (d) { showDiff(detail, d); });

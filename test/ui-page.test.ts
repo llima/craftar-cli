@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { FILE_STATE_ORDER_MAP } from "../src/core/impact.js";
+import { PAGE_STATES } from "../src/ui/page.js";
 import { PAGE_CSS, PAGE_HTML, PAGE_JS } from "../src/ui/page.js";
 
 // Spec 36 §7.4, §10.3 — a source check of the page. The CSP is what stops inline script even if this is fooled;
@@ -66,5 +68,15 @@ describe("craftar ui — the page's source", () => {
     expect(shellWord("C:\\Users\\me\\ws")).toBe("C:\\Users\\me\\ws");
     expect(shellWord("C:\\Users\\me\\my ws")).toBe('"C:\\Users\\me\\my ws"');
     expect(shellWord('C:\\a "b" c')).toBe('"C:\\a \\"b\\" c"');
+  });
+
+  it("the page places every FileState once, from one record: its order, whether sync acts on it, whether it has a diff", () => {
+    expect(Object.keys(PAGE_STATES).sort()).toEqual(Object.keys(FILE_STATE_ORDER_MAP).sort());
+    // diff follows the core's one test (diffReport): unchanged and adopt have none.
+    expect(Object.entries(PAGE_STATES).filter(([, v]) => !v.diff).map(([k]) => k).sort()).toEqual(["adopt", "unchanged"]);
+    expect(Object.entries(PAGE_STATES).filter(([, v]) => v.syncActs).map(([k]) => k).sort()).toEqual(["adopt", "new", "orphan", "update"]);
+    // The script no longer spells the lists itself.
+    expect(PAGE_JS).not.toMatch(/var STATES = \["/);
+    expect(PAGE_JS).not.toContain('f.state !== "unchanged"');
   });
 });
