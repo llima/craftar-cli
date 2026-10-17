@@ -167,8 +167,10 @@ describe("/api/workspaces/<id>", () => {
     const y = await get(`/api/workspaces/${id}/recipes`);
     expect(y).toEqual({ status: 409, body: { error: "invalid craftar.yaml (targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md')", warnings: [] } });
     await fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), YAML.stringify({ forge: "../forge", profile: "acme", ref: "v1" }));
+    // The server resolves the workspace's real path; on Windows, TEMP can be an 8.3 short path (RUNNER~1 vs runneradmin).
+    const forgeShown = path.join(await fs.realpath(path.dirname(s.forgeRoot)), path.basename(s.forgeRoot));
     await fs.rename(s.forgeRoot, `${s.forgeRoot}-away`);
-    expect(await get(`/api/workspaces/${id}`)).toEqual({ status: 409, body: { error: `Forge not found at ${s.forgeRoot}`, warnings: [] } });
+    expect(await get(`/api/workspaces/${id}`)).toEqual({ status: 409, body: { error: `Forge not found at ${forgeShown}`, warnings: [] } });
     await fs.rename(`${s.forgeRoot}-away`, s.forgeRoot);
     await fs.rm(path.join(s.forgeRoot, "profiles/acme"), { recursive: true });
     // the load succeeded, so its warnings ride along, without the `<path>: ` prefix the table adds
