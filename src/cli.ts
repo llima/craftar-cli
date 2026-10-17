@@ -2262,9 +2262,10 @@ forge
     // The references the Forge cannot see (spec 29 §4.4): a workspace adding a shared recipe that names the base, removing
     // one this run copies for its profile, or disabling the base or the variant by name, follows the Forge at its next sync, not this promotion.
     const shared = [...f.recipes.values()].filter((r) => r.ingredients.includes(promotion.base) && !promotion.recipes.edited.includes(r.name)).map((r) => r.name);
-    const byName = (doc: unknown): boolean => {
-      const d = (typeof doc === "object" && doc !== null ? doc : {}) as { profile?: string; recipes?: { add?: unknown; remove?: unknown }; overrides?: { ingredients?: { disable?: unknown } } };
-      const profile = typeof d.profile === "string" ? d.profile : "";
+    const byName = (doc: unknown, merged: unknown): boolean => {
+      const d = (typeof doc === "object" && doc !== null ? doc : {}) as { recipes?: { add?: unknown; remove?: unknown }; overrides?: { ingredients?: { disable?: unknown } } };
+      const m = (typeof merged === "object" && merged !== null ? merged : {}) as { profile?: string };
+      const profile = typeof m.profile === "string" ? m.profile : "";
       const add = Array.isArray(d.recipes?.add) ? d.recipes.add : [];
       const remove = Array.isArray(d.recipes?.remove) ? d.recipes.remove : [];
       const disable = Array.isArray(d.overrides?.ingredients?.disable) ? d.overrides.ingredients.disable : [];

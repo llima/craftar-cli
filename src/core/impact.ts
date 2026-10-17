@@ -415,6 +415,9 @@ export interface ConcernedResult {
 /**
  * Which workspaces are concerned by a condition on their configuration (spec 25 §4.3).
  * Tests the MERGED configuration to decide, then checks `local` first, else `base` to name the file.
+ * The file-naming tests see one file's document and the merged configuration, so a condition that
+ * spans two fields (a profile and a removal) can be decided on the merged one and located in the
+ * file that holds the removal.
  * Arrays replace on merge, so with `base.x: [a]` and `local.x: []`, the merged config has `[]`
  * and the workspace is NOT concerned — even though `base` had `a`.
  * `missing` entries and stage-`config` errors count as `unchecked`.
@@ -422,7 +425,7 @@ export interface ConcernedResult {
 export function concerned(
   planned: Planned[],
   entries: ForgeWorkspace[],
-  test: (doc: unknown) => boolean,
+  test: (doc: unknown, merged: unknown) => boolean,
 ): ConcernedResult {
   const result: ConcernedResult = { concerned: [], unchecked: 0 };
 
@@ -455,16 +458,16 @@ export function concerned(
     }
 
     // Test the MERGED configuration first to decide if concerned (spec 25 §4.3)
-    if (!test(merged.config)) continue;
+    if (!test(merged.config, merged.config)) continue;
 
     // Concerned: find which file holds the entry (local first, then base)
-    if (test(merged.local)) {
+    if (test(merged.local, merged.config)) {
       result.concerned.push({ path: entry.entry.path, file: "craftar.local.yaml" });
-    } else if (test(merged.base)) {
+    } else if (test(merged.base, merged.config)) {
       result.concerned.push({ path: entry.entry.path, file: "craftar.yaml" });
     }
-    // No else: merged.config is built from base + local via deepMerge, so if test(merged.config)
-    // passes, the value must exist in at least one of them. This branch cannot be reached.
+    // No else: this branch is reached only when a test reads the fields it locates from `doc` —
+    // the merged config is built from base + local via deepMerge, so the value must exist in one of them.
   }
 
   return result;
