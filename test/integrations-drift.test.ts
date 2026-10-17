@@ -789,6 +789,11 @@ describe("promote and a recipe the block selects, shared with another profile", 
     await sync(s.wsRoot);
     const rulePath = path.join(s.wsRoot, ".claude/rules/stories-azure-devops.md");
     await fs.writeFile(rulePath, (await fs.readFile(rulePath, "utf8")).replace("organisation acme", "organisation other"));
+    const shown = runCli(["drift", "show", "--workspace", s.wsRoot, "--json"], { env });
+    expect(shown.code, shown.stderr).toBe(0);
+    const row = JSON.parse(shown.stdout).files.find((f: { path: string }) => f.path === ".claude/rules/stories-azure-devops.md");
+    // show does not plan a promote: a file D19 refuses reads promotable, with no reason (README, the drift row).
+    expect([row?.promotable, row?.reason]).toEqual([true, null]);
     const r = runCli(["drift", "promote", ".claude/rules/stories-azure-devops.md", "--workspace", s.wsRoot, "--json"], { env });
     expect([r.code, r.stdout]).toEqual([1, ""]);
     expect(r.stderr).toBe(

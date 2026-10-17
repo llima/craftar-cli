@@ -1045,7 +1045,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       if (selectedSlot && !(profileOwns && !othersMay)) {
         // Find the ref for the D19 message (the first ref of type matching X's type)
         const ref = ingredientRef;
-        // D19_UNRESOLVED when the only "other" is a profile that does not resolve
+        // D19_UNRESOLVED when the only "other" is a profile that does not resolve (the loop breaks on the first profile that resolves R, so !otherOwns means no profile resolving R was seen).
         if (!otherOwns && unresolvedProfile) throw new Error(D19_UNRESOLVED(normalized, R, profile, selectedSlot, ref, unresolvedProfile));
         throw new Error(D19(normalized, R, profile, selectedSlot, ref));
       }
@@ -1311,9 +1311,9 @@ function emittedMetaFields(emitted: Ingredient, type: string): Partial<Ingredien
  * Find the extends chain from a resolved recipe to the target recipe.
  * Returns the chain like "target → child" if found, null otherwise.
  */
-function findExtendsChain(forge: Forge, resolvedRecipes: string[], targetRecipe: string): string | null {
+function findExtendsChain(forge: Forge, resolved: string[], targetRecipe: string): string | null {
   // Look for a resolved recipe that extends the target
-  for (const name of resolvedRecipes) {
+  for (const name of resolved) {
     const r = forge.recipes.get(name);
     if (r?.extends?.includes(targetRecipe)) {
       return `${name} → ${targetRecipe}`;
@@ -1325,8 +1325,8 @@ function findExtendsChain(forge: Forge, resolvedRecipes: string[], targetRecipe:
 /**
  * Check if any other resolved recipe extends the given recipe.
  */
-function isExtendedByOtherResolved(forge: Forge, resolvedRecipes: string[], R: string): boolean {
-  for (const name of resolvedRecipes) {
+function isExtendedByOtherResolved(forge: Forge, resolved: string[], R: string): boolean {
+  for (const name of resolved) {
     if (name === R) continue;
     const r = forge.recipes.get(name);
     if (r?.extends?.includes(R)) return true;
