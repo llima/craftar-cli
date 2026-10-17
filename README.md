@@ -501,6 +501,7 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; `craftar docs validate`;
 - **`craftar import --report`** no longer marks `steering bigger than the rule` on a rule `--prefer-kiro` took from that steering file; the collision row stays.
 - **`craftar forge promote`** warns about a `recipes.remove` of a recipe it copied only for a workspace whose profile the copy was made for — wherever `profile` and `recipes.remove` sit, `craftar.yaml` or `craftar.local.yaml`. A workspace of another profile is no longer named.
 - **`craftar drift promote`'s D19** has a second wording when the only other profile in question does not resolve (`… and profile <q> does not resolve, so promote cannot tell whether it also uses it — …; fix profile <q>, …`). It refuses exactly as before; only the text differs.
+- **A malformed `integrations` block no longer echoes a key that is not shaped like a name.** A slot or a key name that fails its grammar is still named in the refusal when it looks like a name (letters, digits, `_`, `-` and `.`, at most 64 characters: `my-slot`, `api-url`); any other is named by its position instead — `profile <p>: integrations key #<n> is not a slot name — …`, `profile <p>: integrations.<slot> key #<n> is not a key name — …`, each ending `(not shown: not shaped like a name)` — so a URL with a user and a password pasted where a key goes is never printed. The refusal is the same, and so is its exit code.
 - No exit code, `--json` key or emitted byte of a workspace whose Forge is unchanged moves.
 
 ### to 0.30.0
