@@ -466,10 +466,10 @@ export function concerned(
     } else if (test(merged.base, merged.config)) {
       result.concerned.push({ path: entry.entry.path, file: "craftar.yaml" });
     }
-    // No else: unreachable while a test reads at most one located field from `doc` and the rest from `merged` — arrays
-    // replace on merge, so the merged value is local's or base's. A test that needs two `doc` fields held in different
-    // files reaches it and drops the workspace silently (the forge promote removal warning did, before it read `profile`
-    // from `merged`).
+    // No else: unreachable while each part of a test that `doc` decides reads one located field (the rest from `merged`)
+    // — arrays replace on merge, so the part that passes on the merged value passes on the file it came from. A test that
+    // needs two `doc` fields at once (an AND), held in different files, reaches it and drops the workspace silently (the
+    // forge promote removal warning did, before it read `profile` from `merged`).
   }
 
   return result;
