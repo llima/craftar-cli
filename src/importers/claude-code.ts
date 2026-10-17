@@ -206,7 +206,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     if (!emitted) continue;
     const ruleMeta = emitted.meta as Ingredient & { inclusion: string };
     read(emitted.meta, emitted.files, emitted.scan, (ref) => {
-      ruleNames.push(ref.split("/")[1]);
+      // The output name: a variant's ref is <name>--<profile>, and the steering file it mirrors is <name> (spec 29 §19.6).
+      ruleNames.push(name);
       if (ruleMeta.inclusion === "fileMatch") scopedRules.set(ref, sm?.fileMatchPattern ?? "");
       else refs.base.push(ref);
     });

@@ -125,4 +125,20 @@ describe("import --prefer-kiro — the command", () => {
     expect(rc.code, rc.stderr).toBe(0);
     expect(await rowOf(c.out)).toContain("steering bigger than the rule");
   });
+
+  it("9. a rule decided as a variant beside a bannerless steering file of its name is imported once — no steering ingredient for it (spec 29 §19.6)", async () => {
+    const s = await setup();
+    expect(run(s).code).toBe(0); // acme first: rule/workflow is the base
+    const globex = path.join(s.root, "globex-portal");
+    await writeFiles(globex, {
+      ".claude/rules/workflow.md": "# Workflow\n\nGlobex does it differently.\n",
+      ".kiro/steering/workflow.md": "---\ninclusion: always\n---\n\n# Workflow\n\nGlobex does it differently.\n".replace(/\n/g, "\r\n"),
+    });
+    const r = runCli(["import", "--from", "claude-code", "--forge", s.forge, "--profile", "globex", "--workspace", globex]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(await exists(path.join(s.forge, "ingredients", "rules", "workflow--globex"))).toBe(true);
+    // The steering file is the rule's mirror: it must not also become steering/workflow.
+    expect(await exists(path.join(s.forge, "ingredients", "steerings", "workflow"))).toBe(false);
+    expect(r.stdout).not.toContain("steering/workflow");
+  });
 });
