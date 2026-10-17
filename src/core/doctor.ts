@@ -9,7 +9,7 @@ import { FULL_SHA, cacheKey, classifyForge, inspectCache, type CacheSnapshot } f
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
-import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type MergedConfig, type Plan, type Workspace } from "./sync.js";
+import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig, type Plan, type Workspace } from "./sync.js";
 import { outName } from "../emitters/shared.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram } from "./proc.js";
@@ -54,6 +54,10 @@ export interface DoctorOptions {
   registryOff: boolean;
   /** Environment to read `${NAME}` from; defaults to `process.env`. */
   env?: NodeJS.ProcessEnv;
+  /** A configuration already read, used in place of doctor's own read of the two workspace files (spec 35 §5.1). */
+  merged?: MergedConfig;
+  /** Test seam: sees the git calls of a remote Forge's load; absent, `defaultGit`. */
+  git?: LoadOptions["git"];
   /** Test seams: the Node version, `git --version` and `dotnet --version` (null when not found). */
   nodeVersion?: string;
   gitVersion?: () => Promise<string | null>;
@@ -100,7 +104,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
   let configError: string | null = null;
   if (given !== null) {
     try {
-      merged = await readWorkspaceConfig(given);
+      merged = opts.merged ?? (await readWorkspaceConfig(given));
     } catch (e) {
       configError = oneLine(e);
     }
@@ -208,7 +212,7 @@ async function workspaceChecks(
     } else {
       const remote = classifyForge(merged.config.forge) === "url";
       try {
-        ws = await loadForgeFor(given, merged, { mode: opts.fetch ? "read" : "no-fetch", home: opts.home });
+        ws = await loadForgeFor(given, merged, { mode: opts.fetch ? "read" : "no-fetch", home: opts.home, git: opts.git });
       } catch (e) {
         // Decided by stage, not by message (§5.1): the Forge of a remote configuration read offline failed to load.
         w("config", "error", oneLine(e), remote && !opts.fetch ? "craftar doctor --fetch" : null);
@@ -526,4 +530,13 @@ async function servicesEnvUnset(root: string, p: Plan, env: NodeJS.ProcessEnv): 
     }
   }
   return out;
+}
+
+/** The checks about one workspace, for a reader that must not see the rest of the machine (spec 35 §4.5). */
+export function workspaceReport(report: DoctorReport): DoctorReport {
+  // By scope, so a check added later is kept or dropped by what it is about; `node` and `git` name no path.
+  const checks = report.checks.filter((c) => c.scope === "workspace" || c.id === "node" || c.id === "git");
+  const summary: Record<CheckLevel, number> = { ok: 0, warn: 0, error: 0 };
+  for (const c of checks) summary[c.level]++;
+  return { version: report.version, workspace: report.workspace, fetch: report.fetch, strict: report.strict, checks, summary };
 }

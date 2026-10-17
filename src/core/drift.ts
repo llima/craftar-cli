@@ -21,6 +21,9 @@ export interface DriftRow {
 export const unmanaged = (p: string) =>
   `${p} is not a file craftar manages in this workspace — pass the workspace-relative path as \`craftar status\` prints it (forward slashes)`;
 
+/** The file is one of the MCP configuration files (`.mcp.json`, `.kiro/settings/mcp.json`, the example file): all are tagged `mcp/*`. */
+export const mcpTagged = (s: Pick<FileStatus, "ingredient">): boolean => s.ingredient?.startsWith("mcp/") === true;
+
 /**
  * The static half of promote's refusals: it reads the status, never the Forge's git state.
  * The order is: orphan, then service file (spec 31), then provided (spec 33i), then kiro, then AGENTS.md, then .mcp.json.
@@ -33,7 +36,7 @@ function staticReason(s: FileStatus, provided: Map<string, { slot: string; recip
   if (prov) return `provided by integrations.${prov.slot}`;
   if (s.target === "kiro") return "kiro file";
   if (s.target === "agents-md") return "AGENTS.md";
-  if (s.ingredient?.startsWith("mcp/")) return ".mcp.json";
+  if (mcpTagged(s)) return ".mcp.json";
   return null;
 }
 

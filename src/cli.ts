@@ -12,19 +12,20 @@ import { classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, register, registryFile, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
+import { launchRefusal, pinOf } from "./core/mcp-protocol.js";
+import { serve } from "./mcp.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, readWorkspaceConfig, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock } from "./schema/index.js";
-import { resolve, sectionKey, type ParamLayer } from "./core/resolve.js";
-import { catalogueContext, listRecipes, listIngredients, checkType, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
-import { listTargets } from "./core/capabilities.js";
+import { sectionKey, type ParamLayer } from "./core/resolve.js";
+import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
 import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
+import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, notProduced, readText, statusPath, statusReport, targetsReport } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
-import { hashNormalized, toLf, stripBom } from "./core/text.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { fingerprintDir } from "./core/fingerprint.js";
@@ -49,10 +50,10 @@ import { askInit, confirmInit, againLine, type InitAnswers } from "./core/init-f
 import { readlineIo } from "./prompt.js";
 import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
-import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type Target, type UnifyPlan } from "./schema/index.js";
+import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type UnifyPlan } from "./schema/index.js";
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
-import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport, type Recorded } from "./core/services.js";
+import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport as servicesStatusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion, feedMessage, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared, type InstallResult } from "./core/templates.js";
 import { capture, spawnInherited } from "./core/proc.js";
@@ -67,7 +68,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.28.2");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.29.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -175,9 +176,10 @@ program
     const p = await plan(ws);
     const lock = await readLock(ws.root);
     const st = await status(ws, p, lock);
-    const unset = unsetDeclared(p);
+    const report = statusReport(ws, p, lock, st);
+    const unset = report.unsetParams;
     if (o.json) {
-      console.log(JSON.stringify({ forge: forgeJson(ws, lock), statuses: st.map(({ planned, ...s }) => s), warnings: p.warnings, unsetParams: unset }, null, 2));
+      console.log(JSON.stringify(report, null, 2));
       // exitCode, not process.exit: a piped object is not cut (spec 29 §4.1)
       if (unset.length) process.exitCode = 1;
       return;
@@ -431,10 +433,8 @@ program
     let shown = 0;
     for (const s of st) {
       if (only && s.path !== only) continue;
-      // Spec 19 §3.2: show the six states sync --check refuses (skip unchanged and adopt)
-      if (["unchanged", "adopt"].includes(s.state)) continue;
-      shown++;
-      await printFileDiff(ws.root, s);
+      // Spec 19 §3.2: the six states sync --check refuses are shown; which those are is diffReport's to say
+      if (await printFileDiff(ws.root, s)) shown++;
     }
     if (!shown) console.log(pc.green("no differences"));
     // exitCode, not process.exit: exit drops a piped diff still queued for a slow reader (spec 19 §3.1)
@@ -446,37 +446,27 @@ program
 const DIFF_PAINT = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
 
 /** What `craftar diff` prints for one file `sync --check` refuses; `drift show <path>` prints the same for a drifted one. */
-async function printFileDiff(root: string, s: FileStatus): Promise<void> {
+async function printFileDiff(root: string, s: FileStatus): Promise<boolean> {
+  // What to show is decided in the core (`diffReport`); the headers and the paint are this command's.
+  const [row] = await diffReport({ root }, [s], { withholdMcp: false });
+  // Nothing to show for `unchanged` and `adopt`: says so, for the caller's count
+  if (!row) return false;
   if (s.state === "orphan-drift") {
     // Header and one line, no body: sync keeps this file
     console.log(pc.bold(`--- ${s.path} (disk, orphan-drift)`));
-    console.log(`  ${explainSkip(s)}`);
-    return;
-  }
-  const disk = await readText(path.join(root, s.path));
-  if (s.state === "orphan") {
+  } else if (s.state === "orphan") {
     // A removal: the file exists on disk but the Forge no longer produces it
     console.log(pc.bold(`--- ${s.path} (disk, orphan)`));
     console.log(pc.bold(`+++ ${s.path} (forge: no longer produced — sync removes it)`));
-    console.log(renderDiff(disk ?? "", "", DIFF_PAINT));
   } else {
-    const next = s.planned ? toLf(stripBom(s.planned.content.toString("utf8"))) : "";
     console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
     console.log(pc.bold(`+++ ${s.path} (forge)`));
-    // Spec 27 §4.2, Ruling 4: do not print on-disk content of the example file for drift/collision
-    if (s.path === EXAMPLE_SETTINGS && (s.state === "drift" || s.state === "collision")) {
-      console.log(EXAMPLE_CONTENT_HIDDEN);
-    } else {
-      console.log(renderDiff(disk ?? "", next, DIFF_PAINT));
-    }
   }
+  // Spec 27 §4.2, Ruling 4: a note stands in for the on-disk content of the example file in drift / collision
+  if (row.note !== null) console.log(`  ${row.note}`);
+  else console.log(renderDiff(row.disk ?? "", row.forge ?? "", DIFF_PAINT));
+  return true;
 }
-
-/** Spec 27 Ruling 4: the on-disk content of the example file is never printed. */
-const EXAMPLE_CONTENT_HIDDEN = "  content not shown: an example file may hold a value typed by hand";
-
-/** A path as the user may type it, to the spelling `status` prints: forward slashes, no leading `./`. */
-const statusPath = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, "");
 
 /* ---------------------------------------------------------------- drift */
 const drift = program.command("drift").description("Hand-edited generated files: show them, discard the edit, or promote it to the Forge");
@@ -542,7 +532,7 @@ drift
       console.log(pc.bold(`+++ ${named.path} (forge: no longer produced — \`craftar drift discard\` removes it)`));
       // Spec 27 Ruling 4: the on-disk content of the example file is never printed.
       if (named.path === EXAMPLE_SETTINGS) {
-        console.log(EXAMPLE_CONTENT_HIDDEN);
+        console.log(`  ${EXAMPLE_CONTENT_HIDDEN}`);
       } else {
         console.log(renderDiff((await readText(path.join(ws.root, named.path))) ?? "", "", DIFF_PAINT));
       }
@@ -841,27 +831,24 @@ program
     const ws = await loadWorkspace(o.workspace, load(o, "read"));
     warnStderr(ws.warnings);
     const p = await plan(ws);
-    const f = p.files.find((x) => x.path === file.replace(/\\/g, "/"));
-    if (!f) fail(`${file} is not produced by the Forge for profile ${ws.config.profile}`);
-    const ing = p.resolution.ingredients.find((i) => i.ref === f.ingredient);
+    const f = explainFile(ws, p, file.replace(/\\/g, "/"));
+    if (!f) fail(notProduced(file, ws.config.profile));
     console.log(pc.bold(f.path));
     console.log(`  target      ${f.target}`);
-    console.log(`  ingredient  ${f.ingredient}${ing?.meta.origin ? pc.dim(`  (imported from ${ing.meta.origin.workspace}:${ing.meta.origin.path})`) : ""}`);
-    if (ing) console.log(`  via recipes ${ing.via.join(" → ")}`);
+    console.log(`  ingredient  ${f.ingredient}${f.origin ? pc.dim(`  (imported from ${f.origin.workspace}:${f.origin.path})`) : ""}`);
+    if (f.via) console.log(`  via recipes ${f.via.join(" → ")}`);
     // Spec 11 §4.2 (Ruling 15): which layer filled each section. AGENTS.md (rule/*) is not one ingredient.
-    const sections = p.sections.get(f.ingredient);
-    if (sections?.length) {
+    if (f.sections.length) {
       const layer = (l: SectionLayer) => (l === "profile" ? `profile ${p.resolution.profile.name}` : l);
-      console.log(`  sections    ${sections.map((x) => `${x.name} (${layer(x.layer)})`).join(", ")}`);
+      console.log(`  sections    ${f.sections.map((x) => `${x.name} (${layer(x.layer)})`).join(", ")}`);
     }
     // Spec 29 §4.1: which layer filled each parameter the file's ingredient cites — or `unset`.
-    const params = p.params.get(f.ingredient);
-    if (params?.length) {
+    if (f.params.length) {
       const layer = (l: ParamLayer) => (typeof l === "string" ? l : "recipe" in l ? `recipe ${l.recipe}` : `profile ${l.profile}`);
-      console.log(`  params      ${params.map((x) => `${x.key} (${layer(x.layer)})`).join(", ")}`);
+      console.log(`  params      ${f.params.map((x) => `${x.key} (${layer(x.layer)})`).join(", ")}`);
     }
-    console.log(`  profile     ${ws.config.profile}  (recipes: ${p.resolution.recipes.join(", ")})`);
-    console.log(`  hash        ${hashNormalized(f.content)}`);
+    console.log(`  profile     ${f.profile}  (recipes: ${f.recipes.join(", ")})`);
+    console.log(`  hash        ${f.hash}`);
   });
 
 /* ---------------------------------------------------------------- forge ls */
@@ -1061,6 +1048,38 @@ templates
     if (report.exitCode) process.exitCode = 1;
   });
 
+/* ---------------------------------------------------------------- mcp */
+program
+  .command("mcp")
+  .description(
+    "Serve this workspace to an AI coder over the Model Context Protocol, on stdin and stdout: seven reading tools — status, diff, explain, recipes, ingredients, targets, doctor — with the data those commands print. Started by the AI coder, not typed. Reads only; reads without the network unless --fetch",
+  )
+  .option("--workspace <dir>", "the workspace to serve", ".")
+  .option("--fetch", "let a tool call fetch a remote Forge instead of reading the cached copy", false)
+  .action(async (o: { workspace: string; fetch: boolean }) => {
+    // The bound workspace, resolved once: no tool takes a directory (spec 35 §4.1).
+    const root = path.resolve(o.workspace);
+    const refusal = launchRefusal(process.stdin.isTTY === true, await exists(path.join(root, WORKSPACE_FILE)), root);
+    if (refusal !== null) fail(refusal);
+    // The configuration must read at launch — its forge, ref and profile are the pin. The Forge need not load: each call says so.
+    let merged: MergedConfig;
+    try {
+      merged = await readWorkspaceConfig(root);
+    } catch (e) {
+      fail(errorText(e));
+    }
+    // From here stdout carries protocol lines only, and stderr nothing (spec 35 §4.1, §7). Stdin ending ends the process, exit 0.
+    await serve(process.stdin, process.stdout, {
+      root,
+      fetch: o.fetch,
+      home: craftarHome(),
+      version: program.version() ?? "unknown",
+      registryOff: registryOff(),
+      env: process.env,
+      pin: pinOf(merged),
+    });
+  });
+
 /* ---------------------------------------------------------------- recipes */
 program
   .command("recipes")
@@ -1091,7 +1110,7 @@ program
 
     const r = listRecipes(forg, context);
     // Loading the workspace may warn (spec 13 §4.2); those come first, as in `plan()`.
-    if (workspace) r.warnings.unshift(...workspace.warnings);
+    if (workspace) withLoadWarnings(r, workspace.warnings);
 
     if (o.json) {
       return console.log(JSON.stringify(r, null, 2));
@@ -1217,7 +1236,7 @@ program
     } catch (e) {
       fail(e instanceof Error ? e.message : String(e));
     }
-    if (workspace) result.warnings.unshift(...workspace.warnings);
+    if (workspace) withLoadWarnings(result, workspace.warnings);
 
     if (o.json) {
       return console.log(JSON.stringify(result, null, 2));
@@ -1376,36 +1395,31 @@ program
   .option("--workspace <dir>", "workspace whose targets to mark (default: . when it holds a craftar.yaml)")
   .option("--json", "machine-readable output", false)
   .action(async (o) => {
-    let inUse: Target[] | null = null;
-    const warnings: string[] = [];
-
     const root = o.workspace ?? ".";
+    let input: Parameters<typeof targetsReport>[2] = null;
     if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
-      // craftar.yaml does not exist
+      // Explicit --workspace without craftar.yaml: exit 1 with the load's own message. No --workspace: unmarked, no warning.
       if (o.workspace !== undefined) {
-        // Explicit --workspace: exit 1 with loadWorkspace's message
         try {
-          await loadWorkspace(root, load({}, "no-fetch"));
+          await readWorkspaceConfig(root);
         } catch (e) {
           fail(e instanceof Error ? e.message : String(e));
         }
       }
-      // No --workspace: just show unmarked, no warning
     } else {
-      // craftar.yaml exists, try to load
+      // craftar.yaml exists: a configuration that does not read is a warning, as a Forge that does not load is
       try {
-        const ws = await loadWorkspace(root, load({}, "no-fetch"));
-        inUse = resolve(ws.forge, ws.config).targets;
+        input = { merged: await readWorkspaceConfig(root) };
       } catch (e) {
-        // Load or resolve failed — warning, not error
-        warnings.push(`targets in use not shown: ${e instanceof Error ? e.message : String(e)}`);
+        input = { reason: e instanceof Error ? e.message : String(e) };
       }
     }
 
-    const result = listTargets(inUse);
+    const result = await targetsReport(root, { home: load({}, "no-fetch").home }, input);
+    const warnings = result.warnings;
 
     if (o.json) {
-      return console.log(JSON.stringify({ ...result, warnings }, null, 2));
+      return console.log(JSON.stringify(result, null, 2));
     }
 
     // Text mode
@@ -2377,7 +2391,7 @@ services
         if (r.code === 0) ps = readPs(r.stdout);
         else psFault = `docker compose ps failed — ${r.stderr.trim().split("\n")[0] || `exit ${r.code}`}`;
       }
-      const report = statusReport(real, recorded, docker, ps, psFault);
+      const report = servicesStatusReport(real, recorded, docker, ps, psFault);
       if (o.json) console.log(JSON.stringify(report, null, 2));
       else {
         console.log(pc.bold(`craftar services — project ${report.project}`));
@@ -2607,20 +2621,6 @@ function forgeLine(ws: Workspace, lock: Lock | null): string | null {
   return `  forge ${o.source} @ ${at} ${commit?.slice(0, 8) ?? "no git"}${moved}`;
 }
 
-/** `status --json`'s `forge` key, for every Forge (spec 13 §4.1). */
-function forgeJson(ws: Workspace, lock: Lock | null) {
-  const o = ws.origin;
-  return {
-    kind: o.kind,
-    source: o.source,
-    ref: o.ref,
-    defaultBranch: o.defaultBranch,
-    commit: ws.forge.commit,
-    lockCommit: lock?.forge.commit ?? null,
-    fetched: o.fetched,
-  };
-}
-
 /** One line on stderr with the `error: ` prefix, without exiting — `fail()` is this, then exit 1. */
 function errorLine(msg: string): void {
   console.error(pc.red("error: ") + msg);
@@ -2665,27 +2665,6 @@ function color(state: string) {
       return pc.cyan;
     default:
       return pc.dim;
-  }
-}
-
-function explainSkip(s: FileStatus): string {
-  switch (s.state) {
-    case "drift":
-      return "hand-edited since last sync — `craftar drift show <path>`, then `craftar drift discard` or `craftar drift promote`";
-    case "collision":
-      return "exists but was never generated by craftar and differs from the Forge — rename it or import it";
-    case "orphan-drift":
-      return "no longer produced by the Forge but hand-edited — kept; `craftar drift discard <path>` removes it, or delete it yourself";
-    default:
-      return "";
-  }
-}
-
-async function readText(p: string): Promise<string | null> {
-  try {
-    return toLf(stripBom(await fs.readFile(p, "utf8")));
-  } catch {
-    return null;
   }
 }
 
