@@ -228,6 +228,18 @@ describe("forge promote — the command", () => {
     );
   });
 
+  it("22d. a recipes.remove of a recipe this run copied concerns only a workspace whose profile it was copied for (spec 29 §20.6)", async () => {
+    const t = await scenario();
+    await t.workspace("initech");
+    // acme is the promoted profile: it never named base, and nothing was copied for it.
+    const ws = path.join(t.root, "acme-remover-portal");
+    await makeWorkspace(ws, t.forge, { config: { profile: "acme", recipes: { remove: ["base"] } } });
+    expect(t.cli(["sync", "--workspace", ws]).code).toBe(0);
+    const r = t.promote();
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split("\n").filter((l) => l.startsWith("  warn "))).toEqual([]);
+  });
+
   it("22b. --json carries the same: a row's keys in unify's order, the changed files, the warning", async () => {
     const t = await scenario();
     const ws = path.join(t.root, "adder-portal");

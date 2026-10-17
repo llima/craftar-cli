@@ -2262,14 +2262,14 @@ forge
     // The references the Forge cannot see (spec 29 §4.4): a workspace adding a shared recipe that names the base, removing
     // one this run copies for its profile, or disabling the base or the variant by name, follows the Forge at its next sync, not this promotion.
     const shared = [...f.recipes.values()].filter((r) => r.ingredients.includes(promotion.base) && !promotion.recipes.edited.includes(r.name)).map((r) => r.name);
-    const split = promotion.recipes.created.map((r) => r.from);
     const byName = (doc: unknown): boolean => {
-      const d = (typeof doc === "object" && doc !== null ? doc : {}) as { recipes?: { add?: unknown; remove?: unknown }; overrides?: { ingredients?: { disable?: unknown } } };
+      const d = (typeof doc === "object" && doc !== null ? doc : {}) as { profile?: string; recipes?: { add?: unknown; remove?: unknown }; overrides?: { ingredients?: { disable?: unknown } } };
+      const profile = typeof d.profile === "string" ? d.profile : "";
       const add = Array.isArray(d.recipes?.add) ? d.recipes.add : [];
       const remove = Array.isArray(d.recipes?.remove) ? d.recipes.remove : [];
       const disable = Array.isArray(d.overrides?.ingredients?.disable) ? d.overrides.ingredients.disable : [];
-      // A removed recipe the profile no longer names (it names the copy) stops removing anything.
-      return add.some((r) => shared.includes(r)) || remove.some((r) => split.includes(r)) || disable.some((r) => r === promotion.base || r === promotion.removed);
+      // A removed recipe concerns this workspace only when the recipe was copied for its profile (removing one this run copies for its profile).
+      return add.some((r) => shared.includes(r)) || remove.some((r) => promotion.recipes.created.some((c) => c.from === r && c.name === `${r}--${profile}`)) || disable.some((r) => r === promotion.base || r === promotion.removed);
     };
     for (const c of concerned(impactBefore, impactEntries, byName).concerned) {
       warnings.push(
