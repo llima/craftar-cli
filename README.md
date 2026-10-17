@@ -495,6 +495,14 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; `craftar docs validate`;
 
 ## Upgrading
 
+### to 0.29.1
+
+- **`craftar import` no longer imports a rule's Kiro mirror a second time.** When a rule is decided as a variant (`rule/<name>--<profile>`) and its `.kiro/steering/<name>.md` has no generated banner, import used to also create `steering/<name>` and list it in `<profile>-steering`, so the profile resolved two ingredients for one file (`two ingredients write .kiro/steering/<name>.md … (last wins)`) and the file read `adopt` against the steering copy. It is now the rule's mirror only: in a workspace with no lock entry for it the file reads `collision`, and a workspace that already synced from such a Forge sees `update` on it at the next `sync` after a re-import — the rule variant's render, banner included. A re-import into a Forge an earlier import gave the duplicate takes `steering/<name>` out of `<profile>-steering` when the workspace has other hand-written steering files, and otherwise takes `<profile>-steering` out of the profile and leaves its recipe file as it was; `ingredients/steerings/<name>/` stays either way — remove what is left by hand.
+- **`craftar import --report`** no longer marks `steering bigger than the rule` on a rule `--prefer-kiro` took from that steering file; the collision row stays.
+- **`craftar forge promote`** warns about a `recipes.remove` of a recipe it copied only for a workspace whose profile the copy was made for — wherever `profile` and `recipes.remove` sit, `craftar.yaml` or `craftar.local.yaml`. A workspace of another profile is no longer named.
+- **`craftar drift promote`'s D19** has a second wording when the only other profile in question does not resolve (`… and profile <q> does not resolve, so promote cannot tell whether it also uses it — …; fix profile <q>, …`). It refuses exactly as before; only the text differs.
+- No exit code, `--json` key or emitted byte of a workspace whose Forge is unchanged moves.
+
 ### to 0.30.0
 
 - **New command: `craftar ui [--port <n>]`**, a local, read-only dashboard in a browser (see *Commands*). It writes nothing to a workspace, its lock, the registry or a Forge — the Forge cache is used as every reader uses it — reaches no network (a remote Forge is read from the cached copy), and never runs `sync`: it prints the command to copy. It takes no `--workspace`, and exits 1 when `CRAFTAR_NO_REGISTRY` is set or the registry cannot be read.
