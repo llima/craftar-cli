@@ -495,7 +495,7 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; `craftar docs validate`;
 
 ## Upgrading
 
-### to 0.29.1
+### to 0.30.1
 
 - **`craftar import` no longer imports a rule's Kiro mirror a second time.** When a rule is decided as a variant (`rule/<name>--<profile>`) and its `.kiro/steering/<name>.md` has no generated banner, import used to also create `steering/<name>` and list it in `<profile>-steering`, so the profile resolved two ingredients for one file (`two ingredients write .kiro/steering/<name>.md … (last wins)`) and the file read `adopt` against the steering copy. It is now the rule's mirror only: in a workspace with no lock entry for it the file reads `collision` (`sync` skips it, and `sync --check` exits 1 until it is edited to match, or deleted and written by a `sync`), and a workspace that already synced from such a Forge sees `update` on it at the next `sync` after a re-import — the rule variant's render, banner included. A re-import into a Forge an earlier import gave the duplicate takes `steering/<name>` out of `<profile>-steering` when the workspace has other hand-written steering files, and otherwise takes `<profile>-steering` out of the profile and leaves its recipe file as it was; `ingredients/steerings/<name>/` stays either way — remove what is left by hand.
 - **`craftar import --report`** no longer marks `steering bigger than the rule` on a rule `--prefer-kiro` took from that steering file; the collision row stays.
