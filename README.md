@@ -494,6 +494,16 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; `craftar docs validate`;
 
 ## Upgrading
 
+
+### to 0.29.0
+
+- **New command: `craftar mcp`**, a read-only MCP server over stdin and stdout, started by an AI coder (see *Commands* and *Craftar inside the AI coder*). It writes nothing — no workspace file, lock, `craftar.yaml`, registry entry or Forge file — and there is no `sync` tool.
+- **Nothing that exists changes**: no emitted byte, no lock, no Forge schema; `status`, `diff`, `explain`, `recipes`, `ingredients`, `targets` and `drift show` print what they printed before, with the same `--json` keys and exit codes — their builders moved into the core, and their output is pinned by tests.
+- **New tooling contracts**: the seven tool names and their arguments; the `diff` tool's result (`{files: [{path, state, added, removed, diff, note}], warnings, unsetParams}`); the `explain` tool's (`{path, target, ingredient, origin, via, sections, params, profile, recipes, hash, warnings}`); and the `doctor` tool's, which is `doctor --json` narrowed to the workspace's checks plus `node` and `git`, its summary recounted. The `status`, `recipes`, `ingredients` and `targets` tools answer with the shapes of those commands' `--json`, which now bind the tools too.
+- **Upgrade every machine before adding the server to a shared Forge.** A Forge can register `craftar mcp` as an ordinary `mcp` ingredient, and `sync` on any version writes it to `.mcp.json` and `.kiro/settings/mcp.json` (its workspaces see `new` or `update` on those files); an AI coder on a machine with a craftar before `0.29.0` then starts `craftar mcp`, an unknown command, and the server fails to start.
+- **The server runs in its client's environment**: the programs it runs (`git`, and for the `doctor` tool `docker` and `dotnet`) are looked for in the `PATH` the client gives it, by the lookup of *to 0.28.2*, and the `forge`, `ref` and `profile` it was started with stay fixed until it is restarted.
+- **A result can carry what the reading commands print** — the names of the Forge's profiles and of the workspace an ingredient was imported from, absolute paths, and the parameter values a generated file holds (at Forge `schema: 4`, also those rendered into an MCP server; a value that looks like a credential still refuses the plan, and the tool then answers with the plan's line, never the value). Register the server only where that is acceptable.
+
 ### to 0.28.2
 
 - **A program is no longer looked for in a `node_modules/.bin` of the current directory or of a directory above it.** `npx craftar` — and an `npm` script — puts those entries first on `PATH`, as absolute ones, so a `git`, a `dotnet` or a `docker` committed there was the program craftar ran. They are now skipped, in the lookup and in the `PATH` the program gets, so what it starts in turn (`ssh`, a credential helper) is not found there either. The current directory is the one craftar is started in, whatever `--workspace` names. The entries are compared as written — `.`, `..` and repeated separators resolved, no link followed, without case on Windows. A `node_modules/.bin` anywhere else on `PATH` (npx's own cache, a global prefix) is looked in as before.
