@@ -16,6 +16,7 @@ import {
   gitUnheld,
   exists,
   listFiles,
+  readIngredientText,
   typeFolder,
   type Forge,
   type UnheldPath,
@@ -710,7 +711,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Source metadata: X's own, but re-read certain fields; drop params
   const sourceMeta: Ingredient = {
     ...X.meta,
-    ...emittedMetaFields(emitted.meta, readType, X.meta, meta.type === "rule" ? await fs.readFile(path.join(X.dir, meta.file), "utf8").catch(() => null) : null),
+    // A base with no frontmatterRaw may hold its `paths:` in its body (imported before rules kept it apart)
+    ...emittedMetaFields(emitted.meta, readType, X.meta, meta.type === "rule" && meta.frontmatterRaw === undefined ? await readIngredientText(X, meta.file) : null),
   } as Ingredient;
   // Remove params from source (sources carry none)
   if ("params" in sourceMeta) delete (sourceMeta as Record<string, unknown>).params;
@@ -1310,12 +1312,13 @@ function emittedMetaFields(emitted: Ingredient, type: string, base: Ingredient, 
     // The frontmatter travels as read; the scope is re-derived only when the hand edit changed `paths:` — an
     // unchanged one keeps the Forge's scope, which may come from a hand-written steering file (import's first level).
     const raw = (emitted as Record<string, unknown>).frontmatterRaw as string | undefined;
-    const baseRaw = "frontmatterRaw" in base ? base.frontmatterRaw : undefined;
-    if (raw === baseRaw) return {};
-    const paths = rulePaths(raw ?? null).value;
+    const stored = "frontmatterRaw" in base ? base.frontmatterRaw : undefined;
+    if (stored !== undefined && raw === stored) return {};
     // A base imported before rules kept their frontmatter apart holds its `paths:` inside its body
-    const basePaths = rulePaths(baseRaw ?? (baseBody === null ? null : parseFrontmatter(baseBody).raw)).value;
-    if (JSON.stringify(paths) === JSON.stringify(basePaths)) return { frontmatterRaw: raw };
+    const baseRaw = stored ?? (baseBody === null ? undefined : (parseFrontmatter(baseBody).raw ?? undefined));
+    const paths = rulePaths(raw ?? null).value;
+    const basePaths = rulePaths(baseRaw ?? null).value;
+    if (JSON.stringify(paths) === JSON.stringify(basePaths)) return raw === stored ? {} : { frontmatterRaw: raw };
     if (paths !== undefined) return { frontmatterRaw: raw, inclusion: "fileMatch", fileMatchPattern: paths };
     // `paths:` removed by hand: a scope that came from it goes with it; one from elsewhere stays.
     const b = base as Extract<Ingredient, { type: "rule" }>;

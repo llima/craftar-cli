@@ -402,5 +402,22 @@ describe("import --from claude-code — paths: read by lines when YAML refuses i
   it("R9. rulePaths reads a CRLF block as an LF one", () => {
     expect(rulePaths("paths:\r\n  - **/*.ts\r\n").value).toEqual(["**/*.ts"]);
   });
+
+  it("R10. a rule that is only its frontmatter, with no newline after the fence, is adopted as written", async () => {
+    const t = await setup();
+    const only = "---\npaths: src/**\n---";
+    await writeFiles(t.ws("api"), { ".claude/rules/r.md": only });
+    await importClaudeCode({ workspaceRoot: t.ws("api"), forgeRoot: t.forge, profileName: "api", writeWorkspaceConfig: true });
+    const meta = await yaml(path.join(t.forge, "ingredients/rules/r/ingredient.yaml"));
+    expect(meta.inclusion).toBe("fileMatch");
+    const ws = await loadWorkspace(t.ws("api"));
+    const p = await plan(ws);
+    const st = await status(ws, p, await readLock(t.ws("api")));
+    expect(["adopt", "unchanged"]).toContain(st.find((e) => e.path === ".claude/rules/r.md")!.state);
+  });
+
+  it("R11. the line reader keeps a list at one indent", () => {
+    expect(rulePaths("paths:\n  - **/*.ts\n- other\n").value).toBeUndefined();
+  });
 });
 

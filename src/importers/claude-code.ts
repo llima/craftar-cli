@@ -667,11 +667,13 @@ export function rulePaths(rawText: string | null): { present: boolean; value?: s
       return v ? { present: true, value: v } : { present: true };
     }
     const items: string[] = [];
+    let indent: string | null = null; // every item at the first one's indent, which may be the key's own
     for (const line of lines.slice(at + 1)) {
       if (line.trim() === "" || /^\s*#/.test(line)) continue;
-      if (/^\S/.test(line) && !/^-\s/.test(line)) break; // the next key (a `- item` may sit at the key's indent)
-      const item = /^\s*-\s+(.*)$/.exec(line);
-      const v = item ? scalar(item[1]) : null;
+      if (/^\S/.test(line) && !/^-\s/.test(line)) break; // the next key
+      const item = /^(\s*)-\s+(.*)$/.exec(line);
+      if (item && indent === null) indent = item[1];
+      const v = item && item[1] === indent ? scalar(item[2]) : null;
       if (!v) return { present: true };
       items.push(v);
     }
@@ -712,8 +714,9 @@ export async function readEmitted(
     let fileMatchPattern: string | string[] | undefined;
     let frontmatterRaw: string | undefined;
 
-    // When paths: is usable, ALWAYS split it out (so kiro/AGENTS.md don't carry the paths: block)
-    const useFrontmatter = pathsUsable;
+    // When paths: is usable, split it out whoever sets the scope (so kiro/AGENTS.md don't carry the paths: block)
+    // — unless the file ends at its closing fence with no newline, which the split could not write back.
+    const useFrontmatter = pathsUsable && text.startsWith(`---\n${parsed.raw}\n---\n`);
     if (useFrontmatter) {
       frontmatterRaw = parsed.raw ?? undefined;
     }
