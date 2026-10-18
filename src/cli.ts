@@ -327,7 +327,7 @@ async function runCloneStep(root: string, profile: string, entries: RepoEntry[],
 program
   .command("init")
   .description(
-    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync; with --clone, clone the profile's repositories into the workspace after the sync; in a terminal, asks for the Forge and the profile not given as flags; refused when craftar.yaml already exists",
+    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync; with --clone, clone the profile's repositories into the workspace (after the first sync, or with --no-sync after writing craftar.yaml); in a terminal, asks for the Forge and the profile not given as flags; refused when craftar.yaml already exists",
   )
   .option("--forge <dir|url>", "the Forge: a directory (written relative to the workspace) or a git URL; asked for in a terminal when omitted")
   .option("--profile <name>", "the client profile in the Forge; asked for in a terminal when omitted")
