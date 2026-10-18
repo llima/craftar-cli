@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { listFiles } from "../src/core/forge.js";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, profile, recipe, rule, tmpDir, type ForgeSpec } from "./helpers/forge.js";
+import YAML from "yaml";
 import { git, gitEnv, remoteForge } from "./helpers/remote.js";
 
 // Spec 38 §4.1–§4.6 through the command. Forges are local git repositories with a commit; no network, no push.
@@ -169,6 +170,33 @@ describe("the run (§4.4–§4.5)", () => {
     const r = s.run(["init", "--forge", path.join(trees, t), "--new-profile", "initech", "--workspace", s.ws]);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory\n$/);
+  });
+});
+
+describe("review round 1 (spec 38)", () => {
+  it("the notes of step 1 are printed after the initLine line: spec 22's and the integrations block's", async () => {
+    const spec: ForgeSpec = {
+      ...SPEC,
+      recipes: [...(SPEC.recipes ?? []), recipe("pm-jira", ["rule/a"])],
+      profiles: [profile("acme", ["base", "stack-node"], ["claude-code"], { integrations: { pm: { kind: "jira" } } })],
+    };
+    const s = await setup(spec);
+    await fs.writeFile(path.join(s.forge, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 3 }));
+    git(s.forge, "commit", "-q", "-am", "schema 3");
+    const r = s.run(["init", "--forge", s.forge, "--new-profile", "initech", "--like", "acme", "--add-recipe", "base", "--workspace", s.ws]);
+    expect(r.code, r.stderr).toBe(0);
+    const lines = r.stdout.split("\n");
+    const at = lines.findIndex((l) => l.startsWith("  forge ../forge · profile initech"));
+    expect(lines[at + 1]).toMatch(/^  note .*base/);
+    expect(lines[at + 2]).toBe("  note integrations of acme not copied — 1 recipe it selects is not in initech");
+  });
+  it("a ref in craftar.local.yaml: init --new-profile behaves as init --profile — it succeeds, and craftar.yaml holds no ref", async () => {
+    const s = await setup();
+    await fs.mkdir(s.ws);
+    await fs.writeFile(path.join(s.ws, "craftar.local.yaml"), "ref: some-branch\n");
+    const r = s.run(["init", "--forge", s.forge, "--new-profile", "globex", "--no-sync", "--workspace", s.ws]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(await fs.readFile(path.join(s.ws, "craftar.yaml"), "utf8")).toBe("forge: ../forge\nprofile: globex\n");
   });
 });
 

@@ -338,8 +338,8 @@ program
   .option("--like <profile>", "with --new-profile: start the new profile's recipes and targets from this profile's — nothing else of it is copied")
   .option("--ref <ref>", "branch, tag or full SHA of a remote Forge")
   .option("--targets <a,b>", "targets to write in craftar.yaml, or of the new profile with --new-profile (claude-code, kiro, agents-md); omitted, the workspace follows the profile's")
-  .option("--add-recipe <name>", "add a recipe to the profile's, or of the new profile with --new-profile (repeatable)", collect, [])
-  .option("--remove-recipe <name>", "remove a recipe of the profile's, or of the new profile with --new-profile (repeatable)", collect, [])
+  .option("--add-recipe <name>", "add a recipe to the profile's, or to the new profile's with --new-profile (repeatable)", collect, [])
+  .option("--remove-recipe <name>", "remove a recipe from the profile's, or from the new profile's with --new-profile (repeatable)", collect, [])
   .option("--replace", "let --add-recipe take a slot another recipe holds", false)
   .option("--no-sync", "write craftar.yaml only, and say what the first sync would do")
   .option("--clone", "after the first sync, clone the profile's repositories (its repos list) into the workspace")
@@ -364,7 +364,8 @@ program
     }, cmd) => {
       const root = path.resolve(o.workspace);
       // N1: craftar.yaml already exists
-      const n1 = () => fail(`${WORKSPACE_FILE} already exists in ${root} — change recipes with craftar add recipe / remove recipe, or edit it`);
+      const n1Text = `${WORKSPACE_FILE} already exists in ${root} — change recipes with craftar add recipe / remove recipe, or edit it`;
+      const n1 = () => fail(n1Text);
       const file = path.join(root, WORKSPACE_FILE);
       if (await exists(file)) n1();
       // N9: --workspace is a file, or any ancestor up to an existing path is a file
@@ -524,6 +525,8 @@ program
       };
       // When init.newProfile: write the profile, then reprove from disk
       let journal: WriteJournal = [];
+      // Step 1's notes are printed after the initLine line (spec 38), so keep them before reprove
+      const step1Notes = init.notes;
       if (init.newProfile) {
         try {
           journal = await writeNewProfile(forgeRoot, init);
@@ -539,7 +542,7 @@ program
         }
         // Reprove from disk (step 4)
         try {
-          init = await reproveFromDisk(root, input.forge, init, { ...load(o, "sync") }, journal);
+          init = await reproveFromDisk(root, input.forge, init, { ...load(o, "sync") }, journal, input.ref);
         } catch (e) {
           if (e instanceof NewProfileLateFailure) {
             fail(lateFailure(e, forgeRoot, e.journal, "init"));
@@ -554,20 +557,35 @@ program
         console.log(`  + profiles/${ws.config.profile}/profile.yaml   (not committed — commit it in the Forge, on a branch, before anyone else syncs)`);
       }
       // Every refusal is above: only now does the directory, and craftar.yaml, come to exist
-      await fs.mkdir(root, { recursive: true });
-      try {
-        await fs.writeFile(file, init.text, { flag: "wx" });
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code === "EEXIST") n1();
-        // Any other error after the profile was written: late failure (journal.length > 0 means a profile was written)
-        if (journal.length > 0) {
+      // When journal is not empty: mkdir inside the try, with late failure handling
+      if (journal.length > 0) {
+        try {
+          await fs.mkdir(root, { recursive: true });
+        } catch (e) {
           fail(lateFailure(e, forgeRoot, journal, "init"));
         }
-        throw e;
+        try {
+          await fs.writeFile(file, init.text, { flag: "wx" });
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+            // N1's text, then lateFailure
+            fail(`${n1Text}\n${lateFailure(e, forgeRoot, journal, "init")}`);
+          }
+          fail(lateFailure(e, forgeRoot, journal, "init"));
+        }
+      } else {
+        // No journal: existing behaviour unchanged
+        await fs.mkdir(root, { recursive: true });
+        try {
+          await fs.writeFile(file, init.text, { flag: "wx" });
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === "EEXIST") n1();
+          throw e;
+        }
       }
       console.log(pc.bold(`craftar init — wrote ${WORKSPACE_FILE} in ${root}`));
       console.log(`  ${initLine(init)}`);
-      for (const n of init.notes) console.log(`  note ${n}`);
+      for (const n of step1Notes) console.log(`  note ${n}`);
       const unset = unsetDeclared(p);
       const cloning = cloneEntries.length > 0;
       const refused = unset.length > 0;
