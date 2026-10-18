@@ -9,7 +9,7 @@ import { git, remoteForge } from "./helpers/remote.js";
 import { TSX_LOADER } from "./helpers/tsx-loader.js";
 import { exists, listFiles } from "../src/core/forge.js";
 import { UnifyPlanSchema } from "../src/schema/index.js";
-import { cacheKey, ensureTree } from "../src/core/remote.js";
+import { cacheKey, ensureTree, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -6117,7 +6117,8 @@ describe("cli — craftar cache prune (spec 26 §4)", () => {
     expect([out.code, out.stderr]).toEqual([0, ""]);
     const lines = out.stdout.split("\n");
     expect(lines[0]).toMatch(new RegExp(`^craftar cache prune — ${s.forges.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(1 entry, \\d+\\.\\d MB\\)$`));
-    expect(lines[1]).toMatch(new RegExp(`^  removed {6}${s.key} orphan: nothing names it \\d+\\.\\d MB$`));
+    const UNVOUCHED = UNVOUCHED_HIDDEN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    expect(lines[1]).toMatch(new RegExp(`^  removed {6}${UNVOUCHED} orphan: nothing names it \\d+\\.\\d MB$`));
     expect(lines.slice(2)).toEqual([expect.stringMatching(/^freed \d+\.\d MB$/), ""]);
     expect(await fs.readdir(s.forges)).toEqual([]);
   });
@@ -6126,8 +6127,9 @@ describe("cli — craftar cache prune (spec 26 §4)", () => {
     const s = await setup();
     const out = s.run(["--dry-run"]);
     expect(out.code).toBe(0);
+    const UNVOUCHED = UNVOUCHED_HIDDEN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     expect(out.stdout.split("\n").slice(1)).toEqual([
-      expect.stringMatching(new RegExp(`^  would remove ${s.key} orphan: nothing names it \\d+\\.\\d MB$`)),
+      expect.stringMatching(new RegExp(`^  would remove ${UNVOUCHED} orphan: nothing names it \\d+\\.\\d MB$`)),
       expect.stringMatching(/^would free \d+\.\d MB$/),
       "",
     ]);
@@ -6143,7 +6145,7 @@ describe("cli — craftar cache prune (spec 26 §4)", () => {
     expect([report.home, report.dryRun, report.removed.map((x: { path: string; kind: string; reason: string }) => [x.path, x.kind, x.reason]), report.kept, report.warnings]).toEqual([
       s.home,
       true,
-      [[`forges/${s.key}`, "entry", "orphan"]],
+      [[`forges/${UNVOUCHED_HIDDEN}`, "entry", "orphan"]],
       [],
       [],
     ]);
@@ -6158,7 +6160,7 @@ describe("cli — craftar cache prune (spec 26 §4)", () => {
     const off = s.run([], { env: { CRAFTAR_NO_REGISTRY: "1" } });
     expect(off.code).toBe(0);
     expect(off.stdout.split("\n").slice(1)).toEqual([
-      `  kept         ${s.key} not checked`,
+      `  kept         ${UNVOUCHED_HIDDEN} not checked`,
       "  warn whole entries kept: CRAFTAR_NO_REGISTRY is set — nothing can tell which ones are used",
       "freed 0.0 MB",
       "",
