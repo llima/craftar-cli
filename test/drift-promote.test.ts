@@ -3014,6 +3014,67 @@ Edited body
     const ruleStatus = statusJ.statuses.find((st: { path: string }) => st.path === rulePath);
     expect(ruleStatus?.state).toBe("unchanged");
   });
+
+  it("67c. a body-only edit keeps a scope the Forge took from a hand-written steering file", async () => {
+    const rulePath = ".claude/rules/a.md";
+    const s = await scenario(
+      {
+        ingredients: [
+          {
+            meta: { type: "rule", name: "a", inclusion: "fileMatch", fileMatchPattern: "other/**", frontmatterRaw: "paths: src/**" },
+            files: { "rule.md": "# A\n" },
+          },
+        ],
+        recipes: [recipe("base", ["rule/a"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "kiro"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.writeFile(path.join(s.wsRoot, rulePath), "---\npaths: src/**\n---\n# A edited\n");
+
+    const r = runCli(["drift", "promote", rulePath, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    const variantMeta = YAML.parse(await fs.readFile(path.join(s.forgeRoot, "ingredients/rules/a--acme/ingredient.yaml"), "utf8"));
+    expect(variantMeta.fileMatchPattern).toBe("other/**");
+    expect(variantMeta.frontmatterRaw).toBe("paths: src/**");
+    // The body edit reaches the steering file; its scope stays the Forge's
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    const steering = await fs.readFile(path.join(s.wsRoot, ".kiro/steering/a.md"), "utf8");
+    expect(steering).toContain('fileMatchPattern: "other/**"');
+    expect(steering).toContain("# A edited");
+  });
+
+  it("67d. removing the frontmatter of a rule the Forge keeps it for promotes a rule without it", async () => {
+    const rulePath = ".claude/rules/a.md";
+    const s = await scenario(
+      {
+        ingredients: [
+          {
+            meta: { type: "rule", name: "a", inclusion: "fileMatch", fileMatchPattern: "src/**", frontmatterRaw: "paths: src/**" },
+            files: { "rule.md": "# A\n" },
+          },
+        ],
+        recipes: [recipe("base", ["rule/a"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.writeFile(path.join(s.wsRoot, rulePath), "# A\n");
+
+    const r = runCli(["drift", "promote", rulePath, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    const variantMeta = YAML.parse(await fs.readFile(path.join(s.forgeRoot, "ingredients/rules/a--acme/ingredient.yaml"), "utf8"));
+    expect(variantMeta.frontmatterRaw).toBeUndefined();
+    expect(await fs.readFile(path.join(s.forgeRoot, "ingredients/rules/a--acme/rule.md"), "utf8")).toBe("# A\n");
+    const statusJ = JSON.parse(runCli(["status", "--workspace", s.wsRoot, "--json"]).stdout);
+    expect(statusJ.statuses.find((st: { path: string }) => st.path === rulePath)?.state).toBe("unchanged");
+  });
 });
 
 

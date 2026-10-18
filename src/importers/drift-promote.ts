@@ -708,7 +708,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Source metadata: X's own, but re-read certain fields; drop params
   const sourceMeta: Ingredient = {
     ...X.meta,
-    ...emittedMetaFields(emitted.meta, readType),
+    ...emittedMetaFields(emitted.meta, readType, X.meta),
   } as Ingredient;
   // Remove params from source (sources carry none)
   if ("params" in sourceMeta) delete (sourceMeta as Record<string, unknown>).params;
@@ -1286,7 +1286,7 @@ export async function applyPromote(plan: PromotePlan, journal: WriteJournal): Pr
 
 // Helper functions
 
-function emittedMetaFields(emitted: Ingredient, type: string): Partial<Ingredient> {
+function emittedMetaFields(emitted: Ingredient, type: string, base: Ingredient): Partial<Ingredient> {
   // Only re-read certain fields from the emitted source
   if (type === "agent") {
     return {
@@ -1305,24 +1305,15 @@ function emittedMetaFields(emitted: Ingredient, type: string): Partial<Ingredien
     };
   }
   if (type === "rule") {
-    // A rule may have frontmatterRaw (from paths: in frontmatter), inclusion and fileMatchPattern.
-    // Only when frontmatterRaw is present do we override inclusion/fileMatchPattern from the emitted.
-    const em = emitted as Record<string, unknown>;
-    const frontmatterRaw = em.frontmatterRaw as string | undefined;
-    if (frontmatterRaw !== undefined) {
-      // User has paths: frontmatter - carry frontmatterRaw, inclusion and fileMatchPattern from emitted
-      return {
-        frontmatterRaw,
-        inclusion: em.inclusion as "always" | "fileMatch" | "manual" | "auto" | undefined,
-        fileMatchPattern: em.fileMatchPattern as string | string[] | undefined,
-      };
-    }
-    // No frontmatterRaw in emitted: return nothing so the base's inclusion/fileMatchPattern are kept.
-    // This handles both:
-    // - A rule that never had frontmatterRaw (base's inclusion is preserved)
-    // - A rule that had frontmatterRaw and user removed it (base's frontmatterRaw is kept, which is wrong,
-    //   but that case needs the user to also change the body to differ, making it a variant anyway)
-    return {};
+    // A rule's scope is re-derived only when the hand edit changed its frontmatter: an unchanged one keeps the
+    // Forge's scope, which may come from a hand-written steering file (import's first precedence level).
+    const raw = (emitted as Record<string, unknown>).frontmatterRaw as string | undefined;
+    const baseRaw = "frontmatterRaw" in base ? base.frontmatterRaw : undefined;
+    if (raw === baseRaw) return {};
+    // Removed by hand: the variant has none; the proof decides whether the rest still plans the file on disk.
+    if (raw === undefined) return { frontmatterRaw: undefined };
+    const e = emitted as Extract<Ingredient, { type: "rule" }>;
+    return { frontmatterRaw: raw, inclusion: e.inclusion, fileMatchPattern: e.fileMatchPattern };
   }
   return {};
 }
