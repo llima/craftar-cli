@@ -316,6 +316,8 @@ export interface Plan {
     explicit: boolean;
     /** Always-on rules sorted by bytes desc, then name asc. */
     rules: Array<{ name: string; bytes: number }>;
+    /** The exact warning line pushed into Plan.warnings, or null if within budget. */
+    warning: string | null;
   } | null;
 }
 
@@ -674,15 +676,22 @@ function computeAgentsMdBudget(
   });
 
   // Add budget warning if over budget and maxBytes > 0
+  let warning: string | null = null;
   if (maxBytes > 0 && bytes > maxBytes) {
     const top5 = sortedRules.slice(0, 5);
     const rulesText = top5.length > 0
       ? `largest always-on rules: ${top5.map((r) => `${r.name} (${r.bytes} bytes)`).join(", ")}`
       : "no always-on rule";
-    warnings.push(`AGENTS.md is ${bytes} bytes, over the budget of ${maxBytes} (${AGENTS_MD_BUDGET_KEY}) — ${rulesText}`);
+    // Two forms: default budget vs explicit budget
+    if (explicit) {
+      warning = `AGENTS.md is ${bytes} bytes, over the budget of ${maxBytes} set by ${AGENTS_MD_BUDGET_KEY}; sync --check fails — ${rulesText}`;
+    } else {
+      warning = `AGENTS.md is ${bytes} bytes, over the default budget of ${maxBytes} (${AGENTS_MD_BUDGET_KEY}) — ${rulesText}`;
+    }
+    warnings.push(warning);
   }
 
-  return { bytes, maxBytes, explicit, rules: sortedRules };
+  return { bytes, maxBytes, explicit, rules: sortedRules, warning };
 }
 
 /**

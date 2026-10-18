@@ -256,6 +256,8 @@ async function workspaceChecks(
       const declaredUnset = declaredWithoutValue(p);
       const owned = new Set<string>();
       for (const mp of p.missingParams) if (declaredUnset.has(mp.key)) owned.add(mp.warning);
+      // Also exclude the AGENTS.md budget warning — it is reported by agents-md-size
+      if (p.agentsMd?.warning) owned.add(p.agentsMd.warning);
       const own = p.warnings.slice(ws.warnings.length).filter((x) => !owned.has(x));
       if (own.length === 0) w("plan", "ok", `${p.files.length} files`);
       for (const x of own) w("plan", "warn", x, null);

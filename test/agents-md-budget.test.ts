@@ -38,7 +38,7 @@ describe("agents-md.maxBytes budget (core)", () => {
     expect(p.agentsMd!.bytes).toBe(agentsMdContent(p)!.length);
     const budgetWarning = p.warnings.find((w) => w.startsWith("AGENTS.md is"));
     expect(budgetWarning).toMatch(
-      /^AGENTS\.md is \d+ bytes, over the budget of 32768 \(agents-md\.maxBytes\) — largest always-on rules: big \(\d+ bytes\), mid \(\d+ bytes\)$/,
+      /^AGENTS\.md is \d+ bytes, over the default budget of 32768 \(agents-md\.maxBytes\) — largest always-on rules: big \(\d+ bytes\), mid \(\d+ bytes\)$/,
     );
     // Not explicit → agentsMdOverBudget returns null
     expect(agentsMdOverBudget(p)).toBeNull();
@@ -57,7 +57,7 @@ describe("agents-md.maxBytes budget (core)", () => {
     expect(p.agentsMd!.explicit).toBe(true);
     expect(p.agentsMd!.maxBytes).toBe(1000);
     const budgetWarning = p.warnings.find((w) => w.startsWith("AGENTS.md is"));
-    expect(budgetWarning).toContain("over the budget of 1000");
+    expect(budgetWarning).toContain("over the budget of 1000 set by agents-md.maxBytes; sync --check fails");
     const over = agentsMdOverBudget(p);
     expect(over).toEqual({ bytes: p.agentsMd!.bytes, maxBytes: 1000 });
   });

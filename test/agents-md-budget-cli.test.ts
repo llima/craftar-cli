@@ -39,12 +39,12 @@ async function setOverrides(wsRoot: string, params: Record<string, unknown>) {
 }
 
 describe("AGENTS.md budget CLI — default budget exceeded (case 9)", () => {
-  it("sync --check exit 0, stdout/stderr contain 'over the budget of 32768'", async () => {
+  it("sync --check exit 0, stdout/stderr contain 'over the default budget of 32768'", async () => {
     const s = await syncedWorkspace();
     const r = runCli(["sync", "--check", "--workspace", s.ws]);
     expect(r.code).toBe(0);
     const all = r.stdout + r.stderr;
-    expect(all).toContain("over the budget of 32768");
+    expect(all).toContain("over the default budget of 32768");
   });
 
   it("status exit 0", async () => {
@@ -136,6 +136,20 @@ describe("AGENTS.md budget CLI — doctor (case 12)", () => {
     expect(check.fix).toBe("set agents-md.maxBytes to fail sync --check above it, or move rules out of the always-on set (inclusion: fileMatch)");
   });
 
+  it("default budget exceeded → plan check is ok, no other check mentions AGENTS.md is", async () => {
+    const s = await syncedWorkspace();
+    const r = runCli(["doctor", "--json", "--workspace", s.ws]);
+    const json = JSON.parse(r.stdout);
+    const planCheck = json.checks.find((c: { id: string }) => c.id === "plan");
+    expect(planCheck).toBeDefined();
+    expect(planCheck.level).toBe("ok");
+    // No check other than agents-md-size should mention "AGENTS.md is"
+    const otherChecks = json.checks.filter((c: { id: string }) => c.id !== "agents-md-size");
+    for (const c of otherChecks) {
+      expect(c.message).not.toContain("AGENTS.md is");
+    }
+  });
+
   it("explicit budget exceeded → agents-md-size level error with exact message and fix", async () => {
     const s = await syncedWorkspace();
     await setOverrides(s.ws, { "agents-md.maxBytes": 1000 });
@@ -147,6 +161,21 @@ describe("AGENTS.md budget CLI — doctor (case 12)", () => {
     expect(check.level).toBe("error");
     expect(check.message).toMatch(/^AGENTS\.md is \d+ bytes, over the budget of 1000 set by agents-md\.maxBytes$/);
     expect(check.fix).toBe("move rules out of the always-on set (inclusion: fileMatch), or raise agents-md.maxBytes");
+  });
+
+  it("explicit budget exceeded → plan check is ok, no other check mentions AGENTS.md is", async () => {
+    const s = await syncedWorkspace();
+    await setOverrides(s.ws, { "agents-md.maxBytes": 1000 });
+    const r = runCli(["doctor", "--json", "--workspace", s.ws]);
+    const json = JSON.parse(r.stdout);
+    const planCheck = json.checks.find((c: { id: string }) => c.id === "plan");
+    expect(planCheck).toBeDefined();
+    expect(planCheck.level).toBe("ok");
+    // No check other than agents-md-size should mention "AGENTS.md is"
+    const otherChecks = json.checks.filter((c: { id: string }) => c.id !== "agents-md-size");
+    for (const c of otherChecks) {
+      expect(c.message).not.toContain("AGENTS.md is");
+    }
   });
 
   it("budget 0 → agents-md-size level ok with exact message", async () => {
