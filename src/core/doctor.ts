@@ -166,9 +166,9 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
   } else if (snapshot === null) {
     // No snapshot: use hideCacheSegment, then hideKeys (spec 39 §5.1).
     // Two passes are safe: hideCacheSegment replaces the whole segment after `forges/`, and a
-    // credential key is a cacheKey — only [a-z0-9._-] (the slug is lower-cased and every other
-    // run becomes `-`) — while the inserted label starts with `(` and holds spaces, so hideKeys
-    // can match neither inside nor across it.
+    // credential key is a cacheKey — only [a-z0-9._-], ending in `-<12 hex>` — while the inserted
+    // label holds no such run and starts with `(` and holds spaces, so hideKeys can match neither
+    // inside nor across it.
     const msg = hideCacheSegment(snapshotError ?? "", opts.home);
     m("cache", "warn", `cannot read the Forge cache: ${hideKeys(msg, reg === null ? [] : credentialKeys(reg))}`, `fix or move $CRAFTAR_HOME (${home})`);
   } else {

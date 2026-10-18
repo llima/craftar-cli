@@ -335,7 +335,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
     const freedBytes = removed.reduce((sum, r) => sum + r.bytes, 0);
 
     // The report names such an entry by the fixed label, in every path and warning.
-    // hideCacheKeys replaces both credential and unvouched keys in ONE pass (spec 39 review round 2).
+    // hideCacheKeys labels both credential and unvouched keys by merged ranges of the original text (spec 39 review rounds 2-3).
     // An entry unvouched at the snapshot stays labelled for the whole run (fail closed).
     const hidePath = (text: string): string => hideCacheKeys(text, hide, unvouched);
     const shownRemoved = removed.map((r) => ({ ...r, path: hidePath(r.path) }));
@@ -356,10 +356,10 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
       if (!(e instanceof Error)) throw e;
       // Before the snapshot: use hideCacheSegment then hideKeys (spec 39 §5.1).
       // Two passes are safe: hideCacheSegment replaces the whole segment after `forges/`, and a
-      // credential key is a cacheKey — only [a-z0-9._-] (the slug is lower-cased and every other
-      // run becomes `-`) — while the inserted label starts with `(` and holds spaces, so hideKeys
-      // can match neither inside nor across it.
-      // After the snapshot: use hideCacheKeys in one pass (spec 39 review round 2).
+      // credential key is a cacheKey — only [a-z0-9._-], ending in `-<12 hex>` — while the inserted
+      // label holds no such run and starts with `(` and holds spaces, so hideKeys can match neither
+      // inside nor across it.
+      // After the snapshot: use hideCacheKeys, one call over the original text (spec 39 review rounds 2-3).
       let msg = e.message;
       if (!snapshotBuilt) {
         msg = hideCacheSegment(msg, home);

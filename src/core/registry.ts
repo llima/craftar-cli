@@ -221,6 +221,8 @@ export function hideCacheKeys(text: string, credential: readonly string[], unvou
       const keyEnd = idx + key.length;
       if (existing === undefined || keyEnd > existing.end) {
         // No existing range at this start, or this key is longer: take it (longer key wins completely)
+        // Deliberate: at the same start the longer key's label is used, even over a shorter credential key
+        // it covers whole — nothing of either is printed (spec 39 review round 4).
         byStart.set(idx, { end: keyEnd, credential: isCred });
       } else if (keyEnd === existing.end && isCred && !existing.credential) {
         // Same length but this one is a credential and existing is not: mark it
