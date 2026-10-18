@@ -18,6 +18,9 @@ import type { LocalKey } from "./workspace-yaml.js";
  * `console` or `readline`, and writes nothing.
  */
 
+/** The message printed when cloning is skipped because the first sync is refused. */
+export const NOT_CLONED_REFUSED = "  repositories: not cloned — the first sync is refused";
+
 export interface InitIo {
   ask(question: string): Promise<string | null>;
   confirm(question: string): Promise<string | null>;
@@ -184,7 +187,7 @@ export async function confirmInit(
 
   // When the sync is refused and cloneRefused, say the not-cloned line
   if (unset.length > 0 && opts.cloneRefused) {
-    io.say("  repositories: not cloned — the first sync is refused");
+    io.say(NOT_CLONED_REFUSED);
   }
 
   // Build the question

@@ -13,6 +13,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Profile } from "../schema/index.js";
 import { realpathOfNearest } from "./forge.js";
+import { nameShaped } from "./integrations.js";
 import { onPath, spawnInherited, type Runner } from "./proc.js";
 import { cloneArgs, isRepoName, profileRepos, type RepoEntry } from "./repos.js";
 
@@ -307,8 +308,8 @@ export async function planClone(
     }
     for (const name of opts.names) {
       if (!entryNameMap.has(name.toLowerCase())) {
-        // R1: unknown name — check if it's shaped like a repository name
-        if (isRepoName(name)) {
+        // R1: unknown name — print it only when it is shaped like a repository name
+        if (isRepoName(name) && nameShaped(name)) {
           throw new Error(`profile ${profile.name} has no repository ${name}`);
         } else {
           throw new Error(`profile ${profile.name}: a name given is not a repository name`);

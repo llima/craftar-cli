@@ -46,7 +46,7 @@ import {
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
 import { checkInitFlags, initLine, planInit, type InitInput } from "./core/init.js";
-import { askInit, askClone, confirmInit, againLine, type InitAnswers } from "./core/init-flow.js";
+import { askInit, askClone, confirmInit, againLine, NOT_CLONED_REFUSED, type InitAnswers } from "./core/init-flow.js";
 import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type DestinationContext, type RepoState } from "./core/clone.js";
 import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
 import { readlineIo } from "./prompt.js";
@@ -243,8 +243,8 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
 
 /**
  * Shared clone report for `craftar init --clone` and `craftar repos clone`.
- * Prints the header, one row per skipped entry (present state), then one row per result,
- * all in the profile's order. Returns whether any clone failed.
+ * Prints the header, the present rows first, then the clone rows (cloned/failed), each group
+ * in the profile's order. Returns whether any clone failed.
  *
  * @param header The bold header line (without the leading text, which is added here)
  * @param results The clone results (cloned or failed)
@@ -490,8 +490,8 @@ program
       if (!o.sync) {
         console.log(nextSyncLine(init.statuses, unset));
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
-        if (cloning && refused) {
-          console.log("  repositories: not cloned — the first sync is refused");
+        if (cloning && refused && answers === null) {
+          console.log(NOT_CLONED_REFUSED);
         } else if (cloning && !refused) {
           // Clone even without sync
           await runCloneStep(root, ws.config.profile, cloneEntries, git!, again);
@@ -505,7 +505,7 @@ program
       if (unset.length) {
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
         if (cloning && answers === null) {
-          console.log("  repositories: not cloned — the first sync is refused");
+          console.log(NOT_CLONED_REFUSED);
         }
         refusalBlock(unset, { thenSync: true });
         again();
@@ -553,6 +553,7 @@ const reposCmd = program
         console.log(JSON.stringify(out, null, 2));
       } else {
         console.log(`profile ${ws.config.profile} lists no repositories`);
+        for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
       }
       return;
     }
