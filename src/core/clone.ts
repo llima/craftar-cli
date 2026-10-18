@@ -6,7 +6,7 @@
  * plan and the clone; `cloneRepos` re-checks before each runner call, and a failure there is
  * reported as one entry's failure.
  *
- * PURE: no console, no process (env and tty come in as arguments).
+ * PURE: no console; `process` read only for `process.platform`.
  */
 
 import { promises as fs } from "node:fs";
@@ -140,7 +140,8 @@ export async function destinationFault(root: string, e: RepoEntry, ctx: Destinat
   } catch (lstatErr) {
     const code = (lstatErr as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTDIR") {
-      // Some other error during lstat — fall through to resolution check
+      // Some other lstat error (EACCES, EIO, …) falls through on purpose: step 3's
+      // realpathOfNearest fails closed, refusing the destination rather than missing it.
     }
   }
 
@@ -382,7 +383,9 @@ export async function cloneRepos(
       continue;
     }
 
-    // Re-check: containment via real paths
+    // Re-check: containment via real paths. A realpathOfNearest error (EACCES, a dangling link
+    // appeared, …) is reported as "leaves the workspace through a link" — fail closed rather than
+    // letting the clone through.
     let destNearest: string;
     let rootReal: string;
     try {
