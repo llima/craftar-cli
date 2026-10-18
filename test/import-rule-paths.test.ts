@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { importClaudeCode } from "../src/importers/claude-code.js";
+import { importClaudeCode, secretIn } from "../src/importers/claude-code.js";
 import { loadWorkspace, plan, status, apply, readLock } from "../src/core/sync.js";
 import { tmpDir, writeFiles } from "./helpers/forge.js";
 
@@ -345,5 +345,41 @@ describe("import --from claude-code — paths: with --prefer-kiro and the secret
     await writeFiles(t.ws("api"), { ".claude/rules/c.md": `---\npaths: src/**\n---\n# C\nx\n${TOKEN}\n` });
     const r = await importInto(t.forge, t.ws("api"), "api");
     expect(r.rejected).toEqual([{ name: "rule/c", reason: "secret-like value (github-token) in .claude/rules/c.md line 6" }]);
+  });
+});
+
+describe("import --from claude-code — paths: read by lines when YAML refuses it", () => {
+  const imported = async (rule: string, steering?: string) => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), { ".claude/rules/r.md": rule, ...(steering ? { ".kiro/steering/r.md": steering } : {}) });
+    const report = await importInto(t.forge, t.ws("api"), "api");
+    return { report, meta: await yaml(path.join(t.forge, "ingredients/rules/r/ingredient.yaml")) };
+  };
+
+  it("R1. a space after paths: still reads the list below it", async () => {
+    const { meta } = await imported("---\npaths: \n  - **/*.ts\n---\n# R\n");
+    expect(meta.fileMatchPattern).toEqual(["**/*.ts"]);
+  });
+
+  it("R2. a comment after a value is not part of the glob", async () => {
+    expect((await imported("---\npaths: **/*.ts # tests\n---\n# R\n")).meta.fileMatchPattern).toBe("**/*.ts");
+    expect((await imported("---\npaths:\n  - src/** # api\n  - '**/*.md'\n---\n# R\n")).meta.fileMatchPattern).toEqual(["src/**", "**/*.md"]);
+  });
+
+  it("R3. a list the line reader cannot read is ignored with the warning, not silently", async () => {
+    const { report, meta } = await imported("---\npaths:\n  - **/*.ts\n    extra\n---\n# R\n");
+    expect(meta.inclusion).toBe("always");
+    expect(report.warnings).toContain("rule r: paths: in .claude/rules/r.md is not a string or a list of strings; ignored");
+  });
+
+  it("R4. a hand-written steering list equal to paths: is no disagreement", async () => {
+    const { report } = await imported("---\npaths:\n  - a/**\n  - b/**\n---\n# R\n", '---\ninclusion: fileMatch\nfileMatchPattern: ["a/**", "b/**"]\n---\n\n# R\n');
+    expect(report.warnings.filter((w) => w.includes("rule r:"))).toEqual([]);
+  });
+
+  it("R5. a variant's raw block is located in the Claude file its body came from", () => {
+    const TOKEN = "ghp_" + "x".repeat(36);
+    const meta = { type: "rule", name: "x--p", as: "x", inclusion: "fileMatch", fileMatchPattern: "a", frontmatterRaw: "paths: a", file: "rule.md", targets: "*", tags: [], origin: { workspace: "w", path: ".claude/rules/x.md" } } as unknown as Parameters<typeof secretIn>[0];
+    expect(secretIn(meta, { "rule.md": `# X\nline\n${TOKEN}\n` })).toBe("secret-like value (github-token) in .claude/rules/x.md line 6");
   });
 });

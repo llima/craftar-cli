@@ -360,7 +360,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       q.meta = { ...q.meta, origin: origin(source) };
       // A steering body written before rules kept their frontmatter apart still holds the fence: the
       // text then carries it, as it did, and the rule's own copy is dropped so the file is not written twice.
-      if ("frontmatterRaw" in q.meta && q.meta.frontmatterRaw !== undefined && FENCE_START.test(text)) {
+      if ("frontmatterRaw" in q.meta && q.meta.frontmatterRaw !== undefined && parseFrontmatter(text).raw !== null) {
         const { frontmatterRaw: _dropped, ...rest } = q.meta;
         q.meta = rest as Ingredient;
       }
@@ -634,6 +634,50 @@ export interface EmittedSource {
 }
 
 /**
+ * A Claude rule's `paths:`, read from its raw frontmatter. `present` says the key is there; `value` is set only
+ * when it is usable — a non-empty string, or a non-empty list of non-empty strings. YAML is tried first; when it
+ * refuses the block (an unquoted `**` reads as an alias), the key is read by lines as Claude Code writes it: an
+ * inline value, or `- item` lines below, each unquoted and without a trailing ` # comment`.
+ */
+export function rulePaths(raw: string | null): { present: boolean; value?: string | string[] } {
+  if (raw === null) return { present: false };
+  const usable = (p: unknown): p is string | string[] =>
+    (typeof p === "string" && p.length > 0) || (Array.isArray(p) && p.length > 0 && p.every((i) => typeof i === "string" && i.length > 0));
+  try {
+    const data = parseYamlText("frontmatter", raw);
+    if (data === null || typeof data !== "object" || !Object.hasOwn(data, "paths")) return { present: false };
+    const p = (data as Record<string, unknown>).paths;
+    return usable(p) ? { present: true, value: p } : { present: true };
+  } catch {
+    const lines = raw.split("\n");
+    const at = lines.findIndex((l) => /^paths:(\s|$)/.test(l));
+    if (at === -1) return { present: false };
+    const scalar = (v: string): string | null => {
+      const t = v.trim();
+      const q = /^(["'])(.*)\1(\s+#.*)?$/.exec(t);
+      if (q) return q[2];
+      if (/^["']/.test(t)) return null; // an unclosed or mismatched quote
+      return t.replace(/\s+#.*$/, "");
+    };
+    const inline = lines[at].slice("paths:".length);
+    if (inline.trim() !== "" && !/^\s*#/.test(inline)) {
+      const v = /^\s*[[{]/.test(inline) ? null : scalar(inline);
+      return v ? { present: true, value: v } : { present: true };
+    }
+    const items: string[] = [];
+    for (const line of lines.slice(at + 1)) {
+      if (line.trim() === "" || /^\s*#/.test(line)) continue;
+      if (/^\S/.test(line)) break; // the next key
+      const item = /^\s*-\s+(.*)$/.exec(line);
+      const v = item ? scalar(item[1]) : null;
+      if (!v) return { present: true };
+      items.push(v);
+    }
+    return items.length ? { present: true, value: items } : { present: true };
+  }
+}
+
+/**
  * One ingredient as import reads it from a workspace's `.claude/` tree. `rel` is the path under
  * `.claude/<folder>/` (a file, or a skill's directory name). Returns `null` where `planImport`
  * skips: a skill directory without `SKILL.md`, a non-file under scripts/hooks.
@@ -652,89 +696,10 @@ export async function readEmitted(
     const parsed = parseFrontmatter<{ paths?: unknown }>(text);
     const warnings: string[] = [];
 
-    // Check if paths is usable: non-empty string or non-empty array of non-empty strings
-    const isUsablePaths = (p: unknown): p is string | string[] => {
-      if (typeof p === "string") return p.length > 0;
-      if (Array.isArray(p)) return p.length > 0 && p.every((item) => typeof item === "string" && item.length > 0);
-      return false;
-    };
-
-    // Read paths from raw frontmatter directly when YAML parsing produced a malformed value.
-    // Claude Code writes unquoted globs which cause YAML alias errors (e.g., `- **/*.ts`).
-    // This function parses paths: by line when the standard YAML parser fails.
-    const readPathsFromRaw = (raw: string | null): { value: unknown; usable: boolean } => {
-      if (raw === null) return { value: undefined, usable: false };
-
-      // First try strict YAML parsing
-      try {
-        const parsed = parseYamlText("frontmatter", raw);
-        if (typeof parsed === "object" && parsed !== null && "paths" in parsed) {
-          const p = (parsed as Record<string, unknown>).paths;
-          return { value: p, usable: isUsablePaths(p) };
-        }
-        return { value: undefined, usable: false };
-      } catch {
-        // YAML parsing failed — read paths: by lines
-        const lines = raw.split("\n");
-        const pathsIdx = lines.findIndex((l) => /^paths:\s*/.test(l));
-        if (pathsIdx === -1) return { value: undefined, usable: false };
-
-        const pathsLine = lines[pathsIdx];
-        const inlineMatch = pathsLine.match(/^paths:\s*(.+)$/);
-        if (inlineMatch) {
-          // Inline value on the same line: `paths: **/*.ts` or `paths: "**/*.ts"`
-          const inlineValue = inlineMatch[1].trim();
-          // If it starts with [ or {, it's not a simple string — unusable
-          if (inlineValue.startsWith("[") || inlineValue.startsWith("{")) {
-            return { value: inlineValue, usable: false };
-          }
-          // Remove surrounding quotes if present
-          const unquoted = inlineValue.replace(/^["'](.*)["']$/, "$1");
-          return { value: unquoted, usable: unquoted.length > 0 };
-        }
-
-        // No inline value — look for list items below
-        const items: string[] = [];
-        // Find the indentation of the first list item
-        let listIndent: string | null = null;
-        for (let i = pathsIdx + 1; i < lines.length; i++) {
-          const line = lines[i];
-          // Empty line: continue
-          if (line.trim() === "") continue;
-          // Check if it's a list item
-          const listMatch = line.match(/^(\s*)-\s*(.*)$/);
-          if (listMatch) {
-            if (listIndent === null) {
-              listIndent = listMatch[1];
-            } else if (listMatch[1] !== listIndent) {
-              // Different indentation — we've moved past this list
-              break;
-            }
-            // Extract item value, removing surrounding quotes
-            const itemValue = listMatch[2].trim().replace(/^["'](.*)["']$/, "$1");
-            if (itemValue.length > 0) {
-              items.push(itemValue);
-            }
-          } else {
-            // Not a list item — check if it's another key or continuation
-            const keyMatch = line.match(/^\s*\S+:/);
-            if (keyMatch) break; // Another key, stop
-            // Might be a continuation or nested object — not a simple list, unusable
-            return { value: undefined, usable: false };
-          }
-        }
-
-        if (items.length > 0) {
-          return { value: items, usable: true };
-        }
-        return { value: undefined, usable: false };
-      }
-    };
-
-    const pathsResult = readPathsFromRaw(parsed.raw);
-    const hasPaths = pathsResult.value !== undefined;
-    const pathsUsable = pathsResult.usable;
-    const pathsValue = pathsResult.value as string | string[] | undefined;
+    const pathsResult = rulePaths(parsed.raw);
+    const hasPaths = pathsResult.present;
+    const pathsValue = pathsResult.value;
+    const pathsUsable = pathsValue !== undefined;
 
     // Determine scope by precedence:
     // 1. hand-written steering with frontmatter inclusion → use steering
@@ -754,12 +719,12 @@ export async function readEmitted(
     // Helper to check if steering scope differs from paths scope.
     // The kiro emitter writes a list as a comma-joined string, so we compare the steering pattern
     // (which is always a string) against the paths value joined by comma.
-    const scopeDiffers = (steeringInclusion: string | undefined, steeringPattern: string | undefined): boolean => {
+    const scopeDiffers = (steeringInclusion: string | undefined, steeringPattern: string | string[] | undefined): boolean => {
       if (!pathsUsable || pathsValue === undefined) return false;
       if (steeringInclusion !== "fileMatch") return true;
-      // Compare steering pattern (a string) against paths joined by comma
-      const pathsJoined = Array.isArray(pathsValue) ? pathsValue.join(",") : pathsValue;
-      return steeringPattern !== pathsJoined;
+      // Compared as the kiro emitter writes a list: joined by ","
+      const joined = (p: string | string[] | undefined) => (Array.isArray(p) ? p.join(",") : p);
+      return joined(steeringPattern) !== joined(pathsValue);
     };
 
     if (steering && !steering.generated && steering.setsInclusion) {
@@ -945,12 +910,14 @@ function addRef(list: string[], ref: string | null): void {
   if (ref) list.push(ref);
 }
 
-/** A frontmatter fence at the very start of a text. */
-const FENCE_START = /^---\n[\s\S]*?\n---\n/;
-
 /** Where a rule's `frontmatterRaw` was read: its Claude file, whatever file its body came from. */
 function rawSource(meta: Ingredient): string | null {
-  return meta.type === "rule" ? `.claude/rules/${meta.name}.md` : null;
+  return meta.type === "rule" ? `.claude/rules/${outName(meta)}.md` : null;
+}
+
+/** A rule whose body was taken from its steering file (`--prefer-kiro`): the body's lines are that file's. */
+function bodyFromSteering(meta: Ingredient): boolean {
+  return meta.type === "rule" && (meta.origin?.path ?? "").startsWith(".kiro/steering/");
 }
 
 /** First secret-like value in an ingredient about to be imported, described by location only. */
@@ -961,7 +928,7 @@ export function secretIn(meta: Ingredient, files: Record<string, string | Buffer
   // is for a text that starts lower in its source file for another reason (spec 29 §4.3). A rule's raw block is
   // always its Claude file's, while its body may come from a steering file (`--prefer-kiro`).
   const rawWhere = rawSource(meta) ?? origin;
-  const bodyOffset = raw && rawWhere === origin ? raw.split("\n").length + 2 : lineOffset;
+  const bodyOffset = raw && !bodyFromSteering(meta) ? raw.split("\n").length + 2 : lineOffset;
   const texts: { where: string; text: string; offset: number }[] = [];
   if (raw) texts.push({ where: rawWhere, text: raw, offset: 1 });
   for (const [rel, content] of Object.entries(files)) {
@@ -1353,7 +1320,7 @@ async function existingProfile(
  */
 export function markerIn(meta: Ingredient, files: Record<string, string | Buffer>, source: string, lineOffset = 0): { where: string; line: number } | null {
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
-  const offset = raw && (rawSource(meta) ?? meta.origin?.path) === meta.origin?.path ? raw.split("\n").length + 2 : lineOffset;
+  const offset = raw && !bodyFromSteering(meta) ? raw.split("\n").length + 2 : lineOffset;
   for (const [rel, content] of Object.entries(files)) {
     // the importer builds meta and file keys itself, with canonical names
     if (!bodyFile(meta, rel, null)) continue;
