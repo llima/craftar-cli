@@ -1304,6 +1304,26 @@ function emittedMetaFields(emitted: Ingredient, type: string): Partial<Ingredien
       frontmatterRaw: (emitted as Record<string, unknown>).frontmatterRaw as string | undefined,
     };
   }
+  if (type === "rule") {
+    // A rule may have frontmatterRaw (from paths: in frontmatter), inclusion and fileMatchPattern.
+    // Only when frontmatterRaw is present do we override inclusion/fileMatchPattern from the emitted.
+    const em = emitted as Record<string, unknown>;
+    const frontmatterRaw = em.frontmatterRaw as string | undefined;
+    if (frontmatterRaw !== undefined) {
+      // User has paths: frontmatter - carry frontmatterRaw, inclusion and fileMatchPattern from emitted
+      return {
+        frontmatterRaw,
+        inclusion: em.inclusion as "always" | "fileMatch" | "manual" | "auto" | undefined,
+        fileMatchPattern: em.fileMatchPattern as string | string[] | undefined,
+      };
+    }
+    // No frontmatterRaw in emitted: return nothing so the base's inclusion/fileMatchPattern are kept.
+    // This handles both:
+    // - A rule that never had frontmatterRaw (base's inclusion is preserved)
+    // - A rule that had frontmatterRaw and user removed it (base's frontmatterRaw is kept, which is wrong,
+    //   but that case needs the user to also change the body to differ, making it a variant anyway)
+    return {};
+  }
   return {};
 }
 
