@@ -181,17 +181,18 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
 
   /* ---- Kiro steering gives us inclusion modes and hand-written steering ---- */
   const steeringDir = path.join(ws, ".kiro", "steering");
-  const steeringMeta = new Map<string, { inclusion: string; fileMatchPattern?: string; generated: boolean; text: string; scan?: string }>();
+  const steeringMeta = new Map<string, { inclusion: string; fileMatchPattern?: string; generated: boolean; hasFrontmatter: boolean; text: string; scan?: string }>();
   if (await exists(steeringDir)) {
     for (const f of (await fs.readdir(steeringDir)).sort()) {
       if (!f.endsWith(".md")) continue;
       const src = await readSource(path.join(steeringDir, f));
       const text = toLf(stripBom(src.text));
-      const { data, body } = parseFrontmatter<{ inclusion?: string; fileMatchPattern?: string }>(text);
+      const { data, body, raw } = parseFrontmatter<{ inclusion?: string; fileMatchPattern?: string }>(text);
       steeringMeta.set(f.replace(/\.md$/, ""), {
         inclusion: data.inclusion ?? "always",
         fileMatchPattern: data.fileMatchPattern,
         generated: GENERATED_BANNER.test(body.slice(0, 300)),
+        hasFrontmatter: raw !== null && data.inclusion !== undefined,
         text,
         scan: src.scan,
       });
@@ -203,14 +204,24 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     if (!f.endsWith(".md")) continue;
     const name = f.replace(/\.md$/, "");
     const sm = steeringMeta.get(name);
-    const emitted = await readEmitted(claudeDir, "rule", f, origin, sm ? { inclusion: sm.inclusion, fileMatchPattern: sm.fileMatchPattern } : undefined);
+    const emitted = await readEmitted(claudeDir, "rule", f, origin, sm ? { inclusion: sm.inclusion, fileMatchPattern: sm.fileMatchPattern, generated: sm.generated, hasFrontmatter: sm.hasFrontmatter } : undefined);
     if (!emitted) continue;
-    const ruleMeta = emitted.meta as Ingredient & { inclusion: string };
+    // Copy any warnings from readEmitted into the report
+    if (emitted.warnings) {
+      for (const w of emitted.warnings) report.warnings.push(w);
+    }
+    const ruleMeta = emitted.meta as Ingredient & { inclusion: string; fileMatchPattern?: string | string[] };
     read(emitted.meta, emitted.files, emitted.scan, (ref) => {
       // The output name: a variant's ref is <name>--<profile>, and the steering file it mirrors is <name> (spec 29 §19.6).
       ruleNames.push(name);
-      if (ruleMeta.inclusion === "fileMatch") scopedRules.set(ref, sm?.fileMatchPattern ?? "");
-      else refs.base.push(ref);
+      // Use the rule's own fileMatchPattern (from paths: or from steering), joined with comma for stack recipe
+      if (ruleMeta.inclusion === "fileMatch") {
+        const pattern = ruleMeta.fileMatchPattern;
+        const patternStr = Array.isArray(pattern) ? pattern.join(",") : pattern ?? "";
+        scopedRules.set(ref, patternStr);
+      } else {
+        refs.base.push(ref);
+      }
     });
   }
 
@@ -609,6 +620,8 @@ export interface EmittedSource {
   meta: Ingredient;
   files: Record<string, string | Buffer>;
   scan: Record<string, string>;
+  /** Warnings from reading the source (e.g., paths: disagrees with steering). */
+  warnings?: string[];
 }
 
 /**
@@ -621,23 +634,104 @@ export async function readEmitted(
   type: "rule" | "agent" | "command" | "skill" | "script" | "hook",
   rel: string,
   origin: (rel: string) => { workspace: string; path: string },
-  steering?: { inclusion: string; fileMatchPattern?: string },
+  steering?: { inclusion: string; fileMatchPattern?: string; generated?: boolean; hasFrontmatter?: boolean },
 ): Promise<EmittedSource | null> {
   if (type === "rule") {
     const name = rel.replace(/\.md$/, "");
     const src = await readSource(path.join(claudeDir, "rules", rel));
     const text = toLf(stripBom(src.text));
+    const parsed = parseFrontmatter<{ paths?: unknown }>(text);
+    const warnings: string[] = [];
+
+    // Check if paths is usable: non-empty string or non-empty array of non-empty strings
+    const isUsablePaths = (p: unknown): p is string | string[] => {
+      if (typeof p === "string") return p.length > 0;
+      if (Array.isArray(p)) return p.length > 0 && p.every((item) => typeof item === "string" && item.length > 0);
+      return false;
+    };
+
+    const hasPaths = parsed.raw !== null && "paths" in parsed.data;
+    const pathsUsable = hasPaths && isUsablePaths(parsed.data.paths);
+
+    // Determine scope by precedence:
+    // 1. hand-written steering with frontmatter inclusion → use steering
+    // 2. usable paths: → use paths
+    // 3. generated steering → use steering
+    // 4. else "always"
+    let inclusion: "always" | "fileMatch" | "manual" | "auto" = "always";
+    let fileMatchPattern: string | string[] | undefined;
+    let useFrontmatter = false;
+    let frontmatterRaw: string | undefined;
+
+    if (steering && !steering.generated && steering.hasFrontmatter) {
+      // Case 1: hand-written steering with frontmatter - use steering
+      inclusion = steering.inclusion as "always" | "fileMatch" | "manual" | "auto";
+      fileMatchPattern = steering.fileMatchPattern;
+
+      // Warn if paths: differs from steering
+      if (pathsUsable) {
+        const steeringPattern = steering.fileMatchPattern;
+        const pathsPattern = parsed.data.paths as string | string[];
+        // Compare as lists (order-sensitive)
+        const normSteering = [steeringPattern].flat().filter((x): x is string => x !== undefined);
+        const normPaths = [pathsPattern].flat();
+        const differs = steering.inclusion !== "fileMatch" || JSON.stringify(normSteering) !== JSON.stringify(normPaths);
+        if (differs) {
+          warnings.push(`rule ${name}: .kiro/steering/${name}.md and paths: in .claude/rules/${name}.md disagree; the steering file's scope is kept`);
+        }
+      }
+    } else if (pathsUsable) {
+      // Case 2: usable paths: in rule
+      inclusion = "fileMatch";
+      fileMatchPattern = parsed.data.paths as string | string[];
+      useFrontmatter = true;
+      frontmatterRaw = parsed.raw ?? undefined;
+
+      // Warn about steering
+      if (steering) {
+        if (!steering.hasFrontmatter) {
+          // steering without frontmatter
+          warnings.push(`rule ${name}: .kiro/steering/${name}.md has no frontmatter; scope taken from paths: in .claude/rules/${name}.md`);
+        } else if (steering.generated) {
+          // generated steering with different scope
+          const steeringPattern = steering.fileMatchPattern;
+          const pathsPattern = parsed.data.paths as string | string[];
+          const normSteering = [steeringPattern].flat().filter((x): x is string => x !== undefined);
+          const normPaths = [pathsPattern].flat();
+          const differs = steering.inclusion !== "fileMatch" || JSON.stringify(normSteering) !== JSON.stringify(normPaths);
+          if (differs) {
+            warnings.push(`rule ${name}: the generated .kiro/steering/${name}.md disagrees with paths: in .claude/rules/${name}.md; scope taken from paths:`);
+          }
+        }
+      }
+    } else if (steering && steering.generated) {
+      // Case 3: generated steering
+      inclusion = steering.inclusion as "always" | "fileMatch" | "manual" | "auto";
+      fileMatchPattern = steering.fileMatchPattern;
+    }
+    // else Case 4: "always" (default)
+
+    // Warn about unusable paths
+    if (hasPaths && !pathsUsable) {
+      warnings.push(`rule ${name}: paths: in .claude/rules/${name}.md is not a string or a list of strings; read as always`);
+    }
+
     const meta: Ingredient = {
       type: "rule",
       name,
-      inclusion: (steering?.inclusion as "always" | "fileMatch" | "manual" | "auto") ?? "always",
-      fileMatchPattern: steering?.fileMatchPattern,
+      inclusion,
+      fileMatchPattern,
       file: "rule.md",
+      ...(frontmatterRaw !== undefined ? { frontmatterRaw } : {}),
       targets: "*",
       tags: [],
       origin: origin(`.claude/rules/${rel}`),
     };
-    return { meta, files: { "rule.md": text }, scan: scanOf("rule.md", src) };
+
+    // If using frontmatter (paths: is usable), store the body only; otherwise store whole text
+    const ruleContent = useFrontmatter ? parsed.body : text;
+
+    return { meta, files: { "rule.md": ruleContent }, scan: scanOf("rule.md", src), ...(warnings.length ? { warnings } : {}) };
   }
 
   if (type === "agent") {
