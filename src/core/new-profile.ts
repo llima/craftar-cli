@@ -96,7 +96,7 @@ export function newProfile(forge: Forge, o: NewProfileOptions): NewProfileResult
   }
 
   // 2. targets = o.targets ?? template's ?? ["claude-code"]
-  const targets = targetOverride ?? template?.recipes !== undefined ? (targetOverride ?? template?.targets ?? ["claude-code"]) : ["claude-code"];
+  const targets = targetOverride ?? template?.targets ?? ["claude-code"];
 
   // 3. draft = ProfileSchema.parse({ name, recipes: template?.recipes ?? [], targets }); copy = withProfile(forge, draft)
   const draft = ProfileSchema.parse({
