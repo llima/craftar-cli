@@ -45,7 +45,7 @@ import {
   type PruneResult,
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
-import { checkInitFlags, initLine, planInit, forgeSource, type InitInput } from "./core/init.js";
+import { checkInitFlags, checkLocalKeys, initLine, planInit, forgeSource, type InitInput } from "./core/init.js";
 import { profileName } from "./core/new-profile.js";
 import { newProfileGate } from "./core/new-profile-gate.js";
 import { writeNewProfile, reproveFromDisk, NewProfileRaceLost, NewProfileLateFailure } from "./core/new-profile-write.js";
@@ -458,23 +458,12 @@ program
         answers = result.answers;
       } else if (o.newProfile !== undefined) {
         // --forge and --new-profile given (flags mode with new profile)
-        // N10: checkLocalKeys with --new-profile counting as --profile
-        const clash = local.keys.find((k) =>
-          k === "forge" || k === "profile" ||
-          (k === "ref" && o.ref !== undefined) ||
-          (k === "recipes" && (o.addRecipe.length > 0 || o.removeRecipe.length > 0)) ||
-          (k === "targets" && o.targets !== undefined)
-        );
-        if (clash) {
-          const flag: Record<string, string> = {
-            forge: "--forge",
-            ref: "--ref",
-            profile: "--profile",
-            recipes: "--add-recipe / --remove-recipe",
-            targets: "--targets",
-          };
-          fail(`${LOCAL_FILE} sets ${clash}, which would replace ${flag[clash]} — move it aside and re-run init`);
-        }
+        // N10 (spec 38 §4.2): the one check, before the load — --new-profile counts as --profile there
+        checkLocalKeys(local.keys, {
+          ref: o.ref !== undefined,
+          recipes: o.addRecipe.length > 0 || o.removeRecipe.length > 0,
+          targets: o.targets !== undefined,
+        });
         // Load the Forge
         const loaded = await loadForgeSource(root, forgeSource(root, o.forge!), o.ref ?? null, { ...load(o, "sync") });
         // Gate: P5-P8
