@@ -411,16 +411,15 @@ program
       const bad = st.filter((s) => !["unchanged", "adopt"].includes(s.state));
       printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true, forgeLine(ws, lock));
       const unset = unsetDeclared(p);
-      const budgetOver = agentsMdOverBudget(p);
+      const budgetExplicit = agentsMdOverBudget(p);
       if (bad.length) console.log(pc.red(`\n${bad.length} file(s) out of sync`));
       // A refused sync is not "in sync", whatever the files say: the listing, then the block, and the exit is
       // exitCode's, so nothing queued is cut (spec 29 §4.1)
-      if (refusalBlock(unset)) process.exitCode = 1;
-      if (budgetRefusalBlock(p)) process.exitCode = 1;
-      // Files out of sync without a refusal: exit 1
+      const hadUnsetRefusal = refusalBlock(unset);
+      const hadBudgetRefusal = budgetRefusalBlock(p);
+      if (hadUnsetRefusal || hadBudgetRefusal) process.exitCode = 1;
       else if (bad.length) process.exitCode = 1;
-      // No refusal and no bad files: in sync (but only if budget is not exceeded)
-      else if (!budgetOver) console.log(pc.green("\nworkspace in sync"));
+      else console.log(pc.green("\nworkspace in sync"));
       return;
     }
     // Asked here, not left to apply()'s gate: the plan's warnings come before the block (spec 29 §4.1)
