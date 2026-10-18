@@ -152,9 +152,9 @@ export function credentialFault(raw: string): boolean {
   if (!scheme) {
     // No `://`: any run of `/` and `\` after the scheme that is not `//` has its authority read by
     // the same rules (spec 39 §4.2 A). The authority ends at the first `/` or `\`; a drive path
-    // (`C:\dir`) has no `@` there.
+    // (`C:\dir`) has no `@` there. SCHEME_URL already takes a run starting with `//`.
     const loose = BACKSLASH_URL.exec(value);
-    if (!loose || loose[2] === "//" || /^file$/i.test(loose[1])) return false;
+    if (!loose || /^file$/i.test(loose[1])) return false;
     const tail = value.slice(loose[0].length);
     const looseAuthority = tail.slice(0, tail.search(/[/\\]|$/));
     const looseAt = looseAuthority.lastIndexOf("@");

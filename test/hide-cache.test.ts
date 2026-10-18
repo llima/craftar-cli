@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { hideCacheSegment, hideUnvouched, vouchedKeys } from "../src/core/registry.js";
-import { UNVOUCHED_HIDDEN } from "../src/core/remote.js";
+import { hideCacheKeys, hideCacheSegment, hideKeys, hideUnvouched, vouchedKeys } from "../src/core/registry.js";
+import { CREDENTIAL_HIDDEN, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
 import { RegistryEntrySchema } from "../src/schema/index.js";
 
 const KEY = "fake" + "user-" + "nota" + "secret-example.invalid-f-0123456789ab";
@@ -73,5 +73,27 @@ describe("hideUnvouched and vouchedKeys (spec 39 §3, §5.1)", () => {
       entry({ path: "/ws/b", forge: { kind: "remote", source: "https://" + "u" + ":" + "p" + "@example.invalid/b.git", key: "flagged-key", ref: null } }),
     ] };
     expect([...vouchedKeys(named, reg)]).toEqual(["clean-key"]);
+  });
+});
+
+describe("one pass over every key (spec 39, review round 2)", () => {
+  const SHORT = "github.com-u";
+  const LONG = "github.com-u-tok-" + "abcdef012345";
+  it("a key that is a prefix of another never leaves the rest of the longer one printed", () => {
+    const text = `forges/${SHORT} and forges/${LONG}/trees`;
+    const out = hideUnvouched(text, [SHORT, LONG]);
+    expect(out).toBe(`forges/${UNVOUCHED_HIDDEN} and forges/${UNVOUCHED_HIDDEN}/trees`);
+    expect(out.includes("tok-")).toBe(false);
+    expect(hideKeys(text, [SHORT, LONG])).toBe(`forges/${CREDENTIAL_HIDDEN} and forges/${CREDENTIAL_HIDDEN}/trees`);
+  });
+  it("a key that is a substring of a label never rewrites the inserted label", () => {
+    expect(hideUnvouched("forges/k1 forges/n", ["k1", "n"])).toBe(`forges/${UNVOUCHED_HIDDEN} forges/${UNVOUCHED_HIDDEN}`);
+  });
+  it("hideCacheKeys: a credential key that is a prefix of an unvouched one — each gets its own label, nothing of either leaks", () => {
+    const out = hideCacheKeys(`forges/${SHORT} forges/${LONG}`, [SHORT], [LONG]);
+    expect(out).toBe(`forges/${CREDENTIAL_HIDDEN} forges/${UNVOUCHED_HIDDEN}`);
+  });
+  it("empty keys are ignored by every form", () => {
+    expect(hideCacheKeys("forges/abc", [""], [""])).toBe("forges/abc");
   });
 });

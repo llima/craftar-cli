@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { LockBusyError, type LockTiming } from "./home-lock.js";
-import { credentialKeys, hideCacheSegment, hideKeys, hideUnvouched, namedCacheKeys, readRegistry, vouchedKeys } from "./registry.js";
+import { credentialKeys, hideCacheKeys, hideCacheSegment, hideKeys, namedCacheKeys, readRegistry, vouchedKeys } from "./registry.js";
 import type { Registry } from "../schema/index.js";
 import {
   cacheDir,
@@ -95,7 +95,7 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
   // key holds them in clear. Filled once the registry is read; nothing this run says names one.
   const hide: string[] = [];
   // The unvouched keys: filled after the snapshot is built. A failure before the snapshot
-  // uses `hideCacheSegment`; a failure after it uses `hideUnvouched(text, unvouched)` (spec 39 §5.1).
+  // uses `hideCacheSegment`; a failure after it uses `hideCacheKeys(text, hide, unvouched)` (spec 39 §5.1).
   let snapshotBuilt = false;
   const unvouched: string[] = [];
 
@@ -335,9 +335,9 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
     const freedBytes = removed.reduce((sum, r) => sum + r.bytes, 0);
 
     // The report names such an entry by the fixed label, in every path and warning.
-    // Apply hideKeys (for credential keys) then hideUnvouched (for unvouched keys) — spec 39 §5.1.
+    // hideCacheKeys replaces both credential and unvouched keys in ONE pass (spec 39 review round 2).
     // An entry unvouched at the snapshot stays labelled for the whole run (fail closed).
-    const hidePath = (text: string): string => hideUnvouched(hideKeys(text, hide), unvouched);
+    const hidePath = (text: string): string => hideCacheKeys(text, hide, unvouched);
     const shownRemoved = removed.map((r) => ({ ...r, path: hidePath(r.path) }));
     const shownKept = kept.map((r) => ({ ...r, path: hidePath(r.path) }));
 
@@ -354,15 +354,14 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
       return await doPrune(lock);
     } catch (e) {
       if (!(e instanceof Error)) throw e;
-      // Before the snapshot: use hideCacheSegment (spec 39 §5.1: "until then guarded's rethrow applies this segment rule").
-      // After the snapshot: use hideKeys then hideUnvouched.
+      // Before the snapshot: use hideCacheSegment then hideKeys (spec 39 §5.1).
+      // After the snapshot: use hideCacheKeys in one pass (spec 39 review round 2).
       let msg = e.message;
       if (!snapshotBuilt) {
         msg = hideCacheSegment(msg, home);
         msg = hideKeys(msg, hide);
       } else {
-        msg = hideKeys(msg, hide);
-        msg = hideUnvouched(msg, unvouched);
+        msg = hideCacheKeys(msg, hide, unvouched);
       }
       if (msg === e.message) throw e;
       // A new error on purpose — no `cause`, no copied `code`: the original carries the name.

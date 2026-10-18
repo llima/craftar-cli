@@ -165,9 +165,7 @@ export function credentialKeys(reg: Registry): string[] {
 
 /** `text` with every one of `keys` replaced by the fixed label: what `cache prune` and `doctor` print of a cache entry. */
 export function hideKeys(text: string, keys: readonly string[]): string {
-  let out = text;
-  for (const k of keys) out = out.split(k).join(CREDENTIAL_HIDDEN);
-  return out;
+  return hideCacheKeys(text, keys, []);
 }
 
 /**
@@ -184,12 +182,33 @@ export function vouchedKeys(named: ReadonlyMap<string, readonly string[]>, reg: 
 
 /** `text` with every one of `keys` replaced by `UNVOUCHED_HIDDEN`: what `cache prune` and `doctor` print for an unvouched key. */
 export function hideUnvouched(text: string, keys: readonly string[]): string {
-  let out = text;
-  for (const k of keys) {
-    if (k === "") continue;
-    out = out.split(k).join(UNVOUCHED_HIDDEN);
-  }
-  return out;
+  return hideCacheKeys(text, [], keys);
+}
+
+/**
+ * Replace every occurrence of every key in `credential` with `CREDENTIAL_HIDDEN` and every key in
+ * `unvouched` with `UNVOUCHED_HIDDEN` — in ONE pass, so a prefix key never leaves the rest of a
+ * longer one printed, and a key inside an inserted label never rewrites it (spec 39 review round 2).
+ * A key in both lists gets `CREDENTIAL_HIDDEN`. Empty keys are ignored.
+ */
+export function hideCacheKeys(text: string, credential: readonly string[], unvouched: readonly string[]): string {
+  // Collect all non-empty keys with their label, deduped by key (credential wins)
+  const credSet = new Set(credential.filter((k) => k !== ""));
+  const unvSet = new Set(unvouched.filter((k) => k !== ""));
+  const all: string[] = [];
+  for (const k of credSet) all.push(k);
+  for (const k of unvSet) if (!credSet.has(k)) all.push(k);
+  if (all.length === 0) return text;
+
+  // Sort LONGEST first: a longer key matches before a shorter prefix can
+  all.sort((a, b) => b.length - a.length);
+
+  // Escape regex-special characters
+  const escaped = all.map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const pattern = new RegExp(escaped.join("|"), "g");
+
+  // Replace using a function: credential keys → CREDENTIAL_HIDDEN, others → UNVOUCHED_HIDDEN
+  return text.replace(pattern, (match) => (credSet.has(match) ? CREDENTIAL_HIDDEN : UNVOUCHED_HIDDEN));
 }
 
 /**
