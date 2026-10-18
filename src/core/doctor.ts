@@ -9,7 +9,7 @@ import { FULL_SHA, cacheKey, classifyForge, inspectCache, type CacheSnapshot } f
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
-import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig, type Plan, type Workspace, agentsMdOverBudget } from "./sync.js";
+import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, AGENTS_MD_BUDGET_FIX } from "./sync.js";
 import { outName } from "../emitters/shared.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram } from "./proc.js";
@@ -275,16 +275,23 @@ async function workspaceChecks(
       // agents-md-size: only when the plan writes AGENTS.md (the target is in use)
       if (p.agentsMd !== null) {
         const { bytes, maxBytes, explicit } = p.agentsMd;
-        // maxBytes 0 means budget is off; otherwise check if over
-        const overBudget = maxBytes !== 0 && bytes > maxBytes;
-        if (!overBudget) {
-          // Within budget or budget is off
-          w("agents-md-size", "ok", `${bytes} bytes`);
+        // maxBytes 0 means budget is off
+        if (maxBytes === 0) {
+          w("agents-md-size", "ok", `AGENTS.md is ${bytes} bytes; the budget is off (${AGENTS_MD_BUDGET_KEY}: 0)`);
+        } else if (bytes <= maxBytes) {
+          // Within budget
+          w("agents-md-size", "ok", `AGENTS.md is ${bytes} bytes, within the budget of ${maxBytes}`);
+        } else if (explicit) {
+          // Over explicit budget: error — use shared message and fix
+          w("agents-md-size", "error", agentsMdOverBudgetMessage({ bytes, maxBytes }), AGENTS_MD_BUDGET_FIX);
         } else {
-          // Over budget: error if explicit, warn otherwise
-          const level = explicit ? "error" : "warn";
-          const fix = "move rules out of the always-on set (inclusion: fileMatch), or raise agents-md.maxBytes";
-          w("agents-md-size", level, `${bytes} bytes, over the budget of ${maxBytes}${explicit ? " (agents-md.maxBytes)" : ""}`, fix);
+          // Over default budget: warn
+          w(
+            "agents-md-size",
+            "warn",
+            `AGENTS.md is ${bytes} bytes, over the default budget of ${maxBytes}`,
+            `set ${AGENTS_MD_BUDGET_KEY} to fail sync --check above it, or move rules out of the always-on set (inclusion: fileMatch)`,
+          );
         }
       }
 

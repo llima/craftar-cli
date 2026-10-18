@@ -381,11 +381,19 @@ export function agentsMdOverBudget(p: Plan): { bytes: number; maxBytes: number }
   return { bytes, maxBytes };
 }
 
+/** The message for an explicit AGENTS.md budget violation. */
+export function agentsMdOverBudgetMessage(o: { bytes: number; maxBytes: number }): string {
+  return `AGENTS.md is ${o.bytes} bytes, over the budget of ${o.maxBytes} set by ${AGENTS_MD_BUDGET_KEY}`;
+}
+
+/** The fix for an explicit AGENTS.md budget violation. */
+export const AGENTS_MD_BUDGET_FIX = `move rules out of the always-on set (inclusion: fileMatch), or raise ${AGENTS_MD_BUDGET_KEY}`;
+
 /**
  * The refusal block for an explicit AGENTS.md budget violation, without the `error: ` prefix.
  */
 export function agentsMdRefusal(o: { bytes: number; maxBytes: number }): string {
-  return `AGENTS.md is ${o.bytes} bytes, over the budget of ${o.maxBytes} set by ${AGENTS_MD_BUDGET_KEY}\n  fix: move rules out of the always-on set (inclusion: fileMatch), or raise ${AGENTS_MD_BUDGET_KEY}`;
+  return `${agentsMdOverBudgetMessage(o)}\n  fix: ${AGENTS_MD_BUDGET_FIX}`;
 }
 
 /** A path as the Forge names it: relative to its root, POSIX separators. */

@@ -124,7 +124,7 @@ describe("AGENTS.md budget CLI — writing sync with explicit budget (case 11)",
 });
 
 describe("AGENTS.md budget CLI — doctor (case 12)", () => {
-  it("default budget exceeded → agents-md-size level warn", async () => {
+  it("default budget exceeded → agents-md-size level warn with exact message and fix", async () => {
     const s = await syncedWorkspace();
     const r = runCli(["doctor", "--json", "--workspace", s.ws]);
     expect(r.code).toBe(0);
@@ -132,9 +132,11 @@ describe("AGENTS.md budget CLI — doctor (case 12)", () => {
     const check = json.checks.find((c: { id: string }) => c.id === "agents-md-size");
     expect(check).toBeDefined();
     expect(check.level).toBe("warn");
+    expect(check.message).toMatch(/^AGENTS\.md is \d+ bytes, over the default budget of 32768$/);
+    expect(check.fix).toBe("set agents-md.maxBytes to fail sync --check above it, or move rules out of the always-on set (inclusion: fileMatch)");
   });
 
-  it("explicit budget exceeded → agents-md-size level error", async () => {
+  it("explicit budget exceeded → agents-md-size level error with exact message and fix", async () => {
     const s = await syncedWorkspace();
     await setOverrides(s.ws, { "agents-md.maxBytes": 1000 });
     const r = runCli(["doctor", "--json", "--workspace", s.ws]);
@@ -143,9 +145,11 @@ describe("AGENTS.md budget CLI — doctor (case 12)", () => {
     const check = json.checks.find((c: { id: string }) => c.id === "agents-md-size");
     expect(check).toBeDefined();
     expect(check.level).toBe("error");
+    expect(check.message).toMatch(/^AGENTS\.md is \d+ bytes, over the budget of 1000 set by agents-md\.maxBytes$/);
+    expect(check.fix).toBe("move rules out of the always-on set (inclusion: fileMatch), or raise agents-md.maxBytes");
   });
 
-  it("budget 0 → agents-md-size level ok", async () => {
+  it("budget 0 → agents-md-size level ok with exact message", async () => {
     const s = await syncedWorkspace();
     await setOverrides(s.ws, { "agents-md.maxBytes": 0 });
     const r = runCli(["doctor", "--json", "--workspace", s.ws]);
@@ -154,6 +158,19 @@ describe("AGENTS.md budget CLI — doctor (case 12)", () => {
     const check = json.checks.find((c: { id: string }) => c.id === "agents-md-size");
     expect(check).toBeDefined();
     expect(check.level).toBe("ok");
+    expect(check.message).toMatch(/^AGENTS\.md is \d+ bytes; the budget is off \(agents-md\.maxBytes: 0\)$/);
+  });
+
+  it("within budget → agents-md-size level ok with exact message", async () => {
+    const s = await syncedWorkspace();
+    await setOverrides(s.ws, { "agents-md.maxBytes": 100000 }); // Big enough to be within budget
+    const r = runCli(["doctor", "--json", "--workspace", s.ws]);
+    expect(r.code).toBe(0);
+    const json = JSON.parse(r.stdout);
+    const check = json.checks.find((c: { id: string }) => c.id === "agents-md-size");
+    expect(check).toBeDefined();
+    expect(check.level).toBe("ok");
+    expect(check.message).toMatch(/^AGENTS\.md is \d+ bytes, within the budget of 100000$/);
   });
 
   it("workspace without agents-md target → no agents-md-size check", async () => {
