@@ -349,6 +349,9 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       const sm = steeringMeta.get(name);
       if (!sm) throw new Error(`import: --prefer-kiro ${name}: there is no .kiro/steering/${name}.md to prefer`);
       const ruleText = q.files["rule.md"] as string;
+      // The Claude file as written: a split rule's fence counts toward its lines
+      const ruleRaw = "frontmatterRaw" in q.meta ? q.meta.frontmatterRaw : undefined;
+      const ruleFileText = ruleRaw !== undefined ? `---\n${ruleRaw}\n---\n${ruleText}` : ruleText;
       const { text, offset } = preferKiro({ name, steering: sm.text, rules: new Set(rules.keys()), handSteering, banner });
       const source = `.kiro/steering/${name}.md`;
       q.files = { "rule.md": text };
@@ -364,7 +367,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       const after = q.after;
       q.after = (ref) => {
         after(ref);
-        preferred.push({ ref, source, steeringLines: textLines(sm.text), rule: `.claude/rules/${name}.md`, ruleLines: textLines(ruleText), differs: text !== ruleText });
+        preferred.push({ ref, source, steeringLines: textLines(sm.text), rule: `.claude/rules/${name}.md`, ruleLines: textLines(ruleFileText), differs: text !== ruleText });
       };
     }
   }

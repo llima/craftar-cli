@@ -29,7 +29,7 @@ describe("import --from claude-code — paths: frontmatter", () => {
   it("1. paths: as a list, no .kiro/ → fileMatch with list pattern, frontmatterRaw, body without fence", async () => {
     const t = await setup();
     await writeFiles(t.ws("api"), { ".claude/rules/backend.md": ruleList });
-    const report = await importInto(t.forge, t.ws("api"), "api");
+    await importInto(t.forge, t.ws("api"), "api");
 
     const ingredientYaml = await yaml(path.join(t.forge, "ingredients/rules/backend/ingredient.yaml"));
     expect(ingredientYaml.inclusion).toBe("fileMatch");
@@ -185,7 +185,7 @@ describe("import --from claude-code — paths: frontmatter", () => {
       ".claude/rules/workflow.md": "# Workflow\n",
     });
 
-    const report = await importInto(t.forge, t.ws("api"), "api", );
+    const report = await importInto(t.forge, t.ws("api"), "api");
     expect(report.created).toContain("rule/backend");
 
     // Set profile targets to all three
