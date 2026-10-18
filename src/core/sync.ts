@@ -387,6 +387,11 @@ export function agentsMdOverBudgetMessage(o: { bytes: number; maxBytes: number }
   return `AGENTS.md is ${o.bytes} bytes, over the budget of ${o.maxBytes} set by ${AGENTS_MD_BUDGET_KEY}`;
 }
 
+/** The message for an AGENTS.md over the default budget (no budget set). */
+export function agentsMdOverDefaultMessage(o: { bytes: number; maxBytes: number }): string {
+  return `AGENTS.md is ${o.bytes} bytes, over the default budget of ${o.maxBytes}`;
+}
+
 /** What shrinks AGENTS.md: the two kinds of rule body it holds. */
 export const AGENTS_MD_SHRINK = "move always-on rules to inclusion: fileMatch, write scoped rules to their own files (target claude-code or kiro)";
 /** The fix for an explicit AGENTS.md budget violation. */
@@ -674,22 +679,18 @@ function computeAgentsMdBudget(
   // Sort rules by bytes desc, then name asc
   const sortedRules = [...agentsMdRules].sort((a, b) => {
     if (b.bytes !== a.bytes) return b.bytes - a.bytes;
-    return a.name.localeCompare(b.name);
+    return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
   });
 
   // Add budget warning if over budget and maxBytes > 0
   let warning: string | null = null;
   if (maxBytes > 0 && bytes > maxBytes) {
     const top5 = sortedRules.slice(0, 5);
-    const rulesText = top5.length > 0
-      ? `largest rules: ${top5.map((r) => `${r.name} (${r.scoped ? "scoped, " : ""}${r.bytes} bytes)`).join(", ")}`
-      : "no rule";
-    // Two forms: default budget vs explicit budget
-    if (explicit) {
-      warning = `AGENTS.md is ${bytes} bytes, over the budget of ${maxBytes} set by ${AGENTS_MD_BUDGET_KEY}; sync --check fails — ${rulesText}`;
-    } else {
-      warning = `AGENTS.md is ${bytes} bytes, over the default budget of ${maxBytes} (${AGENTS_MD_BUDGET_KEY}) — ${rulesText}`;
-    }
+    const rulesText = top5.length > 0 ? ` — largest rules: ${top5.map((r) => `${r.name} (${r.scoped ? "scoped, " : ""}${r.bytes} bytes)`).join(", ")}` : "";
+    // Two forms, each led by the wording the error block and doctor use
+    warning = explicit
+      ? `${agentsMdOverBudgetMessage({ bytes, maxBytes })}; sync --check fails${rulesText}`
+      : `${agentsMdOverDefaultMessage({ bytes, maxBytes })} (${AGENTS_MD_BUDGET_KEY})${rulesText}`;
     warnings.push(warning);
   }
 

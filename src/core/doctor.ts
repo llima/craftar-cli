@@ -9,7 +9,7 @@ import { FULL_SHA, cacheKey, classifyForge, inspectCache, type CacheSnapshot } f
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
-import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK } from "./sync.js";
+import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK } from "./sync.js";
 import { outName } from "../emitters/shared.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram } from "./proc.js";
@@ -291,7 +291,7 @@ async function workspaceChecks(
           w(
             "agents-md-size",
             "warn",
-            `AGENTS.md is ${bytes} bytes, over the default budget of ${maxBytes}`,
+            agentsMdOverDefaultMessage({ bytes, maxBytes }),
             `set ${AGENTS_MD_BUDGET_KEY} to fail sync --check above it; to shrink the file: ${AGENTS_MD_SHRINK}`,
           );
         }

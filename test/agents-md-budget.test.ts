@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkspace, plan, type Plan } from "../src/core/sync.js";
 import { reservedKey } from "../src/core/extract.js";
-import { agentsMdOverBudget } from "../src/core/sync.js";
+import { agentsMdOverBudget, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage } from "../src/core/sync.js";
 import { profile, recipe, rule, scenario, type ForgeSpec } from "./helpers/forge.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -181,4 +181,27 @@ describe("agents-md.maxBytes budget (core)", () => {
   it("10. agents-md.maxBytes is an emitter's param: unify never extracts it", () => {
     expect(reservedKey("agents-md.maxBytes", 1)).toBe(true);
   });
+
+  it("11. the budget set in craftar.local.yaml's overrides.params → explicit true", async () => {
+    const forge: ForgeSpec = {
+      ingredients: [rule("big", "# Big\n" + "x".repeat(5000) + "\n")],
+      recipes: [recipe("base", ["rule/big"])],
+      profiles: [profile("acme", ["base"], ["agents-md"])],
+    };
+    const s = await scenario(forge, { config: { profile: "acme" }, files: { "craftar.local.yaml": 'overrides:\n  params:\n    agents-md.maxBytes: 1000\n' } });
+    cleanups.push(s.cleanup);
+    const p = await plan(await loadWorkspace(s.wsRoot));
+    expect(p.agentsMd!.explicit).toBe(true);
+    expect(p.agentsMd!.maxBytes).toBe(1000);
+  });
+
+  it("12. the warning's first part is the error's and doctor's own wording", async () => {
+    const big = [rule("big", "# Big\n" + "x".repeat(40000) + "\n")];
+    const dflt = await planFor(big);
+    const set = await planFor(big, { params: { "agents-md.maxBytes": 1000 } });
+    const o = (p: Plan) => ({ bytes: p.agentsMd!.bytes, maxBytes: p.agentsMd!.maxBytes });
+    expect(dflt.agentsMd!.warning!.startsWith(agentsMdOverDefaultMessage(o(dflt)) + " (agents-md.maxBytes) — largest rules: ")).toBe(true);
+    expect(set.agentsMd!.warning!.startsWith(agentsMdOverBudgetMessage(o(set)) + "; sync --check fails — largest rules: ")).toBe(true);
+  });
 });
+

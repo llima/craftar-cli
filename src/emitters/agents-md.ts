@@ -58,7 +58,7 @@ export const agentsMd: Emitter<"agents-md"> = {
         alwaysReports.push(report);
         const body = resolved.replace(/\n+$/, "");
         // Report the byte size of this always-on rule's body as it appears in AGENTS.md
-        ctx.reportAgentsMdRule?.(outName(ing.meta), Buffer.byteLength(body, "utf8"), false);
+        ctx.reportAgentsMdRule(outName(ing.meta), Buffer.byteLength(body, "utf8"), false);
         parts.push(`<!-- rule: ${outName(ing.meta)} -->`, body, "");
       } else {
         // Spec 14 §4.1: decide which target writes this rule file
@@ -78,7 +78,7 @@ export const agentsMd: Emitter<"agents-md"> = {
           embeddedReports.push(report);
           const body = resolved.replace(/\n+$/, "");
           // Report the byte size of this embedded scoped rule
-          ctx.reportAgentsMdRule?.(outName(ing.meta), Buffer.byteLength(body, "utf8"), true);
+          ctx.reportAgentsMdRule(outName(ing.meta), Buffer.byteLength(body, "utf8"), true);
           embedded.push(`<!-- rule: ${outName(ing.meta)} -->`, `> Scoped rule — ${scopeText}`, "", body, "");
         }
       }

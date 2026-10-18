@@ -33,7 +33,7 @@ export interface EmitBase {
   /** A warning said once per plan, whichever targets raise it (spec 34 §5.2). */
   warnOnce(msg: string): void;
   /** Reports a rule's byte size for the AGENTS.md budget (called by the agents-md emitter). */
-  reportAgentsMdRule?: (name: string, bytes: number, scoped: boolean) => void;
+  reportAgentsMdRule(name: string, bytes: number, scoped: boolean): void;
 }
 
 /** An emitter's context: the base, plus the ingredients the matrix says target T writes (spec 18 §3.1). */
