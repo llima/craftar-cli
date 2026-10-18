@@ -432,7 +432,7 @@ program
 /* ---------------------------------------------------------------- diff */
 program
   .command("diff")
-  .description("Unified diff between the files on disk and what the Forge would generate, orphans included (files the Forge no longer produces); also says when a declared parameter a file cites has no value, which sync refuses")
+  .description("Unified diff between the files on disk and what the Forge would generate, orphans included (files the Forge no longer produces); also says when a declared parameter a file cites has no value, which sync refuses, and when AGENTS.md is over an explicit budget")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--exit-code", "exit 1 when there are differences (exactly when `sync --check` would fail), including when AGENTS.md is over an explicit budget; a [path] that names no file craftar manages becomes an error; with a remote Forge, a failed fetch exits 1 as `sync --check` does (--offline to use the cached copy)", false)
   .argument("[path]", "limit to one file")
