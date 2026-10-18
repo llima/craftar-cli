@@ -9,7 +9,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { assertNoLinkOnPath, gitHasCommit, gitIgnored, gitIsRepo, type Forge } from "./forge.js";
-import { samePath } from "./registry.js";
 
 /**
  * The gate of the one path `init --new-profile` creates.
@@ -27,8 +26,9 @@ export async function newProfileGate(forge: Forge, home: string, name?: string):
   let forgesReal: string | null = null;
   try {
     forgesReal = await fs.realpath(forgesDir);
-  } catch {
-    // ENOENT or other error — forges/ does not exist, check passes
+  } catch (e) {
+    // Only a forges/ that does not exist passes (spec 38 §4.2 P5); any other error fails closed.
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
   if (forgesReal !== null) {
     const rootReal = await fs.realpath(root);
@@ -90,7 +90,7 @@ export async function newProfileGate(forge: Forge, home: string, name?: string):
 }
 
 /**
- * Whether `child` is under `parent` (or equal), segment-wise, using samePath for comparison.
+ * Whether `child` is under `parent` (or equal), segment-wise — `path.relative` compares without case on win32, as `samePath` does.
  */
 function isUnderOrEqual(child: string, parent: string): boolean {
   // Get the relative path from parent to child
