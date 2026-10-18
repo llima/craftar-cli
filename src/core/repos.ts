@@ -63,6 +63,15 @@ function isValidNameSegment(s: string): boolean {
   return true;
 }
 
+/**
+ * Whether `s` is shaped like a repository name: letters, digits, `.`, `_` and `-`, starting with a
+ * letter or a digit, not ending with `.`, and not a Windows device name. Used by `planClone` to decide
+ * which R1 message to show for a name that is not an entry.
+ */
+export function isRepoName(s: string): boolean {
+  return isValidNameSegment(s);
+}
+
 function isValidPathSegment(s: string): boolean {
   // Same rules as name, plus no ., .., \, :, ~, leading -
   if (!s) return false;
