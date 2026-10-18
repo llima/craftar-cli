@@ -38,7 +38,7 @@ describe("agents-md.maxBytes budget (core)", () => {
     expect(p.agentsMd!.bytes).toBe(agentsMdContent(p)!.length);
     const budgetWarning = p.warnings.find((w) => w.startsWith("AGENTS.md is"));
     expect(budgetWarning).toMatch(
-      /^AGENTS\.md is \d+ bytes, over the default budget of 32768 \(agents-md\.maxBytes\) — largest always-on rules: big \(\d+ bytes\), mid \(\d+ bytes\)$/,
+      /^AGENTS\.md is \d+ bytes, over the default budget of 32768 \(agents-md\.maxBytes\) — largest rules: big \(\d+ bytes\), mid \(\d+ bytes\)$/,
     );
     // Not explicit → agentsMdOverBudget returns null
     expect(agentsMdOverBudget(p)).toBeNull();
@@ -116,8 +116,8 @@ describe("agents-md.maxBytes budget (core)", () => {
     );
   });
 
-  // Case 7: seven always-on rules r1…r7, one scoped rule, budget 100 → warning names exactly r1-r5, scoped not listed
-  it("7. seven always-on rules, one scoped, budget 100 → warning names exactly r1-r5, rules array has 7 entries", async () => {
+  // Case 7: seven always-on rules r1…r7, one embedded scoped rule, budget 100 → warning names scoped + r1-r4 (top 5 by bytes)
+  it("7. seven always-on rules, one embedded scoped, budget 100 → warning names scoped, r1-r4, rules array has 8 entries", async () => {
     const p = await planFor(
       [
         rule("r1", "# R1\n" + "z".repeat(10000) + "\n"),
@@ -127,27 +127,30 @@ describe("agents-md.maxBytes budget (core)", () => {
         rule("r5", "# R5\n" + "z".repeat(6000) + "\n"),
         rule("r6", "# R6\n" + "z".repeat(5000) + "\n"),
         rule("r7", "# R7\n" + "z".repeat(4000) + "\n"),
+        // This scoped rule has targets: "*", but since we only have agents-md target, it becomes embedded (State C)
         rule("scoped", "# Scoped\n" + "z".repeat(50000) + "\n", { inclusion: "fileMatch", fileMatchPattern: "src/**" }),
       ],
       { params: { "agents-md.maxBytes": 100 } },
     );
     expect(p.agentsMd).not.toBeNull();
-    expect(p.agentsMd!.rules).toHaveLength(7); // only always-on rules
-    // Rules sorted by bytes desc, then name asc
+    expect(p.agentsMd!.rules).toHaveLength(8); // 7 always-on + 1 embedded scoped
+    // Rules sorted by bytes desc, then name asc; scoped is largest
     const names = p.agentsMd!.rules.map((r) => r.name);
-    expect(names.slice(0, 5)).toEqual(["r1", "r2", "r3", "r4", "r5"]);
-    // scoped is not in the rules list
-    expect(names).not.toContain("scoped");
-    // Warning names exactly r1-r5
+    expect(names[0]).toBe("scoped");
+    expect(names.slice(1, 6)).toEqual(["r1", "r2", "r3", "r4", "r5"]);
+    // Check scoped flag
+    expect(p.agentsMd!.rules[0].scoped).toBe(true);
+    expect(p.agentsMd!.rules[1].scoped).toBe(false);
+    // Warning names top 5: scoped, r1, r2, r3, r4
     const budgetWarning = p.warnings.find((w) => w.startsWith("AGENTS.md is"));
+    expect(budgetWarning).toMatch(/largest rules: scoped \(scoped, \d+ bytes\), r1 \(\d+ bytes\)/);
     expect(budgetWarning).toContain("r1 (");
     expect(budgetWarning).toContain("r2 (");
     expect(budgetWarning).toContain("r3 (");
     expect(budgetWarning).toContain("r4 (");
-    expect(budgetWarning).toContain("r5 (");
+    expect(budgetWarning).not.toContain("r5 ("); // 6th largest
     expect(budgetWarning).not.toContain("r6 (");
     expect(budgetWarning).not.toContain("r7 (");
-    expect(budgetWarning).not.toContain("scoped");
   });
 
   // Case 8: profile without agents-md target → agentsMd is null, no budget warning

@@ -314,8 +314,8 @@ export interface Plan {
     bytes: number;
     maxBytes: number;
     explicit: boolean;
-    /** Always-on rules sorted by bytes desc, then name asc. */
-    rules: Array<{ name: string; bytes: number }>;
+    /** Rules sorted by bytes desc, then name asc. */
+    rules: Array<{ name: string; bytes: number; scoped: boolean }>;
     /** The exact warning line pushed into Plan.warnings, or null if within budget. */
     warning: string | null;
   } | null;
@@ -388,8 +388,10 @@ export function agentsMdOverBudgetMessage(o: { bytes: number; maxBytes: number }
   return `AGENTS.md is ${o.bytes} bytes, over the budget of ${o.maxBytes} set by ${AGENTS_MD_BUDGET_KEY}`;
 }
 
+/** What shrinks AGENTS.md: the two kinds of rule body it holds. */
+export const AGENTS_MD_SHRINK = "move always-on rules to inclusion: fileMatch, write scoped rules to their own files (target claude-code or kiro)";
 /** The fix for an explicit AGENTS.md budget violation. */
-export const AGENTS_MD_BUDGET_FIX = `move rules out of the always-on set (inclusion: fileMatch), or raise ${AGENTS_MD_BUDGET_KEY}`;
+export const AGENTS_MD_BUDGET_FIX = `${AGENTS_MD_SHRINK}, or raise ${AGENTS_MD_BUDGET_KEY}`;
 
 /**
  * The refusal block for an explicit AGENTS.md budget violation, without the `error: ` prefix.
@@ -536,7 +538,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
   /** Warnings said once per plan, for warnOnce (spec 34 §5.2). */
   const warnedOnce = new Set<string>();
   /** Per-rule byte sizes for AGENTS.md budget, collected by the agents-md emitter. */
-  const agentsMdRules: Array<{ name: string; bytes: number }> = [];
+  const agentsMdRules: Array<{ name: string; bytes: number; scoped: boolean }> = [];
   const ctx: EmitBase = {
     forge: ws.forge,
     resolution,
@@ -587,8 +589,8 @@ export async function plan(ws: Workspace): Promise<Plan> {
         warnings.push(msg);
       }
     },
-    reportAgentsMdRule(name: string, bytes: number) {
-      agentsMdRules.push({ name, bytes });
+    reportAgentsMdRule(name: string, bytes: number, scoped: boolean) {
+      agentsMdRules.push({ name, bytes, scoped });
     },
   };
   const files: PlannedFile[] = [];
@@ -638,7 +640,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
 function computeAgentsMdBudget(
   files: PlannedFile[],
   resolution: Resolution,
-  agentsMdRules: Array<{ name: string; bytes: number }>,
+  agentsMdRules: Array<{ name: string; bytes: number; scoped: boolean }>,
   warnings: string[],
 ): Plan["agentsMd"] {
   // Find the AGENTS.md file
@@ -680,8 +682,8 @@ function computeAgentsMdBudget(
   if (maxBytes > 0 && bytes > maxBytes) {
     const top5 = sortedRules.slice(0, 5);
     const rulesText = top5.length > 0
-      ? `largest always-on rules: ${top5.map((r) => `${r.name} (${r.bytes} bytes)`).join(", ")}`
-      : "no always-on rule";
+      ? `largest rules: ${top5.map((r) => `${r.name} (${r.scoped ? "scoped, " : ""}${r.bytes} bytes)`).join(", ")}`
+      : "no rule";
     // Two forms: default budget vs explicit budget
     if (explicit) {
       warning = `AGENTS.md is ${bytes} bytes, over the budget of ${maxBytes} set by ${AGENTS_MD_BUDGET_KEY}; sync --check fails — ${rulesText}`;

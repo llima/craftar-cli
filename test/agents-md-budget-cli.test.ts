@@ -133,7 +133,7 @@ describe("AGENTS.md budget CLI — doctor (case 12)", () => {
     expect(check).toBeDefined();
     expect(check.level).toBe("warn");
     expect(check.message).toMatch(/^AGENTS\.md is \d+ bytes, over the default budget of 32768$/);
-    expect(check.fix).toBe("set agents-md.maxBytes to fail sync --check above it, or move rules out of the always-on set (inclusion: fileMatch)");
+    expect(check.fix).toBe("set agents-md.maxBytes to fail sync --check above it; to shrink the file: move always-on rules to inclusion: fileMatch, write scoped rules to their own files (target claude-code or kiro)");
   });
 
   it("default budget exceeded → plan check is ok, no other check mentions AGENTS.md is", async () => {
@@ -160,7 +160,7 @@ describe("AGENTS.md budget CLI — doctor (case 12)", () => {
     expect(check).toBeDefined();
     expect(check.level).toBe("error");
     expect(check.message).toMatch(/^AGENTS\.md is \d+ bytes, over the budget of 1000 set by agents-md\.maxBytes$/);
-    expect(check.fix).toBe("move rules out of the always-on set (inclusion: fileMatch), or raise agents-md.maxBytes");
+    expect(check.fix).toBe("move always-on rules to inclusion: fileMatch, write scoped rules to their own files (target claude-code or kiro), or raise agents-md.maxBytes");
   });
 
   it("explicit budget exceeded → plan check is ok, no other check mentions AGENTS.md is", async () => {
