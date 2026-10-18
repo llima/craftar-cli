@@ -27,6 +27,9 @@ function withPath(value: string): NodeJS.ProcessEnv {
   return env;
 }
 
+/** Windows may hold a just-run copy of node for a moment after it exits (EBUSY): Node's own retry, for cleanup only. */
+const removeQuietly = (p: string) => fs.rm(p, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+
 // Two copies of node for the whole file. LOCAL is the very entry npx adds for this process — the
 // `node_modules/.bin` of the directory the tests run in. PROJECT is a made-up project elsewhere: its
 // `node_modules/.bin` is skipped only when craftar is said to run inside it.
@@ -45,8 +48,8 @@ beforeAll(async () => {
   await fs.chmod(path.join(PROJECT_BIN, TOOL + EXE), 0o755);
 });
 afterAll(async () => {
-  await fs.rm(path.join(LOCAL, TOOL + EXE), { force: true });
-  await fs.rm(PROJECT, { recursive: true, force: true });
+  await removeQuietly(path.join(LOCAL, TOOL + EXE));
+  await removeQuietly(PROJECT);
 });
 
 describe("isLocalBin — the node_modules/.bin of a directory or of one above it", () => {
@@ -118,7 +121,7 @@ describe("onPath — a program in such an entry is not found", () => {
     expect(await onPath(TOOL, env, PROJECT)).toBeNull();
     expect(await onPath(TOOL, env, path.join(PROJECT, "packages", "app"))).toBeNull();
     const elsewhere = await fs.realpath(await tmpDir("craftar-local-bin-elsewhere-"));
-    cleanups.push(() => fs.rm(elsewhere, { recursive: true, force: true }));
+    cleanups.push(() => removeQuietly(elsewhere));
     expect(await onPath(TOOL, env, elsewhere)).toBe(path.join(PROJECT_BIN, TOOL + EXE));
   });
 
