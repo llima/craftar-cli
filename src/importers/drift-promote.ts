@@ -712,7 +712,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const sourceMeta: Ingredient = {
     ...X.meta,
     // A base with no frontmatterRaw may hold its `paths:` in its body (imported before rules kept it apart)
-    ...emittedMetaFields(emitted.meta, readType, X.meta, meta.type === "rule" && meta.frontmatterRaw === undefined ? await readIngredientText(X, meta.file) : null),
+    ...emittedMetaFields(emitted.meta, readType, X.meta, meta.type === "rule" && meta.frontmatterRaw === undefined ? await readIngredientText(X, meta.file) : null, emitted.files["rule.md"]),
   } as Ingredient;
   // Remove params from source (sources carry none)
   if ("params" in sourceMeta) delete (sourceMeta as Record<string, unknown>).params;
@@ -1290,7 +1290,7 @@ export async function applyPromote(plan: PromotePlan, journal: WriteJournal): Pr
 
 // Helper functions
 
-function emittedMetaFields(emitted: Ingredient, type: string, base: Ingredient, baseBody: string | null): Partial<Ingredient> {
+function emittedMetaFields(emitted: Ingredient, type: string, base: Ingredient, baseBody: string | null, body?: string | Buffer): Partial<Ingredient> {
   // Only re-read certain fields from the emitted source
   if (type === "agent") {
     return {
@@ -1316,7 +1316,8 @@ function emittedMetaFields(emitted: Ingredient, type: string, base: Ingredient, 
     if (stored !== undefined && raw === stored) return {};
     // A base imported before rules kept their frontmatter apart holds its `paths:` inside its body
     const baseRaw = stored ?? (baseBody === null ? undefined : (parseFrontmatter(baseBody).raw ?? undefined));
-    const paths = rulePaths(raw ?? null).value;
+    // A file that ends at its closing fence is not split: its `paths:` is still in its body
+    const paths = rulePaths(raw ?? (typeof body === "string" ? parseFrontmatter(body).raw : null)).value;
     const basePaths = rulePaths(baseRaw ?? null).value;
     if (JSON.stringify(paths) === JSON.stringify(basePaths)) return raw === stored ? {} : { frontmatterRaw: raw };
     if (paths !== undefined) return { frontmatterRaw: raw, inclusion: "fileMatch", fileMatchPattern: paths };
