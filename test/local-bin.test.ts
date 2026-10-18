@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { execProgram, isLocalBin, onPath, pathEntries, spawnInherited } from "../src/core/proc.js";
 import { dockerRunner, dockerVersion } from "../src/core/services.js";
 import { tmpDir } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 
 // 0.28.2 — `npx craftar` puts `<cwd>/node_modules/.bin`, and every ancestor's, first on PATH. craftar runs in a
 // workspace or a Forge, so a program committed there would be the one it runs: those entries are skipped, in the
@@ -45,8 +46,8 @@ beforeAll(async () => {
   await fs.chmod(path.join(PROJECT_BIN, TOOL + EXE), 0o755);
 });
 afterAll(async () => {
-  await fs.rm(path.join(LOCAL, TOOL + EXE), { force: true });
-  await fs.rm(PROJECT, { recursive: true, force: true });
+  await removeWithRetry(path.join(LOCAL, TOOL + EXE));
+  await removeWithRetry(PROJECT);
 });
 
 describe("isLocalBin — the node_modules/.bin of a directory or of one above it", () => {
@@ -118,7 +119,7 @@ describe("onPath — a program in such an entry is not found", () => {
     expect(await onPath(TOOL, env, PROJECT)).toBeNull();
     expect(await onPath(TOOL, env, path.join(PROJECT, "packages", "app"))).toBeNull();
     const elsewhere = await fs.realpath(await tmpDir("craftar-local-bin-elsewhere-"));
-    cleanups.push(() => fs.rm(elsewhere, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(elsewhere));
     expect(await onPath(TOOL, env, elsewhere)).toBe(path.join(PROJECT_BIN, TOOL + EXE));
   });
 
