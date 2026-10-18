@@ -26,7 +26,7 @@ import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, notProduced, readText, statusPath, statusReport, targetsReport } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
-import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, type UnheldPath } from "./core/forge.js";
+import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
@@ -2737,54 +2737,6 @@ function color(state: string) {
       return pc.dim;
   }
 }
-
-/**
- * The real path of `abs`, resolved through its nearest existing ancestor: `fs.realpath` needs the
- * path to exist, and a plan target usually does not yet — so the part that exists is resolved
- * (symlinks and all) and the part that does not is appended as written.
- *
- * It walks up only past a component that truly does not exist (`lstat` says ENOENT/ENOTDIR). Any
- * other outcome throws instead. A component `lstat` cannot inspect (a symlink loop or a permission
- * error on Linux) "cannot be inspected"; one it can inspect but `realpath` cannot follow (a
- * dangling symlink or junction, a loop on Windows) "exists but cannot be resolved". Resolving the
- * rest lexically would let a link that points into the Forge pass the containment check, so the gate
- * fails closed rather than guess where the target lands.
- */
-async function realpathOfNearest(abs: string): Promise<string> {
-  let head = abs;
-  const tail: string[] = [];
-  for (;;) {
-    try {
-      return path.join(await fs.realpath(head), ...tail);
-    } catch (realpathError) {
-      try {
-        await fs.lstat(head);
-      } catch (lstatError) {
-        const code = (lstatError as NodeJS.ErrnoException).code;
-        if (code === "ENOENT" || code === "ENOTDIR") {
-          const parent = path.dirname(head);
-          if (parent === head) return abs;
-          tail.unshift(path.basename(head));
-          head = parent;
-          continue;
-        }
-        throw cannotResolve(head, lstatError, "cannot be inspected");
-      }
-      throw cannotResolve(head, realpathError, "exists but cannot be resolved");
-    }
-  }
-}
-
-/**
- * The refusal for a target that cannot be resolved; the caller adds which command cannot prove it. `what` is
- * "cannot be inspected" when `lstat` itself failed, so the path is not known to exist, and "exists but cannot be
- * resolved" when `lstat` succeeded and `realpath` did not.
- */
-function cannotResolve(p: string, e: unknown, what: "cannot be inspected" | "exists but cannot be resolved"): Error {
-  const code = (e as NodeJS.ErrnoException | null)?.code ?? (e instanceof Error ? e.message : String(e));
-  return new Error(`${p} ${what} (${code})`);
-}
-
 /**
  * The gate of a user-supplied output path (Ruling 30 of spec 06; spec 29 §4.2): the file a command writes where the
  * user says must lie outside the Forge and must not exist. Both sides are compared as real paths, so neither a `..`
