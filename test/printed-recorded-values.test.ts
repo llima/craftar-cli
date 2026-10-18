@@ -9,6 +9,7 @@ import { cacheKey, credentialFault, CREDENTIAL_HIDDEN, ensureTree, parseLsRemote
 import { apply, loadForgeSource, loadWorkspace, loadWorkspaceConfig, plan, readLock, status } from "../src/core/sync.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
 import { remoteForge } from "./helpers/remote.js";
+import { runCli } from "./helpers/cli.js";
 
 // 0.28.1 — three values that reached an output: a Forge URL with credentials that an earlier
 // release recorded in the registry, a `forge:` spelled with backslashes after the scheme, and a
@@ -471,8 +472,29 @@ describe("spec 39 gap 1: a cache entry named after a URL with credentials, that 
     expectClean(message);
   });
 
-  it("spec 39 §7: neither label contains a / — so labelOf in cache prune text output splits a tree row correctly", () => {
-    expect(CREDENTIAL_HIDDEN).not.toContain("/");
-    expect(UNVOUCHED_HIDDEN).not.toContain("/");
+  it("spec 39 §7: cache prune CLI text output with a labelled tree row does not throw in labelOf", async () => {
+    // Build a home with a cache entry whose name holds a credential (flagged rows name it).
+    const h = await recordedHome();
+
+    // Find the tree inside the renamed cache entry — sync created it.
+    const treesDir = path.join(h.home, "forges", h.oldKey, "trees");
+    const treeEntries = await fs.readdir(treesDir);
+    const commit = treeEntries.find((e) => !e.includes("."));
+    expect(commit, "no tree commit found").toBeDefined();
+
+    // Make the tree's .used stamp 15 days old so cache prune --dry-run lists it.
+    const DAY = 24 * 60 * 60 * 1000;
+    const ago15 = new Date(Date.now() - 15 * DAY);
+    await fs.utimes(path.join(treesDir, `${commit}.used`), ago15, ago15);
+
+    // Run the CLI from a directory without craftar.yaml (as other cache-prune CLI tests do).
+    const r = runCli(["cache", "prune", "--dry-run"], { env: { CRAFTAR_HOME: h.home }, cwd: h.root });
+    expect(r.code, r.stderr).toBe(0);
+
+    // The tree row uses the label, not the raw key.
+    expect(r.stdout).toContain(LABEL);
+    expect(r.stdout).toContain("/trees/");
+    expectClean(r.stdout);
+    expectClean(r.stderr);
   });
 });

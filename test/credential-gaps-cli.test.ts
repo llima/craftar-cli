@@ -134,3 +134,27 @@ describe("spec 39 gap 2: a forge: spelled with tab/LF/CR inside the scheme or it
     }
   });
 });
+
+describe("spec 39 gap 2 — the interactive init refuses the answer and does not offer it back", () => {
+  // One-slash spelling for the Forge answer
+  const ONE_SLASH = `https:/${CRED}example.invalid/acme/forge.git`;
+
+  it("a one-slash spelling typed as the Forge is refused, and no question or line holds any part of it", async () => {
+    const { askInit } = await import("../src/core/init-flow.js");
+    const root = await tmpDir("craftar-gap2-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    await fs.mkdir(home);
+    const asked: string[] = [];
+    const said: string[] = [];
+    const answers = [ONE_SLASH];
+    const next = async (q: string) => (asked.push(q), answers.shift() ?? null);
+    const io = { ask: next, confirm: next, say: (l: string) => void said.push(l) };
+    const result = await askInit(path.join(root, "ws"), { addRecipes: [], removeRecipes: [], replace: false }, { doc: null, keys: [] }, io, { home, registryOff: false });
+    expect(result.kind).toBe("cancelled");
+    expect(said).toContain("the answer holds credentials in the URL — remove them and let git authenticate");
+    const all = JSON.stringify([asked, said]);
+    expect(all.includes(PW), "the password is printed or offered").toBe(false);
+    expect(all.includes(USER), "the user is printed or offered").toBe(false);
+  });
+});
