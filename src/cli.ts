@@ -46,7 +46,9 @@ import {
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
 import { checkInitFlags, initLine, planInit, type InitInput } from "./core/init.js";
-import { askInit, confirmInit, againLine, type InitAnswers } from "./core/init-flow.js";
+import { askInit, askClone, confirmInit, againLine, type InitAnswers } from "./core/init-flow.js";
+import { findGit, cloneRepos, type CloneResult } from "./core/clone.js";
+import { byHand, type RepoEntry } from "./core/repos.js";
 import { readlineIo } from "./prompt.js";
 import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
@@ -239,11 +241,42 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
   return r;
 }
 
+/**
+ * The clone step for `craftar init --clone`: clones the entries, prints the report, sets exitCode on failures.
+ * Calls `again()` at the end.
+ */
+async function runCloneStep(root: string, profile: string, entries: RepoEntry[], git: string, again: () => void): Promise<void> {
+  const n = entries.length;
+  const repoWord = n === 1 ? "repository" : "repositories";
+  console.log(pc.bold(`craftar init — cloning ${n} ${repoWord} of ${profile}`));
+  const results = await cloneRepos(root, entries, { git, env: process.env, stdinIsTty: process.stdin.isTTY === true });
+  const maxName = Math.max(...results.map((r) => r.entry.name.length));
+  for (const r of results) {
+    if (r.outcome === "cloned") {
+      console.log(`  cloned  ${r.entry.name.padEnd(maxName)}  → ${r.entry.path}`);
+    } else {
+      console.log(`  failed  ${r.entry.name.padEnd(maxName)}  → ${r.entry.path}  (${r.reason})`);
+    }
+  }
+  const failed = results.filter((r): r is CloneResult & { outcome: "failed" } => r.outcome === "failed");
+  if (failed.length > 0) {
+    const ok = results.length - failed.length;
+    console.log(`  ${ok} of ${n} cloned — clone the rest by hand, in ${root}:`);
+    for (const f of failed) {
+      console.log(`    ${byHand(f.entry)}`);
+    }
+    const failedNames = failed.map((f) => f.entry.name);
+    console.log(`  or, from the workspace: craftar repos clone ${failedNames.join(" ")}`);
+    process.exitCode = 1;
+  }
+  again();
+}
+
 /* ---------------------------------------------------------------- init */
 program
   .command("init")
   .description(
-    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync; in a terminal, asks for the Forge and the profile not given as flags; refused when craftar.yaml already exists",
+    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync; with --clone, clone the profile's repositories into the workspace after the sync; in a terminal, asks for the Forge and the profile not given as flags; refused when craftar.yaml already exists",
   )
   .option("--forge <dir|url>", "the Forge: a directory (written relative to the workspace) or a git URL; asked for in a terminal when omitted")
   .option("--profile <name>", "the client profile in the Forge; asked for in a terminal when omitted")
@@ -253,6 +286,8 @@ program
   .option("--remove-recipe <name>", "remove a recipe of the profile's (repeatable)", collect, [])
   .option("--replace", "let --add-recipe take a slot another recipe holds", false)
   .option("--no-sync", "write craftar.yaml only, and say what the first sync would do")
+  .option("--clone", "after the first sync, clone the profile's repositories (its repos list) into the workspace")
+  .option("--no-clone", "do not clone, and do not ask")
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
   .option("--workspace <dir>", "workspace root, created when missing", ".")
   .action(
@@ -265,6 +300,7 @@ program
       removeRecipe: string[];
       replace: boolean;
       sync: boolean;
+      clone?: boolean;
       offline: boolean;
       workspace: string;
     }, cmd) => {
@@ -295,6 +331,19 @@ program
         addRecipes: o.addRecipe,
         removeRecipes: o.removeRecipe,
       });
+      // C1: --clone and --no-clone cannot be given together
+      if (process.argv.includes("--clone") && process.argv.includes("--no-clone")) {
+        fail("pass --clone or --no-clone, not both");
+      }
+      // C2: --clone with --offline
+      if (o.clone === true && o.offline) {
+        fail("--clone needs the network — drop --offline, or clone later with git");
+      }
+      // C6: --clone with no git on PATH
+      const git = await findGit(process.env);
+      if (o.clone === true && git === null) {
+        fail("cloning needs git — install it, or leave the clone out");
+      }
       // Mode: flags when both given; else interactive when both streams are TTYs; else N2
       const bothGiven = o.forge !== undefined && o.profile !== undefined;
       const isTTY = process.stdin.isTTY && process.stdout.isTTY;
@@ -341,19 +390,37 @@ program
           addRecipes: o.addRecipe,
           removeRecipes: o.removeRecipe,
           replace: o.replace,
+          clone: o.clone === true,
         };
       }
       const init = await planInit(root, input, { ...load(o, "sync"), local });
+      // Interactive mode: when o.clone is undefined, ask about cloning between planInit and confirmInit
+      let cloneEntries: RepoEntry[] = [];
+      let cloneRefused = false;
       if (answers !== null) {
+        if (o.clone === undefined) {
+          const io = readlineIo(process.stdin, process.stdout, { terminal: true });
+          const cloneResult = await askClone(io, init, { root, offline: o.offline, git });
+          if (cloneResult === "cancelled") fail("init cancelled — nothing written");
+          cloneEntries = cloneResult.entries;
+          cloneRefused = cloneResult.refused === true;
+        }
         const io = readlineIo(process.stdin, process.stdout, { terminal: true });
-        const confirm = await confirmInit(init, root, io, { sync: o.sync });
+        const confirm = await confirmInit(init, root, io, {
+          sync: o.sync,
+          clone: cloneEntries.length || undefined,
+          cloneRefused: o.clone === true || cloneRefused,
+        });
         if (confirm === "cancelled") fail("init cancelled — nothing written");
+      } else if (o.clone === true) {
+        // Non-interactive mode with --clone: use repos from planInit
+        cloneEntries = init.repos;
       }
       const { ws, plan: p } = init;
       const workspaceGiven = cmd.getOptionValueSource("workspace") === "cli";
       const again = () => {
         if (answers !== null) {
-          console.log(againLine(answers, { workspace: workspaceGiven ? o.workspace : undefined, sync: o.sync, offline: o.offline }));
+          console.log(againLine(answers, { workspace: workspaceGiven ? o.workspace : undefined, sync: o.sync, offline: o.offline, clone: cloneEntries.length > 0 }));
         }
       };
       // Every refusal is above: only now does the directory, and craftar.yaml, come to exist
@@ -368,9 +435,18 @@ program
       console.log(`  ${initLine(init)}`);
       for (const n of init.notes) console.log(`  note ${n}`);
       const unset = unsetDeclared(p);
+      const cloning = cloneEntries.length > 0;
+      const refused = unset.length > 0;
       if (!o.sync) {
         console.log(nextSyncLine(init.statuses, unset));
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+        if (cloning && refused) {
+          console.log("  repositories: not cloned — the first sync is refused");
+        } else if (cloning && !refused) {
+          // Clone even without sync
+          await runCloneStep(root, ws.config.profile, cloneEntries, git!, again);
+          return;
+        }
         again();
         return;
       }
@@ -378,6 +454,9 @@ program
       // first sync is not run. exitCode, not fail(): the `again` line still follows the block.
       if (unset.length) {
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+        if (cloning) {
+          console.log("  repositories: not cloned — the first sync is refused");
+        }
         refusalBlock(unset, { thenSync: true });
         again();
         process.exitCode = 1;
@@ -389,6 +468,10 @@ program
         console.log(
           `  ${pc.yellow("warn")} ${collisions} file(s) already in the workspace differ from the Forge and were left as they are — to bring them into the Forge, run craftar import`,
         );
+      if (cloning) {
+        await runCloneStep(root, ws.config.profile, cloneEntries, git!, again);
+        return;
+      }
       again();
     },
   );

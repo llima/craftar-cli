@@ -12,7 +12,6 @@ import {
   plan,
   readLock,
   status,
-  unsetDeclared,
   workspaceOf,
   type FileStatus,
   type LoadedForge,
