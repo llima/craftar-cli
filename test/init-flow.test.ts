@@ -149,6 +149,13 @@ describe("lastForge", () => {
     const result = lastForge(reg, () => true);
     expect(result).toEqual({ forge: "/abs/forge", ref: null });
   });
+  it("spec 39 §14 item 8: a path row whose source is a one-slash credential spelling is not offered; a clean path row still is", () => {
+    const source = "https:/" + "fake" + "user" + ":" + "NOTA" + "SECRET" + "@example.invalid/acme/forge.git";
+    const flagged = entry({ forge: { kind: "path", source, key: "/f/held" }, lastSync: "2026-01-03T00:00:00.000Z" });
+    const clean = entry({ forge: { kind: "path", source: "../forge", key: "/f/b" }, lastSync: "2026-01-02T00:00:00.000Z" });
+    expect(lastForge({ schema: 1, workspaces: [flagged, clean] }, () => true)).toEqual({ forge: "/f/b", ref: null });
+    expect(lastForge({ schema: 1, workspaces: [flagged] }, () => true)).toBeNull();
+  });
 });
 
 /* ------------------------------------------------------------------ */
