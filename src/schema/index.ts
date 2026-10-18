@@ -157,6 +157,8 @@ export const RuleIngredient = IngredientBase.extend({
   fileMatchPattern: z.string().or(z.array(z.string())).optional(),
   /** Main file, relative to the ingredient dir. */
   file: z.string().default("rule.md"),
+  /** Frontmatter as found in the source (kept verbatim for byte-exact claude-code round trips). */
+  frontmatterRaw: z.string().optional(),
 });
 
 export const AgentIngredient = IngredientBase.extend({
