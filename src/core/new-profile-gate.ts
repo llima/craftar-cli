@@ -93,15 +93,9 @@ export async function newProfileGate(forge: Forge, home: string, name?: string):
  * Whether `child` is under `parent` (or equal), segment-wise — `path.relative` compares without case on win32, as `samePath` does.
  */
 function isUnderOrEqual(child: string, parent: string): boolean {
-  // Get the relative path from parent to child
   const rel = path.relative(parent, child);
-  // If relative path is empty, they are equal
   if (rel === "") return true;
-  // If relative path starts with "..", child is not under parent
   if (rel === ".." || rel.startsWith(".." + path.sep)) return false;
-  // If relative path is absolute, they are on different drives (Windows)
   if (path.isAbsolute(rel)) return false;
-  // Otherwise, child is under parent — but we need to compare with samePath
-  // The relative path not starting with ".." means it's under parent
   return true;
 }

@@ -239,6 +239,9 @@ export async function planInit(root: string, input: InitInput, opts: InitOptions
     const notes = [...np.notes];
     if (np.blockNote !== null) notes.push(np.blockNote);
 
+    // targetsFrom: "local" when the local file sets targets (no flag), else "profile"
+    const targetsFrom = input.targets !== undefined ? "flag" : local.includes("targets") ? "local" : "profile";
+
     return {
       ws,
       plan: p,
@@ -246,7 +249,7 @@ export async function planInit(root: string, input: InitInput, opts: InitOptions
       statuses,
       text: YAML.stringify(doc),
       notes,
-      targetsFrom: "profile",
+      targetsFrom,
       repos,
       newProfile: { path: `profiles/${np.profile.name}/profile.yaml`, text: np.text, blockNote: np.blockNote },
     };
