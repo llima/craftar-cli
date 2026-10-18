@@ -44,6 +44,7 @@ import { findProfileFile, resolvedBy } from "../core/param-writes.js";
 import { outName } from "../emitters/shared.js";
 import {
   readEmitted,
+  rulePaths,
   secretIn,
   markerIn,
   validateImported,
@@ -717,8 +718,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const secret = secretIn(sourceMeta, emitted.files, emitted.scan);
   if (secret) throw new Error(D9(ingredientRef, secret));
 
-  // Collect warnings about hand-added files in a skill directory
-  const warnings: string[] = [];
+  // What reading the source warned (a rule's unusable `paths:`), then hand-added files in a skill directory
+  const warnings: string[] = [...(emitted.warnings ?? [])];
   if (meta.type === "skill" && meta.layout === "dir") {
     const skillDir = path.join(claudeDir, "skills", outputName);
     const diskFiles = await listFiles(skillDir).catch(() => [] as string[]);
@@ -1305,15 +1306,19 @@ function emittedMetaFields(emitted: Ingredient, type: string, base: Ingredient):
     };
   }
   if (type === "rule") {
-    // A rule's scope is re-derived only when the hand edit changed its frontmatter: an unchanged one keeps the
-    // Forge's scope, which may come from a hand-written steering file (import's first precedence level).
+    // The frontmatter travels as read; the scope is re-derived only when the hand edit changed `paths:` — an
+    // unchanged one keeps the Forge's scope, which may come from a hand-written steering file (import's first level).
     const raw = (emitted as Record<string, unknown>).frontmatterRaw as string | undefined;
     const baseRaw = "frontmatterRaw" in base ? base.frontmatterRaw : undefined;
     if (raw === baseRaw) return {};
-    // Removed by hand: the variant has none; the proof decides whether the rest still plans the file on disk.
-    if (raw === undefined) return { frontmatterRaw: undefined };
-    const e = emitted as Extract<Ingredient, { type: "rule" }>;
-    return { frontmatterRaw: raw, inclusion: e.inclusion, fileMatchPattern: e.fileMatchPattern };
+    const paths = rulePaths(raw ?? null).value;
+    const basePaths = rulePaths(baseRaw ?? null).value;
+    if (JSON.stringify(paths) === JSON.stringify(basePaths)) return { frontmatterRaw: raw };
+    if (paths !== undefined) return { frontmatterRaw: raw, inclusion: "fileMatch", fileMatchPattern: paths };
+    // `paths:` removed by hand: a scope that came from it goes with it; one from elsewhere stays.
+    const b = base as Extract<Ingredient, { type: "rule" }>;
+    const fromPaths = b.inclusion === "fileMatch" && JSON.stringify(b.fileMatchPattern) === JSON.stringify(basePaths);
+    return fromPaths ? { frontmatterRaw: raw, inclusion: "always", fileMatchPattern: undefined } : { frontmatterRaw: raw };
   }
   return {};
 }

@@ -3047,6 +3047,49 @@ Edited body
     expect(steering).toContain("# A edited");
   });
 
+  it("67e. an edit to another frontmatter key keeps a scope the Forge took from a hand-written steering file", async () => {
+    const rulePath = ".claude/rules/a.md";
+    const s = await scenario(
+      {
+        ingredients: [
+          {
+            meta: { type: "rule", name: "a", inclusion: "fileMatch", fileMatchPattern: "other/**", frontmatterRaw: "paths: src/**\ndescription: x" },
+            files: { "rule.md": "# A\n" },
+          },
+        ],
+        recipes: [recipe("base", ["rule/a"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.writeFile(path.join(s.wsRoot, rulePath), "---\npaths: src/**\ndescription: y\n---\n# A\n");
+
+    const r = runCli(["drift", "promote", rulePath, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    const variantMeta = YAML.parse(await fs.readFile(path.join(s.forgeRoot, "ingredients/rules/a--acme/ingredient.yaml"), "utf8"));
+    expect(variantMeta.frontmatterRaw).toBe("paths: src/**\ndescription: y");
+    expect(variantMeta.inclusion).toBe("fileMatch");
+    expect(variantMeta.fileMatchPattern).toBe("other/**");
+  });
+
+  it("67f. an unusable paths: in the edited rule is warned, as import warns it", async () => {
+    const rulePath = ".claude/rules/a.md";
+    const s = await scenario(
+      { ingredients: [{ meta: { type: "rule", name: "a" }, files: { "rule.md": "# A\n" } }], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.writeFile(path.join(s.wsRoot, rulePath), "---\npaths: []\n---\n# A\n");
+    const r = runCli(["drift", "promote", rulePath, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("warn rule a: paths: in .claude/rules/a.md is not a string or a list of strings; ignored");
+  });
+
   it("67d. removing the frontmatter of a rule the Forge keeps it for promotes a rule without it", async () => {
     const rulePath = ".claude/rules/a.md";
     const s = await scenario(
@@ -3071,6 +3114,9 @@ Edited body
     expect(r.code).toBe(0);
     const variantMeta = YAML.parse(await fs.readFile(path.join(s.forgeRoot, "ingredients/rules/a--acme/ingredient.yaml"), "utf8"));
     expect(variantMeta.frontmatterRaw).toBeUndefined();
+    // its scope came from the paths: just removed, so the variant is always-on, as Claude Code now reads the file
+    expect(variantMeta.inclusion ?? "always").toBe("always");
+    expect(variantMeta.fileMatchPattern).toBeUndefined();
     expect(await fs.readFile(path.join(s.forgeRoot, "ingredients/rules/a--acme/rule.md"), "utf8")).toBe("# A\n");
     const statusJ = JSON.parse(runCli(["status", "--workspace", s.wsRoot, "--json"]).stdout);
     expect(statusJ.statuses.find((st: { path: string }) => st.path === rulePath)?.state).toBe("unchanged");
