@@ -160,4 +160,20 @@ describe("agents-md.maxBytes budget (core)", () => {
     const budgetWarning = p.warnings.find((w) => w.startsWith("AGENTS.md is"));
     expect(budgetWarning).toBeUndefined();
   });
+
+  // A recipe's params default is a layer like any other: the budget counts as set
+  it("9. the budget given as a recipe param default → explicit true", async () => {
+    const big = rule("big", "# Big\n" + "x".repeat(5000) + "\n");
+    const forge: ForgeSpec = {
+      ingredients: [big],
+      recipes: [recipe("base", ["rule/big"], { params: { "agents-md.maxBytes": { default: 1000 } } })],
+      profiles: [profile("acme", ["base"], ["agents-md"])],
+    };
+    const s = await scenario(forge, { config: { profile: "acme" } });
+    cleanups.push(s.cleanup);
+    const p = await plan(await loadWorkspace(s.wsRoot));
+    expect(p.agentsMd!.explicit).toBe(true);
+    expect(p.agentsMd!.maxBytes).toBe(1000);
+    expect(agentsMdOverBudget(p)).toEqual({ bytes: agentsMdContent(p)!.length, maxBytes: 1000 });
+  });
 });

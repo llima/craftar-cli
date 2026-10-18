@@ -13,7 +13,7 @@ afterEach(async () => {
 });
 
 /** A Forge with a large rule (40000 bytes body) targeting agents-md. */
-const LARGE_RULE_FORGE = (overridesParams?: Record<string, unknown>): ForgeSpec => ({
+const LARGE_RULE_FORGE = (): ForgeSpec => ({
   ingredients: [rule("big", "# Big\n" + "x".repeat(40000) + "\n")],
   recipes: [recipe("base", ["rule/big"])],
   profiles: [profile("acme", ["base"], ["agents-md"])],
@@ -66,6 +66,8 @@ describe("AGENTS.md budget CLI — explicit budget exceeded (case 10)", () => {
     await setOverrides(s.ws, { "agents-md.maxBytes": 1000 });
     const r = runCli(["sync", "--check", "--workspace", s.ws]);
     expect(r.code).toBe(1);
+    expect(r.stdout).not.toContain("out of sync");
+    expect(r.stdout).not.toContain("workspace in sync");
     expect(r.stderr).toContain("error: AGENTS.md is");
     expect(r.stderr).toContain("set by agents-md.maxBytes");
   });
@@ -93,6 +95,8 @@ describe("AGENTS.md budget CLI — explicit budget exceeded (case 10)", () => {
     await setOverrides(s.ws, { "agents-md.maxBytes": 1000 });
     const r = runCli(["diff", "--exit-code", "--workspace", s.ws]);
     expect(r.code).toBe(1);
+    expect(r.stdout).toContain("no differences");
+    expect(r.stderr).toContain("error: AGENTS.md is");
   });
 
   it("diff --exit-code AGENTS.md exit 0 (single file path, budget does not set exit code)", async () => {
@@ -100,6 +104,7 @@ describe("AGENTS.md budget CLI — explicit budget exceeded (case 10)", () => {
     await setOverrides(s.ws, { "agents-md.maxBytes": 1000 });
     const r = runCli(["diff", "--exit-code", "AGENTS.md", "--workspace", s.ws]);
     expect(r.code).toBe(0);
+    expect(r.stderr).toContain("error: AGENTS.md is");
   });
 
   it("plain diff exit 0", async () => {
@@ -107,6 +112,7 @@ describe("AGENTS.md budget CLI — explicit budget exceeded (case 10)", () => {
     await setOverrides(s.ws, { "agents-md.maxBytes": 1000 });
     const r = runCli(["diff", "--workspace", s.ws]);
     expect(r.code).toBe(0);
+    expect(r.stderr).toContain("error: AGENTS.md is");
   });
 });
 

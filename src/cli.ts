@@ -411,14 +411,12 @@ program
       const bad = st.filter((s) => !["unchanged", "adopt"].includes(s.state));
       printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true, forgeLine(ws, lock));
       const unset = unsetDeclared(p);
-      const budgetExplicit = agentsMdOverBudget(p);
       if (bad.length) console.log(pc.red(`\n${bad.length} file(s) out of sync`));
       // A refused sync is not "in sync", whatever the files say: the listing, then the block, and the exit is
       // exitCode's, so nothing queued is cut (spec 29 §4.1)
-      const hadUnsetRefusal = refusalBlock(unset);
-      const hadBudgetRefusal = budgetRefusalBlock(p);
-      if (hadUnsetRefusal || hadBudgetRefusal) process.exitCode = 1;
-      else if (bad.length) process.exitCode = 1;
+      // Both blocks are printed; either one, or a file out of sync, fails the check.
+      const refused = [refusalBlock(unset), budgetRefusalBlock(p)].some(Boolean);
+      if (refused || bad.length) process.exitCode = 1;
       else console.log(pc.green("\nworkspace in sync"));
       return;
     }
@@ -457,10 +455,8 @@ program
     else if (o.exitCode) process.exitCode = 1;
     // Spec 29 §4.1: with no [path], --exit-code fails exactly when `sync --check` does — a refused sync included
     if (refusalBlock(unsetDeclared(p)) && o.exitCode && !only) process.exitCode = 1;
-    // AGENTS.md budget: with no [path], --exit-code fails on explicit budget violation (plain diff prints but exits 0)
-    const budgetOver = agentsMdOverBudget(p);
-    if (o.exitCode && !only && budgetRefusalBlock(p)) process.exitCode = 1;
-    else if (!o.exitCode && budgetOver) errorLine(agentsMdRefusal(budgetOver));
+    // The AGENTS.md budget, as the refusal above: always printed, failing only --exit-code with no [path]
+    if (budgetRefusalBlock(p) && o.exitCode && !only) process.exitCode = 1;
   });
 
 const DIFF_PAINT = { paint: { same: pc.dim, del: pc.red, add: pc.green } };

@@ -628,9 +628,10 @@ export async function plan(ws: Workspace): Promise<Plan> {
 
   // AGENTS.md size budget: computed after the target loop, warning pushed by plan() (spec 15 §4.5 reserves
   // the single agents-md warning for references).
-  const agentsMd = computeAgentsMdBudget(files, resolution, agentsMdRules, warnings);
+  const planned = dedupeLastWins(files);
+  const agentsMd = computeAgentsMdBudget(planned, resolution, agentsMdRules, warnings);
 
-  return { resolution, files: dedupeLastWins(files), warnings, sections: sections.byRef, params, missingParams: missing, agentsMd };
+  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd };
 }
 
 /**
