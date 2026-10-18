@@ -187,12 +187,20 @@ export function hideUnvouched(text: string, keys: readonly string[]): string {
 
 /**
  * Replace every occurrence of every key in `credential` with `CREDENTIAL_HIDDEN` and every key in
- * `unvouched` with `UNVOUCHED_HIDDEN` — in ONE pass, so a prefix key never leaves the rest of a
- * longer one printed, and a key inside an inserted label never rewrites it (spec 39 review round 2).
- * A key in both lists gets `CREDENTIAL_HIDDEN`. Empty keys are ignored.
+ * `unvouched` with `UNVOUCHED_HIDDEN`. One label per merged range of the original text:
+ *
+ * - A prefix key (review round 2): `abc` and `abcdef` starting at the same position — the longer
+ *   key wins (it's the more specific match); if they start at different positions, each gets its
+ *   own label.
+ * - A key that starts before another and ends inside it (review round 3): `removing-github` starts
+ *   before `github.com-u-tok-abcdef012345` and ends inside it — merge them, one label.
+ *
+ * Credential wins: a merged range is labelled `CREDENTIAL_HIDDEN` when any key covering any part of
+ * it is in `credential`. Empty keys are ignored. Ranges are found on the ORIGINAL text, so nothing
+ * inside an inserted label is ever matched.
  */
 export function hideCacheKeys(text: string, credential: readonly string[], unvouched: readonly string[]): string {
-  // Collect all non-empty keys with their label, deduped by key (credential wins)
+  // Collect non-empty keys; credential wins when a key is in both lists
   const credSet = new Set(credential.filter((k) => k !== ""));
   const unvSet = new Set(unvouched.filter((k) => k !== ""));
   const all: string[] = [];
@@ -200,15 +208,64 @@ export function hideCacheKeys(text: string, credential: readonly string[], unvou
   for (const k of unvSet) if (!credSet.has(k)) all.push(k);
   if (all.length === 0) return text;
 
-  // Sort LONGEST first: a longer key matches before a shorter prefix can
-  all.sort((a, b) => b.length - a.length);
+  // Find every occurrence of every key: [start, end), credential flag
+  // When multiple keys start at the same position, keep only the longest (most specific match)
+  const byStart = new Map<number, { end: number; credential: boolean }>();
+  for (const key of all) {
+    const isCred = credSet.has(key);
+    let pos = 0;
+    while (true) {
+      const idx = text.indexOf(key, pos);
+      if (idx === -1) break;
+      const existing = byStart.get(idx);
+      const keyEnd = idx + key.length;
+      if (existing === undefined || keyEnd > existing.end) {
+        // No existing range at this start, or this key is longer: take it (longer key wins completely)
+        byStart.set(idx, { end: keyEnd, credential: isCred });
+      } else if (keyEnd === existing.end && isCred && !existing.credential) {
+        // Same length but this one is a credential and existing is not: mark it
+        existing.credential = true;
+      }
+      pos = idx + 1; // advance by 1 so overlapping occurrences of the same key are found
+    }
+  }
+  if (byStart.size === 0) return text;
 
-  // Escape regex-special characters
-  const escaped = all.map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const pattern = new RegExp(escaped.join("|"), "g");
+  // Convert to sorted array
+  const ranges: { start: number; end: number; credential: boolean }[] = [];
+  for (const [start, { end, credential }] of byStart) {
+    ranges.push({ start, end, credential });
+  }
+  ranges.sort((a, b) => a.start - b.start);
 
-  // Replace using a function: credential keys → CREDENTIAL_HIDDEN, others → UNVOUCHED_HIDDEN
-  return text.replace(pattern, (match) => (credSet.has(match) ? CREDENTIAL_HIDDEN : UNVOUCHED_HIDDEN));
+  // Merge every range that overlaps the current one (next.start < cur.end)
+  // Touching ranges (next.start === cur.end) are NOT merged, so adjacent keys keep a label each
+  const merged: { start: number; end: number; credential: boolean }[] = [];
+  let cur = { ...ranges[0] };
+  for (let i = 1; i < ranges.length; i++) {
+    const next = ranges[i];
+    if (next.start < cur.end) {
+      // Overlaps: extend current range, credential wins
+      cur.end = Math.max(cur.end, next.end);
+      cur.credential = cur.credential || next.credential;
+    } else {
+      // No overlap: finalize current, start new
+      merged.push(cur);
+      cur = { ...next };
+    }
+  }
+  merged.push(cur);
+
+  // Build output left to right: text between ranges unchanged, each merged range replaced by label
+  let out = "";
+  let prev = 0;
+  for (const r of merged) {
+    out += text.slice(prev, r.start);
+    out += r.credential ? CREDENTIAL_HIDDEN : UNVOUCHED_HIDDEN;
+    prev = r.end;
+  }
+  out += text.slice(prev);
+  return out;
 }
 
 /**

@@ -165,6 +165,10 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
     m("cache", "ok", "not checked ($CRAFTAR_HOME is not a directory)");
   } else if (snapshot === null) {
     // No snapshot: use hideCacheSegment, then hideKeys (spec 39 §5.1).
+    // Two passes are safe: hideCacheSegment replaces the whole segment after `forges/`, and a
+    // credential key is a cacheKey — only [a-z0-9._-] (the slug is lower-cased and every other
+    // run becomes `-`) — while the inserted label starts with `(` and holds spaces, so hideKeys
+    // can match neither inside nor across it.
     const msg = hideCacheSegment(snapshotError ?? "", opts.home);
     m("cache", "warn", `cannot read the Forge cache: ${hideKeys(msg, reg === null ? [] : credentialKeys(reg))}`, `fix or move $CRAFTAR_HOME (${home})`);
   } else {

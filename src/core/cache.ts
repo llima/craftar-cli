@@ -355,6 +355,10 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
     } catch (e) {
       if (!(e instanceof Error)) throw e;
       // Before the snapshot: use hideCacheSegment then hideKeys (spec 39 §5.1).
+      // Two passes are safe: hideCacheSegment replaces the whole segment after `forges/`, and a
+      // credential key is a cacheKey — only [a-z0-9._-] (the slug is lower-cased and every other
+      // run becomes `-`) — while the inserted label starts with `(` and holds spaces, so hideKeys
+      // can match neither inside nor across it.
       // After the snapshot: use hideCacheKeys in one pass (spec 39 review round 2).
       let msg = e.message;
       if (!snapshotBuilt) {

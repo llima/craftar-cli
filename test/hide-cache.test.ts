@@ -97,3 +97,29 @@ describe("one pass over every key (spec 39, review round 2)", () => {
     expect(hideCacheKeys("forges/abc", [""], [""])).toBe("forges/abc");
   });
 });
+
+describe("overlapping keys are hidden as one range (spec 39, review round 3)", () => {
+  const CRED = "github.com-u-tok-" + "abcdef012345";
+  const DECOY = "removing-github";
+  it("a key that starts before a credential key and ends inside it leaves nothing of the credential key printed", () => {
+    const text = `forges/${DECOY} forges/~removing-${CRED}-4242`;
+    for (const [cred, unv] of [[[CRED], [DECOY]], [[CRED, DECOY], []], [[], [CRED, DECOY]]] as const) {
+      const out = hideCacheKeys(text, cred, unv);
+      expect(out.includes("tok-")).toBe(false);
+      expect(out.includes("abcdef012345")).toBe(false);
+      expect(out.includes(".com-u")).toBe(false);
+      expect(out.endsWith("-4242")).toBe(true);
+    }
+  });
+  it("one label per merged range — the credential label when a credential key covers any part of it", () => {
+    const text = `x ~removing-${CRED}-4242 y`;
+    expect(hideCacheKeys(text, [CRED], [DECOY])).toBe(`x ~${CREDENTIAL_HIDDEN}-4242 y`);
+    expect(hideCacheKeys(text, [], [CRED, DECOY])).toBe(`x ~${UNVOUCHED_HIDDEN}-4242 y`);
+  });
+  it("adjacent but not overlapping keys keep a label each", () => {
+    expect(hideCacheKeys("abcdef", ["abc"], ["def"])).toBe(`${CREDENTIAL_HIDDEN}${UNVOUCHED_HIDDEN}`);
+  });
+  it("a key inside an inserted label is never matched", () => {
+    expect(hideCacheKeys("forges/k1", ["k1"], ["credentials", "cache"])).toBe(`forges/${CREDENTIAL_HIDDEN}`);
+  });
+});
