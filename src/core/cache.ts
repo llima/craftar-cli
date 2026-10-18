@@ -102,6 +102,11 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
   // The actual prune work: under the prune lock for a run, no lock for dry-run.
   // Everything after the "no forges/" check runs under the prune lock (§4.2 step 0).
   const doPrune = async (lock: { refresh: () => Promise<void>; bytes: number }) => {
+    // Reset the state in case of retry (spec 39 §5.1: an entry unvouched at the snapshot stays labelled for the whole run).
+    snapshotBuilt = false;
+    hide.length = 0;
+    unvouched.length = 0;
+
     const start = Date.now();
 
     // Step 2: Determine naming info (§4.2 step 2) — under the lock so a waiting prune sees the state
@@ -331,11 +336,10 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
 
     // The report names such an entry by the fixed label, in every path and warning.
     // Apply hideKeys (for credential keys) then hideUnvouched (for unvouched keys) — spec 39 §5.1.
-    // Exception: a kept entry with reason "named" is vouched by the re-check, so only credential keys are hidden.
+    // An entry unvouched at the snapshot stays labelled for the whole run (fail closed).
     const hidePath = (text: string): string => hideUnvouched(hideKeys(text, hide), unvouched);
-    const hideCredOnly = (text: string): string => hideKeys(text, hide);
     const shownRemoved = removed.map((r) => ({ ...r, path: hidePath(r.path) }));
-    const shownKept = kept.map((r) => ({ ...r, path: r.reason === "named" ? hideCredOnly(r.path) : hidePath(r.path) }));
+    const shownKept = kept.map((r) => ({ ...r, path: hidePath(r.path) }));
 
     return {
       report: { home, dryRun: opts.dryRun, removed: shownRemoved, kept: shownKept, freedBytes, warnings: warnings.map(hidePath) },

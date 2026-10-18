@@ -268,13 +268,14 @@ describe("the report (§4.5) and what is never touched (§7)", () => {
 });
 
 describe("the re-check under the entry lock (§4.3 step 1)", () => {
-  it("a workspace registered between the snapshot and the entry's lock: kept named, namedBy from the re-check", async () => {
+  // An entry unvouched at the snapshot stays labelled even when the re-check vouches it (fail closed, review R1).
+  it("a workspace registered between the snapshot and the entry's lock: kept named, namedBy from the re-check, path labelled", async () => {
     const s = await setup();
     await ensureTree(s.r.url, null, { home: s.home });
     const dir = await s.ws("acme-api");
     let steps = 0;
     const { report } = await pruneCache(s.home, { ...RUN, beforeStep: async () => { if (steps++ === 0) await s.syncAndRegister(dir); } });
-    expect([report.removed, report.kept, report.warnings]).toEqual([[], [{ path: `forges/${s.key}`, reason: "named", namedBy: [dir] }], []]);
+    expect([report.removed, report.kept, report.warnings]).toEqual([[], [{ path: `forges/${UNVOUCHED_HIDDEN}`, reason: "named", namedBy: [dir] }], []]);
   });
 
   it("the registry stops reading at the re-check: every such entry kept unchecked, the warning once", async () => {
