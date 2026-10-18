@@ -458,8 +458,9 @@ program
     // Spec 29 §4.1: with no [path], --exit-code fails exactly when `sync --check` does — a refused sync included
     if (refusalBlock(unsetDeclared(p)) && o.exitCode && !only) process.exitCode = 1;
     // AGENTS.md budget: with no [path], --exit-code fails on explicit budget violation (plain diff prints but exits 0)
+    const budgetOver = agentsMdOverBudget(p);
     if (o.exitCode && !only && budgetRefusalBlock(p)) process.exitCode = 1;
-    else if (!o.exitCode && agentsMdOverBudget(p)) errorLine(agentsMdRefusal(agentsMdOverBudget(p)!));
+    else if (!o.exitCode && budgetOver) errorLine(agentsMdRefusal(budgetOver));
   });
 
 const DIFF_PAINT = { paint: { same: pc.dim, del: pc.red, add: pc.green } };

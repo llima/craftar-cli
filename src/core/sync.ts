@@ -695,10 +695,9 @@ function parseAgentsMdBudget(value: unknown): number | null {
     return value;
   }
   if (typeof value === "string") {
-    // Must be only digits (no leading zeros except "0" itself, but we're lenient)
     if (!/^\d+$/.test(value)) return null;
     const n = Number(value);
-    if (!Number.isFinite(n) || n < 0) return null;
+    if (!Number.isFinite(n)) return null;
     return n;
   }
   return null;
