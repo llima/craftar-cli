@@ -385,3 +385,51 @@ export async function assertNoLinkOnPath(forgeDir: string, paths: string[]): Pro
     }
   }
 }
+
+
+/**
+ * The real path of `abs`, resolved through its nearest existing ancestor: `fs.realpath` needs the
+ * path to exist, and a plan target usually does not yet — so the part that exists is resolved
+ * (symlinks and all) and the part that does not is appended as written.
+ *
+ * It walks up only past a component that truly does not exist (`lstat` says ENOENT/ENOTDIR). Any
+ * other outcome throws instead. A component `lstat` cannot inspect (a symlink loop or a permission
+ * error on Linux) "cannot be inspected"; one it can inspect but `realpath` cannot follow (a
+ * dangling symlink or junction, a loop on Windows) "exists but cannot be resolved". Resolving the
+ * rest lexically would let a link that points into the Forge pass the containment check, so the gate
+ * fails closed rather than guess where the target lands.
+ */
+export async function realpathOfNearest(abs: string): Promise<string> {
+  let head = abs;
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return path.join(await fs.realpath(head), ...tail);
+    } catch (realpathError) {
+      try {
+        await fs.lstat(head);
+      } catch (lstatError) {
+        const code = (lstatError as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          const parent = path.dirname(head);
+          if (parent === head) return abs;
+          tail.unshift(path.basename(head));
+          head = parent;
+          continue;
+        }
+        throw cannotResolve(head, lstatError, "cannot be inspected");
+      }
+      throw cannotResolve(head, realpathError, "exists but cannot be resolved");
+    }
+  }
+}
+
+/**
+ * The refusal for a target that cannot be resolved; the caller adds which command cannot prove it. `what` is
+ * "cannot be inspected" when `lstat` itself failed, so the path is not known to exist, and "exists but cannot be
+ * resolved" when `lstat` succeeded and `realpath` did not.
+ */
+export function cannotResolve(p: string, e: unknown, what: "cannot be inspected" | "exists but cannot be resolved"): Error {
+  const code = (e as NodeJS.ErrnoException | null)?.code ?? (e instanceof Error ? e.message : String(e));
+  return new Error(`${p} ${what} (${code})`);
+}

@@ -39,12 +39,20 @@ const KIND_RE = /^[a-z0-9][a-z0-9._-]*$/;
 const NAME_LIKE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /**
+ * Whether `name` is shaped like a name: matches the regex and is not a token of a known format.
+ * Used by `shownName` here and by `repos.ts` for unknown keys (the 0.30.1 check in one copy).
+ */
+export function nameShaped(name: string): boolean {
+  return NAME_LIKE.test(name) && findSecrets(name).length === 0;
+}
+
+/**
  * Returns the name to show in an error message: JSON.stringify(name) when it looks like a name
  * and is not a token of a known format (`findSecrets`), otherwise `#${index + 1}` with the
  * "(not shown: not shaped like a name)" suffix.
  */
 function shownName(name: string, index: number): { shown: string; suffix: string } {
-  if (NAME_LIKE.test(name) && findSecrets(name).length === 0) {
+  if (nameShaped(name)) {
     return { shown: JSON.stringify(name), suffix: "" };
   }
   return { shown: `#${index + 1}`, suffix: " (not shown: not shaped like a name)" };

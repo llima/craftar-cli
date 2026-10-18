@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { TARGETS, type Registry, type RegistryEntry, type WorkspaceConfig } from "../schema/index.js";
+import { planClone } from "./clone.js";
 import { countStates } from "./impact.js";
 import { resolveHome } from "./home-lock.js";
 import { checkInitFlags, checkLocalKeys, forgeSource, initLine, type InitInput, type InitPlan } from "./init.js";
@@ -7,6 +8,7 @@ import { planRecipeEdit, slotHeld } from "./recipe-edit.js";
 import { readRegistry } from "./registry.js";
 import { classifyForge, credentialFault, CREDENTIAL_HIDDEN, refHoldsCredentials } from "./remote.js";
 import { profileNotFoundMessage, resolve } from "./resolve.js";
+import { profileRepos, type RepoEntry } from "./repos.js";
 import { loadForgeSource, mergeWorkspaceConfig, unsetDeclared, unsetRefused, type LoadedForge, type LoadOptions } from "./sync.js";
 import type { LocalKey } from "./workspace-yaml.js";
 
@@ -15,6 +17,9 @@ import type { LocalKey } from "./workspace-yaml.js";
  * so the flow can be tested with scripted answers. This module never touches `process`,
  * `console` or `readline`, and writes nothing.
  */
+
+/** The message printed when cloning is skipped because the first sync is refused. */
+export const NOT_CLONED_REFUSED = "  repositories: not cloned — the first sync is refused";
 
 export interface InitIo {
   ask(question: string): Promise<string | null>;
@@ -71,6 +76,91 @@ export function yesNo(answer: string): boolean | null {
 }
 
 /**
+ * The clone question of the interactive flow (spec 37 §4.3): lists the profile's repositories,
+ * asks whether to clone them, re-asks on errors. Returns the decision and the entries to clone.
+ *
+ * @param io The prompt interface.
+ * @param init The init plan.
+ * @param opts.root Absolute path of the workspace.
+ * @param opts.offline Whether --offline was given (no list, no question).
+ * @param opts.git The git binary path, or null if not found.
+ * @returns `{clone: false, entries: []}` when nothing to clone or the user said no;
+ *          `{clone: true, entries}` when the user said yes and planClone succeeded;
+ *          `{clone: false, entries: [], refused: true}` when the first sync is refused (unset params);
+ *          `"cancelled"` when the user cancelled.
+ */
+export async function askClone(
+  io: InitIo,
+  init: InitPlan,
+  opts: { root: string; offline: boolean; git: string | null },
+): Promise<{ clone: boolean; entries: RepoEntry[]; refused?: true } | "cancelled"> {
+  // --offline → no list, no question
+  if (opts.offline) {
+    return { clone: false, entries: [] };
+  }
+
+  // profileRepos throws → say one line, no question
+  const profile = init.ws.forge.profiles.get(init.ws.config.profile)!;
+  let allEntries: RepoEntry[];
+  try {
+    allEntries = profileRepos(profile);
+  } catch (e) {
+    io.say(`repositories: not offered — ${(e as Error).message}`);
+    return { clone: false, entries: [] };
+  }
+
+  // no entry → no list, no question
+  if (allEntries.length === 0) {
+    return { clone: false, entries: [] };
+  }
+
+  // a plan whose first sync would be refused → no list, no question, refused flag
+  const unset = unsetDeclared(init.plan);
+  if (unset.length > 0) {
+    return { clone: false, entries: [], refused: true };
+  }
+
+  // say the list
+  const maxName = Math.max(...allEntries.map((e) => e.name.length));
+  const maxUrl = Math.max(...allEntries.map((e) => e.url.length));
+  io.say(`Repositories of ${profile.name}:`);
+  for (let i = 0; i < allEntries.length; i++) {
+    const e = allEntries[i];
+    const ref = e.ref !== null ? `  @ ${e.ref}` : "";
+    io.say(`  ${i + 1}) ${e.name.padEnd(maxName)}   ${e.url.padEnd(maxUrl)}   → ${e.path}${ref}`);
+  }
+
+  // loop on confirm
+  for (;;) {
+    const answer = await io.confirm("Clone them into the workspace [no]: ");
+    if (answer === null) return "cancelled";
+    if (answer === "") return { clone: false, entries: [] };
+    const yn = yesNo(answer);
+    if (yn === false) return { clone: false, entries: [] };
+    if (yn === null) {
+      io.say("answer yes or no");
+      continue;
+    }
+
+    // yes → check git
+    if (opts.git === null) {
+      io.say("cloning needs git — install it, or leave the clone out");
+      continue;
+    }
+
+    // yes → planClone
+    try {
+      const ctx = { planned: init.plan.files.map((f) => f.path), lockPaths: init.lock?.files.map((f) => f.path) ?? [], forgeDir: init.ws.forge.root };
+      const clonePlan = await planClone(opts.root, profile, ctx, { present: "refuse", noEntries: "nothing to clone" });
+      return { clone: true, entries: clonePlan.entries };
+    } catch (e) {
+      io.say((e as Error).message);
+      continue;
+    }
+  }
+}
+
+/**
  * Says the summary and the `first sync:` line, asks through `io.confirm`,
  * re-asks anything but yes/no, returns confirmed or cancelled. A plan whose sync
  * is refused (spec 29 §4.1) says so before the question, which then offers no sync.
@@ -79,7 +169,7 @@ export async function confirmInit(
   init: InitPlan,
   root: string,
   io: InitIo,
-  opts: { sync: boolean },
+  opts: { sync: boolean; clone?: number; cloneRefused?: boolean },
 ): Promise<"confirmed" | "cancelled"> {
   io.say(`craftar init — about to write craftar.yaml in ${root}`);
   io.say(`  ${initLine(init)}`);
@@ -95,9 +185,29 @@ export async function confirmInit(
     io.say(`  first sync: ${parts.join(", ")}`);
   }
 
-  const question = opts.sync && unset.length === 0
-    ? "Write craftar.yaml and sync [yes]: "
-    : "Write craftar.yaml [yes]: ";
+  // When the sync is refused and cloneRefused, say the not-cloned line
+  if (unset.length > 0 && opts.cloneRefused) {
+    io.say(NOT_CLONED_REFUSED);
+  }
+
+  // Build the question
+  let question: string;
+  const clone = opts.clone ?? 0;
+  if (unset.length > 0) {
+    // Sync refused → offer only craftar.yaml
+    question = "Write craftar.yaml [yes]: ";
+  } else if (clone > 0) {
+    const repoWord = clone === 1 ? "repository" : "repositories";
+    if (opts.sync) {
+      question = `Write craftar.yaml, sync and clone ${clone} ${repoWord} [yes]: `;
+    } else {
+      question = `Write craftar.yaml and clone ${clone} ${repoWord} [yes]: `;
+    }
+  } else if (opts.sync) {
+    question = "Write craftar.yaml and sync [yes]: ";
+  } else {
+    question = "Write craftar.yaml [yes]: ";
+  }
 
   for (;;) {
     const answer = await io.confirm(question);
@@ -134,7 +244,7 @@ function maybeQuote(value: string): string {
  */
 export function againLine(
   answers: InitAnswers,
-  given: { workspace?: string; sync: boolean; offline: boolean },
+  given: { workspace?: string; sync: boolean; offline: boolean; clone?: boolean },
 ): string {
   if (credentialFault(answers.forge)) {
     throw new Error("againLine: the Forge holds credentials");
@@ -151,6 +261,7 @@ export function againLine(
   if (given.workspace !== undefined) parts.push(`--workspace ${maybeQuote(given.workspace)}`);
   if (!given.sync) parts.push("--no-sync");
   if (given.offline) parts.push("--offline");
+  if (given.clone === true) parts.push("--clone");
   return parts.join(" ");
 }
 
@@ -162,6 +273,7 @@ export interface InitGiven {
   addRecipes: string[];
   removeRecipes: string[];
   replace: boolean;
+  clone?: boolean;
 }
 
 export type AskResult =
@@ -543,6 +655,7 @@ export async function askInit(
   if (answeredAddRecipes.length > 0) input.addRecipes = answeredAddRecipes;
   if (answeredRemoveRecipes.length > 0) input.removeRecipes = answeredRemoveRecipes;
   if (answeredReplace) input.replace = true;
+  if (given.clone === true) input.clone = true;
 
   const answers: InitAnswers = {
     forge: answeredForge!,

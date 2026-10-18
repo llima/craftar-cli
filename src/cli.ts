@@ -26,7 +26,7 @@ import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, notProduced, readText, statusPath, statusReport, targetsReport } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
-import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, type UnheldPath } from "./core/forge.js";
+import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
@@ -46,7 +46,9 @@ import {
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
 import { checkInitFlags, initLine, planInit, type InitInput } from "./core/init.js";
-import { askInit, confirmInit, againLine, type InitAnswers } from "./core/init-flow.js";
+import { askInit, askClone, confirmInit, againLine, NOT_CLONED_REFUSED, type InitAnswers } from "./core/init-flow.js";
+import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type DestinationContext, type RepoState } from "./core/clone.js";
+import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
 import { readlineIo } from "./prompt.js";
 import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
@@ -69,7 +71,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.32.1");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.33.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -239,11 +241,93 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
   return r;
 }
 
+/**
+ * Shared clone report for `craftar init --clone` and `craftar repos clone`.
+ * Prints the header, the present rows first, then the clone rows (cloned/failed), each group
+ * in the profile's order. Returns whether any clone failed.
+ *
+ * @param header The bold header line (without the leading text, which is added here)
+ * @param results The clone results (cloned or failed)
+ * @param skipped The entries that were skipped (present state)
+ * @param root The workspace root, used for the by-hand message
+ * @param opts.reposCloneLine Whether to print the "or, from the workspace: craftar repos clone ..." line
+ */
+function printCloneReport(
+  header: string,
+  results: CloneResult[],
+  skipped: RepoEntry[],
+  root: string,
+  opts: { reposCloneLine: boolean },
+): boolean {
+  console.log(pc.bold(header));
+
+  // Build rows: skipped first (as "present"), then results (as "cloned" or "failed")
+  // All maintain profile order, which is the order of the input arrays
+  type Row = { state: "present" | "cloned" | "failed"; name: string; path: string; reason?: string };
+  const rows: Row[] = [];
+  for (const e of skipped) {
+    rows.push({ state: "present", name: e.name, path: e.path });
+  }
+  for (const r of results) {
+    if (r.outcome === "cloned") {
+      rows.push({ state: "cloned", name: r.entry.name, path: r.entry.path });
+    } else {
+      rows.push({ state: "failed", name: r.entry.name, path: r.entry.path, reason: r.reason });
+    }
+  }
+
+  // Compute column widths: sw = longest state, nw = longest name
+  const sw = Math.max(...rows.map((r) => r.state.length));
+  const nw = Math.max(...rows.map((r) => r.name.length));
+
+  // Print rows
+  for (const r of rows) {
+    let line = `  ${r.state.padEnd(sw)}  ${r.name.padEnd(nw)}  → ${r.path}`;
+    if (r.state === "present") {
+      line += "  (not cloned)";
+    } else if (r.state === "failed" && r.reason) {
+      line += `  (${r.reason})`;
+    }
+    console.log(line);
+  }
+
+  // Failure report
+  const failed = results.filter((r): r is CloneResult & { outcome: "failed" } => r.outcome === "failed");
+  if (failed.length > 0) {
+    const ok = results.length - failed.length;
+    const n = results.length;
+    console.log(`  ${ok} of ${n} cloned — clone the rest by hand, in ${root}:`);
+    for (const f of failed) {
+      console.log(`    ${byHand(f.entry)}`);
+    }
+    if (opts.reposCloneLine) {
+      const failedNames = failed.map((f) => f.entry.name);
+      console.log(`  or, from the workspace: craftar repos clone ${failedNames.join(" ")}`);
+    }
+  }
+
+  return failed.length > 0;
+}
+
+/**
+ * The clone step for `craftar init --clone`: clones the entries, prints the report, sets exitCode on failures.
+ * Calls `again()` at the end.
+ */
+async function runCloneStep(root: string, profile: string, entries: RepoEntry[], git: string, again: () => void): Promise<void> {
+  const n = entries.length;
+  const repoWord = n === 1 ? "repository" : "repositories";
+  const results = await cloneRepos(root, entries, { git, env: process.env, stdinIsTty: process.stdin.isTTY === true });
+  const header = `craftar init — cloning ${n} ${repoWord} of ${profile}`;
+  const anyFailed = printCloneReport(header, results, [], root, { reposCloneLine: true });
+  if (anyFailed) process.exitCode = 1;
+  again();
+}
+
 /* ---------------------------------------------------------------- init */
 program
   .command("init")
   .description(
-    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync; in a terminal, asks for the Forge and the profile not given as flags; refused when craftar.yaml already exists",
+    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync; with --clone, clone the profile's repositories into the workspace (after the first sync, or with --no-sync after writing craftar.yaml); in a terminal, asks for the Forge and the profile not given as flags; refused when craftar.yaml already exists",
   )
   .option("--forge <dir|url>", "the Forge: a directory (written relative to the workspace) or a git URL; asked for in a terminal when omitted")
   .option("--profile <name>", "the client profile in the Forge; asked for in a terminal when omitted")
@@ -253,6 +337,8 @@ program
   .option("--remove-recipe <name>", "remove a recipe of the profile's (repeatable)", collect, [])
   .option("--replace", "let --add-recipe take a slot another recipe holds", false)
   .option("--no-sync", "write craftar.yaml only, and say what the first sync would do")
+  .option("--clone", "after the first sync, clone the profile's repositories (its repos list) into the workspace")
+  .option("--no-clone", "do not clone, and do not ask")
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
   .option("--workspace <dir>", "workspace root, created when missing", ".")
   .action(
@@ -265,6 +351,7 @@ program
       removeRecipe: string[];
       replace: boolean;
       sync: boolean;
+      clone?: boolean;
       offline: boolean;
       workspace: string;
     }, cmd) => {
@@ -295,6 +382,19 @@ program
         addRecipes: o.addRecipe,
         removeRecipes: o.removeRecipe,
       });
+      // C1: --clone and --no-clone cannot be given together
+      if (process.argv.includes("--clone") && process.argv.includes("--no-clone")) {
+        fail("pass --clone or --no-clone, not both");
+      }
+      // C2: --clone with --offline
+      if (o.clone === true && o.offline) {
+        fail("--clone needs the network — drop --offline, or clone later with git");
+      }
+      // C6: --clone with no git on PATH
+      const git = await findGit(process.env);
+      if (o.clone === true && git === null) {
+        fail("cloning needs git — install it, or leave the clone out");
+      }
       // Mode: flags when both given; else interactive when both streams are TTYs; else N2
       const bothGiven = o.forge !== undefined && o.profile !== undefined;
       const isTTY = process.stdin.isTTY && process.stdout.isTTY;
@@ -324,6 +424,7 @@ program
             addRecipes: o.addRecipe,
             removeRecipes: o.removeRecipe,
             replace: o.replace,
+            clone: o.clone,
           },
           local,
           io,
@@ -341,19 +442,35 @@ program
           addRecipes: o.addRecipe,
           removeRecipes: o.removeRecipe,
           replace: o.replace,
+          clone: o.clone === true,
         };
       }
       const init = await planInit(root, input, { ...load(o, "sync"), local });
+      // Interactive mode: when o.clone is undefined, ask about cloning between planInit and confirmInit
+      // --clone typed: planInit has checked C3–C5 and returned the entries, in either mode
+      let cloneEntries: RepoEntry[] = o.clone === true ? init.repos : [];
+      let cloneRefused = false;
       if (answers !== null) {
+        if (o.clone === undefined) {
+          const io = readlineIo(process.stdin, process.stdout, { terminal: true });
+          const cloneResult = await askClone(io, init, { root, offline: o.offline, git });
+          if (cloneResult === "cancelled") fail("init cancelled — nothing written");
+          cloneEntries = cloneResult.entries;
+          cloneRefused = cloneResult.refused === true;
+        }
         const io = readlineIo(process.stdin, process.stdout, { terminal: true });
-        const confirm = await confirmInit(init, root, io, { sync: o.sync });
+        const confirm = await confirmInit(init, root, io, {
+          sync: o.sync,
+          clone: cloneEntries.length || undefined,
+          cloneRefused: o.clone === true || cloneRefused,
+        });
         if (confirm === "cancelled") fail("init cancelled — nothing written");
       }
       const { ws, plan: p } = init;
       const workspaceGiven = cmd.getOptionValueSource("workspace") === "cli";
       const again = () => {
         if (answers !== null) {
-          console.log(againLine(answers, { workspace: workspaceGiven ? o.workspace : undefined, sync: o.sync, offline: o.offline }));
+          console.log(againLine(answers, { workspace: workspaceGiven ? o.workspace : undefined, sync: o.sync, offline: o.offline, clone: cloneEntries.length > 0 }));
         }
       };
       // Every refusal is above: only now does the directory, and craftar.yaml, come to exist
@@ -368,9 +485,18 @@ program
       console.log(`  ${initLine(init)}`);
       for (const n of init.notes) console.log(`  note ${n}`);
       const unset = unsetDeclared(p);
+      const cloning = cloneEntries.length > 0;
+      const refused = unset.length > 0;
       if (!o.sync) {
         console.log(nextSyncLine(init.statuses, unset));
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+        if (cloning && refused && answers === null) {
+          console.log(NOT_CLONED_REFUSED);
+        } else if (cloning && !refused) {
+          // Clone even without sync
+          await runCloneStep(root, ws.config.profile, cloneEntries, git!, again);
+          return;
+        }
         again();
         return;
       }
@@ -378,6 +504,9 @@ program
       // first sync is not run. exitCode, not fail(): the `again` line still follows the block.
       if (unset.length) {
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+        if (cloning && answers === null) {
+          console.log(NOT_CLONED_REFUSED);
+        }
         refusalBlock(unset, { thenSync: true });
         again();
         process.exitCode = 1;
@@ -389,9 +518,148 @@ program
         console.log(
           `  ${pc.yellow("warn")} ${collisions} file(s) already in the workspace differ from the Forge and were left as they are — to bring them into the Forge, run craftar import`,
         );
+      if (cloning) {
+        await runCloneStep(root, ws.config.profile, cloneEntries, git!, again);
+        return;
+      }
       again();
     },
   );
+
+/* ---------------------------------------------------------------- repos */
+// `craftar repos` lists (the command's own action); `craftar repos clone` clones. No `repos list` (spec 37 §13.3 item 29).
+const reposCmd = program
+  .command("repos")
+  .description("List the profile's repositories (its repos list) with their state in this workspace: present, missing or blocked; starts no program but the Forge load, writes nothing")
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
+  .option("--json", "machine-readable output", false)
+  .action(async (o) => {
+    const ws = await loadWorkspace(o.workspace, load(o, "read"));
+    const p = await plan(ws);
+    const lock = await readLock(ws.root);
+    const profile = ws.forge.profiles.get(ws.config.profile)!;
+    // C4: profileRepos throws for a block that does not read
+    const entries = profileRepos(profile);
+    // No entry → one line, exit 0
+    if (entries.length === 0) {
+      if (o.json) {
+        const out = {
+          workspace: await fs.realpath(ws.root),
+          profile: ws.config.profile,
+          repos: [],
+          warnings: p.warnings,
+        };
+        console.log(JSON.stringify(out, null, 2));
+      } else {
+        console.log(`profile ${ws.config.profile} lists no repositories`);
+        for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+      }
+      return;
+    }
+    // Build the destination context: planned paths and lock paths
+    const ctx: DestinationContext = {
+      planned: p.files.map((f) => f.path),
+      lockPaths: lock?.files.map((f) => f.path) ?? [],
+      forgeDir: ws.forge.root,
+    };
+    const list = await listRepos(ws.root, entries, ctx);
+    const missing = list.filter((e) => e.state === "missing").length;
+    if (o.json) {
+      const repos = list.map((e) => ({
+        name: e.name,
+        url: e.url,
+        path: e.path,
+        ref: e.ref,
+        state: e.state,
+        reason: e.reason,
+      }));
+      const out = {
+        workspace: await fs.realpath(ws.root),
+        profile: ws.config.profile,
+        repos,
+        warnings: p.warnings,
+      };
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+    // Text output
+    console.log(`repositories of ${ws.config.profile} — ${list.length} in the profile, ${missing} missing`);
+    const sw = 7; // "present" is longest, always
+    const nw = Math.max(...list.map((e) => e.name.length));
+    const pw = Math.max(...list.map((e) => e.path.length));
+    for (const e of list) {
+      let line = `  ${e.state.padEnd(sw)}  ${e.name.padEnd(nw)}  → ${e.path.padEnd(pw)}   ${e.url}`;
+      if (e.ref) line += `  @ ${e.ref}`;
+      if (e.reason) line += `  (${e.reason})`;
+      console.log(line);
+    }
+    for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+  });
+
+reposCmd
+  .command("clone")
+  .description("Clone the profile's repositories that are missing in this workspace (all, or the names given); typing the command is the consent; needs a fresh copy of a remote Forge")
+  .argument("[names...]", "repository names to clone (default: all missing)")
+  // No default here: `repos` holds `--workspace` too, and commander gives the value to the parent when both declare it.
+  .option("--workspace <dir>", 'workspace root (default: ".")')
+  .action(async (names: string[], o) => {
+    const workspace: string = o.workspace ?? reposCmd.opts().workspace ?? ".";
+    // C6: git is needed before any load
+    const git = await findGit(process.env);
+    if (git === null) {
+      fail("cloning needs git — install it, or leave the clone out");
+    }
+    // R4: fetchHint: "fresh-copy" — repos clone refuses a stale cached copy
+    const ws = await loadWorkspace(workspace, { ...load({ offline: false }, "sync"), fetchHint: "fresh-copy" });
+    const p = await plan(ws);
+    const lock = await readLock(ws.root);
+    const profile = ws.forge.profiles.get(ws.config.profile)!;
+    // Build the destination context
+    const ctx: DestinationContext = {
+      planned: p.files.map((f) => f.path),
+      lockPaths: lock?.files.map((f) => f.path) ?? [],
+      forgeDir: ws.forge.root,
+    };
+    // planClone: C3, C4, C5, R1, R2, R3 come out of it
+    const clonePlan = await planClone(ws.root, profile, ctx, {
+      present: "skip",
+      noEntries: "nothing to clone",
+      names: names.length ? names : undefined,
+    });
+    // Nothing to clone and no names given: all are present
+    if (clonePlan.entries.length === 0) {
+      const all = profileRepos(profile);
+      const n = all.length;
+      const repoWord = n === 1 ? "repository" : "repositories";
+      console.log(`all ${n} ${repoWord} of ${ws.config.profile} are present — nothing to clone`);
+      return;
+    }
+    // Clone the entries
+    const results = await cloneRepos(ws.root, clonePlan.entries, { git, env: process.env, stdinIsTty: process.stdin.isTTY === true });
+    // Combine skipped and results in profile order for the report
+    // skipped entries come from planClone, results are in the same order as entries
+    // To merge them in profile order: iterate through all entries and match
+    const allEntries = profileRepos(profile);
+    const skippedNames = new Set(clonePlan.skipped.map((e) => e.name.toLowerCase()));
+    const resultMap = new Map(results.map((r) => [r.entry.name.toLowerCase(), r]));
+    const orderedSkipped: RepoEntry[] = [];
+    const orderedResults: CloneResult[] = [];
+    for (const e of allEntries) {
+      const lower = e.name.toLowerCase();
+      if (skippedNames.has(lower)) {
+        orderedSkipped.push(clonePlan.skipped.find((s) => s.name.toLowerCase() === lower)!);
+      } else if (resultMap.has(lower)) {
+        orderedResults.push(resultMap.get(lower)!);
+      }
+    }
+    // Report
+    const n = clonePlan.entries.length;
+    const repoWord = n === 1 ? "repository" : "repositories";
+    const header = `craftar repos clone — cloning ${n} ${repoWord} of ${ws.config.profile}`;
+    const anyFailed = printCloneReport(header, orderedResults, orderedSkipped, ws.root, { reposCloneLine: false });
+    if (anyFailed) process.exitCode = 1;
+  });
 
 /* ---------------------------------------------------------------- sync */
 program
@@ -2737,54 +3005,6 @@ function color(state: string) {
       return pc.dim;
   }
 }
-
-/**
- * The real path of `abs`, resolved through its nearest existing ancestor: `fs.realpath` needs the
- * path to exist, and a plan target usually does not yet — so the part that exists is resolved
- * (symlinks and all) and the part that does not is appended as written.
- *
- * It walks up only past a component that truly does not exist (`lstat` says ENOENT/ENOTDIR). Any
- * other outcome throws instead. A component `lstat` cannot inspect (a symlink loop or a permission
- * error on Linux) "cannot be inspected"; one it can inspect but `realpath` cannot follow (a
- * dangling symlink or junction, a loop on Windows) "exists but cannot be resolved". Resolving the
- * rest lexically would let a link that points into the Forge pass the containment check, so the gate
- * fails closed rather than guess where the target lands.
- */
-async function realpathOfNearest(abs: string): Promise<string> {
-  let head = abs;
-  const tail: string[] = [];
-  for (;;) {
-    try {
-      return path.join(await fs.realpath(head), ...tail);
-    } catch (realpathError) {
-      try {
-        await fs.lstat(head);
-      } catch (lstatError) {
-        const code = (lstatError as NodeJS.ErrnoException).code;
-        if (code === "ENOENT" || code === "ENOTDIR") {
-          const parent = path.dirname(head);
-          if (parent === head) return abs;
-          tail.unshift(path.basename(head));
-          head = parent;
-          continue;
-        }
-        throw cannotResolve(head, lstatError, "cannot be inspected");
-      }
-      throw cannotResolve(head, realpathError, "exists but cannot be resolved");
-    }
-  }
-}
-
-/**
- * The refusal for a target that cannot be resolved; the caller adds which command cannot prove it. `what` is
- * "cannot be inspected" when `lstat` itself failed, so the path is not known to exist, and "exists but cannot be
- * resolved" when `lstat` succeeded and `realpath` did not.
- */
-function cannotResolve(p: string, e: unknown, what: "cannot be inspected" | "exists but cannot be resolved"): Error {
-  const code = (e as NodeJS.ErrnoException | null)?.code ?? (e instanceof Error ? e.message : String(e));
-  return new Error(`${p} ${what} (${code})`);
-}
-
 /**
  * The gate of a user-supplied output path (Ruling 30 of spec 06; spec 29 §4.2): the file a command writes where the
  * user says must lie outside the Forge and must not exist. Both sides are compared as real paths, so neither a `..`

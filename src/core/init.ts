@@ -1,8 +1,10 @@
 import path from "node:path";
 import YAML from "yaml";
 import { TARGETS, type Lock, type WorkspaceConfig } from "../schema/index.js";
+import { planClone } from "./clone.js";
 import { planRecipeEdit } from "./recipe-edit.js";
 import { classifyForge, credentialFault } from "./remote.js";
+import { type RepoEntry } from "./repos.js";
 import {
   LOCAL_FILE,
   loadWorkspaceConfig,
@@ -19,6 +21,8 @@ import {
 } from "./sync.js";
 import { readLocalFile, type LocalKey } from "./workspace-yaml.js";
 
+export type { RepoEntry };
+
 /**
  * `craftar init` (spec 23): steps 2–7 of §4.2 — the flag checks, the local-file check, the configuration
  * in memory, the Forge load, the recipe flags, the plan. Never writes, never prints: the command writes
@@ -34,6 +38,8 @@ export interface InitInput {
   addRecipes?: string[];
   removeRecipes?: string[];
   replace?: boolean;
+  /** Clone the profile's repositories into the workspace (spec 37 §4.2). */
+  clone?: boolean;
   /** A Forge already loaded: `planInit` reuses it instead of loading again (spec 28 §5.2).
    * A path Forge is loaded with the ref the workspace will have (`loadForgeSource(root, source, ref)`),
    * so its ignored-ref warning travels in `loaded.warnings`. */
@@ -51,6 +57,8 @@ export interface InitPlan {
   notes: string[];
   /** Where the targets come from, for the first line of the output (§4.4). */
   targetsFrom: "flag" | "local" | "profile";
+  /** The repositories to clone, in profile order; empty when `input.clone` is not true (spec 37 §4.2). */
+  repos: RepoEntry[];
 }
 
 /** The flag each local key would replace (N10). */
@@ -215,6 +223,15 @@ export async function planInit(root: string, input: InitInput, opts: InitOptions
   }
   if (input.targets !== undefined) doc.targets = input.targets;
 
+  // Clone planning (spec 37 §4.2): when input.clone is true, planClone errors propagate.
+  let repos: RepoEntry[] = [];
+  if (input.clone === true) {
+    const profile = ws.forge.profiles.get(ws.config.profile)!;
+    const ctx = { planned: p.files.map((f) => f.path), lockPaths: lock?.files.map((f) => f.path) ?? [], forgeDir: ws.forge.root };
+    const clonePlan = await planClone(root, profile, ctx, { present: "refuse", noEntries: "nothing to clone; drop --clone" });
+    repos = clonePlan.entries;
+  }
+
   const targetsFrom = input.targets !== undefined ? "flag" : local.includes("targets") ? "local" : "profile";
-  return { ws, plan: p, lock, statuses, text: YAML.stringify(doc), notes, targetsFrom };
+  return { ws, plan: p, lock, statuses, text: YAML.stringify(doc), notes, targetsFrom, repos };
 }
