@@ -59,6 +59,12 @@ const FINDING: Array<[string, string]> = [
   ["the empty authority and a line feed before the @, together", "https:///tok\n@host/"],
   ["refused though it is no secret: a URL, a tab, a handle", "https://example.com\t@handle"],
   ["a tab inside the scheme does not save a password", "ht\ttps://u:p@host/"],
+  // Spec 39 §4.2 (B′): a tab or a line break inside the scheme or its :// — a URL parser removes them, so the userinfo reaches the host.
+  ["a tab inside the ://", "https:\t//u:p@host/"],
+  ["a tab inside the scheme, a bare user", "ht\ttps://tok@host/"],
+  ["a line feed inside the scheme, a bare user", "ht\ntps://tok@host/"],
+  ["a line feed between the two slashes", "https:/\n/u:p@host/"],
+  ["a word, a line feed, then a URL with a bare user", "see\nhttps://tok@host/"],
 ];
 
 const NONE: Array<[string, string]> = [
@@ -129,8 +135,6 @@ const NONE: Array<[string, string]> = [
   ["a host and a port, a space, a mention", "postgres://db.internal:5432 @replica"],
   ["a line feed and no @ after it", "https://tok\n\n\n"],
   ["ssh, a line feed, a mention — no colon before the @", "ssh://host\n@alice"],
-  ["a tab inside the :// — still passes, though it holds a password", "https:\t//u:p@host/"],
-  ["a tab inside the scheme, a bare user — still passes", "ht\ttps://tok@host/"],
 ];
 
 describe("urlCredentialIn — row U", () => {
@@ -146,5 +150,9 @@ describe("urlCredentialIn — row U", () => {
       [false, true],
       [false, true],
     ]);
+  });
+  it("the removal is confined to the scheme and its :// (spec 39 §5.2): the pinned passes stay passes", () => {
+    for (const text of ["https://tok\n @host/", "https://u\t:p@host/", "ssh://git\n@host/x", "https://example.com\nops@example.com", "site: https://example.com\nmail: ops@example.com", "ssh://host\n@alice"])
+      expect(urlCredentialIn(text), JSON.stringify(text)).toBe(false);
   });
 });

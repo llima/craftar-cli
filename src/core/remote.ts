@@ -46,17 +46,25 @@ const REFERENCE_ONLY = new RegExp(`^(\\$\\{${ENV_NAME}\\}|:)*$`);
  * the remedy it prescribes (a userinfo made only of `${NAME}` references).
  */
 export function urlCredentialIn(text: string): boolean {
+  // A run of tab / LF / CR among the `:` and the two `/` of a scheme separator is removed, so the
+  // separator is found (spec 39 §5.2).
+  const leaf = text.replace(/:[\t\n\r]*\/[\t\n\r]*\//g, "://");
   // Step 1: For every occurrence of `://` in the leaf (occurrences are independent; none hides another).
   let pos = 0;
   while (true) {
-    const sep = text.indexOf("://", pos);
+    const sep = leaf.indexOf("://", pos);
     if (sep === -1) break;
     pos = sep + 3; // Move past this `://` for the next iteration
 
     // Step 1: The scheme is the run of [A-Za-z0-9+.-] directly before it; it may be empty.
     let schemeStart = sep;
-    while (schemeStart > 0 && /[A-Za-z0-9+.-]/.test(text[schemeStart - 1])) schemeStart--;
-    const scheme = text.slice(schemeStart, sep).toLowerCase();
+    while (schemeStart > 0 && /[A-Za-z0-9+.-]/.test(leaf[schemeStart - 1])) schemeStart--;
+    const scheme = leaf.slice(schemeStart, sep).toLowerCase();
+
+    // Spec 39 §5.2: also walk back including tab / LF / CR, then remove them and lower-case.
+    let schemeLooseStart = sep;
+    while (schemeLooseStart > 0 && /[A-Za-z0-9+.\-\t\n\r]/.test(leaf[schemeLooseStart - 1])) schemeLooseStart--;
+    const schemeLoose = leaf.slice(schemeLooseStart, sep).replace(/[\t\n\r]/g, "").toLowerCase();
 
     // Step 2: The authority is the text after it, up to the first of `/`, `?`, `#`, white space (\s), `"`, `'`, `,`, `;` or the end.
     // An empty authority is not the end of it: curl takes up to three slashes after the scheme and reads what
@@ -64,7 +72,7 @@ export function urlCredentialIn(text: string): boolean {
     // but `file` (where an empty authority is the norm and the rest is a path) is read past the leading
     // separators. White space among them is read past too: a URL parser drops a tab or a newline,
     // percent-encodes a space, and still reads the userinfo that follows.
-    const rest = text.slice(sep + 3);
+    const rest = leaf.slice(sep + 3);
     const afterScheme = scheme === "file" ? rest : rest.replace(/^[/\\\s]+/, "");
     // White space ends the authority — except a run of tab, line feed and carriage return directly before an
     // `@`: a URL parser deletes those three from a URL, so `https://<token><LF>@host/` reaches the host with the
@@ -101,9 +109,11 @@ export function urlCredentialIn(text: string): boolean {
 
     // Step 5: When the scheme is http, https, ws or wss, or ends in + followed by one of them,
     // any other non-empty userinfo is a finding; for any other scheme, the empty one included,
-    // only a userinfo holding `:` is.
-    const isHttpWs = HTTP_WS_SCHEMES.includes(scheme) ||
-      HTTP_WS_SCHEMES.some((s) => scheme.endsWith("+" + s));
+    // only a userinfo holding `:` is. Spec 39 §5.2: isHttpWs is true when EITHER reading
+    // (scheme or schemeLoose) matches.
+    const isHttpWs =
+      HTTP_WS_SCHEMES.includes(scheme) || HTTP_WS_SCHEMES.some((s) => scheme.endsWith("+" + s)) ||
+      HTTP_WS_SCHEMES.includes(schemeLoose) || HTTP_WS_SCHEMES.some((s) => schemeLoose.endsWith("+" + s));
 
     if (isHttpWs) {
       // Any non-empty userinfo (not made of references only) is a finding
