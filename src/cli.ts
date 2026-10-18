@@ -395,7 +395,8 @@ program
       }
       const init = await planInit(root, input, { ...load(o, "sync"), local });
       // Interactive mode: when o.clone is undefined, ask about cloning between planInit and confirmInit
-      let cloneEntries: RepoEntry[] = [];
+      // --clone typed: planInit has checked C3–C5 and returned the entries, in either mode
+      let cloneEntries: RepoEntry[] = o.clone === true ? init.repos : [];
       let cloneRefused = false;
       if (answers !== null) {
         if (o.clone === undefined) {
@@ -412,9 +413,6 @@ program
           cloneRefused: o.clone === true || cloneRefused,
         });
         if (confirm === "cancelled") fail("init cancelled — nothing written");
-      } else if (o.clone === true) {
-        // Non-interactive mode with --clone: use repos from planInit
-        cloneEntries = init.repos;
       }
       const { ws, plan: p } = init;
       const workspaceGiven = cmd.getOptionValueSource("workspace") === "cli";
