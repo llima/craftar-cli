@@ -181,7 +181,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
 
   /* ---- Kiro steering gives us inclusion modes and hand-written steering ---- */
   const steeringDir = path.join(ws, ".kiro", "steering");
-  const steeringMeta = new Map<string, { inclusion: string; fileMatchPattern?: string; generated: boolean; hasFrontmatter: boolean; text: string; scan?: string }>();
+  const steeringMeta = new Map<string, { inclusion: string; fileMatchPattern?: string; generated: boolean; setsInclusion: boolean; text: string; scan?: string }>();
   if (await exists(steeringDir)) {
     for (const f of (await fs.readdir(steeringDir)).sort()) {
       if (!f.endsWith(".md")) continue;
@@ -192,7 +192,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
         inclusion: data.inclusion ?? "always",
         fileMatchPattern: data.fileMatchPattern,
         generated: GENERATED_BANNER.test(body.slice(0, 300)),
-        hasFrontmatter: raw !== null && data.inclusion !== undefined,
+        setsInclusion: raw !== null && data.inclusion !== undefined,
         text,
         scan: src.scan,
       });
@@ -204,7 +204,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     if (!f.endsWith(".md")) continue;
     const name = f.replace(/\.md$/, "");
     const sm = steeringMeta.get(name);
-    const emitted = await readEmitted(claudeDir, "rule", f, origin, sm ? { inclusion: sm.inclusion, fileMatchPattern: sm.fileMatchPattern, generated: sm.generated, hasFrontmatter: sm.hasFrontmatter } : undefined);
+    const emitted = await readEmitted(claudeDir, "rule", f, origin, sm ? { inclusion: sm.inclusion, fileMatchPattern: sm.fileMatchPattern, generated: sm.generated, setsInclusion: sm.setsInclusion } : undefined);
     if (!emitted) continue;
     // Copy any warnings from readEmitted into the report
     if (emitted.warnings) {
@@ -634,7 +634,7 @@ export async function readEmitted(
   type: "rule" | "agent" | "command" | "skill" | "script" | "hook",
   rel: string,
   origin: (rel: string) => { workspace: string; path: string },
-  steering?: { inclusion: string; fileMatchPattern?: string; generated?: boolean; hasFrontmatter?: boolean },
+  steering?: { inclusion: string; fileMatchPattern?: string; generated?: boolean; setsInclusion?: boolean },
 ): Promise<EmittedSource | null> {
   if (type === "rule") {
     const name = rel.replace(/\.md$/, "");
@@ -650,8 +650,82 @@ export async function readEmitted(
       return false;
     };
 
-    const hasPaths = parsed.raw !== null && "paths" in parsed.data;
-    const pathsUsable = hasPaths && isUsablePaths(parsed.data.paths);
+    // Read paths from raw frontmatter directly when YAML parsing produced a malformed value.
+    // Claude Code writes unquoted globs which cause YAML alias errors (e.g., `- **/*.ts`).
+    // This function parses paths: by line when the standard YAML parser fails.
+    const readPathsFromRaw = (raw: string | null): { value: unknown; usable: boolean } => {
+      if (raw === null) return { value: undefined, usable: false };
+
+      // First try strict YAML parsing
+      try {
+        const parsed = parseYamlText("frontmatter", raw);
+        if (typeof parsed === "object" && parsed !== null && "paths" in parsed) {
+          const p = (parsed as Record<string, unknown>).paths;
+          return { value: p, usable: isUsablePaths(p) };
+        }
+        return { value: undefined, usable: false };
+      } catch {
+        // YAML parsing failed — read paths: by lines
+        const lines = raw.split("\n");
+        const pathsIdx = lines.findIndex((l) => /^paths:\s*/.test(l));
+        if (pathsIdx === -1) return { value: undefined, usable: false };
+
+        const pathsLine = lines[pathsIdx];
+        const inlineMatch = pathsLine.match(/^paths:\s*(.+)$/);
+        if (inlineMatch) {
+          // Inline value on the same line: `paths: **/*.ts` or `paths: "**/*.ts"`
+          const inlineValue = inlineMatch[1].trim();
+          // If it starts with [ or {, it's not a simple string — unusable
+          if (inlineValue.startsWith("[") || inlineValue.startsWith("{")) {
+            return { value: inlineValue, usable: false };
+          }
+          // Remove surrounding quotes if present
+          const unquoted = inlineValue.replace(/^["'](.*)["']$/, "$1");
+          return { value: unquoted, usable: unquoted.length > 0 };
+        }
+
+        // No inline value — look for list items below
+        const items: string[] = [];
+        // Find the indentation of the first list item
+        let listIndent: string | null = null;
+        for (let i = pathsIdx + 1; i < lines.length; i++) {
+          const line = lines[i];
+          // Empty line: continue
+          if (line.trim() === "") continue;
+          // Check if it's a list item
+          const listMatch = line.match(/^(\s*)-\s*(.*)$/);
+          if (listMatch) {
+            if (listIndent === null) {
+              listIndent = listMatch[1];
+            } else if (listMatch[1] !== listIndent) {
+              // Different indentation — we've moved past this list
+              break;
+            }
+            // Extract item value, removing surrounding quotes
+            const itemValue = listMatch[2].trim().replace(/^["'](.*)["']$/, "$1");
+            if (itemValue.length > 0) {
+              items.push(itemValue);
+            }
+          } else {
+            // Not a list item — check if it's another key or continuation
+            const keyMatch = line.match(/^\s*\S+:/);
+            if (keyMatch) break; // Another key, stop
+            // Might be a continuation or nested object — not a simple list, unusable
+            return { value: undefined, usable: false };
+          }
+        }
+
+        if (items.length > 0) {
+          return { value: items, usable: true };
+        }
+        return { value: undefined, usable: false };
+      }
+    };
+
+    const pathsResult = readPathsFromRaw(parsed.raw);
+    const hasPaths = pathsResult.value !== undefined;
+    const pathsUsable = pathsResult.usable;
+    const pathsValue = pathsResult.value as string | string[] | undefined;
 
     // Determine scope by precedence:
     // 1. hand-written steering with frontmatter inclusion → use steering
@@ -668,17 +742,19 @@ export async function readEmitted(
       frontmatterRaw = parsed.raw ?? undefined;
     }
 
-    // Helper to check if steering scope differs from paths scope
+    // Helper to check if steering scope differs from paths scope.
+    // The kiro emitter writes a list as a comma-joined string, so we compare the steering pattern
+    // (which is always a string) against the paths value joined by comma.
     const scopeDiffers = (steeringInclusion: string | undefined, steeringPattern: string | undefined): boolean => {
-      if (!pathsUsable) return false;
-      const pathsPattern = parsed.data.paths as string | string[];
-      const normSteering = [steeringPattern].flat().filter((x): x is string => x !== undefined);
-      const normPaths = [pathsPattern].flat();
-      return steeringInclusion !== "fileMatch" || JSON.stringify(normSteering) !== JSON.stringify(normPaths);
+      if (!pathsUsable || pathsValue === undefined) return false;
+      if (steeringInclusion !== "fileMatch") return true;
+      // Compare steering pattern (a string) against paths joined by comma
+      const pathsJoined = Array.isArray(pathsValue) ? pathsValue.join(",") : pathsValue;
+      return steeringPattern !== pathsJoined;
     };
 
-    if (steering && !steering.generated && steering.hasFrontmatter) {
-      // Case 1: hand-written steering with frontmatter - use steering's scope
+    if (steering && !steering.generated && steering.setsInclusion) {
+      // Case 1: hand-written steering with inclusion set - use steering's scope
       inclusion = steering.inclusion as "always" | "fileMatch" | "manual" | "auto";
       fileMatchPattern = steering.fileMatchPattern;
 
@@ -686,16 +762,16 @@ export async function readEmitted(
       if (pathsUsable && scopeDiffers(steering.inclusion, steering.fileMatchPattern)) {
         warnings.push(`rule ${name}: .kiro/steering/${name}.md and paths: in .claude/rules/${name}.md disagree; the steering file's scope is kept`);
       }
-    } else if (pathsUsable) {
+    } else if (pathsUsable && pathsValue !== undefined) {
       // Case 2: usable paths: in rule
       inclusion = "fileMatch";
-      fileMatchPattern = parsed.data.paths as string | string[];
+      fileMatchPattern = pathsValue;
 
       // Warn about steering
       if (steering) {
-        if (!steering.hasFrontmatter) {
-          // steering without frontmatter
-          warnings.push(`rule ${name}: .kiro/steering/${name}.md has no frontmatter; scope taken from paths: in .claude/rules/${name}.md`);
+        if (!steering.setsInclusion) {
+          // steering without inclusion set
+          warnings.push(`rule ${name}: .kiro/steering/${name}.md sets no inclusion; scope taken from paths: in .claude/rules/${name}.md`);
         } else if (steering.generated && scopeDiffers(steering.inclusion, steering.fileMatchPattern)) {
           // generated steering with different scope
           warnings.push(`rule ${name}: the generated .kiro/steering/${name}.md disagrees with paths: in .claude/rules/${name}.md; scope taken from paths:`);
@@ -705,12 +781,16 @@ export async function readEmitted(
       // Case 3: generated steering
       inclusion = steering.inclusion as "always" | "fileMatch" | "manual" | "auto";
       fileMatchPattern = steering.fileMatchPattern;
+    } else if (steering) {
+      // Case 4: any steering file (hand-written, may have no inclusion) - use its pattern as main did
+      inclusion = steering.inclusion as "always" | "fileMatch" | "manual" | "auto";
+      fileMatchPattern = steering.fileMatchPattern;
     }
-    // else Case 4: "always" (default)
+    // else Case 5: no steering file at all → "always" (default)
 
-    // Warn about unusable paths
+    // Warn about unusable paths (the scope then follows the rest of the precedence)
     if (hasPaths && !pathsUsable) {
-      warnings.push(`rule ${name}: paths: in .claude/rules/${name}.md is not a string or a list of strings; read as always`);
+      warnings.push(`rule ${name}: paths: in .claude/rules/${name}.md is not a string or a list of strings; ignored`);
     }
 
     const meta: Ingredient = {

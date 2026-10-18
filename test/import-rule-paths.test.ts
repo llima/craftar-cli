@@ -106,7 +106,7 @@ describe("import --from claude-code — paths: frontmatter", () => {
     expect(ingredientYaml.inclusion).toBe("fileMatch");
     expect(ingredientYaml.fileMatchPattern).toBe("projects/acme-api/**");
     expect(report.warnings).toContain(
-      "rule backend: .kiro/steering/backend.md has no frontmatter; scope taken from paths: in .claude/rules/backend.md"
+      "rule backend: .kiro/steering/backend.md sets no inclusion; scope taken from paths: in .claude/rules/backend.md"
     );
   });
 
@@ -123,7 +123,7 @@ describe("import --from claude-code — paths: frontmatter", () => {
     expect(ruleMd).toBe("---\npaths: []\n---\n# B\n");
 
     expect(report.warnings).toContain(
-      "rule backend: paths: in .claude/rules/backend.md is not a string or a list of strings; read as always"
+      "rule backend: paths: in .claude/rules/backend.md is not a string or a list of strings; ignored"
     );
   });
 
@@ -235,5 +235,77 @@ describe("import --from claude-code — paths: frontmatter", () => {
     for (const e of st2) {
       expect(e.state, `${e.path} should be unchanged`).toBe("unchanged");
     }
+
+    // B. Re-import into the same Forge: rule should be reused, no warning about backend
+    const reimportReport = await importInto(t.forge, t.ws("api"), "api");
+    expect(reimportReport.warnings.filter((w) => w.includes("backend"))).toEqual([]);
+    expect(reimportReport.reused).toContain("rule/backend");
+    expect(reimportReport.variants).toEqual([]);
+  });
+
+  // === A. Unquoted paths: globs ===
+
+  it("A1. unquoted paths: list (YAML alias error) → fileMatch with list pattern", async () => {
+    const t = await setup();
+    // Unquoted globs cause YAML alias errors, but we should still parse them correctly
+    const ruleUnquotedList = "---\npaths:\n  - **/*.ts\n  - src/**\n---\n# R\n";
+    await writeFiles(t.ws("api"), { ".claude/rules/a.md": ruleUnquotedList });
+    await importInto(t.forge, t.ws("api"), "api");
+
+    const ingredientYaml = await yaml(path.join(t.forge, "ingredients/rules/a/ingredient.yaml"));
+    expect(ingredientYaml.inclusion).toBe("fileMatch");
+    expect(ingredientYaml.fileMatchPattern).toEqual(["**/*.ts", "src/**"]);
+    expect(ingredientYaml.frontmatterRaw).toBe("paths:\n  - **/*.ts\n  - src/**");
+
+    const ruleMd = await fs.readFile(path.join(t.forge, "ingredients/rules/a/rule.md"), "utf8");
+    expect(ruleMd).toBe("# R\n");
+  });
+
+  it("A2. unquoted paths: single value → fileMatch with string pattern", async () => {
+    const t = await setup();
+    const ruleUnquotedString = "---\npaths: **/*.ts\n---\n# R\n";
+    await writeFiles(t.ws("api"), { ".claude/rules/a.md": ruleUnquotedString });
+    await importInto(t.forge, t.ws("api"), "api");
+
+    const ingredientYaml = await yaml(path.join(t.forge, "ingredients/rules/a/ingredient.yaml"));
+    expect(ingredientYaml.inclusion).toBe("fileMatch");
+    expect(ingredientYaml.fileMatchPattern).toBe("**/*.ts");
+  });
+
+  it("A3. paths: with nested object (not a string or list) → unusable warning", async () => {
+    const t = await setup();
+    const ruleNestedObject = "---\npaths:\n  foo: bar\n---\n# R\n";
+    await writeFiles(t.ws("api"), { ".claude/rules/a.md": ruleNestedObject });
+    const report = await importInto(t.forge, t.ws("api"), "api");
+
+    const ingredientYaml = await yaml(path.join(t.forge, "ingredients/rules/a/ingredient.yaml"));
+    expect(ingredientYaml.inclusion).toBe("always");
+    expect(ingredientYaml.frontmatterRaw).toBeUndefined();
+
+    const ruleMd = await fs.readFile(path.join(t.forge, "ingredients/rules/a/rule.md"), "utf8");
+    expect(ruleMd).toBe("---\npaths:\n  foo: bar\n---\n# R\n");
+
+    // The warning should mention the unusable paths
+    expect(report.warnings.some((w) => w.includes("rule a") && w.includes("not a string or a list of strings"))).toBe(true);
+  });
+
+  // === C. Steering scope words and fallbacks ===
+
+  it("C1. steering with fileMatchPattern but no inclusion → use steering's pattern", async () => {
+    const t = await setup();
+    // Steering file has fileMatchPattern but no inclusion (as main would have kept)
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/b.md": "# B\n",
+      ".kiro/steering/b.md": '---\nfileMatchPattern: "src/**"\n---\n# B\n',
+    });
+    const report = await importInto(t.forge, t.ws("api"), "api");
+
+    const ingredientYaml = await yaml(path.join(t.forge, "ingredients/rules/b/ingredient.yaml"));
+    // As on main: use the steering's pattern, but inclusion is "always" (no inclusion set)
+    expect(ingredientYaml.inclusion).toBe("always");
+    expect(ingredientYaml.fileMatchPattern).toBe("src/**");
+
+    // No warning
+    expect(report.warnings.filter((w) => w.includes("rule b"))).toEqual([]);
   });
 });
