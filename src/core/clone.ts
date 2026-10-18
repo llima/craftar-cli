@@ -41,6 +41,36 @@ export type CloneResult =
 
 const WIN = process.platform === "win32";
 
+/**
+ * The repository-local environment variables git itself clears when it moves to another repository.
+ * This is what `git rev-parse --local-env-vars` lists (git 2.53).
+ */
+const GIT_LOCAL_ENV = [
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_CONFIG",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_CONFIG_COUNT",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_IMPLICIT_WORK_TREE",
+  "GIT_GRAFT_FILE",
+  "GIT_INDEX_FILE",
+  "GIT_NO_REPLACE_OBJECTS",
+  "GIT_REPLACE_REF_BASE",
+  "GIT_PREFIX",
+  "GIT_SHALLOW_FILE",
+  "GIT_COMMON_DIR",
+] as const;
+
+/** Set for O(1) lookup, upper-case for win32. */
+const GIT_LOCAL_SET = new Set(GIT_LOCAL_ENV.map((v) => v.toUpperCase()));
+
+/** Whether a key is one of git's repository-local variables — case-insensitive on win32, exact elsewhere. */
+function isLocalEnvVar(k: string): boolean {
+  return WIN ? GIT_LOCAL_SET.has(k.toUpperCase()) : GIT_LOCAL_SET.has(k);
+}
+
 /** Case-insensitive comparison on Windows, case-sensitive elsewhere. */
 function eq(a: string, b: string): boolean {
   return WIN ? a.toLowerCase() === b.toLowerCase() : a === b;
@@ -401,13 +431,13 @@ export async function cloneRepos(
       continue;
     }
 
-    // Build environment: drop GIT_DIR and GIT_WORK_TREE — they would place the checkout
-    // outside the checked destination (the workspace may be a worktree, or git hooks may have set them).
-    const { GIT_DIR: _gitDir, GIT_WORK_TREE: _gitWorkTree, ...inheritedEnv } = opts.env;
-    const env: NodeJS.ProcessEnv = {
-      ...inheritedEnv,
-      GIT_ALLOW_PROTOCOL: "https:ssh",
-    };
+    // Build environment: drop all repository-local variables — they would place the checkout
+    // or parts of it outside the checked destination (the workspace may be a worktree, or
+    // git hooks may have set them). The list is what `git rev-parse --local-env-vars` returns.
+    const env: NodeJS.ProcessEnv = { GIT_ALLOW_PROTOCOL: "https:ssh" };
+    for (const [k, v] of Object.entries(opts.env)) {
+      if (v !== undefined && !isLocalEnvVar(k)) env[k] = v;
+    }
     if (!opts.stdinIsTty) {
       env.GIT_TERMINAL_PROMPT = "0";
     }

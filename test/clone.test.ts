@@ -284,13 +284,23 @@ describe("cloneRepos — one runner call per entry, in order, sequential", () =>
       }
     }
   });
-  it("GIT_DIR and GIT_WORK_TREE inherited from the caller are not handed to git: they would place the checkout elsewhere (review round 1)", async () => {
+  it("git's repository-local variables inherited from the caller are not handed to git (git rev-parse --local-env-vars) — they would move the checkout or its parts out of the checked destination (review rounds 1–2)", async () => {
+    const { root } = await layout();
+    const LOCAL = ["GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR"];
+    const env: NodeJS.ProcessEnv = { MARKER_VAR: "kept", GIT_SSH_COMMAND: "ssh -i key", GIT_ASKPASS: "/bin/askpass" };
+    for (const k of LOCAL) env[k] = "/elsewhere";
+    const r = recorder([0]);
+    await cloneRepos(root, [entry("api")], { git: GIT, env, stdinIsTty: true }, r.run);
+    for (const k of LOCAL) expect(r.calls[0].env[k], k).toBeUndefined();
+    expect(r.calls[0].env.MARKER_VAR).toBe("kept");
+    expect(r.calls[0].env.GIT_SSH_COMMAND).toBe("ssh -i key");
+    expect(r.calls[0].env.GIT_ASKPASS).toBe("/bin/askpass");
+  });
+  it.runIf(WIN)("on win32 a repository-local variable is dropped whatever its case (Git_Dir)", async () => {
     const { root } = await layout();
     const r = recorder([0]);
-    await cloneRepos(root, [entry("api")], { git: GIT, env: { GIT_DIR: "/elsewhere/.git", GIT_WORK_TREE: "/elsewhere", MARKER_VAR: "kept" }, stdinIsTty: true }, r.run);
-    expect(r.calls[0].env.GIT_DIR).toBeUndefined();
-    expect(r.calls[0].env.GIT_WORK_TREE).toBeUndefined();
-    expect(r.calls[0].env.MARKER_VAR).toBe("kept");
+    await cloneRepos(root, [entry("api")], { git: GIT, env: { Git_Dir: "C:\\elsewhere\\.git" }, stdinIsTty: true }, r.run);
+    expect(Object.keys(r.calls[0].env).filter((k) => k.toUpperCase() === "GIT_DIR")).toEqual([]);
   });
   it("a failure in the middle: cloned, failed (git exited 128), cloned — the next entry still tried", async () => {
     const { root } = await layout();
