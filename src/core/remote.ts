@@ -17,7 +17,7 @@ const SCHEME_URL = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
 /** The SCP-like form `<user>@<host>:<path>`; without a user, `host:path` stays a path (a drive letter looks the same). */
 const SCP_URL = /^[^\s/\\:@]+@[^\s/\\:]+:/;
 
-/** A scheme and the run of `/` and `\` after it, whatever the run is (`credentialFault` reads it when it is not `//`). */
+/** A scheme and the run of `/` and `\` after it; `credentialFault` reads any run that is not `//` (spec 39 §4.2 A). */
 const BACKSLASH_URL = /^([A-Za-z][A-Za-z0-9+.-]*):([/\\]+)/;
 
 /** What is printed in place of a value `credentialFault` flags, where one written or recorded earlier would be shown. */
@@ -122,21 +122,23 @@ export function urlCredentialIn(text: string): boolean {
  * password never reaches a message that prints the value (spec 13 §6.1, §14 item 11). An empty
  * authority (`https:///…`) is read past, for every scheme but `file`: what follows the extra
  * separators is the authority some clients use — curl past up to three slashes, a WHATWG parser
- * past a `\` too. A scheme followed by separators that are not `//` and hold a `\` (`https:\\…`,
- * `https:/\…`) is read the same way: a WHATWG parser takes each `\` for a `/`, while
+ * past a `\` too. A scheme followed by any run of `/` and `\` that is not `//` (`https:/…`,
+ * `https:\\…`, `https:/\…`) is read the same way: a WHATWG parser takes each `\` for a `/`, while
  * `classifyForge` reads the value as a path — and a path is printed.
  */
 export function credentialFault(raw: string): boolean {
-  const value = raw.trim();
+  // A URL parser removes tab, line feed and carriage return before it reads, so `https:<TAB>//…`
+  // and `ht<TAB>tps://…` reach a host with their userinfo — spec 39 §4.2 B.
+  const value = raw.replace(/[\t\n\r]/g, "").trim();
   const head = value.split(/[/\\]/, 1)[0];
   if (/^[^@]*:[^@]*@/.test(head) && !SCHEME_URL.test(value)) return true;
   const scheme = SCHEME_URL.exec(value);
   if (!scheme) {
-    // No `://`: only a separator run holding a backslash is read as one. The authority ends at the
-    // first `/` or `\`; the rules are the ones below, by the scheme's name. A drive path (`C:\dir`)
-    // has no `@` there.
+    // No `://`: any run of `/` and `\` after the scheme that is not `//` has its authority read by
+    // the same rules (spec 39 §4.2 A). The authority ends at the first `/` or `\`; a drive path
+    // (`C:\dir`) has no `@` there.
     const loose = BACKSLASH_URL.exec(value);
-    if (!loose || !loose[2].includes("\\") || /^file$/i.test(loose[1])) return false;
+    if (!loose || loose[2] === "//" || /^file$/i.test(loose[1])) return false;
     const tail = value.slice(loose[0].length);
     const looseAuthority = tail.slice(0, tail.search(/[/\\]|$/));
     const looseAt = looseAuthority.lastIndexOf("@");
