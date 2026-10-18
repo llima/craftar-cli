@@ -15,7 +15,7 @@ import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEn
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
-import { agentsMd } from "../emitters/agents-md.js";
+import { AGENTS_MD_BUDGET_KEY, agentsMd } from "../emitters/agents-md.js";
 import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
 import { written } from "./capabilities.js";
 import { planServices } from "./services.js";
@@ -24,8 +24,7 @@ export const WORKSPACE_FILE = "craftar.yaml";
 export const LOCAL_FILE = "craftar.local.yaml";
 export const LOCK_FILE = "craftar.lock";
 
-/** The param key for the AGENTS.md size budget. */
-export const AGENTS_MD_BUDGET_KEY = "agents-md.maxBytes";
+export { AGENTS_MD_BUDGET_KEY };
 /** The default AGENTS.md size budget in bytes. */
 export const AGENTS_MD_DEFAULT_MAX_BYTES = 32768;
 

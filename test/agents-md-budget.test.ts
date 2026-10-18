@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkspace, plan, type Plan } from "../src/core/sync.js";
+import { reservedKey } from "../src/core/extract.js";
 import { agentsMdOverBudget } from "../src/core/sync.js";
 import { profile, recipe, rule, scenario, type ForgeSpec } from "./helpers/forge.js";
 
@@ -175,5 +176,9 @@ describe("agents-md.maxBytes budget (core)", () => {
     expect(p.agentsMd!.explicit).toBe(true);
     expect(p.agentsMd!.maxBytes).toBe(1000);
     expect(agentsMdOverBudget(p)).toEqual({ bytes: agentsMdContent(p)!.length, maxBytes: 1000 });
+  });
+
+  it("10. agents-md.maxBytes is an emitter's param: unify never extracts it", () => {
+    expect(reservedKey("agents-md.maxBytes", 1)).toBe(true);
   });
 });
