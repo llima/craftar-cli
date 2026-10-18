@@ -182,8 +182,8 @@ program
     if (o.json) {
       console.log(JSON.stringify(report, null, 2));
       // exitCode, not process.exit: a piped object is not cut (spec 29 §4.1)
-      if (unset.length) process.exitCode = 1;
-      if (budgetRefusalBlock(p)) process.exitCode = 1;
+      // The object carries both reasons (unsetParams, the budget line in warnings): nothing on stderr
+      if (unset.length || agentsMdOverBudget(p)) process.exitCode = 1;
       return;
     }
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, false, forgeLine(ws, lock));

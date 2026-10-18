@@ -86,6 +86,8 @@ describe("AGENTS.md budget CLI — explicit budget exceeded (case 10)", () => {
     await setOverrides(s.ws, { "agents-md.maxBytes": 1000 });
     const r = runCli(["status", "--json", "--workspace", s.ws]);
     expect(r.code).toBe(1);
+    // as for an unset parameter: the reason is in the object (warnings), nothing on stderr
+    expect(r.stderr).toBe("");
     const json = JSON.parse(r.stdout);
     expect(Object.keys(json)).toEqual(["forge", "statuses", "warnings", "unsetParams"]);
   });

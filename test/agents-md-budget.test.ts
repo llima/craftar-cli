@@ -203,5 +203,10 @@ describe("agents-md.maxBytes budget (core)", () => {
     expect(dflt.agentsMd!.warning!.startsWith(agentsMdOverDefaultMessage(o(dflt)) + " (agents-md.maxBytes) — largest rules: ")).toBe(true);
     expect(set.agentsMd!.warning!.startsWith(agentsMdOverBudgetMessage(o(set)) + "; sync --check fails — largest rules: ")).toBe(true);
   });
-});
 
+  it("13. a file with no rule body ends the warning at the budget", async () => {
+    const p = await planFor([rule("s", "# S\n", { inclusion: "fileMatch", fileMatchPattern: "src/**" })], { params: { "agents-md.maxBytes": 1 } }, ["agents-md", "claude-code"]);
+    expect(p.agentsMd!.rules).toEqual([]);
+    expect(p.agentsMd!.warning).toBe(`AGENTS.md is ${p.agentsMd!.bytes} bytes, over the budget of 1 set by agents-md.maxBytes; sync --check fails`);
+  });
+});
