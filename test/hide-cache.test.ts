@@ -24,7 +24,8 @@ describe("hideCacheSegment (spec 39 §5.1, the no-snapshot rule)", () => {
       expect(out).toContain(UNVOUCHED_HIDDEN);
     });
   it("either separator after forges, and a ~removing- name, are replaced whole", () => {
-    const out = hideCacheSegment(`rmdir '/tmp/h\\forges\\~removing-${KEY}-4242\\repo.git'`, "/tmp/h");
+    // The home as the file system reports it — path.resolve, so `D:\tmp\h` on win32 — with backslashes after it.
+    const out = hideCacheSegment(`rmdir '${path.resolve("/tmp/h")}\\forges\\~removing-${KEY}-4242\\repo.git'`, "/tmp/h");
     expect(out.includes(KEY)).toBe(false);
     expect(out).toContain(UNVOUCHED_HIDDEN);
   });
