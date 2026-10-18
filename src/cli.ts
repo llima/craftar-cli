@@ -526,10 +526,9 @@ program
   );
 
 /* ---------------------------------------------------------------- repos */
-const reposCmd = program.command("repos").description("Profile repositories: list them, clone the missing ones");
-
-reposCmd
-  .command("list", { isDefault: true })
+// `craftar repos` lists (the command's own action); `craftar repos clone` clones. No `repos list` (spec 37 §13.3 item 29).
+const reposCmd = program
+  .command("repos")
   .description("List the profile's repositories (its repos list) with their state in this workspace: present, missing or blocked; starts no program but the Forge load, writes nothing")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
@@ -600,15 +599,17 @@ reposCmd
   .command("clone")
   .description("Clone the profile's repositories that are missing in this workspace (all, or the names given); typing the command is the consent; needs a fresh copy of a remote Forge")
   .argument("[names...]", "repository names to clone (default: all missing)")
-  .option("--workspace <dir>", "workspace root", ".")
+  // No default here: `repos` holds `--workspace` too, and commander gives the value to the parent when both declare it.
+  .option("--workspace <dir>", 'workspace root (default: ".")')
   .action(async (names: string[], o) => {
+    const workspace: string = o.workspace ?? reposCmd.opts().workspace ?? ".";
     // C6: git is needed before any load
     const git = await findGit(process.env);
     if (git === null) {
       fail("cloning needs git — install it, or leave the clone out");
     }
     // R4: fetchHint: "fresh-copy" — repos clone refuses a stale cached copy
-    const ws = await loadWorkspace(o.workspace, { ...load({ offline: false }, "sync"), fetchHint: "fresh-copy" });
+    const ws = await loadWorkspace(workspace, { ...load({ offline: false }, "sync"), fetchHint: "fresh-copy" });
     const p = await plan(ws);
     const lock = await readLock(ws.root);
     const profile = ws.forge.profiles.get(ws.config.profile)!;
