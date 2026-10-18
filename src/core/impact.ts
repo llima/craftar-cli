@@ -415,6 +415,9 @@ export interface ConcernedResult {
 /**
  * Which workspaces are concerned by a condition on their configuration (spec 25 §4.3).
  * Tests the MERGED configuration to decide, then checks `local` first, else `base` to name the file.
+ * The file-naming tests see one file's document and the merged configuration, so a condition that
+ * spans two fields (a profile and a removal) can be decided on the merged one and located in the
+ * file that holds the removal.
  * Arrays replace on merge, so with `base.x: [a]` and `local.x: []`, the merged config has `[]`
  * and the workspace is NOT concerned — even though `base` had `a`.
  * `missing` entries and stage-`config` errors count as `unchecked`.
@@ -422,7 +425,7 @@ export interface ConcernedResult {
 export function concerned(
   planned: Planned[],
   entries: ForgeWorkspace[],
-  test: (doc: unknown) => boolean,
+  test: (doc: unknown, merged: unknown) => boolean,
 ): ConcernedResult {
   const result: ConcernedResult = { concerned: [], unchecked: 0 };
 
@@ -455,16 +458,18 @@ export function concerned(
     }
 
     // Test the MERGED configuration first to decide if concerned (spec 25 §4.3)
-    if (!test(merged.config)) continue;
+    if (!test(merged.config, merged.config)) continue;
 
     // Concerned: find which file holds the entry (local first, then base)
-    if (test(merged.local)) {
+    if (test(merged.local, merged.config)) {
       result.concerned.push({ path: entry.entry.path, file: "craftar.local.yaml" });
-    } else if (test(merged.base)) {
+    } else if (test(merged.base, merged.config)) {
       result.concerned.push({ path: entry.entry.path, file: "craftar.yaml" });
     }
-    // No else: merged.config is built from base + local via deepMerge, so if test(merged.config)
-    // passes, the value must exist in at least one of them. This branch cannot be reached.
+    // No else: unreachable while each part of a test that `doc` decides reads one located field (the rest from `merged`)
+    // — arrays replace on merge, so the part that passes on the merged value passes on the file it came from. A test that
+    // needs two `doc` fields at once (an AND), held in different files, reaches it and drops the workspace silently (the
+    // forge promote removal warning did, before it read `profile` from `merged`).
   }
 
   return result;

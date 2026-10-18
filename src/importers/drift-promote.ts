@@ -48,6 +48,7 @@ import {
   markerIn,
   validateImported,
   recipesOf,
+  resolvedRecipes,
   recipeFile,
   ForgeStage,
   type EmittedSource,
@@ -188,6 +189,8 @@ const D18 = (p: string, recipe: string, profile: string, slot: string, ref: stri
   `${p} comes from recipe ${recipe}, which profile ${profile} selects through integrations.${slot} — edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
 const D19 = (p: string, recipe: string, profile: string, slot: string, ref: string) =>
   `${p} reaches this workspace through recipe ${recipe}, which profile ${profile} selects through integrations.${slot} and another profile also resolves — promote cannot fork a recipe a block selects; edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
+const D19_UNRESOLVED = (p: string, recipe: string, profile: string, slot: string, ref: string, other: string) =>
+  `${p} reaches this workspace through recipe ${recipe}, which profile ${profile} selects through integrations.${slot}, and profile ${other} does not resolve, so promote cannot tell whether it also uses it — promote cannot fork a recipe a block selects; fix profile ${other}, edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
 const INTERNAL_REUSE = (p: string) => `internal: ${p} is drift but the Forge already renders it — please report this`;
 interface OtherWorkspaceCheck {
   entries: ForgeWorkspace[];
@@ -1020,21 +1023,30 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     for (const R of viaRecipes) {
       // Check if this profile owns the recipe (resolves it in its own layer)
       const profileOwns = recipesOf(forge, profile).has(R);
-      // Check if any other profile resolves it
+      // Check if any other profile resolves it, and record the first profile that does not resolve at all
       let otherOwns = false;
+      let unresolvedProfile: string | undefined;
       for (const [q] of forge.profiles) {
-        if (q !== profile && recipesOf(forge, q).has(R)) {
+        if (q === profile) continue;
+        const resolved = resolvedRecipes(forge, q);
+        if (resolved === null) {
+          unresolvedProfile ??= q;
+        } else if (resolved.has(R)) {
           otherOwns = true;
           break;
         }
       }
+      // A profile that does not resolve may use the recipe — it counted as owning everything before D19_UNRESOLVED.
+      const othersMay = otherOwns || unresolvedProfile !== undefined;
 
-      // D19: if the block selects R and another profile resolves it, promote cannot fork it
-      // The ONLY allowed case is "profile owns it alone → edit in place" (profileOwns && !otherOwns)
+      // D19: if the block selects R and another profile resolves it (or might — a profile that does not resolve), promote cannot fork it
+      // The ONLY allowed case is "profile owns it alone → edit in place" (profileOwns && !othersMay)
       const selectedSlot = selectedBy.get(R);
-      if (selectedSlot && !(profileOwns && !otherOwns)) {
+      if (selectedSlot && !(profileOwns && !othersMay)) {
         // Find the ref for the D19 message (the first ref of type matching X's type)
         const ref = ingredientRef;
+        // D19_UNRESOLVED when the only "other" is a profile that does not resolve (the loop breaks on the first profile that resolves R, so !otherOwns means no profile resolving R was seen).
+        if (!otherOwns && unresolvedProfile) throw new Error(D19_UNRESOLVED(normalized, R, profile, selectedSlot, ref, unresolvedProfile));
         throw new Error(D19(normalized, R, profile, selectedSlot, ref));
       }
 
@@ -1045,7 +1057,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       // Check if any other resolved recipe extends R
       const extendedByOther = isExtendedByOtherResolved(forge, p0.resolution.recipes, R);
 
-      if (profileOwns && !otherOwns) {
+      if (profileOwns && !othersMay) {
         // Case 1: profile owns it alone — edit recipe in place
         const recipeOpts = { stage, dir: path.join(forgeDir, "recipes") };
         const recFile = await recipeFile(recipeOpts, R, "drift promote");
@@ -1299,9 +1311,9 @@ function emittedMetaFields(emitted: Ingredient, type: string): Partial<Ingredien
  * Find the extends chain from a resolved recipe to the target recipe.
  * Returns the chain like "target → child" if found, null otherwise.
  */
-function findExtendsChain(forge: Forge, resolvedRecipes: string[], targetRecipe: string): string | null {
+function findExtendsChain(forge: Forge, resolved: string[], targetRecipe: string): string | null {
   // Look for a resolved recipe that extends the target
-  for (const name of resolvedRecipes) {
+  for (const name of resolved) {
     const r = forge.recipes.get(name);
     if (r?.extends?.includes(targetRecipe)) {
       return `${name} → ${targetRecipe}`;
@@ -1313,8 +1325,8 @@ function findExtendsChain(forge: Forge, resolvedRecipes: string[], targetRecipe:
 /**
  * Check if any other resolved recipe extends the given recipe.
  */
-function isExtendedByOtherResolved(forge: Forge, resolvedRecipes: string[], R: string): boolean {
-  for (const name of resolvedRecipes) {
+function isExtendedByOtherResolved(forge: Forge, resolved: string[], R: string): boolean {
+  for (const name of resolved) {
     if (name === R) continue;
     const r = forge.recipes.get(name);
     if (r?.extends?.includes(R)) return true;

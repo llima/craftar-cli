@@ -24,7 +24,10 @@ export type KiroReport =
   | { kind: "not-computed"; message: string } // the plan could not be computed after the flush
   | { kind: "computed"; collisions: KiroCollision[]; unsourced: string[] };
 
-/** The note of a steering mirror that grew past its rule — the hint that `--prefer-kiro` may apply. */
+/**
+ * The note of a steering mirror that grew past its rule — the hint that `--prefer-kiro` may apply (not given to a rule
+ * `--prefer-kiro` just took from its steering file: that mirror is the source now, so the hint does not apply).
+ */
 export const STEERING_BIGGER = "steering bigger than the rule";
 
 /** The banner the kiro emitter puts on a generated steering file. */
@@ -55,9 +58,11 @@ function steeringBody(text: string): string {
  * `STEERING_BIGGER` for a rule's steering mirror that holds more lines than the rule's source in `.claude/rules/` —
  * the documented symptom of a mirror kept by hand. The file's name is the rule's output name.
  */
-async function noteFor(workspaceRoot: string, rel: string, from: string, steering: string): Promise<string> {
+async function noteFor(workspaceRoot: string, rel: string, from: string, steering: string, preferred: readonly string[]): Promise<string> {
   const m = /^\.kiro\/steering\/([^/]+)\.md$/.exec(rel);
   if (!m || !from.startsWith("rule/")) return "";
+  // A rule --prefer-kiro took from its steering file: that mirror is the source now, so the note does not apply.
+  if (preferred.includes(m[1])) return "";
   const rule = path.join(workspaceRoot, ".claude", "rules", `${m[1]}.md`);
   if (!(await exists(rule))) return "";
   return textLines(steeringBody(steering)) > textLines(await fs.readFile(rule, "utf8")) ? STEERING_BIGGER : "";
@@ -74,11 +79,13 @@ async function noteFor(workspaceRoot: string, rel: string, from: string, steerin
  * throws — an import that flushed has succeeded whatever the plan says. `deps.plan` is for tests.
  */
 export async function kiroReport(
-  o: { workspaceRoot: string; forgeRoot: string; profile: string; targets: Target[] },
+  o: { workspaceRoot: string; forgeRoot: string; profile: string; targets: Target[]; preferred?: readonly string[] },
   deps: { plan: typeof plan } = { plan },
 ): Promise<KiroReport> {
   const root = path.resolve(o.workspaceRoot);
   if (!(await exists(path.join(root, ".kiro")))) return { kind: "none" };
+  // The rules this run took from their steering file (`report.preferKiro`).
+  const preferred = o.preferred ?? [];
   try {
     const read = (abs: string) => fs.readFile(abs, "utf8");
     const overrides = { params: await workspaceParams(root, read), sections: await workspaceSections(root, read) };
@@ -97,7 +104,7 @@ export async function kiroReport(
         from,
         workspaceLines: textLines(disk),
         generatedLines: textLines(s.planned!.content.toString("utf8")),
-        note: await noteFor(root, s.path, from, disk),
+        note: await noteFor(root, s.path, from, disk, preferred),
       });
     }
     const planned = new Set(p.files.map((f) => f.path));

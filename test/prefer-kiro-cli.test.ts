@@ -104,4 +104,41 @@ describe("import --prefer-kiro — the command", () => {
     expect(help).toContain("--prefer-kiro <rule,…>");
     expect(help).toContain("each proved to render back to that steering file");
   });
+
+  it("8. --report: a rule just taken from Kiro whose steering file still collides keeps its row, without the `steering bigger than the rule` note (spec 29 §19.6)", async () => {
+    // A steering file kept by hand with no banner: sync would add the banner, so it stays a collision after the preference.
+    const bannerless = "---\ninclusion: always\n---\n\n# Workflow\n\nSee .kiro/steering/style.md.\nA line kept by hand.\n".replace(/\n/g, "\r\n");
+    const files = { ...WORKSPACE, ".kiro/steering/workflow.md": bannerless };
+    const rowOf = async (out: string) => {
+      const report = await fs.readFile(out, "utf8");
+      return report.slice(report.indexOf("## Kiro collisions")).split("\n").find((l) => l.includes("| .kiro/steering/workflow.md |"));
+    };
+    const s = await setup(files);
+    const r = run(s, ["--prefer-kiro", "workflow", "--report", s.out]);
+    expect(r.code, r.stderr).toBe(0);
+    const row = await rowOf(s.out);
+    expect(row).toBeDefined();
+    expect(row).not.toContain("steering bigger than the rule");
+    // Control: the same workspace without the flag — the rule comes from .claude/rules/, and the note is the hint it was.
+    const c = await setup(files);
+    const rc = run(c, ["--report", c.out]);
+    expect(rc.code, rc.stderr).toBe(0);
+    expect(await rowOf(c.out)).toContain("steering bigger than the rule");
+  });
+
+  it("9. a rule decided as a variant beside a bannerless steering file of its name is imported once — no steering ingredient for it (spec 29 §19.6)", async () => {
+    const s = await setup();
+    expect(run(s).code).toBe(0); // acme first: rule/workflow is the base
+    const globex = path.join(s.root, "globex-portal");
+    await writeFiles(globex, {
+      ".claude/rules/workflow.md": "# Workflow\n\nGlobex does it differently.\n",
+      ".kiro/steering/workflow.md": "---\ninclusion: always\n---\n\n# Workflow\n\nGlobex does it differently.\n".replace(/\n/g, "\r\n"),
+    });
+    const r = runCli(["import", "--from", "claude-code", "--forge", s.forge, "--profile", "globex", "--workspace", globex]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(await exists(path.join(s.forge, "ingredients", "rules", "workflow--globex"))).toBe(true);
+    // The steering file is the rule's mirror: it must not also become steering/workflow.
+    expect(await exists(path.join(s.forge, "ingredients", "steerings", "workflow"))).toBe(false);
+    expect(r.stdout).not.toContain("steering/workflow");
+  });
 });

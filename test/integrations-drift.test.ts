@@ -765,6 +765,80 @@ describe("promote and a recipe the block selects, shared with another profile", 
       warnings: [],
     });
   });
+
+  it("P5. a block-selected recipe and a sibling profile that does not resolve — D19 says the sibling does not resolve", async () => {
+    const spec: ForgeSpec = {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        rule("where", "Org {{integrations.pm.org}}\n"),
+        rule("stories-azure-devops", STORIES),
+        mcp("azure-devops", { command: "npx", args: ["-y", "ado-mcp"] }),
+      ],
+      recipes: [
+        recipe("base", ["rule/workflow", "rule/where", "rule/stories-azure-devops"]),
+        recipe("pm-azure-devops", ["mcp/azure-devops", "rule/stories-azure-devops"], { slot: "pm" }),
+      ],
+      // globex names a recipe the Forge does not have: it does not resolve, so promote cannot tell what it uses.
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"], { integrations: PM }), profile("globex", ["no-such-recipe"], ["claude-code"])],
+    };
+    const s = await forgeAt(3, spec);
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+    gitInit(s.forgeRoot);
+    await sync(s.wsRoot);
+    const rulePath = path.join(s.wsRoot, ".claude/rules/stories-azure-devops.md");
+    await fs.writeFile(rulePath, (await fs.readFile(rulePath, "utf8")).replace("organisation acme", "organisation other"));
+    const shown = runCli(["drift", "show", "--workspace", s.wsRoot, "--json"], { env });
+    expect(shown.code, shown.stderr).toBe(0);
+    const row = JSON.parse(shown.stdout).files.find((f: { path: string }) => f.path === ".claude/rules/stories-azure-devops.md");
+    // show does not plan a promote: a file D19 refuses reads promotable, with no reason (README, the drift row).
+    expect([row?.promotable, row?.reason]).toEqual([true, null]);
+    const r = runCli(["drift", "promote", ".claude/rules/stories-azure-devops.md", "--workspace", s.wsRoot, "--json"], { env });
+    expect([r.code, r.stdout]).toEqual([1, ""]);
+    expect(r.stderr).toBe(
+      "error: .claude/rules/stories-azure-devops.md reaches this workspace through recipe pm-azure-devops, which profile acme selects through integrations.pm, and profile globex does not resolve, so promote cannot tell whether it also uses it — promote cannot fork a recipe a block selects; fix profile globex, edit rule/stories-azure-devops in the Forge, or `craftar drift discard .claude/rules/stories-azure-devops.md`\n",
+    );
+    expect(porcelain(s.forgeRoot)).toBe("");
+  });
+
+  it("P6. (control) listed by hand, no block, and a sibling profile that does not resolve — still forks, never edits in place", async () => {
+    const spec: ForgeSpec = {
+      ingredients: [
+        rule("workflow", "# Workflow\n"),
+        rule("where", "Org {{integrations.pm.org}}\n"),
+        rule("stories-azure-devops", STORIES),
+        mcp("azure-devops", { command: "npx", args: ["-y", "ado-mcp"] }),
+      ],
+      recipes: [
+        recipe("base", ["rule/workflow", "rule/where"]),
+        recipe("pm-azure-devops", ["mcp/azure-devops", "rule/stories-azure-devops"], { slot: "pm" }),
+      ],
+      // globex does not resolve: promote cannot tell whether it uses pm-azure-devops, so it must not edit that recipe in place.
+      profiles: [
+        profile("acme", ["base", "pm-azure-devops"], ["claude-code", "kiro"], { integrations: {} }),
+        profile("globex", ["no-such-recipe"], ["claude-code"]),
+      ],
+    };
+    const s = await forgeAt(3, spec);
+    cleanups.push(s.cleanup);
+    const env = { CRAFTAR_HOME: path.join(s.root, "home") };
+    await fs.mkdir(env.CRAFTAR_HOME, { recursive: true });
+    gitInit(s.forgeRoot);
+    await sync(s.wsRoot);
+    const rulePath = path.join(s.wsRoot, ".claude/rules/stories-azure-devops.md");
+    await fs.writeFile(rulePath, (await fs.readFile(rulePath, "utf8")).replace("organisation {{integrations.pm.org}}", "organisation other"));
+    const r = runCli(["drift", "promote", ".claude/rules/stories-azure-devops.md", "--workspace", s.wsRoot, "--dry-run", "--json"], { env });
+    expect(r.code, r.stderr).toBe(0);
+    const j = JSON.parse(r.stdout);
+    expect(j.outcome).toBe("variant");
+    expect(j.written.map((w: { path: string }) => w.path)).toEqual([
+      "ingredients/rules/stories-azure-devops--acme/ingredient.yaml",
+      "ingredients/rules/stories-azure-devops--acme/rule.md",
+      "recipes/pm-azure-devops--acme.yaml",
+      "profiles/acme/profile.yaml",
+    ]);
+  });
 });
 
 

@@ -127,7 +127,8 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
   if (config?.action === "created") report.created.push("craftar.yaml (workspace)");
   // Spec 29 §4.2: after the flush, and never able to fail an import that succeeded.
   if (opts.report) {
-    report.kiro = await kiroReport({ workspaceRoot: opts.workspaceRoot, forgeRoot: opts.forgeRoot, profile: opts.profileName, targets: planned.targets });
+    const preferred = (report.preferKiro ?? []).map((x) => x.source.replace(/^\.kiro\/steering\//, "").replace(/\.md$/, ""));
+    report.kiro = await kiroReport({ workspaceRoot: opts.workspaceRoot, forgeRoot: opts.forgeRoot, profile: opts.profileName, targets: planned.targets, preferred });
     if (report.kiro.kind === "not-computed") report.warnings.push(`import report: Kiro sections not computed: ${report.kiro.message}`);
   }
   return report;
@@ -206,7 +207,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     if (!emitted) continue;
     const ruleMeta = emitted.meta as Ingredient & { inclusion: string };
     read(emitted.meta, emitted.files, emitted.scan, (ref) => {
-      ruleNames.push(ref.split("/")[1]);
+      // The output name: a variant's ref is <name>--<profile>, and the steering file it mirrors is <name> (spec 29 §19.6).
+      ruleNames.push(name);
       if (ruleMeta.inclusion === "fileMatch") scopedRules.set(ref, sm?.fileMatchPattern ?? "");
       else refs.base.push(ref);
     });
@@ -1107,13 +1109,18 @@ function resolvedParam(forge: import("../core/forge.js").Forge | null, profile: 
   return Object.hasOwn(own, key) ? own[key] : undefined;
 }
 
-/** The recipes a profile resolves inside the Forge; fails closed — a profile that does not resolve counts as using everything. */
-export function recipesOf(forge: import("../core/forge.js").Forge, profile: string): { has(name: string): boolean } {
+/** The recipes a profile resolves inside the Forge, or null when `resolve` throws — the profile does not resolve. */
+export function resolvedRecipes(forge: import("../core/forge.js").Forge, profile: string): Set<string> | null {
   try {
     return new Set(resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile })).recipes);
   } catch {
-    return { has: () => true };
+    return null;
   }
+}
+
+/** The recipes a profile resolves inside the Forge; fails closed — a profile that does not resolve counts as using everything. */
+export function recipesOf(forge: import("../core/forge.js").Forge, profile: string): { has(name: string): boolean } {
+  return resolvedRecipes(forge, profile) ?? { has: () => true };
 }
 
 /**

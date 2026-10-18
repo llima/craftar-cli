@@ -2,11 +2,12 @@
  * The one reader of `profile.integrations` (spec 33 §5.2): below schema 3 the block is ignored;
  * at 3 it selects integration recipes and derives params.
  *
- * This module is pure — it imports types and the schema constant only, never resolve.ts (which
- * imports it).
+ * This module is pure — it imports types, the schema constant and `findSecrets` only, never
+ * resolve.ts (which imports it).
  */
 
 import { FORGE_SCHEMA_INTEGRATIONS, type ForgeManifest, type Profile } from "../schema/index.js";
+import { findSecrets } from "./secrets.js";
 import type { Forge } from "./forge.js";
 
 /* ------------------------------------------------------------------ */
@@ -28,6 +29,26 @@ const KEY_RE = /^[A-Za-z0-9_]+$/;
 
 /** Kind: a string matching `^[a-z0-9][a-z0-9._-]*$`. */
 const KIND_RE = /^[a-z0-9][a-z0-9._-]*$/;
+
+/**
+ * What a refused slot or key may be named by: a string shaped like a name and not a token of a
+ * known format (`findSecrets`); anything else — a URL pasted where a key goes, say — is named by
+ * its position, so a credential in it is never printed (tech-debt 2026-10-11 item 7; the user's
+ * ruling of 2026-10-17).
+ */
+const NAME_LIKE = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/**
+ * Returns the name to show in an error message: JSON.stringify(name) when it looks like a name
+ * and is not a token of a known format (`findSecrets`), otherwise `#${index + 1}` with the
+ * "(not shown: not shaped like a name)" suffix.
+ */
+function shownName(name: string, index: number): { shown: string; suffix: string } {
+  if (NAME_LIKE.test(name) && findSecrets(name).length === 0) {
+    return { shown: JSON.stringify(name), suffix: "" };
+  }
+  return { shown: `#${index + 1}`, suffix: " (not shown: not shaped like a name)" };
+}
 
 /* ------------------------------------------------------------------ */
 /* Gate                                                                 */
@@ -103,11 +124,14 @@ export function effectiveProfile(
   const blockKeys: string[] = [];
 
   // Process each slot in block order.
-  for (const slot of Object.keys(block)) {
+  const slots = Object.keys(block);
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i];
     // 1. Validate slot name.
     if (!SLOT_RE.test(slot)) {
+      const { shown, suffix } = shownName(slot, i);
       throw new Error(
-        `profile ${pName}: integrations key ${JSON.stringify(slot)} is not a slot name — letters, digits and _, starting with a letter`,
+        `profile ${pName}: integrations key ${shown} is not a slot name — letters, digits and _, starting with a letter${suffix}`,
       );
     }
 
@@ -122,11 +146,14 @@ export function effectiveProfile(
     const slotObj = slotValue as Record<string, unknown>;
 
     // Process each key inside the slot, in key order.
-    for (const key of Object.keys(slotObj)) {
+    const keys = Object.keys(slotObj);
+    for (let j = 0; j < keys.length; j++) {
+      const key = keys[j];
       // 3. Validate key name.
       if (!KEY_RE.test(key)) {
+        const { shown, suffix } = shownName(key, j);
         throw new Error(
-          `profile ${pName}: integrations.${slot} key ${JSON.stringify(key)} is not a key name — letters, digits and _ only`,
+          `profile ${pName}: integrations.${slot} key ${shown} is not a key name — letters, digits and _ only${suffix}`,
         );
       }
 
