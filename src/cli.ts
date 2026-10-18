@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import path from "node:path";
-import { promises as fs } from "node:fs";
+import { promises as fs, statSync } from "node:fs";
 import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
 import { parsePreferKiro } from "./importers/prefer-kiro.js";
@@ -16,7 +16,7 @@ import { launchRefusal, pinOf } from "./core/mcp-protocol.js";
 import { serve } from "./mcp.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, readWorkspaceConfig, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, agentsMdOverBudget, agentsMdRefusal, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, agentsMdOverBudget, agentsMdRefusal, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -45,7 +45,10 @@ import {
   type PruneResult,
 } from "./core/unify.js";
 import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
-import { checkInitFlags, initLine, planInit, type InitInput } from "./core/init.js";
+import { checkInitFlags, initLine, planInit, forgeSource, type InitInput } from "./core/init.js";
+import { profileName } from "./core/new-profile.js";
+import { newProfileGate } from "./core/new-profile-gate.js";
+import { writeNewProfile, reproveFromDisk, NewProfileRaceLost, NewProfileLateFailure } from "./core/new-profile-write.js";
 import { askInit, askClone, confirmInit, againLine, NOT_CLONED_REFUSED, type InitAnswers } from "./core/init-flow.js";
 import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type DestinationContext, type RepoState } from "./core/clone.js";
 import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
@@ -327,14 +330,16 @@ async function runCloneStep(root: string, profile: string, entries: RepoEntry[],
 program
   .command("init")
   .description(
-    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync; with --clone, clone the profile's repositories into the workspace (after the first sync, or with --no-sync after writing craftar.yaml); in a terminal, asks for the Forge and the profile not given as flags; refused when craftar.yaml already exists",
+    "Start a workspace from a Forge and a profile: write a craftar.yaml proved to resolve and plan, then run the first sync; with --new-profile, create the profile in the Forge directory first (recipes and targets from --like and the recipe/target flags), then start the workspace on it — nothing is committed; with --clone, clone the profile's repositories into the workspace (after the first sync, or with --no-sync after writing craftar.yaml); in a terminal, asks for the Forge and the profile not given as flags; refused when craftar.yaml already exists",
   )
   .option("--forge <dir|url>", "the Forge: a directory (written relative to the workspace) or a git URL; asked for in a terminal when omitted")
   .option("--profile <name>", "the client profile in the Forge; asked for in a terminal when omitted")
+  .option("--new-profile <name>", "create this profile in the Forge directory (recipes and targets from --like and the recipe flags), then start the workspace on it; nothing is committed")
+  .option("--like <profile>", "with --new-profile: start the new profile's recipes and targets from this profile's — nothing else of it is copied")
   .option("--ref <ref>", "branch, tag or full SHA of a remote Forge")
-  .option("--targets <a,b>", "targets to write in craftar.yaml (claude-code, kiro, agents-md); omitted, the workspace follows the profile's")
-  .option("--add-recipe <name>", "add a recipe to the profile's (repeatable)", collect, [])
-  .option("--remove-recipe <name>", "remove a recipe of the profile's (repeatable)", collect, [])
+  .option("--targets <a,b>", "targets to write in craftar.yaml, or of the new profile with --new-profile (claude-code, kiro, agents-md); omitted, the workspace follows the profile's")
+  .option("--add-recipe <name>", "add a recipe to the profile's, or of the new profile with --new-profile (repeatable)", collect, [])
+  .option("--remove-recipe <name>", "remove a recipe of the profile's, or of the new profile with --new-profile (repeatable)", collect, [])
   .option("--replace", "let --add-recipe take a slot another recipe holds", false)
   .option("--no-sync", "write craftar.yaml only, and say what the first sync would do")
   .option("--clone", "after the first sync, clone the profile's repositories (its repos list) into the workspace")
@@ -345,6 +350,8 @@ program
     async (o: {
       forge?: string;
       profile?: string;
+      newProfile?: string;
+      like?: string;
       ref?: string;
       targets?: string;
       addRecipe: string[];
@@ -395,14 +402,28 @@ program
       if (o.clone === true && git === null) {
         fail("cloning needs git — install it, or leave the clone out");
       }
+      // P1–P4: --new-profile checks (before anything is read)
+      if (o.newProfile !== undefined && o.profile !== undefined) {
+        fail("pass --profile or --new-profile, not both");
+      }
+      if (o.like !== undefined && o.newProfile === undefined) {
+        fail("--like goes with --new-profile");
+      }
+      if (o.newProfile !== undefined) {
+        profileName(o.newProfile);
+      }
+      if (o.newProfile !== undefined && o.forge !== undefined && classifyForge(o.forge) === "url") {
+        fail("a new profile is written into a Forge directory — clone the Forge, pass that directory as --forge, then commit and push the profile");
+      }
       // Mode: flags when both given; else interactive when both streams are TTYs; else N2
-      const bothGiven = o.forge !== undefined && o.profile !== undefined;
+      // --new-profile counts as --profile for bothGiven and N2
+      const bothGiven = o.forge !== undefined && (o.profile !== undefined || o.newProfile !== undefined);
       const isTTY = process.stdin.isTTY && process.stdout.isTTY;
       if (!bothGiven && !isTTY) {
         // N2: refuse with our message
-        if (o.forge === undefined && o.profile === undefined) {
+        if (o.forge === undefined && o.profile === undefined && o.newProfile === undefined) {
           fail("--forge and --profile are required when craftar init does not run in a terminal — pass them, or run craftar init in a terminal to be asked");
-        } else if (o.profile === undefined) {
+        } else if (o.profile === undefined && o.newProfile === undefined) {
           fail("--profile is required when craftar init does not run in a terminal — pass it, or run craftar init in a terminal to be asked");
         } else {
           fail("--forge is required when craftar init does not run in a terminal — pass it, or run craftar init in a terminal to be asked");
@@ -419,6 +440,8 @@ program
           {
             forge: o.forge,
             profile: o.profile,
+            newProfile: o.newProfile,
+            like: o.like,
             ref: o.ref,
             targets: o.targets === undefined ? undefined : o.targets.split(",").map((t) => t.trim()),
             addRecipes: o.addRecipe,
@@ -433,6 +456,42 @@ program
         if (result.kind === "cancelled") fail("init cancelled — nothing written");
         input = result.input;
         answers = result.answers;
+      } else if (o.newProfile !== undefined) {
+        // --forge and --new-profile given (flags mode with new profile)
+        // N10: checkLocalKeys with --new-profile counting as --profile
+        const clash = local.keys.find((k) =>
+          k === "forge" || k === "profile" ||
+          (k === "ref" && o.ref !== undefined) ||
+          (k === "recipes" && (o.addRecipe.length > 0 || o.removeRecipe.length > 0)) ||
+          (k === "targets" && o.targets !== undefined)
+        );
+        if (clash) {
+          const flag: Record<string, string> = {
+            forge: "--forge",
+            ref: "--ref",
+            profile: "--profile",
+            recipes: "--add-recipe / --remove-recipe",
+            targets: "--targets",
+          };
+          fail(`${LOCAL_FILE} sets ${clash}, which would replace ${flag[clash]} — move it aside and re-run init`);
+        }
+        // Load the Forge
+        const loaded = await loadForgeSource(root, forgeSource(root, o.forge!), o.ref ?? null, { ...load(o, "sync") });
+        // Gate: P5-P8
+        await newProfileGate(loaded.forge, resolveHome(process.env.CRAFTAR_HOME || undefined), o.newProfile);
+        // Build input
+        input = {
+          forge: o.forge!,
+          profile: o.newProfile,
+          newProfile: { name: o.newProfile, like: o.like },
+          ref: o.ref,
+          targets: o.targets === undefined ? undefined : o.targets.split(",").map((t) => t.trim()),
+          addRecipes: o.addRecipe,
+          removeRecipes: o.removeRecipe,
+          replace: o.replace,
+          clone: o.clone === true,
+          loaded,
+        };
       } else {
         input = {
           forge: o.forge!,
@@ -445,7 +504,7 @@ program
           clone: o.clone === true,
         };
       }
-      const init = await planInit(root, input, { ...load(o, "sync"), local });
+      let init = await planInit(root, input, { ...load(o, "sync"), local });
       // Interactive mode: when o.clone is undefined, ask about cloning between planInit and confirmInit
       // --clone typed: planInit has checked C3–C5 and returned the entries, in either mode
       let cloneEntries: RepoEntry[] = o.clone === true ? init.repos : [];
@@ -466,19 +525,55 @@ program
         });
         if (confirm === "cancelled") fail("init cancelled — nothing written");
       }
-      const { ws, plan: p } = init;
+      let { ws, plan: p } = init;
+      const forgeRoot = ws.forge.root;
       const workspaceGiven = cmd.getOptionValueSource("workspace") === "cli";
       const again = () => {
         if (answers !== null) {
           console.log(againLine(answers, { workspace: workspaceGiven ? o.workspace : undefined, sync: o.sync, offline: o.offline, clone: cloneEntries.length > 0 }));
         }
       };
+      // When init.newProfile: write the profile, then reprove from disk
+      let journal: WriteJournal = [];
+      if (init.newProfile) {
+        try {
+          journal = await writeNewProfile(forgeRoot, init);
+        } catch (e) {
+          if (e instanceof NewProfileRaceLost) {
+            // P7's first message, no recover lines
+            fail(e.message);
+          }
+          if (e instanceof NewProfileLateFailure) {
+            fail(lateFailure(e, forgeRoot, e.journal, "init"));
+          }
+          throw e;
+        }
+        // Reprove from disk (step 4)
+        try {
+          init = await reproveFromDisk(root, input.forge, init, { ...load(o, "sync") }, journal);
+        } catch (e) {
+          if (e instanceof NewProfileLateFailure) {
+            fail(lateFailure(e, forgeRoot, e.journal, "init"));
+          }
+          throw e;
+        }
+        // Update ws and p from the second init
+        ws = init.ws;
+        p = init.plan;
+        // Print the profile creation lines
+        console.log(pc.bold(`craftar init — created profile ${ws.config.profile} in ${forgeRoot}`));
+        console.log(`  + profiles/${ws.config.profile}/profile.yaml   (not committed — commit it in the Forge, on a branch, before anyone else syncs)`);
+      }
       // Every refusal is above: only now does the directory, and craftar.yaml, come to exist
       await fs.mkdir(root, { recursive: true });
       try {
         await fs.writeFile(file, init.text, { flag: "wx" });
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code === "EEXIST") n1();
+        // Any other error after the profile was written: late failure (journal.length > 0 means a profile was written)
+        if (journal.length > 0) {
+          fail(lateFailure(e, forgeRoot, journal, "init"));
+        }
         throw e;
       }
       console.log(pc.bold(`craftar init — wrote ${WORKSPACE_FILE} in ${root}`));
@@ -3053,6 +3148,7 @@ function unheldMessage(command: string, root: string, unheld: UnheldPath[]): str
  * The message for a `forge unify` failure after writing began (Ruling 33): the original error, the
  * Forge-relative paths already touched, and the git commands that undo them — `checkout` for what
  * git tracks, `clean` for files unify created (checkout refuses a path git does not know).
+ * For created paths, directories get `clean -fd`, files (or missing paths) get `clean -f`.
  */
 function lateFailure(e: unknown, root: string, journal: WriteJournal, command = "unify"): string {
   const msg = errorText(e);
@@ -3060,12 +3156,29 @@ function lateFailure(e: unknown, root: string, journal: WriteJournal, command = 
   const rel = (abs: string) => path.relative(root, abs).split(path.sep).join("/");
   const quote = (p: string) => (/^[\w./-]+$/.test(p) ? p : `"${p}"`);
   const restore = [...new Set(journal.filter((j) => !j.created).map((j) => rel(j.abs)))];
-  const created = [...new Set(journal.filter((j) => j.created).map((j) => rel(j.abs)))];
+  const created = [...new Set(journal.filter((j) => j.created).map((j) => j.abs))];
+  // For created paths, check if they are directories
+  const createdDirs: string[] = [];
+  const createdFiles: string[] = [];
+  for (const abs of created) {
+    try {
+      const st = statSync(abs);
+      if (st.isDirectory()) {
+        createdDirs.push(rel(abs));
+      } else {
+        createdFiles.push(rel(abs));
+      }
+    } catch {
+      // Path doesn't exist, treat as file
+      createdFiles.push(rel(abs));
+    }
+  }
   const lines = [msg, `${command} had already started changing the Forge (${root}) when this failed:`];
-  for (const p of [...restore, ...created]) lines.push(`  ${p}`);
+  for (const p of [...restore, ...createdDirs, ...createdFiles]) lines.push(`  ${p}`);
   lines.push("recover with:");
   if (restore.length) lines.push(`  git -C ${quote(root)} checkout -- ${restore.map(quote).join(" ")}`);
-  if (created.length) lines.push(`  git -C ${quote(root)} clean -f -- ${created.map(quote).join(" ")}`);
+  if (createdDirs.length) lines.push(`  git -C ${quote(root)} clean -fd -- ${createdDirs.map(quote).join(" ")}`);
+  if (createdFiles.length) lines.push(`  git -C ${quote(root)} clean -f -- ${createdFiles.map(quote).join(" ")}`);
   return lines.join("\n");
 }
 
