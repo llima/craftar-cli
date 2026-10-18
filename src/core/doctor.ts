@@ -9,7 +9,7 @@ import { FULL_SHA, cacheKey, classifyForge, inspectCache, type CacheSnapshot } f
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
-import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig, type Plan, type Workspace } from "./sync.js";
+import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK } from "./sync.js";
 import { outName } from "../emitters/shared.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram } from "./proc.js";
@@ -256,6 +256,8 @@ async function workspaceChecks(
       const declaredUnset = declaredWithoutValue(p);
       const owned = new Set<string>();
       for (const mp of p.missingParams) if (declaredUnset.has(mp.key)) owned.add(mp.warning);
+      // Also exclude the AGENTS.md budget warning — it is reported by agents-md-size
+      if (p.agentsMd?.warning) owned.add(p.agentsMd.warning);
       const own = p.warnings.slice(ws.warnings.length).filter((x) => !owned.has(x));
       if (own.length === 0) w("plan", "ok", `${p.files.length} files`);
       for (const x of own) w("plan", "warn", x, null);
@@ -270,6 +272,29 @@ async function workspaceChecks(
           `"${key}" declared by ${declaredBy.join(", ")} has no value${cited.length ? ` — cited by ${cited.join(", ")}` : ""}`,
           `set ${key} in the profile's params or overrides.params`,
         );
+      }
+
+      // agents-md-size: only when the plan writes AGENTS.md (the target is in use)
+      if (p.agentsMd !== null) {
+        const { bytes, maxBytes, explicit } = p.agentsMd;
+        // maxBytes 0 means budget is off
+        if (maxBytes === 0) {
+          w("agents-md-size", "ok", `AGENTS.md is ${bytes} bytes; the budget is off (${AGENTS_MD_BUDGET_KEY}: 0)`);
+        } else if (bytes <= maxBytes) {
+          // Within budget
+          w("agents-md-size", "ok", `AGENTS.md is ${bytes} bytes, within the budget of ${maxBytes}`);
+        } else if (explicit) {
+          // Over explicit budget: error — use shared message and fix
+          w("agents-md-size", "error", agentsMdOverBudgetMessage({ bytes, maxBytes }), AGENTS_MD_BUDGET_FIX);
+        } else {
+          // Over default budget: warn
+          w(
+            "agents-md-size",
+            "warn",
+            agentsMdOverDefaultMessage({ bytes, maxBytes }),
+            `set ${AGENTS_MD_BUDGET_KEY} to fail sync --check above it; to shrink the file: ${AGENTS_MD_SHRINK}`,
+          );
+        }
       }
 
       const unset = mcpUnset(p, env, ws.forge.manifest.schema);

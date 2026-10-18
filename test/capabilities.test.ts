@@ -606,6 +606,7 @@ function baseOf(resolution: Resolution, warnings: string[]): EmitBase {
     warn: (m: string) => warnings.push(m),
     missing: () => {},
     warnOnce: (m: string) => warnings.push(m),
+    reportAgentsMdRule: () => {},
   };
 }
 

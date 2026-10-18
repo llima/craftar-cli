@@ -2,6 +2,9 @@ import { buildRuleLookup, outName, resolveRuleRefs, ruleFile, ruleWriter, textFi
 import type { Emitter } from "./types.js";
 import type { WrittenIngredient } from "../core/capabilities.js";
 
+/** The param that sets the AGENTS.md size budget, read by `plan()` (and reserved from extraction, like `kiro.banner`). */
+export const AGENTS_MD_BUDGET_KEY = "agents-md.maxBytes";
+
 /**
  * AGENTS.md target (open standard read by Codex, Cursor, Warp, Copilot, Kiro, Kimi…).
  * Concatenates the `always` rules into one file. Scoped rules (`fileMatch`, `manual`, `auto`)
@@ -54,6 +57,8 @@ export const agentsMd: Emitter<"agents-md"> = {
         const { text: resolved, report } = resolveRuleRefs(rawBody, ing.ref, lookup, ctx.resolution.targets);
         alwaysReports.push(report);
         const body = resolved.replace(/\n+$/, "");
+        // Report the byte size of this always-on rule's body as it appears in AGENTS.md
+        ctx.reportAgentsMdRule(outName(ing.meta), Buffer.byteLength(body, "utf8"), false);
         parts.push(`<!-- rule: ${outName(ing.meta)} -->`, body, "");
       } else {
         // Spec 14 §4.1: decide which target writes this rule file
@@ -72,6 +77,8 @@ export const agentsMd: Emitter<"agents-md"> = {
           const { text: resolved, report } = resolveRuleRefs(rawBody, ing.ref, lookup, ctx.resolution.targets);
           embeddedReports.push(report);
           const body = resolved.replace(/\n+$/, "");
+          // Report the byte size of this embedded scoped rule
+          ctx.reportAgentsMdRule(outName(ing.meta), Buffer.byteLength(body, "utf8"), true);
           embedded.push(`<!-- rule: ${outName(ing.meta)} -->`, `> Scoped rule — ${scopeText}`, "", body, "");
         }
       }

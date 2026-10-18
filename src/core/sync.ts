@@ -15,7 +15,7 @@ import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEn
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
-import { agentsMd } from "../emitters/agents-md.js";
+import { AGENTS_MD_BUDGET_KEY, agentsMd } from "../emitters/agents-md.js";
 import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
 import { written } from "./capabilities.js";
 import { planServices } from "./services.js";
@@ -23,6 +23,10 @@ import { planServices } from "./services.js";
 export const WORKSPACE_FILE = "craftar.yaml";
 export const LOCAL_FILE = "craftar.local.yaml";
 export const LOCK_FILE = "craftar.lock";
+
+export { AGENTS_MD_BUDGET_KEY };
+/** The default AGENTS.md size budget in bytes. */
+export const AGENTS_MD_DEFAULT_MAX_BYTES = 32768;
 
 // Mapped, not Record<Target, Emitter>: an emitter in another target's slot does not compile (spec 18 §3.3).
 const EMITTERS: { [T in Target]: Emitter<T> } = { "claude-code": claudeCode, kiro, "agents-md": agentsMd };
@@ -301,6 +305,19 @@ export interface Plan {
    * declares that way (spec 29 §4.1).
    */
   missingParams: Array<{ key: string; refs: string[]; warning: string; declaredBy: string[] }>;
+  /**
+   * AGENTS.md size budget info: present when the plan includes an AGENTS.md file; null otherwise.
+   * `explicit` is true when the key is present in resolved params with a valid value.
+   */
+  agentsMd: {
+    bytes: number;
+    maxBytes: number;
+    explicit: boolean;
+    /** Rules sorted by bytes desc, then name asc. */
+    rules: Array<{ name: string; bytes: number; scoped: boolean }>;
+    /** The exact warning line pushed into Plan.warnings, or null if within budget. */
+    warning: string | null;
+  } | null;
 }
 
 /** Declared keys with no default that no layer fills, with the ingredients declaring them (spec 24 §4.2) — cited or not. */
@@ -350,6 +367,41 @@ export function unsetRefused(unset: UnsetParam[]): string {
 /** The refusal in one line, for a row that has no room for the block (`workspaces`, `forge impact`). */
 export function unsetSummary(unset: UnsetParam[]): string {
   return `sync refused: declared parameter(s) with no value: ${unset.map((u) => u.key).join(", ")}`;
+}
+
+/**
+ * Non-null when the plan has an AGENTS.md, the budget is explicit, maxBytes > 0, and bytes > maxBytes.
+ * Used by CLI surfaces that fail on an explicit budget violation.
+ */
+export function agentsMdOverBudget(p: Plan): { bytes: number; maxBytes: number } | null {
+  if (!p.agentsMd) return null;
+  const { bytes, maxBytes, explicit } = p.agentsMd;
+  if (!explicit) return null;
+  if (maxBytes === 0) return null;
+  if (bytes <= maxBytes) return null;
+  return { bytes, maxBytes };
+}
+
+/** The message for an explicit AGENTS.md budget violation. */
+export function agentsMdOverBudgetMessage(o: { bytes: number; maxBytes: number }): string {
+  return `AGENTS.md is ${o.bytes} bytes, over the budget of ${o.maxBytes} set by ${AGENTS_MD_BUDGET_KEY}`;
+}
+
+/** The message for an AGENTS.md over the default budget (no budget set). */
+export function agentsMdOverDefaultMessage(o: { bytes: number; maxBytes: number }): string {
+  return `AGENTS.md is ${o.bytes} bytes, over the default budget of ${o.maxBytes}`;
+}
+
+/** What shrinks AGENTS.md: the two kinds of rule body it holds. */
+export const AGENTS_MD_SHRINK = "move always-on rules to inclusion: fileMatch, write scoped rules to their own files (target claude-code or kiro)";
+/** The fix for an explicit AGENTS.md budget violation. */
+export const AGENTS_MD_BUDGET_FIX = `${AGENTS_MD_SHRINK}, or raise ${AGENTS_MD_BUDGET_KEY}`;
+
+/**
+ * The refusal block for an explicit AGENTS.md budget violation, without the `error: ` prefix.
+ */
+export function agentsMdRefusal(o: { bytes: number; maxBytes: number }): string {
+  return `${agentsMdOverBudgetMessage(o)}\n  fix: ${AGENTS_MD_BUDGET_FIX}`;
 }
 
 /** A path as the Forge names it: relative to its root, POSIX separators. */
@@ -489,6 +541,8 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const cited = new Map<string, { ing: ResolvedIngredient; keys: Set<string> }>();
   /** Warnings said once per plan, for warnOnce (spec 34 §5.2). */
   const warnedOnce = new Set<string>();
+  /** Per-rule byte sizes for AGENTS.md budget, collected by the agents-md emitter. */
+  const agentsMdRules: Array<{ name: string; bytes: number; scoped: boolean }> = [];
   const ctx: EmitBase = {
     forge: ws.forge,
     resolution,
@@ -539,6 +593,9 @@ export async function plan(ws: Workspace): Promise<Plan> {
         warnings.push(msg);
       }
     },
+    reportAgentsMdRule(name: string, bytes: number, scoped: boolean) {
+      agentsMdRules.push({ name, bytes, scoped });
+    },
   };
   const files: PlannedFile[] = [];
   for (const t of resolution.targets) {
@@ -572,7 +629,90 @@ export async function plan(ws: Workspace): Promise<Plan> {
     if (prev) warnings.push(`two ingredients write ${f.path}: ${prev} and ${f.ingredient} (last wins)`);
     seen.set(f.path, f.ingredient);
   }
-  return { resolution, files: dedupeLastWins(files), warnings, sections: sections.byRef, params, missingParams: missing };
+
+  // AGENTS.md size budget: computed after the target loop, warning pushed by plan() (spec 15 §4.5 reserves
+  // the single agents-md warning for references).
+  const planned = dedupeLastWins(files);
+  const agentsMd = computeAgentsMdBudget(planned, resolution, agentsMdRules, warnings);
+
+  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd };
+}
+
+/**
+ * Compute the AGENTS.md budget info. Returns null when no AGENTS.md is planned.
+ * Parses and validates the budget param, adds warnings, and builds the budget object.
+ */
+function computeAgentsMdBudget(
+  files: PlannedFile[],
+  resolution: Resolution,
+  agentsMdRules: Array<{ name: string; bytes: number; scoped: boolean }>,
+  warnings: string[],
+): Plan["agentsMd"] {
+  // Find the AGENTS.md file
+  const agentsMdFile = files.find((f) => f.path === "AGENTS.md");
+  if (!agentsMdFile) return null;
+
+  const bytes = agentsMdFile.content.length;
+
+  // Parse the budget param
+  const rawValue = resolution.params[AGENTS_MD_BUDGET_KEY];
+  const hasKey = Object.hasOwn(resolution.params, AGENTS_MD_BUDGET_KEY);
+  let maxBytes: number;
+  let explicit: boolean;
+
+  if (!hasKey) {
+    maxBytes = AGENTS_MD_DEFAULT_MAX_BYTES;
+    explicit = false;
+  } else {
+    // Validate: must be a whole number >= 0 (given as number or string of digits)
+    const parsed = parseAgentsMdBudget(rawValue);
+    if (parsed === null) {
+      warnings.push(`${AGENTS_MD_BUDGET_KEY} must be a whole number of bytes (0 turns the budget off) — the default ${AGENTS_MD_DEFAULT_MAX_BYTES} is used`);
+      maxBytes = AGENTS_MD_DEFAULT_MAX_BYTES;
+      explicit = false;
+    } else {
+      maxBytes = parsed;
+      explicit = true;
+    }
+  }
+
+  // Sort rules by bytes desc, then name asc
+  const sortedRules = [...agentsMdRules].sort((a, b) => {
+    if (b.bytes !== a.bytes) return b.bytes - a.bytes;
+    return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+  });
+
+  // Add budget warning if over budget and maxBytes > 0
+  let warning: string | null = null;
+  if (maxBytes > 0 && bytes > maxBytes) {
+    const top5 = sortedRules.slice(0, 5);
+    const rulesText = top5.length > 0 ? ` — largest rules: ${top5.map((r) => `${r.name} (${r.scoped ? "scoped, " : ""}${r.bytes} bytes)`).join(", ")}` : "";
+    // Two forms, each led by the wording the error block and doctor use
+    warning = explicit
+      ? `${agentsMdOverBudgetMessage({ bytes, maxBytes })}; sync --check fails${rulesText}`
+      : `${agentsMdOverDefaultMessage({ bytes, maxBytes })} (${AGENTS_MD_BUDGET_KEY})${rulesText}`;
+    warnings.push(warning);
+  }
+
+  return { bytes, maxBytes, explicit, rules: sortedRules, warning };
+}
+
+/**
+ * Parse the agents-md.maxBytes value. Returns the number if valid, null otherwise.
+ * Valid: a whole number >= 0, as a number or a string of digits.
+ */
+function parseAgentsMdBudget(value: unknown): number | null {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) return null;
+    return value;
+  }
+  if (typeof value === "string") {
+    if (!/^\d+$/.test(value)) return null;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    return n;
+  }
+  return null;
 }
 
 function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {
