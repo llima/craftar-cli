@@ -296,6 +296,21 @@ describe("cloneRepos — one runner call per entry, in order, sequential", () =>
     expect(r.calls[0].env.GIT_SSH_COMMAND).toBe("ssh -i key");
     expect(r.calls[0].env.GIT_ASKPASS).toBe("/bin/askpass");
   });
+  it("an inherited GIT_ALLOW_PROTOCOL never widens the transports: git always gets https:ssh (review round 3 blocker)", async () => {
+    const { root } = await layout();
+    for (const stdinIsTty of [false, true]) {
+      const r = recorder([0]);
+      await cloneRepos(root, [entry("api")], { git: GIT, env: { GIT_ALLOW_PROTOCOL: "ext:file:https:ssh", MARKER_VAR: "kept" }, stdinIsTty }, r.run);
+      expect(r.calls[0].env.GIT_ALLOW_PROTOCOL).toBe("https:ssh");
+      expect(r.calls[0].env.MARKER_VAR).toBe("kept");
+    }
+  });
+  it.runIf(WIN)("on win32 an inherited git_allow_protocol in another case does not reach git beside craftar's", async () => {
+    const { root } = await layout();
+    const r = recorder([0]);
+    await cloneRepos(root, [entry("api")], { git: GIT, env: { git_allow_protocol: "ext:file" }, stdinIsTty: true }, r.run);
+    expect(Object.entries(r.calls[0].env).filter(([k]) => k.toUpperCase() === "GIT_ALLOW_PROTOCOL")).toEqual([["GIT_ALLOW_PROTOCOL", "https:ssh"]]);
+  });
   it.runIf(WIN)("on win32 a repository-local variable is dropped whatever its case (Git_Dir)", async () => {
     const { root } = await layout();
     const r = recorder([0]);

@@ -432,13 +432,16 @@ export async function cloneRepos(
       continue;
     }
 
-    // Build environment: drop all repository-local variables — they would place the checkout
-    // or parts of it outside the checked destination (the workspace may be a worktree, or
-    // git hooks may have set them). The list is what `git rev-parse --local-env-vars` returns.
-    const env: NodeJS.ProcessEnv = { GIT_ALLOW_PROTOCOL: "https:ssh" };
+    // Build environment: drop repository-local variables (they would place the checkout or parts
+    // of it outside the checked destination) and any inherited GIT_ALLOW_PROTOCOL. Craftar's own
+    // values are set last, so nothing inherited can widen the transports (spec 37 §4.4, §7).
+    const env: NodeJS.ProcessEnv = {};
+    const isAllowProtocol = (k: string): boolean =>
+      WIN ? k.toUpperCase() === "GIT_ALLOW_PROTOCOL" : k === "GIT_ALLOW_PROTOCOL";
     for (const [k, v] of Object.entries(opts.env)) {
-      if (v !== undefined && !isLocalEnvVar(k)) env[k] = v;
+      if (v !== undefined && !isLocalEnvVar(k) && !isAllowProtocol(k)) env[k] = v;
     }
+    env.GIT_ALLOW_PROTOCOL = "https:ssh";
     if (!opts.stdinIsTty) {
       env.GIT_TERMINAL_PROMPT = "0";
     }
