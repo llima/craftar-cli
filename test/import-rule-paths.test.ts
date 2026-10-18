@@ -25,7 +25,7 @@ const yaml = async (file: string) => YAML.parse(await fs.readFile(file, "utf8"))
 const ruleList = '---\npaths:\n  - "projects/acme-api/**"\n  - "projects/acme-web/**"\n---\n\n# Backend\n\nUse the acme conventions.\n';
 const ruleString = '---\npaths: "projects/acme-api/**"\ndescription: Backend rules\n---\n# Backend\n';
 
-describe("import --from claude-code — paths: frontmatter (spec 35)", () => {
+describe("import --from claude-code — paths: frontmatter", () => {
   it("1. paths: as a list, no .kiro/ → fileMatch with list pattern, frontmatterRaw, body without fence", async () => {
     const t = await setup();
     await writeFiles(t.ws("api"), { ".claude/rules/backend.md": ruleList });

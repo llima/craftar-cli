@@ -249,7 +249,7 @@ describe("claude-code emitter — authEnv example file (spec 27)", () => {
 });
 
 
-describe("claude-code emitter — rule frontmatterRaw (spec 35)", () => {
+describe("claude-code emitter — rule frontmatterRaw", () => {
   it("a fileMatch rule without frontmatterRaw emits body only (no generated paths: block)", async () => {
     const p = await planFor([{ meta: { type: "rule", name: "a", inclusion: "fileMatch", fileMatchPattern: "src/**" }, files: { "rule.md": "# A\n" } }]);
     expect(text(p, ".claude/rules/a.md")).toBe("# A\n");
