@@ -7,8 +7,8 @@
  */
 
 import type { Profile } from "../schema/index.js";
+import { nameShaped } from "./integrations.js";
 import { classifyForge, credentialFault } from "./remote.js";
-import { findSecrets } from "./secrets.js";
 import { climbsOut } from "./text.js";
 
 /* ------------------------------------------------------------------ */
@@ -32,7 +32,6 @@ const URL_CHARS_RE = /^[A-Za-z0-9._~:/@+-]+$/;
 const REF_RE = /^[A-Za-z0-9][A-Za-z0-9._/+-]*$/;
 const SHA40_RE = /^[0-9a-f]{40}$/i;
 const SHA64_RE = /^[0-9a-f]{64}$/i;
-const KEY_NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 const CRAFTAR_RESERVED = new Set(["agents.md", "craftar.yaml", "craftar.local.yaml", "craftar.lock"]);
 const KNOWN_KEYS = new Set(["name", "url", "path", "ref"]);
@@ -267,8 +266,8 @@ function validateEntry(
   for (let keyIndex = 0; keyIndex < keys.length; keyIndex++) {
     const key = keys[keyIndex];
     if (!KNOWN_KEYS.has(key)) {
-      // Check if key is shaped like a name: matches the regex and has no secrets
-      if (KEY_NAME_RE.test(key) && findSecrets(key).length === 0) {
+      // Check if key is shaped like a name
+      if (nameShaped(key)) {
         refuse(profile, index, `${key} is not a key of a repository entry — name, url, path, ref`);
       } else {
         // 1-based position among the entry's keys
