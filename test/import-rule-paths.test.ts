@@ -322,12 +322,14 @@ describe("import --from claude-code — paths: with --prefer-kiro and the secret
       // what a craftar before this fix generated: inclusion always, the fence inside the body
       ".kiro/steering/a.md": `---\ninclusion: always\n---\n\n${banner("a")}\n\n---\npaths: src/**\n---\n# A\n`,
     });
-    await importClaudeCode({ workspaceRoot: t.ws("api"), forgeRoot: t.forge, profileName: "api", preferKiro: ["a"], writeWorkspaceConfig: true });
+    const r = await importClaudeCode({ workspaceRoot: t.ws("api"), forgeRoot: t.forge, profileName: "api", preferKiro: ["a"], writeWorkspaceConfig: true });
     const ruleMd = await fs.readFile(path.join(t.forge, "ingredients/rules/a/rule.md"), "utf8");
     expect(ruleMd.match(/---\npaths:/g)).toHaveLength(1);
     expect((await yaml(path.join(t.forge, "ingredients/rules/a/ingredient.yaml"))).frontmatterRaw).toBeUndefined();
     const p = await plan(await loadWorkspace(t.ws("api")));
     expect(p.files.find((f) => f.path === ".claude/rules/a.md")?.content.toString("utf8")).toBe(claude);
+    // differs compares what sync writes with the Claude file: the fence round-trips, so differs is false
+    expect(r.preferKiro?.find((x) => x.ref === "rule/a")?.differs).toBe(false);
   });
 
   it("D2. a secret in a preferred steering body is named at its line in the steering file", async () => {
@@ -345,6 +347,28 @@ describe("import --from claude-code — paths: with --prefer-kiro and the secret
     await writeFiles(t.ws("api"), { ".claude/rules/c.md": `---\npaths: src/**\n---\n# C\nx\n${TOKEN}\n` });
     const r = await importInto(t.forge, t.ws("api"), "api");
     expect(r.rejected).toEqual([{ name: "rule/c", reason: "secret-like value (github-token) in .claude/rules/c.md line 6" }]);
+  });
+
+  it("D4. a preferred rule with frontmatterRaw kept but edited body has differs: true", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/a.md": "---\npaths: src/**\n---\n# A\n",
+      // no fence in the body, so frontmatterRaw is kept; body differs from Claude file
+      ".kiro/steering/a.md": `---\ninclusion: always\n---\n\n${banner("a")}\n\n# A edited\n`,
+    });
+    const r = await importClaudeCode({ workspaceRoot: t.ws("api"), forgeRoot: t.forge, profileName: "api", preferKiro: ["a"] });
+    expect(r.preferKiro?.find((x) => x.ref === "rule/a")?.differs).toBe(true);
+  });
+
+  it("D5. a preferred rule with frontmatterRaw kept and same body has differs: false", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/a.md": "---\npaths: src/**\n---\n# A\n",
+      // no fence in the body, so frontmatterRaw is kept; body is identical
+      ".kiro/steering/a.md": `---\ninclusion: always\n---\n\n${banner("a")}\n\n# A\n`,
+    });
+    const r = await importClaudeCode({ workspaceRoot: t.ws("api"), forgeRoot: t.forge, profileName: "api", preferKiro: ["a"] });
+    expect(r.preferKiro?.find((x) => x.ref === "rule/a")?.differs).toBe(false);
   });
 });
 

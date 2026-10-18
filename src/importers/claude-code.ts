@@ -367,7 +367,11 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       const after = q.after;
       q.after = (ref) => {
         after(ref);
-        preferred.push({ ref, source, steeringLines: textLines(sm.text), rule: `.claude/rules/${name}.md`, ruleLines: textLines(ruleFileText), differs: text !== ruleText });
+        // What sync will write to .claude/rules/<name>.md: if frontmatterRaw is still present, the fence
+        // wraps the body; otherwise the body alone (it may carry its own fence).
+        const raw = "frontmatterRaw" in q.meta ? (q.meta as { frontmatterRaw?: string }).frontmatterRaw : undefined;
+        const written = raw !== undefined ? `---\n${raw}\n---\n${text}` : text;
+        preferred.push({ ref, source, steeringLines: textLines(sm.text), rule: `.claude/rules/${name}.md`, ruleLines: textLines(ruleFileText), differs: written !== ruleFileText });
       };
     }
   }
