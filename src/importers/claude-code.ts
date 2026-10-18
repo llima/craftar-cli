@@ -355,6 +355,12 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       q.scan = scanOf("rule.md", sm);
       q.lineOffset = offset;
       q.meta = { ...q.meta, origin: origin(source) };
+      // A steering body written before rules kept their frontmatter apart still holds the fence: the
+      // text then carries it, as it did, and the rule's own copy is dropped so the file is not written twice.
+      if ("frontmatterRaw" in q.meta && q.meta.frontmatterRaw !== undefined && FENCE_START.test(text)) {
+        const { frontmatterRaw: _dropped, ...rest } = q.meta;
+        q.meta = rest as Ingredient;
+      }
       const after = q.after;
       q.after = (ref) => {
         after(ref);
@@ -936,15 +942,25 @@ function addRef(list: string[], ref: string | null): void {
   if (ref) list.push(ref);
 }
 
+/** A frontmatter fence at the very start of a text. */
+const FENCE_START = /^---\n[\s\S]*?\n---\n/;
+
+/** Where a rule's `frontmatterRaw` was read: its Claude file, whatever file its body came from. */
+function rawSource(meta: Ingredient): string | null {
+  return meta.type === "rule" ? `.claude/rules/${meta.name}.md` : null;
+}
+
 /** First secret-like value in an ingredient about to be imported, described by location only. */
 export function secretIn(meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string> = {}, lineOffset = 0): string | null {
   const origin = meta.origin?.path ?? `${meta.type}/${meta.name}`;
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
-  // Bodies of agents and commands start after `---`, the raw block and the closing `---`; `lineOffset` is for a text
-  // that starts lower in its source file for another reason (spec 29 §4.3).
-  const bodyOffset = raw ? raw.split("\n").length + 2 : lineOffset;
+  // Bodies of agents, commands and split rules start after `---`, the raw block and the closing `---`; `lineOffset`
+  // is for a text that starts lower in its source file for another reason (spec 29 §4.3). A rule's raw block is
+  // always its Claude file's, while its body may come from a steering file (`--prefer-kiro`).
+  const rawWhere = rawSource(meta) ?? origin;
+  const bodyOffset = raw && rawWhere === origin ? raw.split("\n").length + 2 : lineOffset;
   const texts: { where: string; text: string; offset: number }[] = [];
-  if (raw) texts.push({ where: origin, text: raw, offset: 1 });
+  if (raw) texts.push({ where: rawWhere, text: raw, offset: 1 });
   for (const [rel, content] of Object.entries(files)) {
     const where = meta.type === "skill" && meta.layout === "dir" ? `${origin}${rel}` : origin;
     // A Buffer (non-allowlisted extensions such as .pem or .bat) goes through decodeForScan:
@@ -1334,7 +1350,7 @@ async function existingProfile(
  */
 export function markerIn(meta: Ingredient, files: Record<string, string | Buffer>, source: string, lineOffset = 0): { where: string; line: number } | null {
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
-  const offset = raw ? raw.split("\n").length + 2 : lineOffset;
+  const offset = raw && (rawSource(meta) ?? meta.origin?.path) === meta.origin?.path ? raw.split("\n").length + 2 : lineOffset;
   for (const [rel, content] of Object.entries(files)) {
     // the importer builds meta and file keys itself, with canonical names
     if (!bodyFile(meta, rel, null)) continue;

@@ -309,3 +309,41 @@ describe("import --from claude-code — paths: frontmatter", () => {
     expect(report.warnings.filter((w) => w.includes("rule b"))).toEqual([]);
   });
 });
+
+describe("import --from claude-code — paths: with --prefer-kiro and the secret scan", () => {
+  const TOKEN = "ghp_" + "x".repeat(36); // assembled at runtime on purpose
+  const banner = (n: string) => `<!-- GENERATED from .claude/rules/${n}.md by craftar -- do not edit. -->`;
+
+  it("D1. a preferred steering body that still holds the fence keeps one frontmatter, and the Claude file round-trips", async () => {
+    const t = await setup();
+    const claude = "---\npaths: src/**\n---\n# A\n";
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/a.md": claude,
+      // what a craftar before this fix generated: inclusion always, the fence inside the body
+      ".kiro/steering/a.md": `---\ninclusion: always\n---\n\n${banner("a")}\n\n---\npaths: src/**\n---\n# A\n`,
+    });
+    await importClaudeCode({ workspaceRoot: t.ws("api"), forgeRoot: t.forge, profileName: "api", preferKiro: ["a"], writeWorkspaceConfig: true });
+    const ruleMd = await fs.readFile(path.join(t.forge, "ingredients/rules/a/rule.md"), "utf8");
+    expect(ruleMd.match(/---\npaths:/g)).toHaveLength(1);
+    expect((await yaml(path.join(t.forge, "ingredients/rules/a/ingredient.yaml"))).frontmatterRaw).toBeUndefined();
+    const p = await plan(await loadWorkspace(t.ws("api")));
+    expect(p.files.find((f) => f.path === ".claude/rules/a.md")?.content.toString("utf8")).toBe(claude);
+  });
+
+  it("D2. a secret in a preferred steering body is named at its line in the steering file", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/b.md": "---\npaths: src/**\n---\n# B\n",
+      ".kiro/steering/b.md": `---\ninclusion: always\n---\n\n${banner("b")}\n\n# B\n${TOKEN}\n`,
+    });
+    const r = await importClaudeCode({ workspaceRoot: t.ws("api"), forgeRoot: t.forge, profileName: "api", preferKiro: ["b"] });
+    expect(r.rejected).toEqual([{ name: "rule/b", reason: "secret-like value (github-token) in .kiro/steering/b.md line 8" }]);
+  });
+
+  it("D3. a secret in a split rule's body is named at its line in the Claude file", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), { ".claude/rules/c.md": `---\npaths: src/**\n---\n# C\nx\n${TOKEN}\n` });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([{ name: "rule/c", reason: "secret-like value (github-token) in .claude/rules/c.md line 6" }]);
+  });
+});
