@@ -84,6 +84,12 @@ export interface LoadOptions {
   refuseRemote?: (url: string) => string;
   /** Test seam: counts or fails the git calls of a remote load; absent, `defaultGit`. */
   git?: GitRunner;
+  /**
+   * When a sync-mode fetch fails and there is a cached copy, what the error's tail says (spec 37 §5.2):
+   * - `"offline"` (default): "run with --offline to use the cached copy"
+   * - `"fresh-copy"`: "repos clone reads the profile's repositories only from a fresh copy"
+   */
+  fetchHint?: "offline" | "fresh-copy";
 }
 
 /** The result of loading a Forge by its source before a profile is known (spec 28 §5.2). */
@@ -220,6 +226,7 @@ async function remoteTree(
   const mode = opts.mode ?? "read";
   const offline = opts.offline || mode === "no-fetch";
   const git = opts.git;
+  const fetchHint = opts.fetchHint ?? "offline";
   const origin = (t: CachedTree): ForgeOrigin => ({
     kind: "remote",
     source: url,
@@ -250,8 +257,12 @@ async function remoteTree(
       throw new Error(
         `cannot fetch the Forge ${url}: ${e.gitMessage} — ${e.haveCopy ? `and the cached copy cannot resolve ${ref === null ? "the default branch" : refHoldsCredentials(ref) ? shownRef(ref) : ref}` : "and there is no cached copy to fall back on"}`,
       );
-    if (mode === "sync")
-      throw new Error(`cannot fetch the Forge ${url}: ${e.gitMessage} — run with --offline to use the cached copy (${short(e.cached.commit)} fetched ${e.cached.fetchedAt ?? "never"})`);
+    if (mode === "sync") {
+      const tail = fetchHint === "fresh-copy"
+        ? "repos clone reads the profile's repositories only from a fresh copy"
+        : `run with --offline to use the cached copy (${short(e.cached.commit)} fetched ${e.cached.fetchedAt ?? "never"})`;
+      throw new Error(`cannot fetch the Forge ${url}: ${e.gitMessage} — ${tail}`);
+    }
     const t = await ensureTree(url, ref, { home, offline: true, git });
     return { tree: t.dir, origin: origin(t), warning: `Forge ${url} not fetched (${e.gitMessage}) — using ${used(t)}` };
   }
