@@ -495,7 +495,7 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; `craftar docs validate`;
 
 ## Upgrading
 
-### to <next-version>
+### to 0.31.0
 
 - **A Forge written by `import` or `drift promote` may hold `frontmatterRaw` on a rule**, which an older craftar refuses (strict ingredient schema) — upgrade every workspace that reads it.
 - **A Forge imported before this fix keeps a scoped rule as `inclusion: always`** with the `paths:` block inside `rule.md`; a re-import does NOT correct it (import never rewrites a base — it writes a variant `rule/<name>--<profile>`). The re-import also moves the scoped rule into a recipe of the profile's own, `stack-<name>--<profile>`, and gives the profile its own `base--<profile>` (the shared `base` still lists the old rule); a base that was already `fileMatch` but holds the fence inside `rule.md` is turned into a variant the same way. Correct it either with `craftar forge promote rule/<name> --profile <p>` after that re-import — which corrects that profile only: every other profile that resolved the old base gets it back as its own variant `rule/<name>--<q>`, still always-on — or by hand, for every profile at once: move the frontmatter out of `rule.md` into `frontmatterRaw`, set `inclusion: fileMatch` and `fileMatchPattern`, then `craftar sync` — whose next run updates `.kiro/steering/<name>.md`, `AGENTS.md` and the `.kiro/agents/*.json` of agents bound to that rule, while `.claude/rules/<name>.md` keeps its bytes.
