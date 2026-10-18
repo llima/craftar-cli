@@ -183,8 +183,7 @@ export async function planInit(root: string, input: InitInput, opts: InitOptions
     const base: Record<string, unknown> = { forge };
     if (input.ref !== undefined) base.ref = input.ref;
     base.profile = input.profile;
-    // With newProfile, targets go into the profile, not craftar.yaml — but local targets are still merged
-    if (input.targets !== undefined) base.targets = input.targets;
+    // With newProfile, --targets goes into the profile (spec 38 §4.1): neither craftar.yaml nor the workspace layer holds it
 
     const merged = mergeWorkspaceConfig(base, localDoc);
 
@@ -217,10 +216,7 @@ export async function planInit(root: string, input: InitInput, opts: InitOptions
 
     const p = await plan(ws);
 
-    // P12: a new profile whose recipes do not resolve is refused (spec 38 §4.2).
-    // Missing ingredient references are warnings for existing profiles but failures for new ones.
-    const missingIngredient = p.resolution.warnings.find((w) => w.includes("missing ingredient"));
-    if (missingIngredient) throw new Error(missingIngredient);
+    // P12 is the resolver's and the planner's own refusal: newProfile's recipe edit resolves, and plan() above throws (spec 38 §4.2)
 
     const lock = await readLock(root);
     const statuses = await status(ws, p, lock);

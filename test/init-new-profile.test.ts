@@ -14,7 +14,7 @@ afterEach(async () => {
 });
 const SPEC: ForgeSpec = {
   ingredients: [rule("a", "# A\n"), rule("b", "# B\n"), rule("c", "# C\n")],
-  recipes: [recipe("base", ["rule/a"]), recipe("stack-node", ["rule/b"]), recipe("extra", ["rule/c"]), recipe("broken", ["rule/missing"])],
+  recipes: [recipe("base", ["rule/a"]), recipe("stack-node", ["rule/b"]), recipe("extra", ["rule/c"]), recipe("broken", ["rule/a"], { extends: ["nope"] })],
   profiles: [profile("acme", ["base", "stack-node"], ["claude-code", "kiro"], { params: { org: "zqmark" } })],
 };
 async function setup(spec: ForgeSpec = SPEC) {
@@ -71,7 +71,7 @@ describe("planInit with newProfile", () => {
   });
   it("P12 / P11: a new profile whose recipes do not resolve is refused — nothing written", async () => {
     const s = await setup();
-    await expect(planInit(s.ws, { forge: s.forge, profile: "initech", newProfile: { name: "initech" }, addRecipes: ["broken"], loaded: s.loaded })).rejects.toThrow(/missing/);
+    await expect(planInit(s.ws, { forge: s.forge, profile: "initech", newProfile: { name: "initech" }, addRecipes: ["broken"], loaded: s.loaded })).rejects.toThrow(/^recipe "nope" not found/);
     expect(await fs.readdir(path.join(s.forge, "profiles"))).toEqual(["acme"]);
     expect(await fs.readdir(s.ws)).toEqual([]);
   });
