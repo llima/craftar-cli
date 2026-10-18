@@ -85,16 +85,23 @@ describe("spec 39 gap 2: a forge: spelled with one slash after the scheme", () =
     }
   });
 
-  it("import --write-config: exit 1, the credential message, nothing of the fake password printed", async () => {
+  it("import --write-config: exit 1, the credential message, craftar.yaml unchanged, nothing of the fake password printed", async () => {
     for (const forge of spellings) {
       const { ws, home, forge: forgeDir } = await wsWithForge(forge);
       // Set up a minimal .claude/rules file so import has something to read
       await writeFiles(ws, { ".claude/rules/a.md": "# A\n" });
+      // Write an initial craftar.yaml with the credential URL
+      const beforePath = path.join(ws, "craftar.yaml");
+      const beforeContent = `forge: ${forge}\nprofile: acme\n`;
+      await fs.writeFile(beforePath, beforeContent);
       const r = runCli(["import", "--from", "claude-code", "--workspace", ws, "--forge", forgeDir, "--profile", "acme", "--write-config"], {
         env: { CRAFTAR_HOME: home },
       });
       expect(r.code, forge.replace(PW, "<pw>")).toBe(1);
       expect(r.stderr, forge.replace(PW, "<pw>")).toContain("craftar.yaml › forge holds credentials in the URL");
+      // craftar.yaml is unchanged (the refusal wrote nothing).
+      const afterContent = await fs.readFile(beforePath, "utf8");
+      expect(afterContent, "craftar.yaml was changed despite the refusal").toBe(beforeContent);
       expect(r.stdout + r.stderr, forge.replace(PW, "<pw>")).not.toContain(PW);
       expect(r.stdout + r.stderr, forge.replace(PW, "<pw>")).not.toContain(PW.toLowerCase());
     }

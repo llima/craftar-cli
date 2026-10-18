@@ -444,12 +444,18 @@ describe("spec 39 gap 1: a cache entry named after a URL with credentials, that 
     expectClean(report);
   });
 
-  it("with CRAFTAR_NO_REGISTRY every entry is labelled — even one a row with credentials names, and one a clean row names", async () => {
+  it("with CRAFTAR_NO_REGISTRY every entry is labelled — even one a row with credentials names", async () => {
     const h = await recordedHome(); // its rows still name the entry, flagged
     const { report } = await pruneCache(h.home, { dryRun: true, workspace: null, registryOff: true });
     expect([...report.removed, ...report.kept].map((r) => r.path)).toEqual([`forges/${UNVOUCHED}`]);
     expectClean(report);
+    // Remove the fetched stamp to make the entry incomplete, so doctor reports it individually.
+    await fs.rm(path.join(h.home, "forges", h.oldKey, "fetched"));
     const d = await runDoctor(doctorOpts(h.home, { registryOff: true }));
+    // The cache check reports the entry by the label because no row vouches it (registry off).
+    expect(d.checks.filter((c) => c.id === "cache").map((c) => c.message)).toEqual([
+      `${UNVOUCHED} — a fetch never completed (orphans not checked: CRAFTAR_NO_REGISTRY is set)`,
+    ]);
     expectClean(d);
   });
 
@@ -494,6 +500,19 @@ describe("spec 39 gap 1: a cache entry named after a URL with credentials, that 
     // The tree row uses the label, not the raw key.
     expect(r.stdout).toContain(LABEL);
     expect(r.stdout).toContain("/trees/");
+    expectClean(r.stdout);
+    expectClean(r.stderr);
+  });
+
+  it("spec 39 §7: cache prune CLI text output with CRAFTAR_NO_REGISTRY shows the unvouched label", async () => {
+    const h = await recordedHome();
+    // Run the CLI with the registry off, so every entry is unvouched.
+    const r = runCli(["cache", "prune", "--dry-run"], { env: { CRAFTAR_HOME: h.home, CRAFTAR_NO_REGISTRY: "1" }, cwd: h.root });
+    expect(r.code, r.stderr).toBe(0);
+    // The entry row uses the unvouched label (neither label contains "/").
+    expect(r.stdout).toContain(UNVOUCHED);
+    expect(UNVOUCHED).not.toContain("/");
+    expect(LABEL).not.toContain("/");
     expectClean(r.stdout);
     expectClean(r.stderr);
   });

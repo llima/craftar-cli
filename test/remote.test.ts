@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cacheKey, classifyForge, credentialFault, parseLsRemote, resolveRef } from "../src/core/remote.js";
+import { cacheKey, classifyForge, credentialFault, parseLsRemote, refHoldsCredentials, resolveRef } from "../src/core/remote.js";
 
 describe("what counts as a URL (spec 13 §6.1)", () => {
   it("URLs", () => {
@@ -115,6 +115,8 @@ describe("credentials (spec 13 §4.3, §6.1)", () => {
       `C:/x:y@z`,
     ])
       expect(credentialFault(v), JSON.stringify(v.replace(P, "<pw>"))).toBe(true);
+    // refHoldsCredentials is used for the README's "a ref: spelled that way is named by the label".
+    expect(refHoldsCredentials(`https:/${U}:${P}@${H}`)).toBe(true);
   });
   it("accepted (spec 39, pinned): paths, a bare user on a non-http scheme, file, a tab in a path", () => {
     for (const v of ["C:/forges/acme", "../acme-forge", "foo:/a@b", "file:/x@y", "ssh:/git@example.invalid/f", "../my\tforge"])
