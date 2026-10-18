@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { LockBusyError, type LockTiming } from "./home-lock.js";
-import { credentialKeys, hideKeys, namedCacheKeys, readRegistry } from "./registry.js";
+import { credentialKeys, hideCacheKeys, hideCacheSegment, hideKeys, namedCacheKeys, readRegistry, vouchedKeys } from "./registry.js";
 import type { Registry } from "../schema/index.js";
 import {
   cacheDir,
@@ -11,6 +11,7 @@ import {
   pruneTrees,
   removeEntry,
   removeLeftover,
+  REMOVING_PREFIX,
   withPruneLock,
   type CacheSnapshot,
   type GitRunner,
@@ -72,6 +73,8 @@ export interface PruneOptions extends LockTiming {
   rename?: (from: string, to: string) => Promise<void>;
   /** Test hook: awaited after each `refresh()` of the prune lock, before the step it precedes. */
   beforeStep?: () => Promise<void>;
+  /** Test hook: a replacement for the real `inspectCache` (spec 39 §5.1). */
+  inspectCache?: typeof inspectCache;
 }
 
 export async function pruneCache(home: string, opts: PruneOptions): Promise<PruneResult> {
@@ -91,10 +94,19 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
   // The keys the registry records for a URL with credentials: an entry's name is its key, and such a
   // key holds them in clear. Filled once the registry is read; nothing this run says names one.
   const hide: string[] = [];
+  // The unvouched keys: filled after the snapshot is built. A failure before the snapshot
+  // uses `hideCacheSegment`; a failure after it uses `hideCacheKeys(text, hide, unvouched)` (spec 39 §5.1).
+  let snapshotBuilt = false;
+  const unvouched: string[] = [];
 
   // The actual prune work: under the prune lock for a run, no lock for dry-run.
   // Everything after the "no forges/" check runs under the prune lock (§4.2 step 0).
   const doPrune = async (lock: { refresh: () => Promise<void>; bytes: number }) => {
+    // Reset the state in case of retry (spec 39 §5.1: an entry unvouched at the snapshot stays labelled for the whole run).
+    snapshotBuilt = false;
+    hide.length = 0;
+    unvouched.length = 0;
+
     const start = Date.now();
 
     // Step 2: Determine naming info (§4.2 step 2) — under the lock so a waiting prune sees the state
@@ -132,8 +144,9 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
 
     // Step 3: Snapshot the cache — under the lock.
     let snapshot: CacheSnapshot;
+    const doInspect = opts.inspectCache ?? inspectCache;
     try {
-      snapshot = await inspectCache(home);
+      snapshot = await doInspect(home);
     } catch (e) {
       throw new Error(`cannot read ${forgesDir}: ${(e as Error).message}`);
     }
@@ -141,6 +154,25 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
     // the lock is in forges/ during the snapshot but is not part of the cache content.
     const headerBytes = snapshot.bytes - lock.bytes;
     const header = { forges: forgesDir, entries: snapshot.entries.length, bytes: headerBytes };
+
+    // The unvouched list: every key in the snapshot that is not vouched (spec 39 §5.1).
+    // Built now, so `guarded` knows whether the failure came before or after the snapshot.
+    const vouched = vouchedKeys(named, reg);
+    unvouched.length = 0; // Clear in case of retry
+    for (const e of snapshot.entries) if (!vouched.has(e.key)) unvouched.push(e.key);
+    // Keys inside ~removing- directories: strip the prefix and the trailing `-<digits>`.
+    for (const r of snapshot.removing) {
+      const name = path.basename(r.dir);
+      if (name.startsWith(REMOVING_PREFIX)) {
+        const rest = name.slice(REMOVING_PREFIX.length);
+        const lastDash = rest.lastIndexOf("-");
+        if (lastDash !== -1) {
+          const maybeKey = rest.slice(0, lastDash);
+          if (!vouched.has(maybeKey) && !hide.includes(maybeKey)) unvouched.push(maybeKey);
+        }
+      }
+    }
+    snapshotBuilt = true; // Mark that the snapshot was built for guarded's hide logic.
 
     const removed: PruneRemoved[] = [];
     const kept: PruneKept[] = [];
@@ -303,10 +335,14 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
     const freedBytes = removed.reduce((sum, r) => sum + r.bytes, 0);
 
     // The report names such an entry by the fixed label, in every path and warning.
-    const shown = <T extends { path: string }>(rows: T[]): T[] => (hide.length === 0 ? rows : rows.map((r) => ({ ...r, path: hideKeys(r.path, hide) })));
+    // hideCacheKeys labels both credential and unvouched keys by merged ranges of the original text (spec 39 review rounds 2-3).
+    // An entry unvouched at the snapshot stays labelled for the whole run (fail closed).
+    const hidePath = (text: string): string => hideCacheKeys(text, hide, unvouched);
+    const shownRemoved = removed.map((r) => ({ ...r, path: hidePath(r.path) }));
+    const shownKept = kept.map((r) => ({ ...r, path: hidePath(r.path) }));
 
     return {
-      report: { home, dryRun: opts.dryRun, removed: shown(removed), kept: shown(kept), freedBytes, warnings: warnings.map((w) => hideKeys(w, hide)) },
+      report: { home, dryRun: opts.dryRun, removed: shownRemoved, kept: shownKept, freedBytes, warnings: warnings.map(hidePath) },
       header,
     };
   };
@@ -317,9 +353,23 @@ export async function pruneCache(home: string, opts: PruneOptions): Promise<Prun
     try {
       return await doPrune(lock);
     } catch (e) {
-      if (!(e instanceof Error) || hideKeys(e.message, hide) === e.message) throw e;
+      if (!(e instanceof Error)) throw e;
+      // Before the snapshot: use hideCacheSegment then hideKeys (spec 39 §5.1).
+      // Two passes are safe: hideCacheSegment replaces the whole segment after `forges/`, and a
+      // credential key is a cacheKey — only [a-z0-9._-], ending in `-<12 hex>` — while the inserted
+      // label holds no such run and starts with `(` and holds spaces, so hideKeys can match neither
+      // inside nor across it.
+      // After the snapshot: use hideCacheKeys, one call over the original text (spec 39 review rounds 2-3).
+      let msg = e.message;
+      if (!snapshotBuilt) {
+        msg = hideCacheSegment(msg, home);
+        msg = hideKeys(msg, hide);
+      } else {
+        msg = hideCacheKeys(msg, hide, unvouched);
+      }
+      if (msg === e.message) throw e;
       // A new error on purpose — no `cause`, no copied `code`: the original carries the name.
-      throw new Error(hideKeys(e.message, hide));
+      throw new Error(msg);
     }
   };
 

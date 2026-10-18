@@ -51,6 +51,9 @@ function offerableForge(
   exists: (dir: string) => boolean,
 ): OfferedForge | null {
   if (entry.forge.kind === "path") {
+    // Spec 39 §7, §14 item 8: a gap-2 spelling that once loaded as a path is recorded with a real
+    // path that holds the credential.
+    if (credentialFault(entry.forge.source)) return null;
     if (entry.forge.key === null) return null;
     if (!exists(entry.forge.key)) return null;
     return { forge: entry.forge.key, ref: null };

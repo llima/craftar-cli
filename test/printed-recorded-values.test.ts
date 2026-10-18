@@ -5,10 +5,11 @@ import { pruneCache } from "../src/core/cache.js";
 import { runDoctor, type DoctorOptions } from "../src/core/doctor.js";
 import { askInit, type InitIo } from "../src/core/init-flow.js";
 import { credentialKeys, hideKeys, listWorkspaces, readRegistry, register, registryFile } from "../src/core/registry.js";
-import { cacheKey, credentialFault, ensureTree, parseLsRemote, resolveRef, type GitRunner } from "../src/core/remote.js";
+import { cacheKey, credentialFault, CREDENTIAL_HIDDEN, ensureTree, parseLsRemote, resolveRef, UNVOUCHED_HIDDEN, type GitRunner } from "../src/core/remote.js";
 import { apply, loadForgeSource, loadWorkspace, loadWorkspaceConfig, plan, readLock, status } from "../src/core/sync.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
 import { remoteForge } from "./helpers/remote.js";
+import { runCli } from "./helpers/cli.js";
 
 // 0.28.1 — three values that reached an output: a Forge URL with credentials that an earlier
 // release recorded in the registry, a `forge:` spelled with backslashes after the scheme, and a
@@ -154,7 +155,24 @@ describe("a Forge URL with credentials recorded by an earlier release", () => {
     }
   });
 
-  it("cache prune: an entry nothing with credentials names keeps its name", async () => {
+  it("cache prune: an entry a clean registry row names keeps its name (spec 39, pinned)", async () => {
+    const root = await tmpDir("craftar-recorded-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    await fs.mkdir(home);
+    const r = await remoteForge(SPEC);
+    cleanups.push(r.cleanup);
+    const dir = path.join(root, "acme-clean");
+    await makeWorkspace(dir, root, { config: { profile: "acme", forge: r.url } });
+    const w = await loadWorkspace(dir, { home });
+    const p = await plan(w);
+    await apply(w, p, await status(w, p, await readLock(w.root)));
+    await register(home, w, p);
+    const { report } = await pruneCache(home, { dryRun: true, workspace: null, registryOff: false });
+    expect(report.kept.map((x) => x.path)).toEqual([`forges/${cacheKey(r.url)}`]);
+  });
+
+  it("cache prune: an entry nothing names is named by the unvouched label (spec 39 §4.1 a)", async () => {
     const root = await tmpDir("craftar-recorded-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
     const home = path.join(root, "home");
@@ -163,7 +181,7 @@ describe("a Forge URL with credentials recorded by an earlier release", () => {
     cleanups.push(r.cleanup);
     await ensureTree(r.url, null, { home });
     const { report } = await pruneCache(home, { dryRun: true, workspace: null, registryOff: false });
-    expect(report.removed.map((x) => x.path)).toEqual([`forges/${cacheKey(r.url)}`]);
+    expect(report.removed.map((x) => x.path)).toEqual([`forges/${UNVOUCHED_HIDDEN}`]);
   });
 
   it("doctor: the cache check names such an entry by the label", async () => {
@@ -375,5 +393,127 @@ describe("a ref: that holds a URL with credentials", () => {
       expect(message).toBe(`ref ${LABEL} not found in ${c.url}`);
       expectClean(message);
     }
+  });
+});
+
+describe("spec 39 gap 1: a cache entry named after a URL with credentials, that no registry row names any more", () => {
+  const UNVOUCHED = "(a cache entry name — not shown)";
+
+  /** recordedHome, then the registry rows dropped: the state right after the user re-synced without the credentials and pruned the registry. */
+  async function orphanHome() {
+    const h = await recordedHome();
+    const file = registryFile(h.home);
+    const reg = JSON.parse(await fs.readFile(file, "utf8"));
+    reg.workspaces = [];
+    await fs.writeFile(file, JSON.stringify(reg, null, 2) + "\n");
+    return h;
+  }
+  const doctorOpts = (home: string, extra: Partial<DoctorOptions> = {}): DoctorOptions => ({
+    version: "0.0.0", workspace: null, fetch: false, strict: false, registryOff: false, env: {}, nodeVersion: "22.11.0",
+    gitVersion: async () => "2.53.0", home, ...extra,
+  });
+
+  it("the label's text is pinned", () => expect(UNVOUCHED_HIDDEN).toBe(UNVOUCHED));
+
+  it("doctor: `nothing names it` and `a fetch never completed` name it by the label — text and the report object", async () => {
+    const h = await orphanHome();
+    const report = await runDoctor(doctorOpts(h.home));
+    expect(report.checks.filter((c) => c.id === "cache").map((c) => c.message)).toEqual([`${UNVOUCHED} — nothing names it`]);
+    expectClean(report);
+    await fs.rm(path.join(h.home, "forges", h.oldKey, "fetched"));
+    const again = await runDoctor(doctorOpts(h.home));
+    expect(again.checks.filter((c) => c.id === "cache").map((c) => c.message)).toEqual([`${UNVOUCHED} — a fetch never completed`]);
+    expectClean(again);
+  });
+
+  it("cache prune: the entry, its ~removing- leftover and a warning about it are named by the label — dry run and run", async () => {
+    for (const dryRun of [true, false]) {
+      const h = await orphanHome();
+      await fs.mkdir(path.join(h.home, "forges", `~removing-${h.oldKey}-4242`));
+      const { report } = await pruneCache(h.home, { dryRun, workspace: null, registryOff: false });
+      expect(report.removed.map((r) => r.path).sort()).toEqual([`forges/${UNVOUCHED}`, `forges/~removing-${UNVOUCHED}-4242`].sort());
+      expectClean(report);
+    }
+    const h = await orphanHome();
+    await fs.rm(path.join(h.home, "forges", h.oldKey, "fetched"));
+    const rename = async () => {
+      throw Object.assign(new Error("held"), { code: "EPERM" });
+    };
+    const { report } = await pruneCache(h.home, { dryRun: false, workspace: null, registryOff: false, rename });
+    expect(report.warnings).toEqual([`${UNVOUCHED} is held open (EPERM) — kept`]);
+    expectClean(report);
+  });
+
+  it("with CRAFTAR_NO_REGISTRY every entry is labelled — even one a row with credentials names", async () => {
+    const h = await recordedHome(); // its rows still name the entry, flagged
+    const { report } = await pruneCache(h.home, { dryRun: true, workspace: null, registryOff: true });
+    expect([...report.removed, ...report.kept].map((r) => r.path)).toEqual([`forges/${UNVOUCHED}`]);
+    expectClean(report);
+    // Remove the fetched stamp to make the entry incomplete, so doctor reports it individually.
+    await fs.rm(path.join(h.home, "forges", h.oldKey, "fetched"));
+    const d = await runDoctor(doctorOpts(h.home, { registryOff: true }));
+    // The cache check reports the entry by the label because no row vouches it (registry off).
+    expect(d.checks.filter((c) => c.id === "cache").map((c) => c.message)).toEqual([
+      `${UNVOUCHED} — a fetch never completed (orphans not checked: CRAFTAR_NO_REGISTRY is set)`,
+    ]);
+    expectClean(d);
+  });
+
+  it("no snapshot: doctor's unreadable-cache line and cache prune's failed snapshot print the label, a flagged key included", async () => {
+    const h = await recordedHome(); // flagged key, named by its rows
+    const inside = path.join(h.home, "forges", h.oldKey, "fetched");
+    const failing = async () => {
+      throw Object.assign(new Error(`EACCES: permission denied, open '${inside}'`), { code: "EACCES" });
+    };
+    const d = await runDoctor(doctorOpts(h.home, { inspectCache: failing } as Partial<DoctorOptions>));
+    const line = d.checks.find((c) => c.id === "cache")!.message;
+    expect(line).toBe(`cannot read the Forge cache: EACCES: permission denied, open '${path.join(path.resolve(h.home), "forges", UNVOUCHED, "fetched")}'`);
+    expectClean(d);
+    const message = await pruneCache(h.home, { dryRun: true, workspace: null, registryOff: false, inspectCache: failing } as Parameters<typeof pruneCache>[1]).then(
+      () => "",
+      (e: unknown) => (e as Error).message,
+    );
+    expect(message).toContain(UNVOUCHED);
+    expect(message).not.toContain(LABEL);
+    expectClean(message);
+  });
+
+  it("spec 39 §7: cache prune CLI text output with a labelled tree row does not throw in labelOf", async () => {
+    // Build a home with a cache entry whose name holds a credential (flagged rows name it).
+    const h = await recordedHome();
+
+    // Find the tree inside the renamed cache entry — sync created it.
+    const treesDir = path.join(h.home, "forges", h.oldKey, "trees");
+    const treeEntries = await fs.readdir(treesDir);
+    const commit = treeEntries.find((e) => !e.includes("."));
+    expect(commit, "no tree commit found").toBeDefined();
+
+    // Make the tree's .used stamp 15 days old so cache prune --dry-run lists it.
+    const DAY = 24 * 60 * 60 * 1000;
+    const ago15 = new Date(Date.now() - 15 * DAY);
+    await fs.utimes(path.join(treesDir, `${commit}.used`), ago15, ago15);
+
+    // Run the CLI from a directory without craftar.yaml (as other cache-prune CLI tests do).
+    const r = runCli(["cache", "prune", "--dry-run"], { env: { CRAFTAR_HOME: h.home }, cwd: h.root });
+    expect(r.code, r.stderr).toBe(0);
+
+    // The tree row uses the label, not the raw key.
+    expect(r.stdout).toContain(LABEL);
+    expect(r.stdout).toContain("/trees/");
+    expectClean(r.stdout);
+    expectClean(r.stderr);
+  });
+
+  it("spec 39 §7: cache prune CLI text output with CRAFTAR_NO_REGISTRY shows the unvouched label", async () => {
+    const h = await recordedHome();
+    // Run the CLI with the registry off, so every entry is unvouched.
+    const r = runCli(["cache", "prune", "--dry-run"], { env: { CRAFTAR_HOME: h.home, CRAFTAR_NO_REGISTRY: "1" }, cwd: h.root });
+    expect(r.code, r.stderr).toBe(0);
+    // The entry row uses the unvouched label (neither label contains "/").
+    expect(r.stdout).toContain(UNVOUCHED);
+    expect(UNVOUCHED).not.toContain("/");
+    expect(LABEL).not.toContain("/");
+    expectClean(r.stdout);
+    expectClean(r.stderr);
   });
 });

@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runDoctor, type Check, type DoctorOptions } from "../src/core/doctor.js";
 import { register } from "../src/core/registry.js";
-import { cacheKey, ensureTree } from "../src/core/remote.js";
+import { cacheKey, ensureTree, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
 import { apply, loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 import { git, remoteForge } from "./helpers/remote.js";
@@ -136,7 +136,7 @@ describe("the cache check (§4.3)", () => {
     await fs.mkdir(path.join(c.home, "forges", "example.com-half-000000000000"), { recursive: true });
     const r = await run({ home: c.home });
     const found = of(r.checks, "cache");
-    expect(found.map((x) => x.message).sort()).toEqual([`${c.key} — nothing names it`, "example.com-half-000000000000 — a fetch never completed"].sort());
+    expect(found.map((x) => x.message).sort()).toEqual([`${UNVOUCHED_HIDDEN} — nothing names it`, `${UNVOUCHED_HIDDEN} — a fetch never completed`].sort());
     expect(found.every((x) => x.level === "warn" && x.fix === "craftar cache prune")).toBe(true);
   });
 
@@ -156,7 +156,7 @@ describe("the cache check (§4.3)", () => {
     await fs.mkdir(path.join(c.home, "forges", "example.com-half-000000000000"), { recursive: true });
     expect(one((await run({ home: c.home, registryOff: true })).checks, "cache")).toMatchObject({
       level: "warn",
-      message: "example.com-half-000000000000 — a fetch never completed (orphans not checked: CRAFTAR_NO_REGISTRY is set)",
+      message: `${UNVOUCHED_HIDDEN} — a fetch never completed (orphans not checked: CRAFTAR_NO_REGISTRY is set)`,
     });
     await fs.rm(path.join(c.home, "forges", "example.com-half-000000000000"), { recursive: true });
     const bad = path.join(c.root, "bad");
@@ -169,7 +169,7 @@ describe("the cache check (§4.3)", () => {
     const a = await c.ws("acme-a", { profile: "acme", forge: "../nowhere" });
     const r = await run({ home: c.home, workspace: a });
     expect(one(r.checks, "config").level).toBe("error");
-    expect(one(r.checks, "cache")).toMatchObject({ level: "warn", message: `${c.key} — nothing names it` });
+    expect(one(r.checks, "cache")).toMatchObject({ level: "warn", message: `${UNVOUCHED_HIDDEN} — nothing names it` });
   });
 
   it("the size is summed", async () => {
@@ -430,7 +430,7 @@ describe("the cache check and removal directories (spec 26 §5.1, §6 case 13)",
     const f = await fixture();
     await writeFiles(path.join(f.home, "forges"), { "example.com-half-000000000000/repo.git/HEAD": "x" });
     const r = await run({ home: f.home });
-    expect(one(r.checks, "cache")).toEqual({ id: "cache", scope: "machine", level: "warn", message: "example.com-half-000000000000 — a fetch never completed", fix: "craftar cache prune" });
+    expect(one(r.checks, "cache")).toEqual({ id: "cache", scope: "machine", level: "warn", message: `${UNVOUCHED_HIDDEN} — a fetch never completed`, fix: "craftar cache prune" });
   });
 });
 

@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { pruneCache, type PruneOptions } from "../src/core/cache.js";
-import { cacheKey, ensureTree } from "../src/core/remote.js";
+import { cacheKey, ensureTree, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
 import { tmpDir, profile, recipe, rule, writeFiles } from "./helpers/forge.js";
 import { remoteForge } from "./helpers/remote.js";
 
@@ -48,8 +48,8 @@ describe("a crash mid-removal (§4.3)", () => {
     expect(await ls(c.forges)).toEqual([c.key, `~removing-${c.key}-99999`, "prune.lock"].sort());
     const dry = (await pruneCache(c.home, { ...RUN, dryRun: true })).report;
     expect(dry.removed.map((x) => [x.path, x.kind, x.reason])).toEqual([
-      [`forges/${c.key}`, "entry", "incomplete"],
-      [`forges/~removing-${c.key}-99999`, "leftover", "interrupted"],
+      [`forges/${UNVOUCHED_HIDDEN}`, "entry", "incomplete"],
+      [`forges/~removing-${UNVOUCHED_HIDDEN}-99999`, "leftover", "interrupted"],
     ]);
   });
 
@@ -59,8 +59,8 @@ describe("a crash mid-removal (§4.3)", () => {
     await fs.utimes(path.join(c.forges, "prune.lock"), old, old);
     const { report } = await pruneCache(c.home, { ...RUN, staleMs: 1_000 });
     expect(report.removed.map((x) => [x.path, x.kind, x.reason])).toEqual([
-      [`forges/${c.key}`, "entry", "incomplete"],
-      [`forges/~removing-${c.key}-99999`, "leftover", "interrupted"],
+      [`forges/${UNVOUCHED_HIDDEN}`, "entry", "incomplete"],
+      [`forges/~removing-${UNVOUCHED_HIDDEN}-99999`, "leftover", "interrupted"],
     ]);
     expect([report.kept, report.warnings]).toEqual([[], []]);
     expect(await ls(c.forges)).toEqual([]);
@@ -139,8 +139,8 @@ describe("a file held open, leftovers, and a key shaped like a removal directory
     const { report } = await pruneCache(s.home, { ...RUN, rename });
     expect([report.removed, report.kept, report.warnings]).toEqual([
       [],
-      [{ path: `forges/${s.key}`, reason: "held-open", namedBy: [] }],
-      [`${s.key} is held open (EBUSY) — kept`],
+      [{ path: `forges/${UNVOUCHED_HIDDEN}`, reason: "held-open", namedBy: [] }],
+      [`${UNVOUCHED_HIDDEN} is held open (EBUSY) — kept`],
     ]);
     expect(await ls(s.entry)).toEqual(["fetched", "repo.git", "trees"]);
     expect(await ls(s.forges)).toEqual([s.key]);
@@ -151,8 +151,8 @@ describe("a file held open, leftovers, and a key shaped like a removal directory
     await fs.writeFile(path.join(s.home, "registry.json"), JSON.stringify({ schema: 1, workspaces: [] }));
     await writeFiles(s.forges, { "~removing-example.com-old-0a1b2c3d4e5f-4242/repo.git/HEAD": "12345" });
     const { report } = await pruneCache(s.home, { ...RUN, registryOff: true });
-    expect(report.removed).toEqual([{ path: "forges/~removing-example.com-old-0a1b2c3d4e5f-4242", kind: "leftover", reason: "interrupted", bytes: 5 }]);
-    expect(report.kept).toEqual([{ path: `forges/${s.key}`, reason: "unchecked", namedBy: [] }]);
+    expect(report.removed).toEqual([{ path: `forges/~removing-${UNVOUCHED_HIDDEN}-4242`, kind: "leftover", reason: "interrupted", bytes: 5 }]);
+    expect(report.kept).toEqual([{ path: `forges/${UNVOUCHED_HIDDEN}`, reason: "unchecked", namedBy: [] }]);
     expect(report.freedBytes).toBe(5);
     expect(await ls(s.forges)).toEqual([s.key]);
   });

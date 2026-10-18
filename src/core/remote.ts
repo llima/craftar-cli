@@ -17,11 +17,17 @@ const SCHEME_URL = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
 /** The SCP-like form `<user>@<host>:<path>`; without a user, `host:path` stays a path (a drive letter looks the same). */
 const SCP_URL = /^[^\s/\\:@]+@[^\s/\\:]+:/;
 
-/** A scheme and the run of `/` and `\` after it, whatever the run is (`credentialFault` reads it when it is not `//`). */
+/** A scheme and the run of `/` and `\` after it; `credentialFault` reads any run that is not `//` (spec 39 §4.2 A). */
 const BACKSLASH_URL = /^([A-Za-z][A-Za-z0-9+.-]*):([/\\]+)/;
 
 /** What is printed in place of a value `credentialFault` flags, where one written or recorded earlier would be shown. */
 export const CREDENTIAL_HIDDEN = "(a URL with credentials — not shown)";
+
+/**
+ * What is printed in place of a cache key no clean registry row vouches for — an orphan, every entry
+ * when the registry is off or unreadable. Spec 39 §3.
+ */
+export const UNVOUCHED_HIDDEN = "(a cache entry name — not shown)";
 
 /** A `forge:` value is a git URL (a remote Forge) or a path resolved from the workspace root. */
 export function classifyForge(value: string): "url" | "path" {
@@ -46,17 +52,25 @@ const REFERENCE_ONLY = new RegExp(`^(\\$\\{${ENV_NAME}\\}|:)*$`);
  * the remedy it prescribes (a userinfo made only of `${NAME}` references).
  */
 export function urlCredentialIn(text: string): boolean {
+  // A run of tab / LF / CR among the `:` and the two `/` of a scheme separator is removed, so the
+  // separator is found (spec 39 §5.2).
+  const leaf = text.replace(/:[\t\n\r]*\/[\t\n\r]*\//g, "://");
   // Step 1: For every occurrence of `://` in the leaf (occurrences are independent; none hides another).
   let pos = 0;
   while (true) {
-    const sep = text.indexOf("://", pos);
+    const sep = leaf.indexOf("://", pos);
     if (sep === -1) break;
     pos = sep + 3; // Move past this `://` for the next iteration
 
     // Step 1: The scheme is the run of [A-Za-z0-9+.-] directly before it; it may be empty.
     let schemeStart = sep;
-    while (schemeStart > 0 && /[A-Za-z0-9+.-]/.test(text[schemeStart - 1])) schemeStart--;
-    const scheme = text.slice(schemeStart, sep).toLowerCase();
+    while (schemeStart > 0 && /[A-Za-z0-9+.-]/.test(leaf[schemeStart - 1])) schemeStart--;
+    const scheme = leaf.slice(schemeStart, sep).toLowerCase();
+
+    // Spec 39 §5.2: also walk back including tab / LF / CR, then remove them and lower-case.
+    let schemeLooseStart = sep;
+    while (schemeLooseStart > 0 && /[A-Za-z0-9+.\-\t\n\r]/.test(leaf[schemeLooseStart - 1])) schemeLooseStart--;
+    const schemeLoose = leaf.slice(schemeLooseStart, sep).replace(/[\t\n\r]/g, "").toLowerCase();
 
     // Step 2: The authority is the text after it, up to the first of `/`, `?`, `#`, white space (\s), `"`, `'`, `,`, `;` or the end.
     // An empty authority is not the end of it: curl takes up to three slashes after the scheme and reads what
@@ -64,7 +78,7 @@ export function urlCredentialIn(text: string): boolean {
     // but `file` (where an empty authority is the norm and the rest is a path) is read past the leading
     // separators. White space among them is read past too: a URL parser drops a tab or a newline,
     // percent-encodes a space, and still reads the userinfo that follows.
-    const rest = text.slice(sep + 3);
+    const rest = leaf.slice(sep + 3);
     const afterScheme = scheme === "file" ? rest : rest.replace(/^[/\\\s]+/, "");
     // White space ends the authority — except a run of tab, line feed and carriage return directly before an
     // `@`: a URL parser deletes those three from a URL, so `https://<token><LF>@host/` reaches the host with the
@@ -101,9 +115,11 @@ export function urlCredentialIn(text: string): boolean {
 
     // Step 5: When the scheme is http, https, ws or wss, or ends in + followed by one of them,
     // any other non-empty userinfo is a finding; for any other scheme, the empty one included,
-    // only a userinfo holding `:` is.
-    const isHttpWs = HTTP_WS_SCHEMES.includes(scheme) ||
-      HTTP_WS_SCHEMES.some((s) => scheme.endsWith("+" + s));
+    // only a userinfo holding `:` is. Spec 39 §5.2: isHttpWs is true when EITHER reading
+    // (scheme or schemeLoose) matches.
+    const isHttpWs =
+      HTTP_WS_SCHEMES.includes(scheme) || HTTP_WS_SCHEMES.some((s) => scheme.endsWith("+" + s)) ||
+      HTTP_WS_SCHEMES.includes(schemeLoose) || HTTP_WS_SCHEMES.some((s) => schemeLoose.endsWith("+" + s));
 
     if (isHttpWs) {
       // Any non-empty userinfo (not made of references only) is a finding
@@ -122,21 +138,23 @@ export function urlCredentialIn(text: string): boolean {
  * password never reaches a message that prints the value (spec 13 §6.1, §14 item 11). An empty
  * authority (`https:///…`) is read past, for every scheme but `file`: what follows the extra
  * separators is the authority some clients use — curl past up to three slashes, a WHATWG parser
- * past a `\` too. A scheme followed by separators that are not `//` and hold a `\` (`https:\\…`,
- * `https:/\…`) is read the same way: a WHATWG parser takes each `\` for a `/`, while
+ * past a `\` too. A scheme followed by any run of `/` and `\` that is not `//` (`https:/…`,
+ * `https:\\…`, `https:/\…`) is read the same way: a WHATWG parser takes each `\` for a `/`, while
  * `classifyForge` reads the value as a path — and a path is printed.
  */
 export function credentialFault(raw: string): boolean {
-  const value = raw.trim();
+  // A URL parser removes tab, line feed and carriage return before it reads, so `https:<TAB>//…`
+  // and `ht<TAB>tps://…` reach a host with their userinfo — spec 39 §4.2 B.
+  const value = raw.replace(/[\t\n\r]/g, "").trim();
   const head = value.split(/[/\\]/, 1)[0];
   if (/^[^@]*:[^@]*@/.test(head) && !SCHEME_URL.test(value)) return true;
   const scheme = SCHEME_URL.exec(value);
   if (!scheme) {
-    // No `://`: only a separator run holding a backslash is read as one. The authority ends at the
-    // first `/` or `\`; the rules are the ones below, by the scheme's name. A drive path (`C:\dir`)
-    // has no `@` there.
+    // No `://`: any run of `/` and `\` after the scheme that is not `//` has its authority read by
+    // the same rules (spec 39 §4.2 A). The authority ends at the first `/` or `\`; a drive path
+    // (`C:\dir`) has no `@` there. SCHEME_URL already takes a run starting with `//`.
     const loose = BACKSLASH_URL.exec(value);
-    if (!loose || !loose[2].includes("\\") || /^file$/i.test(loose[1])) return false;
+    if (!loose || /^file$/i.test(loose[1])) return false;
     const tail = value.slice(loose[0].length);
     const looseAuthority = tail.slice(0, tail.search(/[/\\]|$/));
     const looseAt = looseAuthority.lastIndexOf("@");

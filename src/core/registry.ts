@@ -4,7 +4,7 @@ import { REGISTRY_SCHEMAS, RegistrySchema, type Lock, type Registry, type Regist
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { exists } from "./forge.js";
 import { withLock, type LockTiming } from "./home-lock.js";
-import { cacheKey, credentialFault, CREDENTIAL_HIDDEN } from "./remote.js";
+import { cacheKey, credentialFault, CREDENTIAL_HIDDEN, UNVOUCHED_HIDDEN } from "./remote.js";
 import { loadWorkspace, plan, readLock, status, unsetDeclared, unsetSummary, WORKSPACE_FILE, type FileStatus, type Plan, type Workspace } from "./sync.js";
 
 /*
@@ -165,9 +165,126 @@ export function credentialKeys(reg: Registry): string[] {
 
 /** `text` with every one of `keys` replaced by the fixed label: what `cache prune` and `doctor` print of a cache entry. */
 export function hideKeys(text: string, keys: readonly string[]): string {
-  let out = text;
-  for (const k of keys) out = out.split(k).join(CREDENTIAL_HIDDEN);
+  return hideCacheKeys(text, keys, []);
+}
+
+/**
+ * The vouched keys: the keys of `named` minus `credentialKeys(reg)`. Empty when `reg` is null or `named`
+ * is empty (spec 39 §5.1). A vouched key is printed as-is; an unvouched key gets `UNVOUCHED_HIDDEN`.
+ */
+export function vouchedKeys(named: ReadonlyMap<string, readonly string[]>, reg: Registry | null): Set<string> {
+  if (reg === null || named.size === 0) return new Set();
+  const flagged = new Set(credentialKeys(reg));
+  const vouched = new Set<string>();
+  for (const k of named.keys()) if (!flagged.has(k)) vouched.add(k);
+  return vouched;
+}
+
+/** `text` with every one of `keys` replaced by `UNVOUCHED_HIDDEN`: what `cache prune` and `doctor` print for an unvouched key. */
+export function hideUnvouched(text: string, keys: readonly string[]): string {
+  return hideCacheKeys(text, [], keys);
+}
+
+/**
+ * Replace every occurrence of every key in `credential` with `CREDENTIAL_HIDDEN` and every key in
+ * `unvouched` with `UNVOUCHED_HIDDEN`. One label per merged range of the original text:
+ *
+ * - A prefix key (review round 2): `abc` and `abcdef` starting at the same position — the longer
+ *   key wins (it's the more specific match); if they start at different positions, each gets its
+ *   own label.
+ * - A key that starts before another and ends inside it (review round 3): `removing-github` starts
+ *   before `github.com-u-tok-abcdef012345` and ends inside it — merge them, one label.
+ *
+ * Credential wins: a merged range is labelled `CREDENTIAL_HIDDEN` when any key covering any part of
+ * it is in `credential`. Empty keys are ignored. Ranges are found on the ORIGINAL text, so nothing
+ * inside an inserted label is ever matched.
+ */
+export function hideCacheKeys(text: string, credential: readonly string[], unvouched: readonly string[]): string {
+  // Collect non-empty keys; credential wins when a key is in both lists
+  const credSet = new Set(credential.filter((k) => k !== ""));
+  const unvSet = new Set(unvouched.filter((k) => k !== ""));
+  const all: string[] = [];
+  for (const k of credSet) all.push(k);
+  for (const k of unvSet) if (!credSet.has(k)) all.push(k);
+  if (all.length === 0) return text;
+
+  // Find every occurrence of every key: [start, end), credential flag
+  // When multiple keys start at the same position, keep only the longest (most specific match)
+  const byStart = new Map<number, { end: number; credential: boolean }>();
+  for (const key of all) {
+    const isCred = credSet.has(key);
+    let pos = 0;
+    while (true) {
+      const idx = text.indexOf(key, pos);
+      if (idx === -1) break;
+      const existing = byStart.get(idx);
+      const keyEnd = idx + key.length;
+      if (existing === undefined || keyEnd > existing.end) {
+        // No existing range at this start, or this key is longer: take it (longer key wins completely)
+        // Deliberate: at the same start the longer key's label is used, even over a shorter credential key
+        // it covers whole — nothing of either is printed (spec 39 review round 4).
+        byStart.set(idx, { end: keyEnd, credential: isCred });
+      } else if (keyEnd === existing.end && isCred && !existing.credential) {
+        // Same length but this one is a credential and existing is not: mark it
+        existing.credential = true;
+      }
+      pos = idx + 1; // advance by 1 so overlapping occurrences of the same key are found
+    }
+  }
+  if (byStart.size === 0) return text;
+
+  // Convert to sorted array
+  const ranges: { start: number; end: number; credential: boolean }[] = [];
+  for (const [start, { end, credential }] of byStart) {
+    ranges.push({ start, end, credential });
+  }
+  ranges.sort((a, b) => a.start - b.start);
+
+  // Merge every range that overlaps the current one (next.start < cur.end)
+  // Touching ranges (next.start === cur.end) are NOT merged, so adjacent keys keep a label each
+  const merged: { start: number; end: number; credential: boolean }[] = [];
+  let cur = { ...ranges[0] };
+  for (let i = 1; i < ranges.length; i++) {
+    const next = ranges[i];
+    if (next.start < cur.end) {
+      // Overlaps: extend current range, credential wins
+      cur.end = Math.max(cur.end, next.end);
+      cur.credential = cur.credential || next.credential;
+    } else {
+      // No overlap: finalize current, start new
+      merged.push(cur);
+      cur = { ...next };
+    }
+  }
+  merged.push(cur);
+
+  // Build output left to right: text between ranges unchanged, each merged range replaced by label
+  let out = "";
+  let prev = 0;
+  for (const r of merged) {
+    out += text.slice(prev, r.start);
+    out += r.credential ? CREDENTIAL_HIDDEN : UNVOUCHED_HIDDEN;
+    prev = r.end;
+  }
+  out += text.slice(prev);
   return out;
+}
+
+/**
+ * `text` with every path segment that follows `<path.resolve(home)>/forges/` or `<home>\forges\`
+ * (either separator after `forges`) up to the next `/`, `\`, white space or quote replaced by
+ * `UNVOUCHED_HIDDEN`. The no-snapshot rule, spec 39 §5.1 — vouched or not.
+ */
+export function hideCacheSegment(text: string, home: string): string {
+  // Strip trailing separators so the root `/` becomes empty and the pattern is `[/\\]forges[/\\]`
+  const resolved = path.resolve(home).replace(/[/\\]+$/, "");
+  // Escape special regex characters in the home path
+  const escaped = resolved.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Match: <home>/forges/ or <home>\forges\ followed by the segment (up to / \ space or quote)
+  // Capture the prefix (including the separator after forges) in group 1
+  const pattern = new RegExp(`(${escaped}[/\\\\]forges[/\\\\])([^/\\\\\\s"']+)`, "g");
+  // Use a function replacement to avoid $&, $1, etc. in the home path being interpreted
+  return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
 }
 
 /** Whether `dir` has a registry entry — by real path, without case on Windows, as `register` keys it (spec 24 §5.1). */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cacheKey, classifyForge, credentialFault, parseLsRemote, resolveRef } from "../src/core/remote.js";
+import { cacheKey, classifyForge, credentialFault, parseLsRemote, refHoldsCredentials, resolveRef } from "../src/core/remote.js";
 
 describe("what counts as a URL (spec 13 §6.1)", () => {
   it("URLs", () => {
@@ -94,6 +94,33 @@ describe("credentials (spec 13 §4.3, §6.1)", () => {
     const v = `https:///${CRED}example.invalid/acme/forge.git`;
     expect(credentialFault(v)).toBe(true);
     expect(cacheKey(v)).toContain("pw" + "x".repeat(6));
+  });
+  // Spec 39 §4.2 (A) and (B): a scheme followed by one slash, or a tab / line break inside the scheme or its `://`, used to be
+  // read as a path and printed whole. Fake parts, assembled at runtime.
+  const U = "fake" + "user";
+  const P = "NOTA" + "SECRET";
+  const H = "example.invalid/acme/forge.git";
+  it("refused (spec 39): one slash, and tab / line feed / carriage return inside the scheme or its ://", () => {
+    for (const v of [
+      `https:/${U}:${P}@${H}`,
+      `https:/${U}@${H}`,
+      `http:/${U}:${P}@${H}`,
+      `ssh:/${U}:${P}@${H}`,
+      `https:\t//${U}:${P}@${H}`,
+      `https:/\n/${U}@${H}`,
+      `ht\ttps://${U}@${H}`,
+      `https:\r//${U}:${P}@${H}`,
+      `https:/\r/${U}@${H}`,
+      `ht\rtps://${U}@${H}`,
+      `C:/x:y@z`,
+    ])
+      expect(credentialFault(v), JSON.stringify(v.replace(P, "<pw>"))).toBe(true);
+    // refHoldsCredentials is used for the README's "a ref: spelled that way is named by the label".
+    expect(refHoldsCredentials(`https:/${U}:${P}@${H}`)).toBe(true);
+  });
+  it("accepted (spec 39, pinned): paths, a bare user on a non-http scheme, file, a tab in a path", () => {
+    for (const v of ["C:/forges/acme", "../acme-forge", "foo:/a@b", "file:/x@y", "ssh:/git@example.invalid/f", "../my\tforge"])
+      expect(credentialFault(v), JSON.stringify(v)).toBe(false);
   });
 });
 

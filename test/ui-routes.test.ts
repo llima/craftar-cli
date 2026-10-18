@@ -491,6 +491,19 @@ describe("a Forge URL recorded with credentials is never served (spec 36 §7.5)"
     expect(servedRow(loaded)).toEqual({ id: workspaceId(loaded.path), ...loaded });
   });
 
+
+  it("spec 39: a recorded forge.source spelled with one slash after the scheme is served as the label, with no key", async () => {
+    const s = kept(await scenario(BASE, { config: { profile: "acme" } }));
+    await syncRegistered(s.wsRoot);
+    const loaded = (await listWorkspaces(HOME(), { fetch: false })).rows[0];
+    const oneSlash = "https:/" + USER + ":" + PW + "@forge.example.invalid/acme";
+    const served = servedRow({ ...loaded, forge: { ...loaded.forge, kind: "remote" as const, source: oneSlash, key: "forge.example.invalid-x" } });
+    expect(served.forge.source).toBe(CREDENTIAL_HIDDEN);
+    expect(served.forge.key).toBeNull();
+    const json = JSON.stringify(served);
+    expect(json).not.toContain(USER);
+    expect(json).not.toContain(PW);
+  });
   it("a recorded ref that holds a URL with credentials is served as the label, the rest of the row untouched", async () => {
     const s = kept(await scenario(BASE, { config: { profile: "acme" } }));
     await syncRegistered(s.wsRoot);

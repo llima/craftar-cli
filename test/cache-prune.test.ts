@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { pruneCache, type PruneOptions } from "../src/core/cache.js";
 import { prune as pruneRegistry, register } from "../src/core/registry.js";
-import { cacheKey, ensureTree, inspectCache } from "../src/core/remote.js";
+import { cacheKey, ensureTree, inspectCache, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
 import { apply, loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
 import { makeWorkspace, profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
 import { remoteForge } from "./helpers/remote.js";
@@ -54,7 +54,7 @@ describe("whole entries (§4.2 steps 2–4)", () => {
     expect(report).toEqual({
       home: s.home,
       dryRun: false,
-      removed: [{ path: `forges/${s.key}`, kind: "entry", reason: "orphan", bytes }],
+      removed: [{ path: `forges/${UNVOUCHED_HIDDEN}`, kind: "entry", reason: "orphan", bytes }],
       kept: [],
       freedBytes: bytes,
       warnings: [],
@@ -78,7 +78,7 @@ describe("whole entries (§4.2 steps 2–4)", () => {
     await fs.rm(dir, { recursive: true, force: true });
     expect((await pruneCache(s.home, RUN)).report.kept).toEqual([{ path: `forges/${s.key}`, reason: "named", namedBy: [dir] }]);
     expect(await pruneRegistry(s.home)).toEqual([dir]);
-    expect((await pruneCache(s.home, RUN)).report.removed.map((x) => [x.path, x.reason])).toEqual([[`forges/${s.key}`, "orphan"]]);
+    expect((await pruneCache(s.home, RUN)).report.removed.map((x) => [x.path, x.reason])).toEqual([[`forges/${UNVOUCHED_HIDDEN}`, "orphan"]]);
   });
 
   it("named only by the current, unregistered workspace: kept; from another directory: removed", async () => {
@@ -86,7 +86,7 @@ describe("whole entries (§4.2 steps 2–4)", () => {
     const dir = await s.ws("acme-api");
     await loadWorkspace(dir, { home: s.home });
     expect((await pruneCache(s.home, { ...RUN, workspace: dir })).report.kept).toEqual([{ path: `forges/${s.key}`, reason: "named", namedBy: [dir] }]);
-    expect((await pruneCache(s.home, RUN)).report.removed.map((x) => [x.path, x.kind, x.reason])).toEqual([[`forges/${s.key}`, "entry", "orphan"]]);
+    expect((await pruneCache(s.home, RUN)).report.removed.map((x) => [x.path, x.kind, x.reason])).toEqual([[`forges/${UNVOUCHED_HIDDEN}`, "entry", "orphan"]]);
   });
 
   it("registry off: no whole entry removed, every one unchecked, the warning; old trees still go", async () => {
@@ -94,8 +94,8 @@ describe("whole entries (§4.2 steps 2–4)", () => {
     const t = await ensureTree(s.r.url, null, { home: s.home });
     await fs.utimes(`${t.dir}.used`, ago(15 * DAY), ago(15 * DAY));
     const { report } = await pruneCache(s.home, { ...RUN, registryOff: true });
-    expect(report.kept).toEqual([{ path: `forges/${s.key}`, reason: "unchecked", namedBy: [] }]);
-    expect(report.removed.map((x) => [x.path, x.kind, x.reason])).toEqual([[`forges/${s.key}/trees/${t.commit}`, "tree", "unused"]]);
+    expect(report.kept).toEqual([{ path: `forges/${UNVOUCHED_HIDDEN}`, reason: "unchecked", namedBy: [] }]);
+    expect(report.removed.map((x) => [x.path, x.kind, x.reason])).toEqual([[`forges/${UNVOUCHED_HIDDEN}/trees/${t.commit}`, "tree", "unused"]]);
     expect(report.warnings).toEqual(["whole entries kept: CRAFTAR_NO_REGISTRY is set — nothing can tell which ones are used"]);
     expect(await ls(path.join(s.entry, "trees"))).toEqual([]);
   });
@@ -107,7 +107,7 @@ describe("whole entries (§4.2 steps 2–4)", () => {
     const { report } = await pruneCache(s.home, RUN);
     expect([report.removed, report.kept, report.warnings]).toEqual([
       [],
-      [{ path: `forges/${s.key}`, reason: "unchecked", namedBy: [] }],
+      [{ path: `forges/${UNVOUCHED_HIDDEN}`, reason: "unchecked", namedBy: [] }],
       ["whole entries kept: the registry cannot be read — nothing can tell which ones are used"],
     ]);
   });
@@ -120,7 +120,7 @@ describe("whole entries (§4.2 steps 2–4)", () => {
     const { report } = await pruneCache(s.home, { ...RUN, workspace: dir });
     expect([report.removed, report.kept, report.warnings]).toEqual([
       [],
-      [{ path: `forges/${s.key}`, reason: "unchecked", namedBy: [] }],
+      [{ path: `forges/${UNVOUCHED_HIDDEN}`, reason: "unchecked", namedBy: [] }],
       ["whole entries kept: the checked craftar.yaml does not read — nothing can tell which ones are used"],
     ]);
   });
@@ -154,7 +154,7 @@ describe("whole entries (§4.2 steps 2–4)", () => {
     const dir = await s.ws("acme-api");
     await s.syncAndRegister(dir);
     await fs.rm(path.join(s.entry, "fetched"));
-    expect((await pruneCache(s.home, { ...RUN, workspace: dir, registryOff: true })).report.kept).toEqual([{ path: `forges/${s.key}`, reason: "unchecked", namedBy: [] }]);
+    expect((await pruneCache(s.home, { ...RUN, workspace: dir, registryOff: true })).report.kept).toEqual([{ path: `forges/${UNVOUCHED_HIDDEN}`, reason: "unchecked", namedBy: [] }]);
   });
 
   it("no forges/ directory: nothing to prune, and forges/ is not created", async () => {
@@ -203,10 +203,10 @@ describe("--dry-run (§6 case 7)", () => {
       home: s.home,
       dryRun: true,
       removed: [
-        { path: `forges/${s.key}/trees/${t.commit}`, kind: "tree", reason: "unused", bytes: expect.any(Number) },
-        { path: "forges/~removing-example.com-old-0a1b2c3d4e5f-4242", kind: "leftover", reason: "interrupted", bytes: 3 },
+        { path: `forges/${UNVOUCHED_HIDDEN}/trees/${t.commit}`, kind: "tree", reason: "unused", bytes: expect.any(Number) },
+        { path: `forges/~removing-${UNVOUCHED_HIDDEN}-4242`, kind: "leftover", reason: "interrupted", bytes: 3 },
       ],
-      kept: [{ path: `forges/${s.key}`, reason: "unchecked", namedBy: [] }],
+      kept: [{ path: `forges/${UNVOUCHED_HIDDEN}`, reason: "unchecked", namedBy: [] }],
       freedBytes: dry.removed[0].bytes + 3,
       warnings: ["whole entries kept: CRAFTAR_NO_REGISTRY is set — nothing can tell which ones are used"],
     });
@@ -222,7 +222,7 @@ describe("--dry-run (§6 case 7)", () => {
     const s = await setup();
     await ensureTree(s.r.url, null, { home: s.home });
     const dry = (await pruneCache(s.home, { ...RUN, dryRun: true })).report;
-    expect(dry.removed.map((x) => [x.path, x.kind, x.reason])).toEqual([[`forges/${s.key}`, "entry", "orphan"]]);
+    expect(dry.removed.map((x) => [x.path, x.kind, x.reason])).toEqual([[`forges/${UNVOUCHED_HIDDEN}`, "entry", "orphan"]]);
     expect(await ls(path.join(s.home, "forges"))).toEqual([s.key]);
     expect({ ...(await pruneCache(s.home, RUN)).report, dryRun: true }).toEqual(dry);
   });
@@ -268,13 +268,14 @@ describe("the report (§4.5) and what is never touched (§7)", () => {
 });
 
 describe("the re-check under the entry lock (§4.3 step 1)", () => {
-  it("a workspace registered between the snapshot and the entry's lock: kept named, namedBy from the re-check", async () => {
+  // An entry unvouched at the snapshot stays labelled even when the re-check vouches it (fail closed, review R1).
+  it("a workspace registered between the snapshot and the entry's lock: kept named, namedBy from the re-check, path labelled", async () => {
     const s = await setup();
     await ensureTree(s.r.url, null, { home: s.home });
     const dir = await s.ws("acme-api");
     let steps = 0;
     const { report } = await pruneCache(s.home, { ...RUN, beforeStep: async () => { if (steps++ === 0) await s.syncAndRegister(dir); } });
-    expect([report.removed, report.kept, report.warnings]).toEqual([[], [{ path: `forges/${s.key}`, reason: "named", namedBy: [dir] }], []]);
+    expect([report.removed, report.kept, report.warnings]).toEqual([[], [{ path: `forges/${UNVOUCHED_HIDDEN}`, reason: "named", namedBy: [dir] }], []]);
   });
 
   it("the registry stops reading at the re-check: every such entry kept unchecked, the warning once", async () => {
