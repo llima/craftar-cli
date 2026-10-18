@@ -24,6 +24,11 @@ export const WORKSPACE_FILE = "craftar.yaml";
 export const LOCAL_FILE = "craftar.local.yaml";
 export const LOCK_FILE = "craftar.lock";
 
+/** The param key for the AGENTS.md size budget. */
+export const AGENTS_MD_BUDGET_KEY = "agents-md.maxBytes";
+/** The default AGENTS.md size budget in bytes. */
+export const AGENTS_MD_DEFAULT_MAX_BYTES = 32768;
+
 // Mapped, not Record<Target, Emitter>: an emitter in another target's slot does not compile (spec 18 §3.3).
 const EMITTERS: { [T in Target]: Emitter<T> } = { "claude-code": claudeCode, kiro, "agents-md": agentsMd };
 
@@ -301,6 +306,17 @@ export interface Plan {
    * declares that way (spec 29 §4.1).
    */
   missingParams: Array<{ key: string; refs: string[]; warning: string; declaredBy: string[] }>;
+  /**
+   * AGENTS.md size budget info: present when the plan includes an AGENTS.md file; null otherwise.
+   * `explicit` is true when the key is present in resolved params with a valid value.
+   */
+  agentsMd: {
+    bytes: number;
+    maxBytes: number;
+    explicit: boolean;
+    /** Always-on rules sorted by bytes desc, then name asc. */
+    rules: Array<{ name: string; bytes: number }>;
+  } | null;
 }
 
 /** Declared keys with no default that no layer fills, with the ingredients declaring them (spec 24 §4.2) — cited or not. */
@@ -350,6 +366,26 @@ export function unsetRefused(unset: UnsetParam[]): string {
 /** The refusal in one line, for a row that has no room for the block (`workspaces`, `forge impact`). */
 export function unsetSummary(unset: UnsetParam[]): string {
   return `sync refused: declared parameter(s) with no value: ${unset.map((u) => u.key).join(", ")}`;
+}
+
+/**
+ * Non-null when the plan has an AGENTS.md, the budget is explicit, maxBytes > 0, and bytes > maxBytes.
+ * Used by CLI surfaces that fail on an explicit budget violation.
+ */
+export function agentsMdOverBudget(p: Plan): { bytes: number; maxBytes: number } | null {
+  if (!p.agentsMd) return null;
+  const { bytes, maxBytes, explicit } = p.agentsMd;
+  if (!explicit) return null;
+  if (maxBytes === 0) return null;
+  if (bytes <= maxBytes) return null;
+  return { bytes, maxBytes };
+}
+
+/**
+ * The refusal block for an explicit AGENTS.md budget violation, without the `error: ` prefix.
+ */
+export function agentsMdRefusal(o: { bytes: number; maxBytes: number }): string {
+  return `AGENTS.md is ${o.bytes} bytes, over the budget of ${o.maxBytes} set by ${AGENTS_MD_BUDGET_KEY}\n  fix: move rules out of the always-on set (inclusion: fileMatch), or raise ${AGENTS_MD_BUDGET_KEY}`;
 }
 
 /** A path as the Forge names it: relative to its root, POSIX separators. */
@@ -489,6 +525,8 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const cited = new Map<string, { ing: ResolvedIngredient; keys: Set<string> }>();
   /** Warnings said once per plan, for warnOnce (spec 34 §5.2). */
   const warnedOnce = new Set<string>();
+  /** Per-rule byte sizes for AGENTS.md budget, collected by the agents-md emitter. */
+  const agentsMdRules: Array<{ name: string; bytes: number }> = [];
   const ctx: EmitBase = {
     forge: ws.forge,
     resolution,
@@ -539,6 +577,9 @@ export async function plan(ws: Workspace): Promise<Plan> {
         warnings.push(msg);
       }
     },
+    reportAgentsMdRule(name: string, bytes: number) {
+      agentsMdRules.push({ name, bytes });
+    },
   };
   const files: PlannedFile[] = [];
   for (const t of resolution.targets) {
@@ -572,7 +613,87 @@ export async function plan(ws: Workspace): Promise<Plan> {
     if (prev) warnings.push(`two ingredients write ${f.path}: ${prev} and ${f.ingredient} (last wins)`);
     seen.set(f.path, f.ingredient);
   }
-  return { resolution, files: dedupeLastWins(files), warnings, sections: sections.byRef, params, missingParams: missing };
+
+  // AGENTS.md size budget: computed after the target loop, warning pushed by plan() (spec 15 §4.5 reserves
+  // the single agents-md warning for references).
+  const agentsMd = computeAgentsMdBudget(files, resolution, agentsMdRules, warnings);
+
+  return { resolution, files: dedupeLastWins(files), warnings, sections: sections.byRef, params, missingParams: missing, agentsMd };
+}
+
+/**
+ * Compute the AGENTS.md budget info. Returns null when no AGENTS.md is planned.
+ * Parses and validates the budget param, adds warnings, and builds the budget object.
+ */
+function computeAgentsMdBudget(
+  files: PlannedFile[],
+  resolution: Resolution,
+  agentsMdRules: Array<{ name: string; bytes: number }>,
+  warnings: string[],
+): Plan["agentsMd"] {
+  // Find the AGENTS.md file
+  const agentsMdFile = files.find((f) => f.path === "AGENTS.md");
+  if (!agentsMdFile) return null;
+
+  const bytes = agentsMdFile.content.length;
+
+  // Parse the budget param
+  const rawValue = resolution.params[AGENTS_MD_BUDGET_KEY];
+  const hasKey = Object.hasOwn(resolution.params, AGENTS_MD_BUDGET_KEY);
+  let maxBytes: number;
+  let explicit: boolean;
+
+  if (!hasKey) {
+    maxBytes = AGENTS_MD_DEFAULT_MAX_BYTES;
+    explicit = false;
+  } else {
+    // Validate: must be a whole number >= 0 (given as number or string of digits)
+    const parsed = parseAgentsMdBudget(rawValue);
+    if (parsed === null) {
+      warnings.push(`${AGENTS_MD_BUDGET_KEY} must be a whole number of bytes (0 turns the budget off) — the default ${AGENTS_MD_DEFAULT_MAX_BYTES} is used`);
+      maxBytes = AGENTS_MD_DEFAULT_MAX_BYTES;
+      explicit = false;
+    } else {
+      maxBytes = parsed;
+      explicit = true;
+    }
+  }
+
+  // Sort rules by bytes desc, then name asc
+  const sortedRules = [...agentsMdRules].sort((a, b) => {
+    if (b.bytes !== a.bytes) return b.bytes - a.bytes;
+    return a.name.localeCompare(b.name);
+  });
+
+  // Add budget warning if over budget and maxBytes > 0
+  if (maxBytes > 0 && bytes > maxBytes) {
+    const top5 = sortedRules.slice(0, 5);
+    const rulesText = top5.length > 0
+      ? `largest always-on rules: ${top5.map((r) => `${r.name} (${r.bytes} bytes)`).join(", ")}`
+      : "no always-on rule";
+    warnings.push(`AGENTS.md is ${bytes} bytes, over the budget of ${maxBytes} (${AGENTS_MD_BUDGET_KEY}) — ${rulesText}`);
+  }
+
+  return { bytes, maxBytes, explicit, rules: sortedRules };
+}
+
+/**
+ * Parse the agents-md.maxBytes value. Returns the number if valid, null otherwise.
+ * Valid: a whole number >= 0, as a number or a string of digits.
+ */
+function parseAgentsMdBudget(value: unknown): number | null {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) return null;
+    return value;
+  }
+  if (typeof value === "string") {
+    // Must be only digits (no leading zeros except "0" itself, but we're lenient)
+    if (!/^\d+$/.test(value)) return null;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return n;
+  }
+  return null;
 }
 
 function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {
