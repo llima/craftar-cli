@@ -660,48 +660,45 @@ export async function readEmitted(
     // 4. else "always"
     let inclusion: "always" | "fileMatch" | "manual" | "auto" = "always";
     let fileMatchPattern: string | string[] | undefined;
-    let useFrontmatter = false;
     let frontmatterRaw: string | undefined;
 
+    // When paths: is usable, ALWAYS split it out (so kiro/AGENTS.md don't carry the paths: block)
+    const useFrontmatter = pathsUsable;
+    if (useFrontmatter) {
+      frontmatterRaw = parsed.raw ?? undefined;
+    }
+
+    // Helper to check if steering scope differs from paths scope
+    const scopeDiffers = (steeringInclusion: string | undefined, steeringPattern: string | undefined): boolean => {
+      if (!pathsUsable) return false;
+      const pathsPattern = parsed.data.paths as string | string[];
+      const normSteering = [steeringPattern].flat().filter((x): x is string => x !== undefined);
+      const normPaths = [pathsPattern].flat();
+      return steeringInclusion !== "fileMatch" || JSON.stringify(normSteering) !== JSON.stringify(normPaths);
+    };
+
     if (steering && !steering.generated && steering.hasFrontmatter) {
-      // Case 1: hand-written steering with frontmatter - use steering
+      // Case 1: hand-written steering with frontmatter - use steering's scope
       inclusion = steering.inclusion as "always" | "fileMatch" | "manual" | "auto";
       fileMatchPattern = steering.fileMatchPattern;
 
       // Warn if paths: differs from steering
-      if (pathsUsable) {
-        const steeringPattern = steering.fileMatchPattern;
-        const pathsPattern = parsed.data.paths as string | string[];
-        // Compare as lists (order-sensitive)
-        const normSteering = [steeringPattern].flat().filter((x): x is string => x !== undefined);
-        const normPaths = [pathsPattern].flat();
-        const differs = steering.inclusion !== "fileMatch" || JSON.stringify(normSteering) !== JSON.stringify(normPaths);
-        if (differs) {
-          warnings.push(`rule ${name}: .kiro/steering/${name}.md and paths: in .claude/rules/${name}.md disagree; the steering file's scope is kept`);
-        }
+      if (pathsUsable && scopeDiffers(steering.inclusion, steering.fileMatchPattern)) {
+        warnings.push(`rule ${name}: .kiro/steering/${name}.md and paths: in .claude/rules/${name}.md disagree; the steering file's scope is kept`);
       }
     } else if (pathsUsable) {
       // Case 2: usable paths: in rule
       inclusion = "fileMatch";
       fileMatchPattern = parsed.data.paths as string | string[];
-      useFrontmatter = true;
-      frontmatterRaw = parsed.raw ?? undefined;
 
       // Warn about steering
       if (steering) {
         if (!steering.hasFrontmatter) {
           // steering without frontmatter
           warnings.push(`rule ${name}: .kiro/steering/${name}.md has no frontmatter; scope taken from paths: in .claude/rules/${name}.md`);
-        } else if (steering.generated) {
+        } else if (steering.generated && scopeDiffers(steering.inclusion, steering.fileMatchPattern)) {
           // generated steering with different scope
-          const steeringPattern = steering.fileMatchPattern;
-          const pathsPattern = parsed.data.paths as string | string[];
-          const normSteering = [steeringPattern].flat().filter((x): x is string => x !== undefined);
-          const normPaths = [pathsPattern].flat();
-          const differs = steering.inclusion !== "fileMatch" || JSON.stringify(normSteering) !== JSON.stringify(normPaths);
-          if (differs) {
-            warnings.push(`rule ${name}: the generated .kiro/steering/${name}.md disagrees with paths: in .claude/rules/${name}.md; scope taken from paths:`);
-          }
+          warnings.push(`rule ${name}: the generated .kiro/steering/${name}.md disagrees with paths: in .claude/rules/${name}.md; scope taken from paths:`);
         }
       }
     } else if (steering && steering.generated) {

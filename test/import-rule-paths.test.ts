@@ -68,6 +68,10 @@ describe("import --from claude-code — paths: frontmatter (spec 35)", () => {
 
     const ingredientYaml = await yaml(path.join(t.forge, "ingredients/rules/backend/ingredient.yaml"));
     expect(ingredientYaml.fileMatchPattern).toBe("projects/other/**");
+    // Even when steering wins, the frontmatter is split out (so kiro/AGENTS.md don't carry paths:)
+    expect(ingredientYaml.frontmatterRaw).toBe('paths: "projects/acme-api/**"\ndescription: Backend rules');
+    const ruleMd = await fs.readFile(path.join(t.forge, "ingredients/rules/backend/rule.md"), "utf8");
+    expect(ruleMd).toBe("# Backend\n");
     expect(report.warnings).toContain(
       "rule backend: .kiro/steering/backend.md and paths: in .claude/rules/backend.md disagree; the steering file's scope is kept"
     );
