@@ -16,7 +16,7 @@ import { launchRefusal, pinOf } from "./core/mcp-protocol.js";
 import { serve } from "./mcp.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, readWorkspaceConfig, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, readWorkspaceConfig, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, agentsMdOverBudget, agentsMdRefusal, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -168,7 +168,7 @@ program
 /* ---------------------------------------------------------------- status */
 program
   .command("status")
-  .description("Show what sync would do: new, update, drift, orphan, collision; exits 1 when a declared parameter a file cites has no value")
+  .description("Show what sync would do: new, update, drift, orphan, collision; exits 1 when a declared parameter a file cites has no value, or when AGENTS.md is over an explicit budget")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--json", "machine-readable output", false)
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
@@ -183,10 +183,12 @@ program
       console.log(JSON.stringify(report, null, 2));
       // exitCode, not process.exit: a piped object is not cut (spec 29 §4.1)
       if (unset.length) process.exitCode = 1;
+      if (budgetRefusalBlock(p)) process.exitCode = 1;
       return;
     }
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, false, forgeLine(ws, lock));
     if (refusalBlock(unset)) process.exitCode = 1;
+    if (budgetRefusalBlock(p)) process.exitCode = 1;
   });
 
 /**
@@ -196,6 +198,16 @@ program
 function refusalBlock(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): boolean {
   if (unset.length) errorLine(unsetRefusal(unset, opts));
   return unset.length > 0;
+}
+
+/**
+ * The AGENTS.md budget refusal for a command that goes on to print or exit by itself: the block on stderr,
+ * without exiting. Says whether there was one.
+ */
+function budgetRefusalBlock(p: Plan): boolean {
+  const over = agentsMdOverBudget(p);
+  if (over) errorLine(agentsMdRefusal(over));
+  return over !== null;
 }
 
 /**
@@ -384,9 +396,9 @@ program
 /* ---------------------------------------------------------------- sync */
 program
   .command("sync")
-  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces); refuses, writing nothing, when a declared parameter a file cites has no value")
+  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces); refuses, writing nothing, when a declared parameter a file cites has no value; with --check, also exits 1 when AGENTS.md is over an explicit budget")
   .option("--workspace <dir>", "workspace root", ".")
-  .option("--check", "exit 1 when the workspace is out of date or has drift (CI mode)", false)
+  .option("--check", "exit 1 when the workspace is out of date or has drift, or when AGENTS.md is over an explicit budget (CI mode)", false)
   .option("--dry-run", "show the plan, write nothing", false)
   .option("--overwrite-drift", "regenerate files that were hand-edited (their edits are lost)", false)
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
@@ -399,12 +411,16 @@ program
       const bad = st.filter((s) => !["unchanged", "adopt"].includes(s.state));
       printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true, forgeLine(ws, lock));
       const unset = unsetDeclared(p);
+      const budgetOver = agentsMdOverBudget(p);
       if (bad.length) console.log(pc.red(`\n${bad.length} file(s) out of sync`));
       // A refused sync is not "in sync", whatever the files say: the listing, then the block, and the exit is
       // exitCode's, so nothing queued is cut (spec 29 §4.1)
       if (refusalBlock(unset)) process.exitCode = 1;
-      else if (bad.length) process.exit(1);
-      else console.log(pc.green("\nworkspace in sync"));
+      if (budgetRefusalBlock(p)) process.exitCode = 1;
+      // Files out of sync without a refusal: exit 1
+      else if (bad.length) process.exitCode = 1;
+      // No refusal and no bad files: in sync (but only if budget is not exceeded)
+      else if (!budgetOver) console.log(pc.green("\nworkspace in sync"));
       return;
     }
     // Asked here, not left to apply()'s gate: the plan's warnings come before the block (spec 29 §4.1)
@@ -421,7 +437,7 @@ program
   .command("diff")
   .description("Unified diff between the files on disk and what the Forge would generate, orphans included (files the Forge no longer produces); also says when a declared parameter a file cites has no value, which sync refuses")
   .option("--workspace <dir>", "workspace root", ".")
-  .option("--exit-code", "exit 1 when there are differences (exactly when `sync --check` would fail); a [path] that names no file craftar manages becomes an error; with a remote Forge, a failed fetch exits 1 as `sync --check` does (--offline to use the cached copy)", false)
+  .option("--exit-code", "exit 1 when there are differences (exactly when `sync --check` would fail), including when AGENTS.md is over an explicit budget; a [path] that names no file craftar manages becomes an error; with a remote Forge, a failed fetch exits 1 as `sync --check` does (--offline to use the cached copy)", false)
   .argument("[path]", "limit to one file")
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
   .action(async (only, o) => {
@@ -442,6 +458,9 @@ program
     else if (o.exitCode) process.exitCode = 1;
     // Spec 29 §4.1: with no [path], --exit-code fails exactly when `sync --check` does — a refused sync included
     if (refusalBlock(unsetDeclared(p)) && o.exitCode && !only) process.exitCode = 1;
+    // AGENTS.md budget: with no [path], --exit-code fails on explicit budget violation (plain diff prints but exits 0)
+    if (o.exitCode && !only && budgetRefusalBlock(p)) process.exitCode = 1;
+    else if (!o.exitCode && agentsMdOverBudget(p)) errorLine(agentsMdRefusal(agentsMdOverBudget(p)!));
   });
 
 const DIFF_PAINT = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
