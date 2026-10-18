@@ -5,7 +5,7 @@ import { pruneCache } from "../src/core/cache.js";
 import { runDoctor, type DoctorOptions } from "../src/core/doctor.js";
 import { askInit, type InitIo } from "../src/core/init-flow.js";
 import { credentialKeys, hideKeys, listWorkspaces, readRegistry, register, registryFile } from "../src/core/registry.js";
-import { cacheKey, credentialFault, ensureTree, parseLsRemote, resolveRef, UNVOUCHED_HIDDEN, type GitRunner } from "../src/core/remote.js";
+import { cacheKey, credentialFault, CREDENTIAL_HIDDEN, ensureTree, parseLsRemote, resolveRef, UNVOUCHED_HIDDEN, type GitRunner } from "../src/core/remote.js";
 import { apply, loadForgeSource, loadWorkspace, loadWorkspaceConfig, plan, readLock, status } from "../src/core/sync.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
 import { remoteForge } from "./helpers/remote.js";
@@ -469,5 +469,10 @@ describe("spec 39 gap 1: a cache entry named after a URL with credentials, that 
     expect(message).toContain(UNVOUCHED);
     expect(message).not.toContain(LABEL);
     expectClean(message);
+  });
+
+  it("spec 39 §7: neither label contains a / — so labelOf in cache prune text output splits a tree row correctly", () => {
+    expect(CREDENTIAL_HIDDEN).not.toContain("/");
+    expect(UNVOUCHED_HIDDEN).not.toContain("/");
   });
 });
