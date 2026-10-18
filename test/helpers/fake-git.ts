@@ -52,7 +52,8 @@ export async function fakeGit(): Promise<FakeGit> {
     dir,
     git,
     log,
-    env: (extra = {}) => ({ PATH: dir, Path: dir, NODE_OPTIONS: `--require "${hook}"`, CRAFTAR_TEST_CLONE_LOG: log, ...extra }),
+    // NODE_OPTIONS reads `\` inside double quotes as an escape: on win32 the hook's path is given with `/`, which node accepts.
+    env: (extra = {}) => ({ PATH: dir, Path: dir, NODE_OPTIONS: `--require "${hook.replace(/\\/g, "/")}"`, CRAFTAR_TEST_CLONE_LOG: log, ...extra }),
     cleanup: () => fs.rm(dir, { recursive: true, force: true }),
   };
 }

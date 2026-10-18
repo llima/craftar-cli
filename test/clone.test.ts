@@ -234,7 +234,11 @@ describe("findGit — onPath, nothing else", () => {
     expect(await findGit({ PATH: "relative-bin" })).toBeNull();
   });
   it("a git reachable only through a relative PATH entry is not found, though the file is there", async () => {
-    const dir = await scratch();
+    // Under the checkout's node_modules/.cache (ignored by git): on the current directory's drive, so a relative
+    // spelling exists on win32 too — a temp dir may sit on another drive, where path.relative gives an absolute path.
+    const dir = path.join(process.cwd(), "node_modules", ".cache", `craftar-findgit-${process.pid}-${Date.now()}`);
+    await fs.mkdir(dir, { recursive: true });
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
     await fs.copyFile(process.execPath, path.join(dir, "git" + EXE));
     await fs.chmod(path.join(dir, "git" + EXE), 0o755);
     const rel = path.relative(process.cwd(), dir);
