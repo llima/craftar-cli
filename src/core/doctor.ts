@@ -9,7 +9,7 @@ import { FULL_SHA, cacheKey, classifyForge, inspectCache, type CacheSnapshot } f
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
-import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig, type Plan, type Workspace } from "./sync.js";
+import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig, type Plan, type Workspace, agentsMdOverBudget } from "./sync.js";
 import { outName } from "../emitters/shared.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram } from "./proc.js";
@@ -270,6 +270,22 @@ async function workspaceChecks(
           `"${key}" declared by ${declaredBy.join(", ")} has no value${cited.length ? ` — cited by ${cited.join(", ")}` : ""}`,
           `set ${key} in the profile's params or overrides.params`,
         );
+      }
+
+      // agents-md-size: only when the plan writes AGENTS.md (the target is in use)
+      if (p.agentsMd !== null) {
+        const { bytes, maxBytes, explicit } = p.agentsMd;
+        // maxBytes 0 means budget is off; otherwise check if over
+        const overBudget = maxBytes !== 0 && bytes > maxBytes;
+        if (!overBudget) {
+          // Within budget or budget is off
+          w("agents-md-size", "ok", `${bytes} bytes`);
+        } else {
+          // Over budget: error if explicit, warn otherwise
+          const level = explicit ? "error" : "warn";
+          const fix = "move rules out of the always-on set (inclusion: fileMatch), or raise agents-md.maxBytes";
+          w("agents-md-size", level, `${bytes} bytes, over the budget of ${maxBytes}${explicit ? " (agents-md.maxBytes)" : ""}`, fix);
+        }
       }
 
       const unset = mcpUnset(p, env, ws.forge.manifest.schema);
