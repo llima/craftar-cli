@@ -270,6 +270,7 @@ export interface InitGiven {
   addRecipes: string[];
   removeRecipes: string[];
   replace: boolean;
+  clone?: boolean;
 }
 
 export type AskResult =
@@ -651,6 +652,7 @@ export async function askInit(
   if (answeredAddRecipes.length > 0) input.addRecipes = answeredAddRecipes;
   if (answeredRemoveRecipes.length > 0) input.removeRecipes = answeredRemoveRecipes;
   if (answeredReplace) input.replace = true;
+  if (given.clone === true) input.clone = true;
 
   const answers: InitAnswers = {
     forge: answeredForge!,

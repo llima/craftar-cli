@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { againLine, askClone, confirmInit, type InitAnswers, type InitIo } from "../src/core/init-flow.js";
+import { againLine, askClone, askInit, confirmInit, type InitAnswers, type InitIo } from "../src/core/init-flow.js";
 import { planInit } from "../src/core/init.js";
 import { loadWorkspace } from "../src/core/sync.js";
 import { makeForge, profile, recipe, rule, tmpDir } from "./helpers/forge.js";
@@ -225,5 +225,39 @@ describe("LoadOptions.fetchHint — R4's tail (§5.2)", () => {
     expect(await msg({ fetchHint: "fresh-copy" })).not.toContain("--offline");
     expect(await msg({})).toMatch(new RegExp(` — run with --offline to use the cached copy \\(${sha} fetched [^)]+\\)$`));
     expect(await msg({ fetchHint: "offline" })).toMatch(new RegExp(` — run with --offline to use the cached copy \\(${sha} fetched [^)]+\\)$`));
+  });
+});
+
+/** Answers in order, then Enter for every later question — never a loop on the same answer. */
+function queued(answers: string[]): InitIo {
+  const next = async () => (answers.length ? answers.shift()! : "");
+  return { ask: next, confirm: next, say: () => {} };
+}
+
+describe("askInit carries a typed --clone into planInit (review round 1 blocker)", () => {
+  it("given.clone true: the input planInit gets asks to clone, so C3–C5 are checked and the entries come back", async () => {
+    const s = await setup();
+    const answers = ["acme"];
+    const asked: string[] = [];
+    const next = async (q: string) => (asked.push(q), answers.length ? answers.shift()! : "");
+    const io: InitIo = { ask: next, confirm: next, say: () => {} };
+    const r = await askInit(s.ws, { forge: s.forge, addRecipes: [], removeRecipes: [], replace: false, clone: true }, { doc: null, keys: [] }, io, { registryOff: true });
+    if (r.kind !== "answered") throw new Error("expected answers");
+    expect(r.input.clone).toBe(true);
+    const init = await planInit(s.ws, r.input);
+    expect(init.repos.map((e) => e.name)).toEqual(["portal-api", "portal-web"]);
+    const t = await setup({ repos: [] });
+    const r2 = await askInit(t.ws, { forge: t.forge, addRecipes: [], removeRecipes: [], replace: false, clone: true }, { doc: null, keys: [] }, queued(["acme"]), { registryOff: true });
+    if (r2.kind !== "answered") throw new Error("expected answers");
+    await expect(planInit(t.ws, r2.input)).rejects.toThrow(/^profile acme lists no repositories — nothing to clone; drop --clone$/);
+  });
+  it("given.clone absent or false: the input does not ask to clone", async () => {
+    const s = await setup();
+    for (const clone of [undefined, false]) {
+      const io = queued(["acme"]);
+      const r = await askInit(s.ws, { forge: s.forge, addRecipes: [], removeRecipes: [], replace: false, ...(clone === undefined ? {} : { clone }) }, { doc: null, keys: [] }, io, { registryOff: true });
+      if (r.kind !== "answered") throw new Error("expected answers");
+      expect(r.input.clone).not.toBe(true);
+    }
   });
 });

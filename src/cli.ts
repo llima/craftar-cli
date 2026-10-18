@@ -424,6 +424,7 @@ program
             addRecipes: o.addRecipe,
             removeRecipes: o.removeRecipe,
             replace: o.replace,
+            clone: o.clone,
           },
           local,
           io,
@@ -503,7 +504,7 @@ program
       // first sync is not run. exitCode, not fail(): the `again` line still follows the block.
       if (unset.length) {
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
-        if (cloning) {
+        if (cloning && answers === null) {
           console.log("  repositories: not cloned — the first sync is refused");
         }
         refusalBlock(unset, { thenSync: true });
