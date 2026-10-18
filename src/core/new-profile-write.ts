@@ -5,7 +5,7 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { forgeSource, planInit, type InitOptions, type InitPlan } from "./init.js";
+import { planInit, type InitOptions, type InitPlan } from "./init.js";
 import { note, type WriteJournal } from "./unify.js";
 
 export { type WriteJournal };
@@ -122,6 +122,7 @@ export async function writeNewProfile(
  * @param init1 The first plan (with newProfile).
  * @param opts Options for planInit (without local, which is read fresh).
  * @param journal The write journal, for error reporting.
+ * @param ref The typed ref from the input (not the merged config's ref).
  * @returns The second plan.
  */
 export async function reproveFromDisk(
@@ -130,25 +131,31 @@ export async function reproveFromDisk(
   init1: InitPlan,
   opts: InitOptions,
   journal: WriteJournal = [],
+  ref?: string,
 ): Promise<InitPlan> {
   if (!init1.newProfile) throw new Error("reproveFromDisk: init1.newProfile is required");
 
   const name = path.basename(path.dirname(init1.newProfile.path));
 
-  // Build the ref from init1 if it had one
-  const ref = init1.ws.config.ref;
-
   // Second planInit: profile exists on disk, no newProfile, no loaded, no recipe or target flag
-  const init2 = await planInit(
-    root,
-    {
-      forge: forgeArg,
-      profile: name,
-      ref,
-      // NO newProfile, NO loaded, NO recipe or target flag
-    },
-    opts,
-  );
+  // Use the typed ref, not init1.ws.config.ref (which is the merged config, including craftar.local.yaml)
+  let init2: InitPlan;
+  try {
+    init2 = await planInit(
+      root,
+      {
+        forge: forgeArg,
+        profile: name,
+        ref,
+        // NO newProfile, NO loaded, NO recipe or target flag
+      },
+      opts,
+    );
+  } catch (e) {
+    // Wrap EVERY error of the second planInit in NewProfileLateFailure
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new NewProfileLateFailure(msg, journal);
+  }
 
   // Compare: same paths and same bytes
   const paths1 = new Set(init1.plan.files.map((f) => f.path));

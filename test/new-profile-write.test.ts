@@ -114,4 +114,12 @@ describe("reproveFromDisk — step 4", () => {
     expect(e).toBeInstanceOf(NewProfileLateFailure);
     expect((e as Error).message).toBe("the Forge read back from disk does not plan what init proved in memory — a Forge file changed while init ran");
   });
+  it("an error the second planInit itself throws (a recipe removed between the steps) is a late failure too, with the journal", async () => {
+    const s = await setup();
+    const journal = await writeNewProfile(s.forge, s.init);
+    await fs.rm(path.join(s.forge, "recipes", "stack-node.yaml"));
+    const e = await reproveFromDisk(s.ws, s.forge, s.init, {}, journal).catch((x) => x);
+    expect(e).toBeInstanceOf(NewProfileLateFailure);
+    expect((e as NewProfileLateFailure).journal).toBe(journal);
+  });
 });
