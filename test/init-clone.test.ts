@@ -5,6 +5,7 @@ import { againLine, askClone, askInit, confirmInit, type InitAnswers, type InitI
 import { planInit } from "../src/core/init.js";
 import { loadWorkspace } from "../src/core/sync.js";
 import { makeForge, profile, recipe, rule, tmpDir } from "./helpers/forge.js";
+import { runCli } from "./helpers/cli.js";
 import { git, remoteForge } from "./helpers/remote.js";
 
 // Spec 37 §4.2–§4.3, §5.2 — planInit with clone, askClone, confirmInit's clone questions, the again line, and
@@ -259,5 +260,24 @@ describe("askInit carries a typed --clone into planInit (review round 1 blocker)
       if (r.kind !== "answered") throw new Error("expected answers");
       expect(r.input.clone).not.toBe(true);
     }
+  });
+});
+
+describe("a leftover craftar.lock (no craftar.yaml) is read for the destination checks (review round 2)", () => {
+  it("a path the old lock records is a file sync writes — planInit with clone refuses it, as craftar repos would", async () => {
+    const s = await setup();
+    expect(runCli(["init", "--forge", s.forge, "--profile", "acme", "--workspace", s.ws]).code).toBe(0);
+    await fs.rm(path.join(s.ws, "craftar.yaml"));
+    const lockFile = path.join(s.ws, "craftar.lock");
+    const lock = JSON.parse(await fs.readFile(lockFile, "utf8"));
+    lock.files.push({ path: "portal-api/readme.md", hash: "sha256:" + "0".repeat(64), target: "claude-code", ingredient: "rule/a" });
+    await fs.writeFile(lockFile, JSON.stringify(lock, null, 2) + "\n");
+    await expect(planInit(s.ws, { forge: s.forge, profile: "acme", clone: true })).rejects.toThrow(/^cannot clone portal-api: portal-api is a file sync writes$/);
+    const init = await planInit(s.ws, { forge: s.forge, profile: "acme" });
+    const said: string[] = [];
+    const answers = ["yes", "no"];
+    const io: InitIo = { ask: async () => "", confirm: async () => answers.shift() ?? "no", say: (l) => void said.push(l) };
+    expect(await askClone(io, init, { root: s.ws, offline: false, git: GIT })).toEqual({ clone: false, entries: [] });
+    expect(said).toContain("cannot clone portal-api: portal-api is a file sync writes");
   });
 });

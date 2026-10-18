@@ -227,7 +227,7 @@ export async function planInit(root: string, input: InitInput, opts: InitOptions
   let repos: RepoEntry[] = [];
   if (input.clone === true) {
     const profile = ws.forge.profiles.get(ws.config.profile)!;
-    const ctx = { planned: p.files.map((f) => f.path), lockPaths: [] as string[], forgeDir: ws.forge.root };
+    const ctx = { planned: p.files.map((f) => f.path), lockPaths: lock?.files.map((f) => f.path) ?? [], forgeDir: ws.forge.root };
     const clonePlan = await planClone(root, profile, ctx, { present: "refuse", noEntries: "nothing to clone; drop --clone" });
     repos = clonePlan.entries;
   }

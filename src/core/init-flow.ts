@@ -147,7 +147,7 @@ export async function askClone(
 
     // yes → planClone
     try {
-      const ctx = { planned: init.plan.files.map((f) => f.path), lockPaths: [] as string[], forgeDir: init.ws.forge.root };
+      const ctx = { planned: init.plan.files.map((f) => f.path), lockPaths: init.lock?.files.map((f) => f.path) ?? [], forgeDir: init.ws.forge.root };
       const clonePlan = await planClone(opts.root, profile, ctx, { present: "refuse", noEntries: "nothing to clone" });
       return { clone: true, entries: clonePlan.entries };
     } catch (e) {
