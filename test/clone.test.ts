@@ -284,6 +284,14 @@ describe("cloneRepos — one runner call per entry, in order, sequential", () =>
       }
     }
   });
+  it("GIT_DIR and GIT_WORK_TREE inherited from the caller are not handed to git: they would place the checkout elsewhere (review round 1)", async () => {
+    const { root } = await layout();
+    const r = recorder([0]);
+    await cloneRepos(root, [entry("api")], { git: GIT, env: { GIT_DIR: "/elsewhere/.git", GIT_WORK_TREE: "/elsewhere", MARKER_VAR: "kept" }, stdinIsTty: true }, r.run);
+    expect(r.calls[0].env.GIT_DIR).toBeUndefined();
+    expect(r.calls[0].env.GIT_WORK_TREE).toBeUndefined();
+    expect(r.calls[0].env.MARKER_VAR).toBe("kept");
+  });
   it("a failure in the middle: cloned, failed (git exited 128), cloned — the next entry still tried", async () => {
     const { root } = await layout();
     const r = recorder([0, 128, 0]);

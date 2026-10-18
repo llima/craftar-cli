@@ -398,9 +398,11 @@ export async function cloneRepos(
       continue;
     }
 
-    // Build environment
+    // Build environment: drop GIT_DIR and GIT_WORK_TREE — they would place the checkout
+    // outside the checked destination (the workspace may be a worktree, or git hooks may have set them).
+    const { GIT_DIR: _gitDir, GIT_WORK_TREE: _gitWorkTree, ...inheritedEnv } = opts.env;
     const env: NodeJS.ProcessEnv = {
-      ...opts.env,
+      ...inheritedEnv,
       GIT_ALLOW_PROTOCOL: "https:ssh",
     };
     if (!opts.stdinIsTty) {
