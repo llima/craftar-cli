@@ -247,3 +247,16 @@ describe("claude-code emitter — authEnv example file (spec 27)", () => {
     expect(p.files.some((f) => f.path === EX)).toBe(false);
   });
 });
+
+
+describe("claude-code emitter — rule frontmatterRaw", () => {
+  it("a fileMatch rule without frontmatterRaw emits body only (no generated paths: block)", async () => {
+    const p = await planFor([{ meta: { type: "rule", name: "a", inclusion: "fileMatch", fileMatchPattern: "src/**" }, files: { "rule.md": "# A\n" } }]);
+    expect(text(p, ".claude/rules/a.md")).toBe("# A\n");
+  });
+
+  it("a rule with frontmatterRaw emits frontmatter + body verbatim", async () => {
+    const p = await planFor([{ meta: { type: "rule", name: "a", inclusion: "fileMatch", fileMatchPattern: "src/**", frontmatterRaw: "paths: src/**" }, files: { "rule.md": "# A\n" } }]);
+    expect(text(p, ".claude/rules/a.md")).toBe("---\npaths: src/**\n---\n# A\n");
+  });
+});

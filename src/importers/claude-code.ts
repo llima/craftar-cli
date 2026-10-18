@@ -181,17 +181,18 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
 
   /* ---- Kiro steering gives us inclusion modes and hand-written steering ---- */
   const steeringDir = path.join(ws, ".kiro", "steering");
-  const steeringMeta = new Map<string, { inclusion: string; fileMatchPattern?: string; generated: boolean; text: string; scan?: string }>();
+  const steeringMeta = new Map<string, { inclusion: string; fileMatchPattern?: string; generated: boolean; setsInclusion: boolean; text: string; scan?: string }>();
   if (await exists(steeringDir)) {
     for (const f of (await fs.readdir(steeringDir)).sort()) {
       if (!f.endsWith(".md")) continue;
       const src = await readSource(path.join(steeringDir, f));
       const text = toLf(stripBom(src.text));
-      const { data, body } = parseFrontmatter<{ inclusion?: string; fileMatchPattern?: string }>(text);
+      const { data, body, raw } = parseFrontmatter<{ inclusion?: string; fileMatchPattern?: string }>(text);
       steeringMeta.set(f.replace(/\.md$/, ""), {
         inclusion: data.inclusion ?? "always",
         fileMatchPattern: data.fileMatchPattern,
         generated: GENERATED_BANNER.test(body.slice(0, 300)),
+        setsInclusion: raw !== null && data.inclusion !== undefined,
         text,
         scan: src.scan,
       });
@@ -203,14 +204,24 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     if (!f.endsWith(".md")) continue;
     const name = f.replace(/\.md$/, "");
     const sm = steeringMeta.get(name);
-    const emitted = await readEmitted(claudeDir, "rule", f, origin, sm ? { inclusion: sm.inclusion, fileMatchPattern: sm.fileMatchPattern } : undefined);
+    const emitted = await readEmitted(claudeDir, "rule", f, origin, sm ? { inclusion: sm.inclusion, fileMatchPattern: sm.fileMatchPattern, generated: sm.generated, setsInclusion: sm.setsInclusion } : undefined);
     if (!emitted) continue;
-    const ruleMeta = emitted.meta as Ingredient & { inclusion: string };
+    // Copy any warnings from readEmitted into the report
+    if (emitted.warnings) {
+      for (const w of emitted.warnings) report.warnings.push(w);
+    }
+    const ruleMeta = emitted.meta as Ingredient & { inclusion: string; fileMatchPattern?: string | string[] };
     read(emitted.meta, emitted.files, emitted.scan, (ref) => {
       // The output name: a variant's ref is <name>--<profile>, and the steering file it mirrors is <name> (spec 29 §19.6).
       ruleNames.push(name);
-      if (ruleMeta.inclusion === "fileMatch") scopedRules.set(ref, sm?.fileMatchPattern ?? "");
-      else refs.base.push(ref);
+      // Use the rule's own fileMatchPattern (from paths: or from steering), joined with comma for stack recipe
+      if (ruleMeta.inclusion === "fileMatch") {
+        const pattern = ruleMeta.fileMatchPattern;
+        const patternStr = Array.isArray(pattern) ? pattern.join(",") : pattern ?? "";
+        scopedRules.set(ref, patternStr);
+      } else {
+        refs.base.push(ref);
+      }
     });
   }
 
@@ -338,16 +349,29 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       const sm = steeringMeta.get(name);
       if (!sm) throw new Error(`import: --prefer-kiro ${name}: there is no .kiro/steering/${name}.md to prefer`);
       const ruleText = q.files["rule.md"] as string;
+      // The Claude file as written: a split rule's fence counts toward its lines
+      const ruleRaw = "frontmatterRaw" in q.meta ? q.meta.frontmatterRaw : undefined;
+      const ruleFileText = ruleRaw !== undefined ? `---\n${ruleRaw}\n---\n${ruleText}` : ruleText;
       const { text, offset } = preferKiro({ name, steering: sm.text, rules: new Set(rules.keys()), handSteering, banner });
       const source = `.kiro/steering/${name}.md`;
       q.files = { "rule.md": text };
       q.scan = scanOf("rule.md", sm);
       q.lineOffset = offset;
       q.meta = { ...q.meta, origin: origin(source) };
+      // A steering body written before rules kept their frontmatter apart still holds the fence: the
+      // text then carries it, as it did, and the rule's own copy is dropped so the file is not written twice.
+      if ("frontmatterRaw" in q.meta && q.meta.frontmatterRaw !== undefined && parseFrontmatter(text).raw !== null) {
+        const { frontmatterRaw: _dropped, ...rest } = q.meta;
+        q.meta = rest as Ingredient;
+      }
       const after = q.after;
       q.after = (ref) => {
         after(ref);
-        preferred.push({ ref, source, steeringLines: textLines(sm.text), rule: `.claude/rules/${name}.md`, ruleLines: textLines(ruleText), differs: text !== ruleText });
+        // What sync will write to .claude/rules/<name>.md: if frontmatterRaw is still present, the fence
+        // wraps the body; otherwise the body alone (it may carry its own fence).
+        const raw = "frontmatterRaw" in q.meta ? (q.meta as { frontmatterRaw?: string }).frontmatterRaw : undefined;
+        const written = raw !== undefined ? `---\n${raw}\n---\n${text}` : text;
+        preferred.push({ ref, source, steeringLines: textLines(sm.text), rule: `.claude/rules/${name}.md`, ruleLines: textLines(ruleFileText), differs: written !== ruleFileText });
       };
     }
   }
@@ -609,6 +633,56 @@ export interface EmittedSource {
   meta: Ingredient;
   files: Record<string, string | Buffer>;
   scan: Record<string, string>;
+  /** Warnings from reading the source (e.g., paths: disagrees with steering). */
+  warnings?: string[];
+}
+
+/**
+ * A Claude rule's `paths:`, read from its raw frontmatter. `present` says the key is there; `value` is set only
+ * when it is usable — a non-empty string, or a non-empty list of non-empty strings. YAML is tried first; when it
+ * refuses the block (an unquoted `**` reads as an alias), the key is read by lines as Claude Code writes it: an
+ * inline value, or `- item` lines below, each unquoted and without a trailing ` # comment`.
+ */
+export function rulePaths(rawText: string | null): { present: boolean; value?: string | string[] } {
+  if (rawText === null) return { present: false };
+  const raw = toLf(rawText);
+  // A glob is one line: a block scalar's text is not one
+  const glob = (i: unknown): i is string => typeof i === "string" && i.length > 0 && !i.includes("\n");
+  const usable = (p: unknown): p is string | string[] => glob(p) || (Array.isArray(p) && p.length > 0 && p.every(glob));
+  try {
+    const data = parseYamlText("frontmatter", raw);
+    if (data === null || typeof data !== "object" || !Object.hasOwn(data, "paths")) return { present: false };
+    const p = (data as Record<string, unknown>).paths;
+    return usable(p) ? { present: true, value: p } : { present: true };
+  } catch {
+    const lines = raw.split("\n");
+    const at = lines.findIndex((l) => /^paths:(\s|$)/.test(l));
+    if (at === -1) return { present: false };
+    const scalar = (v: string): string | null => {
+      const t = v.trim();
+      const q = /^(["'])(.*)\1(\s+#.*)?$/.exec(t);
+      if (q) return q[2];
+      if (/^["']/.test(t)) return null; // an unclosed or mismatched quote
+      return t.replace(/\s+#.*$/, "");
+    };
+    const inline = lines[at].slice("paths:".length);
+    if (inline.trim() !== "" && !/^\s*#/.test(inline)) {
+      const v = /^\s*[[{|>]/.test(inline) ? null : scalar(inline);
+      return v ? { present: true, value: v } : { present: true };
+    }
+    const items: string[] = [];
+    let indent: string | null = null; // every item at the first one's indent, which may be the key's own
+    for (const line of lines.slice(at + 1)) {
+      if (line.trim() === "" || /^\s*#/.test(line)) continue;
+      if (/^\S/.test(line) && !/^-\s/.test(line)) break; // the next key
+      const item = /^(\s*)-\s+(.*)$/.exec(line);
+      if (item && indent === null) indent = item[1];
+      const v = item && item[1] === indent ? scalar(item[2]) : null;
+      if (!v) return { present: true };
+      items.push(v);
+    }
+    return items.length ? { present: true, value: items } : { present: true };
+  }
 }
 
 /**
@@ -621,23 +695,103 @@ export async function readEmitted(
   type: "rule" | "agent" | "command" | "skill" | "script" | "hook",
   rel: string,
   origin: (rel: string) => { workspace: string; path: string },
-  steering?: { inclusion: string; fileMatchPattern?: string },
+  steering?: { inclusion: string; fileMatchPattern?: string; generated?: boolean; setsInclusion?: boolean },
 ): Promise<EmittedSource | null> {
   if (type === "rule") {
     const name = rel.replace(/\.md$/, "");
     const src = await readSource(path.join(claudeDir, "rules", rel));
     const text = toLf(stripBom(src.text));
+    const parsed = parseFrontmatter<{ paths?: unknown }>(text);
+    const warnings: string[] = [];
+
+    const pathsResult = rulePaths(parsed.raw);
+    const hasPaths = pathsResult.present;
+    const pathsValue = pathsResult.value;
+    const pathsUsable = pathsValue !== undefined;
+
+    // Determine scope by precedence:
+    // 1. hand-written steering with frontmatter inclusion → use steering
+    // 2. usable paths: → use paths
+    // 3. generated steering → use steering
+    // 4. else "always"
+    let inclusion: "always" | "fileMatch" | "manual" | "auto" = "always";
+    let fileMatchPattern: string | string[] | undefined;
+    let frontmatterRaw: string | undefined;
+
+    // When paths: is usable, split it out whoever sets the scope (so kiro/AGENTS.md don't carry the paths: block)
+    // — unless the file ends at its closing fence with no newline, which the split could not write back.
+    const useFrontmatter = pathsUsable && text.startsWith(`---\n${parsed.raw}\n---\n`);
+    if (useFrontmatter) {
+      frontmatterRaw = parsed.raw ?? undefined;
+    }
+
+    // Helper to check if steering scope differs from paths scope.
+    // The kiro emitter writes a list as a comma-joined string, so we compare the steering pattern
+    // (which is always a string) against the paths value joined by comma.
+    const scopeDiffers = (steeringInclusion: string | undefined, steeringPattern: string | string[] | undefined): boolean => {
+      if (!pathsUsable || pathsValue === undefined) return false;
+      if (steeringInclusion !== "fileMatch") return true;
+      // Compared as the kiro emitter writes a list: joined by ","
+      const joined = (p: string | string[] | undefined) => (Array.isArray(p) ? p.join(",") : p);
+      return joined(steeringPattern) !== joined(pathsValue);
+    };
+
+    if (steering && !steering.generated && steering.setsInclusion) {
+      // Case 1: hand-written steering with inclusion set - use steering's scope
+      inclusion = steering.inclusion as "always" | "fileMatch" | "manual" | "auto";
+      fileMatchPattern = steering.fileMatchPattern;
+
+      // Warn if paths: differs from steering
+      if (pathsUsable && scopeDiffers(steering.inclusion, steering.fileMatchPattern)) {
+        warnings.push(`rule ${name}: .kiro/steering/${name}.md and paths: in .claude/rules/${name}.md disagree; the steering file's scope is kept`);
+      }
+    } else if (pathsUsable && pathsValue !== undefined) {
+      // Case 2: usable paths: in rule
+      inclusion = "fileMatch";
+      fileMatchPattern = pathsValue;
+
+      // Warn about steering
+      if (steering) {
+        if (!steering.setsInclusion) {
+          // steering without inclusion set
+          warnings.push(`rule ${name}: .kiro/steering/${name}.md sets no inclusion; scope taken from paths: in .claude/rules/${name}.md`);
+        } else if (steering.generated && scopeDiffers(steering.inclusion, steering.fileMatchPattern)) {
+          // generated steering with different scope
+          warnings.push(`rule ${name}: the generated .kiro/steering/${name}.md disagrees with paths: in .claude/rules/${name}.md; scope taken from paths:`);
+        }
+      }
+    } else if (steering && steering.generated) {
+      // Case 3: generated steering
+      inclusion = steering.inclusion as "always" | "fileMatch" | "manual" | "auto";
+      fileMatchPattern = steering.fileMatchPattern;
+    } else if (steering) {
+      // Case 4: any steering file (hand-written, may have no inclusion) - use its pattern as main did
+      inclusion = steering.inclusion as "always" | "fileMatch" | "manual" | "auto";
+      fileMatchPattern = steering.fileMatchPattern;
+    }
+    // else Case 5: no steering file at all → "always" (default)
+
+    // Warn about unusable paths (the scope then follows the rest of the precedence)
+    if (hasPaths && !pathsUsable) {
+      warnings.push(`rule ${name}: paths: in .claude/rules/${name}.md is not a string or a list of strings; ignored`);
+    }
+
     const meta: Ingredient = {
       type: "rule",
       name,
-      inclusion: (steering?.inclusion as "always" | "fileMatch" | "manual" | "auto") ?? "always",
-      fileMatchPattern: steering?.fileMatchPattern,
+      inclusion,
+      fileMatchPattern,
       file: "rule.md",
+      ...(frontmatterRaw !== undefined ? { frontmatterRaw } : {}),
       targets: "*",
       tags: [],
       origin: origin(`.claude/rules/${rel}`),
     };
-    return { meta, files: { "rule.md": text }, scan: scanOf("rule.md", src) };
+
+    // If using frontmatter (paths: is usable), store the body only; otherwise store whole text
+    const ruleContent = useFrontmatter ? parsed.body : text;
+
+    return { meta, files: { "rule.md": ruleContent }, scan: scanOf("rule.md", src), ...(warnings.length ? { warnings } : {}) };
   }
 
   if (type === "agent") {
@@ -765,15 +919,27 @@ function addRef(list: string[], ref: string | null): void {
   if (ref) list.push(ref);
 }
 
+/** Where a rule's `frontmatterRaw` was read: its Claude file, whatever file its body came from. */
+function rawSource(meta: Ingredient): string | null {
+  return meta.type === "rule" ? `.claude/rules/${outName(meta)}.md` : null;
+}
+
+/** A rule whose body was taken from its steering file (`--prefer-kiro`): the body's lines are that file's. */
+function bodyFromSteering(meta: Ingredient): boolean {
+  return meta.type === "rule" && (meta.origin?.path ?? "").startsWith(".kiro/steering/");
+}
+
 /** First secret-like value in an ingredient about to be imported, described by location only. */
 export function secretIn(meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string> = {}, lineOffset = 0): string | null {
   const origin = meta.origin?.path ?? `${meta.type}/${meta.name}`;
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
-  // Bodies of agents and commands start after `---`, the raw block and the closing `---`; `lineOffset` is for a text
-  // that starts lower in its source file for another reason (spec 29 §4.3).
-  const bodyOffset = raw ? raw.split("\n").length + 2 : lineOffset;
+  // Bodies of agents, commands and split rules start after `---`, the raw block and the closing `---`; `lineOffset`
+  // is for a text that starts lower in its source file for another reason (spec 29 §4.3). A rule's raw block is
+  // always its Claude file's, while its body may come from a steering file (`--prefer-kiro`).
+  const rawWhere = rawSource(meta) ?? origin;
+  const bodyOffset = raw && !bodyFromSteering(meta) ? raw.split("\n").length + 2 : lineOffset;
   const texts: { where: string; text: string; offset: number }[] = [];
-  if (raw) texts.push({ where: origin, text: raw, offset: 1 });
+  if (raw) texts.push({ where: rawWhere, text: raw, offset: 1 });
   for (const [rel, content] of Object.entries(files)) {
     const where = meta.type === "skill" && meta.layout === "dir" ? `${origin}${rel}` : origin;
     // A Buffer (non-allowlisted extensions such as .pem or .bat) goes through decodeForScan:
@@ -1163,7 +1329,7 @@ async function existingProfile(
  */
 export function markerIn(meta: Ingredient, files: Record<string, string | Buffer>, source: string, lineOffset = 0): { where: string; line: number } | null {
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
-  const offset = raw ? raw.split("\n").length + 2 : lineOffset;
+  const offset = raw && !bodyFromSteering(meta) ? raw.split("\n").length + 2 : lineOffset;
   for (const [rel, content] of Object.entries(files)) {
     // the importer builds meta and file keys itself, with canonical names
     if (!bodyFile(meta, rel, null)) continue;

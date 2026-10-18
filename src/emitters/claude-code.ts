@@ -20,9 +20,13 @@ export const claudeCode: Emitter<"claude-code"> = {
     for (const ing of ctx.aimed) {
       const m = ing.meta;
       switch (m.type) {
-        case "rule":
-          out.push(await textFile(ctx, ruleFile("claude-code", m), await ctx.text(ing, m.file), t, ing.ref));
+        case "rule": {
+          const body = await ctx.text(ing, m.file);
+          // If frontmatterRaw is set, serialize with it; otherwise emit body only (no generated paths:)
+          const doc = m.frontmatterRaw != null ? serializeFrontmatter({}, body, { raw: m.frontmatterRaw }) : body;
+          out.push(await textFile(ctx, ruleFile("claude-code", m), doc, t, ing.ref));
           break;
+        }
         case "agent": {
           const body = await ctx.text(ing, m.file);
           const fm = m.frontmatterRaw ?? null;
