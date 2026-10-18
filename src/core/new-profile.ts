@@ -57,6 +57,11 @@ export function withProfile(forge: Forge, profile: Profile): Forge {
   return { ...forge, profiles };
 }
 
+/** P10's one wording (spec 38 §4.2): a recipe named for another profile of the Forge, in a new profile's list. */
+export function ownedRecipeRefusal(recipe: string, owner: string): string {
+  return `recipe ${recipe} is named for profile ${owner} — a new profile cannot use it; leave it out and add the shared recipe it stands for`;
+}
+
 /** Options for newProfile (spec 38 §4.4). */
 export interface NewProfileOptions {
   name: string;
@@ -142,9 +147,7 @@ export function newProfile(forge: Forge, o: NewProfileOptions): NewProfileResult
   for (const r of finalRecipes) {
     const owner = ownedBy(forge, r);
     if (owner !== null) {
-      throw new Error(
-        `recipe ${r} is named for profile ${owner} — a new profile cannot use it; leave it out and add the shared recipe it stands for`,
-      );
+      throw new Error(ownedRecipeRefusal(r, owner));
     }
   }
 

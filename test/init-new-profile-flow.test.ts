@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { againLine, askInit, confirmInit, type InitIo } from "../src/core/init-flow.js";
 import { planInit } from "../src/core/init.js";
+import YAML from "yaml";
 import { makeForge, profile, recipe, rule, tmpDir, type ForgeSpec } from "./helpers/forge.js";
 import { git, remoteForge } from "./helpers/remote.js";
 
@@ -174,5 +175,83 @@ describe("confirmInit and againLine with a new profile (§4.3)", () => {
     expect(
       againLine({ forge: "../forge", profile: "initech", addRecipes: [], removeRecipes: [], replace: false }, { sync: true, offline: false }),
     ).toBe("  again craftar init --forge ../forge --profile initech");
+  });
+});
+
+describe("review round 1 (spec 38 §4.2, §4.3)", () => {
+  it("a template in a Forge at schema 3: the draft goes through ProfileSchema — no raw TypeError", async () => {
+    const spec: ForgeSpec = {
+      ...SPEC,
+      recipes: [...(SPEC.recipes ?? []), recipe("pm-jira", ["rule/a"])],
+      profiles: [profile("acme", ["base"], ["claude-code"], { integrations: { pm: { kind: "jira" } } })],
+    };
+    const s = await setup({ spec });
+    await fs.writeFile(path.join(s.forge, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 3 }));
+    git(s.forge, "commit", "-q", "-am", "schema 3");
+    const sc = script(["", ""]);
+    const r = await ask(s, { forge: s.forge, newProfile: "initech", like: "acme" }, sc.io);
+    if (r.kind !== "answered") throw new Error("expected answers");
+    expect(r.input.newProfile).toEqual({ name: "initech", like: "acme" });
+    expect(sc.said).toContain("Recipes of initech (from acme): base");
+  });
+  it("flags typed with --new-profile answer their questions: nothing is asked for them", async () => {
+    const s = await setup();
+    const sc = script([]);
+    const r = await ask(s, { forge: s.forge, newProfile: "initech", like: "acme", addRecipes: ["extra"], targets: ["kiro"] }, sc.io);
+    expect(sc.asked).toEqual([]);
+    if (r.kind !== "answered") throw new Error("expected answers");
+    expect(r.input.addRecipes).toEqual(["extra"]);
+    expect(r.input.targets).toEqual(["kiro"]);
+  });
+  it("a typed --like the Forge does not have is refused before any question (P9)", async () => {
+    const s = await setup();
+    await expect(ask(s, { forge: s.forge, newProfile: "initech", like: "nope" }, script([]).io)).rejects.toThrow('--like: profile "nope" not found in Forge (acme, globex)');
+  });
+  it("--new-profile typed, the Forge asked: a URL answer is P4, said and asked again — nothing fetched", async () => {
+    const rf = await remoteForge(SPEC);
+    cleanups.push(rf.cleanup);
+    const s = await setup();
+    const sc = script([rf.url, s.forge, "", "", ""]);
+    const r = await ask(s, { newProfile: "initech" }, sc.io);
+    expect(sc.said).toContain("a new profile is written into a Forge directory — clone the Forge, pass that directory as --forge, then commit and push the profile");
+    expect(sc.asked.filter((q) => q.startsWith("Forge")).length).toBe(2);
+    expect(await fs.lstat(path.join(s.home, "forges")).then(() => true, () => false)).toBe(false);
+    if (r.kind !== "answered") throw new Error("expected answers");
+    expect(r.input.forge).toBe(s.forge);
+  });
+  it("--new-profile typed, the Forge asked: a directory that is not a git repository is said and asked again", async () => {
+    const bad = await setup({ git: false });
+    const s = await setup();
+    const sc = script([bad.forge, s.forge, "", "", ""]);
+    const r = await ask(s, { newProfile: "initech" }, sc.io);
+    const p6 = `cannot create a profile in ${bad.forge}: it is not a git repository with a commit — git is how a Forge write is undone`;
+    expect(sc.said.filter((l) => l === p6).length).toBe(1);
+    if (r.kind !== "answered") throw new Error("expected answers");
+    expect(r.input.forge).toBe(s.forge);
+  });
+  it("a Forge directory with no profile that fails P6, the Forge asked: said once, and the Forge asked again", async () => {
+    const bad = await setup({ spec: { ...SPEC, profiles: [] }, git: false });
+    const s = await setup({ spec: { ...SPEC, profiles: [] } });
+    const sc = script([bad.forge, s.forge, "initech", "", ""]);
+    const r = await ask(s, {}, sc.io);
+    const p6 = `cannot create a profile in ${bad.forge}: it is not a git repository with a commit — git is how a Forge write is undone`;
+    expect(sc.said.filter((l) => l === p6).length).toBe(1);
+    expect(sc.said).toContain("the Forge has no profile yet — creating the first one");
+    if (r.kind !== "answered") throw new Error("expected answers");
+    expect(r.input.newProfile).toEqual({ name: "initech" });
+  });
+  it("a held slot in the new profile's recipes asks `replace <holder>`, as spec 28 does", async () => {
+    const spec: ForgeSpec = {
+      ...SPEC,
+      recipes: [...(SPEC.recipes ?? []), recipe("front-a", ["rule/b"], { slot: "front" }), recipe("front-b", ["rule/c"], { slot: "front" })],
+      profiles: [profile("acme", ["base", "front-a"], ["claude-code"]), profile("globex", ["base"], ["kiro"])],
+    };
+    const s = await setup({ spec });
+    const sc = script(["yes", "", "front-b", "yes", ""]);
+    const r = await ask(s, { forge: s.forge, newProfile: "initech", like: "acme" }, sc.io);
+    expect(sc.asked).toContain('front-b takes the slot "front" that front-a holds — replace front-a [no]: ');
+    if (r.kind !== "answered") throw new Error("expected answers");
+    expect(r.input.addRecipes).toEqual(["front-b"]);
+    expect(r.input.replace).toBe(true);
   });
 });

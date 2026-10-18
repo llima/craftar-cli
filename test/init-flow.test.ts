@@ -861,15 +861,15 @@ describe("askInit", () => {
     const s = await askSetup(specNoProfile);
     const given: InitGiven = { addRecipes: [], removeRecipes: [], replace: false };
     const local = { doc: null, keys: [] as LocalKey[] };
-    const sc = script([s.forge]);
-    // Spec 38 §4.3, §8: a Forge directory with no profile that is NOT a git repository
-    // now throws P6's text instead of the old "the Forge has no profile" message.
-    // This is because a Forge directory with no profile goes to the new-profile flow,
-    // which requires the Forge to be a git repository (P6).
-    await expect(
-      askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync })
-    ).rejects.toThrow(`cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`);
-    expect(sc.asked).toEqual([QF]);
+    // Spec 38 §4.3: a Forge directory with no profile that fails P6, Forge asked:
+    // say P6's text ONCE and ask the Forge again. With no --forge given, this continues.
+    // Provide the bad Forge once, then null to cancel when asked again.
+    const sc = script([s.forge, null as any]);
+    const result = await askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync });
+    expect(result.kind).toBe("cancelled");
+    expect(sc.said).toContain(`cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`);
+    // Forge was asked once, P6 said, Forge asked again with default, user cancelled
+    expect(sc.asked.filter(q => q.startsWith("Forge")).length).toBe(2);
 
     // given.profile = "nope" - use a Forge WITH a profile (SPEC_DESC) to get proper error
     const s2 = await askSetup(SPEC_DESC);
