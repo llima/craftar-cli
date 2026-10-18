@@ -185,7 +185,10 @@ export function vouchedKeys(named: ReadonlyMap<string, readonly string[]>, reg: 
 /** `text` with every one of `keys` replaced by `UNVOUCHED_HIDDEN`: what `cache prune` and `doctor` print for an unvouched key. */
 export function hideUnvouched(text: string, keys: readonly string[]): string {
   let out = text;
-  for (const k of keys) out = out.split(k).join(UNVOUCHED_HIDDEN);
+  for (const k of keys) {
+    if (k === "") continue;
+    out = out.split(k).join(UNVOUCHED_HIDDEN);
+  }
   return out;
 }
 
@@ -195,12 +198,15 @@ export function hideUnvouched(text: string, keys: readonly string[]): string {
  * `UNVOUCHED_HIDDEN`. The no-snapshot rule, spec 39 §5.1 — vouched or not.
  */
 export function hideCacheSegment(text: string, home: string): string {
-  const resolved = path.resolve(home);
+  // Strip trailing separators so the root `/` becomes empty and the pattern is `[/\\]forges[/\\]`
+  const resolved = path.resolve(home).replace(/[/\\]+$/, "");
   // Escape special regex characters in the home path
   const escaped = resolved.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   // Match: <home>/forges/ or <home>\forges\ followed by the segment (up to / \ space or quote)
-  const pattern = new RegExp(`${escaped}[/\\\\]forges[/\\\\]([^/\\\\\\s"']+)`, "g");
-  return text.replace(pattern, `${resolved}${path.sep}forges${path.sep}${UNVOUCHED_HIDDEN}`);
+  // Capture the prefix (including the separator after forges) in group 1
+  const pattern = new RegExp(`(${escaped}[/\\\\]forges[/\\\\])([^/\\\\\\s"']+)`, "g");
+  // Use a function replacement to avoid $&, $1, etc. in the home path being interpreted
+  return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
 }
 
 /** Whether `dir` has a registry entry — by real path, without case on Windows, as `register` keys it (spec 24 §5.1). */
