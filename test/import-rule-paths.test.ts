@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { importClaudeCode, secretIn } from "../src/importers/claude-code.js";
+import { importClaudeCode, rulePaths, secretIn } from "../src/importers/claude-code.js";
 import { loadWorkspace, plan, status, apply, readLock } from "../src/core/sync.js";
 import { tmpDir, writeFiles } from "./helpers/forge.js";
 
@@ -382,4 +382,25 @@ describe("import --from claude-code — paths: read by lines when YAML refuses i
     const meta = { type: "rule", name: "x--p", as: "x", inclusion: "fileMatch", fileMatchPattern: "a", frontmatterRaw: "paths: a", file: "rule.md", targets: "*", tags: [], origin: { workspace: "w", path: ".claude/rules/x.md" } } as unknown as Parameters<typeof secretIn>[0];
     expect(secretIn(meta, { "rule.md": `# X\nline\n${TOKEN}\n` })).toBe("secret-like value (github-token) in .claude/rules/x.md line 6");
   });
+
+  it("R6. a list written at the key's own indent is read", async () => {
+    expect((await imported("---\npaths:\n- **/*.ts\n- src/**\n---\n# R\n")).meta.fileMatchPattern).toEqual(["**/*.ts", "src/**"]);
+  });
+
+  it("R7. a block scalar is not a glob: unusable, warned", async () => {
+    const { report, meta } = await imported("---\npaths: |\n  **/*.ts\n---\n# R\n");
+    expect(meta.inclusion).toBe("always");
+    expect(report.warnings).toContain("rule r: paths: in .claude/rules/r.md is not a string or a list of strings; ignored");
+  });
+
+  it("R8. a list paths: agrees with the mirror craftar generated for it", async () => {
+    const banner = "<!-- GENERATED from .claude/rules/r.md by craftar -- do not edit. -->";
+    const { report } = await imported("---\npaths:\n  - a/**\n  - b/**\n---\n# R\n", `---\ninclusion: fileMatch\nfileMatchPattern: "a/**,b/**"\n---\n\n${banner}\n\n# R\n`);
+    expect(report.warnings.filter((w) => w.includes("rule r:"))).toEqual([]);
+  });
+
+  it("R9. rulePaths reads a CRLF block as an LF one", () => {
+    expect(rulePaths("paths:\r\n  - **/*.ts\r\n").value).toEqual(["**/*.ts"]);
+  });
 });
+

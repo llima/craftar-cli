@@ -42,6 +42,7 @@ import {
 } from "../core/impact.js";
 import { findProfileFile, resolvedBy } from "../core/param-writes.js";
 import { outName } from "../emitters/shared.js";
+import { parseFrontmatter } from "../core/frontmatter.js";
 import {
   readEmitted,
   rulePaths,
@@ -709,7 +710,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Source metadata: X's own, but re-read certain fields; drop params
   const sourceMeta: Ingredient = {
     ...X.meta,
-    ...emittedMetaFields(emitted.meta, readType, X.meta),
+    ...emittedMetaFields(emitted.meta, readType, X.meta, meta.type === "rule" ? await fs.readFile(path.join(X.dir, meta.file), "utf8").catch(() => null) : null),
   } as Ingredient;
   // Remove params from source (sources carry none)
   if ("params" in sourceMeta) delete (sourceMeta as Record<string, unknown>).params;
@@ -1287,7 +1288,7 @@ export async function applyPromote(plan: PromotePlan, journal: WriteJournal): Pr
 
 // Helper functions
 
-function emittedMetaFields(emitted: Ingredient, type: string, base: Ingredient): Partial<Ingredient> {
+function emittedMetaFields(emitted: Ingredient, type: string, base: Ingredient, baseBody: string | null): Partial<Ingredient> {
   // Only re-read certain fields from the emitted source
   if (type === "agent") {
     return {
@@ -1312,7 +1313,8 @@ function emittedMetaFields(emitted: Ingredient, type: string, base: Ingredient):
     const baseRaw = "frontmatterRaw" in base ? base.frontmatterRaw : undefined;
     if (raw === baseRaw) return {};
     const paths = rulePaths(raw ?? null).value;
-    const basePaths = rulePaths(baseRaw ?? null).value;
+    // A base imported before rules kept their frontmatter apart holds its `paths:` inside its body
+    const basePaths = rulePaths(baseRaw ?? (baseBody === null ? null : parseFrontmatter(baseBody).raw)).value;
     if (JSON.stringify(paths) === JSON.stringify(basePaths)) return { frontmatterRaw: raw };
     if (paths !== undefined) return { frontmatterRaw: raw, inclusion: "fileMatch", fileMatchPattern: paths };
     // `paths:` removed by hand: a scope that came from it goes with it; one from elsewhere stays.

@@ -3090,6 +3090,29 @@ Edited body
     expect(r.stdout).toContain("warn rule a: paths: in .claude/rules/a.md is not a string or a list of strings; ignored");
   });
 
+  it("67g. a body-only edit of a rule imported before frontmatterRaw keeps its scope", async () => {
+    const rulePath = ".claude/rules/a.md";
+    const s = await scenario(
+      {
+        // what an import before this fix wrote: the fence inside rule.md, the scope from a steering file
+        ingredients: [{ meta: { type: "rule", name: "a", inclusion: "fileMatch", fileMatchPattern: "other/**" }, files: { "rule.md": "---\npaths: src/**\n---\n# A\n" } }],
+        recipes: [recipe("base", ["rule/a"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.writeFile(path.join(s.wsRoot, rulePath), "---\npaths: src/**\n---\n# A edited\n");
+
+    const r = runCli(["drift", "promote", rulePath, "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    const variantMeta = YAML.parse(await fs.readFile(path.join(s.forgeRoot, "ingredients/rules/a--acme/ingredient.yaml"), "utf8"));
+    expect(variantMeta.inclusion).toBe("fileMatch");
+    expect(variantMeta.fileMatchPattern).toBe("other/**");
+  });
+
   it("67d. removing the frontmatter of a rule the Forge keeps it for promotes a rule without it", async () => {
     const rulePath = ".claude/rules/a.md";
     const s = await scenario(

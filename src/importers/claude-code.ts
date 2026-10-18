@@ -639,10 +639,12 @@ export interface EmittedSource {
  * refuses the block (an unquoted `**` reads as an alias), the key is read by lines as Claude Code writes it: an
  * inline value, or `- item` lines below, each unquoted and without a trailing ` # comment`.
  */
-export function rulePaths(raw: string | null): { present: boolean; value?: string | string[] } {
-  if (raw === null) return { present: false };
-  const usable = (p: unknown): p is string | string[] =>
-    (typeof p === "string" && p.length > 0) || (Array.isArray(p) && p.length > 0 && p.every((i) => typeof i === "string" && i.length > 0));
+export function rulePaths(rawText: string | null): { present: boolean; value?: string | string[] } {
+  if (rawText === null) return { present: false };
+  const raw = toLf(rawText);
+  // A glob is one line: a block scalar's text is not one
+  const glob = (i: unknown): i is string => typeof i === "string" && i.length > 0 && !i.includes("\n");
+  const usable = (p: unknown): p is string | string[] => glob(p) || (Array.isArray(p) && p.length > 0 && p.every(glob));
   try {
     const data = parseYamlText("frontmatter", raw);
     if (data === null || typeof data !== "object" || !Object.hasOwn(data, "paths")) return { present: false };
@@ -661,13 +663,13 @@ export function rulePaths(raw: string | null): { present: boolean; value?: strin
     };
     const inline = lines[at].slice("paths:".length);
     if (inline.trim() !== "" && !/^\s*#/.test(inline)) {
-      const v = /^\s*[[{]/.test(inline) ? null : scalar(inline);
+      const v = /^\s*[[{|>]/.test(inline) ? null : scalar(inline);
       return v ? { present: true, value: v } : { present: true };
     }
     const items: string[] = [];
     for (const line of lines.slice(at + 1)) {
       if (line.trim() === "" || /^\s*#/.test(line)) continue;
-      if (/^\S/.test(line)) break; // the next key
+      if (/^\S/.test(line) && !/^-\s/.test(line)) break; // the next key (a `- item` may sit at the key's indent)
       const item = /^\s*-\s+(.*)$/.exec(line);
       const v = item ? scalar(item[1]) : null;
       if (!v) return { present: true };
