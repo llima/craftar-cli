@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { capture, execProgram, onPath, pathEntries, spawnInherited } from "../src/core/proc.js";
 import { tmpDir } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 
 // design D3 — the two ways craftar runs an external program besides git: no shell, an argument array.
 
@@ -70,7 +71,7 @@ beforeAll(async () => {
   await fs.copyFile(process.execPath, path.join(PLANTED, TOOL + EXE));
   await fs.chmod(path.join(PLANTED, TOOL + EXE), 0o755);
 });
-afterAll(() => fs.rm(PLANTED, { recursive: true, force: true }));
+afterAll(() => removeWithRetry(PLANTED));
 
 /** The process environment with PATH replaced, whatever the key's case (Windows spells it `Path`). */
 function withPath(value: string): NodeJS.ProcessEnv {
