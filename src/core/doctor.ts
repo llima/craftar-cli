@@ -4,8 +4,8 @@ import { ENV_NAME, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
 import { renderServer, rendersServers } from "./mcp-server.js";
-import { credentialKeys, hideKeys, isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus } from "./registry.js";
-import { FULL_SHA, cacheKey, classifyForge, inspectCache, type CacheSnapshot } from "./remote.js";
+import { credentialKeys, hideCacheSegment, hideKeys, isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus, vouchedKeys } from "./registry.js";
+import { FULL_SHA, cacheKey, classifyForge, CREDENTIAL_HIDDEN, inspectCache, UNVOUCHED_HIDDEN, type CacheSnapshot } from "./remote.js";
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
@@ -64,6 +64,8 @@ export interface DoctorOptions {
   dotnetVersion?: () => Promise<string | null>;
   /** Test seam: injected runner for `docker compose version --short` (spec 31 §4.7). */
   dockerRunner?: DockerRunner;
+  /** Test seam: a replacement for the real `inspectCache` (spec 39 §5.1). */
+  inspectCache?: typeof inspectCache;
 }
 
 async function defaultGitVersion(): Promise<string | null> {
@@ -95,8 +97,9 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
   // which `git` and `cache` need even when the Forge does not load (§5.1).
   let snapshot: CacheSnapshot | null = null;
   let snapshotError: string | null = null;
+  const doInspect = opts.inspectCache ?? inspectCache;
   try {
-    snapshot = await inspectCache(opts.home);
+    snapshot = await doInspect(opts.home);
   } catch (e) {
     snapshotError = oneLine(e);
   }
@@ -161,7 +164,9 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
     // One cause, one line (§13 item 12): a home that is not a directory is `home`'s error.
     m("cache", "ok", "not checked ($CRAFTAR_HOME is not a directory)");
   } else if (snapshot === null) {
-    m("cache", "warn", `cannot read the Forge cache: ${hideKeys(snapshotError ?? "", reg === null ? [] : credentialKeys(reg))}`, `fix or move $CRAFTAR_HOME (${home})`);
+    // No snapshot: use hideCacheSegment, then hideKeys (spec 39 §5.1).
+    const msg = hideCacheSegment(snapshotError ?? "", opts.home);
+    m("cache", "warn", `cannot read the Forge cache: ${hideKeys(msg, reg === null ? [] : credentialKeys(reg))}`, `fix or move $CRAFTAR_HOME (${home})`);
   } else {
     const summary = `${snapshot.entries.length} entr${snapshot.entries.length === 1 ? "y" : "ies"}, ${MB(snapshot.bytes)}`;
     let skip: string | null = registryWhyNot;
@@ -169,14 +174,21 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
     const findings: Check[] = [];
     // A key the registry records for a URL with credentials is never printed (the name holds them).
     const hide = reg === null ? [] : credentialKeys(reg);
+    // Compute the named map before both loops so both can use it (spec 39 §5.1).
+    const checked = skip === null && reg !== null && remote && root !== null ? { key: cacheKey(merged!.config.forge.trim()), path: root } : null;
+    const named = skip === null && reg !== null ? namedCacheKeys(reg, checked) : new Map<string, string[]>();
+    const vouched = vouchedKeys(named, reg);
+    // `a fetch never completed`: show key as-is only when vouched, as CREDENTIAL_HIDDEN when credentialKeys holds it, else UNVOUCHED_HIDDEN.
     for (const e of snapshot.entries) {
-      if (!e.fetched) findings.push({ id: "cache", scope: "machine", level: "warn", message: `${hideKeys(e.key, hide)} — a fetch never completed`, fix: CACHE_FIX });
+      if (!e.fetched) {
+        const label = vouched.has(e.key) ? e.key : hide.includes(e.key) ? CREDENTIAL_HIDDEN : UNVOUCHED_HIDDEN;
+        findings.push({ id: "cache", scope: "machine", level: "warn", message: `${label} — a fetch never completed`, fix: CACHE_FIX });
+      }
     }
+    // `nothing names it`: always UNVOUCHED_HIDDEN (such a key is never vouched).
     if (skip === null && reg !== null) {
-      const checked = remote && root !== null ? { key: cacheKey(merged!.config.forge.trim()), path: root } : null;
-      const named = namedCacheKeys(reg, checked);
       for (const e of snapshot.entries)
-        if (e.fetched && !named.has(e.key)) findings.push({ id: "cache", scope: "machine", level: "warn", message: `${e.key} — nothing names it`, fix: CACHE_FIX });
+        if (e.fetched && !named.has(e.key)) findings.push({ id: "cache", scope: "machine", level: "warn", message: `${UNVOUCHED_HIDDEN} — nothing names it`, fix: CACHE_FIX });
     }
     // A skipped orphan part is said on every cache line, findings included (§4.3, §13 item 6).
     const why = skip === null ? "" : ` (orphans not checked: ${skip})`;

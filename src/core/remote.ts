@@ -23,6 +23,12 @@ const BACKSLASH_URL = /^([A-Za-z][A-Za-z0-9+.-]*):([/\\]+)/;
 /** What is printed in place of a value `credentialFault` flags, where one written or recorded earlier would be shown. */
 export const CREDENTIAL_HIDDEN = "(a URL with credentials — not shown)";
 
+/**
+ * What is printed in place of a cache key no clean registry row vouches for — an orphan, every entry
+ * when the registry is off or unreadable. Spec 39 §3.
+ */
+export const UNVOUCHED_HIDDEN = "(a cache entry name — not shown)";
+
 /** A `forge:` value is a git URL (a remote Forge) or a path resolved from the workspace root. */
 export function classifyForge(value: string): "url" | "path" {
   const v = value.trim();

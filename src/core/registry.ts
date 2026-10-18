@@ -4,7 +4,7 @@ import { REGISTRY_SCHEMAS, RegistrySchema, type Lock, type Registry, type Regist
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { exists } from "./forge.js";
 import { withLock, type LockTiming } from "./home-lock.js";
-import { cacheKey, credentialFault, CREDENTIAL_HIDDEN } from "./remote.js";
+import { cacheKey, credentialFault, CREDENTIAL_HIDDEN, UNVOUCHED_HIDDEN } from "./remote.js";
 import { loadWorkspace, plan, readLock, status, unsetDeclared, unsetSummary, WORKSPACE_FILE, type FileStatus, type Plan, type Workspace } from "./sync.js";
 
 /*
@@ -168,6 +168,39 @@ export function hideKeys(text: string, keys: readonly string[]): string {
   let out = text;
   for (const k of keys) out = out.split(k).join(CREDENTIAL_HIDDEN);
   return out;
+}
+
+/**
+ * The vouched keys: the keys of `named` minus `credentialKeys(reg)`. Empty when `reg` is null or `named`
+ * is empty (spec 39 §5.1). A vouched key is printed as-is; an unvouched key gets `UNVOUCHED_HIDDEN`.
+ */
+export function vouchedKeys(named: ReadonlyMap<string, readonly string[]>, reg: Registry | null): Set<string> {
+  if (reg === null || named.size === 0) return new Set();
+  const flagged = new Set(credentialKeys(reg));
+  const vouched = new Set<string>();
+  for (const k of named.keys()) if (!flagged.has(k)) vouched.add(k);
+  return vouched;
+}
+
+/** `text` with every one of `keys` replaced by `UNVOUCHED_HIDDEN`: what `cache prune` and `doctor` print for an unvouched key. */
+export function hideUnvouched(text: string, keys: readonly string[]): string {
+  let out = text;
+  for (const k of keys) out = out.split(k).join(UNVOUCHED_HIDDEN);
+  return out;
+}
+
+/**
+ * `text` with every path segment that follows `<path.resolve(home)>/forges/` or `<home>\forges\`
+ * (either separator after `forges`) up to the next `/`, `\`, white space or quote replaced by
+ * `UNVOUCHED_HIDDEN`. The no-snapshot rule, spec 39 §5.1 — vouched or not.
+ */
+export function hideCacheSegment(text: string, home: string): string {
+  const resolved = path.resolve(home);
+  // Escape special regex characters in the home path
+  const escaped = resolved.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Match: <home>/forges/ or <home>\forges\ followed by the segment (up to / \ space or quote)
+  const pattern = new RegExp(`${escaped}[/\\\\]forges[/\\\\]([^/\\\\\\s"']+)`, "g");
+  return text.replace(pattern, `${resolved}${path.sep}forges${path.sep}${UNVOUCHED_HIDDEN}`);
 }
 
 /** Whether `dir` has a registry entry — by real path, without case on Windows, as `register` keys it (spec 24 §5.1). */

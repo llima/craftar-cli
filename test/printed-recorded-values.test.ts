@@ -5,7 +5,7 @@ import { pruneCache } from "../src/core/cache.js";
 import { runDoctor, type DoctorOptions } from "../src/core/doctor.js";
 import { askInit, type InitIo } from "../src/core/init-flow.js";
 import { credentialKeys, hideKeys, listWorkspaces, readRegistry, register, registryFile } from "../src/core/registry.js";
-import { cacheKey, credentialFault, ensureTree, parseLsRemote, resolveRef, type GitRunner } from "../src/core/remote.js";
+import { cacheKey, credentialFault, ensureTree, parseLsRemote, resolveRef, UNVOUCHED_HIDDEN, type GitRunner } from "../src/core/remote.js";
 import { apply, loadForgeSource, loadWorkspace, loadWorkspaceConfig, plan, readLock, status } from "../src/core/sync.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
 import { remoteForge } from "./helpers/remote.js";
@@ -154,7 +154,24 @@ describe("a Forge URL with credentials recorded by an earlier release", () => {
     }
   });
 
-  it("cache prune: an entry nothing with credentials names keeps its name", async () => {
+  it("cache prune: an entry a clean registry row names keeps its name (spec 39, pinned)", async () => {
+    const root = await tmpDir("craftar-recorded-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    await fs.mkdir(home);
+    const r = await remoteForge(SPEC);
+    cleanups.push(r.cleanup);
+    const dir = path.join(root, "acme-clean");
+    await makeWorkspace(dir, root, { config: { profile: "acme", forge: r.url } });
+    const w = await loadWorkspace(dir, { home });
+    const p = await plan(w);
+    await apply(w, p, await status(w, p, await readLock(w.root)));
+    await register(home, w, p);
+    const { report } = await pruneCache(home, { dryRun: true, workspace: null, registryOff: false });
+    expect(report.kept.map((x) => x.path)).toEqual([`forges/${cacheKey(r.url)}`]);
+  });
+
+  it("cache prune: an entry nothing names is named by the unvouched label (spec 39 §4.1 a)", async () => {
     const root = await tmpDir("craftar-recorded-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
     const home = path.join(root, "home");
@@ -163,7 +180,7 @@ describe("a Forge URL with credentials recorded by an earlier release", () => {
     cleanups.push(r.cleanup);
     await ensureTree(r.url, null, { home });
     const { report } = await pruneCache(home, { dryRun: true, workspace: null, registryOff: false });
-    expect(report.removed.map((x) => x.path)).toEqual([`forges/${cacheKey(r.url)}`]);
+    expect(report.removed.map((x) => x.path)).toEqual([`forges/${UNVOUCHED_HIDDEN}`]);
   });
 
   it("doctor: the cache check names such an entry by the label", async () => {
@@ -375,5 +392,82 @@ describe("a ref: that holds a URL with credentials", () => {
       expect(message).toBe(`ref ${LABEL} not found in ${c.url}`);
       expectClean(message);
     }
+  });
+});
+
+describe("spec 39 gap 1: a cache entry named after a URL with credentials, that no registry row names any more", () => {
+  const UNVOUCHED = "(a cache entry name — not shown)";
+
+  /** recordedHome, then the registry rows dropped: the state right after the user re-synced without the credentials and pruned the registry. */
+  async function orphanHome() {
+    const h = await recordedHome();
+    const file = registryFile(h.home);
+    const reg = JSON.parse(await fs.readFile(file, "utf8"));
+    reg.workspaces = [];
+    await fs.writeFile(file, JSON.stringify(reg, null, 2) + "\n");
+    return h;
+  }
+  const doctorOpts = (home: string, extra: Partial<DoctorOptions> = {}): DoctorOptions => ({
+    version: "0.0.0", workspace: null, fetch: false, strict: false, registryOff: false, env: {}, nodeVersion: "22.11.0",
+    gitVersion: async () => "2.53.0", home, ...extra,
+  });
+
+  it("the label's text is pinned", () => expect(UNVOUCHED_HIDDEN).toBe(UNVOUCHED));
+
+  it("doctor: `nothing names it` and `a fetch never completed` name it by the label — text and the report object", async () => {
+    const h = await orphanHome();
+    const report = await runDoctor(doctorOpts(h.home));
+    expect(report.checks.filter((c) => c.id === "cache").map((c) => c.message)).toEqual([`${UNVOUCHED} — nothing names it`]);
+    expectClean(report);
+    await fs.rm(path.join(h.home, "forges", h.oldKey, "fetched"));
+    const again = await runDoctor(doctorOpts(h.home));
+    expect(again.checks.filter((c) => c.id === "cache").map((c) => c.message)).toEqual([`${UNVOUCHED} — a fetch never completed`]);
+    expectClean(again);
+  });
+
+  it("cache prune: the entry, its ~removing- leftover and a warning about it are named by the label — dry run and run", async () => {
+    for (const dryRun of [true, false]) {
+      const h = await orphanHome();
+      await fs.mkdir(path.join(h.home, "forges", `~removing-${h.oldKey}-4242`));
+      const { report } = await pruneCache(h.home, { dryRun, workspace: null, registryOff: false });
+      expect(report.removed.map((r) => r.path).sort()).toEqual([`forges/${UNVOUCHED}`, `forges/~removing-${UNVOUCHED}-4242`].sort());
+      expectClean(report);
+    }
+    const h = await orphanHome();
+    await fs.rm(path.join(h.home, "forges", h.oldKey, "fetched"));
+    const rename = async () => {
+      throw Object.assign(new Error("held"), { code: "EPERM" });
+    };
+    const { report } = await pruneCache(h.home, { dryRun: false, workspace: null, registryOff: false, rename });
+    expect(report.warnings).toEqual([`${UNVOUCHED} is held open (EPERM) — kept`]);
+    expectClean(report);
+  });
+
+  it("with CRAFTAR_NO_REGISTRY every entry is labelled — even one a row with credentials names, and one a clean row names", async () => {
+    const h = await recordedHome(); // its rows still name the entry, flagged
+    const { report } = await pruneCache(h.home, { dryRun: true, workspace: null, registryOff: true });
+    expect([...report.removed, ...report.kept].map((r) => r.path)).toEqual([`forges/${UNVOUCHED}`]);
+    expectClean(report);
+    const d = await runDoctor(doctorOpts(h.home, { registryOff: true }));
+    expectClean(d);
+  });
+
+  it("no snapshot: doctor's unreadable-cache line and cache prune's failed snapshot print the label, a flagged key included", async () => {
+    const h = await recordedHome(); // flagged key, named by its rows
+    const inside = path.join(h.home, "forges", h.oldKey, "fetched");
+    const failing = async () => {
+      throw Object.assign(new Error(`EACCES: permission denied, open '${inside}'`), { code: "EACCES" });
+    };
+    const d = await runDoctor(doctorOpts(h.home, { inspectCache: failing } as Partial<DoctorOptions>));
+    const line = d.checks.find((c) => c.id === "cache")!.message;
+    expect(line).toBe(`cannot read the Forge cache: EACCES: permission denied, open '${path.join(path.resolve(h.home), "forges", UNVOUCHED, "fetched")}'`);
+    expectClean(d);
+    const message = await pruneCache(h.home, { dryRun: true, workspace: null, registryOff: false, inspectCache: failing } as Parameters<typeof pruneCache>[1]).then(
+      () => "",
+      (e: unknown) => (e as Error).message,
+    );
+    expect(message).toContain(UNVOUCHED);
+    expect(message).not.toContain(LABEL);
+    expectClean(message);
   });
 });
