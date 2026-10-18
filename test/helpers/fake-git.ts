@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { tmpDir } from "./forge.js";
+import { removeWithRetry } from "./fs.js";
 
 // Spec 37 §10: no test runs a real `git clone` and none reaches the network. The CLI's clone step is exercised with
 // a fake git: a copy of node named `git` (`git.exe` on win32) alone on an absolute PATH entry — the trick
@@ -54,7 +55,7 @@ export async function fakeGit(): Promise<FakeGit> {
     log,
     // NODE_OPTIONS reads `\` inside double quotes as an escape: on win32 the hook's path is given with `/`, which node accepts.
     env: (extra = {}) => ({ PATH: dir, Path: dir, NODE_OPTIONS: `--require "${hook.replace(/\\/g, "/")}"`, CRAFTAR_TEST_CLONE_LOG: log, ...extra }),
-    cleanup: () => fs.rm(dir, { recursive: true, force: true }),
+    cleanup: () => removeWithRetry(dir),
   };
 }
 
