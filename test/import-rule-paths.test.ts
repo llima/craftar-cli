@@ -198,7 +198,8 @@ describe("import --from claude-code — paths: frontmatter (spec 35)", () => {
     // Plan and apply
     const ws = await loadWorkspace(t.ws("api"));
     const p = await plan(ws);
-    const st = await status(ws, p);
+    const lock = await readLock(t.ws("api"));
+    const st = await status(ws, p, lock);
 
     // .claude/rules/backend.md should be adopt or unchanged
     const backendEntry = st.find((e) => e.path === ".claude/rules/backend.md");
@@ -225,9 +226,10 @@ describe("import --from claude-code — paths: frontmatter (spec 35)", () => {
     // Second plan + status should show everything unchanged
     const ws2 = await loadWorkspace(t.ws("api"));
     const p2 = await plan(ws2);
-    const st2 = await status(ws2, p2);
+    const lock2 = await readLock(t.ws("api"));
+    const st2 = await status(ws2, p2, lock2);
     for (const e of st2) {
-      expect(e.state).toBe("unchanged");
+      expect(e.state, `${e.path} should be unchanged`).toBe("unchanged");
     }
   });
 });
