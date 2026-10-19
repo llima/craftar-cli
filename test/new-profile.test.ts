@@ -201,3 +201,16 @@ describe("newProfile — recipe names YAML would misread (review round 2)", () =
     expect(newProfile(forge, { name: "initech", like: "acme" }).text).toContain("  - base\n  - stack-node\n");
   });
 });
+
+describe("newProfile — a profile name YAML would misread (review round 3)", () => {
+  it("--new-profile 123, null, true, 1e3: the name line is quoted and reads back as that string", async () => {
+    const forge = await forgeOf(BASE_SPEC);
+    for (const name of ["123", "null", "true", "1e3"]) {
+      const r = newProfile(forge, { name });
+      const back = YAML.parse(r.text);
+      expect(back.name, name).toBe(name);
+      expect(r.profile.name).toBe(name);
+    }
+    expect(newProfile(forge, { name: "initech" }).text.startsWith("name: initech\n")).toBe(true);
+  });
+});

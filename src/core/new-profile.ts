@@ -171,7 +171,7 @@ export function newProfile(forge: Forge, o: NewProfileOptions): NewProfileResult
 
   // Generate text: name: <name>\n + recipes block + targets block
   const lines: string[] = [];
-  lines.push(`name: ${name}`);
+  lines.push(`name: ${yamlSafe(name)}`);
   if (finalRecipes.length === 0) {
     lines.push("recipes: []");
   } else {
