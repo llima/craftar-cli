@@ -117,4 +117,20 @@ describe("assertNotCacheTree", () => {
     );
     expect(message).not.toContain(link);
   });
+
+  it("a directory that does not exist yet, under <home>/forges, is refused", async () => {
+    const home = await fs.realpath(await tmpDir("craftar-checktree-"));
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    await fs.mkdir(path.join(home, "forges"), { recursive: true });
+    await expect(assertNotCacheTree(path.join(home, "forges", "k", "new"), home)).rejects.toThrow(
+      `${path.join(home, "forges", "(a cache entry name — not shown)", "new")} is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory`,
+    );
+  });
+
+  it("a directory that does not exist yet, outside the cache, passes", async () => {
+    const home = await fs.realpath(await tmpDir("craftar-checktree-"));
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    await fs.mkdir(path.join(home, "forges"), { recursive: true });
+    await expect(assertNotCacheTree(path.join(home, "elsewhere", "new"), home)).resolves.toBeUndefined();
+  });
 });

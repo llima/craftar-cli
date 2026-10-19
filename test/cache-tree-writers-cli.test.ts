@@ -102,14 +102,71 @@ describe("cache tree as Forge — gated writers", () => {
     expect(await snapshot(ctx.tree)).toEqual(before);
   });
 
-  it("drift promote --forge <cache tree> in a URL workspace is D2 already (pin)", async () => {
+  it("drift promote --forge <cache tree> in a URL workspace is refused as a cache tree, before D2", async () => {
     const ctx = await cacheTree();
     await fs.writeFile(path.join(ctx.w0, ".claude/rules/workflow.md"), "hand edit\n");
     const before = await snapshot(ctx.tree);
     const r = ctx.run(["drift", "promote", ".claude/rules/workflow.md", "--workspace", ctx.w0, "--forge", ctx.tree]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toBe(`error: --forge ${ctx.tree} is not a clone of this workspace's Forge — none of its git remotes matches\n`);
+    expect(r.stderr).toMatch(TAIL);
+    expect(r.stderr).not.toContain(ctx.entry);
+    expect(r.stderr).toContain("(a cache entry name — not shown)");
     expect(await snapshot(ctx.tree)).toEqual(before);
+  });
+
+  it("drift promote in a workspace whose forge: is a cache tree, with --forge an ordinary directory, is refused as a cache tree, not D2", async () => {
+    const ctx = await cacheTree();
+    const ws = path.join(ctx.parent, "ws-initech-forge");
+    const relForge = path.relative(ws, ctx.tree).replace(/\\/g, "/");
+    await fs.mkdir(ws, { recursive: true });
+    await fs.writeFile(path.join(ws, "craftar.yaml"), `forge: ${relForge}\nprofile: initech\n`);
+    const syncR = ctx.run(["sync", "--workspace", ws]);
+    expect(syncR.code, syncR.stderr).toBe(0);
+    await fs.writeFile(path.join(ws, ".claude/rules/workflow.md"), "hand edit\n");
+    const before = await snapshot(ctx.tree);
+    const r = ctx.run(["drift", "promote", ".claude/rules/workflow.md", "--workspace", ws, "--forge", ctx.rf.src]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(TAIL);
+    expect(r.stderr).not.toContain(ctx.entry);
+    expect(await snapshot(ctx.tree)).toEqual(before);
+  });
+
+  it("craftar import --forge <cache tree> is refused, the tree untouched", async () => {
+    const ctx = await cacheTree();
+    const src = path.join(ctx.parent, "src-ws");
+    await fs.mkdir(path.join(src, ".claude/rules"), { recursive: true });
+    await fs.writeFile(path.join(src, ".claude/rules/hello.md"), "# Hello\n");
+    const before = await snapshot(ctx.tree);
+    const r = ctx.run(["import", "--from", "claude-code", "--forge", ctx.tree, "--profile", "globex", "--workspace", src]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toMatch(TAIL);
+    expect(r.stderr).not.toContain(ctx.entry);
+    expect(await snapshot(ctx.tree)).toEqual(before);
+  });
+
+  it("craftar import --forge <a new directory under the cache> is refused, nothing created", async () => {
+    const ctx = await cacheTree();
+    const src = path.join(ctx.parent, "src-ws2");
+    await fs.mkdir(path.join(src, ".claude/rules"), { recursive: true });
+    await fs.writeFile(path.join(src, ".claude/rules/hello.md"), "# Hello\n");
+    const target = path.join(ctx.home, "forges", "new-forge");
+    const r = ctx.run(["import", "--from", "claude-code", "--forge", target, "--profile", "globex", "--workspace", src]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(TAIL);
+    await expect(fs.lstat(target)).rejects.toThrow();
+    expect(r.stderr).toContain(path.join(ctx.home, "forges", "(a cache entry name — not shown)"));
+  });
+
+  it("craftar import --forge <an ordinary new directory> still imports (pin)", async () => {
+    const ctx = await cacheTree();
+    const src = path.join(ctx.parent, "src-ws3");
+    await fs.mkdir(path.join(src, ".claude/rules"), { recursive: true });
+    await fs.writeFile(path.join(src, ".claude/rules/hello.md"), "# Hello\n");
+    const target = path.join(ctx.parent, "fresh-forge");
+    const r = ctx.run(["import", "--from", "claude-code", "--forge", target, "--profile", "globex", "--workspace", src]);
+    expect(r.code, r.stderr).toBe(0);
+    await expect(fs.lstat(path.join(target, "ingredients/rules/hello"))).resolves.toBeTruthy();
   });
 
   it("forge unify --save-plan with a cache tree still writes the plan and nothing in the tree (pin)", async () => {
