@@ -145,4 +145,19 @@ describe("assertNotCacheTree", () => {
     expect(e!.message).toBe(`${path.join(home, "forges", "(a cache entry name — not shown)", "trees", "c")} cannot be inspected (EACCES)`);
     expect(e!.message).not.toContain("secretkey");
   });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable component under a home reached through a link whose real path ends with it is labelled once", async () => {
+    const t = await fs.realpath(await tmpDir("craftar-checktree-"));
+    const realHome = path.join(t, t.slice(1), "h");          // <t>/<t without leading />/h — ends with "<t>/h"
+    const home = path.join(t, "h");                           // a link to realHome
+    await fs.mkdir(realHome, { recursive: true });
+    await fs.symlink(realHome, home);
+    const entry = path.join(realHome, "forges", "secretkey-0123456789ab");
+    await fs.mkdir(path.join(entry, "trees", "c"), { recursive: true });
+    await fs.chmod(entry, 0o000);
+    cleanups.push(async () => { await fs.chmod(entry, 0o755); await fs.rm(t, { recursive: true, force: true }); });
+    const e = await assertNotCacheTree(path.join(entry, "trees", "c"), home).then(() => null, (x: Error) => x);
+    expect(e!.message).toBe(`${path.join(realHome, "forges", "(a cache entry name — not shown)", "trees", "c")} cannot be inspected (EACCES)`);
+    expect(e!.message).not.toContain("secretkey");
+  });
 });

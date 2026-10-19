@@ -549,15 +549,22 @@ export async function cacheDir(home: string): Promise<"absent" | "present"> {
  * (either separator after `forges`) up to the next `/`, `\`, white space or quote replaced by
  * `UNVOUCHED_HIDDEN`. The no-snapshot rule, spec 39 §5.1 — vouched or not. Any first segment under
  * `forges/` is labelled, not only an entry's name.
+ *
+ * When `home` is an array of homes, **one** regex matches them all in one pass, so a label inserted
+ * for one home is never matched by another — the fix for homes where one is a string suffix of the
+ * other (e.g. `/home` as a link to `/var/home`).
  */
-export function hideCacheSegment(text: string, home: string): string {
-  // Strip trailing separators so the root `/` becomes empty and the pattern is `[/\\]forges[/\\]`
-  const resolved = path.resolve(home).replace(/[/\\]+$/, "");
-  // Escape special regex characters in the home path
-  const escaped = resolved.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // Match: <home>/forges/ or <home>\forges\ followed by the segment (up to / \ space or quote)
+export function hideCacheSegment(text: string, home: string | readonly string[]): string {
+  const homes = Array.isArray(home) ? home : [home];
+  // Resolve, strip trailing separators, escape, de-duplicate and sort longest first (so a longer
+  // prefix is tried before a shorter one that is a suffix of it).
+  const escaped = [...new Set(homes.map((h) => path.resolve(h).replace(/[/\\]+$/, "")))]
+    .sort((a, b) => b.length - a.length)
+    .map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (escaped.length === 0) return text;
+  // Match: <any home>/forges/ or <any home>\forges\ followed by the segment (up to / \ space or quote)
   // Capture the prefix (including the separator after forges) in group 1
-  const pattern = new RegExp(`(${escaped}[/\\\\]forges[/\\\\])([^/\\\\\\s"']+)`, "g");
+  const pattern = new RegExp(`((?:${escaped.join("|")})[/\\\\]forges[/\\\\])([^/\\\\\\s"']+)`, "g");
   // Use a function replacement to avoid $&, $1, etc. in the home path being interpreted
   return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
 }
@@ -597,12 +604,11 @@ export async function assertNotCacheTree(dir: string, home: string): Promise<voi
     try {
       rootReal = await realpathOfNearest(dir);
     } catch (e) {
-      // Fail closed: label the entry's name in the error and rethrow. One pass per distinct prefix
-      // (the home as given, and the real home when it differs), because a second pass over the
-      // same prefix would match inside the label.
-      let out = e instanceof Error ? e.message : String(e);
-      for (const prefix of new Set([path.resolve(home), path.dirname(forgesReal)])) out = hideCacheSegment(out, prefix);
-      throw new Error(out);
+      // Fail closed: label the entry's name in the error and rethrow. One pass over both prefixes
+      // (the home as given and the real home), since a second pass could match inside the label
+      // when one prefix ends with the other.
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(hideCacheSegment(msg, [home, path.dirname(forgesReal)]));
     }
     if (isUnderOrEqual(rootReal, forgesReal)) {
       const rel = path.relative(forgesReal, rootReal);

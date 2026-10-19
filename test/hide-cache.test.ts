@@ -99,6 +99,24 @@ describe("one pass over every key (spec 39, review round 2)", () => {
   });
 });
 
+describe("one pass over several homes never matches inside the label (spec 39, review round 3)", () => {
+  it.skipIf(process.platform === "win32")("array of homes: the second home never matches inside the label the first left", () => {
+    // When one home is a string suffix of the other (e.g. "/home" link to "/var/home"), the second
+    // pass would find `<prefix>/forges/` inside the label the first pass wrote and garble it.
+    expect(hideCacheSegment("/link/a/h/forges/KEY/trees/c x", ["/link/a/h", "/a/h"])).toBe(
+      "/link/a/h/forges/(a cache entry name — not shown)/trees/c x"
+    );
+    expect(hideCacheSegment("/link/a/h/forges/KEY/trees/c x", ["/a/h", "/link/a/h"])).toBe(
+      "/link/a/h/forges/(a cache entry name — not shown)/trees/c x"
+    );
+  });
+  it.skipIf(process.platform === "win32")("array of homes: both homes are labelled in one pass", () => {
+    expect(hideCacheSegment("/a/h/forges/K1 and /link/a/h/forges/K2", ["/a/h", "/link/a/h"])).toBe(
+      "/a/h/forges/(a cache entry name — not shown) and /link/a/h/forges/(a cache entry name — not shown)"
+    );
+  });
+});
+
 describe("overlapping keys are hidden as one range (spec 39, review round 3)", () => {
   const CRED = "github.com-u-tok-" + "abcdef012345";
   const DECOY = "removing-github";
