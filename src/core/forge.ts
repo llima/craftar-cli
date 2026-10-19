@@ -256,10 +256,10 @@ export async function listFiles(dir: string, rel = ""): Promise<string[]> {
 
 /* ---- the scratch copy a Forge proof runs on, and the link check its writes share (spec 30 `drift promote`, spec 29 `forge promote`) ---- */
 
-const SYMLINK_REFUSAL = (rel: string) =>
-  `${rel} is a symbolic link in the Forge — promote does not write through a link; replace it with the file and commit`;
-const SYMLINK_DIR_REFUSAL = (rel: string) =>
-  `${rel} is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit`;
+const SYMLINK_REFUSAL = (rel: string, command: string) =>
+  `${rel} is a symbolic link in the Forge — ${command} does not write through a link; replace it with the file and commit`;
+const SYMLINK_DIR_REFUSAL = (rel: string, command: string) =>
+  `${rel} is a symbolic link in the Forge — ${command} does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit`;
 const SYMLINK_OUT_OR_DANGLING = (rel: string) =>
   `${rel} is a symbolic link out of the Forge, or to nothing — promote cannot copy the Forge to prove its edit; fix or remove it`;
 const NON_REGULAR_FILE_REFUSAL = (rel: string) =>
@@ -312,7 +312,7 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string): P
           // A root directory link (ingredients, recipes, profiles) is refused: loadForge follows it
           // but the scratch would skip it, so the scratch would not load the same as the real Forge.
           if (rel === "" && ROOT_DIRS.has(ent.name)) {
-            throw new Error(SYMLINK_DIR_REFUSAL(ent.name));
+            throw new Error(SYMLINK_DIR_REFUSAL(ent.name, "promote"));
           }
           // Other directory links are skipped entirely — loadForge doesn't traverse them
           continue;
@@ -357,7 +357,7 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string): P
  * Refuse a write through a symbolic link: every path, and every ancestor between it and `forgeDir`, that exists must
  * not be one. A path that does not exist yet is fine — it will be created.
  */
-export async function assertNoLinkOnPath(forgeDir: string, paths: string[]): Promise<void> {
+export async function assertNoLinkOnPath(forgeDir: string, paths: string[], command = "promote"): Promise<void> {
   const checked = new Set<string>();
   for (const abs of paths) {
     // The path and every ancestor up to but not including forgeDir
@@ -371,9 +371,9 @@ export async function assertNoLinkOnPath(forgeDir: string, paths: string[]): Pro
           const rel = path.relative(forgeDir, current).split(path.sep).join("/");
           // The directory-specific message for a root directory (ingredients, recipes, profiles)
           if (ROOT_DIRS.has(rel)) {
-            throw new Error(SYMLINK_DIR_REFUSAL(rel));
+            throw new Error(SYMLINK_DIR_REFUSAL(rel, command));
           }
-          throw new Error(SYMLINK_REFUSAL(rel));
+          throw new Error(SYMLINK_REFUSAL(rel, command));
         }
       } catch (e) {
         // ENOENT means the path doesn't exist yet (it will be created) — that's fine

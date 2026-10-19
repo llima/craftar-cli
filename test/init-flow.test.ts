@@ -454,10 +454,12 @@ describe("askInit", () => {
       { home: s.home, registryOff: false, exists: existsSync }
     );
     expect(sc.asked).toEqual([QF, QF, QP1, QA, QT]);
+    // Spec 38 §4.3: a Forge directory that is not a git repo shows P6's text under the profile list
     expect(sc.said).toEqual([
       "a Forge is needed — a directory or a git URL",
       `Profiles in ${s.forge}:`,
       "  1) acme",
+      `cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`,
       "Recipes of acme: base → stack-api → front-a",
     ]);
     expect(result.kind).toBe("answered");
@@ -638,9 +640,11 @@ describe("askInit", () => {
       QA,
       QT,
     ]);
+    // Spec 38 §4.3: a URL Forge shows "a new profile needs a Forge directory" under the profile list
     expect(sc.said).toEqual([
       `Profiles in ${r.url}:`,
       "  1) acme",
+      "a new profile needs a Forge directory",
       "Recipes of acme: base → stack-api → front-a",
     ]);
     expect(sc.left()).toBe(0);
@@ -676,9 +680,11 @@ describe("askInit", () => {
       QA,
       QT,
     ]);
+    // Spec 38 §4.3: a URL Forge shows "a new profile needs a Forge directory" under the profile list
     expect(sc2.said).toEqual([
       `Profiles in ${r.url}:`,
       "  1) acme",
+      "a new profile needs a Forge directory",
       "Recipes of acme: base → stack-api → front-a",
     ]);
     expect(sc2.left()).toBe(0);
@@ -721,10 +727,12 @@ describe("askInit", () => {
     const sc = script([s.forge, "globex", "", ""]);
     await askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync });
     expect(sc.asked).toEqual([QF, QP, QA, QTk]);
+    // Spec 38 §4.3: a Forge directory that is not a git repo shows P6's text under the profile list
     expect(sc.said).toEqual([
       `Profiles in ${s.forge}:`,
       "  1) acme",
       "  2) globex  Globex — services",
+      `cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`,
       "Recipes of globex: base",
     ]);
     expect(sc.left()).toBe(0);
@@ -733,10 +741,12 @@ describe("askInit", () => {
     const sc2 = script([s.forge, "2", "", ""]);
     const result2 = await askInit(s.ws, given, local, sc2.io, { home: s.home, registryOff: false, exists: existsSync });
     expect(sc2.asked).toEqual([QF, QP, QA, QTk]);
+    // Spec 38 §4.3: a Forge directory that is not a git repo shows P6's text under the profile list
     expect(sc2.said).toEqual([
       `Profiles in ${s.forge}:`,
       "  1) acme",
       "  2) globex  Globex — services",
+      `cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`,
       "Recipes of globex: base",
     ]);
     expect(sc2.left()).toBe(0);
@@ -748,10 +758,12 @@ describe("askInit", () => {
     const sc3 = script([s.forge, "globex", "", ""]);
     const result3 = await askInit(s.ws, given, local, sc3.io, { home: s.home, registryOff: false, exists: existsSync });
     expect(sc3.asked).toEqual([QF, QP, QA, QTk]);
+    // Spec 38 §4.3: a Forge directory that is not a git repo shows P6's text under the profile list
     expect(sc3.said).toEqual([
       `Profiles in ${s.forge}:`,
       "  1) acme",
       "  2) globex  Globex — services",
+      `cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`,
       "Recipes of globex: base",
     ]);
     expect(sc3.left()).toBe(0);
@@ -763,10 +775,12 @@ describe("askInit", () => {
     const sc4 = script([s.forge, "", "nope", "acme", "", ""]);
     const result4 = await askInit(s.ws, given, local, sc4.io, { home: s.home, registryOff: false, exists: existsSync });
     expect(sc4.asked).toEqual([QF, QP, QP, QP, QA, QT]);
+    // Spec 38 §4.3: a Forge directory that is not a git repo shows P6's text under the profile list
     expect(sc4.said).toEqual([
       `Profiles in ${s.forge}:`,
       "  1) acme",
       "  2) globex  Globex — services",
+      `cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`,
       "a profile is needed — a name or a number from the list",
       'profile "nope" not found in Forge (acme, globex)',
       "Recipes of acme: base → stack-api → front-a",
@@ -780,10 +794,12 @@ describe("askInit", () => {
     const sc5 = script([s.forge, "globex", "", ""]);
     const result5 = await askInit(s.ws, given, local, sc5.io, { home: s.home, registryOff: false, exists: existsSync });
     expect(sc5.asked).toEqual([QF, QP, QA, QTk]);
+    // Spec 38 §4.3: a Forge directory that is not a git repo shows P6's text under the profile list
     expect(sc5.said).toEqual([
       `Profiles in ${s.forge}:`,
       "  1) acme",
       "  2) globex  Globex — services",
+      `cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`,
       "Recipes of globex: base",
     ]);
     expect(sc5.left()).toBe(0);
@@ -805,10 +821,12 @@ describe("askInit", () => {
     const sc7 = script([s2.forge, "2", "", ""]);
     const result7 = await askInit(s2.ws, given, local, sc7.io, { home: s2.home, registryOff: false, exists: existsSync });
     expect(sc7.asked).toEqual([QF, QP, QA, QT]);
+    // Spec 38 §4.3: a Forge directory that is not a git repo shows P6's text under the profile list
     expect(sc7.said).toEqual([
       `Profiles in ${s2.forge}:`,
       "  1) 2",
       "  2) acme",
+      `cannot create a profile in ${s2.forge}: it is not a git repository with a commit — git is how a Forge write is undone`,
       "Recipes of 2: base → stack-api → front-a",
     ]);
     expect(sc7.left()).toBe(0);
@@ -820,10 +838,12 @@ describe("askInit", () => {
     const sc8 = script([s2.forge, "1", "", ""]);
     const result8 = await askInit(s2.ws, given, local, sc8.io, { home: s2.home, registryOff: false, exists: existsSync });
     expect(sc8.asked).toEqual([QF, QP, QA, QT]);
+    // Spec 38 §4.3: a Forge directory that is not a git repo shows P6's text under the profile list
     expect(sc8.said).toEqual([
       `Profiles in ${s2.forge}:`,
       "  1) 2",
       "  2) acme",
+      `cannot create a profile in ${s2.forge}: it is not a git repository with a commit — git is how a Forge write is undone`,
       "Recipes of 2: base → stack-api → front-a",
     ]);
     expect(sc8.left()).toBe(0);
@@ -841,11 +861,15 @@ describe("askInit", () => {
     const s = await askSetup(specNoProfile);
     const given: InitGiven = { addRecipes: [], removeRecipes: [], replace: false };
     const local = { doc: null, keys: [] as LocalKey[] };
-    const sc = script([s.forge]);
-    await expect(
-      askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync })
-    ).rejects.toThrow("the Forge has no profile — add one under profiles/, then re-run init");
-    expect(sc.asked).toEqual([QF]);
+    // Spec 38 §4.3: a Forge directory with no profile that fails P6, Forge asked:
+    // say P6's text ONCE and ask the Forge again. With no --forge given, this continues.
+    // Provide the bad Forge once, then null to cancel when asked again.
+    const sc = script([s.forge, null as any]);
+    const result = await askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync });
+    expect(result.kind).toBe("cancelled");
+    expect(sc.said).toContain(`cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`);
+    // Forge was asked once, P6 said, Forge asked again with default, user cancelled
+    expect(sc.asked.filter(q => q.startsWith("Forge")).length).toBe(2);
 
     // given.profile = "nope" - use a Forge WITH a profile (SPEC_DESC) to get proper error
     const s2 = await askSetup(SPEC_DESC);
@@ -1030,9 +1054,11 @@ describe("askInit", () => {
     const sc = script([s.forge, "", "yes", "", "base", ""]);
     await askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync });
     expect(sc.asked).toEqual([QF, QP1, QA, "Remove [none]: ", "Add [none]: ", QT]);
+    // Spec 38 §4.3: a Forge directory that is not a git repo shows P6's text under the profile list
     expect(sc.said).toEqual([
       `Profiles in ${s.forge}:`,
       "  1) acme",
+      `cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`,
       "Recipes of acme: base → stack-api → front-a",
       `Recipes in ${s.forge}:`,
       "  1) base · in use",
@@ -1159,9 +1185,11 @@ describe("askInit", () => {
     const sc = script([s.forge, "", ""]);
     await askInit(s.ws, given, { doc: { targets: ["kiro"] }, keys: ["targets"] }, sc.io, { home: s.home, registryOff: false, exists: existsSync });
     expect(sc.asked).toEqual([QF, QP1, QA]);
+    // Spec 38 §4.3: a Forge directory that is not a git repo shows P6's text under the profile list
     expect(sc.said).toEqual([
       `Profiles in ${s.forge}:`,
       "  1) acme",
+      `cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`,
       "Recipes of acme: base → stack-api → front-a",
       "Targets: kiro (from craftar.local.yaml)",
     ]);
@@ -1171,9 +1199,11 @@ describe("askInit", () => {
     const sc2 = script([s.forge, "", ""]);
     await askInit(s.ws, given, { doc: { recipes: { add: ["extra"] } }, keys: ["recipes"] }, sc2.io, { home: s.home, registryOff: false, exists: existsSync });
     expect(sc2.asked).toEqual([QF, QP1, QT]);
+    // Spec 38 §4.3: a Forge directory that is not a git repo shows P6's text under the profile list
     expect(sc2.said).toEqual([
       `Profiles in ${s.forge}:`,
       "  1) acme",
+      `cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`,
       "Recipes: base → stack-api → front-a → extra (from craftar.local.yaml)",
     ]);
     expect(sc2.left()).toBe(0);
@@ -1183,10 +1213,12 @@ describe("askInit", () => {
     const sc3 = script([r.url, "", "", ""]);
     const result3 = await askInit(s.ws, given, { doc: { ref: "main" }, keys: ["ref"] }, sc3.io, { home: s.home, registryOff: false, exists: existsSync });
     expect(sc3.asked).toEqual([QF, QP1, QA, QT]);
+    // Spec 38 §4.3: a URL Forge shows "a new profile needs a Forge directory" under the profile list
     expect(sc3.said).toEqual([
       "Ref: main (from craftar.local.yaml)",
       `Profiles in ${r.url}:`,
       "  1) acme",
+      "a new profile needs a Forge directory",
       "Recipes of acme: base → stack-api → front-a",
     ]);
     expect(sc3.left()).toBe(0);
@@ -1201,9 +1233,11 @@ describe("askInit", () => {
     const sc4 = script([s.forge, "", "", ""]);
     await askInit(s.ws, given, { doc: { ref: "v1" }, keys: ["ref"] }, sc4.io, { home: s.home, registryOff: false, exists: existsSync });
     expect(sc4.asked).toEqual([QF, QP1, QA, QT]);
+    // Spec 38 §4.3: a Forge directory that is not a git repo shows P6's text under the profile list
     expect(sc4.said).toEqual([
       `Profiles in ${s.forge}:`,
       "  1) acme",
+      `cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`,
       "Recipes of acme: base → stack-api → front-a",
     ]);
     expect(sc4.left()).toBe(0);
@@ -1500,10 +1534,12 @@ describe("askInit — answers that are not an item (review round 1)", () => {
       const sc = script([s.forge, wrong, "acme", "", ""]);
       const result = await askInit(s.ws, given(), local, sc.io, opts(s.home));
       expect(sc.asked).toEqual([QF, QP, QP, QA, QT]);
+      // Spec 38 §4.3: a Forge directory that is not a git repo shows P6's text under the profile list
       expect(sc.said).toEqual([
         `Profiles in ${s.forge}:`,
         "  1) acme",
         "  2) globex  Globex — services",
+        `cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`,
         `profile "${wrong.trim()}" not found in Forge (acme, globex)`,
         "Recipes of acme: base → stack-api → front-a",
       ]);
@@ -1531,9 +1567,11 @@ describe("askInit — answers that are not an item (review round 1)", () => {
     // The list: 1) base · in use, 2) api · in use, 3) 2 — so "2" as a position would be api, already in use.
     const sc = script([s.forge, "", "yes", "", "2", ""]);
     const result = await askInit(s.ws, given(), local, sc.io, opts(s.home));
+    // Spec 38 §4.3: a Forge directory that is not a git repo shows P6's text under the profile list
     expect(sc.said).toEqual([
       `Profiles in ${s.forge}:`,
       "  1) acme",
+      `cannot create a profile in ${s.forge}: it is not a git repository with a commit — git is how a Forge write is undone`,
       "Recipes of acme: base → api",
       `Recipes in ${s.forge}:`,
       "  1) base · in use",

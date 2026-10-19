@@ -1,9 +1,11 @@
 import { existsSync } from "node:fs";
-import { TARGETS, type Registry, type RegistryEntry, type WorkspaceConfig } from "../schema/index.js";
+import { ProfileSchema, TARGETS, type Registry, type RegistryEntry, type WorkspaceConfig } from "../schema/index.js";
 import { planClone } from "./clone.js";
 import { countStates } from "./impact.js";
 import { resolveHome } from "./home-lock.js";
 import { checkInitFlags, checkLocalKeys, forgeSource, initLine, type InitInput, type InitPlan } from "./init.js";
+import { newProfile, ownedBy, ownedRecipeRefusal, profileName, withProfile } from "./new-profile.js";
+import { newProfileGate } from "./new-profile-gate.js";
 import { planRecipeEdit, slotHeld } from "./recipe-edit.js";
 import { readRegistry } from "./registry.js";
 import { classifyForge, credentialFault, CREDENTIAL_HIDDEN, refHoldsCredentials } from "./remote.js";
@@ -171,7 +173,17 @@ export async function confirmInit(
   io: InitIo,
   opts: { sync: boolean; clone?: number; cloneRefused?: boolean },
 ): Promise<"confirmed" | "cancelled"> {
-  io.say(`craftar init — about to write craftar.yaml in ${root}`);
+  // Spec 38 §4.3: blockNote first when there is one
+  if (init.newProfile?.blockNote) {
+    io.say(`  note ${init.newProfile.blockNote}`);
+  }
+
+  // Spec 38 §4.3: the first line changes with newProfile
+  if (init.newProfile) {
+    io.say(`craftar init — about to create profile ${init.ws.config.profile} in ${init.ws.forge.root} and write craftar.yaml in ${root}`);
+  } else {
+    io.say(`craftar init — about to write craftar.yaml in ${root}`);
+  }
   io.say(`  ${initLine(init)}`);
 
   const unset = unsetDeclared(init.plan);
@@ -190,10 +202,19 @@ export async function confirmInit(
     io.say(NOT_CLONED_REFUSED);
   }
 
-  // Build the question
+  // Build the question: spec 38 §4.3 — with newProfile, the question names both writes
   let question: string;
   const clone = opts.clone ?? 0;
-  if (unset.length > 0) {
+  const profileName = init.newProfile ? init.ws.config.profile : null;
+
+  if (init.newProfile) {
+    // New profile: different question forms
+    if (unset.length > 0 || !opts.sync) {
+      question = `Create profiles/${profileName}/profile.yaml (not committed) and write craftar.yaml [yes]: `;
+    } else {
+      question = `Create profiles/${profileName}/profile.yaml (not committed), write craftar.yaml and sync [yes]: `;
+    }
+  } else if (unset.length > 0) {
     // Sync refused → offer only craftar.yaml
     question = "Write craftar.yaml [yes]: ";
   } else if (clone > 0) {
@@ -274,6 +295,10 @@ export interface InitGiven {
   removeRecipes: string[];
   replace: boolean;
   clone?: boolean;
+  /** The new profile's name (spec 38 §4.3). */
+  newProfile?: string;
+  /** The template profile (spec 38 §4.3). */
+  like?: string;
 }
 
 export type AskResult =
@@ -377,6 +402,12 @@ export async function askInit(
           continue forgeLoop;
         }
       }
+
+      // P4 check: with --new-profile typed and Forge asked, a URL answer is refused — say P4 and ask again
+      if (given.newProfile !== undefined && classifyForge(forgeValue) === "url") {
+        io.say("a new profile is written into a Forge directory — clone the Forge, pass that directory as --forge, then commit and push the profile");
+        continue forgeLoop;
+      }
       forgeDefault = forgeValue;
     }
 
@@ -442,20 +473,48 @@ export async function askInit(
         throw e;
       }
     }
+
+    // P5/P6 check: with --new-profile typed and Forge asked, check if the Forge can take a new profile
+    if (given.newProfile !== undefined && forgeWasAsked) {
+      try {
+        await newProfileGate(loaded.forge, home);
+      } catch (e) {
+        io.say((e as Error).message);
+        forgeDefault = forgeValue;
+        refDefault = answeredRef ?? refDefault;
+        continue forgeLoop;
+      }
+    }
+
+    // P5/P6 check: with no profile given and no profiles in the Forge, we'll be forced to create a new profile
+    // If the Forge was asked and it can't take a new profile, say the error and ask again
+    if (given.profile === undefined && given.newProfile === undefined && loaded.forge.profiles.size === 0 && forgeWasAsked) {
+      if (classifyForge(forgeValue) !== "url") {
+        try {
+          await newProfileGate(loaded.forge, home);
+        } catch (e) {
+          io.say((e as Error).message);
+          forgeDefault = forgeValue;
+          refDefault = answeredRef ?? refDefault;
+          continue forgeLoop;
+        }
+      }
+    }
+
     break forgeLoop;
   }
 
   const forge = loaded!.forge;
 
-  if (forge.profiles.size === 0 && given.profile === undefined) {
-    throw new Error("the Forge has no profile — add one under profiles/, then re-run init");
-  }
-  if (given.profile !== undefined) {
-    if (!forge.profiles.has(given.profile)) {
-      throw new Error(profileNotFoundMessage(given.profile, [...forge.profiles.keys()]));
-    }
-    answeredProfile = given.profile;
-  } else {
+  // Track whether we're in the new-profile flow
+  let isNewProfile = false;
+  let newProfileName: string | undefined;
+  let newProfileLike: string | undefined;
+  let profileListShown = false;
+
+  // Helper to show the profile list
+  const showProfileList = () => {
+    if (profileListShown) return;
     const profiles = [...forge.profiles.values()].sort((a, b) => a.name.localeCompare(b.name));
     io.say(`Profiles in ${answeredForge}:`);
     const maxLen = Math.max(...profiles.map((p) => p.name.length));
@@ -468,6 +527,66 @@ export async function askInit(
         io.say(`  ${i + 1}) ${p.name}`);
       }
     }
+    profileListShown = true;
+  };
+
+  // Check if the new profile entry should be shown: Forge is a directory that passes P5/P6
+  let canOfferNewProfile = false;
+  let newProfileGateError: string | null = null;
+  if (classifyForge(answeredForge!) !== "url") {
+    try {
+      await newProfileGate(forge, home);
+      canOfferNewProfile = true;
+    } catch (e) {
+      newProfileGateError = (e as Error).message;
+    }
+  }
+
+  // Handle given.newProfile: validate with P3 and P7/P8 (typed value is not re-asked)
+  if (given.newProfile !== undefined) {
+    profileName(given.newProfile); // P3: throws on failure
+    // P9 up front: a typed --like the Forge does not have is refused before any question
+    if (given.like !== undefined && !forge.profiles.has(given.like)) {
+      throw new Error("--like: " + profileNotFoundMessage(given.like, [...forge.profiles.keys()]));
+    }
+    await newProfileGate(forge, home, given.newProfile); // P7/P8: throws on failure
+    isNewProfile = true;
+    newProfileName = given.newProfile;
+    newProfileLike = given.like;
+    answeredProfile = given.newProfile;
+  } else if (given.profile !== undefined) {
+    if (!forge.profiles.has(given.profile)) {
+      throw new Error(profileNotFoundMessage(given.profile, [...forge.profiles.keys()]));
+    }
+    answeredProfile = given.profile;
+  } else if (forge.profiles.size === 0) {
+    // Spec 38 §4.3: A Forge directory with no profile goes straight to the new-profile questions
+    // (A URL Forge with no profile keeps today's error)
+    if (classifyForge(answeredForge!) === "url") {
+      throw new Error("the Forge has no profile — add one under profiles/, then re-run init");
+    }
+    // For directory Forge with no profile: check if it can take a new profile
+    if (!canOfferNewProfile) {
+      throw new Error(newProfileGateError!);
+    }
+    io.say("the Forge has no profile yet — creating the first one");
+    isNewProfile = true;
+  } else {
+    // Show the profile list with the new profile entry if applicable
+    const profiles = [...forge.profiles.values()].sort((a, b) => a.name.localeCompare(b.name));
+    showProfileList();
+    
+    // Show the 0) a new profile entry ONLY when the Forge can take a new profile
+    // Per spec 38 §4.3: show lines explaining why the entry isn't available
+    if (canOfferNewProfile) {
+      io.say("  0) a new profile");
+    } else if (classifyForge(answeredForge!) === "url") {
+      io.say("a new profile needs a Forge directory");
+    } else if (newProfileGateError) {
+      // Forge directory that fails P5/P6: show the error as the line under the list
+      io.say(newProfileGateError);
+    }
+
     const defProfile = profiles.length === 1 ? profiles[0].name : null;
     const profileQ = defProfile !== null ? `Profile [${defProfile}]: ` : "Profile: ";
     profileLoop: for (;;) {
@@ -482,15 +601,349 @@ export async function askInit(
         answeredProfile = defProfile;
         break profileLoop;
       }
+      // pickItem: names first, then (only when the entry is shown) "0" for new profile, then numbers
       const picked = pickItem(profiles.map((p) => p.name), trimmed);
       if (picked !== null) {
         answeredProfile = picked;
+        break profileLoop;
+      }
+      // Check for "0" to start new-profile questions (only when the entry is shown)
+      if (canOfferNewProfile && trimmed === "0") {
+        isNewProfile = true;
         break profileLoop;
       }
       io.say(profileNotFoundMessage(trimmed, [...forge.profiles.keys()]));
     }
   }
 
+  // New-profile questions (§4.3)
+  if (isNewProfile) {
+    // Name question (skipped when given.newProfile was typed)
+    if (newProfileName === undefined) {
+      nameLoop: for (;;) {
+        const answer = await io.ask("New profile's name: ");
+        if (answer === null) return { kind: "cancelled" };
+        const trimmed = answer.trim();
+        if (trimmed === "") {
+          io.say('a name is needed — lowercase letters and digits, in groups joined by one "-"');
+          continue nameLoop;
+        }
+        try {
+          profileName(trimmed); // P3
+          await newProfileGate(forge, home, trimmed); // P7, P8
+          newProfileName = trimmed;
+          break nameLoop;
+        } catch (e) {
+          io.say((e as Error).message);
+          continue nameLoop;
+        }
+      }
+    }
+    answeredProfile = newProfileName;
+
+    // Template question: "Start from an existing profile [none]:" — only when the Forge has profiles
+    // and when given.like was not provided
+    if (newProfileLike === undefined && forge.profiles.size > 0) {
+      // Print the profile list if it wasn't printed yet (e.g. --new-profile was typed, --forge asked)
+      if (!profileListShown) {
+        showProfileList();
+      }
+      
+      templateLoop: for (;;) {
+        const answer = await io.ask("Start from an existing profile [none]: ");
+        if (answer === null) return { kind: "cancelled" };
+        const trimmed = answer.trim();
+        if (trimmed === "" || trimmed === "0") {
+          // Enter or 0 → none
+          break templateLoop;
+        }
+        const profiles = [...forge.profiles.values()].sort((a, b) => a.name.localeCompare(b.name));
+        const picked = pickItem(profiles.map((p) => p.name), trimmed);
+        if (picked !== null) {
+          newProfileLike = picked;
+          break templateLoop;
+        }
+        // Unknown → say "--like: " + profileNotFoundMessage
+        io.say("--like: " + profileNotFoundMessage(trimmed, [...forge.profiles.keys()]));
+        continue templateLoop;
+      }
+    }
+
+    // Recipes question for new profile
+    // With a template: show "Recipes of <name> (from <like>): <chain>" then Adjust flow
+    // Without a template: show recipes list and ask "Add [none]:" directly
+    let finalAddRecipes: string[] = [];
+    let finalRemoveRecipes: string[] = [];
+    let finalReplace = false;
+
+    // Typed flags answer their questions (spec 38 §4.2, §4.3)
+    const recipesFlagged = given.addRecipes.length > 0 || given.removeRecipes.length > 0;
+    if (recipesFlagged) {
+      // Use the flags directly, skip all recipe questions
+      finalAddRecipes = given.addRecipes;
+      finalRemoveRecipes = given.removeRecipes;
+      finalReplace = given.replace;
+    } else if (local.keys.includes("recipes")) {
+      // local.keys includes recipes and no recipe flag typed: no recipes question; say the chain from the draft resolved with local recipes
+      const templateRecipes = newProfileLike ? forge.profiles.get(newProfileLike)!.recipes : [];
+      const draftProfile = ProfileSchema.parse({ name: newProfileName!, recipes: templateRecipes, targets: [] });
+      const draftCopy = withProfile(forge, draftProfile);
+      const recipeConfig = { ...localConfig!, profile: newProfileName! };
+      const resolution = resolve(draftCopy, recipeConfig);
+      io.say(`Recipes: ${resolution.recipes.join(" → ")} (from craftar.local.yaml)`);
+    } else {
+      // Track whether we should start with Remove (after a P10 error)
+      let startWithRemove = false;
+
+      recipeLoop: for (;;) {
+        // Compute the draft profile in a copy of the Forge for the recipes line
+        const template = newProfileLike ? forge.profiles.get(newProfileLike) : undefined;
+        const draftRecipes = template?.recipes ?? [];
+        
+        if (template && !startWithRemove) {
+          // With a template: show the chain resolved from the draft profile
+          const draft = ProfileSchema.parse({ name: newProfileName!, recipes: draftRecipes, targets: template.targets });
+          const copy = withProfile(forge, draft);
+          // Use mergeWorkspaceConfig to get a valid config with overrides
+          const config = mergeWorkspaceConfig(
+            { forge: forgeSource(root, answeredForge!), profile: newProfileName! },
+            null
+          ).config;
+          const resolution = resolve(copy, config);
+          io.say(`Recipes of ${newProfileName} (from ${newProfileLike}): ${resolution.recipes.join(" → ")}`);
+          
+          // Adjust the recipes [no]:
+          const adjustAns = await io.ask("Adjust the recipes [no]: ");
+          if (adjustAns === null) return { kind: "cancelled" };
+          const yn = yesNo(adjustAns);
+          if (adjustAns.trim() !== "" && yn === null) {
+            io.say("answer yes or no");
+            continue recipeLoop;
+          }
+          if (yn !== true) {
+            // No adjustment: check P10 on the template's recipes before accepting, using ownedBy
+            const templateRecipes = template.recipes;
+            for (const r of templateRecipes) {
+              const owner = ownedBy(forge, r);
+              if (owner !== null) {
+                io.say(ownedRecipeRefusal(r, owner));
+                startWithRemove = true;
+                continue recipeLoop;
+              }
+            }
+            // Success: use template's recipes as-is
+            break recipeLoop;
+          }
+        }
+
+        // Show the Forge's recipes list
+        io.say(`Recipes in ${answeredForge}:`);
+        const allRecipes = [...forge.recipes.values()].sort((a, b) => a.name.localeCompare(b.name));
+        for (let i = 0; i < allRecipes.length; i++) {
+          const r = allRecipes[i];
+          const parts = [`  ${i + 1}) ${r.name}`];
+          if (draftRecipes.includes(r.name)) parts.push("· in use");
+          if (r.slot) parts.push(`· slot ${r.slot}`);
+          if (r.description) parts.push(`· ${r.description}`);
+          io.say(parts.join(" "));
+        }
+
+        const names = allRecipes.map((r) => r.name);
+        const parseRecipeAnswer = (answer: string): string[] =>
+          answer.split(",").map((s) => s.trim()).filter((s) => s !== "").map((s) => pickItem(names, s) ?? s);
+
+        // Remove question (only with a template, or after P10 error)
+        let removeNames: string[] = [];
+        if (template || startWithRemove) {
+          const removeAns = await io.ask("Remove [none]: ");
+          if (removeAns === null) return { kind: "cancelled" };
+          removeNames = parseRecipeAnswer(removeAns);
+        }
+
+        // Add question
+        const addAns = await io.ask("Add [none]: ");
+        if (addAns === null) return { kind: "cancelled" };
+        let addNames = parseRecipeAnswer(addAns);
+
+        // Reset startWithRemove for the next iteration
+        startWithRemove = false;
+
+        if (removeNames.length === 0 && addNames.length === 0) {
+          // No changes entered: check P10 on the final list (same as template's recipes)
+          if (template) {
+            for (const r of template.recipes) {
+              const owner = ownedBy(forge, r);
+              if (owner !== null) {
+                io.say(ownedRecipeRefusal(r, owner));
+                startWithRemove = true;
+                continue recipeLoop;
+              }
+            }
+          }
+          // P10 passed or no template
+          break recipeLoop;
+        }
+
+        // N6 check: a name both added and removed — say and re-ask
+        const both = addNames.find((n) => removeNames.includes(n));
+        if (both !== undefined) {
+          try {
+            checkInitFlags({ addRecipes: addNames, removeRecipes: removeNames });
+          } catch (e) {
+            io.say((e as Error).message);
+            continue recipeLoop;
+          }
+        }
+
+        // Compute the recipe edit for notes and P10 check (mirroring existing flow)
+        // We do removes first, then adds — as init.ts and the existing flow do
+        const editConfig = mergeWorkspaceConfig(
+          { forge: forgeSource(root, answeredForge!), profile: newProfileName! },
+          null
+        ).config;
+        let tempConfig = { ...editConfig, recipes: { add: [] as string[], remove: [] as string[] } };
+
+        // Simulate the edits on the template to get notes
+        const templateRecipes = newProfileLike ? forge.profiles.get(newProfileLike)!.recipes : [];
+        const draftProfile = ProfileSchema.parse({ name: newProfileName!, recipes: templateRecipes, targets: [] });
+        const draftCopy = withProfile(forge, draftProfile);
+
+        // The remove edit and add loop inside one outer try: any refusal → say the message and continue recipeLoop
+        try {
+          // Process removes, say notes
+          if (removeNames.length > 0) {
+            const removeEdit = planRecipeEdit(draftCopy, tempConfig, "remove", removeNames);
+            tempConfig = { ...tempConfig, recipes: removeEdit.recipes };
+            if (removeEdit.reasons.length > 0) {
+              io.say(`  note ${removeEdit.reasons.join(", ")}`);
+            }
+          }
+
+          // Process adds, say notes, handle slot held
+          let doReplace = false;
+          addSlotLoop: for (;;) {
+            try {
+              const addEdit = planRecipeEdit(draftCopy, tempConfig, "add", addNames, { replace: doReplace });
+              tempConfig = { ...tempConfig, recipes: addEdit.recipes };
+              if (addEdit.reasons.length > 0) {
+                io.say(`  note ${addEdit.reasons.join(", ")}`);
+              }
+              break addSlotLoop;
+            } catch (e) {
+              const held = slotHeld(e);
+              if (held !== null && !doReplace) {
+                const replaceQ = `${held.recipe} takes the slot "${held.slot}" that ${held.holder} holds — replace ${held.holder} [no]: `;
+                let replaceYn: boolean | null;
+                for (;;) {
+                  const replaceAns = await io.ask(replaceQ);
+                  if (replaceAns === null) return { kind: "cancelled" };
+                  replaceYn = replaceAns.trim() === "" ? false : yesNo(replaceAns);
+                  if (replaceYn !== null) break;
+                  io.say("answer yes or no");
+                }
+                if (replaceYn) {
+                  doReplace = true;
+                  continue addSlotLoop;
+                }
+                // User said no to replace, re-ask recipes
+                continue recipeLoop;
+              }
+              // Other errors (unknown recipe, etc.): re-throw to outer try
+              throw e;
+            }
+          }
+
+          // Compute the final list: template's recipes minus removes, plus adds
+          const finalList = [
+            ...templateRecipes.filter((r) => !tempConfig.recipes.remove.includes(r)),
+            ...tempConfig.recipes.add,
+          ];
+
+          // P10 check on the final list
+          for (const r of finalList) {
+            const owner = ownedBy(forge, r);
+            if (owner !== null) {
+              io.say(ownedRecipeRefusal(r, owner));
+              startWithRemove = true;
+              continue recipeLoop;
+            }
+          }
+
+          // Success
+          finalAddRecipes = addNames;
+          finalRemoveRecipes = removeNames;
+          finalReplace = doReplace;
+          break recipeLoop;
+        } catch (e) {
+          io.say((e as Error).message);
+          continue recipeLoop;
+        }
+      }
+    }
+
+    answeredAddRecipes = finalAddRecipes;
+    answeredRemoveRecipes = finalRemoveRecipes;
+    answeredReplace = finalReplace;
+
+    // Targets question for new profile
+    // Typed flags answer their questions (spec 38 §4.2, §4.3)
+    if (given.targets !== undefined) {
+      answeredTargets = given.targets;
+    } else if (local.keys.includes("targets")) {
+      // local.keys includes targets and no --targets typed: no targets question; say the local value
+      const localTargets = localConfig?.targets ?? [];
+      io.say(`Targets: ${localTargets.join(", ")} (from craftar.local.yaml)`);
+    } else {
+      // Default: [<template's targets>, from <like>] or [claude-code, default]
+      const template = newProfileLike ? forge.profiles.get(newProfileLike) : undefined;
+      const defaultTargets = template?.targets ?? ["claude-code"];
+      const fromText = template ? `from ${newProfileLike}` : "default";
+      const targetsQ = `Targets — ${TARGETS.join(", ")}, separated by commas [${defaultTargets.join(", ")}, ${fromText}]: `;
+      targetsLoop: for (;;) {
+        const answer = await io.ask(targetsQ);
+        if (answer === null) return { kind: "cancelled" };
+        const trimmed = answer.trim();
+        if (trimmed === "") break targetsLoop;
+        const parsed = trimmed.split(",").map((s) => s.trim());
+        try {
+          checkInitFlags({ targets: parsed });
+        } catch (e) {
+          io.say((e as Error).message);
+          continue targetsLoop;
+        }
+        answeredTargets = parsed;
+        break targetsLoop;
+      }
+    }
+
+    // Build the result for new profile
+    const input: InitInput = {
+      forge: answeredForge!,
+      profile: newProfileName!,
+      loaded: loaded,
+      newProfile: newProfileLike ? { name: newProfileName!, like: newProfileLike } : { name: newProfileName! },
+    };
+    if (answeredRef !== undefined) input.ref = answeredRef;
+    if (answeredTargets !== undefined) input.targets = answeredTargets;
+    if (answeredAddRecipes.length > 0) input.addRecipes = answeredAddRecipes;
+    if (answeredRemoveRecipes.length > 0) input.removeRecipes = answeredRemoveRecipes;
+    if (answeredReplace) input.replace = true;
+    if (given.clone === true) input.clone = true;
+
+    // For new profile: answers has --profile name (for the again line), no recipe/target flags
+    const answers: InitAnswers = {
+      forge: answeredForge!,
+      profile: newProfileName!,
+      addRecipes: [],
+      removeRecipes: [],
+      replace: false,
+    };
+    if (answeredRef !== undefined) answers.ref = answeredRef;
+
+    return { kind: "answered", input, answers };
+  }
+
+  // Existing profile flow (unchanged)
   const profile = forge.profiles.get(answeredProfile!)!;
 
   const recipesFlagged = given.addRecipes.length > 0 || given.removeRecipes.length > 0;

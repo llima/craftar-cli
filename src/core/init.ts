@@ -2,6 +2,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { TARGETS, type Lock, type WorkspaceConfig } from "../schema/index.js";
 import { planClone } from "./clone.js";
+import { newProfile, withProfile } from "./new-profile.js";
 import { planRecipeEdit } from "./recipe-edit.js";
 import { classifyForge, credentialFault } from "./remote.js";
 import { type RepoEntry } from "./repos.js";
@@ -44,6 +45,8 @@ export interface InitInput {
    * A path Forge is loaded with the ref the workspace will have (`loadForgeSource(root, source, ref)`),
    * so its ignored-ref warning travels in `loaded.warnings`. */
   loaded?: LoadedForge;
+  /** When present, create a new profile in memory (spec 38 §5.2). `profile` holds the new name. */
+  newProfile?: { name: string; like?: string };
 }
 
 export interface InitPlan {
@@ -59,6 +62,8 @@ export interface InitPlan {
   targetsFrom: "flag" | "local" | "profile";
   /** The repositories to clone, in profile order; empty when `input.clone` is not true (spec 37 §4.2). */
   repos: RepoEntry[];
+  /** When `input.newProfile` was given: the file to write (spec 38 §5.2). */
+  newProfile?: { path: string; text: string; blockNote: string | null };
 }
 
 /** The flag each local key would replace (N10). */
@@ -169,6 +174,88 @@ export async function planInit(root: string, input: InitInput, opts: InitOptions
   });
 
   const forge = forgeSource(root, input.forge);
+
+  // New profile branch (spec 38 §5.2): build the profile in memory, plan on the copy that holds it.
+  if (input.newProfile) {
+    // input.loaded is REQUIRED with newProfile — a programming error without it
+    if (!input.loaded) throw new Error("planInit: newProfile requires a loaded Forge");
+
+    const base: Record<string, unknown> = { forge };
+    if (input.ref !== undefined) base.ref = input.ref;
+    base.profile = input.profile;
+    // With newProfile, --targets goes into the profile (spec 38 §4.1): neither craftar.yaml nor the workspace layer holds it
+
+    const merged = mergeWorkspaceConfig(base, localDoc);
+
+    // Refuse a `loaded` that is not the configuration's Forge — a programming error
+    if (input.loaded.origin.source !== merged.config.forge) {
+      throw new Error(`planInit: the loaded Forge is "${input.loaded.origin.source}", not "${merged.config.forge}"`);
+    }
+    // Remote only: ref must match
+    if (input.loaded.origin.kind === "remote") {
+      const expectedRef = merged.config.ref ?? null;
+      if (input.loaded.origin.ref !== expectedRef) {
+        throw new Error(`planInit: the loaded Forge is at ref ${JSON.stringify(input.loaded.origin.ref)}, not ${JSON.stringify(expectedRef)}`);
+      }
+    }
+
+    // Build the new profile: the recipe flags go into the profile (spec 38 §4.4)
+    const np = newProfile(input.loaded.forge, {
+      name: input.newProfile.name,
+      like: input.newProfile.like,
+      add: adds,
+      remove: removes,
+      replace: input.replace,
+      targets: input.targets,
+    });
+
+    // Create a copy of the Forge with the new profile added — the input Forge is not mutated
+    const copy = withProfile(input.loaded.forge, np.profile);
+    const loadedCopy: LoadedForge = { ...input.loaded, forge: copy };
+    const ws = workspaceOf(root, merged, loadedCopy);
+
+    const p = await plan(ws);
+
+    // P12 is the resolver's and the planner's own refusal: newProfile's recipe edit resolves, and plan() above throws (spec 38 §4.2)
+
+    const lock = await readLock(root);
+    const statuses = await status(ws, p, lock);
+
+    // craftar.yaml text: only forge, ref, profile — no recipes, no targets (spec 38 §5.2)
+    const doc: Record<string, unknown> = { forge };
+    if (input.ref !== undefined) doc.ref = input.ref;
+    doc.profile = input.profile;
+
+    // Clone planning (spec 37 §4.2)
+    let repos: RepoEntry[] = [];
+    if (input.clone === true) {
+      const profile = ws.forge.profiles.get(ws.config.profile)!;
+      const ctx = { planned: p.files.map((f) => f.path), lockPaths: lock?.files.map((f) => f.path) ?? [], forgeDir: ws.forge.root };
+      const clonePlan = await planClone(root, profile, ctx, { present: "refuse", noEntries: "nothing to clone; drop --clone" });
+      repos = clonePlan.entries;
+    }
+
+    // notes = np.notes then np.blockNote when non-null (spec 38 §5.2)
+    const notes = [...np.notes];
+    if (np.blockNote !== null) notes.push(np.blockNote);
+
+    // targetsFrom: "local" when the local file sets targets, else "profile" (typed targets go into the profile)
+    const targetsFrom = local.includes("targets") ? "local" : "profile";
+
+    return {
+      ws,
+      plan: p,
+      lock,
+      statuses,
+      text: YAML.stringify(doc),
+      notes,
+      targetsFrom,
+      repos,
+      newProfile: { path: `profiles/${np.profile.name}/profile.yaml`, text: np.text, blockNote: np.blockNote },
+    };
+  }
+
+  // Existing profile branch: unchanged
   const base: Record<string, unknown> = { forge };
   if (input.ref !== undefined) base.ref = input.ref;
   base.profile = input.profile;

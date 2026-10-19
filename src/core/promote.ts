@@ -17,6 +17,13 @@ import { editYamlText } from "./yaml-edit.js";
 // base gets it back as its own variant. Three steps a caller runs in order: the edit set (reads only), the slot proof
 // on a scratch copy (reads the Forge only), the writes through a journal.
 
+/**
+ * The owned-recipe predicate (spec 38 §3): a recipe named for a profile — `<anything>--<q>` or `<q>-steering`.
+ */
+export function namedForProfile(name: string, q: string): boolean {
+  return name.endsWith(`--${q}`) || name === `${q}-steering`;
+}
+
 const COMMAND = "forge promote";
 
 /** One file the promotion writes; `created` when nothing is there today. */
@@ -204,7 +211,6 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
     if (f.stem !== name) throw new Error(`${COMMAND}: recipe ${name} is ${label(f.abs)} — ${COMMAND} writes recipes/${name}.yaml`);
     return f;
   };
-  const owned = (name: string, q: string) => name.endsWith(`--${q}`) || name === `${q}-steering`;
   const detail: BasePromotion["detail"] = { recipes: [], profiles: [] };
   const editedRecipes: PromotionWrite[] = [];
   const createdRecipes: PromotionWrite[] = [];
@@ -233,7 +239,7 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
       continue;
     }
     if (!namesBase) continue;
-    const owner = Q.find((q) => owned(name, q));
+    const owner = Q.find((q) => namedForProfile(name, q));
     if (owner) {
       const f = fileOf(name);
       editedRecipes.push({ abs: f.abs, content: recipeEdit(f.raw, label(f.abs), name, name, X, variantRef(owner)), created: false });
