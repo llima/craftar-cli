@@ -782,7 +782,7 @@ export async function askInit(
           { forge: forgeSource(root, answeredForge!), profile: newProfileName! },
           null
         ).config;
-        let tempConfig = { ...editConfig, recipes: { add: [], remove: [] } };
+        let tempConfig = { ...editConfig, recipes: { add: [] as string[], remove: [] as string[] } };
 
         // Simulate the edits on the template to get notes
         const templateRecipes = newProfileLike ? forge.profiles.get(newProfileLike)!.recipes : [];
