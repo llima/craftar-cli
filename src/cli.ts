@@ -107,10 +107,10 @@ program
     if (o.from !== "claude-code") fail(`unsupported source "${o.from}" (only claude-code for now)`);
     // import writes a local Forge; a URL would become a directory named after it (spec 13 §4.4).
     if (classifyForge(o.forge) === "url") fail("--forge takes a directory; to read a remote Forge, run inside a workspace that names it");
-    // A cache tree is refused before anything is read or written.
+    // A cache tree is refused first: it reads only the real paths of --forge and of the cache, nothing of the workspace.
     await assertNotCacheTree(path.resolve(o.forge), craftarHome()).catch((e) => fail(e instanceof Error ? e.message : String(e)));
     // Spec 29 §4.2: the report's path is refused before the import reads anything, so a refusal leaves the Forge untouched.
-    // Spec 29 §4.3: PK5, before anything is read.
+    // Spec 29 §4.3: PK5, before the workspace is read.
     const preferKiro = o.preferKiro === undefined ? undefined : parsePreferKiro(o.preferKiro);
     const reportAbs = o.report === undefined ? null : await gateOutsideForge(o.report, o.forge, REPORT_GATE);
     const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig, report: reportAbs !== null, preferKiro });
