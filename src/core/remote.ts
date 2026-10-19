@@ -356,10 +356,14 @@ export const defaultGit: GitRunner = async (args, opts = {}) => {
   }
 };
 
+// The value is never printed.
+export const DASH_URL = 'a Forge URL that starts with "-" is refused — git would read it as an option';
+
 /** The tree for `ref` of the remote Forge at `url`, fetching first unless offline or the ref is a full SHA already cached. */
 export async function ensureTree(written: string, ref: string | null, opts: CacheOptions): Promise<CachedTree> {
   // As classifyForge reads it: git would choke on a stray leading space.
   const url = written.trim();
+  if (url.startsWith("-")) throw new Error(DASH_URL);
   const git = opts.git ?? defaultGit;
   // Absolute once: `git -C repo.git worktree add <dir>` would read a relative dir from inside repo.git.
   const home = path.resolve(opts.home);
@@ -383,7 +387,7 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
   } else {
     let refs: LsRemote;
     try {
-      refs = parseLsRemote(await git(["ls-remote", "--symref", url], { remote: true }));
+      refs = parseLsRemote(await git(["ls-remote", "--symref", "--", url], { remote: true }));
     } catch (e) {
       throw new ForgeFetchError(url, (e as Error).message, haveCopy, await cachedFallback(git, repo, haveCopy, ref, url, await fetchedAt()));
     }
@@ -396,7 +400,7 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
     await withEntryLock(entry, opts, async () => {
       if (!(await exists(path.join(repo, "HEAD")))) await git(["init", "--quiet", "--bare", repo]);
       try {
-        await git(["-C", repo, "fetch", "--quiet", "--prune", url, "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"], { remote: true });
+        await git(["-C", repo, "fetch", "--quiet", "--prune", "--", url, "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"], { remote: true });
       } catch (e) {
         throw new ForgeFetchError(url, (e as Error).message, haveCopy, await cachedFallback(git, repo, haveCopy, ref, url, await fetchedAt()));
       }
