@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { exists } from "./forge.js";
+import { exists, realpathOfNearest } from "./forge.js";
 import { LockBusyError, withLock, type LockOptions, type LockTiming } from "./home-lock.js";
 import { hashNormalized } from "./text.js";
 import { execProgram } from "./proc.js";
@@ -556,9 +556,10 @@ function isUnderOrEqual(child: string, parent: string): boolean {
  * to) the real path of `<home>/forges` (segment-wise; `path.relative` compares without case on win32).
  * A cache tree is a clean, tracked git repository with a commit, so the git gates of a Forge writer
  * pass on it, and a write there would change every workspace that reads that tree (spec 38 §4.2 P5).
- * Every gated Forge writer calls it before its first git check. A `forges/` that does not exist
- * passes; any other error fails closed. The message names the directory by its place in the cache,
- * with the entry's name replaced by `UNVOUCHED_HIDDEN` (spec 39), never as given.
+ * Every gated Forge writer calls it before its first git check. A directory that does not exist yet
+ * is judged by its nearest existing ancestor. A `forges/` that does not exist passes; any other
+ * error fails closed. The message names the directory by its place in the cache, with the entry's
+ * name replaced by `UNVOUCHED_HIDDEN` (spec 39), never as given.
  */
 export async function assertNotCacheTree(dir: string, home: string): Promise<void> {
   const forgesDir = path.join(home, "forges");
@@ -570,7 +571,7 @@ export async function assertNotCacheTree(dir: string, home: string): Promise<voi
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
   if (forgesReal !== null) {
-    const rootReal = await fs.realpath(dir);
+    const rootReal = await realpathOfNearest(dir);
     if (isUnderOrEqual(rootReal, forgesReal)) {
       const rel = path.relative(forgesReal, rootReal);
       const rest = rel === "" ? [] : rel.split(path.sep).slice(1);
