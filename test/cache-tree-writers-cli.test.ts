@@ -66,6 +66,8 @@ describe("cache tree as Forge — gated writers", () => {
     const r = ctx.run(["forge", "unify", "rule/workflow", "--profile", "acme", "--take", "base", "--forge", ctx.tree, "--no-impact"]);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(TAIL);
+    expect(r.stderr).not.toContain(ctx.entry);
+    expect(r.stderr).toContain("(a cache entry name — not shown)");
     expect(r.stdout).toBe("");
     expect(await snapshot(ctx.tree)).toEqual(before);
   });
@@ -76,6 +78,8 @@ describe("cache tree as Forge — gated writers", () => {
     const r = ctx.run(["forge", "promote", "rule/workflow", "--profile", "acme", "--forge", ctx.tree, "--no-impact"]);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(TAIL);
+    expect(r.stderr).not.toContain(ctx.entry);
+    expect(r.stderr).toContain("(a cache entry name — not shown)");
     expect(r.stdout).toBe("");
     expect(await snapshot(ctx.tree)).toEqual(before);
   });
@@ -93,6 +97,8 @@ describe("cache tree as Forge — gated writers", () => {
     const r = ctx.run(["drift", "promote", ".claude/rules/workflow.md", "--workspace", ws]);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(TAIL);
+    expect(r.stderr).not.toContain(ctx.entry);
+    expect(r.stderr).toContain("(a cache entry name — not shown)");
     expect(await snapshot(ctx.tree)).toEqual(before);
   });
 
@@ -124,6 +130,8 @@ describe("cache tree as Forge — gated writers", () => {
     const r = ctx.run(["forge", "unify", "rule/workflow", "--profile", "acme", "--take", "base", "--forge", link, "--no-impact"]);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(TAIL);
+    expect(r.stderr).not.toContain(ctx.entry);
+    expect(r.stderr).toContain("(a cache entry name — not shown)");
     expect(await snapshot(ctx.tree)).toEqual(before);
   });
 
@@ -136,6 +144,8 @@ describe("cache tree as Forge — gated writers", () => {
     const r = ctx.run(["forge", "promote", "rule/workflow", "--profile", "acme", "--forge", linkedTree, "--no-impact"], { CRAFTAR_HOME: homeLink });
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(TAIL);
+    expect(r.stderr).not.toContain(ctx.entry);
+    expect(r.stderr).toContain("(a cache entry name — not shown)");
     expect(await snapshot(ctx.tree)).toEqual(before);
   });
 
@@ -144,5 +154,7 @@ describe("cache tree as Forge — gated writers", () => {
     const r = ctx.run(["forge", "unify", "rule/workflow", "--profile", "acme", "--take", "base", "--forge", ctx.tree.toUpperCase(), "--no-impact"]);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(TAIL);
+    expect(r.stderr).not.toContain(ctx.entry);
+    expect(r.stderr).toContain("(a cache entry name — not shown)");
   });
 });

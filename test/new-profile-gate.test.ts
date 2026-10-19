@@ -90,9 +90,11 @@ describe("newProfileGate — P5 and P6 (no name: the flow's question)", () => {
     const home = await scratch();
     const root = path.join(home, "forges", "example-0123456789ab", "trees", "abc");
     await makeForge(root, SPEC);
-    expect(await refusal(newProfileGate(await loadForge(root), home, "initech"))).toBe(
-      `${root} is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory`,
+    const msg = await refusal(newProfileGate(await loadForge(root), home, "initech"));
+    expect(msg).toBe(
+      `${path.join(home, "forges", "(a cache entry name — not shown)", "trees", "abc")} is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory`,
     );
+    expect(msg).not.toContain("example-0123456789ab");
     // A home whose forges/ does not exist yet: the check passes on to P6
     const other = await forgeRepo();
     await expect(newProfileGate(L(other), path.join(await scratch(), "nothing-yet"), "initech")).resolves.toBeUndefined();

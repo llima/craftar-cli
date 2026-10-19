@@ -557,7 +557,8 @@ function isUnderOrEqual(child: string, parent: string): boolean {
  * A cache tree is a clean, tracked git repository with a commit, so the git gates of a Forge writer
  * pass on it, and a write there would change every workspace that reads that tree (spec 38 §4.2 P5).
  * Every gated Forge writer calls it before its first git check. A `forges/` that does not exist
- * passes; any other error fails closed.
+ * passes; any other error fails closed. The message names the directory by its place in the cache,
+ * with the entry's name replaced by `UNVOUCHED_HIDDEN` (spec 39), never as given.
  */
 export async function assertNotCacheTree(dir: string, home: string): Promise<void> {
   const forgesDir = path.join(home, "forges");
@@ -571,8 +572,11 @@ export async function assertNotCacheTree(dir: string, home: string): Promise<voi
   if (forgesReal !== null) {
     const rootReal = await fs.realpath(dir);
     if (isUnderOrEqual(rootReal, forgesReal)) {
+      const rel = path.relative(forgesReal, rootReal);
+      const rest = rel === "" ? [] : rel.split(path.sep).slice(1);
+      const shown = path.join(path.resolve(home), "forges", ...(rel === "" ? [] : [UNVOUCHED_HIDDEN]), ...rest);
       throw new Error(
-        `${dir} is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory`,
+        `${shown} is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory`,
       );
     }
   }

@@ -65,14 +65,56 @@ describe("assertNotCacheTree", () => {
     }
   });
 
-  it("the message is the given spelling of the directory", async () => {
+  it("the message hides the cache entry's name", async () => {
     const home = await fs.realpath(await tmpDir("craftar-checktree-"));
     cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
     const nested = path.join(home, "forges", "k", "trees", "c");
     await fs.mkdir(nested, { recursive: true });
-    const dir = nested;
-    await expect(assertNotCacheTree(dir, home)).rejects.toThrow(
-      `${dir} is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory`,
+    let message = "";
+    try {
+      await assertNotCacheTree(nested, home);
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toBe(
+      `${path.join(home, "forges", "(a cache entry name — not shown)", "trees", "c")} is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory`,
     );
+    expect(message).not.toContain(`${path.sep}k${path.sep}`);
+  });
+
+  it("a directory equal to <home>/forges is named as <home>/forges", async () => {
+    const home = await fs.realpath(await tmpDir("craftar-checktree-"));
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    await fs.mkdir(path.join(home, "forges"), { recursive: true });
+    let message = "";
+    try {
+      await assertNotCacheTree(path.join(home, "forges"), home);
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toBe(
+      `${path.join(home, "forges")} is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory`,
+    );
+  });
+
+  it("a cache tree named through a junction is shown by its real place, not the link", async () => {
+    const home = await fs.realpath(await tmpDir("craftar-checktree-"));
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const nested = path.join(home, "forges", "k", "trees", "c");
+    await fs.mkdir(nested, { recursive: true });
+    const otherDir = await fs.realpath(await tmpDir("craftar-link-"));
+    cleanups.push(() => fs.rm(otherDir, { recursive: true, force: true }));
+    const link = path.join(otherDir, "lnk");
+    await fs.symlink(nested, link, "junction");
+    let message = "";
+    try {
+      await assertNotCacheTree(link, home);
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toBe(
+      `${path.join(home, "forges", "(a cache entry name — not shown)", "trees", "c")} is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory`,
+    );
+    expect(message).not.toContain(link);
   });
 });
