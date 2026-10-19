@@ -239,8 +239,8 @@ export async function planInit(root: string, input: InitInput, opts: InitOptions
     const notes = [...np.notes];
     if (np.blockNote !== null) notes.push(np.blockNote);
 
-    // targetsFrom: "local" when the local file sets targets (no flag), else "profile"
-    const targetsFrom = input.targets !== undefined ? "flag" : local.includes("targets") ? "local" : "profile";
+    // targetsFrom: "local" when the local file sets targets, else "profile" (typed targets go into the profile)
+    const targetsFrom = local.includes("targets") ? "local" : "profile";
 
     return {
       ws,
