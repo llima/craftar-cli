@@ -302,3 +302,49 @@ describe("review round 2 (spec 38 §4.3)", () => {
     expect(sc.asked[1]).toBe("Forge — a directory or a git URL: ");
   });
 });
+
+describe("review round 3 (spec 38 §4.3: the same refusals re-asked)", () => {
+  it("an unknown name at Remove is said and the recipes question asked again", async () => {
+    const s = await setup();
+    const sc = script(["yes", "nope", "", "", ""]);
+    const r = await ask(s, { forge: s.forge, newProfile: "initech", like: "acme" }, sc.io);
+    expect(sc.said.some((l) => /^recipe "nope" not found in this Forge \(/.test(l))).toBe(true);
+    expect(sc.asked.filter((q) => q === "Adjust the recipes [no]: ").length).toBe(2);
+    expect(r.kind).toBe("answered");
+  });
+  it("a name at both Remove and Add is N6, said at the question and asked again", async () => {
+    const s = await setup();
+    const sc = script(["yes", "extra", "extra", "", ""]);
+    const r = await ask(s, { forge: s.forge, newProfile: "initech", like: "acme" }, sc.io);
+    expect(sc.said.some((l) => /both added and removed/.test(l))).toBe(true);
+    if (r.kind !== "answered") throw new Error("expected answers");
+    expect(r.input.addRecipes ?? []).toEqual([]);
+    expect(r.input.removeRecipes ?? []).toEqual([]);
+  });
+  it("a craftar.local.yaml that sets targets: no targets question; the local value is said and stays a workspace layer", async () => {
+    const s = await setup();
+    const sc = script([""]);
+    const r = await askInit(s.ws, { ...GIVEN, forge: s.forge, newProfile: "initech", like: "acme" }, { doc: { targets: ["kiro"] }, keys: ["targets"] as never[] }, sc.io, {
+      home: s.home,
+      registryOff: true,
+      exists: existsSync,
+    });
+    expect(sc.asked.some((q) => q.startsWith("Targets"))).toBe(false);
+    expect(sc.said).toContain("Targets: kiro (from craftar.local.yaml)");
+    if (r.kind !== "answered") throw new Error("expected answers");
+    expect(r.input.targets).toBeUndefined();
+  });
+  it("a craftar.local.yaml that sets recipes: no recipes question; the local chain is said", async () => {
+    const s = await setup();
+    const sc = script([""]);
+    const r = await askInit(s.ws, { ...GIVEN, forge: s.forge, newProfile: "initech", like: "acme" }, { doc: { recipes: { add: ["extra"] } }, keys: ["recipes"] as never[] }, sc.io, {
+      home: s.home,
+      registryOff: true,
+      exists: existsSync,
+    });
+    expect(sc.asked).not.toContain("Adjust the recipes [no]: ");
+    expect(sc.said.some((l) => l.startsWith("Recipes: ") && l.endsWith("(from craftar.local.yaml)"))).toBe(true);
+    if (r.kind !== "answered") throw new Error("expected answers");
+    expect(r.input.addRecipes ?? []).toEqual([]);
+  });
+});

@@ -683,6 +683,14 @@ export async function askInit(
       finalAddRecipes = given.addRecipes;
       finalRemoveRecipes = given.removeRecipes;
       finalReplace = given.replace;
+    } else if (local.keys.includes("recipes")) {
+      // local.keys includes recipes and no recipe flag typed: no recipes question; say the chain from the draft resolved with local recipes
+      const templateRecipes = newProfileLike ? forge.profiles.get(newProfileLike)!.recipes : [];
+      const draftProfile = ProfileSchema.parse({ name: newProfileName!, recipes: templateRecipes, targets: [] });
+      const draftCopy = withProfile(forge, draftProfile);
+      const recipeConfig = { ...localConfig!, profile: newProfileName! };
+      const resolution = resolve(draftCopy, recipeConfig);
+      io.say(`Recipes: ${resolution.recipes.join(" → ")} (from craftar.local.yaml)`);
     } else {
       // Track whether we should start with Remove (after a P10 error)
       let startWithRemove = false;
@@ -776,6 +784,17 @@ export async function askInit(
           break recipeLoop;
         }
 
+        // N6 check: a name both added and removed — say and re-ask
+        const both = addNames.find((n) => removeNames.includes(n));
+        if (both !== undefined) {
+          try {
+            checkInitFlags({ addRecipes: addNames, removeRecipes: removeNames });
+          } catch (e) {
+            io.say((e as Error).message);
+            continue recipeLoop;
+          }
+        }
+
         // Compute the recipe edit for notes and P10 check (mirroring existing flow)
         // We do removes first, then adds — as init.ts and the existing flow do
         const editConfig = mergeWorkspaceConfig(
@@ -789,71 +808,76 @@ export async function askInit(
         const draftProfile = ProfileSchema.parse({ name: newProfileName!, recipes: templateRecipes, targets: [] });
         const draftCopy = withProfile(forge, draftProfile);
 
-        // Process removes, say notes
-        if (removeNames.length > 0) {
-          const removeEdit = planRecipeEdit(draftCopy, tempConfig, "remove", removeNames);
-          tempConfig = { ...tempConfig, recipes: removeEdit.recipes };
-          if (removeEdit.reasons.length > 0) {
-            io.say(`  note ${removeEdit.reasons.join(", ")}`);
-          }
-        }
-
-        // Process adds, say notes, handle slot held
-        let doReplace = false;
-        addSlotLoop: for (;;) {
-          try {
-            const addEdit = planRecipeEdit(draftCopy, tempConfig, "add", addNames, { replace: doReplace });
-            tempConfig = { ...tempConfig, recipes: addEdit.recipes };
-            if (addEdit.reasons.length > 0) {
-              io.say(`  note ${addEdit.reasons.join(", ")}`);
+        // The remove edit and add loop inside one outer try: any refusal → say the message and continue recipeLoop
+        try {
+          // Process removes, say notes
+          if (removeNames.length > 0) {
+            const removeEdit = planRecipeEdit(draftCopy, tempConfig, "remove", removeNames);
+            tempConfig = { ...tempConfig, recipes: removeEdit.recipes };
+            if (removeEdit.reasons.length > 0) {
+              io.say(`  note ${removeEdit.reasons.join(", ")}`);
             }
-            break addSlotLoop;
-          } catch (e) {
-            const held = slotHeld(e);
-            if (held !== null && !doReplace) {
-              const replaceQ = `${held.recipe} takes the slot "${held.slot}" that ${held.holder} holds — replace ${held.holder} [no]: `;
-              let replaceYn: boolean | null;
-              for (;;) {
-                const replaceAns = await io.ask(replaceQ);
-                if (replaceAns === null) return { kind: "cancelled" };
-                replaceYn = replaceAns.trim() === "" ? false : yesNo(replaceAns);
-                if (replaceYn !== null) break;
-                io.say("answer yes or no");
+          }
+
+          // Process adds, say notes, handle slot held
+          let doReplace = false;
+          addSlotLoop: for (;;) {
+            try {
+              const addEdit = planRecipeEdit(draftCopy, tempConfig, "add", addNames, { replace: doReplace });
+              tempConfig = { ...tempConfig, recipes: addEdit.recipes };
+              if (addEdit.reasons.length > 0) {
+                io.say(`  note ${addEdit.reasons.join(", ")}`);
               }
-              if (replaceYn) {
-                doReplace = true;
-                continue addSlotLoop;
+              break addSlotLoop;
+            } catch (e) {
+              const held = slotHeld(e);
+              if (held !== null && !doReplace) {
+                const replaceQ = `${held.recipe} takes the slot "${held.slot}" that ${held.holder} holds — replace ${held.holder} [no]: `;
+                let replaceYn: boolean | null;
+                for (;;) {
+                  const replaceAns = await io.ask(replaceQ);
+                  if (replaceAns === null) return { kind: "cancelled" };
+                  replaceYn = replaceAns.trim() === "" ? false : yesNo(replaceAns);
+                  if (replaceYn !== null) break;
+                  io.say("answer yes or no");
+                }
+                if (replaceYn) {
+                  doReplace = true;
+                  continue addSlotLoop;
+                }
+                // User said no to replace, re-ask recipes
+                continue recipeLoop;
               }
-              // User said no to replace, re-ask recipes
+              // Other errors (unknown recipe, etc.): re-throw to outer try
+              throw e;
+            }
+          }
+
+          // Compute the final list: template's recipes minus removes, plus adds
+          const finalList = [
+            ...templateRecipes.filter((r) => !tempConfig.recipes.remove.includes(r)),
+            ...tempConfig.recipes.add,
+          ];
+
+          // P10 check on the final list
+          for (const r of finalList) {
+            const owner = ownedBy(forge, r);
+            if (owner !== null) {
+              io.say(ownedRecipeRefusal(r, owner));
+              startWithRemove = true;
               continue recipeLoop;
             }
-            // Other errors: say and re-run
-            io.say((e as Error).message);
-            continue recipeLoop;
           }
+
+          // Success
+          finalAddRecipes = addNames;
+          finalRemoveRecipes = removeNames;
+          finalReplace = doReplace;
+          break recipeLoop;
+        } catch (e) {
+          io.say((e as Error).message);
+          continue recipeLoop;
         }
-
-        // Compute the final list: template's recipes minus removes, plus adds
-        const finalList = [
-          ...templateRecipes.filter((r) => !tempConfig.recipes.remove.includes(r)),
-          ...tempConfig.recipes.add,
-        ];
-
-        // P10 check on the final list
-        for (const r of finalList) {
-          const owner = ownedBy(forge, r);
-          if (owner !== null) {
-            io.say(ownedRecipeRefusal(r, owner));
-            startWithRemove = true;
-            continue recipeLoop;
-          }
-        }
-
-        // Success
-        finalAddRecipes = addNames;
-        finalRemoveRecipes = removeNames;
-        finalReplace = doReplace;
-        break recipeLoop;
       }
     }
 
@@ -865,6 +889,10 @@ export async function askInit(
     // Typed flags answer their questions (spec 38 §4.2, §4.3)
     if (given.targets !== undefined) {
       answeredTargets = given.targets;
+    } else if (local.keys.includes("targets")) {
+      // local.keys includes targets and no --targets typed: no targets question; say the local value
+      const localTargets = localConfig?.targets ?? [];
+      io.say(`Targets: ${localTargets.join(", ")} (from craftar.local.yaml)`);
     } else {
       // Default: [<template's targets>, from <like>] or [claude-code, default]
       const template = newProfileLike ? forge.profiles.get(newProfileLike) : undefined;
