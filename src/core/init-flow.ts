@@ -402,13 +402,13 @@ export async function askInit(
           continue forgeLoop;
         }
       }
-      forgeDefault = forgeValue;
 
       // P4 check: with --new-profile typed and Forge asked, a URL answer is refused — say P4 and ask again
       if (given.newProfile !== undefined && classifyForge(forgeValue) === "url") {
         io.say("a new profile is written into a Forge directory — clone the Forge, pass that directory as --forge, then commit and push the profile");
         continue forgeLoop;
       }
+      forgeDefault = forgeValue;
     }
 
     answeredForge = forgeValue;
@@ -567,15 +567,7 @@ export async function askInit(
     }
     // For directory Forge with no profile: check if it can take a new profile
     if (!canOfferNewProfile) {
-      // The Forge was asked → say the error and ask for the Forge again
-      // --forge was typed → throw
-      if (forgeWasAsked) {
-        io.say(newProfileGateError!);
-        // Can't ask forge again from here - need to restructure or throw
-        throw new Error(newProfileGateError!);
-      } else {
-        throw new Error(newProfileGateError!);
-      }
+      throw new Error(newProfileGateError!);
     }
     io.say("the Forge has no profile yet — creating the first one");
     isNewProfile = true;
@@ -685,7 +677,7 @@ export async function askInit(
     let finalReplace = false;
 
     // Typed flags answer their questions (spec 38 §4.2, §4.3)
-    const recipesFlagged = given.addRecipes.length > 0 || given.removeRecipes.length > 0 || given.replace;
+    const recipesFlagged = given.addRecipes.length > 0 || given.removeRecipes.length > 0;
     if (recipesFlagged) {
       // Use the flags directly, skip all recipe questions
       finalAddRecipes = given.addRecipes;
@@ -769,37 +761,9 @@ export async function askInit(
         startWithRemove = false;
 
         if (removeNames.length === 0 && addNames.length === 0) {
-          // If no changes, check P10 one more time (for no template case), using ownedBy
-          if (!template) {
-            break recipeLoop;
-          }
-          // With template and no changes: P10 was already checked above when we declined to adjust
-          break recipeLoop;
-        }
-
-        // Check for held slot and ask replace question (spec 28's held-slot question)
-        let doReplace = false;
-        addSlotLoop: for (;;) {
-          try {
-            newProfile(forge, {
-              name: newProfileName!,
-              like: newProfileLike,
-              add: addNames,
-              remove: removeNames,
-              replace: doReplace,
-            });
-            // Success
-            finalAddRecipes = addNames;
-            finalRemoveRecipes = removeNames;
-            finalReplace = doReplace;
-            break recipeLoop;
-          } catch (e) {
-            // Check for P10 using ownedBy on the final list
-            const finalList = [
-              ...(newProfileLike ? forge.profiles.get(newProfileLike)!.recipes : []).filter((r) => !removeNames.includes(r)),
-              ...addNames,
-            ];
-            for (const r of finalList) {
+          // No changes entered: check P10 on the final list (same as template's recipes)
+          if (template) {
+            for (const r of template.recipes) {
               const owner = ownedBy(forge, r);
               if (owner !== null) {
                 io.say(ownedRecipeRefusal(r, owner));
@@ -807,7 +771,44 @@ export async function askInit(
                 continue recipeLoop;
               }
             }
-            // Check for held slot
+          }
+          // P10 passed or no template
+          break recipeLoop;
+        }
+
+        // Compute the recipe edit for notes and P10 check (mirroring existing flow)
+        // We do removes first, then adds — as init.ts and the existing flow do
+        const editConfig = mergeWorkspaceConfig(
+          { forge: forgeSource(root, answeredForge!), profile: newProfileName! },
+          null
+        ).config;
+        let tempConfig = { ...editConfig, recipes: { add: [], remove: [] } };
+
+        // Simulate the edits on the template to get notes
+        const templateRecipes = newProfileLike ? forge.profiles.get(newProfileLike)!.recipes : [];
+        const draftProfile = ProfileSchema.parse({ name: newProfileName!, recipes: templateRecipes, targets: [] });
+        const draftCopy = withProfile(forge, draftProfile);
+
+        // Process removes, say notes
+        if (removeNames.length > 0) {
+          const removeEdit = planRecipeEdit(draftCopy, tempConfig, "remove", removeNames);
+          tempConfig = { ...tempConfig, recipes: removeEdit.recipes };
+          if (removeEdit.reasons.length > 0) {
+            io.say(`  note ${removeEdit.reasons.join(", ")}`);
+          }
+        }
+
+        // Process adds, say notes, handle slot held
+        let doReplace = false;
+        addSlotLoop: for (;;) {
+          try {
+            const addEdit = planRecipeEdit(draftCopy, tempConfig, "add", addNames, { replace: doReplace });
+            tempConfig = { ...tempConfig, recipes: addEdit.recipes };
+            if (addEdit.reasons.length > 0) {
+              io.say(`  note ${addEdit.reasons.join(", ")}`);
+            }
+            break addSlotLoop;
+          } catch (e) {
             const held = slotHeld(e);
             if (held !== null && !doReplace) {
               const replaceQ = `${held.recipe} takes the slot "${held.slot}" that ${held.holder} holds — replace ${held.holder} [no]: `;
@@ -831,6 +832,28 @@ export async function askInit(
             continue recipeLoop;
           }
         }
+
+        // Compute the final list: template's recipes minus removes, plus adds
+        const finalList = [
+          ...templateRecipes.filter((r) => !tempConfig.recipes.remove.includes(r)),
+          ...tempConfig.recipes.add,
+        ];
+
+        // P10 check on the final list
+        for (const r of finalList) {
+          const owner = ownedBy(forge, r);
+          if (owner !== null) {
+            io.say(ownedRecipeRefusal(r, owner));
+            startWithRemove = true;
+            continue recipeLoop;
+          }
+        }
+
+        // Success
+        finalAddRecipes = addNames;
+        finalRemoveRecipes = removeNames;
+        finalReplace = doReplace;
+        break recipeLoop;
       }
     }
 
@@ -858,10 +881,10 @@ export async function askInit(
           checkInitFlags({ targets: parsed });
         } catch (e) {
           io.say((e as Error).message);
-        continue targetsLoop;
-      }
-      answeredTargets = parsed;
-      break targetsLoop;
+          continue targetsLoop;
+        }
+        answeredTargets = parsed;
+        break targetsLoop;
       }
     }
 

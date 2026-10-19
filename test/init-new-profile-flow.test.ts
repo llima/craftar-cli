@@ -255,3 +255,50 @@ describe("review round 1 (spec 38 §4.2, §4.3)", () => {
     expect(r.input.replace).toBe(true);
   });
 });
+
+describe("review round 2 (spec 38 §4.3)", () => {
+  it("a typed targets answer: the confirmation's line says (from the profile) — the targets went into it", async () => {
+    const s = await setup();
+    const { loadForgeSource } = await import("../src/core/sync.js");
+    const { forgeSource } = await import("../src/core/init.js");
+    const loaded = await loadForgeSource(s.ws, forgeSource(s.ws, s.forge), null, { mode: "sync" });
+    const init = await planInit(s.ws, { forge: s.forge, profile: "initech", newProfile: { name: "initech", like: "acme" }, targets: ["kiro"], loaded });
+    const sc = script([""]);
+    await confirmInit(init, s.ws, sc.io, { sync: true });
+    expect(sc.said[1]).toMatch(/targets kiro \(from the profile\)$/);
+  });
+  it("P10 is checked whatever path leaves the recipes question — Adjust yes, then Enter at Remove and Add", async () => {
+    const spec = { ...SPEC, profiles: [profile("acme", ["base--acme", "stack-node"]), profile("globex", ["base"])] };
+    const s = await setup({ spec });
+    const sc = script(["yes", "", "", "base--acme", "base", ""]);
+    const r = await ask(s, { forge: s.forge, newProfile: "initech", like: "acme" }, sc.io);
+    expect(sc.said).toContain("recipe base--acme is named for profile acme — a new profile cannot use it; leave it out and add the shared recipe it stands for");
+    if (r.kind !== "answered") throw new Error("expected answers");
+    expect(r.input.removeRecipes).toEqual(["base--acme"]);
+  });
+  it("spec 22's notes are said at the recipes question, as the existing flow says them", async () => {
+    const s = await setup();
+    const sc = script(["yes", "", "base", ""]);
+    await ask(s, { forge: s.forge, newProfile: "initech", like: "acme" }, sc.io);
+    expect(sc.said.some((l) => l.startsWith("  note ") && l.includes("base"))).toBe(true);
+  });
+  it("the name is re-asked on P8 (git ignores the path)", async () => {
+    const s = await setup();
+    await fs.writeFile(path.join(s.forge, ".gitignore"), "profiles/initech/\n");
+    git(s.forge, "add", ".gitignore");
+    git(s.forge, "commit", "-q", "-m", "ignore");
+    const sc = script(["0", "initech", "other", "", "", ""]);
+    const r = await ask(s, { forge: s.forge }, sc.io);
+    expect(sc.said).toContain("cannot create profiles/initech/profile.yaml: git ignores it");
+    if (r.kind !== "answered") throw new Error("expected answers");
+    expect(r.input.newProfile).toEqual({ name: "other" });
+  });
+  it("after a URL refused by P4 the Forge question offers no default — Enter is not that URL again", async () => {
+    const rf = await remoteForge(SPEC);
+    cleanups.push(rf.cleanup);
+    const s = await setup();
+    const sc = script([rf.url, s.forge, "", "", ""]);
+    await ask(s, { newProfile: "initech" }, sc.io);
+    expect(sc.asked[1]).toBe("Forge — a directory or a git URL: ");
+  });
+});
