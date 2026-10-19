@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
-import { classifyForge, cacheKey as computeCacheKey } from "../core/remote.js";
+import { classifyForge, cacheKey as computeCacheKey, assertNotCacheTree } from "../core/remote.js";
 import {
   loadForge,
   gitIsRepo,
@@ -551,6 +551,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     if (forgeKind === "url") throw new Error(D1);
     forgeDir = path.resolve(root, forgeValue);
   }
+
+  // A cache tree is clean and tracked, so the D3 git checks pass; refuse it before those.
+  await assertNotCacheTree(forgeDir, home);
 
   // D3: must be a git repo with at least one commit
   const realForgeDir = await fs.realpath(forgeDir);

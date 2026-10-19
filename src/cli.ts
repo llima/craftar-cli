@@ -8,7 +8,7 @@ import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
 import { holdsBaseCitations, rendersServers } from "./core/mcp-server.js";
-import { classifyForge } from "./core/remote.js";
+import { assertNotCacheTree, classifyForge } from "./core/remote.js";
 import { forget, listWorkspaces, prune, readRegistry, register, registryFile, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
@@ -2109,8 +2109,8 @@ forge
     if (frontEnds.length !== 1) fail("pass exactly one of --take, --plan or --save-plan");
     if (o.take !== undefined && o.take !== "base" && o.take !== "variant") fail(`--take must be "base" or "variant"`);
 
-    // Never through the cache: a tree there is clean and tracked, so gitUnheld would pass and the edit
-    // would be lost at the next cleanup without reaching the remote (spec 13 §4.4).
+    // Never through the cache: the URL form is refused by refuseRemote and the directory form by assertNotCacheTree;
+    // a tree there is clean and tracked, so gitUnheld would pass and the edit would be lost at the next cleanup without reaching the remote (spec 13 §4.4).
     const f = await resolveForge({
       forge: o.forge,
       workspace: o.workspace,
@@ -2126,6 +2126,7 @@ forge
 
     // Only when about to write — --save-plan touches nothing inside the Forge, so it is exempt.
     if (!o.savePlan) {
+      await assertNotCacheTree(f.root, craftarHome()).catch((e) => fail(e instanceof Error ? e.message : String(e)));
       if (f.commit === null) {
         // `gitHead` (and so `f.commit`) is also `null` for a real git repo with no commits yet —
         // that is not "not a git repository" (Ruling 22), so tell the two apart before wording it.
@@ -2602,12 +2603,13 @@ forge
   .option("--dry-run", "run every check and the first impact pass, print what would be written, and write nothing", false)
   .option("--json", "machine-readable output", false)
   .action(async (ref: string, o) => {
-    // Never through the cache, as `forge unify` (spec 13 §4.4).
+    // Never through the cache, as `forge unify` (spec 13 §4.4): the URL form is refused by refuseRemote and the directory form by assertNotCacheTree.
     const f = await resolveForge({
       forge: o.forge,
       workspace: o.workspace,
       refuseRemote: (url) => `the Forge of this workspace is remote (${url}) — clone it and pass --forge <dir>`,
     });
+    await assertNotCacheTree(f.root, craftarHome()).catch((e) => fail(e instanceof Error ? e.message : String(e)));
     // P2 (spec 29 §4.4): git is the undo, so it must be there, hold a commit and be clean — before anything is planned.
     if (f.commit === null) {
       if (await gitIsRepo(f.root)) fail(`${f.root} has no commits yet — forge promote writes to the Forge and needs git as the undo`);

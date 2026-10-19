@@ -540,6 +540,44 @@ export async function cacheDir(home: string): Promise<"absent" | "present"> {
   return "present";
 }
 
+/**
+ * Whether `child` is under `parent` (or equal), segment-wise — `path.relative` compares without case on win32, as `samePath` does.
+ */
+function isUnderOrEqual(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  if (rel === "") return true;
+  if (rel === ".." || rel.startsWith(".." + path.sep)) return false;
+  if (path.isAbsolute(rel)) return false;
+  return true;
+}
+
+/**
+ * Refuses a Forge directory that is a tree of craftar's Forge cache — its real path under (or equal
+ * to) the real path of `<home>/forges` (segment-wise; `path.relative` compares without case on win32).
+ * A cache tree is a clean, tracked git repository with a commit, so the git gates of a Forge writer
+ * pass on it, and a write there would change every workspace that reads that tree (spec 38 §4.2 P5).
+ * Every gated Forge writer calls it before its first git check. A `forges/` that does not exist
+ * passes; any other error fails closed.
+ */
+export async function assertNotCacheTree(dir: string, home: string): Promise<void> {
+  const forgesDir = path.join(home, "forges");
+  let forgesReal: string | null = null;
+  try {
+    forgesReal = await fs.realpath(forgesDir);
+  } catch (e) {
+    // Only a forges/ that does not exist passes; any other error fails closed.
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  if (forgesReal !== null) {
+    const rootReal = await fs.realpath(dir);
+    if (isUnderOrEqual(rootReal, forgesReal)) {
+      throw new Error(
+        `${dir} is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory`,
+      );
+    }
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Pruning trees (spec 26 §4.2 step 5)                                  */
 /* ------------------------------------------------------------------ */

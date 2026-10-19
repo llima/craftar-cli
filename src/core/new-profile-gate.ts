@@ -9,6 +9,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { assertNoLinkOnPath, gitHasCommit, gitIgnored, gitIsRepo, type Forge } from "./forge.js";
+import { assertNotCacheTree } from "./remote.js";
 
 /**
  * The gate of the one path `init --new-profile` creates.
@@ -19,25 +20,8 @@ import { assertNoLinkOnPath, gitHasCommit, gitIgnored, gitIsRepo, type Forge } f
 export async function newProfileGate(forge: Forge, home: string, name?: string): Promise<void> {
   const root = forge.root;
 
-  // P5: realpath(root) has realpath(path.join(home, "forges")) as an ancestor (or equal),
-  // segment-wise, compared as samePath compares — without case on win32; when <home>/forges
-  // does not exist the check passes.
-  const forgesDir = path.join(home, "forges");
-  let forgesReal: string | null = null;
-  try {
-    forgesReal = await fs.realpath(forgesDir);
-  } catch (e) {
-    // Only a forges/ that does not exist passes (spec 38 §4.2 P5); any other error fails closed.
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-  }
-  if (forgesReal !== null) {
-    const rootReal = await fs.realpath(root);
-    if (isUnderOrEqual(rootReal, forgesReal)) {
-      throw new Error(
-        `${root} is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory`,
-      );
-    }
-  }
+  // P5: the check is assertNotCacheTree
+  await assertNotCacheTree(root, home);
 
   // P6: not a git repository, or has no commit
   const isRepo = await gitIsRepo(root);
@@ -87,15 +71,4 @@ export async function newProfileGate(forge: Forge, home: string, name?: string):
   if (await gitIgnored(root, rel)) {
     throw new Error(`cannot create profiles/${name}/profile.yaml: git ignores it`);
   }
-}
-
-/**
- * Whether `child` is under `parent` (or equal), segment-wise — `path.relative` compares without case on win32, as `samePath` does.
- */
-function isUnderOrEqual(child: string, parent: string): boolean {
-  const rel = path.relative(parent, child);
-  if (rel === "") return true;
-  if (rel === ".." || rel.startsWith(".." + path.sep)) return false;
-  if (path.isAbsolute(rel)) return false;
-  return true;
 }
