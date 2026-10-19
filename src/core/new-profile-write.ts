@@ -6,6 +6,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { planInit, type InitOptions, type InitPlan } from "./init.js";
+import { errorText } from "./schema-fault.js";
 import { note, type WriteJournal } from "./unify.js";
 
 export { type WriteJournal };
@@ -106,8 +107,7 @@ export async function writeNewProfile(
     // NewProfileRaceLost passes through
     if (e instanceof NewProfileRaceLost) throw e;
     // Any other error: wrap in NewProfileLateFailure with the journal
-    const msg = e instanceof Error ? e.message : String(e);
-    throw new NewProfileLateFailure(msg, journal);
+    throw new NewProfileLateFailure(errorText(e), journal);
   }
 }
 
@@ -153,8 +153,7 @@ export async function reproveFromDisk(
     );
   } catch (e) {
     // Wrap EVERY error of the second planInit in NewProfileLateFailure
-    const msg = e instanceof Error ? e.message : String(e);
-    throw new NewProfileLateFailure(msg, journal);
+    throw new NewProfileLateFailure(errorText(e), journal);
   }
 
   // Compare: same paths and same bytes
