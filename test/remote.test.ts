@@ -396,3 +396,46 @@ describe("the Forge cache ignores every host line-ending setting (review of spec
     expect((await fs.readFile(path.join(t.dir, "craftar.forge.yaml"))).includes(0x0d)).toBe(true);
   });
 });
+
+describe('a Forge URL that starts with "-" (tech debt 2026-10-10)', () => {
+  it("is refused before git runs and before anything is written", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const calls: string[][] = [];
+    const rec: GitRunner = async (args) => {
+      calls.push(args);
+      return "";
+    };
+    for (const v of ["-x@h:p", " -x@h:p", "-oProxyCommand=x@h:p"]) {
+      await expect(ensureTree(v, null, { home, git: rec })).rejects.toThrow(
+        'a Forge URL that starts with "-" is refused — git would read it as an option',
+      );
+      try {
+        await ensureTree(v, null, { home, git: rec });
+      } catch (e) {
+        expect((e as Error).message).not.toContain("x@h");
+      }
+    }
+    expect(calls).toEqual([]);
+    await expect(fs.lstat(path.join(home, "forges"))).rejects.toThrow();
+    // Same with offline: true for -x@h:p (still refused, still no call)
+    await expect(ensureTree("-x@h:p", null, { home, git: rec, offline: true })).rejects.toThrow(
+      'a Forge URL that starts with "-" is refused — git would read it as an option',
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it("puts -- before the URL in ls-remote and fetch", async () => {
+    const { r, home } = await setup();
+    const remote: string[][] = [];
+    const rec: GitRunner = (args, opts) => {
+      if (opts?.remote) remote.push(args);
+      return defaultGit(args, opts);
+    };
+    await ensureTree(r.url, null, { home, git: rec });
+    expect(remote[0]).toEqual(["ls-remote", "--symref", "--", r.url]);
+    const f = remote.find((a) => a.includes("fetch"))!;
+    expect(f.slice(0, 7)).toEqual(["-C", f[1], "fetch", "--quiet", "--prune", "--", r.url]);
+    expect(f.indexOf("--")).toBe(f.indexOf(r.url) - 1);
+  });
+});
