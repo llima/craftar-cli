@@ -545,6 +545,24 @@ export async function cacheDir(home: string): Promise<"absent" | "present"> {
 }
 
 /**
+ * `text` with every path segment that follows `<path.resolve(home)>/forges/` or `<home>\forges\`
+ * (either separator after `forges`) up to the next `/`, `\`, white space or quote replaced by
+ * `UNVOUCHED_HIDDEN`. The no-snapshot rule, spec 39 §5.1 — vouched or not. Any first segment under
+ * `forges/` is labelled, not only an entry's name.
+ */
+export function hideCacheSegment(text: string, home: string): string {
+  // Strip trailing separators so the root `/` becomes empty and the pattern is `[/\\]forges[/\\]`
+  const resolved = path.resolve(home).replace(/[/\\]+$/, "");
+  // Escape special regex characters in the home path
+  const escaped = resolved.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Match: <home>/forges/ or <home>\forges\ followed by the segment (up to / \ space or quote)
+  // Capture the prefix (including the separator after forges) in group 1
+  const pattern = new RegExp(`(${escaped}[/\\\\]forges[/\\\\])([^/\\\\\\s"']+)`, "g");
+  // Use a function replacement to avoid $&, $1, etc. in the home path being interpreted
+  return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
+}
+
+/**
  * Whether `child` is under `parent` (or equal), segment-wise — `path.relative` compares without case on win32, as `samePath` does.
  */
 function isUnderOrEqual(child: string, parent: string): boolean {
@@ -575,10 +593,20 @@ export async function assertNotCacheTree(dir: string, home: string): Promise<voi
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
   if (forgesReal !== null) {
-    const rootReal = await realpathOfNearest(dir);
+    let rootReal: string;
+    try {
+      rootReal = await realpathOfNearest(dir);
+    } catch (e) {
+      // Fail closed: label the entry's name in the error and rethrow. The second pass covers a dir
+      // spelled through the real home when home is a link.
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(hideCacheSegment(hideCacheSegment(msg, home), path.dirname(forgesReal)));
+    }
     if (isUnderOrEqual(rootReal, forgesReal)) {
       const rel = path.relative(forgesReal, rootReal);
       const rest = rel === "" ? [] : rel.split(path.sep).slice(1);
+      // Rebuild shown from the real path's segments, so a home reached through a link is shown
+      // correctly — a second form of spec 39's no-snapshot rule beside hideCacheSegment.
       const shown = path.join(path.resolve(home), "forges", ...(rel === "" ? [] : [UNVOUCHED_HIDDEN]), ...rest);
       throw new Error(
         `${shown} is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory`,

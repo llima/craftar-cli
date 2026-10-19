@@ -133,4 +133,16 @@ describe("assertNotCacheTree", () => {
     await fs.mkdir(path.join(home, "forges"), { recursive: true });
     await expect(assertNotCacheTree(path.join(home, "elsewhere", "new"), home)).resolves.toBeUndefined();
   });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable component under <home>/forges never prints the entry's name", async () => {
+    const home = await fs.realpath(await tmpDir("craftar-checktree-"));
+    const entry = path.join(home, "forges", "secretkey-0123456789ab");
+    await fs.mkdir(path.join(entry, "trees", "c"), { recursive: true });
+    await fs.chmod(entry, 0o000);
+    cleanups.push(async () => { await fs.chmod(entry, 0o755); await fs.rm(home, { recursive: true, force: true }); });
+    const e = await assertNotCacheTree(path.join(entry, "trees", "c"), home).then(() => null, (x: Error) => x);
+    expect(e).not.toBeNull();
+    expect(e!.message).not.toContain("secretkey");
+    expect(e!.message).toContain("(a cache entry name — not shown)");
+  });
 });
