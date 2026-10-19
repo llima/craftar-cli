@@ -170,6 +170,8 @@ describe("the run (§4.4–§4.5)", () => {
     const r = s.run(["init", "--forge", path.join(trees, t), "--new-profile", "initech", "--workspace", s.ws]);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory\n$/);
+    expect(r.stderr).not.toContain(entry);
+    expect(r.stderr).toBe(`error: ${path.join(s.home, "forges", "(a cache entry name — not shown)", "trees", t)} is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory\n`);
   });
 });
 

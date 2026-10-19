@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { exists } from "./forge.js";
+import { exists, realpathOfNearest } from "./forge.js";
 import { LockBusyError, withLock, type LockOptions, type LockTiming } from "./home-lock.js";
 import { hashNormalized } from "./text.js";
 import { execProgram } from "./proc.js";
@@ -356,10 +356,14 @@ export const defaultGit: GitRunner = async (args, opts = {}) => {
   }
 };
 
+// The value is never printed.
+export const DASH_URL = 'a Forge URL that starts with "-" is refused — git would read it as an option';
+
 /** The tree for `ref` of the remote Forge at `url`, fetching first unless offline or the ref is a full SHA already cached. */
 export async function ensureTree(written: string, ref: string | null, opts: CacheOptions): Promise<CachedTree> {
   // As classifyForge reads it: git would choke on a stray leading space.
   const url = written.trim();
+  if (url.startsWith("-")) throw new Error(DASH_URL);
   const git = opts.git ?? defaultGit;
   // Absolute once: `git -C repo.git worktree add <dir>` would read a relative dir from inside repo.git.
   const home = path.resolve(opts.home);
@@ -383,7 +387,7 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
   } else {
     let refs: LsRemote;
     try {
-      refs = parseLsRemote(await git(["ls-remote", "--symref", url], { remote: true }));
+      refs = parseLsRemote(await git(["ls-remote", "--symref", "--", url], { remote: true }));
     } catch (e) {
       throw new ForgeFetchError(url, (e as Error).message, haveCopy, await cachedFallback(git, repo, haveCopy, ref, url, await fetchedAt()));
     }
@@ -396,7 +400,7 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
     await withEntryLock(entry, opts, async () => {
       if (!(await exists(path.join(repo, "HEAD")))) await git(["init", "--quiet", "--bare", repo]);
       try {
-        await git(["-C", repo, "fetch", "--quiet", "--prune", url, "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"], { remote: true });
+        await git(["-C", repo, "fetch", "--quiet", "--prune", "--", url, "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"], { remote: true });
       } catch (e) {
         throw new ForgeFetchError(url, (e as Error).message, haveCopy, await cachedFallback(git, repo, haveCopy, ref, url, await fetchedAt()));
       }
@@ -538,6 +542,85 @@ export async function cacheDir(home: string): Promise<"absent" | "present"> {
   if (st === null) return "absent";
   if (!st.isDirectory()) throw new Error(`cannot read ${forges}: not a directory`);
   return "present";
+}
+
+/**
+ * `text` with every path segment that follows `<path.resolve(home)>/forges/` or `<home>\forges\`
+ * (either separator after `forges`) up to the next `/`, `\`, white space or quote replaced by
+ * `UNVOUCHED_HIDDEN`. The no-snapshot rule, spec 39 §5.1 — vouched or not. Any first segment under
+ * `forges/` is labelled, not only an entry's name.
+ *
+ * When `home` is an array of homes, **one** regex matches them all in one pass, so a label inserted
+ * for one home is never matched by another — the fix for homes where one is a string suffix of the
+ * other (e.g. `/home` as a link to `/var/home`).
+ */
+export function hideCacheSegment(text: string, home: string | readonly string[]): string {
+  const homes = Array.isArray(home) ? home : [home];
+  // Resolve, strip trailing separators, escape, de-duplicate and sort longest first (so a longer
+  // prefix is tried before a shorter one that is a suffix of it).
+  const escaped = [...new Set(homes.map((h) => path.resolve(h).replace(/[/\\]+$/, "")))]
+    .sort((a, b) => b.length - a.length)
+    .map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (escaped.length === 0) return text;
+  // Match: <any home>/forges/ or <any home>\forges\ followed by the segment (up to / \ space or quote)
+  // Capture the prefix (including the separator after forges) in group 1
+  const pattern = new RegExp(`((?:${escaped.join("|")})[/\\\\]forges[/\\\\])([^/\\\\\\s"']+)`, "g");
+  // Use a function replacement to avoid $&, $1, etc. in the home path being interpreted
+  return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
+}
+
+/**
+ * Whether `child` is under `parent` (or equal), segment-wise — `path.relative` compares without case on win32, as `samePath` does.
+ */
+function isUnderOrEqual(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  if (rel === "") return true;
+  if (rel === ".." || rel.startsWith(".." + path.sep)) return false;
+  if (path.isAbsolute(rel)) return false;
+  return true;
+}
+
+/**
+ * Refuses a Forge directory that is a tree of craftar's Forge cache — its real path under (or equal
+ * to) the real path of `<home>/forges` (segment-wise; `path.relative` compares without case on win32).
+ * A cache tree is a clean, tracked git repository with a commit, so the git gates of a Forge writer
+ * pass on it, and a write there would change every workspace that reads that tree (spec 38 §4.2 P5).
+ * Every gated Forge writer calls it before its first git check. A directory that does not exist yet
+ * is judged by its nearest existing ancestor. A `forges/` that does not exist passes; any other
+ * error fails closed. The message names the directory by its place in the cache, with the entry's
+ * name replaced by `UNVOUCHED_HIDDEN` (spec 39), never as given.
+ */
+export async function assertNotCacheTree(dir: string, home: string): Promise<void> {
+  const forgesDir = path.join(home, "forges");
+  let forgesReal: string | null = null;
+  try {
+    forgesReal = await fs.realpath(forgesDir);
+  } catch (e) {
+    // Only a forges/ that does not exist passes; any other error fails closed.
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  if (forgesReal !== null) {
+    let rootReal: string;
+    try {
+      rootReal = await realpathOfNearest(dir);
+    } catch (e) {
+      // Fail closed: label the entry's name in the error and rethrow. One pass over both prefixes
+      // (the home as given and the real home), since a second pass could match inside the label
+      // when one prefix ends with the other.
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(hideCacheSegment(msg, [home, path.dirname(forgesReal)]));
+    }
+    if (isUnderOrEqual(rootReal, forgesReal)) {
+      const rel = path.relative(forgesReal, rootReal);
+      const rest = rel === "" ? [] : rel.split(path.sep).slice(1);
+      // Rebuild shown from the real path's segments, so a home reached through a link is shown
+      // correctly — a second form of spec 39's no-snapshot rule beside hideCacheSegment.
+      const shown = path.join(path.resolve(home), "forges", ...(rel === "" ? [] : [UNVOUCHED_HIDDEN]), ...rest);
+      throw new Error(
+        `${shown} is a tree of craftar's Forge cache — nothing is written there; clone the Forge and pass that directory`,
+      );
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ */

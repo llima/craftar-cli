@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
-import { classifyForge, cacheKey as computeCacheKey } from "../core/remote.js";
+import { classifyForge, cacheKey as computeCacheKey, assertNotCacheTree } from "../core/remote.js";
 import {
   loadForge,
   gitIsRepo,
@@ -520,8 +520,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   if (input.forgeDir !== null) {
     // --forge given: verify it's this workspace's Forge
     forgeDir = path.resolve(input.forgeDir);
+    // The cache check comes before D2, whose messages print paths.
+    await assertNotCacheTree(forgeDir, home);
     if (forgeKind === "path") {
       // D2: path Forge — must be the same real path
+      await assertNotCacheTree(path.resolve(root, forgeValue), home);
       const realWorkspaceForge = await fs.realpath(path.resolve(root, forgeValue));
       const realGiven = await fs.realpath(forgeDir);
       if (realWorkspaceForge !== realGiven) throw new Error(D2_PATH(input.forgeDir, realWorkspaceForge));
@@ -550,6 +553,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     // No --forge: the workspace must have a path Forge (D1)
     if (forgeKind === "url") throw new Error(D1);
     forgeDir = path.resolve(root, forgeValue);
+    await assertNotCacheTree(forgeDir, home);
   }
 
   // D3: must be a git repo with at least one commit

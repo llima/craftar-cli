@@ -270,22 +270,8 @@ export function hideCacheKeys(text: string, credential: readonly string[], unvou
   return out;
 }
 
-/**
- * `text` with every path segment that follows `<path.resolve(home)>/forges/` or `<home>\forges\`
- * (either separator after `forges`) up to the next `/`, `\`, white space or quote replaced by
- * `UNVOUCHED_HIDDEN`. The no-snapshot rule, spec 39 §5.1 — vouched or not.
- */
-export function hideCacheSegment(text: string, home: string): string {
-  // Strip trailing separators so the root `/` becomes empty and the pattern is `[/\\]forges[/\\]`
-  const resolved = path.resolve(home).replace(/[/\\]+$/, "");
-  // Escape special regex characters in the home path
-  const escaped = resolved.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // Match: <home>/forges/ or <home>\forges\ followed by the segment (up to / \ space or quote)
-  // Capture the prefix (including the separator after forges) in group 1
-  const pattern = new RegExp(`(${escaped}[/\\\\]forges[/\\\\])([^/\\\\\\s"']+)`, "g");
-  // Use a function replacement to avoid $&, $1, etc. in the home path being interpreted
-  return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
-}
+/** `hideCacheSegment` lives in `remote.ts` (the module that reads the cache layout); re-exported for its callers here. */
+export { hideCacheSegment } from "./remote.js";
 
 /** Whether `dir` has a registry entry — by real path, without case on Windows, as `register` keys it (spec 24 §5.1). */
 export async function isRegistered(reg: Registry, dir: string): Promise<boolean> {
