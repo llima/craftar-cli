@@ -270,12 +270,7 @@ export function hideCacheKeys(text: string, credential: readonly string[], unvou
   return out;
 }
 
-/**
- * `text` with every path segment that follows `<path.resolve(home)>/forges/` or `<home>\forges\`
- * (either separator after `forges`) up to the next `/`, `\`, white space or quote replaced by
- * `UNVOUCHED_HIDDEN`. The no-snapshot rule, spec 39 §5.1 — vouched or not. Any first segment under
- * `forges/` is labelled, not only an entry's name.
- */
+/** `hideCacheSegment` lives in `remote.ts` (the module that reads the cache layout); re-exported for its callers here. */
 export { hideCacheSegment } from "./remote.js";
 
 /** Whether `dir` has a registry entry — by real path, without case on Windows, as `register` keys it (spec 24 §5.1). */
