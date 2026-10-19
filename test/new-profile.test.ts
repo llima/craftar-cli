@@ -186,3 +186,18 @@ describe("newProfile — a template's integrations block (§6 case 8, Ruling 3)"
     expect(r.blockNote).toBe("integrations of acme not copied — the block does not read, so what it selects is not known");
   });
 });
+
+describe("newProfile — recipe names YAML would misread (review round 2)", () => {
+  it("a recipe named 123, true or null is written quoted and reads back as that string", async () => {
+    const forge = await forgeOf({ ...BASE_SPEC, recipes: [...(BASE_SPEC.recipes ?? []), recipe("123", ["rule/a"]), recipe("true", ["rule/b"]), recipe("null", ["rule/c"])] });
+    const r = newProfile(forge, { name: "initech", add: ["123", "true", "null"] });
+    const back = YAML.parse(r.text);
+    expect(back.recipes).toEqual(["123", "true", "null"]);
+    expect(ProfileSchema.parse(back).recipes).toEqual(r.profile.recipes);
+    expect(r.text).toContain('  - "123"\n');
+  });
+  it("plain names stay unquoted (the §4.4 bytes)", async () => {
+    const forge = await forgeOf(BASE_SPEC);
+    expect(newProfile(forge, { name: "initech", like: "acme" }).text).toContain("  - base\n  - stack-node\n");
+  });
+});

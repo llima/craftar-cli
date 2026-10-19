@@ -3,18 +3,29 @@
  * No fs, no process, no console — all validation and generation is deterministic.
  */
 
+import YAML from "yaml";
 import { ProfileSchema, WorkspaceConfigSchema, type Profile } from "../schema/index.js";
 import type { Forge } from "./forge.js";
 import { effectiveProfile } from "./integrations.js";
 import { namedForProfile } from "./promote.js";
 import { planRecipeEdit } from "./recipe-edit.js";
 import { profileNotFoundMessage } from "./resolve.js";
+import { parseYamlText } from "./yaml-read.js";
 
 /** Windows device names (spec 38 §5.1 P3). */
 const DEVICE_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 
 /** Profile name grammar: lowercase letters and digits, in groups joined by one "-". */
 const PROFILE_NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/**
+ * YAML-safe a list item: when `YAML.stringify(value).trim()` differs from the plain value,
+ * use the stringified form (so `123`, `true`, `null` are quoted).
+ */
+function yamlSafe(value: string): string {
+  const stringified = YAML.stringify(value).trim();
+  return stringified !== value ? stringified : value;
+}
 
 /**
  * P3: Validates a profile name. Throws with a quoted name on failure.
@@ -166,14 +177,25 @@ export function newProfile(forge: Forge, o: NewProfileOptions): NewProfileResult
   } else {
     lines.push("recipes:");
     for (const r of finalRecipes) {
-      lines.push(`  - ${r}`);
+      lines.push(`  - ${yamlSafe(r)}`);
     }
   }
   lines.push("targets:");
   for (const t of targets) {
-    lines.push(`  - ${t}`);
+    lines.push(`  - ${yamlSafe(t)}`);
   }
   const text = lines.join("\n") + "\n";
+
+  // Prove that text parses back to the profile — a programming error otherwise
+  const parsed = parseYamlText("generated profile", text);
+  const parsedProfile = ProfileSchema.parse(parsed);
+  if (
+    parsedProfile.name !== profile.name ||
+    JSON.stringify(parsedProfile.recipes) !== JSON.stringify(profile.recipes) ||
+    JSON.stringify(parsedProfile.targets) !== JSON.stringify(profile.targets)
+  ) {
+    throw new Error(`newProfile: the generated text does not match the profile (programming error)`);
+  }
 
   // 8. blockNote (only with a template)
   let blockNote: string | null = null;
