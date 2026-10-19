@@ -5,6 +5,7 @@ import { cloneRepos, destinationFault, findGit, listRepos, planClone, type Desti
 import type { RepoEntry } from "../src/core/repos.js";
 import type { RunRequest } from "../src/core/proc.js";
 import { tmpDir } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 
 // Spec 37 §5.1 *Destination*, §5.2 and §10 — C5 in each of its forms, the listing's states, planClone's refusals
 // (C3–C5, R1–R3), findGit, and cloneRepos with a recording runner. No test runs git: the runner is injected.
@@ -17,7 +18,7 @@ afterEach(async () => {
 });
 async function scratch(prefix = "craftar-clone-"): Promise<string> {
   const dir = await fs.realpath(await tmpDir(prefix));
-  cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(dir));
   return dir;
 }
 const entry = (name: string, extra: Partial<RepoEntry> = {}): RepoEntry => ({ name, url: `https://git.example.com/acme/${name}.git`, path: name, ref: null, ...extra });
@@ -238,7 +239,7 @@ describe("findGit — onPath, nothing else", () => {
     // spelling exists on win32 too — a temp dir may sit on another drive, where path.relative gives an absolute path.
     const dir = path.join(process.cwd(), "node_modules", ".cache", `craftar-findgit-${process.pid}-${Date.now()}`);
     await fs.mkdir(dir, { recursive: true });
-    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(dir));
     await fs.copyFile(process.execPath, path.join(dir, "git" + EXE));
     await fs.chmod(path.join(dir, "git" + EXE), 0o755);
     const rel = path.relative(process.cwd(), dir);
