@@ -142,7 +142,7 @@ describe("assertNotCacheTree", () => {
     cleanups.push(async () => { await fs.chmod(entry, 0o755); await fs.rm(home, { recursive: true, force: true }); });
     const e = await assertNotCacheTree(path.join(entry, "trees", "c"), home).then(() => null, (x: Error) => x);
     expect(e).not.toBeNull();
+    expect(e!.message).toBe(`${path.join(home, "forges", "(a cache entry name — not shown)", "trees", "c")} cannot be inspected (EACCES)`);
     expect(e!.message).not.toContain("secretkey");
-    expect(e!.message).toContain("(a cache entry name — not shown)");
   });
 });

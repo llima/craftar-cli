@@ -597,10 +597,12 @@ export async function assertNotCacheTree(dir: string, home: string): Promise<voi
     try {
       rootReal = await realpathOfNearest(dir);
     } catch (e) {
-      // Fail closed: label the entry's name in the error and rethrow. The second pass covers a dir
-      // spelled through the real home when home is a link.
-      const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(hideCacheSegment(hideCacheSegment(msg, home), path.dirname(forgesReal)));
+      // Fail closed: label the entry's name in the error and rethrow. One pass per distinct prefix
+      // (the home as given, and the real home when it differs), because a second pass over the
+      // same prefix would match inside the label.
+      let out = e instanceof Error ? e.message : String(e);
+      for (const prefix of new Set([path.resolve(home), path.dirname(forgesReal)])) out = hideCacheSegment(out, prefix);
+      throw new Error(out);
     }
     if (isUnderOrEqual(rootReal, forgesReal)) {
       const rel = path.relative(forgesReal, rootReal);
