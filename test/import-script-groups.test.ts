@@ -1,11 +1,24 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { promises as fs } from "node:fs";
+import { promises as fs, mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
-import { importClaudeCode } from "../src/importers/claude-code.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { importClaudeCode, mergeEmitted, type EmittedSource } from "../src/importers/claude-code.js";
 import { exists } from "../src/core/forge.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import { tmpDir, writeFiles } from "./helpers/forge.js";
+
+// Synchronous probe at module load: case-insensitive on NTFS/APFS, case-sensitive on most Linux.
+const caseInsensitiveFs = (() => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "craftar-case-"));
+  try {
+    writeFileSync(path.join(dir, "probe.txt"), "probe");
+    return existsSync(path.join(dir, "PROBE.TXT"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -19,18 +32,6 @@ async function setup() {
 const importInto = (forge: string, workspaceRoot: string, profileName: string) =>
   importClaudeCode({ workspaceRoot, forgeRoot: forge, profileName });
 const yaml = async (f: string) => YAML.parse(await fs.readFile(f, "utf8"));
-
-// Detect case-insensitive file system at module load
-let caseInsensitiveFs = false;
-(async () => {
-  const probeTmpDir = await tmpDir("craftar-fs-probe-");
-  try {
-    await fs.writeFile(path.join(probeTmpDir, "probe.txt"), "probe");
-    caseInsensitiveFs = await exists(path.join(probeTmpDir, "PROBE.TXT"));
-  } finally {
-    await fs.rm(probeTmpDir, { recursive: true, force: true });
-  }
-})();
 
 describe("import groups scripts/hooks by base name", () => {
   it("1. two scripts with one base name become one ingredient listing both", async () => {
@@ -210,9 +211,13 @@ describe("import groups scripts/hooks by base name", () => {
     });
     const r = await importInto(t.forge, t.ws("a"), "acme");
 
-    // Record for report
-    console.log("Case 7 — r.warnings:", r.warnings);
-    console.log("Case 7 — r.variants:", r.variants);
+    // The re-import produces a variant (old shape differs from new)
+    expect(r.variants).toEqual([{ name: "script/run-x--acme", reason: "differs from script/run-x already in the Forge" }]);
+
+    // The recipe no longer lists script/run-x but lists the variant
+    const recipeMeta = await yaml(path.join(t.forge, "recipes/base--acme.yaml"));
+    expect(recipeMeta.ingredients).not.toContain("script/run-x");
+    expect(recipeMeta.ingredients).toContain("script/run-x--acme");
 
     // The variant directory should now have BOTH files
     const variantMeta = await yaml(path.join(t.forge, "ingredients/scripts/run-x--acme/ingredient.yaml"));
@@ -226,8 +231,8 @@ describe("import groups scripts/hooks by base name", () => {
     const ws = await loadWorkspace(t.ws("a"));
     const p = await plan(ws);
 
-    // Record for report
-    console.log("Case 7 — plan warnings:", p.warnings);
+    // No duplicate-write warning
+    expect(p.warnings.filter((w) => w.startsWith("two ingredients write"))).toEqual([]);
 
     // Both planned files equal sources
     const ps1File = p.files.find((f) => f.path === ".claude/scripts/run-x.ps1")!;
@@ -277,5 +282,90 @@ describe("import groups scripts/hooks by base name", () => {
     expect(r.warnings).toContain(
       "ingredients/scripts/run-x--acme/stale.sh is not in the files of script/run-x--acme — sync does not write it; remove it by hand",
     );
+  });
+
+  it("9. a secret in the second file of a group names that file", async () => {
+    const t = await setup();
+    // Assemble token at runtime to avoid tripping the repo's own secret scanner
+    const token = "ghp_" + "x".repeat(36);
+    await writeFiles(t.ws("a"), {
+      ".claude/scripts/run-x.ps1": "Write-Host hi\n",
+      ".claude/scripts/run-x.sh": "echo hi\ntoken=" + token + "\n",
+    });
+    const r = await importInto(t.forge, t.ws("a"), "acme");
+
+    // The rejection must name the .sh file (where the secret is), not the .ps1 file
+    expect(r.rejected).toEqual([
+      { name: "script/run-x", reason: "secret-like value (github-token) in .claude/scripts/run-x.sh line 2" },
+    ]);
+
+    // No ingredient written
+    expect(await exists(path.join(t.forge, "ingredients/scripts/run-x"))).toBe(false);
+  });
+});
+
+describe("mergeEmitted", () => {
+  it("one part is returned as is", () => {
+    const part: EmittedSource = {
+      meta: { type: "script", name: "x", files: ["x.sh"], targets: ["claude-code"], tags: [] },
+      files: { "x.sh": "echo x\n" },
+      scan: {},
+    };
+    const merged = mergeEmitted([part]);
+    expect(merged).toBe(part);
+  });
+
+  it("three parts: files concatenated in order, union of files/scan, warnings concatenated", () => {
+    const a: EmittedSource = {
+      meta: { type: "script", name: "x", files: ["a.sh"], targets: ["claude-code"], tags: [], origin: { workspace: "w", path: ".claude/scripts/a.sh" } },
+      files: { "a.sh": "echo a\n" },
+      scan: { "a.sh": "scanned a" },
+      warnings: ["warn a"],
+    };
+    const b: EmittedSource = {
+      meta: { type: "script", name: "x", files: ["b.ps1"], targets: ["claude-code"], tags: [], origin: { workspace: "w", path: ".claude/scripts/b.ps1" } },
+      files: { "b.ps1": "Write b\n" },
+      scan: {},
+    };
+    const c: EmittedSource = {
+      meta: { type: "script", name: "x", files: ["c.sh"], targets: ["claude-code"], tags: [], origin: { workspace: "w", path: ".claude/scripts/c.sh" } },
+      files: { "c.sh": "echo c\n" },
+      scan: { "c.sh": "scanned c" },
+      warnings: ["warn c"],
+    };
+
+    const merged = mergeEmitted([a, b, c]);
+
+    // Meta from first part, files list concatenated
+    expect((merged.meta as { files?: string[] }).files).toEqual(["a.sh", "b.ps1", "c.sh"]);
+
+    // Origin is the first part's origin (unchanged)
+    expect(merged.meta.origin).toEqual({ workspace: "w", path: ".claude/scripts/a.sh" });
+
+    // Files is the union of all
+    expect(merged.files).toEqual({ "a.sh": "echo a\n", "b.ps1": "Write b\n", "c.sh": "echo c\n" });
+
+    // Scan is the union of all
+    expect(merged.scan).toEqual({ "a.sh": "scanned a", "c.sh": "scanned c" });
+
+    // Warnings concatenated
+    expect(merged.warnings).toEqual(["warn a", "warn c"]);
+  });
+
+  it("warnings key absent when no part has warnings", () => {
+    const a: EmittedSource = {
+      meta: { type: "script", name: "x", files: ["a.sh"], targets: ["claude-code"], tags: [] },
+      files: { "a.sh": "echo a\n" },
+      scan: {},
+    };
+    const b: EmittedSource = {
+      meta: { type: "script", name: "x", files: ["b.sh"], targets: ["claude-code"], tags: [] },
+      files: { "b.sh": "echo b\n" },
+      scan: {},
+    };
+
+    const merged = mergeEmitted([a, b]);
+
+    expect("warnings" in merged).toBe(false);
   });
 });
