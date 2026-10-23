@@ -123,7 +123,7 @@ describe("craftar repos — the listing", () => {
     const lines = r.stdout.split("\n");
     expect(lines[0]).toBe("profile acme lists no repositories");
     // An undeclared key is left verbatim silently — no warning line
-    expect(lines.length).toBeLessThanOrEqual(2); // "profile acme lists no repositories" + empty line
+    expect(lines.length).toBe(2); // "profile acme lists no repositories" + empty line from trailing newline
   });
   it("C4: the block does not read — exit 1", async () => {
     const s = await setup({ repos: [{ name: "a" }] });
