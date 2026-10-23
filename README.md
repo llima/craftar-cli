@@ -521,6 +521,10 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; `craftar docs validate`;
 
 ## Upgrading
 
+### to 0.34.2
+
+- **`import` now creates one script/hook ingredient per base name**, listing every file that shares that name (e.g., `run-x.ps1` and `run-x.sh` become one `script/run-x` with `files: ["run-x.ps1", "run-x.sh"]`). A Forge imported before keeps its shape (a base with one file and a `<name>--<profile>` variant with the other); a re-import rewrites that variant with both files. No emitted byte changes; a Forge with the old shape may be fixed with `forge promote` or by hand.
+
 ### to 0.34.1
 
 - **`forge unify`, `forge promote`, `drift promote` and `import` refuse a tree of craftar's Forge cache** passed as the Forge directory (`--forge <dir>`, or — for the first three — a workspace's `forge:` path), as `init --new-profile` has since 0.34.0. A cache tree is a clean, tracked git repository with a commit, so the git gates of the first three passed (`import` has none) and the edit landed in the tree that every workspace reading that Forge at that commit plans from. `import` also refuses a `--forge` it would create inside the cache. `drift promote` gets it before the `--forge` match, whose messages print the paths they compare. `forge unify --save-plan` still reads a tree.
