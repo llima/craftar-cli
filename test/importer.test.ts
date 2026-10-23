@@ -327,7 +327,7 @@ describe("import --from claude-code — all checks before the first write", () =
     expect(await snapshot(t.forge)).toEqual(before);
   });
 
-  it("compares a later ingredient against one staged earlier in the same run", async () => {
+  it("two hook files with one base name are one ingredient", async () => {
     // Two hook files with the same base name: they are now grouped into one ingredient listing both.
     // (Before the fix, the second saw the first as already in the Forge and became a variant.)
     const t = await setup();
@@ -346,6 +346,27 @@ describe("import --from claude-code — all checks before the first write", () =
     // ingredient.yaml lists both files
     const meta = YAML.parse(await fs.readFile(path.join(t.forge, "ingredients/hooks/guard/ingredient.yaml"), "utf8"));
     expect(meta.files).toEqual(["guard.ps1", "guard.sh"]);
+  });
+
+  it("compares a later ingredient against one staged earlier in the same run", async () => {
+    // .claude/skills/x (dir) and .claude/skills/x.md (file) both map to skill/x.
+    // The loop sorts entries by name, so x (dir) comes before x.md (file).
+    // The first one gets the base, the second becomes a variant because the base is already staged.
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".claude/skills/x/SKILL.md": "---\nname: x\ndescription: one\n---\n\nbody one\n",
+      ".claude/skills/x.md": "---\nname: x\ndescription: two\n---\n\nbody two\n",
+    });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.created).toContain("skill/x");
+    expect(r.variants).toEqual([{ name: "skill/x--api", reason: "differs from skill/x already in the Forge" }]);
+    // Both ingredient directories exist
+    expect(await exists(path.join(t.forge, "ingredients/skills/x/"))).toBe(true);
+    expect(await exists(path.join(t.forge, "ingredients/skills/x--api/"))).toBe(true);
+    // The base comes from the dir layout (x/ → processed first), the variant from the file layout (x.md)
+    expect(await fs.readFile(path.join(t.forge, "ingredients/skills/x/SKILL.md"), "utf8")).toBe("---\nname: x\ndescription: one\n---\n\nbody one\n");
+    expect(await fs.readFile(path.join(t.forge, "ingredients/skills/x--api/SKILL.md"), "utf8")).toBe("---\nname: x\ndescription: two\n---\n\nbody two\n");
   });
 });
 
