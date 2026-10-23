@@ -63,10 +63,8 @@ describe("spec 33 §9.2 — resolve() reads the effective profile", () => {
       p2.files.map((f) => [f.path, f.content.toString("base64")])
     );
 
-    // the two warnings arrays are toEqual, and each is exactly this
-    expect(p1.warnings).toEqual([
-      'param "integrations.pm.org" has no value in any layer — left verbatim (rule/where)',
-    ]);
+    // the two warnings arrays are toEqual, and each is empty (at schema 2, integrations.* keys are undeclared)
+    expect(p1.warnings).toEqual([]);
     expect(p2.warnings).toEqual(p1.warnings);
 
     // text check
@@ -80,7 +78,8 @@ describe("spec 33 §9.2 — resolve() reads the effective profile", () => {
     expect(p1s1.files.map((f) => [f.path, f.content.toString("base64")])).toEqual(
       p1.files.map((f) => [f.path, f.content.toString("base64")])
     );
-    expect(p1s1.warnings).toEqual(p1.warnings);
+    // At schema 1, integrations.* keys are also undeclared — no warning
+    expect(p1s1.warnings).toEqual([]);
     expect(text(p1s1, ".claude/rules/where.md")).toBe("Org {{integrations.pm.org}}\n");
   });
 

@@ -115,14 +115,12 @@ describe("craftar repos — the listing", () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("profile acme lists no repositories\n");
   });
-  it("a profile with no entry whose plan warns: the warn line follows the one line (review round 3)", async () => {
+  it("a profile with no entry and an undeclared param: no warn line (undeclared keys are left silently)", async () => {
     const s = await setup({ repos: [] });
     await fs.writeFile(path.join(s.forge, "ingredients", "rules", "a", "rule.md"), "# A {{nobody.sets.this}}\n");
     const r = s.run(["repos"]);
     expect(r.code, r.stderr).toBe(0);
-    const lines = r.stdout.split("\n");
-    expect(lines[0]).toBe("profile acme lists no repositories");
-    expect(lines[1]).toMatch(/^  warn .*nobody\.sets\.this/);
+    expect(r.stdout).toBe("profile acme lists no repositories\n");
   });
   it("C4: the block does not read — exit 1", async () => {
     const s = await setup({ repos: [{ name: "a" }] });

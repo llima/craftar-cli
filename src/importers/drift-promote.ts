@@ -54,6 +54,7 @@ import {
   resolvedRecipes,
   recipeFile,
   ForgeStage,
+  mergeEmitted,
   type EmittedSource,
 } from "./claude-code.js";
 import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
@@ -689,23 +690,21 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     throw new Error(`cannot promote ${ingredientRef} — unsupported type`);
   }
 
-  // For scripts/hooks with multiple files, read each file and merge
+  // For scripts/hooks with multiple files, read each file and merge using mergeEmitted
   const scriptHookFiles = (meta.type === "script" || meta.type === "hook") ? (meta.files ?? [rel]) : null;
   let emitted: EmittedSource | null;
-  let mergedFiles: Record<string, string | Buffer> = {};
-  let mergedScan: Record<string, string> = {};
 
   if (scriptHookFiles && scriptHookFiles.length > 1) {
-    // Read each file and merge
+    // Read each file with readEmitted, in the ingredient's files order
+    const parts: EmittedSource[] = [];
     for (const fileRel of scriptHookFiles) {
       const fileEmitted = await readEmitted(claudeDir, readType, fileRel, (r) => ({ workspace: path.basename(root), path: r }));
       if (!fileEmitted) throw new Error(`cannot read ${readType} file ${fileRel} from ${claudeDir}`);
-      Object.assign(mergedFiles, fileEmitted.files);
-      Object.assign(mergedScan, fileEmitted.scan);
+      parts.push(fileEmitted);
     }
-    // Use the first file's metadata as base but with files from the original ingredient
-    const firstEmitted = await readEmitted(claudeDir, readType, scriptHookFiles[0], (r) => ({ workspace: path.basename(root), path: r }));
-    emitted = firstEmitted ? { meta: { ...firstEmitted.meta, files: scriptHookFiles } as Ingredient, files: mergedFiles, scan: mergedScan } : null;
+    const merged = mergeEmitted(parts);
+    // Use the original ingredient's files list (meta.files) to preserve order
+    emitted = { ...merged, meta: { ...merged.meta, files: scriptHookFiles } as Ingredient };
   } else {
     // Single file case: call readEmitted normally
     emitted = await readEmitted(claudeDir, readType, rel, (r) => ({ workspace: path.basename(root), path: r }));

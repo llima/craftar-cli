@@ -33,13 +33,15 @@ async function planned(f: ForgeSpec, w: WorkspaceSpec = { config: { profile: "ac
 const ORG_WARNING = 'param "org" has no value in any layer — left verbatim (rule/a, rule/b)';
 
 describe("unset declared parameters — plan", () => {
-  it("missingParams names who declares each key: the declaring ingredient, or nobody", async () => {
+  it("missingParams names who declares each key: the declaring ingredient, or nobody; only declared keys warn", async () => {
     const { p } = await planned(forge());
     expect(p.missingParams).toEqual([
       { key: "free", refs: ["rule/b"], warning: 'param "free" has no value in any layer — left verbatim (rule/b)', declaredBy: [] },
       { key: "org", refs: ["rule/a", "rule/b"], warning: ORG_WARNING, declaredBy: ["rule/a"] },
     ]);
+    // Only the declared key's warning is in p.warnings
     expect(p.warnings).toContain(ORG_WARNING);
+    expect(p.warnings).not.toContain('param "free" has no value in any layer — left verbatim (rule/b)');
   });
 
   it("unsetDeclared keeps only the declared ones, and the plan still holds the files with {{org}} verbatim", async () => {

@@ -263,11 +263,53 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
 
   /* ---- scripts & hooks ---- */
   for (const kind of ["scripts", "hooks"] as const) {
+    const type = kind === "scripts" ? "script" : "hook";
+    // Read each file and group by the base name (lowercased) that readEmitted gives
+    const emittedList: EmittedSource[] = [];
     for (const f of await safeList(path.join(claudeDir, kind))) {
       if (f === ".gitkeep" || f.startsWith("__pycache__") || f.endsWith(".pyc")) continue;
-      const emitted = await readEmitted(claudeDir, kind === "scripts" ? "script" : "hook", f, origin);
+      const emitted = await readEmitted(claudeDir, type, f, origin);
       if (!emitted) continue;
-      read(emitted.meta, emitted.files, emitted.scan, (ref) => addRef(refs.base, ref));
+      emittedList.push(emitted);
+    }
+    // Group by ingredient name (lowercased base name)
+    const groups = new Map<string, EmittedSource[]>();
+    for (const e of emittedList) {
+      const name = e.meta.name; // already lowercased by readEmitted
+      const list = groups.get(name) ?? [];
+      list.push(e);
+      groups.set(name, list);
+    }
+    // Queue one ingredient per group
+    for (const [name, parts] of groups) {
+      // Case collision check: do any two files in the group have names equal ignoring case?
+      const allFiles = parts.flatMap((p) => (p.meta as { files?: string[] }).files ?? []);
+      const seenLower = new Map<string, string>(); // lowercase → original
+      let collision: { a: string; b: string } | null = null;
+      for (const f of allFiles) {
+        const lower = f.toLowerCase();
+        const prev = seenLower.get(lower);
+        if (prev !== undefined && prev !== f) {
+          // Collision: two different file names map to same lowercase
+          const [a, b] = [prev, f].sort();
+          collision = { a, b };
+          break;
+        }
+        seenLower.set(lower, f);
+      }
+      if (collision) {
+        report.rejected.push({
+          name: `${type}/${name}`,
+          reason: `files ${collision.a} and ${collision.b} differ only in case — they would collide on a case-insensitive checkout`,
+        });
+        continue;
+      }
+      const merged = mergeEmitted(parts);
+      // Copy any warnings from mergeEmitted into the report
+      if (merged.warnings) {
+        for (const w of merged.warnings) report.warnings.push(w);
+      }
+      read(merged.meta, merged.files, merged.scan, (ref) => addRef(refs.base, ref));
     }
   }
 
@@ -638,6 +680,32 @@ export interface EmittedSource {
 }
 
 /**
+ * Merge multiple EmittedSource parts that share a base name into one ingredient.
+ * The meta of `parts[0]` is kept with `files` listing every file from all parts in order;
+ * `files` and `scan` are the unions of all parts; `warnings` are concatenated (key omitted when empty).
+ */
+export function mergeEmitted(parts: EmittedSource[]): EmittedSource {
+  if (parts.length === 0) throw new Error("mergeEmitted: parts must not be empty");
+  if (parts.length === 1) return parts[0];
+  const first = parts[0];
+  const mergedMeta = { ...first.meta } as Ingredient & { files?: string[] };
+  // Build the files list from each part's meta.files (not from their files map keys, to preserve original order)
+  const filesList: string[] = [];
+  for (const p of parts) {
+    const partFiles = (p.meta as { files?: string[] }).files ?? [];
+    for (const f of partFiles) filesList.push(f);
+  }
+  mergedMeta.files = filesList;
+  const mergedFiles: Record<string, string | Buffer> = {};
+  for (const p of parts) Object.assign(mergedFiles, p.files);
+  const mergedScan: Record<string, string> = {};
+  for (const p of parts) Object.assign(mergedScan, p.scan);
+  const mergedWarnings: string[] = [];
+  for (const p of parts) if (p.warnings) mergedWarnings.push(...p.warnings);
+  return { meta: mergedMeta, files: mergedFiles, scan: mergedScan, ...(mergedWarnings.length > 0 ? { warnings: mergedWarnings } : {}) };
+}
+
+/**
  * A Claude rule's `paths:`, read from its raw frontmatter. `present` says the key is there; `value` is set only
  * when it is usable — a non-empty string, or a non-empty list of non-empty strings. YAML is tried first; when it
  * refuses the block (an unquoted `**` reads as an alias), the key is read by lines as Claude Code writes it: an
@@ -929,6 +997,20 @@ function bodyFromSteering(meta: Ingredient): boolean {
   return meta.type === "rule" && (meta.origin?.path ?? "").startsWith(".kiro/steering/");
 }
 
+/**
+ * The file path to report in a rejection message (secret, marker).
+ * - For skill dir layout: base ends with `/`, so returns `base + rel`.
+ * - For grouped scripts/hooks (files.length > 1): returns `dirname(base) + "/" + rel`.
+ * - Otherwise: returns `base` unchanged.
+ */
+function fileWhere(meta: Ingredient, base: string, rel: string): string {
+  if (meta.type === "skill" && meta.layout === "dir") return `${base}${rel}`;
+  if ((meta.type === "script" || meta.type === "hook") && meta.files && meta.files.length > 1) {
+    return `${path.posix.dirname(base)}/${rel}`;
+  }
+  return base;
+}
+
 /** First secret-like value in an ingredient about to be imported, described by location only. */
 export function secretIn(meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string> = {}, lineOffset = 0): string | null {
   const origin = meta.origin?.path ?? `${meta.type}/${meta.name}`;
@@ -941,7 +1023,7 @@ export function secretIn(meta: Ingredient, files: Record<string, string | Buffer
   const texts: { where: string; text: string; offset: number }[] = [];
   if (raw) texts.push({ where: rawWhere, text: raw, offset: 1 });
   for (const [rel, content] of Object.entries(files)) {
-    const where = meta.type === "skill" && meta.layout === "dir" ? `${origin}${rel}` : origin;
+    const where = fileWhere(meta, origin, rel);
     // A Buffer (non-allowlisted extensions such as .pem or .bat) goes through decodeForScan:
     // a UTF-16 BOM is decoded as UTF-16, otherwise a NUL byte marks it binary and unscanned.
     if (typeof content === "string") texts.push({ where, text: content, offset: bodyOffset });
@@ -953,7 +1035,7 @@ export function secretIn(meta: Ingredient, files: Record<string, string | Buffer
   // UTF-16 sources read on the text path: their stored text is mojibake no pattern matches,
   // so the whole source file, decoded correctly, is scanned too (lines count from its top).
   for (const [rel, text] of Object.entries(scan)) {
-    const where = meta.type === "skill" && meta.layout === "dir" ? `${origin}${rel}` : origin;
+    const where = fileWhere(meta, origin, rel);
     texts.push({ where, text, offset: 0 });
   }
   for (const t of texts) {
@@ -1101,6 +1183,19 @@ async function writeIngredient(
   }
   stage.write(path.join(dir, "ingredient.yaml"), YAML.stringify(yamlMeta, { lineWidth: 0 }));
   for (const [rel, content] of Object.entries(files)) stage.write(path.join(dir, rel), content);
+
+  // For script and hook, warn about leftover files in the directory
+  if (meta.type === "script" || meta.type === "hook") {
+    const diskFiles = await stage.reader().list(dir);
+    const plannedFiles = new Set(["ingredient.yaml", ...Object.keys(files)]);
+    for (const diskRel of diskFiles) {
+      if (!plannedFiles.has(diskRel)) {
+        const relDir = path.relative(forge, dir).split(path.sep).join("/");
+        report.warnings.push(`${relDir}/${diskRel} is not in the files of ${meta.type}/${name} — sync does not write it; remove it by hand`);
+      }
+    }
+  }
+
   return `${meta.type}/${name}`;
 }
 
@@ -1334,7 +1429,9 @@ export function markerIn(meta: Ingredient, files: Record<string, string | Buffer
     // the importer builds meta and file keys itself, with canonical names
     if (!bodyFile(meta, rel, null)) continue;
     const line = firstMarkerLine(toLf(stripBom(typeof content === "string" ? content : content.toString("utf8"))));
-    if (line !== null) return { where: meta.type === "skill" && meta.layout === "dir" ? `${source}${rel}` : source, line: line + offset };
+    if (line !== null) {
+      return { where: fileWhere(meta, source, rel), line: line + offset };
+    }
   }
   return null;
 }
