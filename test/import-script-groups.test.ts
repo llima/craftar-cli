@@ -3,7 +3,6 @@ import { promises as fs, mkdtempSync, writeFileSync, existsSync, rmSync } from "
 import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
-import { afterEach, describe, expect, it } from "vitest";
 import { importClaudeCode, mergeEmitted, type EmittedSource } from "../src/importers/claude-code.js";
 import { exists } from "../src/core/forge.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
