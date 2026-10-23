@@ -244,7 +244,7 @@ export interface McpWriters {
     merged: MergedConfig,
     op: RecipeOp,
     names: string[],
-    opts: { replace?: boolean; fetch: boolean; home: string; git?: LoadOptions["git"] },
+    opts: { replace?: boolean; fetch: boolean; git?: LoadOptions["git"] },
   ): Promise<RecipeToolResult>;
 }
 
@@ -313,9 +313,9 @@ export function mcpWriters(home: string, registryOff: boolean): McpWriters {
       merged: MergedConfig,
       op: RecipeOp,
       names: string[],
-      opts: { replace?: boolean; fetch: boolean; home: string; git?: LoadOptions["git"] },
+      opts: { replace?: boolean; fetch: boolean; git?: LoadOptions["git"] },
     ): Promise<RecipeToolResult> {
-      const ws = await loadForgeFor(root, merged, { home: opts.home, git: opts.git, mode: opts.fetch ? "read" : "no-fetch" });
+      const ws = await loadForgeFor(root, merged, { home, git: opts.git, mode: opts.fetch ? "read" : "no-fetch" });
       const outcome = await editRecipes(ws, op, names, { replace: opts.replace });
 
       const cached = cachedCopyLine(ws, opts.fetch);

@@ -413,7 +413,6 @@ async function callWrite(name: WriteToolName, args: WriteToolArguments, ctx: Mcp
   return await writers.editRecipes(ctx.root, merged, op, args.names ?? [], {
     replace: args.replace,
     fetch: ctx.fetch,
-    home: ctx.home,
     git: ctx.git,
   });
 }

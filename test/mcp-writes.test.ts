@@ -9,6 +9,7 @@ import {
   INSTRUCTIONS_WRITES,
   PIN_CHANGED,
   pinOf,
+  REGISTRY_UNREADABLE,
   TOOL_NAMES,
   WRITE_TOOL_NAMES,
   WRITES_NEED_REGISTRY,
@@ -679,5 +680,31 @@ describe("craftar mcp --allow-writes — the writing tools", () => {
     // No craftar.lock written
     const lockFile = path.join(wsRoot, "craftar.lock");
     await expect(fs.access(lockFile)).rejects.toThrow();
+  });
+
+  // Test 17: Unreadable registry
+  it("17. unreadable registry: isError, text exactly REGISTRY_UNREADABLE, workspace files unchanged", async () => {
+    const home = await freshHome();
+    const s = kept(
+      await scenario(
+        { ingredients: [rule("keep", "# Keep\n")], recipes: [recipe("base", ["rule/keep"])], profiles: [profile("acme", ["base"])] },
+        { config: { profile: "acme" } },
+      ),
+    );
+    const writers = mcpWriters(home, false);
+    const before = await tree(s.wsRoot);
+
+    // Write a malformed registry that does not parse (writeConsent[0].path should be a string, not a number)
+    await fs.writeFile(path.join(home, "registry.json"), JSON.stringify({ schema: 1, workspaces: [], writeConsent: [{ path: 1 }] }));
+
+    const { tool } = await fresh(s.wsRoot, { home, writers });
+
+    const result = await tool("sync");
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(REGISTRY_UNREADABLE);
+
+    // Workspace files unchanged
+    const after = await tree(s.wsRoot);
+    expect(after).toEqual(before);
   });
 });

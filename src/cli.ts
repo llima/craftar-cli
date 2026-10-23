@@ -1515,9 +1515,9 @@ mcpCmd
     } catch (e) {
       fail(errorText(e));
     }
-    // a ref holding credentials is refused before the terminal check, so the test suite can reach this branch
+    // before anything prints or records it (and before the terminal check)
     if (merged.config.ref && refHoldsCredentials(merged.config.ref)) {
-      fail(`craftar.yaml › ref holds ${CREDENTIAL_HIDDEN} — remove the credentials before allowing writes`);
+      fail(`ref holds ${CREDENTIAL_HIDDEN} — remove the credentials before allowing writes`);
     }
     if (!(process.stdin.isTTY === true && process.stdout.isTTY === true)) {
       fail("craftar mcp allow-writes asks a person in a terminal — type it in one; it cannot be run from a script or an AI coder's shell tool");
