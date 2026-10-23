@@ -8,8 +8,8 @@ import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
 import { holdsBaseCitations, rendersServers } from "./core/mcp-server.js";
-import { assertNotCacheTree, classifyForge } from "./core/remote.js";
-import { forget, listWorkspaces, prune, readRegistry, type WorkspaceRow } from "./core/registry.js";
+import { assertNotCacheTree, classifyForge, shownRef } from "./core/remote.js";
+import { allowWrites, forget, listWorkspaces, prune, readRegistry, revokeWrites, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { launchRefusal, pinOf } from "./core/mcp-protocol.js";
@@ -1452,7 +1452,7 @@ templates
   });
 
 /* ---------------------------------------------------------------- mcp */
-program
+const mcpCmd = program
   .command("mcp")
   .description(
     "Serve this workspace to an AI coder over the Model Context Protocol, on stdin and stdout: seven reading tools — status, diff, explain, recipes, ingredients, targets, doctor — with the data those commands print. Started by the AI coder, not typed. Reads only; reads without the network unless --fetch",
@@ -1481,6 +1481,96 @@ program
       env: process.env,
       pin: pinOf(merged),
     });
+  });
+
+mcpCmd
+  .command("allow-writes")
+  .description(
+    "Let craftar mcp --allow-writes write in this workspace — sync, add_recipe, remove_recipe — for the Forge, ref and profile it names now; asks a person in a terminal and records the consent in this machine's registry",
+  )
+  // No default here: `mcp` holds `--workspace` too, and commander gives the value to the parent when both declare it.
+  .option("--workspace <dir>", 'workspace root (default: ".")')
+  .action(async (o: { workspace?: string }) => {
+    const workspace: string = o.workspace ?? mcpCmd.opts().workspace ?? ".";
+    // Refuse parent flags first (spec 40 §5.1)
+    if (mcpCmd.opts().fetch) fail("craftar mcp allow-writes takes only --workspace");
+    // Step 1: resolve and check craftar.yaml exists
+    const root = path.resolve(workspace);
+    if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
+      fail(`no craftar.yaml in ${root} — the consent is given for one workspace; type it in one, or pass --workspace`);
+    }
+    // Step 2: CRAFTAR_NO_REGISTRY check
+    if (registryOff()) fail("the consent is recorded in the registry, and CRAFTAR_NO_REGISTRY is set — unset it to allow writes");
+    // Step 3: read registry
+    const home = craftarHome();
+    try {
+      await readRegistry(home);
+    } catch (e) {
+      fail(`cannot read the registry: ${errorText(e)}`);
+    }
+    // Step 4: TTY check — both stdin and stdout must be a TTY
+    if (!(process.stdin.isTTY === true && process.stdout.isTTY === true)) {
+      fail("craftar mcp allow-writes asks a person in a terminal — type it in one; it cannot be run from a script or an AI coder's shell tool");
+    }
+    // Step 5: read workspace config (this is where a forge: holding credentials is refused)
+    let merged: MergedConfig;
+    try {
+      merged = await readWorkspaceConfig(root);
+    } catch (e) {
+      fail(errorText(e));
+    }
+    // Step 6: print info and ask
+    const realRoot = await fs.realpath(root);
+    const refLine = merged.config.ref ? shownRef(merged.config.ref) : "(the Forge's default)";
+    console.log(`craftar mcp allow-writes — ${realRoot}`);
+    console.log(`  forge    ${merged.config.forge}`);
+    console.log(`  ref      ${refLine}`);
+    console.log(`  profile  ${merged.config.profile}`);
+    console.log(`  tools    sync, add_recipe, remove_recipe — sync never discards a hand edit`);
+    const io = readlineIo(process.stdin, process.stdout, { terminal: true });
+    const answer = await io.confirm("Let craftar mcp --allow-writes write here [no]: ");
+    // Step 7: cancelled
+    if (!answer) fail("allow-writes cancelled — nothing written");
+    // Step 8: record consent
+    try {
+      const consent = await allowWrites(home, root, {
+        forge: { source: merged.config.forge, ref: merged.config.ref ?? null },
+        profile: merged.config.profile,
+      });
+      console.log(`write consent recorded for ${consent.path} — craftar mcp --allow-writes may sync and edit recipes here; craftar mcp revoke-writes takes it back`);
+    } catch (e) {
+      fail(`consent not recorded: ${errorText(e)}`);
+    }
+  });
+
+mcpCmd
+  .command("revoke-writes")
+  .description("Take back the consent of craftar mcp allow-writes for this workspace; needs no terminal")
+  // No default here: `mcp` holds `--workspace` too, and commander gives the value to the parent when both declare it.
+  .option("--workspace <dir>", 'workspace root (default: ".")')
+  .action(async (o: { workspace?: string }) => {
+    const workspace: string = o.workspace ?? mcpCmd.opts().workspace ?? ".";
+    // Refuse parent flags first (spec 40 §5.1)
+    if (mcpCmd.opts().fetch) fail("craftar mcp revoke-writes takes only --workspace");
+    // Step 1: resolve and check craftar.yaml exists
+    const root = path.resolve(workspace);
+    if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
+      fail(`no craftar.yaml in ${root} — the consent is given for one workspace; type it in one, or pass --workspace`);
+    }
+    // Step 2: CRAFTAR_NO_REGISTRY check
+    if (registryOff()) fail("the consent is recorded in the registry, and CRAFTAR_NO_REGISTRY is set — nothing to revoke here");
+    // Step 3: revoke
+    const home = craftarHome();
+    try {
+      const result = await revokeWrites(home, root);
+      if (result.removed) {
+        console.log(`write consent removed for ${result.path}`);
+      } else {
+        console.log(`no consent recorded for ${result.path}`);
+      }
+    } catch (e) {
+      fail(`consent not removed: ${errorText(e)}`);
+    }
   });
 
 /* ---------------------------------------------------------------- recipes */
