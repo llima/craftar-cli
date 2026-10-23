@@ -305,6 +305,10 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
         continue;
       }
       const merged = mergeEmitted(parts);
+      // Copy any warnings from mergeEmitted into the report
+      if (merged.warnings) {
+        for (const w of merged.warnings) report.warnings.push(w);
+      }
       read(merged.meta, merged.files, merged.scan, (ref) => addRef(refs.base, ref));
     }
   }
@@ -993,6 +997,20 @@ function bodyFromSteering(meta: Ingredient): boolean {
   return meta.type === "rule" && (meta.origin?.path ?? "").startsWith(".kiro/steering/");
 }
 
+/**
+ * The file path to report in a rejection message (secret, marker).
+ * - For skill dir layout: base ends with `/`, so returns `base + rel`.
+ * - For grouped scripts/hooks (files.length > 1): returns `dirname(base) + "/" + rel`.
+ * - Otherwise: returns `base` unchanged.
+ */
+function fileWhere(meta: Ingredient, base: string, rel: string): string {
+  if (meta.type === "skill" && meta.layout === "dir") return `${base}${rel}`;
+  if ((meta.type === "script" || meta.type === "hook") && meta.files && meta.files.length > 1) {
+    return `${path.posix.dirname(base)}/${rel}`;
+  }
+  return base;
+}
+
 /** First secret-like value in an ingredient about to be imported, described by location only. */
 export function secretIn(meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string> = {}, lineOffset = 0): string | null {
   const origin = meta.origin?.path ?? `${meta.type}/${meta.name}`;
@@ -1005,7 +1023,7 @@ export function secretIn(meta: Ingredient, files: Record<string, string | Buffer
   const texts: { where: string; text: string; offset: number }[] = [];
   if (raw) texts.push({ where: rawWhere, text: raw, offset: 1 });
   for (const [rel, content] of Object.entries(files)) {
-    const where = meta.type === "skill" && meta.layout === "dir" ? `${origin}${rel}` : origin;
+    const where = fileWhere(meta, origin, rel);
     // A Buffer (non-allowlisted extensions such as .pem or .bat) goes through decodeForScan:
     // a UTF-16 BOM is decoded as UTF-16, otherwise a NUL byte marks it binary and unscanned.
     if (typeof content === "string") texts.push({ where, text: content, offset: bodyOffset });
@@ -1017,7 +1035,7 @@ export function secretIn(meta: Ingredient, files: Record<string, string | Buffer
   // UTF-16 sources read on the text path: their stored text is mojibake no pattern matches,
   // so the whole source file, decoded correctly, is scanned too (lines count from its top).
   for (const [rel, text] of Object.entries(scan)) {
-    const where = meta.type === "skill" && meta.layout === "dir" ? `${origin}${rel}` : origin;
+    const where = fileWhere(meta, origin, rel);
     texts.push({ where, text, offset: 0 });
   }
   for (const t of texts) {
@@ -1411,7 +1429,9 @@ export function markerIn(meta: Ingredient, files: Record<string, string | Buffer
     // the importer builds meta and file keys itself, with canonical names
     if (!bodyFile(meta, rel, null)) continue;
     const line = firstMarkerLine(toLf(stripBom(typeof content === "string" ? content : content.toString("utf8"))));
-    if (line !== null) return { where: meta.type === "skill" && meta.layout === "dir" ? `${source}${rel}` : source, line: line + offset };
+    if (line !== null) {
+      return { where: fileWhere(meta, source, rel), line: line + offset };
+    }
   }
   return null;
 }
