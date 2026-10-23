@@ -9,13 +9,14 @@ const README = readFileSync(path.resolve(__dirname, "../README.md"), "utf8");
 const count = (needle: string) => README.split(needle).length - 1;
 
 describe("craftar mcp — README and --help", () => {
-  it("--help names the command's contract and its two options", () => {
+  it("--help names the command's contract and its options", () => {
     const help = runCli(["mcp", "--help"]).stdout.replace(/\s+/g, " ");
     expect(help).toContain(
-      "Serve this workspace to an AI coder over the Model Context Protocol, on stdin and stdout: seven reading tools — status, diff, explain, recipes, ingredients, targets, doctor — with the data those commands print. Started by the AI coder, not typed. Reads only; reads without the network unless --fetch",
+      "Serve this workspace to an AI coder over the Model Context Protocol, on stdin and stdout: seven reading tools — status, diff, explain, recipes, ingredients, targets, doctor — with the data those commands print. Started by the AI coder, not typed. Reads only unless --allow-writes; reads without the network unless --fetch",
     );
     expect(help).toContain("--workspace <dir>");
     expect(help).toContain("--fetch");
+    expect(help).toContain("--allow-writes");
   });
 
   it("the Commands row, the section, the registration snippet and the warning of Ruling 2 are there, once each", () => {

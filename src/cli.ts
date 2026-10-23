@@ -14,6 +14,7 @@ import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistry
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { launchRefusal, pinOf } from "./core/mcp-protocol.js";
 import { serve } from "./mcp.js";
+import { mcpWriters } from "./core/write-actions.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
 import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
@@ -1455,11 +1456,12 @@ templates
 const mcpCmd = program
   .command("mcp")
   .description(
-    "Serve this workspace to an AI coder over the Model Context Protocol, on stdin and stdout: seven reading tools — status, diff, explain, recipes, ingredients, targets, doctor — with the data those commands print. Started by the AI coder, not typed. Reads only; reads without the network unless --fetch",
+    "Serve this workspace to an AI coder over the Model Context Protocol, on stdin and stdout: seven reading tools — status, diff, explain, recipes, ingredients, targets, doctor — with the data those commands print. Started by the AI coder, not typed. Reads only unless --allow-writes; reads without the network unless --fetch",
   )
   .option("--workspace <dir>", "the workspace to serve", ".")
   .option("--fetch", "let a tool call fetch a remote Forge instead of reading the cached copy", false)
-  .action(async (o: { workspace: string; fetch: boolean }) => {
+  .option("--allow-writes", "enable the writing tools (sync, add_recipe, remove_recipe) for a workspace with consent", false)
+  .action(async (o: { workspace: string; fetch: boolean; allowWrites: boolean }) => {
     // The bound workspace, resolved once: no tool takes a directory (spec 35 §4.1).
     const root = path.resolve(o.workspace);
     const refusal = launchRefusal(process.stdin.isTTY === true, await exists(path.join(root, WORKSPACE_FILE)), root);
@@ -1480,6 +1482,7 @@ const mcpCmd = program
       registryOff: registryOff(),
       env: process.env,
       pin: pinOf(merged),
+      writers: o.allowWrites ? mcpWriters(craftarHome(), registryOff()) : undefined,
     });
   });
 
@@ -1493,6 +1496,7 @@ mcpCmd
   .action(async (o: { workspace?: string }) => {
     const workspace: string = o.workspace ?? mcpCmd.opts().workspace ?? ".";
     if (mcpCmd.opts().fetch) fail("craftar mcp allow-writes takes only --workspace");
+    if (mcpCmd.opts().allowWrites) fail("craftar mcp allow-writes takes only --workspace");
     const root = path.resolve(workspace);
     if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
       fail(`no craftar.yaml in ${root} — the consent is given for one workspace; type it in one, or pass --workspace`);
@@ -1541,6 +1545,7 @@ mcpCmd
   .action(async (o: { workspace?: string }) => {
     const workspace: string = o.workspace ?? mcpCmd.opts().workspace ?? ".";
     if (mcpCmd.opts().fetch) fail("craftar mcp revoke-writes takes only --workspace");
+    if (mcpCmd.opts().allowWrites) fail("craftar mcp revoke-writes takes only --workspace");
     const root = path.resolve(workspace);
     if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
       fail(`no craftar.yaml in ${root} — the consent is given for one workspace; type it in one, or pass --workspace`);
