@@ -260,4 +260,33 @@ describe("craftar mcp allow-writes / revoke-writes", () => {
     expect(r.stderr).toBe("error: craftar mcp revoke-writes takes only --workspace\n");
     expect(r.stdout).toBe("");
   });
+
+  // Case: allow-writes refuses a ref holding credentials before anything prints or records it
+  it("allow-writes --workspace <ws> with ref holding credentials: code 1, hidden label, nothing in registry", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(
+      await scenario(
+        { ingredients: [rule("keep", "# Keep\n")], recipes: [recipe("base", ["rule/keep"])], profiles: [profile("acme", ["base"])] },
+        { config: { profile: "acme" } },
+      ),
+    );
+
+    // Write a craftar.yaml with a ref holding credentials (assembled at runtime to avoid committing a credential-like string)
+    const secretRef = "https://user:" + "x".repeat(8) + "@example.com/r.git";
+    await fs.writeFile(
+      path.join(s.wsRoot, "craftar.yaml"),
+      `forge: ../forge\nref: "${secretRef}"\nprofile: acme\n`,
+    );
+
+    const r = runCli(["mcp", "allow-writes", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("(a URL with credentials — not shown)");
+    expect(r.stderr).not.toContain("xxxxxxxx");
+    expect(r.stdout).toBe("");
+
+    // Registry should have no writeConsent
+    const reg = await readRegistry(home);
+    expect(reg.writeConsent).toBeUndefined();
+  });
 });

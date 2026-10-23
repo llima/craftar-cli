@@ -8,7 +8,7 @@ import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
 import { holdsBaseCitations, rendersServers } from "./core/mcp-server.js";
-import { assertNotCacheTree, classifyForge, shownRef } from "./core/remote.js";
+import { assertNotCacheTree, classifyForge, CREDENTIAL_HIDDEN, refHoldsCredentials, shownRef } from "./core/remote.js";
 import { allowWrites, forget, listWorkspaces, prune, readRegistry, revokeWrites, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
@@ -1508,9 +1508,6 @@ mcpCmd
     } catch (e) {
       fail(`cannot read the registry: ${errorText(e)}`);
     }
-    if (!(process.stdin.isTTY === true && process.stdout.isTTY === true)) {
-      fail("craftar mcp allow-writes asks a person in a terminal — type it in one; it cannot be run from a script or an AI coder's shell tool");
-    }
     // a forge: holding credentials is refused here, before anything prints it
     let merged: MergedConfig;
     try {
@@ -1518,8 +1515,15 @@ mcpCmd
     } catch (e) {
       fail(errorText(e));
     }
+    // a ref holding credentials is refused before the terminal check, so the test suite can reach this branch
+    if (merged.config.ref && refHoldsCredentials(merged.config.ref)) {
+      fail(`craftar.yaml › ref holds ${CREDENTIAL_HIDDEN} — remove the credentials before allowing writes`);
+    }
+    if (!(process.stdin.isTTY === true && process.stdout.isTTY === true)) {
+      fail("craftar mcp allow-writes asks a person in a terminal — type it in one; it cannot be run from a script or an AI coder's shell tool");
+    }
     const realRoot = await fs.realpath(root);
-    const refLine = merged.config.ref ? shownRef(merged.config.ref) : "(the Forge's default)";
+    const refLine = merged.config.ref ?? "(the Forge's default)";
     console.log(`craftar mcp allow-writes — ${realRoot}`);
     console.log(`  forge    ${merged.config.forge}`);
     console.log(`  ref      ${refLine}`);
