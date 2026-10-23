@@ -521,7 +521,7 @@ Phase 1 — client profile (in progress). Shipped: the read-only catalogue (`rec
 
 Phase 2 — environment (in progress). Shipped: local services (`service` ingredients, `.craftar/`, `craftar services up | down | status`); `craftar templates list | install` (`dotnet new` project templates declared in a profile).
 
-Later: rulesync bridge for Codex/Kimi/Cursor specifics; `craftar docs validate`; GitHub Action and Azure Pipelines task around `sync --check`; the Claude Code / Agent Plugin packaging of `craftar mcp`; writing actions in `craftar ui`.
+Later: rulesync bridge for Codex/Kimi/Cursor specifics; `craftar docs validate`; GitHub Action and Azure Pipelines task around `sync --check`; the Claude Code / Agent Plugin packaging of `craftar mcp`.
 
 ## Upgrading
 
