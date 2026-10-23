@@ -263,11 +263,49 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
 
   /* ---- scripts & hooks ---- */
   for (const kind of ["scripts", "hooks"] as const) {
+    const type = kind === "scripts" ? "script" : "hook";
+    // Read each file and group by the base name (lowercased) that readEmitted gives
+    const emittedList: EmittedSource[] = [];
     for (const f of await safeList(path.join(claudeDir, kind))) {
       if (f === ".gitkeep" || f.startsWith("__pycache__") || f.endsWith(".pyc")) continue;
-      const emitted = await readEmitted(claudeDir, kind === "scripts" ? "script" : "hook", f, origin);
+      const emitted = await readEmitted(claudeDir, type, f, origin);
       if (!emitted) continue;
-      read(emitted.meta, emitted.files, emitted.scan, (ref) => addRef(refs.base, ref));
+      emittedList.push(emitted);
+    }
+    // Group by ingredient name (lowercased base name)
+    const groups = new Map<string, EmittedSource[]>();
+    for (const e of emittedList) {
+      const name = e.meta.name; // already lowercased by readEmitted
+      const list = groups.get(name) ?? [];
+      list.push(e);
+      groups.set(name, list);
+    }
+    // Queue one ingredient per group
+    for (const [name, parts] of groups) {
+      // Case collision check: do any two files in the group have names equal ignoring case?
+      const allFiles = parts.flatMap((p) => (p.meta as { files?: string[] }).files ?? []);
+      const seenLower = new Map<string, string>(); // lowercase → original
+      let collision: { a: string; b: string } | null = null;
+      for (const f of allFiles) {
+        const lower = f.toLowerCase();
+        const prev = seenLower.get(lower);
+        if (prev !== undefined && prev !== f) {
+          // Collision: two different file names map to same lowercase
+          const [a, b] = [prev, f].sort();
+          collision = { a, b };
+          break;
+        }
+        seenLower.set(lower, f);
+      }
+      if (collision) {
+        report.rejected.push({
+          name: `${type}/${name}`,
+          reason: `files ${collision.a} and ${collision.b} differ only in case — they would collide on a case-insensitive checkout`,
+        });
+        continue;
+      }
+      const merged = mergeEmitted(parts);
+      read(merged.meta, merged.files, merged.scan, (ref) => addRef(refs.base, ref));
     }
   }
 
@@ -635,6 +673,32 @@ export interface EmittedSource {
   scan: Record<string, string>;
   /** Warnings from reading the source (e.g., paths: disagrees with steering). */
   warnings?: string[];
+}
+
+/**
+ * Merge multiple EmittedSource parts that share a base name into one ingredient.
+ * The meta of `parts[0]` is kept with `files` listing every file from all parts in order;
+ * `files` and `scan` are the unions of all parts; `warnings` are concatenated (key omitted when empty).
+ */
+export function mergeEmitted(parts: EmittedSource[]): EmittedSource {
+  if (parts.length === 0) throw new Error("mergeEmitted: parts must not be empty");
+  if (parts.length === 1) return parts[0];
+  const first = parts[0];
+  const mergedMeta = { ...first.meta } as Ingredient & { files?: string[] };
+  // Build the files list from each part's meta.files (not from their files map keys, to preserve original order)
+  const filesList: string[] = [];
+  for (const p of parts) {
+    const partFiles = (p.meta as { files?: string[] }).files ?? [];
+    for (const f of partFiles) filesList.push(f);
+  }
+  mergedMeta.files = filesList;
+  const mergedFiles: Record<string, string | Buffer> = {};
+  for (const p of parts) Object.assign(mergedFiles, p.files);
+  const mergedScan: Record<string, string> = {};
+  for (const p of parts) Object.assign(mergedScan, p.scan);
+  const mergedWarnings: string[] = [];
+  for (const p of parts) if (p.warnings) mergedWarnings.push(...p.warnings);
+  return { meta: mergedMeta, files: mergedFiles, scan: mergedScan, ...(mergedWarnings.length > 0 ? { warnings: mergedWarnings } : {}) };
 }
 
 /**
@@ -1101,6 +1165,19 @@ async function writeIngredient(
   }
   stage.write(path.join(dir, "ingredient.yaml"), YAML.stringify(yamlMeta, { lineWidth: 0 }));
   for (const [rel, content] of Object.entries(files)) stage.write(path.join(dir, rel), content);
+
+  // For script and hook, warn about leftover files in the directory
+  if (meta.type === "script" || meta.type === "hook") {
+    const diskFiles = await stage.reader().list(dir);
+    const plannedFiles = new Set(["ingredient.yaml", ...Object.keys(files)]);
+    for (const diskRel of diskFiles) {
+      if (!plannedFiles.has(diskRel)) {
+        const relDir = path.relative(forge, dir).split(path.sep).join("/");
+        report.warnings.push(`${relDir}/${diskRel} is not in the files of ${meta.type}/${name} — sync does not write it; remove it by hand`);
+      }
+    }
+  }
+
   return `${meta.type}/${name}`;
 }
 

@@ -328,8 +328,8 @@ describe("import --from claude-code — all checks before the first write", () =
   });
 
   it("compares a later ingredient against one staged earlier in the same run", async () => {
-    // Two hook files that map to one ingredient name: the second sees the first as already in the
-    // Forge, exactly as it did when the importer wrote as it went.
+    // Two hook files with the same base name: they are now grouped into one ingredient listing both.
+    // (Before the fix, the second saw the first as already in the Forge and became a variant.)
     const t = await setup();
     await writeFiles(t.ws("api"), {
       ".claude/rules/workflow.md": "# Workflow\n",
@@ -338,9 +338,14 @@ describe("import --from claude-code — all checks before the first write", () =
     });
     const r = await importInto(t.forge, t.ws("api"), "api");
     expect(r.created).toContain("hook/guard");
-    expect(r.variants).toEqual([{ name: "hook/guard--api", reason: "differs from hook/guard already in the Forge" }]);
+    // No variant — both files in one ingredient
+    expect(r.variants.filter((v) => v.name.startsWith("hook/guard"))).toEqual([]);
+    // Both files exist in the same ingredient directory
     expect(await fs.readFile(path.join(t.forge, "ingredients/hooks/guard/guard.ps1"), "utf8")).toBe("Write-Output ps1\n");
-    expect(await fs.readFile(path.join(t.forge, "ingredients/hooks/guard--api/guard.sh"), "utf8")).toBe("echo sh\n");
+    expect(await fs.readFile(path.join(t.forge, "ingredients/hooks/guard/guard.sh"), "utf8")).toBe("echo sh\n");
+    // ingredient.yaml lists both files
+    const meta = YAML.parse(await fs.readFile(path.join(t.forge, "ingredients/hooks/guard/ingredient.yaml"), "utf8"));
+    expect(meta.files).toEqual(["guard.ps1", "guard.sh"]);
   });
 });
 
