@@ -28,7 +28,7 @@ export const kiro: Emitter<"kiro"> = {
     const ruleNames = new Set(ctx.resolution.ingredients.filter((i) => i.meta.type === "rule").map((i) => outName(i.meta)));
     const scopedRules = ctx.resolution.ingredients.filter((i) => i.meta.type === "rule" && i.meta.inclusion === "fileMatch").map((i) => outName(i.meta));
     const targets = ctx.resolution.targets;
-    const lookup = buildRuleLookup(ctx.resolution.ingredients);
+    const lookup = buildRuleLookup(ctx.resolution.ingredients, ctx.resolution);
 
     // Collect reports for the warning (spec 17 §4.5)
     const reports: RefReport[] = [];

@@ -9,6 +9,18 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
   return targets === "*" || targets.includes(target);
 }
 
+/**
+ * The targets an ingredient is aimed at in this workspace (spec 41 §4.3): its declared `targets`, except, under
+ * agents-md.primary, an always-on rule with the default targets, which is aimed at agents-md alone. The one
+ * answer to "is this rule AGENTS.md-only"; returns `meta.targets` itself when the mode is off.
+ */
+export function effectiveTargets(meta: Ingredient, resolution: { primary: boolean }): "*" | string[] {
+  if (resolution.primary && meta.type === "rule" && meta.inclusion === "always" && meta.targets === "*") {
+    return ["agents-md"];
+  }
+  return meta.targets;
+}
+
 /** The characters of a rule name in a `.claude/rules/<name>.md` reference (spec 15 §4.1). */
 export const RULE_NAME_CHARS = "A-Za-z0-9._-";
 
@@ -38,18 +50,25 @@ export const UNKNOWN_NAME_KIND = "";
 export interface RuleLookup {
   rulesByName: Map<string, ResolvedIngredient>;
   steeringsByName: Map<string, ResolvedIngredient>;
+  /** Effective targets for each rule (spec 41 §4.3). */
+  ruleTargets: Map<string, "*" | string[]>;
 }
 
 /** Build the lookup maps for rule reference resolution, once per AGENTS.md. */
-export function buildRuleLookup(ingredients: ResolvedIngredient[]): RuleLookup {
+export function buildRuleLookup(ingredients: ResolvedIngredient[], resolution: { primary: boolean } = { primary: false }): RuleLookup {
   const rulesByName = new Map<string, ResolvedIngredient>();
   const steeringsByName = new Map<string, ResolvedIngredient>();
+  const ruleTargets = new Map<string, "*" | string[]>();
   for (const ing of ingredients) {
     const name = outName(ing.meta);
-    if (ing.meta.type === "rule") rulesByName.set(name, ing);
-    else if (ing.meta.type === "steering") steeringsByName.set(name, ing);
+    if (ing.meta.type === "rule") {
+      rulesByName.set(name, ing);
+      ruleTargets.set(name, effectiveTargets(ing.meta, resolution));
+    } else if (ing.meta.type === "steering") {
+      steeringsByName.set(name, ing);
+    }
   }
-  return { rulesByName, steeringsByName };
+  return { rulesByName, steeringsByName, ruleTargets };
 }
 
 /**
@@ -68,7 +87,7 @@ export function resolveRuleRefs(
   const hasCc = targets.includes("claude-code");
   const hasKiro = targets.includes("kiro");
   const hasMd = targets.includes("agents-md");
-  const { rulesByName, steeringsByName } = lookup;
+  const { rulesByName, steeringsByName, ruleTargets } = lookup;
 
   // Determine rule state (spec 15 §4.2 for agents-md, spec 17 §4.2 for kiro)
   // agents-md: A (claude-code writes), B (kiro writes), C (agents-md), D (rule exists), unknown
@@ -76,31 +95,32 @@ export function resolveRuleRefs(
   type State = "A" | "B" | "C" | "D" | "K1" | "K2" | "K3" | "unknown";
   const ruleState = (name: string): State => {
     const rule = rulesByName.get(name);
+    const targets_ = ruleTargets.get(name);
     if (mode === "kiro") {
       // K1: kiro writes it — a rule or steering that admits kiro (spec 17 §4.2)
-      if (rule && hasKiro && appliesTo(rule.meta.targets, "kiro")) return "K1";
+      if (rule && targets_ && hasKiro && appliesTo(targets_, "kiro")) return "K1";
       const steering = steeringsByName.get(name);
       if (steering && hasKiro && appliesTo(steering.meta.targets, "kiro")) return "K1";
       // K2: a rule and claude-code writes it
-      if (rule && hasCc && appliesTo(rule.meta.targets, "claude-code")) return "K2";
+      if (rule && targets_ && hasCc && appliesTo(targets_, "claude-code")) return "K2";
       // K3: a rule aimed at agents-md, and agents-md is a workspace target
-      if (rule && hasMd && appliesTo(rule.meta.targets, "agents-md")) return "K3";
+      if (rule && targets_ && hasMd && appliesTo(targets_, "agents-md")) return "K3";
       // D: any other rule
       if (rule) return "D";
       // unknown: anything else
       return "unknown";
     }
     // agents-md mode (spec 15 §4.2)
-    if (rule) {
-      const writer = ruleWriter(targets, rule.meta.targets);
+    if (rule && targets_) {
+      const writer = ruleWriter(targets, targets_);
       if (writer === "claude-code") return "A";
       if (writer === "kiro") return "B";
     }
     // B (steering): kiro writes a steering with this name — checked before C/D (spec 15 §4.2)
     const steering = steeringsByName.get(name);
     if (steering && hasKiro && appliesTo(steering.meta.targets, "kiro")) return "B";
-    if (rule) {
-      if (appliesTo(rule.meta.targets, "agents-md")) return "C";
+    if (rule && targets_) {
+      if (appliesTo(targets_, "agents-md")) return "C";
       return "D";
     }
     return "unknown";
