@@ -601,4 +601,53 @@ describe("craftar mcp --allow-writes — the writing tools", () => {
     expect(result.structuredContent.warnings[0]).toMatch(/^Forge /);
     expect(result.structuredContent.warnings[0]).toContain("read from the copy cached");
   });
+
+  // Test 16: MCP sync loads in mode sync — a failed fetch says what to do from the AI coder
+  it("16. remote Forge with --fetch, fetch fails: isError, text starts with 'cannot fetch', tail says 'craftar mcp syncs', no .claude/ or lock", async () => {
+    const { remoteForge } = await import("./helpers/remote.js");
+    const { loadWorkspace } = await import("../src/core/sync.js");
+    const home = await freshHome();
+    const r = await remoteForge({
+      ingredients: [rule("keep", "# Keep\n")],
+      recipes: [recipe("base", ["rule/keep"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    cleanups.push(r.cleanup);
+
+    // Create workspace pointing at remote Forge
+    const wsRoot = await tmpDir("ws-remote-");
+    cleanups.push(() => fs.rm(wsRoot, { recursive: true, force: true }));
+    await fs.writeFile(path.join(wsRoot, "craftar.yaml"), `forge: ${r.url}\nprofile: acme\n`);
+
+    // Warm the cache with a sync
+    await loadWorkspace(wsRoot, { home, mode: "sync" });
+
+    // Record consent matching the remote Forge
+    await allowWrites(home, wsRoot, { forge: { source: r.url, ref: null }, profile: "acme" });
+
+    // Git seam that delegates to real runner but fails fetch and ls-remote
+    const { defaultGit } = await import("../src/core/remote.js");
+    const failingGit: McpContext["git"] = async (args: string[], opts) => {
+      if (args[0] === "fetch" || args[0] === "ls-remote") {
+        return { stdout: "", stderr: "simulated failure", exitCode: 1 };
+      }
+      return defaultGit(args, opts);
+    };
+
+    const writers = mcpWriters(home, false);
+    const { tool } = await fresh(wsRoot, { home, writers, fetch: true, git: failingGit });
+
+    const result = await tool("sync");
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/^cannot fetch the Forge /);
+    expect(result.content[0].text).toContain("craftar mcp syncs a remote Forge only from a fresh fetch — run craftar sync --offline in a terminal to use the cached copy");
+
+    // No .claude/ files written
+    const claudeDir = path.join(wsRoot, ".claude");
+    await expect(fs.access(claudeDir)).rejects.toThrow();
+
+    // No craftar.lock written
+    const lockFile = path.join(wsRoot, "craftar.lock");
+    await expect(fs.access(lockFile)).rejects.toThrow();
+  });
 });

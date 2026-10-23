@@ -89,8 +89,9 @@ export interface LoadOptions {
    * When a sync-mode fetch fails and there is a cached copy, what the error's tail says (spec 37 §5.2):
    * - `"offline"` (default): "run with --offline to use the cached copy"
    * - `"fresh-copy"`: "repos clone reads the profile's repositories only from a fresh copy"
+   * - `"mcp"`: "craftar mcp syncs a remote Forge only from a fresh fetch — run craftar sync --offline in a terminal to use the cached copy"
    */
-  fetchHint?: "offline" | "fresh-copy";
+  fetchHint?: "offline" | "fresh-copy" | "mcp";
 }
 
 /** The result of loading a Forge by its source before a profile is known (spec 28 §5.2). */
@@ -261,7 +262,9 @@ async function remoteTree(
     if (mode === "sync") {
       const tail = fetchHint === "fresh-copy"
         ? "repos clone reads the profile's repositories only from a fresh copy"
-        : `run with --offline to use the cached copy (${short(e.cached.commit)} fetched ${e.cached.fetchedAt ?? "never"})`;
+        : fetchHint === "mcp"
+          ? `craftar mcp syncs a remote Forge only from a fresh fetch — run craftar sync --offline in a terminal to use the cached copy (${short(e.cached.commit)} fetched ${e.cached.fetchedAt ?? "never"})`
+          : `run with --offline to use the cached copy (${short(e.cached.commit)} fetched ${e.cached.fetchedAt ?? "never"})`;
       throw new Error(`cannot fetch the Forge ${url}: ${e.gitMessage} — ${tail}`);
     }
     const t = await ensureTree(url, ref, { home, offline: true, git });

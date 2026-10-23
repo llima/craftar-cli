@@ -283,7 +283,7 @@ export function mcpWriters(home: string, registryOff: boolean): McpWriters {
       merged: MergedConfig,
       opts: { home: string; git?: LoadOptions["git"] },
     ): Promise<SyncToolResult> {
-      const ws = await loadForgeFor(root, merged, { home: opts.home, git: opts.git, mode: "sync" });
+      const ws = await loadForgeFor(root, merged, { home: opts.home, git: opts.git, mode: "sync", fetchHint: "mcp" });
       const p = await plan(ws);
 
       const unset = unsetDeclared(p);
