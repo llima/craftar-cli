@@ -517,4 +517,38 @@ describe("craftar mcp --allow-writes — the writing tools", () => {
     // File not written
     await expect(fs.access(path.join(s.wsRoot, ".claude/rules/api.md"))).rejects.toThrow();
   });
+
+  // Test 15: Remote Forge warnings in add_recipe without --fetch
+  it("15. remote Forge without --fetch: add_recipe result warnings[0] starts with 'Forge' and contains 'read from the copy cached'", async () => {
+    const { remoteForge } = await import("./helpers/remote.js");
+    const { loadWorkspace } = await import("../src/core/sync.js");
+    const home = await freshHome();
+    const r = await remoteForge({
+      ingredients: [rule("keep", "# Keep\n"), rule("extra", "# Extra\n")],
+      recipes: [recipe("base", ["rule/keep"]), recipe("extra", ["rule/extra"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    cleanups.push(r.cleanup);
+
+    // Create workspace pointing at remote Forge
+    const wsRoot = await tmpDir("ws-remote-");
+    cleanups.push(() => fs.rm(wsRoot, { recursive: true, force: true }));
+    await fs.writeFile(path.join(wsRoot, "craftar.yaml"), `forge: ${r.url}\nprofile: acme\n`);
+
+    // Warm the cache with a sync
+    await loadWorkspace(wsRoot, { home, mode: "sync" });
+
+    // Record consent matching the remote Forge
+    await allowWrites(home, wsRoot, { forge: { source: r.url, ref: null }, profile: "acme" });
+
+    const writers = mcpWriters(home, false);
+    const { tool } = await fresh(wsRoot, { home, writers, fetch: false });
+
+    const result = await tool("add_recipe", { names: ["extra"] });
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent.warnings).toBeDefined();
+    expect(result.structuredContent.warnings.length).toBeGreaterThan(0);
+    expect(result.structuredContent.warnings[0]).toMatch(/^Forge /);
+    expect(result.structuredContent.warnings[0]).toContain("read from the copy cached");
+  });
 });

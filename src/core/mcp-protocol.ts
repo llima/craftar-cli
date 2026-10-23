@@ -6,7 +6,8 @@ import { unmanaged } from "./drift.js";
 import { cachedCopyLine, diffReport, explainFile, notProduced, statusPath, statusReport, targetsReport } from "./report.js";
 import { errorText, schemaFault } from "./schema-fault.js";
 import { loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig } from "./sync.js";
-import type { McpWriters } from "./write-actions.js";
+import type { McpWriters, Pin } from "./write-actions.js";
+export type { Pin };
 
 /*
  * `craftar mcp` (spec 35): the Model Context Protocol, revision 2025-06-18, as a function from one message to
@@ -60,13 +61,6 @@ export const REGISTRY_UNREADABLE =
 
 const UNKNOWN_TOOL = `unknown tool — one of ${TOOL_NAMES.join(", ")}`;
 const UNKNOWN_TOOL_WITH_WRITES = `unknown tool — one of ${[...TOOL_NAMES, ...WRITE_TOOL_NAMES].join(", ")}`;
-
-/** What the configuration named at launch, fixed for the life of the process (spec 35 §3): three strings. */
-export interface Pin {
-  forge: string;
-  ref: string | null;
-  profile: string;
-}
 
 export const pinOf = (merged: MergedConfig): Pin => ({ forge: merged.config.forge, ref: merged.config.ref ?? null, profile: merged.config.profile });
 
@@ -390,44 +384,30 @@ async function call(name: ToolName, args: ToolArguments, ctx: McpContext): Promi
   return { files, warnings: loadWarnings, unsetParams: report.unsetParams };
 }
 
-/**
- * One writing tool call (spec 40 §5.5). The flow:
- * 1. Check pin
- * 2. Check consent (registry must be on and readable, consent must exist and match the pin)
- * 3. For sync with a remote Forge: check that ctx.fetch is true
- * 4. Call the writers method
- */
+/** One writing tool call (spec 40 §5.5). */
 async function callWrite(name: WriteToolName, args: WriteToolArguments, ctx: McpContext): Promise<object> {
-  // ctx.writers is guaranteed to be defined by the caller
   const writers = ctx.writers!;
 
-  // Step 1: Check pin
-  let merged: MergedConfig;
-  try {
-    merged = await (ctx.readConfig ?? readWorkspaceConfig)(ctx.root);
-    const now = pinOf(merged);
-    if (now.forge !== ctx.pin.forge || now.ref !== ctx.pin.ref || now.profile !== ctx.pin.profile) throw new Error(PIN_CHANGED);
-  } catch (e) {
-    throw e;
-  }
+  const merged = await (ctx.readConfig ?? readWorkspaceConfig)(ctx.root);
+  const now = pinOf(merged);
+  if (now.forge !== ctx.pin.forge || now.ref !== ctx.pin.ref || now.profile !== ctx.pin.profile) throw new Error(PIN_CHANGED);
 
-  // Step 2: Check consent (via writers.consent, which handles registry checks)
   const consentResult = await writers.consent(ctx.root, ctx.pin);
-  if (consentResult !== null) throw new Error(consentResult);
+  if (consentResult === "registry-off") throw new Error(WRITES_NEED_REGISTRY);
+  if (consentResult === "unreadable") throw new Error(REGISTRY_UNREADABLE);
+  if (consentResult === "none") throw new Error(WRITES_NOT_ALLOWED);
+  if (typeof consentResult === "object") throw new Error(CONSENT_STALE(consentResult.stale));
 
-  // Step 3: For sync, check Forge kind and fetch flag
   if (name === "sync") {
-    const forgeKind = await writers.classifyForge(ctx.root, merged);
-    if (forgeKind === "remote" && !ctx.fetch) throw new Error(SYNC_NEEDS_FETCH);
-  }
-
-  // Step 4: Call the writers method
-  if (name === "sync") {
+    if (writers.isRemote(merged.config.forge) && !ctx.fetch) throw new Error(SYNC_NEEDS_FETCH);
     return await writers.sync(ctx.root, merged, ctx.fetch, { home: ctx.home, git: ctx.git });
-  } else if (name === "add_recipe") {
-    return await writers.addRecipe(ctx.root, merged, args.names ?? [], args.replace ?? false, { home: ctx.home, git: ctx.git });
-  } else {
-    // remove_recipe
-    return await writers.removeRecipe(ctx.root, merged, args.names ?? [], { home: ctx.home, git: ctx.git });
   }
+  // add_recipe or remove_recipe
+  const op = name === "add_recipe" ? "add" : "remove";
+  return await writers.editRecipes(ctx.root, merged, op, args.names ?? [], {
+    replace: args.replace,
+    fetch: ctx.fetch,
+    home: ctx.home,
+    git: ctx.git,
+  });
 }

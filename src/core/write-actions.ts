@@ -10,7 +10,7 @@ import type { InitIo } from "./init-flow.js";
 import { yesNo } from "./init-flow.js";
 import { consentFor, readRegistry, register, registryFile } from "./registry.js";
 import { classifyForge } from "./remote.js";
-import { explainSkip, forgeLine, nextSyncLine } from "./report.js";
+import { cachedCopyLine, explainSkip, forgeLine, nextSyncLine } from "./report.js";
 import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeLists, type RecipeOp } from "./recipe-edit.js";
 import {
   apply,
@@ -33,8 +33,7 @@ import {
 } from "./sync.js";
 import { hashNormalized } from "./text.js";
 import { localKeys } from "./workspace-yaml.js";
-import type { Lock, WriteConsent } from "../schema/index.js";
-import type { Pin } from "./mcp-protocol.js";
+import type { Lock } from "../schema/index.js";
 
 /* ------------------------------------------------------------------ */
 /* syncWorkspace                                                       */
@@ -216,30 +215,28 @@ export interface RecipeToolResult {
   warnings: string[];
 }
 
+/** The pin that consent must match (the fields of craftar.yaml that callWrite checks). */
+export interface Pin {
+  forge: string;
+  ref: string | null;
+  profile: string;
+}
+
+/** Consent result codes: "ok" when consent is valid, or a code for callWrite to map to a message. */
+export type ConsentCode = "ok" | "registry-off" | "unreadable" | "none" | { stale: Array<"forge" | "ref" | "profile"> };
+
 /**
  * The writers the MCP server uses under `--allow-writes` (spec 40 §5.3).
  * Each method receives what `mcp-protocol.ts` can pass without value imports.
  */
 export interface McpWriters {
-  /**
-   * Check consent for a writing tool call (spec 40 §5.5 step 2).
-   * Returns null if consent is valid, or an error message string if:
-   * - the registry is off (`WRITES_NEED_REGISTRY`)
-   * - the registry cannot be read (`REGISTRY_UNREADABLE`)
-   * - no consent is recorded (`WRITES_NOT_ALLOWED`)
-   * - consent is for a different forge/ref/profile (`CONSENT_STALE`)
-   */
-  consent(root: string, pin: Pin): Promise<string | null>;
+  /** Check consent for a writing tool call (spec 40 §5.5 step 2). Returns a code for callWrite to map to a message. */
+  consent(root: string, pin: Pin): Promise<ConsentCode>;
 
-  /**
-   * Classify the Forge (spec 40 §5.5 step 3): "remote" | "path".
-   */
-  classifyForge(root: string, merged: MergedConfig): Promise<"remote" | "path">;
+  /** Whether the Forge is remote (a git URL) rather than a path. */
+  isRemote(forge: string): boolean;
 
-  /**
-   * The `sync` tool (spec 40 §5.5): load, plan, run syncWorkspace.
-   * Refuses an unset declared parameter. Never overwrites drift.
-   */
+  /** The `sync` tool (spec 40 §5.5): load, plan, run syncWorkspace. Refuses unset declared params. Never overwrites drift. */
   sync(
     root: string,
     merged: MergedConfig,
@@ -247,25 +244,13 @@ export interface McpWriters {
     opts: { home: string; git?: LoadOptions["git"] },
   ): Promise<SyncToolResult>;
 
-  /**
-   * The `add_recipe` tool (spec 40 §5.5): load, editRecipes("add", ...).
-   */
-  addRecipe(
+  /** The `add_recipe` or `remove_recipe` tool (spec 40 §5.5): load, editRecipes. */
+  editRecipes(
     root: string,
     merged: MergedConfig,
+    op: RecipeOp,
     names: string[],
-    replace: boolean,
-    opts: { home: string; git?: LoadOptions["git"] },
-  ): Promise<RecipeToolResult>;
-
-  /**
-   * The `remove_recipe` tool (spec 40 §5.5): load, editRecipes("remove", ...).
-   */
-  removeRecipe(
-    root: string,
-    merged: MergedConfig,
-    names: string[],
-    opts: { home: string; git?: LoadOptions["git"] },
+    opts: { replace?: boolean; fetch: boolean; home: string; git?: LoadOptions["git"] },
   ): Promise<RecipeToolResult>;
 }
 
@@ -274,39 +259,30 @@ export interface McpWriters {
  */
 export function mcpWriters(home: string, registryOff: boolean): McpWriters {
   return {
-    async consent(root: string, pin: Pin): Promise<string | null> {
-      // Import the error constants lazily to avoid a circular dependency
-      const {
-        WRITES_NEED_REGISTRY,
-        WRITES_NOT_ALLOWED,
-        CONSENT_STALE,
-        REGISTRY_UNREADABLE,
-      } = await import("./mcp-protocol.js");
-
-      if (registryOff) return WRITES_NEED_REGISTRY;
+    async consent(root: string, pin: Pin): Promise<ConsentCode> {
+      if (registryOff) return "registry-off";
 
       let reg;
       try {
         reg = await readRegistry(home);
       } catch {
-        return REGISTRY_UNREADABLE;
+        return "unreadable";
       }
 
       const consent = await consentFor(reg, root);
-      if (consent === null) return WRITES_NOT_ALLOWED;
+      if (consent === null) return "none";
 
-      // Check that consent matches the pin
-      const staleKeys: string[] = [];
-      if (consent.forge.source !== pin.forge) staleKeys.push("forge");
-      if (consent.forge.ref !== pin.ref) staleKeys.push("ref");
-      if (consent.profile !== pin.profile) staleKeys.push("profile");
-      if (staleKeys.length > 0) return CONSENT_STALE(staleKeys);
+      const stale: Array<"forge" | "ref" | "profile"> = [];
+      if (consent.forge.source !== pin.forge) stale.push("forge");
+      if (consent.forge.ref !== pin.ref) stale.push("ref");
+      if (consent.profile !== pin.profile) stale.push("profile");
+      if (stale.length > 0) return { stale };
 
-      return null;
+      return "ok";
     },
 
-    async classifyForge(_root: string, merged: MergedConfig): Promise<"remote" | "path"> {
-      return classifyForge(merged.config.forge) === "url" ? "remote" : "path";
+    isRemote(forge: string): boolean {
+      return classifyForge(forge) === "url";
     },
 
     async sync(
@@ -315,25 +291,16 @@ export function mcpWriters(home: string, registryOff: boolean): McpWriters {
       fetch: boolean,
       opts: { home: string; git?: LoadOptions["git"] },
     ): Promise<SyncToolResult> {
-      const ws = await loadForgeFor(root, merged, { home: opts.home, git: opts.git, mode: fetch ? "read" : "no-fetch" });
+      const ws = await loadForgeFor(root, merged, { home: opts.home, git: opts.git, mode: "sync" });
       const p = await plan(ws);
 
-      // Refuse when a declared parameter has no value
       const unset = unsetDeclared(p);
-      if (unset.length) {
-        throw new Error(unsetRefusal(unset));
-      }
+      if (unset.length) throw new Error(unsetRefusal(unset));
 
       const lock = await readLock(root);
       const statuses = await status(ws, p, lock);
 
-      const outcome = await syncWorkspace(ws, p, statuses, lock, {
-        home,
-        registryOff,
-        // Never overwriteDrift: sync skips hand-edited files
-        // Never overwritePaths: ditto
-        // Never dryRun: the tool writes
-      });
+      const outcome = await syncWorkspace(ws, p, statuses, lock, { home, registryOff });
 
       return {
         profile: ws.config.profile,
@@ -348,15 +315,18 @@ export function mcpWriters(home: string, registryOff: boolean): McpWriters {
       };
     },
 
-    async addRecipe(
+    async editRecipes(
       root: string,
       merged: MergedConfig,
+      op: RecipeOp,
       names: string[],
-      replace: boolean,
-      opts: { home: string; git?: LoadOptions["git"] },
+      opts: { replace?: boolean; fetch: boolean; home: string; git?: LoadOptions["git"] },
     ): Promise<RecipeToolResult> {
-      const ws = await loadForgeFor(root, merged, { home: opts.home, git: opts.git, mode: "no-fetch" });
-      const outcome = await editRecipes(ws, "add", names, { replace });
+      const ws = await loadForgeFor(root, merged, { home: opts.home, git: opts.git, mode: opts.fetch ? "read" : "no-fetch" });
+      const outcome = await editRecipes(ws, op, names, { replace: opts.replace });
+
+      const cached = cachedCopyLine(ws, opts.fetch);
+      const loadWarnings = cached === null ? [...ws.warnings] : [cached, ...ws.warnings];
 
       if (!outcome.changed) {
         return {
@@ -365,7 +335,7 @@ export function mcpWriters(home: string, registryOff: boolean): McpWriters {
           craftarYaml: null,
           recipes: null,
           nextSync: null,
-          warnings: [],
+          warnings: loadWarnings,
         };
       }
 
@@ -375,37 +345,7 @@ export function mcpWriters(home: string, registryOff: boolean): McpWriters {
         craftarYaml: recipeDiffLine(outcome.before, outcome.after),
         recipes: outcome.next?.recipes ?? null,
         nextSync: outcome.next ? nextSyncLine(outcome.next.statuses, outcome.next.unset) : null,
-        warnings: outcome.next?.warnings ?? [],
-      };
-    },
-
-    async removeRecipe(
-      root: string,
-      merged: MergedConfig,
-      names: string[],
-      opts: { home: string; git?: LoadOptions["git"] },
-    ): Promise<RecipeToolResult> {
-      const ws = await loadForgeFor(root, merged, { home: opts.home, git: opts.git, mode: "no-fetch" });
-      const outcome = await editRecipes(ws, "remove", names);
-
-      if (!outcome.changed) {
-        return {
-          changed: false,
-          reasons: outcome.reasons,
-          craftarYaml: null,
-          recipes: null,
-          nextSync: null,
-          warnings: [],
-        };
-      }
-
-      return {
-        changed: true,
-        reasons: outcome.reasons,
-        craftarYaml: recipeDiffLine(outcome.before, outcome.after),
-        recipes: outcome.next?.recipes ?? null,
-        nextSync: outcome.next ? nextSyncLine(outcome.next.statuses, outcome.next.unset) : null,
-        warnings: outcome.next?.warnings ?? [],
+        warnings: [...loadWarnings, ...(outcome.next?.warnings ?? [])],
       };
     },
   };

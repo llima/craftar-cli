@@ -6,7 +6,7 @@ import { runCli } from "./helpers/cli.js";
 import { makeWorkspace, tmpDir, scenario, rule, recipe, profile } from "./helpers/forge.js";
 import { startMcp } from "./helpers/mcp-process.js";
 import { eightStates, type Scenario } from "./helpers/states.js";
-import { registryFile } from "../src/core/registry.js";
+import { allowWrites, registryFile } from "../src/core/registry.js";
 
 // Spec 35 §4.1, §4.9, §10.3 — the process: launch refusals, a whole session over real pipes, nothing written.
 
@@ -192,7 +192,6 @@ describe("craftar mcp --allow-writes — a real process", () => {
       ),
     );
     // Record consent in-process
-    const { allowWrites } = await import("../src/core/registry.js");
     await allowWrites(home, s.wsRoot, { forge: { source: "../forge", ref: null }, profile: "acme" });
 
     const m = start(["--allow-writes", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
