@@ -1,7 +1,8 @@
 /**
  * Spec 40 Part A — the writing half of `sync`, `init`, `drift discard`, `add recipe` and `remove recipe`,
- * shared by the CLI and `craftar mcp --allow-writes`. Loads nothing, prints nothing, writes only through
- * `apply()`, `register()` and the one in-place write of `craftar.yaml`.
+ * shared by the CLI and `craftar mcp --allow-writes`. `syncWorkspace` and `editRecipes` load nothing,
+ * print nothing, write only through `apply()`, `register()` and the one in-place write of `craftar.yaml`.
+ * `mcpWriters` loads the workspace's Forge for a writing tool call.
  */
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -234,7 +235,7 @@ export interface McpWriters {
   sync(
     root: string,
     merged: MergedConfig,
-    opts: { home: string; git?: LoadOptions["git"] },
+    opts: { git?: LoadOptions["git"] },
   ): Promise<SyncToolResult>;
 
   /** The `add_recipe` or `remove_recipe` tool (spec 40 §5.5): load, editRecipes. */
@@ -281,9 +282,9 @@ export function mcpWriters(home: string, registryOff: boolean): McpWriters {
     async sync(
       root: string,
       merged: MergedConfig,
-      opts: { home: string; git?: LoadOptions["git"] },
+      opts: { git?: LoadOptions["git"] },
     ): Promise<SyncToolResult> {
-      const ws = await loadForgeFor(root, merged, { home: opts.home, git: opts.git, mode: "sync", fetchHint: "mcp" });
+      const ws = await loadForgeFor(root, merged, { home, git: opts.git, mode: "sync", fetchHint: "mcp" });
       const p = await plan(ws);
 
       const unset = unsetDeclared(p);

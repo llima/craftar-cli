@@ -362,14 +362,18 @@ export async function allowWrites(
  */
 export async function revokeWrites(home: string, dir: string): Promise<{ path: string; removed: boolean }> {
   const target = await realOrResolved(dir);
+  // Early return when no registry.json exists — don't create one for a revoke
   if (!(await exists(registryFile(home)))) return { path: target, removed: false };
+  // Pre-read as a fast path: if the consent is already absent, don't take the lock
   const reg = await readRegistry(home);
   if (!reg.writeConsent || !reg.writeConsent.some((c) => samePath(c.path, target))) {
     return { path: target, removed: false };
   }
+  // Decide `removed` under the lock, since the registry may have changed since the pre-read
   return update(home, {}, (reg) => {
-    removeConsentsFor(reg, [target]);
-    return { path: target, removed: true };
+    const hadConsent = reg.writeConsent?.some((c) => samePath(c.path, target)) ?? false;
+    if (hadConsent) removeConsentsFor(reg, [target]);
+    return { path: target, removed: hadConsent };
   });
 }
 

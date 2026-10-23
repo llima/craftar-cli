@@ -406,7 +406,7 @@ async function callWrite(name: WriteToolName, args: WriteToolArguments, ctx: Mcp
 
   if (name === "sync") {
     if (writers.isRemote(merged.config.forge) && !ctx.fetch) throw new Error(SYNC_NEEDS_FETCH);
-    return await writers.sync(ctx.root, merged, { home: ctx.home, git: ctx.git });
+    return await writers.sync(ctx.root, merged, { git: ctx.git });
   }
   // add_recipe or remove_recipe
   const op = name === "add_recipe" ? "add" : "remove";

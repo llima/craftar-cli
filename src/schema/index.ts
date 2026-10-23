@@ -677,15 +677,17 @@ export const RegistryEntrySchema = z
   .passthrough();
 
 /** A person's consent, typed on this machine, for `craftar mcp --allow-writes` to write one workspace (spec 40 §3, §5.2). */
-export const WriteConsentSchema = z.object({
-  /** The workspace's native real path, compared with `samePath`. */
-  path: z.string(),
-  /** The Forge the consent was given for, as the configuration named it. */
-  forge: z.object({ source: z.string(), ref: z.string().nullable() }),
-  profile: z.string(),
-  /** ISO time of the consent. */
-  grantedAt: z.string(),
-});
+export const WriteConsentSchema = z
+  .object({
+    /** The workspace's native real path, compared with `samePath`. */
+    path: z.string(),
+    /** The Forge the consent was given for, as the configuration named it. */
+    forge: z.object({ source: z.string(), ref: z.string().nullable() }),
+    profile: z.string(),
+    /** ISO time of the consent. */
+    grantedAt: z.string(),
+  })
+  .passthrough();
 export type WriteConsent = z.infer<typeof WriteConsentSchema>;
 
 export const RegistrySchema = z
