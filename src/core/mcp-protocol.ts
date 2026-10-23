@@ -6,8 +6,14 @@ import { unmanaged } from "./drift.js";
 import { cachedCopyLine, diffReport, explainFile, notProduced, statusPath, statusReport, targetsReport } from "./report.js";
 import { errorText, schemaFault } from "./schema-fault.js";
 import { loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig } from "./sync.js";
-import type { McpWriters, Pin } from "./write-actions.js";
-export type { Pin };
+import type { McpWriters } from "./write-actions.js";
+
+/** The pin that consent must match (the fields of craftar.yaml that callWrite checks). */
+export interface Pin {
+  forge: string;
+  ref: string | null;
+  profile: string;
+}
 
 /*
  * `craftar mcp` (spec 35): the Model Context Protocol, revision 2025-06-18, as a function from one message to
@@ -400,7 +406,7 @@ async function callWrite(name: WriteToolName, args: WriteToolArguments, ctx: Mcp
 
   if (name === "sync") {
     if (writers.isRemote(merged.config.forge) && !ctx.fetch) throw new Error(SYNC_NEEDS_FETCH);
-    return await writers.sync(ctx.root, merged, ctx.fetch, { home: ctx.home, git: ctx.git });
+    return await writers.sync(ctx.root, merged, { home: ctx.home, git: ctx.git });
   }
   // add_recipe or remove_recipe
   const op = name === "add_recipe" ? "add" : "remove";

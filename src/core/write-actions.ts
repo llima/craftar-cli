@@ -34,6 +34,7 @@ import {
 import { hashNormalized } from "./text.js";
 import { localKeys } from "./workspace-yaml.js";
 import type { Lock } from "../schema/index.js";
+import type { Pin } from "./mcp-protocol.js";
 
 /* ------------------------------------------------------------------ */
 /* syncWorkspace                                                       */
@@ -215,13 +216,6 @@ export interface RecipeToolResult {
   warnings: string[];
 }
 
-/** The pin that consent must match (the fields of craftar.yaml that callWrite checks). */
-export interface Pin {
-  forge: string;
-  ref: string | null;
-  profile: string;
-}
-
 /** Consent result codes: "ok" when consent is valid, or a code for callWrite to map to a message. */
 export type ConsentCode = "ok" | "registry-off" | "unreadable" | "none" | { stale: Array<"forge" | "ref" | "profile"> };
 
@@ -240,7 +234,6 @@ export interface McpWriters {
   sync(
     root: string,
     merged: MergedConfig,
-    fetch: boolean,
     opts: { home: string; git?: LoadOptions["git"] },
   ): Promise<SyncToolResult>;
 
@@ -288,7 +281,6 @@ export function mcpWriters(home: string, registryOff: boolean): McpWriters {
     async sync(
       root: string,
       merged: MergedConfig,
-      fetch: boolean,
       opts: { home: string; git?: LoadOptions["git"] },
     ): Promise<SyncToolResult> {
       const ws = await loadForgeFor(root, merged, { home: opts.home, git: opts.git, mode: "sync" });
