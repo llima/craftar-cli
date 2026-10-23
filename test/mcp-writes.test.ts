@@ -202,20 +202,37 @@ describe("craftar mcp --allow-writes — the writing tools", () => {
     expect(await fs.readFile(path.join(s.wsRoot, ".claude/rules/gone-edited.md"), "utf8")).toBe("# Gone edited\nby hand\n");
     expect(await fs.readFile(path.join(s.wsRoot, ".claude/rules/clash.md"), "utf8")).toBe("# Clash\ndisk side\n");
 
-    // The answer must not contain certain content strings
-    const json = JSON.stringify(result);
-    expect(json).not.toContain("by the forge");
-    expect(json).not.toContain("# Fresh");
-    expect(json).not.toContain("# Adopted");
-    expect(json).not.toContain("new line");
-    expect(json).not.toContain("forge side");
-    expect(json).not.toContain("by hand");
+    // Full content scan: walk every string leaf of the result and check no planned body line appears.
+    // Collect all string leaves from structuredContent and parsed content[0].text
+    const leaves: string[] = [];
+    const walk = (v: unknown): void => {
+      if (typeof v === "string") leaves.push(v);
+      else if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === "object") Object.values(v).forEach(walk);
+    };
+    walk(sc);
+    if (result.content?.[0]?.text) {
+      try {
+        walk(JSON.parse(result.content[0].text));
+      } catch {
+        leaves.push(result.content[0].text);
+      }
+    }
 
-    // Full content scan: the answer must not contain any planned file's content (trimmed, non-empty)
+    // Collect significant lines from all planned files (non-empty, trimmed, > 3 chars)
+    const forbiddenLines: string[] = [];
     for (const f of p.files) {
-      const content = f.content.toString("utf8").trim();
-      if (content.length > 0) {
-        expect(json).not.toContain(content);
+      const lines = f.content.toString("utf8").split("\n");
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.length > 3) forbiddenLines.push(trimmed);
+      }
+    }
+
+    // No leaf may contain any forbidden line
+    for (const leaf of leaves) {
+      for (const forbidden of forbiddenLines) {
+        expect(leaf).not.toContain(forbidden);
       }
     }
   });
