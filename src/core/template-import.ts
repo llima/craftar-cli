@@ -94,7 +94,7 @@ export function citedKeys(texts: Map<string, string>): Set<string> {
  * other file as bytes. At schema 4 and for an `mcp` base, the server is rendered (spec 34 §5.3).
  * With no declaration, no marker and nothing set, this is `fingerprintDir`.
  */
-export function renderedFingerprint(base: ImportBase, map: Record<string, unknown>, sections: Record<string, string> = {}, schema: 1 | 2 | 3 | 4 = 1): string {
+export function renderedFingerprint(base: ImportBase, map: Record<string, unknown>, sections: Record<string, string> = {}, schema: 1 | 2 | 3 | 4 | 5 = 1): string {
   // At the gate, render the server before stripForgeOnlyKeys (it needs params).
   let meta: Ingredient;
   if (rendersServers({ schema }) && base.meta.type === "mcp") {

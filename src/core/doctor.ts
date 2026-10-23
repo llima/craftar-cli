@@ -426,7 +426,7 @@ export function oneLine(e: unknown): string {
  *
  * At schema 4, the server is rendered first, so a `${NAME}` a value brings into `env` is checked (spec 34 §4.4).
  */
-function mcpUnset(p: Plan, env: NodeJS.ProcessEnv, schema: 1 | 2 | 3 | 4): Array<{ server: string; name: string }> {
+function mcpUnset(p: Plan, env: NodeJS.ProcessEnv, schema: 1 | 2 | 3 | 4 | 5): Array<{ server: string; name: string }> {
   const servers: Array<[string, unknown, string[] | undefined]> = [];
   for (const target of p.resolution.targets) {
     // `written()` yields only what the matrix says this target writes; the skip warnings were plan()'s.

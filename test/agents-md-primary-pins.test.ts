@@ -138,6 +138,12 @@ async function buildObserved(s: Scenario): Promise<Observed> {
   return normalize(observed, roots) as Observed;
 }
 
+/** Load the pinned baseline for comparison. */
+async function loadPin(): Promise<Observed> {
+  const pinText = await fs.readFile(PIN_FILE, "utf8");
+  return JSON.parse(pinText);
+}
+
 describe("agents-md.primary=off baseline pin", () => {
   it("matches the pinned snapshot (schema 4, no params)", async () => {
     const s = kept(await acmePrimary({ schema: 4 }));
@@ -152,8 +158,7 @@ describe("agents-md.primary=off baseline pin", () => {
     }
 
     // Compare mode: load the pin and compare
-    const pinText = await fs.readFile(PIN_FILE, "utf8");
-    const expected = JSON.parse(pinText);
+    const expected = await loadPin();
     expect(observed).toEqual(expected);
   });
 
@@ -178,5 +183,19 @@ describe("agents-md.primary=off baseline pin", () => {
 
     // syncedExit.syncCheck is 0 (after sync, everything is in sync)
     expect(observed.syncedExit.syncCheck).toBe(0);
+  });
+
+  it("schema 5, no key — equals the schema 4 pin", async () => {
+    const s = kept(await acmePrimary({ schema: 5 }));
+    const observed = await buildObserved(s);
+    const expected = await loadPin();
+    expect(observed).toEqual(expected);
+  });
+
+  it("schema 5, agents-md.primary: false — equals the schema 4 pin", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": false } }));
+    const observed = await buildObserved(s);
+    const expected = await loadPin();
+    expect(observed).toEqual(expected);
   });
 });
