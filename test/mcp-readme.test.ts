@@ -20,7 +20,7 @@ describe("craftar mcp — README and --help", () => {
   });
 
   it("the Commands row, the section, the registration snippet and the warning of Ruling 2 are there, once each", () => {
-    expect(count("| `craftar mcp [--workspace <dir>] [--fetch]` |")).toBe(1);
+    expect(count("| `craftar mcp [--workspace <dir>] [--fetch] [--allow-writes]` |")).toBe(1);
     expect(count("## Craftar inside the AI coder")).toBe(1);
     expect(count('{ "mcpServers": { "craftar": { "command": "craftar", "args": ["mcp"] } } }')).toBe(1);
     expect(count("**the names of every profile of the Forge and the workspace an ingredient was imported from**")).toBe(1);
@@ -34,5 +34,14 @@ describe("craftar mcp — README and --help", () => {
     // the roadmap still names the shipped command, and the results paragraph says what is left out
     expect(count("`craftar mcp` (a read-only MCP server: seven reading tools for an AI coder, over stdin and stdout);")).toBe(1);
     expect(count("with three things left out")).toBe(1);
+  });
+
+  it("spec 40: the writing half is documented once", () => {
+    expect(count("| `craftar mcp allow-writes [--workspace <dir>]` |")).toBe(1);
+    expect(count("| `craftar mcp revoke-writes [--workspace <dir>]` |")).toBe(1);
+    expect(count("**Letting it write.**")).toBe(1);
+    expect(count("### to 0.35.0")).toBe(1);
+    expect(README).not.toContain("writing tools for `craftar mcp` (`sync`, `add recipe`)");
+    expect(README).not.toContain("; it reads only.");
   });
 });
