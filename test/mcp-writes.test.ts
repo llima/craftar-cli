@@ -161,12 +161,17 @@ describe("craftar mcp --allow-writes — the writing tools", () => {
 
   // Test 3: Consent + eightStates: sync writes correctly
   it("3. consent + eightStates: sync result has correct written/removed/skipped, files unchanged where expected, no content in result", async () => {
+    const { loadWorkspace, plan } = await import("../src/core/sync.js");
     const home = await freshHome();
     const s = kept(await eightStates());
     const writers = mcpWriters(home, false);
 
     // Record consent
     await allowWrites(home, s.wsRoot, { forge: { source: "../forge", ref: null }, profile: "acme" });
+
+    // Compute the plan before the call to get all planned file contents
+    const ws = await loadWorkspace(s.wsRoot, { home });
+    const p = await plan(ws);
 
     const { tool } = await fresh(s.wsRoot, { home, writers });
 
@@ -205,6 +210,14 @@ describe("craftar mcp --allow-writes — the writing tools", () => {
     expect(json).not.toContain("new line");
     expect(json).not.toContain("forge side");
     expect(json).not.toContain("by hand");
+
+    // Full content scan: the answer must not contain any planned file's content (trimmed, non-empty)
+    for (const f of p.files) {
+      const content = f.content.toString("utf8").trim();
+      if (content.length > 0) {
+        expect(json).not.toContain(content);
+      }
+    }
   });
 
   // Test 4: A second sync right after: written [], removed [], lock unchanged
