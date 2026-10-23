@@ -140,4 +140,33 @@ describe("param warning — declared vs undeclared", () => {
     // stdout should not contain record.foo — it's undeclared, no warning
     expect(r.stdout).not.toContain("record.foo");
   });
+
+  it("6. a key another ingredient declares with a default still warns where it stays literal", async () => {
+    // Rule `a` declares `deploy.api` with default "x" and cites it
+    // Rule `b` cites `{{deploy.api}}` and declares nothing
+    // The warning should fire for b because the key is declared (by a, with a default)
+    const spec: ForgeSpec = {
+      ingredients: [
+        rule("a", "api: {{deploy.api}}\n", { params: { "deploy.api": { default: "x" } } }),
+        rule("b", "api: {{deploy.api}}\n"),
+      ],
+      recipes: [recipe("base", ["rule/a", "rule/b"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    };
+    const s = await scenario(spec, { config: { profile: "acme" } });
+    cleanups.push(s.cleanup);
+
+    const ws = await loadWorkspace(s.wsRoot);
+    const p = await plan(ws);
+
+    // The warning IS present because deploy.api is declared by rule/a
+    expect(p.warnings).toContain('param "deploy.api" has no value in any layer — left verbatim (rule/b)');
+
+    // unsetDeclared does NOT include this key, because the declaring ingredient has a default
+    expect(unsetDeclared(p)).toEqual([]);
+
+    // Rule b's content still has the literal placeholder
+    const content = p.files.find((f) => f.path === ".claude/rules/b.md")!.content.toString("utf8");
+    expect(content).toBe("api: {{deploy.api}}\n");
+  });
 });

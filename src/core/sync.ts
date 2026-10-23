@@ -625,12 +625,19 @@ export async function plan(ws: Workspace): Promise<Plan> {
   assertInsideWorkspace(files);
   const missing: Plan["missingParams"] = [];
   const declared = declaredWithoutValue({ resolution });
+  // Keys declared by ANY resolved ingredient (with or without default) — for the warning condition
+  const declaredByAny = new Set<string>();
+  for (const ing of resolution.ingredients) {
+    for (const key of Object.keys(ing.meta.params ?? {})) {
+      declaredByAny.add(key);
+    }
+  }
   for (const [key, refs] of [...missingParams].sort(([a], [b]) => a.localeCompare(b))) {
     const warning = `param "${key}" has no value in any layer — left verbatim (${[...refs].sort().join(", ")})`;
     const declaredBy = [...(declared.get(key) ?? [])].sort();
-    // Warn only when the key is declared, or when it is under `integrations.` in a Forge at schema 3+.
-    // An undeclared key (Angular's `{{ 'X' | localize }}`, a stray `{{record.foo}}`) is left silently.
-    if (declaredBy.length > 0 || (readsIntegrations(ws.forge.manifest) && key.startsWith(INTEGRATIONS_PREFIX))) {
+    // Warn when the key is declared by ANY resolved ingredient (with or without default), or when it
+    // is under `integrations.` in a Forge at schema 3+. An undeclared key is left silently.
+    if (declaredByAny.has(key) || (readsIntegrations(ws.forge.manifest) && key.startsWith(INTEGRATIONS_PREFIX))) {
       warnings.push(warning);
     }
     missing.push({ key, refs: [...refs].sort(), warning, declaredBy });
