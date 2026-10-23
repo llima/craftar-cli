@@ -6,6 +6,8 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { InitIo } from "./init-flow.js";
+import { yesNo } from "./init-flow.js";
 import { register, registryFile } from "./registry.js";
 import { forgeLine } from "./report.js";
 import { editRecipesText, planRecipeEdit, type RecipeLists, type RecipeOp } from "./recipe-edit.js";
@@ -156,4 +158,22 @@ export async function statusDigest(ws: Workspace, statuses: FileStatus[]): Promi
 
   const joined = rows.join("\n");
   return createHash("sha256").update(joined, "utf8").digest("hex");
+}
+
+/* ------------------------------------------------------------------ */
+/* confirmWrites                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The question of `craftar mcp allow-writes` (spec 40 §5.2 step 4): `[no]` — Enter, n, no and an input that ended are no,
+ * y and yes are yes (yesNo, the init flow's parser), anything else is asked again.
+ */
+export async function confirmWrites(io: Pick<InitIo, "confirm" | "say">): Promise<boolean> {
+  for (;;) {
+    const answer = await io.confirm("Let craftar mcp --allow-writes write here [no]: ");
+    if (answer === null || answer.trim() === "") return false;
+    const yn = yesNo(answer);
+    if (yn !== null) return yn;
+    io.say("answer yes or no");
+  }
 }

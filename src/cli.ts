@@ -54,7 +54,7 @@ import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type Desti
 import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
 import { readlineIo } from "./prompt.js";
 import { recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
-import { syncWorkspace, editRecipes } from "./core/write-actions.js";
+import { syncWorkspace, editRecipes, confirmWrites } from "./core/write-actions.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type UnifyPlan } from "./schema/index.js";
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
@@ -1492,34 +1492,28 @@ mcpCmd
   .option("--workspace <dir>", 'workspace root (default: ".")')
   .action(async (o: { workspace?: string }) => {
     const workspace: string = o.workspace ?? mcpCmd.opts().workspace ?? ".";
-    // Refuse parent flags first (spec 40 §5.1)
     if (mcpCmd.opts().fetch) fail("craftar mcp allow-writes takes only --workspace");
-    // Step 1: resolve and check craftar.yaml exists
     const root = path.resolve(workspace);
     if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
       fail(`no craftar.yaml in ${root} — the consent is given for one workspace; type it in one, or pass --workspace`);
     }
-    // Step 2: CRAFTAR_NO_REGISTRY check
     if (registryOff()) fail("the consent is recorded in the registry, and CRAFTAR_NO_REGISTRY is set — unset it to allow writes");
-    // Step 3: read registry
     const home = craftarHome();
     try {
       await readRegistry(home);
     } catch (e) {
       fail(`cannot read the registry: ${errorText(e)}`);
     }
-    // Step 4: TTY check — both stdin and stdout must be a TTY
     if (!(process.stdin.isTTY === true && process.stdout.isTTY === true)) {
       fail("craftar mcp allow-writes asks a person in a terminal — type it in one; it cannot be run from a script or an AI coder's shell tool");
     }
-    // Step 5: read workspace config (this is where a forge: holding credentials is refused)
+    // a forge: holding credentials is refused here, before anything prints it
     let merged: MergedConfig;
     try {
       merged = await readWorkspaceConfig(root);
     } catch (e) {
       fail(errorText(e));
     }
-    // Step 6: print info and ask
     const realRoot = await fs.realpath(root);
     const refLine = merged.config.ref ? shownRef(merged.config.ref) : "(the Forge's default)";
     console.log(`craftar mcp allow-writes — ${realRoot}`);
@@ -1527,11 +1521,7 @@ mcpCmd
     console.log(`  ref      ${refLine}`);
     console.log(`  profile  ${merged.config.profile}`);
     console.log(`  tools    sync, add_recipe, remove_recipe — sync never discards a hand edit`);
-    const io = readlineIo(process.stdin, process.stdout, { terminal: true });
-    const answer = await io.confirm("Let craftar mcp --allow-writes write here [no]: ");
-    // Step 7: cancelled
-    if (!answer) fail("allow-writes cancelled — nothing written");
-    // Step 8: record consent
+    if (!(await confirmWrites(readlineIo(process.stdin, process.stdout, { terminal: true })))) fail("allow-writes cancelled — nothing written");
     try {
       const consent = await allowWrites(home, root, {
         forge: { source: merged.config.forge, ref: merged.config.ref ?? null },
@@ -1550,16 +1540,12 @@ mcpCmd
   .option("--workspace <dir>", 'workspace root (default: ".")')
   .action(async (o: { workspace?: string }) => {
     const workspace: string = o.workspace ?? mcpCmd.opts().workspace ?? ".";
-    // Refuse parent flags first (spec 40 §5.1)
     if (mcpCmd.opts().fetch) fail("craftar mcp revoke-writes takes only --workspace");
-    // Step 1: resolve and check craftar.yaml exists
     const root = path.resolve(workspace);
     if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
       fail(`no craftar.yaml in ${root} — the consent is given for one workspace; type it in one, or pass --workspace`);
     }
-    // Step 2: CRAFTAR_NO_REGISTRY check
     if (registryOff()) fail("the consent is recorded in the registry, and CRAFTAR_NO_REGISTRY is set — nothing to revoke here");
-    // Step 3: revoke
     const home = craftarHome();
     try {
       const result = await revokeWrites(home, root);

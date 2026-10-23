@@ -8,7 +8,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
 import { readRegistry, registryFile } from "../src/core/registry.js";
-import { syncWorkspace, editRecipes, statusDigest } from "../src/core/write-actions.js";
+import { syncWorkspace, editRecipes, statusDigest, confirmWrites } from "../src/core/write-actions.js";
 import { eightStates, type Scenario } from "./helpers/states.js";
 import { tmpDir, scenario, rule, recipe, profile, writeFiles } from "./helpers/forge.js";
 
@@ -330,5 +330,92 @@ describe("statusDigest", () => {
     const d2 = await statusDigest(ws2, st2);
 
     expect(d2).not.toBe(d1);
+  });
+});
+
+describe("confirmWrites", () => {
+  const QUESTION = "Let craftar mcp --allow-writes write here [no]: ";
+
+  /** A fake io that returns scripted answers and records questions and say calls. */
+  function fakeIo(answers: Array<string | null>) {
+    let index = 0;
+    const questions: string[] = [];
+    const said: string[] = [];
+    return {
+      io: {
+        confirm: async (q: string) => {
+          questions.push(q);
+          return answers[index++] ?? null;
+        },
+        say: (line: string) => {
+          said.push(line);
+        },
+      },
+      questions,
+      said,
+    };
+  }
+
+  it('[""] → false', async () => {
+    const { io, questions, said } = fakeIo([""]);
+    expect(await confirmWrites(io)).toBe(false);
+    expect(questions).toEqual([QUESTION]);
+    expect(said).toEqual([]);
+  });
+
+  it("[null] → false", async () => {
+    const { io, questions, said } = fakeIo([null]);
+    expect(await confirmWrites(io)).toBe(false);
+    expect(questions).toEqual([QUESTION]);
+    expect(said).toEqual([]);
+  });
+
+  it('["n"] → false', async () => {
+    const { io, questions, said } = fakeIo(["n"]);
+    expect(await confirmWrites(io)).toBe(false);
+    expect(questions).toEqual([QUESTION]);
+    expect(said).toEqual([]);
+  });
+
+  it('["no"] → false', async () => {
+    const { io, questions, said } = fakeIo(["no"]);
+    expect(await confirmWrites(io)).toBe(false);
+    expect(questions).toEqual([QUESTION]);
+    expect(said).toEqual([]);
+  });
+
+  it('["NO "] → false', async () => {
+    const { io, questions, said } = fakeIo(["NO "]);
+    expect(await confirmWrites(io)).toBe(false);
+    expect(questions).toEqual([QUESTION]);
+    expect(said).toEqual([]);
+  });
+
+  it('["y"] → true', async () => {
+    const { io, questions, said } = fakeIo(["y"]);
+    expect(await confirmWrites(io)).toBe(true);
+    expect(questions).toEqual([QUESTION]);
+    expect(said).toEqual([]);
+  });
+
+  it('[" Yes "] → true', async () => {
+    const { io, questions, said } = fakeIo([" Yes "]);
+    expect(await confirmWrites(io)).toBe(true);
+    expect(questions).toEqual([QUESTION]);
+    expect(said).toEqual([]);
+  });
+
+  it('["maybe", "y"] → true, two questions asked, say got exactly ["answer yes or no"]', async () => {
+    const { io, questions, said } = fakeIo(["maybe", "y"]);
+    expect(await confirmWrites(io)).toBe(true);
+    expect(questions).toEqual([QUESTION, QUESTION]);
+    expect(said).toEqual(["answer yes or no"]);
+  });
+
+  it('["maybe", ""] → false', async () => {
+    const { io, questions, said } = fakeIo(["maybe", ""]);
+    expect(await confirmWrites(io)).toBe(false);
+    expect(questions).toEqual([QUESTION, QUESTION]);
+    expect(said).toEqual(["answer yes or no"]);
   });
 });
