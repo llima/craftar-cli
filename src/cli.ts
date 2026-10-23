@@ -9,14 +9,14 @@ import { planPromote, applyPromote, UnheldError } from "./importers/drift-promot
 import { providedRefs } from "./importers/provided.js";
 import { holdsBaseCitations, rendersServers } from "./core/mcp-server.js";
 import { assertNotCacheTree, classifyForge } from "./core/remote.js";
-import { forget, listWorkspaces, prune, readRegistry, register, registryFile, type WorkspaceRow } from "./core/registry.js";
-import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
+import { forget, listWorkspaces, prune, readRegistry, type WorkspaceRow } from "./core/registry.js";
+import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { launchRefusal, pinOf } from "./core/mcp-protocol.js";
 import { serve } from "./mcp.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, agentsMdOverBudget, agentsMdRefusal, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -24,7 +24,7 @@ import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
-import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, notProduced, readText, statusPath, statusReport, targetsReport } from "./core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, readText, statusPath, statusReport, targetsReport } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
@@ -53,7 +53,8 @@ import { askInit, askClone, confirmInit, againLine, NOT_CLONED_REFUSED, type Ini
 import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type DestinationContext, type RepoState } from "./core/clone.js";
 import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
 import { readlineIo } from "./prompt.js";
-import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
+import { recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
+import { syncWorkspace, editRecipes } from "./core/write-actions.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type UnifyPlan } from "./schema/index.js";
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
@@ -222,28 +223,17 @@ function budgetRefusalBlock(p: Plan): boolean {
  * `CRAFTAR_NO_REGISTRY`), and the lines `sync` prints. `sync` and `init` both call it (spec 23 §5.2).
  */
 async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lock | null, opts: { dryRun?: boolean; overwriteDrift?: boolean; overwritePaths?: ReadonlySet<string> } = {}): Promise<ApplyResult> {
-  const r = await apply(ws, p, st, opts);
-  // A writing sync records the workspace (spec 21 §4.1); the registry is an index, so a failure is a warning.
-  let registryWarning: string | null = null;
-  if (!opts.dryRun && !registryOff()) {
-    const home = craftarHome();
-    try {
-      await register(home, ws, p);
-    } catch (e) {
-      registryWarning = `registry not updated (${registryFile(home)}): ${e instanceof Error ? e.message : String(e)}`;
-    }
-  }
+  const o = await syncWorkspace(ws, p, st, lock, { ...opts, home: craftarHome(), registryOff: registryOff() });
   const verb = opts.dryRun ? "would write" : "wrote";
   console.log(pc.bold(`craftar sync — profile ${ws.config.profile} · recipes ${p.resolution.recipes.join(" → ")} · targets ${p.resolution.targets.join(", ")}`));
-  const fl = forgeLine(ws, lock);
-  if (fl) console.log(fl);
-  console.log(`  ${verb} ${pc.green(String(r.written.length))}, removed ${pc.magenta(String(r.removed.length))} orphan(s), skipped ${pc.yellow(String(r.skipped.length))}`);
-  for (const f of r.written) console.log(`  ${pc.green("+")} ${f}`);
-  for (const f of r.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : "orphan: no longer produced by the Forge"})`);
-  for (const s of r.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
+  if (o.forgeLine) console.log(o.forgeLine);
+  console.log(`  ${verb} ${pc.green(String(o.result.written.length))}, removed ${pc.magenta(String(o.result.removed.length))} orphan(s), skipped ${pc.yellow(String(o.result.skipped.length))}`);
+  for (const f of o.result.written) console.log(`  ${pc.green("+")} ${f}`);
+  for (const f of o.result.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : "orphan: no longer produced by the Forge"})`);
+  for (const s of o.result.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
   for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
-  if (registryWarning) console.log(`  ${pc.yellow("warn")} ${registryWarning}`);
-  return r;
+  if (o.registry) console.log(`  ${pc.yellow("warn")} registry not updated (${o.registry.file}): ${o.registry.message}`);
+  return o.result;
 }
 
 /**
@@ -1143,43 +1133,30 @@ drift
   });
 
 /* ---------------------------------------------------------------- add / remove recipe */
-/**
- * Spec 22's line: what the next sync would do (also `init --no-sync`, spec 23 §4.4).
- * Uses `countStates` from `src/core/impact.ts`; a new `FileState` does not compile until it is
- * placed in `FILE_STATE_ORDER_MAP` there. A plan with unset declared parameters has no next sync
- * to count: the line says it is refused (spec 29 §4.1).
- */
-function nextSyncLine(st: FileStatus[], unset: UnsetParam[]): string {
-  if (unset.length) return `next sync: ${unsetRefused(unset)}`;
-  const counts = countStates(st).map(([k, n]) => `${n} ${k}`);
-  return `next sync: ${counts.length ? `${counts.join(", ")} — run \`craftar sync\`` : "nothing to sync"}`;
-}
 
 function recipeCommand(op: RecipeOp) {
   return async (names: string[], o: { workspace: string; replace?: boolean; offline?: boolean }) => {
     const ws = await loadWorkspace(o.workspace, load(o, "read"));
     warnStderr(ws.warnings);
-    // R1: arrays replace across layers, so an edit of craftar.yaml would not take effect (spec 22 Ruling 1).
-    if ((await localKeys(ws.root)).includes("recipes"))
-      fail(`${LOCAL_FILE} sets recipes, which replaces ${WORKSPACE_FILE}'s lists — edit it by hand, or remove its recipes key and re-run`);
-    const edit = planRecipeEdit(ws.forge, ws.config, op, names, { replace: o.replace === true });
-    if (!edit.changed) {
-      console.log(`nothing to change${edit.reasons.length ? `: ${edit.reasons.join(", ")}` : ""}`);
+
+    let outcome;
+    try {
+      outcome = await editRecipes(ws, op, names, { replace: o.replace });
+    } catch (e) {
+      // All errors from editRecipes should be displayed via fail()
+      fail(e instanceof Error ? e.message : String(e));
+    }
+
+    if (!outcome.changed) {
+      console.log(`nothing to change${outcome.reasons.length ? `: ${outcome.reasons.join(", ")}` : ""}`);
       return;
     }
-    const file = path.join(ws.root, WORKSPACE_FILE);
-    const content = editRecipesText(await fs.readFile(file, "utf8"), edit.recipes, `${op} recipe`);
-    // The report is computed before the write, so a plan that fails leaves craftar.yaml untouched (§5.2 step 4).
-    const next: Workspace = { ...ws, config: { ...ws.config, recipes: edit.recipes } };
-    const p = await plan(next);
-    const st = await status(next, p, await readLock(ws.root));
-    const nextLine = nextSyncLine(st, unsetDeclared(p));
-    await fs.writeFile(file, content);
-    console.log(`${WORKSPACE_FILE}: ${recipeDiffLine(ws.config.recipes, edit.recipes)}`);
-    console.log(`recipes: ${p.resolution.recipes.join(" → ")}`);
-    console.log(nextLine);
+
+    console.log(`${WORKSPACE_FILE}: ${recipeDiffLine(outcome.before, outcome.after)}`);
+    console.log(`recipes: ${outcome.next!.recipes.join(" → ")}`);
+    console.log(nextSyncLine(outcome.next!.statuses, outcome.next!.unset));
     // plan() already carries ws.warnings first, and they were printed on load.
-    warnStderr(p.warnings.slice(ws.warnings.length));
+    warnStderr(outcome.next!.warnings);
   };
 }
 
@@ -3053,16 +3030,6 @@ function matchSuffix(ws: ForgeWorkspace): string {
   if (ws.match === "clone") suffix = ` · after push and pull (${ws.via})`;
   if (ws.ref) suffix += `, pins ${ws.ref}`;
   return suffix;
-}
-
-/** The header line naming a remote Forge (spec 13 §4.1); null for a path Forge, whose headers keep their shape. */
-function forgeLine(ws: Workspace, lock: Lock | null): string | null {
-  const o = ws.origin;
-  if (o.kind !== "remote") return null;
-  const commit = ws.forge.commit;
-  const at = o.ref ?? `${o.defaultBranch} (default branch)`;
-  const moved = lock?.forge.commit && commit && lock.forge.commit !== commit ? ` · lock ${lock.forge.commit.slice(0, 8)}` : "";
-  return `  forge ${o.source} @ ${at} ${commit?.slice(0, 8) ?? "no git"}${moved}`;
 }
 
 /** One line on stderr with the `error: ` prefix, without exiting — `fail()` is this, then exit 1. */
