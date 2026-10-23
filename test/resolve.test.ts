@@ -96,11 +96,12 @@ describe("the ingredient default layer (spec 09 §5.4)", () => {
     return { a: text(".claude/rules/a.md"), b: text(".claude/rules/b.md"), warnings: p.warnings };
   }
 
-  it("fills the declaring ingredient only; another ingredient's placeholder stays literal and warned", async () => {
+  it("fills the declaring ingredient only; another ingredient's placeholder stays literal (no warning)", async () => {
     const r = await rendered();
     expect(r.a).toBe("api: ingredient\n");
     expect(r.b).toBe("api: {{deploy.api}}\n");
-    expect(r.warnings.join("\n")).toContain('param "deploy.api" has no value in any layer — left verbatim (rule/b)');
+    // An undeclared key is left verbatim silently — no warning
+    expect(r.warnings.join("\n")).not.toContain("deploy.api");
   });
 
   it("is the weakest layer: recipe, profile, workspace and local each override it", async () => {

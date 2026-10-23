@@ -228,7 +228,7 @@ describe("workspace checks", () => {
     expect(one((await run({ home: f.home, workspace: c })).checks, "lock")).toMatchObject({ level: "error", fix: "upgrade craftar", message: expect.stringMatching(/declares schema 9/) });
   });
 
-  it("params: a declared, cited key with no value is one error, naming its citers, and plan does not repeat it", async () => {
+  it("params: a declared, cited key with no value is one error, naming its citers; undeclared keys are silent", async () => {
     const f = await fixture({
       ingredients: [rule("a", "# {{who}}\n", { params: { who: { description: "w" } } }), rule("b", "# {{who}} too\n"), rule("c", "# {{other}}\n")],
       recipes: [recipe("base", ["rule/a", "rule/b", "rule/c"])],
@@ -239,8 +239,9 @@ describe("workspace checks", () => {
     expect(one(r.checks, "params")).toMatchObject({ level: "error", message: '"who" declared by rule/a has no value — cited by rule/a, rule/b', fix: "set who in the profile's params or overrides.params" });
     const planLines = of(r.checks, "plan").map((c) => c.message);
     expect(planLines.some((x) => x.includes('param "who"'))).toBe(false);
-    expect(planLines.some((x) => x.includes('param "other"'))).toBe(true);
-    expect(of(r.checks, "plan").map((c) => c.level)).toEqual(["warn"]);
+    // An undeclared key is left verbatim silently — no warning in plan either
+    expect(planLines.some((x) => x.includes('param "other"'))).toBe(false);
+    expect(of(r.checks, "plan").map((c) => c.level)).toEqual(["ok"]);
   });
 
   it("params: cited is an error, cited nowhere stays a warning — one line each, and the summary counts them", async () => {

@@ -23,9 +23,12 @@ async function planFor(ingredients: IngredientSpec[], refs: string[], profileExt
 const BODY = "Org: {{scm.org}}\nTitle: {{ 'X' | localize }}\n";
 
 describe("plan warnings", () => {
-  it("reports each unresolved param once, with the ingredients citing it", async () => {
+  it("an undeclared param is left verbatim with no warning, but is still in missingParams", async () => {
     const p = await planFor([rule("a", BODY), rule("b", "Also {{scm.org}}\n")], ["rule/a", "rule/b"]);
-    expect(p.warnings.filter((w) => w.startsWith("param "))).toEqual(['param "scm.org" has no value in any layer — left verbatim (rule/a, rule/b)']);
+    // An undeclared key is left verbatim silently — no warning
+    expect(p.warnings.filter((w) => w.startsWith("param "))).toEqual([]);
+    // But it's recorded in missingParams
+    expect(p.missingParams.map((m) => m.key)).toContain("scm.org");
     const a = p.files.find((f) => f.path === ".claude/rules/a.md")!.content.toString("utf8");
     expect(a).toContain("{{scm.org}}");
     expect(a).toContain("{{ 'X' | localize }}");
@@ -295,10 +298,11 @@ describe("sections — order: sections first, then params (spec 11 §6.4)", () =
     expect(out(p, ".claude/rules/r.md")).toBe("{{ 'A' | localize }}\n{{ 'B' | localize }}\n{{ 'C' | localize }}\n");
   });
 
-  it("the unresolved-param warning counts the expanded text: a replaced default's key is not reported, a value's is", async () => {
+  it("a replaced default's key is not reported, a value's undeclared key is left silently", async () => {
     const body = ["# R", OPEN("a"), "{{gone}}", CLOSE, ""].join("\n");
     const p = await sectionPlan({ ingredients: [rule("r", body)], profileExtra: { sections: { "rule/r": { a: "{{kept}}" } } }, targets: ["claude-code"] });
-    expect(p.warnings.filter((w) => w.startsWith("param "))).toEqual(['param "kept" has no value in any layer — left verbatim (rule/r)']);
+    // An undeclared key is left verbatim silently — no warning
+    expect(p.warnings.filter((w) => w.startsWith("param "))).toEqual([]);
   });
 
   it("records each section's layer for explain", async () => {

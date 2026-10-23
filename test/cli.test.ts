@@ -56,7 +56,7 @@ describe("cli", () => {
     expect(keys.filter((k) => k === ".git" || k.startsWith(".git/"))).toEqual([]);
   });
 
-  it("status prints the unresolved-param warning and exits 0; sync --check still passes", async () => {
+  it("status with an undeclared {{key}}: no param warning, exits 0; sync --check still passes", async () => {
     const s = await scenario(
       { ingredients: [rule("a", "Org: {{missing}}\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
       { config: { profile: "acme" } },
@@ -65,7 +65,8 @@ describe("cli", () => {
 
     const st = runCli(["status", "--workspace", s.wsRoot]);
     expect(st.code).toBe(0);
-    expect(st.stdout).toContain('param "missing" has no value in any layer');
+    // An undeclared key is left verbatim silently — no warning
+    expect(st.stdout).not.toContain('param "missing"');
 
     expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
     const check = runCli(["sync", "--check", "--workspace", s.wsRoot]);
@@ -4075,7 +4076,7 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
     await unmoved();
   });
 
-  it("test 13: nothing to sync when no file moves; a plan warning goes to stderr", async () => {
+  it("test 13: nothing to sync when no file moves; an undeclared param is left silently", async () => {
     const s = await recipeScenario();
     const unmovedS = await guard(s);
     await setYaml(s, BASE_YAML + "recipes:\n  remove: [base]\n");
@@ -4095,7 +4096,8 @@ describe("cli — add recipe / remove recipe (spec 22)", () => {
         "recipes: base → stack-api → front-c\n" +
         "next sync: 1 new, 1 orphan — run `craftar sync`\n",
     );
-    expect(w.stderr).toBe('warn param "owner" has no value in any layer — left verbatim (rule/front-c)\n');
+    // An undeclared key is left verbatim silently — no warning
+    expect(w.stderr).toBe("");
     await unmovedT();
   });
 
@@ -4324,17 +4326,17 @@ describe("cli — craftar init (spec 23 §9.2)", () => {
     ]);
   });
 
-  it("--no-sync: craftar.yaml only, the next sync line and the plan's warnings, nothing registered", async () => {
+  it("--no-sync: craftar.yaml only, the next sync line, nothing registered; an undeclared param is left silently", async () => {
     const s = await setup();
     const ws = path.join(s.root, "ws");
     const r = s.init(ws, ["--no-sync", "--add-recipe", "ph"]);
     expect(r.code, r.stderr).toBe(0);
+    // An undeclared key is left verbatim silently — no warning
     expect(r.stdout).toBe(
       [
         `craftar init — wrote craftar.yaml in ${ws}`,
         "  forge ../forge · profile acme · recipes base → ph · targets claude-code (from the profile)",
         "next sync: 2 new — run `craftar sync`",
-        "  warn param \"nope\" has no value in any layer — left verbatim (rule/p)",
         "",
       ].join("\n"),
     );

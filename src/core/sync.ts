@@ -19,6 +19,7 @@ import { AGENTS_MD_BUDGET_KEY, agentsMd } from "../emitters/agents-md.js";
 import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
 import { written } from "./capabilities.js";
 import { planServices } from "./services.js";
+import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
 export const LOCAL_FILE = "craftar.local.yaml";
@@ -626,8 +627,13 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const declared = declaredWithoutValue({ resolution });
   for (const [key, refs] of [...missingParams].sort(([a], [b]) => a.localeCompare(b))) {
     const warning = `param "${key}" has no value in any layer — left verbatim (${[...refs].sort().join(", ")})`;
-    warnings.push(warning);
-    missing.push({ key, refs: [...refs].sort(), warning, declaredBy: [...(declared.get(key) ?? [])].sort() });
+    const declaredBy = [...(declared.get(key) ?? [])].sort();
+    // Warn only when the key is declared, or when it is under `integrations.` in a Forge at schema 3+.
+    // An undeclared key (Angular's `{{ 'X' | localize }}`, a stray `{{record.foo}}`) is left silently.
+    if (declaredBy.length > 0 || (readsIntegrations(ws.forge.manifest) && key.startsWith(INTEGRATIONS_PREFIX))) {
+      warnings.push(warning);
+    }
+    missing.push({ key, refs: [...refs].sort(), warning, declaredBy });
   }
   const params: Plan["params"] = new Map();
   for (const [ref, { ing, keys }] of cited) {
