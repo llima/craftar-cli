@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { REGISTRY_SCHEMAS, RegistrySchema, type Lock, type Registry, type RegistryEntry } from "../schema/index.js";
+import { REGISTRY_SCHEMAS, RegistrySchema, type Lock, type Registry, type RegistryEntry, type WriteConsent } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { exists } from "./forge.js";
 import { withLock, type LockTiming } from "./home-lock.js";
@@ -133,6 +133,7 @@ export async function forget(home: string, dir: string): Promise<string> {
     const kept = reg.workspaces.filter((e) => !samePath(e.path, target));
     if (kept.length === reg.workspaces.length) throw notRegistered();
     reg.workspaces = kept;
+    removeConsentsFor(reg, [target]);
     return target;
   });
 }
@@ -311,8 +312,71 @@ export async function prune(home: string): Promise<string[]> {
       else kept.push(e);
     }
     reg.workspaces = kept;
+    removeConsentsFor(reg, removed);
     return removed;
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* Write consent (spec 40 §5.2)                                         */
+/* ------------------------------------------------------------------ */
+
+const byConsentPath = (a: WriteConsent, b: WriteConsent) => a.path.localeCompare(b.path);
+
+/** Remove consents for the given paths (by samePath); delete the list when empty. */
+function removeConsentsFor(reg: Registry, paths: string[]): void {
+  if (!reg.writeConsent || paths.length === 0) return;
+  reg.writeConsent = reg.writeConsent.filter((c) => !paths.some((p) => samePath(c.path, p)));
+  if (reg.writeConsent.length === 0) delete reg.writeConsent;
+}
+
+/**
+ * Record the user's consent for `craftar mcp --allow-writes` to write this workspace (spec 40 §5.2).
+ * Replaces any existing consent for the same path.
+ */
+export async function allowWrites(
+  home: string,
+  dir: string,
+  grant: { forge: { source: string; ref: string | null }; profile: string },
+  opts: { now?: Date; lock?: LockTiming } = {},
+): Promise<WriteConsent> {
+  const target = await realOrResolved(dir);
+  const entry: WriteConsent = {
+    path: target,
+    forge: { source: grant.forge.source, ref: grant.forge.ref },
+    profile: grant.profile,
+    grantedAt: (opts.now ?? new Date()).toISOString(),
+  };
+  return update(home, opts.lock ?? {}, (reg) => {
+    const list = (reg.writeConsent ?? []).filter((c) => !samePath(c.path, target));
+    list.push(entry);
+    list.sort(byConsentPath);
+    reg.writeConsent = list;
+    return entry;
+  });
+}
+
+/**
+ * Revoke a previously recorded consent (spec 40 §5.2).
+ * Returns `{ removed: false }` when no consent was recorded or no registry.json exists — without creating one.
+ */
+export async function revokeWrites(home: string, dir: string): Promise<{ path: string; removed: boolean }> {
+  const target = await realOrResolved(dir);
+  if (!(await exists(registryFile(home)))) return { path: target, removed: false };
+  const reg = await readRegistry(home);
+  if (!reg.writeConsent || !reg.writeConsent.some((c) => samePath(c.path, target))) {
+    return { path: target, removed: false };
+  }
+  return update(home, {}, (reg) => {
+    removeConsentsFor(reg, [target]);
+    return { path: target, removed: true };
+  });
+}
+
+/** The consent for this directory, if any (spec 40 §5.2). */
+export async function consentFor(reg: Registry, dir: string): Promise<WriteConsent | null> {
+  const target = await realOrResolved(dir);
+  return reg.writeConsent?.find((c) => samePath(c.path, target)) ?? null;
 }
 
 /* ------------------------------------------------------------------ */
