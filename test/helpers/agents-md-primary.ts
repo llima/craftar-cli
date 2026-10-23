@@ -10,7 +10,7 @@ import { profile, recipe, scenario, writeFiles, type IngredientSpec, type Scenar
  * Spec 41 §11.1: pins what a workspace that does not set agents-md.primary gets today.
  */
 export async function acmePrimary(
-  opts: { schema?: 1 | 2 | 3 | 4 | 5 | 6; params?: Record<string, unknown>; wsFiles?: Record<string, string> } = {},
+  opts: { schema?: 1 | 2 | 3 | 4 | 5 | 6; params?: Record<string, unknown>; wsFiles?: Record<string, string>; wsConfig?: Record<string, unknown> } = {},
 ): Promise<Scenario> {
   const ingredients: IngredientSpec[] = [
     // rule/style — always on (default inclusion), targets default
@@ -88,7 +88,7 @@ export async function acmePrimary(
     profile("acme", ["base"], ["claude-code", "kiro", "agents-md"], opts.params ? { params: opts.params } : {}),
   ];
 
-  const s = await scenario({ ingredients, recipes, profiles }, { config: { profile: "acme" }, files: opts.wsFiles });
+  const s = await scenario({ ingredients, recipes, profiles }, { config: { profile: "acme", ...opts.wsConfig }, files: opts.wsFiles });
 
   // Overwrite craftar.forge.yaml with the requested schema
   await fs.writeFile(

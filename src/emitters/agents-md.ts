@@ -5,6 +5,9 @@ import type { WrittenIngredient } from "../core/capabilities.js";
 /** The param that sets the AGENTS.md size budget, read by `plan()` (and reserved from extraction, like `kiro.banner`). */
 export const AGENTS_MD_BUDGET_KEY = "agents-md.maxBytes";
 
+/** The param that turns AGENTS.md into the one home of the always-on rules (spec 41 §4.1). */
+export const AGENTS_MD_PRIMARY_KEY = "agents-md.primary";
+
 /**
  * AGENTS.md target (open standard read by Codex, Cursor, Warp, Copilot, Kiro, Kimi…).
  * Concatenates the `always` rules into one file. Scoped rules (`fileMatch`, `manual`, `auto`)

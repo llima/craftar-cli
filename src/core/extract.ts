@@ -4,7 +4,7 @@ import { INTEGRATIONS_PREFIX } from "./integrations.js";
 import { changedRegions } from "./classify.js";
 import { TEXT_EXT } from "../emitters/claude-code.js";
 import { KIRO_TEXT_EXT } from "../emitters/kiro.js";
-import { AGENTS_MD_BUDGET_KEY } from "../emitters/agents-md.js";
+import { AGENTS_MD_BUDGET_KEY, AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
 import type { Hunk } from "./diff.js";
 import { stripBom, toLf } from "./text.js";
 
@@ -32,7 +32,7 @@ const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
  * the block gives (spec 33 §5.2).
  */
 export function reservedKey(key: string, schema: number): boolean {
-  if (key === "kiro.banner" || key === AGENTS_MD_BUDGET_KEY || key in Object.prototype) return true;
+  if (key === "kiro.banner" || key === AGENTS_MD_BUDGET_KEY || key === AGENTS_MD_PRIMARY_KEY || key in Object.prototype) return true;
   return schema >= FORGE_SCHEMA_INTEGRATIONS && key.startsWith(INTEGRATIONS_PREFIX);
 }
 
