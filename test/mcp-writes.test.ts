@@ -253,6 +253,56 @@ describe("craftar mcp --allow-writes — the writing tools", () => {
     expect(result.content[0].text).not.toContain("acme-old");
   });
 
+  // Test 5b: CONSENT_STALE: consent recorded with different forge source
+  it("5b. CONSENT_STALE: consent with different forge, text equals CONSENT_STALE([forge]), tree unchanged", async () => {
+    const home = await freshHome();
+    const s = kept(
+      await scenario(
+        { ingredients: [rule("keep", "# Keep\n")], recipes: [recipe("base", ["rule/keep"])], profiles: [profile("acme", ["base"])] },
+        { config: { profile: "acme" } },
+      ),
+    );
+    const writers = mcpWriters(home, false);
+    const before = await tree(s.wsRoot);
+
+    // Consent with wrong forge source
+    await allowWrites(home, s.wsRoot, { forge: { source: "../other-forge", ref: null }, profile: "acme" });
+
+    const { tool } = await fresh(s.wsRoot, { home, writers });
+
+    const result = await tool("sync");
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(CONSENT_STALE(["forge"]));
+
+    const after = await tree(s.wsRoot);
+    expect(after).toEqual(before);
+  });
+
+  // Test 5c: CONSENT_STALE: consent recorded with ref: "v1" while config has no ref
+  it("5c. CONSENT_STALE: consent with ref: 'v1', config has no ref, text equals CONSENT_STALE([ref]), tree unchanged", async () => {
+    const home = await freshHome();
+    const s = kept(
+      await scenario(
+        { ingredients: [rule("keep", "# Keep\n")], recipes: [recipe("base", ["rule/keep"])], profiles: [profile("acme", ["base"])] },
+        { config: { profile: "acme" } },
+      ),
+    );
+    const writers = mcpWriters(home, false);
+    const before = await tree(s.wsRoot);
+
+    // Consent with a ref while config has none (ref: null in the pin)
+    await allowWrites(home, s.wsRoot, { forge: { source: "../forge", ref: "v1" }, profile: "acme" });
+
+    const { tool } = await fresh(s.wsRoot, { home, writers });
+
+    const result = await tool("sync");
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(CONSENT_STALE(["ref"]));
+
+    const after = await tree(s.wsRoot);
+    expect(after).toEqual(before);
+  });
+
   // Test 6: PIN_CHANGED first: consent with profile: "other" AND craftar.yaml changed after pin
   it("6. PIN_CHANGED takes precedence over CONSENT_STALE when config changed after pin", async () => {
     const home = await freshHome();
