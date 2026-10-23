@@ -1133,19 +1133,11 @@ drift
   });
 
 /* ---------------------------------------------------------------- add / remove recipe */
-
 function recipeCommand(op: RecipeOp) {
   return async (names: string[], o: { workspace: string; replace?: boolean; offline?: boolean }) => {
     const ws = await loadWorkspace(o.workspace, load(o, "read"));
     warnStderr(ws.warnings);
-
-    let outcome;
-    try {
-      outcome = await editRecipes(ws, op, names, { replace: o.replace });
-    } catch (e) {
-      // All errors from editRecipes should be displayed via fail()
-      fail(e instanceof Error ? e.message : String(e));
-    }
+    const outcome = await editRecipes(ws, op, names, { replace: o.replace });
 
     if (!outcome.changed) {
       console.log(`nothing to change${outcome.reasons.length ? `: ${outcome.reasons.join(", ")}` : ""}`);

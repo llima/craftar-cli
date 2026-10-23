@@ -222,7 +222,7 @@ export function cachedCopyLine(ws: Pick<Workspace, "origin" | "forge">, fetch: b
   return `Forge ${o.source} read from the copy cached ${o.fetchedAt ?? "(time unknown)"} (commit ${ws.forge.commit?.slice(0, 8) ?? "no git"}) — craftar mcp was started without --fetch`;
 }
 
-/** The header line naming a remote Forge; null for a path Forge. */
+/** The header line naming a remote Forge (spec 13 §4.1); null for a path Forge, whose headers keep their shape. */
 export function forgeLine(ws: Workspace, lock: Lock | null): string | null {
   const o = ws.origin;
   if (o.kind !== "remote") return null;

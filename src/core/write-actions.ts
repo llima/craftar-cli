@@ -109,8 +109,6 @@ export async function editRecipes(
   const p = await plan(next);
   const st = await status(next, p, await readLock(ws.root));
   const unset = unsetDeclared(p);
-
-  // Write only after the plan and status succeed
   await fs.writeFile(file, content);
 
   return {
