@@ -27,8 +27,8 @@ export interface RouteRequest {
   path: string;
   /** The raw query string, without `?`; "" when there is none. */
   query: string;
-  /** The HTTP method. Defaults to "GET" for backward compatibility. */
-  method?: "GET" | "POST";
+  /** The HTTP method. */
+  method: "GET" | "POST";
   /** The parsed body, for write routes. */
   body?: WriteBody;
 }
@@ -71,11 +71,7 @@ export function routeReason(e: unknown): string {
 export function routePattern(path: string): string | null {
   if (path === "/api/workspaces") return path;
   const m = /^\/api\/workspaces\/[0-9a-f]{16}(\/(diff|explain|recipes|ingredients|sync|discard))?$/.exec(path);
-  if (!m) return null;
-  const what = m[1];
-  if (what === "/sync") return "/api/workspaces/<id>/sync";
-  if (what === "/discard") return "/api/workspaces/<id>/discard";
-  return `/api/workspaces/<id>${what ?? ""}`;
+  return m ? `/api/workspaces/<id>${m[1] ?? ""}` : null;
 }
 
 /**
@@ -91,23 +87,17 @@ export function parseWriteBody(action: "sync" | "discard", text: string): WriteB
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
   const obj = parsed as Record<string, unknown>;
-  const keys = Object.keys(obj);
 
-  // Check for extra keys
   const allowed = action === "sync" ? ["digest"] : ["digest", "path"];
-  if (keys.some((k) => !allowed.includes(k))) return null;
+  if (Object.keys(obj).some((k) => !allowed.includes(k))) return null;
 
-  // digest: 64 lowercase hex
-  if (typeof obj.digest !== "string") return null;
-  if (!/^[0-9a-f]{64}$/.test(obj.digest)) return null;
+  if (typeof obj.digest !== "string" || !/^[0-9a-f]{64}$/.test(obj.digest)) return null;
 
-  // path: required for discard, refused for sync
   if (action === "sync") {
     if ("path" in obj) return null;
     return { digest: obj.digest };
   } else {
-    if (!("path" in obj)) return null;
-    if (typeof obj.path !== "string") return null;
+    if (!("path" in obj) || typeof obj.path !== "string") return null;
     return { digest: obj.digest, path: obj.path };
   }
 }
@@ -140,18 +130,14 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
   const pattern = routePattern(req.path);
   if (pattern === null) return { status: 404, body: NOT_FOUND };
 
-  // Treat undefined method as GET for backward compatibility
-  const method = req.method ?? "GET";
-
-  // Write route patterns
-  const isWritePattern = pattern === "/api/workspaces/<id>/sync" || pattern === "/api/workspaces/<id>/discard";
+  const method = req.method;
+  const isWritePattern = (WRITE_PATTERNS as readonly string[]).includes(pattern);
 
   // A POST to a reading route, a GET to a write route, or any POST without allowWrites → 404 (the server refuses earlier with 405)
   if (method === "POST" && !isWritePattern) return { status: 404, body: NOT_FOUND };
   if (method === "GET" && isWritePattern) return { status: 404, body: NOT_FOUND };
   if (method === "POST" && !deps.allowWrites) return { status: 404, body: NOT_FOUND };
 
-  // A write route with no body → 400
   if (isWritePattern && !req.body) return { status: 400, body: { error: "bad request" } };
 
   if (pattern === "/api/workspaces") {
@@ -165,7 +151,6 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
 
   const [, , , id, what] = req.path.split("/");
 
-  // Decided from the request alone, before the registry is read.
   let wanted = "";
   if (what === "diff" || what === "explain") {
     const given = onePath(req.query);
@@ -178,7 +163,7 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
   if (!entry) return { status: 404, body: NOT_FOUND };
   if (await isMissing(entry)) return { status: 409, body: { error: MISSING, warnings: [] } };
 
-  // Write routes: refuse remote Forge before any load (spec 40 §6.4 step 2)
+  // Refuse remote Forge before any load.
   if (isWritePattern && classifyForge(entry.forge.source) === "url") {
     return { status: 409, body: { error: REMOTE_FORGE, warnings: [] } };
   }
@@ -203,18 +188,16 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
     return { status: 409, body: { error: routeReason(e), warnings: ws?.warnings ?? [] } };
   }
 
-  // Handle write routes (sync and discard)
+  // Write routes: digest → (discard) path → unset → sync → answer (spec 40 §6.4).
   if (isWritePattern) {
     const body = req.body!;
     const action = what as "sync" | "discard";
 
-    // Step 4: digest check
     const currentDigest = await statusDigest(ws, st);
     if (currentDigest !== body.digest) {
       return { status: 409, body: { error: STALE_DIGEST, warnings: [] } };
     }
 
-    // Step 5: for discard, check the path
     let row: FileStatus | undefined;
     if (action === "discard") {
       row = st.find((s) => s.path === body.path);
@@ -223,20 +206,17 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
       }
     }
 
-    // Step 6: unset declared parameter
     const unset = unsetDeclared(p);
     if (unset.length) {
       return { status: 409, body: { error: unsetSummary(unset), warnings: [] } };
     }
 
-    // Step 7: syncWorkspace
     const outcome = await syncWorkspace(ws, p, st, lock, {
       home: deps.home,
       registryOff: false,
       ...(action === "discard" && row ? { overwritePaths: new Set([row.path]) } : {}),
     });
 
-    // Step 8: 200 with syncToolResult
     return { status: 200, body: syncToolResult(ws, p, outcome, false) };
   }
 
@@ -251,7 +231,6 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
       ...report,
       refused: report.unsetParams.length ? unsetSummary(report.unsetParams) : null,
     };
-    // Add digest only when allowWrites is true
     if (deps.allowWrites) {
       return {
         status: 200,
