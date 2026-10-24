@@ -150,7 +150,7 @@ export const kiro: Emitter<"kiro"> = {
           const resolvedDescription = !m.frontmatterRaw && m.description !== undefined ? resolve(m.description, ing.ref) : undefined;
           const resolvedFm = m.frontmatterRaw ? resolve(m.frontmatterRaw, ing.ref) : null;
           const body = resolve(rawBody, ing.ref);
-          checkReworded(path, [m.frontmatterRaw ?? m.description ?? "", rawBody], ing.ref);
+          checkReworded(path, [m.frontmatterRaw ? m.frontmatterRaw : (m.description ?? ""), rawBody], ing.ref);
           const doc = serializeFrontmatter(
             { description: resolvedDescription, "argument-hint": m.argumentHint, "allowed-tools": m.allowedTools },
             body,
