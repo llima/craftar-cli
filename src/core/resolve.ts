@@ -1,5 +1,5 @@
 import type { Forge, LoadedIngredient } from "./forge.js";
-import type { ForgeManifest, IngredientRef, Profile, Sections, Target, WorkspaceConfig } from "../schema/index.js";
+import type { IngredientRef, Profile, Sections, Target, WorkspaceConfig } from "../schema/index.js";
 import { FORGE_SCHEMA_AGENTS_MD_PRIMARY } from "../schema/index.js";
 import { deepMerge } from "./merge.js";
 import { outName } from "../emitters/shared.js";
