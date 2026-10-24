@@ -869,7 +869,7 @@ export async function claudeMdBlocks(
   for (const [file, lines] of IMPORT_LINES) {
     const content = await readExisting(file);
     if (content !== null) {
-      const text = content.toString("utf8");
+      const text = stripBom(content.toString("utf8"));
       for (const line of text.split("\n")) {
         // Strip trailing CR first, then trailing spaces/tabs
         const trimmed = line.replace(/\r$/, "").replace(/[ \t]+$/, "");
