@@ -454,4 +454,32 @@ describe("syncToolResult", () => {
       registry: "off",
     });
   });
+
+  it("marks the discarded path with the discard reason; other removed paths keep spec 41's orphanReason", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(await eightStates());
+
+    const ws = await loadWorkspace(s.wsRoot, { home });
+    const p = await plan(ws);
+    const lock = await readLock(ws.root);
+    const st = await status(ws, p, lock);
+
+    // Include the orphan-drift path in overwritePaths to simulate drift discard
+    const orphanDriftPath = ".claude/rules/gone-edited.md";
+    const outcome = await syncWorkspace(ws, p, st, lock, {
+      home,
+      registryOff: true,
+      overwritePaths: new Set([orphanDriftPath]),
+    });
+
+    // Both orphan (gone.md) and orphan-drift (gone-edited.md) are removed
+    expect(outcome.result.removed.sort()).toEqual([".claude/rules/gone-edited.md", ".claude/rules/gone.md"]);
+
+    // With discarded: the discarded path gets the special reason
+    const result = syncToolResult(ws, p, st, outcome, true, orphanDriftPath);
+
+    expect(result.removed).toContainEqual({ path: orphanDriftPath, reason: "hand-edited orphan: discarded" });
+    expect(result.removed).toContainEqual({ path: ".claude/rules/gone.md", reason: "orphan: no longer produced by the Forge" });
+  });
 });

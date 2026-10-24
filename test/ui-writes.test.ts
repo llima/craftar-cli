@@ -184,7 +184,7 @@ describe("discard route", () => {
     expect(result.status).toBe(200);
 
     const body = result.body as any;
-    expect(body.removed.map((r: any) => r.path)).toContain(orphanDriftPath);
+    expect(body.removed).toContainEqual({ path: orphanDriftPath, reason: "hand-edited orphan: discarded" });
 
     // File is gone
     await expect(fs.access(path.join(s.wsRoot, orphanDriftPath))).rejects.toThrow();
