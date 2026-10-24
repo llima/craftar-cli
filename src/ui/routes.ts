@@ -218,7 +218,7 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
       ...(action === "discard" && row ? { overwritePaths: new Set([row.path]) } : {}),
     });
 
-    return { status: 200, body: syncToolResult(ws, p, outcome, false) };
+    return { status: 200, body: syncToolResult(ws, p, st, outcome, false, action === "discard" && row ? row.path : undefined) };
   }
 
   if (what === undefined) {

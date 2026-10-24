@@ -436,7 +436,7 @@ describe("syncToolResult", () => {
       registryOff: true,
     });
 
-    const result = syncToolResult(ws, p, outcome, true);
+    const result = syncToolResult(ws, p, st, outcome, true);
 
     expect(result).toEqual({
       profile: "acme",
