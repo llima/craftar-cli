@@ -314,6 +314,25 @@ describe("claude-code emitter under agents-md.primary (spec 41 §4.4)", () => {
     expect(apiMd!.content.toString("utf8")).toContain("Every endpoint follows AGENTS.md (rule: style).");
   });
 
+  it("test 5b: an agent's and a command's frontmatterRaw is resolved under the mode, and kept as written with it off", async () => {
+    const fm = "name: fm-ref\ndescription: Checks against .claude/rules/style.md\n";
+    const extraIngredients = [
+      { meta: { type: "agent", name: "fm-ref", frontmatterRaw: fm }, files: { "agent.md": "Plain.\n" } },
+      { meta: { type: "command", name: "fm-cmd", frontmatterRaw: "description: see .claude/rules/style.md\n" }, files: { "command.md": "Run.\n" } },
+    ];
+    const on = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true }, extraIngredients }));
+    const pOn = await plan(await loadWorkspace(on.wsRoot, { home: process.env.CRAFTAR_HOME }));
+    const agentOn = pOn.files.find((f) => f.path === ".claude/agents/fm-ref.md")!.content.toString("utf8");
+    const cmdOn = pOn.files.find((f) => f.path === ".claude/commands/fm-cmd.md")!.content.toString("utf8");
+    expect(agentOn).toContain("description: Checks against AGENTS.md (rule: style)\n");
+    expect(cmdOn).toContain("description: see AGENTS.md (rule: style)\n");
+    expect(pOn.reworded).toEqual(expect.arrayContaining([".claude/agents/fm-ref.md", ".claude/commands/fm-cmd.md"]));
+
+    const off = kept(await acmePrimary({ schema: 5, extraIngredients }));
+    const pOff = await plan(await loadWorkspace(off.wsRoot, { home: process.env.CRAFTAR_HOME }));
+    expect(pOff.files.find((f) => f.path === ".claude/agents/fm-ref.md")!.content.toString("utf8")).toContain(fm);
+  });
+
   it("test 5: frontmatterRaw vs description — only one is resolved", async () => {
     // Add fm-agent (with frontmatterRaw) and plain-agent (without), both citing a ghost rule
     const extraIngredients = [

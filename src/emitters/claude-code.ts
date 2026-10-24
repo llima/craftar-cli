@@ -70,6 +70,16 @@ export const claudeCode: Emitter<"claude-code"> = {
       }
     };
 
+    // An agent's or a command's metadata, then its body (spec 41 §4.4, kiro's order): its frontmatterRaw when it has
+    // one, else its description. With the mode off `resolve` returns each text as given.
+    const resolveDoc = (path: string, citing: string, m: { frontmatterRaw?: string; description?: string }, rawBody: string) => {
+      const raw = m.frontmatterRaw != null ? resolve(m.frontmatterRaw, citing) : null;
+      const description = m.frontmatterRaw == null && m.description !== undefined ? resolve(m.description, citing) : m.description;
+      const body = resolve(rawBody, citing);
+      checkReworded(path, (m.frontmatterRaw ?? m.description ?? "") + rawBody, (raw ?? description ?? "") + body);
+      return { raw, description, body };
+    };
+
     // What this target writes comes from its walk; the matrix decides the rest and warns (spec 18).
     for (const ing of ctx.aimed) {
       const m = ing.meta;
@@ -87,46 +97,18 @@ export const claudeCode: Emitter<"claude-code"> = {
         }
         case "agent": {
           const path = `.claude/agents/${outName(m)}.md`;
-          const rawBody = await ctx.text(ing, m.file);
-          const fm = m.frontmatterRaw ?? null;
-
-          // Resolve description first (before body), unless frontmatterRaw is present (spec 41 §4.4)
-          let description = m.description;
-          if (primary && fm === null && description !== undefined) {
-            description = resolve(description, ing.ref);
-          }
-          const body = resolve(rawBody, ing.ref);
-
-          // Track reworded (comparing resolved vs original)
-          const originalForCheck = fm === null ? (m.description ?? "") + rawBody : rawBody;
-          const resolvedForCheck = fm === null ? (description ?? "") + body : body;
-          checkReworded(path, originalForCheck, resolvedForCheck);
-
-          const doc = serializeFrontmatter({ name: outName(m), description, tools: m.tools, model: m.model }, body, { raw: fm });
+          const { raw, description, body } = resolveDoc(path, ing.ref, m, await ctx.text(ing, m.file));
+          const doc = serializeFrontmatter({ name: outName(m), description, tools: m.tools, model: m.model }, body, { raw });
           out.push(await textFile(ctx, path, doc, t, ing.ref));
           break;
         }
         case "command": {
           const path = `.claude/commands/${outName(m)}.md`;
-          const rawBody = await ctx.text(ing, m.file);
-          const fm = m.frontmatterRaw ?? null;
-
-          // Resolve description first (before body), unless frontmatterRaw is present (spec 41 §4.4)
-          let description = m.description;
-          if (primary && fm === null && description !== undefined) {
-            description = resolve(description, ing.ref);
-          }
-          const body = resolve(rawBody, ing.ref);
-
-          // Track reworded
-          const originalForCheck = fm === null ? (m.description ?? "") + rawBody : rawBody;
-          const resolvedForCheck = fm === null ? (description ?? "") + body : body;
-          checkReworded(path, originalForCheck, resolvedForCheck);
-
+          const { raw, description, body } = resolveDoc(path, ing.ref, m, await ctx.text(ing, m.file));
           const doc = serializeFrontmatter(
             { description, "argument-hint": m.argumentHint, "allowed-tools": m.allowedTools },
             body,
-            { raw: fm },
+            { raw },
           );
           out.push(await textFile(ctx, path, doc, t, ing.ref));
           break;
@@ -143,8 +125,7 @@ export const claudeCode: Emitter<"claude-code"> = {
             for (const f of await listFiles(ing.dir)) {
               if (f === "ingredient.yaml") continue;
               const path = `.claude/skills/${outName(m)}/${f}`;
-              if (f.toLowerCase().endsWith(".md")) {
-                // .md files are resolved
+              if (claudeResolves(m, f)) {
                 const rawText = await ctx.text(ing, f);
                 const text = resolve(rawText, ing.ref);
                 checkReworded(path, rawText, text);
@@ -213,6 +194,25 @@ export const claudeCode: Emitter<"claude-code"> = {
     return out;
   },
 };
+
+/**
+ * Whether the claude-code emitter resolves rule references in this file of an ingredient under agents-md.primary
+ * (spec 41 §4.4): a rule's, an agent's or a command's body file, a file-layout skill's SKILL.md and every `.md` file of a
+ * directory skill. Every other file is copied as written and scanned. An agent's and a command's metadata are resolved
+ * too (`frontmatterRaw` when present, else `description`). The one answer, read by the emitter and by import (§4.10).
+ */
+export function claudeResolves(meta: Ingredient, file: string): boolean {
+  switch (meta.type) {
+    case "rule":
+    case "agent":
+    case "command":
+      return file === meta.file;
+    case "skill":
+      return meta.layout === "file" ? file === "SKILL.md" : /\.md$/i.test(file);
+    default:
+      return false;
+  }
+}
 
 /** Files claude-code emits as text, through `ctx.text` (substituted); anything else is copied as raw bytes. */
 export const TEXT_EXT = /\.(md|txt|json|ya?ml|ps1|py|sh|js|ts|cjs|mjs|toml|xml|csv)$/i;
