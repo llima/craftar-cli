@@ -171,7 +171,7 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
   let st: FileStatus[];
   let digest: string | undefined;
   try {
-    // For write patterns, refuse a remote Forge before anything is fetched (spec 40 §6.4 step 2).
+    // A write refuses a remote Forge as the configuration names it, before anything is fetched (spec 40 §6.4).
     ws = await loadWorkspace(entry.path, {
       mode: "no-fetch",
       home: deps.home,
@@ -186,12 +186,12 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
     p = await plan(ws);
     lock = await readLock(ws.root);
     st = await status(ws, p, lock);
-    // Compute the digest inside the try block so a disk error reads as 409, not 500.
+    // Read here so that a disk error is the workspace's state (409).
     if (isWritePattern || (what === undefined && deps.allowWrites)) {
       digest = await statusDigest(ws, st);
     }
   } catch (e) {
-    // A refuseRemote throw returns the exact REMOTE_FORGE message (spec 40 §6.4 step 2).
+    // refuseRemote's own words, not doctor's.
     if (e instanceof Error && e.message === REMOTE_FORGE) {
       return { status: 409, body: { error: REMOTE_FORGE, warnings: [] } };
     }
@@ -261,8 +261,7 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
   if (row.state === "orphan-drift" && deps.allowWrites) {
     const { body: fileBody, note } = await orphanDriftBody(ws.root, row);
     const from = `${row.path} (disk, ${row.state})`;
-    const isPrimary = primaryOrphan(p, row);
-    const to = `${row.path} (forge: ${isPrimary ? "written to AGENTS.md only" : "no longer produced"} — discard removes it)`;
+    const to = `${row.path} (forge: no longer produced — discard removes it)`;
     return {
       status: 200,
       body: {
