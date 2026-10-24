@@ -280,3 +280,48 @@ export function holdsBaseCitations(base: Ingredient, variant: Ingredient): boole
 
   return false;
 }
+
+/**
+ * A written MCP server that starts through `cmd /c` or `cmd /k` (spec 42 §3): `command`, read as a file name (after the
+ * last `/` or `\`, without case, a trailing `.exe` dropped), is `cmd`, and the first `args` item, without case, is `/c`
+ * or `/k`. The one test of that shape. Pure; a plain object only.
+ */
+export function windowsOnlyLauncher(server: unknown): "c" | "k" | null {
+  if (server === null || typeof server !== "object" || Array.isArray(server)) return null;
+  const s = server as Record<string, unknown>;
+  if (typeof s.command !== "string") return null;
+  if (!Array.isArray(s.args) || s.args.length === 0 || typeof s.args[0] !== "string") return null;
+
+  // Extract file name: after the last `/` or `\`
+  const command = s.command;
+  const lastSep = Math.max(command.lastIndexOf("/"), command.lastIndexOf("\\"));
+  let fileName = lastSep >= 0 ? command.slice(lastSep + 1) : command;
+
+  // Strip trailing `.exe` (case insensitive)
+  if (fileName.toLowerCase().endsWith(".exe")) {
+    fileName = fileName.slice(0, -4);
+  }
+
+  // Check that the file name is exactly `cmd` (case insensitive)
+  if (fileName.toLowerCase() !== "cmd") return null;
+
+  // Check the first arg is `/c` or `/k` (case insensitive)
+  const firstArg = (s.args[0] as string).toLowerCase();
+  if (firstArg === "/c") return "c";
+  if (firstArg === "/k") return "k";
+  return null;
+}
+
+export const LAUNCHER_OK = "no written MCP server is Windows-only";
+
+export function launcherWarning(server: string, letter: "c" | "k", files: readonly string[]): string {
+  return `server "${server}" starts through cmd /${letter} \u2014 Windows only; it does not start on Linux or macOS (${files.join(", ")})`;
+}
+
+export function launcherFix(letter: "c" | "k"): string {
+  return `in the Forge, write the program cmd runs as the server's command and drop "cmd" and "/${letter}" (spec 42)`;
+}
+
+export function launcherImportWarning(server: string, letter: "c" | "k"): string {
+  return `.mcp.json server "${server}" starts through cmd /${letter} \u2014 Windows only; the ingredient keeps it as written (spec 42)`;
+}
