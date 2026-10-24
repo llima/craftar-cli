@@ -17,7 +17,7 @@ import { serve } from "./mcp.js";
 import { mcpWriters } from "./core/write-actions.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -192,7 +192,7 @@ program
       console.log(JSON.stringify(report, null, 2));
       // exitCode, not process.exit: a piped object is not cut (spec 29 §4.1)
       // The object carries both reasons (unsetParams, the budget line in warnings): nothing on stderr
-      if (unset.length || agentsMdOverBudget(p)) process.exitCode = 1;
+      if (unset.length || agentsMdOverBudget(p) || kiroResourcesUnplanned(p)?.length) process.exitCode = 1;
       return;
     }
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, false, forgeLine(ws, lock));
@@ -216,7 +216,9 @@ function refusalBlock(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): b
 function budgetRefusalBlock(p: Plan): boolean {
   const over = agentsMdOverBudget(p);
   if (over) errorLine(agentsMdRefusal(over));
-  return over !== null;
+  const kiroUnplanned = kiroResourcesUnplanned(p);
+  if (kiroUnplanned) errorLine(kiroResourcesRefusal(kiroUnplanned));
+  return over !== null || kiroUnplanned !== null;
 }
 
 /**

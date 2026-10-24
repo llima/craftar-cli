@@ -122,6 +122,19 @@ export const kiro: Emitter<"kiro"> = {
           const tools = mapTools(m.tools, ctx);
           // agentResources reads the blanket-rewritten text, not the resolved text (spec 17 §4.6)
           const resources = m.resources ?? agentResources(outName(m), rewrite(rawDesc) + "\n" + rewrite(rawBody), ruleNames, scopedRules);
+          // Under the mode, record hand-written resources for the check (spec 41 §4.5)
+          if (primary && m.resources) {
+            for (const entry of m.resources) {
+              if (!entry.startsWith("file://")) continue;
+              const rel = entry.slice("file://".length);
+              // Skip globs
+              if (/[*?[{]/.test(rel)) continue;
+              // Only check .kiro/steering/, .claude/rules/, or AGENTS.md
+              if (rel.startsWith(".kiro/steering/") || rel.startsWith(".claude/rules/") || rel === "AGENTS.md") {
+                ctx.reportKiroResource(outName(m), rel);
+              }
+            }
+          }
           const json = JSON.stringify({ name: outName(m), description, prompt: body.replace(/^\n+/, "").replace(/\n+$/, ""), tools, allowedTools: tools, resources }, null, 2) + "\n";
           out.push(crlf(path, json, ing.ref));
           break;

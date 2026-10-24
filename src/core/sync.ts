@@ -335,6 +335,15 @@ export interface Plan {
   } | null;
   /** Paths of planned texts reworded because of agents-md.primary, sorted (spec 41 §4.4); [] with the mode off. */
   reworded: string[];
+  /**
+   * Kiro agent resources check (spec 41 §4.5–§4.6): null when the mode is off; otherwise holds
+   * the hand-written entries that name files the plan does not write.
+   */
+  kiroResources: {
+    unplanned: Array<{ agent: string; path: string }>;
+    present: Array<{ agent: string; path: string }>;
+    warning: string | null;
+  } | null;
 }
 
 /** Declared keys with no default that no layer fills, with the ingredients declaring them (spec 24 §4.2) — cited or not. */
@@ -562,6 +571,8 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const agentsMdRules: Array<{ name: string; bytes: number; scoped: boolean }> = [];
   /** Paths reworded by agents-md.primary (spec 41 §4.4). */
   const rewordedPaths = new Set<string>();
+  /** Kiro agent resources recorded for the check (spec 41 §4.5). */
+  const kiroResourceRecords: Array<{ agent: string; path: string }> = [];
   const ctx: EmitBase = {
     forge: ws.forge,
     resolution,
@@ -618,6 +629,9 @@ export async function plan(ws: Workspace): Promise<Plan> {
     reportReworded(path: string) {
       rewordedPaths.add(path);
     },
+    reportKiroResource(agent: string, path: string) {
+      kiroResourceRecords.push({ agent, path });
+    },
   };
   const files: PlannedFile[] = [];
   for (const t of resolution.targets) {
@@ -672,7 +686,10 @@ export async function plan(ws: Workspace): Promise<Plan> {
   // Collect reworded paths (spec 41 §4.4)
   const reworded = [...rewordedPaths].sort();
 
-  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded };
+  // Kiro agent resources check (spec 41 §4.5–§4.6): null when the mode is off
+  const kiroResources = await computeKiroResources(planned, kiroResourceRecords, ctx.readExisting, warnings, resolution.primary);
+
+  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources };
 }
 
 /**
@@ -750,6 +767,74 @@ function parseAgentsMdBudget(value: unknown): number | null {
     return n;
   }
   return null;
+}
+
+/**
+ * Compute the Kiro agent resources check (spec 41 §4.5–§4.6).
+ * Returns null when the mode is off; otherwise holds the entries that name files the plan does not write.
+ */
+async function computeKiroResources(
+  planned: PlannedFile[],
+  recorded: Array<{ agent: string; path: string }>,
+  readExisting: (rel: string) => Promise<Buffer | null>,
+  warnings: string[],
+  primary: boolean,
+): Promise<Plan["kiroResources"]> {
+  if (!primary) return null;
+  if (recorded.length === 0) return { unplanned: [], present: [], warning: null };
+
+  const plannedPaths = new Set(planned.map((f) => f.path));
+
+  // Dedupe by agent+path, sort by agent then path
+  const seen = new Set<string>();
+  const deduped: Array<{ agent: string; path: string }> = [];
+  for (const r of recorded) {
+    const key = `${r.agent}\0${r.path}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(r);
+    }
+  }
+  deduped.sort((a, b) => a.agent.localeCompare(b.agent) || a.path.localeCompare(b.path));
+
+  const unplanned: Array<{ agent: string; path: string }> = [];
+  const present: Array<{ agent: string; path: string }> = [];
+
+  for (const r of deduped) {
+    if (plannedPaths.has(r.path)) continue; // fine
+    // Not planned: check if present on disk
+    const exists = (await readExisting(r.path)) !== null;
+    if (exists) present.push(r);
+    else unplanned.push(r);
+  }
+
+  let warning: string | null = null;
+  if (unplanned.length > 0 || present.length > 0) {
+    const parts: string[] = [];
+    if (unplanned.length > 0) {
+      parts.push(`unplanned: ${unplanned.map((r) => `${r.agent} → ${r.path}`).join(", ")}`);
+    }
+    if (present.length > 0) {
+      parts.push(`on disk only: ${present.map((r) => `${r.agent} → ${r.path}`).join(", ")}`);
+    }
+    warning = `kiro: agent resources name files the plan does not write — ${parts.join("; ")}`;
+    warnings.push(warning);
+  }
+
+  return { unplanned, present, warning };
+}
+
+/** The unplanned entries from kiroResources, or null when there are none (spec 41 §4.6). */
+export function kiroResourcesUnplanned(p: Plan): Array<{ agent: string; path: string }> | null {
+  if (!p.kiroResources) return null;
+  if (p.kiroResources.unplanned.length === 0) return null;
+  return p.kiroResources.unplanned;
+}
+
+/** The refusal message for unplanned Kiro agent resources (spec 41 §4.6). */
+export function kiroResourcesRefusal(u: Array<{ agent: string; path: string }>): string {
+  const entries = u.map((r) => `${r.agent} → ${r.path}`).join(", ");
+  return `${u.length} Kiro agent resource(s) name a file the plan does not write: ${entries}\n  fix: edit the agent's resources in the Forge, or list the rule's targets so kiro writes it`;
 }
 
 function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {

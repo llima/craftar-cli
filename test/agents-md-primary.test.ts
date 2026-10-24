@@ -491,3 +491,28 @@ describe("unresolvedRuleRefs unit (spec 41 §4.4)", () => {
     expect(refs).toEqual([{ line: 2, name: "style" }]);
   });
 });
+
+
+describe("Kiro resources check (spec 41 §4.5–§4.6)", () => {
+  it("test k1: fresh workspace, mode on — unplanned entry for style, not present", async () => {
+    // planner has hand-written resources: file://.kiro/steering/style.md (style is AGENTS.md-only), a glob, file://docs/plan.md
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    expect(p.kiroResources).not.toBeNull();
+    expect(p.kiroResources!.unplanned).toEqual([{ agent: "planner", path: ".kiro/steering/style.md" }]);
+    expect(p.kiroResources!.present).toEqual([]);
+    // The glob and docs/plan.md should NOT be listed
+  });
+
+  it("test k4: mode off — kiroResources is null, no warning", async () => {
+    const s = kept(await acmePrimary({ schema: 5 }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    expect(p.kiroResources).toBeNull();
+    const kiroResourcesWarnings = p.warnings.filter((w) => w.startsWith("kiro: agent resources"));
+    expect(kiroResourcesWarnings).toEqual([]);
+  });
+});
