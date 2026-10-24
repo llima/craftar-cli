@@ -333,6 +333,8 @@ export interface Plan {
     /** The exact warning line pushed into Plan.warnings, or null if within budget. */
     warning: string | null;
   } | null;
+  /** Paths of planned texts reworded because of agents-md.primary, sorted (spec 41 §4.4); [] with the mode off. */
+  reworded: string[];
 }
 
 /** Declared keys with no default that no layer fills, with the ingredients declaring them (spec 24 §4.2) — cited or not. */
@@ -558,6 +560,8 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const warnedOnce = new Set<string>();
   /** Per-rule byte sizes for AGENTS.md budget, collected by the agents-md emitter. */
   const agentsMdRules: Array<{ name: string; bytes: number; scoped: boolean }> = [];
+  /** Paths reworded by agents-md.primary (spec 41 §4.4). */
+  const rewordedPaths = new Set<string>();
   const ctx: EmitBase = {
     forge: ws.forge,
     resolution,
@@ -611,6 +615,9 @@ export async function plan(ws: Workspace): Promise<Plan> {
     reportAgentsMdRule(name: string, bytes: number, scoped: boolean) {
       agentsMdRules.push({ name, bytes, scoped });
     },
+    reportReworded(path: string) {
+      rewordedPaths.add(path);
+    },
   };
   const files: PlannedFile[] = [];
   for (const t of resolution.targets) {
@@ -662,7 +669,10 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const planned = dedupeLastWins(files);
   const agentsMd = computeAgentsMdBudget(planned, resolution, agentsMdRules, warnings);
 
-  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd };
+  // Collect reworded paths (spec 41 §4.4)
+  const reworded = [...rewordedPaths].sort();
+
+  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded };
 }
 
 /**

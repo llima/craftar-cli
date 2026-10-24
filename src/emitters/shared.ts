@@ -46,6 +46,24 @@ export interface RefReport {
 /** The kind string for an unknown name (no rule or steering with that name). */
 export const UNKNOWN_NAME_KIND = "";
 
+/**
+ * Format the "dead references" part of a warning (spec 17 §4.5, spec 41 §4.4): references to rules
+ * that exist but reach no target. Used by both kiro.ts and claude-code.ts emitters.
+ */
+export function formatDeadRefs(dead: Array<{ ref: string; citing: string; kind: string }>): string {
+  const entries = dead.map((e) => `${e.ref} (in ${e.citing}; ${e.kind})`).join(", ");
+  return `${dead.length} reference(s) to rule files this workspace does not have — reworded: ${entries}`;
+}
+
+/**
+ * Format the "scanned files" part of a warning (spec 41 §4.4): references left as written in
+ * files craftar copies. Used by both claude-code.ts and kiro.ts emitters.
+ */
+export function formatScannedRefs(hits: Array<{ path: string; line: number; name: string }>): string {
+  const entries = hits.map((h) => `${h.path}:${h.line} (${h.name})`).join(", ");
+  return `${hits.length} reference(s) left as written in files craftar copies: ${entries}`;
+}
+
 /** Lookup maps for rule reference resolution (spec 15 §4.2), built once per AGENTS.md. */
 export interface RuleLookup {
   rulesByName: Map<string, ResolvedIngredient>;
