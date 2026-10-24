@@ -306,6 +306,21 @@ describe("workspace checks", () => {
     expect(of(r.checks, "mcp-env").map((c) => c.message)).toEqual(['server "api" expects ACME_A, not set', 'server "api" expects ACME_B, not set']);
   });
 
+  const PINNED_MCP_ENV = '[{"id":"mcp-env","scope":"workspace","level":"warn","message":"server \\"acme-b\\" expects ACME_B_TOKEN, not set","fix":"export ACME_B_TOKEN"},{"id":"mcp-env","scope":"workspace","level":"warn","message":"server \\"acme-b\\" expects ACME_SHARED, not set","fix":"export ACME_SHARED"},{"id":"mcp-env","scope":"workspace","level":"warn","message":"server \\"acme-a\\" expects ACME_A_KEY, not set","fix":"export ACME_A_KEY"},{"id":"mcp-env","scope":"workspace","level":"warn","message":"server \\"acme-a\\" expects ACME_A_TOKEN, not set","fix":"export ACME_A_TOKEN"},{"id":"mcp-env","scope":"workspace","level":"warn","message":"server \\"acme-a\\" expects ACME_SHARED, not set","fix":"export ACME_SHARED"},{"id":"mcp-env","scope":"workspace","level":"warn","message":"server \\"acme-k\\" expects ACME_K_TOKEN, not set","fix":"export ACME_K_TOKEN"}]';
+  it("mcp-env: its lines byte for byte across two targets and two servers (pinned before spec 42's shared walk)", async () => {
+    const f = await fixture({
+      ingredients: [
+        mcp("acme-b", { T: "${ACME_B_TOKEN}", U: "${ACME_SHARED}" }),
+        mcp("acme-a", { T: "${ACME_A_TOKEN}", U: "${ACME_SHARED}" }, { authEnv: ["ACME_A_KEY"] }),
+        mcp("acme-k", { T: "${ACME_K_TOKEN}" }, { targets: ["kiro"] }),
+      ],
+      recipes: [recipe("base", ["mcp/acme-b", "mcp/acme-a", "mcp/acme-k"])],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    expect(JSON.stringify(of(r.checks, "mcp-env"))).toBe(PINNED_MCP_ENV);
+  });
+
   it("forge-inside: a workspace inside its path Forge warns; a directory named ..x inside it too", async () => {
     const f = await fixture();
     const inner = path.join(f.forgeRoot, "ws");
