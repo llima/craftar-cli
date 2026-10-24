@@ -152,3 +152,387 @@ describe("pageJs and pageCss (spec 40 §6.5)", () => {
     expect(cssTrue).toContain(".confirm-box");
   });
 });
+
+// A fake DOM environment for running pageJs in a test.
+interface FakeNode {
+  nodeType: 1;
+  tagName: string;
+  className: string;
+  textContent: string;
+  hidden: boolean;
+  type?: string;
+  parentNode: FakeNode | null;
+  children: FakeNode[];
+  listeners: Map<string, Array<() => void>>;
+  appendChild(child: FakeNode): void;
+  removeChild(child: FakeNode): void;
+  addEventListener(event: string, handler: () => void): void;
+  setAttribute(name: string, value: string): void;
+  firstChild: FakeNode | null;
+}
+
+function fakeDom() {
+  function createNode(tagName: string): FakeNode {
+    const node: FakeNode = {
+      nodeType: 1,
+      tagName: tagName.toUpperCase(),
+      className: "",
+      textContent: "",
+      hidden: false,
+      parentNode: null,
+      children: [],
+      listeners: new Map(),
+      appendChild(child: FakeNode) {
+        child.parentNode = this;
+        this.children.push(child);
+      },
+      removeChild(child: FakeNode) {
+        const idx = this.children.indexOf(child);
+        if (idx !== -1) this.children.splice(idx, 1);
+        child.parentNode = null;
+      },
+      addEventListener(event: string, handler: () => void) {
+        if (!this.listeners.has(event)) this.listeners.set(event, []);
+        this.listeners.get(event)!.push(handler);
+      },
+      setAttribute(name: string, value: string) {
+        if (name === "type") (this as any).type = value;
+      },
+      get firstChild(): FakeNode | null {
+        return this.children[0] ?? null;
+      },
+    };
+    return node;
+  }
+
+  const app = createNode("main");
+  const body = createNode("body");
+
+  const doc = {
+    createElement: (tag: string) => createNode(tag),
+    createTextNode: (text: string) => {
+      const n = createNode("#text");
+      n.textContent = text;
+      return n;
+    },
+    getElementById: (id: string) => (id === "app" ? app : null),
+    body,
+  };
+
+  const storage: Record<string, string> = {};
+  const sessionStorage = {
+    getItem: (key: string) => storage[key] ?? null,
+    setItem: (key: string, value: string) => { storage[key] = value; },
+  };
+
+  const location = { hash: "#tok", pathname: "/" };
+  const history = { replaceState: () => {} };
+
+  const posts: Array<{ url: string; body: unknown }> = [];
+  type FetchRoutes = Record<string, unknown>;
+
+  function makeFetch(routes: FetchRoutes, debug = false) {
+    return (url: string, opts?: RequestInit) => {
+      if (debug) console.log("FETCH:", url, opts?.method || "GET");
+      if (opts?.method === "POST") {
+        posts.push({ url, body: JSON.parse(opts.body as string) });
+        const postRoutes = routes as Record<string, unknown>;
+        // Find POST route (store URLs ending with /sync or /discard)
+        for (const [pattern, response] of Object.entries(postRoutes)) {
+          if (url.endsWith(pattern.split("*").pop()!)) {
+            if (debug) console.log("  -> matched POST", pattern);
+            return Promise.resolve({
+              status: 200,
+              json: () => Promise.resolve(response),
+            });
+          }
+        }
+      }
+      // GET request
+      for (const [pattern, response] of Object.entries(routes)) {
+        if (url === pattern || url.startsWith(pattern + "?")) {
+          if (debug) console.log("  -> matched GET", pattern);
+          return Promise.resolve({
+            status: 200,
+            json: () => Promise.resolve(response),
+          });
+        }
+      }
+      if (debug) console.log("  -> 404");
+      return Promise.resolve({ status: 404, json: () => Promise.resolve({ error: "not found" }) });
+    };
+  }
+
+  // Find button by text content in a node tree
+  function findButton(root: FakeNode, text: string): FakeNode | null {
+    if (root.tagName === "BUTTON" && root.textContent === text) return root;
+    for (const child of root.children) {
+      const found = findButton(child, text);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  // Find a diff button that's in a bar containing a specific path
+  function findDiffButtonForPath(root: FakeNode, path: string): FakeNode | null {
+    // Find nodes containing the path
+    function findRowWithPath(node: FakeNode): FakeNode | null {
+      // A row has className "bar" or contains the path as text in a span
+      for (const child of node.children) {
+        if (child.textContent === path) {
+          // Found the path span, return parent's parent (the box)
+          return node;
+        }
+        const found = findRowWithPath(child);
+        if (found) return found;
+      }
+      return null;
+    }
+    const row = findRowWithPath(root);
+    if (!row) return null;
+    return findButton(row, "diff");
+  }
+
+  // Find any node containing specific text
+  function findNodeWithText(root: FakeNode, text: string): FakeNode | null {
+    if (root.textContent.includes(text)) return root;
+    for (const child of root.children) {
+      const found = findNodeWithText(child, text);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function click(node: FakeNode) {
+    const handlers = node.listeners.get("click") ?? [];
+    for (const h of handlers) h();
+  }
+
+  return { doc, body, app, location, history, sessionStorage, posts, makeFetch, findButton, findDiffButtonForPath, findNodeWithText, click };
+}
+
+// Let pending promises run
+const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+describe("pageJs(true) driven in a stubbed DOM (spec 40 §6.5)", () => {
+  const WS_ID = "0123456789abcdef";
+  const DIGEST = "a".repeat(64);
+  const DRIFT_PATH = ".claude/rules/edited.md";
+
+  function makeRoutes(writes: boolean) {
+    return {
+      "/api/workspaces": {
+        version: "0.0.0-test",
+        registry: "/test/registry.json",
+        fetch: false,
+        writes,
+        workspaces: [{
+          id: WS_ID,
+          name: "ws",
+          path: "/test/ws",
+          profile: "acme",
+          recipes: ["base"],
+          stack: {},
+          targets: ["claude-code"],
+          forge: { kind: "path", source: "../forge", ref: null, commit: null, key: "/test/forge" },
+          lastSync: "2025-01-01T00:00:00Z",
+          forgeMoved: null,
+          status: "drift",
+        }],
+        warnings: [],
+      },
+      [`/api/workspaces/${WS_ID}`]: {
+        id: WS_ID,
+        path: "/test/ws",
+        profile: "acme",
+        recipes: ["base"],
+        targets: ["claude-code"],
+        forge: { kind: "path", source: "../forge", ref: null, commit: null },
+        statuses: [
+          { path: DRIFT_PATH, state: "drift", target: "claude-code", ingredient: "rule/edited" },
+          { path: ".claude/rules/fresh.md", state: "new", target: "claude-code", ingredient: "rule/fresh" },
+        ],
+        warnings: [],
+        unsetParams: [],
+        refused: null,
+        ...(writes ? { digest: DIGEST } : {}),
+      },
+      [`/api/workspaces/${WS_ID}/diff`]: {
+        path: DRIFT_PATH,
+        state: "drift",
+        from: `${DRIFT_PATH} (disk, drift)`,
+        to: `${DRIFT_PATH} (forge)`,
+        hidden: false,
+        note: null,
+        diff: "- a\n+ b",
+      },
+      // POST routes
+      [`/api/workspaces/${WS_ID}/discard`]: {
+        written: [DRIFT_PATH],
+        removed: [],
+        skipped: [],
+        registry: "updated",
+      },
+      [`/api/workspaces/${WS_ID}/sync`]: {
+        profile: "acme",
+        recipes: ["base"],
+        targets: ["claude-code"],
+        written: [".claude/rules/fresh.md"],
+        removed: [],
+        skipped: [{ path: DRIFT_PATH, reason: "drift" }],
+        registry: "updated",
+      },
+    };
+  }
+
+  it("Discard edit: clicking Discard edit then Confirm posts to /discard with correct body", async () => {
+    const { doc, body, app, location, history, sessionStorage, posts, makeFetch, findButton, findDiffButtonForPath, click } = fakeDom();
+    const routes = makeRoutes(true);
+    const fetch = makeFetch(routes);
+
+    // Run the script
+    const src = pageJs(true);
+    new Function("document", "location", "history", "sessionStorage", "fetch", src)(doc, location, history, sessionStorage, fetch);
+
+    // Wait for initial load
+    await tick(); await tick(); await tick();
+
+    // Click the workspace link (button with text "ws")
+    const wsLink = findButton(app, "ws");
+    expect(wsLink, "workspace link should exist").not.toBeNull();
+    click(wsLink!);
+
+    await tick(); await tick(); await tick();
+
+    // Click the diff button for the DRIFT file (not just any diff button)
+    const diffBtn = findDiffButtonForPath(app, DRIFT_PATH);
+    expect(diffBtn, "diff button for drift file should exist").not.toBeNull();
+    click(diffBtn!);
+
+    await tick(); await tick(); await tick();
+
+    // Click Discard edit (it's added to the detail area inside app)
+    const discardBtn = findButton(app, "Discard edit");
+    expect(discardBtn, "Discard edit button should exist").not.toBeNull();
+    click(discardBtn!);
+
+    // Click Confirm in the overlay (added to document.body)
+    const confirmBtn = findButton(body, "Confirm");
+    expect(confirmBtn, "Confirm button should exist").not.toBeNull();
+    click(confirmBtn!);
+
+    await tick(); await tick(); await tick();
+
+    // Check POST was made
+    const discardPost = posts.find((p) => p.url.includes("/discard"));
+    expect(discardPost, "should POST to /discard").not.toBeUndefined();
+    expect(discardPost!.url).toBe(`/api/workspaces/${WS_ID}/discard`);
+    expect(discardPost!.body).toEqual({ digest: DIGEST, path: DRIFT_PATH });
+  });
+
+  it("Sync: clicking Sync then Confirm posts to /sync with correct body", async () => {
+    const { doc, body, app, location, history, sessionStorage, posts, makeFetch, findButton, click } = fakeDom();
+    const routes = makeRoutes(true);
+    const fetch = makeFetch(routes);
+
+    const src = pageJs(true);
+    new Function("document", "location", "history", "sessionStorage", "fetch", src)(doc, location, history, sessionStorage, fetch);
+
+    await tick(); await tick(); await tick();
+
+    // Click workspace link
+    const wsLink = findButton(app, "ws");
+    click(wsLink!);
+
+    await tick(); await tick(); await tick();
+
+    // Click Sync (it's added inside the workspace view inside app)
+    const syncBtn = findButton(app, "Sync");
+    expect(syncBtn, "Sync button should exist").not.toBeNull();
+    click(syncBtn!);
+
+    // Click Confirm (in the overlay on document.body)
+    const confirmBtn = findButton(body, "Confirm");
+    click(confirmBtn!);
+
+    await tick(); await tick(); await tick();
+
+    // Check POST was made
+    const syncPost = posts.find((p) => p.url.includes("/sync"));
+    expect(syncPost, "should POST to /sync").not.toBeUndefined();
+    expect(syncPost!.url).toBe(`/api/workspaces/${WS_ID}/sync`);
+    expect(syncPost!.body).toEqual({ digest: DIGEST });
+  });
+
+  it("writes:false — no Sync or Discard edit buttons", async () => {
+    const { doc, body, app, location, history, sessionStorage, makeFetch, findButton, click } = fakeDom();
+    const routes = makeRoutes(false); // writes: false
+    const fetch = makeFetch(routes);
+
+    // Use pageJs(true) but with writes:false from the API
+    const src = pageJs(true);
+    new Function("document", "location", "history", "sessionStorage", "fetch", src)(doc, location, history, sessionStorage, fetch);
+
+    await tick(); await tick(); await tick();
+
+    // Click workspace link
+    const wsLink = findButton(app, "ws");
+    click(wsLink!);
+
+    await tick(); await tick(); await tick();
+
+    // Sync button should not exist (no digest in the response)
+    const syncBtn = findButton(app, "Sync");
+    expect(syncBtn, "Sync button should not exist without digest").toBeNull();
+
+    // Click diff to open detail
+    const diffBtn = findButton(app, "diff");
+    click(diffBtn!);
+
+    await tick(); await tick(); await tick();
+
+    // Discard edit should not exist (no digest)
+    const discardBtn = findButton(app, "Discard edit");
+    expect(discardBtn, "Discard edit button should not exist without digest").toBeNull();
+  });
+
+  it("result message survives reload after discard", async () => {
+    const { doc, body, app, location, history, sessionStorage, makeFetch, findButton, findDiffButtonForPath, findNodeWithText, click } = fakeDom();
+    const routes = makeRoutes(true);
+    const fetch = makeFetch(routes);
+
+    const src = pageJs(true);
+    new Function("document", "location", "history", "sessionStorage", "fetch", src)(doc, location, history, sessionStorage, fetch);
+
+    await tick(); await tick(); await tick();
+
+    // Click workspace link
+    const wsLink = findButton(app, "ws");
+    click(wsLink!);
+
+    await tick(); await tick(); await tick();
+
+    // Click diff for the drift file
+    const diffBtn = findDiffButtonForPath(app, DRIFT_PATH);
+    expect(diffBtn, "diff button for drift file should exist").not.toBeNull();
+    click(diffBtn!);
+
+    await tick(); await tick(); await tick();
+
+    // Click Discard edit
+    const discardBtn = findButton(app, "Discard edit");
+    expect(discardBtn, "Discard edit button should exist").not.toBeNull();
+    click(discardBtn!);
+
+    // Click Confirm
+    const confirmBtn = findButton(body, "Confirm");
+    expect(confirmBtn, "Confirm button should exist").not.toBeNull();
+    click(confirmBtn!);
+
+    await tick(); await tick(); await tick(); await tick();
+
+    // After the reload, the result message should be visible
+    const resultNode = findNodeWithText(app, "wrote 1, removed 0, skipped 0");
+    expect(resultNode, "result message should survive the reload").not.toBeNull();
+  });
+});

@@ -51,7 +51,7 @@ export const originAllowed = (header: string | undefined, port: number): boolean
   header === undefined || names(port).some((n) => header === `http://${n}`);
 export const siteAllowed = (header: string | undefined): boolean => header === undefined || header === "same-origin" || header === "none";
 
-/** Builds the static routes map, with dynamic JS and CSS based on allowWrites. */
+/** Builds the static routes: one HTML, one JS, one CSS. */
 function staticRoutes(allowWrites: boolean): Record<string, readonly [type: string, body: string]> {
   return {
     "/": ["text/html; charset=utf-8", PAGE_HTML],
@@ -76,8 +76,8 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
   const run = opts.route ?? defaultRoute;
   const allowWrites = opts.allowWrites === true;
   const deps: RouteDeps = { home: opts.home, version: opts.version, allowWrites };
-  // Build the static routes once at server start, with dynamic JS/CSS based on allowWrites.
-  const STATIC = staticRoutes(allowWrites);
+  // Built once: the script and stylesheet the page needs for this run.
+  const statics = staticRoutes(allowWrites);
 
   // One data request at a time: each loads a Forge and plans a workspace.
   let queue: Promise<void> = Promise.resolve();
@@ -147,7 +147,7 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
     const q = target.indexOf("?");
     const path = q === -1 ? target : target.slice(0, q);
 
-    const page = Object.hasOwn(STATIC, path) ? STATIC[path] : undefined;
+    const page = Object.hasOwn(statics, path) ? statics[path] : undefined;
     if (page) {
       if (method === "POST") return json(405, { error: "GET only" }, { Allow: "GET" });
       return send(200, page[0], page[1], path === "/" ? { "Content-Security-Policy": CSP } : {});

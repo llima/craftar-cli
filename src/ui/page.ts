@@ -131,15 +131,15 @@ export function pageJs(writes: boolean): string {
     var wrote = (b.written || []).length;
     var removed = (b.removed || []).length;
     var skipped = (b.skipped || []).length;
-    add(into, el("p", "", "wrote " + wrote + ", removed " + removed + ", skipped " + skipped));
-    if (b.registry === "not updated") add(into, el("p", "dim", "the registry was not updated"));
-    showWorkspace(w, "files");
+    var said = ["wrote " + wrote + ", removed " + removed + ", skipped " + skipped];
+    if (b.registry === "not updated") said.push("the registry was not updated");
+    showWorkspace(w, "files", said);
   }`
     : "";
   const W_STORE_WRITES = writes ? `\n      writes = doc.writes;` : "";
   const W_SYNC_BTN = writes
     ? `
-      /* Sync button (spec 40 §6.5): when writes, digest present, unsetParams empty, forge not remote, and some state sync acts on. */
+      /* Sync button: shown only when the workspace can be synced from the page. */
       if (writes && doc.digest && !doc.unsetParams.length && doc.forge.kind !== "remote" && doc.statuses.some(function (s) { return SYNC_ACTS[s.state]; })) {
         var countA = doc.statuses.filter(function (s) { return s.state === "new" || s.state === "update" || s.state === "adopt"; }).length;
         var countR = doc.statuses.filter(function (s) { return s.state === "orphan"; }).length;
@@ -158,11 +158,17 @@ export function pageJs(writes: boolean): string {
         }));
       }`
     : "";
-  // For showDiff: when writes=true, pass doc and f for the discard button
-  const W_SHOWDIFF_EXTRA_ARGS = writes ? ", doc, f" : "";
+  // showDiff needs w, doc and f for the Discard edit button.
+  const W_SHOWDIFF_EXTRA_ARGS = writes ? ", w, doc, f" : "";
+  // showWorkspace takes an optional said array (lines to show after facts) only in writes mode.
+  const W_SHOWWORKSPACE_SAID_PARAM = writes ? ", said" : "";
+  const W_SHOWWORKSPACE_DRAW_SAID = writes
+    ? `
+      if (said && said.length) said.forEach(function (line) { add(body, note(line)); });`
+    : "";
   const W_DISCARD_IN_DIFF = writes
     ? `
-        /* Discard edit button (spec 40 §6.5): only for drift/orphan-drift, not for example file, only when diff not hidden. */
+        /* Discard edit button: only for drift or orphan-drift, not the example file. */
         if (writes && doc.digest && (f.state === "drift" || f.state === "orphan-drift") && f.path !== "${EXAMPLE_FILE}" && !d.hidden) {
           var discardMsg = f.state === "drift"
             ? "The hand edit of " + f.path + " is lost; the Forge's version is written."
@@ -363,7 +369,7 @@ export function pageJs(writes: boolean): string {
     if (kind === "remote") add(into, el("p", "dim", "read from the cached copy of the Forge — not fetched"));
   }
 
-  function showWorkspace(w, tab) {
+  function showWorkspace(w, tab${W_SHOWWORKSPACE_SAID_PARAM}) {
     var body = frame(w, tab);
     if (!token) return add(body, note(NO_TOKEN, "bad"));
     if (tab === "forge") return showForge(w, body);
@@ -377,7 +383,7 @@ export function pageJs(writes: boolean): string {
         ["forge", forgeLine(doc.forge)],
         ["lock", doc.forge.lockCommit ? "generated from " + short(doc.forge.lockCommit) : "records no commit"]
       ].forEach(function (pair) { add(facts, el("dt", "", pair[0]), el("dd", "", pair[1])); });
-      add(body, facts);
+      add(body, facts);${W_SHOWWORKSPACE_DRAW_SAID}
       if (doc.unsetParams.length) {
         add(body, note(doc.refused, "bad"));
         add(body, list(doc.unsetParams.map(function (u) {
