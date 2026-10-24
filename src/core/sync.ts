@@ -689,6 +689,14 @@ export async function plan(ws: Workspace): Promise<Plan> {
   // Kiro agent resources check (spec 41 §4.5–§4.6): null when the mode is off
   const kiroResources = await computeKiroResources(planned, kiroResourceRecords, ctx.readExisting, warnings, resolution.primary);
 
+  // CLAUDE.md blocking check (spec 41 §4.7): only when the mode is on and claude-code is a target
+  if (resolution.primary && resolution.targets.includes("claude-code")) {
+    const blocks = await claudeMdBlocks(ctx.readExisting);
+    if (blocks.blocking.length > 0) {
+      warnings.push(claudeMdBlockedMessage(blocks.blocking[0]));
+    }
+  }
+
   return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources };
 }
 
@@ -741,10 +749,12 @@ function computeAgentsMdBudget(
   if (maxBytes > 0 && bytes > maxBytes) {
     const top5 = sortedRules.slice(0, 5);
     const rulesText = top5.length > 0 ? ` — largest rules: ${top5.map((r) => `${r.name} (${r.scoped ? "scoped, " : ""}${r.bytes} bytes)`).join(", ")}` : "";
+    // Under the mode, add the clause (spec 41 §4.9)
+    const primaryClause = resolution.primary ? "; these rules are in no other file" : "";
     // Two forms, each led by the wording the error block and doctor use
     warning = explicit
-      ? `${agentsMdOverBudgetMessage({ bytes, maxBytes })}; sync --check fails${rulesText}`
-      : `${agentsMdOverDefaultMessage({ bytes, maxBytes })} (${AGENTS_MD_BUDGET_KEY})${rulesText}`;
+      ? `${agentsMdOverBudgetMessage({ bytes, maxBytes })}; sync --check fails${primaryClause}${rulesText}`
+      : `${agentsMdOverDefaultMessage({ bytes, maxBytes })} (${AGENTS_MD_BUDGET_KEY})${primaryClause}${rulesText}`;
     warnings.push(warning);
   }
 
@@ -835,6 +845,47 @@ export function kiroResourcesUnplanned(p: Plan): Array<{ agent: string; path: st
 export function kiroResourcesRefusal(u: Array<{ agent: string; path: string }>): string {
   const entries = u.map((r) => `${r.agent} → ${r.path}`).join(", ");
   return `${u.length} Kiro agent resource(s) name a file the plan does not write: ${entries}\n  fix: edit the agent's resources in the Forge, or list the rule's targets so kiro writes it`;
+}
+
+/**
+ * Check whether a CLAUDE.md imports AGENTS.md or blocks Claude Code from reading it (spec 41 §4.7).
+ * @param readExisting - Function to read workspace files
+ * @returns imports (true when @AGENTS.md found) and blocking (the files that block when not importing)
+ */
+export async function claudeMdBlocks(
+  readExisting: (rel: string) => Promise<Buffer | null>,
+): Promise<{ imports: boolean; blocking: string[] }> {
+  const FILES = ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md"];
+  const IMPORT_LINES = ["@AGENTS.md", "@./AGENTS.md"];
+
+  // Check for import in CLAUDE.md or .claude/CLAUDE.md (not CLAUDE.local.md)
+  for (const file of ["CLAUDE.md", ".claude/CLAUDE.md"]) {
+    const content = await readExisting(file);
+    if (content !== null) {
+      const text = content.toString("utf8");
+      for (const line of text.split("\n")) {
+        // Strip trailing spaces/tabs and trailing CR
+        const trimmed = line.replace(/[ \t]+$/, "").replace(/\r$/, "");
+        if (IMPORT_LINES.includes(trimmed)) {
+          return { imports: true, blocking: [] };
+        }
+      }
+    }
+  }
+
+  // Not importing: collect blocking files
+  const blocking: string[] = [];
+  for (const file of FILES) {
+    const content = await readExisting(file);
+    if (content !== null) blocking.push(file);
+  }
+
+  return { imports: false, blocking };
+}
+
+/** The warning message for a CLAUDE.md that blocks AGENTS.md (spec 41 §4.7). */
+export function claudeMdBlockedMessage(file: string): string {
+  return `agents-md.primary: ${file} keeps Claude Code from reading AGENTS.md — add a line @AGENTS.md to CLAUDE.md, or set Project instructions to claude-md-and-agents-md`;
 }
 
 function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {

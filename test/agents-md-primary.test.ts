@@ -516,3 +516,118 @@ describe("Kiro resources check (spec 41 §4.5–§4.6)", () => {
     expect(kiroResourcesWarnings).toEqual([]);
   });
 });
+
+
+describe("claudeMdBlocks unit (spec 41 §4.7)", () => {
+  const makeReadExisting = (files: Record<string, string>) => async (rel: string): Promise<Buffer | null> => {
+    if (Object.hasOwn(files, rel)) return Buffer.from(files[rel], "utf8");
+    return null;
+  };
+
+  it("absent → {imports: false, blocking: []}", async () => {
+    const { claudeMdBlocks } = await import("../src/core/sync.js");
+    const result = await claudeMdBlocks(makeReadExisting({}));
+    expect(result).toEqual({ imports: false, blocking: [] });
+  });
+
+  it("CLAUDE.md with '# x\\n@AGENTS.md  \\n' → imports", async () => {
+    const { claudeMdBlocks } = await import("../src/core/sync.js");
+    const result = await claudeMdBlocks(makeReadExisting({ "CLAUDE.md": "# x\n@AGENTS.md  \n" }));
+    expect(result.imports).toBe(true);
+    expect(result.blocking).toEqual([]);
+  });
+
+  it(".claude/CLAUDE.md with '@./AGENTS.md\\r\\n' → imports", async () => {
+    const { claudeMdBlocks } = await import("../src/core/sync.js");
+    const result = await claudeMdBlocks(makeReadExisting({ ".claude/CLAUDE.md": "@./AGENTS.md\r\n" }));
+    expect(result.imports).toBe(true);
+    expect(result.blocking).toEqual([]);
+  });
+
+  it("CLAUDE.md '# notes\\n' → blocking ['CLAUDE.md']", async () => {
+    const { claudeMdBlocks } = await import("../src/core/sync.js");
+    const result = await claudeMdBlocks(makeReadExisting({ "CLAUDE.md": "# notes\n" }));
+    expect(result.imports).toBe(false);
+    expect(result.blocking).toEqual(["CLAUDE.md"]);
+  });
+
+  it("CLAUDE.local.md alone → blocking ['CLAUDE.local.md']", async () => {
+    const { claudeMdBlocks } = await import("../src/core/sync.js");
+    const result = await claudeMdBlocks(makeReadExisting({ "CLAUDE.local.md": "# local\n" }));
+    expect(result.imports).toBe(false);
+    expect(result.blocking).toEqual(["CLAUDE.local.md"]);
+  });
+
+  it("CLAUDE.local.md beside an importing CLAUDE.md → imports, blocking []", async () => {
+    const { claudeMdBlocks } = await import("../src/core/sync.js");
+    const result = await claudeMdBlocks(makeReadExisting({
+      "CLAUDE.md": "@AGENTS.md\n",
+      "CLAUDE.local.md": "# local\n",
+    }));
+    expect(result.imports).toBe(true);
+    expect(result.blocking).toEqual([]);
+  });
+});
+
+describe("CLAUDE.md blocking warning (spec 41 §4.7)", () => {
+  it("plan, mode on, CLAUDE.md with token — warning, token not in warnings", async () => {
+    const TOKEN = "TOKEN-" + "x".repeat(8);
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true }, wsFiles: { "CLAUDE.md": `# notes\n${TOKEN}\n` } }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    // Exactly one warning starting with the blocked message
+    const blockedWarnings = p.warnings.filter((w) => w.startsWith("agents-md.primary: CLAUDE.md keeps Claude Code"));
+    expect(blockedWarnings).toHaveLength(1);
+
+    // The token string should NOT appear in any warning
+    for (const w of p.warnings) {
+      expect(w).not.toContain(TOKEN);
+    }
+  });
+
+  it("mode on, targets [kiro, agents-md] → no blocked warning", async () => {
+    const s = kept(await acmePrimary({
+      schema: 5,
+      params: { "agents-md.primary": true },
+      wsFiles: { "CLAUDE.md": "# notes\n" },
+      wsConfig: { targets: ["kiro", "agents-md"] },
+    }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const blockedWarnings = p.warnings.filter((w) => w.startsWith("agents-md.primary:"));
+    expect(blockedWarnings).toEqual([]);
+  });
+
+  it("mode off, CLAUDE.md exists → no blocked warning", async () => {
+    const s = kept(await acmePrimary({ schema: 5, wsFiles: { "CLAUDE.md": "# notes\n" } }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const blockedWarnings = p.warnings.filter((w) => w.startsWith("agents-md.primary:"));
+    expect(blockedWarnings).toEqual([]);
+  });
+});
+
+describe("Budget clause under the mode (spec 41 §4.9)", () => {
+  it("mode on, over budget — warning contains 'these rules are in no other file'", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true, "agents-md.maxBytes": 10 } }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const budgetWarnings = p.warnings.filter((w) => w.includes("AGENTS.md is") && w.includes("bytes"));
+    expect(budgetWarnings).toHaveLength(1);
+    expect(budgetWarnings[0]).toContain("these rules are in no other file");
+  });
+
+  it("mode off, over budget — warning does NOT contain 'these rules are in no other file'", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.maxBytes": 10 } }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const budgetWarnings = p.warnings.filter((w) => w.includes("AGENTS.md is") && w.includes("bytes"));
+    expect(budgetWarnings).toHaveLength(1);
+    expect(budgetWarnings[0]).not.toContain("these rules are in no other file");
+  });
+});
