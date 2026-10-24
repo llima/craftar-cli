@@ -20,6 +20,7 @@ import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
 import { written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
+import { appliesTo, effectiveTargets } from "../emitters/shared.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
 export const LOCAL_FILE = "craftar.local.yaml";
@@ -888,9 +889,19 @@ export function claudeMdBlockedMessage(file: string): string {
   return `agents-md.primary: ${file} keeps Claude Code from reading AGENTS.md — add a line @AGENTS.md to CLAUDE.md, or set Project instructions to claude-md-and-agents-md`;
 }
 
-/** Returns true when resolution.primary is on (spec 41 §4.8). */
-export function primaryOrphan(p: Plan): boolean {
-  return p.resolution.primary === true;
+/** Returns true when the orphan is due to agents-md.primary (spec 41 §4.8). */
+export function primaryOrphan(p: Plan, s: { state: string; target: string; ingredient: string }): boolean {
+  if (!p.resolution.primary) return false;
+  if (s.state !== "orphan") return false;
+  if (s.target !== "claude-code" && s.target !== "kiro") return false;
+  // Find the ingredient in the resolution
+  const ing = p.resolution.ingredients.find((i) => i.ref === s.ingredient);
+  if (!ing) return false;
+  // The orphan is primary iff effectiveTargets does NOT admit s.target while meta.targets DOES
+  const eff = effectiveTargets(ing.meta, p.resolution);
+  const effAdmits = appliesTo(eff, s.target);
+  const declaredAdmits = appliesTo(ing.meta.targets, s.target);
+  return !effAdmits && declaredAdmits;
 }
 
 function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {

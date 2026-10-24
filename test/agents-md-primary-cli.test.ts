@@ -137,3 +137,57 @@ describe("Orphan's words — CLI (spec 41 §4.8)", () => {
     expect(Object.keys(statusJson).sort()).toEqual(["forge", "statuses", "unsetParams", "warnings"]);
   });
 });
+
+
+describe("primaryOrphan per file — CLI (spec 41 §4.8 fix)", () => {
+  it("ordinary orphan beside primary orphan — different wording for each", async () => {
+    // Sync with mode off first
+    const s = kept(await acmePrimary({ schema: 5 })); // mode off
+    const W = ["--workspace", s.wsRoot];
+
+    const syncOffResult = runCli(["sync", ...W]);
+    expect(syncOffResult.code).toBe(0);
+
+    // Now: drop command/review from the recipe AND turn mode on
+    const { promises: fs } = await import("node:fs");
+    const YAML = (await import("yaml")).default;
+    const path = await import("node:path");
+
+    // Update recipe to remove command/review
+    const recipePath = path.join(s.forgeRoot, "recipes/base.yaml");
+    const recipeContent = await fs.readFile(recipePath, "utf8");
+    const recipe = YAML.parse(recipeContent);
+    recipe.ingredients = recipe.ingredients.filter((i: string) => i !== "command/review");
+    await fs.writeFile(recipePath, YAML.stringify(recipe));
+
+    // Turn mode on
+    const profilePath = path.join(s.forgeRoot, "profiles/acme/profile.yaml");
+    const profileContent = await fs.readFile(profilePath, "utf8");
+    const profile = YAML.parse(profileContent);
+    profile.params = { ...profile.params, "agents-md.primary": true };
+    await fs.writeFile(profilePath, YAML.stringify(profile));
+
+    // diff shows different wording for each type of orphan
+    const diffResult = runCli(["diff", ...W]);
+    // command/review is an ordinary orphan (Forge dropped it) — NOT agents-md.primary
+    expect(diffResult.stdout).toContain(".claude/commands/review.md (forge: no longer produced — sync removes it)");
+    // style is a primary orphan (mode turned it off for claude-code and kiro)
+    expect(diffResult.stdout).toContain(".claude/rules/style.md (forge: written to AGENTS.md only — sync removes it)");
+
+    // sync shows different wording for each type
+    const syncResult = runCli(["sync", ...W]);
+    expect(syncResult.code).toBe(0);
+    // Ordinary orphan gets ordinary message
+    expect(syncResult.stdout).toContain("(orphan: no longer produced by the Forge)");
+    // Primary orphan gets specific message  
+    expect(syncResult.stdout).toContain("(orphan: written to AGENTS.md only (agents-md.primary))");
+
+    // drift show should NOT contain agents-md.primary wording (uses original words)
+    // First create a drift situation
+    const apiPath = path.join(s.wsRoot, ".claude/rules/api.md");
+    await fs.appendFile(apiPath, "\n# Hand edit\n");
+    
+    const driftResult = runCli(["drift", "show", ...W]);
+    expect(driftResult.stdout).not.toContain("written to AGENTS.md only");
+  });
+});

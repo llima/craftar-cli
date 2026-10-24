@@ -232,7 +232,13 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
   if (o.forgeLine) console.log(o.forgeLine);
   console.log(`  ${verb} ${pc.green(String(o.result.written.length))}, removed ${pc.magenta(String(o.result.removed.length))} orphan(s), skipped ${pc.yellow(String(o.result.skipped.length))}`);
   for (const f of o.result.written) console.log(`  ${pc.green("+")} ${f}`);
-  for (const f of o.result.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : primaryOrphan(p) ? "orphan: written to AGENTS.md only (agents-md.primary)" : "orphan: no longer produced by the Forge"})`);
+  // Look up each removed path's status to decide if it's a primary orphan
+  const stByPath = new Map(st.map((s) => [s.path, s]));
+  for (const f of o.result.removed) {
+    const s = stByPath.get(f);
+    const isPrimary = s && primaryOrphan(p, s as { state: string; target: string; ingredient: string });
+    console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : isPrimary ? "orphan: written to AGENTS.md only (agents-md.primary)" : "orphan: no longer produced by the Forge"})`);
+  }
   for (const s of o.result.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
   for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   if (o.registry) console.log(`  ${pc.yellow("warn")} registry not updated (${o.registry.file}): ${o.registry.message}`);
@@ -810,10 +816,10 @@ program
     // Spec 19 §3.3: under --exit-code a path nothing matches must not read as "clean" to a script
     if (o.exitCode && only && !st.some((s) => s.path === only)) fail(unmanaged(only));
     let shown = 0;
-    const isPrimary = primaryOrphan(p);
     for (const s of st) {
       if (only && s.path !== only) continue;
       // Spec 19 §3.2: the six states sync --check refuses are shown; which those are is diffReport's to say
+      const isPrimary = primaryOrphan(p, s as { state: string; target: string; ingredient: string });
       if (await printFileDiff(ws.root, s, { isPrimary })) shown++;
     }
     if (!shown) console.log(pc.green("no differences"));
@@ -919,7 +925,7 @@ drift
       } else {
         console.log(renderDiff((await readText(path.join(ws.root, named.path))) ?? "", "", DIFF_PAINT));
       }
-    } else await printFileDiff(ws.root, named, { isPrimary: primaryOrphan(p) });
+    } else await printFileDiff(ws.root, named);
     if (refusalBlock(unset)) process.exitCode = 1;
   });
 
