@@ -1,3 +1,4 @@
+import path from "node:path";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
 import { decodeForScan } from "../core/secrets.js";
@@ -202,13 +203,15 @@ export const claudeCode: Emitter<"claude-code"> = {
  * too (`frontmatterRaw` when present, else `description`). The one answer, read by the emitter and by import (§4.10).
  */
 export function claudeResolves(meta: Ingredient, file: string): boolean {
+  // Compared as the emitters read them (`emittedFile`): `./rule.md` and `/rule.md` name the file listed as `rule.md`.
+  const eq = (a: string, b: string) => path.posix.join(".", a) === path.posix.join(".", b);
   switch (meta.type) {
     case "rule":
     case "agent":
     case "command":
-      return file === meta.file;
+      return eq(file, meta.file);
     case "skill":
-      return meta.layout === "file" ? file === "SKILL.md" : /\.md$/i.test(file);
+      return meta.layout === "file" ? eq(file, "SKILL.md") : /\.md$/i.test(file);
     default:
       return false;
   }

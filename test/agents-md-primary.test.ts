@@ -795,3 +795,13 @@ describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.6–§
     expect(okChecks).toHaveLength(1);
   });
 });
+
+describe("claudeResolves (spec 41 §4.4, §4.10)", () => {
+  it("a body file declared ./rule.md or /agent.md names the file listed as rule.md / agent.md", async () => {
+    const { claudeResolves } = await import("../src/emitters/claude-code.js");
+    expect(claudeResolves(RuleIngredient.parse({ type: "rule", name: "api", file: "./rule.md" }), "rule.md")).toBe(true);
+    expect(claudeResolves(AgentIngredient.parse({ type: "agent", name: "a", file: "/agent.md" }), "agent.md")).toBe(true);
+    expect(claudeResolves(RuleIngredient.parse({ type: "rule", name: "api" }), "rule.md")).toBe(true);
+    expect(claudeResolves(RuleIngredient.parse({ type: "rule", name: "api" }), "notes.md")).toBe(false);
+  });
+});
