@@ -535,7 +535,7 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; `craftar docs validate`;
 
 ### to 0.37.0
 
-- **New flag: `craftar ui --allow-writes`** (see *Commands*). Without it, `craftar ui` is the read-only dashboard byte for byte — the page, its script and stylesheet, every answer, and the three terminal lines; `GET /api/workspaces` gains the key `writes` (`false`). With it the terminal's first line reads `writes allowed` in place of `read-only`, a second line names the two actions, and the page offers Sync and Discard edit for a workspace with a path Forge.
+- **New flag: `craftar ui --allow-writes`** (see *Commands*). Without it, `craftar ui` is the read-only dashboard — the page, its script and stylesheet and the three terminal lines byte for byte, and every answer too except one: `GET /api/workspaces` gains the key `writes` (`false`). With it the terminal's first line reads `writes allowed` in place of `read-only`, a second line names the two actions, and the page offers Sync and Discard edit for a workspace with a path Forge.
 - **The `ui` command's `--help` description now reads `Reads only unless --allow-writes`.**
 - No emitted byte, lock, registry entry, `--json` shape or exit code of an existing command changes.
 
