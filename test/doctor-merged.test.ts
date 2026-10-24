@@ -28,7 +28,7 @@ const opts = (workspace: string, over: Partial<DoctorOptions> = {}): DoctorOptio
   gitVersion: async () => "2.40.0",
   ...over,
 });
-const ALL = ["node", "git", "home", "registry", "cache", "config", "forge", "forge-inside", "plan", "params", "mcp-env", "lock", "registered"];
+const ALL = ["node", "git", "home", "registry", "cache", "config", "forge", "forge-inside", "plan", "params", "mcp-env", "mcp-launcher", "lock", "registered"];
 const check = (r: { checks: Array<{ id: string; level: string; message: string }> }, id: string) => r.checks.find((c) => c.id === id)!;
 
 describe("runDoctor with a configuration already read", () => {
@@ -90,7 +90,7 @@ describe("workspaceReport", () => {
     const w = workspaceReport(report);
     expect(w.checks.map((c) => c.id)).toEqual(ALL.filter((id) => !["home", "registry", "cache"].includes(id)));
     expect(w.summary.ok + w.summary.warn + w.summary.error).toBe(w.checks.length);
-    expect(w.summary).toEqual({ ok: 8, warn: 2, error: 0 });
+    expect(w.summary).toEqual({ ok: 9, warn: 2, error: 0 });
     expect([w.version, w.workspace, w.fetch, w.strict]).toEqual([report.version, report.workspace, report.fetch, report.strict]);
     expect(Object.keys(w)).toEqual(["version", "workspace", "fetch", "strict", "checks", "summary"]);
     expect(report.checks).toHaveLength(n); // the input is not touched
@@ -110,6 +110,6 @@ describe("workspaceReport", () => {
     });
     expect(w.checks.map((c) => c.id)).toContain("acme-new");
     expect(w.checks.map((c) => c.id)).not.toContain("acme-machine");
-    expect(w.summary).toEqual({ ok: 8, warn: 3, error: 0 });
+    expect(w.summary).toEqual({ ok: 9, warn: 3, error: 0 });
   });
 });

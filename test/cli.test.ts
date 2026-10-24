@@ -4521,6 +4521,47 @@ describe("cli — craftar doctor (spec 24 §9.2)", () => {
     const unset = runCli(["doctor", "--workspace", ws, "--json"], { env: { CRAFTAR_HOME: home, ACME_TRACKER_TOKEN: undefined } });
     expect(mcpEnv(unset.stdout).map((c) => [c.level, c.message])).toEqual([["warn", 'server "tracker" expects ACME_TRACKER_TOKEN, not set']]);
   });
+
+  it("9. mcp-launcher with a Windows-only server: --strict exits 1", async () => {
+    const root = await tmpDir("craftar-doctor-launcher-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const LEGACY = { meta: { type: "mcp", name: "legacy", server: { command: "cmd", args: ["/c", "npx", "-y", "@acme/example-mcp"] } } };
+    await makeForge(path.join(root, "forge"), {
+      ingredients: [LEGACY],
+      recipes: [recipe("base", ["mcp/legacy"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+    expect(runCli(["sync", "--workspace", ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+    const strict = runCli(["doctor", "--strict", "--json", "--workspace", ws], { env: { CRAFTAR_HOME: home } });
+    expect(strict.code).toBe(1);
+    const checks = JSON.parse(strict.stdout).checks as Array<{ id: string; level: string }>;
+    const mcpLauncher = checks.find((c) => c.id === "mcp-launcher");
+    expect(mcpLauncher?.level).toBe("warn");
+  });
+
+  it("10. mcp-launcher with a portable server: --strict exits 0 when no other warnings", async () => {
+    const root = await tmpDir("craftar-doctor-launcher-ok-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const PORTABLE = { meta: { type: "mcp", name: "api", server: { command: "npx", args: ["-y", "@acme/example-mcp"] } } };
+    await makeForge(path.join(root, "forge"), {
+      ingredients: [PORTABLE],
+      recipes: [recipe("base", ["mcp/api"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+    expect(runCli(["sync", "--workspace", ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+    const strict = runCli(["doctor", "--strict", "--json", "--workspace", ws], { env: { CRAFTAR_HOME: home } });
+    const checks = JSON.parse(strict.stdout).checks as Array<{ id: string; level: string }>;
+    const mcpLauncher = checks.find((c) => c.id === "mcp-launcher");
+    expect(mcpLauncher?.level).toBe("ok");
+    // exit code is 0 only if all other checks are ok/pass
+    expect(strict.code).toBe(0);
+  });
 });
 
 

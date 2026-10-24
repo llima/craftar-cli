@@ -320,7 +320,107 @@ describe("workspace checks", () => {
     const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
     expect(JSON.stringify(of(r.checks, "mcp-env"))).toBe(PINNED_MCP_ENV);
   });
+});
 
+describe("mcp-launcher (spec 42)", () => {
+  const server = (name: string, srv: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({ meta: { type: "mcp", name, server: srv, ...extra } });
+  const PORTABLE = { command: "npx", args: ["-y", "@acme/example-mcp", "SENTINEL-ARG-42"] };
+  const LEGACY = { command: "cmd", args: ["/c", "npx", "-y", "@acme/example-mcp", "SENTINEL-ARG-42"] };
+
+  it("1. one warn per server, both files named, no command or arg printed", async () => {
+    const f = await fixture({
+      ingredients: [server("api", PORTABLE), server("legacy", LEGACY)],
+      recipes: [recipe("base", ["mcp/api", "mcp/legacy"])],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    expect(of(r.checks, "mcp-launcher")).toEqual([
+      { id: "mcp-launcher", scope: "workspace", level: "warn", message: 'server "legacy" starts through cmd /c \u2014 Windows only; it does not start on Linux or macOS (.mcp.json, .kiro/settings/mcp.json)', fix: 'in the Forge, write the program cmd runs as the server\'s command and drop "cmd" and "/c" (spec 42)' },
+    ]);
+    expect(JSON.stringify(of(r.checks, "mcp-launcher"))).not.toContain('"npx"');
+    expect(JSON.stringify(of(r.checks, "mcp-launcher"))).not.toContain("SENTINEL-ARG-42");
+    expect(JSON.stringify(of(r.checks, "mcp-launcher"))).not.toContain("@acme");
+  });
+
+  it("2. /k reads /k in the message and the fix", async () => {
+    const f = await fixture({
+      ingredients: [server("legacy", { command: "cmd.exe", args: ["/K", "npx"] })],
+      recipes: [recipe("base", ["mcp/legacy"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    const check = of(r.checks, "mcp-launcher")[0];
+    expect(check.message).toBe('server "legacy" starts through cmd /k \u2014 Windows only; it does not start on Linux or macOS (.mcp.json)');
+    expect(check.fix).toMatch(/\/k" \(spec 42\)$/);
+  });
+
+  it("3. a server only kiro writes names only its file", async () => {
+    const f = await fixture({
+      ingredients: [server("legacy", LEGACY, { targets: ["kiro"] }), server("api", PORTABLE)],
+      recipes: [recipe("base", ["mcp/legacy", "mcp/api"])],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    const check = of(r.checks, "mcp-launcher")[0];
+    expect(check.message).toMatch(/\(\.kiro\/settings\/mcp\.json\)$/);
+  });
+
+  it("4. no MCP server → no mcp-launcher line", async () => {
+    const f = await fixture(FORGE);
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    expect(of(r.checks, "mcp-launcher")).toEqual([]);
+    expect(of(r.checks, "mcp-env")).toHaveLength(1); // proves the plan ran
+  });
+
+  it("5. every server portable → one ok", async () => {
+    const f = await fixture({
+      ingredients: [server("api", PORTABLE)],
+      recipes: [recipe("base", ["mcp/api"])],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    expect(of(r.checks, "mcp-launcher")).toEqual([
+      { id: "mcp-launcher", scope: "workspace", level: "ok", message: "no written MCP server is Windows-only", fix: null },
+    ]);
+  });
+
+  it("6. right after mcp-env", async () => {
+    const f = await fixture({
+      ingredients: [server("api", PORTABLE), server("legacy", LEGACY)],
+      recipes: [recipe("base", ["mcp/api", "mcp/legacy"])],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    const ids = r.checks.map(c => c.id);
+    expect(ids.indexOf("mcp-launcher")).toBe(ids.indexOf("mcp-env") + 1);
+  });
+
+  it("7. two servers, two lines, in plan order", async () => {
+    const f = await fixture({
+      ingredients: [server("zeta", LEGACY), server("alpha", { command: "cmd", args: ["/k", "x"] })],
+      recipes: [recipe("base", ["mcp/zeta", "mcp/alpha"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    const msgs = of(r.checks, "mcp-launcher").map(c => c.message);
+    expect(msgs[0]).toMatch(/^server "zeta" .*\/c/);
+    expect(msgs[1]).toMatch(/^server "alpha" .*\/k/);
+  });
+
+  it("8. the same name written by two targets from different ingredients, only one Windows-only", async () => {
+    const f = await fixture({
+      ingredients: [server("api", PORTABLE, { targets: ["claude-code"] }), server("api--x", LEGACY, { as: "api", targets: ["kiro"] })],
+      recipes: [recipe("base", ["mcp/api", "mcp/api--x"])],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    const check = of(r.checks, "mcp-launcher")[0];
+    expect(check.level).toBe("warn");
+    expect(check.message).toMatch(/\(\.kiro\/settings\/mcp\.json\)$/);
+  });
+});
+
+describe("workspace checks", () => {
   it("forge-inside: a workspace inside its path Forge warns; a directory named ..x inside it too", async () => {
     const f = await fixture();
     const inner = path.join(f.forgeRoot, "ws");

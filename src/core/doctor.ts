@@ -3,7 +3,7 @@ import path from "node:path";
 import { ENV_NAME, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
-import { renderServer, rendersServers } from "./mcp-server.js";
+import { renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix } from "./mcp-server.js";
 import { credentialKeys, hideCacheSegment, hideKeys, isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus, vouchedKeys } from "./registry.js";
 import { FULL_SHA, cacheKey, classifyForge, CREDENTIAL_HIDDEN, inspectCache, UNVOUCHED_HIDDEN, type CacheSnapshot } from "./remote.js";
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
@@ -395,6 +395,29 @@ async function workspaceChecks(
       const unset = mcpUnset(servers, env);
       if (unset.length === 0) w("mcp-env", "ok", "every variable a written MCP server expects is set");
       for (const { server, name } of unset) w("mcp-env", "warn", `server "${server}" expects ${name}, not set`, `export ${name}`);
+
+      // mcp-launcher: only when writtenServers returned at least one entry (spec 42)
+      if (servers.length > 0) {
+        // Group by server name in order of first appearance; for each name collect its files in plan order
+        const windowsServers = new Map<string, { letter: "c" | "k"; files: string[] }>();
+        for (const [outName, serverDef, _authEnv, file] of servers) {
+          const letter = windowsOnlyLauncher(serverDef);
+          if (letter === null) continue;
+          const existing = windowsServers.get(outName);
+          if (existing) {
+            if (!existing.files.includes(file)) existing.files.push(file);
+          } else {
+            windowsServers.set(outName, { letter, files: [file] });
+          }
+        }
+        if (windowsServers.size === 0) {
+          w("mcp-launcher", "ok", LAUNCHER_OK, null);
+        } else {
+          for (const [name, { letter, files }] of windowsServers) {
+            w("mcp-launcher", "warn", launcherWarning(name, letter, files), launcherFix(letter));
+          }
+        }
+      }
     }
 
     // docker, services-env: present only when the plan or the lock has a service (spec 31 §4.7)
