@@ -92,21 +92,25 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
     };
     const json = (status: number, body: unknown, extra: Record<string, string> = {}): void =>
       send(status, "application/json; charset=utf-8", JSON.stringify(body), extra);
+    // Every refusal is the same bytes: which check refused is not said.
     const forbidden = (): void => json(403, { error: "forbidden" });
 
-    /** Queue one request: work queued when the server closed is dropped, and the pattern — never the request's text — goes to onError on a 500. */
     const enqueue = (request: RouteRequest, pattern: string): void => {
+      // One request's failure must neither end the process nor stop the queue (see the catch at the end).
       queue = queue.then(async () => {
+        // Work still queued when the server closed is dropped: its connection is gone, and nothing should keep loading.
         if (closed) return;
         try {
-          const answer = await run(request, request.method === "POST" ? { ...deps, allowWrites: true } : deps);
+          const answer = await run(request, deps);
           json(answer.status, answer.body);
         } catch (e) {
+          // The pattern, never the request's text; the browser learns nothing of the message.
           opts.onError(`ui: ${pattern}: ${errorText(e).split("\n")[0]}`);
           json(500, { error: "internal error" });
         }
       }).catch(() => {
-        // A failing onError or an answer that can no longer be written: close the connection rather than leave it unanswered.
+        // Only the catch above can throw: a failing `onError`, or an answer that can no longer be written. Nothing
+        // more can be said then; the connection is closed rather than left unanswered, and the queue goes on.
         res.destroy();
       });
     };
@@ -134,6 +138,7 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
       if (site !== "same-origin") return forbidden();
     }
 
+    // The path is split from the query by hand: no URL is built from the request.
     const q = target.indexOf("?");
     const path = q === -1 ? target : target.slice(0, q);
 
@@ -150,6 +155,7 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
     if (method === "POST" && !isWritePattern) return json(405, { error: "GET only" }, { Allow: "GET" });
     if (method === "GET" && isWritePattern) return json(405, { error: "POST only" }, { Allow: "POST" });
 
+    // The token: in the Authorization header and nowhere else, compared in constant time.
     const got = Buffer.from(one(req, "authorization") ?? "", "utf8");
     if (got.length !== want.length || !timingSafeEqual(got, want)) return forbidden();
 
@@ -188,6 +194,7 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
         enqueue({ path, query: q === -1 ? "" : target.slice(q + 1), method: "POST", body }, pattern);
       });
 
+      // A client that goes away mid-body: nothing to answer, and no unhandled error.
       req.on("error", () => {});
       return;
     }
@@ -199,6 +206,7 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
 
   return new Promise((resolve, reject) => {
     server.once("error", reject);
+    // The literal address: no option, flag or variable changes where this listens.
     server.listen(opts.port, "127.0.0.1", () => {
       const address = server.address() as AddressInfo;
       port = address.port;
@@ -210,6 +218,7 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
           new Promise<void>((done) => {
             closed = true;
             server.close(() => done());
+            // A browser's keep-alive connection, or a route still running, would hold the listener open; that route's answer is abandoned.
             server.closeAllConnections();
           }),
       });
