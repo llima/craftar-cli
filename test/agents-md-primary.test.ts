@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { acmePrimary } from "./helpers/agents-md-primary.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import { reservedKey } from "../src/core/extract.js";
@@ -773,26 +776,28 @@ describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.6–§
     expect(ancestorCheck).toBeDefined();
   });
 
-  it("6. mode on, nothing at root and no ancestor CLAUDE.md → one ok: nothing keeps Claude Code from reading AGENTS.md", async () => {
-    const { promises: fs } = await import("node:fs");
-    const path = await import("node:path");
-
-    // Check if real ancestor CLAUDE.md files exist — skip the assertion if they do
-    const tmpClaudeExists = await fs.access("/tmp/CLAUDE.md").then(() => true, () => false);
-    const rootClaudeExists = await fs.access("/CLAUDE.md").then(() => true, () => false);
-
+  // The scenario lives under os.tmpdir(): a CLAUDE.md in one of its real ancestors would make this case a warn, not an ok.
+  const realAncestorClaude = (() => {
+    for (let d = os.tmpdir(); ; d = path.dirname(d)) {
+      if (existsSync(path.join(d, "CLAUDE.md"))) return true;
+      if (d === path.dirname(d)) return false;
+    }
+  })();
+  it.skipIf(realAncestorClaude)("6. mode on, nothing at root and no ancestor CLAUDE.md → one ok: nothing keeps Claude Code from reading AGENTS.md", async () => {
     const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
     const report = await runDoc(s.wsRoot);
-
     const primaryChecks = report.checks.filter((c) => c.id === "agents-md-primary");
-    
-    if (tmpClaudeExists || rootClaudeExists) {
-      // Skip this assertion — real ancestors of the temp dir hold a CLAUDE.md
-      return;
-    }
+    expect(primaryChecks).toEqual([expect.objectContaining({ level: "ok", message: "nothing keeps Claude Code from reading AGENTS.md" })]);
+  });
 
-    const okChecks = primaryChecks.filter((c) => c.level === "ok" && c.message === "nothing keeps Claude Code from reading AGENTS.md");
-    expect(okChecks).toHaveLength(1);
+  it("7. the ancestor walk reaches the file-system root", async () => {
+    const { claudeMdAncestors } = await import("../src/core/doctor.js");
+    const root = path.parse(process.cwd()).root;
+    const ws = path.join(root, "a", "b", "ws");
+    const seen: string[] = [];
+    const found = await claudeMdAncestors(ws, async (f) => (seen.push(f), f === path.join(root, "CLAUDE.md")));
+    expect(found).toEqual([path.join(root, "CLAUDE.md")]);
+    expect(seen).toEqual([path.join(root, "a", "b", "CLAUDE.md"), path.join(root, "a", "CLAUDE.md"), path.join(root, "CLAUDE.md")]);
   });
 });
 

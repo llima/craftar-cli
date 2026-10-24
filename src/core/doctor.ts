@@ -346,23 +346,14 @@ async function workspaceChecks(
 
           // Check ancestors for CLAUDE.md (not when the root imports)
           let ancestorFound = false;
-          let dir = path.dirname(root);
-          while (dir !== path.dirname(dir)) {
-            const ancestorClaudeMd = path.join(dir, "CLAUDE.md");
-            try {
-              await fs.lstat(ancestorClaudeMd);
-              // Exists — warn
-              ancestorFound = true;
-              w(
-                "agents-md-primary",
-                "warn",
-                `agents-md.primary: ${ancestorClaudeMd} may keep Claude Code from reading AGENTS.md`,
-                "add a line @AGENTS.md to CLAUDE.md",
-              );
-            } catch {
-              // Does not exist
-            }
-            dir = path.dirname(dir);
+          for (const ancestorClaudeMd of await claudeMdAncestors(root)) {
+            ancestorFound = true;
+            w(
+              "agents-md-primary",
+              "warn",
+              `agents-md.primary: ${ancestorClaudeMd} may keep Claude Code from reading AGENTS.md`,
+              "add a line @AGENTS.md to the workspace's CLAUDE.md",
+            );
           }
 
           // nothing found at all → one ok
@@ -374,11 +365,6 @@ async function workspaceChecks(
 
       // kiro-resources: present only when p.kiroResources !== null (spec 41 §4.7)
       if (p.kiroResources !== null) {
-        // Add the plan's kiroResources warning to owned so it's not repeated
-        if (p.kiroResources.warning) {
-          owned.add(p.kiroResources.warning);
-        }
-
         // one error per unplanned entry
         for (const { agent, path: resourcePath } of p.kiroResources.unplanned) {
           w(
@@ -672,4 +658,20 @@ export function workspaceReport(report: DoctorReport): DoctorReport {
   const summary: Record<CheckLevel, number> = { ok: 0, warn: 0, error: 0 };
   for (const c of checks) summary[c.level]++;
   return { version: report.version, workspace: report.workspace, fetch: report.fetch, strict: report.strict, checks, summary };
+}
+
+/**
+ * The `CLAUDE.md` of every directory strictly above `root`, up to and including the file-system root, that exists (spec 41
+ * §4.7) — by `lstat` only, never read. `exists` is a parameter for the test that reaches the file-system root.
+ */
+export async function claudeMdAncestors(
+  root: string,
+  exists: (file: string) => Promise<boolean> = (f) => fs.lstat(f).then(() => true, () => false),
+): Promise<string[]> {
+  const out: string[] = [];
+  for (let dir = path.dirname(root); ; dir = path.dirname(dir)) {
+    const file = path.join(dir, "CLAUDE.md");
+    if (await exists(file)) out.push(file);
+    if (dir === path.dirname(dir)) return out;
+  }
 }
