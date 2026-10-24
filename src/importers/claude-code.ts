@@ -5,7 +5,7 @@ import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, hasUtf16Bom } from "../core/secrets.js";
-import { serverSecret } from "../core/mcp-server.js";
+import { serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
 import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
@@ -332,6 +332,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       if (!isPlainObject(server)) {
         throw new Error(`.mcp.json server "${name}" is not an object — fix the file and re-run import`);
       }
+      const winLetter = windowsOnlyLauncher(server);
+      if (winLetter !== null) report.warnings.push(launcherImportWarning(name, winLetter));
       const meta: Ingredient = { type: "mcp", name, server, targets: "*", tags: [], origin: origin(".mcp.json") };
       read(meta, {}, {}, (ref) => addRef(refs.base, ref));
     }

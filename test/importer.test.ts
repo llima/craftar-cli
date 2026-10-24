@@ -129,6 +129,33 @@ describe("import --from claude-code", () => {
     expect(await exists(path.join(t.forge, "ingredients/mcp"))).toBe(false);
   });
 
+  it("warns for an MCP server that starts through cmd /c and writes it as read (spec 42)", async () => {
+    const t = await setup();
+    const legacy = { command: "cmd", args: ["/c", "npx", "-y", "@acme/example-mcp", "SENTINEL-ARG-42"] };
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": JSON.stringify({ mcpServers: { legacy, api: { command: "npx", args: ["-y", "@acme/example-mcp"] } } }),
+    });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.warnings.filter((w) => w.includes("cmd /"))).toEqual([
+      '.mcp.json server "legacy" starts through cmd /c \u2014 Windows only; the ingredient keeps it as written (spec 42)',
+    ]);
+    expect(JSON.stringify(r.warnings)).not.toContain("SENTINEL-ARG-42");
+    expect((await yaml(path.join(t.forge, "ingredients/mcp/legacy/ingredient.yaml"))).server).toEqual(legacy);
+  });
+
+  it("a /k server warns with /k; a portable one does not warn (spec 42)", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": JSON.stringify({ mcpServers: { keep: { command: "C:\\Windows\\System32\\cmd.exe", args: ["/K", "npx"] }, api: { command: "npx" } } }),
+    });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.warnings.filter((w) => w.includes("cmd /"))).toEqual([
+      '.mcp.json server "keep" starts through cmd /k \u2014 Windows only; the ingredient keeps it as written (spec 42)',
+    ]);
+  });
+
   it("rejects a rule with a token and reports the file line", async () => {
     const t = await setup();
     await writeFiles(t.ws("api"), { ".claude/rules/deploy.md": "# Deploy\n\nkey " + "AKIA" + "ABCDEFGHIJKLMNOP" + "\n" });
