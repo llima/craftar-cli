@@ -9,6 +9,9 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
   return targets === "*" || targets.includes(target);
 }
 
+/** The MCP file each target writes (spec 42 §5.2: shared by the emitters and doctor's mcp-launcher). */
+export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json" } as const;
+
 /**
  * The targets an ingredient is aimed at in this workspace (spec 41 §4.3): its declared `targets`, except, under
  * agents-md.primary, an always-on rule with the default targets, which is aimed at agents-md alone. The one

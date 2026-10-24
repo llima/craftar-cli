@@ -10,6 +10,7 @@ import {
   formatDeadRefs,
   formatScannedRefs,
   mcpServers,
+  MCP_FILE,
   outName,
   resolveRuleRefs,
   ruleFile,
@@ -199,9 +200,9 @@ export const kiro: Emitter<"kiro"> = {
     // Emit one warning for all dead and unknown references (spec 17 §4.5) and scanned files (spec 41 §4.4)
     emitKiroWarning(ctx, reports, scannedHits);
 
-    const servers = mcpServers(ctx, t, ".kiro/settings/mcp.json", mcp);
+    const servers = mcpServers(ctx, t, MCP_FILE.kiro, mcp);
     if (Object.keys(servers).length) {
-      out.push(crlf(".kiro/settings/mcp.json", JSON.stringify({ mcpServers: servers }, null, 2) + "\n", "mcp/*"));
+      out.push(crlf(MCP_FILE.kiro, JSON.stringify({ mcpServers: servers }, null, 2) + "\n", "mcp/*"));
     }
     return out;
   },

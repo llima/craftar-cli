@@ -10,7 +10,7 @@ import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, frag
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK } from "./sync.js";
-import { outName } from "../emitters/shared.js";
+import { outName, MCP_FILE } from "../emitters/shared.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram } from "./proc.js";
 
@@ -391,7 +391,8 @@ async function workspaceChecks(
         }
       }
 
-      const unset = mcpUnset(p, env, ws.forge.manifest.schema);
+      const servers = writtenServers(p, ws.forge.manifest.schema);
+      const unset = mcpUnset(servers, env);
       if (unset.length === 0) w("mcp-env", "ok", "every variable a written MCP server expects is set");
       for (const { server, name } of unset) w("mcp-env", "warn", `server "${server}" expects ${name}, not set`, `export ${name}`);
     }
@@ -497,16 +498,14 @@ export function oneLine(e: unknown): string {
 }
 
 /**
- * One finding per (server outName, NAME) across the targets that write MCP (§4.2, spec 27 §4.3). Each
- * target's own surviving server is read (last-wins per target, as its emitter writes it), so two targets
- * writing the same name from different ingredients are both checked. Names are the union of the
- * ingredient's `authEnv` and every `${NAME}` in a string value of its server's `env`.
- *
- * At schema 4, the server is rendered first, so a `${NAME}` a value brings into `env` is checked (spec 34 §4.4).
+ * Every target's written MCP servers, rendered at schema 4 as mcp-env reads them: [outName, server, authEnv, file], in plan order.
+ * A target with no entry in MCP_FILE (agents-md) is skipped.
  */
-function mcpUnset(p: Plan, env: NodeJS.ProcessEnv, schema: 1 | 2 | 3 | 4 | 5): Array<{ server: string; name: string }> {
-  const servers: Array<[string, unknown, string[] | undefined]> = [];
+function writtenServers(p: Plan, schema: 1 | 2 | 3 | 4 | 5): Array<[string, unknown, string[] | undefined, string]> {
+  const servers: Array<[string, unknown, string[] | undefined, string]> = [];
   for (const target of p.resolution.targets) {
+    const file = MCP_FILE[target as keyof typeof MCP_FILE];
+    if (file === undefined) continue;
     // `written()` yields only what the matrix says this target writes; the skip warnings were plan()'s.
     const walk = written(p.resolution, target, () => {});
     const perTarget = new Map<string, { server: unknown; authEnv: string[] | undefined }>();
@@ -518,8 +517,20 @@ function mcpUnset(p: Plan, env: NodeJS.ProcessEnv, schema: 1 | 2 | 3 | 4 | 5): A
         : ing.meta.server;
       perTarget.set(outName(ing.meta), { server: serverDef, authEnv: ing.meta.authEnv });
     }
-    for (const [name, { server, authEnv }] of perTarget) servers.push([name, server, authEnv]);
+    for (const [name, { server, authEnv }] of perTarget) servers.push([name, server, authEnv, file]);
   }
+  return servers;
+}
+
+/**
+ * One finding per (server outName, NAME) across the targets that write MCP (§4.2, spec 27 §4.3). Each
+ * target's own surviving server is read (last-wins per target, as its emitter writes it), so two targets
+ * writing the same name from different ingredients are both checked. Names are the union of the
+ * ingredient's `authEnv` and every `${NAME}` in a string value of its server's `env`.
+ *
+ * At schema 4, the server is rendered first, so a `${NAME}` a value brings into `env` is checked (spec 34 §4.4).
+ */
+function mcpUnset(servers: Array<[string, unknown, string[] | undefined, string]>, env: NodeJS.ProcessEnv): Array<{ server: string; name: string }> {
   const out: Array<{ server: string; name: string }> = [];
   const seen = new Set<string>();
   for (const [server, def, authEnv] of servers) {
