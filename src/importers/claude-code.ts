@@ -6,7 +6,7 @@ import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST } from "../cor
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, hasUtf16Bom } from "../core/secrets.js";
 import { serverSecret } from "../core/mcp-server.js";
-import { schemaFault } from "../core/schema-fault.js";
+import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
 import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
@@ -1642,7 +1642,7 @@ async function primaryFor(
     resolution = resolve(loaded, config);
   } catch (e) {
     if (!setSomewhere) return null;
-    const message = e instanceof Error ? e.message : String(e);
+    const message = errorText(e);
     throw new Error(`import: profile ${profile} does not resolve on its own (${message}) — agents-md.primary needs it to compare the bases; fix the Forge and re-run`);
   }
   if (!resolution.primary) return null;
