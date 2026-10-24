@@ -349,6 +349,7 @@ describe("mcp-launcher (spec 42)", () => {
       profiles: [profile("acme", ["base"], ["claude-code"])],
     });
     const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
+    expect(of(r.checks, "mcp-launcher")).toHaveLength(1);
     const check = of(r.checks, "mcp-launcher")[0];
     expect(check.message).toBe('server "legacy" starts through cmd /k \u2014 Windows only; it does not start on Linux or macOS (.mcp.json)');
     expect(check.fix).toMatch(/\/k" \(spec 42\)$/);
@@ -361,8 +362,7 @@ describe("mcp-launcher (spec 42)", () => {
       profiles: [profile("acme", ["base"], ["claude-code", "kiro"])],
     });
     const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
-    const check = of(r.checks, "mcp-launcher")[0];
-    expect(check.message).toMatch(/\(\.kiro\/settings\/mcp\.json\)$/);
+    expect(of(r.checks, "mcp-launcher").map((c) => [c.level, c.message])).toEqual([["warn", 'server "legacy" starts through cmd /c \u2014 Windows only; it does not start on Linux or macOS (.kiro/settings/mcp.json)']]);
   });
 
   it("4. no MCP server → no mcp-launcher line", async () => {

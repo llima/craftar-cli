@@ -523,6 +523,7 @@ export function oneLine(e: unknown): string {
 /**
  * Every target's written MCP servers, rendered at schema 4 as mcp-env reads them: [outName, server, authEnv, file], in plan order.
  * A target with no entry in MCP_FILE (agents-md) is skipped.
+ * At schema 4, the server is rendered first, so a `${NAME}` a value brings into `env` is checked (spec 34 §4.4).
  */
 function writtenServers(p: Plan, schema: 1 | 2 | 3 | 4 | 5): Array<[string, unknown, string[] | undefined, string]> {
   const servers: Array<[string, unknown, string[] | undefined, string]> = [];
@@ -551,7 +552,7 @@ function writtenServers(p: Plan, schema: 1 | 2 | 3 | 4 | 5): Array<[string, unkn
  * writing the same name from different ingredients are both checked. Names are the union of the
  * ingredient's `authEnv` and every `${NAME}` in a string value of its server's `env`.
  *
- * At schema 4, the server is rendered first, so a `${NAME}` a value brings into `env` is checked (spec 34 §4.4).
+ * Reads the servers `writtenServers` returns.
  */
 function mcpUnset(servers: Array<[string, unknown, string[] | undefined, string]>, env: NodeJS.ProcessEnv): Array<{ server: string; name: string }> {
   const out: Array<{ server: string; name: string }> = [];
