@@ -285,6 +285,7 @@ describe("discard route", () => {
 
 describe("remote Forge", () => {
   it("9. remote Forge → 409 REMOTE_FORGE, tree unchanged", async () => {
+    // Both the configuration and the registry agree on a URL Forge
     const r = kept(await remoteForge(BASE));
     const ws = await tmpDir();
     cleanups.push(() => fs.rm(ws, { recursive: true, force: true }));
@@ -313,6 +314,33 @@ describe("remote Forge", () => {
     const treeAfter = await tree(ws);
     // The keep.md file should still be edited
     expect(await fs.readFile(path.join(ws, `${R}/keep.md`), "utf8")).toBe("# Keep\nedited\n");
+  });
+
+  it("9b. registered with a path Forge, then craftar.yaml edited to a URL → 409 REMOTE_FORGE, tree unchanged", async () => {
+    // Register with a path Forge
+    const s = kept(await scenario(BASE, { config: { profile: "acme" } }));
+    const { id } = await syncRegistered(s.wsRoot);
+
+    // Edit craftar.yaml to point to a URL Forge (no network reached — refuseRemote throws before any fetch)
+    await fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), YAML.stringify({ forge: "https://example.invalid/forge.git", profile: "acme" }));
+
+    // Get digest — the workspace can still be loaded for reading
+    const statusResp = await get(`/api/workspaces/${id}`, { allowWrites: true });
+    const digest = (statusResp.body as any).digest;
+    const treeBefore = await tree(s.wsRoot);
+
+    // Sync should be refused
+    const syncResult = await post(`/api/workspaces/${id}/sync`, { digest });
+    expect(syncResult.status).toBe(409);
+    expect(syncResult.body).toEqual({ error: REMOTE_FORGE, warnings: [] });
+
+    // Discard should also be refused
+    const discardResult = await post(`/api/workspaces/${id}/discard`, { digest, path: `${R}/keep.md` });
+    expect(discardResult.status).toBe(409);
+    expect(discardResult.body).toEqual({ error: REMOTE_FORGE, warnings: [] });
+
+    // Tree unchanged
+    expect(await tree(s.wsRoot)).toEqual(treeBefore);
   });
 });
 

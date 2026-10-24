@@ -2,7 +2,7 @@ import { catalogueContext, listIngredients, listRecipes, withLoadWarnings } from
 import { renderDiff } from "../core/diff.js";
 import { oneLine } from "../core/doctor.js";
 import { isMissing, listWorkspaces, readRegistry, type WorkspaceRow } from "../core/registry.js";
-import { classifyForge, credentialFault, CREDENTIAL_HIDDEN, refHoldsCredentials } from "../core/remote.js";
+import { credentialFault, CREDENTIAL_HIDDEN, refHoldsCredentials } from "../core/remote.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, orphanDriftBody, statusReport } from "../core/report.js";
 import { statusDigest, syncToolResult, syncWorkspace } from "../core/write-actions.js";
 import { EXAMPLE_SETTINGS } from "../emitters/shared.js";
@@ -164,18 +164,18 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
   if (!entry) return { status: 404, body: NOT_FOUND };
   if (await isMissing(entry)) return { status: 409, body: { error: MISSING, warnings: [] } };
 
-  // Refuse remote Forge before any load.
-  if (isWritePattern && classifyForge(entry.forge.source) === "url") {
-    return { status: 409, body: { error: REMOTE_FORGE, warnings: [] } };
-  }
-
   // What cannot be loaded, planned or read is this workspace's state: 409, in one line. A failure past that point is ours: 500.
   let ws: Workspace | undefined;
   let p: Plan;
   let lock: Lock | null;
   let st: FileStatus[];
   try {
-    ws = await loadWorkspace(entry.path, { mode: "no-fetch", home: deps.home });
+    // For write patterns, refuse a remote Forge before anything is fetched (spec 40 §6.4 step 2).
+    ws = await loadWorkspace(entry.path, {
+      mode: "no-fetch",
+      home: deps.home,
+      ...(isWritePattern ? { refuseRemote: () => REMOTE_FORGE } : {}),
+    });
     if (what === "recipes" || what === "ingredients") {
       // The catalogue resolves and never plans; it does not read the lock either.
       const context = catalogueContext(ws.forge, { kind: "workspace", config: ws.config });
@@ -186,6 +186,10 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
     lock = await readLock(ws.root);
     st = await status(ws, p, lock);
   } catch (e) {
+    // A refuseRemote throw returns the exact REMOTE_FORGE message (spec 40 §6.4 step 2).
+    if (e instanceof Error && e.message === REMOTE_FORGE) {
+      return { status: 409, body: { error: REMOTE_FORGE, warnings: [] } };
+    }
     return { status: 409, body: { error: routeReason(e), warnings: ws?.warnings ?? [] } };
   }
 
