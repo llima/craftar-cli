@@ -389,7 +389,7 @@ workspace `.kiro/settings/mcp.json`):
 | `${VAR}` / `${VAR:-default}` in `args` | expanded | **not expanded** — the text reaches the program as written |
 
 Measured on Linux on 2026-10-23 (Claude Code 2.1.309, Kiro CLI 2.29.1) and on native Windows on 2026-10-24 (Claude Code
-2.1.310, Kiro CLI 2.33.1, Node 22); the `${…}` rows agree on both. The Kiro IDE and macOS were not measured. Later
+2.1.310, Kiro CLI 2.33.1, Node 22); the `${VAR:-default}` cases agree on both, and plain `${VAR}` was run on Linux only. The Kiro IDE and macOS were not measured. Later
 versions may differ. So a `${…}` default in `args` works for Claude Code and not for Kiro: keep variables out of `args`
 of a server Kiro writes.
 
