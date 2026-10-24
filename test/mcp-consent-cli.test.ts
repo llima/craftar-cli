@@ -65,9 +65,9 @@ describe("craftar mcp allow-writes / revoke-writes", () => {
 
     const r = runCli(["mcp", "allow-writes", "--workspace", emptyDir], { env: { CRAFTAR_HOME: home } });
     expect(r.code).toBe(1);
-    const realPath = await fs.realpath(emptyDir);
+    const resolvedPath = path.resolve(emptyDir);
     expect(r.stderr).toBe(
-      `error: no craftar.yaml in ${realPath} — the consent is given for one workspace; type it in one, or pass --workspace\n`,
+      `error: no craftar.yaml in ${resolvedPath} — the consent is given for one workspace; type it in one, or pass --workspace\n`,
     );
     expect(r.stdout).toBe("");
   });
@@ -237,9 +237,9 @@ describe("craftar mcp allow-writes / revoke-writes", () => {
 
     const r = runCli(["mcp", "revoke-writes", "--workspace", emptyDir], { env: { CRAFTAR_HOME: home } });
     expect(r.code).toBe(1);
-    const realPath = await fs.realpath(emptyDir);
+    const resolvedPath = path.resolve(emptyDir);
     expect(r.stderr).toBe(
-      `error: no craftar.yaml in ${realPath} — the consent is given for one workspace; type it in one, or pass --workspace\n`,
+      `error: no craftar.yaml in ${resolvedPath} — the consent is given for one workspace; type it in one, or pass --workspace\n`,
     );
     expect(r.stdout).toBe("");
   });
