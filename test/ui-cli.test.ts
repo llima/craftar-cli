@@ -139,7 +139,7 @@ describe("craftar ui — started (spec 36 §4.3, §4.6)", () => {
     const [, port, token] = OPEN.exec(lines[1])!;
     const data = await request(Number(port), "/api/workspaces", { token });
     expect(data.status).toBe(200);
-    expect(JSON.parse(data.body)).toEqual({ version: VERSION, registry: registryFile(HOME()), fetch: false, workspaces: [], warnings: [] });
+    expect(JSON.parse(data.body)).toEqual({ version: VERSION, registry: registryFile(HOME()), fetch: false, writes: false, workspaces: [], warnings: [] });
     expect((await request(Number(port), "/api/workspaces")).status).toBe(403);
     const page = await request(Number(port), "/");
     expect([page.status, page.type]).toEqual([200, "text/html; charset=utf-8"]);

@@ -42,7 +42,8 @@ function norm(body: unknown, roots: { wsRoot: string; real: string; id: string }
   json = json.replace(new RegExp(escape(registryFile(HOME())), "g"), "<REG>");
   json = json.replace(new RegExp(roots.id, "g"), "<ID>");
   json = json.replace(/"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z"/g, '"<T>"');
-  json = json.replace(/"key":"[^"]+\/forge"/g, '"key":"<KEY>"');
+  // Windows-safe: the key is a native path, so in JSON it ends /forge (POSIX) or \\forge (win32)
+  json = json.replace(/"key":"[^"]+(?:\/|\\\\)forge"/g, '"key":"<KEY>"');
   return JSON.parse(json);
 }
 
@@ -94,7 +95,7 @@ describe("reading routes JSON", () => {
     const { s, id, real } = await eight();
     const answer = await get("/api/workspaces");
     expect(answer.status).toBe(200);
-    expect(norm(answer.body, { wsRoot: s.wsRoot, real, id })).toEqual({"version":"0.0.0-test","registry":"<REG>","fetch":false,"workspaces":[{"id":"<ID>","name":"ws","path":"<ROOT>","profile":"acme","recipes":["base"],"stack":{},"targets":["claude-code"],"forge":{"kind":"path","source":"../forge","ref":null,"defaultBranch":null,"commit":null,"lockCommit":null,"fetched":false,"fromLocalFile":false,"key":"<KEY>"},"lastSync":"<T>","forgeMoved":null,"status":"drift","files":{"adopt":1,"collision":1,"drift":1,"new":1,"orphan":1,"orphan-drift":1,"unchanged":1,"update":1}}],"warnings":[]});
+    expect(norm(answer.body, { wsRoot: s.wsRoot, real, id })).toEqual({"version":"0.0.0-test","registry":"<REG>","fetch":false,"writes":false,"workspaces":[{"id":"<ID>","name":"ws","path":"<ROOT>","profile":"acme","recipes":["base"],"stack":{},"targets":["claude-code"],"forge":{"kind":"path","source":"../forge","ref":null,"defaultBranch":null,"commit":null,"lockCommit":null,"fetched":false,"fromLocalFile":false,"key":"<KEY>"},"lastSync":"<T>","forgeMoved":null,"status":"drift","files":{"adopt":1,"collision":1,"drift":1,"new":1,"orphan":1,"orphan-drift":1,"unchanged":1,"update":1}}],"warnings":[]});
   });
 
   it("GET /api/workspaces/<id>", async () => {

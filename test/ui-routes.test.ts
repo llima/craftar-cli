@@ -79,7 +79,7 @@ describe("routeReason", () => {
 
 describe("/api/workspaces", () => {
   it("no registry yet: an empty table", async () => {
-    expect(await get("/api/workspaces")).toEqual({ status: 200, body: { version: "0.0.0-test", registry: registryFile(HOME()), fetch: false, workspaces: [], warnings: [] } });
+    expect(await get("/api/workspaces")).toEqual({ status: 200, body: { version: "0.0.0-test", registry: registryFile(HOME()), fetch: false, writes: false, workspaces: [], warnings: [] } });
   });
 
   it("the document of `craftar workspaces --json`, with version first and an id first in every row", async () => {
@@ -88,7 +88,7 @@ describe("/api/workspaces", () => {
     const bid = await syncRegistered(b.wsRoot);
     const cli = JSON.parse(runCli(["workspaces", "--json"]).stdout);
     const got = (await get("/api/workspaces")).body as any;
-    expect(Object.keys(got)).toEqual(["version", "registry", "fetch", "workspaces", "warnings"]);
+    expect(Object.keys(got)).toEqual(["version", "registry", "fetch", "writes", "workspaces", "warnings"]);
     expect(got.workspaces.map((r: any) => Object.keys(r)[0])).toEqual(["id", "id"]);
     expect(got.workspaces.map(({ id, ...row }: any) => row)).toEqual(cli.workspaces);
     expect([got.registry, got.fetch, got.warnings]).toEqual([cli.registry, false, cli.warnings]);

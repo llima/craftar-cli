@@ -1,6 +1,6 @@
 import { apply, loadWorkspace, plan, readLock, status } from "../../src/core/sync.js";
 import { register } from "../../src/core/registry.js";
-import { route, workspaceId, type RouteAnswer } from "../../src/ui/routes.js";
+import { route, workspaceId, type RouteAnswer, type WriteBody } from "../../src/ui/routes.js";
 
 export const HOME = () => process.env.CRAFTAR_HOME!;
 
@@ -14,7 +14,18 @@ export async function syncRegistered(wsRoot: string): Promise<{ id: string; path
 }
 
 /** `GET <target>` through route(), with no socket: `target` is a path with an optional `?query`. */
-export function get(target: string): Promise<RouteAnswer> {
+export function get(target: string, opts?: { allowWrites?: boolean }): Promise<RouteAnswer> {
   const q = target.indexOf("?");
-  return route({ path: q === -1 ? target : target.slice(0, q), query: q === -1 ? "" : target.slice(q + 1) }, { home: HOME(), version: "0.0.0-test" });
+  return route(
+    { path: q === -1 ? target : target.slice(0, q), query: q === -1 ? "" : target.slice(q + 1), method: "GET" },
+    { home: HOME(), version: "0.0.0-test", allowWrites: opts?.allowWrites },
+  );
+}
+
+/** `POST <target>` through route() with allowWrites=true: `target` is a path, `body` is the parsed WriteBody. */
+export function post(target: string, body: WriteBody): Promise<RouteAnswer> {
+  return route(
+    { path: target, query: "", method: "POST", body },
+    { home: HOME(), version: "0.0.0-test", allowWrites: true },
+  );
 }
