@@ -1275,10 +1275,11 @@ workspaces
 program
   .command("ui")
   .description(
-    "A local dashboard: the table of `craftar workspaces` and, for one workspace, its file states, a file's diff and explanation, and its Forge's recipes and ingredients — in a browser, on 127.0.0.1 only, behind an address that works for this run. Reads only — writes no workspace, lock, registry or Forge — and reaches no network; Ctrl-C stops it",
+    "A local dashboard: the table of `craftar workspaces` and, for one workspace, its file states, a file's diff and explanation, and its Forge's recipes and ingredients — in a browser, on 127.0.0.1 only, behind an address that works for this run. Reads only unless --allow-writes — then a sync or the discard of one hand-edited file, confirmed in the page, never --overwrite-drift — and reaches no network; Ctrl-C stops it",
   )
   .option("--port <n>", "the port to listen on, 0 to 65535; 0 takes a free one", "4747")
-  .action(async (o: { port: string }) => {
+  .option("--allow-writes", "serve Sync and Discard edit on the page — a sync of one workspace, or the discard of one hand-edited file, each confirmed in the page; workspaces with a path Forge only")
+  .action(async (o: { port: string; allowWrites?: boolean }) => {
     // Every refusal comes before the bind (spec 36 §4.2).
     const port = parsePort(o.port);
     if (port === null) fail("--port takes a whole number from 0 to 65535");
@@ -1290,17 +1291,23 @@ program
       fail(errorText(e));
     }
     const version = program.version() ?? "unknown";
+    const allowWrites = o.allowWrites === true;
     let ui: UiServer;
     try {
       // The one line a failing request leaves in the terminal; nothing is printed per request otherwise.
-      ui = await startUi({ home: craftarHome(), version, port, onError: (line) => console.error(line) });
+      ui = await startUi({ home: craftarHome(), version, port, allowWrites, onError: (line) => console.error(line) });
     } catch (e) {
       // The code only, never the message.
       const code = (e as NodeJS.ErrnoException).code;
       if (code === "EADDRINUSE") fail(`port ${port} is in use on 127.0.0.1 — pass --port <other>, or --port 0 for a free one`);
       fail(`cannot listen on 127.0.0.1:${port}: ${code ?? "unknown"}`);
     }
-    console.log(pc.bold(`craftar ui — craftar ${version} · read-only · ${reg.workspaces.length} registered`));
+    if (allowWrites) {
+      console.log(pc.bold(`craftar ui — craftar ${version} · writes allowed · ${reg.workspaces.length} registered`));
+      console.log("  writes allowed: sync, discard one hand-edited file");
+    } else {
+      console.log(pc.bold(`craftar ui — craftar ${version} · read-only · ${reg.workspaces.length} registered`));
+    }
     console.log(`  open  ${ui.url}`);
     console.log("  the address works for this run only, on this machine — Ctrl-C stops it");
     // The first signal closes the listener and lets the process end; a second one, while closing, ends it at once.
