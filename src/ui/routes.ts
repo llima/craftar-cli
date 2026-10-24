@@ -151,6 +151,7 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
 
   const [, , , id, what] = req.path.split("/");
 
+  // Decided from the request alone, before the registry is read.
   let wanted = "";
   if (what === "diff" || what === "explain") {
     const given = onePath(req.query);
