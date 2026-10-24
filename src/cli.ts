@@ -885,7 +885,7 @@ drift
       // Below schema 3, providedRefs returns early (line "if (!eff.selected.length) return new Map()") before resolve(), so it cannot throw.
       providedWarnings.push(`profile ${ws.config.profile} does not resolve on its own (${(e as Error).message}) — what its integrations provide was not computed, and craftar drift promote will refuse`);
     }
-    const rows = driftList(named ? [named] : st, provided);
+    const rows = driftList(named ? [named] : st, provided, new Set(p.reworded));
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
