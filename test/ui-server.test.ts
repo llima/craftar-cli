@@ -557,39 +557,48 @@ describe("--allow-writes (spec 40 §6.3)", () => {
     expect(calls).toHaveLength(1);
   });
 
-  // Case 5c: 64 KiB body with setImmediate delays between writes → 413 with body
-  it("64 KiB body with setImmediate delays between writes → 413 with body", async () => {
+  // Case 5c: The 413 is answered only after the client ends the body (the order, not just the status)
+  it("the 413 is answered after the client ends an oversized body (the order, not just the status)", async () => {
     const u = await startWithWrites();
 
-    const chunk = "x".repeat(4096);
-    const delayedBody = await new Promise<Answer>((resolve) => {
-      const headers: Record<string, string> = {
-        Host: `127.0.0.1:${u.port}`,
-        Authorization: `Bearer ${TOKEN}`,
-        Origin: `http://127.0.0.1:${u.port}`,
-        "Sec-Fetch-Site": "same-origin",
-        "Content-Type": "application/json",
-      };
-      const req = http.request({ host: "127.0.0.1", port: u.port, path: SYNC_PATH, method: "POST", headers, setHost: false, agent: false }, (res) => {
-        let bodyData = "";
-        res.setEncoding("utf8").on("data", (c) => (bodyData += c)).on("end", () => resolve({ status: res.statusCode!, headers: res.headers, body: bodyData }));
-      });
-      req.on("error", (e) => resolve({ status: 0, headers: {}, body: String(e) }));
-      // Send 16 writes of 4 KiB each with setImmediate delays
+    const order: string[] = [];
+    const status = await new Promise<number>((resolve) => {
+      const req = http.request(
+        {
+          host: "127.0.0.1",
+          port: u.port,
+          path: SYNC_PATH,
+          method: "POST",
+          setHost: false,
+          agent: false,
+          headers: {
+            Host: `127.0.0.1:${u.port}`,
+            Authorization: `Bearer ${TOKEN}`,
+            Origin: `http://127.0.0.1:${u.port}`,
+            "Sec-Fetch-Site": "same-origin",
+            "Content-Type": "application/json",
+          },
+        },
+        (res) => {
+          order.push("response");
+          res.resume().on("end", () => resolve(res.statusCode!));
+        }
+      );
+      req.on("error", () => resolve(0));
       let i = 0;
-      const sendNext = (): void => {
-        if (i < 16) {
-          req.write(chunk);
-          i++;
-          setImmediate(sendNext);
+      const next = () => {
+        if (i++ < 16) {
+          req.write("x".repeat(4096));
+          setTimeout(next, 5);
         } else {
+          order.push("end");
           req.end();
         }
       };
-      sendNext();
+      next();
     });
 
-    expect([delayedBody.status, delayedBody.body]).toEqual([413, '{"error":"body too large"}']);
+    expect([status, order]).toEqual([413, ["end", "response"]]);
     expect(calls).toHaveLength(0);
   });
 
