@@ -2,19 +2,22 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { errorText } from "../core/schema-fault.js";
-import { PAGE_CSS, PAGE_HTML, PAGE_JS } from "./page.js";
-import { route as defaultRoute, routePattern, type RouteAnswer, type RouteDeps, type RouteRequest } from "./routes.js";
+import { PAGE_CSS, PAGE_HTML, PAGE_JS, pageCss, pageJs } from "./page.js";
+import { parseWriteBody, route as defaultRoute, routePattern, WRITE_PATTERNS, type RouteAnswer, type RouteDeps, type RouteRequest } from "./routes.js";
 
 /**
- * The loopback server of `craftar ui` (spec 36 §4.5, §7) — the one file under `src/` that imports `node:http`.
+ * The loopback server of `craftar ui` (spec 36 §4.5, §7; spec 40 §6.3) — the one file under `src/` that imports `node:http`.
  * It never prints and never exits: what the terminal must see goes through `opts.onError`.
  *
- * Every request passes the same checks, in this order, and the order is the contract (§7.2):
+ * Every request passes the same checks, in this order, and the order is the contract (spec 36 §7.2, spec 40 §6.3):
  * method → length of the target → `Host` → `Origin` and `Sec-Fetch-Site` → the route (a static one answers
- * here; an unknown path is 404) → the run token → the queue of one → `route()`.
+ * here; an unknown path is 404; without `allowWrites` a write pattern is 404) → the run token → (for POST)
+ * `Content-Type` → the body → the queue of one → `route()`.
  */
 
 export const MAX_TARGET_BYTES = 2048;
+export const MAX_BODY_BYTES = 4096;
+export const MAX_DRAIN_BYTES = 1024 * 1024;
 export const CSP =
   "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
@@ -25,6 +28,8 @@ export interface UiOptions {
   port: number;
   /** One line for the terminal: `ui: <route pattern>: <first line of the message>`. */
   onError: (line: string) => void;
+  /** Whether `--allow-writes` was passed. Absent or false means read-only. */
+  allowWrites?: boolean;
   /** Test seam; absent, 32 random bytes as base64url. */
   token?: string;
   /** Test seam; absent, the data routes. */
@@ -47,11 +52,14 @@ export const originAllowed = (header: string | undefined, port: number): boolean
   header === undefined || names(port).some((n) => header === `http://${n}`);
 export const siteAllowed = (header: string | undefined): boolean => header === undefined || header === "same-origin" || header === "none";
 
-const STATIC: Record<string, readonly [type: string, body: string]> = {
-  "/": ["text/html; charset=utf-8", PAGE_HTML],
-  "/app.js": ["text/javascript; charset=utf-8", PAGE_JS],
-  "/app.css": ["text/css; charset=utf-8", PAGE_CSS],
-};
+/** Builds the static routes: one HTML, one JS, one CSS. */
+function staticRoutes(allowWrites: boolean): Record<string, readonly [type: string, body: string]> {
+  return {
+    "/": ["text/html; charset=utf-8", PAGE_HTML],
+    "/app.js": ["text/javascript; charset=utf-8", allowWrites ? pageJs(true) : PAGE_JS],
+    "/app.css": ["text/css; charset=utf-8", allowWrites ? pageCss(true) : PAGE_CSS],
+  };
+}
 
 /**
  * A header as sent, once — read from `headersDistinct`, because Node keeps only the first `Host` or `Authorization`
@@ -67,6 +75,11 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
   const token = opts.token ?? randomBytes(32).toString("base64url");
   const want = Buffer.from(`Bearer ${token}`, "utf8");
   const run = opts.route ?? defaultRoute;
+  const allowWrites = opts.allowWrites === true;
+  const deps: RouteDeps = { home: opts.home, version: opts.version, allowWrites };
+  // Built once: the script and stylesheet the page needs for this run.
+  const statics = staticRoutes(allowWrites);
+
   // One data request at a time: each loads a Forge and plans a workspace.
   let queue: Promise<void> = Promise.resolve();
   let port = opts.port;
@@ -88,41 +101,124 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
     // Every refusal is the same bytes: which check refused is not said.
     const forbidden = (): void => json(403, { error: "forbidden" });
 
-    if (req.method !== "GET") return json(405, { error: "GET only" }, { Allow: "GET" });
+    const enqueue = (request: RouteRequest, pattern: string): void => {
+      // One request's failure must neither end the process nor stop the queue (see the catch at the end).
+      queue = queue.then(async () => {
+        // Work still queued when the server closed is dropped: its connection is gone, and nothing should keep loading.
+        if (closed) return;
+        try {
+          const answer = await run(request, deps);
+          json(answer.status, answer.body);
+        } catch (e) {
+          // The pattern, never the request's text; the browser learns nothing of the message.
+          opts.onError(`ui: ${pattern}: ${errorText(e).split("\n")[0]}`);
+          json(500, { error: "internal error" });
+        }
+      }).catch(() => {
+        // Only the catch above can throw: a failing `onError`, or an answer that can no longer be written. Nothing
+        // more can be said then; the connection is closed rather than left unanswered, and the queue goes on.
+        res.destroy();
+      });
+    };
+
+    const method = req.method;
+    if (method !== "GET" && method !== "POST") {
+      return json(405, { error: allowWrites ? "GET or POST only" : "GET only" }, { Allow: allowWrites ? "GET, POST" : "GET" });
+    }
+    if (method === "POST" && !allowWrites) {
+      return json(405, { error: "GET only" }, { Allow: "GET" });
+    }
+
     const target = req.url ?? "/";
     if (Buffer.byteLength(target, "utf8") > MAX_TARGET_BYTES) return json(414, { error: "request too long" });
+
     if (!hostAllowed(one(req, "host"), port)) return forbidden();
-    if (!originAllowed(one(req, "origin"), port) || !siteAllowed(one(req, "sec-fetch-site"))) return forbidden();
+
+    // A POST needs Origin present and exact; a GET may omit it (a navigation or a same-origin fetch sends none).
+    const origin = one(req, "origin");
+    const site = one(req, "sec-fetch-site");
+    if (method === "GET") {
+      if (!originAllowed(origin, port) || !siteAllowed(site)) return forbidden();
+    } else {
+      if (origin === undefined || !names(port).some((n) => origin === `http://${n}`)) return forbidden();
+      if (site !== "same-origin") return forbidden();
+    }
 
     // The path is split from the query by hand: no URL is built from the request.
     const q = target.indexOf("?");
     const path = q === -1 ? target : target.slice(0, q);
-    const page = Object.hasOwn(STATIC, path) ? STATIC[path] : undefined;
-    if (page) return send(200, page[0], page[1], path === "/" ? { "Content-Security-Policy": CSP } : {});
+
+    const page = Object.hasOwn(statics, path) ? statics[path] : undefined;
+    if (page) {
+      if (method === "POST") return json(405, { error: "GET only" }, { Allow: "GET" });
+      return send(200, page[0], page[1], path === "/" ? { "Content-Security-Policy": CSP } : {});
+    }
+
     const pattern = routePattern(path);
-    if (pattern === null) return json(404, { error: "not found" });
+    const isWritePattern = pattern !== null && (WRITE_PATTERNS as readonly string[]).includes(pattern);
+    if (pattern === null || (!allowWrites && isWritePattern)) return json(404, { error: "not found" });
+
+    if (method === "POST" && !isWritePattern) return json(405, { error: "GET only" }, { Allow: "GET" });
+    if (method === "GET" && isWritePattern) return json(405, { error: "POST only" }, { Allow: "POST" });
 
     // The token: in the Authorization header and nowhere else, compared in constant time.
     const got = Buffer.from(one(req, "authorization") ?? "", "utf8");
     if (got.length !== want.length || !timingSafeEqual(got, want)) return forbidden();
 
-    // One request's failure must neither end the process nor stop the queue (see the catch at the end).
-    queue = queue.then(async () => {
-      // Work still queued when the server closed is dropped: its connection is gone, and nothing should keep loading.
-      if (closed) return;
-      try {
-        const answer = await run({ path, query: q === -1 ? "" : target.slice(q + 1) }, { home: opts.home, version: opts.version });
-        json(answer.status, answer.body);
-      } catch (e) {
-        // The pattern, never the request's text; the browser learns nothing of the message.
-        opts.onError(`ui: ${pattern}: ${errorText(e).split("\n")[0]}`);
-        json(500, { error: "internal error" });
+    if (method === "POST") {
+      const contentType = (one(req, "content-type") ?? "").split(";")[0].trim().toLowerCase();
+      if (contentType !== "application/json") {
+        return json(415, { error: "Content-Type must be application/json" });
       }
-    }).catch(() => {
-      // Only the catch above can throw: a failing `onError`, or an answer that can no longer be written. Nothing
-      // more can be said then; the connection is closed rather than left unanswered, and the queue goes on.
-      res.destroy();
-    });
+
+      // The body is counted as it arrives; nothing is kept past 4096 bytes. It drains to 'end' (up to 1 MiB) so the 413 reaches the client before the connection closes.
+      const action = pattern === "/api/workspaces/<id>/sync" ? "sync" : "discard";
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      let drainBytes = 0;
+      let bodyRejected = false;
+      let drainCapExceeded = false;
+
+      req.on("data", (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (!bodyRejected && bytes > MAX_BODY_BYTES) {
+          bodyRejected = true;
+          drainBytes = bytes - MAX_BODY_BYTES;
+        } else if (bodyRejected) {
+          drainBytes += chunk.length;
+        }
+        if (bodyRejected) {
+          if (drainBytes > MAX_DRAIN_BYTES && !drainCapExceeded) {
+            drainCapExceeded = true;
+            json(413, { error: "body too large" }, { Connection: "close" });
+            res.once("finish", () => req.destroy());
+          }
+          return;
+        }
+        chunks.push(chunk);
+      });
+
+      req.on("end", () => {
+        if (drainCapExceeded || closed) return;
+        if (bodyRejected) {
+          json(413, { error: "body too large" }, { Connection: "close" });
+          return;
+        }
+        const text = Buffer.concat(chunks).toString("utf8");
+        const body = parseWriteBody(action, text);
+        if (body === null) {
+          json(400, { error: "bad request" });
+          return;
+        }
+        enqueue({ path, query: q === -1 ? "" : target.slice(q + 1), method: "POST", body }, pattern);
+      });
+
+      // A client that goes away mid-body: nothing to answer, and no unhandled error.
+      req.on("error", () => {});
+      return;
+    }
+
+    enqueue({ path, query: q === -1 ? "" : target.slice(q + 1), method: "GET" }, pattern);
   });
   server.headersTimeout = 10_000;
   server.requestTimeout = 30_000;

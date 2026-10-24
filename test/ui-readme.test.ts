@@ -9,7 +9,7 @@ const count = (needle: string): number => README.split(needle).length - 1;
 
 describe("README — craftar ui", () => {
   it("one Commands row; loopback and the run token said once", () => {
-    expect(count("| `craftar ui [--port <n>]` |")).toBe(1);
+    expect(count("| `craftar ui [--port <n>] [--allow-writes]` |")).toBe(1);
     expect(count("it listens on `127.0.0.1`")).toBe(1);
     expect(count("needs a token generated for that run")).toBe(1);
     // Spec 37 moved Phase 1's `Next:` item to its shipped list, so the entry is no longer followed by `. Next:`.
@@ -33,8 +33,17 @@ describe("README — init --clone and craftar repos", () => {
     expect(count("| `craftar repos clone [<name>…] [--workspace .]` |")).toBe(1);
     expect(count("[--clone \\| --no-clone]")).toBe(1);
     expect(count("**Repositories.** A profile's `repos`")).toBe(1);
-    expect(count("; cloning a profile's repositories (`init --clone`, `craftar repos`); a new profile from `craftar init` (`--new-profile`, `--like`); writing tools for `craftar mcp` (`--allow-writes`: `sync`, `add_recipe`, `remove_recipe`, behind a consent typed per workspace).")).toBe(1);
+    expect(count("; cloning a profile's repositories (`init --clone`, `craftar repos`); a new profile from `craftar init` (`--new-profile`, `--like`); writing tools for `craftar mcp` (`--allow-writes`: `sync`, `add_recipe`, `remove_recipe`, behind a consent typed per workspace); writing actions in `craftar ui` (`--allow-writes`: Sync and Discard edit, confirmed in the page).")).toBe(1);
     expect(count("Next: cloning")).toBe(0);
     expect(count("Everything else in the spec (cloning a profile's repositories at init) is not built yet.")).toBe(0);
+  });
+});
+
+// Spec 40 §6: craftar ui --allow-writes
+describe("README — craftar ui --allow-writes", () => {
+  it("the new README text for --allow-writes appears once each", () => {
+    expect(count("**Read-only unless `--allow-writes`**")).toBe(1);
+    expect(count("started with `--allow-writes`, it also syncs a workspace or discards one hand-edited file")).toBe(1);
+    expect(count("### to 0.37.0")).toBe(1);
   });
 });

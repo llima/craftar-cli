@@ -79,7 +79,7 @@ describe("routeReason", () => {
 
 describe("/api/workspaces", () => {
   it("no registry yet: an empty table", async () => {
-    expect(await get("/api/workspaces")).toEqual({ status: 200, body: { version: "0.0.0-test", registry: registryFile(HOME()), fetch: false, workspaces: [], warnings: [] } });
+    expect(await get("/api/workspaces")).toEqual({ status: 200, body: { version: "0.0.0-test", registry: registryFile(HOME()), fetch: false, writes: false, workspaces: [], warnings: [] } });
   });
 
   it("the document of `craftar workspaces --json`, with version first and an id first in every row", async () => {
@@ -88,7 +88,7 @@ describe("/api/workspaces", () => {
     const bid = await syncRegistered(b.wsRoot);
     const cli = JSON.parse(runCli(["workspaces", "--json"]).stdout);
     const got = (await get("/api/workspaces")).body as any;
-    expect(Object.keys(got)).toEqual(["version", "registry", "fetch", "workspaces", "warnings"]);
+    expect(Object.keys(got)).toEqual(["version", "registry", "fetch", "writes", "workspaces", "warnings"]);
     expect(got.workspaces.map((r: any) => Object.keys(r)[0])).toEqual(["id", "id"]);
     expect(got.workspaces.map(({ id, ...row }: any) => row)).toEqual(cli.workspaces);
     expect([got.registry, got.fetch, got.warnings]).toEqual([cli.registry, false, cli.warnings]);
@@ -265,6 +265,54 @@ describe("diff", () => {
         expect(((await D(id, ".mcp.json")).body as any).diff).toContain("- MARKER-SHOWN");
       }
     }
+  });
+
+  it("agents-md.primary orphan: the page's diff route keeps its words", async () => {
+    // Spec 41 §4.8: the page's diff route keeps its words.
+    const { acmePrimary } = await import("./helpers/agents-md-primary.js");
+    const s = kept(await acmePrimary({ schema: 5 }));
+    const { apply, status, readLock } = await import("../src/core/sync.js");
+
+    // Sync once to create all the generated files (including .claude/rules/style.md)
+    const ws1 = await loadWorkspace(s.wsRoot, { home: HOME() });
+    const p1 = await plan(ws1);
+    const lock1 = await readLock(ws1.root);
+    const st1 = await status(ws1, p1, lock1);
+    await apply(ws1, p1, st1);
+
+    // Enable agents-md.primary in the workspace's overrides
+    await fs.writeFile(
+      path.join(s.wsRoot, "craftar.yaml"),
+      "forge: ../forge\nprofile: acme\noverrides:\n  params:\n    agents-md.primary: true\n",
+    );
+
+    // The rule/style files become orphans under agents-md.primary
+    const ws2 = await loadWorkspace(s.wsRoot, { home: HOME() });
+    const p2 = await plan(ws2);
+    const id = workspaceId((await register(HOME(), ws2, p2)).path);
+    const lock2 = await readLock(ws2.root);
+    const st2 = await status(ws2, p2, lock2);
+
+    const cRule = ".claude/rules/style.md";
+    const cRuleSt = st2.find((r) => r.path === cRule);
+    expect(cRuleSt, "expected .claude/rules/style.md to be orphan").not.toBeUndefined();
+    expect(cRuleSt!.state).toBe("orphan");
+
+    const kRule = ".kiro/steering/style.md";
+    const kRuleSt = st2.find((r) => r.path === kRule);
+    expect(kRuleSt, "expected .kiro/steering/style.md to be orphan").not.toBeUndefined();
+    expect(kRuleSt!.state).toBe("orphan");
+
+    // The diff route keeps its words (not "written to AGENTS.md only")
+    const answerC = await D(id, cRule);
+    expect(answerC.status).toBe(200);
+    expect((answerC.body as any).state).toBe("orphan");
+    expect((answerC.body as any).to).toBe(`${cRule} (forge: no longer produced — sync removes it)`);
+
+    const answerK = await D(id, kRule);
+    expect(answerK.status).toBe(200);
+    expect((answerK.body as any).state).toBe("orphan");
+    expect((answerK.body as any).to).toBe(`${kRule} (forge: no longer produced — sync removes it)`);
   });
 });
 

@@ -4,7 +4,7 @@ import path from "node:path";
 import { MCP_FILES, eightStates, explained, mcpWorkspace, moveTracker, syncOnce, type Scenario } from "./helpers/states.js";
 import { withLoadWarnings } from "../src/core/catalogue.js";
 import { readWorkspaceConfig, loadWorkspace, plan, readLock, status, type FileStatus } from "../src/core/sync.js";
-import { EXAMPLE_CONTENT_HIDDEN, MCP_CONTENT_HIDDEN, cachedCopyLine, diffReport, explainFile, explainSkip, notProduced, statusPath, statusReport, targetsReport } from "../src/core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, MCP_CONTENT_HIDDEN, cachedCopyLine, diffReport, explainFile, explainSkip, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport } from "../src/core/report.js";
 
 // Spec 35 §5.1 (and spec 36 §17): the builders the commands, the MCP server and the dashboard share — tested directly.
 
@@ -179,5 +179,36 @@ describe("cachedCopyLine", () => {
     expect(cachedCopyLine(ws({ fetchedAt: "T" }), true)).toBeNull();
     expect(cachedCopyLine(ws({ kind: "path", source: "../forge" }), false)).toBeNull();
     expect(cachedCopyLine(ws({ ref: "0123456789abcdef0123456789abcdef01234567" }), false)).toBeNull();
+  });
+});
+
+describe("orphanDriftBody", () => {
+  it("returns the body text for a plain orphan-drift file", async () => {
+    const s = kept(await eightStates());
+    const { st } = await loaded(s);
+    const orphanDrift = st.find((x) => x.state === "orphan-drift")!;
+    const result = await orphanDriftBody(s.wsRoot, orphanDrift);
+    expect(result).toEqual({ body: "# Gone edited\nby hand\n", note: null });
+  });
+
+  it("returns note for .claude/settings.craftar.example.json", async () => {
+    const s = kept(await mcpWorkspace());
+    await syncOnce(s.wsRoot);
+    // Remove the mcp ingredient from the recipe so example file becomes orphan
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), "name: base\ningredients: [rule/keep]\n");
+    // Mark the example file as hand-edited
+    const ex = ".claude/settings.craftar.example.json";
+    await fs.writeFile(path.join(s.wsRoot, ex), '{\n  "env": {\n    "ACME_TRACKER_TOKEN": "secret"\n  }\n}\n');
+    const { st } = await loaded(s);
+    const row = st.find((x) => x.path === ex && x.state === "orphan-drift")!;
+    const result = await orphanDriftBody(s.wsRoot, row);
+    expect(result).toEqual({ body: null, note: EXAMPLE_CONTENT_HIDDEN });
+  });
+
+  it("throws when state is not orphan-drift", async () => {
+    const s = kept(await eightStates());
+    const { st } = await loaded(s);
+    const drift = st.find((x) => x.state === "drift")!;
+    await expect(orphanDriftBody(s.wsRoot, drift)).rejects.toThrow("state must be orphan-drift");
   });
 });

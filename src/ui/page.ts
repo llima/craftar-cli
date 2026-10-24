@@ -8,6 +8,7 @@
 
 import type { FileState } from "../core/sync.js";
 import { diffShows } from "../core/report.js";
+import { EXAMPLE_SETTINGS } from "../emitters/shared.js";
 
 export const PAGE_HTML = `<!doctype html>
 <html lang="en">
@@ -63,6 +64,19 @@ ul { margin: 4px 0; padding-left: 18px; }
 code.cmd { background: var(--soft); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; user-select: all; }
 `;
 
+/** CSS rules for the confirmation overlay, added only when writes is true. */
+const CONFIRM_CSS = `
+.confirm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.confirm-box { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 16px 20px; max-width: 500px; }
+.confirm-box p { margin: 0 0 12px; }
+.confirm-box button { margin-right: 8px; }
+`;
+
+/** Builds the page's stylesheet. When `writes` is false, the result is the read-only page; when true, it adds confirmation box styles. */
+export function pageCss(writes: boolean): string {
+  return writes ? PAGE_CSS + CONFIRM_CSS : PAGE_CSS;
+}
+
 /**
  * How the page lists each file state — a `Record` over every `FileState`, so a new state does not compile until it is placed here,
  * as `FILE_STATE_ORDER_MAP` does for the CLI: `order` on the page, `syncActs` (sync writes or removes it without a flag, so the page
@@ -79,7 +93,99 @@ export const PAGE_STATES: Record<FileState, { order: number; syncActs: boolean; 
   unchanged: { order: 7, syncActs: false, diff: diffShows("unchanged") },
 };
 
-export const PAGE_JS = String.raw`"use strict";
+/** Builds the page's script. When `writes` is false, the result is the read-only page; when true, it adds Sync and Discard edit. */
+export function pageJs(writes: boolean): string {
+  // Writing code interpolated only when `writes` is true; otherwise yields ""
+  const W_WRITES_VAR = writes ? `\n  var writes = false;` : "";
+  const W_POST_FN = writes
+    ? `
+  function post(path, body) {
+    return fetch(path, { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" }).then(function (res) {
+      return res.json().then(
+        function (b) { return { status: res.status, body: b }; },
+        function () { return { status: res.status, body: null }; }
+      );
+    });
+  }`
+    : "";
+  const W_CONFIRM_FN = writes
+    ? `
+  function confirmBox(message, onConfirm) {
+    var overlay = el("div", "confirm-overlay");
+    var box = el("div", "confirm-box");
+    add(box, el("p", "", message));
+    add(box, button("Confirm", function () { overlay.parentNode.removeChild(overlay); onConfirm(); }));
+    add(box, button("Cancel", function () { overlay.parentNode.removeChild(overlay); }));
+    add(overlay, box);
+    add(document.body, overlay);
+  }`
+    : "";
+  const W_RESULT_FN = writes
+    ? `
+  function showWriteResult(into, w, answer) {
+    clear(into);
+    if (answer.status !== 200 || answer.body === null) return problem(into, answer);
+    var b = answer.body;
+    var wrote = (b.written || []).length;
+    var removed = (b.removed || []).length;
+    var skipped = (b.skipped || []).length;
+    var said = ["wrote " + wrote + ", removed " + removed + ", skipped " + skipped];
+    if (b.registry === "not updated") said.push("the registry was not updated");
+    showWorkspace(w, "files", said);
+  }`
+    : "";
+  const W_STORE_WRITES = writes ? `\n      writes = doc.writes;` : "";
+  const W_SYNC_BTN = writes
+    ? `
+      /* Sync button: shown only when the workspace can be synced from the page. */
+      if (writes && doc.digest && !doc.unsetParams.length && doc.forge.kind !== "remote" && doc.statuses.some(function (s) { return SYNC_ACTS[s.state]; })) {
+        var countA = doc.statuses.filter(function (s) { return s.state === "new" || s.state === "update" || s.state === "adopt"; }).length;
+        var countR = doc.statuses.filter(function (s) { return s.state === "orphan"; }).length;
+        var countK = doc.statuses.filter(function (s) { return s.state === "drift" || s.state === "orphan-drift" || s.state === "collision"; }).length;
+        var syncMsg = "Sync writes " + countA + " and removes " + countR + "; " + countK + " hand-edited or colliding file(s) are kept.";
+        add(body, button("Sync", function () {
+          confirmBox(syncMsg, function () {
+            var result = el("div");
+            add(body, result);
+            add(clear(result), el("p", "dim", "syncing…"));
+            post("/api/workspaces/" + w.id + "/sync", { digest: doc.digest }).then(
+              function (answer) { showWriteResult(result, w, answer); },
+              function () { unreachable(result); }
+            );
+          });
+        }));
+      }`
+    : "";
+  // showDiff needs w, doc and f for the Discard edit button.
+  const W_SHOWDIFF_EXTRA_ARGS = writes ? ", w, doc, f" : "";
+  // showWorkspace takes an optional said array (lines to show after facts) only in writes mode.
+  const W_SHOWWORKSPACE_SAID_PARAM = writes ? ", said" : "";
+  const W_SHOWWORKSPACE_DRAW_SAID = writes
+    ? `
+      if (said && said.length) said.forEach(function (line) { add(body, note(line)); });`
+    : "";
+  const W_DISCARD_IN_DIFF = writes
+    ? `
+        /* Discard edit button: only for drift or orphan-drift, not the example file, and the same gates as Sync. */
+        if (writes && doc.digest && !doc.unsetParams.length && doc.forge.kind !== "remote" && (f.state === "drift" || f.state === "orphan-drift") && f.path !== ${JSON.stringify(EXAMPLE_SETTINGS)} && !d.hidden) {
+          var discardMsg = f.state === "drift"
+            ? "The hand edit of " + f.path + " is lost; the Forge's version is written."
+            : "The hand edit of " + f.path + " is lost; the file is removed.";
+          add(into, button("Discard edit", function () {
+            confirmBox(discardMsg, function () {
+              var result = el("div");
+              add(into, result);
+              add(clear(result), el("p", "dim", "discarding…"));
+              post("/api/workspaces/" + w.id + "/discard", { digest: doc.digest, path: f.path }).then(
+                function (answer) { showWriteResult(result, w, answer); },
+                function () { unreachable(result); }
+              );
+            });
+          }));
+        }`
+    : "";
+
+  return String.raw`"use strict";
 (function () {
   var NO_TOKEN = "open the address printed by craftar ui — this tab has no token";
   var KEY = "craftar-ui-token";
@@ -90,7 +196,7 @@ export const PAGE_JS = String.raw`"use strict";
   var SYNC_ACTS = ${JSON.stringify(Object.fromEntries(Object.entries(PAGE_STATES).filter(([, v]) => v.syncActs).map(([k]) => [k, true])))};
   var HAS_DIFF = ${JSON.stringify(Object.fromEntries(Object.entries(PAGE_STATES).map(([k, v]) => [k, v.diff])))};
   var app = document.getElementById("app");
-  var table = null;
+  var table = null;${W_WRITES_VAR}
 
   var fromHash = location.hash.slice(1);
   var token = fromHash;
@@ -168,7 +274,7 @@ export const PAGE_JS = String.raw`"use strict";
         function () { return { status: res.status, body: null }; }
       );
     });
-  }
+  }${W_POST_FN}${W_CONFIRM_FN}${W_RESULT_FN}
 
   /* What the page says for an answer that is not 200. asked: the file's path when the request named one. */
   function problem(into, answer, asked) {
@@ -211,7 +317,7 @@ export const PAGE_JS = String.raw`"use strict";
     add(app, head, add(el("div", "bar"), button("Refresh", showWorkspaces)), body);
     if (!token) return add(clear(body), note(NO_TOKEN, "bad"));
     load("/api/workspaces", body, undefined, function (doc) {
-      table = doc;
+      table = doc;${W_STORE_WRITES}
       add(head, el("p", "dim", "craftar " + doc.version + " · registry " + doc.registry));
       if (!doc.workspaces.length) {
         add(body, note("no workspace is registered on this machine yet — run craftar sync in one"));
@@ -261,7 +367,7 @@ export const PAGE_JS = String.raw`"use strict";
     if (kind === "remote") add(into, el("p", "dim", "read from the cached copy of the Forge — not fetched"));
   }
 
-  function showWorkspace(w, tab) {
+  function showWorkspace(w, tab${W_SHOWWORKSPACE_SAID_PARAM}) {
     var body = frame(w, tab);
     if (!token) return add(body, note(NO_TOKEN, "bad"));
     if (tab === "forge") return showForge(w, body);
@@ -275,7 +381,7 @@ export const PAGE_JS = String.raw`"use strict";
         ["forge", forgeLine(doc.forge)],
         ["lock", doc.forge.lockCommit ? "generated from " + short(doc.forge.lockCommit) : "records no commit"]
       ].forEach(function (pair) { add(facts, el("dt", "", pair[0]), el("dd", "", pair[1])); });
-      add(body, facts);
+      add(body, facts);${W_SHOWWORKSPACE_DRAW_SAID}
       if (doc.unsetParams.length) {
         add(body, note(doc.refused, "bad"));
         add(body, list(doc.unsetParams.map(function (u) {
@@ -283,7 +389,7 @@ export const PAGE_JS = String.raw`"use strict";
         })));
       }
       if (doc.warnings.length) add(body, el("h3", "", "warnings"), list(doc.warnings));
-      if (!doc.statuses.length) add(body, note("the Forge produces no file for this workspace"));
+      if (!doc.statuses.length) add(body, note("the Forge produces no file for this workspace"));${W_SYNC_BTN}
       STATES.concat(doc.statuses.map(function (s) { return s.state; }).filter(function (s, i, all) { return STATES.indexOf(s) === -1 && all.indexOf(s) === i; })).forEach(function (state) {
         var files = doc.statuses.filter(function (s) { return s.state === state; });
         if (!files.length) return;
@@ -307,7 +413,7 @@ export const PAGE_JS = String.raw`"use strict";
     if (HAS_DIFF[f.state] !== false) {
       add(bar, button("diff", function () {
         detail.hidden = false;
-        load("/api/workspaces/" + w.id + "/diff" + query, detail, f.path, function (d) { showDiff(detail, d); });
+        load("/api/workspaces/" + w.id + "/diff" + query, detail, f.path, function (d) { showDiff(detail${W_SHOWDIFF_EXTRA_ARGS}, d); });
       }));
     }
     if (f.state !== "orphan" && f.state !== "orphan-drift") {
@@ -320,7 +426,7 @@ export const PAGE_JS = String.raw`"use strict";
     return add(box, bar, detail);
   }
 
-  function showDiff(into, d) {
+  function showDiff(into${W_SHOWDIFF_EXTRA_ARGS}, d) {
     if (d.from) add(into, el("p", "mono dim", "--- " + d.from));
     if (d.to) add(into, el("p", "mono dim", "+++ " + d.to));
     if (d.note) add(into, note(d.note, d.hidden ? "warn" : ""));
@@ -336,7 +442,7 @@ export const PAGE_JS = String.raw`"use strict";
       add(pre, el("span", kind, line), document.createTextNode("\n"));
     });
     add(into, pre);
-    if (lines.length > MAX_DIFF_LINES) add(into, el("p", "dim", "… " + (lines.length - MAX_DIFF_LINES) + " more lines"));
+    if (lines.length > MAX_DIFF_LINES) add(into, el("p", "dim", "… " + (lines.length - MAX_DIFF_LINES) + " more lines"));${W_DISCARD_IN_DIFF}
   }
 
   function showExplain(into, x) {
@@ -396,3 +502,6 @@ export const PAGE_JS = String.raw`"use strict";
   showWorkspaces();
 })();
 `;
+}
+
+export const PAGE_JS = pageJs(false);

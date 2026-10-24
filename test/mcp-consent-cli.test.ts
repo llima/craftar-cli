@@ -289,4 +289,56 @@ describe("craftar mcp allow-writes / revoke-writes", () => {
     const reg = await readRegistry(home);
     expect(reg.writeConsent).toBeUndefined();
   });
+
+  // Case: allow-writes with registry that is not valid JSON: code 1, stderr names the file, nothing quoted, registry unchanged
+  it("allow-writes --workspace <ws> with registry not valid JSON: code 1, file named, registry unchanged", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(
+      await scenario(
+        { ingredients: [rule("keep", "# Keep\n")], recipes: [recipe("base", ["rule/keep"])], profiles: [profile("acme", ["base"])] },
+        { config: { profile: "acme" } },
+      ),
+    );
+
+    // Write a malformed registry
+    const regPath = path.join(home, "registry.json");
+    const badContent = "{";
+    await fs.writeFile(regPath, badContent);
+
+    const r = runCli(["mcp", "allow-writes", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(`error: cannot read the registry: cannot read ${regPath}: not valid JSON\n`);
+    // stderr does not mention "terminal"
+    expect(r.stderr).not.toContain("terminal");
+
+    // Registry file unchanged
+    expect(await fs.readFile(regPath, "utf8")).toBe(badContent);
+  });
+
+  // Case: revoke-writes with registry that is not valid JSON: code 1, stderr names the file, nothing quoted, registry unchanged
+  it("revoke-writes --workspace <ws> with registry not valid JSON: code 1, file named, registry unchanged", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(
+      await scenario(
+        { ingredients: [rule("keep", "# Keep\n")], recipes: [recipe("base", ["rule/keep"])], profiles: [profile("acme", ["base"])] },
+        { config: { profile: "acme" } },
+      ),
+    );
+
+    // Write a malformed registry
+    const regPath = path.join(home, "registry.json");
+    const badContent = "{";
+    await fs.writeFile(regPath, badContent);
+
+    const r = runCli(["mcp", "revoke-writes", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(`error: consent not removed: cannot read ${regPath}: not valid JSON\n`);
+
+    // Registry file unchanged
+    expect(await fs.readFile(regPath, "utf8")).toBe(badContent);
+  });
 });

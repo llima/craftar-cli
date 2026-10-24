@@ -38,6 +38,9 @@ import { localKeys } from "./workspace-yaml.js";
 import type { Lock } from "../schema/index.js";
 import type { Pin } from "./mcp-protocol.js";
 
+/** The words for the orphan-drift a discard removes (`drift discard` and the page's). */
+export const DISCARDED_ORPHAN = "hand-edited orphan: discarded";
+
 /* ------------------------------------------------------------------ */
 /* syncWorkspace                                                       */
 /* ------------------------------------------------------------------ */
@@ -206,6 +209,31 @@ export interface SyncToolResult {
   registry: "updated" | "not updated" | "off";
 }
 
+/** The `sync` result (spec 40 §5.6) — one builder, shared by `craftar mcp`'s `sync` tool and `craftar ui`'s write routes. */
+export function syncToolResult(
+  ws: Workspace,
+  p: Plan,
+  statuses: readonly FileStatus[],
+  outcome: SyncOutcome,
+  registryOff: boolean,
+  discarded?: string,
+): SyncToolResult {
+  return {
+    profile: ws.config.profile,
+    recipes: [...p.resolution.recipes],
+    targets: [...p.resolution.targets],
+    forge: outcome.forgeLine,
+    written: outcome.result.written,
+    removed: outcome.result.removed.map((path) => ({
+      path,
+      reason: path === discarded ? DISCARDED_ORPHAN : orphanReason(p, statuses, path),
+    })),
+    skipped: outcome.result.skipped.map((s) => ({ path: s.path, state: s.state, reason: explainSkip(s) })),
+    warnings: p.warnings,
+    registry: registryOff ? "off" : outcome.registry ? "not updated" : "updated",
+  };
+}
+
 /**
  * The `add_recipe` / `remove_recipe` tool result (spec 40 §5.6).
  */
@@ -296,17 +324,7 @@ export function mcpWriters(home: string, registryOff: boolean): McpWriters {
 
       const outcome = await syncWorkspace(ws, p, statuses, lock, { home, registryOff });
 
-      return {
-        profile: ws.config.profile,
-        recipes: [...p.resolution.recipes],
-        targets: [...p.resolution.targets],
-        forge: outcome.forgeLine,
-        written: outcome.result.written,
-        removed: outcome.result.removed.map((path) => ({ path, reason: orphanReason(p, statuses, path) })),
-        skipped: outcome.result.skipped.map((s) => ({ path: s.path, state: s.state, reason: explainSkip(s) })),
-        warnings: p.warnings,
-        registry: registryOff ? "off" : outcome.registry ? "not updated" : "updated",
-      };
+      return syncToolResult(ws, p, statuses, outcome, registryOff);
     },
 
     async editRecipes(

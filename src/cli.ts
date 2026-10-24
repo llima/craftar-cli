@@ -25,7 +25,7 @@ import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
-import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, readText, statusPath, statusReport, targetsReport } from "./core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
@@ -55,7 +55,7 @@ import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type Desti
 import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
 import { readlineIo } from "./prompt.js";
 import { recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
-import { syncWorkspace, editRecipes, confirmWrites } from "./core/write-actions.js";
+import { syncWorkspace, editRecipes, confirmWrites, DISCARDED_ORPHAN } from "./core/write-actions.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type UnifyPlan } from "./schema/index.js";
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
@@ -76,7 +76,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.36.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.37.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -232,7 +232,7 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
   if (o.forgeLine) console.log(o.forgeLine);
   console.log(`  ${verb} ${pc.green(String(o.result.written.length))}, removed ${pc.magenta(String(o.result.removed.length))} orphan(s), skipped ${pc.yellow(String(o.result.skipped.length))}`);
   for (const f of o.result.written) console.log(`  ${pc.green("+")} ${f}`);
-  for (const f of o.result.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : orphanReason(p, st, f)})`);
+  for (const f of o.result.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? DISCARDED_ORPHAN : orphanReason(p, st, f)})`);
   for (const s of o.result.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
   for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   if (o.registry) console.log(`  ${pc.yellow("warn")} registry not updated (${o.registry.file}): ${o.registry.message}`);
@@ -913,11 +913,11 @@ drift
       // The whole file as a removal: what `drift discard` would do to it.
       console.log(pc.bold(`--- ${named.path} (disk, orphan-drift)`));
       console.log(pc.bold(`+++ ${named.path} (forge: no longer produced — \`craftar drift discard\` removes it)`));
-      // Spec 27 Ruling 4: the on-disk content of the example file is never printed.
-      if (named.path === EXAMPLE_SETTINGS) {
-        console.log(`  ${EXAMPLE_CONTENT_HIDDEN}`);
+      const { body, note } = await orphanDriftBody(ws.root, named);
+      if (note) {
+        console.log(`  ${note}`);
       } else {
-        console.log(renderDiff((await readText(path.join(ws.root, named.path))) ?? "", "", DIFF_PAINT));
+        console.log(renderDiff(body ?? "", "", DIFF_PAINT));
       }
     } else await printFileDiff(ws.root, named);
     if (refusalBlock(unset)) process.exitCode = 1;
@@ -1275,10 +1275,11 @@ workspaces
 program
   .command("ui")
   .description(
-    "A local dashboard: the table of `craftar workspaces` and, for one workspace, its file states, a file's diff and explanation, and its Forge's recipes and ingredients — in a browser, on 127.0.0.1 only, behind an address that works for this run. Reads only — writes no workspace, lock, registry or Forge — and reaches no network; Ctrl-C stops it",
+    "A local dashboard: the table of `craftar workspaces` and, for one workspace, its file states, a file's diff and explanation, and its Forge's recipes and ingredients — in a browser, on 127.0.0.1 only, behind an address that works for this run. Reads only unless --allow-writes — then a sync or the discard of one hand-edited file, confirmed in the page, never --overwrite-drift — and reaches no network; Ctrl-C stops it",
   )
   .option("--port <n>", "the port to listen on, 0 to 65535; 0 takes a free one", "4747")
-  .action(async (o: { port: string }) => {
+  .option("--allow-writes", "serve Sync and Discard edit on the page — a sync of one workspace, or the discard of one hand-edited file, each confirmed in the page; workspaces with a path Forge only")
+  .action(async (o: { port: string; allowWrites?: boolean }) => {
     // Every refusal comes before the bind (spec 36 §4.2).
     const port = parsePort(o.port);
     if (port === null) fail("--port takes a whole number from 0 to 65535");
@@ -1290,17 +1291,23 @@ program
       fail(errorText(e));
     }
     const version = program.version() ?? "unknown";
+    const allowWrites = o.allowWrites === true;
     let ui: UiServer;
     try {
       // The one line a failing request leaves in the terminal; nothing is printed per request otherwise.
-      ui = await startUi({ home: craftarHome(), version, port, onError: (line) => console.error(line) });
+      ui = await startUi({ home: craftarHome(), version, port, allowWrites, onError: (line) => console.error(line) });
     } catch (e) {
       // The code only, never the message.
       const code = (e as NodeJS.ErrnoException).code;
       if (code === "EADDRINUSE") fail(`port ${port} is in use on 127.0.0.1 — pass --port <other>, or --port 0 for a free one`);
       fail(`cannot listen on 127.0.0.1:${port}: ${code ?? "unknown"}`);
     }
-    console.log(pc.bold(`craftar ui — craftar ${version} · read-only · ${reg.workspaces.length} registered`));
+    if (allowWrites) {
+      console.log(pc.bold(`craftar ui — craftar ${version} · writes allowed · ${reg.workspaces.length} registered`));
+      console.log("  writes allowed: sync, discard one hand-edited file");
+    } else {
+      console.log(pc.bold(`craftar ui — craftar ${version} · read-only · ${reg.workspaces.length} registered`));
+    }
     console.log(`  open  ${ui.url}`);
     console.log("  the address works for this run only, on this machine — Ctrl-C stops it");
     // The first signal closes the listener and lets the process end; a second one, while closing, ends it at once.

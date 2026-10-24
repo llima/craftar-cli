@@ -139,7 +139,7 @@ describe("craftar ui — started (spec 36 §4.3, §4.6)", () => {
     const [, port, token] = OPEN.exec(lines[1])!;
     const data = await request(Number(port), "/api/workspaces", { token });
     expect(data.status).toBe(200);
-    expect(JSON.parse(data.body)).toEqual({ version: VERSION, registry: registryFile(HOME()), fetch: false, workspaces: [], warnings: [] });
+    expect(JSON.parse(data.body)).toEqual({ version: VERSION, registry: registryFile(HOME()), fetch: false, writes: false, workspaces: [], warnings: [] });
     expect((await request(Number(port), "/api/workspaces")).status).toBe(403);
     const page = await request(Number(port), "/");
     expect([page.status, page.type]).toEqual([200, "text/html; charset=utf-8"]);
@@ -185,12 +185,26 @@ describe("craftar ui — started (spec 36 §4.3, §4.6)", () => {
     expect(ui.stderr()).toBe("");
   });
 
-  it("10. --help: the port, the description, and none of the options the spec refuses", () => {
+  it("10. --help: the port, the description, --allow-writes, and none of the options the spec refuses", () => {
     const help = runCli(["ui", "--help"]).stdout;
     expect(help).toContain("--port <n>");
+    expect(help).toContain("--allow-writes");
     expect(help.replace(/\s+/g, " ")).toContain(
-      "A local dashboard: the table of `craftar workspaces` and, for one workspace, its file states, a file's diff and explanation, and its Forge's recipes and ingredients — in a browser, on 127.0.0.1 only, behind an address that works for this run. Reads only — writes no workspace, lock, registry or Forge — and reaches no network; Ctrl-C stops it",
+      "Reads only unless --allow-writes — then a sync or the discard of one hand-edited file, confirmed in the page, never --overwrite-drift — and reaches no network",
     );
     for (const refused of ["--host", "--fetch", "--open", "--json", "--workspace"]) expect(help, refused).not.toContain(refused);
+  });
+
+  it("11. --allow-writes: four lines, writes: true in /api/workspaces", async () => {
+    const ui = startUiCli(["--port", "0", "--allow-writes"]);
+    const lines = await ui.firstLines(4);
+    expect(lines[0]).toBe(`craftar ui — craftar ${VERSION} · writes allowed · 0 registered`);
+    expect(lines[1]).toBe("  writes allowed: sync, discard one hand-edited file");
+    expect(lines[2]).toMatch(OPEN);
+    expect(lines[3]).toBe(HINT);
+    const [, port, token] = OPEN.exec(lines[2])!;
+    const data = await request(Number(port), "/api/workspaces", { token });
+    expect(data.status).toBe(200);
+    expect(JSON.parse(data.body).writes).toBe(true);
   });
 });

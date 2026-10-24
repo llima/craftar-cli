@@ -707,4 +707,30 @@ describe("craftar mcp --allow-writes — the writing tools", () => {
     const after = await tree(s.wsRoot);
     expect(after).toEqual(before);
   });
+
+  // Test 18: openWorldHint on writing tools: false without --fetch, true with --fetch
+  it("18. openWorldHint on writing tools: false without --fetch, true with --fetch", async () => {
+    const home = await freshHome();
+    const s = kept(
+      await scenario(
+        { ingredients: [rule("keep", "# Keep\n")], recipes: [recipe("base", ["rule/keep"])], profiles: [profile("acme", ["base"])] },
+        { config: { profile: "acme" } },
+      ),
+    );
+    const writers = mcpWriters(home, false);
+
+    // Without --fetch: openWorldHint = false
+    const { request: reqNoFetch } = await fresh(s.wsRoot, { home, writers, fetch: false });
+    const listNoFetch = await reqNoFetch("tools/list");
+    for (const t of listNoFetch.result.tools.filter((t: any) => WRITE_TOOL_NAMES.includes(t.name))) {
+      expect(t.annotations.openWorldHint).toBe(false);
+    }
+
+    // With --fetch: openWorldHint = true
+    const { request: reqFetch } = await fresh(s.wsRoot, { home, writers, fetch: true });
+    const listFetch = await reqFetch("tools/list");
+    for (const t of listFetch.result.tools.filter((t: any) => WRITE_TOOL_NAMES.includes(t.name))) {
+      expect(t.annotations.openWorldHint).toBe(true);
+    }
+  });
 });
