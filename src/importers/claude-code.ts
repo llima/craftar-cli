@@ -1276,16 +1276,24 @@ const recipeText = (name: string, description: string, ingredients: string[]) =>
  */
 async function placeRecipe(o: RecipeOptions, name: string, list: string[], description: string, holdsVariant: boolean): Promise<string> {
   const owned = `${name}--${o.profile}`;
+  const read = async (file: string) => parseYaml(file, stripBom(await o.stage.readText(file)), RecipeSchema).ingredients;
+  if (holdsVariant) {
+    // Under agents-md.primary the shared recipe's rules held in AGENTS.md alone join the owned list (spec 41 §4.10); with the
+    // mode off the shared file is not read here, as before.
+    if (o.agentsMdOnly.size) {
+      const file = await recipeFile(o, name);
+      if (await o.stage.exists(file)) list = keepAgentsMdOnly(await read(file), list, o.agentsMdOnly);
+    }
+    return writeOwnedRecipe(o, owned, list, description);
+  }
   const file = await recipeFile(o, name);
-  const shared = (await o.stage.exists(file)) ? parseYaml(file, stripBom(await o.stage.readText(file)), RecipeSchema).ingredients : null;
-  if (shared) list = keepAgentsMdOnly(shared, list, o.agentsMdOnly);
-  if (holdsVariant) return writeOwnedRecipe(o, owned, list, description);
-  if (!shared) {
+  if (!(await o.stage.exists(file))) {
     o.stage.write(file, recipeText(name, description, list));
     o.report.recipes.push(name);
     return name;
   }
-  const existing = shared;
+  const existing = await read(file);
+  list = keepAgentsMdOnly(existing, list, o.agentsMdOnly);
   const rules = (xs: string[]) => xs.filter((x) => x.startsWith("rule/"));
   const lacks = existing.find((x) => !list.includes(x));
   const extra = list.find((x) => !existing.includes(x));

@@ -113,3 +113,21 @@ describe("import of a workspace agents-md.primary laid out (spec 41 §4.10)", ()
     sameTree(before, await snapshot(s.forgeRoot));
   });
 });
+
+describe("import with agents-md.primary unset keeps its behaviour (spec 41 §1)", () => {
+  it("a variant in the base recipe never reads the shared recipes/base.yaml: a file there that declares another name is no refusal", async () => {
+    const { scenario, rule, profile } = await import("./helpers/forge.js");
+    const s = kept(
+      await scenario(
+        { ingredients: [rule("style", "# Style\nForge text.\n")], recipes: [], profiles: [profile("acme", ["core"])] },
+        { config: { profile: "acme" }, files: { ".claude/rules/style.md": "# Style\nWorkspace text.\n" } },
+      ),
+    );
+    // recipes/base.yaml holds recipe `core`: the file name and the name differ (what I10 refuses when import writes `base`).
+    await fs.mkdir(path.join(s.forgeRoot, "recipes"), { recursive: true });
+    await fs.writeFile(path.join(s.forgeRoot, "recipes/base.yaml"), YAML.stringify({ name: "core", ingredients: ["rule/style"] }));
+    const r = runCli(["import", "--from", "claude-code", "--forge", s.forgeRoot, "--profile", "acme", "--workspace", s.wsRoot]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(await fs.readFile(path.join(s.forgeRoot, "recipes/base--acme.yaml"), "utf8")).toContain("rule/style--acme");
+  });
+});
