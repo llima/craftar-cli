@@ -537,6 +537,13 @@ describe("claudeMdBlocks unit (spec 41 §4.7)", () => {
     expect(result.blocking).toEqual([]);
   });
 
+  it("CLAUDE.md with '@AGENTS.md \\r\\n' (space before CRLF) → imports", async () => {
+    const { claudeMdBlocks } = await import("../src/core/sync.js");
+    const result = await claudeMdBlocks(makeReadExisting({ "CLAUDE.md": "@AGENTS.md \r\n" }));
+    expect(result.imports).toBe(true);
+    expect(result.blocking).toEqual([]);
+  });
+
   it(".claude/CLAUDE.md with '@./AGENTS.md\\r\\n' → imports", async () => {
     const { claudeMdBlocks } = await import("../src/core/sync.js");
     const result = await claudeMdBlocks(makeReadExisting({ ".claude/CLAUDE.md": "@./AGENTS.md\r\n" }));

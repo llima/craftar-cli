@@ -865,8 +865,8 @@ export async function claudeMdBlocks(
     if (content !== null) {
       const text = content.toString("utf8");
       for (const line of text.split("\n")) {
-        // Strip trailing spaces/tabs and trailing CR
-        const trimmed = line.replace(/[ \t]+$/, "").replace(/\r$/, "");
+        // Strip trailing CR first, then trailing spaces/tabs
+        const trimmed = line.replace(/\r$/, "").replace(/[ \t]+$/, "");
         if (IMPORT_LINES.includes(trimmed)) {
           return { imports: true, blocking: [] };
         }
