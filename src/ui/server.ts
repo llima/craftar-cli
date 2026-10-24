@@ -181,18 +181,18 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
 
       req.on("data", (chunk: Buffer) => {
         bytes += chunk.length;
-        if (bodyRejected) {
+        if (!bodyRejected && bytes > MAX_BODY_BYTES) {
+          bodyRejected = true;
+          drainBytes = bytes - MAX_BODY_BYTES;
+        } else if (bodyRejected) {
           drainBytes += chunk.length;
+        }
+        if (bodyRejected) {
           if (drainBytes > MAX_DRAIN_BYTES && !drainCapExceeded) {
             drainCapExceeded = true;
             json(413, { error: "body too large" }, { Connection: "close" });
             res.once("finish", () => req.destroy());
           }
-          return;
-        }
-        if (bytes > MAX_BODY_BYTES) {
-          bodyRejected = true;
-          drainBytes = bytes - MAX_BODY_BYTES;
           return;
         }
         chunks.push(chunk);
