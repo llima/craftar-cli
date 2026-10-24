@@ -55,7 +55,7 @@ import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type Desti
 import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
 import { readlineIo } from "./prompt.js";
 import { recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
-import { syncWorkspace, editRecipes, confirmWrites } from "./core/write-actions.js";
+import { syncWorkspace, editRecipes, confirmWrites, DISCARDED_ORPHAN } from "./core/write-actions.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type UnifyPlan } from "./schema/index.js";
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
@@ -232,7 +232,7 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
   if (o.forgeLine) console.log(o.forgeLine);
   console.log(`  ${verb} ${pc.green(String(o.result.written.length))}, removed ${pc.magenta(String(o.result.removed.length))} orphan(s), skipped ${pc.yellow(String(o.result.skipped.length))}`);
   for (const f of o.result.written) console.log(`  ${pc.green("+")} ${f}`);
-  for (const f of o.result.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : orphanReason(p, st, f)})`);
+  for (const f of o.result.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? DISCARDED_ORPHAN : orphanReason(p, st, f)})`);
   for (const s of o.result.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
   for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   if (o.registry) console.log(`  ${pc.yellow("warn")} registry not updated (${o.registry.file}): ${o.registry.message}`);

@@ -38,6 +38,9 @@ import { localKeys } from "./workspace-yaml.js";
 import type { Lock } from "../schema/index.js";
 import type { Pin } from "./mcp-protocol.js";
 
+/** The words for the orphan-drift a discard removes (`drift discard` and the page's). */
+export const DISCARDED_ORPHAN = "hand-edited orphan: discarded";
+
 /* ------------------------------------------------------------------ */
 /* syncWorkspace                                                       */
 /* ------------------------------------------------------------------ */
@@ -223,7 +226,7 @@ export function syncToolResult(
     written: outcome.result.written,
     removed: outcome.result.removed.map((path) => ({
       path,
-      reason: path === discarded ? "hand-edited orphan: discarded" : orphanReason(p, statuses, path),
+      reason: path === discarded ? DISCARDED_ORPHAN : orphanReason(p, statuses, path),
     })),
     skipped: outcome.result.skipped.map((s) => ({ path: s.path, state: s.state, reason: explainSkip(s) })),
     warnings: p.warnings,
