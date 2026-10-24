@@ -1,0 +1,12 @@
+{
+  "name": "planner",
+  "description": "",
+  "prompt": "Plan the work.",
+  "tools": [],
+  "allowedTools": [],
+  "resources": [
+    "file://.kiro/steering/style.md",
+    "file://.kiro/steering/**/*.md",
+    "file://docs/plan.md"
+  ]
+}
