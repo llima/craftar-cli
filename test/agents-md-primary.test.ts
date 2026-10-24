@@ -219,3 +219,275 @@ describe("plan() under the mode (spec 41)", () => {
     expect(parsed.prompt).toContain(".kiro/steering/style.md");
   });
 });
+
+
+describe("claude-code emitter under agents-md.primary (spec 41 §4.4)", () => {
+  it("test 1: agent body resolves references — style→AGENTS.md, release→AGENTS.md, kiro-notes→.kiro/steering", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const agentMd = p.files.find((f) => f.path === ".claude/agents/api-reviewer.md");
+    expect(agentMd).toBeDefined();
+    const body = agentMd!.content.toString("utf8");
+
+    // style and release → AGENTS.md
+    expect(body).toContain("Follow AGENTS.md (rule: style) and AGENTS.md (rule: release).");
+    // Link with fragment → fragment dropped
+    expect(body).toContain("See [the style](AGENTS.md).");
+    // kiro-notes (state B: kiro writes it) → .kiro/steering/
+    expect(body).toContain("Notes: .kiro/steering/kiro-notes.md");
+    // No .claude/rules/style.md remains
+    expect(body).not.toContain(".claude/rules/style.md");
+  });
+
+  it("test 1b: agent frontmatter description is resolved", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const agentMd = p.files.find((f) => f.path === ".claude/agents/api-reviewer.md");
+    expect(agentMd).toBeDefined();
+    const body = agentMd!.content.toString("utf8");
+    // Check the frontmatter description contains the resolved reference
+    expect(body).toMatch(/description: Reviews API changes against AGENTS\.md \(rule: style\)/);
+  });
+
+  it("test 2: command and skill resolved", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const commandMd = p.files.find((f) => f.path === ".claude/commands/review.md");
+    expect(commandMd).toBeDefined();
+    expect(commandMd!.content.toString("utf8")).toContain("AGENTS.md (rule: style)");
+
+    const skillMd = p.files.find((f) => f.path === ".claude/skills/checks/SKILL.md");
+    expect(skillMd).toBeDefined();
+    expect(skillMd!.content.toString("utf8")).toContain("Use AGENTS.md (rule: style).");
+  });
+
+  it("test 3: copied files unchanged and warned", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const pModeOn = await plan(ws);
+
+    // Mode off for comparison
+    const sOff = kept(await acmePrimary({ schema: 5 }));
+    const wsOff = await loadWorkspace(sOff.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const pModeOff = await plan(wsOff);
+
+    // run.sh and lint.sh should be byte-identical to mode-off
+    const runShOn = pModeOn.files.find((f) => f.path === ".claude/skills/checks/run.sh");
+    const runShOff = pModeOff.files.find((f) => f.path === ".claude/skills/checks/run.sh");
+    expect(runShOn).toBeDefined();
+    expect(runShOff).toBeDefined();
+    expect(runShOn!.content).toEqual(runShOff!.content);
+
+    const lintShOn = pModeOn.files.find((f) => f.path === ".claude/scripts/lint.sh");
+    const lintShOff = pModeOff.files.find((f) => f.path === ".claude/scripts/lint.sh");
+    expect(lintShOn).toBeDefined();
+    expect(lintShOff).toBeDefined();
+    expect(lintShOn!.content).toEqual(lintShOff!.content);
+
+    // Check warnings: exactly one claude-code: warning
+    const ccWarnings = pModeOn.warnings.filter((w) => w.startsWith("claude-code: "));
+    expect(ccWarnings).toHaveLength(1);
+    const ccWarning = ccWarnings[0];
+
+    // Contains file:line for style reference in scripts
+    expect(ccWarning).toContain(".claude/scripts/lint.sh:2 (style)");
+    expect(ccWarning).toContain(".claude/skills/checks/run.sh:2 (style)");
+
+    // Does NOT contain #!/bin/sh or echo ok (body lines)
+    expect(ccWarning).not.toContain("#!/bin/sh");
+    expect(ccWarning).not.toContain("echo ok");
+  });
+
+  it("test 4: scoped rule body resolved", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const apiMd = p.files.find((f) => f.path === ".claude/rules/api.md");
+    expect(apiMd).toBeDefined();
+    expect(apiMd!.content.toString("utf8")).toContain("Every endpoint follows AGENTS.md (rule: style).");
+  });
+
+  it("test 5: frontmatterRaw vs description — only one is resolved", async () => {
+    // Add fm-agent (with frontmatterRaw) and plain-agent (without), both citing a ghost rule
+    const extraIngredients = [
+      {
+        meta: { type: "rule", name: "ghost", targets: [] },
+        files: { "rule.md": "# Ghost\nNever written.\n" },
+      },
+      {
+        meta: {
+          type: "agent",
+          name: "fm-agent",
+          frontmatterRaw: "name: fm-agent\ndescription: x\n",
+          description: "see .claude/rules/ghost.md",
+        },
+        files: { "agent.md": "Plain.\n" },
+      },
+      {
+        meta: {
+          type: "agent",
+          name: "plain-agent",
+          description: "see .claude/rules/ghost.md",
+        },
+        files: { "agent.md": "Body text.\n" },
+      },
+    ];
+    const s = kept(
+      await acmePrimary({ schema: 5, params: { "agents-md.primary": true }, extraIngredients }),
+    );
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    // Find the claude-code: warning
+    const ccWarnings = p.warnings.filter((w) => w.startsWith("claude-code: "));
+    expect(ccWarnings.length).toBeGreaterThan(0);
+    const ccWarning = ccWarnings.join("; ");
+
+    // fm-agent uses frontmatterRaw, so its description is NOT resolved → not in warning
+    expect(ccWarning).not.toContain("fm-agent");
+    // plain-agent uses description, so it IS resolved → in warning
+    expect(ccWarning).toContain(".claude/rules/ghost.md (in agent/plain-agent; rule/ghost reaches no target here)");
+  });
+});
+
+describe("kiro emitter under agents-md.primary (spec 41 §4.4–§4.5)", () => {
+  it("test 6: copied skill files unchanged and warned", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const pModeOn = await plan(ws);
+
+    const sOff = kept(await acmePrimary({ schema: 5 }));
+    const wsOff = await loadWorkspace(sOff.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const pModeOff = await plan(wsOff);
+
+    // .kiro/skills/checks/run.sh unchanged bytes
+    const runShOn = pModeOn.files.find((f) => f.path === ".kiro/skills/checks/run.sh");
+    const runShOff = pModeOff.files.find((f) => f.path === ".kiro/skills/checks/run.sh");
+    expect(runShOn).toBeDefined();
+    expect(runShOff).toBeDefined();
+    expect(runShOn!.content).toEqual(runShOff!.content);
+
+    // kiro: warning contains the scan hit
+    const kiroWarnings = pModeOn.warnings.filter((w) => w.startsWith("kiro: "));
+    expect(kiroWarnings.length).toBeGreaterThan(0);
+    const kiroWarning = kiroWarnings.join("; ");
+    expect(kiroWarning).toContain(".kiro/skills/checks/run.sh:2 (style)");
+  });
+
+  it("test 7a: generated resources name only planned paths, no file://AGENTS.md", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const plannedPaths = new Set(p.files.map((f) => f.path));
+
+    // Find which agents have explicit resources in the Forge (should be skipped)
+    // In our test setup, only 'planner' has explicit resources
+    const agentsWithExplicitResources = new Set(["planner"]);
+
+    // Check every agent's generated resources (skip agents with explicit m.resources)
+    for (const f of p.files) {
+      if (!f.path.startsWith(".kiro/agents/") || !f.path.endsWith(".json")) continue;
+      const json = JSON.parse(f.content.toString("utf8"));
+      const agentName = json.name as string;
+
+      // Skip agents with hand-written resources; §4.6 handles them (not this task)
+      if (agentsWithExplicitResources.has(agentName)) continue;
+
+      const resources: string[] = json.resources ?? [];
+      for (const r of resources) {
+        // Skip non-file:// and globs
+        if (!r.startsWith("file://")) continue;
+        if (r.includes("*")) continue;
+        const resPath = r.slice("file://".length);
+        expect(plannedPaths).toContain(resPath);
+        expect(r).not.toBe("file://AGENTS.md");
+      }
+    }
+  });
+
+  it("test 7b: api-reviewer resources with repo-discovery — mode on vs off", async () => {
+    const extraIngredients = [
+      {
+        meta: { type: "rule", name: "repo-discovery" },
+        files: { "rule.md": "# Repo Discovery\nFind the repo.\n" },
+      },
+    ];
+    const sOn = kept(
+      await acmePrimary({ schema: 5, params: { "agents-md.primary": true }, extraIngredients }),
+    );
+    const wsOn = await loadWorkspace(sOn.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const pOn = await plan(wsOn);
+
+    const sOff = kept(await acmePrimary({ schema: 5, extraIngredients }));
+    const wsOff = await loadWorkspace(sOff.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const pOff = await plan(wsOff);
+
+    const agentJsonOn = pOn.files.find((f) => f.path === ".kiro/agents/api-reviewer.json");
+    const agentJsonOff = pOff.files.find((f) => f.path === ".kiro/agents/api-reviewer.json");
+
+    expect(agentJsonOn).toBeDefined();
+    expect(agentJsonOff).toBeDefined();
+
+    const resourcesOn: string[] = JSON.parse(agentJsonOn!.content.toString("utf8")).resources;
+    const resourcesOff: string[] = JSON.parse(agentJsonOff!.content.toString("utf8")).resources;
+
+    // Mode on: repo-discovery is AGENTS.md-only now, so not in resources
+    expect(resourcesOn).toEqual(["file://.kiro/steering/api.md"]);
+    // Mode off: both api and repo-discovery
+    expect(resourcesOff).toEqual(["file://.kiro/steering/api.md", "file://.kiro/steering/repo-discovery.md"]);
+  });
+});
+
+describe("plan().reworded (spec 41 §4.4)", () => {
+  it("test 8: reworded paths", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    // Should contain reworded .claude/ and .kiro/ text files
+    expect(p.reworded).toContain(".claude/agents/api-reviewer.md");
+    expect(p.reworded).toContain(".claude/commands/review.md");
+    expect(p.reworded).toContain(".claude/skills/checks/SKILL.md");
+    expect(p.reworded).toContain(".claude/rules/api.md");
+    expect(p.reworded).toContain(".kiro/agents/api-reviewer.json");
+
+    // Should NOT contain copied files
+    expect(p.reworded).not.toContain(".claude/scripts/lint.sh");
+  });
+
+  it("test 8b: mode off → reworded is empty", async () => {
+    const s = kept(await acmePrimary({ schema: 5 }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    expect(p.reworded).toEqual([]);
+  });
+});
+
+describe("unresolvedRuleRefs unit (spec 41 §4.4)", () => {
+  it("test 10: agents-md mode with left boundary check", async () => {
+    // Build a minimal lookup where style is AGENTS.md-only and api is written by claude-code
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const { unresolvedRuleRefs, buildRuleLookup } = await import("../src/emitters/shared.js");
+    const lookup = buildRuleLookup(p.resolution.ingredients, p.resolution);
+
+    const text = "a\n.claude/rules/style.md and .claude/rules/api.md\nx.claude/rules/style.md\n";
+    const refs = unresolvedRuleRefs(text, lookup, p.resolution.targets, "agents-md");
+
+    // style is AGENTS.md-only (state C) → listed
+    // api is written by claude-code (state A) → NOT listed
+    // third line: x.claude/... has no left boundary → NOT listed
+    expect(refs).toEqual([{ line: 2, name: "style" }]);
+  });
+});

@@ -10,7 +10,14 @@ import { profile, recipe, scenario, writeFiles, type IngredientSpec, type Scenar
  * Spec 41 §11.1: pins what a workspace that does not set agents-md.primary gets today.
  */
 export async function acmePrimary(
-  opts: { schema?: 1 | 2 | 3 | 4 | 5 | 6; params?: Record<string, unknown>; wsFiles?: Record<string, string>; wsConfig?: Record<string, unknown> } = {},
+  opts: {
+    schema?: 1 | 2 | 3 | 4 | 5 | 6;
+    params?: Record<string, unknown>;
+    wsFiles?: Record<string, string>;
+    wsConfig?: Record<string, unknown>;
+    /** Extra ingredients appended to the Forge and to recipe `base`. */
+    extraIngredients?: IngredientSpec[];
+  } = {},
 ): Promise<Scenario> {
   const ingredients: IngredientSpec[] = [
     // rule/style — always on (default inclusion), targets default
@@ -70,25 +77,32 @@ export async function acmePrimary(
     },
   ];
 
+  // Append extra ingredients (spec 41 §11.2 tests)
+  const allIngredients = [...ingredients, ...(opts.extraIngredients ?? [])];
+
+  // Build recipe ingredient list
+  const baseIngredients = [
+    "rule/style",
+    "rule/api",
+    "rule/release",
+    "rule/kiro-notes",
+    "agent/api-reviewer",
+    "agent/planner",
+    "command/review",
+    "skill/checks",
+    "script/lint",
+    ...(opts.extraIngredients ?? []).map((i) => `${i.meta.type}/${i.meta.name}`),
+  ];
+
   const recipes = [
-    recipe("base", [
-      "rule/style",
-      "rule/api",
-      "rule/release",
-      "rule/kiro-notes",
-      "agent/api-reviewer",
-      "agent/planner",
-      "command/review",
-      "skill/checks",
-      "script/lint",
-    ]),
+    recipe("base", baseIngredients),
   ];
 
   const profiles = [
     profile("acme", ["base"], ["claude-code", "kiro", "agents-md"], opts.params ? { params: opts.params } : {}),
   ];
 
-  const s = await scenario({ ingredients, recipes, profiles }, { config: { profile: "acme", ...opts.wsConfig }, files: opts.wsFiles });
+  const s = await scenario({ ingredients: allIngredients, recipes, profiles }, { config: { profile: "acme", ...opts.wsConfig }, files: opts.wsFiles });
 
   // Overwrite craftar.forge.yaml with the requested schema
   await fs.writeFile(
