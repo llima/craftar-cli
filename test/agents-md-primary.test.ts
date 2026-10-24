@@ -633,21 +633,26 @@ describe("Budget clause under the mode (spec 41 §4.9)", () => {
 });
 
 
-describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.10)", () => {
-  it("agents-md-primary: mode on with claude-code — warn with expected message", async () => {
-    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.6–§4.7)", () => {
+  // Helper to run doctor
+  async function runDoc(wsRoot: string, wsFiles: Record<string, string> = {}) {
     const { runDoctor } = await import("../src/core/doctor.js");
     const { tmpDir } = await import("./helpers/forge.js");
     const { promises: fs } = await import("node:fs");
     const path = await import("node:path");
 
+    // Write wsFiles to workspace
+    for (const [rel, content] of Object.entries(wsFiles)) {
+      await fs.writeFile(path.join(wsRoot, rel), content);
+    }
+
     const home = await tmpDir("craftar-doctor-home-");
     cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
 
-    const report = await runDoctor({
+    return runDoctor({
       version: "0.0.0",
       home,
-      workspace: s.wsRoot,
+      workspace: wsRoot,
       fetch: false,
       strict: false,
       registryOff: false,
@@ -655,91 +660,96 @@ describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.10)", 
       nodeVersion: "22.11.0",
       gitVersion: async () => "2.53.0",
     });
+  }
 
-    const check = report.checks.find((c) => c.id === "agents-md-primary");
-    expect(check).toBeDefined();
-    expect(check!.scope).toBe("workspace");
-    expect(check!.level).toBe("warn");
-    expect(check!.message).toContain("agents-md.primary is on");
-    expect(check!.fix).toContain("Project instructions");
-  });
-
-  it("agents-md-primary: mode off — no check", async () => {
+  it("1. mode off (schema 5, no key) → no check with id agents-md-primary or kiro-resources", async () => {
     const s = kept(await acmePrimary({ schema: 5 })); // mode off
-    const { runDoctor } = await import("../src/core/doctor.js");
-    const { tmpDir } = await import("./helpers/forge.js");
-    const { promises: fs } = await import("node:fs");
+    const report = await runDoc(s.wsRoot);
 
-    const home = await tmpDir("craftar-doctor-home-");
-    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
-
-    const report = await runDoctor({
-      version: "0.0.0",
-      home,
-      workspace: s.wsRoot,
-      fetch: false,
-      strict: false,
-      registryOff: false,
-      env: {},
-      nodeVersion: "22.11.0",
-      gitVersion: async () => "2.53.0",
-    });
-
-    const check = report.checks.find((c) => c.id === "agents-md-primary");
-    expect(check).toBeUndefined();
+    const primaryCheck = report.checks.find((c) => c.id === "agents-md-primary");
+    const kiroCheck = report.checks.find((c) => c.id === "kiro-resources");
+    expect(primaryCheck).toBeUndefined();
+    expect(kiroCheck).toBeUndefined();
   });
 
-  it("kiro-resources: unplanned resources — warn", async () => {
+  it("2. mode on, fresh workspace → kiro-resources has exactly one error naming planner and .kiro/steering/style.md", async () => {
     const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
-    const { runDoctor } = await import("../src/core/doctor.js");
-    const { tmpDir } = await import("./helpers/forge.js");
-    const { promises: fs } = await import("node:fs");
+    const report = await runDoc(s.wsRoot);
 
-    const home = await tmpDir("craftar-doctor-home-");
-    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const kiroChecks = report.checks.filter((c) => c.id === "kiro-resources");
+    expect(kiroChecks).toHaveLength(1);
+    expect(kiroChecks[0].level).toBe("error");
+    expect(kiroChecks[0].message).toContain("planner");
+    expect(kiroChecks[0].message).toContain(".kiro/steering/style.md");
 
-    const report = await runDoctor({
-      version: "0.0.0",
-      home,
-      workspace: s.wsRoot,
-      fetch: false,
-      strict: false,
-      registryOff: false,
-      env: {},
-      nodeVersion: "22.11.0",
-      gitVersion: async () => "2.53.0",
-    });
-
-    const check = report.checks.find((c) => c.id === "kiro-resources");
-    expect(check).toBeDefined();
-    expect(check!.scope).toBe("workspace");
-    expect(check!.level).toBe("warn");
-    expect(check!.message).toContain("Kiro agent resource");
-    expect(check!.fix).toContain("edit the agent's resources");
+    // No plan finding should repeat this
+    const planFindings = report.checks.filter((c) => c.id === "plan" && c.message.includes("agent resources"));
+    expect(planFindings).toHaveLength(0);
   });
 
-  it("kiro-resources: mode off — no check", async () => {
-    const s = kept(await acmePrimary({ schema: 5 })); // mode off
-    const { runDoctor } = await import("../src/core/doctor.js");
-    const { tmpDir } = await import("./helpers/forge.js");
+  it("3. mode on, wsFiles CLAUDE.md with # notes → agents-md-primary warn with claudeMdBlockedMessage(CLAUDE.md)", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const { claudeMdBlockedMessage } = await import("../src/core/sync.js");
+    const report = await runDoc(s.wsRoot, { "CLAUDE.md": "# notes\n" });
+
+    const primaryChecks = report.checks.filter((c) => c.id === "agents-md-primary");
+    const warnChecks = primaryChecks.filter((c) => c.level === "warn");
+    expect(warnChecks.length).toBeGreaterThanOrEqual(1);
+    expect(warnChecks[0].message).toBe(claudeMdBlockedMessage("CLAUDE.md"));
+
+    // No plan finding should repeat this
+    const planFindings = report.checks.filter((c) => c.id === "plan" && c.message.includes("keeps Claude Code"));
+    expect(planFindings).toHaveLength(0);
+  });
+
+  it("4. mode on, CLAUDE.md with @AGENTS.md → exactly one agents-md-primary line, level ok, AGENTS.md is imported by CLAUDE.md", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const report = await runDoc(s.wsRoot, { "CLAUDE.md": "@AGENTS.md\n" });
+
+    const primaryChecks = report.checks.filter((c) => c.id === "agents-md-primary");
+    expect(primaryChecks).toHaveLength(1);
+    expect(primaryChecks[0].level).toBe("ok");
+    expect(primaryChecks[0].message).toBe("AGENTS.md is imported by CLAUDE.md");
+  });
+
+  it("5. ancestor: CLAUDE.md in parent directory → agents-md-primary warn naming the absolute path", async () => {
     const { promises: fs } = await import("node:fs");
+    const path = await import("node:path");
 
-    const home = await tmpDir("craftar-doctor-home-");
-    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
 
-    const report = await runDoctor({
-      version: "0.0.0",
-      home,
-      workspace: s.wsRoot,
-      fetch: false,
-      strict: false,
-      registryOff: false,
-      env: {},
-      nodeVersion: "22.11.0",
-      gitVersion: async () => "2.53.0",
-    });
+    // Write CLAUDE.md to the root (parent of wsRoot) to simulate an ancestor
+    await fs.writeFile(path.join(s.root, "CLAUDE.md"), "# parent\n");
 
-    const check = report.checks.find((c) => c.id === "kiro-resources");
-    expect(check).toBeUndefined();
+    const report = await runDoc(s.wsRoot);
+
+    const primaryChecks = report.checks.filter((c) => c.id === "agents-md-primary" && c.level === "warn");
+    // The ancestor path is s.root/CLAUDE.md — check both raw and realpath
+    const ancestorPath = path.join(s.root, "CLAUDE.md");
+    const ancestorRealpath = await fs.realpath(ancestorPath);
+    const ancestorCheck = primaryChecks.find((c) => c.message.includes(ancestorPath) || c.message.includes(ancestorRealpath));
+    expect(ancestorCheck).toBeDefined();
+  });
+
+  it("6. mode on, nothing at root and no ancestor CLAUDE.md → one ok: nothing keeps Claude Code from reading AGENTS.md", async () => {
+    const { promises: fs } = await import("node:fs");
+    const path = await import("node:path");
+
+    // Check if real ancestor CLAUDE.md files exist — skip the assertion if they do
+    const tmpClaudeExists = await fs.access("/tmp/CLAUDE.md").then(() => true, () => false);
+    const rootClaudeExists = await fs.access("/CLAUDE.md").then(() => true, () => false);
+
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const report = await runDoc(s.wsRoot);
+
+    const primaryChecks = report.checks.filter((c) => c.id === "agents-md-primary");
+    
+    if (tmpClaudeExists || rootClaudeExists) {
+      // Skip this assertion — real ancestors of the temp dir hold a CLAUDE.md
+      return;
+    }
+
+    const okChecks = primaryChecks.filter((c) => c.level === "ok" && c.message === "nothing keeps Claude Code from reading AGENTS.md");
+    expect(okChecks).toHaveLength(1);
   });
 });
