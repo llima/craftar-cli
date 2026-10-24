@@ -449,14 +449,36 @@ describe("--allow-writes (spec 40 §6.3)", () => {
   });
 
   // Case 5: Body of 4097 bytes → 413; exactly 4096 bytes → reaches parsing (400 or route); Content-Length lies
-  it("body over 4096 bytes → 413, route never called; exactly 4096 → parsing; Content-Length lie → never accepted", async () => {
+  it("body over 4096 bytes → 413 with body received by client; exactly 4096 → parsing; Content-Length lie → never accepted", async () => {
     const u = await startWithWrites();
 
-    // 4097 bytes → 413
-    const bigBody = JSON.stringify({ digest: VALID_DIGEST }) + " ".repeat(4097 - JSON.stringify({ digest: VALID_DIGEST }).length);
-    expect(Buffer.byteLength(bigBody)).toBe(4097);
-    const big = await postAsk(u, SYNC_PATH, bigBody);
-    expect([big.status, big.body]).toEqual([413, '{"error":"body too large"}']);
+    // 4097 bytes in one write → client receives 413 and body
+    const big1 = JSON.stringify({ digest: VALID_DIGEST }) + " ".repeat(4097 - JSON.stringify({ digest: VALID_DIGEST }).length);
+    expect(Buffer.byteLength(big1)).toBe(4097);
+    const big1Ans = await postAsk(u, SYNC_PATH, big1);
+    expect([big1Ans.status, big1Ans.body]).toEqual([413, '{"error":"body too large"}']);
+    expect(calls).toHaveLength(0);
+
+    // 64 KiB in 16 writes of 4 KiB each → client receives 413 and body
+    const chunk = "x".repeat(4096);
+    const big64K = await new Promise<Answer>((resolve, reject) => {
+      const headers: Record<string, string> = {
+        Host: `127.0.0.1:${u.port}`,
+        Authorization: `Bearer ${TOKEN}`,
+        Origin: `http://127.0.0.1:${u.port}`,
+        "Sec-Fetch-Site": "same-origin",
+        "Content-Type": "application/json",
+      };
+      const req = http.request({ host: "127.0.0.1", port: u.port, path: SYNC_PATH, method: "POST", headers, setHost: false, agent: false }, (res) => {
+        let bodyData = "";
+        res.setEncoding("utf8").on("data", (c) => (bodyData += c)).on("end", () => resolve({ status: res.statusCode!, headers: res.headers, body: bodyData }));
+      });
+      req.on("error", (e) => resolve({ status: 0, headers: {}, body: String(e) }));
+      // Send 16 writes of 4 KiB each
+      for (let i = 0; i < 16; i++) req.write(chunk);
+      req.end();
+    });
+    expect([big64K.status, big64K.body]).toEqual([413, '{"error":"body too large"}']);
     expect(calls).toHaveLength(0);
 
     // Exactly 4096 bytes of valid JSON (pad the digest object with spaces) → reaches parsing
