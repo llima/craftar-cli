@@ -266,6 +266,53 @@ describe("diff", () => {
       }
     }
   });
+
+  it("agents-md.primary orphan: the `to` header uses the same wording as craftar diff", async () => {
+    // Create a schema 5 Forge WITHOUT agents-md.primary initially
+    const { acmePrimary } = await import("./helpers/agents-md-primary.js");
+    const s = kept(await acmePrimary({ schema: 5 })); // No agents-md.primary yet
+    const { apply, status, readLock } = await import("../src/core/sync.js");
+
+    // Sync once to create all the generated files (including .claude/rules/style.md)
+    const ws1 = await loadWorkspace(s.wsRoot, { home: HOME() });
+    const p1 = await plan(ws1);
+    const lock1 = await readLock(ws1.root);
+    const st1 = await status(ws1, p1, lock1);
+    await apply(ws1, p1, st1);
+
+    // Now enable agents-md.primary in the workspace's overrides
+    await fs.writeFile(
+      path.join(s.wsRoot, "craftar.yaml"),
+      "forge: ../forge\nprofile: acme\noverrides:\n  params:\n    agents-md.primary: true\n",
+    );
+
+    // After enabling agents-md.primary, the rule/style files should become orphans
+    const ws2 = await loadWorkspace(s.wsRoot, { home: HOME() });
+    const p2 = await plan(ws2);
+    const id = workspaceId((await register(HOME(), ws2, p2)).path);
+    const lock2 = await readLock(ws2.root);
+    const st2 = await status(ws2, p2, lock2);
+
+    // The rule/style files under .claude/rules/ and .kiro/steering/ should be orphans now
+    const cRule = ".claude/rules/style.md";
+    const cRuleSt = st2.find((r) => r.path === cRule);
+    expect(cRuleSt, "expected .claude/rules/style.md to be orphan").not.toBeUndefined();
+    expect(cRuleSt!.state).toBe("orphan");
+
+    // Check the diff answer for the orphan
+    const answerC = await D(id, cRule);
+    expect(answerC.status).toBe(200);
+    expect((answerC.body as any).state).toBe("orphan");
+    // The key assertion: the `to` header uses the agents-md.primary wording
+    expect((answerC.body as any).to).toBe(`${cRule} (forge: written to AGENTS.md only — sync removes it)`);
+
+    // The kiro file too
+    const kRule = ".kiro/steering/style.md";
+    const answerK = await D(id, kRule);
+    expect(answerK.status).toBe(200);
+    expect((answerK.body as any).state).toBe("orphan");
+    expect((answerK.body as any).to).toBe(`${kRule} (forge: written to AGENTS.md only — sync removes it)`);
+  });
 });
 
 describe("explain, recipes, ingredients", () => {

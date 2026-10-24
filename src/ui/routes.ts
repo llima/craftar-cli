@@ -7,7 +7,7 @@ import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, orphanDriftBody, statu
 import { statusDigest, syncToolResult, syncWorkspace } from "../core/write-actions.js";
 import { EXAMPLE_SETTINGS } from "../emitters/shared.js";
 import type { Lock } from "../schema/index.js";
-import { loadWorkspace, plan, readLock, status, unsetDeclared, unsetSummary, type FileStatus, type Plan, type Workspace } from "../core/sync.js";
+import { loadWorkspace, plan, primaryOrphan, readLock, status, unsetDeclared, unsetSummary, type FileStatus, type Plan, type Workspace } from "../core/sync.js";
 import { hashNormalized } from "../core/text.js";
 
 /**
@@ -261,7 +261,8 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
   if (row.state === "orphan-drift" && deps.allowWrites) {
     const { body: fileBody, note } = await orphanDriftBody(ws.root, row);
     const from = `${row.path} (disk, ${row.state})`;
-    const to = `${row.path} (forge: no longer produced — discard removes it)`;
+    const isPrimary = primaryOrphan(p, row);
+    const to = `${row.path} (forge: ${isPrimary ? "written to AGENTS.md only" : "no longer produced"} — discard removes it)`;
     return {
       status: 200,
       body: {
@@ -279,7 +280,13 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
   const [d] = await diffReport(ws, [row], { withholdMcp: false });
   if (!d) return { status: 200, body: { path: row.path, state: row.state, from: null, to: null, hidden: false, note: null, diff: null } };
   const from = `${row.path} (disk, ${row.state})`;
-  const to = row.state === "orphan-drift" ? null : row.state === "orphan" ? `${row.path} (forge: no longer produced — sync removes it)` : `${row.path} (forge)`;
+  const isPrimary = primaryOrphan(p, row);
+  const to =
+    row.state === "orphan-drift"
+      ? null
+      : row.state === "orphan"
+        ? `${row.path} (forge: ${isPrimary ? "written to AGENTS.md only" : "no longer produced"} — sync removes it)`
+        : `${row.path} (forge)`;
   return {
     status: 200,
     body: {
