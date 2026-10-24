@@ -749,6 +749,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     pinned: new Map(),
     forge,
     markedBase: false,
+    // A file agents-md.primary reworded is refused before this point (D20); any other source holds no rewording.
+    primaryRefs: null,
   };
 
   const fingerprint = fingerprintOf(validateImported(sourceMeta), emitted.files);
