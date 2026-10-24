@@ -54,10 +54,9 @@ export const claudeCode: Emitter<"claude-code"> = {
     };
 
     // Track whether a file was reworded
-    const checkReworded = (path: string, original: string, resolved: string): void => {
-      if (primary && original !== resolved) {
-        ctx.reportReworded(path);
-      }
+    // Each [original, resolved] pair is one text of the file, compared on its own (spec 41 §4.4)
+    const checkReworded = (path: string, ...pairs: Array<[string | null | undefined, string | null | undefined]>): void => {
+      if (primary && pairs.some(([original, resolved]) => original !== resolved)) ctx.reportReworded(path);
     };
 
     // Scan a file for unresolved references (spec 41 §4.4): files copied as bytes or other TEXT_EXT
@@ -77,7 +76,7 @@ export const claudeCode: Emitter<"claude-code"> = {
       const raw = m.frontmatterRaw != null ? resolve(m.frontmatterRaw, citing) : null;
       const description = m.frontmatterRaw == null && m.description !== undefined ? resolve(m.description, citing) : m.description;
       const body = resolve(rawBody, citing);
-      checkReworded(path, (m.frontmatterRaw ?? m.description ?? "") + rawBody, (raw ?? description ?? "") + body);
+      checkReworded(path, [m.frontmatterRaw ?? m.description, raw ?? description], [rawBody, body]);
       return { raw, description, body };
     };
 
@@ -92,7 +91,7 @@ export const claudeCode: Emitter<"claude-code"> = {
           // If frontmatterRaw is set, serialize with it; otherwise emit body only (no generated paths:)
           // frontmatterRaw is NOT resolved (spec 41 §4.4)
           const doc = m.frontmatterRaw != null ? serializeFrontmatter({}, body, { raw: m.frontmatterRaw }) : body;
-          checkReworded(path, rawBody, body);
+          checkReworded(path, [rawBody, body]);
           out.push(await textFile(ctx, path, doc, t, ing.ref));
           break;
         }
@@ -119,7 +118,7 @@ export const claudeCode: Emitter<"claude-code"> = {
             const path = `.claude/skills/${outName(m)}.md`;
             const rawText = await ctx.text(ing, "SKILL.md");
             const text = resolve(rawText, ing.ref);
-            checkReworded(path, rawText, text);
+            checkReworded(path, [rawText, text]);
             out.push(await textFile(ctx, path, text, t, ing.ref));
           } else {
             // Directory skill: resolve .md files, scan others
@@ -129,7 +128,7 @@ export const claudeCode: Emitter<"claude-code"> = {
               if (claudeResolves(m, f)) {
                 const rawText = await ctx.text(ing, f);
                 const text = resolve(rawText, ing.ref);
-                checkReworded(path, rawText, text);
+                checkReworded(path, [rawText, text]);
                 out.push(await textFile(ctx, path, text, t, ing.ref));
               } else if (TEXT_EXT.test(f)) {
                 // Other text files: not resolved, but scanned

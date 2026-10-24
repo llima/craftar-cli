@@ -236,7 +236,7 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
   const stByPath = new Map(st.map((s) => [s.path, s]));
   for (const f of o.result.removed) {
     const s = stByPath.get(f);
-    const isPrimary = s && primaryOrphan(p, s as { state: string; target: string; ingredient: string });
+    const isPrimary = s !== undefined && primaryOrphan(p, s);
     console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : isPrimary ? "orphan: written to AGENTS.md only (agents-md.primary)" : "orphan: no longer produced by the Forge"})`);
   }
   for (const s of o.result.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
@@ -819,7 +819,7 @@ program
     for (const s of st) {
       if (only && s.path !== only) continue;
       // Spec 19 §3.2: the six states sync --check refuses are shown; which those are is diffReport's to say
-      const isPrimary = primaryOrphan(p, s as { state: string; target: string; ingredient: string });
+      const isPrimary = primaryOrphan(p, s);
       if (await printFileDiff(ws.root, s, { isPrimary })) shown++;
     }
     if (!shown) console.log(pc.green("no differences"));

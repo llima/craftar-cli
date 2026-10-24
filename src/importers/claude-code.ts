@@ -25,7 +25,7 @@ import { bodyFile } from "../core/extract.js";
 import { GENERATED_BANNER, kiroReport, textLines, type KiroReport } from "./kiro-report.js";
 import { preferKiro } from "./prefer-kiro.js";
 import { deepMerge } from "../core/merge.js";
-import { buildRuleLookup, effectiveTargets, outName, resolveRuleRefs } from "../emitters/shared.js";
+import { agentsMdOnly as isAgentsMdOnly, buildRuleLookup, outName, resolveRuleRefs } from "../emitters/shared.js";
 import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { note, type WriteJournal } from "../core/unify.js";
@@ -1647,6 +1647,6 @@ async function primaryFor(
   }
   if (!resolution.primary) return null;
   const lookup = buildRuleLookup(resolution.ingredients, resolution);
-  const agentsMdOnly = new Set(resolution.ingredients.filter((i) => effectiveTargets(i.meta, resolution) !== i.meta.targets).map((i) => i.ref));
+  const agentsMdOnly = new Set(resolution.ingredients.filter((i) => isAgentsMdOnly(i.meta, resolution)).map((i) => i.ref));
   return { refs: (text, citing) => resolveRuleRefs(text, citing, lookup, resolution.targets).text, agentsMdOnly };
 }

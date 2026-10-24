@@ -896,7 +896,7 @@ export function claudeMdBlockedMessage(file: string): string {
 }
 
 /** Returns true when the orphan is due to agents-md.primary (spec 41 §4.8). */
-export function primaryOrphan(p: Plan, s: { state: string; target: string; ingredient: string }): boolean {
+export function primaryOrphan(p: Plan, s: Pick<FileStatus, "state" | "target" | "ingredient">): boolean {
   if (!p.resolution.primary) return false;
   if (s.state !== "orphan") return false;
   if (s.target !== "claude-code" && s.target !== "kiro") return false;

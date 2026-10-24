@@ -67,14 +67,11 @@ export const kiro: Emitter<"kiro"> = {
       return resolved;
     };
 
-    // Track reworded: compare resolved vs mode-off resolved (spec 41 §4.4)
-    const checkReworded = (path: string, text: string, citing: string): void => {
+    // Track reworded: each text of the file, resolved with the mode and without it (spec 41 §4.4)
+    const checkReworded = (path: string, texts: string[], citing: string): void => {
       if (!primary || !lookupOff) return;
-      const modeOffResolved = resolveRuleRefs(text, citing, lookupOff, targets, "kiro").text;
-      const modeOnResolved = resolveRuleRefs(text, citing, lookup, targets, "kiro").text;
-      if (modeOffResolved !== modeOnResolved) {
-        ctx.reportReworded(path);
-      }
+      const differs = (text: string) => resolveRuleRefs(text, citing, lookupOff, targets, "kiro").text !== resolveRuleRefs(text, citing, lookup, targets, "kiro").text;
+      if (texts.some(differs)) ctx.reportReworded(path);
     };
 
     // Scan a file for unresolved references (spec 41 §4.4)
@@ -98,7 +95,7 @@ export const kiro: Emitter<"kiro"> = {
           const rawBody = await ctx.text(ing, m.file);
           const body = resolve(rawBody, ing.ref);
           const path = ruleFile("kiro", m);
-          checkReworded(path, rawBody, ing.ref);
+          checkReworded(path, [rawBody], ing.ref);
           const fm =
             m.inclusion === "fileMatch"
               ? `---\ninclusion: fileMatch\nfileMatchPattern: ${JSON.stringify(Array.isArray(m.fileMatchPattern) ? m.fileMatchPattern.join(",") : m.fileMatchPattern ?? "**")}\n---\n\n`
@@ -119,7 +116,7 @@ export const kiro: Emitter<"kiro"> = {
           // Read the body once and derive both versions from it
           const rawBody = await ctx.text(ing, m.file);
           const body = resolve(rawBody, ing.ref);
-          checkReworded(path, rawDesc + rawBody, ing.ref);
+          checkReworded(path, [rawDesc, rawBody], ing.ref);
           const tools = mapTools(m.tools, ctx);
           // agentResources reads the blanket-rewritten text, not the resolved text (spec 17 §4.6)
           const resources = m.resources ?? agentResources(outName(m), rewrite(rawDesc) + "\n" + rewrite(rawBody), ruleNames, scopedRules);
@@ -153,7 +150,7 @@ export const kiro: Emitter<"kiro"> = {
           const resolvedDescription = !m.frontmatterRaw && m.description !== undefined ? resolve(m.description, ing.ref) : undefined;
           const resolvedFm = m.frontmatterRaw ? resolve(m.frontmatterRaw, ing.ref) : null;
           const body = resolve(rawBody, ing.ref);
-          checkReworded(path, (m.frontmatterRaw ?? m.description ?? "") + rawBody, ing.ref);
+          checkReworded(path, [m.frontmatterRaw ?? m.description ?? "", rawBody], ing.ref);
           const doc = serializeFrontmatter(
             { description: resolvedDescription, "argument-hint": m.argumentHint, "allowed-tools": m.allowedTools },
             body,
@@ -167,7 +164,7 @@ export const kiro: Emitter<"kiro"> = {
             const path = `.kiro/skills/${outName(m)}/SKILL.md`;
             const rawText = await ctx.text(ing, "SKILL.md");
             const text = resolve(rawText, ing.ref);
-            checkReworded(path, rawText, ing.ref);
+            checkReworded(path, [rawText], ing.ref);
             out.push(crlf(path, text, ing.ref));
           } else {
             for (const f of await listFiles(ing.dir)) {
@@ -176,7 +173,7 @@ export const kiro: Emitter<"kiro"> = {
               if (KIRO_TEXT_EXT.test(f)) {
                 const rawText = await ctx.text(ing, f);
                 const text = resolve(rawText, ing.ref);
-                checkReworded(path, rawText, ing.ref);
+                checkReworded(path, [rawText], ing.ref);
                 out.push(crlf(path, text, ing.ref));
               } else {
                 // Binary file: scan but don't rewrite (spec 41 §4.4)
@@ -279,11 +276,6 @@ export function rewrite(text: string): string {
 
 function crlf(path: string, text: string, ingredient: string): PlannedFile {
   return { path, content: Buffer.from(toCrlf(text), "utf8"), target: "kiro", ingredient };
-}
-
-async function copy(ctx: EmitBase, ing: ResolvedIngredient, file: string, relPath: string, resolve: (text: string, citing: string) => string): Promise<PlannedFile> {
-  if (KIRO_TEXT_EXT.test(file)) return crlf(relPath, resolve(await ctx.text(ing, file), ing.ref), ing.ref);
-  return { path: relPath, content: await ctx.bytes(ing, file), target: "kiro", ingredient: ing.ref };
 }
 
 const TOOL_MAP: Record<string, string | null> = {

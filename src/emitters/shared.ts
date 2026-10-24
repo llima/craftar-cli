@@ -15,10 +15,12 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
  * answer to "is this rule AGENTS.md-only"; returns `meta.targets` itself when the mode is off.
  */
 export function effectiveTargets(meta: Ingredient, resolution: { primary: boolean }): "*" | string[] {
-  if (resolution.primary && meta.type === "rule" && meta.inclusion === "always" && meta.targets === "*") {
-    return ["agents-md"];
-  }
-  return meta.targets;
+  return agentsMdOnly(meta, resolution) ? ["agents-md"] : meta.targets;
+}
+
+/** Under agents-md.primary, an always-on rule with the default targets: written to AGENTS.md alone (spec 41 §4.2). */
+export function agentsMdOnly(meta: Ingredient, resolution: { primary: boolean }): boolean {
+  return resolution.primary && meta.type === "rule" && meta.inclusion === "always" && meta.targets === "*";
 }
 
 /** The characters of a rule name in a `.claude/rules/<name>.md` reference (spec 15 §4.1). */
@@ -178,7 +180,10 @@ export function unresolvedRuleRefs(
   return result;
 }
 
-/** Right boundary: not followed by letter, digit, `_`, `-`, or `.` followed by one of those (spec 15 §4.1). */
+/**
+ * Right boundary: not followed by letter, digit, `_`, `-`, or `.` followed by one of those (spec 15 §4.1).
+ * NOTE: the right boundary's class is NOT RULE_NAME_CHARS (which includes `.` for names) — by design.
+ */
 function rightBoundary(after: string): boolean {
   if (!after) return true;
   const c = after[0];
