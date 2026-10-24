@@ -888,6 +888,11 @@ export function claudeMdBlockedMessage(file: string): string {
   return `agents-md.primary: ${file} keeps Claude Code from reading AGENTS.md — add a line @AGENTS.md to CLAUDE.md, or set Project instructions to claude-md-and-agents-md`;
 }
 
+/** Returns true when resolution.primary is on (spec 41 §4.8). */
+export function primaryOrphan(p: Plan): boolean {
+  return p.resolution.primary === true;
+}
+
 function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {
   const m = new Map<string, PlannedFile>();
   for (const f of files) m.set(f.path, f);

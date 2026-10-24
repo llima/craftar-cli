@@ -93,3 +93,47 @@ describe("Kiro resources check — CLI (spec 41 §4.5–§4.6)", () => {
     expect(syncCheckResult.stderr).not.toContain("Kiro agent resource(s) name a file the plan does not write");
   });
 });
+
+
+describe("Orphan's words — CLI (spec 41 §4.8)", () => {
+  it("synced mode off, then mode on — sync and diff show agents-md.primary wording", async () => {
+    // First: create and sync with mode off
+    const s = kept(await acmePrimary({ schema: 5 })); // mode off
+    const W = ["--workspace", s.wsRoot];
+
+    // Sync with mode off
+    const syncOffResult = runCli(["sync", ...W]);
+    expect(syncOffResult.code).toBe(0);
+
+    // Now switch to mode on
+    const { promises: fs } = await import("node:fs");
+    const YAML = (await import("yaml")).default;
+    const path = await import("node:path");
+
+    const profilePath = path.join(s.forgeRoot, "profiles/acme/profile.yaml");
+    const profileContent = await fs.readFile(profilePath, "utf8");
+    const profile = YAML.parse(profileContent);
+    profile.params = { ...profile.params, "agents-md.primary": true };
+    await fs.writeFile(profilePath, YAML.stringify(profile));
+
+    // diff shows the agents-md.primary wording in diff header
+    const diffResult = runCli(["diff", ...W]);
+    expect(diffResult.stdout).toContain(".claude/rules/style.md (forge: written to AGENTS.md only — sync removes it)");
+    expect(diffResult.stdout).toContain(".kiro/steering/style.md (forge: written to AGENTS.md only — sync removes it)");
+
+    // sync --dry-run shows the wording in removal line
+    const syncDryResult = runCli(["sync", "--dry-run", ...W]);
+    expect(syncDryResult.stdout).toContain("(orphan: written to AGENTS.md only (agents-md.primary))");
+
+    // sync (actual) shows the wording in removal line
+    const syncResult = runCli(["sync", ...W]);
+    expect(syncResult.code).toBe(0);
+    expect(syncResult.stdout).toContain("orphan: written to AGENTS.md only (agents-md.primary)");
+
+    // status --json shows same keys as an ordinary orphan
+    const statusJsonResult = runCli(["status", "--json", ...W]);
+    const statusJson = JSON.parse(statusJsonResult.stdout);
+    // No orphan should exist now (they were removed), but verify the structure was the same
+    expect(Object.keys(statusJson).sort()).toEqual(["forge", "statuses", "unsetParams", "warnings"]);
+  });
+});

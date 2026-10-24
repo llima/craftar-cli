@@ -17,7 +17,7 @@ import { serve } from "./mcp.js";
 import { mcpWriters } from "./core/write-actions.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, primaryOrphan, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -232,7 +232,7 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
   if (o.forgeLine) console.log(o.forgeLine);
   console.log(`  ${verb} ${pc.green(String(o.result.written.length))}, removed ${pc.magenta(String(o.result.removed.length))} orphan(s), skipped ${pc.yellow(String(o.result.skipped.length))}`);
   for (const f of o.result.written) console.log(`  ${pc.green("+")} ${f}`);
-  for (const f of o.result.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : "orphan: no longer produced by the Forge"})`);
+  for (const f of o.result.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : primaryOrphan(p) ? "orphan: written to AGENTS.md only (agents-md.primary)" : "orphan: no longer produced by the Forge"})`);
   for (const s of o.result.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
   for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   if (o.registry) console.log(`  ${pc.yellow("warn")} registry not updated (${o.registry.file}): ${o.registry.message}`);
@@ -810,10 +810,11 @@ program
     // Spec 19 §3.3: under --exit-code a path nothing matches must not read as "clean" to a script
     if (o.exitCode && only && !st.some((s) => s.path === only)) fail(unmanaged(only));
     let shown = 0;
+    const isPrimary = primaryOrphan(p);
     for (const s of st) {
       if (only && s.path !== only) continue;
       // Spec 19 §3.2: the six states sync --check refuses are shown; which those are is diffReport's to say
-      if (await printFileDiff(ws.root, s)) shown++;
+      if (await printFileDiff(ws.root, s, { isPrimary })) shown++;
     }
     if (!shown) console.log(pc.green("no differences"));
     // exitCode, not process.exit: exit drops a piped diff still queued for a slow reader (spec 19 §3.1)
@@ -827,7 +828,7 @@ program
 const DIFF_PAINT = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
 
 /** What `craftar diff` prints for one file `sync --check` refuses; `drift show <path>` prints the same for a drifted one. */
-async function printFileDiff(root: string, s: FileStatus): Promise<boolean> {
+async function printFileDiff(root: string, s: FileStatus, opts: { isPrimary?: boolean } = {}): Promise<boolean> {
   // What to show is decided in the core (`diffReport`); the headers and the paint are this command's.
   const [row] = await diffReport({ root }, [s], { withholdMcp: false });
   // Nothing to show for `unchanged` and `adopt`: says so, for the caller's count
@@ -838,7 +839,8 @@ async function printFileDiff(root: string, s: FileStatus): Promise<boolean> {
   } else if (s.state === "orphan") {
     // A removal: the file exists on disk but the Forge no longer produces it
     console.log(pc.bold(`--- ${s.path} (disk, orphan)`));
-    console.log(pc.bold(`+++ ${s.path} (forge: no longer produced — sync removes it)`));
+    const orphanReason = opts.isPrimary ? "written to AGENTS.md only — sync removes it" : "no longer produced — sync removes it";
+    console.log(pc.bold(`+++ ${s.path} (forge: ${orphanReason})`));
   } else {
     console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
     console.log(pc.bold(`+++ ${s.path} (forge)`));
@@ -917,7 +919,7 @@ drift
       } else {
         console.log(renderDiff((await readText(path.join(ws.root, named.path))) ?? "", "", DIFF_PAINT));
       }
-    } else await printFileDiff(ws.root, named);
+    } else await printFileDiff(ws.root, named, { isPrimary: primaryOrphan(p) });
     if (refusalBlock(unset)) process.exitCode = 1;
   });
 
