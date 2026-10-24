@@ -267,3 +267,24 @@ describe("import --report — an import that succeeded is not undone by its repo
     expect(await fs.readFile(target, "utf8")).toContain("profile: acme"); // craftar.yaml, not a report
   });
 });
+
+describe("import --report — Windows-only MCP server warning (spec 42)", () => {
+  it("the report and stdout contain the warning; neither contains the server's args", async () => {
+    const root = await tmpDir("craftar-import-report-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const ws = path.join(root, "acme-portal");
+    await writeFiles(ws, {
+      ".claude/rules/workflow.md": "# Workflow\n",
+      ".mcp.json": JSON.stringify({ mcpServers: { legacy: { command: "cmd", args: ["/c", "npx", "-y", "@acme/example-mcp", "SENTINEL-ARG-42"] } } }),
+    });
+    const out = path.join(root, "out", "report.md");
+    const r = runCli(["import", "--from", "claude-code", "--forge", path.join(root, "forge"), "--profile", "acme", "--workspace", ws, "--report", out]);
+    expect(r.code, r.stderr).toBe(0);
+    const text = await fs.readFile(out, "utf8");
+    const warning = '.mcp.json server "legacy" starts through cmd /c \u2014 Windows only; the ingredient keeps it as written (spec 42)';
+    expect(text).toContain(warning);
+    expect(text).not.toContain("SENTINEL-ARG-42");
+    expect(r.stdout).toContain(warning);
+    expect(r.stdout).not.toContain("SENTINEL-ARG-42");
+  });
+});

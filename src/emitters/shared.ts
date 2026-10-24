@@ -2,12 +2,18 @@ import { detectEol, hasBom, withEol, type Eol } from "../core/text.js";
 import type { EmitBase, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 import { paramsFor } from "../core/resolve.js";
-import type { Ingredient } from "../schema/index.js";
+import type { Ingredient, Target } from "../schema/index.js";
 import { rendersServers, renderServer, credentialIn, credentialMessage, entropyMessage, undeclaredMessage } from "../core/mcp-server.js";
 
 export function appliesTo(targets: "*" | string[], target: string): boolean {
   return targets === "*" || targets.includes(target);
 }
+
+/**
+ * The MCP file each target writes (spec 42 §5.2: shared by the emitters and doctor's mcp-launcher).
+ * agents-md writes no MCP file (its mcp cell is unsupported), so it has no entry.
+ */
+export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json" } as const satisfies Record<Exclude<Target, "agents-md">, string>;
 
 /**
  * The targets an ingredient is aimed at in this workspace (spec 41 §4.3): its declared `targets`, except, under

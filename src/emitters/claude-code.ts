@@ -9,6 +9,7 @@ import {
   formatDeadRefs,
   formatScannedRefs,
   mcpServers,
+  MCP_FILE,
   outName,
   resolveRuleRefs,
   ruleFile,
@@ -176,10 +177,10 @@ export const claudeCode: Emitter<"claude-code"> = {
       emitClaudeCodeWarning(ctx, reports, scannedHits);
     }
 
-    const servers = mcpServers(ctx, t, ".mcp.json", mcp);
+    const servers = mcpServers(ctx, t, MCP_FILE["claude-code"], mcp);
     if (Object.keys(servers).length) {
       const json = JSON.stringify({ mcpServers: servers }, null, 2) + "\n";
-      out.push(await textFile(ctx, ".mcp.json", json, t, "mcp/*"));
+      out.push(await textFile(ctx, MCP_FILE["claude-code"], json, t, "mcp/*"));
     }
 
     // Write the example file when authEnvNames is non-empty (spec 27 §4.2)

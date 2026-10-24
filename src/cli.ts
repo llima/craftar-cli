@@ -76,7 +76,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.37.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.37.1");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -1328,7 +1328,7 @@ program
 program
   .command("doctor")
   .description(
-    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, the profile's templates block and dotnet when it has one, lock, status, registration): one line per finding — ok, warn or error — each with its fix. Reports only; reads without the network unless --fetch",
+    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, the profile's templates block and dotnet when it has one, lock, status, registration): one line per finding — ok, warn or error — each with its fix. Reports only; reads without the network unless --fetch",
   )
   // No commander default: an explicit --workspace without craftar.yaml exits 1, the current directory without one runs the machine checks (spec 24 §4.1).
   .option("--workspace <dir>", "the workspace to check (default: the current directory, when it holds craftar.yaml)")

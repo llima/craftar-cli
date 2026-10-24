@@ -133,4 +133,22 @@ describe("doctor reads the rendered server at schema 4", () => {
       },
     ]);
   });
+
+  it("case 24: at schema 4 a command that is a declared param valued cmd warns; at schema 3 it does not", async () => {
+    const spec = forge({ command: "{{launcher}}", args: ["/c", "npx"] }, { declare: { launcher: {} }, params: { launcher: "cmd" } });
+    const s4 = await forgeAt(4, spec);
+    cleanups.push(s4.cleanup);
+    const r4 = await run({ home: path.join(s4.root, "home"), workspace: s4.wsRoot });
+    const checks4 = of(r4.checks, "mcp-launcher");
+    expect(checks4).toHaveLength(1);
+    expect(checks4[0].level).toBe("warn");
+    expect(checks4[0].message).toBe('server "idp" starts through cmd /c \u2014 Windows only; it does not start on Linux or macOS (.mcp.json, .kiro/settings/mcp.json)');
+
+    const s3 = await forgeAt(3, spec);
+    cleanups.push(s3.cleanup);
+    const r3 = await run({ home: path.join(s3.root, "home"), workspace: s3.wsRoot });
+    const checks3 = of(r3.checks, "mcp-launcher");
+    expect(checks3).toHaveLength(1);
+    expect(checks3[0].level).toBe("ok");
+  });
 });

@@ -315,6 +315,20 @@ describe("doctor", () => {
     const got = data(await one("doctor", await session(s.wsRoot, { registryOff: true })));
     expect(got.checks.find((c: any) => c.id === "registered")).toMatchObject({ level: "ok", message: "registry off" });
   });
+
+  it("mcp-launcher: a cmd /c server warns for the server name (spec 42)", async () => {
+    const LEGACY_SERVER = { meta: { type: "mcp", name: "legacy", server: { command: "cmd", args: ["/c", "npx", "-y", "@acme/example-mcp"] } } };
+    const s = kept(await scenario(
+      { ingredients: [rule("keep", "# Keep\n"), LEGACY_SERVER], recipes: [recipe("base", ["rule/keep", "mcp/legacy"])], profiles: [profile("acme", ["base"], ["claude-code", "kiro"])] },
+      { config: { profile: "acme" } },
+    ));
+    const got = data(await one("doctor", await session(s.wsRoot)));
+    const check = got.checks.find((c: any) => c.id === "mcp-launcher");
+    expect(check).toMatchObject({
+      level: "warn",
+      message: 'server "legacy" starts through cmd /c \u2014 Windows only; it does not start on Linux or macOS (.mcp.json, .kiro/settings/mcp.json)',
+    });
+  });
 });
 
 describe("a workspace that does not load", () => {
