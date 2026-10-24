@@ -36,7 +36,7 @@ async function eight() {
 /** Normalise a JSON body: replace real paths with <ROOT>, id with <ID>, registry path with <REG>, ISO times with <T>, forge key with <KEY>. */
 function norm(body: unknown, roots: { wsRoot: string; real: string; id: string }): unknown {
   let json = JSON.stringify(body);
-  const escape = (s: string) => s.replace(/[\\]/g, "\\\\").replace(/[.*+?^${}()|[\]]/g, "\\$&");
+  const escape = (s: string) => JSON.stringify(s).slice(1, -1).replace(/[\\.*+?^${}()|[\]]/g, "\\$&");
   json = json.replace(new RegExp(escape(roots.real), "g"), "<ROOT>");
   json = json.replace(new RegExp(escape(roots.wsRoot), "g"), "<ROOT>");
   json = json.replace(new RegExp(escape(registryFile(HOME())), "g"), "<REG>");
@@ -130,5 +130,14 @@ describe("orphan-drift example settings file", () => {
     const entry = await register(HOME(), ws, await plan(ws));
     const id = workspaceId(entry.path);
     expect(norm((await get(`/api/workspaces/${id}/diff?path=${encodeURIComponent(EX)}`)).body, { wsRoot: s.wsRoot, real: entry.path, id })).toEqual({"path":".claude/settings.craftar.example.json","state":"orphan-drift","from":".claude/settings.craftar.example.json (disk, orphan-drift)","to":null,"hidden":false,"note":"no longer produced by the Forge but hand-edited — kept; `craftar drift discard <path>` removes it, or delete it yourself","diff":null});
+  });
+});
+
+describe("norm() substitutes a Windows path as JSON holds it", () => {
+  it("replaces a Windows path with backslashes in JSON-serialized output", () => {
+    const wsRoot = "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\craftar-test-X\\ws";
+    const roots = { wsRoot, real: wsRoot, id: "0123456789abcdef" };
+    const body = { path: wsRoot, id: "0123456789abcdef" };
+    expect(norm(body, roots)).toEqual({ path: "<ROOT>", id: "<ID>" });
   });
 });
