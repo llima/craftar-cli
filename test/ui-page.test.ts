@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { FILE_STATE_ORDER_MAP } from "../src/core/impact.js";
 import { PAGE_STATES } from "../src/ui/page.js";
-import { PAGE_CSS, PAGE_HTML, PAGE_JS } from "../src/ui/page.js";
+import { PAGE_CSS, PAGE_HTML, PAGE_JS, pageCss, pageJs } from "../src/ui/page.js";
 
 // Spec 36 §7.4, §10.3 — a source check of the page. The CSP is what stops inline script even if this is fooled;
 // what the page DOES with an answer is the by-hand run of spec §10.5 (step 36f).
 
+// Banned APIs for both pageJs(false) and pageJs(true) — spec 40 §6.5 rules: no confirm(, alert(, prompt(
+const BANNED_APIS = ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "setAttribute(\"on", "srcdoc", "javascript:", "confirm(", "alert(", "prompt("];
+
 describe("craftar ui — the page's source", () => {
   it("the script never builds markup from a string, and never evaluates one", () => {
-    for (const banned of ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "setAttribute(\"on", "srcdoc", "javascript:"])
+    for (const banned of BANNED_APIS)
       expect(PAGE_JS, banned).not.toContain(banned);
     expect(PAGE_JS).toContain("textContent");
   });
@@ -83,5 +86,69 @@ describe("craftar ui — the page's source", () => {
   it("the page prints the core's refusal line, not one of its own", () => {
     expect(PAGE_JS).not.toContain("sync is refused");
     expect(PAGE_JS).toContain("doc.refused");
+  });
+});
+
+// Spec 40 §6.5 — pageJs(writes) and pageCss(writes) tests
+describe("pageJs and pageCss (spec 40 §6.5)", () => {
+  it("pageJs(false) === PAGE_JS and pageCss(false) === PAGE_CSS", () => {
+    expect(pageJs(false)).toBe(PAGE_JS);
+    expect(pageCss(false)).toBe(PAGE_CSS);
+  });
+
+  it("pageJs(true) has no banned APIs (including confirm(, alert(, prompt()", () => {
+    const jsTrue = pageJs(true);
+    for (const banned of BANNED_APIS) {
+      expect(jsTrue, banned).not.toContain(banned);
+    }
+    expect(jsTrue).toContain("textContent");
+  });
+
+  it("pageJs(false) contains none of POST, /sync, /discard, Discard edit; pageJs(true) contains each", () => {
+    const jsFalse = pageJs(false);
+    const jsTrue = pageJs(true);
+    for (const term of ['"POST"', '"/sync"', '"/discard"', '"Discard edit"']) {
+      expect(jsFalse, `pageJs(false) should not contain ${term}`).not.toContain(term);
+      expect(jsTrue, `pageJs(true) should contain ${term}`).toContain(term);
+    }
+  });
+
+  it('"Discard edit" in pageJs(true) appears only inside showDiff, not in fileRow bar-building code', () => {
+    const jsTrue = pageJs(true);
+
+    // Find the showDiff function's body
+    const showDiffMatch = jsTrue.match(/function showDiff\([^)]*\)\s*\{/);
+    expect(showDiffMatch, "showDiff function not found").not.toBeNull();
+    const showDiffStart = showDiffMatch!.index!;
+
+    // Find the fileRow function's body
+    const fileRowMatch = jsTrue.match(/function fileRow\([^)]*\)\s*\{/);
+    expect(fileRowMatch, "fileRow function not found").not.toBeNull();
+    const fileRowStart = fileRowMatch!.index!;
+
+    // The showDiff function comes after fileRow
+    expect(showDiffStart).toBeGreaterThan(fileRowStart);
+
+    // Find where "Discard edit" appears
+    const discardIndex = jsTrue.indexOf('"Discard edit"');
+    expect(discardIndex, '"Discard edit" not found in pageJs(true)').toBeGreaterThan(-1);
+
+    // "Discard edit" should be after showDiff starts
+    expect(discardIndex, '"Discard edit" should be inside showDiff function').toBeGreaterThan(showDiffStart);
+
+    // Verify it's not in the bar-building code of fileRow (which is before showDiff)
+    const fileRowToShowDiff = jsTrue.slice(fileRowStart, showDiffStart);
+    expect(fileRowToShowDiff, '"Discard edit" should not appear in fileRow bar-building code').not.toContain('"Discard edit"');
+  });
+
+  it("pageJs(true) mentions the example settings file exclusion", () => {
+    const jsTrue = pageJs(true);
+    expect(jsTrue).toContain(".claude/settings.craftar.example.json");
+  });
+
+  it("pageCss(true) includes confirmation box styles", () => {
+    const cssTrue = pageCss(true);
+    expect(cssTrue).toContain(".confirm-overlay");
+    expect(cssTrue).toContain(".confirm-box");
   });
 });

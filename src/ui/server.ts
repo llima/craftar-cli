@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { errorText } from "../core/schema-fault.js";
-import { PAGE_CSS, PAGE_HTML, PAGE_JS } from "./page.js";
+import { PAGE_CSS, PAGE_HTML, PAGE_JS, pageCss, pageJs } from "./page.js";
 import { parseWriteBody, route as defaultRoute, routePattern, WRITE_PATTERNS, type RouteAnswer, type RouteDeps, type RouteRequest } from "./routes.js";
 
 /**
@@ -51,11 +51,14 @@ export const originAllowed = (header: string | undefined, port: number): boolean
   header === undefined || names(port).some((n) => header === `http://${n}`);
 export const siteAllowed = (header: string | undefined): boolean => header === undefined || header === "same-origin" || header === "none";
 
-const STATIC: Record<string, readonly [type: string, body: string]> = {
-  "/": ["text/html; charset=utf-8", PAGE_HTML],
-  "/app.js": ["text/javascript; charset=utf-8", PAGE_JS],
-  "/app.css": ["text/css; charset=utf-8", PAGE_CSS],
-};
+/** Builds the static routes map, with dynamic JS and CSS based on allowWrites. */
+function staticRoutes(allowWrites: boolean): Record<string, readonly [type: string, body: string]> {
+  return {
+    "/": ["text/html; charset=utf-8", PAGE_HTML],
+    "/app.js": ["text/javascript; charset=utf-8", allowWrites ? pageJs(true) : PAGE_JS],
+    "/app.css": ["text/css; charset=utf-8", allowWrites ? pageCss(true) : PAGE_CSS],
+  };
+}
 
 /**
  * A header as sent, once — read from `headersDistinct`, because Node keeps only the first `Host` or `Authorization`
@@ -73,6 +76,8 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
   const run = opts.route ?? defaultRoute;
   const allowWrites = opts.allowWrites === true;
   const deps: RouteDeps = { home: opts.home, version: opts.version, allowWrites };
+  // Build the static routes once at server start, with dynamic JS/CSS based on allowWrites.
+  const STATIC = staticRoutes(allowWrites);
 
   // One data request at a time: each loads a Forge and plans a workspace.
   let queue: Promise<void> = Promise.resolve();

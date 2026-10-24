@@ -613,3 +613,25 @@ describe("--allow-writes (spec 40 §6.3)", () => {
     expect(errors).toEqual(["ui: /api/workspaces/<id>/sync: SENTINEL-ERROR first line"]);
   });
 });
+
+// Spec 40 §6.5 — the served /app.js depends on allowWrites
+describe("/app.js served based on allowWrites", () => {
+  it("with allowWrites: true, /app.js equals pageJs(true)", async () => {
+    // Import dynamically to avoid issues, since we need the actual compiled module
+    const { PAGE_JS, pageJs } = await import("../src/ui/page.js");
+    ui = await startUi({ home: process.env.CRAFTAR_HOME!, version: "0.0.0-test", port: 0, onError: (l) => errors.push(l), token: TOKEN, allowWrites: true, route: async () => OK });
+    const a = await ask(ui, "/app.js", { auth: false });
+    expect(a.status).toBe(200);
+    expect(a.body).toBe(pageJs(true));
+    expect(a.body).not.toBe(PAGE_JS);
+  });
+
+  it("without allowWrites, /app.js equals PAGE_JS (pageJs(false))", async () => {
+    const { PAGE_JS, pageJs } = await import("../src/ui/page.js");
+    ui = await startUi({ home: process.env.CRAFTAR_HOME!, version: "0.0.0-test", port: 0, onError: (l) => errors.push(l), token: TOKEN, route: async () => OK });
+    const a = await ask(ui, "/app.js", { auth: false });
+    expect(a.status).toBe(200);
+    expect(a.body).toBe(PAGE_JS);
+    expect(a.body).toBe(pageJs(false));
+  });
+});
