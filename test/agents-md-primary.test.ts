@@ -631,3 +631,115 @@ describe("Budget clause under the mode (spec 41 §4.9)", () => {
     expect(budgetWarnings[0]).not.toContain("these rules are in no other file");
   });
 });
+
+
+describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.10)", () => {
+  it("agents-md-primary: mode on with claude-code — warn with expected message", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const { runDoctor } = await import("../src/core/doctor.js");
+    const { tmpDir } = await import("./helpers/forge.js");
+    const { promises: fs } = await import("node:fs");
+    const path = await import("node:path");
+
+    const home = await tmpDir("craftar-doctor-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    const report = await runDoctor({
+      version: "0.0.0",
+      home,
+      workspace: s.wsRoot,
+      fetch: false,
+      strict: false,
+      registryOff: false,
+      env: {},
+      nodeVersion: "22.11.0",
+      gitVersion: async () => "2.53.0",
+    });
+
+    const check = report.checks.find((c) => c.id === "agents-md-primary");
+    expect(check).toBeDefined();
+    expect(check!.scope).toBe("workspace");
+    expect(check!.level).toBe("warn");
+    expect(check!.message).toContain("agents-md.primary is on");
+    expect(check!.fix).toContain("Project instructions");
+  });
+
+  it("agents-md-primary: mode off — no check", async () => {
+    const s = kept(await acmePrimary({ schema: 5 })); // mode off
+    const { runDoctor } = await import("../src/core/doctor.js");
+    const { tmpDir } = await import("./helpers/forge.js");
+    const { promises: fs } = await import("node:fs");
+
+    const home = await tmpDir("craftar-doctor-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    const report = await runDoctor({
+      version: "0.0.0",
+      home,
+      workspace: s.wsRoot,
+      fetch: false,
+      strict: false,
+      registryOff: false,
+      env: {},
+      nodeVersion: "22.11.0",
+      gitVersion: async () => "2.53.0",
+    });
+
+    const check = report.checks.find((c) => c.id === "agents-md-primary");
+    expect(check).toBeUndefined();
+  });
+
+  it("kiro-resources: unplanned resources — warn", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
+    const { runDoctor } = await import("../src/core/doctor.js");
+    const { tmpDir } = await import("./helpers/forge.js");
+    const { promises: fs } = await import("node:fs");
+
+    const home = await tmpDir("craftar-doctor-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    const report = await runDoctor({
+      version: "0.0.0",
+      home,
+      workspace: s.wsRoot,
+      fetch: false,
+      strict: false,
+      registryOff: false,
+      env: {},
+      nodeVersion: "22.11.0",
+      gitVersion: async () => "2.53.0",
+    });
+
+    const check = report.checks.find((c) => c.id === "kiro-resources");
+    expect(check).toBeDefined();
+    expect(check!.scope).toBe("workspace");
+    expect(check!.level).toBe("warn");
+    expect(check!.message).toContain("Kiro agent resource");
+    expect(check!.fix).toContain("edit the agent's resources");
+  });
+
+  it("kiro-resources: mode off — no check", async () => {
+    const s = kept(await acmePrimary({ schema: 5 })); // mode off
+    const { runDoctor } = await import("../src/core/doctor.js");
+    const { tmpDir } = await import("./helpers/forge.js");
+    const { promises: fs } = await import("node:fs");
+
+    const home = await tmpDir("craftar-doctor-home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+
+    const report = await runDoctor({
+      version: "0.0.0",
+      home,
+      workspace: s.wsRoot,
+      fetch: false,
+      strict: false,
+      registryOff: false,
+      env: {},
+      nodeVersion: "22.11.0",
+      gitVersion: async () => "2.53.0",
+    });
+
+    const check = report.checks.find((c) => c.id === "kiro-resources");
+    expect(check).toBeUndefined();
+  });
+});

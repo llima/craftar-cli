@@ -313,6 +313,27 @@ async function workspaceChecks(
         }
       }
 
+      // agents-md-primary: present only when the mode is on and claude-code is a target (spec 41 §4.10)
+      if (p.resolution.primary && p.resolution.targets.includes("claude-code")) {
+        w(
+          "agents-md-primary",
+          "warn",
+          "agents-md.primary is on; Claude Code reads AGENTS.md through a CLAUDE.md that imports it, not from its directory",
+          "confirm Project instructions is set to claude-md-and-agents-md or agents-md; a CLAUDE.md that does not import AGENTS.md yields a warning in plan",
+        );
+      }
+
+      // kiro-resources: present only when there are unplanned Kiro agent resources (spec 41 §4.10)
+      if (p.kiroResources !== null && p.kiroResources.unplanned.length > 0) {
+        const entries = p.kiroResources.unplanned.map((r) => `${r.agent} → ${r.path}`).join(", ");
+        w(
+          "kiro-resources",
+          "warn",
+          `${p.kiroResources.unplanned.length} Kiro agent resource(s) name a file the plan does not write: ${entries}`,
+          "edit the agent's resources in the Forge, or list the rule's targets so kiro writes it",
+        );
+      }
+
       const unset = mcpUnset(p, env, ws.forge.manifest.schema);
       if (unset.length === 0) w("mcp-env", "ok", "every variable a written MCP server expects is set");
       for (const { server, name } of unset) w("mcp-env", "warn", `server "${server}" expects ${name}, not set`, `export ${name}`);
