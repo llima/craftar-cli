@@ -3,7 +3,7 @@ import http from "node:http";
 import net from "node:net";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { CSP, hostAllowed, MAX_BODY_BYTES, originAllowed, siteAllowed, startUi, type UiOptions, type UiServer } from "../src/ui/server.js";
+import { CSP, hostAllowed, MAX_BODY_BYTES, MAX_DRAIN_BYTES, originAllowed, siteAllowed, startUi, type UiOptions, type UiServer } from "../src/ui/server.js";
 
 // Spec 36 §7.2, §7.4, §7.5, §10.3 — the checks every request passes, on a real loopback socket (port 0).
 
@@ -512,6 +512,85 @@ describe("--allow-writes (spec 40 §6.3)", () => {
     // Either 413 or connection error or 400 (bad json), route never called
     expect(calls).toHaveLength(0);
     expect(lying.status === 413 || lying.status === 0 || lying.status === 400).toBe(true);
+  });
+
+  // Case 5b: Body of MAX_DRAIN_BYTES + 4096 bytes → client gets 413 or connection error (past drain cap)
+  it("body of MAX_DRAIN_BYTES + 4096 bytes → 413 or connection error; server still answers next request", async () => {
+    const u = await startWithWrites();
+
+    // Send MAX_DRAIN_BYTES + 4096 bytes in 64 KiB chunks
+    const chunkSize = 64 * 1024;
+    const totalBytes = MAX_DRAIN_BYTES + 4096;
+    const numChunks = Math.ceil(totalBytes / chunkSize);
+    const chunk = Buffer.alloc(chunkSize, "x");
+    const lastChunkSize = totalBytes % chunkSize || chunkSize;
+    const lastChunk = Buffer.alloc(lastChunkSize, "x");
+
+    const hugeBody = await new Promise<Answer>((resolve) => {
+      const headers: Record<string, string> = {
+        Host: `127.0.0.1:${u.port}`,
+        Authorization: `Bearer ${TOKEN}`,
+        Origin: `http://127.0.0.1:${u.port}`,
+        "Sec-Fetch-Site": "same-origin",
+        "Content-Type": "application/json",
+      };
+      const req = http.request({ host: "127.0.0.1", port: u.port, path: SYNC_PATH, method: "POST", headers, setHost: false, agent: false }, (res) => {
+        let bodyData = "";
+        res.setEncoding("utf8").on("data", (c) => (bodyData += c)).on("end", () => resolve({ status: res.statusCode!, headers: res.headers, body: bodyData }));
+      });
+      req.on("error", (e) => resolve({ status: 0, headers: {}, body: String(e) }));
+      for (let i = 0; i < numChunks - 1; i++) req.write(chunk);
+      req.write(lastChunk);
+      req.end();
+    });
+
+    // Either 413 with body, or connection error (acceptable past drain cap)
+    expect(hugeBody.status === 413 || hugeBody.status === 0).toBe(true);
+    if (hugeBody.status === 413) {
+      expect(hugeBody.body).toBe('{"error":"body too large"}');
+    }
+    expect(calls).toHaveLength(0);
+
+    // Server still answers a valid request after the huge one
+    const validAfter = await postAsk(u, SYNC_PATH, VALID_SYNC_BODY);
+    expect(validAfter.status).toBe(200);
+    expect(calls).toHaveLength(1);
+  });
+
+  // Case 5c: 64 KiB body with setImmediate delays between writes → 413 with body
+  it("64 KiB body with setImmediate delays between writes → 413 with body", async () => {
+    const u = await startWithWrites();
+
+    const chunk = "x".repeat(4096);
+    const delayedBody = await new Promise<Answer>((resolve) => {
+      const headers: Record<string, string> = {
+        Host: `127.0.0.1:${u.port}`,
+        Authorization: `Bearer ${TOKEN}`,
+        Origin: `http://127.0.0.1:${u.port}`,
+        "Sec-Fetch-Site": "same-origin",
+        "Content-Type": "application/json",
+      };
+      const req = http.request({ host: "127.0.0.1", port: u.port, path: SYNC_PATH, method: "POST", headers, setHost: false, agent: false }, (res) => {
+        let bodyData = "";
+        res.setEncoding("utf8").on("data", (c) => (bodyData += c)).on("end", () => resolve({ status: res.statusCode!, headers: res.headers, body: bodyData }));
+      });
+      req.on("error", (e) => resolve({ status: 0, headers: {}, body: String(e) }));
+      // Send 16 writes of 4 KiB each with setImmediate delays
+      let i = 0;
+      const sendNext = (): void => {
+        if (i < 16) {
+          req.write(chunk);
+          i++;
+          setImmediate(sendNext);
+        } else {
+          req.end();
+        }
+      };
+      sendNext();
+    });
+
+    expect([delayedBody.status, delayedBody.body]).toEqual([413, '{"error":"body too large"}']);
+    expect(calls).toHaveLength(0);
   });
 
   // Case 6: Bad body shapes → 400

@@ -17,6 +17,7 @@ import { parseWriteBody, route as defaultRoute, routePattern, WRITE_PATTERNS, ty
 
 export const MAX_TARGET_BYTES = 2048;
 export const MAX_BODY_BYTES = 4096;
+export const MAX_DRAIN_BYTES = 1024 * 1024;
 export const CSP =
   "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
@@ -170,26 +171,39 @@ export function startUi(opts: UiOptions): Promise<UiServer> {
         return json(415, { error: "Content-Type must be application/json" });
       }
 
-      // The body is counted as it arrives: Content-Length is not trusted.
+      // The body is counted as it arrives; nothing is kept past 4096 bytes. It drains to 'end' (up to 1 MiB) so the 413 reaches the client before the connection closes.
       const action = pattern === "/api/workspaces/<id>/sync" ? "sync" : "discard";
       const chunks: Buffer[] = [];
       let bytes = 0;
+      let drainBytes = 0;
       let bodyRejected = false;
+      let drainCapExceeded = false;
 
       req.on("data", (chunk: Buffer) => {
-        if (bodyRejected) return;
         bytes += chunk.length;
+        if (bodyRejected) {
+          drainBytes += chunk.length;
+          if (drainBytes > MAX_DRAIN_BYTES && !drainCapExceeded) {
+            drainCapExceeded = true;
+            json(413, { error: "body too large" }, { Connection: "close" });
+            res.once("finish", () => req.destroy());
+          }
+          return;
+        }
         if (bytes > MAX_BODY_BYTES) {
           bodyRejected = true;
-          json(413, { error: "body too large" }, { Connection: "close" });
-          res.once("finish", () => req.destroy());
+          drainBytes = bytes - MAX_BODY_BYTES;
           return;
         }
         chunks.push(chunk);
       });
 
       req.on("end", () => {
-        if (bodyRejected || closed) return;
+        if (drainCapExceeded || closed) return;
+        if (bodyRejected) {
+          json(413, { error: "body too large" }, { Connection: "close" });
+          return;
+        }
         const text = Buffer.concat(chunks).toString("utf8");
         const body = parseWriteBody(action, text);
         if (body === null) {
