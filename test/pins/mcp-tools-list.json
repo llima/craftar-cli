@@ -1,0 +1,138 @@
+{
+  "tools": [
+    {
+      "name": "status",
+      "title": "Workspace status",
+      "description": "What `craftar sync` would do in this workspace: every generated file with its state (unchanged, new, update, drift, adopt, collision, orphan, orphan-drift), the Forge it reads, warnings, and declared parameters with no value. Reads only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "diff",
+      "title": "Pending differences",
+      "description": "Files whose content differs from what the Forge would generate. Without `path`: the list, with added and removed line counts. With `path` (workspace-relative, as `status` prints it): that file's diff. Reads only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path of one generated file, as `status` prints it"
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "explain",
+      "title": "Why a file exists",
+      "description": "Which ingredient, recipe chain and target produce a generated file, and which layer filled each section and parameter it cites. Reads only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path of one generated file, as `status` prints it"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "recipes",
+      "title": "Recipes of the Forge",
+      "description": "Every recipe of this workspace's Forge — slot, parents, ingredients, the profiles that use it — marked against what this workspace resolves. Reads only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "ingredients",
+      "title": "Ingredients of the Forge",
+      "description": "Every ingredient of this workspace's Forge with the recipes that bring it, marked against what this workspace resolves; optionally limited to one recipe or one ingredient type. Reads only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "recipe": {
+            "type": "string",
+            "description": "Limit to one recipe, by name"
+          },
+          "type": {
+            "type": "string",
+            "description": "Limit to one ingredient type (rule, agent, command, skill, mcp, …)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "targets",
+      "title": "Capability matrix",
+      "description": "What each target (claude-code, kiro, agents-md) does with each ingredient type, marking the targets this workspace uses. Reads only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "doctor",
+      "title": "Workspace checks",
+      "description": "One finding per check about this workspace — configuration, Forge, plan, declared parameters, MCP environment variable names, the profile's templates block and dotnet, Docker Compose and the variables a service fragment expects, lock, status, registration — each with its fix. Reads only; like the command, it asks docker compose and dotnet for their version when the workspace uses them.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    }
+  ]
+}

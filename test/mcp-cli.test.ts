@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { runCli } from "./helpers/cli.js";
-import { makeWorkspace, tmpDir } from "./helpers/forge.js";
+import { makeWorkspace, tmpDir, scenario, rule, recipe, profile } from "./helpers/forge.js";
 import { startMcp } from "./helpers/mcp-process.js";
 import { eightStates, type Scenario } from "./helpers/states.js";
-import { registryFile } from "../src/core/registry.js";
+import { allowWrites, registryFile } from "../src/core/registry.js";
 
 // Spec 35 §4.1, §4.9, §10.3 — the process: launch refusals, a whole session over real pipes, nothing written.
 
@@ -177,5 +177,41 @@ describe("craftar mcp — launch refusals: exit 1, one line on stderr, nothing o
       stdout: "",
       stderr: "error: craftar.yaml › forge holds credentials in the URL — remove them and let git authenticate (credential helper, SSH agent; see README › Remote Forge)\n",
     });
+  });
+});
+
+
+describe("craftar mcp --allow-writes — a real process", () => {
+  it("tools/list has 10 tools; sync writes the workspace rule; nothing on stderr; exit 0", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(
+      await scenario(
+        { ingredients: [rule("keep", "# Keep\n")], recipes: [recipe("base", ["rule/keep"])], profiles: [profile("acme", ["base"])] },
+        { config: { profile: "acme" } },
+      ),
+    );
+    // Record consent in-process
+    await allowWrites(home, s.wsRoot, { forge: { source: "../forge", ref: null }, profile: "acme" });
+
+    const m = start(["--allow-writes", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
+    await m.request("initialize", INIT);
+
+    // tools/list has 10 tools
+    const list = await m.request("tools/list");
+    expect(list.result.tools).toHaveLength(10);
+
+    // sync writes the workspace rule
+    const sync = await m.tool("sync");
+    expect(sync.isError).toBeUndefined();
+    expect(sync.structuredContent.written).toContain(".claude/rules/keep.md");
+
+    // Verify file was written
+    const content = await fs.readFile(path.join(s.wsRoot, ".claude/rules/keep.md"), "utf8");
+    expect(content).toBe("# Keep\n");
+
+    const done = await m.end();
+    expect(done.stderr).toBe("");
+    expect(done.code).toBe(0);
   });
 });

@@ -8,15 +8,16 @@ import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
 import { holdsBaseCitations, rendersServers } from "./core/mcp-server.js";
-import { assertNotCacheTree, classifyForge } from "./core/remote.js";
-import { forget, listWorkspaces, prune, readRegistry, register, registryFile, type WorkspaceRow } from "./core/registry.js";
-import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStates, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
+import { assertNotCacheTree, classifyForge, CREDENTIAL_HIDDEN, refHoldsCredentials, shownRef } from "./core/remote.js";
+import { allowWrites, forget, listWorkspaces, prune, readRegistry, revokeWrites, type WorkspaceRow } from "./core/registry.js";
+import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { launchRefusal, pinOf } from "./core/mcp-protocol.js";
 import { serve } from "./mcp.js";
+import { mcpWriters } from "./core/write-actions.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, apply, unsetDeclared, unsetRefusal, unsetRefused, agentsMdOverBudget, agentsMdRefusal, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -24,7 +25,7 @@ import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
-import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, notProduced, readText, statusPath, statusReport, targetsReport } from "./core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, readText, statusPath, statusReport, targetsReport } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
@@ -53,7 +54,8 @@ import { askInit, askClone, confirmInit, againLine, NOT_CLONED_REFUSED, type Ini
 import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type DestinationContext, type RepoState } from "./core/clone.js";
 import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
 import { readlineIo } from "./prompt.js";
-import { editRecipesText, planRecipeEdit, recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
+import { recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
+import { syncWorkspace, editRecipes, confirmWrites } from "./core/write-actions.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type UnifyPlan } from "./schema/index.js";
 import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
@@ -74,7 +76,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.34.2");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.35.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -222,28 +224,17 @@ function budgetRefusalBlock(p: Plan): boolean {
  * `CRAFTAR_NO_REGISTRY`), and the lines `sync` prints. `sync` and `init` both call it (spec 23 §5.2).
  */
 async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lock | null, opts: { dryRun?: boolean; overwriteDrift?: boolean; overwritePaths?: ReadonlySet<string> } = {}): Promise<ApplyResult> {
-  const r = await apply(ws, p, st, opts);
-  // A writing sync records the workspace (spec 21 §4.1); the registry is an index, so a failure is a warning.
-  let registryWarning: string | null = null;
-  if (!opts.dryRun && !registryOff()) {
-    const home = craftarHome();
-    try {
-      await register(home, ws, p);
-    } catch (e) {
-      registryWarning = `registry not updated (${registryFile(home)}): ${e instanceof Error ? e.message : String(e)}`;
-    }
-  }
+  const o = await syncWorkspace(ws, p, st, lock, { ...opts, home: craftarHome(), registryOff: registryOff() });
   const verb = opts.dryRun ? "would write" : "wrote";
   console.log(pc.bold(`craftar sync — profile ${ws.config.profile} · recipes ${p.resolution.recipes.join(" → ")} · targets ${p.resolution.targets.join(", ")}`));
-  const fl = forgeLine(ws, lock);
-  if (fl) console.log(fl);
-  console.log(`  ${verb} ${pc.green(String(r.written.length))}, removed ${pc.magenta(String(r.removed.length))} orphan(s), skipped ${pc.yellow(String(r.skipped.length))}`);
-  for (const f of r.written) console.log(`  ${pc.green("+")} ${f}`);
-  for (const f of r.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : "orphan: no longer produced by the Forge"})`);
-  for (const s of r.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
+  if (o.forgeLine) console.log(o.forgeLine);
+  console.log(`  ${verb} ${pc.green(String(o.result.written.length))}, removed ${pc.magenta(String(o.result.removed.length))} orphan(s), skipped ${pc.yellow(String(o.result.skipped.length))}`);
+  for (const f of o.result.written) console.log(`  ${pc.green("+")} ${f}`);
+  for (const f of o.result.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : "orphan: no longer produced by the Forge"})`);
+  for (const s of o.result.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
   for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
-  if (registryWarning) console.log(`  ${pc.yellow("warn")} ${registryWarning}`);
-  return r;
+  if (o.registry) console.log(`  ${pc.yellow("warn")} registry not updated (${o.registry.file}): ${o.registry.message}`);
+  return o.result;
 }
 
 /**
@@ -1143,43 +1134,22 @@ drift
   });
 
 /* ---------------------------------------------------------------- add / remove recipe */
-/**
- * Spec 22's line: what the next sync would do (also `init --no-sync`, spec 23 §4.4).
- * Uses `countStates` from `src/core/impact.ts`; a new `FileState` does not compile until it is
- * placed in `FILE_STATE_ORDER_MAP` there. A plan with unset declared parameters has no next sync
- * to count: the line says it is refused (spec 29 §4.1).
- */
-function nextSyncLine(st: FileStatus[], unset: UnsetParam[]): string {
-  if (unset.length) return `next sync: ${unsetRefused(unset)}`;
-  const counts = countStates(st).map(([k, n]) => `${n} ${k}`);
-  return `next sync: ${counts.length ? `${counts.join(", ")} — run \`craftar sync\`` : "nothing to sync"}`;
-}
-
 function recipeCommand(op: RecipeOp) {
   return async (names: string[], o: { workspace: string; replace?: boolean; offline?: boolean }) => {
     const ws = await loadWorkspace(o.workspace, load(o, "read"));
     warnStderr(ws.warnings);
-    // R1: arrays replace across layers, so an edit of craftar.yaml would not take effect (spec 22 Ruling 1).
-    if ((await localKeys(ws.root)).includes("recipes"))
-      fail(`${LOCAL_FILE} sets recipes, which replaces ${WORKSPACE_FILE}'s lists — edit it by hand, or remove its recipes key and re-run`);
-    const edit = planRecipeEdit(ws.forge, ws.config, op, names, { replace: o.replace === true });
-    if (!edit.changed) {
-      console.log(`nothing to change${edit.reasons.length ? `: ${edit.reasons.join(", ")}` : ""}`);
+    const outcome = await editRecipes(ws, op, names, { replace: o.replace });
+
+    if (!outcome.changed) {
+      console.log(`nothing to change${outcome.reasons.length ? `: ${outcome.reasons.join(", ")}` : ""}`);
       return;
     }
-    const file = path.join(ws.root, WORKSPACE_FILE);
-    const content = editRecipesText(await fs.readFile(file, "utf8"), edit.recipes, `${op} recipe`);
-    // The report is computed before the write, so a plan that fails leaves craftar.yaml untouched (§5.2 step 4).
-    const next: Workspace = { ...ws, config: { ...ws.config, recipes: edit.recipes } };
-    const p = await plan(next);
-    const st = await status(next, p, await readLock(ws.root));
-    const nextLine = nextSyncLine(st, unsetDeclared(p));
-    await fs.writeFile(file, content);
-    console.log(`${WORKSPACE_FILE}: ${recipeDiffLine(ws.config.recipes, edit.recipes)}`);
-    console.log(`recipes: ${p.resolution.recipes.join(" → ")}`);
-    console.log(nextLine);
+
+    console.log(`${WORKSPACE_FILE}: ${recipeDiffLine(outcome.before, outcome.after)}`);
+    console.log(`recipes: ${outcome.next!.recipes.join(" → ")}`);
+    console.log(nextSyncLine(outcome.next!.statuses, outcome.next!.unset));
     // plan() already carries ws.warnings first, and they were printed on load.
-    warnStderr(p.warnings.slice(ws.warnings.length));
+    warnStderr(outcome.next!.warnings);
   };
 }
 
@@ -1483,14 +1453,15 @@ templates
   });
 
 /* ---------------------------------------------------------------- mcp */
-program
+const mcpCmd = program
   .command("mcp")
   .description(
-    "Serve this workspace to an AI coder over the Model Context Protocol, on stdin and stdout: seven reading tools — status, diff, explain, recipes, ingredients, targets, doctor — with the data those commands print. Started by the AI coder, not typed. Reads only; reads without the network unless --fetch",
+    "Serve this workspace to an AI coder over the Model Context Protocol, on stdin and stdout: seven reading tools — status, diff, explain, recipes, ingredients, targets, doctor — with the data those commands print. Started by the AI coder, not typed. Reads only unless --allow-writes; reads without the network unless --fetch",
   )
   .option("--workspace <dir>", "the workspace to serve", ".")
   .option("--fetch", "let a tool call fetch a remote Forge instead of reading the cached copy", false)
-  .action(async (o: { workspace: string; fetch: boolean }) => {
+  .option("--allow-writes", "enable the writing tools (sync, add_recipe, remove_recipe) for a workspace with consent", false)
+  .action(async (o: { workspace: string; fetch: boolean; allowWrites: boolean }) => {
     // The bound workspace, resolved once: no tool takes a directory (spec 35 §4.1).
     const root = path.resolve(o.workspace);
     const refusal = launchRefusal(process.stdin.isTTY === true, await exists(path.join(root, WORKSPACE_FILE)), root);
@@ -1511,7 +1482,90 @@ program
       registryOff: registryOff(),
       env: process.env,
       pin: pinOf(merged),
+      writers: o.allowWrites ? mcpWriters(craftarHome(), registryOff()) : undefined,
     });
+  });
+
+mcpCmd
+  .command("allow-writes")
+  .description(
+    "Let craftar mcp --allow-writes write in this workspace — sync, add_recipe, remove_recipe — for the Forge, ref and profile it names now; asks a person in a terminal and records the consent in this machine's registry",
+  )
+  // No default here: `mcp` holds `--workspace` too, and commander gives the value to the parent when both declare it.
+  .option("--workspace <dir>", 'workspace root (default: ".")')
+  .action(async (o: { workspace?: string }) => {
+    const workspace: string = o.workspace ?? mcpCmd.opts().workspace ?? ".";
+    if (mcpCmd.opts().fetch) fail("craftar mcp allow-writes takes only --workspace");
+    if (mcpCmd.opts().allowWrites) fail("craftar mcp allow-writes takes only --workspace");
+    const root = path.resolve(workspace);
+    if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
+      fail(`no craftar.yaml in ${root} — the consent is given for one workspace; type it in one, or pass --workspace`);
+    }
+    if (registryOff()) fail("the consent is recorded in the registry, and CRAFTAR_NO_REGISTRY is set — unset it to allow writes");
+    const home = craftarHome();
+    try {
+      await readRegistry(home);
+    } catch (e) {
+      fail(`cannot read the registry: ${errorText(e)}`);
+    }
+    // a forge: holding credentials is refused here, before anything prints it
+    let merged: MergedConfig;
+    try {
+      merged = await readWorkspaceConfig(root);
+    } catch (e) {
+      fail(errorText(e));
+    }
+    // before anything prints or records it (and before the terminal check)
+    if (merged.config.ref && refHoldsCredentials(merged.config.ref)) {
+      fail(`ref holds ${CREDENTIAL_HIDDEN} — remove the credentials before allowing writes`);
+    }
+    if (!(process.stdin.isTTY === true && process.stdout.isTTY === true)) {
+      fail("craftar mcp allow-writes asks a person in a terminal — type it in one; it cannot be run from a script or an AI coder's shell tool");
+    }
+    const realRoot = await fs.realpath(root);
+    const refLine = merged.config.ref ?? "(the Forge's default)";
+    console.log(`craftar mcp allow-writes — ${realRoot}`);
+    console.log(`  forge    ${merged.config.forge}`);
+    console.log(`  ref      ${refLine}`);
+    console.log(`  profile  ${merged.config.profile}`);
+    console.log(`  tools    sync, add_recipe, remove_recipe — sync never discards a hand edit`);
+    if (!(await confirmWrites(readlineIo(process.stdin, process.stdout, { terminal: true })))) fail("allow-writes cancelled — nothing written");
+    try {
+      const consent = await allowWrites(home, root, {
+        forge: { source: merged.config.forge, ref: merged.config.ref ?? null },
+        profile: merged.config.profile,
+      });
+      console.log(`write consent recorded for ${consent.path} — craftar mcp --allow-writes may sync and edit recipes here; craftar mcp revoke-writes takes it back`);
+    } catch (e) {
+      fail(`consent not recorded: ${errorText(e)}`);
+    }
+  });
+
+mcpCmd
+  .command("revoke-writes")
+  .description("Take back the consent of craftar mcp allow-writes for this workspace; needs no terminal")
+  // No default here: `mcp` holds `--workspace` too, and commander gives the value to the parent when both declare it.
+  .option("--workspace <dir>", 'workspace root (default: ".")')
+  .action(async (o: { workspace?: string }) => {
+    const workspace: string = o.workspace ?? mcpCmd.opts().workspace ?? ".";
+    if (mcpCmd.opts().fetch) fail("craftar mcp revoke-writes takes only --workspace");
+    if (mcpCmd.opts().allowWrites) fail("craftar mcp revoke-writes takes only --workspace");
+    const root = path.resolve(workspace);
+    if (!(await exists(path.join(root, WORKSPACE_FILE)))) {
+      fail(`no craftar.yaml in ${root} — the consent is given for one workspace; type it in one, or pass --workspace`);
+    }
+    if (registryOff()) fail("the consent is recorded in the registry, and CRAFTAR_NO_REGISTRY is set — nothing to revoke here");
+    const home = craftarHome();
+    try {
+      const result = await revokeWrites(home, root);
+      if (result.removed) {
+        console.log(`write consent removed for ${result.path}`);
+      } else {
+        console.log(`no consent recorded for ${result.path}`);
+      }
+    } catch (e) {
+      fail(`consent not removed: ${errorText(e)}`);
+    }
   });
 
 /* ---------------------------------------------------------------- recipes */
@@ -3053,16 +3107,6 @@ function matchSuffix(ws: ForgeWorkspace): string {
   if (ws.match === "clone") suffix = ` · after push and pull (${ws.via})`;
   if (ws.ref) suffix += `, pins ${ws.ref}`;
   return suffix;
-}
-
-/** The header line naming a remote Forge (spec 13 §4.1); null for a path Forge, whose headers keep their shape. */
-function forgeLine(ws: Workspace, lock: Lock | null): string | null {
-  const o = ws.origin;
-  if (o.kind !== "remote") return null;
-  const commit = ws.forge.commit;
-  const at = o.ref ?? `${o.defaultBranch} (default branch)`;
-  const moved = lock?.forge.commit && commit && lock.forge.commit !== commit ? ` · lock ${lock.forge.commit.slice(0, 8)}` : "";
-  return `  forge ${o.source} @ ${at} ${commit?.slice(0, 8) ?? "no git"}${moved}`;
 }
 
 /** One line on stderr with the `error: ` prefix, without exiting — `fail()` is this, then exit 1. */

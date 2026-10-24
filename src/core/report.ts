@@ -6,10 +6,11 @@ import { listTargets, type ListTargetsResult } from "./capabilities.js";
 import { diffOps } from "./diff.js";
 import { mcpTagged } from "./drift.js";
 import type { PlannedFile } from "../emitters/types.js";
+import { countStates } from "./impact.js";
 import { FULL_SHA } from "./remote.js";
 import { resolve, type ParamLayer } from "./resolve.js";
 import { errorText } from "./schema-fault.js";
-import { loadForgeFor, unsetDeclared, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
+import { loadForgeFor, unsetDeclared, unsetRefused, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
 
 /*
@@ -219,4 +220,26 @@ export function cachedCopyLine(ws: Pick<Workspace, "origin" | "forge">, fetch: b
   const o = ws.origin;
   if (fetch || o.kind !== "remote" || (o.ref !== null && FULL_SHA.test(o.ref))) return null;
   return `Forge ${o.source} read from the copy cached ${o.fetchedAt ?? "(time unknown)"} (commit ${ws.forge.commit?.slice(0, 8) ?? "no git"}) — craftar mcp was started without --fetch`;
+}
+
+/** The header line naming a remote Forge (spec 13 §4.1); null for a path Forge, whose headers keep their shape. */
+export function forgeLine(ws: Workspace, lock: Lock | null): string | null {
+  const o = ws.origin;
+  if (o.kind !== "remote") return null;
+  const commit = ws.forge.commit;
+  const at = o.ref ?? `${o.defaultBranch} (default branch)`;
+  const moved = lock?.forge.commit && commit && lock.forge.commit !== commit ? ` · lock ${lock.forge.commit.slice(0, 8)}` : "";
+  return `  forge ${o.source} @ ${at} ${commit?.slice(0, 8) ?? "no git"}${moved}`;
+}
+
+/**
+ * Spec 22's line: what the next sync would do (also `init --no-sync`, spec 23 §4.4).
+ * Uses `countStates` from `src/core/impact.ts`; a new `FileState` does not compile until it is
+ * placed in `FILE_STATE_ORDER_MAP` there. A plan with unset declared parameters has no next sync
+ * to count: the line says it is refused (spec 29 §4.1).
+ */
+export function nextSyncLine(st: FileStatus[], unset: UnsetParam[]): string {
+  if (unset.length) return `next sync: ${unsetRefused(unset)}`;
+  const counts = countStates(st).map(([k, n]) => `${n} ${k}`);
+  return `next sync: ${counts.length ? `${counts.join(", ")} — run \`craftar sync\`` : "nothing to sync"}`;
 }
