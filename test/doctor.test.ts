@@ -320,6 +320,62 @@ describe("workspace checks", () => {
     const r = await run({ home: f.home, workspace: await f.ws("acme-a") });
     expect(JSON.stringify(of(r.checks, "mcp-env"))).toBe(PINNED_MCP_ENV);
   });
+
+  it("forge-inside: a workspace inside its path Forge warns; a directory named ..x inside it too", async () => {
+    const f = await fixture();
+    const inner = path.join(f.forgeRoot, "ws");
+    await makeWorkspace(inner, f.forgeRoot, { config: { profile: "acme" } });
+    expect(one((await run({ home: f.home, workspace: inner })).checks, "forge-inside").level).toBe("warn");
+    const dotted = path.join(f.forgeRoot, "..x");
+    await makeWorkspace(dotted, f.forgeRoot, { config: { profile: "acme" } });
+    expect(one((await run({ home: f.home, workspace: dotted })).checks, "forge-inside").level).toBe("warn");
+  });
+
+  it("config: a ref beside a path Forge is a config warn, not repeated under plan", async () => {
+    const f = await fixture();
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a", { profile: "acme", ref: "v1" }) });
+    const cfg = of(r.checks, "config");
+    expect(cfg.map((c) => c.level)).toEqual(["warn"]);
+    expect(cfg[0].message).toMatch(/^ref "v1" is ignored/);
+    expect(r.summary.ok).toBe(r.checks.filter((c) => c.level === "ok").length);
+    expect(of(r.checks, "plan").map((c) => c.level)).toEqual(["ok"]);
+  });
+
+  it("registered: through a symlink is ok (real paths); synced but not registered warns", async () => {
+    const f = await fixture();
+    const a = await f.ws("acme-a");
+    await syncAndRegister(f.home, a);
+    const link = path.join(f.root, "link-a");
+    await fs.symlink(a, link, process.platform === "win32" ? "junction" : "dir");
+    expect(one((await run({ home: f.home, workspace: link })).checks, "registered").message).toBe("in the registry");
+    await fs.rm(path.join(f.home, "registry.json"));
+    expect(one((await run({ home: f.home, workspace: a })).checks, "registered")).toMatchObject({ level: "warn", fix: "craftar sync" });
+    const off = await run({ home: f.home, workspace: a, registryOff: true });
+    expect(one(off.checks, "registered")).toMatchObject({ level: "ok", message: "registry off" });
+  });
+
+  it("a symlinked workspace loads its Forge through the path as given, like every other command", async () => {
+    const f = await fixture();
+    const real = path.join(f.root, "real", "ws");
+    await writeFiles(real, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
+    const links = path.join(f.root, "links");
+    await fs.mkdir(links);
+    const kind = process.platform === "win32" ? "junction" : "dir";
+    await fs.symlink(f.forgeRoot, path.join(links, "forge"), kind);
+    await fs.symlink(real, path.join(links, "ws"), kind);
+    const r = await run({ home: f.home, workspace: path.join(links, "ws") });
+    expect(one(r.checks, "config").level).toBe("ok");
+    expect(r.workspace).toBe(await fs.realpath(real));
+  });
+
+  it("a workspace that does not load: config error, dependent checks absent, lock still runs", async () => {
+    const f = await fixture();
+    const a = await f.ws("acme-a", { profile: "acme", forge: "../nowhere" });
+    const r = await run({ home: f.home, workspace: a });
+    expect(one(r.checks, "config")).toMatchObject({ level: "error", fix: null });
+    for (const id of ["forge", "forge-inside", "plan", "params", "mcp-env", "status", "registered"]) expect(of(r.checks, id), id).toHaveLength(0);
+    expect(one(r.checks, "lock").level).toBe("warn");
+  });
 });
 
 describe("mcp-launcher (spec 42)", () => {
@@ -417,64 +473,6 @@ describe("mcp-launcher (spec 42)", () => {
     const check = of(r.checks, "mcp-launcher")[0];
     expect(check.level).toBe("warn");
     expect(check.message).toMatch(/\(\.kiro\/settings\/mcp\.json\)$/);
-  });
-});
-
-describe("workspace checks", () => {
-  it("forge-inside: a workspace inside its path Forge warns; a directory named ..x inside it too", async () => {
-    const f = await fixture();
-    const inner = path.join(f.forgeRoot, "ws");
-    await makeWorkspace(inner, f.forgeRoot, { config: { profile: "acme" } });
-    expect(one((await run({ home: f.home, workspace: inner })).checks, "forge-inside").level).toBe("warn");
-    const dotted = path.join(f.forgeRoot, "..x");
-    await makeWorkspace(dotted, f.forgeRoot, { config: { profile: "acme" } });
-    expect(one((await run({ home: f.home, workspace: dotted })).checks, "forge-inside").level).toBe("warn");
-  });
-
-  it("config: a ref beside a path Forge is a config warn, not repeated under plan", async () => {
-    const f = await fixture();
-    const r = await run({ home: f.home, workspace: await f.ws("acme-a", { profile: "acme", ref: "v1" }) });
-    const cfg = of(r.checks, "config");
-    expect(cfg.map((c) => c.level)).toEqual(["warn"]);
-    expect(cfg[0].message).toMatch(/^ref "v1" is ignored/);
-    expect(r.summary.ok).toBe(r.checks.filter((c) => c.level === "ok").length);
-    expect(of(r.checks, "plan").map((c) => c.level)).toEqual(["ok"]);
-  });
-
-  it("registered: through a symlink is ok (real paths); synced but not registered warns", async () => {
-    const f = await fixture();
-    const a = await f.ws("acme-a");
-    await syncAndRegister(f.home, a);
-    const link = path.join(f.root, "link-a");
-    await fs.symlink(a, link, process.platform === "win32" ? "junction" : "dir");
-    expect(one((await run({ home: f.home, workspace: link })).checks, "registered").message).toBe("in the registry");
-    await fs.rm(path.join(f.home, "registry.json"));
-    expect(one((await run({ home: f.home, workspace: a })).checks, "registered")).toMatchObject({ level: "warn", fix: "craftar sync" });
-    const off = await run({ home: f.home, workspace: a, registryOff: true });
-    expect(one(off.checks, "registered")).toMatchObject({ level: "ok", message: "registry off" });
-  });
-
-  it("a symlinked workspace loads its Forge through the path as given, like every other command", async () => {
-    const f = await fixture();
-    const real = path.join(f.root, "real", "ws");
-    await writeFiles(real, { "craftar.yaml": "forge: ../forge\nprofile: acme\n" });
-    const links = path.join(f.root, "links");
-    await fs.mkdir(links);
-    const kind = process.platform === "win32" ? "junction" : "dir";
-    await fs.symlink(f.forgeRoot, path.join(links, "forge"), kind);
-    await fs.symlink(real, path.join(links, "ws"), kind);
-    const r = await run({ home: f.home, workspace: path.join(links, "ws") });
-    expect(one(r.checks, "config").level).toBe("ok");
-    expect(r.workspace).toBe(await fs.realpath(real));
-  });
-
-  it("a workspace that does not load: config error, dependent checks absent, lock still runs", async () => {
-    const f = await fixture();
-    const a = await f.ws("acme-a", { profile: "acme", forge: "../nowhere" });
-    const r = await run({ home: f.home, workspace: a });
-    expect(one(r.checks, "config")).toMatchObject({ level: "error", fix: null });
-    for (const id of ["forge", "forge-inside", "plan", "params", "mcp-env", "status", "registered"]) expect(of(r.checks, id), id).toHaveLength(0);
-    expect(one(r.checks, "lock").level).toBe("warn");
   });
 });
 

@@ -400,14 +400,14 @@ async function workspaceChecks(
       if (servers.length > 0) {
         // Group by server name in order of first appearance; for each name collect its files in plan order
         const windowsServers = new Map<string, { letter: "c" | "k"; files: string[] }>();
-        for (const [outName, serverDef, _authEnv, file] of servers) {
+        for (const [name, serverDef, _authEnv, file] of servers) {
           const letter = windowsOnlyLauncher(serverDef);
           if (letter === null) continue;
-          const existing = windowsServers.get(outName);
+          const existing = windowsServers.get(name);
           if (existing) {
             if (!existing.files.includes(file)) existing.files.push(file);
           } else {
-            windowsServers.set(outName, { letter, files: [file] });
+            windowsServers.set(name, { letter, files: [file] });
           }
         }
         if (windowsServers.size === 0) {
@@ -529,6 +529,7 @@ function writtenServers(p: Plan, schema: 1 | 2 | 3 | 4 | 5): Array<[string, unkn
   const servers: Array<[string, unknown, string[] | undefined, string]> = [];
   for (const target of p.resolution.targets) {
     const file = MCP_FILE[target as keyof typeof MCP_FILE];
+    // agents-md only: its mcp cell is `unsupported` in src/core/capabilities.ts
     if (file === undefined) continue;
     // `written()` yields only what the matrix says this target writes; the skip warnings were plan()'s.
     const walk = written(p.resolution, target, () => {});
