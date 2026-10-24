@@ -1,4 +1,5 @@
-import { toCrlf } from "../core/text.js";
+import { posix } from "node:path";
+import { climbsOut, toCrlf } from "../core/text.js";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
 import { decodeForScan } from "../core/secrets.js";
@@ -126,9 +127,13 @@ export const kiro: Emitter<"kiro"> = {
           if (primary && m.resources) {
             for (const entry of m.resources) {
               if (!entry.startsWith("file://")) continue;
-              const rel = entry.slice("file://".length);
+              const raw = entry.slice("file://".length);
               // Skip globs
-              if (/[*?[{]/.test(rel)) continue;
+              if (/[*?[{]/.test(raw)) continue;
+              // Compared as a path (`.kiro/steering/./x.md` is `.kiro/steering/x.md`); one that climbs out of the workspace
+              // names nothing the plan can write and is never looked up on disk.
+              if (climbsOut(raw)) continue;
+              const rel = posix.normalize(raw);
               // Only check .kiro/steering/, .claude/rules/, or AGENTS.md
               if (rel.startsWith(".kiro/steering/") || rel.startsWith(".claude/rules/") || rel === "AGENTS.md") {
                 ctx.reportKiroResource(outName(m), rel);

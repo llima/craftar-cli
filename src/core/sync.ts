@@ -688,7 +688,9 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const reworded = [...rewordedPaths].sort();
 
   // Kiro agent resources check (spec 41 §4.5–§4.6): null when the mode is off
-  const kiroResources = await computeKiroResources(planned, kiroResourceRecords, ctx.readExisting, warnings, resolution.primary);
+  // Existence only (lstat): a hand-written entry's file is never read.
+  const onDisk = (rel: string) => fs.lstat(path.join(ws.root, rel)).then(() => true, () => false);
+  const kiroResources = await computeKiroResources(planned, kiroResourceRecords, onDisk, warnings, resolution.primary);
 
   // CLAUDE.md blocking check (spec 41 §4.7): only when the mode is on and claude-code is a target
   if (resolution.primary && resolution.targets.includes("claude-code")) {
@@ -787,7 +789,7 @@ function parseAgentsMdBudget(value: unknown): number | null {
 async function computeKiroResources(
   planned: PlannedFile[],
   recorded: Array<{ agent: string; path: string }>,
-  readExisting: (rel: string) => Promise<Buffer | null>,
+  onDisk: (rel: string) => Promise<boolean>,
   warnings: string[],
   primary: boolean,
 ): Promise<Plan["kiroResources"]> {
@@ -814,7 +816,7 @@ async function computeKiroResources(
   for (const r of deduped) {
     if (plannedPaths.has(r.path)) continue; // fine
     // Not planned: check if present on disk
-    const exists = (await readExisting(r.path)) !== null;
+    const exists = await onDisk(r.path);
     if (exists) present.push(r);
     else unplanned.push(r);
   }

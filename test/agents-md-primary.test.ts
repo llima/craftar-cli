@@ -805,3 +805,22 @@ describe("claudeResolves (spec 41 §4.4, §4.10)", () => {
     expect(claudeResolves(RuleIngredient.parse({ type: "rule", name: "api" }), "notes.md")).toBe(false);
   });
 });
+
+describe("Kiro resources check — spellings (spec 41 §4.5)", () => {
+  it("`.kiro/steering/./api.md` is the planned api.md; an entry that climbs out of the workspace is not checked", async () => {
+    const extraIngredients = [
+      {
+        meta: { type: "agent", name: "spelled", resources: ["file://.kiro/steering/./api.md", "file://.kiro/steering/../../../outside.md"] },
+        files: { "agent.md": "Plain.\n" },
+      },
+    ];
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true }, extraIngredients }));
+    // A file where the climbing entry points (outside the workspace): it must not be reported as present.
+    const { promises: fsp } = await import("node:fs");
+    const pathMod = await import("node:path");
+    await fsp.writeFile(pathMod.join(s.root, "outside.md"), "x\n");
+    const p = await plan(await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME }));
+    const named = [...p.kiroResources!.unplanned, ...p.kiroResources!.present].filter((e) => e.agent === "spelled");
+    expect(named).toEqual([]);
+  });
+});
