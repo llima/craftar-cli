@@ -8,6 +8,7 @@
 
 import type { FileState } from "../core/sync.js";
 import { diffShows } from "../core/report.js";
+import { EXAMPLE_SETTINGS } from "../emitters/shared.js";
 
 export const PAGE_HTML = `<!doctype html>
 <html lang="en">
@@ -94,9 +95,6 @@ export const PAGE_STATES: Record<FileState, { order: number; syncActs: boolean; 
 
 /** Builds the page's script. When `writes` is false, the result is the read-only page; when true, it adds Sync and Discard edit. */
 export function pageJs(writes: boolean): string {
-  // The example settings file path, checked for discard exclusion
-  const EXAMPLE_FILE = ".claude/settings.craftar.example.json";
-
   // Writing code interpolated only when `writes` is true; otherwise yields ""
   const W_WRITES_VAR = writes ? `\n  var writes = false;` : "";
   const W_POST_FN = writes
@@ -169,7 +167,7 @@ export function pageJs(writes: boolean): string {
   const W_DISCARD_IN_DIFF = writes
     ? `
         /* Discard edit button: only for drift or orphan-drift, not the example file. */
-        if (writes && doc.digest && (f.state === "drift" || f.state === "orphan-drift") && f.path !== "${EXAMPLE_FILE}" && !d.hidden) {
+        if (writes && doc.digest && (f.state === "drift" || f.state === "orphan-drift") && f.path !== ${JSON.stringify(EXAMPLE_SETTINGS)} && !d.hidden) {
           var discardMsg = f.state === "drift"
             ? "The hand edit of " + f.path + " is lost; the Forge's version is written."
             : "The hand edit of " + f.path + " is lost; the file is removed.";

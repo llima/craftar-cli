@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { FILE_STATE_ORDER_MAP } from "../src/core/impact.js";
 import { PAGE_STATES } from "../src/ui/page.js";
 import { PAGE_CSS, PAGE_HTML, PAGE_JS, pageCss, pageJs } from "../src/ui/page.js";
+import { EXAMPLE_SETTINGS } from "../src/emitters/shared.js";
 
 // Spec 36 §7.4, §10.3 — a source check of the page. The CSP is what stops inline script even if this is fooled;
 // what the page DOES with an answer is the by-hand run of spec §10.5 (step 36f).
@@ -86,6 +90,16 @@ describe("craftar ui — the page's source", () => {
   it("the page prints the core's refusal line, not one of its own", () => {
     expect(PAGE_JS).not.toContain("sync is refused");
     expect(PAGE_JS).toContain("doc.refused");
+  });
+
+  it("the source of page.ts uses EXAMPLE_SETTINGS from shared.ts, not a second spelling of the path", async () => {
+    // Read the source file to ensure there is no literal spelling of the example path
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const source = await fs.readFile(path.join(__dirname, "..", "src", "ui", "page.ts"), "utf8");
+    // The literal path should not appear in the source
+    expect(source).not.toContain("settings.craftar.example.json");
+    // And pageJs(true) should contain the path (interpolated from EXAMPLE_SETTINGS)
+    expect(pageJs(true)).toContain(EXAMPLE_SETTINGS);
   });
 });
 
