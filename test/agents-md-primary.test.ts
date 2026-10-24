@@ -561,13 +561,13 @@ describe("claudeMdBlocks unit (spec 41 §4.7)", () => {
 
   it("CLAUDE.md starting with a UTF-8 BOM before @AGENTS.md → imports (measured: Claude Code 2.1.310 reads it)", async () => {
     const { claudeMdBlocks } = await import("../src/core/sync.js");
-    const result = await claudeMdBlocks(makeReadExisting({ "CLAUDE.md": "﻿@AGENTS.md\n" }));
+    const result = await claudeMdBlocks(makeReadExisting({ "CLAUDE.md": "\uFEFF@AGENTS.md\n" }));
     expect(result).toEqual({ imports: true, blocking: [] });
   });
 
   it(".claude/CLAUDE.md starting with a UTF-8 BOM before @../AGENTS.md → imports", async () => {
     const { claudeMdBlocks } = await import("../src/core/sync.js");
-    const result = await claudeMdBlocks(makeReadExisting({ ".claude/CLAUDE.md": "﻿@../AGENTS.md\r\n" }));
+    const result = await claudeMdBlocks(makeReadExisting({ ".claude/CLAUDE.md": "\uFEFF@../AGENTS.md\r\n" }));
     expect(result).toEqual({ imports: true, blocking: [] });
   });
 
