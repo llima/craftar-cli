@@ -169,6 +169,7 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
   let p: Plan;
   let lock: Lock | null;
   let st: FileStatus[];
+  let digest: string | undefined;
   try {
     // For write patterns, refuse a remote Forge before anything is fetched (spec 40 §6.4 step 2).
     ws = await loadWorkspace(entry.path, {
@@ -185,6 +186,10 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
     p = await plan(ws);
     lock = await readLock(ws.root);
     st = await status(ws, p, lock);
+    // Compute the digest inside the try block so a disk error reads as 409, not 500.
+    if (isWritePattern || (what === undefined && deps.allowWrites)) {
+      digest = await statusDigest(ws, st);
+    }
   } catch (e) {
     // A refuseRemote throw returns the exact REMOTE_FORGE message (spec 40 §6.4 step 2).
     if (e instanceof Error && e.message === REMOTE_FORGE) {
@@ -198,8 +203,7 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
     const body = req.body!;
     const action = what as "sync" | "discard";
 
-    const currentDigest = await statusDigest(ws, st);
-    if (currentDigest !== body.digest) {
+    if (digest !== body.digest) {
       return { status: 409, body: { error: STALE_DIGEST, warnings: [] } };
     }
 
@@ -239,7 +243,7 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
     if (deps.allowWrites) {
       return {
         status: 200,
-        body: { ...base, digest: await statusDigest(ws, st) },
+        body: { ...base, digest },
       };
     }
     return { status: 200, body: base };
