@@ -895,6 +895,15 @@ export function claudeMdBlockedMessage(file: string): string {
   return `agents-md.primary: ${file} keeps Claude Code from reading AGENTS.md — add a line @AGENTS.md to CLAUDE.md, or set Project instructions to claude-md-and-agents-md`;
 }
 
+/**
+ * Why `apply()` removed `path`: the orphan wording of `craftar sync` and of the `sync` tool of `craftar mcp`, one copy
+ * (spec 41 §4.8).
+ */
+export function orphanReason(p: Plan, statuses: readonly FileStatus[], path: string): string {
+  const s = statuses.find((x) => x.path === path);
+  return s !== undefined && primaryOrphan(p, s) ? "orphan: written to AGENTS.md only (agents-md.primary)" : "orphan: no longer produced by the Forge";
+}
+
 /** Returns true when the orphan is due to agents-md.primary (spec 41 §4.8). */
 export function primaryOrphan(p: Plan, s: Pick<FileStatus, "state" | "target" | "ingredient">): boolean {
   if (!p.resolution.primary) return false;

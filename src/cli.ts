@@ -17,7 +17,7 @@ import { serve } from "./mcp.js";
 import { mcpWriters } from "./core/write-actions.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, primaryOrphan, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -232,13 +232,7 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
   if (o.forgeLine) console.log(o.forgeLine);
   console.log(`  ${verb} ${pc.green(String(o.result.written.length))}, removed ${pc.magenta(String(o.result.removed.length))} orphan(s), skipped ${pc.yellow(String(o.result.skipped.length))}`);
   for (const f of o.result.written) console.log(`  ${pc.green("+")} ${f}`);
-  // Look up each removed path's status to decide if it's a primary orphan
-  const stByPath = new Map(st.map((s) => [s.path, s]));
-  for (const f of o.result.removed) {
-    const s = stByPath.get(f);
-    const isPrimary = s !== undefined && primaryOrphan(p, s);
-    console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : isPrimary ? "orphan: written to AGENTS.md only (agents-md.primary)" : "orphan: no longer produced by the Forge"})`);
-  }
+  for (const f of o.result.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : orphanReason(p, st, f)})`);
   for (const s of o.result.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
   for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   if (o.registry) console.log(`  ${pc.yellow("warn")} registry not updated (${o.registry.file}): ${o.registry.message}`);

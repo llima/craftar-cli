@@ -191,3 +191,27 @@ describe("primaryOrphan per file — CLI (spec 41 §4.8 fix)", () => {
     expect(driftResult.stdout).not.toContain("written to AGENTS.md only");
   });
 });
+
+describe("Orphan's words — the sync tool of craftar mcp (spec 41 §4.8, spec 40 §5.6)", () => {
+  async function syncedOffThenOn(): Promise<Scenario> {
+    const s = kept(await acmePrimary({ schema: 5 }));
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    const file = path.join(s.forgeRoot, "profiles/acme/profile.yaml");
+    const prof = YAML.parse(await fs.readFile(file, "utf8"));
+    await fs.writeFile(file, YAML.stringify({ ...prof, params: { ...prof.params, "agents-md.primary": true } }));
+    return s;
+  }
+
+  it("names agents-md.primary for the orphans the mode made, as craftar sync does", async () => {
+    const { mcpWriters } = await import("../src/core/write-actions.js");
+    const { readWorkspaceConfig } = await import("../src/core/sync.js");
+    const s = await syncedOffThenOn();
+    const home = path.join(s.root, "home");
+    const r = await mcpWriters(home, true).sync(s.wsRoot, await readWorkspaceConfig(s.wsRoot), {});
+    expect(r.removed).toContainEqual({ path: ".claude/rules/style.md", reason: "orphan: written to AGENTS.md only (agents-md.primary)" });
+    expect(r.removed).toContainEqual({ path: ".kiro/steering/style.md", reason: "orphan: written to AGENTS.md only (agents-md.primary)" });
+    for (const row of r.removed) {
+      if (!row.path.endsWith("/style.md") && !row.path.endsWith("/release.md")) expect(row.reason).toBe("orphan: no longer produced by the Forge");
+    }
+  });
+});
