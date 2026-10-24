@@ -857,17 +857,21 @@ export async function claudeMdBlocks(
   readExisting: (rel: string) => Promise<Buffer | null>,
 ): Promise<{ imports: boolean; blocking: string[] }> {
   const FILES = ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md"];
-  const IMPORT_LINES = ["@AGENTS.md", "@./AGENTS.md"];
+  // An import is relative to the file that holds it (measured, Claude Code 2.1.310): from .claude/CLAUDE.md only
+  // `@../AGENTS.md` reaches the root's AGENTS.md. CLAUDE.local.md is not looked at for an import.
+  const IMPORT_LINES: Array<[string, string[]]> = [
+    ["CLAUDE.md", ["@AGENTS.md", "@./AGENTS.md"]],
+    [".claude/CLAUDE.md", ["@../AGENTS.md"]],
+  ];
 
-  // Check for import in CLAUDE.md or .claude/CLAUDE.md (not CLAUDE.local.md)
-  for (const file of ["CLAUDE.md", ".claude/CLAUDE.md"]) {
+  for (const [file, lines] of IMPORT_LINES) {
     const content = await readExisting(file);
     if (content !== null) {
       const text = content.toString("utf8");
       for (const line of text.split("\n")) {
         // Strip trailing CR first, then trailing spaces/tabs
         const trimmed = line.replace(/\r$/, "").replace(/[ \t]+$/, "");
-        if (IMPORT_LINES.includes(trimmed)) {
+        if (lines.includes(trimmed)) {
           return { imports: true, blocking: [] };
         }
       }

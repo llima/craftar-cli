@@ -544,11 +544,27 @@ describe("claudeMdBlocks unit (spec 41 §4.7)", () => {
     expect(result.blocking).toEqual([]);
   });
 
-  it(".claude/CLAUDE.md with '@./AGENTS.md\\r\\n' → imports", async () => {
+  // An import is relative to the file that holds it (measured with Claude Code 2.1.310): from .claude/CLAUDE.md only
+  // `@../AGENTS.md` reaches the root's AGENTS.md.
+  it(".claude/CLAUDE.md with '@../AGENTS.md\\r\\n' → imports", async () => {
     const { claudeMdBlocks } = await import("../src/core/sync.js");
-    const result = await claudeMdBlocks(makeReadExisting({ ".claude/CLAUDE.md": "@./AGENTS.md\r\n" }));
+    const result = await claudeMdBlocks(makeReadExisting({ ".claude/CLAUDE.md": "@../AGENTS.md\r\n" }));
     expect(result.imports).toBe(true);
     expect(result.blocking).toEqual([]);
+  });
+
+  it(".claude/CLAUDE.md with '@AGENTS.md' or '@./AGENTS.md' → blocking, not importing", async () => {
+    const { claudeMdBlocks } = await import("../src/core/sync.js");
+    for (const line of ["@AGENTS.md\n", "@./AGENTS.md\n"]) {
+      const result = await claudeMdBlocks(makeReadExisting({ ".claude/CLAUDE.md": line }));
+      expect(result).toEqual({ imports: false, blocking: [".claude/CLAUDE.md"] });
+    }
+  });
+
+  it("CLAUDE.md with '@./AGENTS.md' → imports; CLAUDE.md with '@../AGENTS.md' → blocking", async () => {
+    const { claudeMdBlocks } = await import("../src/core/sync.js");
+    expect((await claudeMdBlocks(makeReadExisting({ "CLAUDE.md": "@./AGENTS.md\n" }))).imports).toBe(true);
+    expect(await claudeMdBlocks(makeReadExisting({ "CLAUDE.md": "@../AGENTS.md\n" }))).toEqual({ imports: false, blocking: ["CLAUDE.md"] });
   });
 
   it("CLAUDE.md '# notes\\n' → blocking ['CLAUDE.md']", async () => {
