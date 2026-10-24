@@ -20,6 +20,7 @@ import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
 import { written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
+import { appliesTo, effectiveTargets } from "../emitters/shared.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
 export const LOCAL_FILE = "craftar.local.yaml";
@@ -333,6 +334,17 @@ export interface Plan {
     /** The exact warning line pushed into Plan.warnings, or null if within budget. */
     warning: string | null;
   } | null;
+  /** Paths of planned texts reworded because of agents-md.primary, sorted (spec 41 §4.4); [] with the mode off. */
+  reworded: string[];
+  /**
+   * Kiro agent resources check (spec 41 §4.5–§4.6): null when the mode is off; otherwise holds
+   * the hand-written entries that name files the plan does not write.
+   */
+  kiroResources: {
+    unplanned: Array<{ agent: string; path: string }>;
+    present: Array<{ agent: string; path: string }>;
+    warning: string | null;
+  } | null;
 }
 
 /** Declared keys with no default that no layer fills, with the ingredients declaring them (spec 24 §4.2) — cited or not. */
@@ -558,6 +570,10 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const warnedOnce = new Set<string>();
   /** Per-rule byte sizes for AGENTS.md budget, collected by the agents-md emitter. */
   const agentsMdRules: Array<{ name: string; bytes: number; scoped: boolean }> = [];
+  /** Paths reworded by agents-md.primary (spec 41 §4.4). */
+  const rewordedPaths = new Set<string>();
+  /** Kiro agent resources recorded for the check (spec 41 §4.5). */
+  const kiroResourceRecords: Array<{ agent: string; path: string }> = [];
   const ctx: EmitBase = {
     forge: ws.forge,
     resolution,
@@ -611,6 +627,12 @@ export async function plan(ws: Workspace): Promise<Plan> {
     reportAgentsMdRule(name: string, bytes: number, scoped: boolean) {
       agentsMdRules.push({ name, bytes, scoped });
     },
+    reportReworded(path: string) {
+      rewordedPaths.add(path);
+    },
+    reportKiroResource(agent: string, path: string) {
+      kiroResourceRecords.push({ agent, path });
+    },
   };
   const files: PlannedFile[] = [];
   for (const t of resolution.targets) {
@@ -662,7 +684,23 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const planned = dedupeLastWins(files);
   const agentsMd = computeAgentsMdBudget(planned, resolution, agentsMdRules, warnings);
 
-  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd };
+  // Collect reworded paths (spec 41 §4.4)
+  const reworded = [...rewordedPaths].sort();
+
+  // Kiro agent resources check (spec 41 §4.5–§4.6): null when the mode is off
+  // Existence only (lstat): a hand-written entry's file is never read.
+  const onDisk = (rel: string) => fs.lstat(path.join(ws.root, rel)).then(() => true, () => false);
+  const kiroResources = await computeKiroResources(planned, kiroResourceRecords, onDisk, warnings, resolution.primary);
+
+  // CLAUDE.md blocking check (spec 41 §4.7): only when the mode is on and claude-code is a target
+  if (resolution.primary && resolution.targets.includes("claude-code")) {
+    const blocks = await claudeMdBlocks(ctx.readExisting);
+    if (blocks.blocking.length > 0) {
+      warnings.push(claudeMdBlockedMessage(blocks.blocking[0]));
+    }
+  }
+
+  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources };
 }
 
 /**
@@ -714,10 +752,12 @@ function computeAgentsMdBudget(
   if (maxBytes > 0 && bytes > maxBytes) {
     const top5 = sortedRules.slice(0, 5);
     const rulesText = top5.length > 0 ? ` — largest rules: ${top5.map((r) => `${r.name} (${r.scoped ? "scoped, " : ""}${r.bytes} bytes)`).join(", ")}` : "";
+    // Under the mode, add the clause (spec 41 §4.9)
+    const primaryClause = resolution.primary ? "; these rules are in no other file" : "";
     // Two forms, each led by the wording the error block and doctor use
     warning = explicit
-      ? `${agentsMdOverBudgetMessage({ bytes, maxBytes })}; sync --check fails${rulesText}`
-      : `${agentsMdOverDefaultMessage({ bytes, maxBytes })} (${AGENTS_MD_BUDGET_KEY})${rulesText}`;
+      ? `${agentsMdOverBudgetMessage({ bytes, maxBytes })}; sync --check fails${primaryClause}${rulesText}`
+      : `${agentsMdOverDefaultMessage({ bytes, maxBytes })} (${AGENTS_MD_BUDGET_KEY})${primaryClause}${rulesText}`;
     warnings.push(warning);
   }
 
@@ -740,6 +780,143 @@ function parseAgentsMdBudget(value: unknown): number | null {
     return n;
   }
   return null;
+}
+
+/**
+ * Compute the Kiro agent resources check (spec 41 §4.5–§4.6).
+ * Returns null when the mode is off; otherwise holds the entries that name files the plan does not write.
+ */
+async function computeKiroResources(
+  planned: PlannedFile[],
+  recorded: Array<{ agent: string; path: string }>,
+  onDisk: (rel: string) => Promise<boolean>,
+  warnings: string[],
+  primary: boolean,
+): Promise<Plan["kiroResources"]> {
+  if (!primary) return null;
+  if (recorded.length === 0) return { unplanned: [], present: [], warning: null };
+
+  const plannedPaths = new Set(planned.map((f) => f.path));
+
+  // Dedupe by agent+path, sort by agent then path
+  const seen = new Set<string>();
+  const deduped: Array<{ agent: string; path: string }> = [];
+  for (const r of recorded) {
+    const key = `${r.agent}\0${r.path}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(r);
+    }
+  }
+  deduped.sort((a, b) => a.agent.localeCompare(b.agent) || a.path.localeCompare(b.path));
+
+  const unplanned: Array<{ agent: string; path: string }> = [];
+  const present: Array<{ agent: string; path: string }> = [];
+
+  for (const r of deduped) {
+    if (plannedPaths.has(r.path)) continue; // fine
+    // Not planned: check if present on disk
+    const exists = await onDisk(r.path);
+    if (exists) present.push(r);
+    else unplanned.push(r);
+  }
+
+  let warning: string | null = null;
+  if (unplanned.length > 0 || present.length > 0) {
+    const parts: string[] = [];
+    if (unplanned.length > 0) {
+      parts.push(`unplanned: ${unplanned.map((r) => `${r.agent} → ${r.path}`).join(", ")}`);
+    }
+    if (present.length > 0) {
+      parts.push(`on disk only: ${present.map((r) => `${r.agent} → ${r.path}`).join(", ")}`);
+    }
+    warning = `kiro: agent resources name files the plan does not write — ${parts.join("; ")}`;
+    warnings.push(warning);
+  }
+
+  return { unplanned, present, warning };
+}
+
+/** The unplanned entries from kiroResources, or null when there are none (spec 41 §4.6). */
+export function kiroResourcesUnplanned(p: Plan): Array<{ agent: string; path: string }> | null {
+  if (!p.kiroResources) return null;
+  if (p.kiroResources.unplanned.length === 0) return null;
+  return p.kiroResources.unplanned;
+}
+
+/** The refusal message for unplanned Kiro agent resources (spec 41 §4.6). */
+export function kiroResourcesRefusal(u: Array<{ agent: string; path: string }>): string {
+  const entries = u.map((r) => `${r.agent} → ${r.path}`).join(", ");
+  return `${u.length} Kiro agent resource(s) name a file the plan does not write: ${entries}\n  fix: edit the agent's resources in the Forge, or list the rule's targets so kiro writes it`;
+}
+
+/**
+ * Check whether a CLAUDE.md imports AGENTS.md or blocks Claude Code from reading it (spec 41 §4.7).
+ * @param readExisting - Function to read workspace files
+ * @returns imports (true when @AGENTS.md found) and blocking (the files that block when not importing)
+ */
+export async function claudeMdBlocks(
+  readExisting: (rel: string) => Promise<Buffer | null>,
+): Promise<{ imports: boolean; blocking: string[] }> {
+  const FILES = ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md"];
+  // An import is relative to the file that holds it (measured, Claude Code 2.1.310): from .claude/CLAUDE.md only
+  // `@../AGENTS.md` reaches the root's AGENTS.md. CLAUDE.local.md is not looked at for an import.
+  const IMPORT_LINES: Array<[string, string[]]> = [
+    ["CLAUDE.md", ["@AGENTS.md", "@./AGENTS.md"]],
+    [".claude/CLAUDE.md", ["@../AGENTS.md"]],
+  ];
+
+  for (const [file, lines] of IMPORT_LINES) {
+    const content = await readExisting(file);
+    if (content !== null) {
+      const text = stripBom(content.toString("utf8"));
+      for (const line of text.split("\n")) {
+        // Strip trailing CR first, then trailing spaces/tabs
+        const trimmed = line.replace(/\r$/, "").replace(/[ \t]+$/, "");
+        if (lines.includes(trimmed)) {
+          return { imports: true, blocking: [] };
+        }
+      }
+    }
+  }
+
+  // Not importing: collect blocking files
+  const blocking: string[] = [];
+  for (const file of FILES) {
+    const content = await readExisting(file);
+    if (content !== null) blocking.push(file);
+  }
+
+  return { imports: false, blocking };
+}
+
+/** The warning message for a CLAUDE.md that blocks AGENTS.md (spec 41 §4.7). */
+export function claudeMdBlockedMessage(file: string): string {
+  return `agents-md.primary: ${file} keeps Claude Code from reading AGENTS.md — add a line @AGENTS.md to CLAUDE.md, or set Project instructions to claude-md-and-agents-md`;
+}
+
+/**
+ * Why `apply()` removed `path`: the orphan wording of `craftar sync` and of the `sync` tool of `craftar mcp`, one copy
+ * (spec 41 §4.8).
+ */
+export function orphanReason(p: Plan, statuses: readonly FileStatus[], path: string): string {
+  const s = statuses.find((x) => x.path === path);
+  return s !== undefined && primaryOrphan(p, s) ? "orphan: written to AGENTS.md only (agents-md.primary)" : "orphan: no longer produced by the Forge";
+}
+
+/** Returns true when the orphan is due to agents-md.primary (spec 41 §4.8). */
+export function primaryOrphan(p: Plan, s: Pick<FileStatus, "state" | "target" | "ingredient">): boolean {
+  if (!p.resolution.primary) return false;
+  if (s.state !== "orphan") return false;
+  if (s.target !== "claude-code" && s.target !== "kiro") return false;
+  // Find the ingredient in the resolution
+  const ing = p.resolution.ingredients.find((i) => i.ref === s.ingredient);
+  if (!ing) return false;
+  // The orphan is primary iff effectiveTargets does NOT admit s.target while meta.targets DOES
+  const eff = effectiveTargets(ing.meta, p.resolution);
+  const effAdmits = appliesTo(eff, s.target);
+  const declaredAdmits = appliesTo(ing.meta.targets, s.target);
+  return !effAdmits && declaredAdmits;
 }
 
 function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {

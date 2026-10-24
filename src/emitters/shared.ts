@@ -9,6 +9,20 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
   return targets === "*" || targets.includes(target);
 }
 
+/**
+ * The targets an ingredient is aimed at in this workspace (spec 41 §4.3): its declared `targets`, except, under
+ * agents-md.primary, an always-on rule with the default targets, which is aimed at agents-md alone. The one
+ * answer to "is this rule AGENTS.md-only"; returns `meta.targets` itself when the mode is off.
+ */
+export function effectiveTargets(meta: Ingredient, resolution: { primary: boolean }): "*" | string[] {
+  return agentsMdOnly(meta, resolution) ? ["agents-md"] : meta.targets;
+}
+
+/** Under agents-md.primary, an always-on rule with the default targets: written to AGENTS.md alone (spec 41 §4.2). */
+export function agentsMdOnly(meta: Ingredient, resolution: { primary: boolean }): boolean {
+  return resolution.primary && meta.type === "rule" && meta.inclusion === "always" && meta.targets === "*";
+}
+
 /** The characters of a rule name in a `.claude/rules/<name>.md` reference (spec 15 §4.1). */
 export const RULE_NAME_CHARS = "A-Za-z0-9._-";
 
@@ -34,22 +48,148 @@ export interface RefReport {
 /** The kind string for an unknown name (no rule or steering with that name). */
 export const UNKNOWN_NAME_KIND = "";
 
+/**
+ * Format the "dead references" part of a warning (spec 17 §4.5, spec 41 §4.4): references to rules
+ * that exist but reach no target. Used by both kiro.ts and claude-code.ts emitters.
+ */
+export function formatDeadRefs(dead: Array<{ ref: string; citing: string; kind: string }>): string {
+  const entries = dead.map((e) => `${e.ref} (in ${e.citing}; ${e.kind})`).join(", ");
+  return `${dead.length} reference(s) to rule files this workspace does not have — reworded: ${entries}`;
+}
+
+/**
+ * Format the "scanned files" part of a warning (spec 41 §4.4): references left as written in
+ * files craftar copies. Used by both claude-code.ts and kiro.ts emitters.
+ */
+export function formatScannedRefs(hits: Array<{ path: string; line: number; name: string }>): string {
+  const entries = hits.map((h) => `${h.path}:${h.line} (${h.name})`).join(", ");
+  return `${hits.length} reference(s) left as written in files craftar copies: ${entries}`;
+}
+
 /** Lookup maps for rule reference resolution (spec 15 §4.2), built once per AGENTS.md. */
 export interface RuleLookup {
   rulesByName: Map<string, ResolvedIngredient>;
   steeringsByName: Map<string, ResolvedIngredient>;
+  /** Effective targets for each rule (spec 41 §4.3). */
+  ruleTargets: Map<string, "*" | string[]>;
 }
 
 /** Build the lookup maps for rule reference resolution, once per AGENTS.md. */
-export function buildRuleLookup(ingredients: ResolvedIngredient[]): RuleLookup {
+export function buildRuleLookup(ingredients: ResolvedIngredient[], resolution: { primary: boolean } = { primary: false }): RuleLookup {
   const rulesByName = new Map<string, ResolvedIngredient>();
   const steeringsByName = new Map<string, ResolvedIngredient>();
+  const ruleTargets = new Map<string, "*" | string[]>();
   for (const ing of ingredients) {
     const name = outName(ing.meta);
-    if (ing.meta.type === "rule") rulesByName.set(name, ing);
-    else if (ing.meta.type === "steering") steeringsByName.set(name, ing);
+    if (ing.meta.type === "rule") {
+      rulesByName.set(name, ing);
+      ruleTargets.set(name, effectiveTargets(ing.meta, resolution));
+    } else if (ing.meta.type === "steering") {
+      steeringsByName.set(name, ing);
+    }
   }
-  return { rulesByName, steeringsByName };
+  return { rulesByName, steeringsByName, ruleTargets };
+}
+
+/** Rule reference state (spec 15 §4.2 for agents-md, spec 17 §4.2 for kiro). */
+export type RuleRefState = "A" | "B" | "C" | "D" | "K1" | "K2" | "K3" | "unknown";
+
+/**
+ * Determine rule state for a single name (spec 15 §4.2 for agents-md, spec 17 §4.2 for kiro).
+ * agents-md: A (claude-code writes), B (kiro writes), C (agents-md), D (rule exists), unknown
+ * kiro:     K1 (kiro writes), K2 (claude-code writes), K3 (agents-md has it), D, unknown
+ */
+export function ruleRefState(
+  name: string,
+  lookup: RuleLookup,
+  targets: readonly string[],
+  mode: "agents-md" | "kiro",
+): RuleRefState {
+  const { rulesByName, steeringsByName, ruleTargets: effective } = lookup;
+  const hasCc = targets.includes("claude-code");
+  const hasKiro = targets.includes("kiro");
+  const hasMd = targets.includes("agents-md");
+  const rule = rulesByName.get(name);
+  const ruleTargets = effective.get(name);
+  if (mode === "kiro") {
+    // K1: kiro writes it — a rule or steering that admits kiro (spec 17 §4.2)
+    if (rule && ruleTargets && hasKiro && appliesTo(ruleTargets, "kiro")) return "K1";
+    const steering = steeringsByName.get(name);
+    if (steering && hasKiro && appliesTo(steering.meta.targets, "kiro")) return "K1";
+    // K2: a rule and claude-code writes it
+    if (rule && ruleTargets && hasCc && appliesTo(ruleTargets, "claude-code")) return "K2";
+    // K3: a rule aimed at agents-md, and agents-md is a workspace target
+    if (rule && ruleTargets && hasMd && appliesTo(ruleTargets, "agents-md")) return "K3";
+    // D: any other rule
+    if (rule) return "D";
+    // unknown: anything else
+    return "unknown";
+  }
+  // agents-md mode (spec 15 §4.2)
+  if (rule && ruleTargets) {
+    const writer = ruleWriter(targets, ruleTargets);
+    if (writer === "claude-code") return "A";
+    if (writer === "kiro") return "B";
+  }
+  // B (steering): kiro writes a steering with this name — checked before C/D (spec 15 §4.2)
+  const steering = steeringsByName.get(name);
+  if (steering && hasKiro && appliesTo(steering.meta.targets, "kiro")) return "B";
+  if (rule && ruleTargets) {
+    if (appliesTo(ruleTargets, "agents-md")) return "C";
+    return "D";
+  }
+  return "unknown";
+}
+
+/**
+ * References in a text the emitter copies without resolving (spec 41 §4.4): each `.claude/rules/<x>.md` token whose rule
+ * this emitter's target does not write — in "agents-md" mode a state other than A or an unchanged unknown, in "kiro" mode a
+ * state other than K1 — with its 1-based line. The text is never changed.
+ */
+export function unresolvedRuleRefs(
+  text: string,
+  lookup: RuleLookup,
+  targets: readonly string[],
+  mode: "agents-md" | "kiro",
+): Array<{ line: number; name: string }> {
+  const hasCc = targets.includes("claude-code");
+  const result: Array<{ line: number; name: string }> = [];
+  const tokenPattern = new RegExp(TOKEN_PATTERN_SOURCE, "g");
+  let tokenMatch;
+  while ((tokenMatch = tokenPattern.exec(text)) !== null) {
+    const [match, before, _token, name] = tokenMatch as RegExpExecArray & [string, string, string, string];
+    const fullOffset = tokenMatch.index + match.length;
+    const after = text.slice(fullOffset);
+    if (!rightBoundary(after)) continue;
+    const state = ruleRefState(name, lookup, targets, mode);
+    // In agents-md mode: listed when state is B, C, D, or unknown when claude-code is not a target
+    // In kiro mode: listed when state is not K1
+    const listed = mode === "agents-md"
+      ? (state === "B" || state === "C" || state === "D" || (state === "unknown" && !hasCc))
+      : (state !== "K1");
+    if (listed) {
+      // Find line number (1-based)
+      const offset = tokenMatch.index + before.length;
+      const line = text.slice(0, offset).split("\n").length;
+      // Dedupe by (line, name)
+      if (!result.some((r) => r.line === line && r.name === name)) {
+        result.push({ line, name });
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Right boundary: not followed by letter, digit, `_`, `-`, or `.` followed by one of those (spec 15 §4.1).
+ * NOTE: the right boundary's class is NOT RULE_NAME_CHARS (which includes `.` for names) — by design.
+ */
+function rightBoundary(after: string): boolean {
+  if (!after) return true;
+  const c = after[0];
+  if (/[A-Za-z0-9_-]/.test(c)) return false;
+  if (c === "." && after.length > 1 && /[A-Za-z0-9_-]/.test(after[1])) return false;
+  return true;
 }
 
 /**
@@ -66,55 +206,10 @@ export function resolveRuleRefs(
 ): { text: string; report: RefReport } {
   const report: RefReport = { reworded: [], others: [] };
   const hasCc = targets.includes("claude-code");
-  const hasKiro = targets.includes("kiro");
-  const hasMd = targets.includes("agents-md");
-  const { rulesByName, steeringsByName } = lookup;
+  const { rulesByName } = lookup;
 
-  // Determine rule state (spec 15 §4.2 for agents-md, spec 17 §4.2 for kiro)
-  // agents-md: A (claude-code writes), B (kiro writes), C (agents-md), D (rule exists), unknown
-  // kiro:     K1 (kiro writes), K2 (claude-code writes), K3 (agents-md has it), D, unknown
-  type State = "A" | "B" | "C" | "D" | "K1" | "K2" | "K3" | "unknown";
-  const ruleState = (name: string): State => {
-    const rule = rulesByName.get(name);
-    if (mode === "kiro") {
-      // K1: kiro writes it — a rule or steering that admits kiro (spec 17 §4.2)
-      if (rule && hasKiro && appliesTo(rule.meta.targets, "kiro")) return "K1";
-      const steering = steeringsByName.get(name);
-      if (steering && hasKiro && appliesTo(steering.meta.targets, "kiro")) return "K1";
-      // K2: a rule and claude-code writes it
-      if (rule && hasCc && appliesTo(rule.meta.targets, "claude-code")) return "K2";
-      // K3: a rule aimed at agents-md, and agents-md is a workspace target
-      if (rule && hasMd && appliesTo(rule.meta.targets, "agents-md")) return "K3";
-      // D: any other rule
-      if (rule) return "D";
-      // unknown: anything else
-      return "unknown";
-    }
-    // agents-md mode (spec 15 §4.2)
-    if (rule) {
-      const writer = ruleWriter(targets, rule.meta.targets);
-      if (writer === "claude-code") return "A";
-      if (writer === "kiro") return "B";
-    }
-    // B (steering): kiro writes a steering with this name — checked before C/D (spec 15 §4.2)
-    const steering = steeringsByName.get(name);
-    if (steering && hasKiro && appliesTo(steering.meta.targets, "kiro")) return "B";
-    if (rule) {
-      if (appliesTo(rule.meta.targets, "agents-md")) return "C";
-      return "D";
-    }
-    return "unknown";
-  };
-
-  // Right boundary: not followed by letter, digit, `_`, `-`, or `.` followed by one of those (spec 15 §4.1)
-  // NOTE: The right boundary class is NOT the same as RULE_NAME_CHARS (which includes `.` for names).
-  const rightBoundary = (after: string): boolean => {
-    if (!after) return true;
-    const c = after[0];
-    if (/[A-Za-z0-9_-]/.test(c)) return false;
-    if (c === "." && after.length > 1 && /[A-Za-z0-9_-]/.test(after[1])) return false;
-    return true;
-  };
+  // Use module-level ruleRefState
+  const ruleState = (name: string): RuleRefState => ruleRefState(name, lookup, targets, mode);
 
   // Blanket rewrite for kiro mode: .claude/rules/ → .kiro/steering/
   const kiroRewrite = (s: string): string => s.replace(/\.claude\/rules\//g, ".kiro/steering/");

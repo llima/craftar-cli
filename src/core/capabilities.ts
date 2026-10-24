@@ -1,6 +1,6 @@
 import { INGREDIENT_TYPES, TARGETS, type IngredientType, type Target } from "../schema/index.js";
 import type { Resolution, ResolvedIngredient } from "./resolve.js";
-import { appliesTo, EXAMPLE_SETTINGS } from "../emitters/shared.js";
+import { appliesTo, effectiveTargets, EXAMPLE_SETTINGS } from "../emitters/shared.js";
 
 /* ------------------------------------------------------------------ */
 /* Capability states and the matrix (spec 16 §5.3)                     */
@@ -249,7 +249,7 @@ export function written<T extends Target>(
   let started = false;
   let finished = false;
   function* walk(): Generator<WrittenIngredient<T>> {
-    const aimed = resolution.ingredients.filter((ing) => appliesTo(ing.meta.targets, target));
+    const aimed = resolution.ingredients.filter((ing) => appliesTo(effectiveTargets(ing.meta, resolution), target));
     const skips = (ing: ResolvedIngredient) => matrix[target][ing.meta.type].state === "unsupported";
     if (per === "type") {
       const byType = new Map<string, string[]>();

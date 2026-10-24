@@ -24,7 +24,7 @@ import {
   copyForgeForProof,
 } from "../core/forge.js";
 import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type UnsetParam, type Plan, type Workspace } from "../core/sync.js";
-import { driftList, unmanaged } from "../core/drift.js";
+import { driftList, REWORDED_REASON, unmanaged } from "../core/drift.js";
 import { hashNormalized, toLf } from "../core/text.js";
 import { fingerprintOf } from "../core/fingerprint.js";
 import { samePath } from "../core/registry.js";
@@ -171,6 +171,8 @@ const D7 = (ing: string, p: string, state: string, profile: string) =>
 const D8 = (p: string, ing: string) => `${p} of ${ing} is missing on disk — restore it with \`craftar sync\` first`;
 const D9 = (ing: string, reason: string) => `${ing} looks like it holds a secret (${reason}) — nothing was written`;
 const D10 = (ing: string, q: string) => `${ing} is also used by profile ${q} — its files would change there`;
+/** D20 (spec 41 §4.10): storing the hand-edited text would carry agents-md.primary's rewording into the Forge. */
+const D20 = (p: string) => `${p} holds references agents-md.primary reworded — edit the Forge's ingredient`;
 const D11 = (p: string, line: number) => `${p}:${line} holds a section marker — a variant body cannot hold one; remove it and promote again`;
 const D12_SECTION = (ing: string, name: string) =>
   `${ing} takes section "${name}" from this workspace's overrides (craftar.yaml) — a variant would silently stop applying it; edit craftar.yaml, or remove the override and sync first`;
@@ -587,14 +589,14 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   if (fileStatus.state !== "drift") throw new Error(D4_OTHER(normalized, fileStatus.state));
 
   // Static checks (promotability) using driftList's row
-  const rows = driftList([fileStatus], provided);
+  const rows = driftList([fileStatus], provided, new Set(p0.reworded));
   if (rows.length === 0) {
     throw new Error(D4_OTHER(normalized, fileStatus.state));
   }
   const row = rows[0];
   if (!row.promotable) {
     // Build the right D5/D6/D18 message from the static reason.
-    // Order of reasons in driftList: orphan → service file → provided → kiro → AGENTS.md → .mcp.json.
+    // Order of reasons in driftList: orphan → service file → provided → reworded → kiro → AGENTS.md → .mcp.json.
     // "no longer produced" cannot reach here: the state is `drift`, not `orphan-drift`.
     const reason = row.reason;
     if (reason === "service file") {
@@ -606,6 +608,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       // D18: provided by the integrations block
       throw new Error(D18(normalized, prov.recipe, profile, prov.slot, fileStatus.ingredient!));
     }
+    if (reason === REWORDED_REASON) throw new Error(D20(normalized));
     if (reason === "kiro file") {
       // D5 kiro: check if the plan has a claude-code path for this ingredient
       const ingredientRef = fileStatus.ingredient;
@@ -749,6 +752,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     pinned: new Map(),
     forge,
     markedBase: false,
+    // A file agents-md.primary reworded is refused before this point (D20); any other source holds no rewording.
+    primaryRefs: null,
   };
 
   const fingerprint = fingerprintOf(validateImported(sourceMeta), emitted.files);

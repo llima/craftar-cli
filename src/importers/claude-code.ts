@@ -6,18 +6,18 @@ import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST } from "../cor
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, hasUtf16Bom } from "../core/secrets.js";
 import { serverSecret } from "../core/mcp-server.js";
-import { schemaFault } from "../core/schema-fault.js";
+import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
 import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
-import { resolve, type Resolution } from "../core/resolve.js";
+import { readsPrimary, resolve, type Resolution } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { classifyForge, credentialFault } from "../core/remote.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
-import { decide, forgeBefore, pin, sourceKeys, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
+import { decide, forgeBefore, pin, sourceKeys, workspaceParams, workspaceSections, workspaceTargets, type RunContext } from "./decide.js";
 import { providedByBlock } from "./provided.js";
 import { renderMap } from "../core/template-import.js";
 import { firstMarkerLine } from "../core/sections.js";
@@ -25,7 +25,8 @@ import { bodyFile } from "../core/extract.js";
 import { GENERATED_BANNER, kiroReport, textLines, type KiroReport } from "./kiro-report.js";
 import { preferKiro } from "./prefer-kiro.js";
 import { deepMerge } from "../core/merge.js";
-import { outName } from "../emitters/shared.js";
+import { agentsMdOnly as isAgentsMdOnly, buildRuleLookup, outName, resolveRuleRefs } from "../emitters/shared.js";
+import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { note, type WriteJournal } from "../core/unify.js";
 
@@ -355,7 +356,10 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     pinned: new Map(),
     forge: loaded,
     markedBase: false,
+    primaryRefs: null,
   };
+  const primary = await primaryFor(loaded, opts.profileName, ctx, ws, readWs);
+  ctx.primaryRefs = primary?.refs ?? null;
   /* ---- what the block provides is left to its recipe (spec 33 §5.3) ---- */
   // Computed before --prefer-kiro so a named rule left to its recipe can be warned and skipped.
   let provided: Map<string, { recipe: string; slot: string; refs: string[] }>;
@@ -530,7 +534,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- recipes ---- */
   const recipesDir = path.join(forge, "recipes");
   const isVariant = (ref: string) => report.variants.some((v) => v.name === ref);
-  const recipeOpts: RecipeOptions = { stage, dir: recipesDir, profile: opts.profileName, forge: ctx.forge, report, currentRules: currentRuleOrder(ctx.forge, opts.profileName) };
+  const recipeOpts: RecipeOptions = { stage, dir: recipesDir, profile: opts.profileName, forge: ctx.forge, report, currentRules: currentRuleOrder(ctx.forge, opts.profileName), agentsMdOnly: primary?.agentsMdOnly ?? new Set() };
 
   const stackRecipes: string[] = [];
   for (const [ruleRef, pattern] of scopedRules) {
@@ -1219,6 +1223,24 @@ export interface RecipeOptions {
   report: ImportReport;
   /** The rules the profile resolves today, in resolution order; null for a new profile (spec 10 §14 Q10). */
   currentRules: string[] | null;
+  /** Under agents-md.primary, the rules the importing workspace holds in AGENTS.md alone (spec 41 §4.10); empty otherwise. */
+  agentsMdOnly: ReadonlySet<string>;
+}
+
+/**
+ * Under agents-md.primary a rule the workspace holds in AGENTS.md alone has no file import reads, yet the workspace has it
+ * (spec 41 §4.10): a recipe that lists it keeps it, each such entry placed after the entry it follows in the recipe.
+ */
+function keepAgentsMdOnly(existing: string[], list: string[], only: ReadonlySet<string>): string[] {
+  if (!only.size) return list;
+  const out = [...list];
+  let prev = -1;
+  for (const x of existing) {
+    const at = out.indexOf(x);
+    if (at >= 0) prev = at;
+    else if (only.has(x)) out.splice(++prev, 0, x);
+  }
+  return out;
 }
 
 function currentRuleOrder(forge: import("../core/forge.js").Forge | null, profile: string): string[] | null {
@@ -1254,14 +1276,24 @@ const recipeText = (name: string, description: string, ingredients: string[]) =>
  */
 async function placeRecipe(o: RecipeOptions, name: string, list: string[], description: string, holdsVariant: boolean): Promise<string> {
   const owned = `${name}--${o.profile}`;
-  if (holdsVariant) return writeOwnedRecipe(o, owned, list, description);
+  const read = async (file: string) => parseYaml(file, stripBom(await o.stage.readText(file)), RecipeSchema).ingredients;
+  if (holdsVariant) {
+    // Under agents-md.primary the shared recipe's rules held in AGENTS.md alone join the owned list (spec 41 §4.10); with the
+    // mode off the shared file is not read here, as before.
+    if (o.agentsMdOnly.size) {
+      const file = await recipeFile(o, name);
+      if (await o.stage.exists(file)) list = keepAgentsMdOnly(await read(file), list, o.agentsMdOnly);
+    }
+    return writeOwnedRecipe(o, owned, list, description);
+  }
   const file = await recipeFile(o, name);
   if (!(await o.stage.exists(file))) {
     o.stage.write(file, recipeText(name, description, list));
     o.report.recipes.push(name);
     return name;
   }
-  const existing = parseYaml(file, stripBom(await o.stage.readText(file)), RecipeSchema).ingredients;
+  const existing = await read(file);
+  list = keepAgentsMdOnly(existing, list, o.agentsMdOnly);
   const rules = (xs: string[]) => xs.filter((x) => x.startsWith("rule/"));
   const lacks = existing.find((x) => !list.includes(x));
   const extra = list.find((x) => !existing.includes(x));
@@ -1297,6 +1329,7 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
   }
   const raw = await o.stage.readText(file);
   const before = parseYaml(file, stripBom(raw), RecipeSchema);
+  list = keepAgentsMdOnly(before.ingredients, list, o.agentsMdOnly);
   // Each existing entry in order: kept, swapped for its base in place, or dropped; then the rest of the list appended.
   const inPlace = (x: string): string | null => {
     if (list.includes(x)) return x;
@@ -1578,4 +1611,42 @@ async function planConfig(ws: string, forge: string, profile: string, targets: T
   const loaded = WorkspaceConfigSchema.safeParse(after);
   if (!loaded.success) throw i9(`it no longer loads: ${schemaFault(loaded.error)}`);
   return { abs, content, action: content === raw ? "unchanged" : "edited", keptRemote };
+}
+
+/**
+ * What agents-md.primary changed for the importing workspace (spec 41 §4.10): the rewording the claude-code emitter applied, so a
+ * re-import compares each base as sync wrote it, and the rules the workspace holds in AGENTS.md alone, so a recipe that lists
+ * them is not split for lacking them; null when the Forge is below schema 5 or the mode is off. Decided by `resolve()` over
+ * the Forge as loaded, the importing profile, and the workspace's overrides and targets — every layer the mode reads, recipe
+ * defaults included. When the key is set somewhere and the profile does not resolve on its own, fails closed: nothing has
+ * been written yet.
+ */
+async function primaryFor(
+  loaded: import("../core/forge.js").Forge | null,
+  profile: string,
+  ctx: RunContext,
+  ws: string,
+  read: (abs: string) => Promise<string>,
+): Promise<{ refs: NonNullable<RunContext["primaryRefs"]>; agentsMdOnly: Set<string> } | null> {
+  if (!loaded || !readsPrimary(loaded.manifest)) return null;
+  const own = loaded.profiles.get(profile)?.params ?? {};
+  const setSomewhere =
+    Object.hasOwn(own, AGENTS_MD_PRIMARY_KEY) ||
+    Object.hasOwn(ctx.W, AGENTS_MD_PRIMARY_KEY) ||
+    [...loaded.recipes.values()].some((r) => r.params[AGENTS_MD_PRIMARY_KEY]?.default !== undefined);
+  let resolution: Resolution;
+  try {
+    if (!loaded.profiles.has(profile)) throw new Error(`profile ${profile} is not in the Forge`);
+    const targets = await workspaceTargets(ws, read);
+    const config = WorkspaceConfigSchema.parse({ forge: ".", profile, ...(targets ? { targets } : {}), overrides: { params: ctx.W, sections: ctx.WS } });
+    resolution = resolve(loaded, config);
+  } catch (e) {
+    if (!setSomewhere) return null;
+    const message = errorText(e);
+    throw new Error(`import: profile ${profile} does not resolve on its own (${message}) — agents-md.primary needs it to compare the bases; fix the Forge and re-run`);
+  }
+  if (!resolution.primary) return null;
+  const lookup = buildRuleLookup(resolution.ingredients, resolution);
+  const agentsMdOnly = new Set(resolution.ingredients.filter((i) => isAgentsMdOnly(i.meta, resolution)).map((i) => i.ref));
+  return { refs: (text, citing) => resolveRuleRefs(text, citing, lookup, resolution.targets).text, agentsMdOnly };
 }

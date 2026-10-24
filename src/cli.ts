@@ -17,7 +17,7 @@ import { serve } from "./mcp.js";
 import { mcpWriters } from "./core/write-actions.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -76,7 +76,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.35.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.36.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -192,7 +192,7 @@ program
       console.log(JSON.stringify(report, null, 2));
       // exitCode, not process.exit: a piped object is not cut (spec 29 §4.1)
       // The object carries both reasons (unsetParams, the budget line in warnings): nothing on stderr
-      if (unset.length || agentsMdOverBudget(p)) process.exitCode = 1;
+      if (unset.length || agentsMdOverBudget(p) || kiroResourcesUnplanned(p)?.length) process.exitCode = 1;
       return;
     }
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, false, forgeLine(ws, lock));
@@ -216,7 +216,9 @@ function refusalBlock(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): b
 function budgetRefusalBlock(p: Plan): boolean {
   const over = agentsMdOverBudget(p);
   if (over) errorLine(agentsMdRefusal(over));
-  return over !== null;
+  const kiroUnplanned = kiroResourcesUnplanned(p);
+  if (kiroUnplanned) errorLine(kiroResourcesRefusal(kiroUnplanned));
+  return over !== null || kiroUnplanned !== null;
 }
 
 /**
@@ -230,7 +232,7 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
   if (o.forgeLine) console.log(o.forgeLine);
   console.log(`  ${verb} ${pc.green(String(o.result.written.length))}, removed ${pc.magenta(String(o.result.removed.length))} orphan(s), skipped ${pc.yellow(String(o.result.skipped.length))}`);
   for (const f of o.result.written) console.log(`  ${pc.green("+")} ${f}`);
-  for (const f of o.result.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : "orphan: no longer produced by the Forge"})`);
+  for (const f of o.result.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? "hand-edited orphan: discarded" : orphanReason(p, st, f)})`);
   for (const s of o.result.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
   for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   if (o.registry) console.log(`  ${pc.yellow("warn")} registry not updated (${o.registry.file}): ${o.registry.message}`);
@@ -811,7 +813,8 @@ program
     for (const s of st) {
       if (only && s.path !== only) continue;
       // Spec 19 §3.2: the six states sync --check refuses are shown; which those are is diffReport's to say
-      if (await printFileDiff(ws.root, s)) shown++;
+      const isPrimary = primaryOrphan(p, s);
+      if (await printFileDiff(ws.root, s, { isPrimary })) shown++;
     }
     if (!shown) console.log(pc.green("no differences"));
     // exitCode, not process.exit: exit drops a piped diff still queued for a slow reader (spec 19 §3.1)
@@ -825,7 +828,7 @@ program
 const DIFF_PAINT = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
 
 /** What `craftar diff` prints for one file `sync --check` refuses; `drift show <path>` prints the same for a drifted one. */
-async function printFileDiff(root: string, s: FileStatus): Promise<boolean> {
+async function printFileDiff(root: string, s: FileStatus, opts: { isPrimary?: boolean } = {}): Promise<boolean> {
   // What to show is decided in the core (`diffReport`); the headers and the paint are this command's.
   const [row] = await diffReport({ root }, [s], { withholdMcp: false });
   // Nothing to show for `unchanged` and `adopt`: says so, for the caller's count
@@ -836,7 +839,8 @@ async function printFileDiff(root: string, s: FileStatus): Promise<boolean> {
   } else if (s.state === "orphan") {
     // A removal: the file exists on disk but the Forge no longer produces it
     console.log(pc.bold(`--- ${s.path} (disk, orphan)`));
-    console.log(pc.bold(`+++ ${s.path} (forge: no longer produced — sync removes it)`));
+    const orphanReason = opts.isPrimary ? "written to AGENTS.md only — sync removes it" : "no longer produced — sync removes it";
+    console.log(pc.bold(`+++ ${s.path} (forge: ${orphanReason})`));
   } else {
     console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
     console.log(pc.bold(`+++ ${s.path} (forge)`));
@@ -875,7 +879,7 @@ drift
       // Below schema 3, providedRefs returns early (line "if (!eff.selected.length) return new Map()") before resolve(), so it cannot throw.
       providedWarnings.push(`profile ${ws.config.profile} does not resolve on its own (${(e as Error).message}) — what its integrations provide was not computed, and craftar drift promote will refuse`);
     }
-    const rows = driftList(named ? [named] : st, provided);
+    const rows = driftList(named ? [named] : st, provided, new Set(p.reworded));
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {

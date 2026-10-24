@@ -9,7 +9,7 @@ import { FULL_SHA, cacheKey, classifyForge, CREDENTIAL_HIDDEN, inspectCache, UNV
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
-import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK } from "./sync.js";
+import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK } from "./sync.js";
 import { outName } from "../emitters/shared.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram } from "./proc.js";
@@ -274,6 +274,24 @@ async function workspaceChecks(
       for (const mp of p.missingParams) if (declaredUnset.has(mp.key)) owned.add(mp.warning);
       // Also exclude the AGENTS.md budget warning — it is reported by agents-md-size
       if (p.agentsMd?.warning) owned.add(p.agentsMd.warning);
+      // Also exclude the kiro resources warning — it is reported by kiro-resources
+      if (p.kiroResources?.warning) owned.add(p.kiroResources.warning);
+      // Compute claudeMdBlocks early so we can add its warning to owned before the plan filter
+      let claudeMdBlocksResult: { imports: boolean; blocking: string[] } | null = null;
+      if (p.resolution.primary && p.resolution.targets.includes("claude-code")) {
+        const readExisting = async (rel: string): Promise<Buffer | null> => {
+          try {
+            return await fs.readFile(path.join(root, rel));
+          } catch {
+            return null;
+          }
+        };
+        claudeMdBlocksResult = await claudeMdBlocks(readExisting);
+        // Also exclude the CLAUDE.md blocking warning — it is reported by agents-md-primary
+        if (claudeMdBlocksResult.blocking.length > 0) {
+          owned.add(claudeMdBlockedMessage(claudeMdBlocksResult.blocking[0]));
+        }
+      }
       const own = p.warnings.slice(ws.warnings.length).filter((x) => !owned.has(x));
       if (own.length === 0) w("plan", "ok", `${p.files.length} files`);
       for (const x of own) w("plan", "warn", x, null);
@@ -310,6 +328,66 @@ async function workspaceChecks(
             agentsMdOverDefaultMessage({ bytes, maxBytes }),
             `set ${AGENTS_MD_BUDGET_KEY} to fail sync --check above it; to shrink the file: ${AGENTS_MD_SHRINK}`,
           );
+        }
+      }
+
+      // agents-md-primary: present only when the mode is on and claude-code is a target (spec 41 §4.6)
+      if (claudeMdBlocksResult !== null) {
+        const blocks = claudeMdBlocksResult;
+
+        if (blocks.imports) {
+          // imports → ONE ok: "AGENTS.md is imported by CLAUDE.md"
+          w("agents-md-primary", "ok", "AGENTS.md is imported by CLAUDE.md", null);
+        } else {
+          // each root blocking file → one warn
+          for (const file of blocks.blocking) {
+            w("agents-md-primary", "warn", claudeMdBlockedMessage(file), "add a line @AGENTS.md to CLAUDE.md");
+          }
+
+          // Check ancestors for CLAUDE.md (not when the root imports)
+          let ancestorFound = false;
+          for (const ancestorClaudeMd of await claudeMdAncestors(root)) {
+            ancestorFound = true;
+            w(
+              "agents-md-primary",
+              "warn",
+              `agents-md.primary: ${ancestorClaudeMd} may keep Claude Code from reading AGENTS.md`,
+              "add a line @AGENTS.md to the workspace's CLAUDE.md",
+            );
+          }
+
+          // nothing found at all → one ok
+          if (blocks.blocking.length === 0 && !ancestorFound) {
+            w("agents-md-primary", "ok", "nothing keeps Claude Code from reading AGENTS.md", null);
+          }
+        }
+      }
+
+      // kiro-resources: present only when p.kiroResources !== null (spec 41 §4.7)
+      if (p.kiroResources !== null) {
+        // one error per unplanned entry
+        for (const { agent, path: resourcePath } of p.kiroResources.unplanned) {
+          w(
+            "kiro-resources",
+            "error",
+            `agent ${agent} lists ${resourcePath}, a file the plan does not write`,
+            "edit the agent's resources in the Forge",
+          );
+        }
+
+        // one warn per present entry
+        for (const { agent, path: resourcePath } of p.kiroResources.present) {
+          w(
+            "kiro-resources",
+            "warn",
+            `agent ${agent} lists ${resourcePath}, which the plan does not write (on disk only)`,
+            "edit the agent's resources in the Forge",
+          );
+        }
+
+        // neither → one ok
+        if (p.kiroResources.unplanned.length === 0 && p.kiroResources.present.length === 0) {
+          w("kiro-resources", "ok", "every checked Kiro resource is written by the plan", null);
         }
       }
 
@@ -426,7 +504,7 @@ export function oneLine(e: unknown): string {
  *
  * At schema 4, the server is rendered first, so a `${NAME}` a value brings into `env` is checked (spec 34 §4.4).
  */
-function mcpUnset(p: Plan, env: NodeJS.ProcessEnv, schema: 1 | 2 | 3 | 4): Array<{ server: string; name: string }> {
+function mcpUnset(p: Plan, env: NodeJS.ProcessEnv, schema: 1 | 2 | 3 | 4 | 5): Array<{ server: string; name: string }> {
   const servers: Array<[string, unknown, string[] | undefined]> = [];
   for (const target of p.resolution.targets) {
     // `written()` yields only what the matrix says this target writes; the skip warnings were plan()'s.
@@ -580,4 +658,20 @@ export function workspaceReport(report: DoctorReport): DoctorReport {
   const summary: Record<CheckLevel, number> = { ok: 0, warn: 0, error: 0 };
   for (const c of checks) summary[c.level]++;
   return { version: report.version, workspace: report.workspace, fetch: report.fetch, strict: report.strict, checks, summary };
+}
+
+/**
+ * The `CLAUDE.md` of every directory strictly above `root`, up to and including the file-system root, that exists (spec 41
+ * §4.7) — by `lstat` only, never read. `exists` is a parameter for the test that reaches the file-system root.
+ */
+export async function claudeMdAncestors(
+  root: string,
+  exists: (file: string) => Promise<boolean> = (f) => fs.lstat(f).then(() => true, () => false),
+): Promise<string[]> {
+  const out: string[] = [];
+  for (let dir = path.dirname(root); ; dir = path.dirname(dir)) {
+    const file = path.join(dir, "CLAUDE.md");
+    if (await exists(file)) out.push(file);
+    if (dir === path.dirname(dir)) return out;
+  }
 }

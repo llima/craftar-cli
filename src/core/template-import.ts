@@ -7,6 +7,7 @@ import { renderServer, rendersServers } from "./mcp-server.js";
 import { substitute } from "./resolve.js";
 import { checkDeclaredOnce, expandSections, parseSections, SectionMarkerError, type ParsedSections } from "./sections.js";
 import { stripBom, toLf } from "./text.js";
+import { claudeResolves } from "../emitters/claude-code.js";
 
 /**
  * Template-aware import (spec 10): compare a workspace source with the Forge base as sync would
@@ -93,8 +94,17 @@ export function citedKeys(texts: Map<string, string>): Set<string> {
  * values `sections` and then substituted, exactly as `ctx.text` does (spec 11 §6.4, §6.7), every
  * other file as bytes. At schema 4 and for an `mcp` base, the server is rendered (spec 34 §5.3).
  * With no declaration, no marker and nothing set, this is `fingerprintDir`.
+ * `refs`, given when the importing workspace is under agents-md.primary (spec 41 §4.10), rewords rule references as the
+ * claude-code emitter does: in the files `claudeResolves` names and, for an agent or a command, in `frontmatterRaw` and
+ * `description` — a source's description is read back from the frontmatter the emitter reworded.
  */
-export function renderedFingerprint(base: ImportBase, map: Record<string, unknown>, sections: Record<string, string> = {}, schema: 1 | 2 | 3 | 4 = 1): string {
+export function renderedFingerprint(
+  base: ImportBase,
+  map: Record<string, unknown>,
+  sections: Record<string, string> = {},
+  schema: 1 | 2 | 3 | 4 | 5 = 1,
+  refs?: (text: string, citing: string) => string,
+): string {
   // At the gate, render the server before stripForgeOnlyKeys (it needs params).
   let meta: Ingredient;
   if (rendersServers({ schema }) && base.meta.type === "mcp") {
@@ -103,8 +113,16 @@ export function renderedFingerprint(base: ImportBase, map: Record<string, unknow
   } else {
     meta = stripForgeOnlyKeys({ ...base.meta }) as Ingredient;
   }
+  const citing = `${base.meta.type}/${base.meta.name}`;
+  if (refs && (meta.type === "agent" || meta.type === "command")) {
+    if (meta.frontmatterRaw !== undefined) meta.frontmatterRaw = refs(meta.frontmatterRaw, citing);
+    if (meta.description !== undefined) meta.description = refs(meta.description, citing);
+  }
   const files: Record<string, string | Buffer> = {};
-  for (const [rel, text] of expandedTexts(base, sections)) files[rel] = substitute(text, map);
+  for (const [rel, text] of expandedTexts(base, sections)) {
+    const out = substitute(text, map);
+    files[rel] = refs && claudeResolves(base.meta, rel) ? refs(out, citing) : out;
+  }
   for (const [rel, b] of base.bytes) files[rel] = b;
   try {
     return fingerprintOf(meta, files);

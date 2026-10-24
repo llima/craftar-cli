@@ -34,6 +34,10 @@ export interface EmitBase {
   warnOnce(msg: string): void;
   /** Reports a rule's byte size for the AGENTS.md budget (called by the agents-md emitter). */
   reportAgentsMdRule(name: string, bytes: number, scoped: boolean): void;
+  /** Records a planned text the emitter reworded because of agents-md.primary (spec 41 §4.4). */
+  reportReworded(path: string): void;
+  /** Records a hand-written Kiro agent resources entry to check against the plan (spec 41 §4.5). */
+  reportKiroResource(agent: string, path: string): void;
 }
 
 /** An emitter's context: the base, plus the ingredients the matrix says target T writes (spec 18 §3.1). */

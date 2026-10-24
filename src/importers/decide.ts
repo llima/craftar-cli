@@ -11,7 +11,7 @@ import { errorText } from "../core/schema-fault.js";
 import { sectionKey } from "../core/resolve.js";
 import { rendersServers, serverCitations } from "../core/mcp-server.js";
 import type { DirReader } from "../core/fingerprint.js";
-import { OverridesParamsSchema, SectionsSchema, stripForgeOnlyKeys, type Ingredient, type Sections } from "../schema/index.js";
+import { OverridesParamsSchema, SectionsSchema, WorkspaceConfigSchema, stripForgeOnlyKeys, type Ingredient, type Sections, type Target } from "../schema/index.js";
 
 /**
  * The decision half of template-aware import (spec 10 §6.1–§6.5): what the importing profile
@@ -35,6 +35,11 @@ export interface RunContext {
   pinned: Map<string, string | undefined>;
   /** The Forge as it stood before the run; null for an empty Forge. */
   forge: Forge | null;
+  /**
+   * Under agents-md.primary for the importing workspace, the rewording the claude-code emitter applied, so a base is compared
+   * as sync wrote it (spec 41 §4.10); null otherwise.
+   */
+  primaryRefs: ((text: string, citing: string) => string) | null;
   /** Whether a source was decided against a base holding a section marker — the run then needs `schema: 2` (spec 11 §6.14, Ruling 22). */
   markedBase: boolean;
 }
@@ -135,7 +140,7 @@ export async function decide(
   }
 
   const map = renderMap(base.meta, ctx.P, ctx.W);
-  if (renderedFingerprint(base, map, S, schema) === fingerprint) {
+  if (renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined) === fingerprint) {
     pin(ctx, [...cited, ...serverKeys], map);
     const changed = [...cited].filter((k) => Object.hasOwn(map, k));
     const filled = names.filter((n) => Object.hasOwn(S, n));
@@ -177,7 +182,7 @@ async function inferParams(
   fingerprint: string,
   others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>,
   runBases: Set<string>,
-  schema: 1 | 2 | 3 | 4,
+  schema: 1 | 2 | 3 | 4 | 5,
 ): Promise<Decision> {
   // Holes (§3): declared, not reserved, not set by the workspace layer, and not pinned — a key this run already relied
   // on renders at its current value, like any fixed key (§6.5, §14 Q13).
@@ -217,7 +222,7 @@ async function inferParams(
     .map(([key, value]) => ({ key, old: valueOf(ctx.P, key) ?? null, value }));
 
   // F10: the proof, through the same expansion and substitution ctx.text uses.
-  if (renderedFingerprint(base, { ...map, ...sigma }, S, schema) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
+  if (renderedFingerprint(base, { ...map, ...sigma }, S, schema, ctx.primaryRefs ?? undefined) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
 
   // F9: a profile change must not move anything else the profile renders — its files, or a section value
   // that applies to it under this profile or workspace (spec 11 §6.11).
@@ -265,7 +270,7 @@ function inferSectionValues(
   meta: Ingredient,
   files: Record<string, string | Buffer>,
   fingerprint: string,
-  schema: 1 | 2 | 3 | 4,
+  schema: 1 | 2 | 3 | 4 | 5,
 ): Decision {
   const shape = shapeDiffers(base, meta, files);
   if (shape) return { kind: "variant", why: shape };
@@ -279,7 +284,7 @@ function inferSectionValues(
   }
   const S = { ...PSk, ...WSk, ...sigma };
   // F14: the proof, through the same expansion and substitution ctx.text uses.
-  if (renderedFingerprint(base, map, S, schema) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
+  if (renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
 
   const assigned = sectionNames(base).filter((n) => Object.hasOwn(sigma, n));
   const sectionDelta: SectionChange[] = [];
@@ -310,6 +315,22 @@ export async function workspaceParams(ws: string, read: (abs: string) => Promise
       const doc = (parseWorkspaceYaml(f, await read(abs)) ?? {}) as { overrides?: { params?: unknown; sections?: unknown } };
       const params = OverridesParamsSchema.parse(doc?.overrides?.params ?? {});
       out = deepMerge(out, params);
+    } catch (e) {
+      throw new Error(`${command}: ${f} does not load (${errorText(e)})`);
+    }
+  }
+  return out;
+}
+
+/** The workspace's `targets`: craftar.local.yaml's replaces craftar.yaml's, as loadWorkspace merges them; undefined when neither sets it. */
+export async function workspaceTargets(ws: string, read: (abs: string) => Promise<string>, command = "import"): Promise<Target[] | undefined> {
+  let out: Target[] | undefined;
+  for (const f of ["craftar.yaml", "craftar.local.yaml"]) {
+    const abs = path.join(ws, f);
+    if (!(await exists(abs))) continue;
+    try {
+      const doc = (parseWorkspaceYaml(f, await read(abs)) ?? {}) as { targets?: unknown };
+      if (doc?.targets !== undefined) out = WorkspaceConfigSchema.shape.targets.parse(doc.targets);
     } catch (e) {
       throw new Error(`${command}: ${f} does not load (${errorText(e)})`);
     }

@@ -1,7 +1,9 @@
 import type { Forge, LoadedIngredient } from "./forge.js";
 import type { IngredientRef, Profile, Sections, Target, WorkspaceConfig } from "../schema/index.js";
+import { FORGE_SCHEMA_AGENTS_MD_PRIMARY } from "../schema/index.js";
 import { deepMerge } from "./merge.js";
 import { outName } from "../emitters/shared.js";
+import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
 import { effectiveProfile, integrationOrigin } from "./integrations.js";
 
 /** Builds the "profile not found" message (spec 28 §5.2, N5). */
@@ -13,6 +15,11 @@ export function profileNotFoundMessage(profile: string, profileNames: string[]):
 export interface ResolvedIngredient extends LoadedIngredient {
   /** Recipe chain that brought this ingredient in (last one wins). */
   via: string[];
+}
+
+/** Whether the manifest schema reads agents-md.primary (spec 41 §4.1). The ONE comparison with that constant. */
+export function readsPrimary(manifest: { schema: number }): boolean {
+  return manifest.schema >= FORGE_SCHEMA_AGENTS_MD_PRIMARY;
 }
 
 export interface Resolution {
@@ -32,6 +39,8 @@ export interface Resolution {
   ingredients: ResolvedIngredient[];
   disabled: IngredientRef[];
   warnings: string[];
+  /** agents-md.primary is on for this workspace (spec 41 §4.1); decided once by resolve(). */
+  primary: boolean;
 }
 
 /**
@@ -128,6 +137,27 @@ export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
   for (const d of disabled) picked.delete(d);
 
   const targets = [...new Set(ws.targets ?? profile.targets)] as Target[];
+
+  // Decide agents-md.primary (spec 41 §4.1): at most one warning, in order
+  let primary = false;
+  if (Object.hasOwn(params, AGENTS_MD_PRIMARY_KEY)) {
+    const value = params[AGENTS_MD_PRIMARY_KEY];
+    if (!readsPrimary(forge.manifest)) {
+      // Below the gate: warn only when the value is exactly true
+      if (value === true) {
+        warnings.push("agents-md.primary needs a Forge at schema: 5 — the mode is off");
+      }
+    } else if (typeof value !== "boolean") {
+      // Not a boolean at schema 5+
+      warnings.push("agents-md.primary must be true or false — the mode is off");
+    } else if (value === true && !targets.includes("agents-md")) {
+      // true without the agents-md target
+      warnings.push("agents-md.primary has no effect without the agents-md target");
+    } else {
+      primary = value;
+    }
+  }
+
   return {
     profile,
     recipes: order,
@@ -139,6 +169,7 @@ export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
     ingredients: [...picked.values()],
     disabled,
     warnings,
+    primary,
   };
 }
 

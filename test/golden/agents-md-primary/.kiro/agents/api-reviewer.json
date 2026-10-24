@@ -1,0 +1,10 @@
+{
+  "name": "api-reviewer",
+  "description": "Reviews API changes against AGENTS.md (rule: style)",
+  "prompt": "Review the diff.\nFollow AGENTS.md (rule: style) and AGENTS.md (rule: release).\nSee [the style](AGENTS.md).\nNotes: .kiro/steering/kiro-notes.md",
+  "tools": [],
+  "allowedTools": [],
+  "resources": [
+    "file://.kiro/steering/api.md"
+  ]
+}
