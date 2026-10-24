@@ -150,6 +150,17 @@ export async function diffReport(ws: Pick<Workspace, "root">, rows: FileStatus[]
   return out;
 }
 
+/**
+ * What an `orphan-drift` file holds, for a surface that shows it before a discard (spec 40 §6.5, `drift show <path>`):
+ * the whole body read from disk, or — for EXAMPLE_SETTINGS, whose content is never shown — `{ body: null, note:
+ * EXAMPLE_CONTENT_HIDDEN }`. The one reader of such a body.
+ */
+export async function orphanDriftBody(root: string, s: Pick<FileStatus, "path" | "state">): Promise<{ body: string | null; note: string | null }> {
+  if (s.state !== "orphan-drift") throw new Error("state must be orphan-drift");
+  if (s.path === EXAMPLE_SETTINGS) return { body: null, note: EXAMPLE_CONTENT_HIDDEN };
+  return { body: (await readText(path.join(root, s.path))) ?? "", note: null };
+}
+
 /** What `craftar explain` says about one generated file, as data (spec 35 §4.5). */
 export interface ExplainedFile {
   path: string;

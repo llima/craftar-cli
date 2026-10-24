@@ -25,7 +25,7 @@ import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
-import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, readText, statusPath, statusReport, targetsReport } from "./core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, readText, statusPath, statusReport, targetsReport } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
@@ -913,11 +913,11 @@ drift
       // The whole file as a removal: what `drift discard` would do to it.
       console.log(pc.bold(`--- ${named.path} (disk, orphan-drift)`));
       console.log(pc.bold(`+++ ${named.path} (forge: no longer produced — \`craftar drift discard\` removes it)`));
-      // Spec 27 Ruling 4: the on-disk content of the example file is never printed.
-      if (named.path === EXAMPLE_SETTINGS) {
-        console.log(`  ${EXAMPLE_CONTENT_HIDDEN}`);
+      const { body, note } = await orphanDriftBody(ws.root, named);
+      if (note) {
+        console.log(`  ${note}`);
       } else {
-        console.log(renderDiff((await readText(path.join(ws.root, named.path))) ?? "", "", DIFF_PAINT));
+        console.log(renderDiff(body ?? "", "", DIFF_PAINT));
       }
     } else await printFileDiff(ws.root, named);
     if (refusalBlock(unset)) process.exitCode = 1;
