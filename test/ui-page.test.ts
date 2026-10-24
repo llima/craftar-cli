@@ -549,4 +549,76 @@ describe("pageJs(true) driven in a stubbed DOM (spec 40 §6.5)", () => {
     const resultNode = findNodeWithText(app, "wrote 1, removed 0, skipped 0");
     expect(resultNode, "result message should survive the reload").not.toBeNull();
   });
+
+  it("remote Forge: no Discard edit button in opened drift diff", async () => {
+    const { doc, body, app, location, history, sessionStorage, makeFetch, findButton, findDiffButtonForPath, click } = fakeDom();
+    // Create routes with a remote Forge
+    const baseRoutes = makeRoutes(true);
+    const routes = {
+      ...baseRoutes,
+      [`/api/workspaces/${WS_ID}`]: {
+        ...(baseRoutes[`/api/workspaces/${WS_ID}`] as Record<string, unknown>),
+        forge: { kind: "remote", source: "https://example.com/forge.git", ref: null, commit: null },
+      },
+    };
+    const fetch = makeFetch(routes);
+
+    const src = pageJs(true);
+    new Function("document", "location", "history", "sessionStorage", "fetch", src)(doc, location, history, sessionStorage, fetch);
+
+    await tick(); await tick(); await tick();
+
+    // Click workspace link
+    const wsLink = findButton(app, "ws");
+    click(wsLink!);
+
+    await tick(); await tick(); await tick();
+
+    // Click diff to open detail
+    const diffBtn = findDiffButtonForPath(app, DRIFT_PATH);
+    expect(diffBtn, "diff button should exist").not.toBeNull();
+    click(diffBtn!);
+
+    await tick(); await tick(); await tick();
+
+    // Discard edit should not exist (remote Forge)
+    const discardBtn = findButton(app, "Discard edit");
+    expect(discardBtn, "Discard edit button should not exist for remote Forge").toBeNull();
+  });
+
+  it("unset params: no Discard edit button in opened drift diff", async () => {
+    const { doc, body, app, location, history, sessionStorage, makeFetch, findButton, findDiffButtonForPath, click } = fakeDom();
+    // Create routes with an unset param
+    const baseRoutes = makeRoutes(true);
+    const routes = {
+      ...baseRoutes,
+      [`/api/workspaces/${WS_ID}`]: {
+        ...(baseRoutes[`/api/workspaces/${WS_ID}`] as Record<string, unknown>),
+        unsetParams: [{ key: "api.port", declaredBy: ["rule/api"], citedBy: ["rule/api"] }],
+      },
+    };
+    const fetch = makeFetch(routes);
+
+    const src = pageJs(true);
+    new Function("document", "location", "history", "sessionStorage", "fetch", src)(doc, location, history, sessionStorage, fetch);
+
+    await tick(); await tick(); await tick();
+
+    // Click workspace link
+    const wsLink = findButton(app, "ws");
+    click(wsLink!);
+
+    await tick(); await tick(); await tick();
+
+    // Click diff to open detail
+    const diffBtn = findDiffButtonForPath(app, DRIFT_PATH);
+    expect(diffBtn, "diff button should exist").not.toBeNull();
+    click(diffBtn!);
+
+    await tick(); await tick(); await tick();
+
+    // Discard edit should not exist (unset params)
+    const discardBtn = findButton(app, "Discard edit");
+    expect(discardBtn, "Discard edit button should not exist with unset params").toBeNull();
+  });
 });

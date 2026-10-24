@@ -166,8 +166,8 @@ export function pageJs(writes: boolean): string {
     : "";
   const W_DISCARD_IN_DIFF = writes
     ? `
-        /* Discard edit button: only for drift or orphan-drift, not the example file. */
-        if (writes && doc.digest && (f.state === "drift" || f.state === "orphan-drift") && f.path !== ${JSON.stringify(EXAMPLE_SETTINGS)} && !d.hidden) {
+        /* Discard edit button: only for drift or orphan-drift, not the example file, and the same gates as Sync. */
+        if (writes && doc.digest && !doc.unsetParams.length && doc.forge.kind !== "remote" && (f.state === "drift" || f.state === "orphan-drift") && f.path !== ${JSON.stringify(EXAMPLE_SETTINGS)} && !d.hidden) {
           var discardMsg = f.state === "drift"
             ? "The hand edit of " + f.path + " is lost; the Forge's version is written."
             : "The hand edit of " + f.path + " is lost; the file is removed.";
