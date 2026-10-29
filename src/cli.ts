@@ -58,7 +58,6 @@ import { recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
 import { syncWorkspace, editRecipes, confirmWrites, DISCARDED_ORPHAN } from "./core/write-actions.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type UnifyPlan } from "./schema/index.js";
-import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport as servicesStatusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
