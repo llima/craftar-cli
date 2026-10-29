@@ -64,6 +64,7 @@ import { sectionKey } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
+import { citationsIn } from "../core/mcp-server.js";
 import type { WriteJournal } from "../core/unify.js";
 import type { Ingredient, IngredientRef, Lock } from "../schema/index.js";
 
@@ -963,8 +964,32 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       path: meta.type === "skill" && meta.layout === "dir" ? `.claude/skills/${N}/` : normalized,
     },
   } as Ingredient;
-  // Remove params from variant (they are flattened into the body)
-  if ("params" in variantMeta) delete (variantMeta as Record<string, unknown>).params;
+  // Remove params from variant (they are flattened into the body), but for hooks keep the entries the registration cites (spec 43 §7.2 row 10).
+  // Note: sourceMeta had params removed, so we check the BASE (X.meta) for registration-cited params.
+  if (meta.type === "hook" && X.meta.type === "hook" && X.meta.registration && X.meta.params) {
+    // Keep only the params entries the base's registration cites
+    const declared = X.meta.params;
+    const citedKeys = new Set<string>();
+    for (const entry of X.meta.registration) {
+      for (const c of citationsIn(entry, declared, ingredientRef)) {
+        if (c.declared) citedKeys.add(c.key);
+      }
+    }
+    if (citedKeys.size > 0) {
+      const keptParams: Record<string, { default?: string | number | boolean; description?: string }> = {};
+      for (const k of citedKeys) {
+        if (Object.hasOwn(declared, k)) keptParams[k] = declared[k];
+      }
+      (variantMeta as Record<string, unknown>).params = keptParams;
+    }
+  } else if ("params" in variantMeta) {
+    // For non-hooks, remove params (they are flattened)
+    delete (variantMeta as Record<string, unknown>).params;
+  }
+  // Copy the base's registration to the variant (spec 43 §7.2 row 10)
+  if (meta.type === "hook" && X.meta.type === "hook" && X.meta.registration && !("registration" in variantMeta)) {
+    (variantMeta as Record<string, unknown>).registration = X.meta.registration;
+  }
 
   // Stage the variant files using typeFolder
   const folder = typeFolder(meta.type);
