@@ -176,8 +176,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // Two passes (spec 10 §6.8): every source is read first, in today's order, then decided in that
   // order. `after` does the bookkeeping today's code did right after each decision.
   const queue: Source[] = [];
-  const read = (meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string>, after: (ref: string) => void, skip?: () => boolean) =>
-    queue.push({ meta, files, scan, after, skip });
+  const read = (meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string>, after: (ref: string) => void, skip?: () => boolean, sourceTarget?: "claude-code" | "kiro") =>
+    queue.push({ meta, files, scan, after, skip, sourceTarget });
   const refs = { base: [] as string[], stacks: new Map<string, string[]>(), steering: [] as string[] };
   const ruleNames: string[] = [];
   const scopedRules = new Map<string, string>(); // rule name → fileMatchPattern
@@ -345,7 +345,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // Whether a steering file is hand-written depends on the rules decided before it, so the check runs at decision time.
   for (const [name, sm] of steeringMeta) {
     const meta: Ingredient = { type: "steering", name, file: "steering.md", targets: ["kiro"], tags: ["client"], origin: origin(`.kiro/steering/${name}.md`) };
-    read(meta, { "steering.md": sm.text }, scanOf("steering.md", sm), (ref) => addRef(refs.steering, ref), () => ruleNames.includes(name) || sm.generated || name === "commands");
+    read(meta, { "steering.md": sm.text }, scanOf("steering.md", sm), (ref) => addRef(refs.steering, ref), () => ruleNames.includes(name) || sm.generated || name === "commands", "kiro");
   }
 
   /* ---- what the importing profile renders (spec 10 §6.1, §6.8 step 2) ---- */
