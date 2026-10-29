@@ -17,12 +17,29 @@ describe("test isolation", () => {
     expect(process.env.CRAFTAR_NO_REGISTRY).toBeUndefined();
   });
 
-  it("CLAUDE_CONFIG_DIR is set and is not under the real home directory", () => {
+  it("CLAUDE_CONFIG_DIR is set, not the real Claude config dir, and under the OS temporary directory", () => {
     const claudeDir = process.env.CLAUDE_CONFIG_DIR;
     expect(claudeDir, "CLAUDE_CONFIG_DIR is not set — test/setup/craftar-home.ts must set it").toBeTruthy();
-    // Must not be under the user's real home (os.homedir() returns the real home, not a test temp)
-    const realHome = os.homedir();
-    const rel = path.relative(realHome, path.resolve(claudeDir!));
-    expect(rel.startsWith("..") || path.isAbsolute(rel), `CLAUDE_CONFIG_DIR ${claudeDir} is inside the real home ${realHome}`).toBe(true);
+    const resolved = path.resolve(claudeDir!);
+
+    // Must not be the real Claude config dir (~/.claude) or inside it
+    const realClaudeDir = path.join(os.homedir(), ".claude");
+    const relToReal = path.relative(realClaudeDir, resolved);
+    const isRealOrInside = !relToReal.startsWith("..") && !path.isAbsolute(relToReal);
+    // On Windows, compare case-insensitively
+    const isExactMatch = process.platform === "win32"
+      ? resolved.toLowerCase() === realClaudeDir.toLowerCase()
+      : resolved === realClaudeDir;
+    expect(
+      isExactMatch || isRealOrInside,
+      `CLAUDE_CONFIG_DIR ${claudeDir} is the real Claude config dir or inside it (${realClaudeDir})`,
+    ).toBe(false);
+
+    // Must be under the OS temporary directory (as CRAFTAR_HOME test does)
+    const relToTmp = path.relative(os.tmpdir(), resolved);
+    expect(
+      relToTmp.startsWith("..") || path.isAbsolute(relToTmp),
+      `CLAUDE_CONFIG_DIR ${claudeDir} is outside ${os.tmpdir()}`,
+    ).toBe(false);
   });
 });
