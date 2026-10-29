@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import { planFrom, applyPlan, type UnifyPlan } from "../src/core/unify.js";
 import { diffIngredients } from "../src/core/variants.js";
 import { loadForge, typeFolder } from "../src/core/forge.js";
-import { tmpDir } from "./helpers/forge.js";
+import { makeForge, profile, recipe, tmpDir } from "./helpers/forge.js";
 import type { Ingredient, IngredientRef } from "../src/schema/index.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -246,214 +246,35 @@ describe("unify with target-scoped sections (spec 41 Part B Task 05)", () => {
     }
   });
 
-  it("golden-take-section and golden-sections pins unchanged", async () => {
-    // This is a placeholder that will be verified by running those existing golden tests
-    // They should pass unchanged after our implementation
-    expect(true).toBe(true);
-  });
-
-  it("take: section on a schema-6 base with another targeted section succeeds; new marker has no targets=; existing O(t,kiro) block is byte-identical", async () => {
-    // A schema-6 base has:
-    // - section `k` with targets=kiro (existing, untouched)
-    // - a block hunk that will become a new section via take: section
-    // The run should succeed, the new marker has no targets=, the k block stays byte-identical.
-    const t = await setup();
-    const LF = "\n";
-
-    // Both base and variant have the k section - so it's not a diff hunk
-    // The difference is only in the table content (alice vs bob)
-    const baseBody = [
-      "# Style",
-      "",
-      "<!-- craftar:section k targets=kiro -->",
-      "Kiro content.",
-      "<!-- /craftar:section -->",
-      "",
-      "| Reviewer | Area |",
-      "|---|---|",
-      "| alice | frontend |",
-      "",
-      "End.",
-    ].join(LF) + LF;
-
-    // Variant: ALSO has the k section (so it won't be a diff hunk), but different table
-    // Wait - variants can't have section markers. So the variant must NOT have the k section.
-    // But then the k section IS a diff (markers in base, none in variant).
-    //
-    // Actually, the point is: we need a test where the BASE has a targets= section,
-    // and deriveSections is called. deriveSections calls parseSections on the base.
-    // If parseSections doesn't get opts, it throws schema-6 near-miss.
-    //
-    // For a proper test, the variant should have different content that creates a hunk
-    // which we want to extract as a section. The base's existing targeted section
-    // is not part of the diff (neither side's section markers matter for the diff hunks;
-    // the section content is outside the hunk).
-    //
-    // Simpler approach: base has a targeted section AND a table.
-    // Variant has no markers, different section content AND different table.
-    // The diff will show: section marker hunks AND table content hunk.
-    // We take: base for section marker hunks, take: section for the table hunk.
-    //
-    // Even simpler: just verify that --save-plan doesn't throw on schema-6 base
-    // That proves planFrom passes parseOpts to prefillSections.
-    // The existing skipped test does this, let's just unskip and expand it.
-    //
-    // For the apply test, we need a scenario where the base has targeted sections
-    // and we extract a different block into a new section. Let's simplify:
-    // Base has only targeted section k. Variant has no markers but different k content.
-    // The diff is: the entire k section content differs.
-    // We take: section on the k hunk - but this is an EXISTING section, not a new one.
-    //
-    // What about: base has targeted section k AND normal section r.
-    // Variant has neither markers. Table content differs.
-    // Hmm, this gets complicated.
-    //
-    // Let me just test that planFrom works with schema-6 (proves parseSections gets opts)
-    // and that applyPlan works with schema-6 (proves deriveSections/proveSections get opts).
-    // The simplest way: a base with only a targeted section, variant without.
-
-    // Simplest test: base has targeted section, variant has none, they differ in that section.
-    // The hunk is the section content. We apply take: base (to keep the base).
-    // This proves applyPlan's parseSections calls work.
-
-    const simpleBaseBody = [
-      "# Style",
-      "",
-      "<!-- craftar:section k targets=kiro -->",
-      "Kiro default.",
-      "<!-- /craftar:section -->",
-      "",
-    ].join(LF) + LF;
-
-    const simpleVariantBody = [
-      "# Style",
-      "",
-      "Variant k content.",
-      "",
-    ].join(LF) + LF;
-
-    await fs.mkdir(path.join(t.forge, "ingredients/rules/style"), { recursive: true });
-    await fs.mkdir(path.join(t.forge, "ingredients/rules/style--acme"), { recursive: true });
-    await fs.mkdir(path.join(t.forge, "recipes"), { recursive: true });
-    await fs.mkdir(path.join(t.forge, "profiles/acme"), { recursive: true });
-
-    await fs.writeFile(
-      path.join(t.forge, "craftar.forge.yaml"),
-      YAML.stringify({ name: "test-forge", schema: 6 }),
-    );
-
-    await fs.writeFile(
-      path.join(t.forge, "ingredients/rules/style/ingredient.yaml"),
-      YAML.stringify({ type: "rule", name: "style" }),
-    );
-    await fs.writeFile(path.join(t.forge, "ingredients/rules/style/rule.md"), simpleBaseBody);
-
-    await fs.writeFile(
-      path.join(t.forge, "ingredients/rules/style--acme/ingredient.yaml"),
-      YAML.stringify({ type: "rule", name: "style--acme", as: "style" }),
-    );
-    await fs.writeFile(path.join(t.forge, "ingredients/rules/style--acme/rule.md"), simpleVariantBody);
-
-    await fs.writeFile(
-      path.join(t.forge, "recipes/base.yaml"),
-      YAML.stringify({ name: "base", ingredients: ["rule/style"] }),
-    );
-    await fs.writeFile(
-      path.join(t.forge, "recipes/base--acme.yaml"),
-      YAML.stringify({ name: "base--acme", ingredients: ["rule/style--acme"] }),
-    );
-
-    await fs.writeFile(
-      path.join(t.forge, "profiles/acme/profile.yaml"),
-      YAML.stringify({ name: "acme", recipes: ["base--acme"], targets: ["claude-code", "kiro"] }),
-    );
-
-    gitInit(t.forge);
-
-    // Run forge unify with --take base to verify applyPlan works with schema-6 targeted sections
-    const { runCli } = await import("./helpers/cli.js");
-
-    // Using --take base proves that applyPlan's parseSections calls work (for declaredElsewhere etc.)
-    // If they didn't have parseOpts, the schema-6 near-miss error would occur.
-    const takeBase = runCli(["forge", "unify", "rule/style", "--profile", "acme", "--take", "base", "--forge", t.forge, "--no-impact"]);
-    expect(takeBase.code, `stdout: ${takeBase.stdout}\nstderr: ${takeBase.stderr}`).toBe(0);
-
-    // Verify the base's k section with targets=kiro is unchanged
-    const resultBody = await fs.readFile(path.join(t.forge, "ingredients/rules/style/rule.md"), "utf8");
-    expect(resultBody).toContain("<!-- craftar:section k targets=kiro -->");
-    expect(resultBody).toContain("Kiro default.");
-    expect(resultBody).toContain("<!-- /craftar:section -->");
-  });
-
-  it("forge unify --save-plan (planFrom) on a schema-6 base with targeted sections succeeds", async () => {
-    // Just the planFrom path: a schema-6 base with targets= should not throw
-    const t = await setup();
-    const LF = "\n";
-
-    const baseBody = [
-      "# Style",
-      "",
-      "<!-- craftar:section k targets=kiro -->",
-      "Kiro content.",
-      "<!-- /craftar:section -->",
-      "",
-      "Some text.",
-    ].join(LF) + LF;
-
-    const variantBody = [
-      "# Style",
-      "",
-      "<!-- craftar:section k targets=kiro -->",
-      "Kiro content.",
-      "<!-- /craftar:section -->",
-      "",
-      "Different text.",
-    ].join(LF) + LF;
-
-    await fs.mkdir(path.join(t.forge, "ingredients/rules/style"), { recursive: true });
-    await fs.mkdir(path.join(t.forge, "ingredients/rules/style--acme"), { recursive: true });
-    await fs.mkdir(path.join(t.forge, "recipes"), { recursive: true });
-    await fs.mkdir(path.join(t.forge, "profiles/acme"), { recursive: true });
-
-    await fs.writeFile(
-      path.join(t.forge, "craftar.forge.yaml"),
-      YAML.stringify({ name: "test-forge", schema: 6 }),
-    );
-
-    await fs.writeFile(
-      path.join(t.forge, "ingredients/rules/style/ingredient.yaml"),
-      YAML.stringify({ type: "rule", name: "style" }),
-    );
-    await fs.writeFile(path.join(t.forge, "ingredients/rules/style/rule.md"), baseBody);
-
-    await fs.writeFile(
-      path.join(t.forge, "ingredients/rules/style--acme/ingredient.yaml"),
-      YAML.stringify({ type: "rule", name: "style--acme", as: "style" }),
-    );
-    await fs.writeFile(path.join(t.forge, "ingredients/rules/style--acme/rule.md"), variantBody);
-
-    await fs.writeFile(
-      path.join(t.forge, "recipes/base.yaml"),
-      YAML.stringify({ name: "base", ingredients: ["rule/style"] }),
-    );
-    await fs.writeFile(
-      path.join(t.forge, "recipes/base--acme.yaml"),
-      YAML.stringify({ name: "base--acme", ingredients: ["rule/style--acme"] }),
-    );
-
-    await fs.writeFile(
-      path.join(t.forge, "profiles/acme/profile.yaml"),
-      YAML.stringify({ name: "acme", recipes: ["base--acme"], targets: ["claude-code", "kiro"] }),
-    );
-
-    gitInit(t.forge);
-
-    // Run forge unify --save-plan via CLI - this should NOT throw the schema-6 near-miss
-    const { runCli } = await import("./helpers/cli.js");
-    const planPath = path.join(t.root, "plan.yaml");
-
-    const save = runCli(["forge", "unify", "rule/style", "--profile", "acme", "--save-plan", planPath, "--forge", t.forge, "--no-impact"]);
-    expect(save.code, save.stderr).toBe(0);
-    expect(save.stderr).not.toContain("section k names targets");
+  it("take: section on a schema-6 base that holds a targeted section writes a plain marker and keeps the targeted block", async () => {
+    const root = await tmpDir("craftar-unify-target-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const k = "<!-- craftar:section k targets=kiro -->\nKiro only.\n<!-- /craftar:section -->\n";
+    await makeForge(root, {
+      ingredients: [
+        { meta: { type: "rule", name: "style" }, files: { "rule.md": `# R\n\n${k}\n| a |\n\nEnd.\n` } },
+        { meta: { type: "rule", name: "style--acme", as: "style" }, files: { "rule.md": "# R\n\nKiro only.\n\n| a |\n| b |\n\nEnd.\n" } },
+      ],
+      recipes: [recipe("base", ["rule/style"]), recipe("base--acme", ["rule/style--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    await fs.writeFile(path.join(root, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 6 }));
+    const forge = await loadForge(root);
+    const base = forge.ingredients.get("rule/style")!;
+    const variant = forge.ingredients.get("rule/style--acme")!;
+    const diff = await diffIngredients(base, variant);
+    const planObj = await planFrom(base, variant, diff, "acme", 6);
+    const hunks = planObj.files[0].hunks!;
+    // The two marker lines of k, prefilled with k's name, then the table row only the variant has.
+    expect(hunks.map((h) => (h as { section?: { name: string } }).section?.name)).toEqual(["k", "k", "r"]);
+    Object.assign(hunks[0], { take: "base" });
+    Object.assign(hunks[1], { take: "base" });
+    Object.assign(hunks[2], { take: "section", section: { name: "flavors" } });
+    const result = await applyPlan(base, variant, diff, planObj, { forgeSchema: 6 });
+    expect(result.resolved).toBe(true);
+    const written = String(result.write["rule.md"]);
+    expect(written).toContain("<!-- craftar:section flavors -->\n");
+    expect(written).not.toContain("craftar:section flavors targets=");
+    expect(written.startsWith(`# R\n\n${k}\n`)).toBe(true);
   });
 });
