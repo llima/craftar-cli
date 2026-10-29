@@ -9,7 +9,7 @@ import { parseWorkspaceYaml } from "./workspace-yaml.js";
 import { classifyForge, credentialFault, ensureTree, refHoldsCredentials, shownRef, ForgeFetchError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
 import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
-import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
+import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, readsTargetSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile } from "./extract.js";
 import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockV2, type LockV3, type Owner, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
@@ -17,7 +17,7 @@ import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
 import { AGENTS_MD_BUDGET_KEY, agentsMd } from "../emitters/agents-md.js";
 import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
-import { written } from "./capabilities.js";
+import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
 import { appliesTo, effectiveTargets } from "../emitters/shared.js";
@@ -459,6 +459,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
   const declared = new Map<string, Set<string>>(); // section key → names declared by resolved ingredients
   const byRef: Plan["sections"] = new Map();
   let firstMarker: string | null = null;
+  const parseOpts = { targets: readsTargetSections(forge.manifest) };
   for (const ing of resolution.ingredients) {
     const key = sectionKey(ing.meta);
     const names = declared.get(key) ?? new Set<string>();
@@ -469,10 +470,30 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
       if (rel === "ingredient.yaml") continue;
       const abs = path.join(ing.dir, rel);
       if (bodyFile(ing.meta, rel, ing.dir)) {
-        const p = parseSections(await fs.readFile(abs, "utf8"), forgeRel(forge, abs), ing.ref);
+        const p = parseSections(await fs.readFile(abs, "utf8"), forgeRel(forge, abs), ing.ref, parseOpts);
         parsed.set(abs, p);
         files.push({ rel, p });
         if (p.sections.length && firstMarker === null) firstMarker = `${p.file}:${p.sections[0].line}`;
+        // Edge case: a service file with a targeted section fails the plan
+        if (ing.meta.type === "service") {
+          for (const s of p.sections) {
+            if (s.targets) {
+              throw new Error(`${ing.ref} ${rel}: section ${s.name} names targets, but a service file is written for no target — remove targets=`);
+            }
+          }
+        }
+        // Edge case 14: warn if a targeted section reaches no target that writes the ingredient
+        const effTargets = effectiveTargets(ing.meta, resolution);
+        for (const s of p.sections) {
+          if (s.targets) {
+            const reaches = s.targets.some((t) =>
+              appliesTo(effTargets, t) && CAPABILITIES[t][ing.meta.type].state !== "unsupported"
+            );
+            if (!reaches) {
+              warnings.push(`${ing.ref} ${rel}: section ${s.name} reaches no target that writes ${ing.ref} (targets=${s.targets.join(",")})`);
+            }
+          }
+        }
       } else if (emittedFile(ing.meta, rel, ing.dir)) {
         // A file emitted but not every target renders as text keeps its markers; one, whatever its extension, is warned, never dropped
         // silently. Every marker form contains "craftar:section", so a file without it is not decoded.
@@ -585,7 +606,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
         return null;
       }
     },
-    async text(ing: ResolvedIngredient, file: string) {
+    async text(ing: ResolvedIngredient, file: string, owner: Owner) {
       const abs = path.join(ing.dir, file);
       const raw = await fs.readFile(abs, "utf8");
       const missing = new Set<string>();
@@ -599,7 +620,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
         throw new Error(
           `${forgeRel(ws.forge, abs)}: ${ing.ref} declares a file outside its directory, behind a symlinked directory, or spelled differently from the file on disk — keep the file inside ${forgeRel(ws.forge, ing.dir)} and spell the declared path as it is on disk`,
         );
-      const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution)) : toLf(stripBom(raw));
+      const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution), owner) : toLf(stripBom(raw));
       const out = substitute(expanded, params, missing);
       if (parsed) guardOutput(ing, file, out, parsed, resolution, params);
       // Every file rendered here, body file or not: `explain` names each key the refusal can name (spec 29 §4.1).

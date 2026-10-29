@@ -89,7 +89,7 @@ export const claudeCode: Emitter<"claude-code"> = {
       const m = ing.meta;
       switch (m.type) {
         case "rule": {
-          const rawBody = await ctx.text(ing, m.file);
+          const rawBody = await ctx.text(ing, m.file, "claude-code");
           const body = resolve(rawBody, ing.ref);
           const path = ruleFile("claude-code", m);
           // If frontmatterRaw is set, serialize with it; otherwise emit body only (no generated paths:)
@@ -101,14 +101,14 @@ export const claudeCode: Emitter<"claude-code"> = {
         }
         case "agent": {
           const path = `.claude/agents/${outName(m)}.md`;
-          const { raw, description, body } = resolveDoc(path, ing.ref, m, await ctx.text(ing, m.file));
+          const { raw, description, body } = resolveDoc(path, ing.ref, m, await ctx.text(ing, m.file, "claude-code"));
           const doc = serializeFrontmatter({ name: outName(m), description, tools: m.tools, model: m.model }, body, { raw });
           out.push(await textFile(ctx, path, doc, t, ing.ref));
           break;
         }
         case "command": {
           const path = `.claude/commands/${outName(m)}.md`;
-          const { raw, description, body } = resolveDoc(path, ing.ref, m, await ctx.text(ing, m.file));
+          const { raw, description, body } = resolveDoc(path, ing.ref, m, await ctx.text(ing, m.file, "claude-code"));
           const doc = serializeFrontmatter(
             { description, "argument-hint": m.argumentHint, "allowed-tools": m.allowedTools },
             body,
@@ -120,7 +120,7 @@ export const claudeCode: Emitter<"claude-code"> = {
         case "skill": {
           if (m.layout === "file") {
             const path = `.claude/skills/${outName(m)}.md`;
-            const rawText = await ctx.text(ing, "SKILL.md");
+            const rawText = await ctx.text(ing, "SKILL.md", "claude-code");
             const text = resolve(rawText, ing.ref);
             checkReworded(path, [rawText, text]);
             out.push(await textFile(ctx, path, text, t, ing.ref));
@@ -130,13 +130,13 @@ export const claudeCode: Emitter<"claude-code"> = {
               if (f === "ingredient.yaml") continue;
               const path = `.claude/skills/${outName(m)}/${f}`;
               if (claudeResolves(m, f)) {
-                const rawText = await ctx.text(ing, f);
+                const rawText = await ctx.text(ing, f, "claude-code");
                 const text = resolve(rawText, ing.ref);
                 checkReworded(path, [rawText, text]);
                 out.push(await textFile(ctx, path, text, t, ing.ref));
               } else if (TEXT_EXT.test(f)) {
                 // Other text files: not resolved, but scanned
-                const rawText = await ctx.text(ing, f);
+                const rawText = await ctx.text(ing, f, "claude-code");
                 if (primary && lookup) {
                   scanFile(path, Buffer.from(rawText, "utf8"));
                 }
@@ -243,7 +243,7 @@ async function anyFileWithScan(
   scanFile: (path: string, content: Buffer) => void,
 ): Promise<PlannedFile> {
   if (TEXT_EXT.test(file)) {
-    const text = await ctx.text(ing, file);
+    const text = await ctx.text(ing, file, "claude-code");
     if (primary && lookup) {
       scanFile(relPath, Buffer.from(text, "utf8"));
     }
