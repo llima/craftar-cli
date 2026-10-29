@@ -10,7 +10,7 @@ import type { IngredientDiff } from "./variants.js";
 import type { HunkTake, Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile, PlanHunk } from "../schema/index.js";
 import { ProfileSchema, RecipeSchema } from "../schema/index.js";
 import { collect, deriveHunk, prove, substitutedFile, bodyFile, emittedFile, type Extraction } from "./extract.js";
-import { firstMarkerLine, parseSections, SectionMarkerError } from "./sections.js";
+import { firstMarkerLine, parseSections, readsTargetSections, SectionMarkerError, type ParseSectionsOptions } from "./sections.js";
 import { errorText } from "./schema-fault.js";
 import { sectionKey } from "./resolve.js";
 import { findProfileFile } from "./param-writes.js";
@@ -650,7 +650,9 @@ export async function applyPlan(
     }
   }
 
-  await checkMarkers(base, write, remove, newSectionNames);
+  // Spec 41 Part B §5: pass target-scoped section options from the Forge schema
+  const parseOpts = { targets: readsTargetSections({ schema: forgeSchema }) };
+  await checkMarkers(base, write, remove, newSectionNames, parseOpts);
 
   const metaDiffers = opts.discardVariantMeta ? [] : metaDifferences(base, variant, forgeSchema);
   const params = [...extractions.values()];
@@ -693,10 +695,20 @@ export async function applyPlan(
   return { write, remove, resolved: unresolved === 0 && metaDiffers.length === 0, unresolved, metaDiffers, params, sections };
 }
 
-/** The sequence of section names a text declares, or the parse problem. */
-function markerStructure(text: string, label: string): { names: string[] } | { problem: string } {
+/**
+ * The sequence of section keys a text declares, or the parse problem.
+ * Spec 41 Part B §5: when parse options include targets, each key is formatted as
+ * `name` or `name (targets=a,b)` with targets sorted alphabetically.
+ */
+function markerStructure(text: string, label: string, opts?: ParseSectionsOptions): { names: string[] } | { problem: string } {
   try {
-    return { names: parseSections(text, label).sections.map((s) => s.name) };
+    const parsed = parseSections(text, label, label, opts);
+    const names = parsed.sections.map((s) => {
+      if (!s.targets || s.targets.length === 0) return s.name;
+      const sorted = [...s.targets].sort();
+      return `${s.name} (targets=${sorted.join(",")})`;
+    });
+    return { names };
   } catch (e) {
     if (e instanceof SectionMarkerError) return { problem: `line ${e.line}: ${e.problem}` };
     throw e;
@@ -708,22 +720,24 @@ function markerStructure(text: string, label: string): { names: string[] } | { p
  * the plan declares it. Taking the variant's side of a hunk that holds a marker would leave an
  * unterminated section, which every later sync refuses, or drop a section whose profile values would
  * then silently stop applying. Each file the result writes or removes is compared, as the sequence
- * of its section names, with the **expected** sequence: the base's, plus the plan's new sections
- * inserted in span order. A plan without section hunks expects the base's sequence, as in 0.7.x.
+ * of its section keys (name + targets), with the **expected** sequence: the base's, plus the plan's
+ * new sections inserted in span order. A plan without section hunks expects the base's sequence.
+ * Spec 41 Part B §5: when the Forge is at schema 6+, the comparison includes targets.
  */
 async function checkMarkers(
   base: LoadedIngredient,
   write: Record<string, string | Buffer>,
   remove: string[],
   newNames: Map<string, string[]> = new Map(),
+  opts?: ParseSectionsOptions,
 ): Promise<void> {
   const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
   const touched = [...Object.keys(write), ...remove].filter((rel) => bodyFile(base.meta, rel, base.dir)).sort();
   for (const rel of touched) {
     const abs = path.join(base.dir, rel);
-    const before = (await exists(abs)) ? markerStructure(await fs.readFile(abs, "utf8"), label(rel)) : { names: [] };
+    const before = (await exists(abs)) ? markerStructure(await fs.readFile(abs, "utf8"), label(rel), opts) : { names: [] };
     const merged = write[rel];
-    const after = merged === undefined ? { names: [] } : markerStructure(Buffer.isBuffer(merged) ? merged.toString("utf8") : merged, label(rel));
+    const after = merged === undefined ? { names: [] } : markerStructure(Buffer.isBuffer(merged) ? merged.toString("utf8") : merged, label(rel), opts);
     let why: string | null = null;
     if ("problem" in after) why = `the result has malformed markers — ${after.problem}`;
     else if ("problem" in before) why = `the base has malformed markers — ${before.problem}`;
