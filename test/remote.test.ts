@@ -171,6 +171,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { defaultGit, ensureTree, ForgeFetchError, type GitRunner } from "../src/core/remote.js";
 import { profile, recipe, rule, tmpDir } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { git, remoteForge, type RemoteForge } from "./helpers/remote.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -181,7 +182,7 @@ afterEach(async () => {
 async function setup(): Promise<{ r: RemoteForge; home: string }> {
   const r = await remoteForge({ ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] });
   const home = await tmpDir("craftar-home-");
-  cleanups.push(r.cleanup, () => fs.rm(home, { recursive: true, force: true }));
+  cleanups.push(r.cleanup, () => removeWithRetry(home));
   return { r, home };
 }
 
@@ -268,7 +269,7 @@ describe("the Forge cache (spec 13 §6.3)", () => {
     expect(err).toBeInstanceOf(ForgeFetchError);
     expect((err as ForgeFetchError).cached?.commit).toBe(sha);
     const empty = await tmpDir("craftar-home-");
-    cleanups.push(() => fs.rm(empty, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(empty));
     const none = await ensureTree(r.url, null, { home: empty }).catch((e) => e);
     expect((none as ForgeFetchError).cached).toBeNull();
   });

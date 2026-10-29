@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { listFiles } from "../src/core/forge.js";
 import { runCli } from "./helpers/cli.js";
 import { profile, recipe, rule, tmpDir, type ForgeSpec } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { remoteForge } from "./helpers/remote.js";
 
 // A tree of the Forge cache passed as a Forge to the gated writers (forge unify, forge promote, drift promote).
@@ -41,7 +42,7 @@ async function cacheTree(): Promise<CacheTreeContext> {
   const rf = await remoteForge(THREE);
   cleanups.push(rf.cleanup);
   const parent = await fs.realpath(await tmpDir("craftar-cachetree-"));
-  cleanups.push(() => fs.rm(parent, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(parent));
   const home = path.join(parent, "home");
   const w0 = path.join(parent, "w0");
   await fs.mkdir(w0, { recursive: true });

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cacheKey, ensureTree, inspectCache } from "../src/core/remote.js";
 import { profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { remoteForge } from "./helpers/remote.js";
 
 // Spec 24 §5.1: a read-only snapshot of the Forge cache.
@@ -17,13 +18,13 @@ const SPEC = { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rul
 describe("inspectCache", () => {
   it("no forges directory → an empty snapshot", async () => {
     const home = await tmpDir();
-    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(home));
     expect(await inspectCache(home)).toEqual({ forges: path.join(home, "forges"), entries: [], removing: [], bytes: 0 });
   });
 
   it("an entry after a fetch: fetched, its tree complete, its size summed; an incomplete entry apart; the total counts loose files too", async () => {
     const home = await tmpDir();
-    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(home));
     const r = await remoteForge(SPEC);
     cleanups.push(r.cleanup);
     const t = await ensureTree(r.url, null, { home });

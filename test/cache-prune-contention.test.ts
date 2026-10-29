@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { pruneCache, type PruneOptions } from "../src/core/cache.js";
 import { cacheKey, ensureTree, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
 import { tmpDir, profile, recipe, rule, writeFiles } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { remoteForge } from "./helpers/remote.js";
 
 // Spec 26 §4.2 step 0, §4.3, §9 — the prune lock, a crash mid-removal, a file held open, leftovers.
@@ -20,7 +21,7 @@ const old = new Date("2020-01-01T00:00:00Z");
 
 async function setup() {
   const home = await tmpDir("craftar-home-");
-  cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(home));
   const r = await remoteForge(SPEC);
   cleanups.push(r.cleanup);
   await ensureTree(r.url, null, { home });
