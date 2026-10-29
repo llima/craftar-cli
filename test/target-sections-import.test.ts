@@ -205,3 +205,217 @@ describe("import with target-scoped sections (spec 41 Part B Task 05)", () => {
     expect(result.sections.find((x) => x.name === "c")).toBeUndefined();
   });
 });
+
+  it("steering/notes with targets=kiro section is reused on re-import (sourceTarget fix)", async () => {
+    // This tests Fix 1: hand-written steering must be compared as Kiro renders it (sourceTarget: "kiro")
+    const t = await setup();
+    const LF = "\n";
+
+    // Create schema 6 Forge with steering/notes that has targets=kiro section
+    await fs.mkdir(path.join(t.forge, "ingredients/steerings/notes"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "ingredients/rules/style"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "recipes"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "profiles/acme"), { recursive: true });
+
+    await fs.writeFile(
+      path.join(t.forge, "craftar.forge.yaml"),
+      YAML.stringify({ name: "f", schema: 6 }),
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/steerings/notes/ingredient.yaml"),
+      YAML.stringify({ type: "steering", name: "notes", file: "steering.md", targets: ["kiro"], tags: ["client"] }),
+    );
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/steerings/notes/steering.md"),
+      `# Notes${LF}${LF}<!-- craftar:section s targets=kiro -->${LF}Kiro only.${LF}<!-- /craftar:section -->${LF}${LF}End.${LF}`,
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/rules/style/ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "style" }),
+    );
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/style/rule.md"), `# Style${LF}`);
+
+    await fs.writeFile(
+      path.join(t.forge, "recipes/base.yaml"),
+      YAML.stringify({ name: "base", ingredients: ["rule/style", "steering/notes"] }),
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "profiles/acme/profile.yaml"),
+      YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code", "kiro"] }),
+    );
+
+    // Create workspace
+    const wsRoot = t.ws("ws");
+    await fs.mkdir(wsRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(wsRoot, "craftar.yaml"),
+      YAML.stringify({ forge: "../forge", profile: "acme" }),
+    );
+
+    // Sync
+    await syncWorkspace(wsRoot);
+
+    // Copy Forge
+    const forgeCopy = path.join(t.root, "forge-copy");
+    await copyDir(t.forge, forgeCopy);
+
+    // Re-import — steering/notes must be reused (it has targets=kiro section, import source is kiro)
+    const result = await importInto(forgeCopy, wsRoot, "acme");
+    expect(result.reused).toContain("steering/notes");
+    expect(result.variants).toEqual([]);
+
+    // Forge copy must be byte-identical
+    const origSteering = await fs.readFile(path.join(t.forge, "ingredients/steerings/notes/steering.md"), "utf8");
+    const copySteering = await fs.readFile(path.join(forgeCopy, "ingredients/steerings/notes/steering.md"), "utf8");
+    expect(copySteering).toBe(origSteering);
+  });
+
+  it("steering/notes with untargeted section is reused on re-import (control for sourceTarget fix)", async () => {
+    // Control test: untargeted section should also be reused
+    const t = await setup();
+    const LF = "\n";
+
+    await fs.mkdir(path.join(t.forge, "ingredients/steerings/notes"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "ingredients/rules/style"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "recipes"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "profiles/acme"), { recursive: true });
+
+    await fs.writeFile(
+      path.join(t.forge, "craftar.forge.yaml"),
+      YAML.stringify({ name: "f", schema: 6 }),
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/steerings/notes/ingredient.yaml"),
+      YAML.stringify({ type: "steering", name: "notes", file: "steering.md", targets: ["kiro"], tags: ["client"] }),
+    );
+    // Untargeted section
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/steerings/notes/steering.md"),
+      `# Notes${LF}${LF}<!-- craftar:section s -->${LF}Default content.${LF}<!-- /craftar:section -->${LF}${LF}End.${LF}`,
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/rules/style/ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "style" }),
+    );
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/style/rule.md"), `# Style${LF}`);
+
+    await fs.writeFile(
+      path.join(t.forge, "recipes/base.yaml"),
+      YAML.stringify({ name: "base", ingredients: ["rule/style", "steering/notes"] }),
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "profiles/acme/profile.yaml"),
+      YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code", "kiro"] }),
+    );
+
+    const wsRoot = t.ws("ws");
+    await fs.mkdir(wsRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(wsRoot, "craftar.yaml"),
+      YAML.stringify({ forge: "../forge", profile: "acme" }),
+    );
+
+    await syncWorkspace(wsRoot);
+
+    const forgeCopy = path.join(t.root, "forge-copy");
+    await copyDir(t.forge, forgeCopy);
+
+    const result = await importInto(forgeCopy, wsRoot, "acme");
+    expect(result.reused).toContain("steering/notes");
+    expect(result.variants).toEqual([]);
+  });
+
+  it("pin unprojected cited keys: edit to rule b keeps kiro rule a unchanged (F9)", async () => {
+    // Tests Fix 2: a key cited in another target's section must be pinned
+    // Scenario: rule a has `<!-- craftar:section s targets=kiro -->team {{team}}<!-- /craftar:section -->`
+    // rule b has `# B {{team}}`; profile sets team: old; edit .claude/rules/b.md to `# B new`
+    // b becomes variant, profile team stays 'old', kiro rule a is unchanged
+    const t = await setup();
+    const LF = "\n";
+
+    await fs.mkdir(path.join(t.forge, "ingredients/rules/a"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "ingredients/rules/b"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "recipes"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "profiles/acme"), { recursive: true });
+
+    await fs.writeFile(
+      path.join(t.forge, "craftar.forge.yaml"),
+      YAML.stringify({ name: "f", schema: 6 }),
+    );
+
+    // rule a: has a targets=kiro section citing {{team}}
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/rules/a/ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "a", params: { team: { description: "team name" } } }),
+    );
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/rules/a/rule.md"),
+      `# A${LF}${LF}<!-- craftar:section s targets=kiro -->${LF}team {{team}}${LF}<!-- /craftar:section -->${LF}`,
+    );
+
+    // rule b: cites {{team}} in body
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/rules/b/ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "b", params: { team: { description: "team name" } } }),
+    );
+    await fs.writeFile(path.join(t.forge, "ingredients/rules/b/rule.md"), `# B {{team}}${LF}`);
+
+    await fs.writeFile(
+      path.join(t.forge, "recipes/base.yaml"),
+      YAML.stringify({ name: "base", ingredients: ["rule/a", "rule/b"] }),
+    );
+
+    // Profile sets team: old
+    await fs.writeFile(
+      path.join(t.forge, "profiles/acme/profile.yaml"),
+      YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code", "kiro"], params: { team: "old" } }),
+    );
+
+    const wsRoot = t.ws("ws");
+    await fs.mkdir(wsRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(wsRoot, "craftar.yaml"),
+      YAML.stringify({ forge: "../forge", profile: "acme" }),
+    );
+
+    // Sync
+    await syncWorkspace(wsRoot);
+
+    // Hand-edit .claude/rules/b.md to `# B new` (removing the param)
+    await fs.writeFile(path.join(wsRoot, ".claude/rules/b.md"), `# B new${LF}`);
+
+    // Copy Forge
+    const forgeCopy = path.join(t.root, "forge-copy");
+    await copyDir(t.forge, forgeCopy);
+
+    // Re-import
+    const result = await importInto(forgeCopy, wsRoot, "acme");
+
+    // Assertion 1: b becomes a variant
+    expect(result.variants.map((v: { name: string }) => v.name)).toContain("rule/b--acme");
+
+    // Assertion 2: profile team stays 'old' — check the profile file
+    const profileContent = await fs.readFile(path.join(forgeCopy, "profiles/acme/profile.yaml"), "utf8");
+    const profile = YAML.parse(profileContent);
+    expect(profile.params?.team).toBe("old");
+
+    // Point the workspace at the Forge copy and check status
+    await fs.writeFile(
+      path.join(wsRoot, "craftar.yaml"),
+      YAML.stringify({ forge: "../forge-copy", profile: "acme" }),
+    );
+
+    // Assertion 3: .kiro/steering/a.md should be unchanged
+    const ws = await loadWorkspace(wsRoot);
+    const p = await plan(ws);
+    const st = await status(ws, p, await readLock(ws.root));
+    const stJson = st.map((s: { path: string; state: string }) => ({ path: s.path, state: s.state }));
+    const kiroA = stJson.find((s: { path: string }) => s.path === ".kiro/steering/a.md");
+    expect(kiroA?.state).toBe("unchanged");
+  });
