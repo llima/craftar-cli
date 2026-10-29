@@ -1,4 +1,4 @@
-import { SECTION_NAME } from "../schema/index.js";
+import { FORGE_SCHEMA_TARGET_SECTIONS, SECTION_NAME } from "../schema/index.js";
 import { substitute } from "./resolve.js";
 import { placeholders } from "./extract.js";
 import { stripBom, toLf } from "./text.js";
@@ -16,6 +16,11 @@ import { stripBom, toLf } from "./text.js";
  * column 0, single spaces between its tokens, trailing spaces or tabs tolerated. A line that starts
  * like one and is not one is an error (a near miss); an indented marker is literal text.
  */
+
+/** Whether the Forge reads `targets=` on a section marker (spec 41 Part B). */
+export function readsTargetSections(manifest: { schema: number }): boolean {
+  return manifest.schema >= FORGE_SCHEMA_TARGET_SECTIONS;
+}
 
 const OPEN = /^<!-- craftar:section (\S+) -->[ \t]*$/;
 const CLOSE = /^<!-- \/craftar:section -->[ \t]*$/;

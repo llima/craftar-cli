@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
-import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, inferSections, markerLine, parseSections, SectionMarkerError } from "../src/core/sections.js";
+import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, inferSections, markerLine, parseSections, readsTargetSections, SectionMarkerError } from "../src/core/sections.js";
+import { readsPrimary } from "../src/core/resolve.js";
+import { rendersServers } from "../src/core/mcp-server.js";
+import { readsIntegrations } from "../src/core/integrations.js";
 
 const F = "ingredients/rules/review-posture/rule.md";
 const OPEN = (n: string) => `<!-- craftar:section ${n} -->`;
@@ -248,5 +251,19 @@ describe("the section matcher (spec 11 §6.8)", () => {
     const s = src("\n" + T(GLOBEX) + "\n");
     expect(inferSections(p, s.replace(/\n/g, "\r\n"), {}, {})).toEqual({ values: { flavors: T(GLOBEX) } });
     expect(inferSections(p, "﻿" + s, {}, {})).toEqual({ values: { flavors: T(GLOBEX) } });
+  });
+});
+
+describe("schema gates (spec 41 Part B)", () => {
+  it("readsTargetSections: false at schema 5, true at schema 6", () => {
+    expect(readsTargetSections({ schema: 5 })).toBe(false);
+    expect(readsTargetSections({ schema: 6 })).toBe(true);
+  });
+
+  it("readsPrimary, rendersServers, readsIntegrations are all true at schema 6 (they use >=)", () => {
+    const m = { schema: 6 };
+    expect(readsPrimary(m)).toBe(true);
+    expect(rendersServers(m)).toBe(true);
+    expect(readsIntegrations(m)).toBe(true);
   });
 });

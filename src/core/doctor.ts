@@ -1,7 +1,7 @@
 import { promises as fs, constants as fsc } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ENV_NAME, type Lock, type Registry } from "../schema/index.js";
+import { ENV_NAME, type ForgeSchema, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
 import { renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix } from "./mcp-server.js";
@@ -535,7 +535,7 @@ export function oneLine(e: unknown): string {
  * A target with no entry in MCP_FILE (agents-md) is skipped.
  * At schema 4, the server is rendered first, so a `${NAME}` a value brings into `env` is checked (spec 34 §4.4).
  */
-function writtenServers(p: Plan, schema: 1 | 2 | 3 | 4 | 5): Array<[string, unknown, string[] | undefined, string]> {
+function writtenServers(p: Plan, schema: ForgeSchema): Array<[string, unknown, string[] | undefined, string]> {
   const servers: Array<[string, unknown, string[] | undefined, string]> = [];
   for (const target of p.resolution.targets) {
     const file = MCP_FILE[target as keyof typeof MCP_FILE];

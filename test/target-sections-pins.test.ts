@@ -301,4 +301,13 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
     const afterImport = await snapshot(forgeCopy);
     sameTree(beforeImport, afterImport);
   });
+
+  it("schema 6, no targets= — equals the schema 5 pin", async () => {
+    const s = kept(await acmeSections({ schema: 6 }));
+    const observed = await buildObserved(s);
+
+    // Compare with the same pin as schema 5 — they must be identical
+    const expected = await loadPin();
+    expect(observed).toEqual(expected);
+  });
 });

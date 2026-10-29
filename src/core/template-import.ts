@@ -1,5 +1,5 @@
 import path from "node:path";
-import { IngredientSchema, stripForgeOnlyKeys, type Ingredient } from "../schema/index.js";
+import { IngredientSchema, stripForgeOnlyKeys, type ForgeSchema, type Ingredient } from "../schema/index.js";
 import { placeholders, bodyFile } from "./extract.js";
 import { fingerprintOf, type DirReader } from "./fingerprint.js";
 import { parseYaml } from "./forge.js";
@@ -102,7 +102,7 @@ export function renderedFingerprint(
   base: ImportBase,
   map: Record<string, unknown>,
   sections: Record<string, string> = {},
-  schema: 1 | 2 | 3 | 4 | 5 = 1,
+  schema: ForgeSchema = 1,
   refs?: (text: string, citing: string) => string,
 ): string {
   // At the gate, render the server before stripForgeOnlyKeys (it needs params).

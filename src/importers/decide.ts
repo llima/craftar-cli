@@ -11,7 +11,7 @@ import { errorText } from "../core/schema-fault.js";
 import { sectionKey } from "../core/resolve.js";
 import { registrationCitations, rendersServers, serverCitations } from "../core/mcp-server.js";
 import type { DirReader } from "../core/fingerprint.js";
-import { OverridesParamsSchema, SectionsSchema, WorkspaceConfigSchema, stripForgeOnlyKeys, type Ingredient, type Sections, type Target } from "../schema/index.js";
+import { OverridesParamsSchema, SectionsSchema, WorkspaceConfigSchema, stripForgeOnlyKeys, type ForgeSchema, type Ingredient, type Sections, type Target } from "../schema/index.js";
 
 /**
  * The decision half of template-aware import (spec 10 §6.1–§6.5): what the importing profile
@@ -216,7 +216,7 @@ async function inferParams(
   fingerprint: string,
   others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>,
   runBases: Set<string>,
-  schema: 1 | 2 | 3 | 4 | 5,
+  schema: ForgeSchema,
 ): Promise<Decision> {
   // Holes (§3): declared, not reserved, not set by the workspace layer, and not pinned — a key this run already relied
   // on renders at its current value, like any fixed key (§6.5, §14 Q13).
@@ -311,7 +311,7 @@ function inferSectionValues(
   meta: Ingredient,
   files: Record<string, string | Buffer>,
   fingerprint: string,
-  schema: 1 | 2 | 3 | 4 | 5,
+  schema: ForgeSchema,
 ): Decision {
   const shape = shapeDiffers(base, meta, files);
   if (shape) return { kind: "variant", why: shape };
