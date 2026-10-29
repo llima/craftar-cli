@@ -1,11 +1,11 @@
 import path from "node:path";
-import { IngredientSchema, stripForgeOnlyKeys, type ForgeSchema, type Ingredient } from "../schema/index.js";
+import { IngredientSchema, stripForgeOnlyKeys, type ForgeSchema, type Ingredient, type Owner } from "../schema/index.js";
 import { placeholders, bodyFile } from "./extract.js";
 import { fingerprintOf, type DirReader } from "./fingerprint.js";
 import { parseYaml } from "./forge.js";
 import { renderServer, rendersServers } from "./mcp-server.js";
 import { substitute } from "./resolve.js";
-import { checkDeclaredOnce, expandSections, parseSections, SectionMarkerError, type ParsedSections, type ParseSectionsOptions, type Owner } from "./sections.js";
+import { checkDeclaredOnce, expandSections, parseSections, SectionMarkerError, type ParsedSections, type ParseSectionsOptions } from "./sections.js";
 import { stripBom, toLf } from "./text.js";
 import { claudeResolves } from "../emitters/claude-code.js";
 
