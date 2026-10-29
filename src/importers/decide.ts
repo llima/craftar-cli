@@ -158,6 +158,8 @@ export async function decide(
   const names = sectionNames(base);
   // Whatever the outcome — reuse, section inference, variant or a G1 literal comparison — the Forge holds these markers after the run.
   if (names.length) ctx.markedBase = true;
+  // The section names the importing target receives (projected).
+  const projectedNames = sectionNames(base, owner);
   const cited = citedKeys(expandedTexts(base, S, owner));
   // F9: a key another target's section cites still renders there, so pin the unprojected set.
   const citedAll = citedKeys(expandedTexts(base, S));
@@ -183,13 +185,13 @@ export async function decide(
   if (renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined, owner) === fingerprint) {
     pin(ctx, [...citedAll, ...serverKeys], map);
     const changed = [...cited].filter((k) => Object.hasOwn(map, k));
-    const filled = names.filter((n) => Object.hasOwn(S, n));
+    const filled = projectedNames.filter((n) => Object.hasOwn(S, n));
     return { kind: "reuse", rendered: changed.length ? changed.sort() : undefined, renderedSections: filled.length ? filled : undefined };
   }
 
   // Param inference first (Ruling 16): the narrower claim. A base with no open section stops there, as in 0.6.2.
   const param = await inferParams(ctx, base, S, map, cited, citedAll, ref, meta, files, fingerprint, others, runBases, schema, owner);
-  const open = names.filter((n) => !Object.hasOwn(WSk, n));
+  const open = projectedNames.filter((n) => !Object.hasOwn(WSk, n));
   if (param.kind === "reuse" || !open.length) return withAuthEnv(param);
   return withAuthEnv(inferSectionValues(ctx, base, key, PSk, WSk, map, ref, meta, files, fingerprint, schema, owner));
 }

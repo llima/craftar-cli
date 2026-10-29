@@ -5,7 +5,7 @@ import { fingerprintOf, type DirReader } from "./fingerprint.js";
 import { parseYaml } from "./forge.js";
 import { renderServer, rendersServers } from "./mcp-server.js";
 import { substitute } from "./resolve.js";
-import { checkDeclaredOnce, expandSections, parseSections, SectionMarkerError, type ParsedSections, type ParseSectionsOptions } from "./sections.js";
+import { checkDeclaredOnce, expandSections, parseSections, projectSections, SectionMarkerError, type ParsedSections, type ParseSectionsOptions } from "./sections.js";
 import { stripBom, toLf } from "./text.js";
 import { claudeResolves } from "../emitters/claude-code.js";
 
@@ -66,9 +66,12 @@ export async function readBase(dir: string, io: DirReader, forgeRoot?: string, o
   return { meta, texts, bytes, metaFile, parsed };
 }
 
-/** The names of the sections a base declares, across its body files. */
-export function sectionNames(base: ImportBase): string[] {
-  return [...base.parsed.values()].flatMap((p) => p.sections.map((s) => s.name));
+/** The names of the sections a base declares, across its body files. With `owner`, projects to sections that target receives. */
+export function sectionNames(base: ImportBase, owner?: Owner): string[] {
+  return [...base.parsed.values()].flatMap((p) => {
+    const projected = owner ? projectSections(p, owner) : p;
+    return projected.sections.map((s) => s.name);
+  });
 }
 
 /** The base's body files with their sections expanded by `values` (spec 11 §6.2) — what sync substitutes into. With `owner`, calls `projectSections` first. */
@@ -105,7 +108,7 @@ export function renderedFingerprint(
   sections: Record<string, string> = {},
   schema: ForgeSchema = 1,
   refs?: (text: string, citing: string) => string,
-  owner: Owner = "claude-code",
+  owner?: Owner,
 ): string {
   // At the gate, render the server before stripForgeOnlyKeys (it needs params).
   let meta: Ingredient;
