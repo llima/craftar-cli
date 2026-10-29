@@ -21,7 +21,7 @@ import { concerned, workspaceAgainst, type ForgeWorkspace, type Planned, type Re
 import { plan, type MergedConfig } from "./sync.js";
 import { parseYamlText } from "./yaml-read.js";
 import { effectiveProfile, recipesOrWritten } from "./integrations.js";
-import { citationsIn, rendersServers } from "./mcp-server.js";
+import { registrationCitations, rendersServers } from "./mcp-server.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
 // fidelity, correctness should not hinge on a glyph no diff viewer, editor or re-encoding shows.
@@ -163,7 +163,8 @@ export function metaDifferences(base: LoadedIngredient, variant: LoadedIngredien
   // server's bytes, so a variant with no `params` under a base that declares a key differs — and stays.
   // The same for a hook pair whose base's registration cites a declared key (spec 43 §7.2 row 9, ungated).
   const mcpDeclares = base.meta.type === "mcp" && variant.meta.type === "mcp" && Object.keys(base.meta.params ?? {}).length > 0;
-  const hookDeclares = base.meta.type === "hook" && variant.meta.type === "hook" && hookRegistrationCitesDeclared(base.meta);
+  const baseRegCitations = registrationCitations(base.meta);
+  const hookDeclares = base.meta.type === "hook" && variant.meta.type === "hook" && baseRegCitations.some((c) => c.declared);
   if (b.params === undefined && !(rendersServers({ schema }) && mcpDeclares) && !hookDeclares) delete a.params;
   
   // For hook pairs where variant HAS params and base's registration cites declared keys,
@@ -173,12 +174,7 @@ export function metaDifferences(base: LoadedIngredient, variant: LoadedIngredien
     const baseDeclared = base.meta.params ?? {};
     const variantDeclared = variant.meta.params ?? {};
     // Get keys the base's registration cites (that are declared)
-    const citedKeys = new Set<string>();
-    for (const entry of (base.meta as { registration?: unknown[] }).registration ?? []) {
-      for (const c of citationsIn(entry, baseDeclared, `${base.meta.type}/${base.meta.name}`)) {
-        if (c.declared) citedKeys.add(c.key);
-      }
-    }
+    const citedKeys = new Set(baseRegCitations.filter((c) => c.declared).map((c) => c.key));
     // Keys to keep in base: cited + variant-declared
     const keysToKeep = new Set([...citedKeys, ...Object.keys(variantDeclared)]);
     // Restrict base params to keysToKeep
@@ -191,18 +187,6 @@ export function metaDifferences(base: LoadedIngredient, variant: LoadedIngredien
   }
   
   return [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => !isDeepStrictEqual(a[k], b[k])).sort();
-}
-
-/** Whether a hook's registration cites any key the hook declares in its own params (spec 43 §7.2 row 9). */
-function hookRegistrationCitesDeclared(meta: Ingredient): boolean {
-  if (meta.type !== "hook" || !meta.registration) return false;
-  const declared = meta.params ?? {};
-  if (Object.keys(declared).length === 0) return false;
-  for (const entry of meta.registration) {
-    const citations = citationsIn(entry, declared, `${meta.type}/${meta.name}`);
-    if (citations.some((c) => c.declared)) return true;
-  }
-  return false;
 }
 
 export interface ApplyOptions {

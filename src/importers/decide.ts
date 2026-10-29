@@ -9,7 +9,7 @@ import { citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerpri
 import { canonicalValue, inferSections } from "../core/sections.js";
 import { errorText } from "../core/schema-fault.js";
 import { sectionKey } from "../core/resolve.js";
-import { citationsIn, rendersServers, serverCitations } from "../core/mcp-server.js";
+import { registrationCitations, rendersServers, serverCitations } from "../core/mcp-server.js";
 import type { DirReader } from "../core/fingerprint.js";
 import { OverridesParamsSchema, SectionsSchema, WorkspaceConfigSchema, stripForgeOnlyKeys, type Ingredient, type Sections, type Target } from "../schema/index.js";
 
@@ -109,17 +109,13 @@ export async function decide(
   const baseRegistration = base.meta.type === "hook" ? base.meta.registration : undefined;
   // The params entries the base's registration cites, to carry into the variant (spec 43 §7.2 row 10).
   const baseRegistrationParams = (() => {
-    if (base.meta.type !== "hook" || !base.meta.registration || !base.meta.params) return undefined;
-    const declared = base.meta.params;
-    const citedKeys = new Set<string>();
-    for (const entry of base.meta.registration) {
-      for (const c of citationsIn(entry, declared, ref)) {
-        if (c.declared) citedKeys.add(c.key);
-      }
-    }
-    if (citedKeys.size === 0) return undefined;
+    const citations = registrationCitations(base.meta);
+    if (!citations.length) return undefined;
+    const citedDeclared = citations.filter((c) => c.declared).map((c) => c.key);
+    if (!citedDeclared.length) return undefined;
+    const declared = base.meta.params ?? {};
     const result: Record<string, { default?: string | number | boolean; description?: string }> = {};
-    for (const k of citedKeys) {
+    for (const k of citedDeclared) {
       if (Object.hasOwn(declared, k)) result[k] = declared[k];
     }
     return result;
@@ -261,14 +257,8 @@ async function inferParams(
         // F9 for hook registrations (spec 43 §7.2 row 8, ungated): check even for runBases ingredients
         // because registrations are not imported from the workspace - they stay from the Forge.
         // Only skip the current ingredient being decided.
-        if (ing.ref !== ref && ing.meta.type === "hook" && ing.meta.registration) {
-          const declared = ing.meta.params ?? {};
-          for (const entry of ing.meta.registration) {
-            const citations = citationsIn(entry, declared, ing.ref);
-            if (citations.some((c) => c.declared && c.key === key)) {
-              return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
-            }
-          }
+        if (ing.ref !== ref && registrationCitations(ing.meta).some((c) => c.declared && c.key === key)) {
+          return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
         }
         if (ing.ref === ref || runBases.has(ing.ref)) continue;
         for (const rel of await listAdmitted(ing)) {

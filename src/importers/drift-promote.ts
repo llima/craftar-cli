@@ -64,7 +64,7 @@ import { sectionKey } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
-import { citationsIn } from "../core/mcp-server.js";
+import { registrationCitations } from "../core/mcp-server.js";
 import type { WriteJournal } from "../core/unify.js";
 import type { Ingredient, IngredientRef, Lock } from "../schema/index.js";
 
@@ -968,16 +968,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Note: sourceMeta had params removed, so we check the BASE (X.meta) for registration-cited params.
   if (meta.type === "hook" && X.meta.type === "hook" && X.meta.registration && X.meta.params) {
     // Keep only the params entries the base's registration cites
-    const declared = X.meta.params;
-    const citedKeys = new Set<string>();
-    for (const entry of X.meta.registration) {
-      for (const c of citationsIn(entry, declared, ingredientRef)) {
-        if (c.declared) citedKeys.add(c.key);
-      }
-    }
-    if (citedKeys.size > 0) {
+    const citedDeclared = registrationCitations(X.meta).filter((c) => c.declared).map((c) => c.key);
+    if (citedDeclared.length > 0) {
+      const declared = X.meta.params;
       const keptParams: Record<string, { default?: string | number | boolean; description?: string }> = {};
-      for (const k of citedKeys) {
+      for (const k of citedDeclared) {
         if (Object.hasOwn(declared, k)) keptParams[k] = declared[k];
       }
       (variantMeta as Record<string, unknown>).params = keptParams;

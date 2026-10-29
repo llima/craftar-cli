@@ -216,6 +216,16 @@ export function serverCitations(meta: Ingredient): Array<{ key: string; declared
   return citationsIn(meta.server, declared, ref);
 }
 
+/** The keys a hook's registration cites, once each, in the registration's own order, depth first. [] for anything that is not a hook with a registration. */
+export function registrationCitations(meta: Ingredient): Array<{ key: string; declared: boolean }> {
+  if (meta.type !== "hook" || !meta.registration) return [];
+
+  const declared: Record<string, unknown> = meta.params ?? {};
+  const ref = `${meta.type}/${meta.name}`;
+  // One call over the whole list: keys once each, in order.
+  return citationsIn(meta.registration, declared, ref);
+}
+
 export interface ServerFinding {
   path: string;
   kind: string;

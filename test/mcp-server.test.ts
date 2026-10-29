@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { credentialIn, credentialMessage, entropyMessage, holdsBaseCitations, rendersServers, renderServer, serverCitations, serverSecret, undeclaredMessage, type SubstitutedLeaf } from "../src/core/mcp-server.js";
+import { credentialIn, credentialMessage, entropyMessage, holdsBaseCitations, registrationCitations, rendersServers, renderServer, serverCitations, serverSecret, undeclaredMessage, type SubstitutedLeaf } from "../src/core/mcp-server.js";
 import { IngredientSchema, type Ingredient } from "../src/schema/index.js";
 
 // Spec 34 §9 — the one place a server is rendered or scanned for placeholders.
@@ -341,6 +341,45 @@ describe("renderLeaves / citationsIn (spec 43)", () => {
         { key: "a", declared: true },
         { key: "b", declared: false },
       ]);
+    });
+  });
+
+  describe("registrationCitations", () => {
+    it("returns each key once, with declared flag, in registration order — two entries citing a and b, a declared", () => {
+      const hook: Ingredient = IngredientSchema.parse({
+        type: "hook",
+        name: "guard",
+        files: ["guard.py"],
+        params: { a: {} },
+        registration: [
+          { event: "PreToolUse", command: "{{a}}", args: [] },
+          { event: "PostToolUse", command: "{{b}}", args: ["{{a}}"] },
+        ],
+      });
+      expect(registrationCitations(hook)).toEqual([
+        { key: "a", declared: true },
+        { key: "b", declared: false },
+      ]);
+    });
+
+    it("returns [] for a script (no registration)", () => {
+      const script: Ingredient = IngredientSchema.parse({
+        type: "script",
+        name: "lint",
+        files: ["lint.sh"],
+        params: { a: {} },
+      });
+      expect(registrationCitations(script)).toEqual([]);
+    });
+
+    it("returns [] for a hook with no registration", () => {
+      const hook: Ingredient = IngredientSchema.parse({
+        type: "hook",
+        name: "guard",
+        files: ["guard.py"],
+        params: { a: {} },
+      });
+      expect(registrationCitations(hook)).toEqual([]);
     });
   });
 

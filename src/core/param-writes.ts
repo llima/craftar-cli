@@ -5,7 +5,7 @@ import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema, type ForgeManif
 import { placeholders, bodyFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
 import { manifestWithSections } from "./manifest-edit.js";
-import { citationsIn, rendersServers, serverCitations } from "./mcp-server.js";
+import { citationsIn, registrationCitations, rendersServers, serverCitations } from "./mcp-server.js";
 import { resolve, sectionKey } from "./resolve.js";
 import { errorText } from "./schema-fault.js";
 import { canonicalValue } from "./sections.js";
@@ -82,13 +82,7 @@ async function cites(ing: LoadedIngredient, key: string, schema: ForgeManifest["
   // MCP server citations (gated by schema)
   if (rendersServers({ schema }) && serverCitations(ing.meta).some((c) => c.declared && c.key === key)) return true;
   // Hook registration citations (ungated per spec 43 §7.2 row 8)
-  if (ing.meta.type === "hook" && ing.meta.registration) {
-    const declared = ing.meta.params ?? {};
-    for (const entry of ing.meta.registration) {
-      const citations = citationsIn(entry, declared, ing.ref);
-      if (citations.some((c) => c.declared && c.key === key)) return true;
-    }
-  }
+  if (registrationCitations(ing.meta).some((c) => c.declared && c.key === key)) return true;
   return false;
 }
 
