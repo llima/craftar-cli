@@ -1,4 +1,5 @@
-import { FORGE_SCHEMA_TARGET_SECTIONS, SECTION_NAME } from "../schema/index.js";
+import { FORGE_SCHEMA_TARGET_SECTIONS, SECTION_NAME, TARGETS, type Owner, type Target } from "../schema/index.js";
+import { FORGE_MANIFEST } from "./forge.js";
 import { substitute } from "./resolve.js";
 import { placeholders } from "./extract.js";
 import { stripBom, toLf } from "./text.js";
@@ -23,17 +24,73 @@ export function readsTargetSections(manifest: { schema: number }): boolean {
 }
 
 const OPEN = /^<!-- craftar:section (\S+) -->[ \t]*$/;
+const OPEN_TARGETED = /^<!-- craftar:section (\S+) targets=(\S*) -->[ \t]*$/;
 const CLOSE = /^<!-- \/craftar:section -->[ \t]*$/;
 const NEAR = /^<!--[ \t]*\/?[ \t]*craftar:section/;
 
+/** Marker line result: opener, closer, near miss (with optional problem message), or null (plain text). */
+export type MarkerLineResult =
+  | { kind: "open"; name: string; targets?: Target[] }
+  | { kind: "close" }
+  | { kind: "near"; problem?: string }
+  | null;
+
+/** Options for markerLine parsing. */
+export interface MarkerLineOptions {
+  /** Whether to read `targets=` attribute on section markers. Default: false. */
+  targets?: boolean;
+}
+
 /** What a line is to the grammar: an opener (with its name), a closer, a near miss, or text (null). */
-export function markerLine(line: string): { kind: "open"; name: string } | { kind: "close" } | { kind: "near" } | null {
+export function markerLine(line: string, opts?: MarkerLineOptions): MarkerLineResult {
   const l = line.endsWith("\n") ? line.slice(0, -1) : line;
+  const readTargets = opts?.targets ?? false;
+
+  const targeted = OPEN_TARGETED.exec(l);
+  if (targeted && SECTION_NAME.test(targeted[1])) {
+    const name = targeted[1];
+    const targetsValue = targeted[2];
+
+    if (!readTargets) {
+      return { kind: "near", problem: `section ${name} names targets, which a Forge reads only at schema: 6 — set schema: 6 in ${FORGE_MANIFEST}` };
+    }
+
+    const targetsError = validateTargets(name, targetsValue);
+    if (targetsError) {
+      return { kind: "near", problem: targetsError };
+    }
+
+    const parsed = targetsValue.split(",") as Target[];
+    return { kind: "open", name, targets: parsed };
+  }
+
   const open = OPEN.exec(l);
   if (open && SECTION_NAME.test(open[1])) return { kind: "open", name: open[1] };
+
   if (CLOSE.test(l)) return { kind: "close" };
+
   if (NEAR.test(l)) return { kind: "near" };
+
   return null;
+}
+
+/** Validate targets= value, return error message or undefined if valid. */
+function validateTargets(name: string, value: string): string | undefined {
+  const errorMsg = `section ${name}: targets= takes one or more of ${TARGETS.join(", ")}, comma-separated, each once`;
+
+  if (value === "") return errorMsg;
+  if (value.endsWith(",")) return errorMsg;
+
+  const parts = value.split(",");
+  const seen = new Set<string>();
+
+  for (const part of parts) {
+    if (!TARGETS.includes(part as Target)) return errorMsg;
+    if (seen.has(part)) return errorMsg;
+    seen.add(part);
+  }
+
+  return undefined;
 }
 
 /** A marker problem, with the Forge-relative file and 1-based line it names. */
@@ -48,14 +105,23 @@ export class SectionMarkerError extends Error {
   }
 }
 
-export type SectionSegment = { text: string } | { name: string; default: string; line: number };
+/** A text segment or a section segment (with optional targets). */
+export type SectionSegment =
+  | { text: string }
+  | { name: string; default: string; line: number; targets?: Target[] };
 
 /** One file parsed: outside text and sections, in order. A file with no marker is one outside segment. */
 export interface ParsedSections {
   file: string;
   segments: SectionSegment[];
-  /** The sections, in order: name, default, and the line of the opener. */
-  sections: Array<{ name: string; default: string; line: number }>;
+  /** The sections, in order: name, default, the line of the opener, and targets (absent = all). */
+  sections: Array<{ name: string; default: string; line: number; targets?: Target[] }>;
+}
+
+/** Options for parseSections. */
+export interface ParseSectionsOptions {
+  /** Whether to read `targets=` attribute on section markers. Default: false. */
+  targets?: boolean;
 }
 
 /** Lines that keep their terminator; the last one may have none. */
@@ -75,23 +141,25 @@ function linesOf(text: string): string[] {
  * Parse `text` (spec 11 §6.1). `label` is the Forge-relative file the errors name; `ref`, the
  * ingredient the duplicate-name message names (defaults to `label`). Works on `toLf(stripBom(text))`.
  */
-export function parseSections(text: string, label: string, ref: string = label): ParsedSections {
+export function parseSections(text: string, label: string, ref: string = label, opts?: ParseSectionsOptions): ParsedSections {
   const lines = linesOf(toLf(stripBom(text)));
   const segments: SectionSegment[] = [];
   const sections: ParsedSections["sections"] = [];
   const seen = new Map<string, number>();
   let outside = "";
-  let open: { name: string; line: number; body: string } | null = null;
+  let open: { name: string; line: number; body: string; targets?: Target[] } | null = null;
   lines.forEach((line, i) => {
     const n = i + 1;
-    const m = markerLine(line);
+    const m = markerLine(line, opts);
     if (m === null) {
       if (open) open.body += line;
       else outside += line;
       return;
     }
     if (m.kind === "near") {
-      throw new SectionMarkerError(label, n, `malformed section marker — expected "<!-- craftar:section <name> -->" or "<!-- /craftar:section -->"`);
+      // Use the problem from markerLine if it has one, otherwise the default message
+      const problem = m.problem ?? `malformed section marker — expected "<!-- craftar:section <name> -->" or "<!-- /craftar:section -->"`;
+      throw new SectionMarkerError(label, n, problem);
     }
     if (m.kind === "open") {
       if (open) throw new SectionMarkerError(label, n, `section ${m.name} opens inside section ${open.name} (line ${open.line})`);
@@ -100,11 +168,12 @@ export function parseSections(text: string, label: string, ref: string = label):
       seen.set(m.name, n);
       segments.push({ text: outside });
       outside = "";
-      open = { name: m.name, line: n, body: "" };
+      open = { name: m.name, line: n, body: "", targets: m.targets };
       return;
     }
     if (!open) throw new SectionMarkerError(label, n, "a closing marker with no open section");
-    const s = { name: open.name, default: open.body, line: open.line };
+    const s: ParsedSections["sections"][number] = { name: open.name, default: open.body, line: open.line };
+    if (open.targets) s.targets = open.targets;
     segments.push(s);
     sections.push(s);
     open = null;
@@ -137,12 +206,38 @@ export function canonicalValue(v: string): string {
 }
 
 /**
+ * `parsed` as `owner` receives it (spec 41 Part B §5.2): every section whose `targets` is set and does not name
+ * `owner` is removed, and the texts around it join — when the text before ends with a blank line and the text after
+ * starts with one, the first line of the text after is dropped. Nothing else changes; untargeted sections are kept.
+ */
+export function projectSections(parsed: ParsedSections, owner: Owner): ParsedSections {
+  const segments: SectionSegment[] = [];
+  for (const s of parsed.segments) {
+    const last = segments[segments.length - 1];
+    if ("text" in s) {
+      if (last && "text" in last) last.text = joinAround(last.text, s.text);
+      else segments.push({ text: s.text });
+    } else if (!s.targets || (s.targets as readonly string[]).includes(owner)) segments.push(s);
+  }
+  return { file: parsed.file, segments, sections: parsed.sections.filter((s) => !s.targets || (s.targets as readonly string[]).includes(owner)) };
+}
+
+/** The text before a removed section joined with the text after it: one blank line where both sides had one. */
+function joinAround(before: string, after: string): string {
+  const blankBefore = before === "\n" || before.endsWith("\n\n");
+  return blankBefore && after.startsWith("\n") ? before + after.slice(1) : before + after;
+}
+
+/**
  * The file with every section replaced by its value in `values`, or by its default when `values`
  * has none, and every marker line removed (spec 11 §6.2). Substitution comes after, by the caller.
+ *
+ * With `owner`, calls `projectSections(parsed, owner)` first to remove sections not for that owner.
  */
-export function expandSections(parsed: ParsedSections, values: Record<string, string> | undefined): string {
+export function expandSections(parsed: ParsedSections, values: Record<string, string> | undefined, owner?: Owner): string {
+  const projected = owner !== undefined ? projectSections(parsed, owner) : parsed;
   let out = "";
-  for (const s of parsed.segments) {
+  for (const s of projected.segments) {
     if ("text" in s) out += s.text;
     else out += values && Object.hasOwn(values, s.name) ? canonicalValue(values[s.name]) : s.default;
   }
