@@ -104,6 +104,61 @@ describe("target-scoped sections (spec 41 Part B)", () => {
       // The section removals should collapse blank lines properly
     });
 
+    it("explain lists only sections the file's target receives", async () => {
+      // Same fixture as above: rule/style with only (targets=claude-code) and kiro-note (targets=kiro)
+      const styleBody = [
+        "# Style Guide",
+        "",
+        O("only", "claude-code"),
+        "default only",
+        CLOSE,
+        "",
+        "Middle text.",
+        "",
+        O("kiro-note", "kiro"),
+        "default kiro-note",
+        CLOSE,
+        "",
+        "End.",
+      ].join("\n") + "\n";
+
+      const s = kept(await scenario(
+        {
+          ingredients: [
+            {
+              meta: { type: "rule", name: "style" },
+              files: { "rule.md": styleBody },
+            },
+          ],
+          recipes: [recipe("base", ["rule/style"])],
+          profiles: [
+            profile("acme", ["base"], ["claude-code", "kiro"], {
+              sections: { "rule/style": { only: "profile only value\n" } },
+            }),
+          ],
+        },
+        { config: { profile: "acme" } },
+      ));
+      await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test", schema: 6 }));
+
+      // Run sync first to create files
+      expect(runCli(["sync"], { cwd: s.wsRoot }).code).toBe(0);
+
+      // explain .kiro/steering/style.md should list kiro-note but not only
+      const kiroExplain = runCli(["explain", ".kiro/steering/style.md"], { cwd: s.wsRoot });
+      expect(kiroExplain.code, `stderr: ${kiroExplain.stderr}`).toBe(0);
+      // The sections line shows "kiro-note (default)" - not "only"
+      expect(kiroExplain.stdout).toContain("kiro-note (default)");
+      expect(kiroExplain.stdout).not.toContain("only (");
+
+      // explain .claude/rules/style.md should list only but not kiro-note
+      const claudeExplain = runCli(["explain", ".claude/rules/style.md"], { cwd: s.wsRoot });
+      expect(claudeExplain.code, `stderr: ${claudeExplain.stderr}`).toBe(0);
+      // The sections line shows "only (profile acme)" - not "kiro-note"
+      expect(claudeExplain.stdout).toContain("only (profile acme)");
+      expect(claudeExplain.stdout).not.toContain("kiro-note (");
+    });
+
     it("a section targets=agents-md reaches AGENTS.md only", async () => {
       const styleBody = [
         "# Style",

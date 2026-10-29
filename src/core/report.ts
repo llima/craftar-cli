@@ -189,7 +189,9 @@ export function explainFile(ws: Workspace, p: Plan, file: string): ExplainedFile
     ingredient: f.ingredient,
     origin: ing?.meta.origin ? { workspace: ing.meta.origin.workspace, path: ing.meta.origin.path } : null,
     via: ing ? [...ing.via] : null,
-    sections: (p.sections.get(f.ingredient) ?? []).map((x) => ({ name: x.name, layer: x.layer })),
+    sections: (p.sections.get(f.ingredient) ?? [])
+      .filter((x) => !x.targets || (x.targets as readonly string[]).includes(f.target))
+      .map((x) => ({ name: x.name, layer: x.layer })),
     params: (p.params.get(f.ingredient) ?? []).map((x) => ({ key: x.key, layer: x.layer })),
     profile: ws.config.profile,
     recipes: [...p.resolution.recipes],
