@@ -18,7 +18,7 @@ const SPEC = { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rul
 describe("inspectCache", () => {
   it("no forges directory → an empty snapshot", async () => {
     const home = await tmpDir();
-    cleanups.push(() => removeWithRetry(home));
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
     expect(await inspectCache(home)).toEqual({ forges: path.join(home, "forges"), entries: [], removing: [], bytes: 0 });
   });
 
