@@ -781,14 +781,13 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   let flattenedParams: string[] = [];
   let flattenedSections: string[] = [];
 
-  // Read the base to detect cited keys and sections
-  // Spec 41 Part B §5.2: pass target-scoped section options from the Forge manifest
   const parseOpts = { targets: readsTargetSections(forge.manifest) };
   const base = await readBase(X.dir, stage.reader(), forge.root, parseOpts);
   const ingKey = sectionKey(X.meta);
   const PSk = ctx.PS[ingKey] ?? {};
   const WSk = ctx.WS[ingKey] ?? {};
   const S: Record<string, string> = { ...PSk, ...WSk };
+  // Unprojected on purpose: a variant stores the file one target wrote, so its sections are cited for every target (spec 41 Part B).
   const baseCitedKeys = citedKeys(expandedTexts(base, S));
   const baseSectionNames = sectionNames(base);
 
