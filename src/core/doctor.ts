@@ -752,7 +752,7 @@ function sameJsonValue(a: unknown, b: unknown): boolean {
   const sortKeys = (obj: unknown): unknown => {
     if (obj === null || typeof obj !== "object") return obj;
     if (Array.isArray(obj)) return obj.map(sortKeys);
-    const sorted: Record<string, unknown> = {};
+    const sorted: Record<string, unknown> = Object.create(null);
     for (const key of Object.keys(obj).sort()) {
       sorted[key] = sortKeys((obj as Record<string, unknown>)[key]);
     }
@@ -879,7 +879,7 @@ async function hooksRegistered(
 
   // Determine claudeUserDir: seam or default (spec 43 §6)
   const claudeUserDir = opts.claudeUserDir ?? (env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"));
-  const useEnvLabel = Boolean(opts.env?.CLAUDE_CONFIG_DIR || (!opts.claudeUserDir && env.CLAUDE_CONFIG_DIR));
+  const useEnvLabel = Boolean(env.CLAUDE_CONFIG_DIR) && !opts.claudeUserDir;
 
   // Read settings files
   const settingsFiles: Array<{ label: string; result: Awaited<ReturnType<typeof readSettingsFile>> }> = [];

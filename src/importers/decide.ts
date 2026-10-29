@@ -183,7 +183,6 @@ const valuesAt = (layer: Sections, key: string): Record<string, string> => (Obje
 /** F1, F2 (spec 10 §6.3): what no value can explain — metadata, the file set, a file compared as bytes. */
 function shapeDiffers(base: ImportBase, meta: Ingredient, files: Record<string, string | Buffer>): string | null {
   const metaOnly = stripForgeOnlyKeys({ ...base.meta });
-  // fingerprintOf already strips targets/tags for hooks/scripts (spec 43 §7.2)
   if (fingerprintOf(metaOnly as Ingredient, {}) !== fingerprintOf(meta, {})) return "metadata differs";
   const baseFiles = [...base.texts.keys(), ...base.bytes.keys()].sort();
   const srcFiles = Object.keys(files).sort();
