@@ -176,6 +176,44 @@ describe("hooks-registered check (spec 43 §6)", () => {
     expect(check.message).toBe("every hook registration is in a settings file");
   });
 
+  it("2b. handler with __proto__ key is not equal to planned handler (null-prototype sortKeys)", async () => {
+    // This test pins the Object.create(null) in sortKeys of sameJsonValue.
+    // A handler object with an own __proto__ key must NOT match the planned handler.
+    const f = await fixture([fixtureH()]);
+    // Write settings.json BY HAND with a __proto__ key inside the handler object
+    // (JSON.stringify would not add __proto__, so we write the literal JSON)
+    await fs.mkdir(path.join(f.wsRoot, ".claude"), { recursive: true });
+    await fs.writeFile(
+      path.join(f.wsRoot, ".claude/settings.json"),
+      `{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["\${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py"],
+            "timeout": 10,
+            "__proto__": {"x": 1}
+          }
+        ]
+      }
+    ]
+  }
+}`,
+      "utf8",
+    );
+    const r = await run({ home, workspace: f.wsRoot, claudeUserDir: claudeDir });
+    const check = one(r.checks, "hooks-registered");
+    // The handler with __proto__ must NOT count as the planned handler → warn
+    expect(check.level).toBe("warn");
+    expect(check.message).toBe(
+      "hook/guard-path: registration 0 (PreToolUse) is in no settings file Claude Code reads",
+    );
+  });
+
   it("3a. handler only in .claude/settings.local.json → ok", async () => {
     const f = await fixture([fixtureH()]);
     await writeFiles(f.wsRoot, {
