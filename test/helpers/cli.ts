@@ -10,7 +10,8 @@ export function runCli(args: string[], opts: { cwd?: string; env?: NodeJS.Proces
     cwd: opts.cwd ?? REPO,
     encoding: "utf8",
     env: { ...process.env, ...opts.env, NO_COLOR: "1" },
-    timeout: 25_000,
+    // Under vitest's per-test limit (60 s on win32, 30 s elsewhere): a CLI child that fetches a Forge into a fresh cache is the slowest call on windows-latest.
+    timeout: process.platform === "win32" ? 55_000 : 25_000,
   });
   if (r.error) throw r.error;
   return { code: r.status, stdout: r.stdout, stderr: r.stderr };
