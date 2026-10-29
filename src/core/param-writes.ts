@@ -5,7 +5,7 @@ import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema, type ForgeManif
 import { placeholders, bodyFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
 import { manifestWithSections } from "./manifest-edit.js";
-import { rendersServers, serverCitations } from "./mcp-server.js";
+import { citationsIn, rendersServers, serverCitations } from "./mcp-server.js";
 import { resolve, sectionKey } from "./resolve.js";
 import { errorText } from "./schema-fault.js";
 import { canonicalValue } from "./sections.js";
@@ -71,14 +71,25 @@ export function resolvedBy(forge: Forge, profile: string): Set<string> {
 /**
  * Whether any body file an ingredient reads through `ctx.text` cites `{{key}}` — or, in a Forge whose servers are
  * rendered (`schema`, spec 34 §5.2), whether its MCP server cites it as a key the ingredient declares: an undeclared
- * citation is never substituted, so a value under it moves no byte.
+ * citation is never substituted, so a value under it moves no byte. For hooks, a citation in `registration` also
+ * counts — ungated, since registration needs no Forge schema (spec 43 §7.2 row 8).
  */
 async function cites(ing: LoadedIngredient, key: string, schema: ForgeManifest["schema"]): Promise<boolean> {
   for (const rel of await listFiles(ing.dir)) {
     if (rel === "ingredient.yaml" || !bodyFile(ing.meta, rel, ing.dir)) continue;
     if (placeholders(await readIngredientText(ing, rel)).includes(key)) return true;
   }
-  return rendersServers({ schema }) && serverCitations(ing.meta).some((c) => c.declared && c.key === key);
+  // MCP server citations (gated by schema)
+  if (rendersServers({ schema }) && serverCitations(ing.meta).some((c) => c.declared && c.key === key)) return true;
+  // Hook registration citations (ungated per spec 43 §7.2 row 8)
+  if (ing.meta.type === "hook" && ing.meta.registration) {
+    const declared = ing.meta.params ?? {};
+    for (const entry of ing.meta.registration) {
+      const citations = citationsIn(entry, declared, ing.ref);
+      if (citations.some((c) => c.declared && c.key === key)) return true;
+    }
+  }
+  return false;
 }
 
 /**
