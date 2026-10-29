@@ -278,6 +278,100 @@ describe("import — hook with registration (spec 43 §7.2 rows 7–11)", () => 
     // So we should have ONLY hooks.python, NOT x.
     expect(variantMeta.params).toEqual({ "hooks.python": { default: "python3" } });
   });
+
+  it("3c. rewriting existing variant keeps its own params entry when base doesn't declare the key", async () => {
+    // Task 12 bug fix: the base declares no params (or a different key), but the existing variant
+    // has params declaring hooks.node. The variant's registration cites {{hooks.node}}.
+    // After rewrite, the variant should still have hooks.node declared with its own default.
+    const root = await tmpDir("craftar-import-hook-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeDir = path.join(root, "forge");
+    const wsDir = path.join(root, "ws");
+
+    // Hook base that declares NO params at all
+    const hookBaseNoParams: IngredientSpec = {
+      meta: {
+        type: "hook",
+        name: "run-lint",
+        files: ["run-lint.sh"],
+        targets: ["claude-code"],
+        // NO params - the base doesn't declare anything
+        registration: [
+          {
+            event: "PreToolUse",
+            matcher: "Edit",
+            command: "sh",
+            args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/run-lint.sh"],
+          },
+        ],
+      },
+      files: { "run-lint.sh": "#!/bin/sh\necho lint\n" },
+    };
+
+    // Existing variant that has its OWN registration citing {{hooks.node}}, with params declaring hooks.node
+    const variantRegistration = [
+      {
+        event: "PostToolUse",
+        command: "{{hooks.node}}",
+        args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/run-lint.sh", "--check"],
+      },
+    ];
+    await makeForge(forgeDir, {
+      ingredients: [
+        hookBaseNoParams,
+        {
+          meta: {
+            type: "hook",
+            name: "run-lint--acme",
+            as: "run-lint",
+            files: ["run-lint.sh"],
+            targets: ["claude-code"],
+            // Existing variant declares hooks.node because its registration cites it
+            params: { "hooks.node": { default: "node" } },
+            registration: variantRegistration,
+          },
+          files: { "run-lint.sh": "#!/bin/sh\necho old\n" },
+        },
+      ],
+      recipes: [recipe("base", ["hook/run-lint"]), recipe("base--acme", ["hook/run-lint--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+
+    // Create workspace with hook file that differs (forces a rewrite of the existing variant)
+    await writeFiles(wsDir, {
+      ".claude/hooks/run-lint.sh": "#!/bin/sh\necho new script\n",
+    });
+
+    // Import (rewrites the existing variant)
+    const r = await importInto(forgeDir, wsDir, "acme");
+
+    // Should still be a variant
+    expect(r.variants.map((v) => v.name)).toContain("hook/run-lint--acme");
+
+    // Read the rewritten variant's ingredient.yaml
+    const variantMeta = await yaml(path.join(forgeDir, "ingredients/hooks/run-lint--acme/ingredient.yaml"));
+
+    // Should keep the variant's own registration
+    expect(variantMeta.registration).toEqual(variantRegistration);
+
+    // CRITICAL: The variant's params should still have hooks.node declared.
+    // The variant's registration cites {{hooks.node}}. The base declares no params at all.
+    // Per spec §7.2: "take the base's entry when base declares it; otherwise take the existing
+    // variant's own entry when the variant declares it; otherwise nothing."
+    // So the variant's own declaration of hooks.node should be kept.
+    expect(variantMeta.params).toEqual({ "hooks.node": { default: "node" } });
+
+    // Verify sync writes the example file with "node" rendered, not {{hooks.node}}
+    await makeWorkspace(wsDir, forgeDir, { config: { profile: "acme" } });
+    const ws = await loadWorkspace(wsDir);
+    const p = await plan(ws);
+
+    const exampleFile = p.files.find((f) => f.path === ".claude/settings.craftar.example.json");
+    expect(exampleFile).toBeDefined();
+    const content = JSON.parse(typeof exampleFile!.content === "string" ? exampleFile!.content : exampleFile!.content.toString("utf8"));
+    // Should have "command": "node", not {{hooks.node}}
+    expect(content.hooks?.PostToolUse?.[0]?.hooks?.[0]?.command).toBe("node");
+  });
 });
 
 describe("drift promote — hook with registration (spec 43 §7.2 row 10)", () => {

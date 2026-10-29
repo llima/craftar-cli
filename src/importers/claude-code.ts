@@ -1167,29 +1167,34 @@ async function writeIngredient(
       }
     }
     // Spec 43 §7.2 row 10: an existing hook variant's registration decides; a new one inherits the base's.
-    // Also carry the base's params entries the registration cites.
+    // Also carry params entries the registration cites: base's when base declares, else variant's own when variant declares.
     if (meta.type === "hook") {
       if (await stage.exists(variantFile)) {
         const existingMeta = parseYaml(variantFile, await stage.readText(variantFile), IngredientSchema);
         if (existingMeta.type === "hook" && existingMeta.registration) {
           meta = { ...meta, registration: existingMeta.registration } as Ingredient;
-          // For params: use the BASE's entries for keys the variant's registration cites.
-          // The base is at <forge>/ingredients/<folder>/<baseName> (meta.name before the --profile suffix).
+          // For params: for each key the variant's registration cites, take the base's entry when base declares it;
+          // otherwise take the existing variant's own entry when the variant declares it; otherwise nothing.
           const baseDir = path.join(forge, "ingredients", folder, meta.name);
           const baseFile = path.join(baseDir, "ingredient.yaml");
-          if (await stage.exists(baseFile)) {
-            const baseMeta = parseYaml(baseFile, await stage.readText(baseFile), IngredientSchema);
-            if (baseMeta.type === "hook" && baseMeta.params) {
-              // Use the existing variant's registration with the base's declared params
-              const variantMetaForCitations = { ...existingMeta, params: baseMeta.params };
-              const citedDeclared = registrationCitations(variantMetaForCitations).filter((c) => c.declared).map((c) => c.key);
-              if (citedDeclared.length > 0) {
-                const keptParams: Record<string, { default?: string | number | boolean; description?: string }> = {};
-                for (const k of citedDeclared) {
-                  if (Object.hasOwn(baseMeta.params, k)) keptParams[k] = baseMeta.params[k];
-                }
-                meta = { ...meta, params: keptParams } as Ingredient;
-              }
+          const baseMeta = (await stage.exists(baseFile)) ? parseYaml(baseFile, await stage.readText(baseFile), IngredientSchema) : null;
+          const baseParams = baseMeta?.type === "hook" ? baseMeta.params : undefined;
+          const variantParams = existingMeta.params;
+          // Merge base and variant params for citations: a key is "declared" if either side declares it.
+          // Use the type expected by registrationCitations (it only checks key existence).
+          type ParamDecl = { default?: string | number | boolean; description?: string };
+          const mergedParams: Record<string, ParamDecl> = { ...variantParams, ...baseParams };
+          const variantMetaForCitations = { ...existingMeta, params: mergedParams };
+          const citedDeclared = registrationCitations(variantMetaForCitations).filter((c) => c.declared).map((c) => c.key);
+          if (citedDeclared.length > 0) {
+            const keptParams: Record<string, { default?: string | number | boolean; description?: string }> = {};
+            for (const k of citedDeclared) {
+              // Prefer base's entry; fall back to variant's own entry
+              if (baseParams && Object.hasOwn(baseParams, k)) keptParams[k] = baseParams[k];
+              else if (variantParams && Object.hasOwn(variantParams, k)) keptParams[k] = variantParams[k];
+            }
+            if (Object.keys(keptParams).length > 0) {
+              meta = { ...meta, params: keptParams } as Ingredient;
             }
           }
         }
