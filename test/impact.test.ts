@@ -17,6 +17,7 @@ import { register } from "../src/core/registry.js";
 import { cacheKey } from "../src/core/remote.js";
 import { loadWorkspace, mergeWorkspaceConfig, plan, readLock, status, apply } from "../src/core/sync.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { git, remoteForge } from "./helpers/remote.js";
 
 /**
@@ -36,7 +37,7 @@ afterEach(async () => {
 
 async function fixture(spec: ForgeSpec = FORGE) {
   const root = await tmpDir("craftar-impact-");
-  cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(root));
   const home = path.join(root, "home");
   const forgeRoot = path.join(root, "forge");
   await makeForge(forgeRoot, spec);

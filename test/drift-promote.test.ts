@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runCli } from "./helpers/cli.js";
 import { loadWorkspace, plan, readLock, status, apply } from "../src/core/sync.js";
 import { profile, recipe, rule, scenario, tmpDir, makeWorkspace } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 
 // Spec 30e: drift promote with variant outcome, gate and proof (one profile, one target).
 
@@ -2158,7 +2159,7 @@ describe("cli — drift promote (step 30h: impact check)", () => {
 
   it("57. URL Forge + --forge <clone>", async () => {
     const home = await tmpDir("craftar-home-");
-    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(home));
 
     // Use remoteForge helper to create a bare repo with file:// URL
     const { remoteForge } = await import("./helpers/remote.js");
@@ -2224,7 +2225,7 @@ describe("cli — drift promote (step 30h: impact check)", () => {
 
   it("57b. URL Forge + --forge pointing at unrelated directory → D2", async () => {
     const home = await tmpDir("craftar-home-");
-    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(home));
 
     const { remoteForge } = await import("./helpers/remote.js");
     const rf = await remoteForge({
@@ -2424,7 +2425,7 @@ describe("cli — drift promote (step 30h: impact check)", () => {
 
   it("58. forge: overridden in craftar.local.yaml", async () => {
     const home = await tmpDir("craftar-home-");
-    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(home));
 
     const { remoteForge } = await import("./helpers/remote.js");
     const rf = await remoteForge({
@@ -3685,7 +3686,7 @@ describe("D16_BREAK — sibling that planned before but fails after (commit 2)",
 
   it("R11. D2 for URL Forge — clone's only remote URL has credentials → D2 with the credential warning", async () => {
     const home = await tmpDir("craftar-home-");
-    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(home));
 
     // Use remoteForge helper to create a bare repo with file:// URL
     const { remoteForge } = await import("./helpers/remote.js");

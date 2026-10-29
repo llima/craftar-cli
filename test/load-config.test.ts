@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { loadWorkspace, loadWorkspaceConfig } from "../src/core/sync.js";
 import { profile, recipe, rule, scenario, tmpDir } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { remoteForge } from "./helpers/remote.js";
 import { localKeys, readLocalFile } from "../src/core/workspace-yaml.js";
 import { defaultGit, type GitRunner } from "../src/core/remote.js";
@@ -39,7 +40,7 @@ describe("loadWorkspaceConfig — the in-memory half of loadWorkspace (spec 23 �
     const r = await remoteForge(SPEC);
     const ws = await tmpDir("craftar-lc-ws-");
     const home = await tmpDir("craftar-lc-home-");
-    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => removeWithRetry(home));
     await fs.writeFile(path.join(ws, "craftar.yaml"), `forge: ${r.url}\nprofile: acme\n`);
     const strip = (w: Awaited<ReturnType<typeof loadWorkspace>>) => ({ ...w, origin: { ...w.origin, fetched: null, fetchedAt: null } });
     const fromDisk = await loadWorkspace(ws, { home, mode: "sync" });
@@ -159,7 +160,7 @@ describe("loadForgeSource (spec 28 §5.2)", () => {
     const r = await remoteForge(SPEC);
     const ws = await tmpDir("craftar-lfs-ws-");
     const home = await tmpDir("craftar-lfs-home-");
-    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => removeWithRetry(home));
     const { loadForgeSource } = await import("../src/core/sync.js");
     let fetchCount = 0;
     const counting: GitRunner = async (args, opts) => {
@@ -181,7 +182,7 @@ describe("loadForgeSource (spec 28 §5.2)", () => {
     const r = await remoteForge(SPEC);
     const ws = await tmpDir("craftar-lfs-ws-");
     const home = await tmpDir("craftar-lfs-home-");
-    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => removeWithRetry(home));
     const { loadForgeSource } = await import("../src/core/sync.js");
     const result = await loadForgeSource(ws, r.url, null, { home, mode: "sync", fromLocalFile: true });
     expect(result.origin.fromLocalFile).toBe(true);
@@ -191,7 +192,7 @@ describe("loadForgeSource (spec 28 §5.2)", () => {
     const r = await remoteForge(SPEC);
     const ws = await tmpDir("craftar-lfs-ws-");
     const home = await tmpDir("craftar-lfs-home-");
-    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => removeWithRetry(home));
     const { loadForgeSource } = await import("../src/core/sync.js");
     let callCount = 0;
     const counting: GitRunner = async (args, opts) => {
@@ -206,7 +207,7 @@ describe("loadForgeSource (spec 28 §5.2)", () => {
     const r = await remoteForge(SPEC);
     const ws = await tmpDir("craftar-lfs-ws-");
     const home = await tmpDir("craftar-lfs-home-");
-    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => removeWithRetry(home));
     let fetchCount = 0;
     const counting: GitRunner = async (args, opts) => {
       if (args.includes("fetch")) fetchCount++;
@@ -220,7 +221,7 @@ describe("loadForgeSource (spec 28 §5.2)", () => {
     const r = await remoteForge(SPEC);
     const ws = await tmpDir("craftar-lfs-ws-");
     const home = await tmpDir("craftar-lfs-home-");
-    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => removeWithRetry(home));
     const { loadForgeSource } = await import("../src/core/sync.js");
     // First load to populate the cache
     await loadForgeSource(ws, r.url, null, { home, mode: "sync" });

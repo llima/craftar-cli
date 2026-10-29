@@ -8,6 +8,7 @@ import { credentialKeys, hideKeys, listWorkspaces, readRegistry, register, regis
 import { cacheKey, credentialFault, CREDENTIAL_HIDDEN, ensureTree, parseLsRemote, resolveRef, UNVOUCHED_HIDDEN, type GitRunner } from "../src/core/remote.js";
 import { apply, loadForgeSource, loadWorkspace, loadWorkspaceConfig, plan, readLock, status } from "../src/core/sync.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { remoteForge } from "./helpers/remote.js";
 import { runCli } from "./helpers/cli.js";
 
@@ -41,7 +42,7 @@ function expectClean(value: unknown) {
  */
 async function recordedHome() {
   const root = await tmpDir("craftar-recorded-");
-  cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(root));
   const home = path.join(root, "home");
   await fs.mkdir(home);
   const r = await remoteForge(SPEC);
@@ -157,7 +158,7 @@ describe("a Forge URL with credentials recorded by an earlier release", () => {
 
   it("cache prune: an entry a clean registry row names keeps its name (spec 39, pinned)", async () => {
     const root = await tmpDir("craftar-recorded-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(root));
     const home = path.join(root, "home");
     await fs.mkdir(home);
     const r = await remoteForge(SPEC);
@@ -174,7 +175,7 @@ describe("a Forge URL with credentials recorded by an earlier release", () => {
 
   it("cache prune: an entry nothing names is named by the unvouched label (spec 39 §4.1 a)", async () => {
     const root = await tmpDir("craftar-recorded-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(root));
     const home = path.join(root, "home");
     await fs.mkdir(home);
     const r = await remoteForge(SPEC);
@@ -352,7 +353,7 @@ describe("a ref: that holds a URL with credentials", () => {
   /** A home holding a cached copy of a remote Forge, and the message a failing load gives. */
   async function cachedRemote() {
     const root = await tmpDir("craftar-ref-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(root));
     const home = path.join(root, "home");
     await fs.mkdir(home);
     const r = await remoteForge(SPEC);

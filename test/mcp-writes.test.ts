@@ -22,6 +22,7 @@ import {
 import { mcpWriters, type McpWriters } from "../src/core/write-actions.js";
 import { readWorkspaceConfig } from "../src/core/sync.js";
 import { profile, recipe, rule, scenario, tmpDir, writeFiles, type Scenario } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { eightStates, type Scenario as StateScenario } from "./helpers/states.js";
 
 // Spec 40 Part B §5.3-§5.6 — the writing tools of `craftar mcp --allow-writes`.
@@ -49,7 +50,7 @@ async function tree(dir: string): Promise<Array<[string, Buffer]>> {
 /** A fresh temp home for registry isolation. */
 async function freshHome(): Promise<string> {
   const home = await tmpDir("home-");
-  cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(home));
   return home;
 }
 

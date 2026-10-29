@@ -7,6 +7,7 @@ import { checkInitFlags, checkLocalKeys, forgeSource, initLine, planInit, type I
 import { loadForgeSource, mergeWorkspaceConfig, workspaceOf } from "../src/core/sync.js";
 import { defaultGit, type GitRunner } from "../src/core/remote.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { remoteForge } from "./helpers/remote.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -30,7 +31,7 @@ const SPEC: ForgeSpec = {
 /** A temp dir holding `forge/`; the workspace `ws/` is not created (init creates it). */
 async function setup(spec: ForgeSpec = SPEC) {
   const root = await tmpDir("craftar-init-");
-  cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(root));
   const forge = path.join(root, "forge");
   await makeForge(forge, spec);
   const ws = path.join(root, "ws");

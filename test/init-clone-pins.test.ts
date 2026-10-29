@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, profile, recipe, rule, tmpDir } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { git, remoteForge } from "./helpers/remote.js";
 
 // Spec 37 §5.2 and §10: three outputs pinned BEFORE the build touches the code behind them — a pin written
@@ -16,7 +17,7 @@ afterEach(async () => {
 
 async function scratch(prefix: string): Promise<string> {
   const dir = await fs.realpath(await tmpDir(prefix));
-  cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(dir));
   return dir;
 }
 

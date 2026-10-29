@@ -7,6 +7,7 @@ import { prune as pruneRegistry, register } from "../src/core/registry.js";
 import { cacheKey, ensureTree, inspectCache, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
 import { apply, loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
 import { makeWorkspace, profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { remoteForge } from "./helpers/remote.js";
 
 // Spec 26 §4.2–§4.5, §6, §9 — `pruneCache` on synthetic homes, remote Forges and workspaces.
@@ -24,7 +25,7 @@ const ls = (dir: string) => fs.readdir(dir).then((n) => n.sort(), () => null);
 
 async function setup() {
   const root = await tmpDir("craftar-prune-");
-  cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(root));
   const home = path.join(root, "home");
   await fs.mkdir(home);
   const r = await remoteForge(SPEC);

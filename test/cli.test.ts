@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import YAML from "yaml";
 import { makeForge, profile, recipe, rule, scenario, tmpDir, writeFiles, type IngredientSpec } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { runCli } from "./helpers/cli.js";
 import { git, remoteForge } from "./helpers/remote.js";
 import { TSX_LOADER } from "./helpers/tsx-loader.js";
@@ -3364,7 +3365,7 @@ describe("cli — a remote Forge (spec 13 §4.1, §4.4, AC 1, 3, 4, 5)", () => {
     const r = await remoteForge(SPEC);
     const ws = await tmpDir("craftar-remote-ws-");
     const home = await tmpDir("craftar-home-");
-    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => removeWithRetry(home));
     await fs.writeFile(path.join(ws, "craftar.yaml"), `forge: ${r.url}\nprofile: acme\n${extra}`);
     const run = (args: string[], h = home) => runCli([...args, "--workspace", ws], { env: { CRAFTAR_HOME: h } });
     return { r, ws, home, run };
@@ -3430,7 +3431,7 @@ describe("cli — a remote Forge (spec 13 §4.1, §4.4, AC 1, 3, 4, 5)", () => {
     }
     expect(run(["sync", "--offline"]).code).toBe(0);
     const empty = await tmpDir("craftar-home-");
-    cleanups.push(() => fs.rm(empty, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(empty));
     for (const args of [["sync"], ["status"], ["diff"], ["ls"], ["recipes"], ["sync", "--offline"]]) {
       const x = run(args, empty);
       expect(x.code, `${args.join(" ")} without a cache`).toBe(1);
@@ -3566,7 +3567,7 @@ describe("cli — a remote Forge, the cases the review asked for (spec 13 §10.2
     const r = await remoteForge(SPEC);
     const ws = await tmpDir("craftar-remote-ws-");
     const home = await tmpDir("craftar-home-");
-    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => removeWithRetry(home));
     await fs.writeFile(path.join(ws, "craftar.yaml"), `forge: ${r.url}\nprofile: acme\n${extra}`);
     const run = (args: string[]) => runCli([...args, "--workspace", ws], { env: { CRAFTAR_HOME: home } });
     return { r, ws, home, run };
@@ -3627,7 +3628,7 @@ describe("cli — a remote Forge, the cases the review asked for (spec 13 §10.2
   it("a relative CRAFTAR_HOME resolves from the current directory", async () => {
     const { r, ws } = await remoteWs();
     const cwd = await tmpDir("craftar-cwd-");
-    cleanups.push(() => fs.rm(cwd, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(cwd));
     const x = runCli(["status", "--workspace", ws], { cwd, env: { CRAFTAR_HOME: "relhome" } });
     expect(x.code).toBe(0);
     expect(await fs.readdir(path.join(cwd, "relhome", "forges"))).toHaveLength(1);
@@ -3694,7 +3695,7 @@ describe("cli — the workspace registry (spec 21 §10.3)", () => {
   /** A temporary root with its own CRAFTAR_HOME, a path Forge, and workspaces made on demand. */
   async function setup() {
     const root = await tmpDir("craftar-registry-cli-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(root));
     const home = path.join(root, "home");
     const forgeRoot = path.join(root, "forge");
     await makeForge(forgeRoot, SPEC);
@@ -4719,7 +4720,7 @@ describe("cli — forge impact (spec 25 §4.1)", () => {
     const rf = await remoteForge(SPEC);
     cleanups.push(rf.cleanup);
     const root = await tmpDir("craftar-forge-impact-remote-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(root));
     const home = path.join(root, "home");
     const ws = path.join(root, "ws");
     await writeFiles(ws, { "craftar.yaml": `forge: ${rf.url}\nprofile: acme\n` });
@@ -4786,7 +4787,7 @@ describe("cli — forge impact (spec 25 §4.1)", () => {
     const rf = await remoteForge(SPEC);
     cleanups.push(rf.cleanup);
     const root = await tmpDir("craftar-forge-impact-remote-ws-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(root));
     const home = path.join(root, "home");
     const ws = path.join(root, "ws");
     await writeFiles(ws, { "craftar.yaml": `forge: ${rf.url}\nprofile: acme\n` });
@@ -6143,7 +6144,7 @@ describe("cli — craftar cache prune (spec 26 §4)", () => {
 
   async function setup() {
     const root = await tmpDir("craftar-prune-cli-");
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(root));
     const home = path.join(root, "home");
     const r = await remoteForge(SPEC);
     cleanups.push(r.cleanup);

@@ -6,6 +6,7 @@ import { register } from "../src/core/registry.js";
 import { cacheKey, ensureTree, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
 import { apply, loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { git, remoteForge } from "./helpers/remote.js";
 
 // Spec 24 §9.1 — the checks of `craftar doctor`, run on synthetic homes, Forges and workspaces.
@@ -27,7 +28,7 @@ const FORGE: ForgeSpec = {
 
 async function fixture(spec: ForgeSpec = FORGE) {
   const root = await tmpDir("craftar-doctor-");
-  cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(root));
   const home = path.join(root, "home");
   const forgeRoot = path.join(root, "forge");
   await makeForge(forgeRoot, spec);

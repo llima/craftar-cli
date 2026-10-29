@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { LockBusyError } from "../src/core/home-lock.js";
 import { REMOVING_PREFIX, cacheDir, cacheKey, defaultGit, ensureTree, inspectCache, pruneTrees, removeEntry, removeLeftover, withPruneLock } from "../src/core/remote.js";
 import { profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { git, remoteForge } from "./helpers/remote.js";
 
 // Spec 26 §4.2–§4.3, §5.1: what `craftar cache prune` asks of the module that owns the cache layout.
@@ -19,7 +20,7 @@ const ago = (ms: number) => new Date(Date.now() - ms);
 
 async function home() {
   const h = await tmpDir("craftar-home-");
-  cleanups.push(() => fs.rm(h, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(h));
   return h;
 }
 async function cached(h: string) {
