@@ -159,6 +159,8 @@ export async function decide(
   // Whatever the outcome — reuse, section inference, variant or a G1 literal comparison — the Forge holds these markers after the run.
   if (names.length) ctx.markedBase = true;
   const cited = citedKeys(expandedTexts(base, S, owner));
+  // F9: a key another target's section cites still renders there, so pin the unprojected set.
+  const citedAll = citedKeys(expandedTexts(base, S));
 
   // G1: a recipe default the render cannot see — compare literally, as 0.5.0 did.
   if (ctx.forge) {
@@ -179,14 +181,14 @@ export async function decide(
 
   const map = renderMap(base.meta, ctx.P, ctx.W);
   if (renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined, owner) === fingerprint) {
-    pin(ctx, [...cited, ...serverKeys], map);
+    pin(ctx, [...citedAll, ...serverKeys], map);
     const changed = [...cited].filter((k) => Object.hasOwn(map, k));
     const filled = names.filter((n) => Object.hasOwn(S, n));
     return { kind: "reuse", rendered: changed.length ? changed.sort() : undefined, renderedSections: filled.length ? filled : undefined };
   }
 
   // Param inference first (Ruling 16): the narrower claim. A base with no open section stops there, as in 0.6.2.
-  const param = await inferParams(ctx, base, S, map, cited, ref, meta, files, fingerprint, others, runBases, schema, owner);
+  const param = await inferParams(ctx, base, S, map, cited, citedAll, ref, meta, files, fingerprint, others, runBases, schema, owner);
   const open = names.filter((n) => !Object.hasOwn(WSk, n));
   if (param.kind === "reuse" || !open.length) return withAuthEnv(param);
   return withAuthEnv(inferSectionValues(ctx, base, key, PSk, WSk, map, ref, meta, files, fingerprint, schema, owner));
@@ -214,6 +216,7 @@ async function inferParams(
   S: Record<string, string>,
   map: Record<string, unknown>,
   cited: Set<string>,
+  citedAll: Set<string>,
   ref: string,
   meta: Ingredient,
   files: Record<string, string | Buffer>,
@@ -296,7 +299,7 @@ async function inferParams(
   }
 
   for (const d of delta) ctx.P[d.key] = d.value;
-  pin(ctx, cited, { ...map, ...sigma });
+  pin(ctx, citedAll, { ...map, ...sigma });
   return { kind: "reuse", inferred: sigma, delta };
 }
 
@@ -346,7 +349,8 @@ function inferSectionValues(
     for (const d of sectionDelta) next[d.name] = d.value;
     ctx.PS[key] = next;
   }
-  pin(ctx, citedKeys(expandedTexts(base, S, owner)), map);
+  // F9: pin the unprojected cited keys — a key another target's section cites still renders there.
+  pin(ctx, citedKeys(expandedTexts(base, S)), map);
   return { kind: "reuse", sectioned: assigned, sectionDelta };
 }
 
