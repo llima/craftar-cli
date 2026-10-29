@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { removeWithRetry } from "./fs.js";
 import { makeForge, tmpDir, writeFiles, type ForgeSpec } from "./forge.js";
 
 /** A fake but stable identity, so `git commit` never depends on the host's ambient config. */
@@ -56,6 +56,6 @@ export async function remoteForge(spec: ForgeSpec): Promise<RemoteForge> {
       git(src, "push", "-q", "origin", "main");
       return git(src, "rev-parse", "HEAD");
     },
-    cleanup: () => fs.rm(root, { recursive: true, force: true }),
+    cleanup: () => removeWithRetry(root),
   };
 }
