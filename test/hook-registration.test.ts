@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkspace, plan, type Plan } from "../src/core/sync.js";
 import { profile, recipe, scenario, writeFiles, type ForgeSpec, type IngredientSpec, type WorkspaceSpec } from "./helpers/forge.js";
+import { renderRegistration } from "../src/emitters/shared.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -342,5 +343,59 @@ describe("hook registration emitter (spec 43 §5.1–§5.6)", () => {
     };
     const p2 = await planFor([noAuthEnv]);
     expect(p2.files.some((f) => f.path === EX)).toBe(false);
+  });
+});
+
+describe("renderRegistration unit tests (spec 43 §7.2)", () => {
+  it("handler key order for entry with args+timeout: type, command, args, timeout", () => {
+    const entry = {
+      event: "PreToolUse",
+      matcher: "Bash",
+      command: "python3",
+      args: ["script.py", "--flag"],
+      timeout: 30,
+    };
+    const declared = {};
+    const params = {};
+
+    const result = renderRegistration(entry, declared, params, "hook/test");
+
+    // Check handler key order
+    const handlerKeys = Object.keys(result.handler);
+    expect(handlerKeys).toEqual(["type", "command", "args", "timeout"]);
+
+    // Check values
+    expect(result.handler.type).toBe("command");
+    expect(result.handler.command).toBe("python3");
+    expect(result.handler.args).toEqual(["script.py", "--flag"]);
+    expect(result.handler.timeout).toBe(30);
+
+    // Check other output
+    expect(result.event).toBe("PreToolUse");
+    expect(result.matcher).toBe("Bash");
+  });
+
+  it("handler key order for shell-form entry: type, command, shell", () => {
+    const entry = {
+      event: "Stop",
+      command: "echo done",
+      shell: "bash" as const,
+    };
+    const declared = {};
+    const params = {};
+
+    const result = renderRegistration(entry, declared, params, "hook/test");
+
+    // Check handler key order: type, command, shell (no args, no timeout)
+    const handlerKeys = Object.keys(result.handler);
+    expect(handlerKeys).toEqual(["type", "command", "shell"]);
+
+    // Check values
+    expect(result.handler.type).toBe("command");
+    expect(result.handler.command).toBe("echo done");
+    expect(result.handler.shell).toBe("bash");
+
+    // Check that matcher is undefined when not provided
+    expect(result.matcher).toBeUndefined();
   });
 });

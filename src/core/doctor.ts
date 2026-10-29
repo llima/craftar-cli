@@ -4,14 +4,14 @@ import path from "node:path";
 import { ENV_NAME, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
-import { renderLeaves, renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix } from "./mcp-server.js";
+import { renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix } from "./mcp-server.js";
 import { credentialKeys, hideCacheSegment, hideKeys, isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus, vouchedKeys } from "./registry.js";
 import { FULL_SHA, cacheKey, classifyForge, CREDENTIAL_HIDDEN, inspectCache, UNVOUCHED_HIDDEN, type CacheSnapshot } from "./remote.js";
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK } from "./sync.js";
-import { outName, MCP_FILE } from "../emitters/shared.js";
+import { outName, MCP_FILE, renderRegistration } from "../emitters/shared.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram } from "./proc.js";
 
@@ -850,31 +850,17 @@ async function hooksRegistered(
     for (let i = 0; i < hookMeta.registration.length; i++) {
       const entry = hookMeta.registration[i];
 
-      // Render the entry using renderLeaves (spec 43 §4.3)
-      const toRender: Record<string, unknown> = {};
-      if (entry.command) toRender.command = entry.command;
-      if (entry.args) toRender.args = entry.args;
-      if (entry.matcher) toRender.matcher = entry.matcher;
-
-      const rendered = renderLeaves(toRender, declared, params, ing.ref);
-      const renderedValue = rendered.value as typeof toRender;
+      // Render the entry using the shared builder (spec 43 §7.2)
+      const { event, matcher, handler, rendered } = renderRegistration(entry, declared, params, ing.ref);
 
       // Check if this entry's render left a declared key with no value (spec 43 §6)
       const hasMissing = rendered.missing.length > 0;
 
-      // Build the handler object with keys in spec order
-      const handler: Record<string, unknown> = Object.create(null);
-      handler.type = "command";
-      handler.command = renderedValue.command ?? entry.command;
-      if (renderedValue.args !== undefined) handler.args = renderedValue.args;
-      if (entry.timeout !== undefined) handler.timeout = entry.timeout;
-      if (entry.shell !== undefined) handler.shell = entry.shell;
-
       plannedEntries.push({
         ref: ing.ref,
         index: i,
-        event: entry.event,
-        matcher: renderedValue.matcher as string | undefined,
+        event,
+        matcher,
         handler,
         hasMissing,
       });

@@ -3,7 +3,7 @@ import type { EmitBase, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 import { paramsFor } from "../core/resolve.js";
 import type { Ingredient, Target } from "../schema/index.js";
-import { rendersServers, renderServer, renderLeaves, credentialIn, credentialMessage, entropyMessage, undeclaredMessage } from "../core/mcp-server.js";
+import { rendersServers, renderServer, renderLeaves, credentialIn, credentialMessage, entropyMessage, undeclaredMessage, type RenderedLeaves } from "../core/mcp-server.js";
 
 export function appliesTo(targets: "*" | string[], target: string): boolean {
   return targets === "*" || targets.includes(target);
@@ -627,6 +627,51 @@ export type HooksObject = Record<string, HookGroup[]>;
 /** Pattern to find .claude/hooks/<x> references in command/args (spec 43 §5.6). */
 const HOOK_PATH_PATTERN = /\.claude\/hooks\/([^\s"']+)/g;
 
+/** A registration entry from the hook ingredient's registration array. */
+type HookRegistrationEntry = NonNullable<Extract<Ingredient, { type: "hook" }>["registration"]>[number];
+
+/** The result of renderRegistration: the rendered entry plus its render data. */
+export interface RenderedRegistration {
+  event: string;
+  matcher: string | undefined;
+  handler: HookHandler;
+  rendered: RenderedLeaves;
+}
+
+/**
+ * Render one registration entry: build the handler with keys in spec order (spec 43 §5.1).
+ * Renders command, args, and matcher; event, timeout, and shell are not rendered.
+ * The handler's keys are in order: type, command, args, timeout, shell.
+ */
+export function renderRegistration(
+  entry: HookRegistrationEntry,
+  declared: Record<string, unknown>,
+  params: Record<string, unknown>,
+  ref: string,
+): RenderedRegistration {
+  // Render the entry using renderLeaves (spec 43 §4.3)
+  const toRender: Record<string, unknown> = {};
+  if (entry.command) toRender.command = entry.command;
+  if (entry.args) toRender.args = entry.args;
+  if (entry.matcher) toRender.matcher = entry.matcher;
+
+  const rendered = renderLeaves(toRender, declared, params, ref);
+  const renderedValue = rendered.value as typeof toRender;
+  const renderedCommand = (renderedValue.command ?? entry.command) as string;
+  const renderedArgs = renderedValue.args as string[] | undefined;
+  const renderedMatcher = renderedValue.matcher as string | undefined;
+
+  // Build the handler with keys in order: type, command, args, timeout, shell (spec 43 §5.1)
+  const handler: HookHandler = Object.create(null);
+  handler.type = "command";
+  handler.command = renderedCommand;
+  if (renderedArgs !== undefined) handler.args = renderedArgs;
+  if (entry.timeout !== undefined) handler.timeout = entry.timeout;
+  if (entry.shell !== undefined) handler.shell = entry.shell;
+
+  return { event: entry.event, matcher: renderedMatcher, handler, rendered };
+}
+
 /**
  * Build the hooks registration object for the example file (spec 43 §5.1).
  * Renders each entry's declared params and checks the substituted values.
@@ -655,14 +700,8 @@ export function hookRegistrations(
     for (let i = 0; i < meta.registration!.length; i++) {
       const entry = meta.registration![i];
 
-      // Render the entry using renderLeaves (spec 43 §4.3)
-      // We only render command, args, and matcher — event, timeout, and shell are not rendered
-      const toRender: Record<string, unknown> = {};
-      if (entry.command) toRender.command = entry.command;
-      if (entry.args) toRender.args = entry.args;
-      if (entry.matcher) toRender.matcher = entry.matcher;
-
-      const rendered = renderLeaves(toRender, declared, params, ing.ref);
+      // Render the entry using the shared builder (spec 43 §7.2)
+      const { event, matcher, handler, rendered } = renderRegistration(entry, declared, params, ing.ref);
 
       // Handle the four cases (spec 43 §4.3)
       for (const k of rendered.missing) ctx.missing(k, ing.ref);
@@ -687,11 +726,6 @@ export function hookRegistrations(
         );
       }
 
-      const renderedValue = rendered.value as typeof toRender;
-      const renderedCommand = (renderedValue.command ?? entry.command) as string;
-      const renderedArgs = renderedValue.args as string[] | undefined;
-      const renderedMatcher = renderedValue.matcher as string | undefined;
-
       // Check for uncovered .claude/hooks/<x> paths (spec 43 §5.6)
       const checkPath = (value: string) => {
         HOOK_PATH_PATTERN.lastIndex = 0;
@@ -705,26 +739,17 @@ export function hookRegistrations(
           }
         }
       };
-      checkPath(renderedCommand);
-      if (renderedArgs) {
-        for (const arg of renderedArgs) checkPath(arg);
+      checkPath(handler.command);
+      if (handler.args) {
+        for (const arg of handler.args) checkPath(arg);
       }
-
-      // Build the handler with keys in order: type, command, args, timeout, shell (spec 43 §5.1)
-      const handler: HookHandler = Object.create(null);
-      handler.type = "command";
-      handler.command = renderedCommand;
-      if (renderedArgs !== undefined) handler.args = renderedArgs;
-      if (entry.timeout !== undefined) handler.timeout = entry.timeout;
-      if (entry.shell !== undefined) handler.shell = entry.shell;
 
       // Build the group with keys in order: matcher (optional), hooks
       const group: HookGroup = Object.create(null);
-      if (renderedMatcher !== undefined) group.matcher = renderedMatcher;
+      if (matcher !== undefined) group.matcher = matcher;
       group.hooks = [handler];
 
       // Add to the event's list (create if first)
-      const event = entry.event;
       if (!result[event]) {
         result[event] = [];
       }
