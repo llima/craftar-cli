@@ -904,9 +904,11 @@ async function hooksRegistered(
   });
 
   // Report invalid JSON errors first
+  // Collect errors for later - we only emit them if at least one entry was checked (spec 43 §6)
+  const fileErrors: string[] = [];
   for (const { result } of settingsFiles) {
     if (result && "error" in result) {
-      w("hooks-registered", "warn", result.error, null);
+      fileErrors.push(result.error);
     }
   }
 
@@ -942,6 +944,13 @@ async function hooksRegistered(
         `${entry.ref}: registration ${entry.index} (${entry.event}) is in no settings file Claude Code reads`,
         `copy it from ${EXAMPLE_SETTINGS} into .claude/settings.json`,
       );
+    }
+  }
+
+  // Emit file read errors only when at least one entry was checked (spec 43 §6)
+  if (checkedCount > 0) {
+    for (const error of fileErrors) {
+      w("hooks-registered", "warn", error, null);
     }
   }
 

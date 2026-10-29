@@ -583,6 +583,45 @@ describe("hooks-registered check (spec 43 §6)", () => {
     expect(dirCheck!.level).toBe("warn");
     expect(dirCheck!.message).toBe("cannot read .claude/settings.json: unreadable (EISDIR)");
   });
+
+  it("C1. every entry not checked + invalid JSON → no cannot-read warning", async () => {
+    // When every registration entry is "not checked" (because of unset param),
+    // the cannot-read warnings should not be emitted.
+    // Create hook with a param that has no default and no value set
+    const hookNoDefault: IngredientSpec = {
+      meta: {
+        type: "hook",
+        name: "guard-path",
+        files: ["guard-path.py"],
+        params: { "hooks.python": {} }, // No default!
+        registration: [
+          {
+            event: "PreToolUse",
+            matcher: "Bash|PowerShell",
+            command: "{{hooks.python}}",
+            args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py"],
+            timeout: 10,
+          },
+        ],
+      },
+      files: { "guard-path.py": 'print("ok")\n' },
+    };
+    const f = await fixture([hookNoDefault]);
+    // Write invalid JSON in a settings file that would normally trigger a warning
+    const coreClaudeDir = mkdtempSync(path.join(os.tmpdir(), "craftar-core-claude-c1-"));
+    cleanups.push(() => removeWithRetry(coreClaudeDir));
+    await writeFiles(coreClaudeDir, { "settings.json": "{ invalid json" });
+    const r = await run({ home, workspace: f.wsRoot, claudeUserDir: coreClaudeDir, env: {} });
+    const hooksChecks = of(r.checks, "hooks-registered");
+    // Should have the "not checked" line
+    const notCheckedLine = hooksChecks.find((c) =>
+      c.message.includes("not checked") && c.message.includes("a declared parameter has no value")
+    );
+    expect(notCheckedLine, "should have not checked line").toBeDefined();
+    // Should NOT have a "cannot read" warning (spec 43 §6: "When none was checked, the not checked lines are the check's only lines")
+    const cannotReadLine = hooksChecks.find((c) => c.message.includes("cannot read"));
+    expect(cannotReadLine, "should not have cannot read line when nothing was checked").toBeUndefined();
+  });
 });
 
 describe("CLI tests for hooks-registered", () => {
