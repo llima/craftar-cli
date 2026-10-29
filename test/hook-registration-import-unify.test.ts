@@ -42,12 +42,14 @@ function gitInit(dir: string): void {
 const importInto = (forge: string, workspaceRoot: string, profileName: string) =>
   importClaudeCode({ workspaceRoot, forgeRoot: forge, profileName });
 
-/** Hook base B from task spec: has registration citing hooks.python, plus x param in body. */
+/** Hook base B from task spec: has registration citing hooks.python, plus x param in body.
+ * Declares targets: ["claude-code"] as an imported hook would (the schema default for import). */
 const hookBaseB = (): IngredientSpec => ({
   meta: {
     type: "hook",
     name: "guard-path",
     files: ["guard-path.py"],
+    targets: ["claude-code"], // an imported hook gets this default
     params: {
       "hooks.python": { default: "python3" },
       x: { default: "one" },
@@ -182,6 +184,7 @@ describe("import — hook with registration (spec 43 §7.2 rows 7–11)", () => 
             name: "guard-path--acme",
             as: "guard-path",
             files: ["guard-path.py"],
+            targets: ["claude-code"], // as an import writes
             params: { "hooks.python": { default: "python3" } },
             registration: variantRegistration,
           },
@@ -588,6 +591,7 @@ describe("import F9 — delta on key cited by another hook's registration (spec 
         type: "hook",
         name: "hook-a",
         files: ["hook-a.py"],
+        targets: ["claude-code"], // as an import writes
         params: { "hooks.python": { default: "python3" } },
         // NO registration
       },
@@ -600,6 +604,7 @@ describe("import F9 — delta on key cited by another hook's registration (spec 
         type: "hook",
         name: "hook-b",
         files: ["hook-b.py"],
+        targets: ["claude-code"], // as an import writes
         params: { "hooks.python": { default: "python3" } },
         registration: [{ event: "PreToolUse", command: "{{hooks.python}}", args: [] }],
       },
