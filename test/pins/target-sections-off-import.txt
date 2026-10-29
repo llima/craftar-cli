@@ -1,0 +1,6 @@
+Imported <root>/ws → <root>/forge-copy as profile "acme"
+  0 created, 5 reused, 0 variants, 0 rejected
+  rendered rule/api — api.base
+  rendered rule/style — sections flavors
+  profile profiles/acme/profile.yaml unchanged
+  recipes: stack-api, base

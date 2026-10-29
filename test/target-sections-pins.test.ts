@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import YAML from "yaml";
 import { runCli } from "./helpers/cli.js";
 import { acmeSections } from "./helpers/target-sections.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
@@ -244,47 +242,26 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
     expect(observed.planWarnings.length).toBeGreaterThan(0);
   });
 
-  it("import round trip: import to fresh Forge, then re-import reuses all bases", async () => {
+  it("import round trip: importing the synced workspace into a copy of the Forge with markers changes nothing", async () => {
     const s = kept(await acmeSections({ schema: 5 }));
 
-    // 1. Sync the workspace from the built scenario Forge
-    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    // 1. Sync the workspace from the built scenario Forge (which has section markers)
+    const syncResult = runCli(["sync", "--workspace", s.wsRoot]);
+    expect(syncResult.code, syncResult.stderr).toBe(0);
 
-    // 2. Import into a fresh Forge (forge2) - this creates ingredients from what's on disk
-    const forge2 = path.join(s.root, "forge2");
+    // 2. Copy the Forge (with its section markers) to a new directory
+    const forgeCopy = path.join(s.root, "forge-copy");
+    await fs.cp(s.forgeRoot, forgeCopy, { recursive: true });
+
+    // Snapshot the Forge copy BEFORE import
+    const beforeImport = await snapshot(forgeCopy);
+
+    // 3. Import from the synced workspace into the Forge copy (no --write-config)
     const importResult = runCli([
       "import",
       "--from", "claude-code",
       "--workspace", s.wsRoot,
-      "--forge", forge2,
-      "--profile", "acme",
-      "--write-config",
-    ]);
-    expect(importResult.code, importResult.stderr).toBe(0);
-
-    // 3. Point the workspace at forge2 with all three targets and sync
-    await fs.writeFile(
-      path.join(s.wsRoot, "craftar.yaml"),
-      YAML.stringify({ forge: "../forge2", profile: "acme", targets: ["claude-code", "kiro", "agents-md"] }),
-    );
-
-    // Update the forge schema to match the original
-    const manifest = path.join(forge2, "craftar.forge.yaml");
-    const manifestContent = YAML.parse(await fs.readFile(manifest, "utf8"));
-    await fs.writeFile(manifest, YAML.stringify({ ...manifestContent, schema: 5 }));
-
-    const syncResult = runCli(["sync", "--workspace", s.wsRoot]);
-    expect(syncResult.code, syncResult.stderr).toBe(0);
-
-    // 4. Snapshot forge2 before re-import
-    const beforeReimport = await snapshot(forge2);
-
-    // 5. Re-import from the workspace back into forge2
-    const reimportResult = runCli([
-      "import",
-      "--from", "claude-code",
-      "--workspace", s.wsRoot,
-      "--forge", forge2,
+      "--forge", forgeCopy,
       "--profile", "acme",
     ]);
 
@@ -293,7 +270,7 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
     const roots = [s.root, realRoot];
 
     // Normalize the stdout for comparison
-    let stdout = reimportResult.stdout;
+    let stdout = importResult.stdout;
     for (const r of roots) {
       stdout = stdout.split(r).join("<root>");
       stdout = stdout.split(r.replace(/\\/g, "/")).join("<root>");
@@ -302,16 +279,26 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
     // Platform-independent path separator
     stdout = stdout.replace(/<root>[/\\]/g, "<root>/");
 
-    // Re-import should succeed
-    expect(reimportResult.code, reimportResult.stderr).toBe(0);
+    // Import should succeed
+    expect(importResult.code, importResult.stderr).toBe(0);
 
-    // Re-import summary should say all reused, no variants, no created
-    expect(stdout).toContain("reused");
+    // Pin the import stdout
+    const IMPORT_PIN_FILE = path.resolve(__dirname, "pins/target-sections-off-import.txt");
+    if (process.env.CRAFTAR_WRITE_PINS === "1") {
+      await fs.mkdir(path.dirname(IMPORT_PIN_FILE), { recursive: true });
+      await fs.writeFile(IMPORT_PIN_FILE, stdout);
+      console.log(`Import pin written to ${IMPORT_PIN_FILE}`);
+    } else {
+      const expectedStdout = await fs.readFile(IMPORT_PIN_FILE, "utf8");
+      expect(stdout).toBe(expectedStdout);
+    }
+
+    // Import summary should say 0 variants, and not mention any rule variant
     expect(stdout).toContain("0 variants");
-    expect(stdout).toContain("0 created");
+    expect(stdout).not.toContain("variant rule/");
 
-    // Forge2 should be byte-identical after re-import (all bases reused)
-    const afterReimport = await snapshot(forge2);
-    sameTree(beforeReimport, afterReimport);
+    // Forge copy should be byte-identical after import (every base reused, profile unchanged)
+    const afterImport = await snapshot(forgeCopy);
+    sameTree(beforeImport, afterImport);
   });
 });

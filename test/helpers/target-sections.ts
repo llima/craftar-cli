@@ -133,14 +133,24 @@ export async function acmeSections(
       },
       files: { "rule.md": apiBody },
     },
-    // agent/api-reviewer
+    // agent/api-reviewer — with frontmatterRaw matching what the emitter writes
     {
-      meta: { type: "agent", name: "api-reviewer", description: "Reviews API changes" },
+      meta: {
+        type: "agent",
+        name: "api-reviewer",
+        description: "Reviews API changes",
+        frontmatterRaw: "name: api-reviewer\ndescription: Reviews API changes\ntools: ",
+      },
       files: { "agent.md": agentBody },
     },
-    // command/review
+    // command/review — with frontmatterRaw matching what the emitter writes
     {
-      meta: { type: "command", name: "review", description: "Run a review" },
+      meta: {
+        type: "command",
+        name: "review",
+        description: "Run a review",
+        frontmatterRaw: "description: Run a review",
+      },
       files: { "command.md": commandBody },
     },
     // skill/docs — file layout
@@ -160,24 +170,34 @@ export async function acmeSections(
     ingredients.push(opts.extraRule);
   }
 
-  // Build recipe ingredient list
+  // Build recipe ingredient lists
+  // Scoped rules go into stack-* recipes (matching how import structures a Forge)
+  // Agents whose name starts with the rule name also go into that stack-* recipe
+  // Services go in a profile-owned recipe (import can't see them in workspace files)
   const baseIngredients = [
     "rule/style",
-    "rule/api",
-    "agent/api-reviewer",
     "command/review",
     "skill/docs",
-    "service/echo",
     ...(opts.extraRule ? [`${opts.extraRule.meta.type}/${opts.extraRule.meta.name}`] : []),
   ];
 
-  const recipes = [recipe("base", baseIngredients)];
+  // stack-api holds the scoped rule and agents that belong to it (name starts with rule name)
+  const stackApiIngredients = ["rule/api", "agent/api-reviewer"];
+
+  // acme-services holds services (import never touches profile-owned recipes)
+  const acmeServicesIngredients = ["service/echo"];
+
+  const recipes = [
+    recipe("base", baseIngredients),
+    recipe("stack-api", stackApiIngredients, { slot: "api" }),
+    recipe("acme-services", acmeServicesIngredients),
+  ];
 
   // Profile sets:
   // - sections.rule/style.flavors — a different table
   // - params.api.base — override the default
   const profiles = [
-    profile("acme", ["base"], ["claude-code", "kiro", "agents-md"], {
+    profile("acme", ["base", "stack-api", "acme-services"], ["claude-code", "kiro", "agents-md"], {
       params: { "api.base": "/api/v2" },
       sections: {
         "rule/style": {
