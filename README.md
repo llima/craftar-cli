@@ -615,7 +615,7 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; `craftar docs validate`;
 
 ### to 0.39.0
 
-- **A Forge can declare `schema: 6`**, which includes 5 and below, and there a section's opening marker can carry `targets=` (see *Forge layout*). Every craftar before `0.39.0` refuses such a Forge at `craftar.forge.yaml`, so no older craftar writes a section to a target it was not meant for. Upgrade every machine and CI that reads the Forge before setting it. Nothing changes for a Forge at 1 to 5.
+- **A Forge can declare `schema: 6`**, which includes 5 and below, and there a section's opening marker can carry `targets=` (see *Forge layout*). Every craftar before `0.39.0` refuses such a Forge at `craftar.forge.yaml`, so no older craftar writes a section to a target it was not meant for. Upgrade every machine and CI that reads the Forge before setting it. Below `schema: 6` a `targets=` marker still fails the plan, now with a message that names `schema: 6`; nothing else changes for a Forge at 1 to 5.
 - **A Forge that writes no `targets=` sees no change**, at `schema: 6` too: no emitted byte, lock entry, warning, `--json` value or exit code, `doctor --strict` included.
 
 ### to 0.38.0
