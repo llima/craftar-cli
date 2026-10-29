@@ -14,10 +14,10 @@ type McpMeta = Extract<Ingredient, { type: "mcp" }>;
 const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 
 /**
- * A YAML alias can make a server refer back to itself, and a walk would not end. Worded as `fingerprintOf` words it, behind
- * the ingredient's ref — as every message about a server starts.
+ * A YAML alias can make an object refer back to itself, and a walk would not end. Worded as `fingerprintOf` words it, behind
+ * the ingredient's ref — as every message about a server or a registration starts.
  */
-const cyclic = (meta: Ingredient) => new Error(`${meta.type}/${meta.name}: ingredient metadata is cyclic (a YAML alias refers back to itself)`);
+const cyclic = (ref: string) => new Error(`${ref}: ingredient metadata is cyclic (a YAML alias refers back to itself)`);
 
 /** Whether this Forge's servers are rendered (spec 34 §4.1: schema 4 or above). */
 export function rendersServers(manifest: { schema: number }): boolean {
@@ -31,6 +31,14 @@ export interface SubstitutedLeaf {
   value: string;
 }
 
+/** The result of renderLeaves: the rendered value and the four cases (spec 43 §7.2). */
+export interface RenderedLeaves {
+  value: unknown;
+  missing: string[];
+  undeclared: string[];
+  substituted: SubstitutedLeaf[];
+}
+
 export interface RenderedServer {
   server: McpServer;
   missing: string[];
@@ -39,27 +47,33 @@ export interface RenderedServer {
 }
 
 /**
- * Render an MCP server by substituting its declared params.
- * Returns the same object when nothing is substituted.
+ * Walk an object, substituting string leaves. Returns the same object when nothing changed,
+ * a new object (on null prototype) when something did. The one walk for servers and registrations.
+ *
+ * The four cases (spec 34 §6, spec 43 §4.3):
+ * - declared and valued → substituted
+ * - declared, no value → left, added to missing
+ * - undeclared, valued → left, added to undeclared
+ * - undeclared, no value → left, silent
  */
-export function renderServer(meta: McpMeta, params: Record<string, unknown>): RenderedServer {
-  const declared: Record<string, unknown> = meta.params ?? {};
+export function renderLeaves(
+  value: unknown,
+  declared: Record<string, unknown>,
+  params: Record<string, unknown>,
+  ref: string,
+): RenderedLeaves {
   const missing: string[] = [];
   const undeclared: string[] = [];
   const substituted: SubstitutedLeaf[] = [];
   const missingSeen = new Set<string>();
   const undeclaredSeen = new Set<string>();
 
-  /**
-   * Walk a value, substituting string leaves. Returns the same object when nothing changed,
-   * a new object (on null prototype) when something did.
-   */
   const ancestors = new Set<object>();
-  function walk(value: unknown, path: string, under: string): unknown {
-    if (typeof value === "string") {
+  function walk(v: unknown, path: string, under: string): unknown {
+    if (typeof v === "string") {
       let changed = false;
       // One replace per leaf, no second pass on substituted text.
-      const result = value.replace(PLACEHOLDER, (match, key: string) => {
+      const result = v.replace(PLACEHOLDER, (match, key: string) => {
         // Own properties only — never follow a prototype.
         const isDeclared = Object.hasOwn(declared, key);
         const isValued = Object.hasOwn(params, key);
@@ -93,67 +107,85 @@ export function renderServer(meta: McpMeta, params: Record<string, unknown>): Re
         substituted.push({ path, under, value: result });
         return result;
       }
-      return value;
+      return v;
     }
 
-    if (value === null || typeof value !== "object") return value; // numbers, booleans, null — as they are
-    if (ancestors.has(value)) throw cyclic(meta);
-    ancestors.add(value);
+    if (v === null || typeof v !== "object") return v; // numbers, booleans, null — as they are
+    if (ancestors.has(v)) throw cyclic(ref);
+    ancestors.add(v);
     try {
-      return Array.isArray(value) ? walkArray(value, path, under) : walkObject(value as Record<string, unknown>, path, under);
+      return Array.isArray(v) ? walkArray(v, path, under) : walkObject(v as Record<string, unknown>, path, under);
     } finally {
-      ancestors.delete(value);
+      ancestors.delete(v);
     }
   }
 
-  function walkArray(value: unknown[], path: string, under: string): unknown {
+  function walkArray(arr: unknown[], path: string, under: string): unknown {
     let changed = false;
     const items: unknown[] = [];
-    for (let i = 0; i < value.length; i++) {
-      const item = walk(value[i], `${path}[${i}]`, under);
+    for (let i = 0; i < arr.length; i++) {
+      const item = walk(arr[i], `${path}[${i}]`, under);
       items.push(item);
-      if (item !== value[i]) changed = true;
+      if (item !== arr[i]) changed = true;
     }
-    return changed ? items : value;
+    return changed ? items : arr;
   }
 
-  function walkObject(value: Record<string, unknown>, path: string, under: string): unknown {
+  function walkObject(obj: Record<string, unknown>, path: string, under: string): unknown {
     let changed = false;
     // A null prototype, so a `__proto__` key stays an entry; own enumerable keys only, in the source's order.
     const result: Record<string, unknown> = Object.create(null);
-    for (const k of Object.keys(value)) {
-      const v = walk(value[k], path ? `${path}.${k}` : k, path ? under : k);
+    for (const k of Object.keys(obj)) {
+      const v = walk(obj[k], path ? `${path}.${k}` : k, path ? under : k);
       result[k] = v;
-      if (v !== value[k]) changed = true;
+      if (v !== obj[k]) changed = true;
     }
-    return changed ? result : value;
+    return changed ? result : obj;
   }
 
-  const server = walk(meta.server, "", "") as McpServer;
+  const rendered = walk(value, "", "");
 
   return {
-    server,
+    value: rendered,
     missing,
     undeclared,
     substituted,
   };
 }
 
-/** The keys a server's string values cite, once each, in the server's own order, depth first. [] for a non-mcp ingredient. */
-export function serverCitations(meta: Ingredient): Array<{ key: string; declared: boolean }> {
-  if (meta.type !== "mcp") return [];
-
+/**
+ * Render an MCP server by substituting its declared params.
+ * Returns the same object when nothing is substituted.
+ */
+export function renderServer(meta: McpMeta, params: Record<string, unknown>): RenderedServer {
   const declared: Record<string, unknown> = meta.params ?? {};
+  const ref = `${meta.type}/${meta.name}`;
+  const result = renderLeaves(meta.server, declared, params, ref);
+
+  return {
+    server: result.value as McpServer,
+    missing: result.missing,
+    undeclared: result.undeclared,
+    substituted: result.substituted,
+  };
+}
+
+/** The keys an object's string values cite, once each, in the object's own order, depth first. */
+export function citationsIn(
+  value: unknown,
+  declared: Record<string, unknown>,
+  ref: string,
+): Array<{ key: string; declared: boolean }> {
   const result: Array<{ key: string; declared: boolean }> = [];
   const seen = new Set<string>();
   const ancestors = new Set<object>();
 
-  function walk(value: unknown): void {
-    if (typeof value === "string") {
+  function walk(v: unknown): void {
+    if (typeof v === "string") {
       // Find all placeholders in this string
       let match: RegExpExecArray | null;
       const re = new RegExp(PLACEHOLDER.source, "g");
-      while ((match = re.exec(value)) !== null) {
+      while ((match = re.exec(v)) !== null) {
         const key = match[1];
         if (!seen.has(key)) {
           seen.add(key);
@@ -163,16 +195,25 @@ export function serverCitations(meta: Ingredient): Array<{ key: string; declared
       return;
     }
 
-    if (value === null || typeof value !== "object") return;
-    if (ancestors.has(value)) throw cyclic(meta);
-    ancestors.add(value);
+    if (v === null || typeof v !== "object") return;
+    if (ancestors.has(v)) throw cyclic(ref);
+    ancestors.add(v);
     // Walk values only, not keys (keys are never scanned for placeholders)
-    for (const v of Array.isArray(value) ? value : Object.keys(value).map((k) => (value as Record<string, unknown>)[k])) walk(v);
-    ancestors.delete(value);
+    for (const val of Array.isArray(v) ? v : Object.keys(v).map((k) => (v as Record<string, unknown>)[k])) walk(val);
+    ancestors.delete(v);
   }
 
-  walk(meta.server);
+  walk(value);
   return result;
+}
+
+/** The keys a server's string values cite, once each, in the server's own order, depth first. [] for a non-mcp ingredient. */
+export function serverCitations(meta: Ingredient): Array<{ key: string; declared: boolean }> {
+  if (meta.type !== "mcp") return [];
+
+  const declared: Record<string, unknown> = meta.params ?? {};
+  const ref = `${meta.type}/${meta.name}`;
+  return citationsIn(meta.server, declared, ref);
 }
 
 export interface ServerFinding {
@@ -209,23 +250,36 @@ export function credentialIn(substituted: SubstitutedLeaf[]): { error: ServerFin
   return { error: null, warnings };
 }
 
-/** Build the error message for a credential found in a rendered server. */
-export function credentialMessage(ref: string, f: ServerFinding): string {
+/** Options for credential and entropy messages. */
+export interface MessageOptions {
+  prefix?: string;
+  remedy?: string;
+}
+
+const DEFAULT_PREFIX = "server.";
+const DEFAULT_REMEDY = "have the server read it from the environment";
+
+/** Build the error message for a credential found in a rendered value. */
+export function credentialMessage(ref: string, f: ServerFinding, options?: MessageOptions): string {
+  const prefix = options?.prefix ?? DEFAULT_PREFIX;
+  const remedy = options?.remedy ?? DEFAULT_REMEDY;
   // Row U gets a different verb ("holds a URL with credentials") than row T ("looks like a credential")
   if (f.kind === "url-credentials") {
-    return `${ref}: the value rendered into server.${f.path} holds a URL with credentials (${f.kind}) — a generated file is committed, so a secret cannot come from a param; have the server read it from the environment`;
+    return `${ref}: the value rendered into ${prefix}${f.path} holds a URL with credentials (${f.kind}) — a generated file is committed, so a secret cannot come from a param; ${remedy}`;
   }
-  return `${ref}: the value rendered into server.${f.path} looks like a credential (${f.kind}) — a generated file is committed, so a secret cannot come from a param; have the server read it from the environment`;
+  return `${ref}: the value rendered into ${prefix}${f.path} looks like a credential (${f.kind}) — a generated file is committed, so a secret cannot come from a param; ${remedy}`;
 }
 
 /** Build the warning message for a high-entropy value (row E). */
-export function entropyMessage(ref: string, f: ServerFinding): string {
-  return `${ref}: the value rendered into server.${f.path} may be a secret (${f.kind}) — a generated file is committed; if it is one, have the server read it from the environment`;
+export function entropyMessage(ref: string, f: ServerFinding, options?: MessageOptions): string {
+  const prefix = options?.prefix ?? DEFAULT_PREFIX;
+  const remedy = options?.remedy ?? DEFAULT_REMEDY;
+  return `${ref}: the value rendered into ${prefix}${f.path} may be a secret (${f.kind}) — a generated file is committed; if it is one, ${remedy}`;
 }
 
 /** Build the warning message for an undeclared key with a value. */
-export function undeclaredMessage(ref: string, key: string): string {
-  return `${ref}: server cites {{${key}}}, which has a value but is not declared in the ingredient's params — left verbatim`;
+export function undeclaredMessage(ref: string, key: string, subject = "server"): string {
+  return `${ref}: ${subject} cites {{${key}}}, which has a value but is not declared in the ingredient's params — left verbatim`;
 }
 
 /** Import's scan of a server it read (moved from the importer, messages unchanged). */
