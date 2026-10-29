@@ -142,7 +142,10 @@ describe("drift promote with target-scoped sections (spec 41 Part B Task 05)", (
 
     // Should be a sections outcome, not variant
     expect(result.outcome).toBe("sections");
-    expect(result.sections).toEqual([{ key: "rule/style", name: "c", lines: 1 }]);
+    expect(result.sections).toEqual([{ key: "rule/style", name: "c", lines: 1, value: "Edited Claude content.\n" }]);
+
+    // Apply the promote to actually write the profile
+    await applyPromote(result);
 
     // The Forge's rule.md should still have both markers with targets=
     const forgeRule = await fs.readFile(path.join(forgeRoot, "ingredients/rules/style/rule.md"), "utf8");

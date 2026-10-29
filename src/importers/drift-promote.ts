@@ -60,6 +60,7 @@ import {
 import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
 import { providedRefs } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
+import { readsTargetSections } from "../core/sections.js";
 import { sectionKey } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { parseYamlText } from "../core/yaml-read.js";
@@ -781,7 +782,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   let flattenedSections: string[] = [];
 
   // Read the base to detect cited keys and sections
-  const base = await readBase(X.dir, stage.reader(), forge.root);
+  // Spec 41 Part B §5.2: pass target-scoped section options from the Forge manifest
+  const parseOpts = { targets: readsTargetSections(forge.manifest) };
+  const base = await readBase(X.dir, stage.reader(), forge.root, parseOpts);
   const ingKey = sectionKey(X.meta);
   const PSk = ctx.PS[ingKey] ?? {};
   const WSk = ctx.WS[ingKey] ?? {};
