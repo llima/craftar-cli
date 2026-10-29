@@ -5,7 +5,7 @@ import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, hasUtf16Bom } from "../core/secrets.js";
-import { serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
+import { registrationCitations, serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
 import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
@@ -1173,9 +1173,25 @@ async function writeIngredient(
         const existingMeta = parseYaml(variantFile, await stage.readText(variantFile), IngredientSchema);
         if (existingMeta.type === "hook" && existingMeta.registration) {
           meta = { ...meta, registration: existingMeta.registration } as Ingredient;
-        }
-        if (existingMeta.type === "hook" && existingMeta.params) {
-          meta = { ...meta, params: existingMeta.params } as Ingredient;
+          // For params: use the BASE's entries for keys the variant's registration cites.
+          // The base is at <forge>/ingredients/<folder>/<baseName> (meta.name before the --profile suffix).
+          const baseDir = path.join(forge, "ingredients", folder, meta.name);
+          const baseFile = path.join(baseDir, "ingredient.yaml");
+          if (await stage.exists(baseFile)) {
+            const baseMeta = parseYaml(baseFile, await stage.readText(baseFile), IngredientSchema);
+            if (baseMeta.type === "hook" && baseMeta.params) {
+              // Use the existing variant's registration with the base's declared params
+              const variantMetaForCitations = { ...existingMeta, params: baseMeta.params };
+              const citedDeclared = registrationCitations(variantMetaForCitations).filter((c) => c.declared).map((c) => c.key);
+              if (citedDeclared.length > 0) {
+                const keptParams: Record<string, { default?: string | number | boolean; description?: string }> = {};
+                for (const k of citedDeclared) {
+                  if (Object.hasOwn(baseMeta.params, k)) keptParams[k] = baseMeta.params[k];
+                }
+                meta = { ...meta, params: keptParams } as Ingredient;
+              }
+            }
+          }
         }
       } else {
         if (variantRegistration) {

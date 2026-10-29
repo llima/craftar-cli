@@ -214,6 +214,70 @@ describe("import — hook with registration (spec 43 §7.2 rows 7–11)", () => 
     // Should still have only hooks.python in params (cited by registration)
     expect(variantMeta.params).toEqual({ "hooks.python": { default: "python3" } });
   });
+
+  it("3b. rewriting existing variant keeps only base's params entries the variant's registration cites", async () => {
+    // Setup: Forge with hook base B and existing variant with hooks.python AND unrelated x param
+    const root = await tmpDir("craftar-import-hook-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeDir = path.join(root, "forge");
+    const wsDir = path.join(root, "ws");
+
+    // Existing variant has registration citing hooks.python, plus an unrelated x param
+    const variantRegistration = [
+      {
+        event: "PreToolUse",
+        matcher: "Bash",
+        command: "{{hooks.python}}",
+        args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py"],
+        timeout: 30,
+      },
+    ];
+    await makeForge(forgeDir, {
+      ingredients: [
+        hookBaseB(),
+        {
+          meta: {
+            type: "hook",
+            name: "guard-path--acme",
+            as: "guard-path",
+            files: ["guard-path.py"],
+            targets: ["claude-code"],
+            // Existing variant has BOTH hooks.python (cited by registration) AND x (unrelated)
+            params: {
+              "hooks.python": { default: "python3" },
+              x: { default: "old-value" },
+            },
+            registration: variantRegistration,
+          },
+          files: { "guard-path.py": "print(\"old\")\n" },
+        },
+      ],
+      recipes: [recipe("base", ["hook/guard-path"]), recipe("base--acme", ["hook/guard-path--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+
+    // Create workspace with hook file that forces a rewrite
+    await writeFiles(wsDir, {
+      ".claude/hooks/guard-path.py": "# completely new script\nimport sys\n",
+    });
+
+    // Import (rewrites the existing variant)
+    const r = await importInto(forgeDir, wsDir, "acme");
+
+    // Should still be a variant
+    expect(r.variants.map((v) => v.name)).toContain("hook/guard-path--acme");
+
+    // Read the variant's ingredient.yaml after rewrite
+    const variantMeta = await yaml(path.join(forgeDir, "ingredients/hooks/guard-path--acme/ingredient.yaml"));
+
+    // Should keep the variant's own registration
+    expect(variantMeta.registration).toEqual(variantRegistration);
+
+    // After rewrite: params should be ONLY the base's entries for keys the variant's registration cites.
+    // The variant's registration cites hooks.python. The base declares hooks.python with default python3.
+    // So we should have ONLY hooks.python, NOT x.
+    expect(variantMeta.params).toEqual({ "hooks.python": { default: "python3" } });
+  });
 });
 
 describe("drift promote — hook with registration (spec 43 §7.2 row 10)", () => {
