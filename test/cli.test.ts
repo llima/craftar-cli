@@ -2771,7 +2771,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       "kiro · mcp .kiro/settings/mcp.json",
       "claude-code · script .claude/scripts/<file>",
       "kiro · steering .kiro/steering/<name>.md",
-      "claude-code · hook .claude/hooks/<file>",
+      "claude-code · hook .claude/hooks/<file>, .claude/settings.craftar.example.json — the registration is written to .claude/settings.craftar.example.json, to copy",
     ]);
     // Services are not a target; they get their own line after the paths block (spec 31 §4.7)
     expect(norm[norm.length - 1]).toBe("service: written by sync under .craftar/ for no target; see craftar services");

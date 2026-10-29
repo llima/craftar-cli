@@ -3,7 +3,7 @@ import type { EmitBase, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 import { paramsFor } from "../core/resolve.js";
 import type { Ingredient, Target } from "../schema/index.js";
-import { rendersServers, renderServer, credentialIn, credentialMessage, entropyMessage, undeclaredMessage } from "../core/mcp-server.js";
+import { rendersServers, renderServer, renderLeaves, credentialIn, credentialMessage, entropyMessage, undeclaredMessage } from "../core/mcp-server.js";
 
 export function appliesTo(targets: "*" | string[], target: string): boolean {
   return targets === "*" || targets.includes(target);
@@ -597,4 +597,161 @@ export function authEnvNames(collected: readonly ResolvedIngredient[]): string[]
     if (ing.meta.authEnv) for (const name of ing.meta.authEnv) names.add(name);
   }
   return [...names].sort();
+}
+
+/* ------------------------------------------------------------------ */
+/* Hook registration (spec 43)                                         */
+/* ------------------------------------------------------------------ */
+
+/** A resolved hook ingredient: the meta is narrowed to the hook type. */
+type HookResolved = ResolvedIngredient & { meta: Extract<Ingredient, { type: "hook" }> };
+
+/** A handler in the hooks object. */
+interface HookHandler {
+  type: "command";
+  command: string;
+  args?: string[];
+  timeout?: number;
+  shell?: "bash" | "powershell";
+}
+
+/** A matcher group in the hooks object. */
+interface HookGroup {
+  matcher?: string;
+  hooks: HookHandler[];
+}
+
+/** The hooks object for the example file. */
+export type HooksObject = Record<string, HookGroup[]>;
+
+/** Pattern to find .claude/hooks/<x> references in command/args (spec 43 §5.6). */
+const HOOK_PATH_PATTERN = /\.claude\/hooks\/([^\s"']+)/g;
+
+/**
+ * Build the hooks registration object for the example file (spec 43 §5.1).
+ * Renders each entry's declared params and checks the substituted values.
+ * Returns null if no hook declares a registration.
+ */
+export function hookRegistrations(
+  ctx: EmitBase,
+  hooks: readonly ResolvedIngredient[],
+): HooksObject | null {
+  // Filter to hooks with registration
+  const withReg = hooks.filter(
+    (ing): ing is HookResolved => ing.meta.type === "hook" && ing.meta.registration !== undefined
+  );
+
+  if (withReg.length === 0) return null;
+
+  // A null prototype map so __proto__ is a key, not the prototype
+  const result: HooksObject = Object.create(null);
+
+  for (const ing of withReg) {
+    const meta = ing.meta;
+    const declared = meta.params ?? {};
+    const params = paramsFor(ing, ctx.resolution);
+    const files = new Set(meta.files);
+
+    for (let i = 0; i < meta.registration!.length; i++) {
+      const entry = meta.registration![i];
+
+      // Render the entry using renderLeaves (spec 43 §4.3)
+      // We only render command, args, and matcher — event, timeout, and shell are not rendered
+      const toRender: Record<string, unknown> = {};
+      if (entry.command) toRender.command = entry.command;
+      if (entry.args) toRender.args = entry.args;
+      if (entry.matcher) toRender.matcher = entry.matcher;
+
+      const rendered = renderLeaves(toRender, declared, params, ing.ref);
+
+      // Handle the four cases (spec 43 §4.3)
+      for (const k of rendered.missing) ctx.missing(k, ing.ref);
+      for (const k of rendered.undeclared) ctx.warnOnce(undeclaredMessage(ing.ref, k, "registration"));
+
+      // Credential check (spec 43 §4.3)
+      const check = credentialIn(rendered.substituted);
+      if (check.error) {
+        throw new Error(
+          credentialMessage(ing.ref, check.error, {
+            prefix: `registration[${i}].`,
+            remedy: "have the hook read it from the environment",
+          })
+        );
+      }
+      for (const w of check.warnings) {
+        ctx.warnOnce(
+          entropyMessage(ing.ref, w, {
+            prefix: `registration[${i}].`,
+            remedy: "have the hook read it from the environment",
+          })
+        );
+      }
+
+      const renderedValue = rendered.value as typeof toRender;
+      const renderedCommand = (renderedValue.command ?? entry.command) as string;
+      const renderedArgs = renderedValue.args as string[] | undefined;
+      const renderedMatcher = renderedValue.matcher as string | undefined;
+
+      // Check for uncovered .claude/hooks/<x> paths (spec 43 §5.6)
+      const checkPath = (value: string) => {
+        HOOK_PATH_PATTERN.lastIndex = 0;
+        let match;
+        while ((match = HOOK_PATH_PATTERN.exec(value)) !== null) {
+          const cited = match[1];
+          if (!files.has(cited)) {
+            ctx.warnOnce(
+              `${ing.ref}: registration cites .claude/hooks/${cited}, which this ingredient does not write`
+            );
+          }
+        }
+      };
+      checkPath(renderedCommand);
+      if (renderedArgs) {
+        for (const arg of renderedArgs) checkPath(arg);
+      }
+
+      // Build the handler with keys in order: type, command, args, timeout, shell (spec 43 §5.1)
+      const handler: HookHandler = Object.create(null);
+      handler.type = "command";
+      handler.command = renderedCommand;
+      if (renderedArgs !== undefined) handler.args = renderedArgs;
+      if (entry.timeout !== undefined) handler.timeout = entry.timeout;
+      if (entry.shell !== undefined) handler.shell = entry.shell;
+
+      // Build the group with keys in order: matcher (optional), hooks
+      const group: HookGroup = Object.create(null);
+      if (renderedMatcher !== undefined) group.matcher = renderedMatcher;
+      group.hooks = [handler];
+
+      // Add to the event's list (create if first)
+      const event = entry.event;
+      if (!result[event]) {
+        result[event] = [];
+      }
+      result[event].push(group);
+    }
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+/**
+ * Build the settings example object (spec 43 §5.1).
+ * Keys in order: env (when non-empty), hooks (when non-null).
+ */
+export function settingsExample(
+  env: Record<string, string> | null,
+  hooks: HooksObject | null,
+): Record<string, unknown> | null {
+  const hasEnv = env !== null && Object.keys(env).length > 0;
+  const hasHooks = hooks !== null && Object.keys(hooks).length > 0;
+
+  if (!hasEnv && !hasHooks) return null;
+
+  // Build with key order: env, hooks (spec 43 §5.1)
+  const result: Record<string, unknown> = {};
+  if (hasEnv) result.env = env;
+  if (hasHooks) result.hooks = hooks;
+
+  return result;
 }

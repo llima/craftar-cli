@@ -64,8 +64,8 @@ export const CAPABILITIES = {
     },
     hook: {
       state: "native",
-      output: [".claude/hooks/<file>"],
-      note: null,
+      output: [".claude/hooks/<file>", EXAMPLE_SETTINGS],
+      note: "the registration is written to .claude/settings.craftar.example.json, to copy",
     },
     service: {
       state: "unsupported",
