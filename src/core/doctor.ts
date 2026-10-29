@@ -775,7 +775,7 @@ async function readSettingsFile(
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
     if (err.code === "ENOENT") return null;
-    return { error: `cannot read ${label}: unreadable (${err.code})` };
+    return { error: `cannot read ${label}: unreadable (${err.code ?? "error"})` };
   }
   try {
     const parsed = JSON.parse(stripBom(text));
