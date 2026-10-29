@@ -336,6 +336,93 @@ describe("drift promote — hook with registration (spec 43 §7.2 row 10)", () =
     expect(st.code).toBe(0);
     expect(st.stdout).toContain("unchanged");
   });
+
+  it("4b. drift promote infers profile-params outcome for hook with registration (not a variant)", async () => {
+    // Task 10 Item 2: a hook base with registration and params should allow profile-params outcome.
+    // The issue: sourceMeta stripped only params, leaving registration, causing fingerprint mismatch.
+    const root = await tmpDir("craftar-promote-hook-params-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeDir = path.join(root, "forge");
+    const wsDir = path.join(root, "ws");
+
+    // Create hook where the body cites x (not hooks.python), and registration cites hooks.python
+    const hookBaseBParamsOnly: IngredientSpec = {
+      meta: {
+        type: "hook",
+        name: "guard-path",
+        files: ["guard-path.py"],
+        targets: ["claude-code"],
+        params: {
+          "hooks.python": { default: "python3" },
+          x: {}, // no default, profile sets it
+        },
+        registration: [
+          {
+            event: "PreToolUse",
+            command: "{{hooks.python}}",
+            args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py"],
+          },
+        ],
+      },
+      files: { "guard-path.py": 'print("{{x}}")\n' }, // body only cites x
+    };
+
+    await makeForge(forgeDir, {
+      ingredients: [hookBaseBParamsOnly],
+      recipes: [recipe("base", ["hook/guard-path"])],
+      profiles: [profile("acme", ["base"], ["claude-code"], { params: { x: "one" } })], // profile sets x
+    });
+    gitInit(forgeDir);
+
+    // Sync workspace
+    await makeWorkspace(wsDir, forgeDir, { config: { profile: "acme" } });
+    expect(runCli(["sync", "--workspace", wsDir]).code).toBe(0);
+
+    // File should render x=one
+    const before = await fs.readFile(path.join(wsDir, ".claude/hooks/guard-path.py"), "utf8");
+    expect(before).toBe('print("one")\n');
+
+    // Hand-edit to x=two
+    await fs.writeFile(path.join(wsDir, ".claude/hooks/guard-path.py"), 'print("two")\n');
+
+    // Promote — should infer params outcome, NOT create a variant
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-tmp-"));
+    cleanups.push(() => fs.rm(tmp, { recursive: true, force: true }));
+
+    const P = ["drift", "promote", ".claude/hooks/guard-path.py", "--workspace", wsDir, "--json"];
+    const r = runCli(P, { env: { TMPDIR: tmp, TEMP: tmp, TMP: tmp } });
+
+    expect(r.code).toBe(0);
+    const out = JSON.parse(r.stdout);
+
+    // Should be params outcome, not variant
+    expect(out.outcome).toBe("params");
+    expect(out.params).toEqual([{ key: "x", old: "one", value: "two" }]);
+
+    // No variant directory should exist
+    const variantDir = path.join(forgeDir, "ingredients/hooks/guard-path--acme");
+    const variantExists = await fs.stat(variantDir).then(() => true, () => false);
+    expect(variantExists).toBe(false);
+
+    // The base's ingredient.yaml should be unchanged (registration still there)
+    const baseMetaRaw = await fs.readFile(path.join(forgeDir, "ingredients/hooks/guard-path/ingredient.yaml"), "utf8");
+    const baseMeta = YAML.parse(baseMetaRaw);
+    expect(baseMeta.registration).toEqual([
+      {
+        event: "PreToolUse",
+        command: "{{hooks.python}}",
+        args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py"],
+      },
+    ]);
+    expect(baseMeta.params).toEqual({
+      "hooks.python": { default: "python3" },
+      x: {},
+    });
+
+    // Profile should have x: "two" now
+    const profileMeta = await yaml(path.join(forgeDir, "profiles/acme/profile.yaml"));
+    expect(profileMeta.params.x).toBe("two");
+  });
 });
 
 describe("forge unify — take:param refused on registration-cited key (spec 43 §7.2 row 8)", () => {

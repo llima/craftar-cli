@@ -66,7 +66,7 @@ import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { registrationCitations } from "../core/mcp-server.js";
 import type { WriteJournal } from "../core/unify.js";
-import type { Ingredient, IngredientRef, Lock } from "../schema/index.js";
+import { stripForgeOnlyKeys, type Ingredient, type IngredientRef, type Lock } from "../schema/index.js";
 
 // The scratch copy lives in core, where `forge promote` shares it (spec 29, slice D); it stays exported from here.
 export { copyForgeForProof };
@@ -715,14 +715,13 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   }
   if (!emitted) throw new Error(`cannot read ${readType} ${outputName} from ${claudeDir}`);
 
-  // Source metadata: X's own, but re-read certain fields; drop params
-  const sourceMeta: Ingredient = {
+  // Source metadata: X's own, but re-read certain fields; strip Forge-only keys (params, authEnv, registration)
+  // so decide/shapeDiffers/renderedFingerprint compare apples to apples (spec 43 §7.2).
+  const sourceMeta: Ingredient = stripForgeOnlyKeys({
     ...X.meta,
     // A base with no frontmatterRaw may hold its `paths:` in its body (imported before rules kept it apart)
     ...emittedMetaFields(emitted.meta, readType, X.meta, meta.type === "rule" && meta.frontmatterRaw === undefined ? await readIngredientText(X, meta.file) : null, emitted.files["rule.md"]),
-  } as Ingredient;
-  // Remove params from source (sources carry none)
-  if ("params" in sourceMeta) delete (sourceMeta as Record<string, unknown>).params;
+  }) as Ingredient;
 
   // D9: Secret check
   const secret = secretIn(sourceMeta, emitted.files, emitted.scan);
