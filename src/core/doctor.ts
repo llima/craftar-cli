@@ -11,7 +11,7 @@ import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, frag
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK } from "./sync.js";
-import { outName, MCP_FILE, renderRegistration } from "../emitters/shared.js";
+import { outName, MCP_FILE, renderRegistration, EXAMPLE_SETTINGS } from "../emitters/shared.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram } from "./proc.js";
 
@@ -933,7 +933,7 @@ async function hooksRegistered(
         "hooks-registered",
         "warn",
         `${entry.ref}: registration ${entry.index} (${entry.event}) is in no settings file Claude Code reads`,
-        "copy it from .claude/settings.craftar.example.json into .claude/settings.json",
+        `copy it from ${EXAMPLE_SETTINGS} into .claude/settings.json`,
       );
     }
   }
