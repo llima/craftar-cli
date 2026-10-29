@@ -3628,7 +3628,7 @@ describe("cli — a remote Forge, the cases the review asked for (spec 13 §10.2
   it("a relative CRAFTAR_HOME resolves from the current directory", async () => {
     const { r, ws } = await remoteWs();
     const cwd = await tmpDir("craftar-cwd-");
-    cleanups.push(() => fs.rm(cwd, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(cwd));
     const x = runCli(["status", "--workspace", ws], { cwd, env: { CRAFTAR_HOME: "relhome" } });
     expect(x.code).toBe(0);
     expect(await fs.readdir(path.join(cwd, "relhome", "forges"))).toHaveLength(1);

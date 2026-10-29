@@ -5,6 +5,7 @@ import { againLine, askInit, confirmInit, type InitIo } from "../src/core/init-f
 import { planInit } from "../src/core/init.js";
 import YAML from "yaml";
 import { makeForge, profile, recipe, rule, tmpDir, type ForgeSpec } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { git, remoteForge } from "./helpers/remote.js";
 
 // Spec 38 §4.3 — the interactive flow, through InitIo with scripted answers (spec 28 §9.2: the suite cannot drive a
@@ -21,7 +22,7 @@ const SPEC: ForgeSpec = {
 };
 async function setup(opts: { spec?: ForgeSpec; git?: boolean } = {}) {
   const parent = await fs.realpath(await tmpDir("craftar-np-flow-"));
-  cleanups.push(() => fs.rm(parent, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(parent));
   const forge = path.join(parent, "forge");
   await makeForge(forge, opts.spec ?? SPEC);
   if (opts.git !== false) {
