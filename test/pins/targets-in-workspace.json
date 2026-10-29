@@ -67,9 +67,10 @@
         "hook": {
           "state": "native",
           "output": [
-            ".claude/hooks/<file>"
+            ".claude/hooks/<file>",
+            ".claude/settings.craftar.example.json"
           ],
-          "note": null
+          "note": "the registration is written to .claude/settings.craftar.example.json, to copy"
         },
         "service": {
           "state": "unsupported",
