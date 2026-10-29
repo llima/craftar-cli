@@ -413,6 +413,142 @@ describe("hooks-registered check (spec 43 §6)", () => {
       c.level === "warn" && c.message.includes("registration cites .claude/hooks/other.py")
     )).toBe(true);
   });
+
+  it("A1. two entries: one cites unset param → not checked; other cites nothing → warn", async () => {
+    // H with two registration entries: entry 0 cites {{hooks.python}} (unset), entry 1 cites nothing
+    const hookTwoEntries: IngredientSpec = {
+      meta: {
+        type: "hook",
+        name: "guard-path",
+        files: ["guard-path.py"],
+        params: { "hooks.python": {} }, // No default, no value → unset
+        registration: [
+          {
+            event: "PreToolUse",
+            matcher: "Bash|PowerShell",
+            command: "{{hooks.python}}",
+            args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py"],
+            timeout: 10,
+          },
+          {
+            event: "Stop",
+            command: "true", // Cites nothing
+          },
+        ],
+      },
+      files: { "guard-path.py": 'print("ok")\n' },
+    };
+    const f = await fixture([hookTwoEntries]);
+    // No settings files
+    const r = await run({ home, workspace: f.wsRoot, claudeUserDir: claudeDir });
+    const hooksChecks = of(r.checks, "hooks-registered");
+
+    // Entry 0: ok, not checked because it cites the unset param
+    const entry0 = hooksChecks.find((c) =>
+      c.message.includes("registration 0 (PreToolUse)") && c.message.includes("not checked")
+    );
+    expect(entry0, "entry 0 should be marked not checked").toBeDefined();
+    expect(entry0!.level).toBe("ok");
+    expect(entry0!.message).toBe(
+      "hook/guard-path: registration 0 (PreToolUse) not checked — a declared parameter has no value (see params)"
+    );
+
+    // Entry 1: warn, because it does NOT cite the unset param (so it IS checked) and is not in a settings file
+    const entry1 = hooksChecks.find((c) =>
+      c.message.includes("registration 1 (Stop)") && c.message.includes("is in no settings file")
+    );
+    expect(entry1, "entry 1 should be warned as not in settings file").toBeDefined();
+    expect(entry1!.level).toBe("warn");
+    expect(entry1!.message).toBe(
+      "hook/guard-path: registration 1 (Stop) is in no settings file Claude Code reads"
+    );
+  });
+
+  it("A2. two hooks: A has unset param → not checked; B has default and is found → ok", async () => {
+    // Hook A: declares k: {} (no value) and cites it
+    const hookA: IngredientSpec = {
+      meta: {
+        type: "hook",
+        name: "hook-a",
+        files: ["a.sh"],
+        params: { k: {} }, // No default, no value → unset
+        registration: [
+          {
+            event: "PreToolUse",
+            command: "{{k}}",
+          },
+        ],
+      },
+      files: { "a.sh": "echo a\n" },
+    };
+
+    // Hook B: declares k: { default: "x" }, cites {{k}} in its command
+    const hookB: IngredientSpec = {
+      meta: {
+        type: "hook",
+        name: "hook-b",
+        files: ["b.sh"],
+        params: { k: { default: "x" } }, // Has default
+        registration: [
+          {
+            event: "Stop",
+            command: "{{k}}", // Renders to "x"
+          },
+        ],
+      },
+      files: { "b.sh": "echo b\n" },
+    };
+
+    const root = mkdtempSync(path.join(os.tmpdir(), "craftar-doctor-hooks-a2-"));
+    cleanups.push(() => removeWithRetry(root));
+    const forge: ForgeSpec = {
+      ingredients: [hookA, hookB],
+      recipes: [recipe("base", ["hook/hook-a", "hook/hook-b"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    };
+    const forgeRoot = path.join(root, "forge");
+    await makeForge(forgeRoot, forge);
+    const wsRoot = path.join(root, "ws");
+    await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
+
+    // Write settings file with B's rendered handler (command "x")
+    await writeFiles(wsRoot, {
+      ".claude/settings.json": JSON.stringify({
+        hooks: {
+          Stop: [
+            {
+              hooks: [{ type: "command", command: "x" }],
+            },
+          ],
+        },
+      }),
+    });
+
+    const r = await run({ home, workspace: wsRoot, claudeUserDir: claudeDir });
+    const hooksChecks = of(r.checks, "hooks-registered");
+
+    // Hook A's entry: not checked (cites unset param)
+    const entryA = hooksChecks.find((c) =>
+      c.message.includes("hook/hook-a") && c.message.includes("not checked")
+    );
+    expect(entryA, "hook A's entry should be not checked").toBeDefined();
+    expect(entryA!.level).toBe("ok");
+    expect(entryA!.message).toBe(
+      "hook/hook-a: registration 0 (PreToolUse) not checked — a declared parameter has no value (see params)"
+    );
+
+    // Hook B's entry: should be found (no warn for B)
+    const warnForB = hooksChecks.filter(
+      (c) => c.message.includes("hook/hook-b") && c.level === "warn"
+    );
+    expect(warnForB, "hook B should NOT have a warn").toHaveLength(0);
+
+    // Should have an "ok" summary line (since all checked entries were found)
+    const okSummary = hooksChecks.find((c) =>
+      c.level === "ok" && c.message === "every hook registration is in a settings file"
+    );
+    expect(okSummary, "should have ok summary since B's entry was found").toBeDefined();
+  });
 });
 
 describe("CLI tests for hooks-registered", () => {

@@ -426,7 +426,7 @@ async function workspaceChecks(
       }
 
       // hooks-registered: present only when the plan writes at least one registration (spec 43 §6)
-      await hooksRegistered(root, p, ws.forge.manifest.schema, declaredUnset, opts, w, env);
+      await hooksRegistered(root, p, opts, w, env);
     }
 
     // docker, services-env: present only when the plan or the lock has a service (spec 31 §4.7)
@@ -829,8 +829,6 @@ function handlerInSettings(
 async function hooksRegistered(
   root: string,
   p: Plan,
-  schema: 1 | 2 | 3 | 4 | 5,
-  declaredUnset: Map<string, string[]>,
   opts: DoctorOptions,
   w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void,
   env: NodeJS.ProcessEnv,
@@ -852,9 +850,6 @@ async function hooksRegistered(
     for (let i = 0; i < hookMeta.registration.length; i++) {
       const entry = hookMeta.registration[i];
 
-      // Check if any declared param is unset
-      const hasMissing = Object.keys(declared).some((k) => declaredUnset.has(k));
-
       // Render the entry using renderLeaves (spec 43 §4.3)
       const toRender: Record<string, unknown> = {};
       if (entry.command) toRender.command = entry.command;
@@ -863,6 +858,9 @@ async function hooksRegistered(
 
       const rendered = renderLeaves(toRender, declared, params, ing.ref);
       const renderedValue = rendered.value as typeof toRender;
+
+      // Check if this entry's render left a declared key with no value (spec 43 §6)
+      const hasMissing = rendered.missing.length > 0;
 
       // Build the handler object with keys in spec order
       const handler: Record<string, unknown> = Object.create(null);
