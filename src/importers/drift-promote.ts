@@ -754,6 +754,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     markedBase: false,
     // A file agents-md.primary reworded is refused before this point (D20); any other source holds no rewording.
     primaryRefs: null,
+    // Drift promote always works with .claude/ files (spec 41 Part B §5.2)
+    sourceTarget: "claude-code",
   };
 
   const fingerprint = fingerprintOf(validateImported(sourceMeta), emitted.files);

@@ -6,7 +6,7 @@ import { exists, listFiles, loadForge, readIngredientText, type Forge } from "..
 import { hashNormalized, stripBom, toLf } from "../core/text.js";
 import { deepMerge } from "../core/merge.js";
 import { citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
-import { canonicalValue, inferSections } from "../core/sections.js";
+import { canonicalValue, inferSections, projectSections, readsTargetSections, type Owner } from "../core/sections.js";
 import { errorText } from "../core/schema-fault.js";
 import { sectionKey } from "../core/resolve.js";
 import { registrationCitations, rendersServers, serverCitations } from "../core/mcp-server.js";
@@ -42,6 +42,8 @@ export interface RunContext {
   primaryRefs: ((text: string, citing: string) => string) | null;
   /** Whether a source was decided against a base holding a section marker — the run then needs `schema: 2` (spec 11 §6.14, Ruling 22). */
   markedBase: boolean;
+  /** The source target for section projection (spec 41 Part B §5.2): "claude-code" for .claude/ sources, "kiro" for --prefer-kiro. Default "claude-code". */
+  sourceTarget: Owner;
 }
 
 /** One entry of a section change `Δs` (spec 11 §3); `old` is the profile's value before, or null when it did not set it. */
@@ -126,7 +128,10 @@ export async function decide(
   runBases: Set<string>,
 ): Promise<Decision> {
   // The Forge root, for the file an I12 names: every base lives at <forge>/ingredients/<folder>/<name>.
-  const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."));
+  const schema = ctx.forge?.manifest.schema ?? 1;
+  const parseOpts = { targets: readsTargetSections({ schema }) };
+  const owner = ctx.sourceTarget;
+  const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."), parseOpts);
   // The base's authEnv, to carry into the variant answer (spec 27 §5.3).
   const baseAuthEnv = base.meta.type === "mcp" ? base.meta.authEnv : undefined;
   // The base's registration and cited params, to carry into the variant answer (spec 43 §7.2 row 10).
@@ -142,8 +147,7 @@ export async function decide(
     return result;
   };
 
-  // Spec 34 §5.2: schema and the declared server citations (at the gate, else []).
-  const schema = ctx.forge?.manifest.schema ?? 1;
+  // Spec 34 §5.2: the declared server citations (at the gate, else []).
   const serverKeys = rendersServers({ schema }) ? serverCitations(base.meta).filter((c) => c.declared).map((c) => c.key) : [];
 
   const key = sectionKey(base.meta);
@@ -154,7 +158,7 @@ export async function decide(
   const names = sectionNames(base);
   // Whatever the outcome — reuse, section inference, variant or a G1 literal comparison — the Forge holds these markers after the run.
   if (names.length) ctx.markedBase = true;
-  const cited = citedKeys(expandedTexts(base, S));
+  const cited = citedKeys(expandedTexts(base, S, owner));
 
   // G1: a recipe default the render cannot see — compare literally, as 0.5.0 did.
   if (ctx.forge) {
@@ -174,7 +178,7 @@ export async function decide(
   }
 
   const map = renderMap(base.meta, ctx.P, ctx.W);
-  if (renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined) === fingerprint) {
+  if (renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined, owner) === fingerprint) {
     pin(ctx, [...cited, ...serverKeys], map);
     const changed = [...cited].filter((k) => Object.hasOwn(map, k));
     const filled = names.filter((n) => Object.hasOwn(S, n));
@@ -182,10 +186,10 @@ export async function decide(
   }
 
   // Param inference first (Ruling 16): the narrower claim. A base with no open section stops there, as in 0.6.2.
-  const param = await inferParams(ctx, base, S, map, cited, ref, meta, files, fingerprint, others, runBases, schema);
+  const param = await inferParams(ctx, base, S, map, cited, ref, meta, files, fingerprint, others, runBases, schema, owner);
   const open = names.filter((n) => !Object.hasOwn(WSk, n));
   if (param.kind === "reuse" || !open.length) return withAuthEnv(param);
-  return withAuthEnv(inferSectionValues(ctx, base, key, PSk, WSk, map, ref, meta, files, fingerprint, schema));
+  return withAuthEnv(inferSectionValues(ctx, base, key, PSk, WSk, map, ref, meta, files, fingerprint, schema, owner));
 }
 
 /** A key's section values in a layer, or none. */
@@ -217,6 +221,7 @@ async function inferParams(
   others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>,
   runBases: Set<string>,
   schema: ForgeSchema,
+  owner: Owner,
 ): Promise<Decision> {
   // Holes (§3): declared, not reserved, not set by the workspace layer, and not pinned — a key this run already relied
   // on renders at its current value, like any fixed key (§6.5, §14 Q13).
@@ -230,7 +235,7 @@ async function inferParams(
 
   const fixed: Record<string, unknown> = Object.create(null);
   for (const [k, v] of Object.entries(map)) if (!holes.has(k)) fixed[k] = v;
-  const templates = expandedTexts(base, S);
+  const templates = expandedTexts(base, S, owner);
   const sources = new Map([...base.texts.keys()].map((rel) => [rel, textOf(files[rel])]));
   const r = infer(templates, sources, holes, fixed);
   if ("fallback" in r) {
@@ -256,7 +261,7 @@ async function inferParams(
     .map(([key, value]) => ({ key, old: valueOf(ctx.P, key) ?? null, value }));
 
   // F10: the proof, through the same expansion and substitution ctx.text uses.
-  if (renderedFingerprint(base, { ...map, ...sigma }, S, schema, ctx.primaryRefs ?? undefined) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
+  if (renderedFingerprint(base, { ...map, ...sigma }, S, schema, ctx.primaryRefs ?? undefined, owner) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
 
   // F9: a profile change must not move anything else the profile renders — its files, or a section value
   // that applies to it under this profile or workspace (spec 11 §6.11).
@@ -312,20 +317,23 @@ function inferSectionValues(
   files: Record<string, string | Buffer>,
   fingerprint: string,
   schema: ForgeSchema,
+  owner: Owner,
 ): Decision {
   const shape = shapeDiffers(base, meta, files);
   if (shape) return { kind: "variant", why: shape };
   const sigma: Record<string, string> = {};
   const defaults = new Map<string, string>();
   for (const [rel, parsed] of base.parsed) {
-    const r = inferSections(parsed, textOf(files[rel]), WSk, map);
+    // Project sections for the owner before inferring (spec 41 Part B §5.2)
+    const projected = projectSections(parsed, owner);
+    const r = inferSections(projected, textOf(files[rel]), WSk, map);
     if ("fallback" in r) return { kind: "variant", why: r.reason };
     Object.assign(sigma, r.values);
-    for (const s of parsed.sections) defaults.set(s.name, s.default);
+    for (const s of projected.sections) defaults.set(s.name, s.default);
   }
   const S = { ...PSk, ...WSk, ...sigma };
   // F14: the proof, through the same expansion and substitution ctx.text uses.
-  if (renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
+  if (renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined, owner) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
 
   const assigned = sectionNames(base).filter((n) => Object.hasOwn(sigma, n));
   const sectionDelta: SectionChange[] = [];
@@ -338,7 +346,7 @@ function inferSectionValues(
     for (const d of sectionDelta) next[d.name] = d.value;
     ctx.PS[key] = next;
   }
-  pin(ctx, citedKeys(expandedTexts(base, S)), map);
+  pin(ctx, citedKeys(expandedTexts(base, S, owner)), map);
   return { kind: "reuse", sectioned: assigned, sectionDelta };
 }
 

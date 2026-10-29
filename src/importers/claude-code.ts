@@ -144,6 +144,8 @@ interface Source {
   skip?: () => boolean;
   /** Lines of the source file above the text in `files`, when it is not the file's own top (a rule read from its steering mirror). */
   lineOffset?: number;
+  /** The source target for section projection (spec 41 Part B §5.2): "claude-code" for .claude/ sources, "kiro" for --prefer-kiro. */
+  sourceTarget?: "claude-code" | "kiro";
 }
 
 interface PlannedConfig {
@@ -359,6 +361,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     forge: loaded,
     markedBase: false,
     primaryRefs: null,
+    sourceTarget: "claude-code",
   };
   const primary = await primaryFor(loaded, opts.profileName, ctx, ws, readWs);
   ctx.primaryRefs = primary?.refs ?? null;
@@ -406,6 +409,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       q.scan = scanOf("rule.md", sm);
       q.lineOffset = offset;
       q.meta = { ...q.meta, origin: origin(source) };
+      q.sourceTarget = "kiro"; // Spec 41 Part B §5.2: prefer-kiro rules infer from kiro's view of the sections
       // A steering body written before rules kept their frontmatter apart still holds the fence: the
       // text then carries it, as it did, and the rule's own copy is dropped so the file is not written twice.
       if ("frontmatterRaw" in q.meta && q.meta.frontmatterRaw !== undefined && parseFrontmatter(text).raw !== null) {
@@ -470,9 +474,13 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   for (const src of queue) {
     if (src.skip?.()) continue;
     const others = mayBeDecided.filter((q) => q !== src).map((q) => ({ ref: `${q.meta.type}/${q.meta.name}`, meta: q.meta, files: q.files }));
+    // Spec 41 Part B §5.2: use the source's target for section projection (kiro for --prefer-kiro, else claude-code)
+    ctx.sourceTarget = src.sourceTarget ?? "claude-code";
     const ref = await writeIngredient(stage, src.meta, src.files, opts.profileName, report, src.scan, { ctx, others, runBases, literal, lineOffset: src.lineOffset });
     if (ref) src.after(ref);
   }
+  // Reset sourceTarget to claude-code for any remaining operations
+  ctx.sourceTarget = "claude-code";
 
   // I3: a created or variant ingredient is the workspace text itself; a key the profile now sets would change it at sync.
   // I11 first (spec 11 §6.9): a column-0 marker in that text would be read as structure, so sync could not reproduce it.

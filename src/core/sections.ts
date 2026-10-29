@@ -1,4 +1,5 @@
 import { FORGE_SCHEMA_TARGET_SECTIONS, SECTION_NAME, TARGETS, type Owner, type Target } from "../schema/index.js";
+export type { Owner };
 import { FORGE_MANIFEST } from "./forge.js";
 import { substitute } from "./resolve.js";
 import { placeholders } from "./extract.js";

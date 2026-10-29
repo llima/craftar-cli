@@ -5,7 +5,7 @@ import { fingerprintOf, type DirReader } from "./fingerprint.js";
 import { parseYaml } from "./forge.js";
 import { renderServer, rendersServers } from "./mcp-server.js";
 import { substitute } from "./resolve.js";
-import { checkDeclaredOnce, expandSections, parseSections, SectionMarkerError, type ParsedSections } from "./sections.js";
+import { checkDeclaredOnce, expandSections, parseSections, SectionMarkerError, type ParsedSections, type ParseSectionsOptions, type Owner } from "./sections.js";
 import { stripBom, toLf } from "./text.js";
 import { claudeResolves } from "../emitters/claude-code.js";
 
@@ -40,9 +40,9 @@ export interface ImportBase {
 /**
  * Read a base. Every body file is parsed for section markers; a malformed one, or a name
  * declared twice across the ingredient's files, is I12 (spec 11 §4.5). `forgeRoot`, when given,
- * makes the file the error names Forge-relative.
+ * makes the file the error names Forge-relative. `opts`, when given, is passed to `parseSections`.
  */
-export async function readBase(dir: string, io: DirReader, forgeRoot?: string): Promise<ImportBase> {
+export async function readBase(dir: string, io: DirReader, forgeRoot?: string, opts?: ParseSectionsOptions): Promise<ImportBase> {
   const metaFile = path.join(dir, "ingredient.yaml");
   const meta = parseYaml(metaFile, await io.readText(metaFile), IngredientSchema);
   const texts = new Map<string, string>();
@@ -55,7 +55,7 @@ export async function readBase(dir: string, io: DirReader, forgeRoot?: string): 
       if (bodyFile(meta, rel, dir)) {
         const text = norm(await io.readText(path.join(dir, rel)));
         texts.set(rel, text);
-        parsed.set(rel, parseSections(text, label(rel), `${meta.type}/${meta.name}`));
+        parsed.set(rel, parseSections(text, label(rel), `${meta.type}/${meta.name}`, opts));
       } else bytes.set(rel, await io.readBytes(path.join(dir, rel)));
     }
     checkDeclaredOnce(`${meta.type}/${meta.name}`, [...parsed.values()]);
@@ -71,12 +71,12 @@ export function sectionNames(base: ImportBase): string[] {
   return [...base.parsed.values()].flatMap((p) => p.sections.map((s) => s.name));
 }
 
-/** The base's body files with their sections expanded by `values` (spec 11 §6.2) — what sync substitutes into. */
-export function expandedTexts(base: ImportBase, values: Record<string, string> = {}): Map<string, string> {
+/** The base's body files with their sections expanded by `values` (spec 11 §6.2) — what sync substitutes into. With `owner`, calls `projectSections` first. */
+export function expandedTexts(base: ImportBase, values: Record<string, string> = {}, owner?: Owner): Map<string, string> {
   const out = new Map<string, string>();
   for (const [rel, text] of base.texts) {
     const p = base.parsed.get(rel);
-    out.set(rel, p ? expandSections(p, values) : text);
+    out.set(rel, p ? expandSections(p, values, owner) : text);
   }
   return out;
 }
@@ -97,6 +97,7 @@ export function citedKeys(texts: Map<string, string>): Set<string> {
  * `refs`, given when the importing workspace is under agents-md.primary (spec 41 §4.10), rewords rule references as the
  * claude-code emitter does: in the files `claudeResolves` names and, for an agent or a command, in `frontmatterRaw` and
  * `description` — a source's description is read back from the frontmatter the emitter reworded.
+ * `owner`, when given, projects sections for that target before expanding (spec 41 Part B §5.2).
  */
 export function renderedFingerprint(
   base: ImportBase,
@@ -104,6 +105,7 @@ export function renderedFingerprint(
   sections: Record<string, string> = {},
   schema: ForgeSchema = 1,
   refs?: (text: string, citing: string) => string,
+  owner: Owner = "claude-code",
 ): string {
   // At the gate, render the server before stripForgeOnlyKeys (it needs params).
   let meta: Ingredient;
@@ -119,7 +121,7 @@ export function renderedFingerprint(
     if (meta.description !== undefined) meta.description = refs(meta.description, citing);
   }
   const files: Record<string, string | Buffer> = {};
-  for (const [rel, text] of expandedTexts(base, sections)) {
+  for (const [rel, text] of expandedTexts(base, sections, owner)) {
     const out = substitute(text, map);
     files[rel] = refs && claudeResolves(base.meta, rel) ? refs(out, citing) : out;
   }
