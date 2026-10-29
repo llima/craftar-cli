@@ -549,6 +549,40 @@ describe("hooks-registered check (spec 43 §6)", () => {
     );
     expect(okSummary, "should have ok summary since B's entry was found").toBeDefined();
   });
+
+  it("B1. settings.json with UTF-8 BOM holding the planned handler → ok", async () => {
+    // A settings file with a BOM should be read correctly
+    const f = await fixture([fixtureH()]);
+    // Write settings.json with UTF-8 BOM prepended
+    const handlerJson = JSON.stringify(plannedHandlerCorrectOrder());
+    const bom = "\uFEFF"; // UTF-8 BOM
+    await fs.mkdir(path.join(f.wsRoot, ".claude"), { recursive: true });
+    await fs.writeFile(path.join(f.wsRoot, ".claude/settings.json"), bom + handlerJson, "utf8");
+    const r = await run({ home, workspace: f.wsRoot, claudeUserDir: claudeDir });
+    const hooksChecks = of(r.checks, "hooks-registered");
+    // Should NOT have a "cannot read" warning
+    const invalidCheck = hooksChecks.find((c) => c.message.includes("cannot read"));
+    expect(invalidCheck, "should not warn about BOM file").toBeUndefined();
+    // Should find the handler → ok
+    const check = one(r.checks, "hooks-registered");
+    expect(check.level).toBe("ok");
+    expect(check.message).toBe("every hook registration is in a settings file");
+  });
+
+  it("B2. settings.json is a directory → warn with unreadable (EISDIR)", async () => {
+    const f = await fixture([fixtureH()]);
+    // Create .claude/settings.json as a DIRECTORY
+    await fs.mkdir(path.join(f.wsRoot, ".claude/settings.json"), { recursive: true });
+    const r = await run({ home, workspace: f.wsRoot, claudeUserDir: claudeDir });
+    const hooksChecks = of(r.checks, "hooks-registered");
+    // Should have a warning about unreadable
+    const dirCheck = hooksChecks.find((c) =>
+      c.message.includes("cannot read") && c.message.includes("unreadable")
+    );
+    expect(dirCheck, "should warn about directory as unreadable").toBeDefined();
+    expect(dirCheck!.level).toBe("warn");
+    expect(dirCheck!.message).toBe("cannot read .claude/settings.json: unreadable (EISDIR)");
+  });
 });
 
 describe("CLI tests for hooks-registered", () => {

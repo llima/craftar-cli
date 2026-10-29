@@ -12,6 +12,7 @@ import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK } from "./sync.js";
 import { outName, MCP_FILE, renderRegistration, EXAMPLE_SETTINGS } from "../emitters/shared.js";
+import { stripBom } from "./text.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram } from "./proc.js";
 
@@ -768,15 +769,21 @@ async function readSettingsFile(
   filePath: string,
   label: string,
 ): Promise<{ value: unknown } | { error: string } | null> {
+  let text: string;
   try {
-    const text = await fs.readFile(filePath, "utf8");
-    const parsed = JSON.parse(text);
+    text = await fs.readFile(filePath, "utf8");
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") return null;
+    return { error: `cannot read ${label}: unreadable (${err.code})` };
+  }
+  try {
+    const parsed = JSON.parse(stripBom(text));
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       return { error: `cannot read ${label}: not a JSON object` };
     }
     return { value: parsed };
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+  } catch {
     return { error: `cannot read ${label}: not valid JSON` };
   }
 }
