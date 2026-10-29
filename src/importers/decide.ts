@@ -85,6 +85,30 @@ export function pin(ctx: RunContext, keys: Iterable<string>, map: Record<string,
 }
 
 /**
+ * Compute the registration and params to carry from a hook base into a variant.
+ * Returns the base's registration and only the params entries the registration cites (spec 43 §7.2 row 10).
+ * For a non-hook or a hook without registration, returns empty result.
+ */
+export function registrationCarry(meta: Ingredient): {
+  registration?: unknown[];
+  registrationParams?: Record<string, { default?: string | number | boolean; description?: string }>;
+} {
+  if (meta.type !== "hook") return {};
+  const registration = meta.registration;
+  if (!registration) return {};
+  const citations = registrationCitations(meta);
+  if (!citations.length) return { registration };
+  const citedDeclared = citations.filter((c) => c.declared).map((c) => c.key);
+  if (!citedDeclared.length) return { registration };
+  const declared = meta.params ?? {};
+  const registrationParams: Record<string, { default?: string | number | boolean; description?: string }> = {};
+  for (const k of citedDeclared) {
+    if (Object.hasOwn(declared, k)) registrationParams[k] = declared[k];
+  }
+  return { registration, registrationParams: Object.keys(registrationParams).length ? registrationParams : undefined };
+}
+
+/**
  * Decide an existing base against one source. `others` are the run's other sources that may be
  * decided, for the literal-citation check (§6.5 (c)); `runBases` are the refs of the sources it
  * will certainly decide, which the Forge-wide check excludes (§6.5 (b)). See the F9 comment in
@@ -105,21 +129,8 @@ export async function decide(
   const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."));
   // The base's authEnv, to carry into the variant answer (spec 27 §5.3).
   const baseAuthEnv = base.meta.type === "mcp" ? base.meta.authEnv : undefined;
-  // The base's registration, to carry into the variant answer (spec 43 §7.2 row 10).
-  const baseRegistration = base.meta.type === "hook" ? base.meta.registration : undefined;
-  // The params entries the base's registration cites, to carry into the variant (spec 43 §7.2 row 10).
-  const baseRegistrationParams = (() => {
-    const citations = registrationCitations(base.meta);
-    if (!citations.length) return undefined;
-    const citedDeclared = citations.filter((c) => c.declared).map((c) => c.key);
-    if (!citedDeclared.length) return undefined;
-    const declared = base.meta.params ?? {};
-    const result: Record<string, { default?: string | number | boolean; description?: string }> = {};
-    for (const k of citedDeclared) {
-      if (Object.hasOwn(declared, k)) result[k] = declared[k];
-    }
-    return result;
-  })();
+  // The base's registration and cited params, to carry into the variant answer (spec 43 §7.2 row 10).
+  const { registration: baseRegistration, registrationParams: baseRegistrationParams } = registrationCarry(base.meta);
   // Augment a variant decision with the base's authEnv for the importer to carry (spec 27 §5.3).
   // Also augment with registration and registrationParams for hooks (spec 43 §7.2 row 10).
   const withAuthEnv = (d: Decision): Decision => {

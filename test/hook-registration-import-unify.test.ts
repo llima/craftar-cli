@@ -822,6 +822,107 @@ describe("metaDifferences — hook with registration (spec 43 §7.2 row 9)", () 
   });
 });
 
+describe("import — literal path carries base registration (Task 13)", () => {
+  it("8. G1 literal path: hook variant created via decide() literal answer carries base registration", async () => {
+    // Task 13 bug: when decide() answers "literal" (e.g. G1: a recipe defaults a key the body cites),
+    // and the fingerprint differs, a NEW variant is created. But variantRegistration was only captured
+    // from a "variant" decision, not a "literal" one. This test proves the fix.
+
+    // Setup:
+    // - Hook base B with registration citing {{hooks.python}} and body citing {{x}}
+    // - Recipe `base` with params: { x: { default: "one" } } — so G1 triggers on x
+    // - Workspace with different hook file (fingerprint differs)
+    // Result: decide() returns { kind: "literal", warn: "... compared literally" },
+    //         fingerprint differs, so a new variant is created.
+    // BUG: the variant was created without registration or params.
+    // FIX: read base's ingredient.yaml and call registrationCarry().
+
+    const root = await tmpDir("craftar-import-literal-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeDir = path.join(root, "forge");
+    const wsDir = path.join(root, "ws");
+
+    // Hook base: registration cites {{hooks.python}}, body cites {{x}}
+    const hookBaseLiteral: IngredientSpec = {
+      meta: {
+        type: "hook",
+        name: "guard-path",
+        files: ["guard-path.py"],
+        targets: ["claude-code"],
+        params: {
+          "hooks.python": { default: "python3" },
+          x: { default: "default-x" },
+        },
+        registration: [
+          {
+            event: "PreToolUse",
+            command: "{{hooks.python}}",
+            args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py"],
+          },
+        ],
+      },
+      files: {
+        "guard-path.py": 'print("{{x}}")\n', // body cites x
+      },
+    };
+
+    // Recipe gives x a default → triggers G1
+    const recipeWithXDefault = {
+      name: "base",
+      ingredients: ["hook/guard-path"],
+      params: { x: { default: "one" } },
+    };
+
+    await makeForge(forgeDir, {
+      ingredients: [hookBaseLiteral],
+      recipes: [recipeWithXDefault],
+      profiles: [profile("acme", ["base"])],
+    });
+
+    // Create workspace with different hook file (does NOT match the rendered template)
+    // This ensures fingerprint differs after G1 returns literal
+    await writeFiles(wsDir, {
+      ".claude/hooks/guard-path.py": "# completely different script\nimport sys\n",
+    });
+
+    // Import
+    const r = await importInto(forgeDir, wsDir, "acme");
+
+    // Should get the G1 warning
+    expect(r.warnings.some((w) => w.includes("compared literally"))).toBe(true);
+
+    // Should be a variant
+    expect(r.variants.map((v) => v.name)).toContain("hook/guard-path--acme");
+
+    // Read the variant's ingredient.yaml
+    const variantMeta = await yaml(path.join(forgeDir, "ingredients/hooks/guard-path--acme/ingredient.yaml"));
+
+    // CRITICAL: Should have registration from base (THIS IS WHAT WAS BROKEN)
+    expect(variantMeta.registration).toEqual([
+      {
+        event: "PreToolUse",
+        command: "{{hooks.python}}",
+        args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py"],
+      },
+    ]);
+
+    // CRITICAL: Should have ONLY hooks.python in params (cited by registration)
+    // NOT x (which is only in the body, not in registration)
+    expect(variantMeta.params).toEqual({ "hooks.python": { default: "python3" } });
+
+    // Verify sync writes the example file with rendered command
+    await makeWorkspace(wsDir, forgeDir, { config: { profile: "acme" } });
+    const ws = await loadWorkspace(wsDir);
+    const p = await plan(ws);
+
+    const exampleFile = p.files.find((f) => f.path === ".claude/settings.craftar.example.json");
+    expect(exampleFile).toBeDefined();
+    const content = JSON.parse(typeof exampleFile!.content === "string" ? exampleFile!.content : exampleFile!.content.toString("utf8"));
+    // Should have "command": "python3", not {{hooks.python}}
+    expect(content.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command).toBe("python3");
+  });
+});
+
 describe("import F9 — delta on key cited by another hook's registration (spec 43 §7.2 row 8)", () => {
   it("7. setting hooks.python would change another hook → variant", async () => {
     // Setup: two hooks, one's body can infer hooks.python, another's registration cites it

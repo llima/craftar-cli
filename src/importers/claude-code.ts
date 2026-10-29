@@ -17,7 +17,7 @@ import { classifyForge, credentialFault } from "../core/remote.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
-import { decide, forgeBefore, pin, sourceKeys, workspaceParams, workspaceSections, workspaceTargets, type RunContext } from "./decide.js";
+import { decide, forgeBefore, pin, registrationCarry, sourceKeys, workspaceParams, workspaceSections, workspaceTargets, type RunContext } from "./decide.js";
 import { providedByBlock } from "./provided.js";
 import { renderMap } from "../core/template-import.js";
 import { firstMarkerLine } from "../core/sections.js";
@@ -1199,11 +1199,28 @@ async function writeIngredient(
           }
         }
       } else {
-        if (variantRegistration) {
-          meta = { ...meta, registration: variantRegistration } as Ingredient;
+        // NEW hook variant: inherit registration from base.
+        // variantRegistration/variantRegistrationParams come from decide()'s "variant" answer;
+        // when undefined (literal path), read the base's ingredient.yaml and call registrationCarry().
+        let regToApply = variantRegistration;
+        let paramsToApply = variantRegistrationParams;
+        if (regToApply === undefined) {
+          // Literal path: decide() answered "literal", so we didn't get registration from it.
+          // Read the base's ingredient.yaml and compute registration carry (spec 43 §7.2 row 10).
+          const baseDir = path.join(forge, "ingredients", folder, meta.name);
+          const baseFile = path.join(baseDir, "ingredient.yaml");
+          if (await stage.exists(baseFile)) {
+            const baseMeta = parseYaml(baseFile, await stage.readText(baseFile), IngredientSchema);
+            const carry = registrationCarry(baseMeta);
+            regToApply = carry.registration;
+            paramsToApply = carry.registrationParams;
+          }
         }
-        if (variantRegistrationParams) {
-          meta = { ...meta, params: variantRegistrationParams } as Ingredient;
+        if (regToApply) {
+          meta = { ...meta, registration: regToApply } as Ingredient;
+        }
+        if (paramsToApply) {
+          meta = { ...meta, params: paramsToApply } as Ingredient;
         }
       }
     }
