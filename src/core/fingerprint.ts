@@ -14,12 +14,6 @@ export function fingerprintOf(meta: Ingredient, files: Record<string, string | B
   delete m.origin;
   delete m.name;
   delete m.as;
-  // For hooks and scripts, strip targets and tags — they can't be expressed in the workspace file,
-  // so a workspace copy is compared by its files alone (spec 43 §7.2)
-  if (m.type === "hook" || m.type === "script") {
-    delete m.targets;
-    delete m.tags;
-  }
   const parts = [JSON.stringify(sortedDeep(m))];
   for (const k of Object.keys(files).sort()) parts.push(k, hashNormalized(files[k]));
   return hashNormalized(parts.join("\0"));
