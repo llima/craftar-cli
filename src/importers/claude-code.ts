@@ -1121,6 +1121,9 @@ async function writeIngredient(
   const sourceMeta = validateImported(meta);
   // The authEnv to carry into a variant — from the decision (spec 27 §5.3).
   let variantAuthEnv: string[] | undefined;
+  // The registration and cited params to carry into a hook variant — from the decision (spec 43 §7.2 row 10).
+  let variantRegistration: unknown[] | undefined;
+  let variantRegistrationParams: Record<string, { default?: string | number | boolean; description?: string }> | undefined;
   if (await stage.exists(path.join(dir, "ingredient.yaml"))) {
     let why: string | undefined;
     const d = run ? await decide(run.ctx, dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases) : { kind: "literal" as const, warn: "" };
@@ -1142,6 +1145,9 @@ async function writeIngredient(
       why = d.why;
       // Capture the base's authEnv for a new variant (spec 27 §5.3).
       variantAuthEnv = d.authEnv;
+      // Capture the base's registration and cited params for a new hook variant (spec 43 §7.2 row 10).
+      variantRegistration = d.registration;
+      variantRegistrationParams = d.registrationParams;
     }
     const as = meta.name;
     name = `${meta.name}--${profile}`;
@@ -1158,6 +1164,26 @@ async function writeIngredient(
         }
       } else if (variantAuthEnv) {
         meta = { ...meta, authEnv: variantAuthEnv } as Ingredient;
+      }
+    }
+    // Spec 43 §7.2 row 10: an existing hook variant's registration decides; a new one inherits the base's.
+    // Also carry the base's params entries the registration cites.
+    if (meta.type === "hook") {
+      if (await stage.exists(variantFile)) {
+        const existingMeta = parseYaml(variantFile, await stage.readText(variantFile), IngredientSchema);
+        if (existingMeta.type === "hook" && existingMeta.registration) {
+          meta = { ...meta, registration: existingMeta.registration } as Ingredient;
+        }
+        if (existingMeta.type === "hook" && existingMeta.params) {
+          meta = { ...meta, params: existingMeta.params } as Ingredient;
+        }
+      } else {
+        if (variantRegistration) {
+          meta = { ...meta, registration: variantRegistration } as Ingredient;
+        }
+        if (variantRegistrationParams) {
+          meta = { ...meta, params: variantRegistrationParams } as Ingredient;
+        }
       }
     }
     meta = { ...meta, name, as } as Ingredient;
@@ -1180,11 +1206,19 @@ async function writeIngredient(
   }
 
   // Build the YAML preserving key order. For MCP, authEnv sits immediately before server.
+  // For hooks, registration sits after files (spec 43 §7.2 row 10).
   const yamlMeta: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(meta)) {
     if (k === "authEnv") continue;
+    if (k === "registration") continue;
     // authEnv is emitted with server because only an mcp metadata can hold it (the schema refuses it elsewhere).
     if (k === "server" && "authEnv" in meta) yamlMeta.authEnv = meta.authEnv;
+    // registration is emitted after files for hooks (spec 43 §7.2 row 10).
+    if (k === "files" && meta.type === "hook" && "registration" in meta) {
+      yamlMeta[k] = v;
+      yamlMeta.registration = meta.registration;
+      continue;
+    }
     yamlMeta[k] = v;
   }
   stage.write(path.join(dir, "ingredient.yaml"), YAML.stringify(yamlMeta, { lineWidth: 0 }));

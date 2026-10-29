@@ -9,7 +9,7 @@ import { citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerpri
 import { canonicalValue, inferSections } from "../core/sections.js";
 import { errorText } from "../core/schema-fault.js";
 import { sectionKey } from "../core/resolve.js";
-import { rendersServers, serverCitations } from "../core/mcp-server.js";
+import { citationsIn, rendersServers, serverCitations } from "../core/mcp-server.js";
 import type { DirReader } from "../core/fingerprint.js";
 import { OverridesParamsSchema, SectionsSchema, WorkspaceConfigSchema, stripForgeOnlyKeys, type Ingredient, type Sections, type Target } from "../schema/index.js";
 
@@ -64,7 +64,7 @@ export type Decision =
       sectioned?: string[];
       sectionDelta?: SectionChange[];
     }
-  | { kind: "variant"; why?: string; authEnv?: string[] }
+  | { kind: "variant"; why?: string; authEnv?: string[]; registration?: unknown[]; registrationParams?: Record<string, { default?: string | number | boolean; description?: string }> }
   | { kind: "literal"; warn: string };
 
 const norm = (s: string) => toLf(stripBom(s));
@@ -105,8 +105,35 @@ export async function decide(
   const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."));
   // The base's authEnv, to carry into the variant answer (spec 27 §5.3).
   const baseAuthEnv = base.meta.type === "mcp" ? base.meta.authEnv : undefined;
+  // The base's registration, to carry into the variant answer (spec 43 §7.2 row 10).
+  const baseRegistration = base.meta.type === "hook" ? base.meta.registration : undefined;
+  // The params entries the base's registration cites, to carry into the variant (spec 43 §7.2 row 10).
+  const baseRegistrationParams = (() => {
+    if (base.meta.type !== "hook" || !base.meta.registration || !base.meta.params) return undefined;
+    const declared = base.meta.params;
+    const citedKeys = new Set<string>();
+    for (const entry of base.meta.registration) {
+      for (const c of citationsIn(entry, declared, ref)) {
+        if (c.declared) citedKeys.add(c.key);
+      }
+    }
+    if (citedKeys.size === 0) return undefined;
+    const result: Record<string, { default?: string | number | boolean; description?: string }> = {};
+    for (const k of citedKeys) {
+      if (Object.hasOwn(declared, k)) result[k] = declared[k];
+    }
+    return result;
+  })();
   // Augment a variant decision with the base's authEnv for the importer to carry (spec 27 §5.3).
-  const withAuthEnv = (d: Decision): Decision => (d.kind === "variant" && baseAuthEnv ? { ...d, authEnv: baseAuthEnv } : d);
+  // Also augment with registration and registrationParams for hooks (spec 43 §7.2 row 10).
+  const withAuthEnv = (d: Decision): Decision => {
+    if (d.kind !== "variant") return d;
+    let result = d;
+    if (baseAuthEnv) result = { ...result, authEnv: baseAuthEnv };
+    if (baseRegistration) result = { ...result, registration: baseRegistration };
+    if (baseRegistrationParams) result = { ...result, registrationParams: baseRegistrationParams };
+    return result;
+  };
 
   // Spec 34 §5.2: schema and the declared server citations (at the gate, else []).
   const schema = ctx.forge?.manifest.schema ?? 1;
@@ -160,6 +187,7 @@ const valuesAt = (layer: Sections, key: string): Record<string, string> => (Obje
 /** F1, F2 (spec 10 §6.3): what no value can explain — metadata, the file set, a file compared as bytes. */
 function shapeDiffers(base: ImportBase, meta: Ingredient, files: Record<string, string | Buffer>): string | null {
   const metaOnly = stripForgeOnlyKeys({ ...base.meta });
+  // fingerprintOf already strips targets/tags for hooks/scripts (spec 43 §7.2)
   if (fingerprintOf(metaOnly as Ingredient, {}) !== fingerprintOf(meta, {})) return "metadata differs";
   const baseFiles = [...base.texts.keys(), ...base.bytes.keys()].sort();
   const srcFiles = Object.keys(files).sort();
@@ -230,6 +258,18 @@ async function inferParams(
   for (const { key } of delta) {
     if (ctx.forge) {
       for (const ing of ctx.forge.ingredients.values()) {
+        // F9 for hook registrations (spec 43 §7.2 row 8, ungated): check even for runBases ingredients
+        // because registrations are not imported from the workspace - they stay from the Forge.
+        // Only skip the current ingredient being decided.
+        if (ing.ref !== ref && ing.meta.type === "hook" && ing.meta.registration) {
+          const declared = ing.meta.params ?? {};
+          for (const entry of ing.meta.registration) {
+            const citations = citationsIn(entry, declared, ing.ref);
+            if (citations.some((c) => c.declared && c.key === key)) {
+              return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
+            }
+          }
+        }
         if (ing.ref === ref || runBases.has(ing.ref)) continue;
         for (const rel of await listAdmitted(ing)) {
           if (placeholders(norm(await readIngredientText(ing, rel))).includes(key)) return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
@@ -242,6 +282,7 @@ async function inferParams(
           const declaredCitations = serverCitations(ing.meta).filter((c) => c.declared).map((c) => c.key);
           if (declaredCitations.includes(key)) return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
         }
+        // Note: hook registration check was moved earlier to handle runBases ingredients too (spec 43 §7.2 row 8)
       }
     }
     for (const o of others) {
