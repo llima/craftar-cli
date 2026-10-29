@@ -419,3 +419,221 @@ describe("import with target-scoped sections (spec 41 Part B Task 05)", () => {
     const kiroA = stJson.find((s: { path: string }) => s.path === ".kiro/steering/a.md");
     expect(kiroA?.state).toBe("unchanged");
   });
+
+
+  it("variant from claude-code file warns about targets=kiro section left out", async () => {
+    // Test the BLOCKER fix: a variant made from one target's file should warn about sections for other targets
+    const t = await setup();
+    const LF = "\n";
+
+    // Create schema 6 Forge with rule/style having an untargeted part and a targets=kiro section
+    await fs.mkdir(path.join(t.forge, "ingredients/rules/style"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "recipes"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "profiles/acme"), { recursive: true });
+
+    await fs.writeFile(
+      path.join(t.forge, "craftar.forge.yaml"),
+      YAML.stringify({ name: "f", schema: 6 }),
+    );
+
+    // rule/style with untargeted content and a targets=kiro section
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/rules/style/ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "style" }),
+    );
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/rules/style/rule.md"),
+      `# Style${LF}${LF}Shared content.${LF}${LF}<!-- craftar:section k targets=kiro -->${LF}Kiro only.${LF}<!-- /craftar:section -->${LF}`,
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "recipes/base.yaml"),
+      YAML.stringify({ name: "base", ingredients: ["rule/style"] }),
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "profiles/acme/profile.yaml"),
+      YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code", "kiro"] }),
+    );
+
+    const wsRoot = t.ws("ws");
+    await fs.mkdir(wsRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(wsRoot, "craftar.yaml"),
+      YAML.stringify({ forge: "../forge", profile: "acme" }),
+    );
+
+    // Sync
+    await syncWorkspace(wsRoot);
+
+    // Hand-edit .claude/rules/style.md OUTSIDE any section (change the shared content)
+    const claudeRule = path.join(wsRoot, ".claude/rules/style.md");
+    const content = await fs.readFile(claudeRule, "utf8");
+    const edited = content.replace("Shared content.", "Edited shared content.");
+    await fs.writeFile(claudeRule, edited);
+
+    // Copy Forge
+    const forgeCopy = path.join(t.root, "forge-copy");
+    await copyDir(t.forge, forgeCopy);
+
+    // Re-import — should create variant and warn about k section
+    const result = await importInto(forgeCopy, wsRoot, "acme");
+
+    // Assertion 1: rule/style--acme is a variant
+    expect(result.variants.map((v: { name: string }) => v.name)).toContain("rule/style--acme");
+
+    // Assertion 2: warning mentions section k with targets=kiro
+    const sectionWarning = result.warnings.find((w: string) => w.includes("leaves out section k"));
+    expect(sectionWarning).toBeDefined();
+    expect(sectionWarning).toContain("made from the claude-code file");
+    expect(sectionWarning).toContain("targets=kiro");
+    expect(sectionWarning).toContain("sync writes kiro without it");
+
+    // Assertion 3: the text "Kiro only." does NOT appear in any warning
+    for (const w of result.warnings) {
+      expect(w).not.toContain("Kiro only.");
+    }
+  });
+
+  it("--prefer-kiro variant from kiro file warns about targets=claude-code section left out", async () => {
+    // Mirror case: --prefer-kiro with targets=claude-code section
+    const t = await setup();
+    const LF = "\n";
+
+    await fs.mkdir(path.join(t.forge, "ingredients/rules/style"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "recipes"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "profiles/acme"), { recursive: true });
+
+    await fs.writeFile(
+      path.join(t.forge, "craftar.forge.yaml"),
+      YAML.stringify({ name: "f", schema: 6 }),
+    );
+
+    // rule/style with untargeted content and a targets=claude-code section
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/rules/style/ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "style" }),
+    );
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/rules/style/rule.md"),
+      `# Style${LF}${LF}Shared content.${LF}${LF}<!-- craftar:section c targets=claude-code -->${LF}Claude only.${LF}<!-- /craftar:section -->${LF}`,
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "recipes/base.yaml"),
+      YAML.stringify({ name: "base", ingredients: ["rule/style"] }),
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "profiles/acme/profile.yaml"),
+      YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code", "kiro"] }),
+    );
+
+    const wsRoot = t.ws("ws");
+    await fs.mkdir(wsRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(wsRoot, "craftar.yaml"),
+      YAML.stringify({ forge: "../forge", profile: "acme" }),
+    );
+
+    // Sync
+    await syncWorkspace(wsRoot);
+
+    // Hand-edit .kiro/steering/style.md OUTSIDE any section
+    const kiroSteering = path.join(wsRoot, ".kiro/steering/style.md");
+    const content = await fs.readFile(kiroSteering, "utf8");
+    const edited = content.replace("Shared content.", "Edited from kiro.");
+    await fs.writeFile(kiroSteering, edited);
+
+    // Copy Forge
+    const forgeCopy = path.join(t.root, "forge-copy");
+    await copyDir(t.forge, forgeCopy);
+
+    // Re-import with --prefer-kiro
+    const result = await importInto(forgeCopy, wsRoot, "acme", { preferKiro: ["style"] });
+
+    // Assertion 1: rule/style--acme is a variant
+    expect(result.variants.map((v: { name: string }) => v.name)).toContain("rule/style--acme");
+
+    // Assertion 2: warning mentions section c with targets=claude-code and "made from the kiro file"
+    const sectionWarning = result.warnings.find((w: string) => w.includes("leaves out section c"));
+    expect(sectionWarning).toBeDefined();
+    expect(sectionWarning).toContain("made from the kiro file");
+    expect(sectionWarning).toContain("targets=claude-code");
+    expect(sectionWarning).toContain("sync writes claude-code without it");
+
+    // Assertion 3: the text "Claude only." does NOT appear in any warning
+    for (const w of result.warnings) {
+      expect(w).not.toContain("Claude only.");
+    }
+  });
+
+
+  it("a base whose only section is targets=kiro, claude source differs outside → variant reason is from param pass (NIT 3)", async () => {
+    // Test NIT 3: when a base's only open section is for another target, the param pass decides (not section inference)
+    const t = await setup();
+    const LF = "\n";
+
+    await fs.mkdir(path.join(t.forge, "ingredients/rules/style"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "recipes"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "profiles/acme"), { recursive: true });
+
+    await fs.writeFile(
+      path.join(t.forge, "craftar.forge.yaml"),
+      YAML.stringify({ name: "f", schema: 6 }),
+    );
+
+    // rule/style with shared content and ONLY a targets=kiro section
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/rules/style/ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "style" }),
+    );
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/rules/style/rule.md"),
+      `# Style${LF}${LF}Shared content.${LF}${LF}<!-- craftar:section k targets=kiro -->${LF}Kiro only.${LF}<!-- /craftar:section -->${LF}`,
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "recipes/base.yaml"),
+      YAML.stringify({ name: "base", ingredients: ["rule/style"] }),
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "profiles/acme/profile.yaml"),
+      YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code", "kiro"] }),
+    );
+
+    const wsRoot = t.ws("ws");
+    await fs.mkdir(wsRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(wsRoot, "craftar.yaml"),
+      YAML.stringify({ forge: "../forge", profile: "acme" }),
+    );
+
+    // Sync
+    await syncWorkspace(wsRoot);
+
+    // Hand-edit .claude/rules/style.md OUTSIDE any section
+    const claudeRule = path.join(wsRoot, ".claude/rules/style.md");
+    const content = await fs.readFile(claudeRule, "utf8");
+    const edited = content.replace("Shared content.", "Edited outside section.");
+    await fs.writeFile(claudeRule, edited);
+
+    // Copy Forge
+    const forgeCopy = path.join(t.root, "forge-copy");
+    await copyDir(t.forge, forgeCopy);
+
+    // Re-import
+    const result = await importInto(forgeCopy, wsRoot, "acme");
+
+    // The variant should be created
+    expect(result.variants.map((v: { name: string }) => v.name)).toContain("rule/style--acme");
+
+    // With the fix (using projectedNames for open), the param pass returns immediately when there are
+    // no open sections for the owner. When the base has no declared params, the variant reason comes
+    // from the "differs from..." wrapper, not from section inference.
+    const variant = result.variants.find((v: { name: string }) => v.name === "rule/style--acme");
+    // Without the fix, section inference would be called and the reason would mention "text outside the sections"
+    // With the fix, section inference is skipped and we get just the generic "differs from..." reason
+    expect(variant?.reason).not.toContain("text outside the sections");
+  });
