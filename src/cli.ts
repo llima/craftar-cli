@@ -2236,7 +2236,7 @@ forge
       // refusals come before any write; the comparison runs on real paths, so neither a `..`
       // segment nor a symlink can carry the target back into the Forge.
       const savePlanAbs = await gateOutsideForge(o.savePlan, f.root, SAVE_PLAN_GATE);
-      const saved = await planFrom(base, variant, diff, o.profile);
+      const saved = await planFrom(base, variant, diff, o.profile, f.manifest.schema);
       await fs.mkdir(path.dirname(savePlanAbs), { recursive: true });
       await fs.writeFile(savePlanAbs, YAML.stringify(saved), { flag: "wx" });
       const deferred = saved.files.reduce((n: number, pf) => n + (pf.hunks ? pf.hunks.length : 1), 0);
@@ -2253,7 +2253,7 @@ forge
     if (loadedPlan) {
       toApply = loadedPlan;
     } else {
-      toApply = await planFrom(base, variant, diff, o.profile);
+      toApply = await planFrom(base, variant, diff, o.profile, f.manifest.schema);
       const side = o.take as Take;
       for (const pf of toApply.files) {
         if (pf.hunks) for (const h of pf.hunks) h.take = side;

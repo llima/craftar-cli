@@ -72,8 +72,12 @@ export async function planFrom(
   variant: LoadedIngredient,
   diff: IngredientDiff,
   profile: string,
+  forgeSchema: number = 1,
 ): Promise<UnifyPlan> {
   await assertTextMergeable(base, variant);
+
+  // Build parseOpts for this Forge schema (Spec 41 Part B §5.2).
+  const parseOpts: ParseSectionsOptions = { targets: readsTargetSections({ schema: forgeSchema }) };
 
   // Build `declared`: every section name the ingredient already declares, in any body file (spec 12 §4.2, 0.8.2).
   const declared = new Set<string>();
@@ -84,7 +88,7 @@ export async function planFrom(
     if (!bodyFile(base.meta, rel, base.dir)) continue;
     try {
       const text = await readIngredientText(base, rel);
-      const parsed = parseSections(text, label(rel), base.ref);
+      const parsed = parseSections(text, label(rel), base.ref, parseOpts);
       for (const s of parsed.sections) declared.add(s.name);
     } catch (e) {
       // Ignore parse errors — the check that matters runs later (spec 12 §4.2)
@@ -105,6 +109,7 @@ export async function planFrom(
           ref: base.ref,
           hunks: f.hunks,
           declared,
+          parseOpts,
         });
       } catch {
         // On any error, leave all undefined (spec 12 §4.2: "pre-fill never blocks --save-plan")
@@ -369,6 +374,8 @@ export async function applyPlan(
 
   const profileSections = opts.profileSections ?? {};
   const forgeSchema = opts.forgeSchema ?? 1;
+  // Build parseOpts for this Forge schema (Spec 41 Part B §5.2).
+  const parseOpts: ParseSectionsOptions = { targets: readsTargetSections({ schema: forgeSchema }) };
 
   // Ruling 29 (spec §8 refusal 7, in both directions): the plan must cover every file the diff
   // has — paired, base-only and variant-only — each exactly once. The walk below only visits the
@@ -473,7 +480,7 @@ export async function applyPlan(
           if (otherFile === "ingredient.yaml" || otherFile === pf.file) continue;
           if (!bodyFile(base.meta, otherFile, base.dir)) continue;
           const otherText = await readIngredientText(base, otherFile);
-          const parsed = parseSections(otherText, label(otherFile), base.ref);
+          const parsed = parseSections(otherText, label(otherFile), base.ref, parseOpts);
           for (const s of parsed.sections) {
             declaredElsewhere.set(s.name, `${otherFile}:${s.line}`);
           }
@@ -491,6 +498,7 @@ export async function applyPlan(
           hunks,
           entries: pf.hunks,
           declaredElsewhere,
+          parseOpts,
         });
 
         // S3 second form: a name used in two different files
@@ -650,8 +658,7 @@ export async function applyPlan(
     }
   }
 
-  // Spec 41 Part B §5: pass target-scoped section options from the Forge schema
-  const parseOpts = { targets: readsTargetSections({ schema: forgeSchema }) };
+  // Spec 41 Part B §5: parseOpts was already built above with target-scoped section options from the Forge schema
   await checkMarkers(base, write, remove, newSectionNames, parseOpts);
 
   const metaDiffers = opts.discardVariantMeta ? [] : metaDifferences(base, variant, forgeSchema);
@@ -689,6 +696,7 @@ export async function applyPlan(
       values: p.values,
       profileValues: profileSections,
       extractions: params,
+      parseOpts,
     });
   }
 
