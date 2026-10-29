@@ -19,8 +19,8 @@ import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
 import { decide, forgeBefore, pin, registrationCarry, sourceKeys, workspaceParams, workspaceSections, workspaceTargets, type RunContext } from "./decide.js";
 import { providedByBlock } from "./provided.js";
-import { renderMap } from "../core/template-import.js";
-import { firstMarkerLine } from "../core/sections.js";
+import { readBase, renderMap } from "../core/template-import.js";
+import { firstMarkerLine, readsTargetSections } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
 import { GENERATED_BANNER, kiroReport, textLines, type KiroReport } from "./kiro-report.js";
 import { preferKiro } from "./prefer-kiro.js";
@@ -1159,6 +1159,19 @@ async function writeIngredient(
     }
     const as = meta.name;
     name = `${meta.name}--${profile}`;
+    // Warn about sections this variant leaves out because the source target doesn't receive them.
+    if (run?.ctx) {
+      const parseOpts = { targets: readsTargetSections(run.ctx.forge?.manifest ?? { schema: 1 }) };
+      const base = await readBase(dir, stage.reader(), forge, parseOpts);
+      const owner = run.ctx.sourceTarget;
+      for (const [, parsed] of base.parsed) {
+        for (const s of parsed.sections) {
+          if (s.targets && !(s.targets as readonly string[]).includes(owner)) {
+            report.warnings.push(`${meta.type}/${name}: made from the ${owner} file, it leaves out section ${s.name} (targets=${s.targets.join(",")}) — sync writes ${s.targets.join(", ")} without it`);
+          }
+        }
+      }
+    }
     dir = path.join(forge, "ingredients", folder, name);
     report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge${why ? ` (${why})` : ""}` });
 
