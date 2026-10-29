@@ -5,6 +5,7 @@ import { againLine, askClone, askInit, confirmInit, type InitAnswers, type InitI
 import { planInit } from "../src/core/init.js";
 import { loadWorkspace } from "../src/core/sync.js";
 import { makeForge, profile, recipe, rule, tmpDir } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { runCli } from "./helpers/cli.js";
 import { git, remoteForge } from "./helpers/remote.js";
 
@@ -206,7 +207,7 @@ describe("LoadOptions.fetchHint — R4's tail (§5.2)", () => {
     cleanups.push(r.cleanup);
     const ws = await fs.realpath(await tmpDir("craftar-fetchhint-ws-"));
     const home = await fs.realpath(await tmpDir("craftar-fetchhint-home-"));
-    cleanups.push(() => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(() => fs.rm(ws, { recursive: true, force: true }), () => removeWithRetry(home));
     await fs.writeFile(path.join(ws, "craftar.yaml"), `forge: ${r.url}\nprofile: acme\n`);
     await loadWorkspace(ws, { mode: "sync", home });
     const sha = git(r.src, "rev-parse", "HEAD").slice(0, 8);

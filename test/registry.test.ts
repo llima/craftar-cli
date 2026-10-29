@@ -5,6 +5,7 @@ import { cacheKey } from "../src/core/remote.js";
 import { forget, isMissing, isRegistered, listWorkspaces, namedCacheKeys, prune, readRegistry, register, registryFile, rowStatus } from "../src/core/registry.js";
 import { apply, loadWorkspace, plan, readLock, status, type FileStatus } from "../src/core/sync.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { git, remoteForge } from "./helpers/remote.js";
 
 // Spec 21 §10.2 — the registry's core: register, read, forget, prune, and the row status.
@@ -22,7 +23,7 @@ afterEach(async () => {
 
 async function fixture(spec: ForgeSpec = FORGE) {
   const root = await tmpDir("craftar-registry-");
-  cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(root));
   const home = path.join(root, "home");
   const forgeRoot = path.join(root, "forge");
   await makeForge(forgeRoot, spec);

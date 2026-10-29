@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { listFiles } from "../src/core/forge.js";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, profile, recipe, rule, tmpDir, type ForgeSpec } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import YAML from "yaml";
 import { git, gitEnv, remoteForge } from "./helpers/remote.js";
 
@@ -24,7 +25,7 @@ async function setup(spec: ForgeSpec = SPEC) {
   const parent = await fs.realpath(await tmpDir("craftar-np-cli-"));
   cleanups.push(async () => {
     await fs.chmod(parent, 0o755).catch(() => {});
-    await fs.rm(parent, { recursive: true, force: true });
+    await removeWithRetry(parent);
   });
   const forge = path.join(parent, "forge");
   await makeForge(forge, spec);

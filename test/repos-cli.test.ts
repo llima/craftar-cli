@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runCli } from "./helpers/cli.js";
 import { fakeGit, readCloneLog } from "./helpers/fake-git.js";
 import { makeForge, profile, recipe, rule, tmpDir } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { remoteForge } from "./helpers/remote.js";
 
 // Spec 37 §4.7 — `craftar repos` lists, `craftar repos clone [<name>…]` clones the missing entries of an existing
@@ -238,7 +239,7 @@ describe("a remote Forge whose fetch fails (real git, a file:// bare Forge; ever
     cleanups.push(r.cleanup);
     const ws = await fs.realpath(await tmpDir("craftar-repos-remote-ws-"));
     const home = await fs.realpath(await tmpDir("craftar-repos-remote-home-"));
-    cleanups.push(() => fs.rm(ws, { recursive: true, force: true }), () => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(() => fs.rm(ws, { recursive: true, force: true }), () => removeWithRetry(home));
     await fs.writeFile(path.join(ws, "craftar.yaml"), `forge: ${r.url}\nprofile: acme\n`);
     await fs.mkdir(path.join(ws, "portal-api"));
     const run = (args: string[]) => runCli([...args, "--workspace", ws], { env: { CRAFTAR_HOME: home } });

@@ -5,6 +5,7 @@ import { RegistryEntrySchema, type Registry } from "../src/schema/index.js";
 import { lastForge, yesNo, confirmInit, againLine, type InitIo, type OfferedForge, type InitAnswers } from "../src/core/init-flow.js";
 import { planInit, type InitInput } from "../src/core/init.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -431,7 +432,7 @@ const QTk = "Targets — claude-code, kiro, agents-md, separated by commas [kiro
 /** Setup for askInit tests. */
 async function askSetup(spec: ForgeSpec = SPEC_DESC) {
   const root = await tmpDir("craftar-ask-init-");
-  cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(root));
   const forge = path.join(root, "forge");
   await makeForge(forge, spec);
   const ws = path.join(root, "ws");
