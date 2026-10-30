@@ -145,4 +145,41 @@ describe("forge promote — integrations block", () => {
     expect(promotion.created).toEqual([]);
     expect(promotion.discarded).toBe(true);
   });
+
+  it("5. schema 3, profile both lists and selects the same recipe — promote refused, exits 1, Forge unchanged", async () => {
+    // A profile that both lists a recipe in its written `recipes` and selects the same recipe through its
+    // `integrations` block (schema 3). forge promote of a variant of an ingredient in that recipe, another
+    // profile on the base.
+    const spec: ForgeSpec = {
+      ingredients: [
+        rule("x", "base text\n"),
+        variant("x--double", "x", "double text\n"),
+        rule("other", "other\n"),
+      ],
+      recipes: [
+        recipe("base", ["rule/other"]),
+        recipe("double-rules", ["rule/x--double"]),
+        recipe("pm-jira", ["rule/x"]),
+      ],
+      profiles: [
+        // Profile that BOTH lists pm-jira in recipes AND selects it through integrations
+        profile("double", ["pm-jira", "double-rules"], ["claude-code"], { integrations: { pm: { kind: "jira" } } }),
+        // Another profile on the base
+        profile("other", ["pm-jira"], ["claude-code"]),
+      ],
+    };
+    const f = await forgeAt(3, spec);
+    const before = await snapshot(f.forge);
+    const r = f.cli(["forge", "promote", "rule/x", "--profile", "double", "--forge", f.forge]);
+    // exit 1: the proof refuses because double resolves rule/x itself (from pm-jira via both routes)
+    expect(r.code).toBe(1);
+    // The refusal: the Forge is inconsistent — double resolves rule/x itself, writing one file from two ingredients
+    expect(r.stderr).toBe(
+      "error: forge promote: profile double resolves rule/x itself — the Forge is inconsistent (it would write one file from two ingredients); remove one from its recipes by hand, commit, and re-run\n",
+    );
+    expect(r.stdout).toBe("");
+    // The Forge should be unchanged
+    expect(git(f.forge, "status", "--porcelain")).toBe("");
+    expect(await snapshot(f.forge)).toEqual(before);
+  });
 });

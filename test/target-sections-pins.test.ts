@@ -207,6 +207,8 @@ function withoutMachine(o: Observed): Observed {
   return { ...o, doctorWorkspace: o.doctorWorkspace.filter((c) => c.id !== "docker") };
 }
 
+const EXPLAIN_PIN_FILE = path.resolve(__dirname, "pins/explain-schema-6.txt");
+
 describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
   it("matches the pinned snapshot (schema 5, no targets= in markers)", { timeout: 120_000 }, async () => {
     const s = kept(await acmeSections({ schema: 5 }));
@@ -337,5 +339,55 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
     // Compare with the same pin as schema 5 — they must be identical
     const expected = await loadPin();
     expect(withoutMachine(observed)).toEqual(withoutMachine(expected));
+  });
+
+  it("explain TEXT output at schema 6 with no targets= — pin for a rule's file and AGENTS.md", { timeout: 120_000 }, async () => {
+    const s = kept(await acmeSections({ schema: 6 }));
+    const W = ["--workspace", s.wsRoot];
+
+    // Sync the workspace first
+    const syncResult = runCli(["sync", ...W]);
+    expect(syncResult.code, syncResult.stderr).toBe(0);
+
+    // Get both raw and realpath versions of the root for normalization
+    const realRoot = await fs.realpath(s.root);
+    const roots = [s.root, realRoot];
+
+    // Run explain for a rule's .claude/rules/ file
+    const explainStyleResult = runCli(["explain", ".claude/rules/style.md", ...W]);
+    expect(explainStyleResult.code, explainStyleResult.stderr).toBe(0);
+
+    // Run explain for AGENTS.md
+    const explainAgentsMdResult = runCli(["explain", "AGENTS.md", ...W]);
+    expect(explainAgentsMdResult.code, explainAgentsMdResult.stderr).toBe(0);
+
+    // Normalize the stdout for comparison
+    let styleText = explainStyleResult.stdout;
+    let agentsMdText = explainAgentsMdResult.stdout;
+    for (const r of roots) {
+      styleText = styleText.split(r).join("<root>");
+      styleText = styleText.split(r.replace(/\\/g, "/")).join("<root>");
+      styleText = styleText.split(r.replace(/\//g, "\\")).join("<root>");
+      agentsMdText = agentsMdText.split(r).join("<root>");
+      agentsMdText = agentsMdText.split(r.replace(/\\/g, "/")).join("<root>");
+      agentsMdText = agentsMdText.split(r.replace(/\//g, "\\")).join("<root>");
+    }
+    // Platform-independent path separator
+    styleText = styleText.replace(/<root>[/\\]/g, "<root>/");
+    agentsMdText = agentsMdText.replace(/<root>[/\\]/g, "<root>/");
+
+    // Combine into one pinned text: "=== .claude/rules/style.md ===\n..." + "\n=== AGENTS.md ===\n..."
+    const combined = `=== .claude/rules/style.md ===\n${styleText}\n=== AGENTS.md ===\n${agentsMdText}`;
+
+    if (process.env.CRAFTAR_WRITE_PINS === "1") {
+      await fs.mkdir(path.dirname(EXPLAIN_PIN_FILE), { recursive: true });
+      await fs.writeFile(EXPLAIN_PIN_FILE, combined);
+      console.log(`Explain pin written to ${EXPLAIN_PIN_FILE}`);
+      return;
+    }
+
+    // Compare mode: load the pin and compare
+    const expectedText = await fs.readFile(EXPLAIN_PIN_FILE, "utf8");
+    expect(combined).toBe(expectedText);
   });
 });
