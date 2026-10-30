@@ -151,7 +151,7 @@ export async function gitHasCommit(dir: string): Promise<boolean> {
  */
 export async function gitIgnored(dir: string, rel: string): Promise<boolean> {
   try {
-    await execProgram("git", ["-C", dir, "check-ignore", "-q", "--", rel]);
+    await execProgram("git", [...gitRead(dir), "check-ignore", "-q", "--", rel]);
     return true; // exit 0 means ignored
   } catch (e) {
     // exit 1 means not ignored; any other error fails closed

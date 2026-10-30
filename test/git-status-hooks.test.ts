@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { execProgram } from "../src/core/proc.js";
-import { gitDirty, gitUnheld } from "../src/core/forge.js";
+import { gitDirty, gitIgnored, gitUnheld } from "../src/core/forge.js";
 import { tmpDir } from "./helpers/forge.js";
 import { removeWithRetry } from "./helpers/fs.js";
 
@@ -26,7 +26,7 @@ async function createGitRepo(): Promise<string> {
 }
 
 describe.skipIf(process.platform === "win32")("gitDirty and gitUnheld avoid running hooks", () => {
-  it("core.fsmonitor hook is not triggered", async () => {
+  it("core.fsmonitor hook is not triggered by gitDirty, gitUnheld, or gitIgnored", async () => {
     const dir = await createGitRepo();
     
     // Create marker file path to detect if hook is called (using unique path)
@@ -61,6 +61,16 @@ exit 0
     // Marker should still not exist
     const fsmonitorExistsAfter = await fs.lstat(fsmonitorMarker).then(() => true, () => false);
     expect(fsmonitorExistsAfter, "core.fsmonitor should not have been triggered by gitUnheld").toBe(false);
+
+    // Call gitIgnored
+    await fs.rm(fsmonitorMarker, { force: true });
+    const laterIgnored = new Date(Date.now() + 1100);
+    await fs.utimes(path.join(dir, "file.txt"), laterIgnored, laterIgnored);
+    await gitIgnored(dir, "file.txt");
+
+    // Marker should still not exist
+    const fsmonitorExistsIgnored = await fs.lstat(fsmonitorMarker).then(() => true, () => false);
+    expect(fsmonitorExistsIgnored, "core.fsmonitor should not have been triggered by gitIgnored").toBe(false);
   });
 
   it("post-index-change hook is not triggered", async () => {

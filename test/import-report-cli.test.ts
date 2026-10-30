@@ -87,7 +87,7 @@ describe("import --report — the path gate, before the import reads anything", 
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("refusing to write the report to ");
     expect(r.stderr).toContain("it resolves inside the Forge");
-    expect(r.stderr).toContain("write the report outside the Forge");
+    expect(r.stderr).toContain("choose a path outside it");
     expect(r.stdout).toBe("");
     await untouched(s.forge, null);
   });
