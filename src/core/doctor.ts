@@ -14,7 +14,7 @@ import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWork
 import { outName, MCP_FILE, renderRegistration, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
 import { stripBom } from "./text.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
-import { capture, execProgram } from "./proc.js";
+import { capture, execProgram, type Probe } from "./proc.js";
 
 /*
  * `craftar doctor` (spec 24): every check Craftar can make about this machine and, inside one, this
@@ -73,6 +73,10 @@ export interface DoctorOptions {
    * Defaults to `opts.env.CLAUDE_CONFIG_DIR` if set, else `path.join(os.homedir(), ".claude")`.
    */
   claudeUserDir?: string;
+  /** The directory `dotnet --version` runs in; absent, the workspace root. */
+  dotnetCwd?: string;
+  /** Test seam for the dotnet probe (which directory it recorded). */
+  dotnetProbe?: Probe;
 }
 
 async function defaultGitVersion(): Promise<string | null> {
@@ -479,7 +483,7 @@ async function workspaceChecks(
         }
         // dotnet check — only when at least one entry is installable
         if (declared.entries.some((e) => e.installable)) {
-          const getDotnetVersion = opts.dotnetVersion ?? (() => defaultDotnetVersion(capture, env, root));
+          const getDotnetVersion = opts.dotnetVersion ?? (() => defaultDotnetVersion(opts.dotnetProbe ?? capture, env, opts.dotnetCwd ?? root));
           const version = await getDotnetVersion();
           if (version !== null) w("dotnet", "ok", version);
           else w("dotnet", "warn", DOTNET_MISSING, DOTNET_MISSING_FIX);

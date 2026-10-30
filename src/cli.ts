@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import path from "node:path";
+import os from "node:os";
 import { promises as fs, statSync } from "node:fs";
 import YAML from "yaml";
 import { importClaudeCode } from "./importers/claude-code.js";
@@ -1500,6 +1501,9 @@ const mcpCmd = program
       env: process.env,
       pin: pinOf(merged),
       writers: o.allowWrites ? mcpWriters(craftarHome(), registryOff()) : undefined,
+      // The dotnet host looks for global.json going up from its working directory; not the temporary
+      // directory, where another user can plant one.
+      dotnetCwd: path.parse(os.homedir()).root,
     });
   });
 

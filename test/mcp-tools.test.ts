@@ -13,6 +13,8 @@ import { PIN_CHANGED } from "../src/core/mcp-protocol.js";
 import { statusReport } from "../src/core/report.js";
 import { defaultGit, type GitRunner } from "../src/core/remote.js";
 import { loadWorkspace, plan, readLock, readWorkspaceConfig, status } from "../src/core/sync.js";
+import { runDoctor } from "../src/core/doctor.js";
+import type { Probe } from "../src/core/proc.js";
 
 // Spec 35 §4.4–§4.6, §6, §7, §10.2 — the seven tools, the pin, what a result never holds.
 
@@ -561,5 +563,57 @@ describe("doctor — the checks 0.25–0.27 added, through injected runners", ()
     expect(of("dotnet")).toEqual([]);
     expect(of("templates")).toEqual([]);
     expect(of("services-env")).toEqual([]);
+  });
+
+  it("the doctor tool runs dotnet --version in dotnetCwd, not the workspace root", async () => {
+    const f = await fixtureWithServiceAndTemplates();
+    const outsideDir = await tmpDir("craftar-test-outside-dotnet-");
+    cleanups.push(() => fs.rm(outsideDir, { recursive: true, force: true }));
+    let recordedCwd: string | undefined;
+    const dotnetProbe: Probe = async (_file, _args, _env, cwd) => {
+      recordedCwd = cwd;
+      return "10.0.401\n";
+    };
+    const s = await session(f.ws, {
+      nodeVersion: "22.11.0",
+      gitVersion: async () => "2.53.0",
+      dotnetVersion: undefined, // use the real one via dotnetProbe
+      dotnetProbe,
+      dotnetCwd: outsideDir,
+      dockerRunner: async () => ({ code: 0, stdout: "v2.30.0\n", stderr: "" }),
+    });
+    const report = data(await one("doctor", s));
+    expect(recordedCwd).toBe(outsideDir);
+    expect(recordedCwd).not.toBe(f.ws); // not the workspace root
+    expect(report.checks.find((c: { id: string }) => c.id === "dotnet").message).toBe("10.0.401");
+  });
+
+  it("runDoctor with dotnetProbe and no dotnetCwd records the workspace root (typed doctor unchanged)", async () => {
+    const f = await fixtureWithServiceAndTemplates();
+    let recordedCwd: string | undefined;
+    const dotnetProbe: Probe = async (_file, _args, _env, cwd) => {
+      recordedCwd = cwd;
+      return "10.0.401\n";
+    };
+    await runDoctor({
+      version: "0.0.0-test",
+      home: process.env.CRAFTAR_HOME!,
+      workspace: f.ws,
+      fetch: false,
+      strict: false,
+      registryOff: false,
+      nodeVersion: "22.11.0",
+      gitVersion: async () => "2.53.0",
+      dotnetProbe,
+      dockerRunner: async () => ({ code: 0, stdout: "v2.30.0\n", stderr: "" }),
+    });
+    expect(recordedCwd).toBe(await fs.realpath(f.ws)); // the workspace root
+  });
+
+  it("src/cli.ts passes dotnetCwd in the mcp context", async () => {
+    // A CLI-level or source check that `craftar mcp`'s context passes a `dotnetCwd`.
+    // The simplest approach: scan the source for dotnetCwd in the serve() call.
+    const cliSource = await fs.readFile(path.resolve(__dirname, "../src/cli.ts"), "utf8");
+    expect(cliSource).toContain("dotnetCwd: path.parse(os.homedir()).root");
   });
 });
