@@ -431,6 +431,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     // If the profile exists, resolve it to find variants; otherwise check the base rule directly.
     // Fail-closed (spec 44 §4.8): when the profile does not resolve, throw ONLY when some rule base
     // the profile would be compared with holds the placeholder; otherwise proceed with no index step.
+    // NOTE: For new profiles, we don't fail early here — the per-name check in the loop below
+    // will catch rules that hold the placeholder with a more specific error message.
     let pk6Resolution: Awaited<ReturnType<typeof resolveForImport>> | null = null;
     if (loaded && readsRulesIndex(loaded.manifest) && loaded.profiles.has(opts.profileName)) {
       try {
@@ -565,19 +567,28 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // Spec 44 §4.8: at schema >= 7, build the index expansion function for rule re-import comparison.
   // The function expands {{craftar.rules.index}} using the Forge's resolved ingredients.
   // Fail-closed: when the profile does not resolve, throw ONLY when some rule base holds the placeholder.
+  // Finding 4: also fail-closed for a NEW profile when any base holds the placeholder.
   let indexExpand: ((text: string) => string) | undefined;
-  if (loaded && readsRulesIndex(loaded.manifest) && loaded.profiles.has(opts.profileName)) {
-    try {
-      const { resolution, lookup } = await resolveForImport(loaded, opts.profileName, ctx, ws, readWs);
-      indexExpand = (text: string) => expandRulesIndex(text, "claude-code", lookup, resolution).text;
-    } catch (e) {
-      // Fail-closed: check if any rule base holds the placeholder before failing
+  if (loaded && readsRulesIndex(loaded.manifest)) {
+    if (loaded.profiles.has(opts.profileName)) {
+      try {
+        const { resolution, lookup } = await resolveForImport(loaded, opts.profileName, ctx, ws, readWs);
+        indexExpand = (text: string) => expandRulesIndex(text, "claude-code", lookup, resolution).text;
+      } catch (e) {
+        // Fail-closed: check if any rule base holds the placeholder before failing
+        const anyBaseHoldsPlaceholder = await someBaseHoldsRulesIndex(loaded);
+        if (anyBaseHoldsPlaceholder) {
+          const message = e instanceof Error ? e.message : String(e);
+          throw new Error(`import: profile ${opts.profileName} does not resolve (${message}) — fix the Forge and re-run`);
+        }
+        // No base holds the placeholder: proceed with no index step, let the import continue
+      }
+    } else {
+      // Finding 4: NEW profile — fail-closed if any base holds the placeholder
       const anyBaseHoldsPlaceholder = await someBaseHoldsRulesIndex(loaded);
       if (anyBaseHoldsPlaceholder) {
-        const message = e instanceof Error ? e.message : String(e);
-        throw new Error(`import: profile ${opts.profileName} does not resolve (${message}) — fix the Forge and re-run`);
+        throw new Error(`import: profile ${opts.profileName} does not resolve (new profile, cannot expand index) — fix the Forge and re-run`);
       }
-      // No base holds the placeholder: proceed with no index step, let the import continue
     }
   }
 
