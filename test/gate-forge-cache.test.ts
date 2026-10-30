@@ -5,7 +5,7 @@ import { runCli } from "./helpers/cli.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 import { removeWithRetry } from "./helpers/fs.js";
 
-// P1: gateOutsideForge refuses a target under the Forge cache ($CRAFTAR_HOME/forges/…)
+// gateOutsideForge refuses a target under the Forge cache ($CRAFTAR_HOME/forges/…)
 
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -43,8 +43,8 @@ async function setup() {
   return { parent, home, forgeDir, wsDir, forgesDir, entrySecret, run };
 }
 
-describe("P1 — gateOutsideForge refuses targets under the Forge cache", () => {
-  it("a) import --report to a path under forges/ exits 1, no file created, stderr lacks entry name", async () => {
+describe("gateOutsideForge refuses targets under the Forge cache", () => {
+  it("import --report to a path under forges/ exits 1, no file created, stderr lacks entry name", async () => {
     const ctx = await setup();
     const reportPath = path.join(ctx.home, "forges", ctx.entrySecret, "trees", "abc", "report.md");
     
@@ -69,7 +69,7 @@ describe("P1 — gateOutsideForge refuses targets under the Forge cache", () => 
     await expect(fs.lstat(reportPath)).rejects.toThrow();
   });
 
-  it("b) forge unify --save-plan to a path under forges/ exits 1, no file created, stderr lacks entry name", async () => {
+  it("forge unify --save-plan to a path under forges/ exits 1, no file created, stderr lacks entry name", async () => {
     const ctx = await setup();
     
     // Create a variant so unify has something to work with
@@ -96,7 +96,7 @@ describe("P1 — gateOutsideForge refuses targets under the Forge cache", () => 
     await expect(fs.lstat(planPath)).rejects.toThrow();
   });
 
-  it("c) target in a not-yet-existing directory under the cache is refused, directory not created", async () => {
+  it("target in a not-yet-existing directory under the cache is refused, directory not created", async () => {
     const ctx = await setup();
     const nestedPath = path.join(ctx.home, "forges", ctx.entrySecret, "trees", "abc", "nested", "deep", "report.md");
     const nestedParent = path.dirname(nestedPath);
@@ -119,7 +119,7 @@ describe("P1 — gateOutsideForge refuses targets under the Forge cache", () => 
     await expect(fs.lstat(nestedParent)).rejects.toThrow(); // Directory not created
   });
 
-  it("d) through a symlink (junction on win32) to the cache tree", async () => {
+  it("through a symlink (junction on win32) to the cache tree", async () => {
     const ctx = await setup();
     const linkPath = path.join(ctx.parent, "link-to-forges");
     await fs.symlink(path.join(ctx.home, "forges"), linkPath, "junction");
@@ -143,7 +143,7 @@ describe("P1 — gateOutsideForge refuses targets under the Forge cache", () => 
     expect(r.stderr).not.toContain(ctx.entrySecret);
   });
 
-  it("e) control: a target outside the cache still writes", async () => {
+  it("control: a target outside the cache still writes", async () => {
     const ctx = await setup();
     const reportPath = path.join(ctx.parent, "report.md");
     

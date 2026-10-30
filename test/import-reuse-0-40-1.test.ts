@@ -20,8 +20,8 @@ afterEach(async () => {
 });
 
 describe("Item A: script/hook base with default targets is reused", () => {
-  describe("A.a: hook base with no targets → re-import counts it reused, no h--acme variant", () => {
-    it("FAILING FIRST: hook base with targets: '*' is treated as variant when source has ['claude-code']", async () => {
+  describe("a hook base with default targets is reused when the source is at [\"claude-code\"]", () => {
+    it("hook base at targets: '*' is reused, not made a variant", async () => {
       const root = await tmpDir("craftar-import-hook-targets-");
       cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
       const forgeRoot = path.join(root, "forge");
@@ -61,8 +61,8 @@ describe("Item A: script/hook base with default targets is reused", () => {
     });
   });
 
-  describe("A.b: script base with no targets → re-import counts it reused, no s--acme variant", () => {
-    it("FAILING FIRST: script base with targets: '*' is treated as variant when source has ['claude-code']", async () => {
+  describe("a script base with default targets is reused when the source is at [\"claude-code\"]", () => {
+    it("script base at targets: '*' is reused, not made a variant", async () => {
       const root = await tmpDir("craftar-import-script-targets-");
       cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
       const forgeRoot = path.join(root, "forge");
@@ -102,7 +102,7 @@ describe("Item A: script/hook base with default targets is reused", () => {
     });
   });
 
-  describe("A.c: controls that must pass before and after", () => {
+  describe("controls that must pass before and after", () => {
     it("base at ['kiro'] stays a variant when source has ['claude-code']", async () => {
       const root = await tmpDir("craftar-import-hook-kiro-");
       cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
@@ -219,7 +219,7 @@ describe("Item A: script/hook base with default targets is reused", () => {
     });
   });
 
-  describe("A.d: forge variants over a pair differing only in targets still reports a difference", () => {
+  describe("forge variants reports a targets difference for hook", () => {
     it("variants report shows targets difference for hook", async () => {
       const root = await tmpDir("craftar-forge-variants-targets-");
       cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
@@ -258,7 +258,7 @@ describe("Item A: script/hook base with default targets is reused", () => {
     });
   });
 
-  describe("A.e: after reuse, status in a workspace with targets claude-code and kiro prints skip message", () => {
+  describe("status warns when a hook has no Kiro equivalent", () => {
     it("status warns that hook/h has no Kiro equivalent when kiro target is present", async () => {
       const root = await tmpDir("craftar-status-hook-skip-");
       cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
@@ -301,8 +301,8 @@ describe("Item A: script/hook base with default targets is reused", () => {
 });
 
 describe("Item B: MCP variant through literal comparison keeps base's authEnv", () => {
-  describe("B.a: new MCP variant through G1 carries the base's authEnv names", () => {
-    it("FAILING FIRST: MCP variant created via G1 literal path does not inherit base authEnv", async () => {
+  describe("new MCP variant through G1 literal path carries the base's authEnv names", () => {
+    it("MCP variant created via G1 literal path inherits base authEnv", async () => {
       const root = await tmpDir("craftar-import-mcp-authenv-g1-");
       cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
       const forgeRoot = path.join(root, "forge");
@@ -357,7 +357,7 @@ describe("Item B: MCP variant through literal comparison keeps base's authEnv", 
     });
   });
 
-  describe("B.b: the next plan for that profile writes .claude/settings.craftar.example.json listing them", () => {
+  describe("the next plan for that profile writes .claude/settings.craftar.example.json listing authEnv names", () => {
     it("settings example file lists the authEnv names from the variant", async () => {
       const root = await tmpDir("craftar-import-mcp-settings-");
       cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
@@ -398,7 +398,7 @@ describe("Item B: MCP variant through literal comparison keeps base's authEnv", 
     });
   });
 
-  describe("B.c: a rewritten variant keeps its own authEnv", () => {
+  describe("a rewritten variant keeps its own authEnv, not base's", () => {
     it("rewriting existing variant preserves its authEnv, not base's", async () => {
       const root = await tmpDir("craftar-import-mcp-rewrite-");
       cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
@@ -455,7 +455,7 @@ describe("Item B: MCP variant through literal comparison keeps base's authEnv", 
     });
   });
 
-  describe("B.d: a base with no authEnv adds no key to variant", () => {
+  describe("a base with no authEnv adds no authEnv key to its variant", () => {
     it("variant from base without authEnv has no authEnv key", async () => {
       const root = await tmpDir("craftar-import-mcp-no-authenv-");
       cleanups.push(() => fs.rm(root, { recursive: true, force: true }));

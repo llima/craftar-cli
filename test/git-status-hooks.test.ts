@@ -6,7 +6,7 @@ import { gitDirty, gitUnheld } from "../src/core/forge.js";
 import { tmpDir } from "./helpers/forge.js";
 import { removeWithRetry } from "./helpers/fs.js";
 
-// P3: git status in a Forge runs less of what its .git names (--no-optional-locks and -c core.fsmonitor=false)
+// git status in a Forge runs less of what its .git names (--no-optional-locks and -c core.fsmonitor=false)
 
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -25,7 +25,7 @@ async function createGitRepo(): Promise<string> {
   return dir;
 }
 
-describe.skipIf(process.platform === "win32")("P3 — gitDirty and gitUnheld avoid running hooks", () => {
+describe.skipIf(process.platform === "win32")("gitDirty and gitUnheld avoid running hooks", () => {
   it("core.fsmonitor hook is not triggered", async () => {
     const dir = await createGitRepo();
     

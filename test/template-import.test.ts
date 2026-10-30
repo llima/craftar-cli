@@ -159,7 +159,7 @@ describe("renderMap skips RULES_INDEX_KEY when readsRulesIndex is true (spec 44 
 
   const RULES_INDEX_KEY = "craftar.rules.index";
 
-  it("C.a: skips default param value for craftar.rules.index when readsRulesIndex=true", () => {
+  it("skips default param value for craftar.rules.index when readsRulesIndex=true", () => {
     const meta = IngredientSchema.parse({
       type: "rule",
       name: "test",
@@ -173,7 +173,7 @@ describe("renderMap skips RULES_INDEX_KEY when readsRulesIndex is true (spec 44 
     expect(map["other.key"]).toBe("other-value");
   });
 
-  it("C.b: skips profile param value for craftar.rules.index when readsRulesIndex=true", () => {
+  it("skips profile param value for craftar.rules.index when readsRulesIndex=true", () => {
     const meta = IngredientSchema.parse({ type: "rule", name: "test" });
     const P = { [RULES_INDEX_KEY]: "profile-index-value", "other.key": "profile-other" };
     const map = renderMap(meta, P, {}, true);
@@ -181,7 +181,7 @@ describe("renderMap skips RULES_INDEX_KEY when readsRulesIndex is true (spec 44 
     expect(map["other.key"]).toBe("profile-other");
   });
 
-  it("C.c: skips workspace param value for craftar.rules.index when readsRulesIndex=true", () => {
+  it("skips workspace param value for craftar.rules.index when readsRulesIndex=true", () => {
     const meta = IngredientSchema.parse({ type: "rule", name: "test" });
     const W = { [RULES_INDEX_KEY]: "workspace-index-value", "other.key": "ws-other" };
     const map = renderMap(meta, {}, W, true);
@@ -189,7 +189,7 @@ describe("renderMap skips RULES_INDEX_KEY when readsRulesIndex is true (spec 44 
     expect(map["other.key"]).toBe("ws-other");
   });
 
-  it("C.d: skips craftar.rules.index from all three sources combined when readsRulesIndex=true", () => {
+  it("skips craftar.rules.index from all three sources combined when readsRulesIndex=true", () => {
     const meta = IngredientSchema.parse({
       type: "rule",
       name: "test",
@@ -207,7 +207,7 @@ describe("renderMap skips RULES_INDEX_KEY when readsRulesIndex is true (spec 44 
     expect(map["from.workspace"]).toBe("w");
   });
 
-  it("C.e: includes craftar.rules.index when readsRulesIndex=false (control)", () => {
+  it("includes craftar.rules.index when readsRulesIndex=false (control)", () => {
     const meta = IngredientSchema.parse({
       type: "rule",
       name: "test",
@@ -220,7 +220,7 @@ describe("renderMap skips RULES_INDEX_KEY when readsRulesIndex is true (spec 44 
     expect(map[RULES_INDEX_KEY]).toBe("workspace-index");
   });
 
-  it("C.f: schema 6 control — readsRulesIndex=false includes the key (simulating below-gate behavior)", () => {
+  it("schema 6 control — readsRulesIndex=false includes the key (simulating below-gate behavior)", () => {
     // This verifies that callers passing false (schema < 7) include the key normally
     const meta = IngredientSchema.parse({
       type: "rule",
