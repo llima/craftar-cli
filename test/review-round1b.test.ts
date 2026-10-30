@@ -83,3 +83,73 @@ describe("Finding 5: Resolve once; word the failure through errorText", () => {
 });
 
 // After the fix: `grep -c "resolveForImport(" src/importers/claude-code.ts` must be 2
+
+
+import { loadWorkspace, plan } from "../src/core/sync.js";
+import { profile, recipe, scenario, type IngredientSpec } from "./helpers/forge.js";
+const kept = <T extends { cleanup: () => Promise<unknown> }>(s: T): T => (cleanups.push(s.cleanup), s);
+
+describe("Finding 6: The misplaced placeholder line is the planned file's", () => {
+  it("rule readme body 'See {{craftar.rules.index}} here' — warning lists .kiro/steering/readme.md:<n> for CRLF planned line", async () => {
+    // A rule `readme` whose body is `# Rules\n\nSee {{craftar.rules.index}} here\n`
+    // targets claude-code + kiro + agents-md at schema 7
+    // The warning should report .kiro/steering/readme.md:<n> where <n> is the 1-based line
+    // of "See {{" in the PLANNED kiro content (with banner + frontmatter).
+    const ingredients: IngredientSpec[] = [
+      {
+        meta: { type: "rule", name: "readme", description: "Index", targets: "*" },
+        files: { "rule.md": "# Rules\n\nSee {{craftar.rules.index}} here\n" },
+      },
+    ];
+    const s = kept(await scenario(
+      { ingredients, recipes: [recipe("base", ["rule/readme"])], profiles: [profile("test", ["base"], ["claude-code", "kiro", "agents-md"])] },
+      { config: { profile: "test" } }
+    ));
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 7 }));
+
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    // Find the planned kiro file content
+    const kiroFile = p.files.find((f) => f.path === ".kiro/steering/readme.md");
+    expect(kiroFile).toBeDefined();
+    const kiroContent = kiroFile!.content.toString("utf8");
+
+    // Find the line number (1-based) in the planned CRLF content that holds "See {{"
+    const kiroLines = kiroContent.replace(/\r\n/g, "\n").split("\n");
+    const misplacedLineIndex = kiroLines.findIndex((line) => line.includes("See {{craftar.rules.index}}"));
+    expect(misplacedLineIndex).toBeGreaterThanOrEqual(0);
+    const expectedKiroLine = misplacedLineIndex + 1;
+
+    // Find the warning
+    const warning = p.warnings.find((w) => w.includes("must stand alone on its line"));
+    expect(warning).toBeDefined();
+
+    // The warning should contain .kiro/steering/readme.md:<expectedKiroLine>
+    expect(warning).toContain(`.kiro/steering/readme.md:${expectedKiroLine}`);
+
+    // Also check AGENTS.md
+    const agentsMdFile = p.files.find((f) => f.path === "AGENTS.md");
+    expect(agentsMdFile).toBeDefined();
+    const agentsMdContent = agentsMdFile!.content.toString("utf8");
+
+    const agentsMdLines = agentsMdContent.replace(/\r\n/g, "\n").split("\n");
+    const misplacedAgentsMdLineIndex = agentsMdLines.findIndex((line) => line.includes("See {{craftar.rules.index}}"));
+    expect(misplacedAgentsMdLineIndex).toBeGreaterThanOrEqual(0);
+    const expectedAgentsMdLine = misplacedAgentsMdLineIndex + 1;
+
+    expect(warning).toContain(`AGENTS.md:${expectedAgentsMdLine}`);
+
+    // Also check .claude/rules/readme.md
+    const ccFile = p.files.find((f) => f.path === ".claude/rules/readme.md");
+    expect(ccFile).toBeDefined();
+    const ccContent = ccFile!.content.toString("utf8");
+
+    const ccLines = ccContent.replace(/\r\n/g, "\n").split("\n");
+    const misplacedCcLineIndex = ccLines.findIndex((line) => line.includes("See {{craftar.rules.index}}"));
+    expect(misplacedCcLineIndex).toBeGreaterThanOrEqual(0);
+    const expectedCcLine = misplacedCcLineIndex + 1;
+
+    expect(warning).toContain(`.claude/rules/readme.md:${expectedCcLine}`);
+  });
+});
