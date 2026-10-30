@@ -854,6 +854,7 @@ export function expandRulesIndex(
 
   // Build the index content once (it's the same for all occurrences)
   const rules = resolution.ingredients.filter((ing) => ing.meta.type === "rule");
+  const mode = target === "kiro" ? "kiro" : "agents-md";
 
   // Group rules by inclusion for display order
   const alwaysOn: Array<{ name: string; path: string; desc: string | null }> = [];
@@ -864,60 +865,17 @@ export function expandRulesIndex(
     if (ing.meta.type !== "rule") continue;
     const meta = ing.meta;
     const name = outName(meta);
-    const effTargets = effectiveTargets(meta, resolution);
 
-    // Get the reference for this rule in the current target's index
-    const ref = ruleReference(name, lookup, resolution.targets, target === "kiro" ? "kiro" : "agents-md");
+    // Get the reference for this rule in the current target's index (spec 44 §4.3)
+    const ref = ruleReference(name, lookup, resolution.targets, mode);
     const state = ref.state;
 
-    // State D: rule exists but reaches no target here — ABSENT from every index without it (no warning)
-    if (state === "D") continue;
+    // State D (and unknown): rule exists but reaches no target here — ABSENT from every index (no warning)
+    if (state === "D" || state === "unknown") continue;
 
-    // For non-agents-md targets: rules explicitly limited to agents-md (targets: ["agents-md"])
-    // are not accessible from other targets and should be absent from their indices.
-    // However, under agents-md.primary, always-on rules with default targets become AGENTS.md-only
-    // but should still appear (shown as "AGENTS.md (rule: x)") because they're conceptually
-    // profile-wide rules that happen to be in AGENTS.md.
-    // The distinction: meta.targets === "*" means the rule was promoted; explicit ["agents-md"] means it was scoped.
-    if (target !== "agents-md") {
-      // Rule explicitly targets only agents-md — not accessible from this target
-      if (Array.isArray(meta.targets) && meta.targets.length === 1 && meta.targets[0] === "agents-md") {
-        continue;
-      }
-    }
-
-    // Build the path string based on state
-    let path: string;
-    if (target === "kiro") {
-      switch (state) {
-        case "K1":
-          path = `\`.kiro/steering/${name}.md\``;
-          break;
-        case "K2":
-          path = `\`.claude/rules/${name}.md\``;
-          break;
-        case "K3":
-          path = `AGENTS.md (rule: ${name})`;
-          break;
-        default:
-          path = `\`.kiro/steering/${name}.md\``;
-      }
-    } else {
-      // claude-code or agents-md mode
-      switch (state) {
-        case "A":
-          path = `\`.claude/rules/${name}.md\``;
-          break;
-        case "B":
-          path = `\`.kiro/steering/${name}.md\``;
-          break;
-        case "C":
-          path = `AGENTS.md (rule: ${name})`;
-          break;
-        default:
-          path = `\`.claude/rules/${name}.md\``;
-      }
-    }
+    // Build the path string: wrap in backticks for A, B, K1, K2 (file paths); as-is for C, K3 (AGENTS.md refs)
+    const isPathState = state === "A" || state === "B" || state === "K1" || state === "K2";
+    const path = isPathState ? `\`${ref.text}\`` : ref.text;
 
     // Check description validity
     const rawDesc = meta.description;

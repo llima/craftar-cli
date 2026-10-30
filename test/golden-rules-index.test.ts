@@ -221,7 +221,9 @@ describe("rules-index edge cases", () => {
     expect(warning).toContain(".claude/rules/inline.md:1");
   });
 
-  it("state D: rule targets: [agents-md] is absent from kiro and claude-code indices", async () => {
+  it("state C/K3: rule targets: [agents-md] is listed as AGENTS.md (rule: x) when agents-md is a target", async () => {
+    // Spec §6 items 8-9: in a workspace with targets [claude-code, kiro, agents-md], a rule aimed at
+    // agents-md alone is listed as AGENTS.md (rule: x) in both claude and kiro indices (state C, K3).
     const ingredients: IngredientSpec[] = [
       { meta: { type: "rule", name: "style", description: "Style" }, files: { "rule.md": "# Style\n" } },
       { meta: { type: "rule", name: "agenthints", targets: ["agents-md"], description: "Hints" }, files: { "rule.md": "# Hints\n" } },
@@ -229,6 +231,39 @@ describe("rules-index edge cases", () => {
     ];
     const s = kept(await scenario(
       { ingredients, recipes: [recipe("base", ["rule/style", "rule/agenthints", "rule/readme"])], profiles: [profile("test", ["base"], ["claude-code", "kiro", "agents-md"])] },
+      { config: { profile: "test" } }
+    ));
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 7 }));
+
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    // In the claude index, agenthints should appear as AGENTS.md (rule: agenthints) — state C
+    const claudeIndex = p.files.find((f) => f.path === ".claude/rules/readme.md")!;
+    const claudeContent = claudeIndex.content.toString("utf8");
+    expect(claudeContent).toContain("AGENTS.md (rule: agenthints)");
+
+    // In the kiro index, agenthints should appear as AGENTS.md (rule: agenthints) — state K3
+    const kiroIndex = p.files.find((f) => f.path === ".kiro/steering/readme.md")!;
+    const kiroContent = kiroIndex.content.toString("utf8");
+    expect(kiroContent).toContain("AGENTS.md (rule: agenthints)");
+
+    // In the AGENTS.md, the index should also show agenthints
+    const agentsMd = p.files.find((f) => f.path === "AGENTS.md")!;
+    const agentsContent = agentsMd.content.toString("utf8");
+    expect(agentsContent).toContain("AGENTS.md (rule: agenthints)");
+  });
+
+  it("state D: rule targets: [agents-md] is absent when agents-md is NOT a target (no warning)", async () => {
+    // Spec §6 item 9: in a workspace with targets [claude-code, kiro] (no agents-md), a rule aimed at
+    // agents-md alone is D and left out with no warning.
+    const ingredients: IngredientSpec[] = [
+      { meta: { type: "rule", name: "style", description: "Style" }, files: { "rule.md": "# Style\n" } },
+      { meta: { type: "rule", name: "agenthints", targets: ["agents-md"], description: "Hints" }, files: { "rule.md": "# Hints\n" } },
+      { meta: { type: "rule", name: "readme", description: "Index" }, files: { "rule.md": "{{craftar.rules.index}}\n" } },
+    ];
+    const s = kept(await scenario(
+      { ingredients, recipes: [recipe("base", ["rule/style", "rule/agenthints", "rule/readme"])], profiles: [profile("test", ["base"], ["claude-code", "kiro"])] },
       { config: { profile: "test" } }
     ));
     await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 7 }));
@@ -246,10 +281,7 @@ describe("rules-index edge cases", () => {
     const kiroContent = kiroIndex.content.toString("utf8");
     expect(kiroContent).not.toContain("agenthints");
 
-    // In the AGENTS.md, the index should show agenthints
-    const agentsMd = p.files.find((f) => f.path === "AGENTS.md")!;
-    const agentsContent = agentsMd.content.toString("utf8");
-    // agenthints should appear in the index portion of AGENTS.md
-    expect(agentsContent).toContain("AGENTS.md (rule: agenthints)");
+    // No warning for the absent rule (state D is silent)
+    expect(p.warnings.filter((w) => w.includes("agenthints"))).toEqual([]);
   });
 });
