@@ -1,7 +1,9 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { profile, recipe, scenario, type IngredientSpec, type Scenario } from "./forge.js";
+import { profile, recipe, scenario, type IngredientSpec } from "./forge.js";
+
+type Scenario = Awaited<ReturnType<typeof scenario>>;
 
 /**
  * A Forge with rules, an agent and a skill that may or may not use the `{{craftar.rules.index}}` placeholder —

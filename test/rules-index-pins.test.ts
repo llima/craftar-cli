@@ -162,5 +162,12 @@ describe("rules-index=off baseline pin", () => {
     expect(observed).toEqual(expected);
   });
 
-  it.todo("a Forge with neither the placeholder nor a craftar. key is unchanged at schema 7");
+  it("a Forge with neither the placeholder nor a craftar. key is unchanged at schema 7", async () => {
+    const s = kept(await acmeIndex({ schema: 7 }));
+    const observed = await buildObserved(s);
+
+    // Compare mode: load the pin and compare (schema 7 should produce the same output as schema 6)
+    const expected = await loadPin();
+    expect(observed).toEqual(expected);
+  });
 });
