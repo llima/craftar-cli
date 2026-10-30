@@ -45,8 +45,9 @@ export const claudeCode: Emitter<"claude-code"> = {
     const hooks: ResolvedIngredient[] = [];
     const primary = ctx.resolution.primary;
 
-    // Under the mode, build the lookup once
-    const lookup: RuleLookup | null = primary ? buildRuleLookup(ctx.resolution.ingredients, ctx.resolution) : null;
+    // Under primary mode or rulesIndex, build the lookup once
+    const lookup: RuleLookup | null =
+      primary || ctx.resolution.rulesIndex ? buildRuleLookup(ctx.resolution.ingredients, ctx.resolution) : null;
     const targets = ctx.resolution.targets;
 
     // Collect reports for the warning (spec 41 §4.4)
@@ -98,8 +99,8 @@ export const claudeCode: Emitter<"claude-code"> = {
           const path = ruleFile("claude-code", m);
           // Expand the rules index at the gate (spec 44 §4.4), after resolve, before frontmatter
           let body = resolved;
-          if (ctx.resolution.rulesIndex) {
-            const indexResult = expandRulesIndex(resolved, "claude-code", buildRuleLookup(ctx.resolution.ingredients, ctx.resolution), ctx.resolution);
+          if (ctx.resolution.rulesIndex && lookup) {
+            const indexResult = expandRulesIndex(resolved, "claude-code", lookup, ctx.resolution);
             body = indexResult.text;
             if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || indexResult.expanded) {
               ctx.reportIndex({ path, rules: indexResult.listed, undescribed: indexResult.undescribed, expanded: indexResult.expanded });
