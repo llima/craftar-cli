@@ -163,7 +163,7 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
     assertText(ing.ref, fragmentPath, fragmentBytes, "the fragment is not UTF-8 text");
 
     // Render the fragment through ctx.text (sections, params)
-    const fragmentText = await base.text(ing, fragmentPath);
+    const fragmentText = await base.text(ing, fragmentPath, "services");
     const fragmentContent = Buffer.from(toLf(stripBom(fragmentText)), "utf8");
 
     // Parse the rendered fragment through parseFragment
@@ -246,7 +246,7 @@ export async function planServices(base: EmitBase): Promise<PlannedFile[]> {
         const bytes = await base.bytes(ing, file);
         assertText(ing.ref, file, bytes, "not UTF-8 text — list it under binary in ingredient.yaml");
 
-        const text = await base.text(ing, file);
+        const text = await base.text(ing, file, "services");
         const content = Buffer.from(toLf(stripBom(text)), "utf8");
 
         // Check for secrets

@@ -1,7 +1,7 @@
 import type { Hunk } from "./diff.js";
 import { SECTION_NAME, type PlanHunk } from "../schema/index.js";
 import { splitLines } from "./diff.js";
-import { expandSections, firstMarkerLine, parseSections, SectionMarkerError, type ParsedSections } from "./sections.js";
+import { expandSections, firstMarkerLine, parseSections, SectionMarkerError, type ParsedSections, type ParseSectionsOptions } from "./sections.js";
 import { stripBom, toLf } from "./text.js";
 import type { Extraction } from "./extract.js";
 import { placeholders, substituteKeys } from "./extract.js";
@@ -108,8 +108,9 @@ export function deriveSections(args: {
   hunks: Hunk[]; // the file's hunks, from diffIngredients (1-based numbering = index + 1)
   entries: PlanHunk[]; // the plan's hunk entries for this file (any take)
   declaredElsewhere: Map<string, string>; // section names declared in the base's OTHER body files → "file:line"
+  parseOpts?: ParseSectionsOptions; // Spec 41 Part B §5.2: pass to parseSections
 }): { runs: SectionRun[]; markers: MarkerInsertion[] } {
-  const { file, label, ref, baseText, variantText, hunks, entries, declaredElsewhere } = args;
+  const { file, label, ref, baseText, variantText, hunks, entries, declaredElsewhere, parseOpts } = args;
   const A = splitLines(baseText);
   const B = splitLines(variantText);
 
@@ -122,7 +123,7 @@ export function deriveSections(args: {
   }
 
   // Step 2: Base sections
-  const parsed = parseSections(baseText, label, ref);
+  const parsed = parseSections(baseText, label, ref, parseOpts);
   const baseSections = sectionSpans(parsed);
 
   // Step 4: Group section entries
@@ -624,8 +625,9 @@ export function proveSections(args: {
   values: Record<string, string>; // σ: run name → value, for every run (new and existing) in this file
   profileValues: Record<string, string>; // S_p: profile <p>'s current sections for the base's key ({} when none)
   extractions: Extraction[]; // the plan's param keys (may be empty)
+  parseOpts?: ParseSectionsOptions; // Spec 41 Part B §5.2: pass to parseSections
 }): void {
-  const { file, label, ref, template, mBase, mVar, newNames, values, profileValues, extractions } = args;
+  const { file, label, ref, template, mBase, mVar, newNames, values, profileValues, extractions, parseOpts } = args;
   const n = (x: string) => toLf(stripBom(x));
 
   // Build D and V from extractions
@@ -643,7 +645,7 @@ export function proveSections(args: {
   const runNames = Object.keys(values).join(", ") || newNames.join(", ");
 
   try {
-    pT = parseSections(template, label, ref);
+    pT = parseSections(template, label, ref, parseOpts);
   } catch (e) {
     if (e instanceof SectionMarkerError) {
       throw new Error(`unify: section ${runNames} would not reproduce the base side of "${file}" (${e.problem})`);
@@ -652,7 +654,7 @@ export function proveSections(args: {
   }
 
   try {
-    pB = parseSections(mBase, label, ref);
+    pB = parseSections(mBase, label, ref, parseOpts);
   } catch (e) {
     if (e instanceof SectionMarkerError) {
       throw new Error(`unify: section ${runNames} would not reproduce the base side of "${file}" (${e.problem})`);
@@ -661,7 +663,7 @@ export function proveSections(args: {
   }
 
   try {
-    pV = parseSections(mVar, label, ref);
+    pV = parseSections(mVar, label, ref, parseOpts);
   } catch (e) {
     if (e instanceof SectionMarkerError) {
       throw new Error(`unify: section ${runNames} would not reproduce the variant side of "${file}" (${e.problem})`);
@@ -773,14 +775,15 @@ export function prefillSections(args: {
   hunks: HunkWithSuggestion[];
   /** Every section name the ingredient already declares, in any body file. */
   declared: Set<string>;
+  parseOpts?: ParseSectionsOptions; // Spec 41 Part B §5.2: pass to parseSections
 }): Array<string | undefined> {
-  const { baseText, label, ref, hunks, declared } = args;
+  const { baseText, label, ref, hunks, declared, parseOpts } = args;
   const result: Array<string | undefined> = new Array(hunks.length).fill(undefined);
 
   // Parse base sections; on error, return all undefined
   let parsed: ParsedSections;
   try {
-    parsed = parseSections(baseText, label, ref);
+    parsed = parseSections(baseText, label, ref, parseOpts);
   } catch (e) {
     if (e instanceof SectionMarkerError) return result;
     throw e;

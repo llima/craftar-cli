@@ -59,7 +59,7 @@ export const agentsMd: Emitter<"agents-md"> = {
     const alwaysReports: RefReport[] = [];
     const embeddedReports: RefReport[] = [];
     for (const ing of rules) {
-      const rawBody = await ctx.text(ing, ing.meta.file);
+      const rawBody = await ctx.text(ing, ing.meta.file, "agents-md");
       if (ing.meta.inclusion === "always") {
         // Resolve references, then trim trailing newlines (spec 15: after ctx.text, before the trim)
         const { text: resolved, report } = resolveRuleRefs(rawBody, ing.ref, lookup, ctx.resolution.targets);

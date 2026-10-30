@@ -9,7 +9,7 @@ import { parseWorkspaceYaml } from "./workspace-yaml.js";
 import { classifyForge, credentialFault, ensureTree, refHoldsCredentials, shownRef, ForgeFetchError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
 import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
-import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, type ParsedSections } from "./sections.js";
+import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, projectSections, readsTargetSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile } from "./extract.js";
 import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockV2, type LockV3, type Owner, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
@@ -17,7 +17,7 @@ import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
 import { AGENTS_MD_BUDGET_KEY, agentsMd } from "../emitters/agents-md.js";
 import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
-import { written } from "./capabilities.js";
+import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
 import { appliesTo, effectiveTargets } from "../emitters/shared.js";
@@ -312,7 +312,7 @@ export interface Plan {
   files: PlannedFile[];
   warnings: string[];
   /** Per ingredient ref, each section it declares, with the layer that filled it (spec 11 §5.3, for `explain`). */
-  sections: Map<string, Array<{ file: string; name: string; layer: SectionLayer }>>;
+  sections: Map<string, Array<{ file: string; name: string; layer: SectionLayer; targets?: Target[] }>>;
   /** Per ingredient ref, each `{{key}}` a file rendered for it cites, sorted, with the layer that filled it (spec 29 §4.1, for `explain`). */
   params: Map<string, Array<{ key: string; layer: ParamLayer }>>;
   /**
@@ -459,6 +459,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
   const declared = new Map<string, Set<string>>(); // section key → names declared by resolved ingredients
   const byRef: Plan["sections"] = new Map();
   let firstMarker: string | null = null;
+  const parseOpts = { targets: readsTargetSections(forge.manifest) };
   for (const ing of resolution.ingredients) {
     const key = sectionKey(ing.meta);
     const names = declared.get(key) ?? new Set<string>();
@@ -469,10 +470,30 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
       if (rel === "ingredient.yaml") continue;
       const abs = path.join(ing.dir, rel);
       if (bodyFile(ing.meta, rel, ing.dir)) {
-        const p = parseSections(await fs.readFile(abs, "utf8"), forgeRel(forge, abs), ing.ref);
+        const p = parseSections(await fs.readFile(abs, "utf8"), forgeRel(forge, abs), ing.ref, parseOpts);
         parsed.set(abs, p);
         files.push({ rel, p });
         if (p.sections.length && firstMarker === null) firstMarker = `${p.file}:${p.sections[0].line}`;
+        // Edge case: a service file with a targeted section fails the plan
+        if (ing.meta.type === "service") {
+          for (const s of p.sections) {
+            if (s.targets) {
+              throw new Error(`${ing.ref} ${rel}: section ${s.name} names targets, but a service file is written for no target — remove targets=`);
+            }
+          }
+        }
+        // Edge case 14: warn if a targeted section reaches no target that writes the ingredient
+        const effTargets = effectiveTargets(ing.meta, resolution);
+        for (const s of p.sections) {
+          if (s.targets) {
+            const reaches = s.targets.some((t) =>
+              appliesTo(effTargets, t) && CAPABILITIES[t][ing.meta.type].state !== "unsupported"
+            );
+            if (!reaches) {
+              warnings.push(`${ing.ref} ${rel}: section ${s.name} reaches no target that writes ${ing.ref} (targets=${s.targets.join(",")})`);
+            }
+          }
+        }
       } else if (emittedFile(ing.meta, rel, ing.dir)) {
         // A file emitted but not every target renders as text keeps its markers; one, whatever its extension, is warned, never dropped
         // silently. Every marker form contains "craftar:section", so a file without it is not decoded.
@@ -484,11 +505,11 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
       // A file no target emits is skipped silently (0.8.2) — not read for sections, not warned
     }
     checkDeclaredOnce(ing.ref, files.map((f) => f.p));
-    const list: Array<{ file: string; name: string; layer: SectionLayer }> = [];
+    const list: Plan["sections"] extends Map<string, infer V> ? V : never = [];
     for (const { rel, p } of files) {
       for (const s of p.sections) {
         names.add(s.name);
-        list.push({ file: rel, name: s.name, layer: layerOf(resolution, key, s.name) });
+        list.push({ file: rel, name: s.name, layer: layerOf(resolution, key, s.name), ...(s.targets ? { targets: s.targets } : {}) });
       }
     }
     if (list.length) byRef.set(ing.ref, list);
@@ -523,16 +544,17 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
  * The output guard (spec 11 §6.6 step 6, Ruling 19): a rendered body file never holds a marker
  * line. When one does, it came from a value; name the first value that carries one.
  */
-function guardOutput(ing: ResolvedIngredient, file: string, out: string, p: ParsedSections, resolution: Resolution, params: Record<string, unknown>): void {
+function guardOutput(ing: ResolvedIngredient, file: string, out: string, p: ParsedSections, resolution: Resolution, params: Record<string, unknown>, owner: Owner): void {
   const line = firstMarkerLine(out);
   if (line === null) return;
   const key = sectionKey(ing.meta);
   const values = sectionsFor(ing, resolution);
   let from = "a section or param value";
-  const section = p.sections.find((s) => Object.hasOwn(values, s.name) && firstMarkerLine(substitute(canonicalValue(values[s.name]), params)) !== null);
+  const q = projectSections(p, owner);
+  const section = q.sections.find((s) => Object.hasOwn(values, s.name) && firstMarkerLine(substitute(canonicalValue(values[s.name]), params)) !== null);
   if (section) from = `${layerLabel(resolution, layerOf(resolution, key, section.name))}, section ${section.name}`;
   else {
-    const k = placeholders(expandSections(p, values)).find((x) => Object.hasOwn(params, x) && /<!--[ \t]*\/?[ \t]*craftar:section/.test(String(params[x])));
+    const k = placeholders(expandSections(q, values)).find((x) => Object.hasOwn(params, x) && /<!--[ \t]*\/?[ \t]*craftar:section/.test(String(params[x])));
     if (k !== undefined) from = `param ${k}`;
   }
   throw new Error(`${ing.ref} ${file}: the rendered text holds a section marker on line ${line} (from ${from}) — a value cannot open or close a section`);
@@ -585,7 +607,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
         return null;
       }
     },
-    async text(ing: ResolvedIngredient, file: string) {
+    async text(ing: ResolvedIngredient, file: string, owner: Owner) {
       const abs = path.join(ing.dir, file);
       const raw = await fs.readFile(abs, "utf8");
       const missing = new Set<string>();
@@ -599,9 +621,9 @@ export async function plan(ws: Workspace): Promise<Plan> {
         throw new Error(
           `${forgeRel(ws.forge, abs)}: ${ing.ref} declares a file outside its directory, behind a symlinked directory, or spelled differently from the file on disk — keep the file inside ${forgeRel(ws.forge, ing.dir)} and spell the declared path as it is on disk`,
         );
-      const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution)) : toLf(stripBom(raw));
+      const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution), owner) : toLf(stripBom(raw));
       const out = substitute(expanded, params, missing);
-      if (parsed) guardOutput(ing, file, out, parsed, resolution, params);
+      if (parsed) guardOutput(ing, file, out, parsed, resolution, params, owner);
       // Every file rendered here, body file or not: `explain` names each key the refusal can name (spec 29 §4.1).
       const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
       for (const key of placeholders(expanded)) c.keys.add(key);

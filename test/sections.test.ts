@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
-import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, inferSections, markerLine, parseSections, SectionMarkerError } from "../src/core/sections.js";
+import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, inferSections, markerLine, parseSections, readsTargetSections, SectionMarkerError } from "../src/core/sections.js";
+import { readsPrimary } from "../src/core/resolve.js";
+import { rendersServers } from "../src/core/mcp-server.js";
+import { readsIntegrations } from "../src/core/integrations.js";
 
 const F = "ingredients/rules/review-posture/rule.md";
 const OPEN = (n: string) => `<!-- craftar:section ${n} -->`;
@@ -248,5 +251,172 @@ describe("the section matcher (spec 11 §6.8)", () => {
     const s = src("\n" + T(GLOBEX) + "\n");
     expect(inferSections(p, s.replace(/\n/g, "\r\n"), {}, {})).toEqual({ values: { flavors: T(GLOBEX) } });
     expect(inferSections(p, "﻿" + s, {}, {})).toEqual({ values: { flavors: T(GLOBEX) } });
+  });
+});
+
+describe("schema gates (spec 41 Part B)", () => {
+  it("readsTargetSections: false at schema 5, true at schema 6", () => {
+    expect(readsTargetSections({ schema: 5 })).toBe(false);
+    expect(readsTargetSections({ schema: 6 })).toBe(true);
+  });
+
+  it("readsPrimary, rendersServers, readsIntegrations are all true at schema 6 (they use >=)", () => {
+    const m = { schema: 6 };
+    expect(readsPrimary(m)).toBe(true);
+    expect(rendersServers(m)).toBe(true);
+    expect(readsIntegrations(m)).toBe(true);
+  });
+});
+
+describe("targeted sections (spec 41 Part B §11.3)", () => {
+  const O = (n: string, t: string) => `<!-- craftar:section ${n} targets=${t} -->`;
+  const C = CLOSE;
+
+  it("Case 1: targets=false and a targeted marker is near with the schema-6 problem", () => {
+    const m = markerLine(O("x", "kiro"), { targets: false });
+    expect(m).toEqual({ kind: "near", problem: "section x names targets, which a Forge reads only at schema: 6 — set schema: 6 in craftar.forge.yaml" });
+  });
+
+  it("Case 1: parseSections with targets=false throws the schema-6 problem", () => {
+    const e = parseError(O("x", "kiro") + "\nY\n" + C + "\n");
+    expect(e.line).toBe(1);
+    expect(e.problem).toBe("section x names targets, which a Forge reads only at schema: 6 — set schema: 6 in craftar.forge.yaml");
+  });
+
+  it("Case 2: targets=true parses valid targets", () => {
+    const m1 = markerLine(O("x", "kiro"), { targets: true });
+    expect(m1).toEqual({ kind: "open", name: "x", targets: ["kiro"] });
+
+    const m2 = markerLine(O("x", "claude-code,agents-md"), { targets: true });
+    expect(m2).toEqual({ kind: "open", name: "x", targets: ["claude-code", "agents-md"] });
+  });
+
+  it("Case 3: targets=true refuses invalid targets, value never in message", () => {
+    const problem = "section x: targets= takes one or more of claude-code, kiro, agents-md, comma-separated, each once";
+
+    // Empty value
+    expect(markerLine(O("x", ""), { targets: true })).toEqual({ kind: "near", problem });
+
+    // Unknown target
+    expect(markerLine(O("x", "cursor"), { targets: true })).toEqual({ kind: "near", problem });
+
+    // Duplicate target
+    expect(markerLine(O("x", "kiro,kiro"), { targets: true })).toEqual({ kind: "near", problem });
+
+    // Trailing comma
+    expect(markerLine(O("x", "kiro,"), { targets: true })).toEqual({ kind: "near", problem });
+
+    // Wrong case
+    expect(markerLine(O("x", "Kiro"), { targets: true })).toEqual({ kind: "near", problem });
+
+    // Fake secret token - must not appear in message
+    const fakeToken = "zz-secret-zz";
+    const result = markerLine(O("x", fakeToken), { targets: true });
+    expect(result?.kind).toBe("near");
+    expect((result as { problem?: string }).problem).toBe(problem);
+    expect((result as { problem?: string }).problem).not.toContain(fakeToken);
+  });
+
+  it("Case 4: plain opener with targets=true has no targets key", () => {
+    const m = markerLine(OPEN("x"), { targets: true });
+    expect(m).toEqual({ kind: "open", name: "x" });
+    expect(m).not.toHaveProperty("targets");
+  });
+
+  it("Case 5: projectSections removes sections not for the owner (blank-line rule)", () => {
+    // O(n,t) = targeted opener, C = closer
+    const Ot = (n: string, t: string) => `<!-- craftar:section ${n} targets=${t} -->`;
+
+    // first: "O\nX\nC\n\nbody\n" → "\nbody\n"
+    const first = parseSections(Ot("x", "claude-code") + "\nX\n" + C + "\n\nbody\n", F, F, { targets: true });
+    expect(expandSections(first, {}, "kiro")).toBe("\nbody\n");
+
+    // last: "body\n\nO\nX\nC\n" → "body\n\n"
+    const last = parseSections("body\n\n" + Ot("x", "claude-code") + "\nX\n" + C + "\n", F, F, { targets: true });
+    expect(expandSections(last, {}, "kiro")).toBe("body\n\n");
+
+    // alone: "O\nX\nC\n" → ""
+    const alone = parseSections(Ot("x", "claude-code") + "\nX\n" + C + "\n", F, F, { targets: true });
+    expect(expandSections(alone, {}, "kiro")).toBe("");
+
+    // between blank lines: "a\n\nO\nX\nC\n\nb\n" → "a\n\nb\n"
+    const betweenBlanks = parseSections("a\n\n" + Ot("x", "claude-code") + "\nX\n" + C + "\n\nb\n", F, F, { targets: true });
+    expect(expandSections(betweenBlanks, {}, "kiro")).toBe("a\n\nb\n");
+
+    // not between blanks: "a\nO\nX\nC\nb\n" → "a\nb\n"
+    const notBetweenBlanks = parseSections("a\n" + Ot("x", "claude-code") + "\nX\n" + C + "\nb\n", F, F, { targets: true });
+    expect(expandSections(notBetweenBlanks, {}, "kiro")).toBe("a\nb\n");
+
+    // blank before only: "a\n\nO\nX\nC\nb\n" → "a\n\nb\n"
+    const blankBeforeOnly = parseSections("a\n\n" + Ot("x", "claude-code") + "\nX\n" + C + "\nb\n", F, F, { targets: true });
+    expect(expandSections(blankBeforeOnly, {}, "kiro")).toBe("a\n\nb\n");
+
+    // two removed in a row between blanks: "a\n\nO1\nX\nC\nO2\nY\nC\n\nb\n" → "a\n\nb\n"
+    const twoRemoved = parseSections("a\n\n" + Ot("x1", "claude-code") + "\nX\n" + C + "\n" + Ot("x2", "claude-code") + "\nY\n" + C + "\n\nb\n", F, F, { targets: true });
+    expect(expandSections(twoRemoved, {}, "kiro")).toBe("a\n\nb\n");
+
+    // removed then received: "a\n\nO1\nX\nC\nO2\nY\nC\n\nb\n" with O2 targets=kiro → "a\n\nY\n\nb\n"
+    const removedThenReceived = parseSections("a\n\n" + Ot("x1", "claude-code") + "\nX\n" + C + "\n" + Ot("x2", "kiro") + "\nY\n" + C + "\n\nb\n", F, F, { targets: true });
+    expect(expandSections(removedThenReceived, {}, "kiro")).toBe("a\n\nY\n\nb\n");
+
+    // for owner claude-code the same inputs give the section's default (today's expansion)
+    expect(expandSections(first, {}, "claude-code")).toBe("X\n\nbody\n");
+    expect(expandSections(alone, {}, "claude-code")).toBe("X\n");
+    expect(expandSections(betweenBlanks, {}, "claude-code")).toBe("a\n\nX\n\nb\n");
+
+    // a CRLF input gives the same as its LF form (parseSections normalizes)
+    const crlfInput = ("a\n\n" + Ot("x", "claude-code") + "\nX\n" + C + "\n\nb\n").replace(/\n/g, "\r\n");
+    const crlfParsed = parseSections(crlfInput, F, F, { targets: true });
+    expect(expandSections(crlfParsed, {}, "kiro")).toBe("a\n\nb\n");
+
+    // owner services removes every targeted section
+    expect(expandSections(first, {}, "services")).toBe("\nbody\n");
+    expect(expandSections(removedThenReceived, {}, "services")).toBe("a\n\nb\n");
+  });
+
+  it("Case 6: profile value for removed section is not inserted", () => {
+    // A profile provides a value for a section that the owner will never see.
+    // That value must not appear in the expanded result.
+    const Ot = (n: string, t: string) => `<!-- craftar:section ${n} targets=${t} -->`;
+    const parsed = parseSections("a\n\n" + Ot("x", "claude-code") + "\ndefault\n" + C + "\n\nb\n", F, F, { targets: true });
+
+    // Profile provides a value for section x
+    const values = { x: "profile value\n" };
+
+    // For kiro (not in targets), the section is removed entirely — the profile value is ignored
+    expect(expandSections(parsed, values, "kiro")).toBe("a\n\nb\n");
+
+    // For claude-code (in targets), the section is kept and the profile value is used
+    expect(expandSections(parsed, values, "claude-code")).toBe("a\n\nprofile value\n\nb\n");
+  });
+
+  it("Case 7: file with no targeted section behaves same with/without owner", () => {
+    // A file with only untargeted sections (no targets= attribute) expands the same
+    // whether an owner is given or not.
+    const parsed = parseSections("a\n" + OPEN("x") + "\ndefault\n" + C + "\nb\n", F, F, { targets: true });
+
+    // Without owner
+    expect(expandSections(parsed, {})).toBe("a\ndefault\nb\n");
+    expect(expandSections(parsed, { x: "custom\n" })).toBe("a\ncustom\nb\n");
+
+    // With owner — same result since section has no targets attribute
+    expect(expandSections(parsed, {}, "kiro")).toBe("a\ndefault\nb\n");
+    expect(expandSections(parsed, { x: "custom\n" }, "kiro")).toBe("a\ncustom\nb\n");
+    expect(expandSections(parsed, {}, "claude-code")).toBe("a\ndefault\nb\n");
+    expect(expandSections(parsed, { x: "custom\n" }, "claude-code")).toBe("a\ncustom\nb\n");
+  });
+
+  it("firstMarkerLine: targeted line is non-null at every schema", () => {
+    // A targeted marker line should be detected by firstMarkerLine at every schema
+    // (it's a near miss at schema <6, but still caught)
+    const targetedOpener = "<!-- craftar:section x targets=claude-code -->";
+    const targetedCloser = "<!-- /craftar:section -->";
+
+    // firstMarkerLine uses markerLine with no options (default: targets=false)
+    // At targets=false, a targeted opener is a "near" result (schema-6 problem)
+    // This should still return a line number (it's not null, which is "plain text")
+    expect(firstMarkerLine(targetedOpener + "\n")).toBe(1);
+    expect(firstMarkerLine("body\n" + targetedOpener + "\n")).toBe(2);
+    expect(firstMarkerLine("body\n" + targetedCloser + "\n")).toBe(2); // closer is always same
   });
 });

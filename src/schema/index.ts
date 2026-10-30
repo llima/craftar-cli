@@ -595,6 +595,8 @@ export const FORGE_SCHEMA_INTEGRATIONS = 3;
 export const FORGE_SCHEMA_SERVER_PARAMS = 4;
 /** Forge schema that reads the param agents-md.primary (spec 41 §4.1). */
 export const FORGE_SCHEMA_AGENTS_MD_PRIMARY = 5;
+/** Forge schema that reads targets= on a section marker (spec 41 Part B). */
+export const FORGE_SCHEMA_TARGET_SECTIONS = 6;
 
 export const ForgeManifestSchema = z.object({
   name: z.string(),
@@ -605,11 +607,15 @@ export const ForgeManifestSchema = z.object({
       z.literal(FORGE_SCHEMA_INTEGRATIONS),
       z.literal(FORGE_SCHEMA_SERVER_PARAMS),
       z.literal(FORGE_SCHEMA_AGENTS_MD_PRIMARY),
+      z.literal(FORGE_SCHEMA_TARGET_SECTIONS),
     ])
     .default(1),
   description: z.string().optional(),
 });
 export type ForgeManifest = z.infer<typeof ForgeManifestSchema>;
+
+/** The valid schema values a Forge manifest can declare. */
+export type ForgeSchema = ForgeManifest["schema"];
 
 /* ------------------------------------------------------------------ */
 /* Workspace (craftar.yaml)                                             */

@@ -93,7 +93,7 @@ export const kiro: Emitter<"kiro"> = {
       const m = ing.meta;
       switch (m.type) {
         case "rule": {
-          const rawBody = await ctx.text(ing, m.file);
+          const rawBody = await ctx.text(ing, m.file, "kiro");
           const body = resolve(rawBody, ing.ref);
           const path = ruleFile("kiro", m);
           checkReworded(path, [rawBody], ing.ref);
@@ -107,7 +107,7 @@ export const kiro: Emitter<"kiro"> = {
         }
         case "steering":
           // Steering bodies are emitted as written (spec 17 §2)
-          out.push(crlf(`.kiro/steering/${outName(m)}.md`, await ctx.text(ing, m.file), ing.ref));
+          out.push(crlf(`.kiro/steering/${outName(m)}.md`, await ctx.text(ing, m.file, "kiro"), ing.ref));
           break;
         case "agent": {
           const path = `.kiro/agents/${outName(m)}.json`;
@@ -115,7 +115,7 @@ export const kiro: Emitter<"kiro"> = {
           const rawDesc = m.description ?? "";
           const description = resolve(rawDesc, ing.ref);
           // Read the body once and derive both versions from it
-          const rawBody = await ctx.text(ing, m.file);
+          const rawBody = await ctx.text(ing, m.file, "kiro");
           const body = resolve(rawBody, ing.ref);
           checkReworded(path, [rawDesc, rawBody], ing.ref);
           const tools = mapTools(m.tools, ctx);
@@ -144,7 +144,7 @@ export const kiro: Emitter<"kiro"> = {
         }
         case "command": {
           const path = `.kiro/steering/commands/${outName(m)}.md`;
-          const rawBody = await ctx.text(ing, m.file);
+          const rawBody = await ctx.text(ing, m.file, "kiro");
           // Resolve description and raw frontmatter first, then body (spec 17 §4.5 order: frontmatter before body)
           // When frontmatterRaw is set, the description field is unused (serializeFrontmatter ignores it),
           // so we skip resolving it to avoid spurious reports.
@@ -163,7 +163,7 @@ export const kiro: Emitter<"kiro"> = {
         case "skill": {
           if (m.layout === "file") {
             const path = `.kiro/skills/${outName(m)}/SKILL.md`;
-            const rawText = await ctx.text(ing, "SKILL.md");
+            const rawText = await ctx.text(ing, "SKILL.md", "kiro");
             const text = resolve(rawText, ing.ref);
             checkReworded(path, [rawText], ing.ref);
             out.push(crlf(path, text, ing.ref));
@@ -172,7 +172,7 @@ export const kiro: Emitter<"kiro"> = {
               if (f === "ingredient.yaml") continue;
               const path = `.kiro/skills/${outName(m)}/${f}`;
               if (KIRO_TEXT_EXT.test(f)) {
-                const rawText = await ctx.text(ing, f);
+                const rawText = await ctx.text(ing, f, "kiro");
                 const text = resolve(rawText, ing.ref);
                 checkReworded(path, [rawText], ing.ref);
                 out.push(crlf(path, text, ing.ref));

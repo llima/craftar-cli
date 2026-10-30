@@ -9,7 +9,7 @@ import { registrationCitations, serverSecret, windowsOnlyLauncher, launcherImpor
 import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
-import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
+import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, resolve, type Resolution } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
@@ -19,13 +19,14 @@ import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
 import { decide, forgeBefore, pin, registrationCarry, sourceKeys, workspaceParams, workspaceSections, workspaceTargets, type RunContext } from "./decide.js";
 import { providedByBlock } from "./provided.js";
-import { renderMap } from "../core/template-import.js";
-import { firstMarkerLine } from "../core/sections.js";
+import { readBase, renderMap } from "../core/template-import.js";
+import { firstMarkerLine, readsTargetSections } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
 import { GENERATED_BANNER, kiroReport, textLines, type KiroReport } from "./kiro-report.js";
 import { preferKiro } from "./prefer-kiro.js";
+import { agentsMdOnly as isAgentsMdOnly, appliesTo, buildRuleLookup, outName, resolveRuleRefs } from "../emitters/shared.js";
+import { CAPABILITIES } from "../core/capabilities.js";
 import { deepMerge } from "../core/merge.js";
-import { agentsMdOnly as isAgentsMdOnly, buildRuleLookup, outName, resolveRuleRefs } from "../emitters/shared.js";
 import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { note, type WriteJournal } from "../core/unify.js";
@@ -144,6 +145,8 @@ interface Source {
   skip?: () => boolean;
   /** Lines of the source file above the text in `files`, when it is not the file's own top (a rule read from its steering mirror). */
   lineOffset?: number;
+  /** The source target for section projection (spec 41 Part B §5.2): "claude-code" for .claude/ sources, "kiro" for --prefer-kiro. */
+  sourceTarget?: "claude-code" | "kiro";
 }
 
 interface PlannedConfig {
@@ -174,8 +177,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // Two passes (spec 10 §6.8): every source is read first, in today's order, then decided in that
   // order. `after` does the bookkeeping today's code did right after each decision.
   const queue: Source[] = [];
-  const read = (meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string>, after: (ref: string) => void, skip?: () => boolean) =>
-    queue.push({ meta, files, scan, after, skip });
+  const read = (meta: Ingredient, files: Record<string, string | Buffer>, scan: Record<string, string>, after: (ref: string) => void, skip?: () => boolean, sourceTarget?: "claude-code" | "kiro") =>
+    queue.push({ meta, files, scan, after, skip, sourceTarget });
   const refs = { base: [] as string[], stacks: new Map<string, string[]>(), steering: [] as string[] };
   const ruleNames: string[] = [];
   const scopedRules = new Map<string, string>(); // rule name → fileMatchPattern
@@ -343,13 +346,42 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // Whether a steering file is hand-written depends on the rules decided before it, so the check runs at decision time.
   for (const [name, sm] of steeringMeta) {
     const meta: Ingredient = { type: "steering", name, file: "steering.md", targets: ["kiro"], tags: ["client"], origin: origin(`.kiro/steering/${name}.md`) };
-    read(meta, { "steering.md": sm.text }, scanOf("steering.md", sm), (ref) => addRef(refs.steering, ref), () => ruleNames.includes(name) || sm.generated || name === "commands");
+    read(meta, { "steering.md": sm.text }, scanOf("steering.md", sm), (ref) => addRef(refs.steering, ref), () => ruleNames.includes(name) || sm.generated || name === "commands", "kiro");
   }
 
   /* ---- what the importing profile renders (spec 10 §6.1, §6.8 step 2) ---- */
   const loaded = await forgeBefore(forge, manifestOnDisk);
   const existing = await existingProfile(forge, opts.profileName, loaded);
   const readWs = (abs: string) => fs.readFile(abs, "utf8");
+
+  // Detect targets this workspace writes (spec 41 Part B §5.2's variant warnings).
+  const detected: Target[] = ["claude-code"];
+  if (await exists(path.join(ws, ".kiro"))) detected.push("kiro");
+
+  // Compute writtenTargets only at schema 6 (the variant warnings only fire there).
+  async function writtenTargetsFor(): Promise<readonly Target[]> {
+    const profileTargets = loaded?.profiles.get(opts.profileName)?.targets ?? [];
+    // Union of profile targets and detected targets, in TARGETS order.
+    const union = TARGETS.filter((t) => profileTargets.includes(t) || detected.includes(t));
+    try {
+      if (opts.writeWorkspaceConfig) {
+        // With --write-config, craftar.yaml will be set to `detected`, so the next sync writes
+        // craftar.local.yaml's targets when that file sets them, else detected.
+        const localTargets = await workspaceTargets(ws, readWs, "import", ["craftar.local.yaml"]);
+        return localTargets ?? detected;
+      } else {
+        // Without the flag, the workspace's targets (craftar.yaml's, else craftar.local.yaml's),
+        // else the union of profile targets and detected targets.
+        const wsTargets = await workspaceTargets(ws, readWs);
+        return wsTargets ?? union;
+      }
+    } catch {
+      // An invalid targets value must not fail the import — only a warning's wording depends on it.
+      return opts.writeWorkspaceConfig ? detected : union;
+    }
+  }
+  const writtenTargets = readsTargetSections(loaded?.manifest ?? { schema: 1 }) ? await writtenTargetsFor() : [];
+
   const ctx: RunContext = {
     P: Object.assign(Object.create(null), existing.params),
     W: await workspaceParams(ws, readWs),
@@ -359,6 +391,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     forge: loaded,
     markedBase: false,
     primaryRefs: null,
+    sourceTarget: "claude-code",
+    writtenTargets,
   };
   const primary = await primaryFor(loaded, opts.profileName, ctx, ws, readWs);
   ctx.primaryRefs = primary?.refs ?? null;
@@ -406,6 +440,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       q.scan = scanOf("rule.md", sm);
       q.lineOffset = offset;
       q.meta = { ...q.meta, origin: origin(source) };
+      q.sourceTarget = "kiro"; // Spec 41 Part B §5.2: prefer-kiro rules infer from kiro's view of the sections
       // A steering body written before rules kept their frontmatter apart still holds the fence: the
       // text then carries it, as it did, and the rule's own copy is dropped so the file is not written twice.
       if ("frontmatterRaw" in q.meta && q.meta.frontmatterRaw !== undefined && parseFrontmatter(text).raw !== null) {
@@ -470,9 +505,13 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   for (const src of queue) {
     if (src.skip?.()) continue;
     const others = mayBeDecided.filter((q) => q !== src).map((q) => ({ ref: `${q.meta.type}/${q.meta.name}`, meta: q.meta, files: q.files }));
+    // Spec 41 Part B §5.2: use the source's target for section projection (kiro for --prefer-kiro, else claude-code)
+    ctx.sourceTarget = src.sourceTarget ?? "claude-code";
     const ref = await writeIngredient(stage, src.meta, src.files, opts.profileName, report, src.scan, { ctx, others, runBases, literal, lineOffset: src.lineOffset });
     if (ref) src.after(ref);
   }
+  // Reset sourceTarget to claude-code for any remaining operations
+  ctx.sourceTarget = "claude-code";
 
   // I3: a created or variant ingredient is the workspace text itself; a key the profile now sets would change it at sync.
   // I11 first (spec 11 §6.9): a column-0 marker in that text would be read as structure, so sync could not reproduce it.
@@ -557,8 +596,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   }
 
   /* ---- profile ---- */
-  const targets: Target[] = ["claude-code"];
-  if (await exists(path.join(ws, ".kiro"))) targets.push("kiro");
+  const targets = detected; // Computed earlier for writtenTargets.
   const profile: ImportedProfile = {
     name: opts.profileName,
     description: `Imported from ${path.basename(ws)} on ${new Date().toISOString().slice(0, 10)}.`,
@@ -1151,6 +1189,33 @@ async function writeIngredient(
     }
     const as = meta.name;
     name = `${meta.name}--${profile}`;
+    // Warn about sections this variant leaves out or holds as plain text (spec 41 Part B §5.2).
+    if (run?.ctx) {
+      const parseOpts = { targets: readsTargetSections(run.ctx.forge?.manifest ?? { schema: 1 }) };
+      const base = await readBase(dir, stage.reader(), forge, parseOpts);
+      const owner = run.ctx.sourceTarget;
+      // The targets this workspace writes that the variant applies to and supports.
+      const writes = run.ctx.writtenTargets.filter(
+        (t) => appliesTo(meta.targets ?? "*", t) && CAPABILITIES[t][meta.type].state !== "unsupported",
+      );
+      for (const [, parsed] of base.parsed) {
+        for (const s of parsed.sections) {
+          if (s.targets && !(s.targets as readonly string[]).includes(owner)) {
+            // Section for other targets — left out of this variant.
+            const affected = (s.targets as readonly string[]).filter((t) => writes.includes(t as Target));
+            if (affected.length > 0) {
+              report.warnings.push(`${meta.type}/${name}: made from the ${owner} file, it leaves out section ${s.name} (targets=${s.targets.join(",")}) — sync writes ${affected.join(", ")} without it`);
+            }
+          } else if (s.targets && (s.targets as readonly string[]).includes(owner)) {
+            // Section for this target but not all — held as plain text in the variant.
+            const others = writes.filter((t) => !(s.targets as readonly string[]).includes(t));
+            if (others.length > 0) {
+              report.warnings.push(`${meta.type}/${name}: made from the ${owner} file, it holds section ${s.name} (targets=${s.targets.join(",")}) as plain text — sync writes it to ${others.join(", ")} too`);
+            }
+          }
+        }
+      }
+    }
     dir = path.join(forge, "ingredients", folder, name);
     report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge${why ? ` (${why})` : ""}` });
 

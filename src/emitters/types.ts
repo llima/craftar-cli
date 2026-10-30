@@ -23,8 +23,8 @@ export interface EmitBase {
   workspaceRoot: string;
   /** Read the current bytes of a workspace file, or null when it does not exist. */
   readExisting(relPath: string): Promise<Buffer | null>;
-  /** Read a file inside an ingredient dir as UTF-8 text with LF line endings and params substituted. */
-  text(ing: ResolvedIngredient, file: string): Promise<string>;
+  /** Read a file inside an ingredient dir as UTF-8 text with LF line endings, sections projected and params substituted. */
+  text(ing: ResolvedIngredient, file: string, owner: Owner): Promise<string>;
   /** Raw bytes of a file inside an ingredient dir (binary-safe, no substitution). */
   bytes(ing: ResolvedIngredient, file: string): Promise<Buffer>;
   warn(msg: string): void;

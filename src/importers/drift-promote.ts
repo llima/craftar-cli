@@ -60,6 +60,7 @@ import {
 import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
 import { providedRefs } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
+import { readsTargetSections } from "../core/sections.js";
 import { sectionKey } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { parseYamlText } from "../core/yaml-read.js";
@@ -754,6 +755,10 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     markedBase: false,
     // A file agents-md.primary reworded is refused before this point (D20); any other source holds no rewording.
     primaryRefs: null,
+    // Drift promote always works with .claude/ files (spec 41 Part B §5.2)
+    sourceTarget: "claude-code",
+    // Drift promote reports sections through `flattened`; writeIngredient's variant warnings do not run here.
+    writtenTargets: [],
   };
 
   const fingerprint = fingerprintOf(validateImported(sourceMeta), emitted.files);
@@ -778,12 +783,13 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   let flattenedParams: string[] = [];
   let flattenedSections: string[] = [];
 
-  // Read the base to detect cited keys and sections
-  const base = await readBase(X.dir, stage.reader(), forge.root);
+  const parseOpts = { targets: readsTargetSections(forge.manifest) };
+  const base = await readBase(X.dir, stage.reader(), forge.root, parseOpts);
   const ingKey = sectionKey(X.meta);
   const PSk = ctx.PS[ingKey] ?? {};
   const WSk = ctx.WS[ingKey] ?? {};
   const S: Record<string, string> = { ...PSk, ...WSk };
+  // Unprojected on purpose: a variant stores the file one target wrote, so its sections are cited for every target (spec 41 Part B).
   const baseCitedKeys = citedKeys(expandedTexts(base, S));
   const baseSectionNames = sectionNames(base);
 
