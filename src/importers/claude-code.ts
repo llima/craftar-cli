@@ -1978,7 +1978,7 @@ async function indexHolderInQueue(
 ): Promise<string | null> {
   const refs = [...queued].flatMap((r) => [r, `${r}--${profile}`]).sort();
   for (const ref of refs) {
-    const ing = loaded.ingredients.get(ref as `rule/${string}`);
+    const ing = loaded.ingredients.get(ref as `rule/${string}` | `steering/${string}`);
     if (ing && (ing.meta.type === "rule" || ing.meta.type === "steering") && RULES_INDEX_LINE.test(await readIngredientText(ing, ing.meta.file))) return ref;
   }
   return null;
