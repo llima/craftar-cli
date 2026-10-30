@@ -161,6 +161,15 @@ export async function gitIgnored(dir: string, rel: string): Promise<boolean> {
 }
 
 /**
+ * The git arguments for a read-only command that must not run hooks or take locks.
+ * These keep `git` from running a `core.fsmonitor` command and a `post-index-change` hook
+ * of the Forge's own `.git`; a `filter.<x>.clean` still runs.
+ */
+function gitRead(dir: string): string[] {
+  return ["--no-optional-locks", "-C", dir, "-c", "core.fsmonitor=false"];
+}
+
+/**
  * True when the Forge has uncommitted changes — and also when `git status` cannot be run at all.
  * By the time this is called the directory is known to be a git repository (`forge.commit !== null`
  * is checked first), so a failure here is anomalous, and an anomaly is not evidence of a clean
@@ -169,9 +178,7 @@ export async function gitIgnored(dir: string, rel: string): Promise<boolean> {
  */
 export async function gitDirty(dir: string): Promise<boolean> {
   try {
-    // --no-optional-locks avoids taking the index lock for reads,
-    // and -c core.fsmonitor=false avoids running a fsmonitor hook. The clean filter still runs.
-    const { stdout } = await execProgram("git", ["--no-optional-locks", "-C", dir, "-c", "core.fsmonitor=false", "status", "--porcelain"]);
+    const { stdout } = await execProgram("git", [...gitRead(dir), "status", "--porcelain"]);
     return stdout.trim().length > 0;
   } catch {
     return true;
@@ -196,17 +203,15 @@ export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPa
   if (paths.length === 0) return [];
   const rel = paths.map((p) => path.relative(root, p).split(path.sep).join("/") || ".");
   try {
-    // --no-optional-locks avoids taking the index lock for reads,
-    // and -c core.fsmonitor=false avoids running a fsmonitor hook. The clean filter still runs.
     const { stdout } = await execProgram(
       "git",
-      ["--no-optional-locks", "-C", root, "-c", "core.fsmonitor=false", "status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--", ...rel],
+      [...gitRead(root), "status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--", ...rel],
       { maxBuffer: 64 * 1024 * 1024 },
     );
     // `status --porcelain` names paths from the repository root, which is not the Forge root when
     // the Forge sits inside a larger repo; strip the Forge's prefix so every path unify prints —
     // here and in the late-failure message — is Forge-relative. `ls-files` below already is.
-    const { stdout: prefixOut } = await execProgram("git", ["--no-optional-locks", "-C", root, "-c", "core.fsmonitor=false", "rev-parse", "--show-prefix"]);
+    const { stdout: prefixOut } = await execProgram("git", [...gitRead(root), "rev-parse", "--show-prefix"]);
     const prefix = prefixOut.trim();
     const forgeRel = (p: string) => (prefix && p.startsWith(prefix) ? p.slice(prefix.length) : p) || ".";
     const out: UnheldPath[] = [];
@@ -223,7 +228,7 @@ export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPa
     // assume-unchanged reports clean however much its file was edited — and that edit exists
     // nowhere git can restore it from. `ls-files -v` shows the flag: `S` for skip-worktree, a
     // lowercase tag for assume-unchanged.
-    const { stdout: listed } = await execProgram("git", ["--no-optional-locks", "-C", root, "-c", "core.fsmonitor=false", "ls-files", "-v", "-z", "--", ...rel], {
+    const { stdout: listed } = await execProgram("git", [...gitRead(root), "ls-files", "-v", "-z", "--", ...rel], {
       maxBuffer: 64 * 1024 * 1024,
     });
     for (const e of listed.split("\0")) {
