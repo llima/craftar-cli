@@ -1,5 +1,5 @@
 /**
- * P4 tests for promote's `occupied()` function improvements:
+ * Tests for promote's `occupied()` function improvements:
  * - lstat and listFiles errors should report with a clear message
  */
 import { promises as fs } from "node:fs";

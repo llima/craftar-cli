@@ -134,7 +134,7 @@ describe("forge promote — the command", () => {
     expect(await snapshot(s.forge)).toEqual(before);
   });
 
-  it("19. P2: no repository, no commit, a dirty tree, a held path git cannot restore, a created path git ignores", async () => {
+  it("19. a dirty tree and held path git cannot restore and a created path git ignores", async () => {
     const bare = await scenario({ init: false });
     expect(await refused(bare, bare.promote(), await snapshot(bare.forge))).toBe(`error: ${bare.forge} is not a git repository — forge promote writes to the Forge and needs git as the undo\n`);
 
@@ -377,7 +377,7 @@ describe("forge promote — the command", () => {
     const s = await scenario();
     const before = await snapshot(s.forge);
     expect(await refused(s, s.cli(["forge", "promote", "rule/workflow", "--profile", "globex", "--forge", s.forge]), before)).toBe("error: forge promote: rule/workflow has no variant for profile globex\n");
-    // P7 through the command: globex's recipe by name, which initech resolves too.
+    // Through the command: globex's recipe by name, which initech resolves too.
     const shared = await scenario();
     await fs.rm(path.join(shared.forge, "recipes/base.yaml"));
     await writeFiles(shared.forge, {

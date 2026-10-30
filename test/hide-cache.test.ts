@@ -143,7 +143,7 @@ describe("overlapping keys are hidden as one range (spec 39, review round 3)", (
   });
 });
 
-describe("P2 — hideCacheSegment fixes", () => {
+describe("hideCacheSegment edge cases", () => {
   it("(1) empty home list: segment after any forges/ is the label", () => {
     const text = "x /h/forges/secret/y z";
     const out = hideCacheSegment(text, []);
