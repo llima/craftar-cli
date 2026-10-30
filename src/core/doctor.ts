@@ -11,7 +11,7 @@ import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, frag
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK } from "./sync.js";
-import { outName, MCP_FILE, renderRegistration, EXAMPLE_SETTINGS } from "../emitters/shared.js";
+import { outName, MCP_FILE, renderRegistration, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
 import { stripBom } from "./text.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram } from "./proc.js";
@@ -299,6 +299,11 @@ async function workspaceChecks(
           owned.add(claudeMdBlockedMessage(claudeMdBlocksResult.blocking[0]));
         }
       }
+      // Also exclude the flat skill warning — it is reported by skill-layout (spec 44 §5)
+      const flat = flatSkills(p.resolution, p.resolution.targets);
+      if (flat.length > 0) {
+        owned.add(`claude-code: ${flatSkillWarning(flat, "claude-code")}`);
+      }
       const own = p.warnings.slice(ws.warnings.length).filter((x) => !owned.has(x));
       if (own.length === 0) w("plan", "ok", `${p.files.length} files`);
       for (const x of own) w("plan", "warn", x, null);
@@ -428,6 +433,9 @@ async function workspaceChecks(
 
       // hooks-registered: present only when the plan writes at least one registration (spec 43 §6)
       await hooksRegistered(root, p, opts, w, env);
+
+      // skill-layout: present only when flatSkills is non-empty (spec 44 §5)
+      await skillLayout(p, w);
     }
 
     // docker, services-env: present only when the plan or the lock has a service (spec 31 §4.7)
@@ -957,5 +965,31 @@ async function hooksRegistered(
   // Summary: all checked and found → ok
   if (checkedCount > 0 && foundCount === checkedCount) {
     w("hooks-registered", "ok", "every hook registration is in a settings file", null);
+  }
+}
+
+
+/* ------------------------------------------------------------------ */
+/* skill-layout check (spec 44 §5)                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The skill-layout check (spec 44 §5): present only when flatSkills is non-empty.
+ * Emits one warn per skill that Claude Code cannot list.
+ */
+async function skillLayout(
+  p: Plan,
+  w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void,
+): Promise<void> {
+  const flat = flatSkills(p.resolution, p.resolution.targets);
+  if (flat.length === 0) return;
+
+  for (const name of flat) {
+    w(
+      "skill-layout",
+      "warn",
+      `.claude/skills/${name}.md is a skill Claude Code does not list`,
+      `set layout: dir in ingredients/skills/${name}/ingredient.yaml — sync then writes .claude/skills/${name}/SKILL.md`,
+    );
   }
 }

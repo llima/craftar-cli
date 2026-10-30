@@ -979,3 +979,41 @@ export function expandRulesIndex(
     misplaced,
   };
 }
+
+
+/* ------------------------------------------------------------------ */
+/* Flat skill detection (spec 44 §5)                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The outNames of skills this resolution writes as a single file to claude-code, sorted by code point.
+ * A skill is "flat" when (1) its layout is "file", and (2) effectiveTargets admits "claude-code".
+ * Claude Code does not list such skills — they are invisible to the user.
+ */
+export function flatSkills(
+  resolution: { ingredients: readonly { meta: { type: string; name: string; as?: string; layout?: string; targets: "*" | string[] } }[]; primary: boolean },
+  targets: readonly string[],
+): string[] {
+  if (!targets.includes("claude-code")) return [];
+
+  const names: string[] = [];
+  for (const ing of resolution.ingredients) {
+    const meta = ing.meta;
+    if (meta.type !== "skill") continue;
+    if (meta.layout !== "file") continue;
+    // Check effectiveTargets admits "claude-code"
+    const eff = effectiveTargets(meta as Parameters<typeof effectiveTargets>[0], resolution);
+    if (!appliesTo(eff, "claude-code")) continue;
+    names.push(outName(meta));
+  }
+  return names.sort();
+}
+
+/**
+ * Build the warning message for flat skills (spec 44 §5):
+ * "{prefix}: Claude Code does not list a skill written as one file — {paths}; set layout: dir in each ingredient.yaml"
+ */
+export function flatSkillWarning(names: string[], prefix: string): string {
+  const paths = names.map((n) => `.claude/skills/${n}.md`).join(", ");
+  return `Claude Code does not list a skill written as one file — ${paths}; set layout: dir in each ingredient.yaml`;
+}

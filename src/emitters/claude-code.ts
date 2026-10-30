@@ -8,6 +8,8 @@ import {
   buildRuleLookup,
   EXAMPLE_SETTINGS,
   expandRulesIndex,
+  flatSkills,
+  flatSkillWarning,
   formatDeadRefs,
   formatScannedRefs,
   hookRegistrations,
@@ -206,6 +208,12 @@ export const claudeCode: Emitter<"claude-code"> = {
     // Emit the claude-code warning (spec 41 §4.4)
     if (primary) {
       emitClaudeCodeWarning(ctx, reports, scannedHits);
+    }
+
+    // Emit the flat skill warning (spec 44 §5): after the walk, once, with sorted names
+    const flat = flatSkills(ctx.resolution, targets);
+    if (flat.length > 0) {
+      ctx.warn(`claude-code: ${flatSkillWarning(flat, "claude-code")}`);
     }
 
     const servers = mcpServers(ctx, t, MCP_FILE["claude-code"], mcp);

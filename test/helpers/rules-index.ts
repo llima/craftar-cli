@@ -50,7 +50,7 @@ export async function acmeIndex(
     {
       meta: { type: "skill", name: "deploy", layout: opts.flatSkill ? "file" : "dir" },
       files: opts.flatSkill
-        ? { "skill.md": "---\nname: deploy\ndescription: Deploy the app\n---\nRun the deployment.\n" }
+        ? { "SKILL.md": "---\nname: deploy\ndescription: Deploy the app\n---\nRun the deployment.\n" }
         : {
             "SKILL.md": "---\nname: deploy\ndescription: Deploy the app\n---\nRun the deployment.\n",
             "run.sh": "#!/bin/sh\necho deploying\n",
