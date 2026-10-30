@@ -425,8 +425,7 @@ describe("proveBasePromotion and applyBasePromotion", () => {
     await fs.mkdir(elsewhere);
     await fs.symlink(elsewhere, path.join(f.dir, "ingredients/rules/workflow--globex"), "junction");
     const message = await planBasePromotion(await loadForge(f.dir), "rule/workflow", "acme").then(() => "no refusal", (e: Error) => e.message);
-    expect(message).toContain("is a symbolic link to a directory");
-    expect(message).toContain("workflow--globex");
+    expect(message).toContain("already exists, and profile globex also resolves rule/workflow");
     expect(await fs.readdir(elsewhere)).toEqual([]);
   });
 

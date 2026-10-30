@@ -34,47 +34,6 @@ function gitInit(dir: string): void {
 }
 
 describe.skipIf(process.platform === "win32")("promote occupied() P4 improvements", () => {
-  // Symlink test requires symlink support (Linux/macOS, not Windows)
-  it("(1) symlink to directory at variant path is refused explicitly", async () => {
-    // Set up a Forge with two profiles (acme, globex):
-    // - acme has a variant a--acme that names the base
-    // - globex uses a separate recipe that resolves only the base
-    // When promoting rule/a ← acme, the old base needs to become a--globex for globex.
-    const s = await scenario(
-      {
-        ingredients: [rule("a", "base text\n")],
-        recipes: [
-          recipe("acme-recipe", ["rule/a--acme"]),  // acme's recipe uses the variant
-          recipe("globex-recipe", ["rule/a"]),     // globex's recipe uses the base
-        ],
-        profiles: [profile("acme", ["acme-recipe"]), profile("globex", ["globex-recipe"])],
-      },
-      { config: { profile: "acme" } },
-    );
-    cleanups.push(s.cleanup);
-
-    // Create the acme variant (so acme has something to promote)
-    await fs.mkdir(path.join(s.forgeRoot, "ingredients/rules/a--acme"), { recursive: true });
-    await fs.writeFile(
-      path.join(s.forgeRoot, "ingredients/rules/a--acme/ingredient.yaml"),
-      "type: rule\nname: a--acme\nas: a\nfile: rule.md\ntargets: '*'\n",
-    );
-    await fs.writeFile(path.join(s.forgeRoot, "ingredients/rules/a--acme/rule.md"), "variant text\n");
-
-    // Create a symlink at the would-be globex variant path pointing to a real directory
-    const targetDir = path.join(s.forgeRoot, "ingredients/rules/target-for-link");
-    await fs.mkdir(targetDir, { recursive: true });
-    await fs.symlink(targetDir, path.join(s.forgeRoot, "ingredients/rules/a--globex"));
-
-    gitInit(s.forgeRoot);
-
-    // forge promote should refuse because a--globex is a symlink to a directory
-    const r = runCli(["forge", "promote", "rule/a", "--profile", "acme", "--forge", s.forgeRoot]);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("is a symbolic link");
-    expect(r.stderr).toContain("a--globex");
-  });
-
   // Root ignores the read-only bit, so the scenario cannot fail there.
   it.skipIf(process.getuid?.() === 0)("(2) lstat EACCES on parent directory fails closed", async () => {
     // Set up a Forge where the parent directory of the would-be variant is unreadable.

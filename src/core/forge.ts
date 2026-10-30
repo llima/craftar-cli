@@ -396,34 +396,6 @@ export async function assertNoLinkOnPath(forgeDir: string, paths: string[], comm
 }
 
 /**
- * Refuse a symbolic link to a directory where a new ingredient variant would go.
- * Unlike `assertNoLinkOnPath` (which checks paths being written), this checks a directory that
- * `occupied()` says is available — a symlink to a directory must not be used as a variant directory.
- */
-export async function assertNoDirLinkIn(dir: string, rel: string): Promise<void> {
-  try {
-    const stat = await fs.lstat(dir);
-    if (stat.isSymbolicLink()) {
-      // Check if the link target is a directory
-      try {
-        const target = await fs.stat(dir);
-        if (target.isDirectory()) {
-          throw new Error(`${rel} is a symbolic link to a directory — promote does not create a variant through a link; replace it with the directory and commit`);
-        }
-      } catch (e) {
-        // If stat fails (dangling link) and it's not our symlink error, that's fine — the path is not usable anyway
-        if (e instanceof Error && e.message.includes("symbolic link")) throw e;
-      }
-    }
-  } catch (e) {
-    // ENOENT means nothing is there — that's fine
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
-    // Re-throw our symlink error or any other error
-    throw e;
-  }
-}
-
-/**
  * The real path of `abs`, resolved through its nearest existing ancestor: `fs.realpath` needs the
  * path to exist, and a plan target usually does not yet — so the part that exists is resolved
  * (symlinks and all) and the part that does not is appended as written.
