@@ -106,8 +106,8 @@ export function citedKeys(texts: Map<string, string>): Set<string> {
 export function renderedFingerprint(
   base: ImportBase,
   map: Record<string, unknown>,
-  sections: Record<string, string> = {},
-  schema: ForgeSchema = 1,
+  sections: Record<string, string>,
+  schema: ForgeSchema,
   refs?: (text: string, citing: string) => string,
   owner?: Owner,
   index?: (text: string) => string,

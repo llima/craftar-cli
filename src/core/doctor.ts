@@ -895,13 +895,13 @@ async function hooksRegistered(
   // .claude/settings.json
   settingsFiles.push({
     label: SETTINGS_LABELS.project,
-    result: await readSettingsFile(path.join(root, ".claude/settings.json"), SETTINGS_LABELS.project),
+    result: await readSettingsFile(path.join(root, SETTINGS_LABELS.project), SETTINGS_LABELS.project),
   });
 
   // .claude/settings.local.json
   settingsFiles.push({
     label: SETTINGS_LABELS.projectLocal,
-    result: await readSettingsFile(path.join(root, ".claude/settings.local.json"), SETTINGS_LABELS.projectLocal),
+    result: await readSettingsFile(path.join(root, SETTINGS_LABELS.projectLocal), SETTINGS_LABELS.projectLocal),
   });
 
   // User settings: ~/.claude/settings.json or $CLAUDE_CONFIG_DIR/settings.json

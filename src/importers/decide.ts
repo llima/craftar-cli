@@ -308,7 +308,6 @@ async function inferParams(
           const declaredCitations = serverCitations(ing.meta).filter((c) => c.declared).map((c) => c.key);
           if (declaredCitations.includes(key)) return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
         }
-        // Note: hook registration check was moved earlier to handle runBases ingredients too (spec 43 §7.2 row 8)
       }
     }
     for (const o of others) {
