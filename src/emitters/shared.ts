@@ -901,7 +901,7 @@ export function expandRulesIndex(
     if (rawDesc !== undefined && rawDesc.trim() !== "") {
       if (MARKER_IN_DESCRIPTION.test(rawDesc)) {
         throw new Error(
-          `${RULES_INDEX_KEY}: description of rule/${name} contains a section marker — remove it`
+          `${RULES_INDEX_KEY}: description of rule/${meta.name} contains a section marker — remove it`
         );
       }
       desc = foldDescription(rawDesc);

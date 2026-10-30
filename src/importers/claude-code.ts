@@ -268,7 +268,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
 
   // Warn about flat skills (spec 44 §5): after skills are read, warn if any have layout: file
   const flatSkillNames = queue
-    .filter((q) => q.meta.type === "skill" && (q.meta as { layout?: string }).layout === "file")
+    .filter((q) => q.meta.type === "skill" && q.meta.layout === "file")
     .map((q) => outName(q.meta))
     .sort();
   if (flatSkillNames.length > 0) {
@@ -355,7 +355,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- hand-written Kiro steering (no Claude counterpart) ---- */
   // Whether a steering file is hand-written depends on the rules decided before it, so the check runs at decision time.
   for (const [name, sm] of steeringMeta) {
-    const meta: Ingredient = { type: "steering", name, file: "steering.md", targets: ["kiro"], tags: [], origin: origin(`.kiro/steering/${name}.md`) };
+    const meta: Ingredient = { type: "steering", name, file: "steering.md", targets: ["kiro"], tags: ["client"], origin: origin(`.kiro/steering/${name}.md`) };
     read(meta, { "steering.md": sm.text }, scanOf("steering.md", sm), (ref) => addRef(refs.steering, ref), () => ruleNames.includes(name) || sm.generated || name === "commands", "kiro");
   }
 
@@ -603,7 +603,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       // Finding 4: NEW profile — fail-closed only if a rule this import compares holds the placeholder
       const ruleWithPlaceholder = await ruleHoldingIndexInQueue(loaded, queuedRules);
       if (ruleWithPlaceholder) {
-        throw new Error(`import: profile ${opts.profileName} is not in the Forge and ${ruleWithPlaceholder} holds {{craftar.rules.index}} — import cannot compare that base as sync writes it; create the profile first (craftar init --new-profile ${opts.profileName}), then re-run`);
+        throw new Error(`import: profile ${opts.profileName} is not in the Forge and ${ruleWithPlaceholder} holds {{craftar.rules.index}} — import cannot compare that base as sync writes it; create the profile first (craftar init --new-profile ${opts.profileName} --no-sync in another directory), then re-run`);
       }
     }
   }

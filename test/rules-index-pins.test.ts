@@ -69,6 +69,11 @@ async function buildObserved(s: Scenario): Promise<Observed> {
   const realRoot = await fs.realpath(s.root);
   const roots = [s.root, realRoot];
 
+  // Create an empty temp directory so docker is never found — avoids docker-related checks in doctor
+  const emptyDir = path.join(wsRoot, ".craftar-test-no-docker");
+  await fs.mkdir(emptyDir, { recursive: true });
+  const noDocker = { PATH: emptyDir, Path: emptyDir };
+
   // Compute plan
   const ws = await loadWorkspace(wsRoot, { home: process.env.CRAFTAR_HOME });
   const p = await plan(ws);
@@ -110,7 +115,7 @@ async function buildObserved(s: Scenario): Promise<Observed> {
   const syncedStatus = JSON.parse(syncedStatusResult.stdout);
 
   // syncedExit: exit codes after sync
-  const doctorResult = runCli(["doctor", "--strict", "--json", ...W]);
+  const doctorResult = runCli(["doctor", "--strict", "--json", ...W], { env: noDocker });
   const syncedExit = {
     syncCheck: runCli(["sync", "--check", ...W]).code,
     status: syncedStatusResult.code,

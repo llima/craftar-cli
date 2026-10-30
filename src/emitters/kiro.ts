@@ -3,7 +3,7 @@ import { climbsOut, toCrlf } from "../core/text.js";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
 import { decodeForScan } from "../core/secrets.js";
-import { RULES_INDEX_LINE, RULES_INDEX_TOKEN } from "../core/rules-index.js";
+import { RULES_INDEX_TOKEN } from "../core/rules-index.js";
 import {
   appliesTo,
   buildRuleLookup,
@@ -141,8 +141,7 @@ export const kiro: Emitter<"kiro"> = {
           const body = resolve(rawBody, ing.ref);
           checkReworded(path, [rawDesc, rawBody], ing.ref);
           // At the gate, report if the placeholder is in an agent body (spec 44 §4.5)
-          // Check both LINE (alone) and TOKEN (inline) — inline placeholders are warned too
-          if (ctx.resolution.rulesIndex && (RULES_INDEX_LINE.test(body) || RULES_INDEX_TOKEN.test(body))) {
+          if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(body)) {
             ctx.reportIndexLeft(path);
           }
           const tools = mapTools(m.tools, ctx);
@@ -180,8 +179,7 @@ export const kiro: Emitter<"kiro"> = {
           const body = resolve(rawBody, ing.ref);
           checkReworded(path, [m.frontmatterRaw ? m.frontmatterRaw : (m.description ?? ""), rawBody], ing.ref);
           // At the gate, report if the placeholder is in a command body (spec 44 §4.5)
-          // Check both LINE (alone) and TOKEN (inline) — inline placeholders are warned too
-          if (ctx.resolution.rulesIndex && (RULES_INDEX_LINE.test(body) || RULES_INDEX_TOKEN.test(body))) {
+          if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(body)) {
             ctx.reportIndexLeft(path);
           }
           const doc = serializeFrontmatter(
@@ -199,8 +197,7 @@ export const kiro: Emitter<"kiro"> = {
             const text = resolve(rawText, ing.ref);
             checkReworded(path, [rawText], ing.ref);
             // At the gate, report if the placeholder is in a skill body (spec 44 §4.5)
-            // Check both LINE (alone) and TOKEN (inline) — inline placeholders are warned too
-            if (ctx.resolution.rulesIndex && (RULES_INDEX_LINE.test(text) || RULES_INDEX_TOKEN.test(text))) {
+            if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(text)) {
               ctx.reportIndexLeft(path);
             }
             out.push(crlf(path, text, ing.ref));
@@ -213,8 +210,7 @@ export const kiro: Emitter<"kiro"> = {
                 const text = resolve(rawText, ing.ref);
                 checkReworded(path, [rawText], ing.ref);
                 // At the gate, report if the placeholder is in a skill body (spec 44 §4.5)
-                // Check both LINE (alone) and TOKEN (inline) — inline placeholders are warned too
-                if (ctx.resolution.rulesIndex && (RULES_INDEX_LINE.test(text) || RULES_INDEX_TOKEN.test(text))) {
+                if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(text)) {
                   ctx.reportIndexLeft(path);
                 }
                 out.push(crlf(path, text, ing.ref));

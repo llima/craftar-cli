@@ -1079,6 +1079,7 @@ describe("Review round 3 item 2: steering base holding placeholder compared with
         type: "steering",
         name: "guide",
         file: "steering.md",
+        tags: ["client"],
       }),
       "ingredients/steerings/guide/steering.md": "# Guide\n\n{{craftar.rules.index}}\n",
       "recipes/base.yaml": YAML.stringify({
