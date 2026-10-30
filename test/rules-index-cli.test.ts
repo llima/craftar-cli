@@ -145,3 +145,50 @@ describe("rules-index CLI (spec 44 §4.5–§4.6)", () => {
     expect(Object.keys(explained!)).not.toContain("index");
   });
 });
+
+
+import { profile, recipe, scenario, type IngredientSpec } from "./helpers/forge.js";
+import YAML from "yaml";
+
+describe("Should-fix 3: inline placeholder in agent, command or skill is warned (review round 2)", () => {
+  it("3. an agent and a dir skill with inline placeholder at schema 7 → both paths in ONE warning", async () => {
+    // An agent body with "Read the index {{craftar.rules.index}} here." (inline, not alone on line)
+    // A skill (layout: dir) body with inline placeholder
+    // At schema 7, the warning should list BOTH paths
+    const ingredients: IngredientSpec[] = [
+      {
+        meta: { type: "rule", name: "style", description: "Code style" },
+        files: { "rule.md": "# Style\n\n{{craftar.rules.index}}\n" },
+      },
+      {
+        meta: { type: "agent", name: "reviewer", description: "Reviewer agent" },
+        files: { "agent.md": "Read the index {{craftar.rules.index}} here.\n" },
+      },
+      {
+        meta: { type: "skill", name: "deploy", description: "Deployment skill", layout: "dir" },
+        files: {
+          "SKILL.md": "# Deploy\n",
+          "script.sh": "See {{craftar.rules.index}} in your rules.\n",
+        },
+      },
+    ];
+
+    const s = await scenario(
+      { ingredients, recipes: [recipe("base", ["rule/style", "agent/reviewer", "skill/deploy"])], profiles: [profile("test", ["base"], ["claude-code"])] },
+      { config: { profile: "test" } },
+    );
+    cleanups.push(s.cleanup);
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 7 }));
+
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    // Find the warning about placeholder left as written
+    const warning = p.warnings.find((w) => w.includes("expanded in rule and steering bodies only — left as written"));
+    expect(warning).toBeDefined();
+
+    // Both paths should appear in the warning
+    expect(warning).toContain(".claude/agents/reviewer.md");
+    expect(warning).toContain(".claude/skills/deploy/script.sh");
+  });
+});
