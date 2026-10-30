@@ -756,6 +756,7 @@ describe("take: param — the engine (spec 09 §6.1, §6.2)", () => {
     }))).toContain("would need two values");
     expect(await err(run("x globex-api\n", "x acme-api\n", one([{ token: "globex-api", key: "constructor" }])))).toContain("is reserved");
     expect(await err(run("x globex-api\n", "x acme-api\n", one([{ token: "globex-api", key: "kiro.banner" }])))).toContain("is reserved");
+    expect(await err(run("x globex-api\n", "x acme-api\n", one([{ token: "globex-api", key: "craftar.x" }])))).toContain("is reserved");
     expect(await err(run("x globex-api\nsame\nStep 6\n", "x acme-api\nsame\nStep 5\n", one([{ token: "globex-api", key: "k" }])))).toContain("needs the variant resolved");
   });
 
