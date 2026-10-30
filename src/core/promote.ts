@@ -92,13 +92,37 @@ async function recipeFiles(root: string): Promise<Map<string, { abs: string; ste
   return out;
 }
 
-/** Whether something stands where a new directory would go: anything but nothing, or a directory holding no file. */
+const SYMLINK_DIR_VARIANT = (dir: string) =>
+  `${dir} is a symbolic link to a directory — promote does not create a variant through a link; replace it with the directory and commit`;
+
+/**
+ * Whether something stands where a new directory would go: anything but nothing, or a directory holding no file.
+ * Throws on lstat errors other than ENOENT (fail-closed), and throws with an explicit message for a symlink to a directory.
+ */
 async function occupied(dir: string): Promise<boolean> {
   let stat;
   try {
     stat = await fs.lstat(dir);
-  } catch {
-    return false;
+  } catch (e) {
+    // Only ENOENT means "not occupied"; other errors (EACCES, EIO, etc.) fail closed.
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw e;
+  }
+  // A symlink to a directory is refused explicitly — lstat shows it's a symlink, stat would follow it.
+  if (stat.isSymbolicLink()) {
+    try {
+      const target = await fs.stat(dir);
+      if (target.isDirectory()) {
+        throw new Error(SYMLINK_DIR_VARIANT(path.relative(path.dirname(path.dirname(dir)), dir)));
+      }
+    } catch (e) {
+      // If stat fails (dangling link), fall through to the regular "occupied" check
+      if (!(e instanceof Error && e.message.includes("symbolic link"))) {
+        // Not our symlink error, treat as dangling → occupied (not a usable directory)
+        return true;
+      }
+      throw e; // Re-throw our symlink error
+    }
   }
   return !stat.isDirectory() || (await listFiles(dir)).length > 0;
 }
@@ -361,7 +385,13 @@ const refused = (q: string, what: string) => new Error(`${COMMAND}: profile ${q}
  */
 export async function proveBasePromotion(forge: Forge, promotion: BasePromotion): Promise<void> {
   const before = resolveAll(forge);
-  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-forge-promote-"));
+  let scratch: string;
+  try {
+    scratch = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-forge-promote-"));
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code ?? (e as Error).message;
+    throw new Error(`${COMMAND}: could not create a temporary directory for the proof (${code}) — nothing written`);
+  }
   try {
     await copyForgeForProof(forge.root, scratch);
     try {
