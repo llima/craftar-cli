@@ -963,7 +963,7 @@ export function expandRulesIndex(
       // Replace with the index content
       resultLines.push(indexContent);
       expanded = true;
-    } else if (line.includes(`{{${RULES_INDEX_KEY}}}`) || RULES_INDEX_TOKEN.test(line)) {
+    } else if (RULES_INDEX_TOKEN.test(line)) {
       // Placeholder exists but not alone on the line — record as misplaced
       misplaced.push(i + 1); // 1-based line number
       resultLines.push(line);
