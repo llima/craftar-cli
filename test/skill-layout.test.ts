@@ -182,6 +182,24 @@ describe("doctor skill-layout check (spec 44 §5)", () => {
     );
   });
 
+  it("3d. a skill variant's fix names the variant's own folder", async () => {
+    const s = await scenario(
+      {
+        ingredients: [{ meta: { type: "skill", name: "deploy--acme", as: "deploy", layout: "file" }, files: { "skill.md": "---\nname: deploy\ndescription: Deploy\n---\nRun it.\n" } }],
+        recipes: [recipe("base", ["skill/deploy--acme"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const r = await runDoc({ home, workspace: s.wsRoot });
+    const checks = of(r.checks, "skill-layout");
+    expect(checks.map((c) => c.message)).toEqual([".claude/skills/deploy.md is a skill Claude Code does not list"]);
+    expect(checks[0].fix).toBe(
+      "set layout: dir in ingredients/skills/deploy--acme/ingredient.yaml — sync then writes .claude/skills/deploy/SKILL.md",
+    );
+  });
+
   it("3b. skill-layout is NOT a plan finding", async () => {
     const s = await acmeIndex({ schema: 6, flatSkill: true });
     cleanups.push(s.cleanup);
