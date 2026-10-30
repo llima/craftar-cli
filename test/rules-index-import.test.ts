@@ -885,3 +885,277 @@ describe("BLOCKER 2: rules-index fail-closed looks only at bases this import com
     expect(after).toEqual(before);
   });
 });
+
+
+describe("Review round 3 item 1: variant holding placeholder is protected", () => {
+  it("1a. variant holding placeholder — sync then import → variant untouched (reused), NOT rewritten with the list", async () => {
+    // p3.sh scenario: a variant rule/readme--acme holding {{craftar.rules.index}}, base does not
+    // sync expands to the workspace, import back should reuse the variant, not rewrite it
+    const root = await tmpDir("craftar-variant-placeholder-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+
+    // Forge with: rule/style, rule/readme (base, no placeholder), rule/readme--acme (variant, has placeholder)
+    await writeFiles(forgeRoot, {
+      "craftar.forge.yaml": YAML.stringify({ name: "f", schema: 7 }),
+      "ingredients/rules/style/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "style",
+        description: "D style",
+        file: "rule.md",
+      }),
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme",
+        description: "D readme",
+        file: "rule.md",
+      }),
+      "ingredients/rules/readme/rule.md": "# Rules\nbase text\n",
+      "ingredients/rules/readme--acme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme--acme",
+        as: "readme",
+        description: "D readme--acme",
+        file: "rule.md",
+      }),
+      "ingredients/rules/readme--acme/rule.md": "# Rules\n\n{{craftar.rules.index}}\n",
+      "recipes/acme-rules.yaml": YAML.stringify({
+        name: "acme-rules",
+        ingredients: ["rule/style", "rule/readme--acme"],
+      }),
+      "profiles/acme/profile.yaml": YAML.stringify({
+        name: "acme",
+        recipes: ["acme-rules"],
+        targets: ["claude-code"],
+      }),
+    });
+
+    // Workspace config
+    await writeFiles(wsRoot, {
+      "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+    });
+
+    // Sync the workspace
+    const ws = await loadWorkspace(wsRoot);
+    const p = await plan(ws);
+    const lock = await readLock(wsRoot);
+    const st = await status(ws, p, lock);
+    await apply(ws, p, st);
+
+    // Verify the readme.md now has the expanded list (sanity check)
+    const readmeMd = await fs.readFile(path.join(wsRoot, ".claude/rules/readme.md"), "utf8");
+    expect(readmeMd).toContain("Always on:");
+    expect(readmeMd).not.toContain("{{craftar.rules.index}}");
+
+    // Capture the variant body BEFORE import
+    const variantBodyBefore = await fs.readFile(
+      path.join(forgeRoot, "ingredients/rules/readme--acme/rule.md"),
+      "utf8"
+    );
+    expect(variantBodyBefore).toContain("{{craftar.rules.index}}");
+
+    // Import back
+    const result = await importClaudeCode({
+      workspaceRoot: wsRoot,
+      forgeRoot,
+      profileName: "acme",
+    });
+
+    // The variant should be REUSED, not overwritten
+    expect(result.reused).toContain("rule/readme--acme");
+    expect(result.variants.map((v) => v.name)).not.toContain("rule/readme--acme");
+
+    // The variant body should be UNCHANGED (byte-identical)
+    const variantBodyAfter = await fs.readFile(
+      path.join(forgeRoot, "ingredients/rules/readme--acme/rule.md"),
+      "utf8"
+    );
+    expect(variantBodyAfter).toBe(variantBodyBefore);
+    expect(variantBodyAfter).toContain("{{craftar.rules.index}}");
+  });
+
+  it("1b. variant holding placeholder, workspace hand-edited → exit 1 with refusal message, Forge byte-identical", async () => {
+    // Same setup but the workspace readme.md is hand-edited differently
+    const root = await tmpDir("craftar-variant-placeholder-edited-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+
+    await writeFiles(forgeRoot, {
+      "craftar.forge.yaml": YAML.stringify({ name: "f", schema: 7 }),
+      "ingredients/rules/style/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "style",
+        description: "D style",
+        file: "rule.md",
+      }),
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme",
+        description: "D readme",
+        file: "rule.md",
+      }),
+      "ingredients/rules/readme/rule.md": "# Rules\nbase text\n",
+      "ingredients/rules/readme--acme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme--acme",
+        as: "readme",
+        description: "D readme--acme",
+        file: "rule.md",
+      }),
+      "ingredients/rules/readme--acme/rule.md": "# Rules\n\n{{craftar.rules.index}}\n",
+      "recipes/acme-rules.yaml": YAML.stringify({
+        name: "acme-rules",
+        ingredients: ["rule/style", "rule/readme--acme"],
+      }),
+      "profiles/acme/profile.yaml": YAML.stringify({
+        name: "acme",
+        recipes: ["acme-rules"],
+        targets: ["claude-code"],
+      }),
+    });
+
+    await writeFiles(wsRoot, {
+      "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+    });
+
+    // Sync, then hand-edit the readme.md
+    const ws = await loadWorkspace(wsRoot);
+    const p = await plan(ws);
+    const lock = await readLock(wsRoot);
+    const st = await status(ws, p, lock);
+    await apply(ws, p, st);
+
+    // Hand-edit: add a line that differs from what the variant would produce
+    const readmeMd = await fs.readFile(path.join(wsRoot, ".claude/rules/readme.md"), "utf8");
+    await fs.writeFile(
+      path.join(wsRoot, ".claude/rules/readme.md"),
+      readmeMd + "\nHand-edited extra line.\n"
+    );
+
+    const before = await hashForge(forgeRoot);
+
+    // Import should REFUSE
+    const result = await importClaudeCode({
+      workspaceRoot: wsRoot,
+      forgeRoot,
+      profileName: "acme",
+    }).catch((e: Error) => e);
+
+    expect(result).toBeInstanceOf(Error);
+    const msg = (result as Error).message;
+    expect(msg).toContain("rule/readme--acme");
+    expect(msg).toContain("{{craftar.rules.index}}");
+    expect(msg).toContain(".claude/rules/readme.md");
+    expect(msg).toContain("differs");
+
+    // Forge byte-identical
+    const after = await hashForge(forgeRoot);
+    expect(after).toEqual(before);
+  });
+});
+
+describe("Review round 3 item 2: steering base holding placeholder compared with kiro-form expansion", () => {
+  it("2a. steering base holding placeholder — sync then import → steering/guide reused, no variant", async () => {
+    // p4.sh scenario: steering/guide holding {{craftar.rules.index}}
+    // sync expands to kiro form, import back should reuse the base
+    const root = await tmpDir("craftar-steering-placeholder-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+
+    await writeFiles(forgeRoot, {
+      "craftar.forge.yaml": YAML.stringify({ name: "f", schema: 7 }),
+      "ingredients/rules/style/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "style",
+        file: "rule.md",
+      }),
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/steerings/guide/ingredient.yaml": YAML.stringify({
+        type: "steering",
+        name: "guide",
+        file: "steering.md",
+      }),
+      "ingredients/steerings/guide/steering.md": "# Guide\n\n{{craftar.rules.index}}\n",
+      "recipes/base.yaml": YAML.stringify({
+        name: "base",
+        ingredients: ["rule/style", "steering/guide"],
+      }),
+      "profiles/acme/profile.yaml": YAML.stringify({
+        name: "acme",
+        recipes: ["base"],
+        targets: ["claude-code", "kiro"],
+      }),
+    });
+
+    await writeFiles(wsRoot, {
+      "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+    });
+
+    // Sync the workspace
+    const ws = await loadWorkspace(wsRoot);
+    const p = await plan(ws);
+    const lock = await readLock(wsRoot);
+    const st = await status(ws, p, lock);
+    await apply(ws, p, st);
+
+    // Verify the guide.md has the kiro-form expansion
+    const guideMd = await fs.readFile(path.join(wsRoot, ".kiro/steering/guide.md"), "utf8");
+    expect(guideMd).toContain("Always on:");
+    expect(guideMd).toContain(".kiro/steering/"); // kiro form uses .kiro/steering/
+    expect(guideMd).not.toContain("{{craftar.rules.index}}");
+
+    // Import back
+    const result = await importClaudeCode({
+      workspaceRoot: wsRoot,
+      forgeRoot,
+      profileName: "acme",
+    });
+
+    // The steering/guide should be REUSED
+    expect(result.reused).toContain("steering/guide");
+    expect(result.variants.map((v) => v.name)).not.toContain("steering/guide--acme");
+
+    // No new steering directory
+    const dirs = await fs.readdir(path.join(forgeRoot, "ingredients/steerings"));
+    expect(dirs).toEqual(["guide"]);
+  });
+});
+
+describe("Review round 3 item 3: described index rule creates variant with frozen-list warning", () => {
+  it("3a. acmeIndex({ schema: 7, literal: true }) → sync then import produces frozen-list warning", async () => {
+    // spec §4.4's example: a rule with description holding the placeholder
+    // sync expands, import back creates variant, warns about frozen list
+    const s = await acmeIndex({ schema: 7, literal: true });
+    cleanups.push(s.cleanup);
+
+    // Sync the workspace
+    const ws = await loadWorkspace(s.wsRoot);
+    const p = await plan(ws);
+    const lock = await readLock(s.wsRoot);
+    const st = await status(ws, p, lock);
+    await apply(ws, p, st);
+
+    // Import back
+    const result = await importClaudeCode({
+      workspaceRoot: s.wsRoot,
+      forgeRoot: s.forgeRoot,
+      profileName: "acme",
+    });
+
+    // rule/readme becomes a variant because it has a description (import loses description)
+    expect(result.variants.map((v) => v.name)).toContain("rule/readme--acme");
+
+    // The warning about frozen list should be present
+    const frozenWarning = result.warnings.find(
+      (w) => w.includes("rule/readme--acme") && w.includes("frozen")
+    );
+    expect(frozenWarning).toBeDefined();
+    expect(frozenWarning).toContain("rule/readme");
+    expect(frozenWarning).toContain("{{craftar.rules.index}}");
+  });
+});
