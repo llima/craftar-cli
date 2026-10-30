@@ -623,7 +623,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   for (const l of literal) {
     const marker = markerIn(l.meta, l.files, l.source, l.lineOffset);
     if (marker) throw new Error(`import: ${marker.where} holds a section marker on line ${marker.line} — sync would not reproduce it; indent it or remove it, and re-run`);
-    const map = renderMap(l.meta, ctx.P, ctx.W);
+    const map = renderMap(l.meta, ctx.P, ctx.W, false);
     const key = [...sourceKeys(l.meta, l.files)].find((k) => Object.hasOwn(map, k));
     if (key) {
       // Spec 33 §5.3: say "integrations set" when the key is one the block gives (not overridden by params).
@@ -1331,7 +1331,7 @@ async function writeIngredient(
       if ([...v.texts.values()].some((t) => RULES_INDEX_LINE.test(t))) {
         const key = sectionKey(v.meta);
         const S: Record<string, string> = { ...valuesAt(run.ctx.PS, key), ...valuesAt(run.ctx.WS, key) };
-        const map = renderMap(v.meta, run.ctx.P, run.ctx.W);
+        const map = renderMap(v.meta, run.ctx.P, run.ctx.W, false);
         const expand = run.indexExpand;
         // What the workspace cannot show is taken from the source, as import writes it: the `description`, the
         // `targets` and `tags` (no target writes them into the file) and the name of the body file.
@@ -1480,7 +1480,7 @@ async function writeIngredient(
     report.created.push(`${meta.type}/${name}`);
   }
   if (run) {
-    pin(run.ctx, sourceKeys(sourceMeta, files), renderMap(sourceMeta, run.ctx.P, run.ctx.W));
+    pin(run.ctx, sourceKeys(sourceMeta, files), renderMap(sourceMeta, run.ctx.P, run.ctx.W, false));
     run.literal.push({ ref: `${meta.type}/${name}`, source, meta: sourceMeta, files, lineOffset: run.lineOffset });
   }
 

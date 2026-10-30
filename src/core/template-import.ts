@@ -5,6 +5,7 @@ import { fingerprintOf, type DirReader } from "./fingerprint.js";
 import { parseYaml } from "./forge.js";
 import { renderServer, rendersServers } from "./mcp-server.js";
 import { substitute } from "./resolve.js";
+import { RULES_INDEX_KEY } from "./rules-index.js";
 import { checkDeclaredOnce, expandSections, parseSections, projectSections, SectionMarkerError, type ParsedSections, type ParseSectionsOptions } from "./sections.js";
 import { stripBom, toLf } from "./text.js";
 import { claudeResolves } from "../emitters/claude-code.js";
@@ -18,12 +19,29 @@ import { claudeResolves } from "../emitters/claude-code.js";
 const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 const norm = (s: string) => toLf(stripBom(s));
 
-/** The values sync substitutes into `meta`'s files for the importing workspace: declared defaults, then P, then W (spec 10 §6.1). */
-export function renderMap(meta: Ingredient, profileParams: Record<string, unknown>, workspaceParams: Record<string, unknown>): Record<string, unknown> {
+/**
+ * The values sync substitutes into `meta`'s files for the importing workspace: declared defaults, then P, then W (spec 10 §6.1).
+ * At the rules-index gate (spec 44 §4.2), RULES_INDEX_KEY is skipped — sync generates it, so a value set elsewhere is ignored.
+ */
+export function renderMap(
+  meta: Ingredient,
+  profileParams: Record<string, unknown>,
+  workspaceParams: Record<string, unknown>,
+  readsRulesIndex: boolean,
+): Record<string, unknown> {
   const out: Record<string, unknown> = Object.create(null);
-  for (const [k, v] of Object.entries(meta.params ?? {})) if (v.default !== undefined) out[k] = v.default;
-  for (const [k, v] of Object.entries(profileParams)) out[k] = v;
-  for (const [k, v] of Object.entries(workspaceParams)) out[k] = v;
+  for (const [k, v] of Object.entries(meta.params ?? {})) {
+    if (readsRulesIndex && k === RULES_INDEX_KEY) continue;
+    if (v.default !== undefined) out[k] = v.default;
+  }
+  for (const [k, v] of Object.entries(profileParams)) {
+    if (readsRulesIndex && k === RULES_INDEX_KEY) continue;
+    out[k] = v;
+  }
+  for (const [k, v] of Object.entries(workspaceParams)) {
+    if (readsRulesIndex && k === RULES_INDEX_KEY) continue;
+    out[k] = v;
+  }
   return out;
 }
 

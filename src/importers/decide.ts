@@ -10,6 +10,7 @@ import { canonicalValue, inferSections, projectSections, readsTargetSections } f
 import { errorText } from "../core/schema-fault.js";
 import { sectionKey } from "../core/resolve.js";
 import { registrationCitations, rendersServers, serverCitations } from "../core/mcp-server.js";
+import { readsRulesIndex, RULES_INDEX_KEY } from "../core/rules-index.js";
 import type { DirReader } from "../core/fingerprint.js";
 import { OverridesParamsSchema, SectionsSchema, WorkspaceConfigSchema, stripForgeOnlyKeys, type ForgeSchema, type Ingredient, type Owner, type Sections, type Target } from "../schema/index.js";
 
@@ -175,8 +176,11 @@ export async function decide(
   const citedAll = citedKeys(expandedTexts(base, S));
 
   // G1: a recipe default the render cannot see — compare literally, as 0.5.0 did.
+  // At the rules-index gate (spec 44 §4.2), skip RULES_INDEX_KEY — sync generates it.
+  const atRulesIndexGate = readsRulesIndex({ schema });
   if (ctx.forge) {
     for (const k of cited) {
+      if (atRulesIndexGate && k === RULES_INDEX_KEY) continue;
       if (Object.hasOwn(ctx.P, k) || Object.hasOwn(ctx.W, k)) continue;
       for (const [name, r] of ctx.forge.recipes) {
         if (r.params[k]?.default !== undefined) return { kind: "literal", warn: `${ref} cites {{${k}}}, which recipe ${name} defaults — compared literally` };
@@ -191,7 +195,7 @@ export async function decide(
     }
   }
 
-  const map = renderMap(base.meta, ctx.P, ctx.W);
+  const map = renderMap(base.meta, ctx.P, ctx.W, atRulesIndexGate);
   // For rule and steering bases at schema >= 7, expand the rules index placeholder (spec 44 §4.8).
   // Rules use claude-code form; steering uses kiro form.
   const indexTarget = base.meta.type === "rule" ? "claude-code" : base.meta.type === "steering" ? "kiro" : undefined;
