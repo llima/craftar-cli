@@ -24,10 +24,9 @@ import { firstMarkerLine, readsTargetSections } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
 import { GENERATED_BANNER, kiroReport, textLines, type KiroReport } from "./kiro-report.js";
 import { preferKiro } from "./prefer-kiro.js";
-import { appliesTo } from "../emitters/shared.js";
+import { agentsMdOnly as isAgentsMdOnly, appliesTo, buildRuleLookup, outName, resolveRuleRefs } from "../emitters/shared.js";
 import { CAPABILITIES } from "../core/capabilities.js";
 import { deepMerge } from "../core/merge.js";
-import { agentsMdOnly as isAgentsMdOnly, buildRuleLookup, outName, resolveRuleRefs } from "../emitters/shared.js";
 import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { note, type WriteJournal } from "../core/unify.js";
@@ -358,11 +357,16 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // Detect targets this workspace writes (spec 41 Part B §5.2's variant warnings).
   const detected: Target[] = ["claude-code"];
   if (await exists(path.join(ws, ".kiro"))) detected.push("kiro");
-  const wsTargets = await workspaceTargets(ws, readWs);
-  const profileTargets = loaded?.profiles.get(opts.profileName)?.targets ?? [];
-  // Union of profile targets and detected targets, in TARGETS order.
-  const union = TARGETS.filter((t) => profileTargets.includes(t) || detected.includes(t));
-  const writtenTargets: readonly Target[] = wsTargets ?? union;
+  // Only compute writtenTargets at schema 6 (the variant warnings only fire there).
+  // workspaceTargets throws on an invalid targets value, so avoid calling it below schema 6.
+  let writtenTargets: readonly Target[] = [];
+  if (readsTargetSections(loaded?.manifest ?? { schema: 1 })) {
+    const wsTargets = await workspaceTargets(ws, readWs);
+    const profileTargets = loaded?.profiles.get(opts.profileName)?.targets ?? [];
+    // Union of profile targets and detected targets, in TARGETS order.
+    const union = TARGETS.filter((t) => profileTargets.includes(t) || detected.includes(t));
+    writtenTargets = wsTargets ?? union;
+  }
 
   const ctx: RunContext = {
     P: Object.assign(Object.create(null), existing.params),

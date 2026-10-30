@@ -858,3 +858,71 @@ describe("import with target-scoped sections (spec 41 Part B Task 05)", () => {
     // With the fix, section inference is skipped and we get just the generic "differs from..." reason
     expect(variant?.reason).not.toContain("text outside the sections");
   });
+
+  it("import into schema 5 Forge succeeds even with invalid targets in workspace config", async () => {
+    // At schema 5 (before targets= in markers), workspaceTargets should NOT be called,
+    // so an invalid targets value in craftar.yaml does not fail the import.
+    const t = await setup();
+    const LF = "\n";
+
+    await fs.mkdir(path.join(t.forge, "ingredients/rules/style"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "recipes"), { recursive: true });
+    await fs.mkdir(path.join(t.forge, "profiles/acme"), { recursive: true });
+
+    // Schema 5 Forge (no targets= markers)
+    await fs.writeFile(
+      path.join(t.forge, "craftar.forge.yaml"),
+      YAML.stringify({ name: "f", schema: 5 }),
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/rules/style/ingredient.yaml"),
+      YAML.stringify({ type: "rule", name: "style" }),
+    );
+    await fs.writeFile(
+      path.join(t.forge, "ingredients/rules/style/rule.md"),
+      `# Style${LF}${LF}Content.${LF}`,
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "recipes/base.yaml"),
+      YAML.stringify({ name: "base", ingredients: ["rule/style"] }),
+    );
+
+    await fs.writeFile(
+      path.join(t.forge, "profiles/acme/profile.yaml"),
+      YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code"] }),
+    );
+
+    const wsRoot = t.ws("ws");
+    await fs.mkdir(wsRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(wsRoot, "craftar.yaml"),
+      YAML.stringify({ forge: "../forge", profile: "acme" }),
+    );
+
+    // Sync to establish workspace
+    await syncWorkspace(wsRoot);
+
+    // Now write an INVALID targets value to craftar.yaml (keep forge and profile)
+    await fs.writeFile(
+      path.join(wsRoot, "craftar.yaml"),
+      YAML.stringify({ forge: "../forge", profile: "acme", targets: ["not-a-target"] }),
+    );
+
+    // Add a new rule file to the workspace
+    await fs.writeFile(
+      path.join(wsRoot, ".claude/rules/extra.md"),
+      `# Extra${LF}${LF}Extra content.${LF}`,
+    );
+
+    // Copy Forge
+    const forgeCopy = path.join(t.root, "forge-copy");
+    await copyDir(t.forge, forgeCopy);
+
+    // Import should NOT throw — at schema 5, workspaceTargets is not called
+    const result = await importInto(forgeCopy, wsRoot, "acme");
+
+    // The new rule should be created
+    expect(result.created).toContain("rule/extra");
+  });
