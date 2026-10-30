@@ -52,7 +52,7 @@ export function markerLine(line: string, opts?: MarkerLineOptions): MarkerLineRe
     const targetsValue = targeted[2];
 
     if (!readTargets) {
-      return { kind: "near", problem: `section ${name} names targets, which a Forge reads only at schema: 6 — set schema: 6 in ${FORGE_MANIFEST}` };
+      return { kind: "near", problem: `section ${name} names targets, which a Forge reads only at schema: ${FORGE_SCHEMA_TARGET_SECTIONS} — set schema: ${FORGE_SCHEMA_TARGET_SECTIONS} in ${FORGE_MANIFEST}` };
     }
 
     const targetsError = validateTargets(name, targetsValue);
