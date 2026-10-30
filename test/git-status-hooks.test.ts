@@ -63,6 +63,54 @@ exit 0
     expect(fsmonitorExistsAfter, "core.fsmonitor should not have been triggered by gitUnheld").toBe(false);
   });
 
+  it("post-index-change hook is not triggered", async () => {
+    const dir = await createGitRepo();
+
+    // Create marker file path to detect if hook is called
+    const indexMarker = path.join(dir, "post-index-change-marker");
+
+    // Plant an executable .git/hooks/post-index-change that touches a marker and exits 0
+    const hookDir = path.join(dir, ".git", "hooks");
+    await fs.mkdir(hookDir, { recursive: true });
+    const hookScript = path.join(hookDir, "post-index-change");
+    await fs.writeFile(hookScript, `#!/bin/sh
+touch "${indexMarker}"
+exit 0
+`, { mode: 0o755 });
+
+    // Ensure the marker doesn't exist before we start
+    await fs.rm(indexMarker, { force: true });
+
+    // Make the index stale by touching the file 1.1 seconds in the future
+    const now = new Date();
+    const later = new Date(now.getTime() + 1100);
+    await fs.utimes(path.join(dir, "file.txt"), later, later);
+
+    // Call gitDirty
+    await gitDirty(dir);
+
+    // Marker should not exist
+    const markerAfterDirty = await fs.lstat(indexMarker).then(() => true, () => false);
+    expect(markerAfterDirty, "post-index-change should not have been triggered by gitDirty").toBe(false);
+
+    // Call gitUnheld
+    await gitUnheld(dir, [path.join(dir, "file.txt")]);
+
+    // Marker should still not exist
+    const markerAfterUnheld = await fs.lstat(indexMarker).then(() => true, () => false);
+    expect(markerAfterUnheld, "post-index-change should not have been triggered by gitUnheld").toBe(false);
+
+    // Control: a plain git status --porcelain DOES trigger the hook
+    // Re-stale the index
+    const laterAgain = new Date(Date.now() + 1100);
+    await fs.utimes(path.join(dir, "file.txt"), laterAgain, laterAgain);
+
+    await execProgram("git", ["-C", dir, "status", "--porcelain"]);
+
+    const markerAfterPlain = await fs.lstat(indexMarker).then(() => true, () => false);
+    expect(markerAfterPlain, "control: plain git status should trigger post-index-change").toBe(true);
+  });
+
   it("control: plain git status does trigger hooks", async () => {
     const dir = await createGitRepo();
     
