@@ -1375,6 +1375,24 @@ async function writeIngredient(
     dir = path.join(forge, "ingredients", folder, name);
     report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge${why ? ` (${why})` : ""}` });
 
+    // Review round 3 item 3: warn when the base holds {{craftar.rules.index}} and import creates a variant
+    // The variant now has the expanded (frozen) list instead of the dynamic placeholder.
+    if (run?.ctx && run.ctx.forge && readsRulesIndex(run.ctx.forge.manifest)) {
+      const parseOpts = { targets: readsTargetSections(run.ctx.forge.manifest) };
+      const baseDir = path.join(forge, "ingredients", folder, as);
+      if (await stage.exists(path.join(baseDir, "ingredient.yaml"))) {
+        const baseForPlaceholder = await readBase(baseDir, stage.reader(), forge, parseOpts);
+        for (const [, text] of baseForPlaceholder.texts) {
+          if (RULES_INDEX_TOKEN.test(text)) {
+            report.warnings.push(
+              `import: ${meta.type}/${name} holds the generated list of ${meta.type}/${as} — {{craftar.rules.index}} is frozen there; put the placeholder back in the variant, or delete it to use the base`
+            );
+            break;
+          }
+        }
+      }
+    }
+
     // Spec 27 §5.3: an existing variant's authEnv decides; a new one inherits the base's.
     const variantFile = path.join(dir, "ingredient.yaml");
     if (meta.type === "mcp") {
