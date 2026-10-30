@@ -21,6 +21,7 @@ import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
 import { appliesTo, effectiveTargets } from "../emitters/shared.js";
+import { readsRulesIndex, RULES_INDEX_KEY, belowGateLiteralWarning, ignoredValueWarning } from "./rules-index.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
 export const LOCAL_FILE = "craftar.local.yaml";
@@ -354,6 +355,8 @@ export function declaredWithoutValue(p: Pick<Plan, "resolution">): Map<string, s
     const values = paramsFor(ing, p.resolution);
     // `paramsFor` already holds the ingredient's own default, so a key it lacks has neither default nor value.
     for (const key of Object.keys(ing.meta.params ?? {})) {
+      // At the rules-index gate, skip the key (spec 44 §4.2)
+      if (p.resolution.rulesIndex && key === RULES_INDEX_KEY) continue;
       if (Object.hasOwn(values, key)) continue;
       out.set(key, [...(out.get(key) ?? []), ing.ref]);
     }
@@ -596,6 +599,10 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const rewordedPaths = new Set<string>();
   /** Kiro agent resources recorded for the check (spec 41 §4.5). */
   const kiroResourceRecords: Array<{ agent: string; path: string }> = [];
+  /** Below-gate literals: `ref (file)` for each rendered text that holds `{{craftar.rules.index}}` alone on a line (spec 44 §4.2). */
+  const belowGateLiterals = new Set<string>();
+  /** Regex: `{{craftar.rules.index}}` alone on a line (spec 44 §4.2). */
+  const rulesIndexLiteralRe = /^[ \t]*\{\{\s*craftar\.rules\.index\s*\}\}[ \t]*$/m;
   const ctx: EmitBase = {
     forge: ws.forge,
     resolution,
@@ -626,9 +633,21 @@ export async function plan(ws: Workspace): Promise<Plan> {
       if (parsed) guardOutput(ing, file, out, parsed, resolution, params, owner);
       // Every file rendered here, body file or not: `explain` names each key the refusal can name (spec 29 §4.1).
       const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
-      for (const key of placeholders(expanded)) c.keys.add(key);
+      for (const key of placeholders(expanded)) {
+        // At the gate, drop the key from cited (spec 44 §4.2)
+        if (resolution.rulesIndex && key === RULES_INDEX_KEY) continue;
+        c.keys.add(key);
+      }
       if (c.keys.size) cited.set(ing.ref, c);
-      for (const key of missing) missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ing.ref));
+      for (const key of missing) {
+        // At the gate, drop the key from missing (spec 44 §4.2)
+        if (resolution.rulesIndex && key === RULES_INDEX_KEY) continue;
+        missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ing.ref));
+      }
+      // Below the gate, track literals for the warning (spec 44 §4.2)
+      if (!resolution.rulesIndex && rulesIndexLiteralRe.test(out)) {
+        belowGateLiterals.add(`${ing.ref} (${file})`);
+      }
       return out;
     },
     bytes(ing: ResolvedIngredient, file: string) {
@@ -638,6 +657,8 @@ export async function plan(ws: Workspace): Promise<Plan> {
       warnings.push(msg);
     },
     missing(key: string, ref: string) {
+      // At the gate, drop the key (spec 44 §4.2)
+      if (resolution.rulesIndex && key === RULES_INDEX_KEY) return;
       missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ref));
     },
     warnOnce(msg: string) {
@@ -719,6 +740,44 @@ export async function plan(ws: Workspace): Promise<Plan> {
     const blocks = await claudeMdBlocks(ctx.readExisting);
     if (blocks.blocking.length > 0) {
       warnings.push(claudeMdBlockedMessage(blocks.blocking[0]));
+    }
+  }
+
+  // Rules-index warnings (spec 44 §4.2):
+  // - Below the gate: one line for all literals
+  // - At the gate: one line per layer that holds a value for the key
+  if (!resolution.rulesIndex) {
+    // Below the gate: warn about literals
+    if (belowGateLiterals.size > 0) {
+      const sorted = [...belowGateLiterals].sort();
+      warnings.push(belowGateLiteralWarning(sorted));
+    }
+  } else {
+    // At the gate: warn about values in layers (order: recipe, profile, workspace, then ingredient refs sorted)
+    const { recipes, profile, workspace } = resolution.paramLayers;
+    // Recipe that provides a default for the key
+    const recipeWithKey = recipes.get(RULES_INDEX_KEY);
+    if (recipeWithKey !== undefined) {
+      warnings.push(ignoredValueWarning(`recipe ${recipeWithKey}`));
+    }
+    // Profile params
+    if (Object.hasOwn(profile, RULES_INDEX_KEY)) {
+      warnings.push(ignoredValueWarning(`profile ${resolution.profile.name}`));
+    }
+    // Workspace overrides.params
+    if (Object.hasOwn(workspace, RULES_INDEX_KEY)) {
+      warnings.push(ignoredValueWarning("workspace"));
+    }
+    // Ingredient's own params default (sorted by ref)
+    const ingRefs: string[] = [];
+    for (const ing of resolution.ingredients) {
+      const decl = ing.meta.params?.[RULES_INDEX_KEY];
+      if (decl && decl.default !== undefined) {
+        ingRefs.push(ing.ref);
+      }
+    }
+    for (const ref of ingRefs.sort()) {
+      warnings.push(ignoredValueWarning(ref));
     }
   }
 
