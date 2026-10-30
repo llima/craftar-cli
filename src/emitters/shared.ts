@@ -858,7 +858,7 @@ export function expandRulesIndex(
 
   // Group rules by inclusion for display order
   const alwaysOn: Array<{ name: string; path: string; desc: string | null }> = [];
-  const scoped: Array<{ name: string; path: string; scope: string; desc: string | null }> = [];
+  const scoped: Array<{ name: string; path: string; scope: string | null; desc: string | null }> = [];
   const onRequest: Array<{ name: string; path: string; desc: string | null }> = [];
 
   for (const ing of rules) {
@@ -896,10 +896,12 @@ export function expandRulesIndex(
     if (inclusion === "always") {
       alwaysOn.push({ name, path, desc });
     } else if (inclusion === "fileMatch") {
-      const pattern = Array.isArray(meta.fileMatchPattern)
-        ? meta.fileMatchPattern.join("`, `")
-        : (meta.fileMatchPattern ?? "**");
-      scoped.push({ name, path, scope: `applies to \`${pattern}\``, desc });
+      // A fileMatch rule with no pattern adds nothing (spec 44 §4.4)
+      const pattern = meta.fileMatchPattern;
+      const scope = pattern
+        ? `applies to \`${Array.isArray(pattern) ? pattern.join("`, `") : pattern}\``
+        : null;
+      scoped.push({ name, path, scope, desc });
     } else {
       // manual or auto
       onRequest.push({ name, path, desc });
@@ -912,42 +914,37 @@ export function expandRulesIndex(
   scoped.sort(sortByName);
   onRequest.sort(sortByName);
 
-  // Build the index lines
+  // Build the index lines (spec 44 §4.4): each group only when it holds a rule
   const indexLines: string[] = [];
-  let hasContent = false;
 
-  if (alwaysOn.length > 0 || scoped.length > 0 || onRequest.length > 0) {
+  // When the index lists no rule at all, the whole index is `- (no rules)` (no group heading)
+  if (alwaysOn.length === 0 && scoped.length === 0 && onRequest.length === 0) {
+    indexLines.push("- (no rules)");
+  } else {
     if (alwaysOn.length > 0) {
-      if (hasContent) indexLines.push("");
+      if (indexLines.length > 0) indexLines.push("");
       indexLines.push("Always on:");
       for (const r of alwaysOn) {
         indexLines.push(r.desc ? `- ${r.path} — ${r.desc}` : `- ${r.path}`);
       }
-      hasContent = true;
-    } else {
-      if (hasContent) indexLines.push("");
-      indexLines.push("Always on:");
-      indexLines.push("- (no rules)");
-      hasContent = true;
     }
 
     if (scoped.length > 0) {
-      if (hasContent) indexLines.push("");
+      if (indexLines.length > 0) indexLines.push("");
       indexLines.push("Scoped:");
       for (const r of scoped) {
         const descPart = r.desc ? ` — ${r.desc}` : "";
-        indexLines.push(`- ${r.path}${descPart} (${r.scope})`);
+        const scopePart = r.scope ? ` (${r.scope})` : "";
+        indexLines.push(`- ${r.path}${descPart}${scopePart}`);
       }
-      hasContent = true;
     }
 
     if (onRequest.length > 0) {
-      if (hasContent) indexLines.push("");
+      if (indexLines.length > 0) indexLines.push("");
       indexLines.push("On request:");
       for (const r of onRequest) {
         indexLines.push(r.desc ? `- ${r.path} — ${r.desc}` : `- ${r.path}`);
       }
-      hasContent = true;
     }
   }
 

@@ -285,3 +285,99 @@ describe("rules-index edge cases", () => {
     expect(p.warnings.filter((w) => w.includes("agenthints"))).toEqual([]);
   });
 });
+
+describe("rules-index groups and scope", () => {
+  it("3a: a Forge with only fileMatch and manual rules has no Always on: heading", async () => {
+    // Spec 44 §4.4: each group only when it holds a rule. A Forge with only api (fileMatch) and the
+    // index rule readme made inclusion: manual → the index has no Always on: line, starts with Scoped:.
+    const ingredients: IngredientSpec[] = [
+      { meta: { type: "rule", name: "api", inclusion: "fileMatch", fileMatchPattern: "src/api/**", description: "API" }, files: { "rule.md": "# API\n" } },
+      { meta: { type: "rule", name: "readme", inclusion: "manual", description: "Index" }, files: { "rule.md": "{{craftar.rules.index}}\n" } },
+    ];
+    const s = kept(await scenario(
+      { ingredients, recipes: [recipe("base", ["rule/api", "rule/readme"])], profiles: [profile("test", ["base"], ["claude-code"])] },
+      { config: { profile: "test" } }
+    ));
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 7 }));
+
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const claudeIndex = p.files.find((f) => f.path === ".claude/rules/readme.md")!;
+    const content = claudeIndex.content.toString("utf8");
+    // No Always on: heading
+    expect(content).not.toContain("Always on:");
+    // Should start with Scoped:
+    expect(content).toContain("Scoped:");
+    // On request: should be present
+    expect(content).toContain("On request:");
+  });
+
+  it("3b: a profile with NO rules resolving → the index is exactly '- (no rules)' (CRLF for kiro)", async () => {
+    // Spec 44 §4.4: when the index lists no rule at all, the whole index is the single line `- (no rules)`.
+    // A steering index (kiro target) holding the placeholder in a workspace whose profile resolves NO rule.
+    const ingredients: IngredientSpec[] = [
+      { meta: { type: "steering", name: "index", targets: ["kiro"] }, files: { "steering.md": "{{craftar.rules.index}}\n" } },
+    ];
+    const s = kept(await scenario(
+      { ingredients, recipes: [recipe("base", ["steering/index"])], profiles: [profile("test", ["base"], ["kiro"])] },
+      { config: { profile: "test" } }
+    ));
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 7 }));
+
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const kiroIndex = p.files.find((f) => f.path === ".kiro/steering/index.md")!;
+    const content = kiroIndex.content.toString("utf8");
+    // The body should be exactly "- (no rules)" with CRLF
+    expect(content).toContain("- (no rules)");
+    // No group headings
+    expect(content).not.toContain("Always on:");
+    expect(content).not.toContain("Scoped:");
+    expect(content).not.toContain("On request:");
+  });
+
+  it("4: a fileMatch rule with no fileMatchPattern adds nothing (no applies to)", async () => {
+    // Spec 44 §4.4: a fileMatch rule with no pattern adds nothing (not "(applies to `**`)").
+    const ingredients: IngredientSpec[] = [
+      { meta: { type: "rule", name: "scoped", inclusion: "fileMatch", description: "A scoped rule" }, files: { "rule.md": "# Scoped\n" } },
+      { meta: { type: "rule", name: "readme", description: "Index" }, files: { "rule.md": "{{craftar.rules.index}}\n" } },
+    ];
+    const s = kept(await scenario(
+      { ingredients, recipes: [recipe("base", ["rule/scoped", "rule/readme"])], profiles: [profile("test", ["base"], ["claude-code"])] },
+      { config: { profile: "test" } }
+    ));
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 7 }));
+
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const claudeIndex = p.files.find((f) => f.path === ".claude/rules/readme.md")!;
+    const content = claudeIndex.content.toString("utf8");
+    // The scoped rule line should end with its description, not with "(applies to `**`)"
+    expect(content).toContain("`.claude/rules/scoped.md` — A scoped rule");
+    expect(content).not.toContain("applies to");
+  });
+
+  it("4b: multiple patterns are listed as (applies to `a`, `b`)", async () => {
+    // Spec 44 §4.4: several patterns read "(applies to `a`, `b`)".
+    const ingredients: IngredientSpec[] = [
+      { meta: { type: "rule", name: "multi", inclusion: "fileMatch", fileMatchPattern: ["src/**", "lib/**"], description: "Multi" }, files: { "rule.md": "# Multi\n" } },
+      { meta: { type: "rule", name: "readme", description: "Index" }, files: { "rule.md": "{{craftar.rules.index}}\n" } },
+    ];
+    const s = kept(await scenario(
+      { ingredients, recipes: [recipe("base", ["rule/multi", "rule/readme"])], profiles: [profile("test", ["base"], ["claude-code"])] },
+      { config: { profile: "test" } }
+    ));
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 7 }));
+
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const claudeIndex = p.files.find((f) => f.path === ".claude/rules/readme.md")!;
+    const content = claudeIndex.content.toString("utf8");
+    // The multi rule should have (applies to `src/**`, `lib/**`)
+    expect(content).toContain("(applies to `src/**`, `lib/**`)");
+  });
+});
