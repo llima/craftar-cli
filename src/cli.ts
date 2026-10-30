@@ -1185,7 +1185,7 @@ program
 /* ---------------------------------------------------------------- explain */
 program
   .command("explain")
-  .description("Why does this file exist? Which ingredient, recipe chain and target produced it, and which layer filled each section and each parameter it cites")
+  .description("Why does this file exist? Which ingredient, recipe chain and target produced it, which layer filled each section and each parameter it cites, and the rules index when the file holds it")
   .argument("<path>", "workspace-relative path of a generated file")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
