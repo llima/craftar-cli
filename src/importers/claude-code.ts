@@ -357,16 +357,30 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // Detect targets this workspace writes (spec 41 Part B §5.2's variant warnings).
   const detected: Target[] = ["claude-code"];
   if (await exists(path.join(ws, ".kiro"))) detected.push("kiro");
-  // Only compute writtenTargets at schema 6 (the variant warnings only fire there).
-  // workspaceTargets throws on an invalid targets value, so avoid calling it below schema 6.
-  let writtenTargets: readonly Target[] = [];
-  if (readsTargetSections(loaded?.manifest ?? { schema: 1 })) {
-    const wsTargets = await workspaceTargets(ws, readWs);
+
+  // Compute writtenTargets only at schema 6 (the variant warnings only fire there).
+  async function writtenTargetsFor(): Promise<readonly Target[]> {
     const profileTargets = loaded?.profiles.get(opts.profileName)?.targets ?? [];
     // Union of profile targets and detected targets, in TARGETS order.
     const union = TARGETS.filter((t) => profileTargets.includes(t) || detected.includes(t));
-    writtenTargets = wsTargets ?? union;
+    try {
+      if (opts.writeWorkspaceConfig) {
+        // With --write-config, craftar.yaml will be set to `detected`, so the next sync writes
+        // craftar.local.yaml's targets when that file sets them, else detected.
+        const localTargets = await workspaceTargets(ws, readWs, "import", ["craftar.local.yaml"]);
+        return localTargets ?? detected;
+      } else {
+        // Without the flag, the workspace's targets (craftar.yaml's, else craftar.local.yaml's),
+        // else the union of profile targets and detected targets.
+        const wsTargets = await workspaceTargets(ws, readWs);
+        return wsTargets ?? union;
+      }
+    } catch {
+      // An invalid targets value must not fail the import — only a warning's wording depends on it.
+      return opts.writeWorkspaceConfig ? detected : union;
+    }
   }
+  const writtenTargets = readsTargetSections(loaded?.manifest ?? { schema: 1 }) ? await writtenTargetsFor() : [];
 
   const ctx: RunContext = {
     P: Object.assign(Object.create(null), existing.params),

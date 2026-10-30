@@ -44,7 +44,11 @@ export interface RunContext {
   markedBase: boolean;
   /** The source target for section projection (spec 41 Part B §5.2): "claude-code" for .claude/ sources, "kiro" for --prefer-kiro. Default "claude-code". */
   sourceTarget: Owner;
-  /** The targets the next sync of this workspace writes: the workspace's `targets` when craftar.yaml / craftar.local.yaml sets them, else the importing profile's targets in the Forge as loaded plus the ones import detects (spec 41 Part B §5.2's variant warnings). */
+  /**
+   * The targets the next sync of this workspace writes: with --write-config, craftar.local.yaml's targets else the detected
+   * ones; otherwise the workspace's targets, else the importing profile's targets in the Forge as loaded plus the detected
+   * ones; an unreadable value falls back to the default — only a warning's wording depends on it.
+   */
   writtenTargets: readonly Target[];
 }
 
@@ -380,9 +384,14 @@ export async function workspaceParams(ws: string, read: (abs: string) => Promise
 }
 
 /** The workspace's `targets`: craftar.local.yaml's replaces craftar.yaml's, as loadWorkspace merges them; undefined when neither sets it. */
-export async function workspaceTargets(ws: string, read: (abs: string) => Promise<string>, command = "import"): Promise<Target[] | undefined> {
+export async function workspaceTargets(
+  ws: string,
+  read: (abs: string) => Promise<string>,
+  command = "import",
+  files = ["craftar.yaml", "craftar.local.yaml"],
+): Promise<Target[] | undefined> {
   let out: Target[] | undefined;
-  for (const f of ["craftar.yaml", "craftar.local.yaml"]) {
+  for (const f of files) {
     const abs = path.join(ws, f);
     if (!(await exists(abs))) continue;
     try {

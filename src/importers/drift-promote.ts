@@ -757,7 +757,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     primaryRefs: null,
     // Drift promote always works with .claude/ files (spec 41 Part B §5.2)
     sourceTarget: "claude-code",
-    // Drift promote does not emit warnings; writtenTargets is not used.
+    // Drift promote reports sections through `flattened`; writeIngredient's variant warnings do not run here.
     writtenTargets: [],
   };
 
