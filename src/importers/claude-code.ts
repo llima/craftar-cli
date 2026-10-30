@@ -1930,7 +1930,7 @@ async function ruleHoldingIndexInQueue(
 ): Promise<string | null> {
   for (const name of ruleNames) {
     // For new/broken profiles, check the base rule
-    const baseRef = `rule/${name}`;
+    const baseRef = `rule/${name}` as const;
     const base = loaded.ingredients.get(baseRef);
     if (base && base.meta.type === "rule") {
       const body = await readIngredientText(base, base.meta.file);
