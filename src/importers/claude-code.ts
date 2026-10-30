@@ -1385,26 +1385,8 @@ async function writeIngredient(
         if (existingMeta.type === "mcp" && existingMeta.authEnv) {
           meta = { ...meta, authEnv: existingMeta.authEnv } as Ingredient;
         }
-      } else {
-        // NEW mcp variant: inherit authEnv from base.
-        // variantAuthEnv comes from decide()'s "variant" answer;
-        // when undefined (literal path or no run context), read the base's ingredient.yaml.
-        let authEnvToApply = variantAuthEnv;
-        if (authEnvToApply === undefined) {
-          // Literal path: decide() answered "literal", so we didn't get authEnv from it.
-          // Read the base's ingredient.yaml and take its authEnv.
-          const baseDir = path.join(forge, "ingredients", folder, meta.name);
-          const baseFile = path.join(baseDir, "ingredient.yaml");
-          if (await stage.exists(baseFile)) {
-            const baseMeta = parseYaml(baseFile, await stage.readText(baseFile), IngredientSchema);
-            if (baseMeta.type === "mcp" && baseMeta.authEnv) {
-              authEnvToApply = baseMeta.authEnv;
-            }
-          }
-        }
-        if (authEnvToApply) {
-          meta = { ...meta, authEnv: authEnvToApply } as Ingredient;
-        }
+      } else if (variantAuthEnv) {
+        meta = { ...meta, authEnv: variantAuthEnv } as Ingredient;
       }
     }
     // Spec 43 §7.2 row 10: an existing hook variant's registration decides; a new one inherits the base's.

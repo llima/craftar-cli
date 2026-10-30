@@ -10,8 +10,8 @@ import { tmpDir, writeFiles, profile, recipe } from "./helpers/forge.js";
 
 /**
  * Import reuse tests for 0.40.1 tech debt fixes.
- * Item A: script/hook bases with default targets reused when source has targets: ["claude-code"]
- * Item B: MCP variants through literal comparison carry base's authEnv
+ * script/hook bases with default targets reused when source has targets: ["claude-code"]
+ * MCP variants carry base's authEnv
  */
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -19,7 +19,7 @@ afterEach(async () => {
   while (cleanups.length) await cleanups.pop()!();
 });
 
-describe("Item A: script/hook base with default targets is reused", () => {
+describe("script and hook bases with default targets are reused", () => {
   describe("a hook base with default targets is reused when the source is at [\"claude-code\"]", () => {
     it("hook base at targets: '*' is reused, not made a variant", async () => {
       const root = await tmpDir("craftar-import-hook-targets-");
@@ -300,16 +300,16 @@ describe("Item A: script/hook base with default targets is reused", () => {
   });
 });
 
-describe("Item B: MCP variant through literal comparison keeps base's authEnv", () => {
-  describe("new MCP variant through G1 literal path carries the base's authEnv names", () => {
-    it("MCP variant created via G1 literal path inherits base authEnv", async () => {
+describe("a new MCP variant keeps the base's authEnv", () => {
+  describe("new MCP variant carries the base's authEnv names", () => {
+    it("MCP variant created inherits base authEnv", async () => {
       const root = await tmpDir("craftar-import-mcp-authenv-g1-");
       cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
       const forgeRoot = path.join(root, "forge");
       const wsRoot = path.join(root, "ws");
 
       // Forge with MCP base that has authEnv, and a recipe that defaults a key the server cites
-      // This triggers G1: a recipe default the render cannot see → literal comparison
+      // This triggers a recipe default the render cannot see
       await writeFiles(forgeRoot, {
         "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 4 }),
         "ingredients/mcp/srv/ingredient.yaml": YAML.stringify({
@@ -339,7 +339,7 @@ describe("Item B: MCP variant through literal comparison keeps base's authEnv", 
         }),
       });
 
-      // Import — should create variant via G1 literal path
+      // Import — should create variant
       const result = await importClaudeCode({
         workspaceRoot: wsRoot,
         forgeRoot,
@@ -462,7 +462,7 @@ describe("Item B: MCP variant through literal comparison keeps base's authEnv", 
       const forgeRoot = path.join(root, "forge");
       const wsRoot = path.join(root, "ws");
 
-      // Forge with MCP base that has NO authEnv, with G1 trigger
+      // Forge with MCP base that has NO authEnv, triggering a recipe default not visible to render
       await writeFiles(forgeRoot, {
         "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 4 }),
         "ingredients/mcp/srv/ingredient.yaml": YAML.stringify({
@@ -475,7 +475,7 @@ describe("Item B: MCP variant through literal comparison keeps base's authEnv", 
         "recipes/base.yaml": YAML.stringify({
           name: "base",
           ingredients: ["mcp/srv"],
-          params: { org: { default: "acme-corp" } }, // G1 trigger
+          params: { org: { default: "acme-corp" } }, // Triggers a recipe default not visible to render
         }),
         "profiles/acme/profile.yaml": YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code"] }),
       });
