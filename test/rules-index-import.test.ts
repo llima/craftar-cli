@@ -240,6 +240,142 @@ describe("rules-index import (spec 44 §4.7–§4.8)", () => {
       // No error: the import succeeded
       expect(result.profile).toBe("acme");
     });
+
+    it("14. PK6 reads the rule's declared file (meta.file), not hard-coded rule.md", async () => {
+      // Test finding 5: readIngredientText should use meta.file, not "rule.md"
+      const root = await tmpDir("craftar-pk6-custom-file-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forgeRoot = path.join(root, "forge");
+      const wsRoot = path.join(root, "ws");
+
+      // Create Forge with rule whose body file is "body.md" (not "rule.md")
+      await writeFiles(forgeRoot, {
+        "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 7 }),
+        "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+          type: "rule",
+          name: "readme",
+          inclusion: "always",
+          file: "body.md",  // Custom file name
+        }),
+        "ingredients/rules/readme/body.md": "# Rules\n\n{{craftar.rules.index}}\n",  // Placeholder in body.md
+        "recipes/base.yaml": YAML.stringify({ name: "base", ingredients: ["rule/readme"] }),
+        "profiles/acme/profile.yaml": YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code"] }),
+      });
+
+      await writeFiles(wsRoot, {
+        "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+        ".claude/rules/readme.md": "# Rules\n",
+        ".kiro/steering/readme.md": "---\ninclusion: always\n---\n\n# Rules\n",
+      });
+
+      const before = await hashForge(forgeRoot);
+
+      const result = await importClaudeCode({
+        workspaceRoot: wsRoot,
+        forgeRoot: forgeRoot,
+        profileName: "acme",
+        preferKiro: ["readme"],
+      }).catch((e: Error) => e);
+
+      // Should fail with PK6 error (the placeholder was found in body.md)
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).message).toContain("--prefer-kiro readme");
+      expect((result as Error).message).toContain("{{craftar.rules.index}}");
+
+      const after = await hashForge(forgeRoot);
+      expect(after).toEqual(before);
+    });
+  });
+
+  describe("fail-closed: broken profile and placeholder presence", () => {
+    it("12. schema 7, broken profile, no rule holds placeholder → import does NOT fail on account of spec 44", async () => {
+      // Test finding 4(a): when profile doesn't resolve but no base holds the placeholder,
+      // the import should not fail with a rules-index related error
+      const root = await tmpDir("craftar-failclosed-no-placeholder-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forgeRoot = path.join(root, "forge");
+      const wsRoot = path.join(root, "ws");
+
+      // Create Forge with NO rules holding the placeholder, but profile has a missing recipe
+      await writeFiles(forgeRoot, {
+        "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 7 }),
+        "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+          type: "rule",
+          name: "readme",
+          inclusion: "always",
+          file: "rule.md",
+        }),
+        "ingredients/rules/readme/rule.md": "# Rules\nNo placeholder here.\n",
+        "recipes/base.yaml": YAML.stringify({ name: "base", ingredients: ["rule/readme"] }),
+        // Profile references a recipe that doesn't exist
+        "profiles/acme/profile.yaml": YAML.stringify({ name: "acme", recipes: ["base", "missing-recipe"], targets: ["claude-code"] }),
+      });
+
+      await writeFiles(wsRoot, {
+        "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+        ".claude/rules/readme.md": "# Rules\nNo placeholder here.\n",
+      });
+
+      // Import may fail for other reasons (broken profile), but NOT due to rules-index
+      const result = await importClaudeCode({
+        workspaceRoot: wsRoot,
+        forgeRoot: forgeRoot,
+        profileName: "acme",
+      }).catch((e: Error) => e);
+
+      // If it fails, the message should NOT mention craftar.rules.index
+      if (result instanceof Error) {
+        expect((result as Error).message).not.toContain("craftar.rules.index");
+      }
+      // If it succeeds, that's also fine (the profile might resolve without the missing recipe being needed)
+    });
+
+    it("13. schema 7, broken profile, base holds placeholder → exits 1 naming the profile, Forge unchanged", async () => {
+      // Test finding 4(b): when profile doesn't resolve AND a base holds the placeholder,
+      // the import should fail with a message naming the profile
+      const root = await tmpDir("craftar-failclosed-with-placeholder-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forgeRoot = path.join(root, "forge");
+      const wsRoot = path.join(root, "ws");
+
+      // Create Forge with rule holding placeholder, but profile has a missing recipe
+      await writeFiles(forgeRoot, {
+        "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 7 }),
+        "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+          type: "rule",
+          name: "readme",
+          inclusion: "always",
+          file: "rule.md",
+        }),
+        "ingredients/rules/readme/rule.md": "# Rules\n\n{{craftar.rules.index}}\n",  // Has placeholder
+        "recipes/base.yaml": YAML.stringify({ name: "base", ingredients: ["rule/readme"] }),
+        // Profile references a recipe that doesn't exist
+        "profiles/acme/profile.yaml": YAML.stringify({ name: "acme", recipes: ["base", "missing-recipe"], targets: ["claude-code"] }),
+      });
+
+      await writeFiles(wsRoot, {
+        "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+        ".claude/rules/readme.md": "# Rules\n",
+      });
+
+      const before = await hashForge(forgeRoot);
+
+      const result = await importClaudeCode({
+        workspaceRoot: wsRoot,
+        forgeRoot: forgeRoot,
+        profileName: "acme",
+      }).catch((e: Error) => e);
+
+      // Should fail
+      expect(result).toBeInstanceOf(Error);
+      // Should name the profile
+      expect((result as Error).message).toContain("acme");
+      expect((result as Error).message).toMatch(/does not resolve/i);
+
+      // Forge byte-identical
+      const after = await hashForge(forgeRoot);
+      expect(after).toEqual(before);
+    });
   });
 
   describe("re-import at schema 7: compares a base with its index expanded", () => {

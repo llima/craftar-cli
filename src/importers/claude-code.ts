@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
-import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
+import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST, readIngredientText } from "../core/forge.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, hasUtf16Bom } from "../core/secrets.js";
 import { registrationCitations, serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
@@ -420,14 +420,20 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
 
     // PK6 (spec 44 §4.7): at schema >= 7, check for {{craftar.rules.index}} in the resolved rule.
     // If the profile exists, resolve it to find variants; otherwise check the base rule directly.
-    // Fail-closed: if the profile does not resolve on its own, exit 1 and leave the Forge untouched.
+    // Fail-closed (spec 44 §4.8): when the profile does not resolve, throw ONLY when some rule base
+    // the profile would be compared with holds the placeholder; otherwise proceed with no index step.
     let pk6Resolution: Awaited<ReturnType<typeof resolveForImport>> | null = null;
     if (loaded && readsRulesIndex(loaded.manifest) && loaded.profiles.has(opts.profileName)) {
       try {
         pk6Resolution = await resolveForImport(loaded, opts.profileName, ctx, ws, readWs);
       } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        throw new Error(`import: profile ${opts.profileName} does not resolve (${message}) — fix the Forge and re-run`);
+        // Fail-closed: check if any rule base holds the placeholder before failing
+        const anyBaseHoldsPlaceholder = await someBaseHoldsRulesIndex(loaded);
+        if (anyBaseHoldsPlaceholder) {
+          const message = e instanceof Error ? e.message : String(e);
+          throw new Error(`import: profile ${opts.profileName} does not resolve (${message}) — fix the Forge and re-run`);
+        }
+        // No base holds the placeholder: proceed with no index step, let the import continue
       }
     }
 
@@ -447,22 +453,21 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       // When the profile exists, check the resolved ingredient (which may be a variant).
       // When the profile doesn't exist but the Forge does, check the base rule directly.
       if (loaded && readsRulesIndex(loaded.manifest)) {
-        const { readIngredientText } = await import("../core/forge.js");
         let body: string | null = null;
         if (pk6Resolution) {
           // Profile exists: check the resolved ingredient (may be a variant)
           const resolved = pk6Resolution.resolution.ingredients.find(
             (i) => i.meta.type === "rule" && (i.meta.name === name || ("as" in i.meta && i.meta.as === name)),
           );
-          if (resolved) {
-            body = await readIngredientText(resolved, "rule.md");
+          if (resolved && resolved.meta.type === "rule") {
+            body = await readIngredientText(resolved, resolved.meta.file);
           }
         } else {
           // Profile doesn't exist: check the base rule directly from the Forge
           const baseRef = `rule/${name}` as const;
           const base = loaded.ingredients.get(baseRef);
-          if (base) {
-            body = await readIngredientText(base, "rule.md");
+          if (base && base.meta.type === "rule") {
+            body = await readIngredientText(base, base.meta.file);
           }
         }
         if (body !== null && RULES_INDEX_LINE.test(body)) {
@@ -550,13 +555,20 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
 
   // Spec 44 §4.8: at schema >= 7, build the index expansion function for rule re-import comparison.
   // The function expands {{craftar.rules.index}} using the Forge's resolved ingredients.
+  // Fail-closed: when the profile does not resolve, throw ONLY when some rule base holds the placeholder.
   let indexExpand: ((text: string) => string) | undefined;
   if (loaded && readsRulesIndex(loaded.manifest) && loaded.profiles.has(opts.profileName)) {
     try {
       const { resolution, lookup } = await resolveForImport(loaded, opts.profileName, ctx, ws, readWs);
       indexExpand = (text: string) => expandRulesIndex(text, "claude-code", lookup, resolution).text;
-    } catch {
-      // If resolution fails, don't expand the index — re-import will create a variant
+    } catch (e) {
+      // Fail-closed: check if any rule base holds the placeholder before failing
+      const anyBaseHoldsPlaceholder = await someBaseHoldsRulesIndex(loaded);
+      if (anyBaseHoldsPlaceholder) {
+        const message = e instanceof Error ? e.message : String(e);
+        throw new Error(`import: profile ${opts.profileName} does not resolve (${message}) — fix the Forge and re-run`);
+      }
+      // No base holds the placeholder: proceed with no index step, let the import continue
     }
   }
 
@@ -1864,4 +1876,18 @@ async function primaryFor(
   if (!resolution.primary) return null;
   const agentsMdOnly = new Set(resolution.ingredients.filter((i) => isAgentsMdOnly(i.meta, resolution)).map((i) => i.ref));
   return { refs: (text, citing) => resolveRuleRefs(text, citing, lookup, resolution.targets).text, agentsMdOnly };
+}
+
+/**
+ * Whether any rule base in the Forge holds the rules index placeholder (spec 44 §4.8).
+ * Used for fail-closed: when the profile does not resolve, we only fail if some base holds the placeholder.
+ */
+async function someBaseHoldsRulesIndex(loaded: import("../core/forge.js").Forge): Promise<boolean> {
+  for (const ing of loaded.ingredients.values()) {
+    if (ing.meta.type === "rule") {
+      const body = await readIngredientText(ing, ing.meta.file);
+      if (RULES_INDEX_LINE.test(body)) return true;
+    }
+  }
+  return false;
 }
