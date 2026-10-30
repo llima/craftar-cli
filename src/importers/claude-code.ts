@@ -25,7 +25,7 @@ import { firstMarkerLine, readsTargetSections } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
 import { GENERATED_BANNER, kiroReport, textLines, type KiroReport } from "./kiro-report.js";
 import { preferKiro } from "./prefer-kiro.js";
-import { agentsMdOnly as isAgentsMdOnly, appliesTo, buildRuleLookup, expandRulesIndex, outName, resolveRuleRefs, type RuleLookup } from "../emitters/shared.js";
+import { agentsMdOnly as isAgentsMdOnly, appliesTo, buildRuleLookup, expandRulesIndex, flatSkillWarning, outName, resolveRuleRefs, type RuleLookup } from "../emitters/shared.js";
 import { CAPABILITIES } from "../core/capabilities.js";
 import { deepMerge } from "../core/merge.js";
 import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
@@ -264,6 +264,15 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       }
       read(emitted.meta, emitted.files, emitted.scan, (ref) => addRef(refs.base, ref));
     }
+  }
+
+  // Warn about flat skills (spec 44 §5): after skills are read, warn if any have layout: file
+  const flatSkillNames = queue
+    .filter((q) => q.meta.type === "skill" && (q.meta as { layout?: string }).layout === "file")
+    .map((q) => outName(q.meta))
+    .sort();
+  if (flatSkillNames.length > 0) {
+    report.warnings.push(`import: ${flatSkillWarning(flatSkillNames, "import")}`);
   }
 
   /* ---- scripts & hooks ---- */
