@@ -1812,6 +1812,26 @@ async function planConfig(ws: string, forge: string, profile: string, targets: T
 }
 
 /**
+ * Resolve the importing profile on its own (spec 44 §4.7, §4.8): the Forge as loaded, the profile, the workspace's overrides
+ * and targets. Used by PK6 (the prefer-kiro rules-index gate), the re-import comparison step, and primaryFor. Returns the
+ * resolution with its lookup, or throws when the profile does not resolve on its own.
+ */
+async function resolveForImport(
+  loaded: import("../core/forge.js").Forge,
+  profile: string,
+  ctx: RunContext,
+  ws: string,
+  read: (abs: string) => Promise<string>,
+): Promise<{ resolution: Resolution; lookup: RuleLookup }> {
+  if (!loaded.profiles.has(profile)) throw new Error(`profile ${profile} is not in the Forge`);
+  const targets = await workspaceTargets(ws, read);
+  const config = WorkspaceConfigSchema.parse({ forge: ".", profile, ...(targets ? { targets } : {}), overrides: { params: ctx.W, sections: ctx.WS } });
+  const resolution = resolve(loaded, config);
+  const lookup = buildRuleLookup(resolution.ingredients, resolution);
+  return { resolution, lookup };
+}
+
+/**
  * What agents-md.primary changed for the importing workspace (spec 41 §4.10): the rewording the claude-code emitter applied, so a
  * re-import compares each base as sync wrote it, and the rules the workspace holds in AGENTS.md alone, so a recipe that lists
  * them is not split for lacking them; null when the Forge is below schema 5 or the mode is off. Decided by `resolve()` over
@@ -1833,38 +1853,15 @@ async function primaryFor(
     Object.hasOwn(ctx.W, AGENTS_MD_PRIMARY_KEY) ||
     [...loaded.recipes.values()].some((r) => r.params[AGENTS_MD_PRIMARY_KEY]?.default !== undefined);
   let resolution: Resolution;
+  let lookup: RuleLookup;
   try {
-    if (!loaded.profiles.has(profile)) throw new Error(`profile ${profile} is not in the Forge`);
-    const targets = await workspaceTargets(ws, read);
-    const config = WorkspaceConfigSchema.parse({ forge: ".", profile, ...(targets ? { targets } : {}), overrides: { params: ctx.W, sections: ctx.WS } });
-    resolution = resolve(loaded, config);
+    ({ resolution, lookup } = await resolveForImport(loaded, profile, ctx, ws, read));
   } catch (e) {
     if (!setSomewhere) return null;
     const message = errorText(e);
     throw new Error(`import: profile ${profile} does not resolve on its own (${message}) — agents-md.primary needs it to compare the bases; fix the Forge and re-run`);
   }
   if (!resolution.primary) return null;
-  const lookup = buildRuleLookup(resolution.ingredients, resolution);
   const agentsMdOnly = new Set(resolution.ingredients.filter((i) => isAgentsMdOnly(i.meta, resolution)).map((i) => i.ref));
   return { refs: (text, citing) => resolveRuleRefs(text, citing, lookup, resolution.targets).text, agentsMdOnly };
-}
-
-/**
- * Resolve the importing profile on its own (spec 44 §4.7, §4.8): the Forge as loaded, the profile, the workspace's overrides
- * and targets. Used by PK6 (the prefer-kiro rules-index gate) and by the re-import comparison step. Returns the resolution
- * with its lookup, or throws when the profile does not resolve on its own.
- */
-async function resolveForImport(
-  loaded: import("../core/forge.js").Forge,
-  profile: string,
-  ctx: RunContext,
-  ws: string,
-  read: (abs: string) => Promise<string>,
-): Promise<{ resolution: Resolution; lookup: RuleLookup }> {
-  if (!loaded.profiles.has(profile)) throw new Error(`profile ${profile} is not in the Forge`);
-  const targets = await workspaceTargets(ws, read);
-  const config = WorkspaceConfigSchema.parse({ forge: ".", profile, ...(targets ? { targets } : {}), overrides: { params: ctx.W, sections: ctx.WS } });
-  const resolution = resolve(loaded, config);
-  const lookup = buildRuleLookup(resolution.ingredients, resolution);
-  return { resolution, lookup };
 }
