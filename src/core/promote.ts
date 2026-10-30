@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type IngredientRef } from "../schema/index.js";
 import { fingerprintDir } from "./fingerprint.js";
-import { assertNoLinkOnPath, copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
+import { assertNoDirLinkIn, assertNoLinkOnPath, copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
 import { effectiveProfile } from "./integrations.js";
 import { findProfileFile } from "./param-writes.js";
 import { resolve, type Resolution } from "./resolve.js";
@@ -92,12 +92,11 @@ async function recipeFiles(root: string): Promise<Map<string, { abs: string; ste
   return out;
 }
 
-const SYMLINK_DIR_VARIANT = (dir: string) =>
-  `${dir} is a symbolic link to a directory — promote does not create a variant through a link; replace it with the directory and commit`;
+const SYMLINK_DIR_VARIANT_REL = (dir: string) => path.relative(path.dirname(path.dirname(dir)), dir);
 
 /**
  * Whether something stands where a new directory would go: anything but nothing, or a directory holding no file.
- * Throws on lstat errors other than ENOENT (fail-closed), and throws with an explicit message for a symlink to a directory.
+ * Throws on lstat errors other than ENOENT (fail-closed).
  */
 async function occupied(dir: string): Promise<boolean> {
   let stat;
@@ -107,22 +106,6 @@ async function occupied(dir: string): Promise<boolean> {
     // Only ENOENT means "not occupied"; other errors (EACCES, EIO, etc.) fail closed.
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw e;
-  }
-  // A symlink to a directory is refused explicitly — lstat shows it's a symlink, stat would follow it.
-  if (stat.isSymbolicLink()) {
-    try {
-      const target = await fs.stat(dir);
-      if (target.isDirectory()) {
-        throw new Error(SYMLINK_DIR_VARIANT(path.relative(path.dirname(path.dirname(dir)), dir)));
-      }
-    } catch (e) {
-      // If stat fails (dangling link), fall through to the regular "occupied" check
-      if (!(e instanceof Error && e.message.includes("symbolic link"))) {
-        // Not our symlink error, treat as dangling → occupied (not a usable directory)
-        return true;
-      }
-      throw e; // Re-throw our symlink error
-    }
   }
   return !stat.isDirectory() || (await listFiles(dir)).length > 0;
 }
@@ -207,6 +190,8 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
   const createdWrites: PromotionWrite[] = [];
   for (const q of Q) {
     const dir = path.join(folder, `${base.meta.name}--${q}`);
+    // A symlink to a directory is refused explicitly — before checking if occupied.
+    await assertNoDirLinkIn(dir, SYMLINK_DIR_VARIANT_REL(dir));
     // An empty directory is no ingredient: a late failure undone with git leaves one behind, and the re-run must pass.
     if (variantOf(q) || forge.ingredients.has(variantRef(q)) || (await occupied(dir))) {
       throw new Error(

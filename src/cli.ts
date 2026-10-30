@@ -2806,7 +2806,7 @@ forge
       else if (impactResults.every((r) => r.state === "no-effect")) console.log(`  impact   ${n(impactResults.length)} planned before and after: no effect`);
       else for (let i = 0; i < impactResults.length; i++) console.log(`  ${impactLine(impactEntries[i], impactResults[i])}`);
     }
-    if (promotion.created.length) console.log(`  next     craftar forge variants — the old base now shows as ${promotion.created.length} variant(s) to unify`);
+    if (promotion.created.length) console.log(`  next     craftar forge variants — the old base ${o.dryRun ? "would show" : "now shows"} as ${promotion.created.length} variant(s) to unify`);
   });
 
 /* ---------------------------------------------------------------- services ---------------------------------------------------------------- */

@@ -74,4 +74,41 @@ describe.skipIf(process.platform === "win32")("promote occupied() P4 improvement
     expect(r.stderr).toContain("is a symbolic link");
     expect(r.stderr).toContain("a--globex");
   });
+
+  // Root ignores the read-only bit, so the scenario cannot fail there.
+  it.skipIf(process.getuid?.() === 0)("(2) lstat EACCES on parent directory fails closed", async () => {
+    // Set up a Forge where the parent directory of the would-be variant is unreadable.
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "base text\n")],
+        recipes: [
+          recipe("acme-recipe", ["rule/a--acme"]),
+          recipe("globex-recipe", ["rule/a"]),
+        ],
+        profiles: [profile("acme", ["acme-recipe"]), profile("globex", ["globex-recipe"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+
+    // Create the acme variant
+    await fs.mkdir(path.join(s.forgeRoot, "ingredients/rules/a--acme"), { recursive: true });
+    await fs.writeFile(
+      path.join(s.forgeRoot, "ingredients/rules/a--acme/ingredient.yaml"),
+      "type: rule\nname: a--acme\nas: a\nfile: rule.md\ntargets: '*'\n",
+    );
+    await fs.writeFile(path.join(s.forgeRoot, "ingredients/rules/a--acme/rule.md"), "variant text\n");
+
+    gitInit(s.forgeRoot);
+
+    // Make the rules directory unreadable — lstat on a--globex will fail with EACCES
+    const rulesDir = path.join(s.forgeRoot, "ingredients/rules");
+    cleanups.push(() => fs.chmod(rulesDir, 0o755).catch(() => undefined));
+    await fs.chmod(rulesDir, 0o000);
+
+    // forge promote should fail closed (propagate the EACCES) rather than assume "not occupied"
+    const r = runCli(["forge", "promote", "rule/a", "--profile", "acme", "--forge", s.forgeRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/EACCES|permission denied/i);
+  });
 });

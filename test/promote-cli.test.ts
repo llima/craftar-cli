@@ -71,6 +71,7 @@ const LINES = [
   "  profile  profiles/initech/profile.yaml: base → base--initech",
 ];
 const NEXT = "  next     craftar forge variants — the old base now shows as 2 variant(s) to unify";
+const NEXT_DRY = "  next     craftar forge variants — the old base would show as 2 variant(s) to unify";
 const JSON_BODY = {
   base: "rule/workflow",
   profile: "acme",
@@ -121,7 +122,7 @@ describe("forge promote — the command", () => {
         "  recipe   base--initech would be created from base: rule/workflow → rule/workflow--initech",
         ...LINES.slice(6),
         "  impact   1 workspace(s) planned: not written, not compared",
-        NEXT,
+        NEXT_DRY,
         "",
       ].join("\n"),
     );
