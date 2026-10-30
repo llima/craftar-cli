@@ -1,10 +1,22 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { promises as fs } from "node:fs";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { promises as fs, mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { runCli } from "./helpers/cli.js";
 import { acmeSections } from "./helpers/target-sections.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import type { Scenario } from "./helpers/forge.js";
+
+// No test here runs Docker: doctor's child gets a PATH that holds only an empty temp dir, so `docker` is never found.
+let EMPTY_DIR: string;
+let NO_DOCKER: { PATH: string; Path: string };
+beforeAll(() => {
+  EMPTY_DIR = mkdtempSync(path.join(os.tmpdir(), "craftar-test-no-docker-"));
+  NO_DOCKER = { PATH: EMPTY_DIR, Path: EMPTY_DIR };
+});
+afterAll(() => {
+  if (EMPTY_DIR) rmSync(EMPTY_DIR, { recursive: true, force: true });
+});
 
 /**
  * Spec 41 Part B §11.4: pin what a workspace whose Forge writes no `targets=` sees today,
@@ -145,7 +157,7 @@ async function buildObserved(s: Scenario): Promise<Observed> {
   const syncedStatus = JSON.parse(syncedStatusResult.stdout);
 
   // doctorStrict: exit code of doctor --strict
-  const doctorResult = runCli(["doctor", "--strict", "--json", ...W]);
+  const doctorResult = runCli(["doctor", "--strict", "--json", ...W], { env: NO_DOCKER });
   const doctorJson = JSON.parse(doctorResult.stdout);
 
   // syncedExit: exit codes after sync
@@ -190,7 +202,7 @@ async function loadPin(): Promise<Observed> {
   return JSON.parse(pinText);
 }
 
-/** doctor's `docker` line names the machine's Compose version (or its absence): not part of what the pin proves. */
+/** doctor's `docker` line names the machine's Compose version, or that docker is not on the PATH the test gives: not part of what the pin proves. */
 function withoutMachine(o: Observed): Observed {
   return { ...o, doctorWorkspace: o.doctorWorkspace.filter((c) => c.id !== "docker") };
 }
@@ -245,6 +257,9 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
     // doctorStrict may be 1 because of plan warnings (agents-md skipped ingredients)
     // Check that there are plan warnings as expected
     expect(observed.planWarnings.length).toBeGreaterThan(0);
+
+    // No test runs Docker: doctor's docker check finds none (its line is left out of the pin comparison).
+    expect(observed.doctorWorkspace.find((c) => c.id === "docker")?.level).toBe("warn");
   });
 
   it("import round trip: importing the synced workspace into a copy of the Forge with markers changes nothing", { timeout: 120_000 }, async () => {
