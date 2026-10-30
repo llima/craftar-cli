@@ -404,7 +404,22 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     sourceTarget: "claude-code",
     writtenTargets,
   };
-  const primary = await primaryFor(loaded, opts.profileName, ctx, ws, readWs);
+
+  // Resolve the profile ONCE before the --prefer-kiro pass (Finding 5).
+  // The result is used by primaryFor, PK6, and the index expansion step.
+  // null when the profile is new or the Forge is below the gate.
+  type CachedResolution = { ok: true; resolution: Resolution; lookup: RuleLookup } | { ok: false; error: unknown } | null;
+  let cachedResolution: CachedResolution = null;
+  if (loaded && loaded.profiles.has(opts.profileName)) {
+    try {
+      const { resolution, lookup } = await resolveForImport(loaded, opts.profileName, ctx, ws, readWs);
+      cachedResolution = { ok: true, resolution, lookup };
+    } catch (e) {
+      cachedResolution = { ok: false, error: e };
+    }
+  }
+
+  const primary = primaryFor(loaded, opts.profileName, ctx, cachedResolution);
   ctx.primaryRefs = primary?.refs ?? null;
   /* ---- what the block provides is left to its recipe (spec 33 §5.3) ---- */
   // Computed before --prefer-kiro so a named rule left to its recipe can be warned and skipped.
@@ -412,8 +427,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   try {
     provided = loaded?.profiles.has(opts.profileName) ? providedByBlock(loaded, opts.profileName) : new Map();
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    throw new Error(`import: profile ${opts.profileName} does not resolve (${message}) — fix the Forge and re-run`);
+    throw new Error(`import: profile ${opts.profileName} does not resolve (${errorText(e)}) — fix the Forge and re-run`);
   }
 
   /* ---- --prefer-kiro: the named rules take their text from the steering mirror (spec 29 §4.3) ---- */
@@ -433,16 +447,16 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     // the profile would be compared with holds the placeholder; otherwise proceed with no index step.
     // NOTE: For new profiles, we don't fail early here — the per-name check in the loop below
     // will catch rules that hold the placeholder with a more specific error message.
-    let pk6Resolution: Awaited<ReturnType<typeof resolveForImport>> | null = null;
-    if (loaded && readsRulesIndex(loaded.manifest) && loaded.profiles.has(opts.profileName)) {
-      try {
-        pk6Resolution = await resolveForImport(loaded, opts.profileName, ctx, ws, readWs);
-      } catch (e) {
+    // Finding 5: use cachedResolution instead of calling resolveForImport again.
+    let pk6Resolution: { resolution: Resolution; lookup: RuleLookup } | null = null;
+    if (loaded && readsRulesIndex(loaded.manifest) && cachedResolution) {
+      if (cachedResolution.ok) {
+        pk6Resolution = cachedResolution;
+      } else {
         // Fail-closed: check if any rule base holds the placeholder before failing
         const anyBaseHoldsPlaceholder = await someBaseHoldsRulesIndex(loaded);
         if (anyBaseHoldsPlaceholder) {
-          const message = e instanceof Error ? e.message : String(e);
-          throw new Error(`import: profile ${opts.profileName} does not resolve (${message}) — fix the Forge and re-run`);
+          throw new Error(`import: profile ${opts.profileName} does not resolve (${errorText(cachedResolution.error)}) — fix the Forge and re-run`);
         }
         // No base holds the placeholder: proceed with no index step, let the import continue
       }
@@ -568,18 +582,18 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // The function expands {{craftar.rules.index}} using the Forge's resolved ingredients.
   // Fail-closed: when the profile does not resolve, throw ONLY when some rule base holds the placeholder.
   // Finding 4: also fail-closed for a NEW profile when any base holds the placeholder.
+  // Finding 5: use cachedResolution instead of calling resolveForImport again.
   let indexExpand: ((text: string) => string) | undefined;
   if (loaded && readsRulesIndex(loaded.manifest)) {
-    if (loaded.profiles.has(opts.profileName)) {
-      try {
-        const { resolution, lookup } = await resolveForImport(loaded, opts.profileName, ctx, ws, readWs);
+    if (cachedResolution) {
+      if (cachedResolution.ok) {
+        const { resolution, lookup } = cachedResolution;
         indexExpand = (text: string) => expandRulesIndex(text, "claude-code", lookup, resolution).text;
-      } catch (e) {
+      } else {
         // Fail-closed: check if any rule base holds the placeholder before failing
         const anyBaseHoldsPlaceholder = await someBaseHoldsRulesIndex(loaded);
         if (anyBaseHoldsPlaceholder) {
-          const message = e instanceof Error ? e.message : String(e);
-          throw new Error(`import: profile ${opts.profileName} does not resolve (${message}) — fix the Forge and re-run`);
+          throw new Error(`import: profile ${opts.profileName} does not resolve (${errorText(cachedResolution.error)}) — fix the Forge and re-run`);
         }
         // No base holds the placeholder: proceed with no index step, let the import continue
       }
@@ -1675,8 +1689,7 @@ async function existingProfile(
     const eff = effectiveProfile(loaded, p);
     return { params: { ...eff.params }, sections: p.sections, blockKeys: eff.blockKeys };
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    throw new Error(`import: profile ${profile} does not resolve (${message}) — fix the Forge and re-run`);
+    throw new Error(`import: profile ${profile} does not resolve (${errorText(e)}) — fix the Forge and re-run`);
   }
 }
 
@@ -1870,29 +1883,32 @@ async function resolveForImport(
  * the Forge as loaded, the importing profile, and the workspace's overrides and targets — every layer the mode reads, recipe
  * defaults included. When the key is set somewhere and the profile does not resolve on its own, fails closed: nothing has
  * been written yet.
+ * Finding 5: uses the cached resolution instead of calling resolveForImport.
  */
-async function primaryFor(
+function primaryFor(
   loaded: import("../core/forge.js").Forge | null,
   profile: string,
   ctx: RunContext,
-  ws: string,
-  read: (abs: string) => Promise<string>,
-): Promise<{ refs: NonNullable<RunContext["primaryRefs"]>; agentsMdOnly: Set<string> } | null> {
+  cachedResolution: { ok: true; resolution: Resolution; lookup: RuleLookup } | { ok: false; error: unknown } | null,
+): { refs: NonNullable<RunContext["primaryRefs"]>; agentsMdOnly: Set<string> } | null {
   if (!loaded || !readsPrimary(loaded.manifest)) return null;
   const own = loaded.profiles.get(profile)?.params ?? {};
   const setSomewhere =
     Object.hasOwn(own, AGENTS_MD_PRIMARY_KEY) ||
     Object.hasOwn(ctx.W, AGENTS_MD_PRIMARY_KEY) ||
     [...loaded.recipes.values()].some((r) => r.params[AGENTS_MD_PRIMARY_KEY]?.default !== undefined);
-  let resolution: Resolution;
-  let lookup: RuleLookup;
-  try {
-    ({ resolution, lookup } = await resolveForImport(loaded, profile, ctx, ws, read));
-  } catch (e) {
-    if (!setSomewhere) return null;
-    const message = errorText(e);
-    throw new Error(`import: profile ${profile} does not resolve on its own (${message}) — agents-md.primary needs it to compare the bases; fix the Forge and re-run`);
+
+  // Use the cached resolution if available
+  if (cachedResolution === null) {
+    // New profile (not in Forge) — no primary mode available
+    return null;
   }
+  if (!cachedResolution.ok) {
+    // Profile doesn't resolve
+    if (!setSomewhere) return null;
+    throw new Error(`import: profile ${profile} does not resolve on its own (${errorText(cachedResolution.error)}) — agents-md.primary needs it to compare the bases; fix the Forge and re-run`);
+  }
+  const { resolution, lookup } = cachedResolution;
   if (!resolution.primary) return null;
   const agentsMdOnly = new Set(resolution.ingredients.filter((i) => isAgentsMdOnly(i.meta, resolution)).map((i) => i.ref));
   return { refs: (text, citing) => resolveRuleRefs(text, citing, lookup, resolution.targets).text, agentsMdOnly };
