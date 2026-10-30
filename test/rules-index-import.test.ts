@@ -1705,3 +1705,75 @@ describe("Review round 4: variant comparison moved to writeIngredient", () => {
     expect(frozenWarning).toBeUndefined();
   });
 });
+
+describe("Review round 5: a placeholder in the Forge is never overwritten silently", () => {
+  /** A schema-7 Forge whose profile resolves `variant` (when given) or the base; synced once. */
+  async function synced(opts: { variantMeta?: Record<string, unknown>; steering?: boolean }) {
+    const root = await tmpDir("craftar-r5-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+    const files: Record<string, string> = {
+      "craftar.forge.yaml": YAML.stringify({ name: "f", schema: 7 }),
+      "ingredients/rules/style/ingredient.yaml": YAML.stringify({ type: "rule", name: "style" }),
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/rules/readme/ingredient.yaml": YAML.stringify({ type: "rule", name: "readme" }),
+      "ingredients/rules/readme/rule.md": "# Rules\nbase text\n",
+    };
+    const list = ["rule/style"];
+    if (opts.variantMeta) {
+      files["ingredients/rules/readme--acme/ingredient.yaml"] = YAML.stringify({ type: "rule", name: "readme--acme", as: "readme", ...opts.variantMeta });
+      files["ingredients/rules/readme--acme/rule.md"] = "# Rules\n\n{{craftar.rules.index}}\n";
+      list.push("rule/readme--acme");
+    }
+    if (opts.steering) {
+      files["ingredients/steerings/guide/ingredient.yaml"] = YAML.stringify({ type: "steering", name: "guide", targets: ["kiro"] });
+      files["ingredients/steerings/guide/steering.md"] = "# Guide\n\n{{craftar.rules.index}}\n";
+      list.push("steering/guide");
+    }
+    files["recipes/acme-rules.yaml"] = YAML.stringify({ name: "acme-rules", ingredients: list });
+    files["profiles/acme/profile.yaml"] = YAML.stringify({ name: "acme", recipes: ["acme-rules"], targets: opts.steering ? ["claude-code", "kiro"] : ["claude-code"] });
+    await writeFiles(forgeRoot, files);
+    await writeFiles(wsRoot, { "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }) });
+    const ws = await loadWorkspace(wsRoot);
+    const p = await plan(ws);
+    await apply(ws, p, await status(ws, p, await readLock(wsRoot)));
+    return { forgeRoot, wsRoot };
+  }
+
+  async function forgeHashes(forgeRoot: string): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const f of await listFiles(forgeRoot)) out[f] = hashNormalized(await fs.readFile(path.join(forgeRoot, f)));
+    return out;
+  }
+
+  /** Breaks the profile: it now names a recipe the Forge does not have. */
+  async function breakProfile(forgeRoot: string) {
+    await fs.writeFile(path.join(forgeRoot, "profiles/acme/profile.yaml"), YAML.stringify({ name: "acme", recipes: ["acme-rules", "ghost"], targets: ["claude-code", "kiro"] }));
+  }
+
+  it("5a. a variant holding the placeholder, profile that does not resolve → exit 1 naming the variant, Forge untouched", async () => {
+    const { forgeRoot, wsRoot } = await synced({ variantMeta: {} });
+    await breakProfile(forgeRoot);
+    const before = await forgeHashes(forgeRoot);
+    await expect(importClaudeCode({ workspaceRoot: wsRoot, forgeRoot, profileName: "acme" })).rejects.toThrow(/does not resolve on its own .* and rule\/readme--acme holds \{\{craftar\.rules\.index\}\}/);
+    expect(await forgeHashes(forgeRoot)).toEqual(before);
+  });
+
+  it("5b. a steering base holding the placeholder, profile that does not resolve → exit 1 naming the steering, Forge untouched", async () => {
+    const { forgeRoot, wsRoot } = await synced({ steering: true });
+    await breakProfile(forgeRoot);
+    const before = await forgeHashes(forgeRoot);
+    await expect(importClaudeCode({ workspaceRoot: wsRoot, forgeRoot, profileName: "acme" })).rejects.toThrow(/and steering\/guide holds \{\{craftar\.rules\.index\}\}/);
+    expect(await forgeHashes(forgeRoot)).toEqual(before);
+  });
+
+  it("5c. a variant with targets the workspace cannot show, unchanged → kept as it is", async () => {
+    const { forgeRoot, wsRoot } = await synced({ variantMeta: { targets: ["claude-code"], tags: ["x"] } });
+    const before = await forgeHashes(forgeRoot);
+    const result = await importClaudeCode({ workspaceRoot: wsRoot, forgeRoot, profileName: "acme" });
+    expect(result.variants.find((v) => v.name === "rule/readme--acme")?.reason).toMatch(/^unchanged /);
+    const after = await forgeHashes(forgeRoot);
+    for (const f of Object.keys(before).filter((f) => f.startsWith("ingredients/rules/readme--acme/"))) expect(after[f]).toBe(before[f]);
+  });
+});
