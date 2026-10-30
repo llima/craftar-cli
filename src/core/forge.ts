@@ -169,7 +169,9 @@ export async function gitIgnored(dir: string, rel: string): Promise<boolean> {
  */
 export async function gitDirty(dir: string): Promise<boolean> {
   try {
-    const { stdout } = await execProgram("git", ["-C", dir, "status", "--porcelain"]);
+    // --no-optional-locks avoids taking the index lock for reads,
+    // and -c core.fsmonitor=false avoids running a fsmonitor hook. The clean filter still runs.
+    const { stdout } = await execProgram("git", ["--no-optional-locks", "-C", dir, "-c", "core.fsmonitor=false", "status", "--porcelain"]);
     return stdout.trim().length > 0;
   } catch {
     return true;
@@ -194,15 +196,17 @@ export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPa
   if (paths.length === 0) return [];
   const rel = paths.map((p) => path.relative(root, p).split(path.sep).join("/") || ".");
   try {
+    // --no-optional-locks avoids taking the index lock for reads,
+    // and -c core.fsmonitor=false avoids running a fsmonitor hook. The clean filter still runs.
     const { stdout } = await execProgram(
       "git",
-      ["-C", root, "status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--", ...rel],
+      ["--no-optional-locks", "-C", root, "-c", "core.fsmonitor=false", "status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--", ...rel],
       { maxBuffer: 64 * 1024 * 1024 },
     );
     // `status --porcelain` names paths from the repository root, which is not the Forge root when
     // the Forge sits inside a larger repo; strip the Forge's prefix so every path unify prints —
     // here and in the late-failure message — is Forge-relative. `ls-files` below already is.
-    const { stdout: prefixOut } = await execProgram("git", ["-C", root, "rev-parse", "--show-prefix"]);
+    const { stdout: prefixOut } = await execProgram("git", ["--no-optional-locks", "-C", root, "-c", "core.fsmonitor=false", "rev-parse", "--show-prefix"]);
     const prefix = prefixOut.trim();
     const forgeRel = (p: string) => (prefix && p.startsWith(prefix) ? p.slice(prefix.length) : p) || ".";
     const out: UnheldPath[] = [];
@@ -219,7 +223,7 @@ export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPa
     // assume-unchanged reports clean however much its file was edited — and that edit exists
     // nowhere git can restore it from. `ls-files -v` shows the flag: `S` for skip-worktree, a
     // lowercase tag for assume-unchanged.
-    const { stdout: listed } = await execProgram("git", ["-C", root, "ls-files", "-v", "-z", "--", ...rel], {
+    const { stdout: listed } = await execProgram("git", ["--no-optional-locks", "-C", root, "-c", "core.fsmonitor=false", "ls-files", "-v", "-z", "--", ...rel], {
       maxBuffer: 64 * 1024 * 1024,
     });
     for (const e of listed.split("\0")) {
