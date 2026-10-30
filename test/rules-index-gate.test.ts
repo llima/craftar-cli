@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { acmeIndex } from "./helpers/rules-index.js";
-import { loadForge } from "../src/core/forge.js";
+import { loadForge, listFiles } from "../src/core/forge.js";
 import { readsRulesIndex, RULES_INDEX_KEY } from "../src/core/rules-index.js";
 
 type Scenario = Awaited<ReturnType<typeof acmeIndex>>;
@@ -35,15 +34,16 @@ describe("rules-index gate (spec 44 §4.1)", () => {
     expect(RULES_INDEX_KEY).toBe("craftar.rules.index");
   });
 
-  it("FORGE_SCHEMA_RULES_INDEX appears only in schema/index.ts and rules-index.ts", () => {
+  it("FORGE_SCHEMA_RULES_INDEX appears only in schema/index.ts and rules-index.ts", async () => {
     const srcDir = path.resolve(__dirname, "../src");
-    // Use grep to find files referencing FORGE_SCHEMA_RULES_INDEX
-    const result = execFileSync(
-      "grep",
-      ["-rl", "FORGE_SCHEMA_RULES_INDEX", srcDir],
-      { encoding: "utf8" }
-    );
-    const files = result.trim().split("\n").map((f) => path.relative(srcDir, f)).sort();
+    // Scan src/ for files referencing FORGE_SCHEMA_RULES_INDEX, like test/git-lookup.test.ts does
+    const offenders: string[] = [];
+    for (const f of await listFiles(srcDir)) {
+      if (!f.endsWith(".ts")) continue;
+      const content = await fs.readFile(path.join(srcDir, f), "utf8");
+      if (content.includes("FORGE_SCHEMA_RULES_INDEX")) offenders.push(f);
+    }
+    const files = offenders.sort();
     expect(files).toEqual(["core/rules-index.ts", "schema/index.ts"]);
   });
 });
