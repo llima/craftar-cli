@@ -362,7 +362,6 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- what the importing profile renders (spec 10 §6.1, §6.8 step 2) ---- */
   const loaded = await forgeBefore(forge, manifestOnDisk);
   const existing = await existingProfile(forge, opts.profileName, loaded);
-  // P5: propagate effectiveProfile warnings to the import report
   for (const w of existing.warnings) report.warnings.push(w);
   const readWs = (abs: string) => fs.readFile(abs, "utf8");
 
