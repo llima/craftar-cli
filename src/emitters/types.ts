@@ -38,8 +38,8 @@ export interface EmitBase {
   reportReworded(path: string): void;
   /** Records a hand-written Kiro agent resources entry to check against the plan (spec 41 §4.5). */
   reportKiroResource(agent: string, path: string): void;
-  /** Reports a rules index expansion result (spec 44 §4.4). */
-  reportIndex(entry: { path: string; rules: number; undescribed: string[]; misplaced?: number[] }): void;
+  /** Reports a rules index expansion result (spec 44 §4.4). `expanded` is true when at least one placeholder line was expanded. */
+  reportIndex(entry: { path: string; rules: number; undescribed: string[]; misplaced?: number[]; expanded?: boolean }): void;
   /** Reports a path where the placeholder was left as written (other types or not alone on line, spec 44 §4.5). */
   reportIndexLeft(path: string): void;
 }

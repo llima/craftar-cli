@@ -103,8 +103,8 @@ export const kiro: Emitter<"kiro"> = {
           if (ctx.resolution.rulesIndex) {
             const indexResult = expandRulesIndex(resolved, "kiro", lookup, ctx.resolution);
             body = indexResult.text;
-            if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || (indexResult.misplaced && indexResult.misplaced.length > 0)) {
-              ctx.reportIndex({ path, rules: indexResult.listed, undescribed: indexResult.undescribed, misplaced: indexResult.misplaced });
+            if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || (indexResult.misplaced && indexResult.misplaced.length > 0) || indexResult.expanded) {
+              ctx.reportIndex({ path, rules: indexResult.listed, undescribed: indexResult.undescribed, misplaced: indexResult.misplaced, expanded: indexResult.expanded });
             }
           }
           checkReworded(path, [rawBody], ing.ref);
@@ -124,8 +124,8 @@ export const kiro: Emitter<"kiro"> = {
           if (ctx.resolution.rulesIndex) {
             const indexResult = expandRulesIndex(body, "kiro", lookup, ctx.resolution);
             body = indexResult.text;
-            if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || (indexResult.misplaced && indexResult.misplaced.length > 0)) {
-              ctx.reportIndex({ path, rules: indexResult.listed, undescribed: indexResult.undescribed, misplaced: indexResult.misplaced });
+            if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || (indexResult.misplaced && indexResult.misplaced.length > 0) || indexResult.expanded) {
+              ctx.reportIndex({ path, rules: indexResult.listed, undescribed: indexResult.undescribed, misplaced: indexResult.misplaced, expanded: indexResult.expanded });
             }
           }
           out.push(crlf(path, body, ing.ref));

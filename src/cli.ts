@@ -1205,8 +1205,9 @@ program
       console.log(`  sections    ${f.sections.map((x) => `${x.name} (${layer(x.layer)})`).join(", ")}`);
     }
     // Spec 44 §4.5: if this file holds the rules index, name it and its rule count.
+    // Finding 3: AGENTS.md does not print the index line (it would always be the full list of always-on rules)
     const indexedEntry = p.indexed.find((x) => x.path === f.path);
-    if (indexedEntry) {
+    if (indexedEntry && f.path !== "AGENTS.md") {
       console.log(`  index       craftar.rules.index (${indexedEntry.rules} rule${indexedEntry.rules === 1 ? "" : "s"})`);
     }
     // Spec 29 §4.1: which layer filled each parameter the file's ingredient cites — or `unset`.

@@ -101,8 +101,8 @@ export const claudeCode: Emitter<"claude-code"> = {
           if (ctx.resolution.rulesIndex) {
             const indexResult = expandRulesIndex(resolved, "claude-code", buildRuleLookup(ctx.resolution.ingredients, ctx.resolution), ctx.resolution);
             body = indexResult.text;
-            if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || (indexResult.misplaced && indexResult.misplaced.length > 0)) {
-              ctx.reportIndex({ path, rules: indexResult.listed, undescribed: indexResult.undescribed, misplaced: indexResult.misplaced });
+            if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || (indexResult.misplaced && indexResult.misplaced.length > 0) || indexResult.expanded) {
+              ctx.reportIndex({ path, rules: indexResult.listed, undescribed: indexResult.undescribed, misplaced: indexResult.misplaced, expanded: indexResult.expanded });
             }
           }
           // If frontmatterRaw is set, serialize with it; otherwise emit body only (no generated paths:)

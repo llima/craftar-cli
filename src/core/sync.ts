@@ -604,7 +604,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
   /** Kiro agent resources recorded for the check (spec 41 §4.5). */
   const kiroResourceRecords: Array<{ agent: string; path: string }> = [];
   /** Rules index expansion results (spec 44 §4.4). */
-  const indexRecords: Array<{ path: string; rules: number; undescribed: string[]; misplaced?: number[] }> = [];
+  const indexRecords: Array<{ path: string; rules: number; undescribed: string[]; misplaced?: number[]; expanded?: boolean }> = [];
   /** Paths where the index placeholder was left as written (spec 44 §4.5). */
   const indexLeftPaths = new Set<string>();
   /** Below-gate literals: `ref (file)` for each rendered text that holds `{{craftar.rules.index}}` alone on a line (spec 44 §4.2). */
@@ -682,7 +682,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
     reportKiroResource(agent: string, path: string) {
       kiroResourceRecords.push({ agent, path });
     },
-    reportIndex(entry: { path: string; rules: number; undescribed: string[]; misplaced?: number[] }) {
+    reportIndex(entry: { path: string; rules: number; undescribed: string[]; misplaced?: number[]; expanded?: boolean }) {
       indexRecords.push(entry);
     },
     reportIndexLeft(p: string) {
@@ -812,7 +812,16 @@ export async function plan(ws: Workspace): Promise<Plan> {
       }
     }
     if (misplacedLocations.length > 0) {
-      warnings.push(misplacedPlaceholderWarning(misplacedLocations.sort()));
+      // Finding 6: Sort numerically by line number, not string sort
+      // Format: "path:line" - sort by path first (code-point), then by line number (numeric)
+      const sortedLocations = misplacedLocations.sort((a, b) => {
+        const [pathA, lineA] = a.split(/:(?=\d+$)/);
+        const [pathB, lineB] = b.split(/:(?=\d+$)/);
+        const pathCmp = pathA < pathB ? -1 : pathA > pathB ? 1 : 0;
+        if (pathCmp !== 0) return pathCmp;
+        return parseInt(lineA, 10) - parseInt(lineB, 10);
+      });
+      warnings.push(misplacedPlaceholderWarning(sortedLocations));
     }
     // Collect all paths where the placeholder was left (agent, command, skill body)
     if (indexLeftPaths.size > 0) {
@@ -821,9 +830,23 @@ export async function plan(ws: Workspace): Promise<Plan> {
   }
 
   // Build indexed (spec 44 §4.4): sorted by path in code-point order, only at the gate
-  const indexed: Plan["indexed"] = resolution.rulesIndex
-    ? indexRecords.map((r) => ({ path: r.path, rules: r.rules })).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
-    : [];
+  // Finding 2: build only from expanded entries (expanded: true), deduplicated by path
+  const indexed: Plan["indexed"] = [];
+  if (resolution.rulesIndex) {
+    const seenPaths = new Map<string, number>();
+    for (const r of indexRecords) {
+      // Only include entries where something was actually expanded (expanded !== false)
+      if (r.expanded === false) continue;
+      // Dedupe by path: two indexed bodies give ONE entry, rules from first
+      if (!seenPaths.has(r.path)) {
+        seenPaths.set(r.path, r.rules);
+      }
+    }
+    for (const [path, rules] of seenPaths) {
+      indexed.push({ path, rules });
+    }
+    indexed.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  }
 
   return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed };
 }
