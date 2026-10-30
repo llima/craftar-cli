@@ -185,7 +185,7 @@ describe("doctor skill-layout check (spec 44 §5)", () => {
   it("3d. a skill variant's fix names the variant's own folder", async () => {
     const s = await scenario(
       {
-        ingredients: [{ meta: { type: "skill", name: "deploy--acme", as: "deploy", layout: "file" }, files: { "skill.md": "---\nname: deploy\ndescription: Deploy\n---\nRun it.\n" } }],
+        ingredients: [{ meta: { type: "skill", name: "deploy--acme", as: "deploy", layout: "file" }, files: { "SKILL.md": "---\nname: deploy\ndescription: Deploy\n---\nRun it.\n" } }],
         recipes: [recipe("base", ["skill/deploy--acme"])],
         profiles: [profile("acme", ["base"], ["claude-code"])],
       },
