@@ -12,6 +12,7 @@ import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerpri
 import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, resolve, type Resolution } from "../core/resolve.js";
+import { readsRulesIndex, RULES_INDEX_LINE } from "../core/rules-index.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { classifyForge, credentialFault } from "../core/remote.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
@@ -19,12 +20,12 @@ import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
 import { decide, forgeBefore, pin, registrationCarry, sourceKeys, workspaceParams, workspaceSections, workspaceTargets, type RunContext } from "./decide.js";
 import { providedByBlock } from "./provided.js";
-import { readBase, renderMap } from "../core/template-import.js";
+import { readBase, renderMap, renderedFingerprint } from "../core/template-import.js";
 import { firstMarkerLine, readsTargetSections } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
 import { GENERATED_BANNER, kiroReport, textLines, type KiroReport } from "./kiro-report.js";
 import { preferKiro } from "./prefer-kiro.js";
-import { agentsMdOnly as isAgentsMdOnly, appliesTo, buildRuleLookup, outName, resolveRuleRefs } from "../emitters/shared.js";
+import { agentsMdOnly as isAgentsMdOnly, appliesTo, buildRuleLookup, expandRulesIndex, outName, resolveRuleRefs, type RuleLookup } from "../emitters/shared.js";
 import { CAPABILITIES } from "../core/capabilities.js";
 import { deepMerge } from "../core/merge.js";
 import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
@@ -416,6 +417,20 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     // The banner sync would write for this workspace: the importing profile's resolved `kiro.banner`, under the workspace's own.
     const set = Object.hasOwn(ctx.W, "kiro.banner") ? ctx.W["kiro.banner"] : resolvedParam(loaded, opts.profileName, "kiro.banner", existing.params);
     const banner = set === undefined || set === null ? null : String(set);
+
+    // PK6 (spec 44 §4.7): at schema >= 7, check for {{craftar.rules.index}} in the resolved rule.
+    // If the profile exists, resolve it to find variants; otherwise check the base rule directly.
+    // Fail-closed: if the profile does not resolve on its own, exit 1 and leave the Forge untouched.
+    let pk6Resolution: Awaited<ReturnType<typeof resolveForImport>> | null = null;
+    if (loaded && readsRulesIndex(loaded.manifest) && loaded.profiles.has(opts.profileName)) {
+      try {
+        pk6Resolution = await resolveForImport(loaded, opts.profileName, ctx, ws, readWs);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        throw new Error(`import: profile ${opts.profileName} does not resolve (${message}) — fix the Forge and re-run`);
+      }
+    }
+
     for (const name of opts.preferKiro) {
       // A rule left to its recipe is not compared: warn and skip (spec 33 V1 part 2).
       const providedKey = `rule/${name}`;
@@ -426,6 +441,38 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
         report.warnings.push(`--prefer-kiro ${name}: ${ref} is left to recipe ${p.recipe} (integrations.${p.slot}) — nothing to prefer; its steering file was not used`);
         continue;
       }
+
+      // PK6 (spec 44 §4.7): if the resolved ingredient for this rule holds {{craftar.rules.index}}, refuse.
+      // This check comes before PK3/PK4 so it catches the gate case first.
+      // When the profile exists, check the resolved ingredient (which may be a variant).
+      // When the profile doesn't exist but the Forge does, check the base rule directly.
+      if (loaded && readsRulesIndex(loaded.manifest)) {
+        const { readIngredientText } = await import("../core/forge.js");
+        let body: string | null = null;
+        if (pk6Resolution) {
+          // Profile exists: check the resolved ingredient (may be a variant)
+          const resolved = pk6Resolution.resolution.ingredients.find(
+            (i) => i.meta.type === "rule" && (i.meta.name === name || ("as" in i.meta && i.meta.as === name)),
+          );
+          if (resolved) {
+            body = await readIngredientText(resolved, "rule.md");
+          }
+        } else {
+          // Profile doesn't exist: check the base rule directly from the Forge
+          const baseRef = `rule/${name}` as const;
+          const base = loaded.ingredients.get(baseRef);
+          if (base) {
+            body = await readIngredientText(base, "rule.md");
+          }
+        }
+        if (body !== null && RULES_INDEX_LINE.test(body)) {
+          throw new Error(
+            `--prefer-kiro ${name}: the rule the profile resolves holds {{craftar.rules.index}} — ` +
+              `its steering text holds the generated list, which import would freeze`,
+          );
+        }
+      }
+
       const q = rules.get(name);
       if (!q) throw new Error(`import: --prefer-kiro ${name}: there is no .claude/rules/${name}.md — --prefer-kiro takes rules; a steering file with no rule is already imported as steering`);
       const sm = steeringMeta.get(name);
@@ -501,13 +548,25 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const mayBeDecided = clean.filter((q) => !q.skip?.());
   const literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer>; lineOffset?: number }> = [];
 
+  // Spec 44 §4.8: at schema >= 7, build the index expansion function for rule re-import comparison.
+  // The function expands {{craftar.rules.index}} using the Forge's resolved ingredients.
+  let indexExpand: ((text: string) => string) | undefined;
+  if (loaded && readsRulesIndex(loaded.manifest) && loaded.profiles.has(opts.profileName)) {
+    try {
+      const { resolution, lookup } = await resolveForImport(loaded, opts.profileName, ctx, ws, readWs);
+      indexExpand = (text: string) => expandRulesIndex(text, "claude-code", lookup, resolution).text;
+    } catch {
+      // If resolution fails, don't expand the index — re-import will create a variant
+    }
+  }
+
   /* ---- decide, in read order ---- */
   for (const src of queue) {
     if (src.skip?.()) continue;
     const others = mayBeDecided.filter((q) => q !== src).map((q) => ({ ref: `${q.meta.type}/${q.meta.name}`, meta: q.meta, files: q.files }));
     // Spec 41 Part B §5.2: use the source's target for section projection (kiro for --prefer-kiro, else claude-code)
     ctx.sourceTarget = src.sourceTarget ?? "claude-code";
-    const ref = await writeIngredient(stage, src.meta, src.files, opts.profileName, report, src.scan, { ctx, others, runBases, literal, lineOffset: src.lineOffset });
+    const ref = await writeIngredient(stage, src.meta, src.files, opts.profileName, report, src.scan, { ctx, others, runBases, literal, lineOffset: src.lineOffset, indexExpand });
     if (ref) src.after(ref);
   }
   // Reset sourceTarget to claude-code for any remaining operations
@@ -1140,7 +1199,7 @@ async function writeIngredient(
   profile: string,
   report: ImportReport,
   scan: Record<string, string> = {},
-  run?: { ctx: RunContext; others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>; runBases: Set<string>; literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer>; lineOffset?: number }>; lineOffset?: number },
+  run?: { ctx: RunContext; others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>; runBases: Set<string>; literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer>; lineOffset?: number }>; lineOffset?: number; indexExpand?: (text: string) => string },
 ): Promise<string | null> {
   const secret = secretIn(meta, files, scan, run?.lineOffset);
   if (secret) {
@@ -1164,7 +1223,7 @@ async function writeIngredient(
   let variantRegistrationParams: Record<string, { default?: string | number | boolean; description?: string }> | undefined;
   if (await stage.exists(path.join(dir, "ingredient.yaml"))) {
     let why: string | undefined;
-    const d = run ? await decide(run.ctx, dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases) : { kind: "literal" as const, warn: "" };
+    const d = run ? await decide(run.ctx, dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases, run.indexExpand) : { kind: "literal" as const, warn: "" };
     if (d.kind === "literal") {
       if (d.warn) report.warnings.push(d.warn);
       if ((await fingerprintDir(dir, stage.reader())) === fingerprint) {
@@ -1788,4 +1847,24 @@ async function primaryFor(
   const lookup = buildRuleLookup(resolution.ingredients, resolution);
   const agentsMdOnly = new Set(resolution.ingredients.filter((i) => isAgentsMdOnly(i.meta, resolution)).map((i) => i.ref));
   return { refs: (text, citing) => resolveRuleRefs(text, citing, lookup, resolution.targets).text, agentsMdOnly };
+}
+
+/**
+ * Resolve the importing profile on its own (spec 44 §4.7, §4.8): the Forge as loaded, the profile, the workspace's overrides
+ * and targets. Used by PK6 (the prefer-kiro rules-index gate) and by the re-import comparison step. Returns the resolution
+ * with its lookup, or throws when the profile does not resolve on its own.
+ */
+async function resolveForImport(
+  loaded: import("../core/forge.js").Forge,
+  profile: string,
+  ctx: RunContext,
+  ws: string,
+  read: (abs: string) => Promise<string>,
+): Promise<{ resolution: Resolution; lookup: RuleLookup }> {
+  if (!loaded.profiles.has(profile)) throw new Error(`profile ${profile} is not in the Forge`);
+  const targets = await workspaceTargets(ws, read);
+  const config = WorkspaceConfigSchema.parse({ forge: ".", profile, ...(targets ? { targets } : {}), overrides: { params: ctx.W, sections: ctx.WS } });
+  const resolution = resolve(loaded, config);
+  const lookup = buildRuleLookup(resolution.ingredients, resolution);
+  return { resolution, lookup };
 }

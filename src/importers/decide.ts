@@ -121,6 +121,8 @@ export function registrationCarry(meta: Ingredient): {
  * decided, for the literal-citation check (§6.5 (c)); `runBases` are the refs of the sources it
  * will certainly decide, which the Forge-wide check excludes (§6.5 (b)). See the F9 comment in
  * `importClaudeCode` for how each set errs on its safe side.
+ *
+ * `indexExpand`, when given, expands `{{craftar.rules.index}}` in rule bases before comparing (spec 44 §4.8).
  */
 export async function decide(
   ctx: RunContext,
@@ -132,6 +134,7 @@ export async function decide(
   fingerprint: string,
   others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>,
   runBases: Set<string>,
+  indexExpand?: (text: string) => string,
 ): Promise<Decision> {
   // The Forge root, for the file an I12 names: every base lives at <forge>/ingredients/<folder>/<name>.
   const schema = ctx.forge?.manifest.schema ?? 1;
@@ -188,18 +191,39 @@ export async function decide(
   }
 
   const map = renderMap(base.meta, ctx.P, ctx.W);
-  if (renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined, owner) === fingerprint) {
+  // For rule bases at schema >= 7, expand the rules index placeholder (spec 44 §4.8).
+  const ruleIndex = base.meta.type === "rule" ? indexExpand : undefined;
+  const computedFp = renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined, owner, ruleIndex);
+  if (computedFp === fingerprint) {
     pin(ctx, [...citedAll, ...serverKeys], map);
     const changed = [...cited].filter((k) => Object.hasOwn(map, k));
     const filled = projectedNames.filter((n) => Object.hasOwn(S, n));
     return { kind: "reuse", rendered: changed.length ? changed.sort() : undefined, renderedSections: filled.length ? filled : undefined };
   }
 
+  // Spec 44 §4.8: for rule bases with index expansion, check if the body matches after expansion
+  // even if the fingerprint doesn't match (metadata like `description` may differ on re-import).
+  if (ruleIndex && base.meta.type === "rule") {
+    const baseText = base.texts.get("rule.md") ?? "";
+    const expandedText = ruleIndex(baseText);
+    const sourceText = typeof files["rule.md"] === "string" ? files["rule.md"] : (files["rule.md"] as Buffer).toString("utf8");
+    // If expanded body matches source body and only metadata differs, treat as reuse
+    if (expandedText === sourceText) {
+      // Check that only the body file exists in both (same file set)
+      const baseFiles = [...base.texts.keys(), ...base.bytes.keys()].sort();
+      const srcFiles = Object.keys(files).sort();
+      if (baseFiles.join(",") === srcFiles.join(",")) {
+        pin(ctx, [...citedAll, ...serverKeys], map);
+        return { kind: "reuse" };
+      }
+    }
+  }
+
   // Param inference first (Ruling 16): the narrower claim. A base with no open section stops there, as in 0.6.2.
-  const param = await inferParams(ctx, base, S, map, cited, citedAll, ref, meta, files, fingerprint, others, runBases, schema, owner);
+  const param = await inferParams(ctx, base, S, map, cited, citedAll, ref, meta, files, fingerprint, others, runBases, schema, owner, ruleIndex);
   const open = projectedNames.filter((n) => !Object.hasOwn(WSk, n));
   if (param.kind === "reuse" || !open.length) return withAuthEnv(param);
-  return withAuthEnv(inferSectionValues(ctx, base, key, PSk, WSk, map, ref, meta, files, fingerprint, schema, owner));
+  return withAuthEnv(inferSectionValues(ctx, base, key, PSk, WSk, map, ref, meta, files, fingerprint, schema, owner, ruleIndex));
 }
 
 /** A key's section values in a layer, or none. */
@@ -233,6 +257,7 @@ async function inferParams(
   runBases: Set<string>,
   schema: ForgeSchema,
   owner: Owner,
+  ruleIndex?: (text: string) => string,
 ): Promise<Decision> {
   // Holes (§3): declared, not reserved, not set by the workspace layer, and not pinned — a key this run already relied
   // on renders at its current value, like any fixed key (§6.5, §14 Q13).
@@ -272,7 +297,7 @@ async function inferParams(
     .map(([key, value]) => ({ key, old: valueOf(ctx.P, key) ?? null, value }));
 
   // F10: the proof, through the same expansion and substitution ctx.text uses.
-  if (renderedFingerprint(base, { ...map, ...sigma }, S, schema, ctx.primaryRefs ?? undefined, owner) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
+  if (renderedFingerprint(base, { ...map, ...sigma }, S, schema, ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
 
   // F9: a profile change must not move anything else the profile renders — its files, or a section value
   // that applies to it under this profile or workspace (spec 11 §6.11).
@@ -329,6 +354,7 @@ function inferSectionValues(
   fingerprint: string,
   schema: ForgeSchema,
   owner: Owner,
+  ruleIndex?: (text: string) => string,
 ): Decision {
   const shape = shapeDiffers(base, meta, files);
   if (shape) return { kind: "variant", why: shape };
@@ -344,7 +370,7 @@ function inferSectionValues(
   }
   const S = { ...PSk, ...WSk, ...sigma };
   // F14: the proof, through the same expansion and substitution ctx.text uses.
-  if (renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined, owner) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
+  if (renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
 
   const assigned = sectionNames(base).filter((n) => Object.hasOwn(sigma, n));
   const sectionDelta: SectionChange[] = [];
