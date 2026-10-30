@@ -141,10 +141,53 @@ export function ruleRefState(
   const steering = steeringsByName.get(name);
   if (steering && hasKiro && appliesTo(steering.meta.targets, "kiro")) return "B";
   if (rule && ruleTargets) {
-    if (appliesTo(ruleTargets, "agents-md")) return "C";
+    if (hasMd && appliesTo(ruleTargets, "agents-md")) return "C";
     return "D";
   }
   return "unknown";
+}
+
+/** The result of ruleReference (spec 44 §4.3). */
+export interface RuleReferenceResult {
+  state: RuleRefState;
+  text: string;
+  reworded?: { ref: string; kind: string };
+}
+
+/**
+ * How a target names a rule: state (from ruleRefState), text (the replacement), and reworded (when
+ * the reference is to a rule that exists but reaches no target here, or an unknown name) (spec 44 §4.3).
+ * The resolveToken closure in resolveRuleRefs calls this; no second switch over the states anywhere.
+ */
+export function ruleReference(
+  name: string,
+  lookup: RuleLookup,
+  targets: readonly string[],
+  mode: "agents-md" | "kiro",
+): RuleReferenceResult {
+  const state = ruleRefState(name, lookup, targets, mode);
+  const hasCc = targets.includes("claude-code");
+  const rule = lookup.rulesByName.get(name);
+  if (mode === "kiro") {
+    switch (state) {
+      case "K1": return { state, text: ruleFile("kiro", { name }) };
+      case "K2": return { state, text: `.claude/rules/${name}.md` };  // unchanged
+      case "K3": return { state, text: `AGENTS.md (rule: ${name})` };
+      case "D": return { state, text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` } };
+      case "unknown": return { state, text: ruleFile("kiro", { name }), reworded: { ref: `.claude/rules/${name}.md`, kind: UNKNOWN_NAME_KIND } };
+    }
+  } else {
+    switch (state) {
+      case "A": return { state, text: `.claude/rules/${name}.md` };  // unchanged
+      case "B": return { state, text: ruleFile("kiro", { name }) };
+      case "C": return { state, text: `AGENTS.md (rule: ${name})` };
+      case "D": return { state, text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` } };
+      case "unknown":
+        if (hasCc) return { state, text: `.claude/rules/${name}.md` };  // unchanged
+        return { state, text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: "no such rule" } };
+    }
+  }
+  return { state, text: `.claude/rules/${name}.md` };  // fallback
 }
 
 /**
@@ -214,7 +257,7 @@ export function resolveRuleRefs(
   const hasCc = targets.includes("claude-code");
   const { rulesByName } = lookup;
 
-  // Use module-level ruleRefState
+  // Local shorthand for state lookup
   const ruleState = (name: string): RuleRefState => ruleRefState(name, lookup, targets, mode);
 
   // Blanket rewrite for kiro mode: .claude/rules/ → .kiro/steering/
@@ -222,30 +265,7 @@ export function resolveRuleRefs(
 
   // Resolve a single token reference (spec 20 §4.1): used for tokens and link text references.
   // Returns the replacement text and, if it rewords to "not in this workspace", the reworded entry.
-  const resolveToken = (name: string): { text: string; reworded?: { ref: string; kind: string } } => {
-    const state = ruleState(name);
-    const rule = rulesByName.get(name);
-    if (mode === "kiro") {
-      switch (state) {
-        case "K1": return { text: ruleFile("kiro", { name }) };
-        case "K2": return { text: `.claude/rules/${name}.md` };  // unchanged
-        case "K3": return { text: `AGENTS.md (rule: ${name})` };
-        case "D": return { text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` } };
-        case "unknown": return { text: ruleFile("kiro", { name }), reworded: { ref: `.claude/rules/${name}.md`, kind: UNKNOWN_NAME_KIND } };
-      }
-    } else {
-      switch (state) {
-        case "A": return { text: `.claude/rules/${name}.md` };  // unchanged
-        case "B": return { text: ruleFile("kiro", { name }) };
-        case "C": return { text: `AGENTS.md (rule: ${name})` };
-        case "D": return { text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` } };
-        case "unknown":
-          if (hasCc) return { text: `.claude/rules/${name}.md` };  // unchanged
-          return { text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: "no such rule" } };
-      }
-    }
-    return { text: `.claude/rules/${name}.md` };  // fallback
-  };
+  const resolveToken = (name: string): { text: string; reworded?: { ref: string; kind: string } } => ruleReference(name, lookup, targets, mode);
 
   // Collapse: a link whose text is exactly its path becomes the token form (spec 20 §4.2).
   // Returns the token form if collapsible, null otherwise.
