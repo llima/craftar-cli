@@ -383,7 +383,7 @@ export async function proveBasePromotion(forge: Forge, promotion: BasePromotion)
     scratch = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-forge-promote-"));
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code ?? (e as Error).message;
-    throw new Error(`${COMMAND}: could not create a temporary directory for the proof (${code}) — nothing written`);
+    throw new Error(`${COMMAND}: cannot make the scratch copy in the temporary directory (${code}) — nothing was written`);
   }
   try {
     await copyForgeForProof(forge.root, scratch);

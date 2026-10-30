@@ -468,4 +468,45 @@ describe("forge promote — the command", () => {
       expect(r.stderr).not.toContain("EISDIR");
     });
   });
+
+  describe.skipIf(process.platform === "win32")("mkdtemp error message", () => {
+    it.skipIf(process.getuid?.() === 0)("31. TMPDIR read-only reports clear message without mkdtemp word", async () => {
+      const root = await tmpDir("craftar-basepromo-tmpdir-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forge = path.join(root, "forge");
+      const home = path.join(root, "home");
+      const readonlyTmp = path.join(root, "readonly-tmp");
+
+      await makeForge(forge, {
+        ingredients: [rule("a", "base text\n"), rule("a--acme", "acme text\n", { as: "a" })],
+        recipes: [recipe("base", ["rule/a"]), recipe("acme-recipe", ["rule/a--acme"])],
+        profiles: [profile("acme", ["acme-recipe"]), profile("globex", ["base"])],
+      });
+
+      git(forge, "init", "-q", "-b", "main");
+      git(forge, "add", "-A");
+      git(forge, "commit", "-q", "-m", "forge");
+
+      // Create a read-only directory for TMPDIR
+      await fs.mkdir(readonlyTmp, { recursive: true });
+      cleanups.push(() => fs.chmod(readonlyTmp, 0o755).catch(() => undefined));
+      await fs.chmod(readonlyTmp, 0o555);
+
+      // Use the compiled CLI (dist/cli.js) to avoid tsx's TMPDIR usage
+      const REPO = path.resolve(__dirname, "..");
+      const { spawnSync } = await import("node:child_process");
+      const result = spawnSync(
+        process.execPath,
+        [path.join(REPO, "dist/cli.js"), "forge", "promote", "rule/a", "--profile", "acme", "--forge", forge, "--dry-run"],
+        {
+          encoding: "utf8",
+          env: { ...process.env, CRAFTAR_HOME: home, TMPDIR: readonlyTmp, TEMP: readonlyTmp, TMP: readonlyTmp, NO_COLOR: "1" },
+        },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("forge promote: cannot make the scratch copy in the temporary directory");
+      expect(result.stderr).toContain("— nothing was written");
+      expect(result.stderr).not.toContain("mkdtemp");
+    });
+  });
 });
