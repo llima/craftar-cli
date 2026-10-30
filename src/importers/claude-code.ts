@@ -453,12 +453,13 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       if (cachedResolution.ok) {
         pk6Resolution = cachedResolution;
       } else {
-        // Fail-closed: check if any rule base holds the placeholder before failing
-        const anyBaseHoldsPlaceholder = await someBaseHoldsRulesIndex(loaded);
-        if (anyBaseHoldsPlaceholder) {
-          throw new Error(`import: profile ${opts.profileName} does not resolve (${errorText(cachedResolution.error)}) — fix the Forge and re-run`);
+        // Fail-closed: for --prefer-kiro, check only the specific rules being preferred
+        const preferKiroRuleNames = new Set(opts.preferKiro);
+        const ruleWithPlaceholder = await ruleHoldingIndexInQueue(loaded, preferKiroRuleNames);
+        if (ruleWithPlaceholder) {
+          throw new Error(`import: profile ${opts.profileName} does not resolve on its own (${errorText(cachedResolution.error)}) and ${ruleWithPlaceholder} holds {{craftar.rules.index}} — fix the Forge and re-run`);
         }
-        // No base holds the placeholder: proceed with no index step, let the import continue
+        // No --prefer-kiro rule holds the placeholder: proceed with no index step, let the import continue
       }
     }
 
@@ -580,7 +581,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
 
   // Spec 44 §4.8: at schema >= 7, build the index expansion function for rule re-import comparison.
   // The function expands {{craftar.rules.index}} using the Forge's resolved ingredients.
-  // Fail-closed: when the profile does not resolve, throw ONLY when some rule base holds the placeholder.
+  // Fail-closed: when the profile does not resolve, throw ONLY when a rule base the profile would
+  // be compared with holds the placeholder (spec 44 §4.8: "a base the importing profile would be compared with").
   // Finding 4: also fail-closed for a NEW profile when any base holds the placeholder.
   // Finding 5: use cachedResolution instead of calling resolveForImport again.
   let indexExpand: ((text: string) => string) | undefined;
@@ -590,18 +592,18 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
         const { resolution, lookup } = cachedResolution;
         indexExpand = (text: string) => expandRulesIndex(text, "claude-code", lookup, resolution).text;
       } else {
-        // Fail-closed: check if any rule base holds the placeholder before failing
-        const anyBaseHoldsPlaceholder = await someBaseHoldsRulesIndex(loaded);
-        if (anyBaseHoldsPlaceholder) {
-          throw new Error(`import: profile ${opts.profileName} does not resolve (${errorText(cachedResolution.error)}) — fix the Forge and re-run`);
+        // Fail-closed: check only the rules this import compares, not all rules in the Forge
+        const ruleWithPlaceholder = await ruleHoldingIndexInQueue(loaded, queuedRules);
+        if (ruleWithPlaceholder) {
+          throw new Error(`import: profile ${opts.profileName} does not resolve on its own (${errorText(cachedResolution.error)}) and ${ruleWithPlaceholder} holds {{craftar.rules.index}} — fix the Forge and re-run`);
         }
-        // No base holds the placeholder: proceed with no index step, let the import continue
+        // No base this import compares holds the placeholder: proceed with no index step, let the import continue
       }
     } else {
-      // Finding 4: NEW profile — fail-closed if any base holds the placeholder
-      const anyBaseHoldsPlaceholder = await someBaseHoldsRulesIndex(loaded);
-      if (anyBaseHoldsPlaceholder) {
-        throw new Error(`import: profile ${opts.profileName} does not resolve (new profile, cannot expand index) — fix the Forge and re-run`);
+      // Finding 4: NEW profile — fail-closed only if a rule this import compares holds the placeholder
+      const ruleWithPlaceholder = await ruleHoldingIndexInQueue(loaded, queuedRules);
+      if (ruleWithPlaceholder) {
+        throw new Error(`import: profile ${opts.profileName} is not in the Forge and ${ruleWithPlaceholder} holds {{craftar.rules.index}} — import cannot compare that base as sync writes it; create the profile first (craftar init --new-profile ${opts.profileName}), then re-run`);
       }
     }
   }
@@ -1916,15 +1918,25 @@ function primaryFor(
 }
 
 /**
- * Whether any rule base in the Forge holds the rules index placeholder (spec 44 §4.8).
- * Used for fail-closed: when the profile does not resolve, we only fail if some base holds the placeholder.
+ * Whether any of the rules this import compares holds the rules index placeholder (spec 44 §4.8).
+ * For each rule name being imported, checks the ingredient the profile would resolve:
+ * - For a new profile: the base `rule/<name>`
+ * - For a broken profile: the base `rule/<name>` (since it can't resolve a variant)
+ * Returns the first rule ref that holds the placeholder, or null if none do.
  */
-async function someBaseHoldsRulesIndex(loaded: import("../core/forge.js").Forge): Promise<boolean> {
-  for (const ing of loaded.ingredients.values()) {
-    if (ing.meta.type === "rule") {
-      const body = await readIngredientText(ing, ing.meta.file);
-      if (RULES_INDEX_LINE.test(body)) return true;
+async function ruleHoldingIndexInQueue(
+  loaded: import("../core/forge.js").Forge,
+  ruleNames: Set<string>,
+): Promise<string | null> {
+  for (const name of ruleNames) {
+    // For new/broken profiles, check the base rule
+    const baseRef = `rule/${name}`;
+    const base = loaded.ingredients.get(baseRef);
+    if (base && base.meta.type === "rule") {
+      const body = await readIngredientText(base, base.meta.file);
+      if (RULES_INDEX_LINE.test(body)) return baseRef;
     }
   }
-  return false;
+  return null;
 }
+
