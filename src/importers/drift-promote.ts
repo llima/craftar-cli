@@ -757,6 +757,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     primaryRefs: null,
     // Drift promote always works with .claude/ files (spec 41 Part B §5.2)
     sourceTarget: "claude-code",
+    // Drift promote does not emit warnings; writtenTargets is not used.
+    writtenTargets: [],
   };
 
   const fingerprint = fingerprintOf(validateImported(sourceMeta), emitted.files);

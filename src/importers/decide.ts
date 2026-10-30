@@ -44,6 +44,8 @@ export interface RunContext {
   markedBase: boolean;
   /** The source target for section projection (spec 41 Part B §5.2): "claude-code" for .claude/ sources, "kiro" for --prefer-kiro. Default "claude-code". */
   sourceTarget: Owner;
+  /** The targets the next sync of this workspace writes: the workspace's `targets` when craftar.yaml / craftar.local.yaml sets them, else the importing profile's targets in the Forge as loaded plus the ones import detects (spec 41 Part B §5.2's variant warnings). */
+  writtenTargets: readonly Target[];
 }
 
 /** One entry of a section change `Δs` (spec 11 §3); `old` is the profile's value before, or null when it did not set it. */

@@ -24,6 +24,8 @@ import { firstMarkerLine, readsTargetSections } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
 import { GENERATED_BANNER, kiroReport, textLines, type KiroReport } from "./kiro-report.js";
 import { preferKiro } from "./prefer-kiro.js";
+import { appliesTo } from "../emitters/shared.js";
+import { CAPABILITIES } from "../core/capabilities.js";
 import { deepMerge } from "../core/merge.js";
 import { agentsMdOnly as isAgentsMdOnly, buildRuleLookup, outName, resolveRuleRefs } from "../emitters/shared.js";
 import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
@@ -352,6 +354,16 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const loaded = await forgeBefore(forge, manifestOnDisk);
   const existing = await existingProfile(forge, opts.profileName, loaded);
   const readWs = (abs: string) => fs.readFile(abs, "utf8");
+
+  // Detect targets this workspace writes (spec 41 Part B §5.2's variant warnings).
+  const detected: Target[] = ["claude-code"];
+  if (await exists(path.join(ws, ".kiro"))) detected.push("kiro");
+  const wsTargets = await workspaceTargets(ws, readWs);
+  const profileTargets = loaded?.profiles.get(opts.profileName)?.targets ?? [];
+  // Union of profile targets and detected targets, in TARGETS order.
+  const union = TARGETS.filter((t) => profileTargets.includes(t) || detected.includes(t));
+  const writtenTargets: readonly Target[] = wsTargets ?? union;
+
   const ctx: RunContext = {
     P: Object.assign(Object.create(null), existing.params),
     W: await workspaceParams(ws, readWs),
@@ -362,6 +374,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     markedBase: false,
     primaryRefs: null,
     sourceTarget: "claude-code",
+    writtenTargets,
   };
   const primary = await primaryFor(loaded, opts.profileName, ctx, ws, readWs);
   ctx.primaryRefs = primary?.refs ?? null;
@@ -565,8 +578,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   }
 
   /* ---- profile ---- */
-  const targets: Target[] = ["claude-code"];
-  if (await exists(path.join(ws, ".kiro"))) targets.push("kiro");
+  const targets = detected; // Computed earlier for writtenTargets.
   const profile: ImportedProfile = {
     name: opts.profileName,
     description: `Imported from ${path.basename(ws)} on ${new Date().toISOString().slice(0, 10)}.`,
@@ -1159,17 +1171,26 @@ async function writeIngredient(
     }
     const as = meta.name;
     name = `${meta.name}--${profile}`;
-    // Warn about sections this variant leaves out because the source target doesn't receive them.
+    // Warn about sections this variant leaves out or holds as plain text (spec 41 Part B §5.2).
     if (run?.ctx) {
       const parseOpts = { targets: readsTargetSections(run.ctx.forge?.manifest ?? { schema: 1 }) };
       const base = await readBase(dir, stage.reader(), forge, parseOpts);
       const owner = run.ctx.sourceTarget;
+      // The targets this workspace writes that the variant applies to and supports.
+      const writes = run.ctx.writtenTargets.filter(
+        (t) => appliesTo(meta.targets ?? "*", t) && CAPABILITIES[t][meta.type].state !== "unsupported",
+      );
       for (const [, parsed] of base.parsed) {
         for (const s of parsed.sections) {
           if (s.targets && !(s.targets as readonly string[]).includes(owner)) {
-            report.warnings.push(`${meta.type}/${name}: made from the ${owner} file, it leaves out section ${s.name} (targets=${s.targets.join(",")}) — sync writes ${s.targets.join(", ")} without it`);
+            // Section for other targets — left out of this variant.
+            const affected = (s.targets as readonly string[]).filter((t) => writes.includes(t as Target));
+            if (affected.length > 0) {
+              report.warnings.push(`${meta.type}/${name}: made from the ${owner} file, it leaves out section ${s.name} (targets=${s.targets.join(",")}) — sync writes ${affected.join(", ")} without it`);
+            }
           } else if (s.targets && (s.targets as readonly string[]).includes(owner)) {
-            const others = TARGETS.filter((t) => !(s.targets as readonly string[]).includes(t));
+            // Section for this target but not all — held as plain text in the variant.
+            const others = writes.filter((t) => !(s.targets as readonly string[]).includes(t));
             if (others.length > 0) {
               report.warnings.push(`${meta.type}/${name}: made from the ${owner} file, it holds section ${s.name} (targets=${s.targets.join(",")}) as plain text — sync writes it to ${others.join(", ")} too`);
             }
