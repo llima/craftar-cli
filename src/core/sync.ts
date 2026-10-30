@@ -803,7 +803,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
       warnings.push(undescribedRulesWarning([...allUndescribed].sort()));
     }
 
-    // Finding 6: Scan planned files for misplaced placeholders (not alone on line).
+    // Scan the planned files for misplaced placeholders (not alone on line).
     // This detects lines in the PLANNED content, not the ingredient body.
     // Applies to rules (.claude/rules/<name>.md, .kiro/steering/<name>.md) and AGENTS.md.
     const misplacedLocations: string[] = [];
@@ -845,7 +845,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
   }
 
   // Build indexed (spec 44 §4.4): sorted by path in code-point order, only at the gate
-  // Finding 2: build only from expanded entries (expanded: true), deduplicated by path
+  // Build only from expanded entries (expanded: true), deduplicated by path
   const indexed: Plan["indexed"] = [];
   if (resolution.rulesIndex) {
     const seenPaths = new Map<string, number>();

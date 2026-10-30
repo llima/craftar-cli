@@ -850,7 +850,7 @@ export function expandRulesIndex(
   lookup: RuleLookup,
   resolution: Resolution,
 ): ExpandRulesIndexResult {
-  // Finding 1: scan text FIRST — when no line matches RULES_INDEX_LINE and none matches RULES_INDEX_TOKEN,
+  // Scan first — when no line matches RULES_INDEX_LINE and none matches RULES_INDEX_TOKEN,
   // return unchanged without building anything; build the list only when a line will be expanded.
   const lines = text.split("\n");
   const hasAloneLine = lines.some((line) => RULES_INDEX_LINE.test(line));
@@ -862,7 +862,7 @@ export function expandRulesIndex(
   }
 
   // If only misplaced tokens (no alone lines), return unchanged text
-  // (Finding 6: misplaced detection is done by plan() after emitters, not here)
+  // (a misplaced placeholder is found by plan() in the planned files, not here)
   if (!hasAloneLine) {
     return { text, listed: 0, undescribed: [], expanded: false };
   }
