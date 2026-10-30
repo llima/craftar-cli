@@ -12,7 +12,7 @@ import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerpri
 import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, resolve, type Resolution } from "../core/resolve.js";
-import { readsRulesIndex, RULES_INDEX_LINE } from "../core/rules-index.js";
+import { readsRulesIndex, RULES_INDEX_LINE, RULES_INDEX_TOKEN } from "../core/rules-index.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { classifyForge, credentialFault } from "../core/remote.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
@@ -604,6 +604,55 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       const ruleWithPlaceholder = await ruleHoldingIndexInQueue(loaded, queuedRules);
       if (ruleWithPlaceholder) {
         throw new Error(`import: profile ${opts.profileName} is not in the Forge and ${ruleWithPlaceholder} holds {{craftar.rules.index}} — import cannot compare that base as sync writes it; create the profile first (craftar init --new-profile ${opts.profileName}), then re-run`);
+      }
+    }
+  }
+
+  // Review round 3 item 1: check for resolved variants holding the placeholder
+  // When a profile resolves a variant (via `as`) that holds {{craftar.rules.index}}, the import must:
+  // - Reuse the variant if the workspace matches what the variant produces when expanded
+  // - Refuse if the workspace differs (don't create another variant)
+  if (loaded && readsRulesIndex(loaded.manifest) && cachedResolution?.ok) {
+    const { resolution, lookup } = cachedResolution;
+    for (const src of queue) {
+      if (src.skip?.() || src.meta.type !== "rule") continue;
+      // Find the resolved ingredient for this rule name (could be a variant with as: <name>)
+      const resolvedIng = resolution.ingredients.find(
+        (ing) => ing.meta.type === "rule" && outName(ing.meta) === src.meta.name
+      );
+      if (!resolvedIng || resolvedIng.meta.type !== "rule" || !resolvedIng.meta.as) continue; // No variant, normal path applies
+
+      // Check if the variant holds the placeholder
+      const variantDir = resolvedIng.dir;
+      const variantMeta = resolvedIng.meta; // Now TypeScript knows this is a rule
+      const variantFile = variantMeta.file ?? "rule.md";
+      const variantBodyPath = path.join(variantDir, variantFile);
+      if (!(await stage.exists(variantBodyPath))) continue;
+      const variantBody = await stage.readText(variantBodyPath);
+      if (!RULES_INDEX_TOKEN.test(variantBody)) continue; // Variant doesn't hold placeholder
+
+      // The variant holds the placeholder — compare the workspace against what the variant produces
+      const variantExpanded = expandRulesIndex(variantBody, "claude-code", lookup, resolution).text;
+      const sourceText = typeof src.files[variantFile] === "string"
+        ? src.files[variantFile] as string
+        : (src.files[variantFile] as Buffer).toString("utf8");
+      const sourceNorm = toLf(stripBom(sourceText));
+      const variantNorm = toLf(stripBom(variantExpanded));
+
+      const variantRef = `${variantMeta.type}/${resolvedIng.ref.split("/")[1]}`;
+      const sourcePath = src.meta.origin?.path ?? `${src.meta.type}/${src.meta.name}`;
+
+      if (sourceNorm === variantNorm) {
+        // Match — reuse the variant (skip this source and report reuse)
+        report.reused.push(variantRef);
+        // Mark as skipped so decide loop doesn't process it
+        src.skip = () => true;
+        src.after(variantRef); // Track the ref for recipe handling
+      } else {
+        // Differ — refuse the import
+        throw new Error(
+          `import: ${variantRef} holds {{craftar.rules.index}} and the workspace's ${sourcePath} differs from its list — edit the variant in the Forge, then re-run`
+        );
       }
     }
   }
