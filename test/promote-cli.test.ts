@@ -349,7 +349,7 @@ describe("forge promote — the command", () => {
       "--forge <dir>",
       "--workspace <dir>",
       "--no-impact skip planning the registered workspaces of this Forge before and after the writes",
-      "--dry-run run every check and the first impact pass, print what would be written, and write nothing",
+      "--dry-run prove and show the plan, write nothing in the Forge (the proof needs a writable temporary directory)",
       "--json machine-readable output",
     ]) {
       expect(help).toContain(part);
