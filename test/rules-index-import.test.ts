@@ -963,9 +963,8 @@ describe("Review round 3 item 1: variant holding placeholder is protected", () =
       profileName: "acme",
     });
 
-    // The variant should be REUSED, not overwritten
-    expect(result.reused).toContain("rule/readme--acme");
-    expect(result.variants.map((v) => v.name)).not.toContain("rule/readme--acme");
+    // The variant is kept as it is: listed among the variants (so it stays in the profile's own recipe), not rewritten
+    expect(result.variants.find((v) => v.name === "rule/readme--acme")?.reason).toMatch(/^unchanged rule\/readme variant holding/);
 
     // The variant body should be UNCHANGED (byte-identical)
     const variantBodyAfter = await fs.readFile(

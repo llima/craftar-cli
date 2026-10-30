@@ -11,16 +11,16 @@ import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
 import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
-import { readsPrimary, resolve, type Resolution } from "../core/resolve.js";
-import { readsRulesIndex, RULES_INDEX_LINE, RULES_INDEX_TOKEN } from "../core/rules-index.js";
+import { readsPrimary, resolve, sectionKey, type Resolution } from "../core/resolve.js";
+import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN } from "../core/rules-index.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { classifyForge, credentialFault } from "../core/remote.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
-import { decide, forgeBefore, pin, registrationCarry, sourceKeys, workspaceParams, workspaceSections, workspaceTargets, type RunContext } from "./decide.js";
+import { decide, forgeBefore, pin, registrationCarry, sourceKeys, valuesAt, workspaceParams, workspaceSections, workspaceTargets, type RunContext } from "./decide.js";
 import { providedByBlock } from "./provided.js";
-import { readBase, renderMap, renderedFingerprint } from "../core/template-import.js";
+import { readBase, renderMap, renderedFingerprint, type ImportBase } from "../core/template-import.js";
 import { firstMarkerLine, readsTargetSections } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
 import { GENERATED_BANNER, kiroReport, textLines, type KiroReport } from "./kiro-report.js";
@@ -604,55 +604,6 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       const ruleWithPlaceholder = await ruleHoldingIndexInQueue(loaded, queuedRules);
       if (ruleWithPlaceholder) {
         throw new Error(`import: profile ${opts.profileName} is not in the Forge and ${ruleWithPlaceholder} holds {{craftar.rules.index}} — import cannot compare that base as sync writes it; create the profile first (craftar init --new-profile ${opts.profileName} --no-sync in another directory), then re-run`);
-      }
-    }
-  }
-
-  // Review round 3 item 1: check for resolved variants holding the placeholder
-  // When a profile resolves a variant (via `as`) that holds {{craftar.rules.index}}, the import must:
-  // - Reuse the variant if the workspace matches what the variant produces when expanded
-  // - Refuse if the workspace differs (don't create another variant)
-  if (loaded && readsRulesIndex(loaded.manifest) && cachedResolution?.ok) {
-    const { resolution, lookup } = cachedResolution;
-    for (const src of queue) {
-      if (src.skip?.() || src.meta.type !== "rule") continue;
-      // Find the resolved ingredient for this rule name (could be a variant with as: <name>)
-      const resolvedIng = resolution.ingredients.find(
-        (ing) => ing.meta.type === "rule" && outName(ing.meta) === src.meta.name
-      );
-      if (!resolvedIng || resolvedIng.meta.type !== "rule" || !resolvedIng.meta.as) continue; // No variant, normal path applies
-
-      // Check if the variant holds the placeholder
-      const variantDir = resolvedIng.dir;
-      const variantMeta = resolvedIng.meta; // Now TypeScript knows this is a rule
-      const variantFile = variantMeta.file ?? "rule.md";
-      const variantBodyPath = path.join(variantDir, variantFile);
-      if (!(await stage.exists(variantBodyPath))) continue;
-      const variantBody = await stage.readText(variantBodyPath);
-      if (!RULES_INDEX_TOKEN.test(variantBody)) continue; // Variant doesn't hold placeholder
-
-      // The variant holds the placeholder — compare the workspace against what the variant produces
-      const variantExpanded = expandRulesIndex(variantBody, "claude-code", lookup, resolution).text;
-      const sourceText = typeof src.files[variantFile] === "string"
-        ? src.files[variantFile] as string
-        : (src.files[variantFile] as Buffer).toString("utf8");
-      const sourceNorm = toLf(stripBom(sourceText));
-      const variantNorm = toLf(stripBom(variantExpanded));
-
-      const variantRef = `${variantMeta.type}/${resolvedIng.ref.split("/")[1]}`;
-      const sourcePath = src.meta.origin?.path ?? `${src.meta.type}/${src.meta.name}`;
-
-      if (sourceNorm === variantNorm) {
-        // Match — reuse the variant (skip this source and report reuse)
-        report.reused.push(variantRef);
-        // Mark as skipped so decide loop doesn't process it
-        src.skip = () => true;
-        src.after(variantRef); // Track the ref for recipe handling
-      } else {
-        // Differ — refuse the import
-        throw new Error(
-          `import: ${variantRef} holds {{craftar.rules.index}} and the workspace's ${sourcePath} differs from its list — edit the variant in the Forge, then re-run`
-        );
       }
     }
   }
@@ -1372,12 +1323,47 @@ async function writeIngredient(
         }
       }
     }
-    dir = path.join(forge, "ingredients", folder, name);
+    // Spec 44 §4.8: an existing rule or steering variant that holds the placeholder is compared as sync writes it, its
+    // list expanded — the comparison decide() makes for a base (`renderedFingerprint`, which drops `name` and `as`).
+    // Unchanged, it is kept as it is; changed in the workspace, import refuses rather than write the list over it.
+    const variantDir = path.join(forge, "ingredients", folder, name);
+    const indexTarget = meta.type === "rule" ? "claude-code" : meta.type === "steering" ? "kiro" : undefined;
+    if (run?.ctx.forge && readsRulesIndex(run.ctx.forge.manifest) && run.indexExpand && indexTarget && (await stage.exists(path.join(variantDir, "ingredient.yaml")))) {
+      const v = await readBase(variantDir, stage.reader(), forge, { targets: readsTargetSections(run.ctx.forge.manifest) });
+      if ([...v.texts.values()].some((t) => RULES_INDEX_LINE.test(t))) {
+        const key = sectionKey(v.meta);
+        const S: Record<string, string> = { ...valuesAt(run.ctx.PS, key), ...valuesAt(run.ctx.WS, key) };
+        const map = renderMap(v.meta, run.ctx.P, run.ctx.W);
+        const expand = run.indexExpand;
+        // Two facts the workspace cannot show are taken from the source, as import writes them: the rule's
+        // `description` (no target writes it into the file) and the name of its body file.
+        const srcBody = sourceMeta.type === "rule" || sourceMeta.type === "steering" ? path.posix.normalize(sourceMeta.file) : undefined;
+        const varBody = v.meta.type === "rule" || v.meta.type === "steering" ? path.posix.normalize(v.meta.file) : undefined;
+        const rekey = <T>(m: Map<string, T>): Map<string, T> =>
+          new Map([...m].map(([rel, x]) => [srcBody !== undefined && rel === varBody ? srcBody : rel, x]));
+        const seen: ImportBase = {
+          ...v,
+          meta: { ...v.meta, description: sourceMeta.description, ...(srcBody !== undefined ? { file: sourceMeta.type === "rule" || sourceMeta.type === "steering" ? sourceMeta.file : undefined } : {}) } as Ingredient,
+          texts: rekey(v.texts),
+          parsed: rekey(v.parsed),
+        };
+        if (seen.meta.description === undefined) delete (seen.meta as { description?: string }).description;
+        const rendered = renderedFingerprint(seen, map, S, run.ctx.forge.manifest.schema, run.ctx.primaryRefs ?? undefined, run.ctx.sourceTarget, (t) => expand(t, indexTarget));
+        if (rendered !== fingerprint) {
+          throw new Error(`import: ${meta.type}/${name} holds {{${RULES_INDEX_KEY}}} and the workspace's ${source} differs from what sync writes from it — edit the variant in the Forge, then re-run`);
+        }
+        report.variants.push({ name: `${meta.type}/${name}`, reason: `unchanged ${meta.type}/${as} variant holding {{${RULES_INDEX_KEY}}}` });
+        pin(run.ctx, sourceKeys(sourceMeta, files), map);
+        return `${meta.type}/${name}`;
+      }
+    }
+    dir = variantDir;
     report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge${why ? ` (${why})` : ""}` });
 
     // Review round 3 item 3: warn when the base holds {{craftar.rules.index}} and import creates a variant
     // The variant now has the expanded (frozen) list instead of the dynamic placeholder.
-    if (run?.ctx && run.ctx.forge && readsRulesIndex(run.ctx.forge.manifest)) {
+    // Review round 4: only for rule and steering bases (agents/commands/skills don't get this warning)
+    if (run?.ctx && run.ctx.forge && readsRulesIndex(run.ctx.forge.manifest) && (meta.type === "rule" || meta.type === "steering")) {
       const parseOpts = { targets: readsTargetSections(run.ctx.forge.manifest) };
       const baseDir = path.join(forge, "ingredients", folder, as);
       if (await stage.exists(path.join(baseDir, "ingredient.yaml"))) {

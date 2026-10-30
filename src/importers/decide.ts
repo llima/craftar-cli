@@ -212,7 +212,7 @@ export async function decide(
 }
 
 /** A key's section values in a layer, or none. */
-const valuesAt = (layer: Sections, key: string): Record<string, string> => (Object.hasOwn(layer, key) ? layer[key] : {});
+export const valuesAt = (layer: Sections, key: string): Record<string, string> => (Object.hasOwn(layer, key) ? layer[key] : {});
 
 /** F1, F2 (spec 10 §6.3): what no value can explain — metadata, the file set, a file compared as bytes. */
 function shapeDiffers(base: ImportBase, meta: Ingredient, files: Record<string, string | Buffer>): string | null {
