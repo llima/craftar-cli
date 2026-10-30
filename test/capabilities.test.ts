@@ -77,7 +77,7 @@ async function makeCapabilityForge(root: string): Promise<void> {
     },
     // hook
     {
-      meta: { type: "hook", name: "cap-hook", targets: "*", files: ["on-event.sh"] },
+      meta: { type: "hook", name: "cap-hook", targets: "*", files: ["on-event.sh"], registration: [{ event: "Stop", command: "true" }] },
       files: { "on-event.sh": `#!/bin/bash\n# ${REFERENCE}\necho hook\n` },
     },
     // service (aimed at all targets with targets: "*" for the test)
@@ -168,6 +168,11 @@ async function isAsHeld(
     } catch {
       return false;
     }
+  }
+
+  // For hook type, the example file is also not a file rule 4 judges (spec 43 §5.5): return true for it.
+  if (type === "hook" && f.path === ".claude/settings.craftar.example.json") {
+    return true;
   }
 
   // For AGENTS.md (shared rule/* file), it is not as held by construction (spec 16 §10.2)
@@ -317,6 +322,11 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
               cellFiles.push(f);
               continue;
             }
+            // Shared files: The example file belongs to type=hook on claude-code (spec 43 §5.5)
+            if (type === "hook" && target === "claude-code" && f.ingredient === "mcp/*" && f.path === ".claude/settings.craftar.example.json") {
+              cellFiles.push(f);
+              continue;
+            }
           }
 
           // Check rule 2: unsupported ⇔ no cell files AND a warning names each fixture ref AND output is empty
@@ -443,13 +453,14 @@ describe("capability notes are plain text (spec 16 §4.4)", () => {
     );
   });
 
-  it("no note of the 27 cells holds a backtick; native notes are null; unsupported notes are the one sentence", () => {
+  it("no note of the 27 cells holds a backtick; native notes are null (except hook); unsupported notes are the one sentence", () => {
     const bad: string[] = [];
     for (const t of TARGETS)
       for (const ty of INGREDIENT_TYPES) {
         const c = CAPABILITIES[t][ty];
         if (c.note !== null && c.note.includes("`")) bad.push(`${t} · ${ty}`);
-        if (c.state === "native" && c.note !== null) bad.push(`${t} · ${ty} (native with a note)`);
+        // Native cells have null notes, except hook which has a note about registration (spec 43 §5.5)
+        if (c.state === "native" && c.note !== null && !(t === "claude-code" && ty === "hook")) bad.push(`${t} · ${ty} (native with a note)`);
         if (c.state === "unsupported" && c.note !== "skipped with a warning when aimed at this target") bad.push(`${t} · ${ty} (unsupported note)`);
       }
     expect(bad).toEqual([]);

@@ -1,4 +1,5 @@
 import { promises as fs, constants as fsc } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { ENV_NAME, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
@@ -10,7 +11,8 @@ import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, frag
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK } from "./sync.js";
-import { outName, MCP_FILE } from "../emitters/shared.js";
+import { outName, MCP_FILE, renderRegistration, EXAMPLE_SETTINGS } from "../emitters/shared.js";
+import { stripBom } from "./text.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram } from "./proc.js";
 
@@ -66,6 +68,11 @@ export interface DoctorOptions {
   dockerRunner?: DockerRunner;
   /** Test seam: a replacement for the real `inspectCache` (spec 39 §5.1). */
   inspectCache?: typeof inspectCache;
+  /**
+   * Test seam for hooks-registered: the user's Claude config directory (spec 43 §6).
+   * Defaults to `opts.env.CLAUDE_CONFIG_DIR` if set, else `path.join(os.homedir(), ".claude")`.
+   */
+  claudeUserDir?: string;
 }
 
 async function defaultGitVersion(): Promise<string | null> {
@@ -418,6 +425,9 @@ async function workspaceChecks(
           }
         }
       }
+
+      // hooks-registered: present only when the plan writes at least one registration (spec 43 §6)
+      await hooksRegistered(root, p, opts, w, env);
     }
 
     // docker, services-env: present only when the plan or the lock has a service (spec 31 §4.7)
@@ -709,5 +719,243 @@ export async function claudeMdAncestors(
     const file = path.join(dir, "CLAUDE.md");
     if (await exists(file)) out.push(file);
     if (dir === path.dirname(dir)) return out;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* hooks-registered check (spec 43 §6)                                 */
+/* ------------------------------------------------------------------ */
+
+/** A planned hook registration entry after rendering. */
+interface PlannedHookEntry {
+  ref: string;
+  index: number;
+  event: string;
+  matcher: string | undefined;
+  handler: unknown;
+  hasMissing: boolean;
+}
+
+/** Settings file labels (spec 43 §6: fixed, never an absolute path). */
+const SETTINGS_LABELS = {
+  project: ".claude/settings.json",
+  projectLocal: ".claude/settings.local.json",
+  userDefault: "~/.claude/settings.json",
+  userEnv: "$CLAUDE_CONFIG_DIR/settings.json",
+} as const;
+
+/**
+ * Deep equality check for JSON values, ignoring key order in objects.
+ * Uses JSON.stringify with sorted keys for comparison.
+ */
+function sameJsonValue(a: unknown, b: unknown): boolean {
+  const sortKeys = (obj: unknown): unknown => {
+    if (obj === null || typeof obj !== "object") return obj;
+    if (Array.isArray(obj)) return obj.map(sortKeys);
+    const sorted: Record<string, unknown> = Object.create(null);
+    for (const key of Object.keys(obj).sort()) {
+      sorted[key] = sortKeys((obj as Record<string, unknown>)[key]);
+    }
+    return sorted;
+  };
+  return JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
+}
+
+/**
+ * Read and parse a settings file. Returns null if missing, the parsed value if valid JSON object,
+ * or { error: label } if invalid JSON or not an object.
+ */
+async function readSettingsFile(
+  filePath: string,
+  label: string,
+): Promise<{ value: unknown } | { error: string } | null> {
+  let text: string;
+  try {
+    text = await fs.readFile(filePath, "utf8");
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") return null;
+    return { error: `cannot read ${label}: unreadable (${err.code ?? "error"})` };
+  }
+  try {
+    const parsed = JSON.parse(stripBom(text));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { error: `cannot read ${label}: not a JSON object` };
+    }
+    return { value: parsed };
+  } catch {
+    return { error: `cannot read ${label}: not valid JSON` };
+  }
+}
+
+/**
+ * Check if a handler is found in any of the settings files.
+ * Compares event, matcher (absent equals absent), and handler object (key order ignored).
+ */
+function handlerInSettings(
+  entry: PlannedHookEntry,
+  settingsFiles: Array<{ value: unknown }>,
+): boolean {
+  for (const file of settingsFiles) {
+    const hooks = (file.value as Record<string, unknown>).hooks;
+    if (hooks === null || typeof hooks !== "object" || Array.isArray(hooks)) continue;
+
+    const eventGroups = (hooks as Record<string, unknown>)[entry.event];
+    if (!Array.isArray(eventGroups)) continue;
+
+    for (const group of eventGroups) {
+      if (group === null || typeof group !== "object" || Array.isArray(group)) continue;
+      const groupObj = group as Record<string, unknown>;
+
+      // Compare matcher: absent equals absent only
+      const groupMatcher = groupObj.matcher;
+      if (entry.matcher === undefined) {
+        // Planned has no matcher — settings must also have no matcher
+        if (groupMatcher !== undefined) continue;
+      } else {
+        // Planned has matcher — settings must have equal matcher
+        if (groupMatcher !== entry.matcher) continue;
+      }
+
+      // Compare handlers in the group
+      const groupHooks = groupObj.hooks;
+      if (!Array.isArray(groupHooks)) continue;
+
+      for (const handler of groupHooks) {
+        if (sameJsonValue(handler, entry.handler)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * The hooks-registered check (spec 43 §6): present only when the plan writes at least one registration.
+ * Reads settings files and compares each planned handler.
+ */
+async function hooksRegistered(
+  root: string,
+  p: Plan,
+  opts: DoctorOptions,
+  w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  // Collect planned registrations from hooks written by claude-code
+  if (!p.resolution.targets.includes("claude-code")) return;
+
+  const plannedEntries: PlannedHookEntry[] = [];
+
+  const walk = written(p.resolution, "claude-code", () => {});
+  for (const ing of walk) {
+    if (ing.meta.type !== "hook") continue;
+    const hookMeta = ing.meta;
+    if (!hookMeta.registration) continue;
+
+    const declared = hookMeta.params ?? {};
+    const params = paramsFor(ing, p.resolution);
+
+    for (let i = 0; i < hookMeta.registration.length; i++) {
+      const entry = hookMeta.registration[i];
+
+      // Render the entry using the shared builder (spec 43 §7.2)
+      const { event, matcher, handler, rendered } = renderRegistration(entry, declared, params, ing.ref);
+
+      // Check if this entry's render left a declared key with no value (spec 43 §6)
+      const hasMissing = rendered.missing.length > 0;
+
+      plannedEntries.push({
+        ref: ing.ref,
+        index: i,
+        event,
+        matcher,
+        handler,
+        hasMissing,
+      });
+    }
+  }
+
+  // No registrations → no check
+  if (plannedEntries.length === 0) return;
+
+  // Determine claudeUserDir: seam or default (spec 43 §6)
+  const claudeUserDir = opts.claudeUserDir ?? (env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"));
+  const useEnvLabel = Boolean(env.CLAUDE_CONFIG_DIR) && !opts.claudeUserDir;
+
+  // Read settings files
+  const settingsFiles: Array<{ label: string; result: Awaited<ReturnType<typeof readSettingsFile>> }> = [];
+
+  // .claude/settings.json
+  settingsFiles.push({
+    label: SETTINGS_LABELS.project,
+    result: await readSettingsFile(path.join(root, ".claude/settings.json"), SETTINGS_LABELS.project),
+  });
+
+  // .claude/settings.local.json
+  settingsFiles.push({
+    label: SETTINGS_LABELS.projectLocal,
+    result: await readSettingsFile(path.join(root, ".claude/settings.local.json"), SETTINGS_LABELS.projectLocal),
+  });
+
+  // User settings: ~/.claude/settings.json or $CLAUDE_CONFIG_DIR/settings.json
+  const userLabel = useEnvLabel ? SETTINGS_LABELS.userEnv : SETTINGS_LABELS.userDefault;
+  settingsFiles.push({
+    label: userLabel,
+    result: await readSettingsFile(path.join(claudeUserDir, "settings.json"), userLabel),
+  });
+
+  // Report invalid JSON errors first
+  // Collect errors for later - we only emit them if at least one entry was checked (spec 43 §6)
+  const fileErrors: string[] = [];
+  for (const { result } of settingsFiles) {
+    if (result && "error" in result) {
+      fileErrors.push(result.error);
+    }
+  }
+
+  // Collect valid settings files for comparison
+  const validFiles = settingsFiles
+    .filter((f) => f.result && "value" in f.result)
+    .map((f) => f.result as { value: unknown });
+
+  // Check each planned entry
+  let checkedCount = 0;
+  let foundCount = 0;
+
+  for (const entry of plannedEntries) {
+    if (entry.hasMissing) {
+      // Entry has missing param — not checked
+      w(
+        "hooks-registered",
+        "ok",
+        `${entry.ref}: registration ${entry.index} (${entry.event}) not checked — a declared parameter has no value (see params)`,
+        null,
+      );
+      continue;
+    }
+
+    checkedCount++;
+
+    if (handlerInSettings(entry, validFiles)) {
+      foundCount++;
+    } else {
+      w(
+        "hooks-registered",
+        "warn",
+        `${entry.ref}: registration ${entry.index} (${entry.event}) is in no settings file Claude Code reads`,
+        `copy it from ${EXAMPLE_SETTINGS} into ${SETTINGS_LABELS.project}`,
+      );
+    }
+  }
+
+  // Emit file read errors only when at least one entry was checked (spec 43 §6)
+  if (checkedCount > 0) {
+    for (const error of fileErrors) {
+      w("hooks-registered", "warn", error, null);
+    }
+  }
+
+  // Summary: all checked and found → ok
+  if (checkedCount > 0 && foundCount === checkedCount) {
+    w("hooks-registered", "ok", "every hook registration is in a settings file", null);
   }
 }

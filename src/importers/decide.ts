@@ -9,7 +9,7 @@ import { citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerpri
 import { canonicalValue, inferSections } from "../core/sections.js";
 import { errorText } from "../core/schema-fault.js";
 import { sectionKey } from "../core/resolve.js";
-import { rendersServers, serverCitations } from "../core/mcp-server.js";
+import { registrationCitations, rendersServers, serverCitations } from "../core/mcp-server.js";
 import type { DirReader } from "../core/fingerprint.js";
 import { OverridesParamsSchema, SectionsSchema, WorkspaceConfigSchema, stripForgeOnlyKeys, type Ingredient, type Sections, type Target } from "../schema/index.js";
 
@@ -64,7 +64,7 @@ export type Decision =
       sectioned?: string[];
       sectionDelta?: SectionChange[];
     }
-  | { kind: "variant"; why?: string; authEnv?: string[] }
+  | { kind: "variant"; why?: string; authEnv?: string[]; registration?: unknown[]; registrationParams?: Record<string, { default?: string | number | boolean; description?: string }> }
   | { kind: "literal"; warn: string };
 
 const norm = (s: string) => toLf(stripBom(s));
@@ -82,6 +82,30 @@ export function sourceKeys(meta: Ingredient, files: Record<string, string | Buff
 /** Pin every key in `keys` at the value the importing profile renders it with now. */
 export function pin(ctx: RunContext, keys: Iterable<string>, map: Record<string, unknown>): void {
   for (const k of keys) if (!ctx.pinned.has(k)) ctx.pinned.set(k, valueOf(map, k));
+}
+
+/**
+ * Compute the registration and params to carry from a hook base into a variant.
+ * Returns the base's registration and only the params entries the registration cites (spec 43 §7.2 row 10).
+ * For a non-hook or a hook without registration, returns empty result.
+ */
+export function registrationCarry(meta: Ingredient): {
+  registration?: unknown[];
+  registrationParams?: Record<string, { default?: string | number | boolean; description?: string }>;
+} {
+  if (meta.type !== "hook") return {};
+  const registration = meta.registration;
+  if (!registration) return {};
+  const citations = registrationCitations(meta);
+  if (!citations.length) return { registration };
+  const citedDeclared = citations.filter((c) => c.declared).map((c) => c.key);
+  if (!citedDeclared.length) return { registration };
+  const declared = meta.params ?? {};
+  const registrationParams: Record<string, { default?: string | number | boolean; description?: string }> = {};
+  for (const k of citedDeclared) {
+    if (Object.hasOwn(declared, k)) registrationParams[k] = declared[k];
+  }
+  return { registration, registrationParams: Object.keys(registrationParams).length ? registrationParams : undefined };
 }
 
 /**
@@ -105,8 +129,18 @@ export async function decide(
   const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."));
   // The base's authEnv, to carry into the variant answer (spec 27 §5.3).
   const baseAuthEnv = base.meta.type === "mcp" ? base.meta.authEnv : undefined;
+  // The base's registration and cited params, to carry into the variant answer (spec 43 §7.2 row 10).
+  const { registration: baseRegistration, registrationParams: baseRegistrationParams } = registrationCarry(base.meta);
   // Augment a variant decision with the base's authEnv for the importer to carry (spec 27 §5.3).
-  const withAuthEnv = (d: Decision): Decision => (d.kind === "variant" && baseAuthEnv ? { ...d, authEnv: baseAuthEnv } : d);
+  // Also augment with registration and registrationParams for hooks (spec 43 §7.2 row 10).
+  const withAuthEnv = (d: Decision): Decision => {
+    if (d.kind !== "variant") return d;
+    let result = d;
+    if (baseAuthEnv) result = { ...result, authEnv: baseAuthEnv };
+    if (baseRegistration) result = { ...result, registration: baseRegistration };
+    if (baseRegistrationParams) result = { ...result, registrationParams: baseRegistrationParams };
+    return result;
+  };
 
   // Spec 34 §5.2: schema and the declared server citations (at the gate, else []).
   const schema = ctx.forge?.manifest.schema ?? 1;
@@ -230,6 +264,12 @@ async function inferParams(
   for (const { key } of delta) {
     if (ctx.forge) {
       for (const ing of ctx.forge.ingredients.values()) {
+        // F9 for hook registrations (spec 43 §7.2 row 8, ungated): check even for runBases ingredients
+        // because registrations are not imported from the workspace - they stay from the Forge.
+        // Only skip the current ingredient being decided.
+        if (ing.ref !== ref && registrationCitations(ing.meta).some((c) => c.declared && c.key === key)) {
+          return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
+        }
         if (ing.ref === ref || runBases.has(ing.ref)) continue;
         for (const rel of await listAdmitted(ing)) {
           if (placeholders(norm(await readIngredientText(ing, rel))).includes(key)) return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
@@ -242,6 +282,7 @@ async function inferParams(
           const declaredCitations = serverCitations(ing.meta).filter((c) => c.declared).map((c) => c.key);
           if (declaredCitations.includes(key)) return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
         }
+        // Note: hook registration check was moved earlier to handle runBases ingredients too (spec 43 §7.2 row 8)
       }
     }
     for (const o of others) {

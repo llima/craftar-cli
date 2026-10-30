@@ -8,11 +8,13 @@ import {
   EXAMPLE_SETTINGS,
   formatDeadRefs,
   formatScannedRefs,
+  hookRegistrations,
   mcpServers,
   MCP_FILE,
   outName,
   resolveRuleRefs,
   ruleFile,
+  settingsExample,
   textFile,
   unresolvedRuleRefs,
   UNKNOWN_NAME_KIND,
@@ -36,6 +38,7 @@ export const claudeCode: Emitter<"claude-code"> = {
     const out: PlannedFile[] = [];
     const t = "claude-code";
     const mcp: ResolvedIngredient[] = [];
+    const hooks: ResolvedIngredient[] = [];
     const primary = ctx.resolution.primary;
 
     // Under the mode, build the lookup once
@@ -156,6 +159,7 @@ export const claudeCode: Emitter<"claude-code"> = {
           }
           break;
         case "hook":
+          hooks.push(ing); // collected for registration below
           for (const f of m.files) {
             const path = `.claude/hooks/${f}`;
             const file = await anyFileWithScan(ctx, ing, f, path, t, lookup, targets, primary, scanFile);
@@ -183,13 +187,19 @@ export const claudeCode: Emitter<"claude-code"> = {
       out.push(await textFile(ctx, MCP_FILE["claude-code"], json, t, "mcp/*"));
     }
 
-    // Write the example file when authEnvNames is non-empty (spec 27 §4.2)
+    // Write the example file when authEnvNames is non-empty or hooks have registration (spec 27 §4.2, spec 43 §5.1)
     const names = authEnvNames(mcp);
-    if (names.length) {
-      // Build env object on null prototype so __proto__ is a key, not the prototype
-      const env: Record<string, string> = Object.create(null);
+    const hooksObj = hookRegistrations(ctx, hooks);
+
+    // Build env object on null prototype so __proto__ is a key, not the prototype
+    const env: Record<string, string> | null = names.length > 0 ? Object.create(null) : null;
+    if (env) {
       for (const name of names) env[name] = "";
-      const exJson = JSON.stringify({ env }, null, 2) + "\n";
+    }
+
+    const exampleObj = settingsExample(env, hooksObj);
+    if (exampleObj) {
+      const exJson = JSON.stringify(exampleObj, null, 2) + "\n";
       out.push(await textFile(ctx, EXAMPLE_SETTINGS, exJson, t, "mcp/*"));
     }
     return out;

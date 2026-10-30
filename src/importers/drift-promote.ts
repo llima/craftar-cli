@@ -64,8 +64,9 @@ import { sectionKey } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
+import { registrationCitations } from "../core/mcp-server.js";
 import type { WriteJournal } from "../core/unify.js";
-import type { Ingredient, IngredientRef, Lock } from "../schema/index.js";
+import { stripForgeOnlyKeys, type Ingredient, type IngredientRef, type Lock } from "../schema/index.js";
 
 // The scratch copy lives in core, where `forge promote` shares it (spec 29, slice D); it stays exported from here.
 export { copyForgeForProof };
@@ -714,14 +715,13 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   }
   if (!emitted) throw new Error(`cannot read ${readType} ${outputName} from ${claudeDir}`);
 
-  // Source metadata: X's own, but re-read certain fields; drop params
-  const sourceMeta: Ingredient = {
+  // Source metadata: X's own, but re-read certain fields; strip Forge-only keys (params, authEnv, registration)
+  // so decide/shapeDiffers/renderedFingerprint compare apples to apples (spec 43 §7.2).
+  const sourceMeta: Ingredient = stripForgeOnlyKeys({
     ...X.meta,
     // A base with no frontmatterRaw may hold its `paths:` in its body (imported before rules kept it apart)
     ...emittedMetaFields(emitted.meta, readType, X.meta, meta.type === "rule" && meta.frontmatterRaw === undefined ? await readIngredientText(X, meta.file) : null, emitted.files["rule.md"]),
-  } as Ingredient;
-  // Remove params from source (sources carry none)
-  if ("params" in sourceMeta) delete (sourceMeta as Record<string, unknown>).params;
+  }) as Ingredient;
 
   // D9: Secret check
   const secret = secretIn(sourceMeta, emitted.files, emitted.scan);
@@ -963,8 +963,27 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       path: meta.type === "skill" && meta.layout === "dir" ? `.claude/skills/${N}/` : normalized,
     },
   } as Ingredient;
-  // Remove params from variant (they are flattened into the body)
-  if ("params" in variantMeta) delete (variantMeta as Record<string, unknown>).params;
+  // Remove params from variant (they are flattened into the body), but for hooks keep the entries the registration cites (spec 43 §7.2 row 10).
+  // Note: sourceMeta had params removed, so we check the BASE (X.meta) for registration-cited params.
+  if (meta.type === "hook" && X.meta.type === "hook" && X.meta.registration && X.meta.params) {
+    // Keep only the params entries the base's registration cites
+    const citedDeclared = registrationCitations(X.meta).filter((c) => c.declared).map((c) => c.key);
+    if (citedDeclared.length > 0) {
+      const declared = X.meta.params;
+      const keptParams: Record<string, { default?: string | number | boolean; description?: string }> = {};
+      for (const k of citedDeclared) {
+        if (Object.hasOwn(declared, k)) keptParams[k] = declared[k];
+      }
+      (variantMeta as Record<string, unknown>).params = keptParams;
+    }
+  } else if ("params" in variantMeta) {
+    // For non-hooks, remove params (they are flattened)
+    delete (variantMeta as Record<string, unknown>).params;
+  }
+  // Copy the base's registration to the variant (spec 43 §7.2 row 10)
+  if (meta.type === "hook" && X.meta.type === "hook" && X.meta.registration && !("registration" in variantMeta)) {
+    (variantMeta as Record<string, unknown>).registration = X.meta.registration;
+  }
 
   // Stage the variant files using typeFolder
   const folder = typeFolder(meta.type);

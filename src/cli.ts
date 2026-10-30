@@ -58,7 +58,6 @@ import { recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
 import { syncWorkspace, editRecipes, confirmWrites, DISCARDED_ORPHAN } from "./core/write-actions.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type UnifyPlan } from "./schema/index.js";
-import { EXAMPLE_SETTINGS } from "./emitters/shared.js";
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport as servicesStatusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
@@ -76,7 +75,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.37.1");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.38.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -1328,7 +1327,7 @@ program
 program
   .command("doctor")
   .description(
-    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, the profile's templates block and dotnet when it has one, lock, status, registration): one line per finding — ok, warn or error — each with its fix. Reports only; reads without the network unless --fetch",
+    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, the profile's templates block and dotnet when it has one, hooks-registered when the plan writes a registration, lock, status, registry entry): one line per finding — ok, warn or error — each with its fix. Reports only; reads without the network unless --fetch",
   )
   // No commander default: an explicit --workspace without craftar.yaml exits 1, the current directory without one runs the machine checks (spec 24 §4.1).
   .option("--workspace <dir>", "the workspace to check (default: the current directory, when it holds craftar.yaml)")

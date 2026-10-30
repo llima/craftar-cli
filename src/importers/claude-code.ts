@@ -5,7 +5,7 @@ import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST } from "../core/forge.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, hasUtf16Bom } from "../core/secrets.js";
-import { serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
+import { registrationCitations, serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
 import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
@@ -17,7 +17,7 @@ import { classifyForge, credentialFault } from "../core/remote.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
-import { decide, forgeBefore, pin, sourceKeys, workspaceParams, workspaceSections, workspaceTargets, type RunContext } from "./decide.js";
+import { decide, forgeBefore, pin, registrationCarry, sourceKeys, workspaceParams, workspaceSections, workspaceTargets, type RunContext } from "./decide.js";
 import { providedByBlock } from "./provided.js";
 import { renderMap } from "../core/template-import.js";
 import { firstMarkerLine } from "../core/sections.js";
@@ -1121,6 +1121,9 @@ async function writeIngredient(
   const sourceMeta = validateImported(meta);
   // The authEnv to carry into a variant — from the decision (spec 27 §5.3).
   let variantAuthEnv: string[] | undefined;
+  // The registration and cited params to carry into a hook variant — from the decision (spec 43 §7.2 row 10).
+  let variantRegistration: unknown[] | undefined;
+  let variantRegistrationParams: Record<string, { default?: string | number | boolean; description?: string }> | undefined;
   if (await stage.exists(path.join(dir, "ingredient.yaml"))) {
     let why: string | undefined;
     const d = run ? await decide(run.ctx, dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases) : { kind: "literal" as const, warn: "" };
@@ -1142,6 +1145,9 @@ async function writeIngredient(
       why = d.why;
       // Capture the base's authEnv for a new variant (spec 27 §5.3).
       variantAuthEnv = d.authEnv;
+      // Capture the base's registration and cited params for a new hook variant (spec 43 §7.2 row 10).
+      variantRegistration = d.registration;
+      variantRegistrationParams = d.registrationParams;
     }
     const as = meta.name;
     name = `${meta.name}--${profile}`;
@@ -1158,6 +1164,64 @@ async function writeIngredient(
         }
       } else if (variantAuthEnv) {
         meta = { ...meta, authEnv: variantAuthEnv } as Ingredient;
+      }
+    }
+    // Spec 43 §7.2 row 10: an existing hook variant's registration decides; a new one inherits the base's.
+    // Also carry params entries the registration cites: base's when base declares, else variant's own when variant declares.
+    if (meta.type === "hook") {
+      if (await stage.exists(variantFile)) {
+        const existingMeta = parseYaml(variantFile, await stage.readText(variantFile), IngredientSchema);
+        if (existingMeta.type === "hook" && existingMeta.registration) {
+          meta = { ...meta, registration: existingMeta.registration } as Ingredient;
+          // For params: for each key the variant's registration cites, take the base's entry when base declares it;
+          // otherwise take the existing variant's own entry when the variant declares it; otherwise nothing.
+          const baseDir = path.join(forge, "ingredients", folder, meta.name);
+          const baseFile = path.join(baseDir, "ingredient.yaml");
+          const baseMeta = (await stage.exists(baseFile)) ? parseYaml(baseFile, await stage.readText(baseFile), IngredientSchema) : null;
+          const baseParams = baseMeta?.type === "hook" ? baseMeta.params : undefined;
+          const variantParams = existingMeta.params;
+          // Merge base and variant params for citations: a key is "declared" if either side declares it.
+          // Use the type expected by registrationCitations (it only checks key existence).
+          type ParamDecl = { default?: string | number | boolean; description?: string };
+          const mergedParams: Record<string, ParamDecl> = { ...variantParams, ...baseParams };
+          const variantMetaForCitations = { ...existingMeta, params: mergedParams };
+          const citedDeclared = registrationCitations(variantMetaForCitations).filter((c) => c.declared).map((c) => c.key);
+          if (citedDeclared.length > 0) {
+            const keptParams: Record<string, { default?: string | number | boolean; description?: string }> = {};
+            for (const k of citedDeclared) {
+              // Prefer base's entry; fall back to variant's own entry
+              if (baseParams && Object.hasOwn(baseParams, k)) keptParams[k] = baseParams[k];
+              else if (variantParams && Object.hasOwn(variantParams, k)) keptParams[k] = variantParams[k];
+            }
+            if (Object.keys(keptParams).length > 0) {
+              meta = { ...meta, params: keptParams } as Ingredient;
+            }
+          }
+        }
+      } else {
+        // NEW hook variant: inherit registration from base.
+        // variantRegistration/variantRegistrationParams come from decide()'s "variant" answer;
+        // when undefined (literal path), read the base's ingredient.yaml and call registrationCarry().
+        let regToApply = variantRegistration;
+        let paramsToApply = variantRegistrationParams;
+        if (regToApply === undefined) {
+          // Literal path: decide() answered "literal", so we didn't get registration from it.
+          // Read the base's ingredient.yaml and compute registration carry (spec 43 §7.2 row 10).
+          const baseDir = path.join(forge, "ingredients", folder, meta.name);
+          const baseFile = path.join(baseDir, "ingredient.yaml");
+          if (await stage.exists(baseFile)) {
+            const baseMeta = parseYaml(baseFile, await stage.readText(baseFile), IngredientSchema);
+            const carry = registrationCarry(baseMeta);
+            regToApply = carry.registration;
+            paramsToApply = carry.registrationParams;
+          }
+        }
+        if (regToApply) {
+          meta = { ...meta, registration: regToApply } as Ingredient;
+        }
+        if (paramsToApply) {
+          meta = { ...meta, params: paramsToApply } as Ingredient;
+        }
       }
     }
     meta = { ...meta, name, as } as Ingredient;
@@ -1180,11 +1244,19 @@ async function writeIngredient(
   }
 
   // Build the YAML preserving key order. For MCP, authEnv sits immediately before server.
+  // For hooks, registration sits after files (spec 43 §7.2 row 10).
   const yamlMeta: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(meta)) {
     if (k === "authEnv") continue;
+    if (k === "registration") continue;
     // authEnv is emitted with server because only an mcp metadata can hold it (the schema refuses it elsewhere).
     if (k === "server" && "authEnv" in meta) yamlMeta.authEnv = meta.authEnv;
+    // registration is emitted after files for hooks (spec 43 §7.2 row 10).
+    if (k === "files" && meta.type === "hook" && "registration" in meta) {
+      yamlMeta[k] = v;
+      yamlMeta.registration = meta.registration;
+      continue;
+    }
     yamlMeta[k] = v;
   }
   stage.write(path.join(dir, "ingredient.yaml"), YAML.stringify(yamlMeta, { lineWidth: 0 }));

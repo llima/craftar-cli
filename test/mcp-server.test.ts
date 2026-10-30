@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { credentialIn, credentialMessage, entropyMessage, holdsBaseCitations, rendersServers, renderServer, serverCitations, serverSecret, undeclaredMessage, type SubstitutedLeaf } from "../src/core/mcp-server.js";
+import { credentialIn, credentialMessage, entropyMessage, holdsBaseCitations, registrationCitations, rendersServers, renderServer, serverCitations, serverSecret, undeclaredMessage, type SubstitutedLeaf } from "../src/core/mcp-server.js";
 import { IngredientSchema, type Ingredient } from "../src/schema/index.js";
 
 // Spec 34 §9 — the one place a server is rendered or scanned for placeholders.
@@ -271,5 +271,145 @@ describe("serverSecret — import's scan of a server it read", () => {
     expect(serverSecret("idp", { args: ["-y", HIGH] })).toBe("secret-like value (high-entropy-value) in .mcp.json → mcpServers.idp.args[1]");
     expect(serverSecret("idp", { headers: { "X-Id": HIGH }, url: `https://idp.example.com/${HIGH}` })).toBeNull();
     expect(serverSecret("idp", { headers: { Authorization: `Bearer ${GHP}` } })).toBe("secret-like value (github-token) in .mcp.json → mcpServers.idp.headers.Authorization");
+  });
+});
+
+
+// Spec 43 §7.2 — lifted functions for reuse by hook registration.
+
+describe("renderLeaves / citationsIn (spec 43)", () => {
+  describe("renderLeaves", () => {
+    it("substitutes declared and valued keys, reports substituted leaves with path and under, returns nothing missing or undeclared", async () => {
+      const { renderLeaves } = await import("../src/core/mcp-server.js");
+      const input = { command: "{{py}}", args: ["${CLAUDE_PROJECT_DIR}/x.py", "{{py}} -u"], matcher: "Bash" };
+      const declared = { py: {} };
+      const params = P({ py: "python3" });
+      const result = renderLeaves(input, declared, params, "hook/guard-path");
+
+      expect(result.value).toEqual({ command: "python3", args: ["${CLAUDE_PROJECT_DIR}/x.py", "python3 -u"], matcher: "Bash" });
+      expect(result.substituted).toEqual([
+        { path: "command", under: "command", value: "python3" },
+        { path: "args[1]", under: "args", value: "python3 -u" },
+      ]);
+      expect(result.missing).toEqual([]);
+      expect(result.undeclared).toEqual([]);
+    });
+
+    it("a declared key with no value is left and added to missing; value is the same object", async () => {
+      const { renderLeaves } = await import("../src/core/mcp-server.js");
+      const input = { command: "{{py}}", args: ["${CLAUDE_PROJECT_DIR}/x.py", "{{py}} -u"], matcher: "Bash" };
+      const declared = { py: {} };
+      const params = P({});
+      const result = renderLeaves(input, declared, params, "hook/guard-path");
+
+      expect(result.value).toBe(input);
+      expect(result.missing).toEqual(["py"]);
+    });
+
+    it("an undeclared key with a value is left and added to undeclared; value is the same object", async () => {
+      const { renderLeaves } = await import("../src/core/mcp-server.js");
+      const input = { command: "{{py}}", args: ["${CLAUDE_PROJECT_DIR}/x.py", "{{py}} -u"], matcher: "Bash" };
+      const declared = {};
+      const params = P({ py: "python3" });
+      const result = renderLeaves(input, declared, params, "hook/guard-path");
+
+      expect(result.value).toBe(input);
+      expect(result.undeclared).toEqual(["py"]);
+    });
+
+    it("a cyclic object throws, naming the ref", async () => {
+      const { renderLeaves } = await import("../src/core/mcp-server.js");
+      const input: Record<string, unknown> = { command: "x" };
+      input.self = input;
+      const declared = {};
+      const params = P({});
+
+      expect(() => renderLeaves(input, declared, params, "hook/guard-path")).toThrow(
+        new Error("hook/guard-path: ingredient metadata is cyclic (a YAML alias refers back to itself)"),
+      );
+    });
+  });
+
+  describe("citationsIn", () => {
+    it("returns each key once, with declared flag, in order", async () => {
+      const { citationsIn } = await import("../src/core/mcp-server.js");
+      const input = { command: "{{a}}", args: ["{{b}}", "{{a}}"] };
+      const declared = { a: {} };
+      const result = citationsIn(input, declared, "hook/guard-path");
+
+      expect(result).toEqual([
+        { key: "a", declared: true },
+        { key: "b", declared: false },
+      ]);
+    });
+  });
+
+  describe("registrationCitations", () => {
+    it("returns each key once, with declared flag, in registration order — two entries citing a and b, a declared", () => {
+      const hook: Ingredient = IngredientSchema.parse({
+        type: "hook",
+        name: "guard",
+        files: ["guard.py"],
+        params: { a: {} },
+        registration: [
+          { event: "PreToolUse", command: "{{a}}", args: [] },
+          { event: "PostToolUse", command: "{{b}}", args: ["{{a}}"] },
+        ],
+      });
+      expect(registrationCitations(hook)).toEqual([
+        { key: "a", declared: true },
+        { key: "b", declared: false },
+      ]);
+    });
+
+    it("returns [] for a script (no registration)", () => {
+      const script: Ingredient = IngredientSchema.parse({
+        type: "script",
+        name: "lint",
+        files: ["lint.sh"],
+        params: { a: {} },
+      });
+      expect(registrationCitations(script)).toEqual([]);
+    });
+
+    it("returns [] for a hook with no registration", () => {
+      const hook: Ingredient = IngredientSchema.parse({
+        type: "hook",
+        name: "guard",
+        files: ["guard.py"],
+        params: { a: {} },
+      });
+      expect(registrationCitations(hook)).toEqual([]);
+    });
+  });
+
+  describe("message parameters", () => {
+    it("credentialMessage with custom prefix and remedy for a known token", () => {
+      const result = credentialMessage("hook/guard-path", { path: "args[1]", kind: "github-token" }, { prefix: "registration[0].", remedy: "have the hook read it from the environment" });
+      expect(result).toBe(
+        "hook/guard-path: the value rendered into registration[0].args[1] looks like a credential (github-token) — a generated file is committed, so a secret cannot come from a param; have the hook read it from the environment",
+      );
+    });
+
+    it("credentialMessage with custom prefix and remedy for url-credentials", () => {
+      const result = credentialMessage("hook/guard-path", { path: "args[1]", kind: "url-credentials" }, { prefix: "registration[0].", remedy: "have the hook read it from the environment" });
+      expect(result).toBe(
+        "hook/guard-path: the value rendered into registration[0].args[1] holds a URL with credentials (url-credentials) — a generated file is committed, so a secret cannot come from a param; have the hook read it from the environment",
+      );
+    });
+
+    it("entropyMessage with custom prefix and remedy", () => {
+      const result = entropyMessage("hook/guard-path", { path: "args[0]", kind: "high-entropy-value" }, { prefix: "registration[0].", remedy: "have the hook read it from the environment" });
+      expect(result).toBe(
+        "hook/guard-path: the value rendered into registration[0].args[0] may be a secret (high-entropy-value) — a generated file is committed; if it is one, have the hook read it from the environment",
+      );
+    });
+
+    it("undeclaredMessage with custom subject", () => {
+      const result = undeclaredMessage("hook/guard-path", "x", "registration");
+      expect(result).toBe(
+        "hook/guard-path: registration cites {{x}}, which has a value but is not declared in the ingredient's params — left verbatim",
+      );
+    });
   });
 });

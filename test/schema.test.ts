@@ -500,7 +500,7 @@ describe("authEnv (spec 27)", () => {
   it("11. ENV_NAME and FORGE_ONLY_KEYS are exported with correct values", async () => {
     const { ENV_NAME, FORGE_ONLY_KEYS } = await import("../src/schema/index.js");
     expect(ENV_NAME).toBe("[A-Za-z_][A-Za-z0-9_]*");
-    expect(FORGE_ONLY_KEYS).toEqual(["params", "authEnv"]);
+    expect(FORGE_ONLY_KEYS).toEqual(["params", "authEnv", "registration"]);
   });
 
   it("12. authEnv token refusal at Forge load includes path, index, and kind; never the item", async () => {
@@ -781,5 +781,172 @@ describe("service ingredient (spec 31)", () => {
     expect(r.success).toBe(false);
     if (r.success) return;
     expect(r.error.issues[0].message).toBe("files[1] repeats files[0]");
+  });
+});
+
+
+describe("hook registration (spec 43)", () => {
+  const base = { type: "hook", name: "guard-path", files: ["guard-path.py"] } as const;
+
+  it("1. accepts a full valid registration and the parsed value holds registration equal to input", () => {
+    const registration = [
+      { event: "PreToolUse", matcher: "Bash|PowerShell", command: "{{hooks.python}}", args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py"], timeout: 10 },
+    ];
+    const r = IngredientSchema.safeParse({ ...base, registration });
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data.registration).toEqual(registration);
+  });
+
+  it("2. accepts shell form registration", () => {
+    const registration = [{ event: "Stop", command: "npx eslint --fix", shell: "bash" }];
+    const r = IngredientSchema.safeParse({ ...base, registration });
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data.registration).toEqual(registration);
+  });
+
+  it("3. refuses event: preToolUse (lowercase) and event of 65 letters", () => {
+    const r1 = IngredientSchema.safeParse({ ...base, registration: [{ event: "preToolUse", command: "x" }] });
+    expect(r1.success).toBe(false);
+    if (!r1.success) expect(r1.error.issues[0].path).toContain("event");
+
+    const longEvent = "A" + "a".repeat(64);
+    const r2 = IngredientSchema.safeParse({ ...base, registration: [{ event: longEvent, command: "x" }] });
+    expect(r2.success).toBe(false);
+    if (!r2.success) expect(r2.error.issues[0].path).toContain("event");
+  });
+
+  it("4. refuses command: '' and command of 1025 characters", () => {
+    const r1 = IngredientSchema.safeParse({ ...base, registration: [{ event: "Stop", command: "" }] });
+    expect(r1.success).toBe(false);
+    if (!r1.success) expect(r1.error.issues[0].path).toContain("command");
+
+    const longCommand = "x".repeat(1025);
+    const r2 = IngredientSchema.safeParse({ ...base, registration: [{ event: "Stop", command: longCommand }] });
+    expect(r2.success).toBe(false);
+    if (!r2.success) expect(r2.error.issues[0].path).toContain("command");
+  });
+
+  it("5. refuses args + shell together with message 'shell applies to the shell form only; drop it or drop args'", () => {
+    const r = IngredientSchema.safeParse({ ...base, registration: [{ event: "Stop", command: "x", args: ["y"], shell: "bash" }] });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0].message).toBe("shell applies to the shell form only; drop it or drop args");
+  });
+
+  it("6. refuses unknown key foo: 1 as unrecognized_keys with keys ['foo']", () => {
+    const r = IngredientSchema.safeParse({ ...base, registration: [{ event: "Stop", command: "x", foo: 1 }] });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues).toEqual([expect.objectContaining({ code: "unrecognized_keys", keys: ["foo"] })]);
+    }
+  });
+
+  it("7. refuses timeout: 0, timeout: 3601, timeout: 1.5", () => {
+    for (const timeout of [0, 3601, 1.5]) {
+      const r = IngredientSchema.safeParse({ ...base, registration: [{ event: "Stop", command: "x", timeout }] });
+      expect(r.success, `timeout ${timeout}`).toBe(false);
+      if (!r.success) expect(r.error.issues[0].path, `timeout ${timeout}`).toContain("timeout");
+    }
+  });
+
+  it("8. refuses registration: []", () => {
+    const r = IngredientSchema.safeParse({ ...base, registration: [] });
+    expect(r.success).toBe(false);
+  });
+
+  it("9. refuses 65 args, arg of 1025 characters, matcher: '' and matcher of 513 characters", () => {
+    const r1 = IngredientSchema.safeParse({ ...base, registration: [{ event: "Stop", command: "x", args: Array(65).fill("a") }] });
+    expect(r1.success).toBe(false);
+    if (!r1.success) expect(r1.error.issues[0].path).toContain("args");
+
+    const r2 = IngredientSchema.safeParse({ ...base, registration: [{ event: "Stop", command: "x", args: ["x".repeat(1025)] }] });
+    expect(r2.success).toBe(false);
+    if (!r2.success) expect(JSON.stringify(r2.error.issues[0].path)).toContain("args");
+
+    const r3 = IngredientSchema.safeParse({ ...base, registration: [{ event: "Stop", command: "x", matcher: "" }] });
+    expect(r3.success).toBe(false);
+    if (!r3.success) expect(r3.error.issues[0].path).toContain("matcher");
+
+    const r4 = IngredientSchema.safeParse({ ...base, registration: [{ event: "Stop", command: "x", matcher: "x".repeat(513) }] });
+    expect(r4.success).toBe(false);
+    if (!r4.success) expect(r4.error.issues[0].path).toContain("matcher");
+  });
+
+  it("10. refuses shell: 'zsh'", () => {
+    const r = IngredientSchema.safeParse({ ...base, registration: [{ event: "Stop", command: "x", shell: "zsh" }] });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0].path).toContain("shell");
+  });
+
+  it("11. __proto__ key inside registration entry fails as unrecognized_keys naming __proto__", () => {
+    const entry = JSON.parse('{"event":"Stop","command":"x","__proto__":{"a":1}}');
+    const r = IngredientSchema.safeParse({ ...base, registration: [entry] });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues).toEqual([expect.objectContaining({ code: "unrecognized_keys", keys: ["__proto__"] })]);
+    }
+  });
+
+  it("12. literal secret in args fails; path ends with registration, index, args, index; message never holds token", () => {
+    const tok = "ghp_" + "x".repeat(36);
+
+    // Secret in args[1]
+    const r1 = IngredientSchema.safeParse({ ...base, registration: [{ event: "Stop", command: "x", args: ["a", tok] }] });
+    expect(r1.success).toBe(false);
+    if (!r1.success) {
+      const issue = r1.error.issues.find((i) => JSON.stringify(i.path).includes("args"));
+      expect(issue).toBeDefined();
+      expect(issue!.path).toEqual(["registration", 0, "args", 1]);
+      expect(issue!.message).toContain("looks like a token (github-token)");
+      expect(r1.error.issues.some((i) => i.message.includes(tok))).toBe(false);
+      expect(JSON.stringify(r1.error.issues).includes(tok)).toBe(false);
+    }
+
+    // Secret in command
+    const r2 = IngredientSchema.safeParse({ ...base, registration: [{ event: "Stop", command: tok }] });
+    expect(r2.success).toBe(false);
+    if (!r2.success) {
+      const issue = r2.error.issues.find((i) => JSON.stringify(i.path).includes("command"));
+      expect(issue).toBeDefined();
+      expect(issue!.path).toEqual(["registration", 0, "command"]);
+      expect(issue!.message).toContain("looks like a token (github-token)");
+      expect(JSON.stringify(r2.error.issues).includes(tok)).toBe(false);
+    }
+
+    // Secret in matcher
+    const r3 = IngredientSchema.safeParse({ ...base, registration: [{ event: "Stop", command: "x", matcher: tok }] });
+    expect(r3.success).toBe(false);
+    if (!r3.success) {
+      const issue = r3.error.issues.find((i) => JSON.stringify(i.path).includes("matcher"));
+      expect(issue).toBeDefined();
+      expect(issue!.path).toEqual(["registration", 0, "matcher"]);
+      expect(issue!.message).toContain("looks like a token (github-token)");
+      expect(JSON.stringify(r3.error.issues).includes(tok)).toBe(false);
+    }
+  });
+
+  it("13. registration on a script ingredient is refused (strict schema, unrecognized key)", () => {
+    const r = IngredientSchema.safeParse({ type: "script", name: "s", files: ["s.sh"], registration: [{ event: "Stop", command: "x" }] });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues).toEqual([expect.objectContaining({ code: "unrecognized_keys", keys: ["registration"] })]);
+    }
+  });
+
+  it("14. FORGE_ONLY_KEYS equals ['params', 'authEnv', 'registration'] and stripForgeOnlyKeys drops registration", async () => {
+    const { FORGE_ONLY_KEYS, stripForgeOnlyKeys } = await import("../src/schema/index.js");
+    expect(FORGE_ONLY_KEYS).toEqual(["params", "authEnv", "registration"]);
+
+    const meta = {
+      type: "hook",
+      name: "guard-path",
+      files: ["guard-path.py"],
+      registration: [{ event: "Stop", command: "x" }],
+    };
+    const stripped = stripForgeOnlyKeys(meta);
+    expect(stripped).not.toHaveProperty("registration");
+    expect(stripped).toHaveProperty("type", "hook");
+    expect(stripped).toHaveProperty("name", "guard-path");
   });
 });

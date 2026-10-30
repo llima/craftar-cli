@@ -50,8 +50,8 @@ export type IngredientType = (typeof INGREDIENT_TYPES)[number];
 /** The environment variable name pattern (spec 27 §5.1). Exported so doctor's NAME_REF can be built from it. */
 export const ENV_NAME = "[A-Za-z_][A-Za-z0-9_]*";
 
-/** Keys that exist in the Forge only and are stripped by import comparisons (spec 27 §5.2). */
-export const FORGE_ONLY_KEYS = ["params", "authEnv"] as const;
+/** Keys that exist in the Forge only and are stripped by import comparisons (spec 27 §5.2, spec 43 §7.2). */
+export const FORGE_ONLY_KEYS = ["params", "authEnv", "registration"] as const;
 
 /** Return a shallow copy of `meta` with FORGE_ONLY_KEYS removed (spec 27 §5.3). */
 export function stripForgeOnlyKeys(meta: Record<string, unknown>): Record<string, unknown> {
@@ -247,9 +247,54 @@ export const SteeringIngredient = IngredientBase.extend({
   targets: z.array(TargetSchema).or(z.literal("*")).default(["kiro"]),
 });
 
+/**
+ * A hook registration entry: when Claude Code runs the hook (spec 43 §4.2).
+ * The schema is strict: unknown keys fail the Forge load.
+ */
+const HookRegistration = z
+  .object({
+    /** Event name: starts with uppercase, then letters only, max 64 chars. */
+    event: z.string().regex(/^[A-Z][A-Za-z]*$/, "event is a name starting with uppercase").max(64),
+    /** Matcher pattern (optional). Non-empty, max 512 chars. */
+    matcher: z.string().min(1).max(512).optional(),
+    /** Command to run. Non-empty, max 1024 chars. */
+    command: z.string().min(1).max(1024),
+    /** Arguments for exec form (optional). Max 64 items, each max 1024 chars. */
+    args: z.array(z.string().max(1024)).max(64).optional(),
+    /** Timeout in seconds (optional). Integer 1-3600. */
+    timeout: z.number().int().min(1).max(3600).optional(),
+    /** Shell form (optional): bash or powershell. Refused with args. */
+    shell: z.enum(["bash", "powershell"]).optional(),
+  })
+  .strict()
+  .refine((r) => !(r.args && r.shell), "shell applies to the shell form only; drop it or drop args")
+  .superRefine((r, ctx) => {
+    // Scan matcher, command and each args[i] for literal secrets
+    const scan = (value: string | undefined, path: (string | number)[]) => {
+      if (!value) return;
+      const finding = findSecrets(value)[0];
+      if (finding) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path,
+          message: `looks like a token (${finding.kind}) — a registration holds no secret; have the hook read it from the environment`,
+        });
+      }
+    };
+    scan(r.matcher, ["matcher"]);
+    scan(r.command, ["command"]);
+    if (r.args) {
+      for (let i = 0; i < r.args.length; i++) {
+        scan(r.args[i], ["args", i]);
+      }
+    }
+  });
+
 export const HookIngredient = IngredientBase.extend({
   type: z.literal("hook"),
   files: z.array(EmittedFile).min(1),
+  /** Registration entries (optional, spec 43 §4.2). At least one when present. */
+  registration: z.array(HookRegistration).min(1).optional(),
 });
 
 /**
