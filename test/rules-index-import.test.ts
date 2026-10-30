@@ -1160,3 +1160,549 @@ describe("Review round 3 item 3: described index rule creates variant with froze
     expect(frozenWarning).toContain("{{craftar.rules.index}}");
   });
 });
+
+
+describe("Review round 4: variant comparison moved to writeIngredient", () => {
+  /**
+   * r4fm.sh fm: variant rule/readme--acme (fileMatch, frontmatterRaw paths: src/**, placeholder in body);
+   * sync; change paths: to lib/** in .claude/rules/readme.md; import → exit 1 with refusal, Forge byte-identical.
+   */
+  it("4a. variant with fileMatch and placeholder — frontmatter differs → refused, Forge untouched", async () => {
+    const root = await tmpDir("craftar-r4-fm-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+
+    await writeFiles(forgeRoot, {
+      "craftar.forge.yaml": YAML.stringify({ name: "f", schema: 7 }),
+      "ingredients/rules/style/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "style",
+        description: "D style",
+      }),
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme",
+        description: "D readme",
+      }),
+      "ingredients/rules/readme/rule.md": "# Rules\nbase\n",
+      "ingredients/rules/readme--acme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme--acme",
+        as: "readme",
+        description: "D",
+        inclusion: "fileMatch",
+        fileMatchPattern: ["src/**"],
+        frontmatterRaw: "paths:\n  - src/**\n",
+      }),
+      "ingredients/rules/readme--acme/rule.md": "# Rules\n\n{{craftar.rules.index}}\n",
+      "recipes/acme-rules.yaml": YAML.stringify({
+        name: "acme-rules",
+        ingredients: ["rule/style", "rule/readme--acme"],
+      }),
+      "profiles/acme/profile.yaml": YAML.stringify({
+        name: "acme",
+        recipes: ["acme-rules"],
+        targets: ["claude-code"],
+      }),
+    });
+
+    await writeFiles(wsRoot, {
+      "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+    });
+
+    // Sync
+    const ws = await loadWorkspace(wsRoot);
+    const p = await plan(ws);
+    const lock = await readLock(wsRoot);
+    const st = await status(ws, p, lock);
+    await apply(ws, p, st);
+
+    // Change frontmatter: paths: src/** → lib/**
+    const readmePath = path.join(wsRoot, ".claude/rules/readme.md");
+    let content = await fs.readFile(readmePath, "utf8");
+    content = content.replace(/  - src\/\*\*/g, "  - lib/**");
+    await fs.writeFile(readmePath, content);
+
+    const before = await hashForge(forgeRoot);
+
+    // Import should REFUSE
+    const result = await importClaudeCode({
+      workspaceRoot: wsRoot,
+      forgeRoot,
+      profileName: "acme",
+    }).catch((e: Error) => e);
+
+    expect(result).toBeInstanceOf(Error);
+    const msg = (result as Error).message;
+    expect(msg).toContain("rule/readme--acme");
+    expect(msg).toContain("{{craftar.rules.index}}");
+    expect(msg).toContain(".claude/rules/readme.md");
+    expect(msg).toContain("differs");
+
+    // Forge byte-identical
+    const after = await hashForge(forgeRoot);
+    expect(after).toEqual(before);
+  });
+
+  /**
+   * r4.sh param: variant body `# Rules of {{project}}\n\n{{craftar.rules.index}}\n`, project set by profile;
+   * sync; import → exit 0, variant files byte-identical, report.variants lists it.
+   */
+  it("4b. variant with param and placeholder — unchanged → reused, files byte-identical", async () => {
+    const root = await tmpDir("craftar-r4-param-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+
+    await writeFiles(forgeRoot, {
+      "craftar.forge.yaml": YAML.stringify({ name: "f", schema: 7 }),
+      "ingredients/rules/style/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "style",
+        description: "D style",
+      }),
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme",
+        description: "D readme",
+      }),
+      "ingredients/rules/readme/rule.md": "# Rules\nbase\n",
+      "ingredients/rules/readme--acme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme--acme",
+        as: "readme",
+        description: "D",
+        params: { project: { default: "acme-portal" } },
+      }),
+      "ingredients/rules/readme--acme/rule.md": "# Rules of {{project}}\n\n{{craftar.rules.index}}\n",
+      "recipes/acme-rules.yaml": YAML.stringify({
+        name: "acme-rules",
+        ingredients: ["rule/style", "rule/readme--acme"],
+      }),
+      "profiles/acme/profile.yaml": YAML.stringify({
+        name: "acme",
+        recipes: ["acme-rules"],
+        targets: ["claude-code"],
+      }),
+    });
+
+    await writeFiles(wsRoot, {
+      "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+    });
+
+    // Sync
+    const ws = await loadWorkspace(wsRoot);
+    const p = await plan(ws);
+    const lock = await readLock(wsRoot);
+    const st = await status(ws, p, lock);
+    await apply(ws, p, st);
+
+    // Capture before
+    const variantBodyBefore = await fs.readFile(
+      path.join(forgeRoot, "ingredients/rules/readme--acme/rule.md"),
+      "utf8"
+    );
+    const variantMetaBefore = await fs.readFile(
+      path.join(forgeRoot, "ingredients/rules/readme--acme/ingredient.yaml"),
+      "utf8"
+    );
+
+    // Import back
+    const result = await importClaudeCode({
+      workspaceRoot: wsRoot,
+      forgeRoot,
+      profileName: "acme",
+    });
+
+    // Should be in report.variants (not reused the normal way, but handled specially)
+    expect(result.variants.map((v) => v.name)).toContain("rule/readme--acme");
+
+    // Variant files byte-identical
+    const variantBodyAfter = await fs.readFile(
+      path.join(forgeRoot, "ingredients/rules/readme--acme/rule.md"),
+      "utf8"
+    );
+    const variantMetaAfter = await fs.readFile(
+      path.join(forgeRoot, "ingredients/rules/readme--acme/ingredient.yaml"),
+      "utf8"
+    );
+    expect(variantBodyAfter).toBe(variantBodyBefore);
+    expect(variantMetaAfter).toBe(variantMetaBefore);
+  });
+
+  /**
+   * r4.sh dotfile: variant declares file: ./rule.md → exit 0 (no crash), files byte-identical.
+   */
+  it("4c. variant with file: ./rule.md and placeholder → exit 0, files byte-identical", async () => {
+    const root = await tmpDir("craftar-r4-dotfile-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+
+    await writeFiles(forgeRoot, {
+      "craftar.forge.yaml": YAML.stringify({ name: "f", schema: 7 }),
+      "ingredients/rules/style/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "style",
+        description: "D style",
+      }),
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme",
+        description: "D readme",
+      }),
+      "ingredients/rules/readme/rule.md": "# Rules\nbase\n",
+      "ingredients/rules/readme--acme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme--acme",
+        as: "readme",
+        description: "D",
+        file: "./rule.md",
+      }),
+      "ingredients/rules/readme--acme/rule.md": "# Rules\n\n{{craftar.rules.index}}\n",
+      "recipes/acme-rules.yaml": YAML.stringify({
+        name: "acme-rules",
+        ingredients: ["rule/style", "rule/readme--acme"],
+      }),
+      "profiles/acme/profile.yaml": YAML.stringify({
+        name: "acme",
+        recipes: ["acme-rules"],
+        targets: ["claude-code"],
+      }),
+    });
+
+    await writeFiles(wsRoot, {
+      "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+    });
+
+    // Sync
+    const ws = await loadWorkspace(wsRoot);
+    const p = await plan(ws);
+    const lock = await readLock(wsRoot);
+    const st = await status(ws, p, lock);
+    await apply(ws, p, st);
+
+    // Capture before
+    const variantBodyBefore = await fs.readFile(
+      path.join(forgeRoot, "ingredients/rules/readme--acme/rule.md"),
+      "utf8"
+    );
+
+    // Import back — should not crash
+    const result = await importClaudeCode({
+      workspaceRoot: wsRoot,
+      forgeRoot,
+      profileName: "acme",
+    });
+
+    // exit 0 (no error)
+    expect(result.profile).toBe("acme");
+
+    // Variant files byte-identical
+    const variantBodyAfter = await fs.readFile(
+      path.join(forgeRoot, "ingredients/rules/readme--acme/rule.md"),
+      "utf8"
+    );
+    expect(variantBodyAfter).toBe(variantBodyBefore);
+  });
+
+  /**
+   * r4.sh other: variant declares file: body.md → exit 0 (no crash), files byte-identical.
+   */
+  it("4d. variant with file: body.md and placeholder → exit 0, files byte-identical", async () => {
+    const root = await tmpDir("craftar-r4-other-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+
+    await writeFiles(forgeRoot, {
+      "craftar.forge.yaml": YAML.stringify({ name: "f", schema: 7 }),
+      "ingredients/rules/style/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "style",
+        description: "D style",
+      }),
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme",
+        description: "D readme",
+      }),
+      "ingredients/rules/readme/rule.md": "# Rules\nbase\n",
+      "ingredients/rules/readme--acme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme--acme",
+        as: "readme",
+        description: "D",
+        file: "body.md",
+      }),
+      "ingredients/rules/readme--acme/body.md": "# Rules\n\n{{craftar.rules.index}}\n",
+      "recipes/acme-rules.yaml": YAML.stringify({
+        name: "acme-rules",
+        ingredients: ["rule/style", "rule/readme--acme"],
+      }),
+      "profiles/acme/profile.yaml": YAML.stringify({
+        name: "acme",
+        recipes: ["acme-rules"],
+        targets: ["claude-code"],
+      }),
+    });
+
+    await writeFiles(wsRoot, {
+      "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+    });
+
+    // Sync
+    const ws = await loadWorkspace(wsRoot);
+    const p = await plan(ws);
+    const lock = await readLock(wsRoot);
+    const st = await status(ws, p, lock);
+    await apply(ws, p, st);
+
+    // Capture before
+    const variantBodyBefore = await fs.readFile(
+      path.join(forgeRoot, "ingredients/rules/readme--acme/body.md"),
+      "utf8"
+    );
+
+    // Import back — should not crash
+    const result = await importClaudeCode({
+      workspaceRoot: wsRoot,
+      forgeRoot,
+      profileName: "acme",
+    });
+
+    // exit 0 (no error)
+    expect(result.profile).toBe("acme");
+
+    // Variant files byte-identical
+    const variantBodyAfter = await fs.readFile(
+      path.join(forgeRoot, "ingredients/rules/readme--acme/body.md"),
+      "utf8"
+    );
+    expect(variantBodyAfter).toBe(variantBodyBefore);
+  });
+
+  /**
+   * r4b.sh plain: after import, rule/readme--acme is listed in recipes/base--acme.yaml, not in recipes/base.yaml.
+   */
+  it("4e. variant listed in base--acme, not in base", async () => {
+    const root = await tmpDir("craftar-r4-plain-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+
+    await writeFiles(forgeRoot, {
+      "craftar.forge.yaml": YAML.stringify({ name: "f", schema: 7 }),
+      "ingredients/rules/style/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "style",
+      }),
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme",
+        description: "D readme",
+      }),
+      "ingredients/rules/readme/rule.md": "# Rules\nbase\n",
+      "ingredients/rules/readme--acme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme--acme",
+        as: "readme",
+      }),
+      "ingredients/rules/readme--acme/rule.md": "# Rules\n\n{{craftar.rules.index}}\n",
+      "recipes/acme-rules.yaml": YAML.stringify({
+        name: "acme-rules",
+        ingredients: ["rule/style", "rule/readme--acme"],
+      }),
+      "profiles/acme/profile.yaml": YAML.stringify({
+        name: "acme",
+        recipes: ["acme-rules"],
+        targets: ["claude-code"],
+      }),
+    });
+
+    await writeFiles(wsRoot, {
+      "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+    });
+
+    // Sync
+    const ws = await loadWorkspace(wsRoot);
+    const p = await plan(ws);
+    const lock = await readLock(wsRoot);
+    const st = await status(ws, p, lock);
+    await apply(ws, p, st);
+
+    // Import back
+    const result = await importClaudeCode({
+      workspaceRoot: wsRoot,
+      forgeRoot,
+      profileName: "acme",
+    });
+
+    expect(result.profile).toBe("acme");
+
+    // Check recipes: acme-rules should have the variant, not a base recipe
+    const acmeRules = YAML.parse(
+      await fs.readFile(path.join(forgeRoot, "recipes/acme-rules.yaml"), "utf8")
+    );
+    expect(acmeRules.ingredients).toContain("rule/readme--acme");
+
+    // And if base.yaml exists, it should not have the variant
+    const recipesDir = await fs.readdir(path.join(forgeRoot, "recipes"));
+    if (recipesDir.includes("base.yaml")) {
+      const base = YAML.parse(
+        await fs.readFile(path.join(forgeRoot, "recipes/base.yaml"), "utf8")
+      );
+      expect(base.ingredients).not.toContain("rule/readme--acme");
+    }
+  });
+
+  /**
+   * A variant holding the placeholder whose workspace body equals its list but whose frontmatter differs → refused.
+   */
+  it("4f. variant with placeholder — body matches, frontmatter differs → refused", async () => {
+    const root = await tmpDir("craftar-r4-fm-diff-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+
+    await writeFiles(forgeRoot, {
+      "craftar.forge.yaml": YAML.stringify({ name: "f", schema: 7 }),
+      "ingredients/rules/style/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "style",
+        description: "D style",
+      }),
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme",
+        description: "D readme",
+      }),
+      "ingredients/rules/readme/rule.md": "# Rules\nbase\n",
+      "ingredients/rules/readme--acme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme--acme",
+        as: "readme",
+        description: "Different desc from variant",  // will differ when import reads from workspace
+        inclusion: "fileMatch",
+        fileMatchPattern: ["src/**"],
+        frontmatterRaw: "paths:\n  - src/**\n",
+      }),
+      "ingredients/rules/readme--acme/rule.md": "# Rules\n\n{{craftar.rules.index}}\n",
+      "recipes/acme-rules.yaml": YAML.stringify({
+        name: "acme-rules",
+        ingredients: ["rule/style", "rule/readme--acme"],
+      }),
+      "profiles/acme/profile.yaml": YAML.stringify({
+        name: "acme",
+        recipes: ["acme-rules"],
+        targets: ["claude-code"],
+      }),
+    });
+
+    await writeFiles(wsRoot, {
+      "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+    });
+
+    // Sync
+    const ws = await loadWorkspace(wsRoot);
+    const p = await plan(ws);
+    const lock = await readLock(wsRoot);
+    const st = await status(ws, p, lock);
+    await apply(ws, p, st);
+
+    // Now, modify the frontmatter in the workspace while keeping body (rules list) the same
+    const readmePath = path.join(wsRoot, ".claude/rules/readme.md");
+    let content = await fs.readFile(readmePath, "utf8");
+    // Change paths pattern — the body is still the same, but frontmatter differs
+    content = content.replace(/  - src\/\*\*/g, "  - lib/**");
+    await fs.writeFile(readmePath, content);
+
+    const before = await hashForge(forgeRoot);
+
+    // Import should REFUSE
+    const result = await importClaudeCode({
+      workspaceRoot: wsRoot,
+      forgeRoot,
+      profileName: "acme",
+    }).catch((e: Error) => e);
+
+    expect(result).toBeInstanceOf(Error);
+    const msg = (result as Error).message;
+    expect(msg).toContain("rule/readme--acme");
+    expect(msg).toContain("{{craftar.rules.index}}");
+    expect(msg).toContain("differs");
+
+    // Forge byte-identical
+    const after = await hashForge(forgeRoot);
+    expect(after).toEqual(before);
+  });
+
+  /**
+   * An agent base holding {{craftar.rules.index}} that import turns into a variant → NO "frozen" warning.
+   */
+  it("4g. agent base with placeholder becomes variant → no frozen warning", async () => {
+    const root = await tmpDir("craftar-r4-agent-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+
+    await writeFiles(forgeRoot, {
+      "craftar.forge.yaml": YAML.stringify({ name: "f", schema: 7 }),
+      "ingredients/rules/style/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "style",
+        description: "D style",
+      }),
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/agents/helper/ingredient.yaml": YAML.stringify({
+        type: "agent",
+        name: "helper",
+        description: "Helper agent",  // description triggers variant creation on import
+      }),
+      "ingredients/agents/helper/agent.md": "# Helper\n\n{{craftar.rules.index}}\n",
+      "recipes/base.yaml": YAML.stringify({
+        name: "base",
+        ingredients: ["rule/style", "agent/helper"],
+      }),
+      "profiles/acme/profile.yaml": YAML.stringify({
+        name: "acme",
+        recipes: ["base"],
+        targets: ["claude-code"],
+      }),
+    });
+
+    await writeFiles(wsRoot, {
+      "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+    });
+
+    // Sync
+    const ws = await loadWorkspace(wsRoot);
+    const p = await plan(ws);
+    const lock = await readLock(wsRoot);
+    const st = await status(ws, p, lock);
+    await apply(ws, p, st);
+
+    // Import back — agent with description will become a variant (import doesn't write description)
+    const result = await importClaudeCode({
+      workspaceRoot: wsRoot,
+      forgeRoot,
+      profileName: "acme",
+    });
+
+    // It should create a variant for the agent
+    expect(result.variants.map((v) => v.name)).toContain("agent/helper--acme");
+
+    // But NO "frozen" warning for agent (only for rule/steering)
+    const frozenWarning = result.warnings.find(
+      (w) => w.includes("agent/helper") && w.includes("frozen")
+    );
+    expect(frozenWarning).toBeUndefined();
+  });
+});
