@@ -2673,7 +2673,7 @@ forge
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--no-impact", "skip planning the registered workspaces of this Forge before and after the writes")
-  .option("--dry-run", "run every check and the first impact pass, print what would be written, and write nothing", false)
+  .option("--dry-run", "prove and show the plan, write nothing in the Forge (the proof needs a writable temporary directory)", false)
   .option("--json", "machine-readable output", false)
   .action(async (ref: string, o) => {
     // Never through the cache, as `forge unify` (spec 13 §4.4): the URL form is refused by refuseRemote and the directory form by assertNotCacheTree.
@@ -2795,7 +2795,7 @@ forge
     console.log(pc.bold(`craftar forge promote ${promotion.base} ← ${promotion.profile}${o.dryRun ? " (dry run — nothing written)" : ""}`));
     console.log(`  base     ${promotion.base} ${o.dryRun ? "would hold" : "now holds"} ${promotion.profile}'s text (was ${promotion.removed})`);
     for (const c of promotion.created) console.log(`  variant  ${c} ${o.dryRun ? "would be created" : "created"} (the old base)`);
-    if (promotion.discarded) console.log(`  the old base is resolved by no profile — discarded (git holds it)`);
+    if (promotion.discarded) console.log(`  the old base is resolved by no profile — ${o.dryRun ? "would be discarded" : "discarded"} (git holds it)`);
     const recipeLines = [...promotion.detail.recipes.filter((r) => r.from === null), ...promotion.detail.recipes.filter((r) => r.from !== null)];
     for (const r of recipeLines) console.log(`  recipe   ${r.name}${r.from === null ? "" : ` ${o.dryRun ? "would be created" : "created"} from ${r.from}`}: ${r.old} → ${r.new}`);
     for (const p of promotion.detail.profiles) console.log(`  profile  ${p.file}: ${p.swaps.map((s) => `${s.old} → ${s.new}`).join(", ")}`);

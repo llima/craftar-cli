@@ -288,6 +288,17 @@ describe("forge promote — the command", () => {
     );
   });
 
+  it("22c-dry. --dry-run: discarded line says 'would be discarded'", async () => {
+    const s = await scenario();
+    for (const q of ["globex", "initech"]) await fs.rm(path.join(s.forge, "profiles", q), { recursive: true });
+    git(s.forge, "add", "-A");
+    git(s.forge, "commit", "-q", "-m", "acme alone");
+    const r = s.promote(["--dry-run"]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("  the old base is resolved by no profile — would be discarded (git holds it)");
+    expect(r.stdout).not.toContain("— discarded (git holds it)");
+  });
+
   it("23. the registry off or unreadable: the command runs, and warns that no workspace was checked", async () => {
     const off = await scenario();
     const r = off.promote([], { CRAFTAR_NO_REGISTRY: "1" });
