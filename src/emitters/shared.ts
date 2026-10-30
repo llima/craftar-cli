@@ -4,7 +4,7 @@ import type { ResolvedIngredient } from "../core/resolve.js";
 import { paramsFor } from "../core/resolve.js";
 import type { Ingredient, Target } from "../schema/index.js";
 import { rendersServers, renderServer, renderLeaves, credentialIn, credentialMessage, entropyMessage, undeclaredMessage, type RenderedLeaves } from "../core/mcp-server.js";
-import { RULES_INDEX_LINE, RULES_INDEX_KEY } from "../core/rules-index.js";
+import { RULES_INDEX_LINE, RULES_INDEX_KEY, RULES_INDEX_TOKEN } from "../core/rules-index.js";
 import type { Resolution } from "../core/resolve.js";
 
 export function appliesTo(targets: "*" | string[], target: string): boolean {
@@ -963,7 +963,7 @@ export function expandRulesIndex(
       // Replace with the index content
       resultLines.push(indexContent);
       expanded = true;
-    } else if (line.includes(`{{${RULES_INDEX_KEY}}}`) || /\{\{\s*craftar\.rules\.index\s*\}\}/.test(line)) {
+    } else if (line.includes(`{{${RULES_INDEX_KEY}}}`) || RULES_INDEX_TOKEN.test(line)) {
       // Placeholder exists but not alone on the line — record as misplaced
       misplaced.push(i + 1); // 1-based line number
       resultLines.push(line);

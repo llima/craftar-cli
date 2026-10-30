@@ -381,3 +381,43 @@ describe("rules-index groups and scope", () => {
     expect(content).toContain("(applies to `src/**`, `lib/**`)");
   });
 });
+
+describe("rules-index warnings and order", () => {
+  it("5: two undescribed rules → exactly one warning line holding both names", async () => {
+    // Spec 44 §4.4: ONE line naming every such rule (code-point order, each once).
+    const ingredients: IngredientSpec[] = [
+      { meta: { type: "rule", name: "alpha" }, files: { "rule.md": "# Alpha\n" } },  // no description
+      { meta: { type: "rule", name: "beta" }, files: { "rule.md": "# Beta\n" } },   // no description
+      { meta: { type: "rule", name: "readme", description: "Index" }, files: { "rule.md": "{{craftar.rules.index}}\n" } },
+    ];
+    const s = kept(await scenario(
+      { ingredients, recipes: [recipe("base", ["rule/alpha", "rule/beta", "rule/readme"])], profiles: [profile("test", ["base"], ["claude-code"])] },
+      { config: { profile: "test" } }
+    ));
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 7 }));
+
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    // Should have exactly ONE warning containing both names
+    const undescribedWarnings = p.warnings.filter((w) => w.includes("no description for rule"));
+    expect(undescribedWarnings.length).toBe(1);
+    expect(undescribedWarnings[0]).toContain("alpha");
+    expect(undescribedWarnings[0]).toContain("beta");
+    // Check the exact wording: "craftar.rules.index: no description for rule alpha, beta — listed by name only"
+    expect(undescribedWarnings[0]).toBe(`${RULES_INDEX_KEY}: no description for rule alpha, beta — listed by name only`);
+  });
+
+  it("6: Plan.indexed paths sorted by code-point order (.claude < .kiro < AGENTS)", async () => {
+    // Spec 44 §4.4: code-point order for Plan.indexed paths (`.` < `A`).
+    const { p } = await synced();
+    // Expected order: .claude/..., .kiro/..., AGENTS.md
+    const paths = p.indexed.map((i) => i.path);
+    expect(paths[0]).toMatch(/^\.claude\//);
+    expect(paths[1]).toMatch(/^\.kiro\//);
+    expect(paths[2]).toBe("AGENTS.md");
+    // Verify code-point order
+    const sorted = [...paths].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    expect(paths).toEqual(sorted);
+  });
+});

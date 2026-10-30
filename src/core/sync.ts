@@ -21,7 +21,7 @@ import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
 import { appliesTo, effectiveTargets } from "../emitters/shared.js";
-import { RULES_INDEX_KEY, RULES_INDEX_LINE, belowGateLiteralWarning, ignoredValueWarning } from "./rules-index.js";
+import { RULES_INDEX_KEY, RULES_INDEX_LINE, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
 export const LOCAL_FILE = "craftar.local.yaml";
@@ -798,9 +798,9 @@ export async function plan(ws: Workspace): Promise<Plan> {
     for (const r of indexRecords) {
       for (const name of r.undescribed) allUndescribed.add(name);
     }
-    // One warning per undescribed rule
-    for (const name of [...allUndescribed].sort()) {
-      warnings.push(`${RULES_INDEX_KEY}: no description for rule ${name} — listed by name only`);
+    // One warning for all undescribed rules (spec 44 §4.4)
+    if (allUndescribed.size > 0) {
+      warnings.push(undescribedRulesWarning([...allUndescribed].sort()));
     }
     // Collect all misplaced line locations
     const misplacedLocations: string[] = [];
@@ -812,17 +812,17 @@ export async function plan(ws: Workspace): Promise<Plan> {
       }
     }
     if (misplacedLocations.length > 0) {
-      warnings.push(`{{${RULES_INDEX_KEY}}} must stand alone on its line — left as written in ${misplacedLocations.sort().join(", ")}`);
+      warnings.push(misplacedPlaceholderWarning(misplacedLocations.sort()));
     }
     // Collect all paths where the placeholder was left (agent, command, skill body)
     if (indexLeftPaths.size > 0) {
-      warnings.push(`{{${RULES_INDEX_KEY}}} is expanded in rule and steering bodies only — left as written in ${[...indexLeftPaths].sort().join(", ")}`);
+      warnings.push(nonBodyPlaceholderWarning([...indexLeftPaths].sort()));
     }
   }
 
-  // Build indexed (spec 44 §4.4): sorted by path, only at the gate
+  // Build indexed (spec 44 §4.4): sorted by path in code-point order, only at the gate
   const indexed: Plan["indexed"] = resolution.rulesIndex
-    ? indexRecords.map((r) => ({ path: r.path, rules: r.rules })).sort((a, b) => a.path.localeCompare(b.path))
+    ? indexRecords.map((r) => ({ path: r.path, rules: r.rules })).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
     : [];
 
   return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed };
