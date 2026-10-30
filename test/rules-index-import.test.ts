@@ -678,3 +678,59 @@ Always on:
     });
   });
 });
+
+
+describe("BLOCKER 1: new profile must keep spec 41 fail-closed (review round 2)", () => {
+  it("import --profile newco into a schema 5 Forge with agents-md.primary default → exit 1 with fail-closed message, Forge byte-identical", async () => {
+    // A schema 5 Forge with a recipe that defaults agents-md.primary: true
+    // A workspace with claude-code + agents-md targets and a .claude/rules/style.md
+    // import --profile newco → exit 1 with exactly the message from origin/main
+    const root = await tmpDir("craftar-newco-failclosed-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+
+    // Create Forge at schema 5 with a recipe that defaults agents-md.primary: true
+    await writeFiles(forgeRoot, {
+      "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 5 }),
+      "ingredients/rules/style/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "style",
+        description: "Code style",
+        file: "rule.md",
+        targets: "*",
+        tags: [],
+      }),
+      "ingredients/rules/style/rule.md": "# Style\nFollow coding standards.\n",
+      "recipes/base.yaml": YAML.stringify({
+        name: "base",
+        ingredients: ["rule/style"],
+        params: { "agents-md.primary": { default: true } },
+      }),
+    });
+
+    // Create workspace with targets claude-code + agents-md
+    await writeFiles(wsRoot, {
+      ".claude/rules/style.md": "# Style\nFollow coding standards.\n",
+    });
+
+    // Hash the Forge before
+    const before = await hashForge(forgeRoot);
+
+    // Import under a NEW profile name
+    const result = await importClaudeCode({
+      workspaceRoot: wsRoot,
+      forgeRoot,
+      profileName: "newco",
+    }).catch((e: Error) => e);
+
+    // Should fail with the exact message from origin/main
+    expect(result).toBeInstanceOf(Error);
+    const msg = (result as Error).message;
+    expect(msg).toContain("profile newco is not in the Forge");
+
+    // Forge must be byte-identical
+    const after = await hashForge(forgeRoot);
+    expect(after).toEqual(before);
+  });
+});
