@@ -346,6 +346,10 @@ export interface Plan {
     present: Array<{ agent: string; path: string }>;
     warning: string | null;
   } | null;
+  /**
+   * Files where `{{craftar.rules.index}}` was expanded, sorted by path (spec 44 §4.4). Empty at schema 6.
+   */
+  indexed: Array<{ path: string; rules: number }>;
 }
 
 /** Declared keys with no default that no layer fills, with the ingredients declaring them (spec 24 §4.2) — cited or not. */
@@ -599,6 +603,10 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const rewordedPaths = new Set<string>();
   /** Kiro agent resources recorded for the check (spec 41 §4.5). */
   const kiroResourceRecords: Array<{ agent: string; path: string }> = [];
+  /** Rules index expansion results (spec 44 §4.4). */
+  const indexRecords: Array<{ path: string; rules: number; undescribed: string[]; misplaced?: number[] }> = [];
+  /** Paths where the index placeholder was left as written (spec 44 §4.5). */
+  const indexLeftPaths = new Set<string>();
   /** Below-gate literals: `ref (file)` for each rendered text that holds `{{craftar.rules.index}}` alone on a line (spec 44 §4.2). */
   const belowGateLiterals = new Set<string>();
   const ctx: EmitBase = {
@@ -673,6 +681,12 @@ export async function plan(ws: Workspace): Promise<Plan> {
     },
     reportKiroResource(agent: string, path: string) {
       kiroResourceRecords.push({ agent, path });
+    },
+    reportIndex(entry: { path: string; rules: number; undescribed: string[]; misplaced?: number[] }) {
+      indexRecords.push(entry);
+    },
+    reportIndexLeft(p: string) {
+      indexLeftPaths.add(p);
     },
   };
   const files: PlannedFile[] = [];
@@ -777,9 +791,41 @@ export async function plan(ws: Workspace): Promise<Plan> {
     for (const ref of ingRefs.sort()) {
       warnings.push(ignoredValueWarning(ref));
     }
+
+    // Rules-index warnings at the gate (spec 44 §4.4): undescribed rules and misplaced placeholders
+    // Collect all undescribed names across all indices
+    const allUndescribed = new Set<string>();
+    for (const r of indexRecords) {
+      for (const name of r.undescribed) allUndescribed.add(name);
+    }
+    // One warning per undescribed rule
+    for (const name of [...allUndescribed].sort()) {
+      warnings.push(`${RULES_INDEX_KEY}: no description for rule ${name} — listed by name only`);
+    }
+    // Collect all misplaced line locations
+    const misplacedLocations: string[] = [];
+    for (const r of indexRecords) {
+      if (r.misplaced) {
+        for (const line of r.misplaced) {
+          misplacedLocations.push(`${r.path}:${line}`);
+        }
+      }
+    }
+    if (misplacedLocations.length > 0) {
+      warnings.push(`{{${RULES_INDEX_KEY}}} must stand alone on its line — left as written in ${misplacedLocations.sort().join(", ")}`);
+    }
+    // Collect all paths where the placeholder was left (agent, command, skill body)
+    if (indexLeftPaths.size > 0) {
+      warnings.push(`{{${RULES_INDEX_KEY}}} is expanded in rule and steering bodies only — left as written in ${[...indexLeftPaths].sort().join(", ")}`);
+    }
   }
 
-  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources };
+  // Build indexed (spec 44 §4.4): sorted by path, only at the gate
+  const indexed: Plan["indexed"] = resolution.rulesIndex
+    ? indexRecords.map((r) => ({ path: r.path, rules: r.rules })).sort((a, b) => a.path.localeCompare(b.path))
+    : [];
+
+  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed };
 }
 
 /**

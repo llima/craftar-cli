@@ -4,6 +4,8 @@ import type { ResolvedIngredient } from "../core/resolve.js";
 import { paramsFor } from "../core/resolve.js";
 import type { Ingredient, Target } from "../schema/index.js";
 import { rendersServers, renderServer, renderLeaves, credentialIn, credentialMessage, entropyMessage, undeclaredMessage, type RenderedLeaves } from "../core/mcp-server.js";
+import { RULES_INDEX_LINE, RULES_INDEX_KEY } from "../core/rules-index.js";
+import type { Resolution } from "../core/resolve.js";
 
 export function appliesTo(targets: "*" | string[], target: string): boolean {
   return targets === "*" || targets.includes(target);
@@ -799,4 +801,226 @@ export function settingsExample(
   if (hasHooks) result.hooks = hooks;
 
   return result;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Rules index expansion (spec 44 §4.3–§4.5)                           */
+/* ------------------------------------------------------------------ */
+
+/** The result of expandRulesIndex. */
+export interface ExpandRulesIndexResult {
+  /** The text with the placeholder expanded, or unchanged if no placeholder was found. */
+  text: string;
+  /** The number of rules listed in the expanded index. */
+  listed: number;
+  /** Names of rules listed without a description. */
+  undescribed: string[];
+  /** 1-based line numbers where the placeholder was found but not alone on its line. */
+  misplaced: number[];
+}
+
+/**
+ * A description holding `<!-- craftar:` is a section marker and must not appear in the index
+ * (spec 44 §4.4). Throws with a message naming the rule.
+ */
+const MARKER_IN_DESCRIPTION = /<!--[ \t]*\/?[ \t]*craftar:/;
+
+/**
+ * Fold a description for display: collapse runs of whitespace to single space, trim ends (spec 44 §4.4).
+ */
+function foldDescription(desc: string): string {
+  return desc.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Expand `{{craftar.rules.index}}` placeholders in a text, building an index of the profile's rules
+ * for the given target (spec 44 §4.3–§4.5).
+ *
+ * @param text The text that may contain the placeholder.
+ * @param target Which target's index to build: "claude-code", "kiro", or "agents-md".
+ * @param lookup The rule lookup for reference resolution.
+ * @param resolution The resolution with all ingredients and targets.
+ * @returns The result with expanded text, list count, undescribed names, and misplaced line numbers.
+ */
+export function expandRulesIndex(
+  text: string,
+  target: "claude-code" | "kiro" | "agents-md",
+  lookup: RuleLookup,
+  resolution: Resolution,
+): ExpandRulesIndexResult {
+  const undescribed: string[] = [];
+  const misplaced: number[] = [];
+
+  // Build the index content once (it's the same for all occurrences)
+  const rules = resolution.ingredients.filter((ing) => ing.meta.type === "rule");
+
+  // Group rules by inclusion for display order
+  const alwaysOn: Array<{ name: string; path: string; desc: string | null }> = [];
+  const scoped: Array<{ name: string; path: string; scope: string; desc: string | null }> = [];
+  const onRequest: Array<{ name: string; path: string; desc: string | null }> = [];
+
+  for (const ing of rules) {
+    if (ing.meta.type !== "rule") continue;
+    const meta = ing.meta;
+    const name = outName(meta);
+    const effTargets = effectiveTargets(meta, resolution);
+
+    // Get the reference for this rule in the current target's index
+    const ref = ruleReference(name, lookup, resolution.targets, target === "kiro" ? "kiro" : "agents-md");
+    const state = ref.state;
+
+    // State D: rule exists but reaches no target here — ABSENT from every index without it (no warning)
+    if (state === "D") continue;
+
+    // For non-agents-md targets: rules explicitly limited to agents-md (targets: ["agents-md"])
+    // are not accessible from other targets and should be absent from their indices.
+    // However, under agents-md.primary, always-on rules with default targets become AGENTS.md-only
+    // but should still appear (shown as "AGENTS.md (rule: x)") because they're conceptually
+    // profile-wide rules that happen to be in AGENTS.md.
+    // The distinction: meta.targets === "*" means the rule was promoted; explicit ["agents-md"] means it was scoped.
+    if (target !== "agents-md") {
+      // Rule explicitly targets only agents-md — not accessible from this target
+      if (Array.isArray(meta.targets) && meta.targets.length === 1 && meta.targets[0] === "agents-md") {
+        continue;
+      }
+    }
+
+    // Build the path string based on state
+    let path: string;
+    if (target === "kiro") {
+      switch (state) {
+        case "K1":
+          path = `\`.kiro/steering/${name}.md\``;
+          break;
+        case "K2":
+          path = `\`.claude/rules/${name}.md\``;
+          break;
+        case "K3":
+          path = `AGENTS.md (rule: ${name})`;
+          break;
+        default:
+          path = `\`.kiro/steering/${name}.md\``;
+      }
+    } else {
+      // claude-code or agents-md mode
+      switch (state) {
+        case "A":
+          path = `\`.claude/rules/${name}.md\``;
+          break;
+        case "B":
+          path = `\`.kiro/steering/${name}.md\``;
+          break;
+        case "C":
+          path = `AGENTS.md (rule: ${name})`;
+          break;
+        default:
+          path = `\`.claude/rules/${name}.md\``;
+      }
+    }
+
+    // Check description validity
+    const rawDesc = meta.description;
+    let desc: string | null = null;
+    if (rawDesc !== undefined && rawDesc.trim() !== "") {
+      if (MARKER_IN_DESCRIPTION.test(rawDesc)) {
+        throw new Error(
+          `${RULES_INDEX_KEY}: description of rule/${name} contains a section marker — remove it`
+        );
+      }
+      desc = foldDescription(rawDesc);
+    } else {
+      undescribed.push(name);
+    }
+
+    // Categorize by inclusion
+    const inclusion = meta.inclusion;
+    if (inclusion === "always") {
+      alwaysOn.push({ name, path, desc });
+    } else if (inclusion === "fileMatch") {
+      const pattern = Array.isArray(meta.fileMatchPattern)
+        ? meta.fileMatchPattern.join("`, `")
+        : (meta.fileMatchPattern ?? "**");
+      scoped.push({ name, path, scope: `applies to \`${pattern}\``, desc });
+    } else {
+      // manual or auto
+      onRequest.push({ name, path, desc });
+    }
+  }
+
+  // Sort each group by name in code-point order
+  const sortByName = <T extends { name: string }>(a: T, b: T) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  alwaysOn.sort(sortByName);
+  scoped.sort(sortByName);
+  onRequest.sort(sortByName);
+
+  // Build the index lines
+  const indexLines: string[] = [];
+  let hasContent = false;
+
+  if (alwaysOn.length > 0 || scoped.length > 0 || onRequest.length > 0) {
+    if (alwaysOn.length > 0) {
+      if (hasContent) indexLines.push("");
+      indexLines.push("Always on:");
+      for (const r of alwaysOn) {
+        indexLines.push(r.desc ? `- ${r.path} — ${r.desc}` : `- ${r.path}`);
+      }
+      hasContent = true;
+    } else {
+      if (hasContent) indexLines.push("");
+      indexLines.push("Always on:");
+      indexLines.push("- (no rules)");
+      hasContent = true;
+    }
+
+    if (scoped.length > 0) {
+      if (hasContent) indexLines.push("");
+      indexLines.push("Scoped:");
+      for (const r of scoped) {
+        const descPart = r.desc ? ` — ${r.desc}` : "";
+        indexLines.push(`- ${r.path}${descPart} (${r.scope})`);
+      }
+      hasContent = true;
+    }
+
+    if (onRequest.length > 0) {
+      if (hasContent) indexLines.push("");
+      indexLines.push("On request:");
+      for (const r of onRequest) {
+        indexLines.push(r.desc ? `- ${r.path} — ${r.desc}` : `- ${r.path}`);
+      }
+      hasContent = true;
+    }
+  }
+
+  const indexContent = indexLines.join("\n");
+  const listed = alwaysOn.length + scoped.length + onRequest.length;
+
+  // Find and replace all placeholders
+  const lines = text.split("\n");
+  const resultLines: string[] = [];
+  let expanded = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Check if this line has the placeholder alone (using RULES_INDEX_LINE)
+    if (RULES_INDEX_LINE.test(line)) {
+      // Replace with the index content
+      resultLines.push(indexContent);
+      expanded = true;
+    } else if (line.includes(`{{${RULES_INDEX_KEY}}}`) || /\{\{\s*craftar\.rules\.index\s*\}\}/.test(line)) {
+      // Placeholder exists but not alone on the line — record as misplaced
+      misplaced.push(i + 1); // 1-based line number
+      resultLines.push(line);
+    } else {
+      resultLines.push(line);
+    }
+  }
+
+  return {
+    text: resultLines.join("\n"),
+    listed: expanded ? listed : 0,
+    undescribed: expanded ? undescribed : [],
+    misplaced,
+  };
 }
