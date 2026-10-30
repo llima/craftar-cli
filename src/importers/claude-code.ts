@@ -9,7 +9,7 @@ import { registrationCitations, serverSecret, windowsOnlyLauncher, launcherImpor
 import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
-import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
+import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, resolve, type Resolution } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
@@ -1168,6 +1168,11 @@ async function writeIngredient(
         for (const s of parsed.sections) {
           if (s.targets && !(s.targets as readonly string[]).includes(owner)) {
             report.warnings.push(`${meta.type}/${name}: made from the ${owner} file, it leaves out section ${s.name} (targets=${s.targets.join(",")}) — sync writes ${s.targets.join(", ")} without it`);
+          } else if (s.targets && (s.targets as readonly string[]).includes(owner)) {
+            const others = TARGETS.filter((t) => !(s.targets as readonly string[]).includes(t));
+            if (others.length > 0) {
+              report.warnings.push(`${meta.type}/${name}: made from the ${owner} file, it holds section ${s.name} (targets=${s.targets.join(",")}) as plain text — sync writes it to ${others.join(", ")} too`);
+            }
           }
         }
       }
