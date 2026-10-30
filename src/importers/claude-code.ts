@@ -362,6 +362,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- what the importing profile renders (spec 10 §6.1, §6.8 step 2) ---- */
   const loaded = await forgeBefore(forge, manifestOnDisk);
   const existing = await existingProfile(forge, opts.profileName, loaded);
+  // P5: propagate effectiveProfile warnings to the import report
+  for (const w of existing.warnings) report.warnings.push(w);
   const readWs = (abs: string) => fs.readFile(abs, "utf8");
 
   // Detect targets this workspace writes (spec 41 Part B §5.2's variant warnings).
@@ -1723,8 +1725,8 @@ async function existingProfile(
   forge: string,
   profile: string,
   loaded: import("../core/forge.js").Forge | null,
-): Promise<{ params: Record<string, unknown>; sections: Sections; blockKeys: string[] }> {
-  if (!loaded) return { params: {}, sections: {}, blockKeys: [] };
+): Promise<{ params: Record<string, unknown>; sections: Sections; blockKeys: string[]; warnings: string[] }> {
+  if (!loaded) return { params: {}, sections: {}, blockKeys: [], warnings: [] };
   const dir = path.join(forge, "profiles");
   for (const d of (await exists(dir)) ? await fs.readdir(dir, { withFileTypes: true }) : []) {
     if (!d.isDirectory()) continue;
@@ -1736,10 +1738,10 @@ async function existingProfile(
     }
   }
   const p = loaded.profiles.get(profile);
-  if (!p) return { params: {}, sections: {}, blockKeys: [] };
+  if (!p) return { params: {}, sections: {}, blockKeys: [], warnings: [] };
   try {
     const eff = effectiveProfile(loaded, p);
-    return { params: { ...eff.params }, sections: p.sections, blockKeys: eff.blockKeys };
+    return { params: { ...eff.params }, sections: p.sections, blockKeys: eff.blockKeys, warnings: eff.warnings };
   } catch (e) {
     throw new Error(`import: profile ${profile} does not resolve (${errorText(e)}) — fix the Forge and re-run`);
   }

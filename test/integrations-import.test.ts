@@ -489,3 +489,26 @@ describe("import — below the gate", () => {
     expect(changed).toEqual(["ingredients/rules/stories-azure-devops--acme/ingredient.yaml", "ingredients/rules/stories-azure-devops--acme/rule.md", "profiles/acme/profile.yaml", "recipes/base--acme.yaml"]);
   });
 });
+
+describe("P5 — effectiveProfile warnings reach ImportReport.warnings", () => {
+  it("a non-scalar integrations value generates a warning in the import report", async () => {
+    // Create a profile with a non-scalar value (array) in integrations - this should generate a warning
+    const s = await synced(3, {
+      ingredients: [rule("workflow", "# Workflow\n")],
+      recipes: [recipe("base", ["rule/workflow"])],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"], {
+        integrations: {
+          pm: {
+            org: "acme",
+            // A non-scalar value: this will generate a warning from effectiveProfile
+            config: { nested: "value" },
+          },
+        },
+      })],
+    });
+    
+    const r = await importBack(s);
+    // The warning about the non-scalar should be in the report
+    expect(r.warnings.some((w: string) => w.includes("integrations.pm.config") && w.includes("not a scalar"))).toBe(true);
+  });
+});
