@@ -549,10 +549,14 @@ export async function cacheDir(home: string): Promise<"absent" | "present"> {
  * This is the fallback when no home list is provided, and also used by `assertNotCacheTree`'s
  * fail-closed branch where a linked home could make the same string appear twice.
  * One pass only — the label contains `(`, so it can never be matched again as a segment.
+ *
+ * @param platform The platform to use for case-insensitive matching; defaults to `process.platform`.
  */
-export function hideForgeSegmentFallback(text: string): string {
+export function hideForgeSegmentFallback(text: string, platform: NodeJS.Platform = process.platform): string {
   // Match any /forges/ or \forges\ followed by a segment (up to / \ space or quote)
-  return text.replace(/([/\\]forges[/\\])([^/\\\s"']+)/g, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
+  // On win32, match "forges" without case
+  const flags = platform === "win32" ? "gi" : "g";
+  return text.replace(new RegExp("([/\\\\]forges[/\\\\])([^/\\\\\\s\"']+)", flags), (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
 }
 
 /**
@@ -572,13 +576,12 @@ export function hideForgeSegmentFallback(text: string): string {
 export function hideCacheSegment(text: string, home: string | readonly string[], platform: NodeJS.Platform = process.platform): string {
   const homes = Array.isArray(home) ? home : [home];
   // When no homes are given, fall back to replacing any segment after any forges/
-  if (homes.length === 0) return hideForgeSegmentFallback(text);
+  if (homes.length === 0) return hideForgeSegmentFallback(text, platform);
   // Resolve, strip trailing separators, escape, de-duplicate and sort longest first (so a longer
   // prefix is tried before a shorter one that is a suffix of it).
   const escaped = [...new Set(homes.map((h) => path.resolve(h).replace(/[/\\]+$/, "")))]
     .sort((a, b) => b.length - a.length)
     .map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  if (escaped.length === 0) return hideForgeSegmentFallback(text);
   // Match: <any home>/forges/ or <any home>\forges\ followed by the segment (up to / \ space or quote)
   // Capture the prefix (including the separator after forges) in group 1
   const flags = platform === "win32" ? "gi" : "g";

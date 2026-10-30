@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { hideCacheKeys, hideCacheSegment, hideForgeSegmentFallback, hideKeys, hideUnvouched, vouchedKeys } from "../src/core/registry.js";
-import { CREDENTIAL_HIDDEN, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
+import { hideCacheKeys, hideCacheSegment, hideKeys, hideUnvouched, vouchedKeys } from "../src/core/registry.js";
+import { CREDENTIAL_HIDDEN, hideForgeSegmentFallback, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
 import { RegistryEntrySchema } from "../src/schema/index.js";
 
 const KEY = "fake" + "user-" + "nota" + "secret-example.invalid-f-0123456789ab";
@@ -189,5 +189,31 @@ describe("P2 — hideCacheSegment fixes", () => {
     // Count occurrences of the label
     const matches = out.match(/\(a cache entry name — not shown\)/g);
     expect(matches?.length).toBe(2);
+  });
+
+  it("hideCacheSegment with empty list + win32: Forges matches without case, secret hidden", () => {
+    const text = "x C:\\Home\\Forges\\secret\\y";
+    const out = hideCacheSegment(text, [], "win32");
+    expect(out).not.toContain("secret");
+    expect(out).toContain(UNVOUCHED_HIDDEN);
+  });
+
+  it("hideCacheSegment with empty list + linux: Forges does not match, secret kept", () => {
+    const text = "x C:\\Home\\Forges\\secret\\y";
+    const out = hideCacheSegment(text, [], "linux");
+    expect(out).toContain("secret");
+  });
+
+  it("hideForgeSegmentFallback with win32: Forges matches without case", () => {
+    const text = "x C:\\Home\\Forges\\secret\\y";
+    const out = hideForgeSegmentFallback(text, "win32");
+    expect(out).not.toContain("secret");
+    expect(out).toContain(UNVOUCHED_HIDDEN);
+  });
+
+  it("hideForgeSegmentFallback with linux: Forges does not match (case-sensitive)", () => {
+    const text = "x C:\\Home\\Forges\\secret\\y";
+    const out = hideForgeSegmentFallback(text, "linux");
+    expect(out).toContain("secret");
   });
 });
