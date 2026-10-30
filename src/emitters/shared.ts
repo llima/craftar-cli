@@ -824,6 +824,7 @@ export interface ExpandRulesIndexResult {
  * A description holding `<!-- craftar:` is a section marker and must not appear in the index
  * (spec 44 §4.4). Throws with a message naming the rule.
  */
+// Differs from `markerLine` (spec §4.4 refuses `<!-- craftar:` anywhere in a description, not only at column 0).
 const MARKER_IN_DESCRIPTION = /<!--[ \t]*\/?[ \t]*craftar:/;
 
 /**
@@ -999,7 +1000,7 @@ export function expandRulesIndex(
 /**
  * The outNames of skills this resolution writes as a single file to claude-code, sorted by code point.
  * A skill is "flat" when (1) its layout is "file", and (2) effectiveTargets admits "claude-code".
- * Claude Code does not list such skills — they are invisible to the user.
+ * Claude Code does not list such skills.
  */
 export function flatSkills(
   resolution: { ingredients: readonly { meta: { type: string; name: string; as?: string; layout?: string; targets: "*" | string[] } }[]; primary: boolean },

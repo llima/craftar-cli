@@ -245,7 +245,7 @@ describe("Finding 4: Fail closed for a profile the import creates", () => {
         forgeRoot,
         profileName: "newprofile",
       })
-    ).rejects.toThrow(/profile newprofile does not resolve/);
+    ).rejects.toThrow(/profile newprofile is not in the Forge/);
 
     // Forge should be byte-identical
     const forgeFilesAfter = new Map<string, string>();

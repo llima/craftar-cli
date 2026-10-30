@@ -53,7 +53,7 @@ function staticReason(s: FileStatus, provided: Map<string, { slot: string; recip
  * The hand-edited files among `statuses`, in the order given. Pure.
  * @param provided - Map from Forge ref to { slot, recipe } for ingredients the block provides (spec 33i).
  * @param reworded - The plan's `reworded` paths (spec 41 §4.10); empty with the mode off.
- * @param indexed - The plan's indexed paths (spec 44 §4.5); empty at schema 6.
+ * @param indexed - The plan's indexed paths (spec 44 §4.5); empty below schema 7, and when no list was expanded.
  */
 export function driftList(
   statuses: FileStatus[],

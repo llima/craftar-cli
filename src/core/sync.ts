@@ -347,7 +347,7 @@ export interface Plan {
     warning: string | null;
   } | null;
   /**
-   * Files where `{{craftar.rules.index}}` was expanded, sorted by path (spec 44 §4.4). Empty at schema 6.
+   * Files where `{{craftar.rules.index}}` was expanded, sorted by path (spec 44 §4.4). Empty below schema 7, and when no list was expanded.
    */
   indexed: Array<{ path: string; rules: number }>;
 }
