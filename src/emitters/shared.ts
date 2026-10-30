@@ -818,6 +818,8 @@ export interface ExpandRulesIndexResult {
   undescribed: string[];
   /** 1-based line numbers where the placeholder was found but not alone on its line. */
   misplaced: number[];
+  /** True when at least one placeholder line was expanded (spec 44 finding 2). */
+  expanded: boolean;
 }
 
 /**
@@ -849,6 +851,29 @@ export function expandRulesIndex(
   lookup: RuleLookup,
   resolution: Resolution,
 ): ExpandRulesIndexResult {
+  // Finding 1: scan text FIRST — when no line matches RULES_INDEX_LINE and none matches RULES_INDEX_TOKEN,
+  // return unchanged without building anything; build the list only when a line will be expanded.
+  const lines = text.split("\n");
+  const hasAloneLine = lines.some((line) => RULES_INDEX_LINE.test(line));
+  const hasMisplacedToken = !hasAloneLine && lines.some((line) => RULES_INDEX_TOKEN.test(line));
+
+  // If no placeholder at all, return unchanged
+  if (!hasAloneLine && !hasMisplacedToken) {
+    return { text, listed: 0, undescribed: [], misplaced: [], expanded: false };
+  }
+
+  // If only misplaced tokens (no alone lines), collect their line numbers and return unchanged text
+  if (!hasAloneLine) {
+    const misplaced: number[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (RULES_INDEX_TOKEN.test(lines[i])) {
+        misplaced.push(i + 1); // 1-based
+      }
+    }
+    return { text, listed: 0, undescribed: [], misplaced, expanded: false };
+  }
+
+  // We have at least one line to expand — now build the index
   const undescribed: string[] = [];
   const misplaced: number[] = [];
 
@@ -952,9 +977,7 @@ export function expandRulesIndex(
   const listed = alwaysOn.length + scoped.length + onRequest.length;
 
   // Find and replace all placeholders
-  const lines = text.split("\n");
   const resultLines: string[] = [];
-  let expanded = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -962,7 +985,6 @@ export function expandRulesIndex(
     if (RULES_INDEX_LINE.test(line)) {
       // Replace with the index content
       resultLines.push(indexContent);
-      expanded = true;
     } else if (RULES_INDEX_TOKEN.test(line)) {
       // Placeholder exists but not alone on the line — record as misplaced
       misplaced.push(i + 1); // 1-based line number
@@ -974,9 +996,10 @@ export function expandRulesIndex(
 
   return {
     text: resultLines.join("\n"),
-    listed: expanded ? listed : 0,
-    undescribed: expanded ? undescribed : [],
+    listed,
+    undescribed,
     misplaced,
+    expanded: true,  // We got here only if hasAloneLine was true
   };
 }
 
