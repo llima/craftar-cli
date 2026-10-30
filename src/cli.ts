@@ -9,7 +9,7 @@ import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
 import { holdsBaseCitations, rendersServers } from "./core/mcp-server.js";
-import { assertNotCacheTree, classifyForge, CREDENTIAL_HIDDEN, hideCacheSegment, isUnderOrEqual, refHoldsCredentials, shownRef, UNVOUCHED_HIDDEN } from "./core/remote.js";
+import { assertNotCacheTree, classifyForge, CREDENTIAL_HIDDEN, hideAnyCacheSegment, hideCacheSegment, isUnderOrEqual, refHoldsCredentials, shownRef, UNVOUCHED_HIDDEN } from "./core/remote.js";
 import { allowWrites, forget, listWorkspaces, prune, readRegistry, revokeWrites, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
@@ -3184,8 +3184,8 @@ function color(state: string) {
  * fails before anything is written.
  */
 async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate): Promise<string> {
-  const refusing = `refusing to write the ${w.what} to ${target}`;
   const home = craftarHome();
+  const refusing = `refusing to write the ${w.what} to ${hideAnyCacheSegment(target, [home])}`;
   const abs = path.resolve(target);
   let targetReal: string;
   let rootReal: string;
@@ -3194,11 +3194,11 @@ async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate
     rootReal = await realpathOfNearest(path.resolve(forgeRoot));
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    fail(`${refusing}: ${hideCacheSegment(msg, home)} — ${w.who} cannot prove the target lies outside the Forge`);
+    fail(`${refusing}: ${hideAnyCacheSegment(msg, [home])} — ${w.who} cannot prove the target lies outside the Forge`);
   }
   const rel = path.relative(rootReal, targetReal);
   if (rel === "" || !(rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))) {
-    fail(`${refusing}: it resolves inside the Forge (${forgeRoot}) — ${w.outside}`);
+    fail(`${refusing}: it resolves inside the Forge (${hideAnyCacheSegment(forgeRoot, [home])}) — choose a path outside it`);
   }
   // Refuse a target whose real path is under (or equal to) the Forge cache.
   const forgesCacheDir = path.join(home, "forges");
@@ -3209,13 +3209,13 @@ async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate
     // realpathOfNearest already answers for a missing directory; any error here means the path
     // cannot be inspected or resolved, and without its real path the cache check cannot run.
     const msg = e instanceof Error ? e.message : String(e);
-    fail(`${refusing}: ${hideCacheSegment(msg, home)} — ${w.who} cannot prove the target lies outside the Forge cache`);
+    fail(`${refusing}: ${hideAnyCacheSegment(msg, [home])} — ${w.who} cannot prove the target lies outside the Forge cache`);
   }
   if (isUnderOrEqual(targetReal, forgesCacheReal)) {
     const relToCache = path.relative(forgesCacheReal, targetReal);
     const rest = relToCache === "" ? [] : relToCache.split(path.sep).slice(1);
     const shown = path.join(path.resolve(home), "forges", ...(relToCache === "" ? [] : [UNVOUCHED_HIDDEN]), ...rest);
-    fail(`refusing to write the ${w.what}: it resolves inside craftar's Forge cache (${shown}) — ${w.outside}`);
+    fail(`refusing to write the ${w.what}: it resolves inside craftar's Forge cache (${shown}) — choose a path outside it`);
   }
   if (await pathTaken(abs)) fail(`${refusing}: the file already exists — ${w.never}; choose a new path`);
   return abs;

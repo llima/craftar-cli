@@ -545,18 +545,24 @@ export async function cacheDir(home: string): Promise<"absent" | "present"> {
 }
 
 /**
- * Replace the first segment after any `/forges/` or `\forges\` in `text` with `UNVOUCHED_HIDDEN`.
- * This is the fallback when no home list is provided, and also used by `assertNotCacheTree`'s
- * fail-closed branch where a linked home could make the same string appear twice.
- * One pass only — the label contains `(`, so it can never be matched again as a segment.
+ * `text` with every path segment that follows `<home>/forges/` or any `/forges/` replaced by
+ * `UNVOUCHED_HIDDEN`. One regex pass whose alternation tries the homes first and any `/forges/`
+ * second, since the leftmost match wins. An empty `homes` leaves only the second alternative.
+ * The label contains `(`, so it can never be matched again as a segment.
  *
  * @param platform The platform to use for case-insensitive matching; defaults to `process.platform`.
  */
-export function hideForgeSegmentFallback(text: string, platform: NodeJS.Platform = process.platform): string {
-  // Match any /forges/ or \forges\ followed by a segment (up to / \ space or quote)
-  // On win32, match "forges" without case
+export function hideAnyCacheSegment(text: string, homes: readonly string[], platform: NodeJS.Platform = process.platform): string {
+  // Resolve, strip trailing separators, escape, de-duplicate and sort longest first.
+  const escaped = [...new Set(homes.map((h) => path.resolve(h).replace(/[/\\]+$/, "")))]
+    .sort((a, b) => b.length - a.length)
+    .map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  // Alternation: ((?:<homes>)[/\\]forges[/\\]|[/\\]forges[/\\])(<segment>)
+  // The leftmost match wins, so homes are checked first.
+  const homesAlt = escaped.length > 0 ? `(?:${escaped.join("|")})[/\\\\]forges[/\\\\]|` : "";
   const flags = platform === "win32" ? "gi" : "g";
-  return text.replace(new RegExp("([/\\\\]forges[/\\\\])([^/\\\\\\s\"']+)", flags), (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
+  const pattern = new RegExp(`(${homesAlt}[/\\\\]forges[/\\\\])([^/\\\\\\s"']+)`, flags);
+  return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
 }
 
 /**
@@ -569,24 +575,21 @@ export function hideForgeSegmentFallback(text: string, platform: NodeJS.Platform
  * for one home is never matched by another — the fix for homes where one is a string suffix of the
  * other (e.g. `/home` as a link to `/var/home`).
  *
- * When `home` is an empty array, any segment after `forges/` is replaced by the fallback.
+ * When `home` is an empty array, the homes-only path is kept: no fallback to any `/forges/` segment.
  *
  * @param platform The platform to use for case-insensitive matching; defaults to `process.platform`.
  */
 export function hideCacheSegment(text: string, home: string | readonly string[], platform: NodeJS.Platform = process.platform): string {
   const homes = Array.isArray(home) ? home : [home];
-  // When no homes are given, fall back to replacing any segment after any forges/
-  if (homes.length === 0) return hideForgeSegmentFallback(text, platform);
-  // Resolve, strip trailing separators, escape, de-duplicate and sort longest first (so a longer
-  // prefix is tried before a shorter one that is a suffix of it).
+  // When no homes are given, return text unchanged (homes-only behavior).
+  if (homes.length === 0) return text;
+  // Resolve, strip trailing separators, escape, de-duplicate and sort longest first.
   const escaped = [...new Set(homes.map((h) => path.resolve(h).replace(/[/\\]+$/, "")))]
     .sort((a, b) => b.length - a.length)
     .map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  // Match: <any home>/forges/ or <any home>\forges\ followed by the segment (up to / \ space or quote)
-  // Capture the prefix (including the separator after forges) in group 1
+  // Match: <any home>/forges/ or <any home>\forges\ followed by the segment
   const flags = platform === "win32" ? "gi" : "g";
   const pattern = new RegExp(`((?:${escaped.join("|")})[/\\\\]forges[/\\\\])([^/\\\\\\s"']+)`, flags);
-  // Use a function replacement to avoid $&, $1, etc. in the home path being interpreted
   return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
 }
 
@@ -625,12 +628,11 @@ export async function assertNotCacheTree(dir: string, home: string): Promise<voi
     try {
       rootReal = await realpathOfNearest(dir);
     } catch (e) {
-      // Fail closed: label the entry's name in the error and rethrow. One pass only — a second
-      // pass could match inside the label when one prefix ends with the other, or when a link
-      // reaches the forges directory through another path. The fallback labels any /forges/
-      // or \forges\ segment, which covers both the given home and any linked home.
+      // Fail closed: label the entry's name in the error and rethrow.
+      // hideAnyCacheSegment with [home, dirname(forgesReal)] covers both the given home and any
+      // linked home (the forges directory's parent when it was resolved through a link).
       const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(hideForgeSegmentFallback(msg));
+      throw new Error(hideAnyCacheSegment(msg, [home, path.dirname(forgesReal)]));
     }
     if (isUnderOrEqual(rootReal, forgesReal)) {
       const rel = path.relative(forgesReal, rootReal);
