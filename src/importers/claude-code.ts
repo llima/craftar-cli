@@ -12,7 +12,7 @@ import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerpri
 import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, resolve, sectionKey, type Resolution } from "../core/resolve.js";
-import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN } from "../core/rules-index.js";
+import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE } from "../core/rules-index.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { classifyForge, credentialFault } from "../core/remote.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
@@ -20,7 +20,7 @@ import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
 import { decide, forgeBefore, pin, registrationCarry, sourceKeys, valuesAt, workspaceParams, workspaceSections, workspaceTargets, type RunContext } from "./decide.js";
 import { providedByBlock } from "./provided.js";
-import { readBase, renderMap, renderedFingerprint, type ImportBase } from "../core/template-import.js";
+import { citedKeys, expandedTexts, readBase, renderMap, renderedFingerprint, type ImportBase } from "../core/template-import.js";
 import { firstMarkerLine, readsTargetSections } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
 import { GENERATED_BANNER, kiroReport, textLines, type KiroReport } from "./kiro-report.js";
@@ -405,7 +405,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     writtenTargets,
   };
 
-  // Resolve the profile ONCE before the --prefer-kiro pass (Finding 5).
+  // Resolve the profile once, before the --prefer-kiro pass.
   // The result is used by primaryFor, PK6, and the index expansion step.
   // null when the profile is new or the Forge is below the gate.
   type CachedResolution = { ok: true; resolution: Resolution; lookup: RuleLookup } | { ok: false; error: unknown } | null;
@@ -447,15 +447,13 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     // the profile would be compared with holds the placeholder; otherwise proceed with no index step.
     // NOTE: For new profiles, we don't fail early here — the per-name check in the loop below
     // will catch rules that hold the placeholder with a more specific error message.
-    // Finding 5: use cachedResolution instead of calling resolveForImport again.
     let pk6Resolution: { resolution: Resolution; lookup: RuleLookup } | null = null;
     if (loaded && readsRulesIndex(loaded.manifest) && cachedResolution) {
       if (cachedResolution.ok) {
         pk6Resolution = cachedResolution;
       } else {
-        // Fail-closed: for --prefer-kiro, check only the specific rules being preferred
-        const preferKiroRuleNames = new Set(opts.preferKiro);
-        const ruleWithPlaceholder = await ruleHoldingIndexInQueue(loaded, preferKiroRuleNames);
+        // Fail-closed for the preferred rules only (the other rules meet §4.8's check below).
+        const ruleWithPlaceholder = await indexHolderInQueue(loaded, new Set(opts.preferKiro.map((n) => `rule/${n}`)), opts.profileName);
         if (ruleWithPlaceholder) {
           throw new Error(`import: profile ${opts.profileName} does not resolve on its own (${errorText(cachedResolution.error)}) and ${ruleWithPlaceholder} holds {{craftar.rules.index}} — fix the Forge and re-run`);
         }
@@ -573,6 +571,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // and its text leaves the literal check (c). `ruleNames` fills only as rules are decided, so each set errs on its
   // safe side for a steering file a rule of its name may shadow: out of `runBases`, still in `others`.
   const queuedRules = new Set(queue.filter((q) => q.meta.type === "rule").map((q) => q.meta.name));
+  const queuedIndexable = new Set(queue.filter((q) => q.meta.type === "rule" || q.meta.type === "steering").map((q) => `${q.meta.type}/${q.meta.name}`));
   const mayBeSkipped = (q: Source) => q.skip?.() || (q.meta.type === "steering" && queuedRules.has(q.meta.name));
   const clean = queue.filter((q) => !secretIn(q.meta, q.files, q.scan, q.lineOffset));
   const runBases = new Set(clean.filter((q) => !mayBeSkipped(q)).map((q) => `${q.meta.type}/${q.meta.name}`));
@@ -583,8 +582,6 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // The function expands {{craftar.rules.index}} using the Forge's resolved ingredients.
   // Fail-closed: when the profile does not resolve, throw ONLY when a rule base the profile would
   // be compared with holds the placeholder (spec 44 §4.8: "a base the importing profile would be compared with").
-  // Finding 4: also fail-closed for a NEW profile when any base holds the placeholder.
-  // Finding 5: use cachedResolution instead of calling resolveForImport again.
   let indexExpand: ((text: string, target: "claude-code" | "kiro") => string) | undefined;
   if (loaded && readsRulesIndex(loaded.manifest)) {
     if (cachedResolution) {
@@ -593,15 +590,15 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
         indexExpand = (text: string, target: "claude-code" | "kiro") => expandRulesIndex(text, target, lookup, resolution).text;
       } else {
         // Fail-closed: check only the rules this import compares, not all rules in the Forge
-        const ruleWithPlaceholder = await ruleHoldingIndexInQueue(loaded, queuedRules);
+        const ruleWithPlaceholder = await indexHolderInQueue(loaded, queuedIndexable, opts.profileName);
         if (ruleWithPlaceholder) {
           throw new Error(`import: profile ${opts.profileName} does not resolve on its own (${errorText(cachedResolution.error)}) and ${ruleWithPlaceholder} holds {{craftar.rules.index}} — fix the Forge and re-run`);
         }
         // No base this import compares holds the placeholder: proceed with no index step, let the import continue
       }
     } else {
-      // Finding 4: NEW profile — fail-closed only if a rule this import compares holds the placeholder
-      const ruleWithPlaceholder = await ruleHoldingIndexInQueue(loaded, queuedRules);
+      // A new profile: fail closed only when an ingredient this import compares holds the placeholder
+      const ruleWithPlaceholder = await indexHolderInQueue(loaded, queuedIndexable, opts.profileName);
       if (ruleWithPlaceholder) {
         throw new Error(`import: profile ${opts.profileName} is not in the Forge and ${ruleWithPlaceholder} holds {{craftar.rules.index}} — import cannot compare that base as sync writes it; create the profile first (craftar init --new-profile ${opts.profileName} --no-sync in another directory), then re-run`);
       }
@@ -1335,41 +1332,41 @@ async function writeIngredient(
         const S: Record<string, string> = { ...valuesAt(run.ctx.PS, key), ...valuesAt(run.ctx.WS, key) };
         const map = renderMap(v.meta, run.ctx.P, run.ctx.W);
         const expand = run.indexExpand;
-        // Two facts the workspace cannot show are taken from the source, as import writes them: the rule's
-        // `description` (no target writes it into the file) and the name of its body file.
+        // What the workspace cannot show is taken from the source, as import writes it: the `description`, the
+        // `targets` and `tags` (no target writes them into the file) and the name of the body file.
         const srcBody = sourceMeta.type === "rule" || sourceMeta.type === "steering" ? path.posix.normalize(sourceMeta.file) : undefined;
         const varBody = v.meta.type === "rule" || v.meta.type === "steering" ? path.posix.normalize(v.meta.file) : undefined;
         const rekey = <T>(m: Map<string, T>): Map<string, T> =>
           new Map([...m].map(([rel, x]) => [srcBody !== undefined && rel === varBody ? srcBody : rel, x]));
         const seen: ImportBase = {
           ...v,
-          meta: { ...v.meta, description: sourceMeta.description, ...(srcBody !== undefined ? { file: sourceMeta.type === "rule" || sourceMeta.type === "steering" ? sourceMeta.file : undefined } : {}) } as Ingredient,
+          meta: { ...v.meta, description: sourceMeta.description, targets: sourceMeta.targets, tags: sourceMeta.tags, ...(sourceMeta.type === "rule" || sourceMeta.type === "steering" ? { file: sourceMeta.file } : {}) } as Ingredient,
           texts: rekey(v.texts),
           parsed: rekey(v.parsed),
         };
-        if (seen.meta.description === undefined) delete (seen.meta as { description?: string }).description;
+        for (const k of ["description", "targets", "tags"] as const) if ((seen.meta as Record<string, unknown>)[k] === undefined) delete (seen.meta as Record<string, unknown>)[k];
         const rendered = renderedFingerprint(seen, map, S, run.ctx.forge.manifest.schema, run.ctx.primaryRefs ?? undefined, run.ctx.sourceTarget, (t) => expand(t, indexTarget));
         if (rendered !== fingerprint) {
           throw new Error(`import: ${meta.type}/${name} holds {{${RULES_INDEX_KEY}}} and the workspace's ${source} differs from what sync writes from it — edit the variant in the Forge, then re-run`);
         }
         report.variants.push({ name: `${meta.type}/${name}`, reason: `unchanged ${meta.type}/${as} variant holding {{${RULES_INDEX_KEY}}}` });
-        pin(run.ctx, sourceKeys(sourceMeta, files), map);
+        // F9: a kept variant pins every key it cites, under every target (decide()'s citedAll).
+        pin(run.ctx, [...citedKeys(expandedTexts(v, S))], map);
         return `${meta.type}/${name}`;
       }
     }
     dir = variantDir;
     report.variants.push({ name: `${meta.type}/${name}`, reason: `differs from ${meta.type}/${as} already in the Forge${why ? ` (${why})` : ""}` });
 
-    // Review round 3 item 3: warn when the base holds {{craftar.rules.index}} and import creates a variant
+    // A base holding {{craftar.rules.index}} that becomes a new variant: the list is frozen there (spec 44 §4.8)
     // The variant now has the expanded (frozen) list instead of the dynamic placeholder.
-    // Review round 4: only for rule and steering bases (agents/commands/skills don't get this warning)
     if (run?.ctx && run.ctx.forge && readsRulesIndex(run.ctx.forge.manifest) && (meta.type === "rule" || meta.type === "steering")) {
       const parseOpts = { targets: readsTargetSections(run.ctx.forge.manifest) };
       const baseDir = path.join(forge, "ingredients", folder, as);
       if (await stage.exists(path.join(baseDir, "ingredient.yaml"))) {
         const baseForPlaceholder = await readBase(baseDir, stage.reader(), forge, parseOpts);
         for (const [, text] of baseForPlaceholder.texts) {
-          if (RULES_INDEX_TOKEN.test(text)) {
+          if (RULES_INDEX_LINE.test(text)) {
             report.warnings.push(
               `import: ${meta.type}/${name} holds the generated list of ${meta.type}/${as} — {{craftar.rules.index}} is frozen there; put the placeholder back in the variant, or delete it to use the base`
             );
@@ -1938,7 +1935,6 @@ async function resolveForImport(
  * the Forge as loaded, the importing profile, and the workspace's overrides and targets — every layer the mode reads, recipe
  * defaults included. When the key is set somewhere and the profile does not resolve on its own, fails closed: nothing has
  * been written yet.
- * Finding 5: uses the cached resolution instead of calling resolveForImport.
  */
 function primaryFor(
   loaded: import("../core/forge.js").Forge | null,
@@ -1971,24 +1967,19 @@ function primaryFor(
 }
 
 /**
- * Whether any of the rules this import compares holds the rules index placeholder (spec 44 §4.8).
- * For each rule name being imported, checks the ingredient the profile would resolve:
- * - For a new profile: the base `rule/<name>`
- * - For a broken profile: the base `rule/<name>` (since it can't resolve a variant)
- * Returns the first rule ref that holds the placeholder, or null if none do.
+ * The first rule or steering ingredient this import would compare that holds the rules index placeholder (spec 44
+ * §4.8), in ref order: for each queued source `<type>/<name>`, the base `<type>/<name>` and the importing profile's
+ * variant `<type>/<name>--<profile>` — what the profile resolves for that name, read when it cannot be resolved.
  */
-async function ruleHoldingIndexInQueue(
+async function indexHolderInQueue(
   loaded: import("../core/forge.js").Forge,
-  ruleNames: Set<string>,
+  queued: Set<string>,
+  profile: string,
 ): Promise<string | null> {
-  for (const name of ruleNames) {
-    // For new/broken profiles, check the base rule
-    const baseRef = `rule/${name}` as const;
-    const base = loaded.ingredients.get(baseRef);
-    if (base && base.meta.type === "rule") {
-      const body = await readIngredientText(base, base.meta.file);
-      if (RULES_INDEX_LINE.test(body)) return baseRef;
-    }
+  const refs = [...queued].flatMap((r) => [r, `${r}--${profile}`]).sort();
+  for (const ref of refs) {
+    const ing = loaded.ingredients.get(ref as `rule/${string}`);
+    if (ing && (ing.meta.type === "rule" || ing.meta.type === "steering") && RULES_INDEX_LINE.test(await readIngredientText(ing, ing.meta.file))) return ref;
   }
   return null;
 }
