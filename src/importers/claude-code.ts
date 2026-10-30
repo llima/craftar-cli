@@ -1900,8 +1900,9 @@ function primaryFor(
 
   // Use the cached resolution if available
   if (cachedResolution === null) {
-    // New profile (not in Forge) — no primary mode available
-    return null;
+    // New profile (not in Forge) — fail closed if the key is set somewhere
+    if (!setSomewhere) return null;
+    throw new Error(`import: profile ${profile} does not resolve on its own (${errorText(new Error("profile " + profile + " is not in the Forge"))}) — agents-md.primary needs it to compare the bases; fix the Forge and re-run`);
   }
   if (!cachedResolution.ok) {
     // Profile doesn't resolve
