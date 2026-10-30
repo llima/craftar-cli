@@ -545,6 +545,17 @@ export async function cacheDir(home: string): Promise<"absent" | "present"> {
 }
 
 /**
+ * Replace the first segment after any `/forges/` or `\forges\` in `text` with `UNVOUCHED_HIDDEN`.
+ * This is the fallback when no home list is provided, and also used by `assertNotCacheTree`'s
+ * fail-closed branch where a linked home could make the same string appear twice.
+ * One pass only — the label contains `(`, so it can never be matched again as a segment.
+ */
+export function hideForgeSegmentFallback(text: string): string {
+  // Match any /forges/ or \forges\ followed by a segment (up to / \ space or quote)
+  return text.replace(/([/\\]forges[/\\])([^/\\\s"']+)/g, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
+}
+
+/**
  * `text` with every path segment that follows `<path.resolve(home)>/forges/` or `<home>\forges\`
  * (either separator after `forges`) up to the next `/`, `\`, white space or quote replaced by
  * `UNVOUCHED_HIDDEN`. The no-snapshot rule, spec 39 §5.1 — vouched or not. Any first segment under
@@ -553,18 +564,25 @@ export async function cacheDir(home: string): Promise<"absent" | "present"> {
  * When `home` is an array of homes, **one** regex matches them all in one pass, so a label inserted
  * for one home is never matched by another — the fix for homes where one is a string suffix of the
  * other (e.g. `/home` as a link to `/var/home`).
+ *
+ * When `home` is an empty array, any segment after `forges/` is replaced by the fallback.
+ *
+ * @param platform The platform to use for case-insensitive matching; defaults to `process.platform`.
  */
-export function hideCacheSegment(text: string, home: string | readonly string[]): string {
+export function hideCacheSegment(text: string, home: string | readonly string[], platform: NodeJS.Platform = process.platform): string {
   const homes = Array.isArray(home) ? home : [home];
+  // When no homes are given, fall back to replacing any segment after any forges/
+  if (homes.length === 0) return hideForgeSegmentFallback(text);
   // Resolve, strip trailing separators, escape, de-duplicate and sort longest first (so a longer
   // prefix is tried before a shorter one that is a suffix of it).
   const escaped = [...new Set(homes.map((h) => path.resolve(h).replace(/[/\\]+$/, "")))]
     .sort((a, b) => b.length - a.length)
     .map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  if (escaped.length === 0) return text;
+  if (escaped.length === 0) return hideForgeSegmentFallback(text);
   // Match: <any home>/forges/ or <any home>\forges\ followed by the segment (up to / \ space or quote)
   // Capture the prefix (including the separator after forges) in group 1
-  const pattern = new RegExp(`((?:${escaped.join("|")})[/\\\\]forges[/\\\\])([^/\\\\\\s"']+)`, "g");
+  const flags = platform === "win32" ? "gi" : "g";
+  const pattern = new RegExp(`((?:${escaped.join("|")})[/\\\\]forges[/\\\\])([^/\\\\\\s"']+)`, flags);
   // Use a function replacement to avoid $&, $1, etc. in the home path being interpreted
   return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
 }
@@ -604,11 +622,12 @@ export async function assertNotCacheTree(dir: string, home: string): Promise<voi
     try {
       rootReal = await realpathOfNearest(dir);
     } catch (e) {
-      // Fail closed: label the entry's name in the error and rethrow. One pass over both prefixes
-      // (the home as given and the real home), since a second pass could match inside the label
-      // when one prefix ends with the other.
+      // Fail closed: label the entry's name in the error and rethrow. One pass only — a second
+      // pass could match inside the label when one prefix ends with the other, or when a link
+      // reaches the forges directory through another path. The fallback labels any /forges/
+      // or \forges\ segment, which covers both the given home and any linked home.
       const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(hideCacheSegment(msg, [home, path.dirname(forgesReal)]));
+      throw new Error(hideForgeSegmentFallback(msg));
     }
     if (isUnderOrEqual(rootReal, forgesReal)) {
       const rel = path.relative(forgesReal, rootReal);

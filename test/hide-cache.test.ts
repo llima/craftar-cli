@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { hideCacheKeys, hideCacheSegment, hideKeys, hideUnvouched, vouchedKeys } from "../src/core/registry.js";
+import { hideCacheKeys, hideCacheSegment, hideForgeSegmentFallback, hideKeys, hideUnvouched, vouchedKeys } from "../src/core/registry.js";
 import { CREDENTIAL_HIDDEN, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
 import { RegistryEntrySchema } from "../src/schema/index.js";
 
@@ -140,5 +140,54 @@ describe("overlapping keys are hidden as one range (spec 39, review round 3)", (
   });
   it("a key inside an inserted label is never matched", () => {
     expect(hideCacheKeys("forges/k1", ["k1"], ["credentials", "cache"])).toBe(`forges/${CREDENTIAL_HIDDEN}`);
+  });
+});
+
+describe("P2 — hideCacheSegment fixes", () => {
+  it("(1) empty home list: segment after any forges/ is the label", () => {
+    const text = "x /h/forges/secret/y z";
+    const out = hideCacheSegment(text, []);
+    expect(out).not.toContain("secret");
+    expect(out).toContain(UNVOUCHED_HIDDEN);
+    expect(out).toBe(`x /h/forges/${UNVOUCHED_HIDDEN}/y z`);
+  });
+
+  it("(2a) case-insensitive on win32: different case matches", () => {
+    const out = hideCacheSegment("x /H/forges/secret/y", ["/h"], "win32");
+    expect(out).not.toContain("secret");
+    expect(out).toContain(UNVOUCHED_HIDDEN);
+  });
+
+  it("(2b) case-sensitive on linux: different case does NOT match", () => {
+    const out = hideCacheSegment("x /H/forges/secret/y", ["/h"], "linux");
+    expect(out).toContain("secret");
+  });
+
+  it("(3) the label appears exactly once and intact", () => {
+    const text = "x /h/forges/secret/y z";
+    const out = hideCacheSegment(text, ["/h"]);
+    // Count occurrences of the label
+    const matches = out.match(/\(a cache entry name — not shown\)/g);
+    expect(matches?.length).toBe(1);
+    // Ensure label is intact (not garbled by a second pass)
+    expect(out).toContain("(a cache entry name — not shown)");
+  });
+
+  it("hideForgeSegmentFallback: /mnt/link/forges/secret/y lacks secret", () => {
+    const text = "/mnt/link/forges/secret/y";
+    const out = hideForgeSegmentFallback(text);
+    expect(out).not.toContain("secret");
+    expect(out).toContain(UNVOUCHED_HIDDEN);
+    expect(out).toBe(`/mnt/link/forges/${UNVOUCHED_HIDDEN}/y`);
+  });
+
+  it("hideForgeSegmentFallback handles both separators", () => {
+    const text = "x /a/forges/k1/y and z\\b\\forges\\k2\\w";
+    const out = hideForgeSegmentFallback(text);
+    expect(out).not.toContain("k1");
+    expect(out).not.toContain("k2");
+    // Count occurrences of the label
+    const matches = out.match(/\(a cache entry name — not shown\)/g);
+    expect(matches?.length).toBe(2);
   });
 });

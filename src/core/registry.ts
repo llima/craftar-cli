@@ -271,8 +271,8 @@ export function hideCacheKeys(text: string, credential: readonly string[], unvou
   return out;
 }
 
-/** `hideCacheSegment` lives in `remote.ts` (the module that reads the cache layout); re-exported for its callers here. */
-export { hideCacheSegment } from "./remote.js";
+/** `hideCacheSegment` and `hideForgeSegmentFallback` live in `remote.ts` (the module that reads the cache layout); re-exported for their callers here. */
+export { hideCacheSegment, hideForgeSegmentFallback } from "./remote.js";
 
 /** Whether `dir` has a registry entry — by real path, without case on Windows, as `register` keys it (spec 24 §5.1). */
 export async function isRegistered(reg: Registry, dir: string): Promise<boolean> {
