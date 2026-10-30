@@ -94,18 +94,25 @@ async function recipeFiles(root: string): Promise<Map<string, { abs: string; ste
 
 /**
  * Whether something stands where a new directory would go: anything but nothing, or a directory holding no file.
- * Throws on lstat errors other than ENOENT (fail-closed).
+ * Throws on lstat errors other than ENOENT (fail-closed), with a message naming `label` (forge-relative POSIX path).
  */
-async function occupied(dir: string): Promise<boolean> {
+async function occupied(dir: string, label: string): Promise<boolean> {
   let stat;
   try {
     stat = await fs.lstat(dir);
   } catch (e) {
     // Only ENOENT means "not occupied"; other errors (EACCES, EIO, etc.) fail closed.
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw e;
+    const code = (e as NodeJS.ErrnoException).code ?? "unknown";
+    throw new Error(`${COMMAND}: cannot read ${label} (${code})`);
   }
-  return !stat.isDirectory() || (await listFiles(dir)).length > 0;
+  if (!stat.isDirectory()) return true;
+  try {
+    return (await listFiles(dir)).length > 0;
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code ?? "unknown";
+    throw new Error(`${COMMAND}: cannot read ${label} (${code})`);
+  }
 }
 
 /** Replace the plain scalar entries equal to `old` in the sequence under `key`; says how many it replaced. */
@@ -192,8 +199,9 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
   const createdWrites: PromotionWrite[] = [];
   for (const q of Q) {
     const dir = path.join(folder, `${base.meta.name}--${q}`);
+    const variantLabel = `ingredients/${typeFolder(type)}/${base.meta.name}--${q}`;
     // An empty directory is no ingredient: a late failure undone with git leaves one behind, and the re-run must pass.
-    if (variantOf(q) || forge.ingredients.has(variantRef(q)) || (await occupied(dir))) {
+    if (variantOf(q) || forge.ingredients.has(variantRef(q)) || (await occupied(dir, variantLabel))) {
       throw new Error(
         `${COMMAND}: ${variantRef(q)} already exists, and profile ${q} also resolves ${X} — the Forge is inconsistent (both would write one file); remove one by hand, commit, and re-run`,
       );
