@@ -3181,6 +3181,7 @@ function color(state: string) {
  */
 async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate): Promise<string> {
   const refusing = `refusing to write the ${w.what} to ${target}`;
+  const home = craftarHome();
   const abs = path.resolve(target);
   let targetReal: string;
   let rootReal: string;
@@ -3188,7 +3189,6 @@ async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate
     targetReal = await realpathOfNearest(abs);
     rootReal = await realpathOfNearest(path.resolve(forgeRoot));
   } catch (e) {
-    const home = craftarHome();
     const msg = e instanceof Error ? e.message : String(e);
     fail(`${refusing}: ${hideCacheSegment(msg, home)} — ${w.who} cannot prove the target lies outside the Forge`);
   }
@@ -3196,19 +3196,21 @@ async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate
   if (rel === "" || !(rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))) {
     fail(`${refusing}: it resolves inside the Forge (${forgeRoot}) — ${w.outside}`);
   }
-  // P1: refuse a target whose real path is under (or equal to) the Forge cache.
-  const home2 = craftarHome();
-  const forgesCacheDir = path.join(home2, "forges");
+  // Refuse a target whose real path is under (or equal to) the Forge cache.
+  const forgesCacheDir = path.join(home, "forges");
   let forgesCacheReal: string | null = null;
   try {
     forgesCacheReal = await realpathOfNearest(forgesCacheDir);
-  } catch {
-    // forges/ does not exist or cannot be resolved: not a refusal
+  } catch (e) {
+    // realpathOfNearest already answers for a missing directory; any error here means the path
+    // cannot be inspected or resolved, and without its real path the cache check cannot run.
+    const msg = e instanceof Error ? e.message : String(e);
+    fail(`${refusing}: ${hideCacheSegment(msg, home)} — ${w.who} cannot prove the target lies outside the Forge cache`);
   }
-  if (forgesCacheReal !== null && isUnderOrEqual(targetReal, forgesCacheReal)) {
+  if (isUnderOrEqual(targetReal, forgesCacheReal)) {
     const relToCache = path.relative(forgesCacheReal, targetReal);
     const rest = relToCache === "" ? [] : relToCache.split(path.sep).slice(1);
-    const shown = path.join(path.resolve(home2), "forges", ...(relToCache === "" ? [] : [UNVOUCHED_HIDDEN]), ...rest);
+    const shown = path.join(path.resolve(home), "forges", ...(relToCache === "" ? [] : [UNVOUCHED_HIDDEN]), ...rest);
     fail(`refusing to write the ${w.what}: it resolves inside craftar's Forge cache (${shown}) — ${w.outside}`);
   }
   if (await pathTaken(abs)) fail(`${refusing}: the file already exists — ${w.never}; choose a new path`);
