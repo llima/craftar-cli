@@ -355,7 +355,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- hand-written Kiro steering (no Claude counterpart) ---- */
   // Whether a steering file is hand-written depends on the rules decided before it, so the check runs at decision time.
   for (const [name, sm] of steeringMeta) {
-    const meta: Ingredient = { type: "steering", name, file: "steering.md", targets: ["kiro"], tags: ["client"], origin: origin(`.kiro/steering/${name}.md`) };
+    const meta: Ingredient = { type: "steering", name, file: "steering.md", targets: ["kiro"], tags: [], origin: origin(`.kiro/steering/${name}.md`) };
     read(meta, { "steering.md": sm.text }, scanOf("steering.md", sm), (ref) => addRef(refs.steering, ref), () => ruleNames.includes(name) || sm.generated || name === "commands", "kiro");
   }
 
@@ -585,12 +585,12 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // be compared with holds the placeholder (spec 44 §4.8: "a base the importing profile would be compared with").
   // Finding 4: also fail-closed for a NEW profile when any base holds the placeholder.
   // Finding 5: use cachedResolution instead of calling resolveForImport again.
-  let indexExpand: ((text: string) => string) | undefined;
+  let indexExpand: ((text: string, target: "claude-code" | "kiro") => string) | undefined;
   if (loaded && readsRulesIndex(loaded.manifest)) {
     if (cachedResolution) {
       if (cachedResolution.ok) {
         const { resolution, lookup } = cachedResolution;
-        indexExpand = (text: string) => expandRulesIndex(text, "claude-code", lookup, resolution).text;
+        indexExpand = (text: string, target: "claude-code" | "kiro") => expandRulesIndex(text, target, lookup, resolution).text;
       } else {
         // Fail-closed: check only the rules this import compares, not all rules in the Forge
         const ruleWithPlaceholder = await ruleHoldingIndexInQueue(loaded, queuedRules);
@@ -1247,7 +1247,7 @@ async function writeIngredient(
   profile: string,
   report: ImportReport,
   scan: Record<string, string> = {},
-  run?: { ctx: RunContext; others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>; runBases: Set<string>; literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer>; lineOffset?: number }>; lineOffset?: number; indexExpand?: (text: string) => string },
+  run?: { ctx: RunContext; others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>; runBases: Set<string>; literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer>; lineOffset?: number }>; lineOffset?: number; indexExpand?: (text: string, target: "claude-code" | "kiro") => string },
 ): Promise<string | null> {
   const secret = secretIn(meta, files, scan, run?.lineOffset);
   if (secret) {

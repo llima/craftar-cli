@@ -122,7 +122,8 @@ export function registrationCarry(meta: Ingredient): {
  * will certainly decide, which the Forge-wide check excludes (§6.5 (b)). See the F9 comment in
  * `importClaudeCode` for how each set errs on its safe side.
  *
- * `indexExpand`, when given, expands `{{craftar.rules.index}}` in rule bases before comparing (spec 44 §4.8).
+ * `indexExpand`, when given, expands `{{craftar.rules.index}}` in rule and steering bases before comparing (spec 44 §4.8).
+ * Rules use claude-code form; steering uses kiro form. The function takes the target form to use.
  */
 export async function decide(
   ctx: RunContext,
@@ -134,7 +135,7 @@ export async function decide(
   fingerprint: string,
   others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>,
   runBases: Set<string>,
-  indexExpand?: (text: string) => string,
+  indexExpand?: (text: string, target: "claude-code" | "kiro") => string,
 ): Promise<Decision> {
   // The Forge root, for the file an I12 names: every base lives at <forge>/ingredients/<folder>/<name>.
   const schema = ctx.forge?.manifest.schema ?? 1;
@@ -191,8 +192,10 @@ export async function decide(
   }
 
   const map = renderMap(base.meta, ctx.P, ctx.W);
-  // For rule bases at schema >= 7, expand the rules index placeholder (spec 44 §4.8).
-  const ruleIndex = base.meta.type === "rule" ? indexExpand : undefined;
+  // For rule and steering bases at schema >= 7, expand the rules index placeholder (spec 44 §4.8).
+  // Rules use claude-code form; steering uses kiro form.
+  const indexTarget = base.meta.type === "rule" ? "claude-code" : base.meta.type === "steering" ? "kiro" : undefined;
+  const ruleIndex = indexTarget && indexExpand ? (text: string) => indexExpand(text, indexTarget) : undefined;
   const computedFp = renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined, owner, ruleIndex);
   if (computedFp === fingerprint) {
     pin(ctx, [...citedAll, ...serverKeys], map);
