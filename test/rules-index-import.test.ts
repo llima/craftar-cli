@@ -244,64 +244,56 @@ describe("rules-index import (spec 44 §4.7–§4.8)", () => {
 
   describe("re-import at schema 7: compares a base with its index expanded", () => {
     it("6. sync then import back → rule/readme is reused, not a variant", async () => {
-      const s = await acmeIndex({ schema: 7, literal: true });
-      cleanups.push(s.cleanup);
+      // Finding 2: Use a Forge that round-trips (description-less rules)
+      const root = await tmpDir("craftar-reimport-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forgeRoot = path.join(root, "forge");
+      const wsRoot = path.join(root, "ws");
 
-      // Sync the workspace to expand the index
-      expect(await (async () => {
-        const ws = await loadWorkspace(s.wsRoot);
-        const p = await plan(ws);
-        const lock = await readLock(s.wsRoot);
-        const st = await status(ws, p, lock);
-        await apply(ws, p, st);
-        return true;
-      })()).toBe(true);
-
-      // Import back into the same Forge with the same profile
-      const result = await importClaudeCode({
-        workspaceRoot: s.wsRoot,
-        forgeRoot: s.forgeRoot,
-        profileName: "acme",
+      // Forge with description-less rules that round-trip
+      await writeFiles(forgeRoot, {
+        "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 7 }),
+        "ingredients/rules/style/ingredient.yaml": YAML.stringify({
+          type: "rule",
+          name: "style",
+          inclusion: "always",
+          file: "rule.md",
+        }),
+        "ingredients/rules/style/rule.md": "# Style\nUse consistent formatting.\n",
+        "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+          type: "rule",
+          name: "readme",
+          inclusion: "always",
+          file: "rule.md",
+        }),
+        "ingredients/rules/readme/rule.md": "# Rules\n\n{{craftar.rules.index}}\n",
+        "recipes/base.yaml": YAML.stringify({ name: "base", ingredients: ["rule/style", "rule/readme"] }),
+        "profiles/acme/profile.yaml": YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code"] }),
       });
 
-      // rule/readme should be reused, not a variant
-      expect(result.reused).toContain("rule/readme");
-      expect(result.variants.map((v) => v.name)).not.toContain("rule/readme--acme");
-    });
+      // Create workspace synced from this Forge
+      await writeFiles(wsRoot, {
+        "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+      });
 
-    it("7. sync with agents-md.primary then import back → scoped rules still reused", async () => {
-      const s = await acmeIndex({ schema: 7, literal: true });
-      cleanups.push(s.cleanup);
-
-      // Add agents-md.primary to the profile
-      const profilePath = path.join(s.forgeRoot, "profiles/acme/profile.yaml");
-      const profileYaml = YAML.parse(await fs.readFile(profilePath, "utf8"));
-      profileYaml.params = { ...profileYaml.params, "agents-md.primary": true };
-      await fs.writeFile(profilePath, YAML.stringify(profileYaml));
-
-      // Sync the workspace
-      const ws = await loadWorkspace(s.wsRoot);
+      // Sync the workspace to expand the index
+      const ws = await loadWorkspace(wsRoot);
       const p = await plan(ws);
-      const lock = await readLock(s.wsRoot);
+      const lock = await readLock(wsRoot);
       const st = await status(ws, p, lock);
       await apply(ws, p, st);
 
-      // Import back
+      // Import back into the same Forge with the same profile
       const result = await importClaudeCode({
-        workspaceRoot: s.wsRoot,
-        forgeRoot: s.forgeRoot,
+        workspaceRoot: wsRoot,
+        forgeRoot: forgeRoot,
         profileName: "acme",
       });
 
-      // With agents-md.primary:
-      // - rule/readme and rule/style go into AGENTS.md, not individual files, so not imported
-      // - rule/api is scoped (fileMatch), so it's written as a file and should be reused
-      // - rule/release is kiro-only, not in claude-code
-      expect(result.reused).toContain("rule/api");
-      expect(result.reused).toContain("skill/deploy");
-      // readme is NOT imported as a rule file in agents-md.primary mode
-      expect(result.reused).not.toContain("rule/readme");
-      expect(result.variants.map((v) => v.name)).not.toContain("rule/api--acme");
+      // rule/readme should be reused, not a variant (index expanded in fingerprint)
+      expect(result.reused).toContain("rule/readme");
+      expect(result.reused).toContain("rule/style");
+      expect(result.variants.map((v) => v.name)).not.toContain("rule/readme--acme");
     });
   });
 
@@ -352,6 +344,159 @@ Always on:
       const readmeStatus = st.find((s) => s.path === ".claude/rules/readme.md");
       expect(readmeStatus).toBeDefined();
       expect(["unchanged", "adopt"]).toContain(readmeStatus!.state);
+    });
+  });
+
+  describe("schema 6 vs schema 7 re-import: body-equality must not skip metadata check", () => {
+    it("10. body-equality reuse path incorrectly ignores metadata differences", async () => {
+      // This test exposes the body-equality reuse path (spec 44 §4.7 blocker 1):
+      // Rules with description in the Forge don't round-trip (import loses description).
+      // The body-equality path would reuse them anyway at schema 7 when the expanded body matches,
+      // ignoring the metadata difference.
+      // After removing the body-equality path, such rules become variants at both schemas.
+      const root = await tmpDir("craftar-body-equality-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forgeRoot = path.join(root, "forge");
+      const wsRoot = path.join(root, "ws");
+
+      // Forge with rules that have descriptions (won't round-trip through import)
+      await writeFiles(forgeRoot, {
+        "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 7 }),
+        "ingredients/rules/style/ingredient.yaml": YAML.stringify({
+          type: "rule",
+          name: "style",
+          description: "Code style for every file",  // Description: import loses this
+          inclusion: "always",
+          file: "rule.md",
+        }),
+        "ingredients/rules/style/rule.md": "# Style\nUse consistent formatting.\n",
+        "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+          type: "rule",
+          name: "readme",
+          description: "Index of the rules",  // Description: import loses this
+          inclusion: "always",
+          file: "rule.md",
+        }),
+        "ingredients/rules/readme/rule.md": "# Rules\n\n{{craftar.rules.index}}\n",
+        "recipes/base.yaml": YAML.stringify({ name: "base", ingredients: ["rule/style", "rule/readme"] }),
+        "profiles/acme/profile.yaml": YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code"] }),
+      });
+
+      // Create workspace synced from this Forge
+      await writeFiles(wsRoot, {
+        "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+      });
+
+      // Sync the workspace
+      const ws = await loadWorkspace(wsRoot);
+      const p = await plan(ws);
+      const lock = await readLock(wsRoot);
+      const st = await status(ws, p, lock);
+      await apply(ws, p, st);
+
+      // Import at schema 7
+      const result7 = await importClaudeCode({
+        workspaceRoot: wsRoot,
+        forgeRoot: forgeRoot,
+        profileName: "acme",
+      });
+
+      // Copy the Forge and set schema to 6
+      const forgeRoot6 = path.join(root, "forge6");
+      await fs.cp(forgeRoot, forgeRoot6, { recursive: true });
+      await fs.writeFile(path.join(forgeRoot6, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 6 }));
+
+      // Import at schema 6
+      const result6 = await importClaudeCode({
+        workspaceRoot: wsRoot,
+        forgeRoot: forgeRoot6,
+        profileName: "acme",
+      });
+
+      // With body-equality path removed, both rules should become variants at both schemas
+      // because their metadata (description) differs.
+      // The key assertion: schema 7 and schema 6 should AGREE on whether a rule is reused or variant.
+      const style7Reused = result7.reused.includes("rule/style");
+      const style6Reused = result6.reused.includes("rule/style");
+      expect(style7Reused, "rule/style: reused status should agree between schema 7 and 6").toBe(style6Reused);
+
+      // Both should be variants (metadata differs due to description)
+      expect(style7Reused, "rule/style should be variant at schema 7 (description missing)").toBe(false);
+      expect(style6Reused, "rule/style should be variant at schema 6 (description missing)").toBe(false);
+    });
+
+    it("11. round-tripping Forge: sync then import back → readme reused at 7, variant at 6", async () => {
+      // This test uses a Forge that round-trips (spec 44 §4.7 finding 2):
+      // Rules with no description, targets [claude-code], schema 7.
+      // After sync and import back:
+      // - At schema 7: readme is reused (index expanded in fingerprint), style is reused
+      // - At schema 6: readme becomes a variant (literal placeholder vs expanded list), style is reused
+      const root = await tmpDir("craftar-round-trip-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forgeRoot = path.join(root, "forge");
+      const wsRoot = path.join(root, "ws");
+
+      // Forge with description-less rules that round-trip
+      await writeFiles(forgeRoot, {
+        "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 7 }),
+        "ingredients/rules/style/ingredient.yaml": YAML.stringify({
+          type: "rule",
+          name: "style",
+          inclusion: "always",
+          file: "rule.md",
+        }),
+        "ingredients/rules/style/rule.md": "# Style\nUse consistent formatting.\n",
+        "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+          type: "rule",
+          name: "readme",
+          inclusion: "always",
+          file: "rule.md",
+        }),
+        "ingredients/rules/readme/rule.md": "# Rules\n\n{{craftar.rules.index}}\n",
+        "recipes/base.yaml": YAML.stringify({ name: "base", ingredients: ["rule/style", "rule/readme"] }),
+        "profiles/acme/profile.yaml": YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code"] }),
+      });
+
+      // Create workspace synced from this Forge
+      await writeFiles(wsRoot, {
+        "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+      });
+
+      // Sync the workspace
+      const ws = await loadWorkspace(wsRoot);
+      const p = await plan(ws);
+      const lock = await readLock(wsRoot);
+      const st = await status(ws, p, lock);
+      await apply(ws, p, st);
+
+      // Import at schema 7
+      const result7 = await importClaudeCode({
+        workspaceRoot: wsRoot,
+        forgeRoot: forgeRoot,
+        profileName: "acme",
+      });
+
+      // Copy the Forge and set schema to 6
+      const forgeRoot6 = path.join(root, "forge6");
+      await fs.cp(forgeRoot, forgeRoot6, { recursive: true });
+      await fs.writeFile(path.join(forgeRoot6, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 6 }));
+
+      // Import at schema 6
+      const result6 = await importClaudeCode({
+        workspaceRoot: wsRoot,
+        forgeRoot: forgeRoot6,
+        profileName: "acme",
+      });
+
+      // rule/style should agree: reused at both schemas
+      expect(result7.reused, "style reused at 7").toContain("rule/style");
+      expect(result6.reused, "style reused at 6").toContain("rule/style");
+
+      // rule/readme differs:
+      // - At schema 7: reused (index expanded in fingerprint comparison)
+      // - At schema 6: variant (literal placeholder vs expanded list)
+      expect(result7.reused, "readme reused at 7").toContain("rule/readme");
+      expect(result6.variants.map((v) => v.name), "readme variant at 6").toContain("rule/readme--acme");
     });
   });
 

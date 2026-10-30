@@ -201,24 +201,6 @@ export async function decide(
     return { kind: "reuse", rendered: changed.length ? changed.sort() : undefined, renderedSections: filled.length ? filled : undefined };
   }
 
-  // Spec 44 §4.8: for rule bases with index expansion, check if the body matches after expansion
-  // even if the fingerprint doesn't match (metadata like `description` may differ on re-import).
-  if (ruleIndex && base.meta.type === "rule") {
-    const baseText = base.texts.get("rule.md") ?? "";
-    const expandedText = ruleIndex(baseText);
-    const sourceText = typeof files["rule.md"] === "string" ? files["rule.md"] : (files["rule.md"] as Buffer).toString("utf8");
-    // If expanded body matches source body and only metadata differs, treat as reuse
-    if (expandedText === sourceText) {
-      // Check that only the body file exists in both (same file set)
-      const baseFiles = [...base.texts.keys(), ...base.bytes.keys()].sort();
-      const srcFiles = Object.keys(files).sort();
-      if (baseFiles.join(",") === srcFiles.join(",")) {
-        pin(ctx, [...citedAll, ...serverKeys], map);
-        return { kind: "reuse" };
-      }
-    }
-  }
-
   // Param inference first (Ruling 16): the narrower claim. A base with no open section stops there, as in 0.6.2.
   const param = await inferParams(ctx, base, S, map, cited, citedAll, ref, meta, files, fingerprint, others, runBases, schema, owner, ruleIndex);
   const open = projectedNames.filter((n) => !Object.hasOwn(WSk, n));
