@@ -816,8 +816,6 @@ export interface ExpandRulesIndexResult {
   listed: number;
   /** Names of rules listed without a description. */
   undescribed: string[];
-  /** 1-based line numbers where the placeholder was found but not alone on its line. */
-  misplaced: number[];
   /** True when at least one placeholder line was expanded (spec 44 finding 2). */
   expanded: boolean;
 }
@@ -859,23 +857,17 @@ export function expandRulesIndex(
 
   // If no placeholder at all, return unchanged
   if (!hasAloneLine && !hasMisplacedToken) {
-    return { text, listed: 0, undescribed: [], misplaced: [], expanded: false };
+    return { text, listed: 0, undescribed: [], expanded: false };
   }
 
-  // If only misplaced tokens (no alone lines), collect their line numbers and return unchanged text
+  // If only misplaced tokens (no alone lines), return unchanged text
+  // (Finding 6: misplaced detection is done by plan() after emitters, not here)
   if (!hasAloneLine) {
-    const misplaced: number[] = [];
-    for (let i = 0; i < lines.length; i++) {
-      if (RULES_INDEX_TOKEN.test(lines[i])) {
-        misplaced.push(i + 1); // 1-based
-      }
-    }
-    return { text, listed: 0, undescribed: [], misplaced, expanded: false };
+    return { text, listed: 0, undescribed: [], expanded: false };
   }
 
   // We have at least one line to expand — now build the index
   const undescribed: string[] = [];
-  const misplaced: number[] = [];
 
   // Build the index content once (it's the same for all occurrences)
   const rules = resolution.ingredients.filter((ing) => ing.meta.type === "rule");
@@ -985,11 +977,8 @@ export function expandRulesIndex(
     if (RULES_INDEX_LINE.test(line)) {
       // Replace with the index content
       resultLines.push(indexContent);
-    } else if (RULES_INDEX_TOKEN.test(line)) {
-      // Placeholder exists but not alone on the line — record as misplaced
-      misplaced.push(i + 1); // 1-based line number
-      resultLines.push(line);
     } else {
+      // Keep the line as-is (including any misplaced tokens — detected by plan() later)
       resultLines.push(line);
     }
   }
@@ -998,7 +987,6 @@ export function expandRulesIndex(
     text: resultLines.join("\n"),
     listed,
     undescribed,
-    misplaced,
     expanded: true,  // We got here only if hasAloneLine was true
   };
 }

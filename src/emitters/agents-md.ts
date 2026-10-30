@@ -70,8 +70,8 @@ export const agentsMd: Emitter<"agents-md"> = {
         if (ctx.resolution.rulesIndex) {
           const indexResult = expandRulesIndex(resolved, "agents-md", lookup, ctx.resolution);
           bodyText = indexResult.text;
-          if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || (indexResult.misplaced && indexResult.misplaced.length > 0) || indexResult.expanded) {
-            ctx.reportIndex({ path: "AGENTS.md", rules: indexResult.listed, undescribed: indexResult.undescribed, misplaced: indexResult.misplaced, expanded: indexResult.expanded });
+          if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || indexResult.expanded) {
+            ctx.reportIndex({ path: "AGENTS.md", rules: indexResult.listed, undescribed: indexResult.undescribed, expanded: indexResult.expanded });
           }
         }
         const body = bodyText.replace(/\n+$/, "");
@@ -104,8 +104,8 @@ export const agentsMd: Emitter<"agents-md"> = {
           if (ctx.resolution.rulesIndex) {
             const indexResult = expandRulesIndex(resolved, "agents-md", lookup, ctx.resolution);
             bodyText = indexResult.text;
-            if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || (indexResult.misplaced && indexResult.misplaced.length > 0) || indexResult.expanded) {
-              ctx.reportIndex({ path: "AGENTS.md", rules: indexResult.listed, undescribed: indexResult.undescribed, misplaced: indexResult.misplaced, expanded: indexResult.expanded });
+            if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || indexResult.expanded) {
+              ctx.reportIndex({ path: "AGENTS.md", rules: indexResult.listed, undescribed: indexResult.undescribed, expanded: indexResult.expanded });
             }
           }
           const body = bodyText.replace(/\n+$/, "");

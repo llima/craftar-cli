@@ -21,7 +21,7 @@ import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
 import { appliesTo, effectiveTargets } from "../emitters/shared.js";
-import { RULES_INDEX_KEY, RULES_INDEX_LINE, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
+import { RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
 export const LOCAL_FILE = "craftar.local.yaml";
@@ -682,7 +682,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
     reportKiroResource(agent: string, path: string) {
       kiroResourceRecords.push({ agent, path });
     },
-    reportIndex(entry: { path: string; rules: number; undescribed: string[]; misplaced?: number[]; expanded?: boolean }) {
+    reportIndex(entry: { path: string; rules: number; undescribed: string[]; expanded?: boolean }) {
       indexRecords.push(entry);
     },
     reportIndexLeft(p: string) {
@@ -802,17 +802,32 @@ export async function plan(ws: Workspace): Promise<Plan> {
     if (allUndescribed.size > 0) {
       warnings.push(undescribedRulesWarning([...allUndescribed].sort()));
     }
-    // Collect all misplaced line locations
+
+    // Finding 6: Scan planned files for misplaced placeholders (not alone on line).
+    // This detects lines in the PLANNED content, not the ingredient body.
+    // Applies to rules (.claude/rules/<name>.md, .kiro/steering/<name>.md) and AGENTS.md.
     const misplacedLocations: string[] = [];
-    for (const r of indexRecords) {
-      if (r.misplaced) {
-        for (const line of r.misplaced) {
-          misplacedLocations.push(`${r.path}:${line}`);
+    const isRuleOrSteeringOrAgentsMd = (p: string) =>
+      p === "AGENTS.md" ||
+      /^\.claude\/rules\/[^/]+\.md$/.test(p) ||
+      /^\.kiro\/steering\/[^/]+\.md$/.test(p);
+
+    for (const f of planned) {
+      if (!isRuleOrSteeringOrAgentsMd(f.path)) continue;
+      const content = f.content.toString("utf8");
+      // Split on \n, stripping trailing \r from each line (for CRLF files)
+      const lines = content.split("\n").map((l) => l.replace(/\r$/, ""));
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        // Check if the line has the token but NOT alone (i.e., doesn't match RULES_INDEX_LINE)
+        if (RULES_INDEX_TOKEN.test(line) && !RULES_INDEX_LINE.test(line)) {
+          misplacedLocations.push(`${f.path}:${i + 1}`); // 1-based line number
         }
       }
     }
+
     if (misplacedLocations.length > 0) {
-      // Finding 6: Sort numerically by line number, not string sort
+      // Sort numerically by line number, not string sort
       // Format: "path:line" - sort by path first (code-point), then by line number (numeric)
       const sortedLocations = misplacedLocations.sort((a, b) => {
         const [pathA, lineA] = a.split(/:(?=\d+$)/);
