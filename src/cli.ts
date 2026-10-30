@@ -75,7 +75,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.39.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.40.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -878,7 +878,8 @@ drift
       // Below schema 3, providedRefs returns early (line "if (!eff.selected.length) return new Map()") before resolve(), so it cannot throw.
       providedWarnings.push(`profile ${ws.config.profile} does not resolve on its own (${(e as Error).message}) — what its integrations provide was not computed, and craftar drift promote will refuse`);
     }
-    const rows = driftList(named ? [named] : st, provided, new Set(p.reworded));
+    const indexedPaths = new Set(p.indexed.map((x) => x.path));
+    const rows = driftList(named ? [named] : st, provided, new Set(p.reworded), indexedPaths);
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
@@ -1184,7 +1185,7 @@ program
 /* ---------------------------------------------------------------- explain */
 program
   .command("explain")
-  .description("Why does this file exist? Which ingredient, recipe chain and target produced it, and which layer filled each section and each parameter it cites")
+  .description("Why does this file exist? Which ingredient, recipe chain and target produced it, which layer filled each section and each parameter it cites, and the rules index when the file holds it")
   .argument("<path>", "workspace-relative path of a generated file")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
@@ -1202,6 +1203,12 @@ program
     if (f.sections.length) {
       const layer = (l: SectionLayer) => (l === "profile" ? `profile ${p.resolution.profile.name}` : l);
       console.log(`  sections    ${f.sections.map((x) => `${x.name} (${layer(x.layer)})`).join(", ")}`);
+    }
+    // Spec 44 §4.5: if this file holds the rules index, name it and its rule count.
+    // AGENTS.md does not print the index line (it would always be the full list of always-on rules)
+    const indexedEntry = p.indexed.find((x) => x.path === f.path);
+    if (indexedEntry && f.path !== "AGENTS.md") {
+      console.log(`  index       craftar.rules.index (${indexedEntry.rules} rule${indexedEntry.rules === 1 ? "" : "s"})`);
     }
     // Spec 29 §4.1: which layer filled each parameter the file's ingredient cites — or `unset`.
     if (f.params.length) {

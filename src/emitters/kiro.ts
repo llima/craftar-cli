@@ -3,10 +3,12 @@ import { climbsOut, toCrlf } from "../core/text.js";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
 import { decodeForScan } from "../core/secrets.js";
+import { RULES_INDEX_TOKEN } from "../core/rules-index.js";
 import {
   appliesTo,
   buildRuleLookup,
   effectiveTargets,
+  expandRulesIndex,
   formatDeadRefs,
   formatScannedRefs,
   mcpServers,
@@ -94,8 +96,17 @@ export const kiro: Emitter<"kiro"> = {
       switch (m.type) {
         case "rule": {
           const rawBody = await ctx.text(ing, m.file, "kiro");
-          const body = resolve(rawBody, ing.ref);
+          const resolved = resolve(rawBody, ing.ref);
           const path = ruleFile("kiro", m);
+          // Expand the rules index at the gate (spec 44 §4.4), after resolve, before frontmatter and banner
+          let body = resolved;
+          if (ctx.resolution.rulesIndex) {
+            const indexResult = expandRulesIndex(resolved, "kiro", lookup, ctx.resolution);
+            body = indexResult.text;
+            if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || indexResult.expanded) {
+              ctx.reportIndex({ path, rules: indexResult.listed, undescribed: indexResult.undescribed, expanded: indexResult.expanded });
+            }
+          }
           checkReworded(path, [rawBody], ing.ref);
           const fm =
             m.inclusion === "fileMatch"
@@ -105,10 +116,21 @@ export const kiro: Emitter<"kiro"> = {
           out.push(crlf(path, fm + head + body, ing.ref));
           break;
         }
-        case "steering":
-          // Steering bodies are emitted as written (spec 17 §2)
-          out.push(crlf(`.kiro/steering/${outName(m)}.md`, await ctx.text(ing, m.file, "kiro"), ing.ref));
+        case "steering": {
+          // Steering bodies are emitted as written (spec 17 §2), but index is expanded at the gate
+          const path = `.kiro/steering/${outName(m)}.md`;
+          let body = await ctx.text(ing, m.file, "kiro");
+          // Expand the rules index at the gate (spec 44 §4.4), after ctx.text
+          if (ctx.resolution.rulesIndex) {
+            const indexResult = expandRulesIndex(body, "kiro", lookup, ctx.resolution);
+            body = indexResult.text;
+            if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || indexResult.expanded) {
+              ctx.reportIndex({ path, rules: indexResult.listed, undescribed: indexResult.undescribed, expanded: indexResult.expanded });
+            }
+          }
+          out.push(crlf(path, body, ing.ref));
           break;
+        }
         case "agent": {
           const path = `.kiro/agents/${outName(m)}.json`;
           // Resolve description first, then body (spec 17 §4.5 order: description before prompt)
@@ -118,6 +140,10 @@ export const kiro: Emitter<"kiro"> = {
           const rawBody = await ctx.text(ing, m.file, "kiro");
           const body = resolve(rawBody, ing.ref);
           checkReworded(path, [rawDesc, rawBody], ing.ref);
+          // At the gate, report if the placeholder is in an agent body (spec 44 §4.5)
+          if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(body)) {
+            ctx.reportIndexLeft(path);
+          }
           const tools = mapTools(m.tools, ctx);
           // agentResources reads the blanket-rewritten text, not the resolved text (spec 17 §4.6)
           const resources = m.resources ?? agentResources(outName(m), rewrite(rawDesc) + "\n" + rewrite(rawBody), ruleNames, scopedRules);
@@ -152,6 +178,10 @@ export const kiro: Emitter<"kiro"> = {
           const resolvedFm = m.frontmatterRaw ? resolve(m.frontmatterRaw, ing.ref) : null;
           const body = resolve(rawBody, ing.ref);
           checkReworded(path, [m.frontmatterRaw ? m.frontmatterRaw : (m.description ?? ""), rawBody], ing.ref);
+          // At the gate, report if the placeholder is in a command body (spec 44 §4.5)
+          if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(body)) {
+            ctx.reportIndexLeft(path);
+          }
           const doc = serializeFrontmatter(
             { description: resolvedDescription, "argument-hint": m.argumentHint, "allowed-tools": m.allowedTools },
             body,
@@ -166,6 +196,10 @@ export const kiro: Emitter<"kiro"> = {
             const rawText = await ctx.text(ing, "SKILL.md", "kiro");
             const text = resolve(rawText, ing.ref);
             checkReworded(path, [rawText], ing.ref);
+            // At the gate, report if the placeholder is in a skill body (spec 44 §4.5)
+            if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(text)) {
+              ctx.reportIndexLeft(path);
+            }
             out.push(crlf(path, text, ing.ref));
           } else {
             for (const f of await listFiles(ing.dir)) {
@@ -175,6 +209,10 @@ export const kiro: Emitter<"kiro"> = {
                 const rawText = await ctx.text(ing, f, "kiro");
                 const text = resolve(rawText, ing.ref);
                 checkReworded(path, [rawText], ing.ref);
+                // At the gate, report if the placeholder is in a skill body (spec 44 §4.5)
+                if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(text)) {
+                  ctx.reportIndexLeft(path);
+                }
                 out.push(crlf(path, text, ing.ref));
               } else {
                 // Binary file: scan but don't rewrite (spec 41 §4.4)

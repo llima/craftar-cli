@@ -29,10 +29,11 @@ const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 /**
  * Keys `unify` never extracts: a global param an emitter reads directly, or a name `substitute`
  * once resolved to a built-in (P9). At schema 3+, also keys under `integrations.` — the prefix
- * the block gives (spec 33 §5.2).
+ * the block gives (spec 33 §5.2). The `craftar.` prefix is reserved at every schema (spec 44 §4.2).
  */
 export function reservedKey(key: string, schema: number): boolean {
   if (key === "kiro.banner" || key === AGENTS_MD_BUDGET_KEY || key === AGENTS_MD_PRIMARY_KEY || key in Object.prototype) return true;
+  if (key.startsWith("craftar.")) return true;
   return schema >= FORGE_SCHEMA_INTEGRATIONS && key.startsWith(INTEGRATIONS_PREFIX);
 }
 

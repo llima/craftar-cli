@@ -21,6 +21,7 @@ import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
 import { appliesTo, effectiveTargets } from "../emitters/shared.js";
+import { RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
 export const LOCAL_FILE = "craftar.local.yaml";
@@ -345,6 +346,10 @@ export interface Plan {
     present: Array<{ agent: string; path: string }>;
     warning: string | null;
   } | null;
+  /**
+   * Files where `{{craftar.rules.index}}` was expanded, sorted by path (spec 44 §4.4). Empty below schema 7, and when no list was expanded.
+   */
+  indexed: Array<{ path: string; rules: number }>;
 }
 
 /** Declared keys with no default that no layer fills, with the ingredients declaring them (spec 24 §4.2) — cited or not. */
@@ -354,6 +359,8 @@ export function declaredWithoutValue(p: Pick<Plan, "resolution">): Map<string, s
     const values = paramsFor(ing, p.resolution);
     // `paramsFor` already holds the ingredient's own default, so a key it lacks has neither default nor value.
     for (const key of Object.keys(ing.meta.params ?? {})) {
+      // At the rules-index gate, skip the key (spec 44 §4.2)
+      if (p.resolution.rulesIndex && key === RULES_INDEX_KEY) continue;
       if (Object.hasOwn(values, key)) continue;
       out.set(key, [...(out.get(key) ?? []), ing.ref]);
     }
@@ -596,6 +603,12 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const rewordedPaths = new Set<string>();
   /** Kiro agent resources recorded for the check (spec 41 §4.5). */
   const kiroResourceRecords: Array<{ agent: string; path: string }> = [];
+  /** Rules index expansion results (spec 44 §4.4). */
+  const indexRecords: Array<{ path: string; rules: number; undescribed: string[]; misplaced?: number[]; expanded?: boolean }> = [];
+  /** Paths where the index placeholder was left as written (spec 44 §4.5). */
+  const indexLeftPaths = new Set<string>();
+  /** Below-gate literals: `ref (file)` for each rendered text that holds `{{craftar.rules.index}}` alone on a line (spec 44 §4.2). */
+  const belowGateLiterals = new Set<string>();
   const ctx: EmitBase = {
     forge: ws.forge,
     resolution,
@@ -626,9 +639,21 @@ export async function plan(ws: Workspace): Promise<Plan> {
       if (parsed) guardOutput(ing, file, out, parsed, resolution, params, owner);
       // Every file rendered here, body file or not: `explain` names each key the refusal can name (spec 29 §4.1).
       const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
-      for (const key of placeholders(expanded)) c.keys.add(key);
+      for (const key of placeholders(expanded)) {
+        // At the gate, drop the key from cited (spec 44 §4.2)
+        if (resolution.rulesIndex && key === RULES_INDEX_KEY) continue;
+        c.keys.add(key);
+      }
       if (c.keys.size) cited.set(ing.ref, c);
-      for (const key of missing) missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ing.ref));
+      for (const key of missing) {
+        // At the gate, drop the key from missing (spec 44 §4.2)
+        if (resolution.rulesIndex && key === RULES_INDEX_KEY) continue;
+        missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ing.ref));
+      }
+      // Below the gate, track literals for the warning (spec 44 §4.2)
+      if (!resolution.rulesIndex && RULES_INDEX_LINE.test(out)) {
+        belowGateLiterals.add(`${ing.ref} (${file})`);
+      }
       return out;
     },
     bytes(ing: ResolvedIngredient, file: string) {
@@ -638,6 +663,8 @@ export async function plan(ws: Workspace): Promise<Plan> {
       warnings.push(msg);
     },
     missing(key: string, ref: string) {
+      // At the gate, drop the key (spec 44 §4.2)
+      if (resolution.rulesIndex && key === RULES_INDEX_KEY) return;
       missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ref));
     },
     warnOnce(msg: string) {
@@ -654,6 +681,12 @@ export async function plan(ws: Workspace): Promise<Plan> {
     },
     reportKiroResource(agent: string, path: string) {
       kiroResourceRecords.push({ agent, path });
+    },
+    reportIndex(entry: { path: string; rules: number; undescribed: string[]; expanded?: boolean }) {
+      indexRecords.push(entry);
+    },
+    reportIndexLeft(p: string) {
+      indexLeftPaths.add(p);
     },
   };
   const files: PlannedFile[] = [];
@@ -722,7 +755,115 @@ export async function plan(ws: Workspace): Promise<Plan> {
     }
   }
 
-  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources };
+  // Rules-index warnings (spec 44 §4.2):
+  // - Below the gate: one line for all literals
+  // - At the gate: one line per layer that holds a value for the key
+  if (!resolution.rulesIndex) {
+    // Below the gate: warn about literals
+    if (belowGateLiterals.size > 0) {
+      const sorted = [...belowGateLiterals].sort();
+      warnings.push(belowGateLiteralWarning(sorted));
+    }
+  } else {
+    // At the gate: warn about values in layers (order: recipe, profile, workspace, then ingredient refs sorted)
+    const { recipes, profile, workspace } = resolution.paramLayers;
+    // Recipe that provides a default for the key
+    const recipeWithKey = recipes.get(RULES_INDEX_KEY);
+    if (recipeWithKey !== undefined) {
+      warnings.push(ignoredValueWarning(`recipe ${recipeWithKey}`));
+    }
+    // Profile params
+    if (Object.hasOwn(profile, RULES_INDEX_KEY)) {
+      warnings.push(ignoredValueWarning(`profile ${resolution.profile.name}`));
+    }
+    // Workspace overrides.params
+    if (Object.hasOwn(workspace, RULES_INDEX_KEY)) {
+      warnings.push(ignoredValueWarning("workspace"));
+    }
+    // Ingredient's own params default (sorted by ref)
+    const ingRefs: string[] = [];
+    for (const ing of resolution.ingredients) {
+      const decl = ing.meta.params?.[RULES_INDEX_KEY];
+      if (decl && decl.default !== undefined) {
+        ingRefs.push(ing.ref);
+      }
+    }
+    for (const ref of ingRefs.sort()) {
+      warnings.push(ignoredValueWarning(ref));
+    }
+
+    // Rules-index warnings at the gate (spec 44 §4.4): undescribed rules and misplaced placeholders
+    // Collect all undescribed names across all indices
+    const allUndescribed = new Set<string>();
+    for (const r of indexRecords) {
+      for (const name of r.undescribed) allUndescribed.add(name);
+    }
+    // One warning for all undescribed rules (spec 44 §4.4)
+    if (allUndescribed.size > 0) {
+      warnings.push(undescribedRulesWarning([...allUndescribed].sort()));
+    }
+
+    // Scan the planned files for misplaced placeholders (not alone on line).
+    // This detects lines in the PLANNED content, not the ingredient body.
+    // Applies to rules (.claude/rules/<name>.md, .kiro/steering/<name>.md) and AGENTS.md.
+    const misplacedLocations: string[] = [];
+    const isRuleOrSteeringOrAgentsMd = (p: string) =>
+      p === "AGENTS.md" ||
+      /^\.claude\/rules\/[^/]+\.md$/.test(p) ||
+      /^\.kiro\/steering\/[^/]+\.md$/.test(p);
+
+    for (const f of planned) {
+      if (!isRuleOrSteeringOrAgentsMd(f.path)) continue;
+      const content = f.content.toString("utf8");
+      // Split on \n, stripping trailing \r from each line (for CRLF files)
+      const lines = content.split("\n").map((l) => l.replace(/\r$/, ""));
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        // Check if the line has the token but NOT alone (i.e., doesn't match RULES_INDEX_LINE)
+        if (RULES_INDEX_TOKEN.test(line) && !RULES_INDEX_LINE.test(line)) {
+          misplacedLocations.push(`${f.path}:${i + 1}`); // 1-based line number
+        }
+      }
+    }
+
+    if (misplacedLocations.length > 0) {
+      // Sort numerically by line number, not string sort
+      // Format: "path:line" - sort by path first (code-point), then by line number (numeric)
+      const sortedLocations = misplacedLocations.sort((a, b) => {
+        const [pathA, lineA] = a.split(/:(?=\d+$)/);
+        const [pathB, lineB] = b.split(/:(?=\d+$)/);
+        const pathCmp = pathA < pathB ? -1 : pathA > pathB ? 1 : 0;
+        if (pathCmp !== 0) return pathCmp;
+        return parseInt(lineA, 10) - parseInt(lineB, 10);
+      });
+      warnings.push(misplacedPlaceholderWarning(sortedLocations));
+    }
+    // Collect all paths where the placeholder was left (agent, command, skill body)
+    if (indexLeftPaths.size > 0) {
+      warnings.push(nonBodyPlaceholderWarning([...indexLeftPaths].sort()));
+    }
+  }
+
+  // Build indexed (spec 44 §4.4): sorted by path in code-point order, only at the gate
+  // Build only from expanded entries (expanded: true), deduplicated by path
+  const indexed: Plan["indexed"] = [];
+  if (resolution.rulesIndex) {
+    const seenPaths = new Map<string, number>();
+    for (const r of indexRecords) {
+      // Only include entries where something was actually expanded (expanded !== false)
+      if (r.expanded === false) continue;
+      // Dedupe by path: two indexed bodies give ONE entry, rules from first
+      if (!seenPaths.has(r.path)) {
+        seenPaths.set(r.path, r.rules);
+      }
+    }
+    for (const [path, rules] of seenPaths) {
+      indexed.push({ path, rules });
+    }
+    indexed.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  }
+
+  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed };
 }
 
 /**

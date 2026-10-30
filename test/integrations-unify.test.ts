@@ -69,6 +69,16 @@ describe("reservedKey and take: param at schema 3 (spec 33 §5.2)", () => {
     }
   });
 
+  it("1b. reservedKey: the craftar. prefix is reserved at every schema (spec 44 §4.2)", () => {
+    // The craftar. prefix is reserved at every schema (spec 44 §4.2 first bullet)
+    expect(reservedKey("craftar.rules.index", 1)).toBe(true);
+    expect(reservedKey("craftar.x", 1)).toBe(true);
+    expect(reservedKey("craftar.x", 7)).toBe(true);
+    // Keys that do not start with "craftar." are not reserved on this basis
+    expect(reservedKey("craftarx", 1)).toBe(false);
+    expect(reservedKey("acme.craftar.x", 1)).toBe(false);
+  });
+
   it("2. the engine refuses the key at schema 3", async () => {
     expect(await message(extract(3, KEY))).toBe('unify plan: "rule.md" hunk 1: key integrations.pm.org is reserved');
   });

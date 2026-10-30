@@ -4,3 +4,4 @@ Imported <root>/ws → <root>/forge-copy as profile "acme"
   rendered rule/style — sections flavors
   profile profiles/acme/profile.yaml unchanged
   recipes: stack-api, base
+  warn import: Claude Code does not list a skill written as one file — .claude/skills/docs.md; set layout: dir in each ingredient.yaml

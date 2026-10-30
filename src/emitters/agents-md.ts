@@ -1,4 +1,4 @@
-import { buildRuleLookup, effectiveTargets, outName, resolveRuleRefs, ruleFile, ruleWriter, textFile, type RefReport } from "./shared.js";
+import { buildRuleLookup, effectiveTargets, expandRulesIndex, outName, resolveRuleRefs, ruleFile, ruleWriter, textFile, type RefReport } from "./shared.js";
 import type { Emitter } from "./types.js";
 import type { WrittenIngredient } from "../core/capabilities.js";
 
@@ -61,10 +61,20 @@ export const agentsMd: Emitter<"agents-md"> = {
     for (const ing of rules) {
       const rawBody = await ctx.text(ing, ing.meta.file, "agents-md");
       if (ing.meta.inclusion === "always") {
-        // Resolve references, then trim trailing newlines (spec 15: after ctx.text, before the trim)
+        // Resolve references, then expand the index, then trim trailing newlines
+        // (spec 15: after ctx.text, spec 44: index after resolveRuleRefs, before trim and reportAgentsMdRule)
         const { text: resolved, report } = resolveRuleRefs(rawBody, ing.ref, lookup, ctx.resolution.targets);
         alwaysReports.push(report);
-        const body = resolved.replace(/\n+$/, "");
+        // Expand the rules index at the gate (spec 44 §4.4)
+        let bodyText = resolved;
+        if (ctx.resolution.rulesIndex) {
+          const indexResult = expandRulesIndex(resolved, "agents-md", lookup, ctx.resolution);
+          bodyText = indexResult.text;
+          if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || indexResult.expanded) {
+            ctx.reportIndex({ path: "AGENTS.md", rules: indexResult.listed, undescribed: indexResult.undescribed, expanded: indexResult.expanded });
+          }
+        }
+        const body = bodyText.replace(/\n+$/, "");
         // Check for reworded (spec 41 §4.4)
         if (primary && lookupOff) {
           const modeOffResolved = resolveRuleRefs(rawBody, ing.ref, lookupOff, ctx.resolution.targets).text;
@@ -89,7 +99,16 @@ export const agentsMd: Emitter<"agents-md"> = {
           // Resolve references in embedded bodies too (spec 15 §4, after ctx.text, before trim)
           const { text: resolved, report } = resolveRuleRefs(rawBody, ing.ref, lookup, ctx.resolution.targets);
           embeddedReports.push(report);
-          const body = resolved.replace(/\n+$/, "");
+          // Expand the rules index at the gate (spec 44 §4.4)
+          let bodyText = resolved;
+          if (ctx.resolution.rulesIndex) {
+            const indexResult = expandRulesIndex(resolved, "agents-md", lookup, ctx.resolution);
+            bodyText = indexResult.text;
+            if (indexResult.listed > 0 || indexResult.undescribed.length > 0 || indexResult.expanded) {
+              ctx.reportIndex({ path: "AGENTS.md", rules: indexResult.listed, undescribed: indexResult.undescribed, expanded: indexResult.expanded });
+            }
+          }
+          const body = bodyText.replace(/\n+$/, "");
           // Check for reworded (spec 41 §4.4)
           if (primary && lookupOff) {
             const modeOffResolved = resolveRuleRefs(rawBody, ing.ref, lookupOff, ctx.resolution.targets).text;

@@ -5,6 +5,7 @@ import { deepMerge } from "./merge.js";
 import { outName } from "../emitters/shared.js";
 import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
 import { effectiveProfile, integrationOrigin } from "./integrations.js";
+import { readsRulesIndex, RULES_INDEX_KEY } from "./rules-index.js";
 
 /** Builds the "profile not found" message (spec 28 §5.2, N5). */
 export function profileNotFoundMessage(profile: string, profileNames: string[]): string {
@@ -41,6 +42,8 @@ export interface Resolution {
   warnings: string[];
   /** agents-md.primary is on for this workspace (spec 41 §4.1); decided once by resolve(). */
   primary: boolean;
+  /** Whether the Forge reads the rules index (spec 44 §4.1); decided once by resolve(). */
+  rulesIndex: boolean;
 }
 
 /**
@@ -170,6 +173,7 @@ export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
     disabled,
     warnings,
     primary,
+    rulesIndex: readsRulesIndex(forge.manifest),
   };
 }
 
@@ -187,11 +191,18 @@ export function sectionsFor(ing: LoadedIngredient, resolution: Resolution): Reco
 /**
  * The params one ingredient's files resolve against: its declared defaults, then every global
  * layer (spec 09 §5.4). Scoped — another ingredient never sees these defaults.
+ * At the rules-index gate (spec 44 §4.2), `craftar.rules.index` is omitted.
  */
 export function paramsFor(ing: LoadedIngredient, resolution: Resolution): Record<string, unknown> {
   const out: Record<string, unknown> = Object.create(null);
-  for (const [k, v] of Object.entries(ing.meta.params ?? {})) if (v.default !== undefined) out[k] = v.default;
-  for (const [k, v] of Object.entries(resolution.params)) out[k] = v;
+  for (const [k, v] of Object.entries(ing.meta.params ?? {})) {
+    if (resolution.rulesIndex && k === RULES_INDEX_KEY) continue;
+    if (v.default !== undefined) out[k] = v.default;
+  }
+  for (const [k, v] of Object.entries(resolution.params)) {
+    if (resolution.rulesIndex && k === RULES_INDEX_KEY) continue;
+    out[k] = v;
+  }
   return out;
 }
 

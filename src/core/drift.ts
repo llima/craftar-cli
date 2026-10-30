@@ -27,18 +27,22 @@ export const mcpTagged = (s: Pick<FileStatus, "ingredient">): boolean => s.ingre
 /** The reason of a file agents-md.primary reworded (spec 41 §4.10): promoting it would carry the rewording into the Forge. */
 export const REWORDED_REASON = "reworded by agents-md.primary";
 
+/** The reason of a file that holds the generated rules index (spec 44 §4.5): promoting it would carry sync-generated content into the Forge. */
+export const INDEXED_REASON = "holds the rules index";
+
 /**
  * The static half of promote's refusals: it reads the status, never the Forge's git state.
- * The order is: orphan, then service file (spec 31), then provided (spec 33i), then reworded (spec 41), then kiro, then
+ * The order is: orphan, then service file (spec 31), then provided (spec 33i), then reworded (spec 41), then indexed (spec 44), then kiro, then
  * AGENTS.md, then .mcp.json.
  */
-function staticReason(s: FileStatus, provided: Map<string, { slot: string; recipe: string }>, reworded: ReadonlySet<string>): string | null {
+function staticReason(s: FileStatus, provided: Map<string, { slot: string; recipe: string }>, reworded: ReadonlySet<string>, indexed: ReadonlySet<string>): string | null {
   if (s.state === "orphan-drift") return "no longer produced";
   if (s.target === "services") return "service file";
   // Provided by integrations block — after "no longer produced" and "service file", before "kiro file"
   const prov = s.ingredient ? provided.get(s.ingredient) : undefined;
   if (prov) return `provided by integrations.${prov.slot}`;
   if (reworded.has(s.path)) return REWORDED_REASON;
+  if (indexed.has(s.path)) return INDEXED_REASON;
   if (s.target === "kiro") return "kiro file";
   if (s.target === "agents-md") return "AGENTS.md";
   if (mcpTagged(s)) return ".mcp.json";
@@ -49,18 +53,20 @@ function staticReason(s: FileStatus, provided: Map<string, { slot: string; recip
  * The hand-edited files among `statuses`, in the order given. Pure.
  * @param provided - Map from Forge ref to { slot, recipe } for ingredients the block provides (spec 33i).
  * @param reworded - The plan's `reworded` paths (spec 41 §4.10); empty with the mode off.
+ * @param indexed - The plan's indexed paths (spec 44 §4.5); empty below schema 7, and when no list was expanded.
  */
 export function driftList(
   statuses: FileStatus[],
   provided: Map<string, { slot: string; recipe: string }> = new Map(),
   reworded: ReadonlySet<string> = new Set(),
+  indexed: ReadonlySet<string> = new Set(),
 ): DriftRow[] {
   const rows: DriftRow[] = [];
   for (const s of statuses) {
     if (s.state !== "drift" && s.state !== "orphan-drift") continue;
     // `same`: the lock's hash is the plan's, so only the hand edit separates the disk from the Forge.
     const forge: ForgeSide = s.state === "orphan-drift" ? "removed" : s.lock!.hash === hashNormalized(s.planned!.content) ? "same" : "changed";
-    const reason = staticReason(s, provided, reworded);
+    const reason = staticReason(s, provided, reworded, indexed);
     rows.push({ path: s.path, state: s.state, target: s.target!, ingredient: s.ingredient ?? "", forge, promotable: reason === null, reason });
   }
   return rows;

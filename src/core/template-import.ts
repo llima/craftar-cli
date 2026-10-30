@@ -101,6 +101,7 @@ export function citedKeys(texts: Map<string, string>): Set<string> {
  * claude-code emitter does: in the files `claudeResolves` names and, for an agent or a command, in `frontmatterRaw` and
  * `description` — a source's description is read back from the frontmatter the emitter reworded.
  * `owner`, when given, projects sections for that target before expanding (spec 41 Part B §5.2).
+ * `index`, when given, expands the rules index placeholder in `rule` and `steering` bases after refs and substitute (spec 44 §4.8).
  */
 export function renderedFingerprint(
   base: ImportBase,
@@ -109,6 +110,7 @@ export function renderedFingerprint(
   schema: ForgeSchema = 1,
   refs?: (text: string, citing: string) => string,
   owner?: Owner,
+  index?: (text: string) => string,
 ): string {
   // At the gate, render the server before stripForgeOnlyKeys (it needs params).
   let meta: Ingredient;
@@ -125,8 +127,11 @@ export function renderedFingerprint(
   }
   const files: Record<string, string | Buffer> = {};
   for (const [rel, text] of expandedTexts(base, sections, owner)) {
-    const out = substitute(text, map);
-    files[rel] = refs && claudeResolves(base.meta, rel) ? refs(out, citing) : out;
+    let out = substitute(text, map);
+    if (refs && claudeResolves(base.meta, rel)) out = refs(out, citing);
+    // Apply index expansion to rule and steering bases, after refs (spec 44 §4.8)
+    if (index && (base.meta.type === "rule" || base.meta.type === "steering")) out = index(out);
+    files[rel] = out;
   }
   for (const [rel, b] of base.bytes) files[rel] = b;
   try {

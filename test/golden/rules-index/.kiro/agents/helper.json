@@ -1,0 +1,10 @@
+{
+  "name": "helper",
+  "description": "",
+  "prompt": "Help the user.\n\n{{craftar.rules.index}}",
+  "tools": [],
+  "allowedTools": [],
+  "resources": [
+    "file://.kiro/steering/**/*.md"
+  ]
+}

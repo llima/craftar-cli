@@ -4,6 +4,8 @@ import type { ResolvedIngredient } from "../core/resolve.js";
 import { paramsFor } from "../core/resolve.js";
 import type { Ingredient, Target } from "../schema/index.js";
 import { rendersServers, renderServer, renderLeaves, credentialIn, credentialMessage, entropyMessage, undeclaredMessage, type RenderedLeaves } from "../core/mcp-server.js";
+import { RULES_INDEX_LINE, RULES_INDEX_KEY, RULES_INDEX_TOKEN } from "../core/rules-index.js";
+import type { Resolution } from "../core/resolve.js";
 
 export function appliesTo(targets: "*" | string[], target: string): boolean {
   return targets === "*" || targets.includes(target);
@@ -141,10 +143,53 @@ export function ruleRefState(
   const steering = steeringsByName.get(name);
   if (steering && hasKiro && appliesTo(steering.meta.targets, "kiro")) return "B";
   if (rule && ruleTargets) {
-    if (appliesTo(ruleTargets, "agents-md")) return "C";
+    if (hasMd && appliesTo(ruleTargets, "agents-md")) return "C";
     return "D";
   }
   return "unknown";
+}
+
+/** The result of ruleReference (spec 44 §4.3). */
+export interface RuleReferenceResult {
+  state: RuleRefState;
+  text: string;
+  reworded?: { ref: string; kind: string };
+}
+
+/**
+ * How a target names a rule: state (from ruleRefState), text (the replacement), and reworded (when
+ * the reference is to a rule that exists but reaches no target here, or an unknown name) (spec 44 §4.3).
+ * The resolveToken closure in resolveRuleRefs calls this; no second switch over the states anywhere.
+ */
+export function ruleReference(
+  name: string,
+  lookup: RuleLookup,
+  targets: readonly string[],
+  mode: "agents-md" | "kiro",
+): RuleReferenceResult {
+  const state = ruleRefState(name, lookup, targets, mode);
+  const hasCc = targets.includes("claude-code");
+  const rule = lookup.rulesByName.get(name);
+  if (mode === "kiro") {
+    switch (state) {
+      case "K1": return { state, text: ruleFile("kiro", { name }) };
+      case "K2": return { state, text: `.claude/rules/${name}.md` };  // unchanged
+      case "K3": return { state, text: `AGENTS.md (rule: ${name})` };
+      case "D": return { state, text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` } };
+      case "unknown": return { state, text: ruleFile("kiro", { name }), reworded: { ref: `.claude/rules/${name}.md`, kind: UNKNOWN_NAME_KIND } };
+    }
+  } else {
+    switch (state) {
+      case "A": return { state, text: `.claude/rules/${name}.md` };  // unchanged
+      case "B": return { state, text: ruleFile("kiro", { name }) };
+      case "C": return { state, text: `AGENTS.md (rule: ${name})` };
+      case "D": return { state, text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` } };
+      case "unknown":
+        if (hasCc) return { state, text: `.claude/rules/${name}.md` };  // unchanged
+        return { state, text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: "no such rule" } };
+    }
+  }
+  return { state, text: `.claude/rules/${name}.md` };  // fallback
 }
 
 /**
@@ -214,7 +259,7 @@ export function resolveRuleRefs(
   const hasCc = targets.includes("claude-code");
   const { rulesByName } = lookup;
 
-  // Use module-level ruleRefState
+  // Local shorthand for state lookup
   const ruleState = (name: string): RuleRefState => ruleRefState(name, lookup, targets, mode);
 
   // Blanket rewrite for kiro mode: .claude/rules/ → .kiro/steering/
@@ -222,30 +267,7 @@ export function resolveRuleRefs(
 
   // Resolve a single token reference (spec 20 §4.1): used for tokens and link text references.
   // Returns the replacement text and, if it rewords to "not in this workspace", the reworded entry.
-  const resolveToken = (name: string): { text: string; reworded?: { ref: string; kind: string } } => {
-    const state = ruleState(name);
-    const rule = rulesByName.get(name);
-    if (mode === "kiro") {
-      switch (state) {
-        case "K1": return { text: ruleFile("kiro", { name }) };
-        case "K2": return { text: `.claude/rules/${name}.md` };  // unchanged
-        case "K3": return { text: `AGENTS.md (rule: ${name})` };
-        case "D": return { text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` } };
-        case "unknown": return { text: ruleFile("kiro", { name }), reworded: { ref: `.claude/rules/${name}.md`, kind: UNKNOWN_NAME_KIND } };
-      }
-    } else {
-      switch (state) {
-        case "A": return { text: `.claude/rules/${name}.md` };  // unchanged
-        case "B": return { text: ruleFile("kiro", { name }) };
-        case "C": return { text: `AGENTS.md (rule: ${name})` };
-        case "D": return { text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` } };
-        case "unknown":
-          if (hasCc) return { text: `.claude/rules/${name}.md` };  // unchanged
-          return { text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: "no such rule" } };
-      }
-    }
-    return { text: `.claude/rules/${name}.md` };  // fallback
-  };
+  const resolveToken = (name: string): { text: string; reworded?: { ref: string; kind: string } } => ruleReference(name, lookup, targets, mode);
 
   // Collapse: a link whose text is exactly its path becomes the token form (spec 20 §4.2).
   // Returns the token form if collapsible, null otherwise.
@@ -779,4 +801,231 @@ export function settingsExample(
   if (hasHooks) result.hooks = hooks;
 
   return result;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Rules index expansion (spec 44 §4.3–§4.5)                           */
+/* ------------------------------------------------------------------ */
+
+/** The result of expandRulesIndex. */
+export interface ExpandRulesIndexResult {
+  /** The text with the placeholder expanded, or unchanged if no placeholder was found. */
+  text: string;
+  /** The number of rules listed in the expanded index. */
+  listed: number;
+  /** Names of rules listed without a description. */
+  undescribed: string[];
+  /** True when at least one placeholder line was expanded (spec 44 finding 2). */
+  expanded: boolean;
+}
+
+/**
+ * A description holding `<!-- craftar:` is a section marker and must not appear in the index
+ * (spec 44 §4.4). Throws with a message naming the rule.
+ */
+// Differs from `markerLine` (spec §4.4 refuses `<!-- craftar:` anywhere in a description, not only at column 0).
+const MARKER_IN_DESCRIPTION = /<!--[ \t]*\/?[ \t]*craftar:/;
+
+/**
+ * Fold a description for display: collapse runs of whitespace to single space, trim ends (spec 44 §4.4).
+ */
+function foldDescription(desc: string): string {
+  return desc.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Expand `{{craftar.rules.index}}` placeholders in a text, building an index of the profile's rules
+ * for the given target (spec 44 §4.3–§4.5).
+ *
+ * @param text The text that may contain the placeholder.
+ * @param target Which target's index to build: "claude-code", "kiro", or "agents-md".
+ * @param lookup The rule lookup for reference resolution.
+ * @param resolution The resolution with all ingredients and targets.
+ * @returns The result with expanded text, list count, undescribed names, and misplaced line numbers.
+ */
+export function expandRulesIndex(
+  text: string,
+  target: "claude-code" | "kiro" | "agents-md",
+  lookup: RuleLookup,
+  resolution: Resolution,
+): ExpandRulesIndexResult {
+  // Scan first — when no line matches RULES_INDEX_LINE and none matches RULES_INDEX_TOKEN,
+  // return unchanged without building anything; build the list only when a line will be expanded.
+  const lines = text.split("\n");
+  const hasAloneLine = lines.some((line) => RULES_INDEX_LINE.test(line));
+  const hasMisplacedToken = !hasAloneLine && lines.some((line) => RULES_INDEX_TOKEN.test(line));
+
+  // If no placeholder at all, return unchanged
+  if (!hasAloneLine && !hasMisplacedToken) {
+    return { text, listed: 0, undescribed: [], expanded: false };
+  }
+
+  // If only misplaced tokens (no alone lines), return unchanged text
+  // (a misplaced placeholder is found by plan() in the planned files, not here)
+  if (!hasAloneLine) {
+    return { text, listed: 0, undescribed: [], expanded: false };
+  }
+
+  // We have at least one line to expand — now build the index
+  const undescribed: string[] = [];
+
+  // Build the index content once (it's the same for all occurrences)
+  const rules = resolution.ingredients.filter((ing) => ing.meta.type === "rule");
+  const mode = target === "kiro" ? "kiro" : "agents-md";
+
+  // Group rules by inclusion for display order
+  const alwaysOn: Array<{ name: string; path: string; desc: string | null }> = [];
+  const scoped: Array<{ name: string; path: string; scope: string | null; desc: string | null }> = [];
+  const onRequest: Array<{ name: string; path: string; desc: string | null }> = [];
+
+  for (const ing of rules) {
+    if (ing.meta.type !== "rule") continue;
+    const meta = ing.meta;
+    const name = outName(meta);
+
+    // Get the reference for this rule in the current target's index (spec 44 §4.3)
+    const ref = ruleReference(name, lookup, resolution.targets, mode);
+    const state = ref.state;
+
+    // State D (and unknown): rule exists but reaches no target here — ABSENT from every index (no warning)
+    if (state === "D" || state === "unknown") continue;
+
+    // Build the path string: wrap in backticks for A, B, K1, K2 (file paths); as-is for C, K3 (AGENTS.md refs)
+    const isPathState = state === "A" || state === "B" || state === "K1" || state === "K2";
+    const path = isPathState ? `\`${ref.text}\`` : ref.text;
+
+    // Check description validity
+    const rawDesc = meta.description;
+    let desc: string | null = null;
+    if (rawDesc !== undefined && rawDesc.trim() !== "") {
+      if (MARKER_IN_DESCRIPTION.test(rawDesc)) {
+        throw new Error(
+          `${RULES_INDEX_KEY}: description of rule/${meta.name} contains a section marker — remove it`
+        );
+      }
+      desc = foldDescription(rawDesc);
+    } else {
+      undescribed.push(name);
+    }
+
+    // Categorize by inclusion
+    const inclusion = meta.inclusion;
+    if (inclusion === "always") {
+      alwaysOn.push({ name, path, desc });
+    } else if (inclusion === "fileMatch") {
+      // A fileMatch rule with no pattern adds nothing (spec 44 §4.4)
+      const pattern = meta.fileMatchPattern;
+      const scope = pattern
+        ? `applies to \`${Array.isArray(pattern) ? pattern.join("`, `") : pattern}\``
+        : null;
+      scoped.push({ name, path, scope, desc });
+    } else {
+      // manual or auto
+      onRequest.push({ name, path, desc });
+    }
+  }
+
+  // Sort each group by name in code-point order
+  const sortByName = <T extends { name: string }>(a: T, b: T) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  alwaysOn.sort(sortByName);
+  scoped.sort(sortByName);
+  onRequest.sort(sortByName);
+
+  // Build the index lines (spec 44 §4.4): each group only when it holds a rule
+  const indexLines: string[] = [];
+
+  // When the index lists no rule at all, the whole index is `- (no rules)` (no group heading)
+  if (alwaysOn.length === 0 && scoped.length === 0 && onRequest.length === 0) {
+    indexLines.push("- (no rules)");
+  } else {
+    if (alwaysOn.length > 0) {
+      if (indexLines.length > 0) indexLines.push("");
+      indexLines.push("Always on:");
+      for (const r of alwaysOn) {
+        indexLines.push(r.desc ? `- ${r.path} — ${r.desc}` : `- ${r.path}`);
+      }
+    }
+
+    if (scoped.length > 0) {
+      if (indexLines.length > 0) indexLines.push("");
+      indexLines.push("Scoped:");
+      for (const r of scoped) {
+        const descPart = r.desc ? ` — ${r.desc}` : "";
+        const scopePart = r.scope ? ` (${r.scope})` : "";
+        indexLines.push(`- ${r.path}${descPart}${scopePart}`);
+      }
+    }
+
+    if (onRequest.length > 0) {
+      if (indexLines.length > 0) indexLines.push("");
+      indexLines.push("On request:");
+      for (const r of onRequest) {
+        indexLines.push(r.desc ? `- ${r.path} — ${r.desc}` : `- ${r.path}`);
+      }
+    }
+  }
+
+  const indexContent = indexLines.join("\n");
+  const listed = alwaysOn.length + scoped.length + onRequest.length;
+
+  // Find and replace all placeholders
+  const resultLines: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Check if this line has the placeholder alone (using RULES_INDEX_LINE)
+    if (RULES_INDEX_LINE.test(line)) {
+      // Replace with the index content
+      resultLines.push(indexContent);
+    } else {
+      // Keep the line as-is (including any misplaced tokens — detected by plan() later)
+      resultLines.push(line);
+    }
+  }
+
+  return {
+    text: resultLines.join("\n"),
+    listed,
+    undescribed,
+    expanded: true,  // We got here only if hasAloneLine was true
+  };
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Flat skill detection (spec 44 §5)                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The outNames of skills this resolution writes as a single file to claude-code, sorted by code point.
+ * A skill is "flat" when (1) its layout is "file", and (2) effectiveTargets admits "claude-code".
+ * Claude Code does not list such skills.
+ */
+export function flatSkills(
+  resolution: { ingredients: readonly { meta: { type: string; name: string; as?: string; layout?: string; targets: "*" | string[] } }[]; primary: boolean },
+  targets: readonly string[],
+): string[] {
+  if (!targets.includes("claude-code")) return [];
+
+  const names: string[] = [];
+  for (const ing of resolution.ingredients) {
+    const meta = ing.meta;
+    if (meta.type !== "skill") continue;
+    if (meta.layout !== "file") continue;
+    // Check effectiveTargets admits "claude-code"
+    const eff = effectiveTargets(meta as Parameters<typeof effectiveTargets>[0], resolution);
+    if (!appliesTo(eff, "claude-code")) continue;
+    names.push(outName(meta));
+  }
+  return names.sort();
+}
+
+/**
+ * Build the warning message for flat skills (spec 44 §5):
+ * "{prefix}: Claude Code does not list a skill written as one file — {paths}; set layout: dir in each ingredient.yaml"
+ */
+export function flatSkillWarning(names: string[], prefix = "claude-code"): string {
+  const paths = names.map((n) => `.claude/skills/${n}.md`).join(", ");
+  return `${prefix}: Claude Code does not list a skill written as one file — ${paths}; set layout: dir in each ingredient.yaml`;
 }
