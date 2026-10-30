@@ -120,6 +120,11 @@ export function renderedFingerprint(
   } else {
     meta = stripForgeOnlyKeys({ ...base.meta }) as Ingredient;
   }
+  // For script/hook, normalize base targets in a local copy before comparison (spec A: targets "*" ≡ ["claude-code"])
+  // Import builds the source at targets: ["claude-code"], so a base at "*" should match it.
+  if ((meta.type === "script" || meta.type === "hook") && meta.targets === "*") {
+    meta = { ...meta, targets: ["claude-code"] };
+  }
   const citing = `${base.meta.type}/${base.meta.name}`;
   if (refs && (meta.type === "agent" || meta.type === "command")) {
     if (meta.frontmatterRaw !== undefined) meta.frontmatterRaw = refs(meta.frontmatterRaw, citing);

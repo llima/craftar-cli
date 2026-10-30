@@ -214,9 +214,23 @@ export async function decide(
 /** A key's section values in a layer, or none. */
 export const valuesAt = (layer: Sections, key: string): Record<string, string> => (Object.hasOwn(layer, key) ? layer[key] : {});
 
+/**
+ * For script/hook types only, normalize targets: `"*"` is equivalent to `["claude-code"]` on import
+ * because import builds the source at `targets: ["claude-code"]` (spec 10). This normalization is
+ * done in a local copy for the comparison, so `fingerprintOf` (shared with `forge variants`) is unchanged.
+ */
+function normalizeTargetsForImport(meta: Ingredient): Ingredient {
+  if ((meta.type === "script" || meta.type === "hook") && meta.targets === "*") {
+    return { ...meta, targets: ["claude-code"] };
+  }
+  return meta;
+}
+
 /** F1, F2 (spec 10 §6.3): what no value can explain — metadata, the file set, a file compared as bytes. */
 function shapeDiffers(base: ImportBase, meta: Ingredient, files: Record<string, string | Buffer>): string | null {
-  const metaOnly = stripForgeOnlyKeys({ ...base.meta });
+  // For script/hook, normalize base targets in a local copy before comparison (spec A: targets "*" ≡ ["claude-code"])
+  const baseMeta = normalizeTargetsForImport(base.meta);
+  const metaOnly = stripForgeOnlyKeys({ ...baseMeta });
   if (fingerprintOf(metaOnly as Ingredient, {}) !== fingerprintOf(meta, {})) return "metadata differs";
   const baseFiles = [...base.texts.keys(), ...base.bytes.keys()].sort();
   const srcFiles = Object.keys(files).sort();
