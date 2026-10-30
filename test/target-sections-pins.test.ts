@@ -248,7 +248,15 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
   });
 
   it("import round trip: importing the synced workspace into a copy of the Forge with markers changes nothing", async () => {
-    const s = kept(await acmeSections({ schema: 5 }));
+    await importRoundTrip(5, process.env.CRAFTAR_WRITE_PINS === "1");
+  });
+
+  it("import round trip at schema 6, no targets= — the same stdout pin, the Forge copy unchanged", async () => {
+    await importRoundTrip(6, false);
+  });
+
+  async function importRoundTrip(schema: 5 | 6, writePin: boolean): Promise<void> {
+    const s = kept(await acmeSections({ schema }));
 
     // 1. Sync the workspace from the built scenario Forge (which has section markers)
     const syncResult = runCli(["sync", "--workspace", s.wsRoot]);
@@ -289,7 +297,7 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
 
     // Pin the import stdout
     const IMPORT_PIN_FILE = path.resolve(__dirname, "pins/target-sections-off-import.txt");
-    if (process.env.CRAFTAR_WRITE_PINS === "1") {
+    if (writePin) {
       await fs.mkdir(path.dirname(IMPORT_PIN_FILE), { recursive: true });
       await fs.writeFile(IMPORT_PIN_FILE, stdout);
       console.log(`Import pin written to ${IMPORT_PIN_FILE}`);
@@ -305,7 +313,7 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
     // Forge copy should be byte-identical after import (every base reused, profile unchanged)
     const afterImport = await snapshot(forgeCopy);
     sameTree(beforeImport, afterImport);
-  });
+  }
 
   it("schema 6, no targets= — equals the schema 5 pin", async () => {
     const s = kept(await acmeSections({ schema: 6 }));
