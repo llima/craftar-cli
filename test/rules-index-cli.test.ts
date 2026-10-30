@@ -153,7 +153,7 @@ import YAML from "yaml";
 describe("Should-fix 3: inline placeholder in agent, command or skill is warned (review round 2)", () => {
   it("3. an agent and a dir skill with inline placeholder at schema 7 → both paths in ONE warning", async () => {
     // An agent body with "Read the index {{craftar.rules.index}} here." (inline, not alone on line)
-    // A skill (layout: dir) body with inline placeholder
+    // A skill (layout: dir) body with inline placeholder (must be a .md file to be resolved)
     // At schema 7, the warning should list BOTH paths
     const ingredients: IngredientSpec[] = [
       {
@@ -167,8 +167,7 @@ describe("Should-fix 3: inline placeholder in agent, command or skill is warned 
       {
         meta: { type: "skill", name: "deploy", description: "Deployment skill", layout: "dir" },
         files: {
-          "SKILL.md": "# Deploy\n",
-          "script.sh": "See {{craftar.rules.index}} in your rules.\n",
+          "SKILL.md": "# Deploy\nSee {{craftar.rules.index}} in your rules.\n",
         },
       },
     ];
@@ -189,6 +188,6 @@ describe("Should-fix 3: inline placeholder in agent, command or skill is warned 
 
     // Both paths should appear in the warning
     expect(warning).toContain(".claude/agents/reviewer.md");
-    expect(warning).toContain(".claude/skills/deploy/script.sh");
+    expect(warning).toContain(".claude/skills/deploy/SKILL.md");
   });
 });
