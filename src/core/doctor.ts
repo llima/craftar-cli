@@ -985,11 +985,13 @@ async function skillLayout(
   if (flat.length === 0) return;
 
   for (const name of flat) {
+    // The fix names the folder of the ingredient the profile resolves — a variant's own, not its base's.
+    const folder = p.resolution.ingredients.find((i) => i.meta.type === "skill" && outName(i.meta) === name)?.meta.name ?? name;
     w(
       "skill-layout",
       "warn",
       `.claude/skills/${name}.md is a skill Claude Code does not list`,
-      `set layout: dir in ingredients/skills/${name}/ingredient.yaml — sync then writes .claude/skills/${name}/SKILL.md`,
+      `set layout: dir in ingredients/skills/${folder}/ingredient.yaml — sync then writes .claude/skills/${name}/SKILL.md`,
     );
   }
 }
