@@ -190,6 +190,11 @@ async function loadPin(): Promise<Observed> {
   return JSON.parse(pinText);
 }
 
+/** doctor's `docker` line names the machine's Compose version (or its absence): not part of what the pin proves. */
+function withoutMachine(o: Observed): Observed {
+  return { ...o, doctorWorkspace: o.doctorWorkspace.filter((c) => c.id !== "docker") };
+}
+
 describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
   it("matches the pinned snapshot (schema 5, no targets= in markers)", async () => {
     const s = kept(await acmeSections({ schema: 5 }));
@@ -205,7 +210,7 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
 
     // Compare mode: load the pin and compare
     const expected = await loadPin();
-    expect(observed).toEqual(expected);
+    expect(withoutMachine(observed)).toEqual(withoutMachine(expected));
   });
 
   it("the pin is not vacuous: holds section defaults, profile values, services, and CRLF in kiro files", async () => {
@@ -308,6 +313,6 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
 
     // Compare with the same pin as schema 5 — they must be identical
     const expected = await loadPin();
-    expect(observed).toEqual(expected);
+    expect(withoutMachine(observed)).toEqual(withoutMachine(expected));
   });
 });
