@@ -734,3 +734,154 @@ describe("BLOCKER 1: new profile must keep spec 41 fail-closed (review round 2)"
     expect(after).toEqual(before);
   });
 });
+
+
+describe("BLOCKER 2: rules-index fail-closed looks only at bases this import compares (review round 2)", () => {
+  it("2a. import --profile newco where only rule/readme (not imported) holds placeholder → exit 0, rule/lint written", async () => {
+    // A schema 7 Forge with rule/readme holding the placeholder (in the Forge)
+    // A workspace holding only .claude/rules/lint.md (NOT readme)
+    // import --profile newco → exit 0, rule/lint written, nothing about the index
+    const root = await tmpDir("craftar-failclosed-unrelated-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+
+    await writeFiles(forgeRoot, {
+      "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 7 }),
+      // rule/readme with the placeholder
+      "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme",
+        description: "Index",
+        file: "rule.md",
+        targets: "*",
+        tags: [],
+      }),
+      "ingredients/rules/readme/rule.md": "# Rules\n\n{{craftar.rules.index}}\n",
+      "recipes/base.yaml": YAML.stringify({ name: "base", ingredients: ["rule/readme"] }),
+    });
+
+    // Workspace with ONLY lint.md (no readme)
+    await writeFiles(wsRoot, {
+      ".claude/rules/lint.md": "# Lint\nRun linter.\n",
+    });
+
+    // Import under a NEW profile name
+    const report = await importClaudeCode({
+      workspaceRoot: wsRoot,
+      forgeRoot,
+      profileName: "newco",
+    });
+
+    // Should succeed
+    expect(report.profile).toBe("newco");
+    // rule/lint--newco should be created (or rule/lint)
+    expect(report.created.some((r) => r.includes("lint"))).toBe(true);
+    // No mention of index-related errors
+  });
+
+  it("2b. import --profile newco with .claude/rules/readme.md where rule/readme holds placeholder → exit 1 with new-profile message, Forge byte-identical", async () => {
+    // A schema 7 Forge with rule/readme holding the placeholder
+    // A workspace holding .claude/rules/readme.md (the SAME name as the rule with placeholder)
+    // import --profile newco → exit 1 with the new-profile error, naming the rule
+    const root = await tmpDir("craftar-failclosed-same-rule-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+
+    await writeFiles(forgeRoot, {
+      "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 7 }),
+      "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme",
+        description: "Index",
+        file: "rule.md",
+        targets: "*",
+        tags: [],
+      }),
+      "ingredients/rules/readme/rule.md": "# Rules\n\n{{craftar.rules.index}}\n",
+      "recipes/base.yaml": YAML.stringify({ name: "base", ingredients: ["rule/readme"] }),
+    });
+
+    // Workspace with readme.md
+    await writeFiles(wsRoot, {
+      ".claude/rules/readme.md": "# Rules\n\nSome content.\n",
+    });
+
+    const before = await hashForge(forgeRoot);
+
+    const result = await importClaudeCode({
+      workspaceRoot: wsRoot,
+      forgeRoot,
+      profileName: "newco",
+    }).catch((e: Error) => e);
+
+    expect(result).toBeInstanceOf(Error);
+    const msg = (result as Error).message;
+    // The message should name the rule and say what to do
+    expect(msg).toContain("profile newco is not in the Forge");
+    expect(msg).toContain("rule/readme");
+    expect(msg).toContain("{{craftar.rules.index}}");
+    expect(msg).toContain("create the profile first");
+
+    const after = await hashForge(forgeRoot);
+    expect(after).toEqual(before);
+  });
+
+  it("2c. broken profile (missing recipe) + readme in workspace where rule/readme holds placeholder → exit 1 with broken-profile message naming the rule", async () => {
+    // A schema 7 Forge with rule/readme holding the placeholder
+    // A profile that references a missing recipe (broken)
+    // A workspace holding .claude/rules/readme.md
+    // → exit 1 with the broken-profile error, naming the rule
+    const root = await tmpDir("craftar-failclosed-broken-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forgeRoot = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+
+    await writeFiles(forgeRoot, {
+      "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 7 }),
+      "ingredients/rules/readme/ingredient.yaml": YAML.stringify({
+        type: "rule",
+        name: "readme",
+        description: "Index",
+        file: "rule.md",
+        targets: "*",
+        tags: [],
+      }),
+      "ingredients/rules/readme/rule.md": "# Rules\n\n{{craftar.rules.index}}\n",
+      "recipes/base.yaml": YAML.stringify({ name: "base", ingredients: ["rule/readme"] }),
+      // Broken profile - references missing recipe
+      "profiles/broken/profile.yaml": YAML.stringify({
+        name: "broken",
+        description: "Broken profile",
+        recipes: ["base", "nonexistent"],
+        targets: ["claude-code"],
+      }),
+    });
+
+    // Workspace with readme.md
+    await writeFiles(wsRoot, {
+      "craftar.yaml": YAML.stringify({ forge: forgeRoot, profile: "broken" }),
+      ".claude/rules/readme.md": "# Rules\n\nSome content.\n",
+    });
+
+    const before = await hashForge(forgeRoot);
+
+    const result = await importClaudeCode({
+      workspaceRoot: wsRoot,
+      forgeRoot,
+      profileName: "broken",
+    }).catch((e: Error) => e);
+
+    expect(result).toBeInstanceOf(Error);
+    const msg = (result as Error).message;
+    // The message should name the rule
+    expect(msg).toContain("profile broken does not resolve");
+    expect(msg).toContain("rule/readme");
+    expect(msg).toContain("{{craftar.rules.index}}");
+    expect(msg).toContain("fix the Forge and re-run");
+
+    const after = await hashForge(forgeRoot);
+    expect(after).toEqual(before);
+  });
+});
