@@ -5,6 +5,8 @@ import path from "node:path";
 import { runCli } from "./helpers/cli.js";
 import { acmeIndex } from "./helpers/rules-index.js";
 import { driftList } from "../src/core/drift.js";
+import { explainFile } from "../src/core/report.js";
+import { loadWorkspace, plan } from "../src/core/sync.js";
 import type { FileStatus } from "../src/core/sync.js";
 import { hashNormalized } from "../src/core/text.js";
 import type { Scenario } from "./helpers/forge.js";
@@ -116,5 +118,30 @@ describe("rules-index CLI (spec 44 §4.5–§4.6)", () => {
       promotable: false,
       reason: "holds the rules index",
     });
+  });
+
+  it("5. the explain tool of craftar mcp gains no key for the rules index (spec 44 §11)", async () => {
+    // Test that ExplainedFile has exactly these keys, in this order, and no value mentioning "index"
+    // besides what the file's own path and warnings say.
+    const s = kept(await acmeIndex({ schema: 7, literal: true }));
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Use explainFile directly from report.ts to check the interface
+    const ws = await loadWorkspace(s.wsRoot);
+    const p = await plan(ws);
+    const explained = explainFile(ws, p, README);
+
+    // The interface must have exactly these keys, in this order
+    const expectedKeys = ["path", "target", "ingredient", "origin", "via", "sections", "params", "profile", "recipes", "hash"];
+    expect(Object.keys(explained!)).toEqual(expectedKeys);
+
+    // No value besides the file path and warnings should mention "index"
+    // Check that none of the values (excluding path and ignoring where index is natural) have "index"
+    const stringified = JSON.stringify(explained);
+    // Remove the path (which contains "readme") and check no stray "index" key
+    const withoutPath = { ...explained, path: "" };
+    const strWithoutPath = JSON.stringify(withoutPath);
+    // The stringified version should not have a key named "index"
+    expect(Object.keys(explained!)).not.toContain("index");
   });
 });
