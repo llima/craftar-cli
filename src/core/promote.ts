@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type IngredientRef } from "../schema/index.js";
 import { fingerprintDir } from "./fingerprint.js";
-import { assertNoLinkOnPath, copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
+import { assertNoDirLinkIn, assertNoLinkOnPath, copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
 import { effectiveProfile } from "./integrations.js";
 import { findProfileFile } from "./param-writes.js";
 import { resolve, type Resolution } from "./resolve.js";
@@ -154,6 +154,10 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
     [...forge.ingredients.values()].find((i) => i.meta.type === type && i.meta.as === base.meta.name && profileOf(i.meta) === q);
   const variant = variantOf(profile);
   if (!variant) throw new Error(`${COMMAND}: ${ref} has no variant for profile ${profile}`);
+
+  // Check for symlinks to directories inside the base and variant directories before reading their files.
+  await assertNoDirLinkIn(forge.root, base.dir, COMMAND);
+  await assertNoDirLinkIn(forge.root, variant.dir, COMMAND);
 
   const warnings: string[] = [];
   const before = resolveAll(forge);

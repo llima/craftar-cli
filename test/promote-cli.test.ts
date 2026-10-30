@@ -380,4 +380,92 @@ describe("forge promote — the command", () => {
       "error: forge promote: profile initech would not resolve the same after the promotion — its ingredients differ at position 1 (rule/workflow--globex ≠ rule/workflow--initech); nothing written\n",
     );
   });
+
+  describe.skipIf(process.platform === "win32")("symlink-to-directory inside an ingredient", () => {
+    it("28. a symlink to a directory inside the variant's directory is refused, not EISDIR", async () => {
+      // Create a Forge with: rule/a (base), rule/a--acme (variant to be promoted), and rule/a--globex will be created
+      const root = await tmpDir("craftar-basepromo-dirlink-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forge = path.join(root, "forge");
+      const home = path.join(root, "home");
+
+      await makeForge(forge, {
+        ingredients: [rule("a", "base text\n"), rule("a--acme", "acme text\n", { as: "a" })],
+        recipes: [recipe("base", ["rule/a"]), recipe("acme-recipe", ["rule/a--acme"])],
+        profiles: [profile("acme", ["acme-recipe"]), profile("globex", ["base"])],
+      });
+
+      // Create a symlink to a directory inside the variant's directory
+      const targetDir = path.join(forge, "ingredients/rules/a--acme/shared-target");
+      await fs.mkdir(targetDir, { recursive: true });
+      await fs.writeFile(path.join(targetDir, "data.txt"), "shared data\n");
+      await fs.symlink("shared-target", path.join(forge, "ingredients/rules/a--acme/shared"));
+
+      git(forge, "init", "-q", "-b", "main");
+      git(forge, "add", "-A");
+      git(forge, "commit", "-q", "-m", "forge");
+
+      const r = runCli(["forge", "promote", "rule/a", "--profile", "acme", "--forge", forge, "--dry-run"], { env: { CRAFTAR_HOME: home } });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("ingredients/rules/a--acme/shared is a symbolic link to a directory in the Forge — forge promote does not read through it; replace it with the files and commit");
+      expect(r.stderr).not.toContain("EISDIR");
+      expect(git(forge, "status", "--porcelain")).toBe("");
+    });
+
+    it("29. a symlink to a directory inside the base's directory is refused, not EISDIR", async () => {
+      const root = await tmpDir("craftar-basepromo-dirlink-base-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forge = path.join(root, "forge");
+      const home = path.join(root, "home");
+
+      await makeForge(forge, {
+        ingredients: [rule("a", "base text\n"), rule("a--acme", "acme text\n", { as: "a" })],
+        recipes: [recipe("base", ["rule/a"]), recipe("acme-recipe", ["rule/a--acme"])],
+        profiles: [profile("acme", ["acme-recipe"]), profile("globex", ["base"])],
+      });
+
+      // Create a symlink to a directory inside the base's directory
+      const targetDir = path.join(forge, "ingredients/rules/a/shared-target");
+      await fs.mkdir(targetDir, { recursive: true });
+      await fs.writeFile(path.join(targetDir, "data.txt"), "shared data\n");
+      await fs.symlink("shared-target", path.join(forge, "ingredients/rules/a/shared"));
+
+      git(forge, "init", "-q", "-b", "main");
+      git(forge, "add", "-A");
+      git(forge, "commit", "-q", "-m", "forge");
+
+      const r = runCli(["forge", "promote", "rule/a", "--profile", "acme", "--forge", forge, "--dry-run"], { env: { CRAFTAR_HOME: home } });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("ingredients/rules/a/shared is a symbolic link to a directory in the Forge — forge promote does not read through it; replace it with the files and commit");
+      expect(r.stderr).not.toContain("EISDIR");
+      expect(git(forge, "status", "--porcelain")).toBe("");
+    });
+
+    it("30. a symlink to a file inside the variant is allowed (existing check)", async () => {
+      const root = await tmpDir("craftar-basepromo-filelink-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forge = path.join(root, "forge");
+      const home = path.join(root, "home");
+
+      await makeForge(forge, {
+        ingredients: [rule("a", "base text\n"), rule("a--acme", "acme text\n", { as: "a" })],
+        recipes: [recipe("base", ["rule/a"]), recipe("acme-recipe", ["rule/a--acme"])],
+        profiles: [profile("acme", ["acme-recipe"]), profile("globex", ["base"])],
+      });
+
+      // Create a symlink to a file inside the variant
+      await fs.writeFile(path.join(forge, "ingredients/rules/a--acme/target.txt"), "target\n");
+      await fs.symlink("target.txt", path.join(forge, "ingredients/rules/a--acme/link.txt"));
+
+      git(forge, "init", "-q", "-b", "main");
+      git(forge, "add", "-A");
+      git(forge, "commit", "-q", "-m", "forge");
+
+      const r = runCli(["forge", "promote", "rule/a", "--profile", "acme", "--forge", forge, "--dry-run"], { env: { CRAFTAR_HOME: home } });
+      // A symlink to a file triggers the existing check in copyForgeForProof, not the new one
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toContain("symbolic link");
+      expect(r.stderr).not.toContain("EISDIR");
+    });
+  });
 });

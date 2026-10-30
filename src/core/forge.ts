@@ -395,6 +395,18 @@ export async function assertNoLinkOnPath(forgeDir: string, paths: string[], comm
   }
 }
 
+/** Refuse a symbolic link to a directory anywhere inside `dir`: `listFiles` lists it as a file, and reading it fails with a raw `EISDIR`. Links to files and dangling links are left to the other checks. */
+export async function assertNoDirLinkIn(forgeDir: string, dir: string, command: string): Promise<void> {
+  for (const rel of await listFiles(dir)) {
+    const abs = path.join(dir, rel);
+    if (!(await fs.lstat(abs)).isSymbolicLink()) continue;
+    const target = await fs.stat(abs).catch(() => null);
+    if (target?.isDirectory()) {
+      throw new Error(`${path.relative(forgeDir, abs).split(path.sep).join("/")} is a symbolic link to a directory in the Forge — ${command} does not read through it; replace it with the files and commit`);
+    }
+  }
+}
+
 /**
  * The real path of `abs`, resolved through its nearest existing ancestor: `fs.realpath` needs the
  * path to exist, and a plan target usually does not yet — so the part that exists is resolved
