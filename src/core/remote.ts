@@ -572,7 +572,7 @@ export function hideCacheSegment(text: string, home: string | readonly string[])
 /**
  * Whether `child` is under `parent` (or equal), segment-wise — `path.relative` compares without case on win32, as `samePath` does.
  */
-function isUnderOrEqual(child: string, parent: string): boolean {
+export function isUnderOrEqual(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
   if (rel === "") return true;
   if (rel === ".." || rel.startsWith(".." + path.sep)) return false;
