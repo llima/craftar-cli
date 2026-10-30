@@ -1013,7 +1013,7 @@ export function flatSkills(
  * Build the warning message for flat skills (spec 44 §5):
  * "{prefix}: Claude Code does not list a skill written as one file — {paths}; set layout: dir in each ingredient.yaml"
  */
-export function flatSkillWarning(names: string[], prefix: string): string {
+export function flatSkillWarning(names: string[], prefix = "claude-code"): string {
   const paths = names.map((n) => `.claude/skills/${n}.md`).join(", ");
-  return `Claude Code does not list a skill written as one file — ${paths}; set layout: dir in each ingredient.yaml`;
+  return `${prefix}: Claude Code does not list a skill written as one file — ${paths}; set layout: dir in each ingredient.yaml`;
 }

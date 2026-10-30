@@ -322,14 +322,14 @@ describe("flatSkillWarning helper", () => {
   it("builds correct warning with claude-code prefix", () => {
     const msg = flatSkillWarning(["deploy", "lint"], "claude-code");
     expect(msg).toBe(
-      "Claude Code does not list a skill written as one file — .claude/skills/deploy.md, .claude/skills/lint.md; set layout: dir in each ingredient.yaml",
+      "claude-code: Claude Code does not list a skill written as one file — .claude/skills/deploy.md, .claude/skills/lint.md; set layout: dir in each ingredient.yaml",
     );
   });
 
   it("builds correct warning with import prefix", () => {
     const msg = flatSkillWarning(["deploy"], "import");
     expect(msg).toBe(
-      "Claude Code does not list a skill written as one file — .claude/skills/deploy.md; set layout: dir in each ingredient.yaml",
+      "import: Claude Code does not list a skill written as one file — .claude/skills/deploy.md; set layout: dir in each ingredient.yaml",
     );
   });
 });

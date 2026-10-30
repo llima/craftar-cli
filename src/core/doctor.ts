@@ -302,7 +302,7 @@ async function workspaceChecks(
       // Also exclude the flat skill warning — it is reported by skill-layout (spec 44 §5)
       const flat = flatSkills(p.resolution, p.resolution.targets);
       if (flat.length > 0) {
-        owned.add(`claude-code: ${flatSkillWarning(flat, "claude-code")}`);
+        owned.add(flatSkillWarning(flat, "claude-code"));
       }
       const own = p.warnings.slice(ws.warnings.length).filter((x) => !owned.has(x));
       if (own.length === 0) w("plan", "ok", `${p.files.length} files`);

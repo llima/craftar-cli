@@ -272,7 +272,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     .map((q) => outName(q.meta))
     .sort();
   if (flatSkillNames.length > 0) {
-    report.warnings.push(`import: ${flatSkillWarning(flatSkillNames, "import")}`);
+    report.warnings.push(flatSkillWarning(flatSkillNames, "import"));
   }
 
   /* ---- scripts & hooks ---- */

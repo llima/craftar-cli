@@ -213,7 +213,7 @@ export const claudeCode: Emitter<"claude-code"> = {
     // Emit the flat skill warning (spec 44 §5): after the walk, once, with sorted names
     const flat = flatSkills(ctx.resolution, targets);
     if (flat.length > 0) {
-      ctx.warn(`claude-code: ${flatSkillWarning(flat, "claude-code")}`);
+      ctx.warn(flatSkillWarning(flat, "claude-code"));
     }
 
     const servers = mcpServers(ctx, t, MCP_FILE["claude-code"], mcp);
