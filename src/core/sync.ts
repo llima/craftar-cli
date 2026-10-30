@@ -21,7 +21,7 @@ import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
 import { appliesTo, effectiveTargets } from "../emitters/shared.js";
-import { readsRulesIndex, RULES_INDEX_KEY, belowGateLiteralWarning, ignoredValueWarning } from "./rules-index.js";
+import { RULES_INDEX_KEY, RULES_INDEX_LINE, belowGateLiteralWarning, ignoredValueWarning } from "./rules-index.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
 export const LOCAL_FILE = "craftar.local.yaml";
@@ -601,8 +601,6 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const kiroResourceRecords: Array<{ agent: string; path: string }> = [];
   /** Below-gate literals: `ref (file)` for each rendered text that holds `{{craftar.rules.index}}` alone on a line (spec 44 §4.2). */
   const belowGateLiterals = new Set<string>();
-  /** Regex: `{{craftar.rules.index}}` alone on a line (spec 44 §4.2). */
-  const rulesIndexLiteralRe = /^[ \t]*\{\{\s*craftar\.rules\.index\s*\}\}[ \t]*$/m;
   const ctx: EmitBase = {
     forge: ws.forge,
     resolution,
@@ -645,7 +643,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
         missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ing.ref));
       }
       // Below the gate, track literals for the warning (spec 44 §4.2)
-      if (!resolution.rulesIndex && rulesIndexLiteralRe.test(out)) {
+      if (!resolution.rulesIndex && RULES_INDEX_LINE.test(out)) {
         belowGateLiterals.add(`${ing.ref} (${file})`);
       }
       return out;

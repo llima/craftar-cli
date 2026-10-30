@@ -7,6 +7,12 @@ import { FORGE_SCHEMA_RULES_INDEX } from "../schema/index.js";
 /** The rules-index key (spec 44 §4.2). */
 export const RULES_INDEX_KEY = "craftar.rules.index";
 
+/**
+ * Regex: `{{craftar.rules.index}}` alone on a line (spec 44 §4.2).
+ * Used by `plan()` below the gate and by `expandRulesIndex` at the gate.
+ */
+export const RULES_INDEX_LINE = /^[ \t]*\{\{\s*craftar\.rules\.index\s*\}\}[ \t]*$/m;
+
 /** Whether the Forge reads the rules index (spec 44 §4.1). */
 export function readsRulesIndex(manifest: { schema: number }): boolean {
   return manifest.schema >= FORGE_SCHEMA_RULES_INDEX;
