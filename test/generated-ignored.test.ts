@@ -213,6 +213,13 @@ describe("generatedIgnored", () => {
     expect(r.lines).toEqual([]);
     expect(r.stale).toEqual(["nope.md"]);
   });
+  it("reads mayBeIgnored from craftar.local.yaml too, whose list replaces the base's", async () => {
+    const root = await ws({ config: { mayBeIgnored: ["nope.md"] }, local: { mayBeIgnored: [RULE_FILE] } });
+    await writeFiles(root, { ".gitignore": ".claude/\n" });
+    const r = await gi(root);
+    expect(r.lines).toEqual([]);
+    expect(r.stale).toEqual([]);
+  });
   it("is silent when forge: comes from craftar.local.yaml", async () => {
     const root = await ws({ local: { forge: "../forge" } });
     await writeFiles(root, { ".gitignore": ".claude/\n" });
