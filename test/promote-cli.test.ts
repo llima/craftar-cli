@@ -3,7 +3,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import YAML from "yaml";
-import { exists, listFiles } from "../src/core/forge.js";
+import { exists, listFiles, loadForge } from "../src/core/forge.js";
+import { planBasePromotion, proveBasePromotion } from "../src/core/promote.js";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 import { git, gitEnv } from "./helpers/remote.js";
@@ -503,21 +504,25 @@ describe("forge promote — the command", () => {
       cleanups.push(() => fs.chmod(readonlyTmp, 0o755).catch(() => undefined));
       await fs.chmod(readonlyTmp, 0o555);
 
-      // Use the compiled CLI (dist/cli.js) to avoid tsx's TMPDIR usage
-      const REPO = path.resolve(__dirname, "..");
-      const { spawnSync } = await import("node:child_process");
-      const result = spawnSync(
-        process.execPath,
-        [path.join(REPO, "dist/cli.js"), "forge", "promote", "rule/a", "--profile", "acme", "--forge", forge, "--dry-run"],
-        {
-          encoding: "utf8",
-          env: { ...process.env, CRAFTAR_HOME: home, TMPDIR: readonlyTmp, TEMP: readonlyTmp, TMP: readonlyTmp, NO_COLOR: "1" },
-        },
-      );
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("forge promote: cannot make the scratch copy in the temporary directory");
-      expect(result.stderr).toContain("— nothing was written");
-      expect(result.stderr).not.toContain("mkdtemp");
+      // In process: a CLI child under this TMPDIR dies in tsx's loader before craftar starts.
+      const loaded = await loadForge(forge);
+      const promotion = await planBasePromotion(loaded, "rule/a", "acme");
+      const saved = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
+      Object.assign(process.env, { TMPDIR: readonlyTmp, TEMP: readonlyTmp, TMP: readonlyTmp });
+      let message = "";
+      try {
+        await proveBasePromotion(loaded, promotion).catch((e: Error) => {
+          message = e.message;
+        });
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+      expect(message).toContain("forge promote: cannot make the scratch copy in the temporary directory");
+      expect(message).toContain("— nothing was written");
+      expect(message).not.toContain("mkdtemp");
     });
   });
 });
