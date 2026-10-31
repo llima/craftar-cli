@@ -1500,10 +1500,8 @@ const mcpCmd = program
       env: process.env,
       pin: pinOf(merged),
       writers: o.allowWrites ? mcpWriters(craftarHome(), registryOff()) : undefined,
-      // The dotnet host looks for global.json going up from its working directory; the root has no parent
-      // to look in, and only its own global.json counts. Not the temporary directory, where any user can plant one.
-      // A root another user may write (a data drive, a share) is still open. `root` is resolved already, so this cannot throw.
-      dotnetCwd: path.parse(root).root,
+      // Not the workspace root or anywhere a global.json can be planted: the dotnet host reads it and loads what its sdk.paths names.
+      dotnetOwnDir: true,
     });
   });
 

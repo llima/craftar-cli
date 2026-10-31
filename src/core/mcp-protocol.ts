@@ -92,8 +92,8 @@ export interface McpContext {
   gitVersion?: DoctorOptions["gitVersion"];
   dotnetVersion?: DoctorOptions["dotnetVersion"];
   dockerRunner?: DoctorOptions["dockerRunner"];
-  /** The directory `dotnet --version` runs in; absent, the workspace root. */
-  dotnetCwd?: string;
+  /** Run `dotnet --version` in a directory of its own (`dotnetVersionInOwnDir`); absent, at the workspace root. */
+  dotnetOwnDir?: boolean;
   /** Test seam for the dotnet probe (which directory it recorded). */
   dotnetProbe?: DoctorOptions["dotnetProbe"];
 }
@@ -347,7 +347,7 @@ async function call(name: ToolName, args: ToolArguments, ctx: McpContext): Promi
   if (name === "targets") return targetsReport(ctx.root, seam, { merged });
   if (name === "doctor")
     return workspaceReport(
-      await runDoctor({ version: ctx.version, home: ctx.home, workspace: ctx.root, fetch: ctx.fetch, strict: false, registryOff: ctx.registryOff, env: ctx.env, merged, git: ctx.git, nodeVersion: ctx.nodeVersion, gitVersion: ctx.gitVersion, dotnetVersion: ctx.dotnetVersion, dockerRunner: ctx.dockerRunner, dotnetCwd: ctx.dotnetCwd, dotnetProbe: ctx.dotnetProbe }),
+      await runDoctor({ version: ctx.version, home: ctx.home, workspace: ctx.root, fetch: ctx.fetch, strict: false, registryOff: ctx.registryOff, env: ctx.env, merged, git: ctx.git, nodeVersion: ctx.nodeVersion, gitVersion: ctx.gitVersion, dotnetVersion: ctx.dotnetVersion, dockerRunner: ctx.dockerRunner, dotnetOwnDir: ctx.dotnetOwnDir, dotnetProbe: ctx.dotnetProbe }),
     );
 
   const ws = await loadForgeFor(ctx.root, merged, { ...seam, mode: ctx.fetch ? "read" : "no-fetch" });
