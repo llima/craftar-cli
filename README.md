@@ -623,7 +623,7 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; `craftar docs validate`;
 - **A re-import reuses a script or hook base whose `targets` is the default**, where it made a `<name>--<profile>` variant. The workspace then gets the skip warning from each target that cannot write it, in `status`, `doctor` and `--json` `warnings`.
 - **At `schema: 7` a value for `craftar.rules.index` no longer reaches a re-import**: no spurious variant, no frozen list, no refusal of an unchanged variant.
 - **The `doctor` tool of `craftar mcp` runs `dotnet --version` outside the workspace**, so its answer can differ from a typed `craftar doctor` when a `global.json` pins the version. A typed `craftar doctor` still honours that file and loads what its `sdk.paths` names: run it only in a repository you trust.
-- **`git status` in a Forge** no longer runs the Forge's `core.fsmonitor` command or `post-index-change` hook; the same is now true of `git check-ignore`. A `filter.<x>.clean` set in its `.git/config` still runs.
+- **The `git status` and `git check-ignore` craftar runs in a Forge** no longer run the Forge's `core.fsmonitor` command or `post-index-change` hook. A `filter.<x>.clean` set in its `.git/config` still runs.
 - **`craftar forge promote`** refuses in words a link to a directory inside an ingredient, an unreadable directory and an unwritable temporary directory, exit 1 as before; under `--dry-run` two more lines read in the conditional.
 - **`craftar import`** now also says what `integrations` warns about the importing profile (a value that is not a scalar).
 
