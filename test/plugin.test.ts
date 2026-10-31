@@ -48,9 +48,19 @@ describe("the Claude Code plugin (spec 45)", () => {
     });
   });
 
-  it("2. plugin.json's version is a plain x.y.z", async () => {
+  it("2. plugin.json is the spec's manifest, with a plain x.y.z version", async () => {
+    // Compared whole: a manifest can declare mcpServers or hooks inline, a second launch path test 1 never reads.
     const manifest = await readJson("plugins", "craftar", ".claude-plugin", "plugin.json");
     expect(manifest.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(manifest).toStrictEqual({
+      name: "craftar",
+      version: manifest.version,
+      description: "Lets the agent read a Craftar workspace's state through craftar mcp.",
+      author: { name: "Craftar" },
+      homepage: "https://craftar.dev",
+      repository: "https://github.com/llima/craftar-cli",
+      license: "MIT",
+    });
   });
 
   it("3. plugins/craftar holds exactly the plugin's files", async () => {
@@ -78,11 +88,20 @@ describe("the Claude Code plugin (spec 45)", () => {
     expect(drift[0].startsWith("Never add")).toBe(true);
   });
 
-  it("6. the marketplace's one entry points at the plugin and holds no version", async () => {
-    const market = await readJson(".claude-plugin", "marketplace.json");
-    expect(market.plugins).toHaveLength(1);
-    expect(market.plugins[0].source).toBe("./plugins/craftar");
-    expect(market.plugins[0]).not.toHaveProperty("version");
+  it("6. the marketplace is the spec's, its one entry pointing at the plugin with no version", async () => {
+    // Compared whole, as test 2 compares the manifest: an entry can carry its own mcpServers.
+    expect(await readJson(".claude-plugin", "marketplace.json")).toStrictEqual({
+      name: "craftar",
+      description: "The Claude Code plugin of Craftar, a build system for AI-coding harnesses.",
+      owner: { name: "Craftar" },
+      plugins: [
+        {
+          name: "craftar",
+          source: "./plugins/craftar",
+          description: "Lets the agent read a Craftar workspace's state through craftar mcp.",
+        },
+      ],
+    });
   });
 
   it("7. package.json's files does not reach plugins or .claude-plugin", async () => {

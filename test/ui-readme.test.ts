@@ -39,7 +39,7 @@ describe("README — init --clone and craftar repos", () => {
   });
 });
 
-// Spec 45 §9: the plugin is shipped, so Later keeps only the Agent Plugin.
+// Spec 45 §9: the plugin is shipped, so of the plugin packaging Later keeps only the Agent Plugin.
 describe("README — the Claude Code plugin", () => {
   it("Later names the Agent Plugin alone, and the install commands appear once", () => {
     const later = README.split("\n").filter((l) => l.startsWith("Later:"));
