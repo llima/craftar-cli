@@ -218,3 +218,66 @@ describe("a cache entry's name in a refusal that cannot resolve the path", () =>
     expect(r.stderr).not.toContain("entry-secret");
   });
 });
+
+describe("the path a gate refusal prints", () => {
+  const LABEL = "(a cache entry name — not shown)";
+
+  async function fixture() {
+    const parent = await fs.realpath(await tmpDir("craftar-gatecache-shown-"));
+    cleanups.push(() => removeWithRetry(parent));
+    const home = path.join(parent, "home");
+    const entry = path.join(home, "forges", "entry-secret");
+    await fs.mkdir(entry, { recursive: true });
+    const forge = path.join(parent, "forge");
+    await makeForge(forge, FORGE_SPEC);
+    const ws = path.join(parent, "ws");
+    await fs.mkdir(path.join(ws, ".claude/rules"), { recursive: true });
+    const report = (target: string, env: NodeJS.ProcessEnv, cwd?: string, f = forge) =>
+      runCli(["import", "--from", "claude-code", "--forge", f, "--profile", "acme", "--workspace", ws, "--report", target], { env, cwd });
+    return { parent, home, entry, report };
+  }
+
+  it.skipIf(process.platform === "win32")("a home reached through a link and itself named forges: no entry name", async () => {
+    const { parent, report } = await fixture();
+    const real = path.join(parent, "real", "forges");
+    const entry = path.join(real, "forges", "entry-secret");
+    await fs.mkdir(entry, { recursive: true });
+    await fs.symlink(path.join(entry, "loop"), path.join(entry, "loop"));
+    const link = path.join(parent, "linkhome");
+    await fs.symlink(real, link);
+    const r = report(path.join(entry, "loop", "r.md"), { CRAFTAR_HOME: link });
+    expect(r.code).toBe(1);
+    expect(r.stderr).not.toContain("entry-secret");
+  });
+
+  it.skipIf(process.platform === "win32")("a relative target under the cache: no entry name, from the home and from forges/", async () => {
+    const { home, entry, report } = await fixture();
+    await fs.symlink(path.join(entry, "loop"), path.join(entry, "loop"));
+    for (const [cwd, target] of [[home, path.join("forges", "entry-secret", "loop", "r.md")], [path.join(home, "forges"), path.join("entry-secret", "loop", "r.md")]]) {
+      const r = report(target, { CRAFTAR_HOME: home }, cwd);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain(LABEL);
+      expect(r.stderr).not.toContain("entry-secret");
+    }
+  });
+
+  it("an existing file in a folder named forges outside the cache keeps its path", async () => {
+    const { parent, home, report } = await fixture();
+    const target = path.join(parent, "work", "forges", "acme", "r.md");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, "x\n");
+    const r = report(target, { CRAFTAR_HOME: home });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`refusing to write the report to ${target}: the file already exists`);
+  });
+
+  it("a Forge in a folder named forges outside the cache keeps its path", async () => {
+    const { parent, home, report } = await fixture();
+    const forge = path.join(parent, "work", "forges", "acme");
+    await makeForge(forge, FORGE_SPEC);
+    const target = path.join(forge, "r.md");
+    const r = report(target, { CRAFTAR_HOME: home }, undefined, forge);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`refusing to write the report to ${target}: it resolves inside the Forge (${forge})`);
+  });
+});

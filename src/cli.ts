@@ -8,7 +8,7 @@ import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
 import { holdsBaseCitations, rendersServers } from "./core/mcp-server.js";
-import { assertNotCacheTree, classifyForge, CREDENTIAL_HIDDEN, hideAnyCacheSegment, isUnderOrEqual, refHoldsCredentials, shownRef, UNVOUCHED_HIDDEN } from "./core/remote.js";
+import { assertNotCacheTree, classifyForge, CREDENTIAL_HIDDEN, hideAnyCacheSegment, isUnderOrEqual, shownCachePath, refHoldsCredentials, shownRef, UNVOUCHED_HIDDEN } from "./core/remote.js";
 import { allowWrites, forget, listWorkspaces, prune, readRegistry, revokeWrites, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
@@ -3184,7 +3184,19 @@ function color(state: string) {
  */
 async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate): Promise<string> {
   const home = craftarHome();
-  const refusing = `refusing to write the ${w.what} to ${hideAnyCacheSegment(target, [home])}`;
+  const forgesCacheDir = path.join(home, "forges");
+  let forgesCacheReal: string | null = null;
+  let cacheFault: string | null = null;
+  try {
+    forgesCacheReal = await realpathOfNearest(forgesCacheDir);
+  } catch (e) {
+    // realpathOfNearest already answers for a missing directory; any error here means the path
+    // cannot be inspected or resolved, and without its real path the cache check cannot run.
+    cacheFault = e instanceof Error ? e.message : String(e);
+  }
+  const caches = [path.resolve(forgesCacheDir), ...(forgesCacheReal === null ? [] : [forgesCacheReal])];
+  const hideHomes = [home, ...(forgesCacheReal === null ? [] : [path.dirname(forgesCacheReal)])];
+  let refusing = `refusing to write the ${w.what} to ${shownCachePath(target, caches)}`;
   const abs = path.resolve(target);
   let targetReal: string;
   let rootReal: string;
@@ -3193,22 +3205,18 @@ async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate
     rootReal = await realpathOfNearest(path.resolve(forgeRoot));
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    fail(`${refusing}: ${hideAnyCacheSegment(msg, [home])} — ${w.who} cannot prove the target lies outside the Forge`);
+    fail(`${refusing}: ${hideAnyCacheSegment(msg, hideHomes)} — ${w.who} cannot prove the target lies outside the Forge`);
   }
+  // A path typed through a link to the cache is shown by where it lands.
+  if (shownCachePath(targetReal, caches) !== targetReal) refusing = `refusing to write the ${w.what} to ${shownCachePath(targetReal, caches)}`;
   const rel = path.relative(rootReal, targetReal);
   if (rel === "" || !(rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))) {
-    fail(`${refusing}: it resolves inside the Forge (${hideAnyCacheSegment(forgeRoot, [home])}) — ${w.outside}`);
+    const shownRoot = shownCachePath(rootReal, caches) === rootReal ? shownCachePath(forgeRoot, caches) : shownCachePath(rootReal, caches);
+    fail(`${refusing}: it resolves inside the Forge (${shownRoot}) — ${w.outside}`);
   }
   // Refuse a target whose real path is under (or equal to) the Forge cache.
-  const forgesCacheDir = path.join(home, "forges");
-  let forgesCacheReal: string | null = null;
-  try {
-    forgesCacheReal = await realpathOfNearest(forgesCacheDir);
-  } catch (e) {
-    // realpathOfNearest already answers for a missing directory; any error here means the path
-    // cannot be inspected or resolved, and without its real path the cache check cannot run.
-    const msg = e instanceof Error ? e.message : String(e);
-    fail(`${refusing}: ${hideAnyCacheSegment(msg, [home])} — ${w.who} cannot prove the target lies outside the Forge cache`);
+  if (forgesCacheReal === null) {
+    fail(`${refusing}: ${hideAnyCacheSegment(cacheFault ?? "", hideHomes)} — ${w.who} cannot prove the target lies outside the Forge cache`);
   }
   if (isUnderOrEqual(targetReal, forgesCacheReal)) {
     const relToCache = path.relative(forgesCacheReal, targetReal);

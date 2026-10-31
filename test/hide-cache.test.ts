@@ -218,6 +218,11 @@ describe("hideCacheSegment edge cases", () => {
     expect(out).toContain(path.join(home, "forges"));
   });
 
+  it("a home named forges reached by another spelling: the entry is hidden, not the literal forges/", () => {
+    const out = hideAnyCacheSegment("/real/forges/forges/entry-secret/x", ["/h"]);
+    expect(out).toBe(`/real/forges/forges/${UNVOUCHED_HIDDEN}/x`);
+  });
+
   it("a third spelling of the home: hidden by the any-forges alternative only", () => {
     const text = `${path.resolve("/mnt/link/forges/entry-secret/y")}`;
     expect(hideAnyCacheSegment(text, [path.resolve("/h")])).not.toContain("entry-secret");

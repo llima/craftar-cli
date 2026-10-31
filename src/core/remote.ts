@@ -544,25 +544,45 @@ export async function cacheDir(home: string): Promise<"absent" | "present"> {
   return "present";
 }
 
+/** One regex over the segment after `<home>/forges/` and, when `anyForges`, after any `/forges/`; the homes come first, since the leftmost match wins. */
+function cacheSegmentPattern(homes: readonly string[], anyForges: boolean, platform: NodeJS.Platform): RegExp {
+  // Resolve, strip trailing separators, escape, de-duplicate and sort longest first.
+  const escaped = [...new Set(homes.map((h) => path.resolve(h).replace(/[/\\]+$/, "")))]
+    .sort((a, b) => b.length - a.length)
+    .map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const sep = "[/\\\\]";
+  const alternatives = [
+    ...(escaped.length > 0 ? [`(?:${escaped.join("|")})${sep}forges${sep}`] : []),
+    // A second literal `forges/` is the cache of a home itself named `forges`, spelled another way.
+    ...(anyForges ? [`${sep}forges${sep}(?:forges${sep})?`] : []),
+  ];
+  return new RegExp(`(${alternatives.join("|")})([^/\\\\\\s"']+)`, platform === "win32" ? "gi" : "g");
+}
+
 /**
  * `text` with every path segment that follows `<home>/forges/` or any `/forges/` replaced by
- * `UNVOUCHED_HIDDEN`. One regex pass whose alternation tries the homes first and any `/forges/`
- * second, since the leftmost match wins. An empty `homes` leaves only the second alternative.
+ * `UNVOUCHED_HIDDEN`, in one regex pass. An empty `homes` leaves only the second alternative.
  * The label contains `(`, so it can never be matched again as a segment.
  *
  * @param platform The platform to use for case-insensitive matching; defaults to `process.platform`.
  */
 export function hideAnyCacheSegment(text: string, homes: readonly string[], platform: NodeJS.Platform = process.platform): string {
-  // Resolve, strip trailing separators, escape, de-duplicate and sort longest first.
-  const escaped = [...new Set(homes.map((h) => path.resolve(h).replace(/[/\\]+$/, "")))]
-    .sort((a, b) => b.length - a.length)
-    .map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  // Alternation: ((?:<homes>)[/\\]forges[/\\]|[/\\]forges[/\\])(<segment>)
-  // The leftmost match wins, so homes are checked first.
-  const homesAlt = escaped.length > 0 ? `(?:${escaped.join("|")})[/\\\\]forges[/\\\\]|` : "";
-  const flags = platform === "win32" ? "gi" : "g";
-  const pattern = new RegExp(`(${homesAlt}[/\\\\]forges[/\\\\])([^/\\\\\\s"']+)`, flags);
-  return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
+  return text.replace(cacheSegmentPattern(homes, true, platform), (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
+}
+
+/**
+ * `p` as a refusal prints a path the user typed: untouched unless it lies under one of `caches`
+ * (spellings of `<home>/forges`), then absolute with `UNVOUCHED_HIDDEN` in place of the entry. Decided
+ * from the resolved path, so a folder named `forges` elsewhere keeps its name and a relative one is seen.
+ */
+export function shownCachePath(p: string, caches: readonly string[]): string {
+  const abs = path.resolve(p);
+  for (const cache of caches) {
+    if (!isUnderOrEqual(abs, cache)) continue;
+    const rel = path.relative(cache, abs);
+    return rel === "" ? abs : path.join(cache, UNVOUCHED_HIDDEN, ...rel.split(path.sep).slice(1));
+  }
+  return p;
 }
 
 /**
@@ -583,14 +603,7 @@ export function hideAnyCacheSegment(text: string, homes: readonly string[], plat
 export function hideCacheSegment(text: string, home: string | readonly string[], platform: NodeJS.Platform = process.platform): string {
   const homes = Array.isArray(home) ? home : [home];
   if (homes.length === 0) return hideAnyCacheSegment(text, [], platform);
-  // Resolve, strip trailing separators, escape, de-duplicate and sort longest first.
-  const escaped = [...new Set(homes.map((h) => path.resolve(h).replace(/[/\\]+$/, "")))]
-    .sort((a, b) => b.length - a.length)
-    .map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  // Match: <any home>/forges/ or <any home>\forges\ followed by the segment
-  const flags = platform === "win32" ? "gi" : "g";
-  const pattern = new RegExp(`((?:${escaped.join("|")})[/\\\\]forges[/\\\\])([^/\\\\\\s"']+)`, flags);
-  return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
+  return text.replace(cacheSegmentPattern(homes, false, platform), (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
 }
 
 /**
