@@ -572,12 +572,13 @@ export function hideAnyCacheSegment(text: string, homes: readonly string[], plat
 
 /**
  * `text` with the segment after each of `caches` (spellings of `<home>/forges`) replaced by `UNVOUCHED_HIDDEN`,
- * in one regex pass: the cause of a refusal that could not resolve a path. Only those directories, so a
- * folder named `forges` elsewhere keeps its name.
+ * in one regex pass: the cause of a refusal that could not resolve a path. Only a path that starts at one
+ * of them, so a folder named `forges` elsewhere keeps its name.
  */
 export function hideUnderCaches(text: string, caches: readonly string[], platform: NodeJS.Platform = process.platform): string {
+  if (caches.length === 0) return text;
   const escaped = [...new Set(caches)].sort((a, b) => b.length - a.length).map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const pattern = new RegExp(`((?:${escaped.join("|")})[/\\\\])([^/\\\\\\s"']+)`, platform === "win32" ? "gi" : "g");
+  const pattern = new RegExp(`(?<=^|[\\s"'(])((?:${escaped.join("|")})[/\\\\])([^/\\\\\\s"']+)`, platform === "win32" ? "gi" : "g");
   return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
 }
 

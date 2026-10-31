@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { hideCacheKeys, hideCacheSegment, hideKeys, hideUnvouched, vouchedKeys } from "../src/core/registry.js";
-import { CREDENTIAL_HIDDEN, hideAnyCacheSegment, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
+import { CREDENTIAL_HIDDEN, hideAnyCacheSegment, hideUnderCaches, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
 import { RegistryEntrySchema } from "../src/schema/index.js";
 
 const KEY = "fake" + "user-" + "nota" + "secret-example.invalid-f-0123456789ab";
@@ -221,6 +221,14 @@ describe("hideCacheSegment edge cases", () => {
   it("a home named forges reached by another spelling: the entry is hidden, not the literal forges/", () => {
     const out = hideAnyCacheSegment("/real/forges/forges/entry-secret/x", ["/h"]);
     expect(out).toBe(`/real/forges/forges/${UNVOUCHED_HIDDEN}/x`);
+  });
+
+  it("hideUnderCaches labels only a path that starts at a cache", () => {
+    const cache = path.resolve("/h/forges");
+    expect(hideUnderCaches(`x '${path.join(cache, "e", "y")}' z`, [cache])).toBe(`x '${path.join(cache, UNVOUCHED_HIDDEN, "y")}' z`);
+    const elsewhere = `${path.resolve("/q")}${cache}${path.sep}other${path.sep}y`;
+    expect(hideUnderCaches(elsewhere, [cache])).toBe(elsewhere);
+    expect(hideUnderCaches("/a/b", [])).toBe("/a/b");
   });
 
   it("a third spelling of the home: hidden by the any-forges alternative only", () => {
