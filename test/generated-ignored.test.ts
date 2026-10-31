@@ -142,7 +142,8 @@ describe("ignoredPaths", () => {
     expect(r.unchecked).toBe(true);
     expect(r.ignored.map((i) => i.path)).toEqual(["a"]);
   });
-  it("does not start a core.fsmonitor", async () => {
+  // Linux proves the guard: on win32 git cannot start this script, so the test would pass with nothing proved.
+  it.skipIf(process.platform === "win32")("does not start a core.fsmonitor", async () => {
     const dir = await repo();
     const record = path.join(dir, "fsmonitor-ran");
     const hook = path.join(dir, "fsm.js");
@@ -181,6 +182,30 @@ describe("generatedIgnored", () => {
     await writeFiles(root, { ".gitignore": ".claude/\n" });
     const r = await gi(root);
     expect(r).toMatchObject({ lines: [], unchecked: false, inRepo: true, silenced: true });
+  });
+  it("reads the rules of a workspace in a subdirectory of the repository", async () => {
+    const dir = await repo();
+    const s = await scenario(
+      { ingredients: [rule("a", "body\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(() => removeWithRetry(s.root));
+    const inner = path.join(dir, "acme", "harness");
+    await fs.mkdir(path.dirname(inner), { recursive: true });
+    await fs.cp(s.wsRoot, inner, { recursive: true });
+    const forge = path.relative(inner, s.forgeRoot).replace(/\\/g, "/");
+    await writeFiles(inner, { "craftar.yaml": `forge: ${forge}\nprofile: acme\n`, ".gitignore": "craftar.lock\n" });
+    await writeFiles(dir, { ".gitignore": ".claude/\n" });
+    const r = await gi(inner);
+    expect(r.lines[0]).toContain(`${RULE_FILE} is generated, but git ignores it (.gitignore:1 .claude/)`);
+    expect(r.lines[1]).toContain("craftar.lock is generated, but git ignores it (acme/harness/.gitignore:1 craftar.lock)");
+  });
+  it("names an odd mayBeIgnored entry by its position, never its text", async () => {
+    const token = "ghp_" + "x".repeat(36);
+    const root = await ws({ config: { mayBeIgnored: [RULE_FILE, token, "a\u001b[31mb", "fine/path.md"] } });
+    const r = await gi(root);
+    expect(r.stale).toEqual(["#2", "#3", "fine/path.md"]);
+    expect(JSON.stringify(r)).not.toContain(token);
   });
   it("says it is not in a repository", async () => {
     expect(await gi(await ws({ repo: false }))).toMatchObject({ lines: [], inRepo: false });
