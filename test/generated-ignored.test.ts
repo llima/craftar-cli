@@ -4,6 +4,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runDoctor, workspaceReport } from "../src/core/doctor.js";
@@ -22,7 +23,13 @@ afterEach(async () => {
 });
 
 // A rule in the developer's own git configuration must not reach these tests: `.claude/` ignored globally is plausible.
-const SAVED = ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "XDG_CONFIG_HOME"].map((k) => [k, process.env[k]] as const);
+// Nor a run from inside a git hook: under its GIT_DIR, this file's `git config` would write into the developer's repository.
+const CLEARED = [
+  "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_PREFIX",
+  "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE",
+  "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+];
+const SAVED = ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "XDG_CONFIG_HOME", "GIT_CEILING_DIRECTORIES", ...CLEARED].map((k) => [k, process.env[k]] as const);
 let hermetic: string;
 beforeAll(async () => {
   hermetic = await tmpDir();
@@ -30,6 +37,9 @@ beforeAll(async () => {
   process.env.GIT_CONFIG_GLOBAL = path.join(hermetic, "gitconfig");
   process.env.GIT_CONFIG_NOSYSTEM = "1";
   process.env.XDG_CONFIG_HOME = hermetic;
+  // A TMPDIR inside a repository must not make "not in a repository" false.
+  process.env.GIT_CEILING_DIRECTORIES = await fs.realpath(os.tmpdir());
+  for (const k of CLEARED) delete process.env[k];
 });
 afterAll(async () => {
   for (const [k, v] of SAVED) {
