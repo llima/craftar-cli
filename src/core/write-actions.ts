@@ -9,6 +9,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { InitIo } from "./init-flow.js";
 import { yesNo } from "./init-flow.js";
+import { generatedIgnored } from "./generated-ignored.js";
 import { consentFor, readRegistry, register, registryFile } from "./registry.js";
 import { classifyForge } from "./remote.js";
 import { cachedCopyLine, explainSkip, forgeLine, nextSyncLine } from "./report.js";
@@ -51,6 +52,8 @@ export interface SyncOutcome {
   registry: { file: string; message: string } | null;
   /** The header line naming a remote Forge; null for a path Forge. */
   forgeLine: string | null;
+  /** One line per generated path git ignores (spec 49 §4.3). */
+  ignored: string[];
 }
 
 export async function syncWorkspace(
@@ -72,7 +75,8 @@ export async function syncWorkspace(
       };
     }
   }
-  return { result: r, registry, forgeLine: forgeLine(ws, lock) };
+  const ignored = (await generatedIgnored(ws, p)).lines;
+  return { result: r, registry, forgeLine: forgeLine(ws, lock), ignored };
 }
 
 /* ------------------------------------------------------------------ */
@@ -229,7 +233,7 @@ export function syncToolResult(
       reason: path === discarded ? DISCARDED_ORPHAN : orphanReason(p, statuses, path),
     })),
     skipped: outcome.result.skipped.map((s) => ({ path: s.path, state: s.state, reason: explainSkip(s) })),
-    warnings: p.warnings,
+    warnings: [...p.warnings, ...outcome.ignored],
     registry: registryOff ? "off" : outcome.registry ? "not updated" : "updated",
   };
 }

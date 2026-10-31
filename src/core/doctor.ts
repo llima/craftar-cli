@@ -4,6 +4,7 @@ import path from "node:path";
 import { ENV_NAME, type ForgeSchema, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
+import { generatedIgnored, IGNORED_FIX, staleLine, UNCHECKED_LINE } from "./generated-ignored.js";
 import { renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix } from "./mcp-server.js";
 import { credentialKeys, hideCacheSegment, hideKeys, isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus, vouchedKeys } from "./registry.js";
 import { FULL_SHA, cacheKey, classifyForge, CREDENTIAL_HIDDEN, inspectCache, UNVOUCHED_HIDDEN, type CacheSnapshot } from "./remote.js";
@@ -440,6 +441,9 @@ async function workspaceChecks(
 
       // skill-layout: present only when flatSkills is non-empty (spec 44 §5)
       await skillLayout(p, w);
+
+      // generated-ignored: present only in a git repository (spec 49 §4.4)
+      await generatedIgnoredCheck(ws, p, w);
     }
 
     // docker, services-env: present only when the plan or the lock has a service (spec 31 §4.7)
@@ -1003,4 +1007,25 @@ async function skillLayout(
       `set layout: dir in ingredients/skills/${folder}/ingredient.yaml — sync then writes .claude/skills/${name}/SKILL.md`,
     );
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* generated-ignored check (spec 49 §4.4)                              */
+/* ------------------------------------------------------------------ */
+
+async function generatedIgnoredCheck(
+  ws: Workspace,
+  p: Plan,
+  w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void,
+): Promise<void> {
+  const r = await generatedIgnored(ws, p);
+  if (!r.inRepo) return;
+  if (r.silenced) {
+    w("generated-ignored", "ok", "not checked: forge: comes from craftar.local.yaml");
+    return;
+  }
+  for (const line of r.lines) w("generated-ignored", "warn", line, IGNORED_FIX);
+  if (r.unchecked) w("generated-ignored", "warn", UNCHECKED_LINE, "a generated folder that is a symbolic link is the usual cause: make it a real directory, or run git check-ignore on the path");
+  if (r.stale.length > 0) w("generated-ignored", "warn", staleLine(r.stale), "remove the entry from mayBeIgnored in craftar.yaml");
+  if (r.lines.length === 0 && !r.unchecked && r.stale.length === 0) w("generated-ignored", "ok", "git ignores no generated file");
 }
