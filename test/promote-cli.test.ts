@@ -393,7 +393,7 @@ describe("forge promote — the command", () => {
     );
   });
 
-  describe.skipIf(process.platform === "win32")("symlink-to-directory inside an ingredient", () => {
+  describe("symlink-to-directory inside an ingredient", () => {
     it("28. a symlink to a directory inside the variant's directory is refused, not EISDIR", async () => {
       // Create a Forge with: rule/a (base), rule/a--acme (variant to be promoted), and rule/a--globex will be created
       const root = await tmpDir("craftar-basepromo-dirlink-");
@@ -411,7 +411,7 @@ describe("forge promote — the command", () => {
       const targetDir = path.join(forge, "ingredients/rules/a--acme/shared-target");
       await fs.mkdir(targetDir, { recursive: true });
       await fs.writeFile(path.join(targetDir, "data.txt"), "shared data\n");
-      await fs.symlink("shared-target", path.join(forge, "ingredients/rules/a--acme/shared"));
+      await fs.symlink(targetDir, path.join(forge, "ingredients/rules/a--acme/shared"), "junction");
 
       git(forge, "init", "-q", "-b", "main");
       git(forge, "add", "-A");
@@ -440,7 +440,7 @@ describe("forge promote — the command", () => {
       const targetDir = path.join(forge, "ingredients/rules/a/shared-target");
       await fs.mkdir(targetDir, { recursive: true });
       await fs.writeFile(path.join(targetDir, "data.txt"), "shared data\n");
-      await fs.symlink("shared-target", path.join(forge, "ingredients/rules/a/shared"));
+      await fs.symlink(targetDir, path.join(forge, "ingredients/rules/a/shared"), "junction");
 
       git(forge, "init", "-q", "-b", "main");
       git(forge, "add", "-A");
@@ -453,7 +453,8 @@ describe("forge promote — the command", () => {
       expect(git(forge, "status", "--porcelain")).toBe("");
     });
 
-    it("30. a symlink to a file inside the variant is allowed (existing check)", async () => {
+    // A junction names only a directory, and a file link on Windows needs a privilege.
+    it.skipIf(process.platform === "win32")("30. a symlink to a file inside the variant is refused (existing check)", async () => {
       const root = await tmpDir("craftar-basepromo-filelink-");
       cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
       const forge = path.join(root, "forge");

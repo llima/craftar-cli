@@ -172,7 +172,14 @@ exit 0
       path.join(dir, "ignored.txt"),
     ];
     const unheld = await gitUnheld(dir, allPaths);
-    
+
+    // The same answers with a core.fsmonitor planted: git reads the worktree itself.
+    const script = path.join(dir, "fsmonitor-equal.sh");
+    await fs.writeFile(script, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await execProgram("git", ["-C", dir, "config", "core.fsmonitor", script]);
+    expect(await gitDirty(dir)).toBe(dirty);
+    expect(await gitUnheld(dir, allPaths)).toEqual(unheld);
+
     // Should have entries for modified, untracked, and ignored
     const reasons = unheld.map(u => u.reason).sort();
     expect(reasons).toContain("modified");
