@@ -13,7 +13,8 @@ import {
 } from "../schema/index.js";
 import { parseYamlText } from "./yaml-read.js";
 import { SchemaError, schemaIssues } from "./schema-fault.js";
-import { execProgram } from "./proc.js";
+import { execProgram, streamProgram } from "./proc.js";
+import { findSecrets } from "./secrets.js";
 
 export interface LoadedIngredient {
   ref: IngredientRef;
@@ -183,6 +184,77 @@ export async function gitDirty(dir: string): Promise<boolean> {
   } catch {
     return true;
   }
+}
+
+/** How one ignore rule is named in a message (spec 49 §4.2, Ruling 3): no path outside the tree, no control character. */
+export function shownRule(source: string, line: string, pattern: string, commonDir: string | null): string {
+  const clean = (t: string) => t.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  const slashed = (t: string) => {
+    const p = t.replace(/\\/g, "/");
+    return process.platform === "win32" ? p.toLowerCase() : p;
+  };
+  const absolute = path.isAbsolute(source) || /^[A-Za-z]:[\\/]/.test(source);
+  let where: string;
+  if (absolute) where = commonDir !== null && slashed(source) === `${slashed(commonDir)}/info/exclude` ? ".git/info/exclude" : "core.excludesFile";
+  // In the tree a source is a .gitignore or the exclude file; a core.excludesFile can be spelled relative.
+  else where = source === ".git/info/exclude" || path.posix.basename(source) === ".gitignore" ? clean(source) : "core.excludesFile";
+  const at = `${where}:${/^\d+$/.test(line) ? line : "?"}`;
+  const shown = clean(pattern);
+  return findSecrets(shown).length > 0 ? at : `${at} ${shown}`;
+}
+
+export interface IgnoredPath {
+  /** The path as the caller spelled it. */
+  path: string;
+  /** `shownRule`'s words. */
+  rule: string;
+}
+
+/**
+ * The paths under `paths` git ignores at `root` (spec 49 §4.1). Fails open, unlike `gitIgnored`: that one protects a Forge
+ * write, this one only informs. `-v` lists a negated rule too and exits 0 for it, so a path is ignored when its pattern is
+ * not empty and does not start with `!`; the exit code decides nothing. A tracked file is never listed.
+ */
+export async function ignoredPaths(root: string, paths: string[], env?: NodeJS.ProcessEnv): Promise<{ ignored: IgnoredPath[]; unchecked: boolean }> {
+  // First: a directory that is no repository and a path beyond a symbolic link both exit 128.
+  if (!(await gitIsRepo(root))) return { ignored: [], unchecked: false };
+  // Git refuses `/x` and answers for the spelling it is given: one query per normalized path, each named as the caller spells it.
+  const spelled = new Map<string, string[]>();
+  for (const p of paths) {
+    const query = path.posix.normalize(p).replace(/^\/+/, "");
+    spelled.set(query, [...(spelled.get(query) ?? []), p]);
+  }
+  let run: { code: number | null; stdout: string };
+  try {
+    run = await streamProgram("git", [...gitRead(root), "check-ignore", "--stdin", "-z", "-v", "-n"], {
+      input: [...spelled.keys()].map((q) => `${q}\0`).join(""),
+      env,
+    });
+  } catch (e) {
+    if ((e as { code?: unknown }).code === "ENOENT") return { ignored: [], unchecked: false };
+    return { ignored: [], unchecked: true };
+  }
+  const fields = run.stdout.split("\0");
+  const records: Array<{ source: string; line: string; pattern: string; query: string }> = [];
+  for (let i = 0; i + 3 < fields.length; i += 4) {
+    const [source, line, pattern, query] = fields.slice(i, i + 4);
+    if (pattern !== "" && !pattern.startsWith("!")) records.push({ source, line, pattern, query });
+  }
+  // Only a source spelled absolute needs it: in a linked worktree that is the common directory's exclude file.
+  let commonDir: string | null = null;
+  if (records.some((r) => path.isAbsolute(r.source) || /^[A-Za-z]:[\\/]/.test(r.source))) {
+    try {
+      const { stdout } = await execProgram("git", [...gitRead(root), "rev-parse", "--path-format=absolute", "--git-common-dir"], env ? { env } : {});
+      commonDir = stdout.trim() || null;
+    } catch {
+      commonDir = null;
+    }
+  }
+  const ignored: IgnoredPath[] = [];
+  for (const r of records) {
+    for (const p of spelled.get(r.query) ?? []) ignored.push({ path: p, rule: shownRule(r.source, r.line, r.pattern, commonDir) });
+  }
+  return { ignored, unchecked: run.code !== 0 && run.code !== 1 };
 }
 
 export interface UnheldPath {
