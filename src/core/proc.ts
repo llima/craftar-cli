@@ -177,3 +177,28 @@ export const spawnInherited: Runner = async (req) => {
     child.on("close", (code) => resolve({ code }));
   });
 };
+
+/**
+ * Input written to a program's stdin, resolved with its exit code and stdout whatever the code: a caller that keeps what
+ * a failing program printed before it stopped needs both (spec 49 §5.2). Rejects with ENOENT as `execProgram` does. The
+ * program's stderr is dropped, so nothing it quotes can reach an output.
+ */
+export async function streamProgram(
+  file: string,
+  args: string[],
+  opts: { input: string; env?: NodeJS.ProcessEnv; cwd?: string },
+): Promise<{ code: number | null; stdout: string }> {
+  const env = opts.env ?? process.env;
+  const program = await onPath(file, env);
+  if (program === null) throw notOnPath(file);
+  return new Promise((resolve, reject) => {
+    const child = spawn(program, args, { cwd: opts.cwd, env: childEnv(env), stdio: ["pipe", "pipe", "ignore"] });
+    const chunks: Buffer[] = [];
+    child.stdout.on("data", (d: Buffer) => chunks.push(d));
+    // A program that stops before reading its stdin (a failed git) ends the pipe: its exit says so, not this error.
+    child.stdin.on("error", () => {});
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code, stdout: Buffer.concat(chunks).toString("utf8") }));
+    child.stdin.end(opts.input);
+  });
+}

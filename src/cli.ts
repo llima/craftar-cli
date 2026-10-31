@@ -12,6 +12,7 @@ import { assertNotCacheTree, classifyForge, CREDENTIAL_HIDDEN, hideUnderCaches, 
 import { allowWrites, forget, listWorkspaces, prune, readRegistry, revokeWrites, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
+import { generatedIgnored } from "./core/generated-ignored.js";
 import { launchRefusal, pinOf } from "./core/mcp-protocol.js";
 import { serve } from "./mcp.js";
 import { mcpWriters } from "./core/write-actions.js";
@@ -75,7 +76,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.40.2");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.41.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -234,6 +235,7 @@ async function applyAndReport(ws: Workspace, p: Plan, st: FileStatus[], lock: Lo
   for (const f of o.result.removed) console.log(`  ${pc.magenta("-")} ${f}  (${opts.overwritePaths?.has(f) ? DISCARDED_ORPHAN : orphanReason(p, st, f)})`);
   for (const s of o.result.skipped) console.log(`  ${pc.yellow("!")} ${s.path}  ${explainSkip(s)}`);
   for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+  for (const w of o.ignored) console.log(`  ${pc.yellow("warn")} ${w}`);
   if (o.registry) console.log(`  ${pc.yellow("warn")} registry not updated (${o.registry.file}): ${o.registry.message}`);
   return o.result;
 }
@@ -760,7 +762,7 @@ reposCmd
 /* ---------------------------------------------------------------- sync */
 program
   .command("sync")
-  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces); refuses, writing nothing, when a declared parameter a file cites has no value; with --check, also exits 1 when AGENTS.md is over an explicit budget")
+  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces); refuses, writing nothing, when a declared parameter a file cites has no value; with --check, also exits 1 when AGENTS.md is over an explicit budget; warns for a generated file git ignores (mayBeIgnored in craftar.yaml lists one kept out on purpose)")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--check", "exit 1 when the workspace is out of date or has drift, or when AGENTS.md is over an explicit budget (CI mode)", false)
   .option("--dry-run", "show the plan, write nothing", false)
@@ -774,6 +776,8 @@ program
     if (o.check) {
       const bad = st.filter((s) => !["unchanged", "adopt"].includes(s.state));
       printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true, forgeLine(ws, lock));
+      // Spec 49 §4.3: said here too, and it changes no exit code. `--check` never reaches `applyAndReport`.
+      for (const w of (await generatedIgnored(ws, p)).lines) console.log(`  ${pc.yellow("warn")} ${w}`);
       const unset = unsetDeclared(p);
       if (bad.length) console.log(pc.red(`\n${bad.length} file(s) out of sync`));
       // A refused sync is not "in sync", whatever the files say: the listing, then the block, and the exit is
@@ -1334,7 +1338,7 @@ program
 program
   .command("doctor")
   .description(
-    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, the profile's templates block and dotnet when it has one, hooks-registered when the plan writes a registration, lock, status, registry entry): one line per finding — ok, warn or error — each with its fix. Reports only; reads without the network unless --fetch",
+    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, generated files git ignores, the profile's templates block and dotnet when it has one, hooks-registered when the plan writes a registration, lock, status, registry entry): one line per finding — ok, warn or error — each with its fix. Reports only; reads without the network unless --fetch",
   )
   // No commander default: an explicit --workspace without craftar.yaml exits 1, the current directory without one runs the machine checks (spec 24 §4.1).
   .option("--workspace <dir>", "the workspace to check (default: the current directory, when it holds craftar.yaml)")

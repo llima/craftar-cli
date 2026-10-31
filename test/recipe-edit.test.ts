@@ -341,6 +341,7 @@ describe("editRecipesText (spec 22 §5.1, §5.2, §6 items 1–3)", () => {
         "ref: v1.4.0 # optional, with a git URL: a branch, a tag or a full SHA\n" +
         "profile: acme-portal\n" +
         "targets: [claude-code, kiro] # optional, overrides the profile\n" +
+        "mayBeIgnored: [.claude/settings.craftar.example.json] # optional: exact generated paths git may ignore here\n" +
         "recipes: {add: [react-front], remove: [angular-front]} # edited by craftar add recipe / remove recipe\n" +
         "overrides:\n" +
         "  params: {}\n" +

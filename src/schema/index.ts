@@ -634,6 +634,8 @@ export const WorkspaceConfigSchema = z.object({
   profile: z.string(),
   recipes: z.object({ add: z.array(z.string()).default([]), remove: z.array(z.string()).default([]) }).default({}),
   targets: z.array(TargetSchema).optional(),
+  /** Exact generated paths this workspace keeps out of git on purpose (spec 49 §4.5); an older craftar strips the key. */
+  mayBeIgnored: z.array(z.string()).optional(),
   overrides: z
     .object({
       params: OverridesParamsSchema.default({}),
