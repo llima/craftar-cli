@@ -109,12 +109,18 @@ export function citedKeys(texts: Map<string, string>): Set<string> {
   return out;
 }
 
+/** import builds a script or hook source at ["claude-code"], the one target that writes them. */
+export function asImportTargets<T extends Ingredient>(meta: T): T {
+  return (meta.type === "script" || meta.type === "hook") && meta.targets === "*" ? { ...meta, targets: ["claude-code"] } : meta;
+}
+
 /**
  * The fingerprint of a base rendered through `map` (spec 10 §6.2): its metadata without the
  * Forge-only keys (a workspace cannot express a declaration), body files expanded with the section
  * values `sections` and then substituted, exactly as `ctx.text` does (spec 11 §6.4, §6.7), every
  * other file as bytes. At schema 4 and for an `mcp` base, the server is rendered (spec 34 §5.3).
- * With no declaration, no marker and nothing set, this is `fingerprintDir`.
+ * With no declaration, no marker and nothing set, this is `fingerprintDir`, except for a script or a hook at the
+ * default targets (`asImportTargets`).
  * `refs`, given when the importing workspace is under agents-md.primary (spec 41 §4.10), rewords rule references as the
  * claude-code emitter does: in the files `claudeResolves` names and, for an agent or a command, in `frontmatterRaw` and
  * `description` — a source's description is read back from the frontmatter the emitter reworded.
@@ -138,11 +144,7 @@ export function renderedFingerprint(
   } else {
     meta = stripForgeOnlyKeys({ ...base.meta }) as Ingredient;
   }
-  // For script/hook, normalize base targets in a local copy before comparison (spec A: targets "*" ≡ ["claude-code"])
-  // Import builds the source at targets: ["claude-code"], so a base at "*" should match it.
-  if ((meta.type === "script" || meta.type === "hook") && meta.targets === "*") {
-    meta = { ...meta, targets: ["claude-code"] };
-  }
+  meta = asImportTargets(meta);
   const citing = `${base.meta.type}/${base.meta.name}`;
   if (refs && (meta.type === "agent" || meta.type === "command")) {
     if (meta.frontmatterRaw !== undefined) meta.frontmatterRaw = refs(meta.frontmatterRaw, citing);

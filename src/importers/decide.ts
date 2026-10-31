@@ -5,7 +5,7 @@ import { fingerprintOf } from "../core/fingerprint.js";
 import { exists, listFiles, loadForge, readIngredientText, type Forge } from "../core/forge.js";
 import { hashNormalized, stripBom, toLf } from "../core/text.js";
 import { deepMerge } from "../core/merge.js";
-import { citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
+import { asImportTargets, citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
 import { canonicalValue, inferSections, projectSections, readsTargetSections } from "../core/sections.js";
 import { errorText } from "../core/schema-fault.js";
 import { sectionKey } from "../core/resolve.js";
@@ -218,23 +218,9 @@ export async function decide(
 /** A key's section values in a layer, or none. */
 export const valuesAt = (layer: Sections, key: string): Record<string, string> => (Object.hasOwn(layer, key) ? layer[key] : {});
 
-/**
- * For script/hook types only, normalize targets: `"*"` is equivalent to `["claude-code"]` on import
- * because import builds the source at `targets: ["claude-code"]` (spec 10). This normalization is
- * done in a local copy for the comparison, so `fingerprintOf` (shared with `forge variants`) is unchanged.
- */
-function normalizeTargetsForImport(meta: Ingredient): Ingredient {
-  if ((meta.type === "script" || meta.type === "hook") && meta.targets === "*") {
-    return { ...meta, targets: ["claude-code"] };
-  }
-  return meta;
-}
-
 /** F1, F2 (spec 10 §6.3): what no value can explain — metadata, the file set, a file compared as bytes. */
 function shapeDiffers(base: ImportBase, meta: Ingredient, files: Record<string, string | Buffer>): string | null {
-  // For script/hook, normalize base targets in a local copy before comparison (spec A: targets "*" ≡ ["claude-code"])
-  const baseMeta = normalizeTargetsForImport(base.meta);
-  const metaOnly = stripForgeOnlyKeys({ ...baseMeta });
+  const metaOnly = stripForgeOnlyKeys({ ...asImportTargets(base.meta) });
   if (fingerprintOf(metaOnly as Ingredient, {}) !== fingerprintOf(meta, {})) return "metadata differs";
   const baseFiles = [...base.texts.keys(), ...base.bytes.keys()].sort();
   const srcFiles = Object.keys(files).sort();

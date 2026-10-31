@@ -1272,7 +1272,10 @@ async function writeIngredient(
     const d = run ? await decide(run.ctx, dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases, run.indexExpand) : { kind: "literal" as const, warn: "" };
     if (d.kind === "literal") {
       if (d.warn) report.warnings.push(d.warn);
-      if ((await fingerprintDir(dir, stage.reader())) === fingerprint) {
+      const baseFingerprint = await fingerprintDir(dir, stage.reader());
+      // A script or hook base at the default targets compares as `asImportTargets` reads it.
+      const atDefault = meta.type === "script" || meta.type === "hook" ? fingerprintOf(validateImported({ ...meta, targets: "*" }), files) : fingerprint;
+      if (baseFingerprint === fingerprint || baseFingerprint === atDefault) {
         report.reused.push(ref);
         return ref;
       }

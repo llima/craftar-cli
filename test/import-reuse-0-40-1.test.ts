@@ -178,6 +178,30 @@ describe("script and hook bases with default targets are reused", () => {
       expect(result.reused).not.toContain("hook/h");
     });
 
+    it("a hook base at the default targets citing a key a recipe defaults is reused from a source holding it verbatim", async () => {
+      const root = await tmpDir("craftar-import-hook-literal-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forgeRoot = path.join(root, "forge");
+      const wsRoot = path.join(root, "ws");
+
+      await writeFiles(forgeRoot, {
+        "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 1 }),
+        "ingredients/hooks/h/ingredient.yaml": YAML.stringify({ type: "hook", name: "h", files: ["h.sh"] }),
+        "ingredients/hooks/h/h.sh": "echo {{k}}\n",
+        "recipes/base.yaml": YAML.stringify({ name: "base", ingredients: ["hook/h"], params: { k: { default: "v" } } }),
+        "profiles/acme/profile.yaml": YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code"] }),
+      });
+      await writeFiles(wsRoot, {
+        "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }),
+        ".claude/hooks/h.sh": "echo {{k}}\n",
+      });
+
+      const result = await importClaudeCode({ workspaceRoot: wsRoot, forgeRoot, profileName: "acme" });
+
+      expect(result.reused).toContain("hook/h");
+      expect(result.variants).toEqual([]);
+    });
+
     it("a rule with default targets versus ['claude-code'] metadata is unaffected (rules always compared with body)", async () => {
       const root = await tmpDir("craftar-import-rule-targets-");
       cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
