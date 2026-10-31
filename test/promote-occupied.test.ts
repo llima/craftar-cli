@@ -32,6 +32,28 @@ function gitInit(dir: string): void {
 
 describe.skipIf(process.platform === "win32")("promote occupied() error messages", () => {
   // Root ignores the read-only bit, so the scenario cannot fail there.
+  it.skipIf(process.getuid?.() === 0)("unreadable directory inside the base is refused in words", async () => {
+    const s = await scenario(
+      {
+        ingredients: [rule("workflow", "base text\n"), rule("workflow--acme", "variant text\n", { as: "workflow" })],
+        recipes: [recipe("acme-recipe", ["rule/workflow--acme"]), recipe("globex-recipe", ["rule/workflow"])],
+        profiles: [profile("acme", ["acme-recipe"]), profile("globex", ["globex-recipe"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const sub = path.join(s.forgeRoot, "ingredients/rules/workflow/sub");
+    await fs.mkdir(sub);
+    cleanups.push(() => fs.chmod(sub, 0o755).catch(() => undefined));
+    await fs.chmod(sub, 0o000);
+    gitInit(s.forgeRoot);
+
+    const r = runCli(["forge", "promote", "rule/workflow", "--profile", "acme", "--forge", s.forgeRoot, "--dry-run"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("forge promote: cannot read ingredients/rules/workflow (EACCES)");
+    expect(r.stderr).not.toContain("scandir");
+  });
+
   it.skipIf(process.getuid?.() === 0)("unreadable directory at would-be variant path reports with clear message", async () => {
     // Set up a Forge where the would-be variant path is an unreadable directory.
     const s = await scenario(

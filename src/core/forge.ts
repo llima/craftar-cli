@@ -397,7 +397,14 @@ export async function assertNoLinkOnPath(forgeDir: string, paths: string[], comm
 
 /** Refuse a symbolic link to a directory anywhere inside `dir`: `listFiles` lists it as a file, and reading it fails with a raw `EISDIR`. Links to files and dangling links are left to the other checks. */
 export async function assertNoDirLinkIn(forgeDir: string, dir: string, command: string): Promise<void> {
-  for (const rel of await listFiles(dir)) {
+  let files: string[];
+  try {
+    files = await listFiles(dir);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code ?? "unreadable";
+    throw new Error(`${command}: cannot read ${path.relative(forgeDir, dir).split(path.sep).join("/")} (${code})`);
+  }
+  for (const rel of files) {
     const abs = path.join(dir, rel);
     if (!(await fs.lstat(abs)).isSymbolicLink()) continue;
     const target = await fs.stat(abs).catch(() => null);
