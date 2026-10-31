@@ -86,12 +86,8 @@ describe("the Claude Code plugin (spec 45)", () => {
   });
 
   it("7. package.json's files does not reach plugins or .claude-plugin", async () => {
+    // The whole list, since a glob such as "**/*" or "plugin*" reaches them with no name to match.
     const { files } = await readJson("package.json");
-    expect(Array.isArray(files)).toBe(true);
-    const reaches = (entry: string) => {
-      const e = entry.replace(/^(\.\/)+/, "").replace(/\/+$/, "");
-      return ["", ".", "*", "**"].includes(e) || /^(plugins|\.claude-plugin)(\/|$)/.test(e);
-    };
-    expect((files as string[]).filter(reaches)).toEqual([]);
+    expect(files).toStrictEqual(["dist", "bin", "README.md"]);
   });
 });
