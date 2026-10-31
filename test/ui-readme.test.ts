@@ -33,9 +33,21 @@ describe("README — init --clone and craftar repos", () => {
     expect(count("| `craftar repos clone [<name>…] [--workspace .]` |")).toBe(1);
     expect(count("[--clone \\| --no-clone]")).toBe(1);
     expect(count("**Repositories.** A profile's `repos`")).toBe(1);
-    expect(count("; cloning a profile's repositories (`init --clone`, `craftar repos`); a new profile from `craftar init` (`--new-profile`, `--like`); writing tools for `craftar mcp` (`--allow-writes`: `sync`, `add_recipe`, `remove_recipe`, behind a consent typed per workspace); writing actions in `craftar ui` (`--allow-writes`: Sync and Discard edit, confirmed in the page).")).toBe(1);
+    expect(count("; cloning a profile's repositories (`init --clone`, `craftar repos`); a new profile from `craftar init` (`--new-profile`, `--like`); writing tools for `craftar mcp` (`--allow-writes`: `sync`, `add_recipe`, `remove_recipe`, behind a consent typed per workspace); writing actions in `craftar ui` (`--allow-writes`: Sync and Discard edit, confirmed in the page); the Claude Code plugin of `craftar mcp` (`plugins/craftar/`: a `/craftar` skill and the reading tools).")).toBe(1);
     expect(count("Next: cloning")).toBe(0);
     expect(count("Everything else in the spec (cloning a profile's repositories at init) is not built yet.")).toBe(0);
+  });
+});
+
+// Spec 45 §9: the plugin is shipped, so of the plugin packaging Later keeps only the Agent Plugin.
+describe("README — the Claude Code plugin", () => {
+  it("Later names the Agent Plugin alone, and the install commands appear once", () => {
+    const later = README.split("\n").filter((l) => l.startsWith("Later:"));
+    expect(later).toHaveLength(1);
+    expect(later[0]).toContain("the Agent Plugin packaging of `craftar mcp`");
+    expect(later[0]).not.toContain("Claude Code");
+    expect(count("/plugin marketplace add llima/craftar-cli")).toBe(1);
+    expect(count("/plugin install craftar@craftar")).toBe(1);
   });
 });
 

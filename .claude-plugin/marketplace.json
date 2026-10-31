@@ -1,0 +1,12 @@
+{
+  "name": "craftar",
+  "description": "The Claude Code plugin of Craftar, a build system for AI-coding harnesses.",
+  "owner": { "name": "Craftar" },
+  "plugins": [
+    {
+      "name": "craftar",
+      "source": "./plugins/craftar",
+      "description": "Lets the agent read a Craftar workspace's state through craftar mcp."
+    }
+  ]
+}

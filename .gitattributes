@@ -2,3 +2,6 @@
 test/golden/** -text
 # The pins of the reading commands are compared byte for byte too (test/report-pins.test.ts).
 test/pins/** -text
+# The plugin is published as committed: LF on every checkout.
+plugins/** eol=lf
+.claude-plugin/** eol=lf
