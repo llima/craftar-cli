@@ -680,7 +680,7 @@ describe("metaDifferences — hook with registration (spec 43 §7.2 row 9)", () 
     const variant = forge.ingredients.get("hook/guard--acme")!;
 
     // Should NOT report params as different
-    const diffs = metaDifferences(base, variant);
+    const diffs = metaDifferences(base, variant, 1);
     expect(diffs).not.toContain("params");
   });
 
@@ -730,7 +730,7 @@ describe("metaDifferences — hook with registration (spec 43 §7.2 row 9)", () 
     const variant = forge.ingredients.get("hook/guard--acme")!;
 
     // SHOULD report params as different
-    const diffs = metaDifferences(base, variant);
+    const diffs = metaDifferences(base, variant, 1);
     expect(diffs).toContain("params");
   });
 
@@ -772,7 +772,7 @@ describe("metaDifferences — hook with registration (spec 43 §7.2 row 9)", () 
     const variant = forge.ingredients.get("hook/guard--acme")!;
 
     // SHOULD report registration as different
-    const diffs = metaDifferences(base, variant);
+    const diffs = metaDifferences(base, variant, 1);
     expect(diffs).toContain("registration");
   });
 
@@ -817,7 +817,7 @@ describe("metaDifferences — hook with registration (spec 43 §7.2 row 9)", () 
     const variant = forge.ingredients.get("hook/guard--acme")!;
 
     // SHOULD report params as different (like MCP: the declaration decides the example file's bytes)
-    const diffs = metaDifferences(base, variant);
+    const diffs = metaDifferences(base, variant, 1);
     expect(diffs).toContain("params");
   });
 });

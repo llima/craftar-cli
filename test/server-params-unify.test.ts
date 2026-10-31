@@ -120,7 +120,7 @@ const differs = async (schema: number, spec: ForgeSpec, pass = true) => {
   const { forge } = await forgeOf(schema, spec);
   const f = await loadForge(forge);
   const [b, v] = [f.ingredients.get("mcp/idp")!, f.ingredients.get("mcp/idp--acme")!];
-  return pass ? metaDifferences(b, v, f.manifest.schema) : metaDifferences(b, v);
+  return pass ? metaDifferences(b, v, f.manifest.schema) : metaDifferences(b, v, 1);
 };
 const FIRST = (fields: string) => `ingredient.yaml differs in ${fields} — unify cannot merge ingredient.yaml, so mcp/idp--acme stays; resolve it by hand, or use --take base to discard the variant`;
 const SECOND = "mcp/idp--acme holds its server as a workspace wrote it; discarding it, or giving it the base's params, can make the next sync render those params into that workspace's MCP files";

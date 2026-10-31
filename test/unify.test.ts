@@ -658,7 +658,7 @@ describe("metaDifferences — MCP server key order (spec 07, AC 19)", () => {
         { meta: { type: "mcp", name: "p--acme", as: "p", server: { type: "stdio", env: { B: "2", A: "1" }, command: "npx" } } },
       ],
     });
-    expect(metaDifferences(forge.ingredients.get("mcp/p")!, forge.ingredients.get("mcp/p--acme")!)).toEqual([]);
+    expect(metaDifferences(forge.ingredients.get("mcp/p")!, forge.ingredients.get("mcp/p--acme")!, 1)).toEqual([]);
   });
 });
 
@@ -772,9 +772,9 @@ describe("take: param — the engine (spec 09 §6.1, §6.2)", () => {
   it("ignores params in metaDifferences when the variant declares none (§6.6)", async () => {
     const { base, variant } = await scenario({ "rule.md": "a\n" }, { "rule.md": "a\n" });
     (base as any).meta = { ...(base as any).meta, params: { k: { default: "x" } } };
-    expect(metaDifferences(base, variant)).toEqual([]);
+    expect(metaDifferences(base, variant, 1)).toEqual([]);
     (variant as any).meta = { ...(variant as any).meta, params: { k: { default: "y" } } };
-    expect(metaDifferences(base, variant)).toEqual(["params"]);
+    expect(metaDifferences(base, variant, 1)).toEqual(["params"]);
   });
 
   it("take: param works on a body file declared ./rule.md (0.8.2)", async () => {
