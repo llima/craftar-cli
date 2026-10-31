@@ -1025,7 +1025,7 @@ async function generatedIgnoredCheck(
     return;
   }
   for (const line of r.lines) w("generated-ignored", "warn", line, IGNORED_FIX);
-  if (r.unchecked) w("generated-ignored", "warn", UNCHECKED_LINE, "make the generated folder a real directory");
+  if (r.unchecked) w("generated-ignored", "warn", UNCHECKED_LINE, "a generated folder that is a symbolic link is the usual cause: make it a real directory, or run git check-ignore on the path");
   if (r.stale.length > 0) w("generated-ignored", "warn", staleLine(r.stale), "remove the entry from mayBeIgnored in craftar.yaml");
   if (r.lines.length === 0 && !r.unchecked && r.stale.length === 0) w("generated-ignored", "ok", "git ignores no generated file");
 }

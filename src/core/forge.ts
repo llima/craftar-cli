@@ -15,6 +15,7 @@ import { parseYamlText } from "./yaml-read.js";
 import { SchemaError, schemaIssues } from "./schema-fault.js";
 import { execProgram, streamProgram } from "./proc.js";
 import { findSecrets } from "./secrets.js";
+import { climbsOut } from "./text.js";
 
 export interface LoadedIngredient {
   ref: IngredientRef;
@@ -188,7 +189,7 @@ export async function gitDirty(dir: string): Promise<boolean> {
 
 /** How one ignore rule is named in a message (spec 49 §4.2, Ruling 3): no path outside the tree, no control character. */
 export function shownRule(source: string, line: string, pattern: string, commonDir: string | null): string {
-  const clean = (t: string) => t.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  const clean = (t: string) => t.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, "");
   const slashed = (t: string) => {
     const p = t.replace(/\\/g, "/");
     return process.platform === "win32" ? p.toLowerCase() : p;
@@ -196,8 +197,8 @@ export function shownRule(source: string, line: string, pattern: string, commonD
   const absolute = path.isAbsolute(source) || /^[A-Za-z]:[\\/]/.test(source);
   let where: string;
   if (absolute) where = commonDir !== null && slashed(source) === `${slashed(commonDir)}/info/exclude` ? ".git/info/exclude" : "core.excludesFile";
-  // In the tree a source is a .gitignore or the exclude file; a core.excludesFile can be spelled relative.
-  else where = source === ".git/info/exclude" || path.posix.basename(source) === ".gitignore" ? clean(source) : "core.excludesFile";
+  // In the tree a source is a .gitignore or the exclude file, reported from the top; a core.excludesFile can be spelled relative.
+  else where = !climbsOut(source) && (source === ".git/info/exclude" || path.posix.basename(source) === ".gitignore") ? clean(source) : "core.excludesFile";
   const at = `${where}:${/^\d+$/.test(line) ? line : "?"}`;
   const shown = clean(pattern);
   return findSecrets(shown).length > 0 ? at : `${at} ${shown}`;

@@ -177,6 +177,7 @@ export const spawnInherited: Runner = async (req) => {
     child.on("close", (code) => resolve({ code }));
   });
 };
+
 /**
  * Input written to a program's stdin, resolved with its exit code and stdout whatever the code: a caller that keeps what
  * a failing program printed before it stopped needs both (spec 49 §5.2). Rejects with ENOENT as `execProgram` does. The

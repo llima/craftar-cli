@@ -5,8 +5,8 @@
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { runDoctor } from "../src/core/doctor.js";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { runDoctor, workspaceReport } from "../src/core/doctor.js";
 import { ignoredPaths, shownRule } from "../src/core/forge.js";
 import { streamProgram } from "../src/core/proc.js";
 import { generatedIgnored } from "../src/core/generated-ignored.js";
@@ -19,6 +19,24 @@ import { removeWithRetry } from "./helpers/fs.js";
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
   while (cleanups.length) await cleanups.pop()!();
+});
+
+// A rule in the developer's own git configuration must not reach these tests: `.claude/` ignored globally is plausible.
+const SAVED = ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "XDG_CONFIG_HOME"].map((k) => [k, process.env[k]] as const);
+let hermetic: string;
+beforeAll(async () => {
+  hermetic = await tmpDir();
+  await writeFiles(hermetic, { gitconfig: "" });
+  process.env.GIT_CONFIG_GLOBAL = path.join(hermetic, "gitconfig");
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+  process.env.XDG_CONFIG_HOME = hermetic;
+});
+afterAll(async () => {
+  for (const [k, v] of SAVED) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  await removeWithRetry(hermetic);
 });
 
 const git = (cwd: string, ...args: string[]) =>
@@ -60,6 +78,13 @@ describe("shownRule", () => {
   });
   it("removes control characters from the pattern", () => {
     expect(shownRule(".gitignore", "1", "a\u001b[31mb\u0085c\u0007", null)).toBe(".gitignore:1 a[31mbc");
+  });
+  it("removes a bidirectional override from the pattern", () => {
+    expect(shownRule(".gitignore", "1", "a\u202eb\u2066c", null)).toBe(".gitignore:1 abc");
+  });
+  it("never prints a relative source that climbs out of the tree", () => {
+    expect(shownRule("../secret/.gitignore", "1", "x", null)).toBe("core.excludesFile:1 x");
+    expect(shownRule("a/../../.gitignore", "1", "x", null)).toBe("core.excludesFile:1 x");
   });
   it("leaves out a pattern that holds a token of a known format", () => {
     const token = "ghp_" + "x".repeat(36);
@@ -132,7 +157,8 @@ describe("ignoredPaths", () => {
     const dir = await tmpDir();
     cleanups.push(() => removeWithRetry(dir));
     expect(await ignoredPaths(dir, ["x"])).toEqual({ ignored: [], unchecked: false });
-    expect(await ignoredPaths(dir, ["x"], { PATH: "" })).toEqual({ ignored: [], unchecked: false });
+    // In a repository, so that git not being found is what answers.
+    expect(await ignoredPaths(await repo(), ["x"], { PATH: "" })).toEqual({ ignored: [], unchecked: false });
   });
   it.skipIf(process.platform === "win32")("keeps the paths before a symbolic link and says unchecked", async () => {
     const dir = await repo();
@@ -293,6 +319,26 @@ describe("the surfaces", () => {
     const checks = JSON.parse(r.stdout).checks.filter((c: { id: string }) => c.id === "generated-ignored");
     expect(checks.map((c: { message: string }) => c.message)).toContain("some generated paths could not be checked against git's ignore rules");
     expect(r.code).toBe(1);
+  });
+  it("doctor --strict exits 0 once the ignored path is listed under mayBeIgnored", async () => {
+    const root = await ws({ config: { mayBeIgnored: [RULE_FILE, "craftar.lock"] } });
+    await writeFiles(root, { ".gitignore": ".claude/\ncraftar.lock\n" });
+    const line = JSON.parse(runCli(["doctor", "--workspace", root, "--json"]).stdout).checks.filter((c: { id: string }) => c.id === "generated-ignored");
+    expect(line.map((c: { level: string }) => c.level)).toEqual(["ok"]);
+    runCli(["sync", "--workspace", root]);
+    expect(runCli(["doctor", "--strict", "--workspace", root]).stdout).not.toContain("git ignores it");
+  });
+  it("doctor says it did not check when forge: comes from craftar.local.yaml", async () => {
+    const root = await ws({ local: { forge: "../forge" } });
+    await writeFiles(root, { ".gitignore": ".claude/\n" });
+    const line = JSON.parse(runCli(["doctor", "--workspace", root, "--json"]).stdout).checks.filter((c: { id: string }) => c.id === "generated-ignored");
+    expect(line).toMatchObject([{ level: "ok", message: "not checked: forge: comes from craftar.local.yaml" }]);
+  });
+  it("the doctor tool's narrowed report keeps the check", async () => {
+    const root = await ws();
+    await writeFiles(root, { ".gitignore": ".claude/\n" });
+    const report = await runDoctor({ version: "t", workspace: root, fetch: false, strict: false, home: await tmpHome(), registryOff: true, gitVersion: async () => "t", dotnetVersion: async () => null });
+    expect(workspaceReport(report).checks.some((c) => c.id === "generated-ignored" && c.level === "warn")).toBe(true);
   });
   it("a workspace with nothing ignored prints no line", async () => {
     const root = await ws();
