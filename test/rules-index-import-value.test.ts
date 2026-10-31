@@ -259,6 +259,9 @@ describe("Item 1: craftar.rules.index value at re-import (schema 7)", () => {
         }),
       );
 
+      // A base whose text differs from the variant's, so decide() does not answer reuse
+      await fs.writeFile(path.join(s.forgeRoot, "ingredients/rules/readme/rule.md"), "# Another base\n");
+
       // Sync to expand the index
       await syncWorkspace(s.wsRoot);
 
@@ -277,9 +280,8 @@ describe("Item 1: craftar.rules.index value at re-import (schema 7)", () => {
       expect(variantContentAfter).toBe(variantContentBefore);
       expect(variantContentAfter).toContain("{{craftar.rules.index}}");
       
-      // The base is reused because its fingerprint (with index expanded) matches the workspace
-      // This is correct behavior - the variant directory is left alone
-      expect(result.reused).toContain("rule/readme");
+      // The base differs, so the unchanged variant is what this import compares and keeps
+      expect(result.reused).not.toContain("rule/readme");
       expect(await variantExists(s.forgeRoot, "readme--acme")).toBe(true);
     });
   });
