@@ -8,7 +8,7 @@ import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
 import { holdsBaseCitations, rendersServers } from "./core/mcp-server.js";
-import { assertNotCacheTree, classifyForge, CREDENTIAL_HIDDEN, refHoldsCredentials, shownRef } from "./core/remote.js";
+import { assertNotCacheTree, classifyForge, CREDENTIAL_HIDDEN, hideUnderCaches, isUnderOrEqual, shownCachePath, refHoldsCredentials, shownRef, UNVOUCHED_HIDDEN } from "./core/remote.js";
 import { allowWrites, forget, listWorkspaces, prune, readRegistry, revokeWrites, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
@@ -75,7 +75,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.40.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.40.1");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -98,7 +98,7 @@ program
   .option("--write-config", "write craftar.yaml into the workspace, merging an existing one (forge, profile, targets)", false)
   .option(
     "--report <file.md>",
-    "also write a Markdown report of the import — what was created, reused, made a variant or rejected, and the .kiro/ files that differ from what Craftar would generate (paths and line counts, never content); refused when the path is inside the Forge or already exists",
+    "also write a Markdown report of the import — what was created, reused, made a variant or rejected, and the .kiro/ files that differ from what Craftar would generate (paths and line counts, never content); refused when the path is inside the Forge or inside craftar's Forge cache or already exists",
   )
   .option(
     "--prefer-kiro <rule,…>",
@@ -1500,6 +1500,8 @@ const mcpCmd = program
       env: process.env,
       pin: pinOf(merged),
       writers: o.allowWrites ? mcpWriters(craftarHome(), registryOff()) : undefined,
+      // Not the workspace root or anywhere a global.json can be planted: the dotnet host reads it and loads what its sdk.paths names.
+      dotnetOwnDir: true,
     });
   });
 
@@ -2166,7 +2168,7 @@ forge
   .requiredOption("--profile <p>", "which variant to resolve")
   .option("--take <side>", "resolve every decision to base or variant")
   .option("--plan <file>", "apply the decisions in this plan file (a hunk may be take: param with its params list, or take: section with its section name)")
-  .option("--save-plan <file>", "write a plan with every decision deferred, each hunk annotated with its suggested class (which --plan ignores), value hunks pre-filled with params, block hunks pre-filled with a section name, and hunks touching an existing section with its name, to a new file outside the Forge, and stop")
+  .option("--save-plan <file>", "write a plan with every decision deferred, each hunk annotated with its suggested class (which --plan ignores), value hunks pre-filled with params, block hunks pre-filled with a section name, and hunks touching an existing section with its name, to a new file outside the Forge and outside craftar's Forge cache, and stop")
   .option("--no-impact", "skip planning the registered workspaces of this Forge before and after the writes (the warnings then keep their previous text)")
   .option("--prune-recipes", "delete each suffixed recipe the cascade leaves identical to its sibling and repoint the profiles that name it — only when every workspace registered on this machine plans byte for byte the same; needs the impact passes")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
@@ -2673,7 +2675,7 @@ forge
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--no-impact", "skip planning the registered workspaces of this Forge before and after the writes")
-  .option("--dry-run", "run every check and the first impact pass, print what would be written, and write nothing", false)
+  .option("--dry-run", "prove and show the plan, write nothing in the Forge (the proof needs a writable temporary directory)", false)
   .option("--json", "machine-readable output", false)
   .action(async (ref: string, o) => {
     // Never through the cache, as `forge unify` (spec 13 §4.4): the URL form is refused by refuseRemote and the directory form by assertNotCacheTree.
@@ -2795,7 +2797,7 @@ forge
     console.log(pc.bold(`craftar forge promote ${promotion.base} ← ${promotion.profile}${o.dryRun ? " (dry run — nothing written)" : ""}`));
     console.log(`  base     ${promotion.base} ${o.dryRun ? "would hold" : "now holds"} ${promotion.profile}'s text (was ${promotion.removed})`);
     for (const c of promotion.created) console.log(`  variant  ${c} ${o.dryRun ? "would be created" : "created"} (the old base)`);
-    if (promotion.discarded) console.log(`  the old base is resolved by no profile — discarded (git holds it)`);
+    if (promotion.discarded) console.log(`  the old base is resolved by no profile — ${o.dryRun ? "would be discarded" : "discarded"} (git holds it)`);
     const recipeLines = [...promotion.detail.recipes.filter((r) => r.from === null), ...promotion.detail.recipes.filter((r) => r.from !== null)];
     for (const r of recipeLines) console.log(`  recipe   ${r.name}${r.from === null ? "" : ` ${o.dryRun ? "would be created" : "created"} from ${r.from}`}: ${r.old} → ${r.new}`);
     for (const p of promotion.detail.profiles) console.log(`  profile  ${p.file}: ${p.swaps.map((s) => `${s.old} → ${s.new}`).join(", ")}`);
@@ -2806,7 +2808,7 @@ forge
       else if (impactResults.every((r) => r.state === "no-effect")) console.log(`  impact   ${n(impactResults.length)} planned before and after: no effect`);
       else for (let i = 0; i < impactResults.length; i++) console.log(`  ${impactLine(impactEntries[i], impactResults[i])}`);
     }
-    if (promotion.created.length) console.log(`  next     craftar forge variants — the old base now shows as ${promotion.created.length} variant(s) to unify`);
+    if (promotion.created.length) console.log(`  next     craftar forge variants — the old base ${o.dryRun ? "would show" : "now shows"} as ${promotion.created.length} variant(s) to unify`);
   });
 
 /* ---------------------------------------------------------------- services ---------------------------------------------------------------- */
@@ -3180,7 +3182,19 @@ function color(state: string) {
  * fails before anything is written.
  */
 async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate): Promise<string> {
-  const refusing = `refusing to write the ${w.what} to ${target}`;
+  const home = craftarHome();
+  const forgesCacheDir = path.join(home, "forges");
+  let forgesCacheReal: string | null = null;
+  let cacheFault: string | null = null;
+  try {
+    forgesCacheReal = await realpathOfNearest(forgesCacheDir);
+  } catch (e) {
+    // realpathOfNearest already answers for a missing directory; any error here means the path
+    // cannot be inspected or resolved, and without its real path the cache check cannot run.
+    cacheFault = e instanceof Error ? e.message : String(e);
+  }
+  const caches = [path.resolve(forgesCacheDir), ...(forgesCacheReal === null ? [] : [forgesCacheReal])];
+  let refusing = `refusing to write the ${w.what} to ${shownCachePath(target, caches)}`;
   const abs = path.resolve(target);
   let targetReal: string;
   let rootReal: string;
@@ -3188,11 +3202,25 @@ async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate
     targetReal = await realpathOfNearest(abs);
     rootReal = await realpathOfNearest(path.resolve(forgeRoot));
   } catch (e) {
-    fail(`${refusing}: ${e instanceof Error ? e.message : String(e)} — ${w.who} cannot prove the target lies outside the Forge`);
+    const msg = e instanceof Error ? e.message : String(e);
+    fail(`${refusing}: ${hideUnderCaches(msg, caches)} — ${w.who} cannot prove the target lies outside the Forge`);
   }
+  // A path typed through a link to the cache is shown by where it lands.
+  if (shownCachePath(targetReal, caches) !== targetReal) refusing = `refusing to write the ${w.what} to ${shownCachePath(targetReal, caches)}`;
   const rel = path.relative(rootReal, targetReal);
   if (rel === "" || !(rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))) {
-    fail(`${refusing}: it resolves inside the Forge (${forgeRoot}) — ${w.outside}`);
+    const shownRoot = shownCachePath(rootReal, caches) === rootReal ? shownCachePath(forgeRoot, caches) : shownCachePath(rootReal, caches);
+    fail(`${refusing}: it resolves inside the Forge (${shownRoot}) — ${w.outside}`);
+  }
+  // Refuse a target whose real path is under (or equal to) the Forge cache.
+  if (forgesCacheReal === null) {
+    fail(`${refusing}: ${hideUnderCaches(cacheFault ?? "", caches)} — ${w.who} cannot prove the target lies outside the Forge cache`);
+  }
+  if (isUnderOrEqual(targetReal, forgesCacheReal)) {
+    const relToCache = path.relative(forgesCacheReal, targetReal);
+    const rest = relToCache === "" ? [] : relToCache.split(path.sep).slice(1);
+    const shown = path.join(path.resolve(home), "forges", ...(relToCache === "" ? [] : [UNVOUCHED_HIDDEN]), ...rest);
+    fail(`refusing to write the ${w.what}: it resolves inside craftar's Forge cache (${shown}) — choose a path outside it`);
   }
   if (await pathTaken(abs)) fail(`${refusing}: the file already exists — ${w.never}; choose a new path`);
   return abs;

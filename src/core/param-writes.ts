@@ -5,7 +5,7 @@ import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema, type ForgeManif
 import { placeholders, bodyFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
 import { manifestWithSections } from "./manifest-edit.js";
-import { citationsIn, registrationCitations, rendersServers, serverCitations } from "./mcp-server.js";
+import { registrationCitations, rendersServers, serverCitations } from "./mcp-server.js";
 import { resolve, sectionKey } from "./resolve.js";
 import { errorText } from "./schema-fault.js";
 import { canonicalValue } from "./sections.js";

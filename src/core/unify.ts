@@ -160,7 +160,7 @@ function comparableMeta(meta: Ingredient): Record<string, unknown> {
  * the differing fields can be named — never through `JSON.stringify(x, keys)`, whose key-array
  * replacer filters at every depth and sees two different nested `server` objects as the same `{}`.
  */
-export function metaDifferences(base: LoadedIngredient, variant: LoadedIngredient, schema = 1): string[] {
+export function metaDifferences(base: LoadedIngredient, variant: LoadedIngredient, schema: number): string[] {
   const a = comparableMeta(base.meta);
   const b = comparableMeta(variant.meta);
   // A variant never needs declarations of its own; the base's are what an extraction added (spec 09 §6.6).

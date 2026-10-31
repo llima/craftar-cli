@@ -5,6 +5,7 @@ import { fingerprintOf, type DirReader } from "./fingerprint.js";
 import { parseYaml } from "./forge.js";
 import { renderServer, rendersServers } from "./mcp-server.js";
 import { substitute } from "./resolve.js";
+import { RULES_INDEX_KEY } from "./rules-index.js";
 import { checkDeclaredOnce, expandSections, parseSections, projectSections, SectionMarkerError, type ParsedSections, type ParseSectionsOptions } from "./sections.js";
 import { stripBom, toLf } from "./text.js";
 import { claudeResolves } from "../emitters/claude-code.js";
@@ -18,12 +19,29 @@ import { claudeResolves } from "../emitters/claude-code.js";
 const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 const norm = (s: string) => toLf(stripBom(s));
 
-/** The values sync substitutes into `meta`'s files for the importing workspace: declared defaults, then P, then W (spec 10 §6.1). */
-export function renderMap(meta: Ingredient, profileParams: Record<string, unknown>, workspaceParams: Record<string, unknown>): Record<string, unknown> {
+/**
+ * The values sync substitutes into `meta`'s files for the importing workspace: declared defaults, then P, then W (spec 10 §6.1).
+ * At the rules-index gate (spec 44 §4.2), RULES_INDEX_KEY is skipped — sync generates it, so a value set elsewhere is ignored.
+ */
+export function renderMap(
+  meta: Ingredient,
+  profileParams: Record<string, unknown>,
+  workspaceParams: Record<string, unknown>,
+  readsRulesIndex: boolean,
+): Record<string, unknown> {
   const out: Record<string, unknown> = Object.create(null);
-  for (const [k, v] of Object.entries(meta.params ?? {})) if (v.default !== undefined) out[k] = v.default;
-  for (const [k, v] of Object.entries(profileParams)) out[k] = v;
-  for (const [k, v] of Object.entries(workspaceParams)) out[k] = v;
+  for (const [k, v] of Object.entries(meta.params ?? {})) {
+    if (readsRulesIndex && k === RULES_INDEX_KEY) continue;
+    if (v.default !== undefined) out[k] = v.default;
+  }
+  for (const [k, v] of Object.entries(profileParams)) {
+    if (readsRulesIndex && k === RULES_INDEX_KEY) continue;
+    out[k] = v;
+  }
+  for (const [k, v] of Object.entries(workspaceParams)) {
+    if (readsRulesIndex && k === RULES_INDEX_KEY) continue;
+    out[k] = v;
+  }
   return out;
 }
 
@@ -91,12 +109,18 @@ export function citedKeys(texts: Map<string, string>): Set<string> {
   return out;
 }
 
+/** import builds a script or hook source at ["claude-code"], the one target that writes them. */
+export function asImportTargets<T extends Ingredient>(meta: T): T {
+  return (meta.type === "script" || meta.type === "hook") && meta.targets === "*" ? { ...meta, targets: ["claude-code"] } : meta;
+}
+
 /**
  * The fingerprint of a base rendered through `map` (spec 10 §6.2): its metadata without the
  * Forge-only keys (a workspace cannot express a declaration), body files expanded with the section
  * values `sections` and then substituted, exactly as `ctx.text` does (spec 11 §6.4, §6.7), every
  * other file as bytes. At schema 4 and for an `mcp` base, the server is rendered (spec 34 §5.3).
- * With no declaration, no marker and nothing set, this is `fingerprintDir`.
+ * With no declaration, no marker and nothing set, this is `fingerprintDir`, except for a script or a hook at the
+ * default targets (`asImportTargets`).
  * `refs`, given when the importing workspace is under agents-md.primary (spec 41 §4.10), rewords rule references as the
  * claude-code emitter does: in the files `claudeResolves` names and, for an agent or a command, in `frontmatterRaw` and
  * `description` — a source's description is read back from the frontmatter the emitter reworded.
@@ -106,8 +130,8 @@ export function citedKeys(texts: Map<string, string>): Set<string> {
 export function renderedFingerprint(
   base: ImportBase,
   map: Record<string, unknown>,
-  sections: Record<string, string> = {},
-  schema: ForgeSchema = 1,
+  sections: Record<string, string>,
+  schema: ForgeSchema,
   refs?: (text: string, citing: string) => string,
   owner?: Owner,
   index?: (text: string) => string,
@@ -120,6 +144,7 @@ export function renderedFingerprint(
   } else {
     meta = stripForgeOnlyKeys({ ...base.meta }) as Ingredient;
   }
+  meta = asImportTargets(meta);
   const citing = `${base.meta.type}/${base.meta.name}`;
   if (refs && (meta.type === "agent" || meta.type === "command")) {
     if (meta.frontmatterRaw !== undefined) meta.frontmatterRaw = refs(meta.frontmatterRaw, citing);

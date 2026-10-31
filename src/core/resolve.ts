@@ -223,9 +223,12 @@ export function paramLayer(key: string, ing: LoadedIngredient, resolution: Resol
   return Object.hasOwn(declared, key) && declared[key].default !== undefined ? "default" : "unset";
 }
 
+/** The placeholder pattern: `{{key}}` with optional whitespace around the key (spec 08 §6.4). */
+export const PLACEHOLDER_RE = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
+
 /** Substitute `{{param}}` placeholders. Unknown placeholders are left untouched (and reported by the caller). */
 export function substitute(text: string, params: Record<string, unknown>, missing?: Set<string>): string {
-  return text.replace(/\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g, (m, key: string) => {
+  return text.replace(PLACEHOLDER_RE, (m, key: string) => {
     // Own properties only: `key in params` resolved {{constructor}} to Object.prototype.constructor.
     if (Object.hasOwn(params, key)) return String(params[key]);
     missing?.add(key);

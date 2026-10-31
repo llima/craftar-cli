@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
 import { makeForge, makeWorkspace, profile, recipe, rule, scenario, tmpDir, writeFiles } from "./helpers/forge.js";
-import { DOTNET_MISSING } from "../src/core/templates.js";
+import { DOTNET_MISSING, DOTNET_PROBE_DIR_FAILED } from "../src/core/templates.js";
 import { session } from "./helpers/mcp.js";
 import { remoteForge } from "./helpers/remote.js";
 import { MCP_FILES, eightStates, explained, mcpWorkspace, moveTracker, syncOnce, type Scenario } from "./helpers/states.js";
@@ -13,6 +14,8 @@ import { PIN_CHANGED } from "../src/core/mcp-protocol.js";
 import { statusReport } from "../src/core/report.js";
 import { defaultGit, type GitRunner } from "../src/core/remote.js";
 import { loadWorkspace, plan, readLock, readWorkspaceConfig, status } from "../src/core/sync.js";
+import { runDoctor } from "../src/core/doctor.js";
+import type { Probe } from "../src/core/proc.js";
 
 // Spec 35 §4.4–§4.6, §6, §7, §10.2 — the seven tools, the pin, what a result never holds.
 
@@ -561,5 +564,142 @@ describe("doctor — the checks 0.25–0.27 added, through injected runners", ()
     expect(of("dotnet")).toEqual([]);
     expect(of("templates")).toEqual([]);
     expect(of("services-env")).toEqual([]);
+  });
+
+  describe("the doctor tool's dotnet probe directory", () => {
+    const seams = { nodeVersion: "22.11.0", gitVersion: async () => "2.53.0", dotnetVersion: undefined, dockerRunner: async () => ({ code: 0, stdout: "v2.30.0\n", stderr: "" }) };
+    const dotnetCheck = (report: { checks: Array<{ id: string; level: string; message: string; fix: string | null }> }) => report.checks.find((c) => c.id === "dotnet")!;
+
+    it("runs dotnet --version in a new 0700 directory under the temporary directory, holding only a global.json of {}, removed afterwards", async () => {
+      const f = await fixtureWithServiceAndTemplates();
+      const seen: Array<{ cwd: string | undefined; files: string[]; text: string; mode: number }> = [];
+      const dotnetProbe: Probe = async (_file, _args, _env, cwd) => {
+        seen.push({ cwd, files: await fs.readdir(cwd!), text: await fs.readFile(path.join(cwd!, "global.json"), "utf8"), mode: (await fs.stat(cwd!)).mode & 0o777 });
+        return "10.0.401\n";
+      };
+      const s = await session(f.ws, { ...seams, dotnetProbe, dotnetOwnDir: true });
+      const first = data(await one("doctor", s));
+      await one("doctor", s);
+      expect(seen).toHaveLength(2);
+      expect(seen[0].cwd).not.toBe(seen[1].cwd);
+      for (const run of seen) {
+        expect(path.dirname(run.cwd!)).toBe(os.tmpdir());
+        expect(run.files).toEqual(["global.json"]);
+        expect(run.text).toBe("{}");
+        if (process.platform !== "win32") expect(run.mode).toBe(0o700);
+        await expect(fs.lstat(run.cwd!)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect(dotnetCheck(first).message).toBe("10.0.401");
+    });
+
+    it("removes the directory when the probe fails, and reads as a missing SDK", async () => {
+      const f = await fixtureWithServiceAndTemplates();
+      let cwdSeen: string | undefined;
+      const dotnetProbe: Probe = async (_file, _args, _env, cwd) => {
+        cwdSeen = cwd;
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      };
+      const s = await session(f.ws, { ...seams, dotnetProbe, dotnetOwnDir: true });
+      const c = dotnetCheck(data(await one("doctor", s)));
+      await expect(fs.lstat(cwdSeen!)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(c.level).toBe("warn");
+      expect(c.message).toBe(DOTNET_MISSING);
+    });
+
+    it("a directory it cannot prepare: no probe, a warn in its own words that names no path and no missing SDK", async () => {
+      const f = await fixtureWithServiceAndTemplates();
+      const missing = path.join(await tmpDir("craftar-test-no-tmp-"), "absent");
+      cleanups.push(() => fs.rm(path.dirname(missing), { recursive: true, force: true }));
+      let probed = false;
+      const dotnetProbe: Probe = async () => {
+        probed = true;
+        return "10.0.401\n";
+      };
+      const saved = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
+      const s = await session(f.ws, { ...seams, dotnetProbe, dotnetOwnDir: true });
+      Object.assign(process.env, { TMPDIR: missing, TEMP: missing, TMP: missing });
+      let report;
+      try {
+        report = data(await one("doctor", s));
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+      const c = dotnetCheck(report);
+      expect(probed).toBe(false);
+      expect(c.level).toBe("warn");
+      expect(c.message).toBe(DOTNET_PROBE_DIR_FAILED);
+      expect(c.message).not.toBe(DOTNET_MISSING);
+      expect(`${c.message} ${c.fix}`).not.toContain(path.dirname(missing));
+    });
+
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a removal that fails leaves the directory and does not change the check", async () => {
+      const f = await fixtureWithServiceAndTemplates();
+      let cwdSeen = "";
+      const dotnetProbe: Probe = async (_file, _args, _env, cwd) => {
+        cwdSeen = cwd!;
+        await fs.chmod(cwd!, 0o500);
+        return "10.0.401\n";
+      };
+      cleanups.push(async () => {
+        await fs.chmod(cwdSeen, 0o700);
+        await fs.rm(cwdSeen, { recursive: true, force: true });
+      });
+      const s = await session(f.ws, { ...seams, dotnetProbe, dotnetOwnDir: true });
+      const c = dotnetCheck(data(await one("doctor", s)));
+      expect(path.dirname(cwdSeen)).toBe(os.tmpdir());
+      expect(c.level).toBe("ok");
+      expect(c.message).toBe("10.0.401");
+      await expect(fs.lstat(cwdSeen)).resolves.toBeTruthy();
+    });
+
+    it("no template block: nothing is created and no probe runs", async () => {
+      const t = await tmpDir("craftar-test-own-tmp-");
+      cleanups.push(() => fs.rm(t, { recursive: true, force: true }));
+      const w = kept(await scenario(BASE, { config: { profile: "acme" } }));
+      await syncOnce(w.wsRoot);
+      let probed = false;
+      const s = await session(w.wsRoot, { ...seams, dotnetProbe: async () => ((probed = true), "10.0.401\n"), dotnetOwnDir: true });
+      const saved = process.env.TMPDIR;
+      process.env.TMPDIR = t;
+      try {
+        await one("doctor", s);
+        expect(await fs.readdir(t)).toEqual([]);
+      } finally {
+        if (saved === undefined) delete process.env.TMPDIR;
+        else process.env.TMPDIR = saved;
+      }
+      expect(probed).toBe(false);
+    });
+  });
+
+  it("runDoctor with dotnetProbe and no dotnetOwnDir records the workspace root (typed doctor unchanged)", async () => {
+    const f = await fixtureWithServiceAndTemplates();
+    let recordedCwd: string | undefined;
+    const dotnetProbe: Probe = async (_file, _args, _env, cwd) => {
+      recordedCwd = cwd;
+      return "10.0.401\n";
+    };
+    await runDoctor({
+      version: "0.0.0-test",
+      home: process.env.CRAFTAR_HOME!,
+      workspace: f.ws,
+      fetch: false,
+      strict: false,
+      registryOff: false,
+      nodeVersion: "22.11.0",
+      gitVersion: async () => "2.53.0",
+      dotnetProbe,
+      dockerRunner: async () => ({ code: 0, stdout: "v2.30.0\n", stderr: "" }),
+    });
+    expect(recordedCwd).toBe(await fs.realpath(f.ws)); // the workspace root
+  });
+
+  it("src/cli.ts asks for the probe directory in the mcp context", async () => {
+    const cliSource = await fs.readFile(path.resolve(__dirname, "../src/cli.ts"), "utf8");
+    expect(cliSource).toContain("dotnetOwnDir: true");
+    expect(cliSource).not.toContain("dotnetCwd");
   });
 });

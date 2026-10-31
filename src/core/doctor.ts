@@ -13,8 +13,8 @@ import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK } from "./sync.js";
 import { outName, MCP_FILE, renderRegistration, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
 import { stripBom } from "./text.js";
-import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion as defaultDotnetVersion, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
-import { capture, execProgram } from "./proc.js";
+import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX, dotnetVersion as defaultDotnetVersion, dotnetVersionInOwnDir, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
+import { capture, execProgram, type Probe } from "./proc.js";
 
 /*
  * `craftar doctor` (spec 24): every check Craftar can make about this machine and, inside one, this
@@ -73,6 +73,10 @@ export interface DoctorOptions {
    * Defaults to `opts.env.CLAUDE_CONFIG_DIR` if set, else `path.join(os.homedir(), ".claude")`.
    */
   claudeUserDir?: string;
+  /** Run `dotnet --version` in a directory of its own (`dotnetVersionInOwnDir`); absent, at the workspace root. */
+  dotnetOwnDir?: boolean;
+  /** Test seam for the dotnet probe (which directory it recorded). */
+  dotnetProbe?: Probe;
 }
 
 async function defaultGitVersion(): Promise<string | null> {
@@ -479,9 +483,14 @@ async function workspaceChecks(
         }
         // dotnet check — only when at least one entry is installable
         if (declared.entries.some((e) => e.installable)) {
-          const getDotnetVersion = opts.dotnetVersion ?? (() => defaultDotnetVersion(capture, env, root));
-          const version = await getDotnetVersion();
-          if (version !== null) w("dotnet", "ok", version);
+          const probe = opts.dotnetProbe ?? capture;
+          const answer = opts.dotnetVersion
+            ? { ran: true as const, version: await opts.dotnetVersion() }
+            : opts.dotnetOwnDir
+              ? await dotnetVersionInOwnDir(probe, env)
+              : { ran: true as const, version: await defaultDotnetVersion(probe, env, root) };
+          if (!answer.ran) w("dotnet", "warn", DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX);
+          else if (answer.version !== null) w("dotnet", "ok", answer.version);
           else w("dotnet", "warn", DOTNET_MISSING, DOTNET_MISSING_FIX);
         }
       }
@@ -895,13 +904,13 @@ async function hooksRegistered(
   // .claude/settings.json
   settingsFiles.push({
     label: SETTINGS_LABELS.project,
-    result: await readSettingsFile(path.join(root, ".claude/settings.json"), SETTINGS_LABELS.project),
+    result: await readSettingsFile(path.join(root, SETTINGS_LABELS.project), SETTINGS_LABELS.project),
   });
 
   // .claude/settings.local.json
   settingsFiles.push({
     label: SETTINGS_LABELS.projectLocal,
-    result: await readSettingsFile(path.join(root, ".claude/settings.local.json"), SETTINGS_LABELS.projectLocal),
+    result: await readSettingsFile(path.join(root, SETTINGS_LABELS.projectLocal), SETTINGS_LABELS.projectLocal),
   });
 
   // User settings: ~/.claude/settings.json or $CLAUDE_CONFIG_DIR/settings.json

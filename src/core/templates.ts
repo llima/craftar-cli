@@ -4,6 +4,7 @@
  * This module returns data and throws; it never prints.
  */
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { DotnetNewTemplateSchema, TEMPLATE_RULES, TemplatesSchema } from "../schema/index.js";
 import { credentialFault } from "./remote.js";
@@ -267,6 +268,30 @@ export async function installTemplates(entries: DeclaredEntry[], root: string, o
   }
 
   return { lines, installed, failed, skipped };
+}
+
+/** The `dotnet` check of the `doctor` tool of `craftar mcp` when the probe's directory cannot be prepared: the SDK was not looked at. */
+export const DOTNET_PROBE_DIR_FAILED = "dotnet was not checked: no directory could be prepared to run it in";
+export const DOTNET_PROBE_DIR_FIX = "check that the temporary directory can be written";
+
+/**
+ * `dotnetVersion` in a new directory of its own under the temporary directory, removed afterwards. The host
+ * reads the first `global.json` going up from its working directory and loads what its `sdk.paths` names; the
+ * `{}` here stops the walk and pins no version. `ran: false` means no probe ran: never a run elsewhere.
+ */
+export async function dotnetVersionInOwnDir(probe: Probe = defaultCapture, env: NodeJS.ProcessEnv = process.env): Promise<{ ran: false } | { ran: true; version: string | null }> {
+  let dir: string | null = null;
+  try {
+    try {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-dotnet-"));
+      await fs.writeFile(path.join(dir, "global.json"), "{}", { flag: "wx" });
+    } catch {
+      return { ran: false };
+    }
+    return { ran: true, version: await dotnetVersion(probe, env, dir) };
+  } finally {
+    if (dir !== null) await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => undefined);
+  }
 }
 
 /**

@@ -544,6 +544,59 @@ export async function cacheDir(home: string): Promise<"absent" | "present"> {
   return "present";
 }
 
+/** One regex over the segment after `<home>/forges/` and, when `anyForges`, after any `/forges/`; the homes come first, since the leftmost match wins. */
+function cacheSegmentPattern(homes: readonly string[], anyForges: boolean, platform: NodeJS.Platform): RegExp {
+  // Resolve, strip trailing separators, escape, de-duplicate and sort longest first.
+  const escaped = [...new Set(homes.map((h) => path.resolve(h).replace(/[/\\]+$/, "")))]
+    .sort((a, b) => b.length - a.length)
+    .map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const sep = "[/\\\\]";
+  const alternatives = [
+    ...(escaped.length > 0 ? [`(?:${escaped.join("|")})${sep}forges${sep}`] : []),
+    // A second literal `forges/` is the cache of a home itself named `forges`, spelled another way.
+    ...(anyForges ? [`${sep}forges${sep}(?:forges${sep})?`] : []),
+  ];
+  return new RegExp(`(${alternatives.join("|")})([^/\\\\\\s"']+)`, platform === "win32" ? "gi" : "g");
+}
+
+/**
+ * `text` with every path segment that follows `<home>/forges/` or any `/forges/` replaced by
+ * `UNVOUCHED_HIDDEN`, in one regex pass. An empty `homes` leaves only the second alternative.
+ * The label contains `(`, so it can never be matched again as a segment.
+ *
+ * @param platform The platform to use for case-insensitive matching; defaults to `process.platform`.
+ */
+export function hideAnyCacheSegment(text: string, homes: readonly string[], platform: NodeJS.Platform = process.platform): string {
+  return text.replace(cacheSegmentPattern(homes, true, platform), (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
+}
+
+/**
+ * `text` with the segment after each of `caches` (spellings of `<home>/forges`) replaced by `UNVOUCHED_HIDDEN`,
+ * in one regex pass: the cause of a refusal that could not resolve a path. Only a path that starts at one
+ * of them, so a folder named `forges` elsewhere keeps its name.
+ */
+export function hideUnderCaches(text: string, caches: readonly string[], platform: NodeJS.Platform = process.platform): string {
+  if (caches.length === 0) return text;
+  const escaped = [...new Set(caches)].sort((a, b) => b.length - a.length).map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const pattern = new RegExp(`(?<=^|[\\s"'(])((?:${escaped.join("|")})[/\\\\])([^/\\\\\\s"']+)`, platform === "win32" ? "gi" : "g");
+  return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
+}
+
+/**
+ * `p` as a refusal prints a path the user typed: untouched unless it lies under one of `caches`
+ * (spellings of `<home>/forges`), then absolute with `UNVOUCHED_HIDDEN` in place of the entry. Decided
+ * from the resolved path, so a folder named `forges` elsewhere keeps its name and a relative one is seen.
+ */
+export function shownCachePath(p: string, caches: readonly string[]): string {
+  const abs = path.resolve(p);
+  for (const cache of caches) {
+    if (!isUnderOrEqual(abs, cache)) continue;
+    const rel = path.relative(cache, abs);
+    return rel === "" ? abs : path.join(cache, UNVOUCHED_HIDDEN, ...rel.split(path.sep).slice(1));
+  }
+  return p;
+}
+
 /**
  * `text` with every path segment that follows `<path.resolve(home)>/forges/` or `<home>\forges\`
  * (either separator after `forges`) up to the next `/`, `\`, white space or quote replaced by
@@ -553,26 +606,22 @@ export async function cacheDir(home: string): Promise<"absent" | "present"> {
  * When `home` is an array of homes, **one** regex matches them all in one pass, so a label inserted
  * for one home is never matched by another — the fix for homes where one is a string suffix of the
  * other (e.g. `/home` as a link to `/var/home`).
+ *
+ * When `home` is an empty array, no home can be matched, so it fails closed: `hideAnyCacheSegment`
+ * labels the segment after any `/forges/`.
+ *
+ * @param platform The platform to use for case-insensitive matching; defaults to `process.platform`.
  */
-export function hideCacheSegment(text: string, home: string | readonly string[]): string {
+export function hideCacheSegment(text: string, home: string | readonly string[], platform: NodeJS.Platform = process.platform): string {
   const homes = Array.isArray(home) ? home : [home];
-  // Resolve, strip trailing separators, escape, de-duplicate and sort longest first (so a longer
-  // prefix is tried before a shorter one that is a suffix of it).
-  const escaped = [...new Set(homes.map((h) => path.resolve(h).replace(/[/\\]+$/, "")))]
-    .sort((a, b) => b.length - a.length)
-    .map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  if (escaped.length === 0) return text;
-  // Match: <any home>/forges/ or <any home>\forges\ followed by the segment (up to / \ space or quote)
-  // Capture the prefix (including the separator after forges) in group 1
-  const pattern = new RegExp(`((?:${escaped.join("|")})[/\\\\]forges[/\\\\])([^/\\\\\\s"']+)`, "g");
-  // Use a function replacement to avoid $&, $1, etc. in the home path being interpreted
-  return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
+  if (homes.length === 0) return hideAnyCacheSegment(text, [], platform);
+  return text.replace(cacheSegmentPattern(homes, false, platform), (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
 }
 
 /**
  * Whether `child` is under `parent` (or equal), segment-wise — `path.relative` compares without case on win32, as `samePath` does.
  */
-function isUnderOrEqual(child: string, parent: string): boolean {
+export function isUnderOrEqual(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
   if (rel === "") return true;
   if (rel === ".." || rel.startsWith(".." + path.sep)) return false;
@@ -604,11 +653,9 @@ export async function assertNotCacheTree(dir: string, home: string): Promise<voi
     try {
       rootReal = await realpathOfNearest(dir);
     } catch (e) {
-      // Fail closed: label the entry's name in the error and rethrow. One pass over both prefixes
-      // (the home as given and the real home), since a second pass could match inside the label
-      // when one prefix ends with the other.
+      // Fail closed: label the entry's name in the error and rethrow.
       const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(hideCacheSegment(msg, [home, path.dirname(forgesReal)]));
+      throw new Error(hideUnderCaches(msg, [path.resolve(forgesDir), forgesReal]));
     }
     if (isUnderOrEqual(rootReal, forgesReal)) {
       const rel = path.relative(forgesReal, rootReal);

@@ -1,0 +1,15 @@
+=== .claude/rules/style.md ===
+.claude/rules/style.md
+  target      claude-code
+  ingredient  rule/style
+  via recipes base
+  sections    intro (default), flavors (profile acme), notes (default)
+  profile     acme  (recipes: base, stack-api, acme-services)
+  hash        sha256:180c67ee92e4f8567266b91f8f185d4bd047e21f33945a8925969cdd3670d9db
+
+=== AGENTS.md ===
+AGENTS.md
+  target      agents-md
+  ingredient  rule/*
+  profile     acme  (recipes: base, stack-api, acme-services)
+  hash        sha256:12d2315623f10210559e5fdc3aa381b3c50df2a14b02a558ec93bba98606c25d

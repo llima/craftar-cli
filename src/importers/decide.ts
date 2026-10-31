@@ -5,11 +5,12 @@ import { fingerprintOf } from "../core/fingerprint.js";
 import { exists, listFiles, loadForge, readIngredientText, type Forge } from "../core/forge.js";
 import { hashNormalized, stripBom, toLf } from "../core/text.js";
 import { deepMerge } from "../core/merge.js";
-import { citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
+import { asImportTargets, citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
 import { canonicalValue, inferSections, projectSections, readsTargetSections } from "../core/sections.js";
 import { errorText } from "../core/schema-fault.js";
 import { sectionKey } from "../core/resolve.js";
 import { registrationCitations, rendersServers, serverCitations } from "../core/mcp-server.js";
+import { readsRulesIndex, RULES_INDEX_KEY } from "../core/rules-index.js";
 import type { DirReader } from "../core/fingerprint.js";
 import { OverridesParamsSchema, SectionsSchema, WorkspaceConfigSchema, stripForgeOnlyKeys, type ForgeSchema, type Ingredient, type Owner, type Sections, type Target } from "../schema/index.js";
 
@@ -175,8 +176,11 @@ export async function decide(
   const citedAll = citedKeys(expandedTexts(base, S));
 
   // G1: a recipe default the render cannot see — compare literally, as 0.5.0 did.
+  // At the rules-index gate (spec 44 §4.2), skip RULES_INDEX_KEY — sync generates it.
+  const atRulesIndexGate = readsRulesIndex({ schema });
   if (ctx.forge) {
     for (const k of cited) {
+      if (atRulesIndexGate && k === RULES_INDEX_KEY) continue;
       if (Object.hasOwn(ctx.P, k) || Object.hasOwn(ctx.W, k)) continue;
       for (const [name, r] of ctx.forge.recipes) {
         if (r.params[k]?.default !== undefined) return { kind: "literal", warn: `${ref} cites {{${k}}}, which recipe ${name} defaults — compared literally` };
@@ -184,6 +188,7 @@ export async function decide(
     }
     // G1 for a server (spec 34 §5.3): a declared citation a recipe defaults — variant, not reuse.
     for (const k of serverKeys) {
+      if (atRulesIndexGate && k === RULES_INDEX_KEY) continue;
       if (Object.hasOwn(ctx.P, k) || Object.hasOwn(ctx.W, k)) continue;
       for (const [name, r] of ctx.forge.recipes) {
         if (r.params[k]?.default !== undefined) return withAuthEnv({ kind: "variant", why: `recipe ${name} defaults ${k}, which the server cites` });
@@ -191,7 +196,7 @@ export async function decide(
     }
   }
 
-  const map = renderMap(base.meta, ctx.P, ctx.W);
+  const map = renderMap(base.meta, ctx.P, ctx.W, atRulesIndexGate);
   // For rule and steering bases at schema >= 7, expand the rules index placeholder (spec 44 §4.8).
   // Rules use claude-code form; steering uses kiro form.
   const indexTarget = base.meta.type === "rule" ? "claude-code" : base.meta.type === "steering" ? "kiro" : undefined;
@@ -216,7 +221,7 @@ export const valuesAt = (layer: Sections, key: string): Record<string, string> =
 
 /** F1, F2 (spec 10 §6.3): what no value can explain — metadata, the file set, a file compared as bytes. */
 function shapeDiffers(base: ImportBase, meta: Ingredient, files: Record<string, string | Buffer>): string | null {
-  const metaOnly = stripForgeOnlyKeys({ ...base.meta });
+  const metaOnly = stripForgeOnlyKeys({ ...asImportTargets(base.meta) });
   if (fingerprintOf(metaOnly as Ingredient, {}) !== fingerprintOf(meta, {})) return "metadata differs";
   const baseFiles = [...base.texts.keys(), ...base.bytes.keys()].sort();
   const srcFiles = Object.keys(files).sort();
@@ -308,7 +313,6 @@ async function inferParams(
           const declaredCitations = serverCitations(ing.meta).filter((c) => c.declared).map((c) => c.key);
           if (declaredCitations.includes(key)) return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
         }
-        // Note: hook registration check was moved earlier to handle runBases ingredients too (spec 43 §7.2 row 8)
       }
     }
     for (const o of others) {

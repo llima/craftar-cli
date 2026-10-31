@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type IngredientRef } from "../schema/index.js";
 import { fingerprintDir } from "./fingerprint.js";
-import { assertNoLinkOnPath, copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
+import { assertNoDirLinkIn, assertNoLinkOnPath, copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
 import { effectiveProfile } from "./integrations.js";
 import { findProfileFile } from "./param-writes.js";
 import { resolve, type Resolution } from "./resolve.js";
@@ -92,15 +92,27 @@ async function recipeFiles(root: string): Promise<Map<string, { abs: string; ste
   return out;
 }
 
-/** Whether something stands where a new directory would go: anything but nothing, or a directory holding no file. */
-async function occupied(dir: string): Promise<boolean> {
+/**
+ * Whether something stands where a new directory would go: anything but nothing, or a directory holding no file.
+ * Throws on lstat errors other than ENOENT (fail-closed), with a message naming `label` (forge-relative POSIX path).
+ */
+async function occupied(dir: string, label: string): Promise<boolean> {
   let stat;
   try {
     stat = await fs.lstat(dir);
-  } catch {
-    return false;
+  } catch (e) {
+    // Only ENOENT means "not occupied"; other errors (EACCES, EIO, etc.) fail closed.
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
+    const code = (e as NodeJS.ErrnoException).code ?? "unknown";
+    throw new Error(`${COMMAND}: cannot read ${label} (${code})`);
   }
-  return !stat.isDirectory() || (await listFiles(dir)).length > 0;
+  if (!stat.isDirectory()) return true;
+  try {
+    return (await listFiles(dir)).length > 0;
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code ?? "unknown";
+    throw new Error(`${COMMAND}: cannot read ${label} (${code})`);
+  }
 }
 
 /** Replace the plain scalar entries equal to `old` in the sequence under `key`; says how many it replaced. */
@@ -150,6 +162,10 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
   const variant = variantOf(profile);
   if (!variant) throw new Error(`${COMMAND}: ${ref} has no variant for profile ${profile}`);
 
+  // Check for symlinks to directories inside the base and variant directories before reading their files.
+  await assertNoDirLinkIn(forge.root, base.dir, COMMAND);
+  await assertNoDirLinkIn(forge.root, variant.dir, COMMAND);
+
   const warnings: string[] = [];
   const before = resolveAll(forge);
   const holds = (q: string, r: string) => {
@@ -183,8 +199,9 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
   const createdWrites: PromotionWrite[] = [];
   for (const q of Q) {
     const dir = path.join(folder, `${base.meta.name}--${q}`);
+    const variantLabel = `ingredients/${typeFolder(type)}/${base.meta.name}--${q}`;
     // An empty directory is no ingredient: a late failure undone with git leaves one behind, and the re-run must pass.
-    if (variantOf(q) || forge.ingredients.has(variantRef(q)) || (await occupied(dir))) {
+    if (variantOf(q) || forge.ingredients.has(variantRef(q)) || (await occupied(dir, variantLabel))) {
       throw new Error(
         `${COMMAND}: ${variantRef(q)} already exists, and profile ${q} also resolves ${X} — the Forge is inconsistent (both would write one file); remove one by hand, commit, and re-run`,
       );
@@ -361,7 +378,13 @@ const refused = (q: string, what: string) => new Error(`${COMMAND}: profile ${q}
  */
 export async function proveBasePromotion(forge: Forge, promotion: BasePromotion): Promise<void> {
   const before = resolveAll(forge);
-  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-forge-promote-"));
+  let scratch: string;
+  try {
+    scratch = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-forge-promote-"));
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code ?? (e as Error).message;
+    throw new Error(`${COMMAND}: cannot make the scratch copy in the temporary directory (${code}) — nothing was written`);
+  }
   try {
     await copyForgeForProof(forge.root, scratch);
     try {

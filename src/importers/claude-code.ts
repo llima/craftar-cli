@@ -362,6 +362,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- what the importing profile renders (spec 10 §6.1, §6.8 step 2) ---- */
   const loaded = await forgeBefore(forge, manifestOnDisk);
   const existing = await existingProfile(forge, opts.profileName, loaded);
+  for (const w of existing.warnings) report.warnings.push(w);
   const readWs = (abs: string) => fs.readFile(abs, "utf8");
 
   // Detect targets this workspace writes (spec 41 Part B §5.2's variant warnings).
@@ -622,7 +623,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   for (const l of literal) {
     const marker = markerIn(l.meta, l.files, l.source, l.lineOffset);
     if (marker) throw new Error(`import: ${marker.where} holds a section marker on line ${marker.line} — sync would not reproduce it; indent it or remove it, and re-run`);
-    const map = renderMap(l.meta, ctx.P, ctx.W);
+    const map = renderMap(l.meta, ctx.P, ctx.W, readsRulesIndex(loaded?.manifest ?? { schema: 1 }));
     const key = [...sourceKeys(l.meta, l.files)].find((k) => Object.hasOwn(map, k));
     if (key) {
       // Spec 33 §5.3: say "integrations set" when the key is one the block gives (not overridden by params).
@@ -1271,7 +1272,10 @@ async function writeIngredient(
     const d = run ? await decide(run.ctx, dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases, run.indexExpand) : { kind: "literal" as const, warn: "" };
     if (d.kind === "literal") {
       if (d.warn) report.warnings.push(d.warn);
-      if ((await fingerprintDir(dir, stage.reader())) === fingerprint) {
+      const baseFingerprint = await fingerprintDir(dir, stage.reader());
+      // A script or hook base at the default targets compares as `asImportTargets` reads it.
+      const atDefault = meta.type === "script" || meta.type === "hook" ? fingerprintOf(validateImported({ ...meta, targets: "*" }), files) : fingerprint;
+      if (baseFingerprint === fingerprint || baseFingerprint === atDefault) {
         report.reused.push(ref);
         return ref;
       }
@@ -1330,7 +1334,7 @@ async function writeIngredient(
       if ([...v.texts.values()].some((t) => RULES_INDEX_LINE.test(t))) {
         const key = sectionKey(v.meta);
         const S: Record<string, string> = { ...valuesAt(run.ctx.PS, key), ...valuesAt(run.ctx.WS, key) };
-        const map = renderMap(v.meta, run.ctx.P, run.ctx.W);
+        const map = renderMap(v.meta, run.ctx.P, run.ctx.W, readsRulesIndex(run.ctx.forge?.manifest ?? { schema: 1 }));
         const expand = run.indexExpand;
         // What the workspace cannot show is taken from the source, as import writes it: the `description`, the
         // `targets` and `tags` (no target writes them into the file) and the name of the body file.
@@ -1461,7 +1465,7 @@ async function writeIngredient(
     report.created.push(`${meta.type}/${name}`);
   }
   if (run) {
-    pin(run.ctx, sourceKeys(sourceMeta, files), renderMap(sourceMeta, run.ctx.P, run.ctx.W));
+    pin(run.ctx, sourceKeys(sourceMeta, files), renderMap(sourceMeta, run.ctx.P, run.ctx.W, readsRulesIndex(run.ctx.forge?.manifest ?? { schema: 1 })));
     run.literal.push({ ref: `${meta.type}/${name}`, source, meta: sourceMeta, files, lineOffset: run.lineOffset });
   }
 
@@ -1723,8 +1727,8 @@ async function existingProfile(
   forge: string,
   profile: string,
   loaded: import("../core/forge.js").Forge | null,
-): Promise<{ params: Record<string, unknown>; sections: Sections; blockKeys: string[] }> {
-  if (!loaded) return { params: {}, sections: {}, blockKeys: [] };
+): Promise<{ params: Record<string, unknown>; sections: Sections; blockKeys: string[]; warnings: string[] }> {
+  if (!loaded) return { params: {}, sections: {}, blockKeys: [], warnings: [] };
   const dir = path.join(forge, "profiles");
   for (const d of (await exists(dir)) ? await fs.readdir(dir, { withFileTypes: true }) : []) {
     if (!d.isDirectory()) continue;
@@ -1736,10 +1740,10 @@ async function existingProfile(
     }
   }
   const p = loaded.profiles.get(profile);
-  if (!p) return { params: {}, sections: {}, blockKeys: [] };
+  if (!p) return { params: {}, sections: {}, blockKeys: [], warnings: [] };
   try {
     const eff = effectiveProfile(loaded, p);
-    return { params: { ...eff.params }, sections: p.sections, blockKeys: eff.blockKeys };
+    return { params: { ...eff.params }, sections: p.sections, blockKeys: eff.blockKeys, warnings: eff.warnings };
   } catch (e) {
     throw new Error(`import: profile ${profile} does not resolve (${errorText(e)}) — fix the Forge and re-run`);
   }

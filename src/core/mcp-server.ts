@@ -5,13 +5,11 @@
 
 import type { Ingredient, McpServer } from "../schema/index.js";
 import { FORGE_SCHEMA_SERVER_PARAMS } from "../schema/index.js";
+import { PLACEHOLDER_RE } from "./resolve.js";
 import { findSecrets, looksLikeSecretValue, secretValueKind } from "./secrets.js";
 import { urlCredentialIn } from "./remote.js";
 
 type McpMeta = Extract<Ingredient, { type: "mcp" }>;
-
-/** The placeholder pattern, same as `substitute`'s in resolve.ts. */
-const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 
 /**
  * A YAML alias can make an object refer back to itself, and a walk would not end. Worded as `fingerprintOf` words it, behind
@@ -73,7 +71,7 @@ export function renderLeaves(
     if (typeof v === "string") {
       let changed = false;
       // One replace per leaf, no second pass on substituted text.
-      const result = v.replace(PLACEHOLDER, (match, key: string) => {
+      const result = v.replace(PLACEHOLDER_RE, (match, key: string) => {
         // Own properties only — never follow a prototype.
         const isDeclared = Object.hasOwn(declared, key);
         const isValued = Object.hasOwn(params, key);
@@ -184,7 +182,7 @@ export function citationsIn(
     if (typeof v === "string") {
       // Find all placeholders in this string
       let match: RegExpExecArray | null;
-      const re = new RegExp(PLACEHOLDER.source, "g");
+      const re = new RegExp(PLACEHOLDER_RE.source, "g");
       while ((match = re.exec(v)) !== null) {
         const key = match[1];
         if (!seen.has(key)) {

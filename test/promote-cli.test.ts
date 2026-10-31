@@ -3,7 +3,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import YAML from "yaml";
-import { exists, listFiles } from "../src/core/forge.js";
+import { exists, listFiles, loadForge } from "../src/core/forge.js";
+import { planBasePromotion, proveBasePromotion } from "../src/core/promote.js";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 import { git, gitEnv } from "./helpers/remote.js";
@@ -71,6 +72,7 @@ const LINES = [
   "  profile  profiles/initech/profile.yaml: base → base--initech",
 ];
 const NEXT = "  next     craftar forge variants — the old base now shows as 2 variant(s) to unify";
+const NEXT_DRY = "  next     craftar forge variants — the old base would show as 2 variant(s) to unify";
 const JSON_BODY = {
   base: "rule/workflow",
   profile: "acme",
@@ -121,7 +123,7 @@ describe("forge promote — the command", () => {
         "  recipe   base--initech would be created from base: rule/workflow → rule/workflow--initech",
         ...LINES.slice(6),
         "  impact   1 workspace(s) planned: not written, not compared",
-        NEXT,
+        NEXT_DRY,
         "",
       ].join("\n"),
     );
@@ -133,7 +135,7 @@ describe("forge promote — the command", () => {
     expect(await snapshot(s.forge)).toEqual(before);
   });
 
-  it("19. P2: no repository, no commit, a dirty tree, a held path git cannot restore, a created path git ignores", async () => {
+  it("19. a dirty tree and held path git cannot restore and a created path git ignores", async () => {
     const bare = await scenario({ init: false });
     expect(await refused(bare, bare.promote(), await snapshot(bare.forge))).toBe(`error: ${bare.forge} is not a git repository — forge promote writes to the Forge and needs git as the undo\n`);
 
@@ -287,6 +289,17 @@ describe("forge promote — the command", () => {
     );
   });
 
+  it("22c-dry. --dry-run: discarded line says 'would be discarded'", async () => {
+    const s = await scenario();
+    for (const q of ["globex", "initech"]) await fs.rm(path.join(s.forge, "profiles", q), { recursive: true });
+    git(s.forge, "add", "-A");
+    git(s.forge, "commit", "-q", "-m", "acme alone");
+    const r = s.promote(["--dry-run"]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("  the old base is resolved by no profile — would be discarded (git holds it)");
+    expect(r.stdout).not.toContain("— discarded (git holds it)");
+  });
+
   it("23. the registry off or unreadable: the command runs, and warns that no workspace was checked", async () => {
     const off = await scenario();
     const r = off.promote([], { CRAFTAR_NO_REGISTRY: "1" });
@@ -337,7 +350,7 @@ describe("forge promote — the command", () => {
       "--forge <dir>",
       "--workspace <dir>",
       "--no-impact skip planning the registered workspaces of this Forge before and after the writes",
-      "--dry-run run every check and the first impact pass, print what would be written, and write nothing",
+      "--dry-run prove and show the plan, write nothing in the Forge (the proof needs a writable temporary directory)",
       "--json machine-readable output",
     ]) {
       expect(help).toContain(part);
@@ -365,7 +378,7 @@ describe("forge promote — the command", () => {
     const s = await scenario();
     const before = await snapshot(s.forge);
     expect(await refused(s, s.cli(["forge", "promote", "rule/workflow", "--profile", "globex", "--forge", s.forge]), before)).toBe("error: forge promote: rule/workflow has no variant for profile globex\n");
-    // P7 through the command: globex's recipe by name, which initech resolves too.
+    // Through the command: globex's recipe by name, which initech resolves too.
     const shared = await scenario();
     await fs.rm(path.join(shared.forge, "recipes/base.yaml"));
     await writeFiles(shared.forge, {
@@ -378,5 +391,139 @@ describe("forge promote — the command", () => {
     expect(await refused(shared, shared.promote(), await snapshot(shared.forge))).toBe(
       "error: forge promote: profile initech would not resolve the same after the promotion — its ingredients differ at position 1 (rule/workflow--globex ≠ rule/workflow--initech); nothing written\n",
     );
+  });
+
+  describe("symlink-to-directory inside an ingredient", () => {
+    it("28. a symlink to a directory inside the variant's directory is refused, not EISDIR", async () => {
+      // Create a Forge with: rule/a (base), rule/a--acme (variant to be promoted), and rule/a--globex will be created
+      const root = await tmpDir("craftar-basepromo-dirlink-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forge = path.join(root, "forge");
+      const home = path.join(root, "home");
+
+      await makeForge(forge, {
+        ingredients: [rule("a", "base text\n"), rule("a--acme", "acme text\n", { as: "a" })],
+        recipes: [recipe("base", ["rule/a"]), recipe("acme-recipe", ["rule/a--acme"])],
+        profiles: [profile("acme", ["acme-recipe"]), profile("globex", ["base"])],
+      });
+
+      // Create a symlink to a directory inside the variant's directory
+      const targetDir = path.join(forge, "ingredients/rules/a--acme/shared-target");
+      await fs.mkdir(targetDir, { recursive: true });
+      await fs.writeFile(path.join(targetDir, "data.txt"), "shared data\n");
+      await fs.symlink(targetDir, path.join(forge, "ingredients/rules/a--acme/shared"), "junction");
+
+      git(forge, "init", "-q", "-b", "main");
+      git(forge, "add", "-A");
+      git(forge, "commit", "-q", "-m", "forge");
+
+      const r = runCli(["forge", "promote", "rule/a", "--profile", "acme", "--forge", forge, "--dry-run"], { env: { CRAFTAR_HOME: home } });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("ingredients/rules/a--acme/shared is a symbolic link to a directory in the Forge — forge promote does not read through it; replace it with the files and commit");
+      expect(r.stderr).not.toContain("EISDIR");
+      expect(git(forge, "status", "--porcelain")).toBe("");
+    });
+
+    it("29. a symlink to a directory inside the base's directory is refused, not EISDIR", async () => {
+      const root = await tmpDir("craftar-basepromo-dirlink-base-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forge = path.join(root, "forge");
+      const home = path.join(root, "home");
+
+      await makeForge(forge, {
+        ingredients: [rule("a", "base text\n"), rule("a--acme", "acme text\n", { as: "a" })],
+        recipes: [recipe("base", ["rule/a"]), recipe("acme-recipe", ["rule/a--acme"])],
+        profiles: [profile("acme", ["acme-recipe"]), profile("globex", ["base"])],
+      });
+
+      // Create a symlink to a directory inside the base's directory
+      const targetDir = path.join(forge, "ingredients/rules/a/shared-target");
+      await fs.mkdir(targetDir, { recursive: true });
+      await fs.writeFile(path.join(targetDir, "data.txt"), "shared data\n");
+      await fs.symlink(targetDir, path.join(forge, "ingredients/rules/a/shared"), "junction");
+
+      git(forge, "init", "-q", "-b", "main");
+      git(forge, "add", "-A");
+      git(forge, "commit", "-q", "-m", "forge");
+
+      const r = runCli(["forge", "promote", "rule/a", "--profile", "acme", "--forge", forge, "--dry-run"], { env: { CRAFTAR_HOME: home } });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("ingredients/rules/a/shared is a symbolic link to a directory in the Forge — forge promote does not read through it; replace it with the files and commit");
+      expect(r.stderr).not.toContain("EISDIR");
+      expect(git(forge, "status", "--porcelain")).toBe("");
+    });
+
+    // A junction names only a directory, and a file link on Windows needs a privilege.
+    it.skipIf(process.platform === "win32")("30. a symlink to a file inside the variant is refused (existing check)", async () => {
+      const root = await tmpDir("craftar-basepromo-filelink-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forge = path.join(root, "forge");
+      const home = path.join(root, "home");
+
+      await makeForge(forge, {
+        ingredients: [rule("a", "base text\n"), rule("a--acme", "acme text\n", { as: "a" })],
+        recipes: [recipe("base", ["rule/a"]), recipe("acme-recipe", ["rule/a--acme"])],
+        profiles: [profile("acme", ["acme-recipe"]), profile("globex", ["base"])],
+      });
+
+      // Create a symlink to a file inside the variant
+      await fs.writeFile(path.join(forge, "ingredients/rules/a--acme/target.txt"), "target\n");
+      await fs.symlink("target.txt", path.join(forge, "ingredients/rules/a--acme/link.txt"));
+
+      git(forge, "init", "-q", "-b", "main");
+      git(forge, "add", "-A");
+      git(forge, "commit", "-q", "-m", "forge");
+
+      const r = runCli(["forge", "promote", "rule/a", "--profile", "acme", "--forge", forge, "--dry-run"], { env: { CRAFTAR_HOME: home } });
+      // A symlink to a file triggers the existing check in copyForgeForProof, not the new one
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toContain("symbolic link");
+      expect(r.stderr).not.toContain("EISDIR");
+    });
+  });
+
+  describe.skipIf(process.platform === "win32")("mkdtemp error message", () => {
+    it.skipIf(process.getuid?.() === 0)("31. TMPDIR read-only reports clear message without mkdtemp word", async () => {
+      const root = await tmpDir("craftar-basepromo-tmpdir-");
+      cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+      const forge = path.join(root, "forge");
+      const home = path.join(root, "home");
+      const readonlyTmp = path.join(root, "readonly-tmp");
+
+      await makeForge(forge, {
+        ingredients: [rule("a", "base text\n"), rule("a--acme", "acme text\n", { as: "a" })],
+        recipes: [recipe("base", ["rule/a"]), recipe("acme-recipe", ["rule/a--acme"])],
+        profiles: [profile("acme", ["acme-recipe"]), profile("globex", ["base"])],
+      });
+
+      git(forge, "init", "-q", "-b", "main");
+      git(forge, "add", "-A");
+      git(forge, "commit", "-q", "-m", "forge");
+
+      // Create a read-only directory for TMPDIR
+      await fs.mkdir(readonlyTmp, { recursive: true });
+      cleanups.push(() => fs.chmod(readonlyTmp, 0o755).catch(() => undefined));
+      await fs.chmod(readonlyTmp, 0o555);
+
+      // In process: a CLI child under this TMPDIR dies in tsx's loader before craftar starts.
+      const loaded = await loadForge(forge);
+      const promotion = await planBasePromotion(loaded, "rule/a", "acme");
+      const saved = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
+      Object.assign(process.env, { TMPDIR: readonlyTmp, TEMP: readonlyTmp, TMP: readonlyTmp });
+      let message = "";
+      try {
+        await proveBasePromotion(loaded, promotion).catch((e: Error) => {
+          message = e.message;
+        });
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+      expect(message).toContain("forge promote: cannot make the scratch copy in the temporary directory");
+      expect(message).toContain("— nothing was written");
+      expect(message).not.toContain("mkdtemp");
+    });
   });
 });

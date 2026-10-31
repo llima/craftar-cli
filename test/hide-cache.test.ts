@@ -1,7 +1,7 @@
-import path from "node:path";
 import { describe, expect, it } from "vitest";
+import path from "node:path";
 import { hideCacheKeys, hideCacheSegment, hideKeys, hideUnvouched, vouchedKeys } from "../src/core/registry.js";
-import { CREDENTIAL_HIDDEN, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
+import { CREDENTIAL_HIDDEN, hideAnyCacheSegment, hideUnderCaches, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
 import { RegistryEntrySchema } from "../src/schema/index.js";
 
 const KEY = "fake" + "user-" + "nota" + "secret-example.invalid-f-0123456789ab";
@@ -140,5 +140,113 @@ describe("overlapping keys are hidden as one range (spec 39, review round 3)", (
   });
   it("a key inside an inserted label is never matched", () => {
     expect(hideCacheKeys("forges/k1", ["k1"], ["credentials", "cache"])).toBe(`forges/${CREDENTIAL_HIDDEN}`);
+  });
+});
+
+describe("hideCacheSegment edge cases", () => {
+  it("(1) empty home list: fails closed, labelling the segment after any forges/", () => {
+    expect(hideCacheSegment("x /h/forges/secret/y z", [])).toBe(`x /h/forges/${UNVOUCHED_HIDDEN}/y z`);
+  });
+
+  it("home named forges: hideCacheSegment replaces inside that home's forges", () => {
+    // A home that is itself named "forges" — the pattern must match the segment after its forges/
+    const home = "/x/forges";
+    const text = `x ${path.resolve(home)}/forges/secret/y z`;
+    const out = hideCacheSegment(text, [home]);
+    expect(out).not.toContain("secret");
+    expect(out).toContain(UNVOUCHED_HIDDEN);
+  });
+
+  it("(2a) case-insensitive on win32: different case matches", () => {
+    const h = path.resolve("/h");
+    const out = hideCacheSegment(`x ${h.toUpperCase()}/forges/secret/y`, ["/h"], "win32");
+    expect(out).not.toContain("secret");
+    expect(out).toContain(UNVOUCHED_HIDDEN);
+  });
+
+  it("(2b) case-sensitive on linux: different case does NOT match", () => {
+    const h = path.resolve("/h");
+    const out = hideCacheSegment(`x ${h.toUpperCase()}/forges/secret/y`, [h], "linux");
+    // On Linux, case matters: /H does not match /h
+    expect(out).toContain("secret");
+  });
+
+  it("(3) the label appears exactly once and intact", () => {
+    const h = path.resolve("/h");
+    const text = `x ${h}/forges/secret/y z`;
+    const out = hideCacheSegment(text, ["/h"]);
+    // Count occurrences of the label
+    const matches = out.match(/\(a cache entry name — not shown\)/g);
+    expect(matches?.length).toBe(1);
+    // Ensure label is intact (not garbled by a second pass)
+    expect(out).toContain("(a cache entry name — not shown)");
+  });
+
+  it("hideAnyCacheSegment: /mnt/link/forges/secret/y lacks secret", () => {
+    const text = "/mnt/link/forges/secret/y";
+    const out = hideAnyCacheSegment(text, []);
+    expect(out).not.toContain("secret");
+    expect(out).toContain(UNVOUCHED_HIDDEN);
+    expect(out).toBe(`/mnt/link/forges/${UNVOUCHED_HIDDEN}/y`);
+  });
+
+  it("hideAnyCacheSegment handles both separators", () => {
+    const text = "x /a/forges/k1/y and z\\b\\forges\\k2\\w";
+    const out = hideAnyCacheSegment(text, []);
+    expect(out).not.toContain("k1");
+    expect(out).not.toContain("k2");
+    // Count occurrences of the label
+    const matches = out.match(/\(a cache entry name — not shown\)/g);
+    expect(matches?.length).toBe(2);
+  });
+
+  it("hideCacheSegment with empty list + win32: Forges matches without case", () => {
+    const out = hideCacheSegment("x C:\\Home\\Forges\\secret\\y", [], "win32");
+    expect(out).not.toContain("secret");
+    expect(out).toContain(UNVOUCHED_HIDDEN);
+  });
+
+  it("hideCacheSegment with empty list + linux: Forges does not match (case-sensitive)", () => {
+    expect(hideCacheSegment("x C:\\Home\\Forges\\secret\\y", [], "linux")).toContain("secret");
+  });
+
+  it("a home itself named forges: the entry is hidden, the literal forges/ is not taken for it", () => {
+    const home = path.resolve("/tmp/forges");
+    const out = hideAnyCacheSegment(`x ${path.join(home, "forges", "entry-secret", "x")}`, [home]);
+    expect(out).not.toContain("entry-secret");
+    expect(out.match(/\(a cache entry name — not shown\)/g)?.length).toBe(1);
+    expect(out).toContain(path.join(home, "forges"));
+  });
+
+  it("a home named forges reached by another spelling: the entry is hidden, not the literal forges/", () => {
+    const out = hideAnyCacheSegment("/real/forges/forges/entry-secret/x", ["/h"]);
+    expect(out).toBe(`/real/forges/forges/${UNVOUCHED_HIDDEN}/x`);
+  });
+
+  it("hideUnderCaches labels only a path that starts at a cache", () => {
+    const cache = path.resolve("/h/forges");
+    expect(hideUnderCaches(`x '${path.join(cache, "e", "y")}' z`, [cache])).toBe(`x '${path.join(cache, UNVOUCHED_HIDDEN, "y")}' z`);
+    const elsewhere = `${path.resolve("/q")}${cache}${path.sep}other${path.sep}y`;
+    expect(hideUnderCaches(elsewhere, [cache])).toBe(elsewhere);
+    expect(hideUnderCaches("/a/b", [])).toBe("/a/b");
+  });
+
+  it("a third spelling of the home: hidden by the any-forges alternative only", () => {
+    const text = `${path.resolve("/mnt/link/forges/entry-secret/y")}`;
+    expect(hideAnyCacheSegment(text, [path.resolve("/h")])).not.toContain("entry-secret");
+    expect(hideCacheSegment(text, [path.resolve("/h")])).toContain("entry-secret");
+  });
+
+  it("hideAnyCacheSegment with empty homes + win32: Forges matches without case", () => {
+    const text = "x C:\\Home\\Forges\\secret\\y";
+    const out = hideAnyCacheSegment(text, [], "win32");
+    expect(out).not.toContain("secret");
+    expect(out).toContain(UNVOUCHED_HIDDEN);
+  });
+
+  it("hideAnyCacheSegment with empty homes + linux: Forges does not match (case-sensitive)", () => {
+    const text = "x C:\\Home\\Forges\\secret\\y";
+    const out = hideAnyCacheSegment(text, [], "linux");
+    expect(out).toContain("secret");
   });
 });

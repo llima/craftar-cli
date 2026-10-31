@@ -489,3 +489,69 @@ describe("import — below the gate", () => {
     expect(changed).toEqual(["ingredients/rules/stories-azure-devops--acme/ingredient.yaml", "ingredients/rules/stories-azure-devops--acme/rule.md", "profiles/acme/profile.yaml", "recipes/base--acme.yaml"]);
   });
 });
+
+describe("effectiveProfile warnings reach ImportReport.warnings", () => {
+  it("a non-scalar integrations value generates exactly one warning in the import report", async () => {
+    // Create a profile with a non-scalar value (array) in integrations - this should generate a warning
+    const s = await synced(3, {
+      ingredients: [rule("workflow", "# Workflow\n")],
+      recipes: [recipe("base", ["rule/workflow"])],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"], {
+        integrations: {
+          pm: {
+            org: "acme",
+            // A non-scalar value: this will generate a warning from effectiveProfile
+            config: { nested: "value" },
+          },
+        },
+      })],
+    });
+    
+    const r = await importBack(s);
+    // The warning about the non-scalar should appear exactly once in the report
+    const notScalarWarnings = r.warnings.filter((w: string) => w.includes("integrations.pm.config") && w.includes("not a scalar"));
+    expect(notScalarWarnings.length).toBe(1);
+  });
+
+  it("the warning appears in the --report file", async () => {
+    const s = await synced(3, {
+      ingredients: [rule("workflow", "# Workflow\n")],
+      recipes: [recipe("base", ["rule/workflow"])],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"], {
+        integrations: {
+          pm: {
+            org: "acme",
+            config: { nested: "value" },
+          },
+        },
+      })],
+    });
+    
+    const reportFile = path.join(s.wsRoot, "import-report.md");
+    const cli = runCli(["import", "--from", "claude-code", "--forge", s.forgeRoot, "--profile", "acme", "--workspace", s.wsRoot, "--report", reportFile]);
+    expect(cli.code, cli.stderr).toBe(0);
+    const reportText = await fs.readFile(reportFile, "utf8");
+    expect(reportText).toContain("integrations.pm.config");
+    expect(reportText).toContain("not a scalar");
+  });
+
+  it("a Forge at schema 2 with the same block gives no warning", async () => {
+    const s = await synced(2, {
+      ingredients: [rule("workflow", "# Workflow\n")],
+      recipes: [recipe("base", ["rule/workflow"])],
+      profiles: [profile("acme", ["base"], ["claude-code", "kiro"], {
+        integrations: {
+          pm: {
+            org: "acme",
+            config: { nested: "value" },
+          },
+        },
+      })],
+    });
+    
+    const r = await importBack(s);
+    // At schema 2 the integrations block is not processed, so no warning
+    const notScalarWarnings = r.warnings.filter((w: string) => w.includes("integrations.pm.config") && w.includes("not a scalar"));
+    expect(notScalarWarnings.length).toBe(0);
+  });
+});

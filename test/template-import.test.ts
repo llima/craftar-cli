@@ -88,7 +88,7 @@ describe("renderedFingerprint — identity with fingerprintDir (spec 10 AC 1, 2)
       for (const type of await fs.readdir(root)) {
         for (const name of await fs.readdir(path.join(root, type))) {
           const dir = path.join(root, type, name);
-          expect(renderedFingerprint(await readBase(dir, reader), {}), dir).toBe(await fingerprintDir(dir));
+          expect(renderedFingerprint(await readBase(dir, reader), {}, {}, 1), dir).toBe(await fingerprintDir(dir));
         }
       }
     }
@@ -98,10 +98,10 @@ describe("renderedFingerprint — identity with fingerprintDir (spec 10 AC 1, 2)
     const dir = path.join(GOLDEN, "forge-param-expected/ingredients/rules/deploy");
     const base = await readBase(dir, reader);
     expect([...citedKeys(base.texts)].sort()).toEqual(["deploy.api", "deploy.web"]);
-    const map = renderMap(base.meta, { "deploy.api": "acme-api" }, {});
+    const map = renderMap(base.meta, { "deploy.api": "acme-api" }, {}, false);
     expect(map["deploy.api"]).toBe("acme-api");
     expect(map["deploy.web"]).toBe("globex-web");
-    expect(renderedFingerprint(base, map)).not.toBe(renderedFingerprint(base, {}));
+    expect(renderedFingerprint(base, map, {}, 1)).not.toBe(renderedFingerprint(base, {}, {}, 1));
   });
 });
 
@@ -124,13 +124,13 @@ describe("the render with sections (spec 11 §6.7)", () => {
     const { root, dir } = await forgeWith({ "ingredients/rules/review/rule.md": BODY });
     const base = await readBase(dir, reader, root);
     expect(base.parsed.get("rule.md")!.sections.map((s) => s.name)).toEqual(["flavors"]);
-    expect(renderedFingerprint(base, { reviewer: "bob", target: "x" })).toBe(fp("# Review\n\n| `acme-api` | bob |\n\nNever edit x.\n"));
+    expect(renderedFingerprint(base, { reviewer: "bob", target: "x" }, {}, 1)).toBe(fp("# Review\n\n| `acme-api` | bob |\n\nNever edit x.\n"));
   });
 
   it("renders a section value, which may cite a key the map sets", async () => {
     const { root, dir } = await forgeWith({ "ingredients/rules/review/rule.md": BODY });
     const base = await readBase(dir, reader, root);
-    expect(renderedFingerprint(base, { target: "x", owner: "ann" }, { flavors: "| `globex-api` | {{owner}} |" })).toBe(fp("# Review\n\n| `globex-api` | ann |\n\nNever edit x.\n"));
+    expect(renderedFingerprint(base, { target: "x", owner: "ann" }, { flavors: "| `globex-api` | {{owner}} |" }, 1)).toBe(fp("# Review\n\n| `globex-api` | ann |\n\nNever edit x.\n"));
   });
 
   it("C(X) is read over the expanded text: a key cited only by a replaced default is not cited, one in the value is", async () => {
@@ -149,5 +149,85 @@ describe("the render with sections (spec 11 §6.7)", () => {
       "ingredients/rules/review/reference.md": "<!-- craftar:section a -->\n<!-- /craftar:section -->\n",
     });
     await expect(readBase(twice.dir, reader, twice.root)).rejects.toThrow("import: ingredients/rules/review/reference.md:1: section a is declared twice in skill/review (also ingredients/rules/review/SKILL.md:1)");
+  });
+});
+
+
+describe("renderMap skips RULES_INDEX_KEY when readsRulesIndex is true (spec 44 §4.2)", () => {
+  // These tests verify that renderMap(meta, P, W, readsRulesIndex) skips craftar.rules.index
+  // when readsRulesIndex is true — sync generates it, so a value set elsewhere is ignored.
+
+  const RULES_INDEX_KEY = "craftar.rules.index";
+
+  it("skips default param value for craftar.rules.index when readsRulesIndex=true", () => {
+    const meta = IngredientSchema.parse({
+      type: "rule",
+      name: "test",
+      params: {
+        "craftar.rules.index": { default: "default-index-value" },
+        "other.key": { default: "other-value" },
+      },
+    });
+    const map = renderMap(meta, {}, {}, true);
+    expect(map).not.toHaveProperty(RULES_INDEX_KEY);
+    expect(map["other.key"]).toBe("other-value");
+  });
+
+  it("skips profile param value for craftar.rules.index when readsRulesIndex=true", () => {
+    const meta = IngredientSchema.parse({ type: "rule", name: "test" });
+    const P = { [RULES_INDEX_KEY]: "profile-index-value", "other.key": "profile-other" };
+    const map = renderMap(meta, P, {}, true);
+    expect(map).not.toHaveProperty(RULES_INDEX_KEY);
+    expect(map["other.key"]).toBe("profile-other");
+  });
+
+  it("skips workspace param value for craftar.rules.index when readsRulesIndex=true", () => {
+    const meta = IngredientSchema.parse({ type: "rule", name: "test" });
+    const W = { [RULES_INDEX_KEY]: "workspace-index-value", "other.key": "ws-other" };
+    const map = renderMap(meta, {}, W, true);
+    expect(map).not.toHaveProperty(RULES_INDEX_KEY);
+    expect(map["other.key"]).toBe("ws-other");
+  });
+
+  it("skips craftar.rules.index from all three sources combined when readsRulesIndex=true", () => {
+    const meta = IngredientSchema.parse({
+      type: "rule",
+      name: "test",
+      params: {
+        [RULES_INDEX_KEY]: { default: "default-index" },
+        "from.default": { default: "d" },
+      },
+    });
+    const P = { [RULES_INDEX_KEY]: "profile-index", "from.profile": "p" };
+    const W = { [RULES_INDEX_KEY]: "workspace-index", "from.workspace": "w" };
+    const map = renderMap(meta, P, W, true);
+    expect(map).not.toHaveProperty(RULES_INDEX_KEY);
+    expect(map["from.default"]).toBe("d");
+    expect(map["from.profile"]).toBe("p");
+    expect(map["from.workspace"]).toBe("w");
+  });
+
+  it("includes craftar.rules.index when readsRulesIndex=false (control)", () => {
+    const meta = IngredientSchema.parse({
+      type: "rule",
+      name: "test",
+      params: { [RULES_INDEX_KEY]: { default: "default-index" } },
+    });
+    const P = { [RULES_INDEX_KEY]: "profile-index" };
+    const W = { [RULES_INDEX_KEY]: "workspace-index" };
+    const map = renderMap(meta, P, W, false);
+    // W wins over P wins over default
+    expect(map[RULES_INDEX_KEY]).toBe("workspace-index");
+  });
+
+  it("schema 6 control — readsRulesIndex=false includes the key (simulating below-gate behavior)", () => {
+    // This verifies that callers passing false (schema < 7) include the key normally
+    const meta = IngredientSchema.parse({
+      type: "rule",
+      name: "test",
+      params: { [RULES_INDEX_KEY]: { default: "index-text" } },
+    });
+    const map = renderMap(meta, {}, {}, false);
+    expect(map[RULES_INDEX_KEY]).toBe("index-text");
   });
 });
