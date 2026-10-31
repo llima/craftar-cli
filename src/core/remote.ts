@@ -575,14 +575,14 @@ export function hideAnyCacheSegment(text: string, homes: readonly string[], plat
  * for one home is never matched by another — the fix for homes where one is a string suffix of the
  * other (e.g. `/home` as a link to `/var/home`).
  *
- * When `home` is an empty array, the homes-only path is kept: no fallback to any `/forges/` segment.
+ * When `home` is an empty array, no home can be matched, so it fails closed: `hideAnyCacheSegment`
+ * labels the segment after any `/forges/`.
  *
  * @param platform The platform to use for case-insensitive matching; defaults to `process.platform`.
  */
 export function hideCacheSegment(text: string, home: string | readonly string[], platform: NodeJS.Platform = process.platform): string {
   const homes = Array.isArray(home) ? home : [home];
-  // When no homes are given, return text unchanged (homes-only behavior).
-  if (homes.length === 0) return text;
+  if (homes.length === 0) return hideAnyCacheSegment(text, [], platform);
   // Resolve, strip trailing separators, escape, de-duplicate and sort longest first.
   const escaped = [...new Set(homes.map((h) => path.resolve(h).replace(/[/\\]+$/, "")))]
     .sort((a, b) => b.length - a.length)
