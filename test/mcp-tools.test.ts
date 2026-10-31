@@ -614,6 +614,6 @@ describe("doctor — the checks 0.25–0.27 added, through injected runners", ()
     // A CLI-level or source check that `craftar mcp`'s context passes a `dotnetCwd`.
     // The simplest approach: scan the source for dotnetCwd in the serve() call.
     const cliSource = await fs.readFile(path.resolve(__dirname, "../src/cli.ts"), "utf8");
-    expect(cliSource).toContain("dotnetCwd: path.parse(process.cwd()).root");
+    expect(cliSource).toContain("dotnetCwd: path.parse(root).root");
   });
 });

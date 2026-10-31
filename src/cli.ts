@@ -1501,8 +1501,8 @@ const mcpCmd = program
       pin: pinOf(merged),
       writers: o.allowWrites ? mcpWriters(craftarHome(), registryOff()) : undefined,
       // The dotnet host looks for global.json going up from its working directory; not the temporary
-      // directory, where another user can plant one.
-      dotnetCwd: path.parse(process.cwd()).root,
+      // directory, where another user can plant one. `root` is resolved already, so this cannot throw.
+      dotnetCwd: path.parse(root).root,
     });
   });
 
