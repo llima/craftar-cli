@@ -1480,7 +1480,7 @@ describe("cli — forge unify --save-plan: the refusals' words (the gate import 
     const root = await forge();
     const target = path.join(root, "plan.yaml");
     const r = save(root, target);
-    expect([r.code, r.stderr]).toEqual([1, `error: refusing to write the plan to ${target}: it resolves inside the Forge (${root}) — choose a path outside it\n`]);
+    expect([r.code, r.stderr]).toEqual([1, `error: refusing to write the plan to ${target}: it resolves inside the Forge (${root}) — save plans outside the Forge\n`]);
   });
 
   it("an existing file: the whole line", async () => {

@@ -3198,7 +3198,7 @@ async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate
   }
   const rel = path.relative(rootReal, targetReal);
   if (rel === "" || !(rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))) {
-    fail(`${refusing}: it resolves inside the Forge (${hideAnyCacheSegment(forgeRoot, [home])}) — choose a path outside it`);
+    fail(`${refusing}: it resolves inside the Forge (${hideAnyCacheSegment(forgeRoot, [home])}) — ${w.outside}`);
   }
   // Refuse a target whose real path is under (or equal to) the Forge cache.
   const forgesCacheDir = path.join(home, "forges");
