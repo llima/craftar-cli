@@ -163,3 +163,58 @@ describe("gateOutsideForge refuses targets under the Forge cache", () => {
     await expect(fs.lstat(reportPath)).resolves.toBeTruthy();
   });
 });
+
+describe("a cache entry's name in a refusal that cannot resolve the path", () => {
+  async function loop(home: string) {
+    const entry = path.join(home, "forges", "entry-secret");
+    await fs.mkdir(entry, { recursive: true });
+    await fs.symlink(path.join(entry, "loop"), path.join(entry, "loop"));
+    return entry;
+  }
+
+  it.skipIf(process.platform === "win32")("import --forge through a link loop, with a home itself named forges: no entry name", async () => {
+    const parent = await fs.realpath(await tmpDir("craftar-gatecache-loop-"));
+    cleanups.push(() => removeWithRetry(parent));
+    const home = path.join(parent, "forges");
+    const entry = await loop(home);
+    const ws = path.join(parent, "ws");
+    await fs.mkdir(path.join(ws, ".claude/rules"), { recursive: true });
+    const r = runCli(["import", "--from", "claude-code", "--forge", path.join(entry, "loop", "q"), "--profile", "acme", "--workspace", ws], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stderr).not.toContain("entry-secret");
+    expect(r.stderr).toContain("(a cache entry name — not shown)");
+  });
+
+  it.skipIf(process.platform === "win32")("import --report through a link loop: no entry name", async () => {
+    const parent = await fs.realpath(await tmpDir("craftar-gatecache-loop-"));
+    cleanups.push(() => removeWithRetry(parent));
+    const home = path.join(parent, "home");
+    const entry = await loop(home);
+    const forge = path.join(parent, "forge");
+    await makeForge(forge, FORGE_SPEC);
+    const ws = path.join(parent, "ws");
+    await fs.mkdir(path.join(ws, ".claude/rules"), { recursive: true });
+    const r = runCli(["import", "--from", "claude-code", "--forge", forge, "--profile", "acme", "--workspace", ws, "--report", path.join(entry, "loop", "r.md")], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("refusing to write the report");
+    expect(r.stderr).not.toContain("entry-secret");
+  });
+
+  it("--save-plan inside a Forge that is a tree of the cache: no entry name", async () => {
+    const parent = await fs.realpath(await tmpDir("craftar-gatecache-tree-"));
+    cleanups.push(() => removeWithRetry(parent));
+    const home = path.join(parent, "home");
+    const tree = path.join(home, "forges", "entry-secret", "trees", "abc");
+    await makeForge(tree, FORGE_SPEC);
+    await writeFiles(tree, {
+      "ingredients/rules/hello--acme/ingredient.yaml": "type: rule\nname: hello--acme\nas: hello\n",
+      "ingredients/rules/hello--acme/rule.md": "variant text\n",
+      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/hello--acme\n",
+      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\ntargets:\n  - claude-code\n",
+    });
+    const r = runCli(["forge", "unify", "rule/hello", "--profile", "acme", "--forge", tree, "--save-plan", path.join(tree, "plan.yaml")], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("refusing to write the plan");
+    expect(r.stderr).not.toContain("entry-secret");
+  });
+});
