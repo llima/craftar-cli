@@ -1,0 +1,257 @@
+{
+  "edited": {
+    "syncCheck": {
+      "code": 1,
+      "stdout": "craftar status — profile acme · recipes base\n  drift 1  update 3  new 2  orphan 2  collision 1  unchanged 2\n  drift         .claude/rules/a.md  rule/a\n  update        .claude/rules/b.md  rule/b\n  new           .claude/rules/c.md  rule/c\n  orphan        .claude/rules/d.md  rule/d\n  collision     .claude/rules/e.md  rule/e\n  update        .kiro/steering/b.md  rule/b\n  orphan        .kiro/steering/d.md  rule/d\n  new           .kiro/steering/e.md  rule/e\n  update        AGENTS.md  rule/*\n\n9 file(s) out of sync\n",
+      "stderr": ""
+    },
+    "status": {
+      "code": 0,
+      "stdout": "craftar status — profile acme · recipes base\n  drift 1  update 3  new 2  orphan 2  collision 1  unchanged 2\n  drift         .claude/rules/a.md  rule/a\n  update        .claude/rules/b.md  rule/b\n  new           .claude/rules/c.md  rule/c\n  orphan        .claude/rules/d.md  rule/d\n  collision     .claude/rules/e.md  rule/e\n  unchanged     .kiro/steering/a.md\n  update        .kiro/steering/b.md  rule/b\n  unchanged     .kiro/steering/c.md\n  orphan        .kiro/steering/d.md  rule/d\n  new           .kiro/steering/e.md  rule/e\n  update        AGENTS.md  rule/*\n",
+      "stderr": ""
+    },
+    "statusJson": {
+      "code": 0,
+      "stdout": "{\n  \"forge\": {\n    \"kind\": \"path\",\n    \"source\": \"../forge\",\n    \"ref\": null,\n    \"defaultBranch\": null,\n    \"commit\": null,\n    \"lockCommit\": null,\n    \"fetched\": false\n  },\n  \"statuses\": [\n    {\n      \"path\": \".claude/rules/a.md\",\n      \"state\": \"drift\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/a\",\n      \"lock\": {\n        \"path\": \".claude/rules/a.md\",\n        \"hash\": \"sha256:e07e8b2e2b5ad09af528dc7157d73ca3b3f7c17193cab4f7883171fb88e32c32\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/a\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/b.md\",\n      \"state\": \"update\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/b\",\n      \"lock\": {\n        \"path\": \".claude/rules/b.md\",\n        \"hash\": \"sha256:7de45b73012c8c40af4b9bcf3247294a6cc919c1fe9d5c68136c87b9f6e89135\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/b\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/c.md\",\n      \"state\": \"new\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/c\",\n      \"lock\": {\n        \"path\": \".claude/rules/c.md\",\n        \"hash\": \"sha256:f47f498950689cccd5c349eb41559b6255fe9bb4f67b68ebe7853f80da7cee72\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/c\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/d.md\",\n      \"state\": \"orphan\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/d\",\n      \"lock\": {\n        \"path\": \".claude/rules/d.md\",\n        \"hash\": \"sha256:bbace398bf8c588a6a7fe784825f7bb0accf4b94896d6d14e3bd0e8ce316383f\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/d\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/e.md\",\n      \"state\": \"collision\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/e\"\n    },\n    {\n      \"path\": \".kiro/steering/a.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/a\",\n      \"lock\": {\n        \"path\": \".kiro/steering/a.md\",\n        \"hash\": \"sha256:873d069d3135ea5c1a8c5bb669bf9b8b88172198967724bfc39c59771467589a\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/a\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/b.md\",\n      \"state\": \"update\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/b\",\n      \"lock\": {\n        \"path\": \".kiro/steering/b.md\",\n        \"hash\": \"sha256:ad740807b34981885056d4bfbbd2a7291dc29275f7a3051aa3324704d65d14a7\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/b\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/c.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/c\",\n      \"lock\": {\n        \"path\": \".kiro/steering/c.md\",\n        \"hash\": \"sha256:af012c46843aaf01b118876708e8dfd6f3164efce7699ddc035da360addd9e2b\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/c\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/d.md\",\n      \"state\": \"orphan\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/d\",\n      \"lock\": {\n        \"path\": \".kiro/steering/d.md\",\n        \"hash\": \"sha256:ecc840f3ec9cbe44a1ffc5bb50fc8a535f50443f78970570a8be91950566db99\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/d\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/e.md\",\n      \"state\": \"new\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/e\"\n    },\n    {\n      \"path\": \"AGENTS.md\",\n      \"state\": \"update\",\n      \"target\": \"agents-md\",\n      \"ingredient\": \"rule/*\",\n      \"lock\": {\n        \"path\": \"AGENTS.md\",\n        \"hash\": \"sha256:1c09ad554ff9129c812d26325c0bba002958f13decb98f95645aff8e6b1d0183\",\n        \"target\": \"agents-md\",\n        \"ingredient\": \"rule/*\"\n      }\n    }\n  ],\n  \"warnings\": [],\n  \"unsetParams\": []\n}\n",
+      "stderr": ""
+    },
+    "diff": {
+      "code": 0,
+      "stdout": "--- .claude/rules/a.md (disk, drift)\n+++ .claude/rules/a.md (forge)\n  # Rule A\n  First rule.\n- Hand-edited line.\n--- .claude/rules/b.md (disk, update)\n+++ .claude/rules/b.md (forge)\n  # Rule B\n- Second rule.\n+ Second rule, UPDATED in Forge.\n--- .claude/rules/c.md (disk, new)\n+++ .claude/rules/c.md (forge)\n+ # Rule C\n+ Third rule.\n--- .claude/rules/d.md (disk, orphan)\n+++ .claude/rules/d.md (forge: no longer produced — sync removes it)\n- # Rule D\n- Fourth rule (will be orphan).\n--- .claude/rules/e.md (disk, collision)\n+++ .claude/rules/e.md (forge)\n- # My Rule E\n- User's own file.\n+ # Rule E\n+ Fifth rule from Forge.\n--- .kiro/steering/b.md (disk, update)\n+++ .kiro/steering/b.md (forge)\n  ---\n  inclusion: always\n  ---\n  … 1 unchanged lines …\n  <!-- GENERATED from .claude/rules/b.md by craftar -- do not edit. -->\n  \n  # Rule B\n- Second rule.\n+ Second rule, UPDATED in Forge.\n--- .kiro/steering/d.md (disk, orphan)\n+++ .kiro/steering/d.md (forge: no longer produced — sync removes it)\n- ---\n- inclusion: always\n- ---\n- \n- <!-- GENERATED from .claude/rules/d.md by craftar -- do not edit. -->\n- \n- # Rule D\n- Fourth rule (will be orphan).\n--- .kiro/steering/e.md (disk, new)\n+++ .kiro/steering/e.md (forge)\n+ ---\n+ inclusion: always\n+ ---\n+ \n+ <!-- GENERATED from .claude/rules/e.md by craftar -- do not edit. -->\n+ \n+ # Rule E\n+ Fifth rule from Forge.\n--- AGENTS.md (disk, update)\n+++ AGENTS.md (forge)\n  <!-- GENERATED by craftar from the Forge. Edit the rule ingredients, not this file. -->\n  \n  # AGENTS.md — acme\n  … 7 unchanged lines …\n  \n  <!-- rule: b -->\n  # Rule B\n- Second rule.\n+ Second rule, UPDATED in Forge.\n  \n  <!-- rule: c -->\n  # Rule C\n  Third rule.\n  \n- <!-- rule: d -->\n- # Rule D\n- Fourth rule (will be orphan).\n+ <!-- rule: e -->\n+ # Rule E\n+ Fifth rule from Forge.\n",
+      "stderr": ""
+    },
+    "diffExitCode": {
+      "code": 1,
+      "stdout": "--- .claude/rules/a.md (disk, drift)\n+++ .claude/rules/a.md (forge)\n  # Rule A\n  First rule.\n- Hand-edited line.\n--- .claude/rules/b.md (disk, update)\n+++ .claude/rules/b.md (forge)\n  # Rule B\n- Second rule.\n+ Second rule, UPDATED in Forge.\n--- .claude/rules/c.md (disk, new)\n+++ .claude/rules/c.md (forge)\n+ # Rule C\n+ Third rule.\n--- .claude/rules/d.md (disk, orphan)\n+++ .claude/rules/d.md (forge: no longer produced — sync removes it)\n- # Rule D\n- Fourth rule (will be orphan).\n--- .claude/rules/e.md (disk, collision)\n+++ .claude/rules/e.md (forge)\n- # My Rule E\n- User's own file.\n+ # Rule E\n+ Fifth rule from Forge.\n--- .kiro/steering/b.md (disk, update)\n+++ .kiro/steering/b.md (forge)\n  ---\n  inclusion: always\n  ---\n  … 1 unchanged lines …\n  <!-- GENERATED from .claude/rules/b.md by craftar -- do not edit. -->\n  \n  # Rule B\n- Second rule.\n+ Second rule, UPDATED in Forge.\n--- .kiro/steering/d.md (disk, orphan)\n+++ .kiro/steering/d.md (forge: no longer produced — sync removes it)\n- ---\n- inclusion: always\n- ---\n- \n- <!-- GENERATED from .claude/rules/d.md by craftar -- do not edit. -->\n- \n- # Rule D\n- Fourth rule (will be orphan).\n--- .kiro/steering/e.md (disk, new)\n+++ .kiro/steering/e.md (forge)\n+ ---\n+ inclusion: always\n+ ---\n+ \n+ <!-- GENERATED from .claude/rules/e.md by craftar -- do not edit. -->\n+ \n+ # Rule E\n+ Fifth rule from Forge.\n--- AGENTS.md (disk, update)\n+++ AGENTS.md (forge)\n  <!-- GENERATED by craftar from the Forge. Edit the rule ingredients, not this file. -->\n  \n  # AGENTS.md — acme\n  … 7 unchanged lines …\n  \n  <!-- rule: b -->\n  # Rule B\n- Second rule.\n+ Second rule, UPDATED in Forge.\n  \n  <!-- rule: c -->\n  # Rule C\n  Third rule.\n  \n- <!-- rule: d -->\n- # Rule D\n- Fourth rule (will be orphan).\n+ <!-- rule: e -->\n+ # Rule E\n+ Fifth rule from Forge.\n",
+      "stderr": ""
+    },
+    "doctorJson": {
+      "checks": [
+        {
+          "id": "config",
+          "level": "ok",
+          "message": "craftar.yaml loads (forge ../forge, profile acme)",
+          "fix": null
+        },
+        {
+          "id": "forge",
+          "level": "ok",
+          "message": "../forge @ no git",
+          "fix": null
+        },
+        {
+          "id": "forge-inside",
+          "level": "ok",
+          "message": "outside the Forge",
+          "fix": null
+        },
+        {
+          "id": "plan",
+          "level": "ok",
+          "message": "9 files",
+          "fix": null
+        },
+        {
+          "id": "params",
+          "level": "ok",
+          "message": "every declared parameter has a value",
+          "fix": null
+        },
+        {
+          "id": "agents-md-size",
+          "level": "ok",
+          "message": "AGENTS.md is 459 bytes, within the budget of 32768",
+          "fix": null
+        },
+        {
+          "id": "mcp-env",
+          "level": "ok",
+          "message": "every variable a written MCP server expects is set",
+          "fix": null
+        },
+        {
+          "id": "lock",
+          "level": "ok",
+          "message": "schema 2, generated <timestamp>",
+          "fix": null
+        },
+        {
+          "id": "status",
+          "level": "warn",
+          "message": "drift — 1 drift, 3 update, 2 new, 2 orphan, 1 collision",
+          "fix": "craftar status, then craftar sync"
+        },
+        {
+          "id": "registered",
+          "level": "ok",
+          "message": "in the registry",
+          "fix": null
+        }
+      ]
+    }
+  },
+  "fresh": {
+    "syncCheck": {
+      "code": 0,
+      "stdout": "craftar status — profile acme · recipes base\n  unchanged 9\n\nworkspace in sync\n",
+      "stderr": ""
+    },
+    "status": {
+      "code": 0,
+      "stdout": "craftar status — profile acme · recipes base\n  unchanged 9\n  unchanged     .claude/rules/a.md\n  unchanged     .claude/rules/b.md\n  unchanged     .claude/rules/c.md\n  unchanged     .claude/rules/e.md\n  unchanged     .kiro/steering/a.md\n  unchanged     .kiro/steering/b.md\n  unchanged     .kiro/steering/c.md\n  unchanged     .kiro/steering/e.md\n  unchanged     AGENTS.md\n",
+      "stderr": ""
+    },
+    "statusJson": {
+      "code": 0,
+      "stdout": "{\n  \"forge\": {\n    \"kind\": \"path\",\n    \"source\": \"../forge\",\n    \"ref\": null,\n    \"defaultBranch\": null,\n    \"commit\": null,\n    \"lockCommit\": null,\n    \"fetched\": false\n  },\n  \"statuses\": [\n    {\n      \"path\": \".claude/rules/a.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/a\",\n      \"lock\": {\n        \"path\": \".claude/rules/a.md\",\n        \"hash\": \"sha256:e07e8b2e2b5ad09af528dc7157d73ca3b3f7c17193cab4f7883171fb88e32c32\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/a\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/b.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/b\",\n      \"lock\": {\n        \"path\": \".claude/rules/b.md\",\n        \"hash\": \"sha256:87ea717df6de0ce33e96b22aed233bb5ad06d9f0a84d0a56566c913793c0e1b7\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/b\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/c.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/c\",\n      \"lock\": {\n        \"path\": \".claude/rules/c.md\",\n        \"hash\": \"sha256:f47f498950689cccd5c349eb41559b6255fe9bb4f67b68ebe7853f80da7cee72\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/c\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/e.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/e\",\n      \"lock\": {\n        \"path\": \".claude/rules/e.md\",\n        \"hash\": \"sha256:4674400557a0fb5bea5c35cc587b3fe46f2450ec560620539ea32587df24e2bf\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/e\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/a.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/a\",\n      \"lock\": {\n        \"path\": \".kiro/steering/a.md\",\n        \"hash\": \"sha256:873d069d3135ea5c1a8c5bb669bf9b8b88172198967724bfc39c59771467589a\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/a\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/b.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/b\",\n      \"lock\": {\n        \"path\": \".kiro/steering/b.md\",\n        \"hash\": \"sha256:3fb593920532698c6e6e4799cd4aa2b772f373c2ed285cf5fb9a3f3d759fe8d9\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/b\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/c.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/c\",\n      \"lock\": {\n        \"path\": \".kiro/steering/c.md\",\n        \"hash\": \"sha256:af012c46843aaf01b118876708e8dfd6f3164efce7699ddc035da360addd9e2b\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/c\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/e.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/e\",\n      \"lock\": {\n        \"path\": \".kiro/steering/e.md\",\n        \"hash\": \"sha256:43279cce9e9fcf3408f57085284d97d814a8b1179b298e158e0f8734f7cd8962\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/e\"\n      }\n    },\n    {\n      \"path\": \"AGENTS.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"agents-md\",\n      \"ingredient\": \"rule/*\",\n      \"lock\": {\n        \"path\": \"AGENTS.md\",\n        \"hash\": \"sha256:b03f4a759e06ba94703e3960619a617e4622cc06fd811df75cd2e66cafb75e2f\",\n        \"target\": \"agents-md\",\n        \"ingredient\": \"rule/*\"\n      }\n    }\n  ],\n  \"warnings\": [],\n  \"unsetParams\": []\n}\n",
+      "stderr": ""
+    },
+    "diff": {
+      "code": 0,
+      "stdout": "no differences\n",
+      "stderr": ""
+    },
+    "diffExitCode": {
+      "code": 0,
+      "stdout": "no differences\n",
+      "stderr": ""
+    },
+    "doctorJson": {
+      "checks": [
+        {
+          "id": "config",
+          "level": "ok",
+          "message": "craftar.yaml loads (forge ../forge, profile acme)",
+          "fix": null
+        },
+        {
+          "id": "forge",
+          "level": "ok",
+          "message": "../forge @ no git",
+          "fix": null
+        },
+        {
+          "id": "forge-inside",
+          "level": "ok",
+          "message": "outside the Forge",
+          "fix": null
+        },
+        {
+          "id": "plan",
+          "level": "ok",
+          "message": "9 files",
+          "fix": null
+        },
+        {
+          "id": "params",
+          "level": "ok",
+          "message": "every declared parameter has a value",
+          "fix": null
+        },
+        {
+          "id": "agents-md-size",
+          "level": "ok",
+          "message": "AGENTS.md is 459 bytes, within the budget of 32768",
+          "fix": null
+        },
+        {
+          "id": "mcp-env",
+          "level": "ok",
+          "message": "every variable a written MCP server expects is set",
+          "fix": null
+        },
+        {
+          "id": "lock",
+          "level": "ok",
+          "message": "schema 2, generated <timestamp>",
+          "fix": null
+        },
+        {
+          "id": "status",
+          "level": "ok",
+          "message": "up to date",
+          "fix": null
+        },
+        {
+          "id": "registered",
+          "level": "ok",
+          "message": "in the registry",
+          "fix": null
+        }
+      ]
+    },
+    "lock": {
+      "schema": 2,
+      "forge": {
+        "source": "../forge",
+        "ref": null,
+        "commit": null
+      },
+      "profile": "acme",
+      "recipes": [
+        "base"
+      ],
+      "targets": [
+        "claude-code",
+        "kiro",
+        "agents-md"
+      ],
+      "files": [
+        {
+          "path": ".claude/rules/a.md",
+          "hash": "sha256:e07e8b2e2b5ad09af528dc7157d73ca3b3f7c17193cab4f7883171fb88e32c32",
+          "target": "claude-code",
+          "ingredient": "rule/a"
+        },
+        {
+          "path": ".claude/rules/b.md",
+          "hash": "sha256:87ea717df6de0ce33e96b22aed233bb5ad06d9f0a84d0a56566c913793c0e1b7",
+          "target": "claude-code",
+          "ingredient": "rule/b"
+        },
+        {
+          "path": ".claude/rules/c.md",
+          "hash": "sha256:f47f498950689cccd5c349eb41559b6255fe9bb4f67b68ebe7853f80da7cee72",
+          "target": "claude-code",
+          "ingredient": "rule/c"
+        },
+        {
+          "path": ".claude/rules/e.md",
+          "hash": "sha256:4674400557a0fb5bea5c35cc587b3fe46f2450ec560620539ea32587df24e2bf",
+          "target": "claude-code",
+          "ingredient": "rule/e"
+        },
+        {
+          "path": ".kiro/steering/a.md",
+          "hash": "sha256:873d069d3135ea5c1a8c5bb669bf9b8b88172198967724bfc39c59771467589a",
+          "target": "kiro",
+          "ingredient": "rule/a"
+        },
+        {
+          "path": ".kiro/steering/b.md",
+          "hash": "sha256:3fb593920532698c6e6e4799cd4aa2b772f373c2ed285cf5fb9a3f3d759fe8d9",
+          "target": "kiro",
+          "ingredient": "rule/b"
+        },
+        {
+          "path": ".kiro/steering/c.md",
+          "hash": "sha256:af012c46843aaf01b118876708e8dfd6f3164efce7699ddc035da360addd9e2b",
+          "target": "kiro",
+          "ingredient": "rule/c"
+        },
+        {
+          "path": ".kiro/steering/e.md",
+          "hash": "sha256:43279cce9e9fcf3408f57085284d97d814a8b1179b298e158e0f8734f7cd8962",
+          "target": "kiro",
+          "ingredient": "rule/e"
+        },
+        {
+          "path": "AGENTS.md",
+          "hash": "sha256:b03f4a759e06ba94703e3960619a617e4622cc06fd811df75cd2e66cafb75e2f",
+          "target": "agents-md",
+          "ingredient": "rule/*"
+        }
+      ]
+    }
+  }
+}
