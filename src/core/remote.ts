@@ -571,6 +571,17 @@ export function hideAnyCacheSegment(text: string, homes: readonly string[], plat
 }
 
 /**
+ * `text` with the segment after each of `caches` (spellings of `<home>/forges`) replaced by `UNVOUCHED_HIDDEN`,
+ * in one regex pass: the cause of a refusal that could not resolve a path. Only those directories, so a
+ * folder named `forges` elsewhere keeps its name.
+ */
+export function hideUnderCaches(text: string, caches: readonly string[], platform: NodeJS.Platform = process.platform): string {
+  const escaped = [...new Set(caches)].sort((a, b) => b.length - a.length).map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const pattern = new RegExp(`((?:${escaped.join("|")})[/\\\\])([^/\\\\\\s"']+)`, platform === "win32" ? "gi" : "g");
+  return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
+}
+
+/**
  * `p` as a refusal prints a path the user typed: untouched unless it lies under one of `caches`
  * (spellings of `<home>/forges`), then absolute with `UNVOUCHED_HIDDEN` in place of the entry. Decided
  * from the resolved path, so a folder named `forges` elsewhere keeps its name and a relative one is seen.
@@ -642,10 +653,8 @@ export async function assertNotCacheTree(dir: string, home: string): Promise<voi
       rootReal = await realpathOfNearest(dir);
     } catch (e) {
       // Fail closed: label the entry's name in the error and rethrow.
-      // hideAnyCacheSegment with [home, dirname(forgesReal)] covers both the given home and any
-      // linked home (the forges directory's parent when it was resolved through a link).
       const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(hideAnyCacheSegment(msg, [home, path.dirname(forgesReal)]));
+      throw new Error(hideUnderCaches(msg, [path.resolve(forgesDir), forgesReal]));
     }
     if (isUnderOrEqual(rootReal, forgesReal)) {
       const rel = path.relative(forgesReal, rootReal);

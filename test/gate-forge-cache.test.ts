@@ -281,3 +281,48 @@ describe("the path a gate refusal prints", () => {
     expect(r.stderr).toContain(`refusing to write the report to ${target}: it resolves inside the Forge (${forge})`);
   });
 });
+
+describe("the cause a gate refusal relays", () => {
+  async function fixture() {
+    const parent = await fs.realpath(await tmpDir("craftar-gatecache-cause-"));
+    cleanups.push(() => removeWithRetry(parent));
+    const forge = path.join(parent, "forge");
+    await makeForge(forge, FORGE_SPEC);
+    const ws = path.join(parent, "ws");
+    await fs.mkdir(path.join(ws, ".claude/rules"), { recursive: true });
+    const looped = async (dir: string) => {
+      await fs.mkdir(dir, { recursive: true });
+      await fs.symlink(path.join(dir, "loop"), path.join(dir, "loop"));
+      return path.join(dir, "loop");
+    };
+    return { parent, forge, ws, looped };
+  }
+
+  it.skipIf(process.platform === "win32")("a folder named forges outside the cache keeps its name", async () => {
+    const { parent, forge, ws, looped } = await fixture();
+    const loop = await looped(path.join(parent, "ord", "forges", "kept"));
+    const env = { CRAFTAR_HOME: path.join(parent, "home") };
+    const report = runCli(["import", "--from", "claude-code", "--forge", forge, "--profile", "acme", "--workspace", ws, "--report", path.join(loop, "r.md")], { env });
+    expect(report.code).toBe(1);
+    expect(report.stderr).not.toContain("(a cache entry name — not shown)");
+    const asForge = runCli(["import", "--from", "claude-code", "--forge", path.join(loop, "f"), "--profile", "acme", "--workspace", ws], { env });
+    expect(asForge.code).toBe(1);
+    expect(asForge.stderr).not.toContain("(a cache entry name — not shown)");
+  });
+
+  it.skipIf(process.platform === "win32")("a cache linked to a directory of another name: no entry name", async () => {
+    const { parent, forge, ws, looped } = await fixture();
+    const store = path.join(parent, "store");
+    const loop = await looped(path.join(store, "entry-secret"));
+    const home = path.join(parent, "home");
+    await fs.mkdir(home);
+    await fs.symlink(store, path.join(home, "forges"));
+    const env = { CRAFTAR_HOME: home };
+    const report = runCli(["import", "--from", "claude-code", "--forge", forge, "--profile", "acme", "--workspace", ws, "--report", path.join(loop, "r.md")], { env });
+    expect(report.code).toBe(1);
+    expect(report.stderr).not.toContain("entry-secret");
+    const asForge = runCli(["import", "--from", "claude-code", "--forge", path.join(loop, "f"), "--profile", "acme", "--workspace", ws], { env });
+    expect(asForge.code).toBe(1);
+    expect(asForge.stderr).not.toContain("entry-secret");
+  });
+});

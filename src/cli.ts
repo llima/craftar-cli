@@ -8,7 +8,7 @@ import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
 import { holdsBaseCitations, rendersServers } from "./core/mcp-server.js";
-import { assertNotCacheTree, classifyForge, CREDENTIAL_HIDDEN, hideAnyCacheSegment, isUnderOrEqual, shownCachePath, refHoldsCredentials, shownRef, UNVOUCHED_HIDDEN } from "./core/remote.js";
+import { assertNotCacheTree, classifyForge, CREDENTIAL_HIDDEN, hideUnderCaches, isUnderOrEqual, shownCachePath, refHoldsCredentials, shownRef, UNVOUCHED_HIDDEN } from "./core/remote.js";
 import { allowWrites, forget, listWorkspaces, prune, readRegistry, revokeWrites, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
@@ -1500,8 +1500,9 @@ const mcpCmd = program
       env: process.env,
       pin: pinOf(merged),
       writers: o.allowWrites ? mcpWriters(craftarHome(), registryOff()) : undefined,
-      // The dotnet host looks for global.json going up from its working directory; not the temporary
-      // directory, where another user can plant one. `root` is resolved already, so this cannot throw.
+      // The dotnet host looks for global.json going up from its working directory; the root has no parent
+      // to look in, and only its own global.json counts. Not the temporary directory, where any user can plant one.
+      // A root another user may write (a data drive, a share) is still open. `root` is resolved already, so this cannot throw.
       dotnetCwd: path.parse(root).root,
     });
   });
@@ -3195,7 +3196,6 @@ async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate
     cacheFault = e instanceof Error ? e.message : String(e);
   }
   const caches = [path.resolve(forgesCacheDir), ...(forgesCacheReal === null ? [] : [forgesCacheReal])];
-  const hideHomes = [home, ...(forgesCacheReal === null ? [] : [path.dirname(forgesCacheReal)])];
   let refusing = `refusing to write the ${w.what} to ${shownCachePath(target, caches)}`;
   const abs = path.resolve(target);
   let targetReal: string;
@@ -3205,7 +3205,7 @@ async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate
     rootReal = await realpathOfNearest(path.resolve(forgeRoot));
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    fail(`${refusing}: ${hideAnyCacheSegment(msg, hideHomes)} — ${w.who} cannot prove the target lies outside the Forge`);
+    fail(`${refusing}: ${hideUnderCaches(msg, caches)} — ${w.who} cannot prove the target lies outside the Forge`);
   }
   // A path typed through a link to the cache is shown by where it lands.
   if (shownCachePath(targetReal, caches) !== targetReal) refusing = `refusing to write the ${w.what} to ${shownCachePath(targetReal, caches)}`;
@@ -3216,7 +3216,7 @@ async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate
   }
   // Refuse a target whose real path is under (or equal to) the Forge cache.
   if (forgesCacheReal === null) {
-    fail(`${refusing}: ${hideAnyCacheSegment(cacheFault ?? "", hideHomes)} — ${w.who} cannot prove the target lies outside the Forge cache`);
+    fail(`${refusing}: ${hideUnderCaches(cacheFault ?? "", caches)} — ${w.who} cannot prove the target lies outside the Forge cache`);
   }
   if (isUnderOrEqual(targetReal, forgesCacheReal)) {
     const relToCache = path.relative(forgesCacheReal, targetReal);
