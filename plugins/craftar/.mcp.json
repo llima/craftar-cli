@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "craftar": {
+      "command": "craftar",
+      "args": ["mcp", "--workspace", "${CLAUDE_PROJECT_DIR}"]
+    }
+  }
+}
