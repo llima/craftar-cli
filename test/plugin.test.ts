@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,6 +78,13 @@ describe("the Claude Code plugin (spec 45)", () => {
     const tools = firstColumn(await skillLines());
     expect([...tools].sort()).toEqual([...TOOL_NAMES].sort());
     for (const name of WRITE_TOOL_NAMES) expect(tools).not.toContain(name);
+  });
+
+  it("4c. the skill is the spec's text, byte for byte but for line endings", async () => {
+    // A body line such as !`cmd` runs a program when the skill is invoked, and prose can send the agent to npx:
+    // the other checks read only the frontmatter, the table and two flags. A change to the skill moves this hash on purpose.
+    const text = (await skillLines()).join("\n");
+    expect(createHash("sha256").update(text).digest("hex")).toBe("9d8fec001bdb9329023f6ef04acff03bebf50488300f4ff9bf7632d483ec632e");
   });
 
   it("5. the skill never offers --allow-writes, and names --overwrite-drift only to forbid it", async () => {
