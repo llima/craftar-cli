@@ -25,6 +25,7 @@ import {
 } from "../core/forge.js";
 import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type UnsetParam, type Plan, type Workspace } from "../core/sync.js";
 import { driftList, REWORDED_REASON, INDEXED_REASON, unmanaged } from "../core/drift.js";
+import { readsRulesIndex, RULES_INDEX_KEY } from "../core/rules-index.js";
 import { hashNormalized, toLf } from "../core/text.js";
 import { fingerprintOf } from "../core/fingerprint.js";
 import { samePath } from "../core/registry.js";
@@ -795,6 +796,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const S: Record<string, string> = { ...PSk, ...WSk };
   // Unprojected on purpose: a variant stores the file one target wrote, so its sections are cited for every target (spec 41 Part B).
   const baseCitedKeys = citedKeys(expandedTexts(base, S));
+  // At the gate sync generates this key and ignores a value a layer gives it, so a variant flattens nothing and stops applying nothing.
+  if (readsRulesIndex(forge.manifest)) baseCitedKeys.delete(RULES_INDEX_KEY);
   const baseSectionNames = sectionNames(base);
 
   if (decision.kind === "reuse") {
