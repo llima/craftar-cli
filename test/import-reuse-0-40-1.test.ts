@@ -212,10 +212,10 @@ describe("script and hook bases with default targets are reused", () => {
         profileName: "acme",
       });
 
-      // For rules, the targets comparison is about the body, not metadata equality
-      // The rule should be either reused or a variant based on other metadata, not targets alone
-      // (Rules have complex logic; this just checks the fix didn't break rule behavior)
+      // Only a script or a hook reads "*" as ["claude-code"]: a rule's outcome stays what it was before 0.40.1.
       expect(result.rejected).toEqual([]);
+      expect(result.reused).toEqual(["rule/workflow"]);
+      expect(result.variants).toEqual([]);
     });
   });
 
