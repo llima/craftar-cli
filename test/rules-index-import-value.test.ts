@@ -286,6 +286,21 @@ describe("Item 1: craftar.rules.index value at re-import (schema 7)", () => {
     });
   });
 
+  describe("an MCP server citing the key, a recipe defaulting it", () => {
+    it("is reused, no variant", async () => {
+      const s = await makeForge(7, { recipeDefault: "x" });
+      const server = { command: "run", args: ["{{craftar.rules.index}}"] };
+      await writeFiles(s.forgeRoot, {
+        "ingredients/mcp/srv/ingredient.yaml": YAML.stringify({ type: "mcp", name: "srv", server, params: { "craftar.rules.index": {} } }),
+        "recipes/base.yaml": YAML.stringify({ name: "base", ingredients: ["rule/readme", "rule/style", "mcp/srv"], params: { "craftar.rules.index": { default: "x" } } }),
+      });
+      await syncWorkspace(s.wsRoot);
+      const result = await importClaudeCode({ workspaceRoot: s.wsRoot, forgeRoot: s.forgeRoot, profileName: "acme" });
+      expect(result.variants.map((v) => v.name)).not.toContain("mcp/srv--acme");
+      expect(result.reused).toContain("mcp/srv");
+    });
+  });
+
   describe("f) control: schema 6 with value at profile behaves as origin/main", () => {
     it("schema 6 reuses the base when it round-trips (no description)", async () => {
       const s = await makeForge(6, { profileParams: { "craftar.rules.index": "Always on:\n- readme\n- style\n" } });

@@ -188,6 +188,7 @@ export async function decide(
     }
     // G1 for a server (spec 34 §5.3): a declared citation a recipe defaults — variant, not reuse.
     for (const k of serverKeys) {
+      if (atRulesIndexGate && k === RULES_INDEX_KEY) continue;
       if (Object.hasOwn(ctx.P, k) || Object.hasOwn(ctx.W, k)) continue;
       for (const [name, r] of ctx.forge.recipes) {
         if (r.params[k]?.default !== undefined) return withAuthEnv({ kind: "variant", why: `recipe ${name} defaults ${k}, which the server cites` });
