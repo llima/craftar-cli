@@ -325,21 +325,30 @@ function titleBetween(s: string, from: number, to: number): boolean {
   return true;
 }
 
-/** The width of a line's leading whitespace, a tab advancing to the next multiple of 4 (CommonMark). */
-function indentOf(line: string): number {
-  let w = 0;
-  for (const c of line) {
-    if (c === " ") w++;
-    else if (c === "\t") w += 4 - (w % 4);
-    else break;
-  }
-  return w;
+/**
+ * Width in columns of `text`, a tab advancing to the next multiple of 4 counted from the line's real column `start`
+ * (after a block-quote prefix), as CommonMark expands tabs.
+ */
+function columnsOf(text: string, start: number): number {
+  let col = start;
+  for (const c of text) col = c === "\t" ? col + 4 - (col % 4) : col + 1;
+  return col - start;
 }
 
-/** `line` with its leading whitespace as `indentOf` spaces: a tab advances to the next multiple of 4. */
-function expandedLead(line: string): string {
+/**
+ * The width of a line's leading whitespace from column `start`. `owed`: a block-quote marker whose optional space was not
+ * written, so the first column of that whitespace is the marker's (a tab after `>` is partly its space).
+ */
+function indentOf(line: string, start = 0, owed = false): number {
+  const lead = /^[ \t]*/.exec(line)![0];
+  const w = columnsOf(lead, start);
+  return owed && w > 0 ? w - 1 : w;
+}
+
+/** `line` with its leading whitespace as `indentOf` spaces, the rest untouched. */
+function expandedLead(line: string, start = 0, owed = false): string {
   const rest = line.replace(/^[ \t]+/, "");
-  return line.length === rest.length ? line : " ".repeat(indentOf(line)) + rest;
+  return line.length === rest.length ? line : " ".repeat(indentOf(line, start, owed)) + rest;
 }
 
 /** `line` without up to `n` leading spaces. */
@@ -408,15 +417,17 @@ export function scanMarkdown(input: string): Scan {
       col0 = quote[0].length;
       raw = raw.slice(col0);
     }
+    // The last marker's optional space was not written: a tab right after it is partly that space.
+    const owed = quote !== null && !quote[0].endsWith(" ");
 
     if (fence) {
       const close = new RegExp(`^ {0,3}${fence.char === "`" ? "`" : "~"}{${fence.len},}[ \\t]*$`);
       // A fence ends with its container: an unquoted line ends one opened in a quote, and a non-blank line indented less
       // than the item ends one opened in a list item; that line is then read as any other.
       const leftQuote = fence.quoted && !quote;
-      const leftItem = fence.strip > 0 && raw.trim() !== "" && indentOf(raw) < fence.strip;
+      const leftItem = fence.strip > 0 && raw.trim() !== "" && indentOf(raw, col0, owed) < fence.strip;
       if (!leftQuote && !leftItem) {
-        if (close.test(withoutIndent(expandedLead(raw), fence.strip))) fence = null;
+        if (close.test(withoutIndent(expandedLead(raw, col0, owed), fence.strip))) fence = null;
         continue;
       }
       fence = null;
@@ -436,8 +447,8 @@ export function scanMarkdown(input: string): Scan {
 
     // A fence indented less than the item's content is not the item's: it ends the list (CommonMark), a top-level fence.
     // Fence decisions read the leading whitespace with tabs expanded (CommonMark), the text itself untouched.
-    const fenceLine = expandedLead(raw);
-    if (inList && indentOf(raw) < listIndent && FENCE_OPEN.test(fenceLine)) inList = false;
+    const fenceLine = expandedLead(raw, col0, owed);
+    if (inList && indentOf(raw, col0, owed) < listIndent && FENCE_OPEN.test(fenceLine)) inList = false;
     const strip = inList ? listIndent : 0;
     const open = FENCE_OPEN.exec(withoutIndent(fenceLine, strip));
     if (open && !(open[1][0] === "`" && open[2].includes("`"))) {
@@ -474,7 +485,8 @@ export function scanMarkdown(input: string): Scan {
     if (listItem && !indented) {
       flush();
       inList = true;
-      listIndent = listItem[0].length;
+      // In columns, tabs expanded from the line's real column: `1.\titem` puts the content at column 4.
+      listIndent = columnsOf(listItem[0], col0) - (owed && /^[ \t]/.test(raw) ? 1 : 0);
       // A fence on the item's own line opens there, its content indented to the item's.
       const itemFence = FENCE_OPEN.exec(raw.slice(listItem[0].length));
       if (itemFence && !(itemFence[1][0] === "`" && itemFence[2].includes("`"))) {

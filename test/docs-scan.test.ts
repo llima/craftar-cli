@@ -173,6 +173,23 @@ describe("review round 6 — a tab-indented fence in a list item", () => {
   });
 });
 
+describe("review round 7 — tabs counted from their real column", () => {
+  it("a tab after a block-quote marker makes the line a fence", () => {
+    expect(dests("> \t~~~\n> [a](x.md)\n> ~~~\n")).toEqual([]);
+    expect(dests(">\t~~~\n> [a](x.md)\n> ~~~\n")).toEqual([]);
+  });
+  it("a tab-indented closer in a quote closes the fence", () => {
+    expect(dests("> ~~~\n> a\n> \t~~~\n> [b](y.md)\n\n[c](z.md)\n")).toEqual(["y.md", "z.md"]);
+  });
+  it("a list marker followed by a tab puts the content at column 4", () => {
+    expect(dests("1.\titem\n\n   ```\n[a](x.md)\n   ```\n")).toEqual([]);
+  });
+  it("earlier cases hold: a quoted item, round 5's tab case", () => {
+    expect(dests("> - item\n>   ~~~\n>   x\n> \t~~~\n>   [b](y.md)\n")).toEqual(["y.md"]);
+    expect(at("- ```\n\t[a](a.md)\n  ```\n[b](b.md)\n")).toEqual(["4:5 b.md"]);
+  });
+});
+
 describe("§6.2 — anchors", () => {
   it("GitHub slugs, with -1 for a repeat, and <a id> / <a name>", () => {
     const s = scanMarkdown("# Hello World!\n\n## Hello World\n\nSetext Title\n---\n\n## `code` and [link](x.md)\n\n<a id=\"custom\"></a> <a name='other'>\n");
