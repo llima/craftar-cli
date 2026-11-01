@@ -163,6 +163,16 @@ describe("review round 5 — a top-level fence after a list", () => {
   });
 });
 
+describe("review round 6 — a tab-indented fence in a list item", () => {
+  it("a fence indented by a tab opens inside the item", () => {
+    expect(dests("1. item\n\n\t~~~\n\t[a](x.md)\n\t~~~\n")).toEqual([]);
+  });
+  it("a closer indented by a tab closes the item's fence", () => {
+    expect(dests("1. item\n   ~~~\n   x\n\t~~~\n   [b](y.md)\n")).toEqual(["y.md"]);
+    expect(dests("- item\n  ~~~\n  x\n\t~~~\n  [b](y.md)\n")).toEqual(["y.md"]);
+  });
+});
+
 describe("§6.2 — anchors", () => {
   it("GitHub slugs, with -1 for a repeat, and <a id> / <a name>", () => {
     const s = scanMarkdown("# Hello World!\n\n## Hello World\n\nSetext Title\n---\n\n## `code` and [link](x.md)\n\n<a id=\"custom\"></a> <a name='other'>\n");

@@ -336,6 +336,12 @@ function indentOf(line: string): number {
   return w;
 }
 
+/** `line` with its leading whitespace as `indentOf` spaces: a tab advances to the next multiple of 4. */
+function expandedLead(line: string): string {
+  const rest = line.replace(/^[ \t]+/, "");
+  return line.length === rest.length ? line : " ".repeat(indentOf(line)) + rest;
+}
+
 /** `line` without up to `n` leading spaces. */
 function withoutIndent(line: string, n: number): string {
   let i = 0;
@@ -410,7 +416,7 @@ export function scanMarkdown(input: string): Scan {
       const leftQuote = fence.quoted && !quote;
       const leftItem = fence.strip > 0 && raw.trim() !== "" && indentOf(raw) < fence.strip;
       if (!leftQuote && !leftItem) {
-        if (close.test(withoutIndent(raw, fence.strip))) fence = null;
+        if (close.test(withoutIndent(expandedLead(raw), fence.strip))) fence = null;
         continue;
       }
       fence = null;
@@ -429,9 +435,11 @@ export function scanMarkdown(input: string): Scan {
     }
 
     // A fence indented less than the item's content is not the item's: it ends the list (CommonMark), a top-level fence.
-    if (inList && indentOf(raw) < listIndent && FENCE_OPEN.test(raw)) inList = false;
+    // Fence decisions read the leading whitespace with tabs expanded (CommonMark), the text itself untouched.
+    const fenceLine = expandedLead(raw);
+    if (inList && indentOf(raw) < listIndent && FENCE_OPEN.test(fenceLine)) inList = false;
     const strip = inList ? listIndent : 0;
-    const open = FENCE_OPEN.exec(withoutIndent(raw, strip));
+    const open = FENCE_OPEN.exec(withoutIndent(fenceLine, strip));
     if (open && !(open[1][0] === "`" && open[2].includes("`"))) {
       flush();
       fence = { char: open[1][0], len: open[1].length, strip, quoted: quote !== null };
