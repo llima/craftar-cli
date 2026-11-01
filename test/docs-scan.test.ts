@@ -168,3 +168,18 @@ describe("§11 item 4 — a pathological file finishes in linear time", () => {
     expect(Date.now() - t0).toBeLessThan(10_000);
   });
 });
+
+describe("§6.2 — a pathological heading finishes in linear time (review round 1)", () => {
+  const MiB = 1 << 20;
+  it.each([
+    ["# then [", "# " + "[".repeat(MiB)],
+    ["# a, spaces, b", "# a" + " ".repeat(MiB) + "b"],
+    ["# then <", "# " + "<".repeat(MiB)],
+    ["a setext paragraph of [", "[".repeat(MiB) + "\n===\n"],
+    ["nested destinations with no title", "[](x ".repeat(MiB / 5) + ")".repeat(MiB / 5)],
+  ])("%s", (_label, text) => {
+    const t0 = Date.now();
+    scanMarkdown(text);
+    expect(Date.now() - t0).toBeLessThan(10_000);
+  });
+});

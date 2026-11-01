@@ -90,11 +90,22 @@ const SETEXT = /^ {0,3}(?:=+|-+)[ \t]*$/;
 const LIST_ITEM = /^ {0,3}(?:[-+*]|\d{1,9}[.)])(?:[ \t]+|$)/;
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
+/** An ATX heading's text without its optional closing `#` run (CommonMark), read from the end: no regex backtracks over it. */
+function withoutClosingRun(text: string): string {
+  const t = text.trimEnd();
+  let k = t.length;
+  while (k > 0 && t[k - 1] === "#") k--;
+  if (k === t.length) return t;
+  if (k === 0) return "";
+  return t[k - 1] === " " || t[k - 1] === "\t" ? t.slice(0, k).trimEnd() : t;
+}
+
 /** GitHub's heading slug (github-slugger's rule): lower case, characters other than letters, marks, numbers, `_`, space and `-` dropped, spaces to `-`. */
 export function githubSlug(text: string): string {
   const visible = text
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/<[^>]*>/g, "")
+    // Each class excludes its own opener, so a failed attempt stops at the next one: linear on a run of openers.
+    .replace(/\[([^[\]]*)\]\([^()]*\)/g, "$1")
+    .replace(/<[^<>]*>/g, "")
     .trim()
     .toLowerCase();
   return visible.replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "").replace(/ /g, "-");
@@ -203,7 +214,6 @@ function nextWhere(s: string, test: (c: string) => boolean): Int32Array {
 }
 
 const isWs = (c: string) => c === " " || c === "\t" || c === "\n";
-const TITLE = /^(?:"[^"]*"|'[^']*'|\([^()]*\))$/s;
 
 /** Every link, anchor and tag of one paragraph (code already blanked). */
 function scanParagraph(s: string, at: (pos: number) => { line: number; column: number }, scan: Scan): void {
@@ -232,12 +242,12 @@ function scanParagraph(s: string, at: (pos: number) => { line: number; column: n
       const gt = nextGt[p + 1];
       if (gt >= s.length || s[gt] !== ">") return null;
       const end = close > gt ? close : -1;
-      if (end === -1 || !TITLE_OR_EMPTY(s.slice(gt + 1, end))) return null;
+      if (end === -1 || !titleBetween(s, gt + 1, end)) return null;
       return { link: { dest: s.slice(p + 1, gt), markdown: true, ...at(p + 1) }, end };
     }
     if (close === -1) return null;
     const stop = Math.min(nextWs[p], close);
-    if (!TITLE_OR_EMPTY(s.slice(stop, close))) return null;
+    if (!titleBetween(s, stop, close)) return null;
     return { link: { dest: s.slice(p, stop), markdown: true, ...at(p) }, end: close };
   };
 
@@ -283,10 +293,25 @@ function scanParagraph(s: string, at: (pos: number) => { line: number; column: n
   }
 }
 
-const TITLE_OR_EMPTY = (rest: string): boolean => {
-  const t = rest.trim();
-  return t === "" || TITLE.test(t);
-};
+const TITLE_OR_EMPTY = (rest: string): boolean => titleBetween(rest, 0, rest.length);
+
+/**
+ * Whether `s[from, to)` is whitespace and at most one title (`"…"`, `'…'`, `(…)`). Read from both ends, stopping at the first
+ * character that decides, so that nested destinations whose `)` is far away are not each read to the end (§6.2).
+ */
+function titleBetween(s: string, from: number, to: number): boolean {
+  let p = from;
+  while (p < to && isWs(s[p])) p++;
+  if (p >= to) return true;
+  const open = s[p];
+  const close = open === "(" ? ")" : open;
+  if (open !== '"' && open !== "'" && open !== "(") return false;
+  let q = to - 1;
+  while (q > p && isWs(s[q])) q--;
+  if (q <= p || s[q] !== close) return false;
+  for (let i = p + 1; i < q; i++) if (s[i] === close || (open === "(" && s[i] === "(")) return false;
+  return true;
+}
 
 /** Scan one Markdown file's text (spec 47 §6.1–§6.3). */
 export function scanMarkdown(input: string): Scan {
@@ -406,7 +431,7 @@ export function scanMarkdown(input: string): Scan {
     const atx = ATX.exec(raw);
     if (atx && !indented) {
       flush();
-      const content = atx[2].replace(/[ \t]+#+[ \t]*$/, "").replace(/^#+[ \t]*$/, "");
+      const content = withoutClosingRun(atx[2]);
       paragraph.push({ text: content, line: lineNo, col0: col0 + raw.length - atx[2].length });
       flush(true);
       afterBlank = false;
