@@ -797,7 +797,9 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
     if (s.what === "link") add({ id: "scope", level: "warn", path: s.rel, message: "symbolic link not followed: not scanned", fix: "link to real files, or ignore it in git" });
     else add({ id: "scope", level: "warn", path: s.rel === "." ? null : s.rel, message: "directory cannot be read: not scanned", fix: "check its permissions" });
   }
-  let files = walked.files.filter((f) => !skipDirs.some((d) => d !== "" && (f === d || f.startsWith(`${d}/`))));
+  // A destination is compared without case on Windows, where the disk folds it.
+  const fold = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p);
+  let files = walked.files.filter((f) => !skipDirs.some((d) => d !== "" && (fold(f) === fold(d) || fold(f).startsWith(`${fold(d)}/`))));
   if (await gitIsRepo(root)) {
     const { ignored, unchecked } = await ignoredPaths(root, files);
     const skip = new Set(ignored.map((i) => i.path));
