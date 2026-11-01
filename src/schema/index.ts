@@ -592,7 +592,6 @@ export const DocsBlockSchema = z.unknown().transform((v, ctx): DocsBlock => {
       else if (!allowed.includes(key)) issue(docsKeyShaped(key) ? [...at, key] : at, message);
     }
   };
-  unknownKeys(v, DOCS_KEYS, [], DOCS_RULES.unknownKey);
   if (v.uncovered !== undefined) {
     if (v.uncovered === "ignore" || v.uncovered === "error") out.uncovered = v.uncovered;
     else issue(["uncovered"], DOCS_RULES.uncovered);
@@ -601,9 +600,10 @@ export const DocsBlockSchema = z.unknown().transform((v, ctx): DocsBlock => {
     if (v.related === "off" || v.related === "resolve" || v.related === "symmetric") out.related = v.related;
     else issue(["related"], DOCS_RULES.related);
   }
-  if (v.categories === undefined || v.categories === null) return out;
+  if (v.categories !== undefined && v.categories !== null && !Array.isArray(v.categories)) issue(["categories"], DOCS_RULES.categories);
+  // Unknown keys last, so that a misspelt key does not hide a value's refusal.
   if (!Array.isArray(v.categories)) {
-    issue(["categories"], DOCS_RULES.categories);
+    unknownKeys(v, DOCS_KEYS, [], DOCS_RULES.unknownKey);
     return out;
   }
   v.categories.forEach((c: unknown, i: number) => {
@@ -630,6 +630,7 @@ export const DocsBlockSchema = z.unknown().transform((v, ctx): DocsBlock => {
     }
     out.categories.push(category);
   });
+  unknownKeys(v, DOCS_KEYS, [], DOCS_RULES.unknownKey);
   return out;
 });
 
