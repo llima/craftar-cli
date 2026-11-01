@@ -14,6 +14,7 @@ import { allowWrites, forget, listWorkspaces, prune, readRegistry, revokeWrites,
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { generatedIgnored } from "./core/generated-ignored.js";
+import { GitHooksRefusal, HOOK_NAMES, hooksStatus, installHooks, uninstallHooks, type HookName } from "./core/git-hooks.js";
 import { GitSourceRefusal, gitSource, NotACommitError, type GitSource } from "./core/workspace-source.js";
 import { launchRefusal, pinOf } from "./core/mcp-protocol.js";
 import { serve } from "./mcp.js";
@@ -3004,6 +3005,73 @@ services
   });
 
 /* ---------------------------------------------------------------- cache ---------------------------------------------------------------- */
+/* ----------------------------------------------------------- git-hooks */
+const gitHooks = program.command("git-hooks").description("An optional git hook that runs sync --check over what is pushed or committed, written only when you type install, and only inside the repository");
+
+/** The hooks a command's flags name; none named, `fallback`. */
+const namedHooks = (o: { prePush?: boolean; preCommit?: boolean }, fallback: readonly HookName[]): readonly HookName[] => {
+  const named = HOOK_NAMES.filter((n) => (n === "pre-push" ? o.prePush : o.preCommit));
+  return named.length > 0 ? named : fallback;
+};
+
+/** A refusal of `git-hooks` is said as a refusal; anything else stays a failure of ours. */
+async function hooksCommand<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (e) {
+    if (e instanceof GitHooksRefusal) fail(e.message);
+    throw e;
+  }
+}
+
+gitHooks
+  .command("install")
+  .description("Write a hook that runs craftar sync --check: pre-push over each pushed commit (the default), pre-commit over the index. Only in .git/hooks or a core.hooksPath inside the repository; the hook starts the craftar on PATH, never npx, and with none it says so and passes")
+  .option("--pre-push", "write the pre-push hook", false)
+  .option("--pre-commit", "write the pre-commit hook", false)
+  .option("--block-when-unavailable", "block when the Forge cannot be had, a commit has no craftar.yaml or an object is not a commit, where the hook otherwise says not checked and passes", false)
+  .option("--force", "keep a hook that is not craftar's as <hook>.craftar-backup and write this one", false)
+  .option("--workspace <dir>", "workspace root", ".")
+  .action(async (o) => {
+    const root = path.resolve(o.workspace);
+    const r = await hooksCommand(() =>
+      installHooks(root, namedHooks(o, ["pre-push"]), { force: o.force, blockWhenUnavailable: o.blockWhenUnavailable, home: process.env.CRAFTAR_HOME || undefined }),
+    );
+    for (const name of r.backedUp) console.log(`  kept the existing ${name} as ${name}.craftar-backup`);
+    const where = r.place.label === ".git/hooks" ? ".git/hooks" : "core.hooksPath";
+    for (const name of r.written) console.log(`  ${pc.green("+")} ${where}/${name}`);
+    for (const n of r.notes) console.log(`  ${pc.yellow("warn")} ${n}`);
+  });
+
+gitHooks
+  .command("uninstall")
+  .description("Remove this workspace's hook: every one with no flag, listing and leaving any other; a hook named by flag that is not this workspace's is refused. A backup is named and left. Reads no craftar.yaml")
+  .option("--pre-push", "the pre-push hook", false)
+  .option("--pre-commit", "the pre-commit hook", false)
+  .option("--workspace <dir>", "workspace root", ".")
+  .action(async (o) => {
+    const r = await hooksCommand(() => uninstallHooks(path.resolve(o.workspace), namedHooks(o, [])));
+    for (const name of r.removed) console.log(`  ${pc.magenta("-")} ${name}`);
+    for (const name of r.left) console.log(`  ${name} is not this workspace's hook: left`);
+    for (const name of r.backups) console.log(`  ${name} is still there: restore it by hand if you want it back`);
+    if (r.removed.length === 0 && r.left.length === 0) console.log("  no hook of this workspace is installed");
+  });
+
+gitHooks
+  .command("status")
+  .description("Show whether each hook is installed, and where hooks live. Reads only")
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--json", "machine-readable output", false)
+  .action(async (o) => {
+    const { hooksDir, hooks } = await hooksCommand(() => hooksStatus(path.resolve(o.workspace)));
+    if (o.json) {
+      console.log(JSON.stringify({ hooksDir, hooks }, null, 2));
+      return;
+    }
+    console.log(`hooks live in ${hooksDir}`);
+    for (const h of hooks) console.log(`  ${h.name}: ${h.state}${h.workspace === null ? "" : ` (workspace ${h.workspace})`}`);
+  });
+
 const cache = program.command("cache").description("The per-machine Forge cache in $CRAFTAR_HOME/forges/");
 
 cache

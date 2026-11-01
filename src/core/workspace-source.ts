@@ -76,6 +76,19 @@ async function gitVersion(): Promise<[number, number]> {
 
 const atLeast = (v: [number, number], major: number, minor: number) => v[0] > major || (v[0] === major && v[1] >= minor);
 
+/**
+ * The workspace's place in its repository, whether or not it is on disk: the nearest existing directory, and the path from
+ * the repository's root with a trailing `/` (empty at the root). Only the line ending is stripped: a directory can start
+ * with a space, and a wrong prefix reads as `no craftar.yaml`. Rejects when `git` cannot answer there.
+ */
+export async function locateWorkspace(root: string): Promise<{ start: string; prefix: string }> {
+  const start = await nearestDirectory(root);
+  const { stdout } = await execProgram("git", [...gitRead(start), "rev-parse", "--show-prefix"]);
+  const atStart = stdout.replace(/\r?\n$/, "");
+  const rest = path.relative(start, root).split(path.sep).join("/");
+  return { start, prefix: rest === "" ? atStart : `${atStart}${rest}/` };
+}
+
 async function nearestDirectory(dir: string): Promise<string> {
   for (let d = dir; ; d = path.dirname(d)) {
     const stat = await fs.stat(d).catch(() => null);
@@ -97,11 +110,7 @@ export async function gitSource(root: string, spec: GitSourceSpec): Promise<GitS
   // --no-lazy-fetch needs git 2.45: without it, a partial clone's missing blob would be fetched.
   const lazy = atLeast(version, 2, 45) ? ["--no-lazy-fetch"] : [];
   const base = [...lazy, ...gitRead(start)];
-  const { stdout: prefixOut } = await execProgram("git", [...base, "rev-parse", "--show-prefix"]);
-  // Only the line ending: a directory can start with a space, and a wrong prefix reads as `no craftar.yaml`.
-  const atStart = prefixOut.replace(/\r?\n$/, "");
-  const rest = path.relative(start, root).split(path.sep).join("/");
-  const prefix = rest === "" ? atStart : `${atStart}${rest}/`;
+  const { prefix } = await locateWorkspace(root);
 
   const entries = new Map<string, { mode: string; oid: string }>();
   let label: GitSource["label"];
