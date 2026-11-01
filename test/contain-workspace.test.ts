@@ -379,6 +379,26 @@ describe("every surface that answers would sync fail", () => {
     expect(no.stdout).toContain("next sync: refused — ");
   });
 
+  it("init prints both blocks when an unset parameter and a path that leaves both hold", async () => {
+    const s = await scenario(
+      {
+        ingredients: [{ meta: { type: "rule", name: "r", params: { "acme.key": {} } }, files: { "rule.md": "# R {{acme.key}}\n" } }],
+        recipes: [recipe("base", ["rule/r"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const { dir } = await outside();
+    const ws = path.join(s.root, "fresh");
+    await fs.mkdir(path.join(ws, ".claude"), { recursive: true });
+    await fs.symlink(dir, path.join(ws, ".claude/rules"), "junction");
+    const r = runCli(["init", "--forge", s.forgeRoot, "--profile", "acme", "--workspace", ws]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("declared parameter(s) have no value — craftar.yaml written, sync not run");
+    expect(r.stderr).toContain("path(s) craftar does not follow — craftar.yaml written, sync not run");
+  });
+
   it("doctor: workspace-links at error, one per path, and status leaves those rows out", async () => {
     const { s } = await escaping();
     const r = runCli(["sync", ...W(s)]);
