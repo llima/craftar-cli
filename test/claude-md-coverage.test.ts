@@ -251,14 +251,24 @@ describe("doctor's agents-md-primary above the root (spec 50 §4.2, §11 items 9
     expect(primaryLines(r)).toEqual([expect.objectContaining({ level: "warn", message: ancestorMessage(path.join(s.root, "CLAUDE.md")) })]);
   });
 
-  it("a dangling link and a directory named CLAUDE.md above: each warned by lstat, never followed (edges 1, 3)", async () => {
+  it("a directory named CLAUDE.md above is warned by lstat (edge 3)", async () => {
+    const s = await primaryWorkspace();
+    await fs.mkdir(path.join(s.root, "CLAUDE.md"));
+    expect(primaryLines(await doctorOf(s))).toEqual([expect.objectContaining({ level: "warn", message: ancestorMessage(path.join(s.root, "CLAUDE.md")) })]);
+  });
+
+  // A file link (spec 48's rule for links in tests): run on Linux, not on Windows.
+  it.skipIf(process.platform === "win32")("a dangling link named CLAUDE.local.md above is warned by lstat, never followed (edge 1)", async () => {
     const s = await primaryWorkspace();
     await fs.symlink(path.join(s.root, "nowhere"), path.join(s.root, "CLAUDE.local.md"));
-    await fs.mkdir(path.join(s.root, "CLAUDE.md"));
-    expect(primaryLines(await doctorOf(s))).toEqual([
-      expect.objectContaining({ level: "warn", message: ancestorMessage(path.join(s.root, "CLAUDE.md")) }),
-      expect.objectContaining({ level: "warn", message: ancestorMessage(path.join(s.root, "CLAUDE.local.md")) }),
-    ]);
+    expect(primaryLines(await doctorOf(s))).toEqual([expect.objectContaining({ level: "warn", message: ancestorMessage(path.join(s.root, "CLAUDE.local.md")) })]);
+  });
+
+  it("the user's own .claude/CLAUDE.md is left out with a trailing separator on CLAUDE_CONFIG_DIR", async () => {
+    const s = await primaryWorkspace();
+    await writeFiles(s.root, { ".claude/CLAUDE.md": "x\n", "CLAUDE.md": "x\n" });
+    const r = await doctorOf(s, { claudeUserDir: undefined, env: { CLAUDE_CONFIG_DIR: path.join(s.root, ".claude") + path.sep } });
+    expect(primaryLines(r)).toEqual([expect.objectContaining({ level: "warn", message: ancestorMessage(path.join(s.root, "CLAUDE.md")) })]);
   });
 
   it("the user's own .claude/CLAUDE.md is left out when CLAUDE_CONFIG_DIR is spelled through a link", async () => {
