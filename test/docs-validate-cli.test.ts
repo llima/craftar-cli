@@ -138,7 +138,8 @@ describe("printing (§11 item 5)", () => {
       const r = runCli(["docs", "validate", ...extra, "--workspace", s.wsRoot]);
       // Not vacuous: the run printed its findings — the links error and the block's policy error.
       expect(r.code).toBe(1);
-      expect(r.stdout).toMatch(/links/);
+      if (extra.length === 0) expect(r.stdout).toMatch(/error\s+links\s+docs\/a\.md:4:/);
+      else expect(JSON.parse(r.stdout).checks.some((c: { id: string; level: string; path: string }) => c.id === "links" && c.level === "error" && c.path === "docs/a.md")).toBe(true);
       expect(r.stdout).toMatch(/docs block: /);
       expect(r.stdout + r.stderr).not.toContain(M);
       expect(r.stdout + r.stderr).not.toContain(TOKEN);
