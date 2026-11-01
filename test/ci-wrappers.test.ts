@@ -471,6 +471,7 @@ describe.each(VENDORS)("the token and hostile text under %s (spec 46 §10, 6 and
     ["the Base64 not masked", "console.log(azure ? `${VSO}task.setsecret]${basic}` : `::add-mask::${basic}`);", "", tokenFaults],
     ["the status given the check's environment", 'craftar(["status", "--json", "--offline"], childEnv)', 'craftar(["status", "--json", "--offline"], checkEnv)', tokenFaults],
     ["neuter as identity", 'const neuter = (t) => t.replace(/##(vso)?\\[/gi, (m) => m.slice(0, -1) + " [").replace(/^([\\s\\u0085]*)::/gm, "$1: :");', "const neuter = (t) => t;", hostileFaults],
+    ["neuter blind to a next-line character", "/^([\\s\\u0085]*)::/gm", "/^(\\s*)::/gm", hostileFaults],
     ["prop as identity", 'const prop = (s) => azure ? esc(s).replace(/;/g, "%3B").replace(/\\]/g, "%5D").replace(/\\[/g, "%5B") : esc(s).replace(/:/g, "%3A").replace(/,/g, "%2C");', "const prop = (s) => s;", hostileFaults],
   ];
   it.each(removedSafety)("catches %s", (_name, from, to, faults) => {
@@ -588,6 +589,7 @@ describe("the README (spec 46 §9)", () => {
       "changes the job's `node`",
       "--ignore-scripts",
       "has not run on a real agent",
+      "was not verified",
     ]) expect(s, needle).toContain(needle);
     expect(s).not.toMatch(/@main\b|pull_request_target|@latest/);
     expect(s).not.toMatch(/uses: \S+@v\d/);
