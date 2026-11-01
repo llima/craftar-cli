@@ -251,6 +251,19 @@ describe("§5.3 — the declared checks", () => {
     expect(r.checks.find((c) => c.id === "policy")!.message).toBe(POLICY.categories(3));
   });
 
+  it("a category reached through a link is not followed: an outside directory that exists reads the same as one that does not", async () => {
+    const outside = await tmpDir();
+    cleanups.push(() => removeWithRetry(outside));
+    await fs.mkdir(path.join(outside, "present"));
+    const s = await ws({ "docs/a/x.md": "x\n" }, { docs: { categories: [{ path: "a" }, { path: "lnk/present" }, { path: "lnk/absent" }] } });
+    await fs.symlink(outside, path.join(s.wsRoot, "docs", "lnk"), "junction");
+    const r = await run(s.wsRoot);
+    expect(findings(r, "categories").map(brief)).toEqual([
+      "error categories null categories[1]: no such directory under docs/",
+      "error categories null categories[2]: no such directory under docs/",
+    ]);
+  });
+
   it("docs/ absent: every declared path is a categories error", async () => {
     const s = await ws({ "README.md": "x\n" }, { docs: { categories: [{ path: "a" }, { path: "b/c" }] } });
     expect(findings(await run(s.wsRoot)).map(brief)).toEqual(["error categories null categories[0]: no such directory under docs/", "error categories null categories[1]: no such directory under docs/"]);

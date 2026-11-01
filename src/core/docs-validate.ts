@@ -860,7 +860,7 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
   }
 
   // Declared (§5.3).
-  if (declared && block !== null) await declaredChecks(root, block, state, resolver, add);
+  if (declared && block !== null) await declaredChecks(block, state, resolver, add);
 
   // `[path]` limits the findings about a file; a `path: null` one always counts (§4.1).
   const inLimit = (p: string | null) => p === null || limit === "" || p === limit || p.startsWith(`${limit}/`);
@@ -921,16 +921,16 @@ function labelIndex(rel: string, files: string[]): number {
 }
 
 async function declaredChecks(
-  root: string,
   block: DocsBlock,
   state: Map<string, FileState>,
   resolver: Resolver,
   add: (c: Omit<DocsCheck, "line" | "column" | "path"> & Partial<Pick<DocsCheck, "line" | "column" | "path">>) => void,
 ): Promise<void> {
   // A declared directory that is not there: by position, with no path (§5.3).
+  // Resolved as a link is (§7): a symbolic link on the way stops it, so nothing outside the workspace is asked about.
   for (const [i, c] of block.categories.entries()) {
-    const st = await fs.lstat(path.join(root, "docs", ...c.path.split("/"))).catch(() => null);
-    if (!st?.isDirectory()) add({ id: "categories", level: "error", message: `categories[${i}]: no such directory under docs/`, fix: "create the directory, or remove the entry from the docs block" });
+    const r = await resolver.resolve(".", `docs/${c.path}`);
+    if (r.kind !== "ok" || !r.isDir) add({ id: "categories", level: "error", message: `categories[${i}]: no such directory under docs/`, fix: "create the directory, or remove the entry from the docs block" });
   }
   const covering = (sub: string) =>
     block.categories.filter((c) => sub.startsWith(`${c.path}/`)).sort((a, b) => b.path.length - a.path.length)[0] ?? null;
