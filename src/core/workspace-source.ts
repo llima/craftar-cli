@@ -150,7 +150,8 @@ async function resolveCommit(base: string[], rev: string, endOfOptions: boolean)
       return null;
     }
   };
-  const exists = await verify(rev);
+  // `--verify` answers for any full hash, present or not; `^{object}` asks git for the object.
+  const exists = await verify(`${rev}^{object}`);
   if (exists === null) throw new GitSourceRefusal(`unknown revision ${shown}`);
   const commit = await verify(`${rev}^{commit}`);
   if (commit === null) throw new NotACommitError(exists.slice(0, 8));

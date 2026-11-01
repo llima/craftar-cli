@@ -130,7 +130,7 @@ export async function loadWorkspace(root: string, opts: LoadOptions = {}): Promi
 
 /**
  * The two workspace files read and merged, the Forge not loaded (spec 24 §5.1): what `doctor` needs to
- * know a Forge's kind and cache key even when the Forge does not load. The one reader of the files.
+ * know a Forge's kind and cache key even when the Forge does not load. The one reader of the files on disk; `readConfigFrom` reads a git source.
  */
 export async function readWorkspaceConfig(root: string): Promise<MergedConfig> {
   root = path.resolve(root);

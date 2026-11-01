@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { apply, loadWorkspace, plan, status } from "../src/core/sync.js";
 import { diskSource, gitSource } from "../src/core/workspace-source.js";
@@ -215,6 +216,33 @@ describe("sync --check --committed", () => {
       expect(r.stderr).toContain("cannot read object");
     }
   });
+  it("does not fetch a partial clone's missing blob", async () => {
+    const { repo, root } = await committed();
+    const version = /(\d+)\.(\d+)/.exec(git(root, "--version"))!;
+    // git before 2.45 has no --no-lazy-fetch: the README says what then happens.
+    if (Number(version[1]) < 2 || (Number(version[1]) === 2 && Number(version[2]) < 45)) return;
+    git(repo, "config", "uploadpack.allowFilter", "true");
+    const clone = path.join(root, "partial");
+    git(root, "clone", "-q", "--no-checkout", "--filter=blob:none", pathToFileURL(repo).href, clone);
+    // Even craftar.yaml's blob is missing here, and nothing may fetch it.
+    const packs = async () => (await fs.readdir(path.join(clone, ".git/objects/pack"))).join();
+    const before = await packs();
+    const r = check(clone, "--committed", "--unavailable-ok");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("cannot read object");
+    expect(await packs()).toBe(before);
+  });
+  it("refuses credentials in a commit's forge:, without printing them", async () => {
+    const { ws, repo } = await committed();
+    const secret = "s3cr3tvalue";
+    await fs.writeFile(path.join(ws, "craftar.yaml"), `forge: https://user:${secret}@example.invalid/f.git\nprofile: acme\n`);
+    git(repo, "add", "craftar.yaml");
+    git(repo, "commit", "-qm", "creds");
+    const r = check(ws, "--committed", "--unavailable-ok");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("holds credentials");
+    expect(r.stderr + r.stdout).not.toContain(secret);
+  });
   for (const lead of [" sp", "\tt"]) {
     it.skipIf(process.platform === "win32")(`reads a workspace below a directory starting with ${JSON.stringify(lead)}`, async () => {
       const { ws } = await committed(`${lead}/w`);
@@ -298,6 +326,11 @@ describe("refusals", () => {
     expect(ok.code).toBe(0);
     expect(ok.stderr).toContain("is not a commit");
     expect(check(ws, "--committed=nope", "--unavailable-ok").code).toBe(1);
+    // rev-parse --verify answers for any full hash, whether or not the object exists.
+    const unknown = "0123456789".repeat(4);
+    const absent = check(ws, `--committed=${unknown}`, "--unavailable-ok");
+    expect(absent.code).toBe(1);
+    expect(absent.stderr).toContain("unknown revision");
   });
   it("a tag peels to its commit", async () => {
     const { ws, repo } = await committed();
@@ -356,13 +389,28 @@ describe("--unavailable-ok", () => {
     const none = runCli(["sync", "--check", "--committed", "--unavailable-ok", "--workspace", dir], { env });
     expect(none.code).toBe(0);
     expect(none.stderr).toContain("not checked: cannot fetch the Forge");
+    // A real cached copy, and a ref it cannot resolve: offline, and after a fetch that fails.
+    await writeFiles(dir, { "craftar.yaml": `forge: ${rf.url}\nprofile: acme\n` });
+    expect(runCli(["sync", "--workspace", dir], { env }).code).toBe(0);
     await writeFiles(dir, { "craftar.yaml": `forge: ${rf.url}\nref: no-such-ref\nprofile: acme\n` });
     git(dir, "add", ".");
     git(dir, "commit", "-qm", "ref");
-    expect(runCli(["sync", "--check", "--committed", "--workspace", dir], { env }).code).toBe(1);
     const noRef = runCli(["sync", "--check", "--committed", "--offline", "--unavailable-ok", "--workspace", dir], { env });
     expect(noRef.code).toBe(0);
     expect(noRef.stderr).toContain("not checked:");
+    expect(noRef.stderr).toContain("no-such-ref");
+    const without = runCli(["sync", "--check", "--committed", "--offline", "--workspace", dir], { env });
+    expect(without.code).toBe(1);
+    expect(without.stderr).toContain("no-such-ref");
+    await fs.rename(rf.bare, `${rf.bare}-away`);
+    try {
+      const failed = runCli(["sync", "--check", "--committed", "--unavailable-ok", "--workspace", dir], { env });
+      expect(failed.code).toBe(0);
+      expect(failed.stderr).toContain("not checked:");
+      expect(failed.stderr).toContain("no-such-ref");
+    } finally {
+      await fs.rename(`${rf.bare}-away`, rf.bare);
+    }
   });
   it("passes a remote Forge with no cached copy under --offline", async () => {
     const rf = await remoteForge(FORGE);
