@@ -1462,7 +1462,7 @@ const docs = program.command("docs").description("The workspace's documentation:
 docs
   .command("validate [path]")
   .description(
-    "Check the Markdown files under docs/ and .claude/ and at the workspace root, skipping what git ignores: links that resolve inside the workspace (a missing fragment is a warn), tool-call tags leaked outside code, files that are not UTF-8 text, and, where the profile declares a docs block, its categories, required frontmatter, dated file names and related: entries. One line per finding with its fix, never a line of a file, a link's target or a frontmatter value; reads no link over the network and writes nothing. [path] limits which findings about a file are reported",
+    "Check the Markdown files under docs/ and .claude/ and at the workspace root, skipping what git ignores: links that resolve inside the workspace (a missing fragment is a warn), tool-call tags leaked outside code, files that are not UTF-8 text, and, where the profile declares a docs block, its categories, required frontmatter, dated file names and related: entries. One line per finding with its fix, never a line of a file, a link's target or a frontmatter value; reads no link over the network and writes nothing. [path], relative to the workspace (not the current directory), limits which findings about a file are reported",
   )
   // No commander default: an explicit --workspace without craftar.yaml exits 1, the current directory without one runs the always-on checks only (spec 47 §4.1).
   .option("--workspace <dir>", "the workspace to check (default: the current directory)")

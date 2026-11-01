@@ -174,5 +174,7 @@ describe("the README (spec 47 §10)", () => {
     expect(lines.slice(0, 6).join("\n")).toContain("`craftar docs validate` checks a workspace's Markdown");
     expect(lines.some((l) => l.startsWith("| `craftar docs validate [path] [--workspace <dir>] [--fetch] [--strict] [--json]` |"))).toBe(true);
     expect(readme).toContain("### to 0.46.0");
+    expect(readme).toContain("`[path]`, relative to the workspace (not the current directory)");
+    expect(runCli(["docs", "validate", "--help"]).stdout.replace(/\s+/g, " ")).toContain("[path], relative to the workspace (not the current directory)");
   });
 });
