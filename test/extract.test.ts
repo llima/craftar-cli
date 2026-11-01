@@ -59,15 +59,15 @@ describe("service ingredient emittedFile and bodyFile (spec 31)", () => {
   });
 
   it("bodyFile: compose.yaml is a body file (emitted and substituted)", () => {
-    expect(bodyFile(service, "compose.yaml", dir)).toBe(true);
+    expect(bodyFile(service, "compose.yaml", dir, 1)).toBe(true);
   });
 
   it("bodyFile: init/a.sh is a body file (emitted and substituted, not in binary)", () => {
-    expect(bodyFile(service, "init/a.sh", dir)).toBe(true);
+    expect(bodyFile(service, "init/a.sh", dir, 1)).toBe(true);
   });
 
   it("bodyFile: logo.png is NOT a body file (in binary, so not substituted)", () => {
-    expect(bodyFile(service, "logo.png", dir)).toBe(false);
+    expect(bodyFile(service, "logo.png", dir, 1)).toBe(false);
   });
 
   it("bodyFile: binary: [./logo.png] also matches logo.png", () => {
@@ -77,20 +77,20 @@ describe("service ingredient emittedFile and bodyFile (spec 31)", () => {
       files: ["logo.png"],
       binary: ["./logo.png"],
     });
-    expect(bodyFile(s2, "logo.png", dir)).toBe(false);
+    expect(bodyFile(s2, "logo.png", dir, 1)).toBe(false);
   });
 
   it("bodyFile: other.md is not a body file (not emitted)", () => {
-    expect(bodyFile(service, "other.md", dir)).toBe(false);
+    expect(bodyFile(service, "other.md", dir, 1)).toBe(false);
   });
 
   it("bodyFile: with null dir, 'compose.yaml' is false (./compose.yaml declared, not string-equal)", () => {
     // service has compose: "./compose.yaml", asking for "compose.yaml" with null dir: not string-equal
-    expect(bodyFile(service, "compose.yaml", null)).toBe(false);
+    expect(bodyFile(service, "compose.yaml", null, 1)).toBe(false);
   });
 
   it("bodyFile: with null dir, './compose.yaml' is true (string-equal to declared)", () => {
     // service has compose: "./compose.yaml", asking for "./compose.yaml" with null dir: string-equal
-    expect(bodyFile(service, "./compose.yaml", null)).toBe(true);
+    expect(bodyFile(service, "./compose.yaml", null, 1)).toBe(true);
   });
 });

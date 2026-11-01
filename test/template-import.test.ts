@@ -89,7 +89,7 @@ describe("renderedFingerprint — identity with fingerprintDir (spec 10 AC 1, 2)
       for (const type of await fs.readdir(root)) {
         for (const name of await fs.readdir(path.join(root, type))) {
           const dir = path.join(root, type, name);
-          expect(renderedFingerprint(await readBase(dir, reader), {}, {}, 1), dir).toBe(await fingerprintDir(dir, forgeReader(fsRoot(dir))));
+          expect(renderedFingerprint(await readBase(dir, reader, undefined, undefined, 1), {}, {}, 1), dir).toBe(await fingerprintDir(dir, forgeReader(fsRoot(dir))));
         }
       }
     }
@@ -97,7 +97,7 @@ describe("renderedFingerprint — identity with fingerprintDir (spec 10 AC 1, 2)
 
   it("renders a declared default and cites its keys", async () => {
     const dir = path.join(GOLDEN, "forge-param-expected/ingredients/rules/deploy");
-    const base = await readBase(dir, reader);
+    const base = await readBase(dir, reader, undefined, undefined, 1);
     expect([...citedKeys(base.texts)].sort()).toEqual(["deploy.api", "deploy.web"]);
     const map = renderMap(base.meta, { "deploy.api": "acme-api" }, {}, false);
     expect(map["deploy.api"]).toBe("acme-api");
@@ -123,33 +123,33 @@ describe("the render with sections (spec 11 §6.7)", () => {
 
   it("expands before substituting: with no value the render is the body without its marker lines", async () => {
     const { root, dir } = await forgeWith({ "ingredients/rules/review/rule.md": BODY });
-    const base = await readBase(dir, reader, root);
+    const base = await readBase(dir, reader, root, undefined, 1);
     expect(base.parsed.get("rule.md")!.sections.map((s) => s.name)).toEqual(["flavors"]);
     expect(renderedFingerprint(base, { reviewer: "bob", target: "x" }, {}, 1)).toBe(fp("# Review\n\n| `acme-api` | bob |\n\nNever edit x.\n"));
   });
 
   it("renders a section value, which may cite a key the map sets", async () => {
     const { root, dir } = await forgeWith({ "ingredients/rules/review/rule.md": BODY });
-    const base = await readBase(dir, reader, root);
+    const base = await readBase(dir, reader, root, undefined, 1);
     expect(renderedFingerprint(base, { target: "x", owner: "ann" }, { flavors: "| `globex-api` | {{owner}} |" }, 1)).toBe(fp("# Review\n\n| `globex-api` | ann |\n\nNever edit x.\n"));
   });
 
   it("C(X) is read over the expanded text: a key cited only by a replaced default is not cited, one in the value is", async () => {
     const { root, dir } = await forgeWith({ "ingredients/rules/review/rule.md": BODY });
-    const base = await readBase(dir, reader, root);
+    const base = await readBase(dir, reader, root, undefined, 1);
     expect([...citedKeys(expandedTexts(base))].sort()).toEqual(["reviewer", "target"]);
     expect([...citedKeys(expandedTexts(base, { flavors: "{{owner}}\n" }))].sort()).toEqual(["owner", "target"]);
   });
 
   it("I12: a malformed marker, or a name declared twice across files, refuses naming the Forge-relative file and line", async () => {
     const bad = await forgeWith({ "ingredients/rules/review/rule.md": "a\n<!-- craftar:section flavors -->\nx\n" });
-    await expect(readBase(bad.dir, reader, bad.root)).rejects.toThrow("import: ingredients/rules/review/rule.md:2: section flavors is never closed — fix the Forge and re-run");
+    await expect(readBase(bad.dir, reader, bad.root, undefined, 1)).rejects.toThrow("import: ingredients/rules/review/rule.md:2: section flavors is never closed — fix the Forge and re-run");
     const twice = await forgeWith({
       "ingredients/rules/review/ingredient.yaml": "type: skill\nname: review\nlayout: dir\n",
       "ingredients/rules/review/SKILL.md": "<!-- craftar:section a -->\n<!-- /craftar:section -->\n",
       "ingredients/rules/review/reference.md": "<!-- craftar:section a -->\n<!-- /craftar:section -->\n",
     });
-    await expect(readBase(twice.dir, reader, twice.root)).rejects.toThrow("import: ingredients/rules/review/reference.md:1: section a is declared twice in skill/review (also ingredients/rules/review/SKILL.md:1)");
+    await expect(readBase(twice.dir, reader, twice.root, undefined, 1)).rejects.toThrow("import: ingredients/rules/review/reference.md:1: section a is declared twice in skill/review (also ingredients/rules/review/SKILL.md:1)");
   });
 });
 
