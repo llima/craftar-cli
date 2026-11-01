@@ -86,6 +86,7 @@ async function tree(dir: string, rel = ""): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   for (const e of (await fs.readdir(path.join(dir, rel), { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
     const r = rel ? `${rel}/${e.name}` : e.name;
+    if (r === "craftar.lock") continue; // pinned on its own, without generatedAt
     const abs = path.join(dir, r);
     const st = await fs.lstat(abs);
     if (st.isSymbolicLink()) out[r] = "<link>";
@@ -98,7 +99,6 @@ async function tree(dir: string, rel = ""): Promise<Record<string, string>> {
 const withoutGeneratedAt = (text: string) => {
   const lock = JSON.parse(text) as Record<string, unknown>;
   delete lock.generatedAt;
-  // forge.source is relative here, and forge.commit is null: this Forge is no repository.
   return lock;
 };
 
