@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
-import { findSecrets } from "./secrets.js";
+import { nameShaped } from "./integrations.js";
 import { detectEol, stripBom, toLf, withEol } from "./text.js";
 
 /**
@@ -23,10 +23,12 @@ const WIDTHS = [
   { flowCollectionPadding: false, doubleQuotedMinMultiLineLength: Number.MAX_SAFE_INTEGER },
 ] as const;
 
-const KEY_SHAPE = /^[A-Za-z0-9_./@-]{1,128}$/;
-/** A key of a document as a message may print it, or its position: a pasted token or sentence is not a key (spec 50 §6.2). */
+/**
+ * A key of a document as a message may print it, or its position: a pasted token or sentence is not a key (spec 50 §6.2).
+ * `nameShaped` per `/`-separated segment, since a section key is `<type>/<name>`.
+ */
 const shownKey = (key: unknown, position: number): string =>
-  typeof key === "string" && KEY_SHAPE.test(key) && findSecrets(key).length === 0 ? key : `#${position}`;
+  typeof key === "string" && key.split("/").every(nameShaped) ? key : `#${position}`;
 
 /** Where a text first differs from what the writer gives: the 1-based line, the keys above it, and whether it holds a double-quoted value. */
 function whereItDiffers(raw: string, text: string, doc: YAML.Document): { line: number; keys: string[]; quoted: boolean } {
@@ -79,7 +81,7 @@ function whereItDiffers(raw: string, text: string, doc: YAML.Document): { line: 
  */
 export function readBackDifference(after: unknown, expected: unknown): string | null {
   const walk = (a: unknown, b: unknown, at: string[]): string | null => {
-    const say = (where: string[], kind: string) => `${where.join(" › ")} reads back ${kind}`;
+    const say = (where: string[], kind: string) => `${where.length ? where.join(" › ") : "the document"} reads back ${kind}`;
     const seqs = Array.isArray(a) && Array.isArray(b);
     const maps = !seqs && a !== null && b !== null && typeof a === "object" && typeof b === "object" && !Array.isArray(a) && !Array.isArray(b);
     if (seqs || maps) {

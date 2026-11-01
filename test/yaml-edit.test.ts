@@ -123,8 +123,10 @@ describe("editYamlText's refusal names where (spec 50 §6.2)", () => {
     const m = err(() => editYamlText('name: "SECRETVALUE\n', opts, () => {}));
     expect(m).toBe(`${prefix}) — reformat it by hand, commit, and re-run`);
   });
-  it("two messages the callers relay keep their parenthesis whole", () => {
-    expect(`${prefix}: line 1, under name) — x`.replace(/^.*in place \((.*)\) — .*$/s, "$1")).toBe("it does not round-trip unchanged through the YAML writer: line 1, under name");
+  it("a key that is no name, an email-shaped one, is named by its position", () => {
+    const m = err(() => editYamlText('first: 1\nsomeone@example.com: "caf\\u00e9"\n', opts, () => {}));
+    expect(m).toContain(": line 2, under #2)");
+    expect(m).not.toContain("example.com");
   });
 });
 
@@ -136,6 +138,7 @@ describe("readBackDifference (spec 50 §6.2)", () => {
     expect(readBackDifference({ a: 1 }, {})).toBe("a reads back added");
     expect(readBackDifference({ l: [1] }, { l: [1, 2] })).toBe("l › #2 reads back missing");
     expect(readBackDifference({ a: 1, b: 2 }, { a: 1, b: 2 })).toBeNull();
+    expect(readBackDifference("SECRET", "OTHER")).toBe("the document reads back changed");
     expect(readBackDifference({ ["ghp_" + "x".repeat(36)]: 1 }, {})).toBe("#1 reads back added");
   });
 });
