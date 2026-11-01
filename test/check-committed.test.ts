@@ -326,6 +326,9 @@ describe("refusals", () => {
     expect(ok.code).toBe(0);
     expect(ok.stderr).toContain("is not a commit");
     expect(check(ws, "--committed=nope", "--unavailable-ok").code).toBe(1);
+    const spelled = check(ws, "--committed=HEAD:craftar.yaml", "--unavailable-ok");
+    expect(spelled.code).toBe(0);
+    expect(spelled.stderr).toContain("is not a commit");
     // rev-parse --verify answers for any full hash, whether or not the object exists.
     const unknown = "0123456789".repeat(4);
     const absent = check(ws, `--committed=${unknown}`, "--unavailable-ok");

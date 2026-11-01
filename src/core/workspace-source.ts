@@ -150,10 +150,12 @@ async function resolveCommit(base: string[], rev: string, endOfOptions: boolean)
       return null;
     }
   };
-  // `--verify` answers for any full hash, present or not; `^{object}` asks git for the object.
-  const exists = await verify(`${rev}^{object}`);
+  // `--verify` answers for any full hash, present or not, and a suffix on `HEAD:x` would be read as part of the path:
+  // so the spelling is resolved first, and the hash asked whether git holds the object and whether it peels to a commit.
+  const oid = await verify(rev);
+  const exists = oid === null ? null : await verify(`${oid}^{object}`);
   if (exists === null) throw new GitSourceRefusal(`unknown revision ${shown}`);
-  const commit = await verify(`${rev}^{commit}`);
+  const commit = await verify(`${oid}^{commit}`);
   if (commit === null) throw new NotACommitError(exists.slice(0, 8));
   return commit;
 }
