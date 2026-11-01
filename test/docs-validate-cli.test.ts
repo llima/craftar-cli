@@ -147,3 +147,15 @@ describe("writes nothing (§11 item 13)", () => {
     expect(await fs.readFile(reg, "utf8").catch(() => null)).toBe(before);
   });
 });
+
+describe("the README (spec 47 §10)", () => {
+  it("Phase 2's shipped list ends with docs validate, Later no longer lists it, the status line and the Commands row say it", async () => {
+    const readme = await fs.readFile(path.join(__dirname, "..", "README.md"), "utf8");
+    const lines = readme.split("\n");
+    expect(lines.find((l) => l.startsWith("Phase 2"))!).toMatch(/`craftar docs validate` \([^)]*\)\.$/);
+    expect(lines.find((l) => l.startsWith("Later:"))!).not.toContain("docs validate");
+    expect(lines.slice(0, 6).join("\n")).toContain("`craftar docs validate` checks a workspace's Markdown");
+    expect(lines.some((l) => l.startsWith("| `craftar docs validate [path] [--workspace <dir>] [--fetch] [--strict] [--json]` |"))).toBe(true);
+    expect(readme).toContain("### to 0.46.0");
+  });
+});
