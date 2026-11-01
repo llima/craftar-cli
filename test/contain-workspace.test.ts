@@ -595,3 +595,36 @@ describe("the other surfaces", () => {
     quiet(r);
   });
 });
+
+describe("init --clone", () => {
+  it("clones nothing when a path of the first sync leaves the workspace", async () => {
+    const { fakeGit } = await import("./helpers/fake-git.js");
+    const fg = await fakeGit();
+    cleanups.push(fg.cleanup);
+    const s = await scenario(
+      {
+        ingredients: [rule("r", "# R\n")],
+        recipes: [recipe("base", ["rule/r"])],
+        profiles: [profile("acme", ["base"], ["claude-code"], { repos: [{ name: "app", url: "https://example.invalid/acme/app.git" }] })],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const { dir } = await outside();
+    const ws = path.join(s.root, "fresh");
+    await fs.mkdir(path.join(ws, ".claude"), { recursive: true });
+    await fs.symlink(dir, path.join(ws, ".claude/rules"), "junction");
+    const r = runCli(["init", "--forge", s.forgeRoot, "--profile", "acme", "--workspace", ws, "--clone"], { env: fg.env() });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(LEAVES);
+    await expect(fs.lstat(path.join(ws, "app"))).rejects.toThrow();
+    await expect(fs.readFile(fg.log, "utf8")).rejects.toThrow();
+    // Under --no-sync the first sync is not run, and it is still the sync that would be refused.
+    const n = path.join(s.root, "fresh2");
+    await fs.mkdir(path.join(n, ".claude"), { recursive: true });
+    await fs.symlink(dir, path.join(n, ".claude/rules"), "junction");
+    const no = runCli(["init", "--forge", s.forgeRoot, "--profile", "acme", "--workspace", n, "--clone", "--no-sync"], { env: fg.env() });
+    expect(no.stdout).toContain("next sync: refused — ");
+    await expect(fs.lstat(path.join(n, "app"))).rejects.toThrow();
+  });
+});
