@@ -6,6 +6,7 @@ import { promises as fs, type Dirent } from "node:fs";
 import path from "node:path";
 import { DocsBlockSchema, type DocsBlock } from "../schema/index.js";
 import { TERMINAL_UNSAFE, gitIsRepo, ignoredPaths } from "./forge.js";
+import { parseFrontmatter } from "./frontmatter.js";
 import { profileRepos } from "./repos.js";
 import { classifyForge, type GitRunner } from "./remote.js";
 import { loadForgeFor, readLock, readWorkspaceConfig, type MergedConfig, type Workspace } from "./sync.js";
@@ -84,7 +85,6 @@ interface SrcLine {
 }
 
 const ASCII_PUNCT = /[!-/:-@[-`{-~]/;
-const FRONTMATTER = /^---\n([\s\S]*?)\n---(?:\n|$)/;
 const ATX = /^ {0,3}(#{1,6})(?:[ \t]+|$)(.*)$/;
 const SETEXT = /^ {0,3}(?:=+|-+)[ \t]*$/;
 const LIST_ITEM = /^ {0,3}(?:[-+*]|\d{1,9}[.)])(?:[ \t]+|$)/;
@@ -320,10 +320,11 @@ export function scanMarkdown(input: string): Scan {
   const slugger = new Slugger(scan.anchors);
   const all = text.split("\n");
   let first = 0;
-  const fm = FRONTMATTER.exec(text);
-  if (fm) {
-    scan.frontmatter = { raw: fm[1], firstLine: 2 };
-    first = fm[0].replace(/\n$/, "").split("\n").length;
+  // The block is parseFrontmatter's (§5.3), one fence for the emitters and this command; its lines are skipped whole.
+  const raw = parseFrontmatter(text, { loose: true }).raw;
+  if (raw !== null) {
+    scan.frontmatter = { raw, firstLine: 2 };
+    first = raw.split("\n").length + 2;
   }
 
   let paragraph: SrcLine[] = [];

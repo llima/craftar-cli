@@ -67,6 +67,11 @@ describe("§6.1 — blocks", () => {
     expect(at(text)).toEqual(["5:5 a.md"]);
     expect(scanMarkdown(text).frontmatter).toEqual({ raw: "title: [x](no.md)", firstLine: 2 });
   });
+  it("the frontmatter block is parseFrontmatter's: a closing fence of four dashes still closes it", () => {
+    const s = scanMarkdown("---\ntitle: x\n----\n[a](a.md)\n");
+    expect(s.frontmatter).toEqual({ raw: "title: x", firstLine: 2 });
+    expect(at("---\ntitle: x\n----\n[a](a.md)\n")).toEqual(["4:5 a.md"]);
+  });
   it("a fence in a block quote is a fence", () => {
     expect(dests("> ```\n> [a](a.md)\n> ```\n> [b](b.md)\n")).toEqual(["b.md"]);
   });
