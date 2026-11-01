@@ -76,7 +76,7 @@ export function resolvedBy(forge: Forge, profile: string): Set<string> {
  */
 async function cites(ing: LoadedIngredient, key: string, schema: ForgeManifest["schema"]): Promise<boolean> {
   for (const rel of await listFiles(ing.dir)) {
-    if (rel === "ingredient.yaml" || !bodyFile(ing.meta, rel, ing.dir)) continue;
+    if (rel === "ingredient.yaml" || !bodyFile(ing.meta, rel, ing.dir, schema)) continue;
     if (placeholders(await readIngredientText(ing, rel)).includes(key)) return true;
   }
   // MCP server citations (gated by schema)

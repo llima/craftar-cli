@@ -807,7 +807,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   let flattenedSections: string[] = [];
 
   const parseOpts = { targets: readsTargetSections(forge.manifest) };
-  const base = await readBase(X.dir, stage.reader(), forge.root, parseOpts);
+  const base = await readBase(X.dir, stage.reader(), forge.root, parseOpts, forge.manifest.schema);
   const ingKey = sectionKey(X.meta);
   const PSk = ctx.PS[ingKey] ?? {};
   const WSk = ctx.WS[ingKey] ?? {};
@@ -895,7 +895,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
   // D11: marker check (only for variant outcomes)
   if (outcome === "variant" || outcome === "variant-updated") {
-    const marker = markerIn(sourceMeta, emitted.files, normalized);
+    const marker = markerIn(sourceMeta, emitted.files, normalized, forge.manifest.schema);
     if (marker) throw new Error(D11(marker.where, marker.line));
   }
 

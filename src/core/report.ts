@@ -14,6 +14,7 @@ import { errorText } from "./schema-fault.js";
 import { loadForgeFor, unsetDeclared, unsetRefused, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
 import { readsProfileLocal } from "./profile-local.js";
+import { shellAtGate } from "./extract.js";
 
 /*
  * What the reading commands answer, as data (spec 35 §5.1): one builder per shape, called by the CLI, by
@@ -208,7 +209,8 @@ export function explainFile(ws: Workspace, p: Plan, file: string): ExplainedFile
     ingredient: f.ingredient,
     origin: ing?.meta.origin ? { workspace: ing.meta.origin.workspace, path: ing.meta.origin.path } : null,
     via: ing ? [...ing.via] : null,
-    sections: (p.sections.get(f.ingredient) ?? [])
+    // Spec 51 §4.6: a file Kiro copies as bytes renders no section there.
+    sections: (f.target === "kiro" && ing && shellAtGate(ing.meta, f.path, ws.forge.manifest.schema) ? [] : (p.sections.get(f.ingredient) ?? []))
       .filter((x) => !x.targets || (x.targets as readonly string[]).includes(f.target))
       .map((x) => ({ name: x.name, layer: x.layer })),
     params: (p.params.get(f.ingredient) ?? []).map((x) => ({ key: x.key, layer: x.layer })),

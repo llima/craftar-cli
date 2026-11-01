@@ -2528,6 +2528,7 @@ forge
     }
     // Spec 25 §4.2: push warnings from forgeWorkspaces (credential lines)
     warnings.push(...impactWarnings);
+    warnings.push(...result.notes);
     // Spec 33 §4.4: push warnings from pruneCandidates (malformed blocks)
     warnings.push(...pruneWarnings);
 

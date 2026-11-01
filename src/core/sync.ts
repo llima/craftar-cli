@@ -12,7 +12,7 @@ import { diskSource, type WorkspaceSource } from "./workspace-source.js";
 import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, projectSections, readsTargetSections, type ParsedSections } from "./sections.js";
-import { placeholders, bodyFile, emittedFile } from "./extract.js";
+import { placeholders, bodyFile, emittedFile, shellAtGate } from "./extract.js";
 import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockV2, type LockV3, type Owner, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
@@ -495,7 +495,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
     for (const rel of await listFiles(ing.dir)) {
       if (rel === "ingredient.yaml") continue;
       const abs = path.join(ing.dir, rel);
-      if (bodyFile(ing.meta, rel, ing.dir)) {
+      if (bodyFile(ing.meta, rel, ing.dir, forge.manifest.schema)) {
         const p = parseSections(await readForgeText(ing.forgeRoot, abs), forgeRel(forge, abs), ing.ref, parseOpts);
         parsed.set(abs, p);
         files.push({ rel, p });
@@ -510,6 +510,12 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
         }
         // Edge case 14: warn if a targeted section reaches no target that writes the ingredient
         const effTargets = effectiveTargets(ing.meta, resolution);
+        // Spec 51 §4.6: Kiro copies a skill's shell file as bytes, so what claude-code renders there reaches Kiro raw.
+        if (shellAtGate(ing.meta, rel, forge.manifest.schema) && appliesTo(effTargets, "kiro") && CAPABILITIES.kiro[ing.meta.type].state !== "unsupported") {
+          const keys = new Set([...Object.keys(ing.meta.params ?? {}), ...Object.keys(resolution.params)]);
+          const text = await readForgeText(ing.forgeRoot, abs);
+          if (p.sections.length || placeholders(text).some((k) => keys.has(k))) warnings.push(`${ing.ref} ${rel}: kiro copies ${rel} as bytes: its sections and params are not rendered`);
+        }
         for (const s of p.sections) {
           if (s.targets) {
             const reaches = s.targets.some((t) =>
@@ -643,7 +649,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
       const missing = new Set<string>();
       const params = paramsFor(ing, resolution);
       // Sections first, then params (spec 11 §6.4), in body files only (§6.5, 0.8.2).
-      const parsed = bodyFile(ing.meta, file, ing.dir) ? sections.parsed.get(abs) : null;
+      const parsed = bodyFile(ing.meta, file, ing.dir, ws.forge.manifest.schema) ? sections.parsed.get(abs) : null;
       // Every body file of a resolved ingredient was parsed and gated in the section pass; a miss here means the file is
       // outside the ingredient directory, behind a symlinked directory that listFiles did not descend into, or spelled
       // with different letter case on a case-insensitive file system.

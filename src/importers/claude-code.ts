@@ -745,10 +745,10 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // I3: a created or variant ingredient is the workspace text itself; a key the profile now sets would change it at sync.
   // I11 first (spec 11 §6.9): a column-0 marker in that text would be read as structure, so sync could not reproduce it.
   for (const l of literal) {
-    const marker = markerIn(l.meta, l.files, l.source, l.lineOffset);
+    const marker = markerIn(l.meta, l.files, l.source, ctx.forge?.manifest.schema ?? 1, l.lineOffset);
     if (marker) throw new Error(`import: ${marker.where} holds a section marker on line ${marker.line} — sync would not reproduce it; indent it or remove it, and re-run`);
     const map = renderMap(l.meta, ctx.P, ctx.W, readsRulesIndex(loaded?.manifest ?? { schema: 1 }));
-    const key = [...sourceKeys(l.meta, l.files)].find((k) => Object.hasOwn(map, k));
+    const key = [...sourceKeys(l.meta, l.files, ctx.forge?.manifest.schema ?? 1)].find((k) => Object.hasOwn(map, k));
     if (key) {
       // Spec 33 §5.3: say "integrations set" when the key is one the block gives (not overridden by params).
       const who = existing.blockKeys.includes(key) ? `profile ${opts.profileName}'s integrations set` : `profile ${opts.profileName} sets`;
@@ -1467,7 +1467,7 @@ async function writeIngredient(
     // Warn about sections this variant leaves out or holds as plain text (spec 41 Part B §5.2).
     if (run?.ctx) {
       const parseOpts = { targets: readsTargetSections(run.ctx.forge?.manifest ?? { schema: 1 }) };
-      const base = await readBase(dir, stage.reader(), forge, parseOpts);
+      const base = await readBase(dir, stage.reader(), forge, parseOpts, run.ctx.forge?.manifest.schema ?? 1);
       const owner = run.ctx.sourceTarget;
       // The targets this workspace writes that the variant applies to and supports.
       const writes = run.ctx.writtenTargets.filter(
@@ -1497,7 +1497,7 @@ async function writeIngredient(
     const variantDir = path.join(forge, "ingredients", folder, name);
     const indexTarget = meta.type === "rule" ? "claude-code" : meta.type === "steering" ? "kiro" : undefined;
     if (run?.ctx.forge && readsRulesIndex(run.ctx.forge.manifest) && run.indexExpand && indexTarget && (await stage.exists(path.join(variantDir, "ingredient.yaml")))) {
-      const v = await readBase(variantDir, stage.reader(), forge, { targets: readsTargetSections(run.ctx.forge.manifest) });
+      const v = await readBase(variantDir, stage.reader(), forge, { targets: readsTargetSections(run.ctx.forge.manifest) }, run.ctx.forge.manifest.schema);
       if ([...v.texts.values()].some((t) => RULES_INDEX_LINE.test(t))) {
         const key = sectionKey(v.meta);
         const S: Record<string, string> = { ...valuesAt(run.ctx.PS, key), ...valuesAt(run.ctx.WS, key) };
@@ -1535,7 +1535,7 @@ async function writeIngredient(
       const parseOpts = { targets: readsTargetSections(run.ctx.forge.manifest) };
       const baseDir = path.join(forge, "ingredients", folder, as);
       if (await stage.exists(path.join(baseDir, "ingredient.yaml"))) {
-        const baseForPlaceholder = await readBase(baseDir, stage.reader(), forge, parseOpts);
+        const baseForPlaceholder = await readBase(baseDir, stage.reader(), forge, parseOpts, run.ctx.forge.manifest.schema);
         for (const [, text] of baseForPlaceholder.texts) {
           if (RULES_INDEX_LINE.test(text)) {
             report.warnings.push(
@@ -1632,7 +1632,7 @@ async function writeIngredient(
     report.created.push(`${meta.type}/${name}`);
   }
   if (run) {
-    pin(run.ctx, sourceKeys(sourceMeta, files), renderMap(sourceMeta, run.ctx.P, run.ctx.W, readsRulesIndex(run.ctx.forge?.manifest ?? { schema: 1 })));
+    pin(run.ctx, sourceKeys(sourceMeta, files, run.ctx.forge?.manifest.schema ?? 1), renderMap(sourceMeta, run.ctx.P, run.ctx.W, readsRulesIndex(run.ctx.forge?.manifest ?? { schema: 1 })));
     run.literal.push({ ref: `${meta.type}/${name}`, source, meta: sourceMeta, files, lineOffset: run.lineOffset });
   }
 
@@ -2022,12 +2022,12 @@ async function existingProfile(
  * created or variant source, which sync would read as structure. The line counts from the top of
  * the workspace file, as the secret scan's does: an agent or command body starts after its frontmatter.
  */
-export function markerIn(meta: Ingredient, files: Record<string, string | Buffer>, source: string, lineOffset = 0): { where: string; line: number } | null {
+export function markerIn(meta: Ingredient, files: Record<string, string | Buffer>, source: string, schema: number, lineOffset = 0): { where: string; line: number } | null {
   const raw = "frontmatterRaw" in meta ? meta.frontmatterRaw : undefined;
   const offset = raw && !bodyFromSteering(meta) ? raw.split("\n").length + 2 : lineOffset;
   for (const [rel, content] of Object.entries(files)) {
     // the importer builds meta and file keys itself, with canonical names
-    if (!bodyFile(meta, rel, null)) continue;
+    if (!bodyFile(meta, rel, null, schema)) continue;
     const line = firstMarkerLine(toLf(stripBom(typeof content === "string" ? content : content.toString("utf8"))));
     if (line !== null) {
       return { where: fileWhere(meta, source, rel), line: line + offset };

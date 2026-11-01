@@ -83,10 +83,10 @@ const textOf = (c: string | Buffer) => norm(typeof c === "string" ? c : c.toStri
 const valueOf = (m: Record<string, unknown>, k: string) => (Object.hasOwn(m, k) ? String(m[k]) : undefined);
 
 /** The keys a source's body files cite literally. */
-export function sourceKeys(meta: Ingredient, files: Record<string, string | Buffer>): Set<string> {
+export function sourceKeys(meta: Ingredient, files: Record<string, string | Buffer>, schema: number): Set<string> {
   const out = new Set<string>();
   // the importer builds meta and file keys itself, with canonical names
-  for (const [rel, c] of Object.entries(files)) if (bodyFile(meta, rel, null)) for (const k of placeholders(textOf(c))) out.add(k);
+  for (const [rel, c] of Object.entries(files)) if (bodyFile(meta, rel, null, schema)) for (const k of placeholders(textOf(c))) out.add(k);
   return out;
 }
 
@@ -144,7 +144,7 @@ export async function decide(
   const schema = ctx.forge?.manifest.schema ?? 1;
   const parseOpts = { targets: readsTargetSections({ schema }) };
   const owner = ctx.sourceTarget;
-  const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."), parseOpts);
+  const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."), parseOpts, schema);
   // The base's authEnv, to carry into the variant answer (spec 27 §5.3).
   const baseAuthEnv = base.meta.type === "mcp" ? base.meta.authEnv : undefined;
   // The base's registration and cited params, to carry into the variant answer (spec 43 §7.2 row 10).
@@ -304,7 +304,7 @@ async function inferParams(
           return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
         }
         if (ing.ref === ref || runBases.has(ing.ref)) continue;
-        for (const rel of await listAdmitted(ing)) {
+        for (const rel of await listAdmitted(ing, schema)) {
           if (placeholders(norm(await readIngredientText(ing, rel))).includes(key)) return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
         }
         for (const v of Object.values(valuesAt(values, sectionKey(ing.meta)))) {
@@ -318,7 +318,7 @@ async function inferParams(
       }
     }
     for (const o of others) {
-      if (sourceKeys(o.meta, o.files).has(key)) return { kind: "variant", why: `setting ${key} would change ${o.ref}` };
+      if (sourceKeys(o.meta, o.files, schema).has(key)) return { kind: "variant", why: `setting ${key} would change ${o.ref}` };
     }
   }
 
@@ -379,8 +379,8 @@ function inferSectionValues(
   return { kind: "reuse", sectioned: assigned, sectionDelta };
 }
 
-async function listAdmitted(ing: { dir: string; meta: Ingredient }): Promise<string[]> {
-  return (await listFiles(ing.dir)).filter((rel) => rel !== "ingredient.yaml" && bodyFile(ing.meta, rel, ing.dir));
+async function listAdmitted(ing: { dir: string; meta: Ingredient }, schema: number): Promise<string[]> {
+  return (await listFiles(ing.dir)).filter((rel) => rel !== "ingredient.yaml" && bodyFile(ing.meta, rel, ing.dir, schema));
 }
 
 /** `W`: overrides.params of craftar.yaml and craftar.local.yaml, merged as loadWorkspace merges them (I6). */
