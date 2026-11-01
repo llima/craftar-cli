@@ -1,0 +1,106 @@
+parameters:
+  - { name: version, type: string }
+  - { name: workspace, type: string, default: "." }
+  - { name: forgeOrigin, type: string, default: "" }
+  - { name: forgeToken, type: string, default: "" }
+  - { name: forgeTokenUser, type: string, default: "" }
+  - { name: nodeVersion, type: string, default: "22.x" }
+  - { name: stepName, type: string, default: craftarCheck } # unique per use in a job
+steps:
+  - task: UseNode@1
+    inputs: { version: "${{ parameters.nodeVersion }}" }
+  - bash: |
+      [[ "$CRAFTAR_CI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "##""vso[task.logissue type=error]craftar: version must be exact, x.y.z"; exit 1; }
+      mkdir -p "$AGENT_TEMPDIRECTORY/craftar-cli" && cd "$AGENT_TEMPDIRECTORY/craftar-cli"
+      [ -f package.json ] || printf '{}\n' > package.json
+      npm install --ignore-scripts --no-audit --no-fund "craftar@$CRAFTAR_CI_VERSION"
+    displayName: Install craftar
+    env: { CRAFTAR_CI_VERSION: "${{ parameters.version }}" }
+  - bash: |
+      node --input-type=module - <<'CRAFTAR_CI'
+      import { spawnSync } from "node:child_process";
+      import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+      import { join, relative, resolve } from "node:path";
+      const env = process.env;
+      const azure = Boolean(env.TF_BUILD);
+      const VSO = "##" + "vso["; // never literal: an agent may print this source and read it as a command
+      const temp = azure ? env.AGENT_TEMPDIRECTORY : env.RUNNER_TEMP;
+      const bin = join(temp, "craftar-cli", "node_modules", "craftar", "bin", "craftar.js");
+      const ws = env.CRAFTAR_CI_WORKSPACE || ".";
+      const root = resolve(ws);
+      const childEnv = { ...env, NO_COLOR: "1", CRAFTAR_HOME: join(temp, "craftar-home") };
+      delete childEnv.CRAFTAR_CI_TOKEN;
+      const finish = (result, md) => {
+        if (azure) console.log(`${VSO}task.setvariable variable=result;isOutput=true]${result}`);
+        else if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `result=${result}\n`);
+        try { // a report that cannot be written never changes the verdict
+          if (azure) {
+            const f = join(temp, `craftar-summary-${process.pid}.md`);
+            writeFileSync(f, md);
+            console.log(`${VSO}task.uploadsummary]${f}`);
+          } else if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, md);
+        } catch { console.log("craftar: the summary could not be written"); }
+      };
+      class Stop extends Error {}
+      const stop = (m) => { throw new Stop(m); };
+      const main = () => {
+      const origin = env.CRAFTAR_CI_ORIGIN || "";
+      const token = env.CRAFTAR_CI_TOKEN || "";
+      const [ORIGIN, TOKEN] = azure ? ["forgeOrigin", "forgeToken"] : ["forge-origin", "forge-token"];
+      const noSecret = `${ORIGIN} was given with no ${TOKEN} (a fork's pull request receives no secrets)`;
+      if (origin && !/^https:\/\/[a-z0-9.-]+(:[0-9]+)?$/.test(origin)) stop(`${ORIGIN} must be https://<host>[:port], lowercase, with no path and no credentials`);
+      if (origin && !token) stop(noSecret);
+      if (azure && origin && /^\$\([^)]*\)$/.test(token)) stop(noSecret); // an undefined macro arrives as its own text
+      if (token && !origin) stop(`${TOKEN} needs ${ORIGIN}`);
+      if (existsSync(join(root, "craftar.local.yaml"))) stop("craftar.local.yaml is in the checkout: it is per developer, and it would change what this check reads");
+      const checkEnv = { ...childEnv };
+      if (token) {
+        const basic = Buffer.from(`${env.CRAFTAR_CI_TOKEN_USER ?? (azure ? "" : "x-access-token")}:${token}`).toString("base64");
+        console.log(azure ? `${VSO}task.setsecret]${basic}` : `::add-mask::${basic}`);
+        const n = Number(env.GIT_CONFIG_COUNT || 0);
+        Object.assign(checkEnv, {
+          GIT_CONFIG_COUNT: String(n + 2),
+          [`GIT_CONFIG_KEY_${n}`]: `http.${origin}/.extraheader`, [`GIT_CONFIG_VALUE_${n}`]: `Authorization: Basic ${basic}`,
+          [`GIT_CONFIG_KEY_${n + 1}`]: "http.followRedirects", [`GIT_CONFIG_VALUE_${n + 1}`]: "false",
+        });
+      }
+      const neuter = (t) => t.replace(/##(vso)?\[/gi, (m) => m.slice(0, -1) + " [").replace(/^(\s*)::/gm, "$1: :");
+      // cwd outside the checkout: git must not read the checkout's .git/config, which may persist a credential
+      const craftar = (args, e) => spawnSync(process.execPath, [bin, ...args, "--workspace", root], { cwd: temp, env: e, encoding: "utf8", maxBuffer: 1 << 26 });
+      const check = craftar(["sync", "--check"], checkEnv);
+      if (check.status === null) stop(neuter(`could not run craftar: ${check.error?.message ?? "killed"}`));
+      const out = neuter(`${check.stdout}${check.stderr}`);
+      process.stdout.write(out.endsWith("\n") || out === "" ? out : `${out}\n`);
+      let result = check.status === 0 ? "in-sync" : "error";
+      let rows = [];
+      if (check.status !== 0) {
+        const st = craftar(["status", "--json", "--offline"], childEnv);
+        try {
+          const j = JSON.parse(st.stdout);
+          rows = j.statuses.filter((s) => s.state !== "unchanged" && s.state !== "adopt");
+          if (rows.length || (j.unsetParams ?? []).length) result = "out-of-sync";
+        } catch { /* the check's own lines above say why */ }
+      }
+      const esc = (s) => s.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+      const prop = (s) => azure ? esc(s).replace(/;/g, "%3B").replace(/\]/g, "%5D") : esc(s).replace(/:/g, "%3A").replace(/,/g, "%2C");
+      const at = (p) => prop(relative(process.cwd(), join(root, p)).replace(/\\/g, "/"));
+      for (const r of rows.slice(0, 10)) console.log(azure ? `${VSO}task.logissue type=error;sourcepath=${at(r.path)}]craftar: ${r.state}` : `::error file=${at(r.path)}::craftar: ${r.state}`);
+      const cell = (s) => s.replace(/[`|\r\n]/g, "?");
+      finish(result, [`### craftar sync --check: ${result}`, "", ...(rows.length ? ["| File | State |", "|---|---|", ...rows.map((r) => `| \`${cell(r.path)}\` | ${r.state} |`)] : [])].join("\n") + "\n");
+      return check.status === 0 ? 0 : 1;
+      };
+      // exitCode, never exit(): a pipe's writes are asynchronous on Windows, and exit() would cut them
+      try { process.exitCode = main(); } catch (e) {
+        if (!(e instanceof Stop)) throw e;
+        console.log(azure ? `${VSO}task.logissue type=error]craftar: ${e.message}` : `::error::craftar: ${e.message}`);
+        finish("error", `### craftar sync --check: error\n\n${e.message}\n`);
+        process.exitCode = 1;
+      }
+      CRAFTAR_CI
+    name: ${{ parameters.stepName }}
+    displayName: craftar sync --check
+    env:
+      CRAFTAR_CI_WORKSPACE: "${{ parameters.workspace }}"
+      CRAFTAR_CI_ORIGIN: "${{ parameters.forgeOrigin }}"
+      CRAFTAR_CI_TOKEN: "${{ parameters.forgeToken }}"
+      CRAFTAR_CI_TOKEN_USER: "${{ parameters.forgeTokenUser }}"

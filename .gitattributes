@@ -5,3 +5,5 @@ test/pins/** -text
 # The plugin is published as committed: LF on every checkout.
 plugins/** eol=lf
 .claude-plugin/** eol=lf
+# The wrappers hold one program byte for byte (test/ci-wrappers.test.ts).
+ci/** -text
