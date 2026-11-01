@@ -173,8 +173,7 @@ describe("§4.3 leaked-tags, encoding, scope", () => {
     expect(findings(await run(s.wsRoot))).toEqual([]);
   });
 
-  it("a file name with a space and a newline goes through -z to git", async () => {
-    if (process.platform === "win32") return; // no newline in a Windows file name
+  it.skipIf(process.platform === "win32")("a file name with a space and a newline goes through -z to git", async () => {
     const s = await ws({ "docs/a b.md": "[x](nope.md)\n", "docs/c\nd.md": "[x](nope.md)\n", ".gitignore": "docs/a b.md\ndocs/c?d.md\n" });
     const r = await run(s.wsRoot);
     expect(findings(r)).toEqual([]);
@@ -200,15 +199,13 @@ describe("§7 — what a finding prints", () => {
     }
   });
 
-  it("a file name with a control character, ##vso[ (any case), ##[ or :: is replaced whole by its numbered label", async () => {
-    if (process.platform === "win32") return; // these names are not valid on Windows
+  it.skipIf(process.platform === "win32")("a file name with a control character, ##vso[ (any case), ##[ or :: is replaced whole by its numbered label", async () => {
     const s = await ws({ "docs/a\u001b[31m.md": "[x](nope.md)\n", "docs/##VSO[task].md": "[x](nope.md)\n", "docs/b.md": "[x](nope.md)\n", "docs/z::y.md": "[x](nope.md)\n" });
     const r = await run(s.wsRoot);
     expect(findings(r).map((c) => c.path)).toEqual(["(a file name — not shown) #1", "(a file name — not shown) #2", "docs/b.md", "(a file name — not shown) #4"]);
   });
 
-  it("hidden names are numbered by one sorted walk: two links not followed never share a label", async () => {
-    if (process.platform === "win32") return; // these names are not valid on Windows
+  it.skipIf(process.platform === "win32")("hidden names are numbered by one sorted walk: two links not followed never share a label", async () => {
     const s = await ws({ "docs/b.md": "x\n", "real/t.md": "x\n" });
     await fs.symlink(path.join(s.wsRoot, "real", "t.md"), path.join(s.wsRoot, "docs", "a::1.md"));
     await fs.symlink(path.join(s.wsRoot, "real", "t.md"), path.join(s.wsRoot, "docs", "a::2.md"));

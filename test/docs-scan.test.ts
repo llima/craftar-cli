@@ -117,6 +117,12 @@ describe("review round 2 — a fence inside a list item", () => {
   });
 });
 
+describe("review round 2 — scanner nits", () => {
+  it("a one-line <pre> element inside a paragraph is blanked, as <code> is", () => {
+    expect(dests("see <pre>[x](x.md)</pre> and [y](y.md)\n")).toEqual(["y.md"]);
+  });
+});
+
 describe("§6.2 — anchors", () => {
   it("GitHub slugs, with -1 for a repeat, and <a id> / <a name>", () => {
     const s = scanMarkdown("# Hello World!\n\n## Hello World\n\nSetext Title\n---\n\n## `code` and [link](x.md)\n\n<a id=\"custom\"></a> <a name='other'>\n");

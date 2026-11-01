@@ -189,16 +189,18 @@ export function blankCode(s: string): string {
   for (const [open, close] of [
     ["<!--", "-->"],
     ["<code", "</code>"],
+    ["<pre", "</pre>"],
   ] as const) {
     const pieces: string[] = [];
     let from = 0;
-    const lower = open === "<code" ? out.toLowerCase() : out;
+    const element = open !== "<!--";
+    const lower = element ? out.toLowerCase() : out;
     let search = 0;
     for (;;) {
       const a = lower.indexOf(open, search);
       if (a === -1) break;
-      // `<code` names the element only when a space, `>` or the end follows (`<codex>` is another element).
-      if (open === "<code" && a + open.length < out.length && !/[\s>]/.test(out[a + open.length])) {
+      // `<code` / `<pre` names the element only when a space, `>` or the end follows (`<codex>` is another element).
+      if (element && a + open.length < out.length && !/[\s>]/.test(out[a + open.length])) {
         search = a + 1;
         continue;
       }
@@ -640,6 +642,13 @@ type Resolved =
  */
 class Resolver {
   private listings = new Map<string, Promise<Map<string, Dirent> | null>>();
+  private folded = new Map<Map<string, Dirent>, Set<string>>();
+  /** The listing's names in lower case, built once per listing, for the case finding. */
+  private lower(list: Map<string, Dirent>): Set<string> {
+    let set = this.folded.get(list);
+    if (!set) this.folded.set(list, (set = new Set([...list.keys()].map((k) => k.toLowerCase()))));
+    return set;
+  }
   constructor(private root: string) {}
   private listing(rel: string): Promise<Map<string, Dirent> | null> {
     let p = this.listings.get(rel);
@@ -664,7 +673,7 @@ class Resolver {
       const entry = list.get(segments[i]);
       if (!entry) {
         const lower = segments[i].toLowerCase();
-        return [...list.keys()].some((k) => k.toLowerCase() === lower) ? { kind: "case" } : { kind: "missing" };
+        return this.lower(list).has(lower) ? { kind: "case" } : { kind: "missing" };
       }
       if (entry.isSymbolicLink()) return { kind: "link" };
       at = at ? `${at}/${segments[i]}` : segments[i];
@@ -837,6 +846,8 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
     let bytes: Buffer;
     try {
       const st = await fs.lstat(path.join(root, rel));
+      // A file swapped for a link (or anything else) since the walk is not read: the link would be followed.
+      if (!st.isFile()) throw new Error("not a regular file");
       if (st.size > MAX_FILE_BYTES) {
         add({ id: "encoding", level: "warn", path: rel, message: "over 8 MiB: not scanned", fix: "split the file" });
         continue;
