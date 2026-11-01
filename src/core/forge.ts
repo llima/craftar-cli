@@ -16,11 +16,14 @@ import { SchemaError, schemaIssues } from "./schema-fault.js";
 import { execProgram, streamProgram } from "./proc.js";
 import { findSecrets } from "./secrets.js";
 import { climbsOut } from "./text.js";
+import { containRoot, readForgeText, type ContainRoot } from "./contain.js";
 
 export interface LoadedIngredient {
   ref: IngredientRef;
   dir: string;
   meta: Ingredient;
+  /** The Forge it was loaded from: every read of its files is measured against this root (spec 48). */
+  forgeRoot: ContainRoot;
 }
 
 export interface Forge {
@@ -56,15 +59,19 @@ export function parseYaml<T>(file: string, text: string, schema: { parse: (v: un
   }
 }
 
-async function readYaml<T>(file: string, schema: { parse: (v: unknown) => T }): Promise<T> {
-  return parseYaml(file, await fs.readFile(file, "utf8"), schema);
+async function readYaml<T>(root: ContainRoot, file: string, schema: { parse: (v: unknown) => T }): Promise<T> {
+  return parseYaml(file, await readForgeText(root, file), schema);
 }
+
+/** Anything at the path, a dangling link included: `exists` would read that as absent and skip the file (spec 48 §15 item 27). */
+const present = (p: string) => fs.lstat(p).then(() => true, () => false);
 
 export async function loadForge(root: string): Promise<Forge> {
   root = path.resolve(root);
   const manifestPath = path.join(root, FORGE_MANIFEST);
   if (!(await exists(manifestPath))) throw new Error(`not a Forge: ${manifestPath} not found`);
-  const manifest = await readYaml(manifestPath, ForgeManifestSchema);
+  const contain = await containRoot(root);
+  const manifest = await readYaml(contain, manifestPath, ForgeManifestSchema);
 
   const ingredients = new Map<IngredientRef, LoadedIngredient>();
   const ingRoot = path.join(root, "ingredients");
@@ -76,11 +83,11 @@ export async function loadForge(root: string): Promise<Forge> {
         if (!ingDir.isDirectory()) continue;
         const dir = path.join(ingRoot, typeName, ingDir.name);
         const metaFile = path.join(dir, "ingredient.yaml");
-        if (!(await exists(metaFile))) continue;
-        const meta = await readYaml(metaFile, IngredientSchema);
+        if (!(await present(metaFile))) continue;
+        const meta = await readYaml(contain, metaFile, IngredientSchema);
         const ref = `${meta.type}/${meta.name}` as IngredientRef;
         if (ingredients.has(ref)) throw new Error(`duplicate ingredient ${ref} (${dir})`);
-        ingredients.set(ref, { ref, dir, meta });
+        ingredients.set(ref, { ref, dir, meta, forgeRoot: contain });
       }
     }
   }
@@ -90,7 +97,7 @@ export async function loadForge(root: string): Promise<Forge> {
   if (await exists(recRoot)) {
     for (const f of await fs.readdir(recRoot)) {
       if (!/\.ya?ml$/.test(f)) continue;
-      const r = await readYaml(path.join(recRoot, f), RecipeSchema);
+      const r = await readYaml(contain, path.join(recRoot, f), RecipeSchema);
       recipes.set(r.name, r);
     }
   }
@@ -101,8 +108,8 @@ export async function loadForge(root: string): Promise<Forge> {
     for (const d of await fs.readdir(profRoot, { withFileTypes: true })) {
       if (!d.isDirectory()) continue;
       const f = path.join(profRoot, d.name, "profile.yaml");
-      if (!(await exists(f))) continue;
-      const p = await readYaml(f, ProfileSchema);
+      if (!(await present(f))) continue;
+      const p = await readYaml(contain, f, ProfileSchema);
       profiles.set(p.name, p);
     }
   }
@@ -322,7 +329,7 @@ export function typeFolder(type: Ingredient["type"]): string {
 }
 
 export async function readIngredientText(ing: LoadedIngredient, file: string): Promise<string> {
-  return fs.readFile(path.join(ing.dir, file), "utf8");
+  return readForgeText(ing.forgeRoot, path.join(ing.dir, file));
 }
 
 /** Recursively list files under a directory, relative to it, sorted. */

@@ -1,4 +1,6 @@
 import { promises as fs } from "node:fs";
+import { forgeReader } from "../src/core/contain.js";
+import { fsRoot } from "./helpers/forge.js";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -113,19 +115,19 @@ describe("fingerprintDir — validated metadata (spec 07)", () => {
 
   it("hashes the metadata with its schema defaults applied, as the other side of every comparison is", async () => {
     const dir = await ingredientDir("type: rule\nname: x\n");
-    expect(await fingerprintDir(dir)).toBe(fingerprintOf(IngredientSchema.parse({ type: "rule", name: "x" }), { "rule.md": "body\n" }));
+    expect(await fingerprintDir(dir, forgeReader(fsRoot(dir)))).toBe(fingerprintOf(IngredientSchema.parse({ type: "rule", name: "x" }), { "rule.md": "body\n" }));
   });
 
   it("refuses an unknown key, naming the file and the key", async () => {
     const dir = await ingredientDir("type: rule\nname: x\nfoo: 1\n");
-    const err = await fingerprintDir(dir).then(() => null, (e: Error) => e);
+    const err = await fingerprintDir(dir, forgeReader(fsRoot(dir))).then(() => null, (e: Error) => e);
     expect(err?.message).toContain("ingredient.yaml");
     expect(err?.message).toContain("foo");
   });
 
   it("names the file on a YAML syntax error", async () => {
     const dir = await ingredientDir("type: rule\nname: [x\n");
-    const err = await fingerprintDir(dir).then(() => null, (e: Error) => e);
+    const err = await fingerprintDir(dir, forgeReader(fsRoot(dir))).then(() => null, (e: Error) => e);
     expect(err?.message).toContain("ingredient.yaml");
   });
 
@@ -134,7 +136,7 @@ describe("fingerprintDir — validated metadata (spec 07)", () => {
     const b = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-fp-"));
     await fs.writeFile(path.join(a, "ingredient.yaml"), "type: mcp\nname: p\nserver:\n  command: npx\n  type: stdio\n  env: { A: '1', B: '2' }\n");
     await fs.writeFile(path.join(b, "ingredient.yaml"), "type: mcp\nname: p\nserver:\n  type: stdio\n  env: { B: '2', A: '1' }\n  command: npx\n");
-    expect(await fingerprintDir(b)).toBe(await fingerprintDir(a));
+    expect(await fingerprintDir(b, forgeReader(fsRoot(b)))).toBe(await fingerprintDir(a, forgeReader(fsRoot(a))));
   });
 });
 

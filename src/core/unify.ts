@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { forgeReader, readForgeFile, readForgeText } from "./contain.js";
 import YAML from "yaml";
 import { fingerprintDir } from "./fingerprint.js";
 import { exists, listFiles, loadForge, readIngredientText, type Forge, type LoadedIngredient } from "./forge.js";
@@ -37,7 +38,7 @@ async function rawFilesOf(ing: LoadedIngredient): Promise<Map<string, Buffer>> {
   const out = new Map<string, Buffer>();
   for (const rel of await listFiles(ing.dir)) {
     if (rel === "ingredient.yaml") continue;
-    out.set(rel, await fs.readFile(path.join(ing.dir, rel)));
+    out.set(rel, await readForgeFile(ing.forgeRoot, path.join(ing.dir, rel)));
   }
   return out;
 }
@@ -137,8 +138,8 @@ export async function planFrom(
     base: base.ref,
     profile,
     variant: variant.ref,
-    baseFingerprint: await fingerprintDir(base.dir),
-    variantFingerprint: await fingerprintDir(variant.dir),
+    baseFingerprint: await fingerprintDir(base.dir, forgeReader(base.forgeRoot)),
+    variantFingerprint: await fingerprintDir(variant.dir, forgeReader(variant.forgeRoot)),
     files,
   };
 }
@@ -652,7 +653,7 @@ export async function applyPlan(
       // included, so it is carried as text; anything else stays a Buffer, which a UTF-8
       // decode/encode would corrupt.
       if (take === "variant") {
-        const bytes = await fs.readFile(path.join(variant.dir, pf.file));
+        const bytes = await readForgeFile(variant.forgeRoot, path.join(variant.dir, pf.file));
         write[pf.file] = isUtf8(bytes) ? bytes.toString("utf8") : bytes;
       }
     }
@@ -743,7 +744,7 @@ async function checkMarkers(
   const touched = [...Object.keys(write), ...remove].filter((rel) => bodyFile(base.meta, rel, base.dir)).sort();
   for (const rel of touched) {
     const abs = path.join(base.dir, rel);
-    const before = (await exists(abs)) ? markerStructure(await fs.readFile(abs, "utf8"), label(rel), opts) : { names: [] };
+    const before = (await exists(abs)) ? markerStructure(await readForgeText(base.forgeRoot, abs), label(rel), opts) : { names: [] };
     const merged = write[rel];
     const after = merged === undefined ? { names: [] } : markerStructure(Buffer.isBuffer(merged) ? merged.toString("utf8") : merged, label(rel), opts);
     let why: string | null = null;

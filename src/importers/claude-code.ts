@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { containRoot, readForgeFile, readForgeText, type ContainRoot } from "../core/contain.js";
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST, readIngredientText } from "../core/forge.js";
@@ -738,7 +739,13 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
  */
 export class ForgeStage {
   private readonly files = new Map<string, string | Buffer>();
+  private contain: Promise<ContainRoot> | null = null;
   constructor(readonly root: string) {}
+
+  /** `import` can target a Forge that does not exist yet, so the root is resolved on first use, by its nearest ancestor. */
+  private forgeRoot(): Promise<ContainRoot> {
+    return (this.contain ??= containRoot(this.root));
+  }
 
   write(abs: string, content: string | Buffer): void {
     this.files.set(abs, content);
@@ -750,7 +757,7 @@ export class ForgeStage {
 
   async readText(abs: string): Promise<string> {
     const staged = this.files.get(abs);
-    if (staged === undefined) return fs.readFile(abs, "utf8");
+    if (staged === undefined) return readForgeText(await this.forgeRoot(), abs);
     return Buffer.isBuffer(staged) ? staged.toString("utf8") : staged;
   }
 
@@ -760,7 +767,7 @@ export class ForgeStage {
       readText: (abs) => this.readText(abs),
       readBytes: async (abs) => {
         const staged = this.files.get(abs);
-        if (staged === undefined) return fs.readFile(abs);
+        if (staged === undefined) return readForgeFile(await this.forgeRoot(), abs);
         return Buffer.isBuffer(staged) ? staged : Buffer.from(staged, "utf8");
       },
       list: async (dir) => {
@@ -1734,7 +1741,7 @@ async function existingProfile(
     if (!d.isDirectory()) continue;
     const abs = path.join(dir, d.name, "profile.yaml");
     if (!(await exists(abs))) continue;
-    const name = parseYaml(abs, stripBom(await fs.readFile(abs, "utf8")), ProfileSchema).name;
+    const name = parseYaml(abs, stripBom(await readForgeText(await containRoot(forge), abs)), ProfileSchema).name;
     if ((name === profile) !== (d.name === profile)) {
       throw new Error(`import: profile ${profile} is profiles/${d.name}/profile.yaml — import writes profiles/${profile}/profile.yaml`);
     }

@@ -100,6 +100,7 @@ export function preferKiro(i: PreferKiroInput): { text: string; body: string; of
   const entry = (type: "rule" | "steering", name: string): ResolvedIngredient => ({
     ref: `${type}/${name}`,
     dir: "",
+    forgeRoot: { given: "", real: "" }, // a lookup entry: nothing is read through it
     meta: IngredientSchema.parse(type === "rule" ? { type, name, file: "rule.md", targets: "*" } : { type, name, file: "steering.md", targets: ["kiro"] }),
     via: [],
   });

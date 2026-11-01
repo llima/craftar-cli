@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { readForgeFile, readForgeText } from "./contain.js";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
 import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
@@ -494,7 +495,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
       if (rel === "ingredient.yaml") continue;
       const abs = path.join(ing.dir, rel);
       if (bodyFile(ing.meta, rel, ing.dir)) {
-        const p = parseSections(await fs.readFile(abs, "utf8"), forgeRel(forge, abs), ing.ref, parseOpts);
+        const p = parseSections(await readForgeText(ing.forgeRoot, abs), forgeRel(forge, abs), ing.ref, parseOpts);
         parsed.set(abs, p);
         files.push({ rel, p });
         if (p.sections.length && firstMarker === null) firstMarker = `${p.file}:${p.sections[0].line}`;
@@ -521,7 +522,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
       } else if (emittedFile(ing.meta, rel, ing.dir)) {
         // A file emitted but not every target renders as text keeps its markers; one, whatever its extension, is warned, never dropped
         // silently. Every marker form contains "craftar:section", so a file without it is not decoded.
-        const bytes = await fs.readFile(abs);
+        const bytes = await readForgeFile(ing.forgeRoot, abs);
         if (bytes.includes("craftar:section") && toLf(stripBom(bytes.toString("utf8"))).split("\n").some((l) => markerLine(l) !== null)) {
           warnings.push(`${ing.ref} ${rel}: section markers are read only in files every target renders as text — copied with them`);
         }
@@ -633,7 +634,6 @@ export async function plan(ws: Workspace): Promise<Plan> {
     readExisting: (rel: string) => sourceOf(ws).read(rel),
     async text(ing: ResolvedIngredient, file: string, owner: Owner) {
       const abs = path.join(ing.dir, file);
-      const raw = await fs.readFile(abs, "utf8");
       const missing = new Set<string>();
       const params = paramsFor(ing, resolution);
       // Sections first, then params (spec 11 §6.4), in body files only (§6.5, 0.8.2).
@@ -641,10 +641,12 @@ export async function plan(ws: Workspace): Promise<Plan> {
       // Every body file of a resolved ingredient was parsed and gated in the section pass; a miss here means the file is
       // outside the ingredient directory, behind a symlinked directory that listFiles did not descend into, or spelled
       // with different letter case on a case-insensitive file system.
-      if (parsed === undefined)
+      // Tested before the read, so what lies behind such a path is not read; a path that is plainly missing stays its ENOENT.
+      if (parsed === undefined && (await exists(abs)))
         throw new Error(
           `${forgeRel(ws.forge, abs)}: ${ing.ref} declares a file outside its directory, behind a symlinked directory, or spelled differently from the file on disk — keep the file inside ${forgeRel(ws.forge, ing.dir)} and spell the declared path as it is on disk`,
         );
+      const raw = await readForgeText(ing.forgeRoot, abs);
       const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution), owner) : toLf(stripBom(raw));
       const out = substitute(expanded, params, missing);
       if (parsed) guardOutput(ing, file, out, parsed, resolution, params, owner);
@@ -668,7 +670,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
       return out;
     },
     bytes(ing: ResolvedIngredient, file: string) {
-      return fs.readFile(path.join(ing.dir, file));
+      return readForgeFile(ing.forgeRoot, path.join(ing.dir, file));
     },
     warn(msg: string) {
       warnings.push(msg);

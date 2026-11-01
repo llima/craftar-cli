@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { forgeReader, readForgeFile, readForgeText } from "./contain.js";
 import YAML from "yaml";
 import { IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type IngredientRef } from "../schema/index.js";
 import { fingerprintDir } from "./fingerprint.js";
@@ -187,12 +188,12 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
     for (const rel of await listFiles(from.dir)) {
       if (rel === "ingredient.yaml") continue;
       const abs = path.join(toDir, rel);
-      out.push({ abs, content: await fs.readFile(path.join(from.dir, rel)), created: !(await exists(abs)) });
+      out.push({ abs, content: await readForgeFile(from.forgeRoot, path.join(from.dir, rel)), created: !(await exists(abs)) });
     }
     const abs = path.join(toDir, "ingredient.yaml");
     return [...out.sort(byPath), { abs, content: yaml, created: !(await exists(abs)) }];
   };
-  const metaText = (ing: LoadedIngredient) => fs.readFile(path.join(ing.dir, "ingredient.yaml"), "utf8");
+  const metaText = (ing: LoadedIngredient) => readForgeText(ing.forgeRoot, path.join(ing.dir, "ingredient.yaml"));
   const label = (abs: string) => posix(forge.root, abs);
 
   /* ---- X--q for every profile on the old base ---- */
@@ -428,7 +429,8 @@ export async function proveBasePromotion(forge: Forge, promotion: BasePromotion)
       for (const i of was.ingredients) {
         const to = rename(i.ref);
         if (to === i.ref) continue;
-        if ((await fingerprintDir(edited.ingredients.get(to)!.dir)) !== (await fingerprintDir(i.dir))) throw refused(q, `${to} would not hold the same files`);
+        const renamed = edited.ingredients.get(to)!;
+        if ((await fingerprintDir(renamed.dir, forgeReader(renamed.forgeRoot))) !== (await fingerprintDir(i.dir, forgeReader(i.forgeRoot)))) throw refused(q, `${to} would not hold the same files`);
       }
     }
   } finally {

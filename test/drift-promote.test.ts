@@ -2283,15 +2283,15 @@ describe("cli — drift promote (step 30h: impact check)", () => {
       throw e;
     }
     gitInit(f.forgeRoot);
-    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
-    await f.driftA();
+    // Spec 48 §4.2: the load fails before promote gets to it, and so does the sync before it.
+    const message = "recipes/base.yaml: a symbolic link out of the Forge — craftar does not read it; replace it with a file inside the Forge";
+    expect(runCli(["sync", "--workspace", f.ws]).stderr).toContain(message);
 
     const r = runCli(["drift", "promote", A, "--workspace", f.ws, "--dry-run"]);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    expect(r.stderr).toBe(
-      "error: recipes/base.yaml is a symbolic link in the Forge — promote does not write through a link; replace it with the file and commit\n",
-    );
+    expect(r.stderr).toContain(message);
+    expect(r.stderr).not.toContain(outsideDir);
     // Outside file unchanged
     expect((await fs.readFile(outsideFile)).equals(outsideBefore)).toBe(true);
     // Forge porcelain empty
@@ -2319,15 +2319,15 @@ describe("cli — drift promote (step 30h: impact check)", () => {
       throw e;
     }
     gitInit(f.forgeRoot);
-    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
-    await f.driftA();
+    // Spec 48 §4.2: the load fails before promote gets to it, and so does the sync before it.
+    const message = "recipes/base.yaml: a symbolic link out of the Forge — craftar does not read it; replace it with a file inside the Forge";
+    expect(runCli(["sync", "--workspace", f.ws]).stderr).toContain(message);
 
     const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    expect(r.stderr).toBe(
-      "error: recipes/base.yaml is a symbolic link in the Forge — promote does not write through a link; replace it with the file and commit\n",
-    );
+    expect(r.stderr).toContain(message);
+    expect(r.stderr).not.toContain(outsideDir);
     // Outside file unchanged
     expect((await fs.readFile(outsideFile)).equals(outsideBefore)).toBe(true);
     // Forge porcelain empty
@@ -2366,25 +2366,22 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     // Now gitInit - this commits the symlink state
     gitInit(f.forgeRoot);
     
-    // Now sync - this should work because the Forge still loads through the symlink
-    expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
-    await f.driftA();
-    
+    // Spec 48 §4.2: the Forge no longer loads through a link out, so nothing reaches promote's own check.
     const outsideListing = (await fs.readdir(path.join(outsideDir, "ingredients/rules"))).sort();
-    const lockBefore = await f.lockBytes();
+    const sync = runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } });
+    expect(sync.code).toBe(1);
+    expect(sync.stderr).toContain("a symbolic link out of the Forge");
 
     const r = runCli(["drift", "promote", A, "--workspace", f.ws], { env: { CRAFTAR_HOME: home } });
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    expect(r.stderr).toBe(
-      "error: ingredients is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit\n",
-    );
+    expect(r.stderr).toContain("a symbolic link out of the Forge");
+    expect(r.stderr).not.toContain(outsideDir);
     // Outside directory listing unchanged (no new a--acme dir)
     expect((await fs.readdir(path.join(outsideDir, "ingredients/rules"))).sort()).toEqual(outsideListing);
     // Forge porcelain empty
     expect(porcelain(f.forgeRoot)).toBe("");
-    // Lock unchanged
-    expect((await f.lockBytes()).equals(lockBefore)).toBe(true);
+
   });
 
   it("R4. copyForgeForProof — skips .git, dereferences file links inside the Forge, refuses non-regular files and root dir links", async () => {
@@ -3428,11 +3425,9 @@ describe("copyForgeForProof — non-regular files and root directory links (comm
     gitInit(s.forgeRoot);
     
     const outsideListing = (await fs.readdir(path.join(outsideDir, "profiles"))).sort();
-    expect(runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
-    
-    // Trigger params outcome: change only the param value
+    // Spec 48 §4.2: the Forge no longer loads through a link out, so nothing reaches the proof's copy.
+    await fs.mkdir(path.dirname(path.join(s.wsRoot, A)), { recursive: true });
     await fs.writeFile(path.join(s.wsRoot, A), "Org: globex-org\nA two\n");
-    const lockBefore = await fs.readFile(path.join(s.wsRoot, "craftar.lock"));
 
     // Use a private temp directory so parallel workers don't interfere
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-tmp-"));
@@ -3441,15 +3436,12 @@ describe("copyForgeForProof — non-regular files and root directory links (comm
     const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home, TMPDIR: tmp, TEMP: tmp, TMP: tmp } });
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    expect(r.stderr).toBe(
-      "error: profiles is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit\n",
-    );
+    expect(r.stderr).toContain("a symbolic link out of the Forge");
+    expect(r.stderr).not.toContain(outsideDir);
     // Outside profiles listing unchanged
     expect((await fs.readdir(path.join(outsideDir, "profiles"))).sort()).toEqual(outsideListing);
     // Forge porcelain empty
     expect(porcelain(s.forgeRoot)).toBe("");
-    // Lock unchanged
-    expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
     // No scratch left
     expect(await scratchDirs(tmp)).toEqual([]);
   });
