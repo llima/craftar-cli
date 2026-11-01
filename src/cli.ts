@@ -3217,7 +3217,8 @@ function printDocs(r: DocsReport): void {
     if (c.fix !== null) console.log(`           fix: ${c.fix}`);
   }
   const n = (k: number, one: string) => `${k} ${k === 1 ? one : `${one}s`}`;
-  console.log(`\n${n(r.summary.error, "error")}, ${n(r.summary.warn, "warn")} in ${n(r.scanned, "file")}`);
+  // `warn` stays a level word, as in doctor's summary.
+  console.log(`\n${n(r.summary.error, "error")}, ${r.summary.warn} warn in ${n(r.scanned, "file")}`);
 }
 
 /** The text report of `craftar cache prune` (spec 26 §4.4) — presentation, not contract. */

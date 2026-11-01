@@ -35,7 +35,7 @@ describe("exit codes and streams (§4.6)", () => {
     const s = await ws({ "docs/a.md": "# A\n" });
     const r = runCli(["docs", "validate", "--workspace", s.wsRoot]);
     expect(r).toMatchObject({ code: 0, stderr: "" });
-    expect(r.stdout).toBe("  ok     links       0 links in 1 file\n  ok     leaked-tags 1 file\n  ok     policy      no docs block in this profile\n\n0 errors, 0 warns in 1 file\n");
+    expect(r.stdout).toBe("  ok     links       0 links in 1 file\n  ok     leaked-tags 1 file\n  ok     policy      no docs block in this profile\n\n0 errors, 0 warn in 1 file\n");
   });
 
   it("an error: exit 1, its line and fix in the text", async () => {
@@ -43,7 +43,7 @@ describe("exit codes and streams (§4.6)", () => {
     const r = runCli(["docs", "validate", "--workspace", s.wsRoot]);
     expect(r.code).toBe(1);
     expect(r.stdout.split("\n").slice(0, 2)).toEqual(["  error  links       docs/a.md:1:5 — target does not exist", "           fix: correct the link or restore the file"]);
-    expect(r.stdout).toMatch(/\n1 error, 0 warns in 1 file\n$/);
+    expect(r.stdout).toMatch(/\n1 error, 0 warn in 1 file\n$/);
   });
 
   it("a warn: exit 0, and 1 under --strict", async () => {
@@ -136,6 +136,10 @@ describe("printing (§11 item 5)", () => {
     );
     for (const extra of [[], ["--json"]]) {
       const r = runCli(["docs", "validate", ...extra, "--workspace", s.wsRoot]);
+      // Not vacuous: the run printed its findings — the links error and the block's policy error.
+      expect(r.code).toBe(1);
+      expect(r.stdout).toMatch(/links/);
+      expect(r.stdout).toMatch(/docs block: /);
       expect(r.stdout + r.stderr).not.toContain(M);
       expect(r.stdout + r.stderr).not.toContain(TOKEN);
     }

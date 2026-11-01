@@ -949,7 +949,7 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
   }
 
   // Sorted by the file's place in the walk, then line and column; lines with no path last, in their order (§4.6).
-  // Every path the walk met — files, ignored or not, and the links and directories it did not enter — sorted once (§7).
+  // Every path the walk kept — the files, and the links and unreadable directories it did not enter — sorted once (§7).
   const met = [...new Set([...walked.files, ...walked.scope.map((x) => x.rel)])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const place = new Map(met.map((p, i) => [p, i] as const));
   const order = (c: DocsCheck) => (c.path === null ? met.length + 1 + ID_ORDER.indexOf(c.id) : place.get(c.path) ?? met.length);
