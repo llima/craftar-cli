@@ -1,12 +1,29 @@
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runCli } from "./helpers/cli.js";
 import { profile, recipe, rule, scenario, tmpDir, writeFiles } from "./helpers/forge.js";
 import { removeWithRetry } from "./helpers/fs.js";
 
 // Spec 47 §4.1, §4.6 — `craftar docs validate` as a real process: exit codes, refusals, --json, streams.
+
+// git reads the developer's global and system configuration (a core.excludesFile can ignore *.md): every git this file starts,
+// in process and in a CLI child, gets a scratch global file that does not exist and no system file.
+const SAVED_GIT = { global: process.env.GIT_CONFIG_GLOBAL, nosystem: process.env.GIT_CONFIG_NOSYSTEM };
+let gitScratch = "";
+beforeAll(async () => {
+  const dir = (gitScratch = await tmpDir("craftar-docs-git-"));
+  process.env.GIT_CONFIG_GLOBAL = path.join(dir, "no-global-config");
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+});
+afterAll(async () => {
+  await removeWithRetry(gitScratch);
+  for (const [k, v] of [["GIT_CONFIG_GLOBAL", SAVED_GIT.global], ["GIT_CONFIG_NOSYSTEM", SAVED_GIT.nosystem]] as const) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+});
 
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
