@@ -120,7 +120,7 @@ export async function loadForge(root: string): Promise<Forge> {
       const present2 = [] as Array<"ingredients" | "recipes">;
       for (const sub of ["ingredients", "recipes"] as const) if (await present(path.join(folder, sub))) present2.push(sub);
       if (!reads) {
-        if (p && present2.length) ignoredLocals.set(p.name, present2);
+        if (p && present2.length) ignoredLocals.set(p.name, { folder: d.name, subs: present2 });
         continue;
       }
       const label = `profiles/${d.name}`;

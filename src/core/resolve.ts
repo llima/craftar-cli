@@ -85,7 +85,8 @@ export function resolve(root: Forge, ws: WorkspaceConfig): Resolution {
   // The effective profile once integrations are applied (spec 33 §5.2).
   const eff = effectiveProfile(forge, profile);
   const warnings: string[] = [...eff.warnings];
-  for (const folder of root.ignoredLocals.get(profile.name) ?? []) warnings.push(ignoredLocalWarning(profile.name, folder));
+  const ignored = root.ignoredLocals.get(profile.name);
+  for (const sub of ignored?.subs ?? []) warnings.push(ignoredLocalWarning(ignored!.folder, sub));
 
   // Check unknown integration recipes before recipes.add (spec 33 §4.3, design.md item 4).
   for (const s of eff.selected) {

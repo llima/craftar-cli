@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { escapeReason, escapeSummary, escapingRows } from "./contain.js";
 import { EXAMPLE_SETTINGS } from "../emitters/shared.js";
-import type { Lock } from "../schema/index.js";
+import type { IngredientRef, Lock } from "../schema/index.js";
 import { listTargets, type ListTargetsResult } from "./capabilities.js";
 import { diffOps } from "./diff.js";
 import { mcpTagged } from "./drift.js";
@@ -225,7 +225,7 @@ export function explainFile(ws: Workspace, p: Plan, file: string): ExplainedFile
 function sourceOf(ws: Workspace, ing: { ref: string; dir: string } | undefined): { scope: "forge" | "profile" | null; dir: string | null } {
   if (!ing) return { scope: null, dir: null };
   const dir = path.relative(ws.forge.root, ing.dir).split(path.sep).join("/");
-  const local = ws.forge.locals.get(ws.config.profile)?.ingredients.get(ing.ref as never);
+  const local = ws.forge.locals.get(ws.config.profile)?.ingredients.get(ing.ref as IngredientRef);
   return { scope: local && local.dir === ing.dir ? "profile" : "forge", dir };
 }
 

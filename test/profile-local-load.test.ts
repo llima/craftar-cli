@@ -69,7 +69,7 @@ describe("loadForge: the local layer (spec 51 §4.2)", () => {
     const root = await forgeAt(7, base, { ...localRule("acme", "x"), ...localRecipe("acme", "acme-extra", ["rule/x"]) });
     const f = await loadForge(root);
     expect(f.locals.size).toBe(0);
-    expect(f.ignoredLocals.get("acme")).toEqual(["ingredients", "recipes"]);
+    expect(f.ignoredLocals.get("acme")).toEqual({ folder: "acme", subs: ["ingredients", "recipes"] });
   });
 
   it("below schema 8, a broken reference and a local of the root's name still load (Ruling 2)", async () => {

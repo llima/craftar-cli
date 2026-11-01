@@ -180,9 +180,9 @@ const D10 = (ing: string, q: string) => `${ing} is also used by profile ${q} —
 /** D20 (spec 41 §4.10): storing the hand-edited text would carry agents-md.primary's rewording into the Forge. */
 const D20 = (p: string) => `${p} holds references agents-md.primary reworded — edit the Forge's ingredient`;
 /** D21 (spec 44 §4.5): the file holds the generated rules index — promoting it would carry sync-generated content into the Forge. */
-/** D22 (spec 51 §4.5): a profile-local ingredient's file — until Part B, edit it in the profile's folder. */
-const D22 = (p: string, dir: string) => `${p} comes from ${dir}, local to this profile — edit it there; promote does not carry a local's hand edit yet`;
 const D21 = (p: string) => `${p} holds the generated rules index — edit the Forge's rule, or the description of the rule it lists`;
+/** D22 (spec 51 §4.5): a profile-local ingredient's file — edit it in the profile's folder. */
+const D22 = (p: string, dir: string) => `${p} comes from ${dir}, local to this profile — edit it there; promote does not carry a local's hand edit`;
 const D11 = (p: string, line: number) => `${p}:${line} holds a section marker — a variant body cannot hold one; remove it and promote again`;
 const D12_SECTION = (ing: string, name: string) =>
   `${ing} takes section "${name}" from this workspace's overrides (craftar.yaml) — a variant would silently stop applying it; edit craftar.yaml, or remove the override and sync first`;

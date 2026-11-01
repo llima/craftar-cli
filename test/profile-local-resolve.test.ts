@@ -99,6 +99,17 @@ describe("resolve() through the profile's view (spec 51 §4.3)", () => {
   });
 });
 
+describe("§4.1's warning names the folder on disk (spec 51 §4.1)", () => {
+  it("below schema 8, a folder whose name is not its profile's is named as it is", async () => {
+    const s = await at(7, { ...spec, profiles: [profile("globex", ["core"])] }, { profile: "acme" }, {
+      "profiles/acme-folder/profile.yaml": YAML.stringify({ name: "acme", recipes: ["core"], targets: ["claude-code"] }),
+      ...localRule("acme-folder", "x", "# X\n"),
+    });
+    const p = await plan(await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME }));
+    expect(p.warnings).toContain("profiles/acme-folder/ingredients: ignored below schema 8");
+  });
+});
+
 describe("a profile-local load error on each surface (spec 51 §4.2)", () => {
   const broken = { ...locals, ...localRule("acme", "style", "# shadow\n"), "recipes/unused.yaml": YAML.stringify({ name: "unused", ingredients: ["rule/ghost"] }) };
 

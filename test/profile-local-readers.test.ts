@@ -5,7 +5,9 @@ import path from "node:path";
 /**
  * Spec 51 §4.3: a reader of a Forge's recipe or ingredient maps decides whether it means the root or a profile's view.
  * This scan, by property name and whatever the variable is called, names every file under `src/` that reads one; a new
- * file reading them fails here until §4.3's table (and this list) place it.
+ * file reading them fails here until §4.3's table (and this list) place it. It is file-granular and over-includes on
+ * purpose: a `Resolution`'s `ingredients` matches too, so a file such as `write-actions.ts` is listed though it reads no
+ * Forge map — a false entry costs a line here, a missed reader costs a local read as the root.
  */
 const ALLOWED = [
   "src/cli.ts",

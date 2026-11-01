@@ -24,12 +24,12 @@ export interface LocalLayer {
   recipes: Map<string, LocalRecipe>;
 }
 
-/** The folders below the gate that a profile holds and the Forge does not read (spec 51 §4.1), by profile name. */
-export type IgnoredLocals = Map<string, Array<"ingredients" | "recipes">>;
+/** The folders below the gate that a profile holds and the Forge does not read (spec 51 §4.1), by profile name, with the folder that holds them. */
+export type IgnoredLocals = Map<string, { folder: string; subs: Array<"ingredients" | "recipes"> }>;
 
-/** The warning `resolve()` gives the workspace's own profile below the gate (spec 51 §4.1). */
-export function ignoredLocalWarning(profile: string, folder: "ingredients" | "recipes"): string {
-  return `profiles/${profile}/${folder}: ignored below schema ${FORGE_SCHEMA_PROFILE_LOCAL}`;
+/** The warning `resolve()` gives the workspace's own profile below the gate (spec 51 §4.1), naming the folder as it is on disk. */
+export function ignoredLocalWarning(folder: string, sub: "ingredients" | "recipes"): string {
+  return `profiles/${folder}/${sub}: ignored below schema ${FORGE_SCHEMA_PROFILE_LOCAL}`;
 }
 
 /** A Forge whose profile-local layer does not load (spec 51 §4.2): every finding, one per line. Not a `SchemaError`, and holds no zod issues. */
@@ -47,12 +47,12 @@ export function oneLineOfFindings(e: ProfileLocalLoadError): string {
 }
 
 /** A name read from a file, printed only when shaped like one (spec 51 §4.2); `what` says what it is otherwise. */
-export function shownName(name: string, what: string): string {
+export function shownLocalName(name: string, what: string): string {
   return nameShaped(name) ? name : `a ${what} (not shown: not shaped like a name)`;
 }
 
 /** A ref `<type>/<name>` printed only when both halves are shaped like names. */
-export function shownRef(ref: string): string {
+export function shownIngredientRef(ref: string): string {
   const [type, name, ...rest] = ref.split("/");
   return rest.length === 0 && name !== undefined && nameShaped(type) && nameShaped(name) ? ref : "a ref (not shown: not shaped like a name)";
 }
@@ -101,14 +101,14 @@ export function checkLocals(root: RootView, locals: ReadonlyMap<string, LocalLay
     for (const ref of layer.ingredients.keys()) {
       const at = localPaths.get(p)?.get(ref) ?? `profiles/${p}`;
       const rootAt = root.ingredientPaths.get(ref);
-      if (rootAt !== undefined) findings.push(`L1 ${at} and ${rootAt}: the same ingredient, local to profile ${shownName(p, "profile")} and at the root`);
+      if (rootAt !== undefined) findings.push(`L1 ${at} and ${rootAt}: the same ingredient, local to profile ${shownLocalName(p, "profile")} and at the root`);
       const variant = `${ref}--${p}` as IngredientRef;
       const vAt = root.ingredients.has(variant) ? root.ingredientPaths.get(variant) : undefined;
       if (vAt !== undefined) findings.push(`L1 ${at} and ${vAt}: a local ingredient and the root variant of the same name for its own profile`);
     }
     for (const [name, r] of layer.recipes) {
       const rootFile = root.recipeFiles.get(name);
-      if (root.recipes.has(name)) findings.push(`L2 ${r.file} and ${rootFile ?? "recipes/"}: the same recipe, local to profile ${shownName(p, "profile")} and at the root`);
+      if (root.recipes.has(name)) findings.push(`L2 ${r.file} and ${rootFile ?? "recipes/"}: the same recipe, local to profile ${shownLocalName(p, "profile")} and at the root`);
     }
   }
 
@@ -118,14 +118,14 @@ export function checkLocals(root: RootView, locals: ReadonlyMap<string, LocalLay
     for (const ref of r.ingredients) {
       if (root.ingredients.has(ref as IngredientRef)) continue;
       const localAt = localRefsAnywhere.get(ref);
-      if (localAt) findings.push(`L3 ${file}: cites ${shownRef(ref)}, which is local (${localAt.join(", ")}) — a root recipe does not see a profile's ingredients`);
-      else findings.push(`L4 ${file}: cites ${shownRef(ref)}, which does not exist`);
+      if (localAt) findings.push(`L3 ${file}: cites ${shownIngredientRef(ref)}, which is local (${localAt.join(", ")}) — a root recipe does not see a profile's ingredients`);
+      else findings.push(`L4 ${file}: cites ${shownIngredientRef(ref)}, which does not exist`);
     }
     for (const parent of r.extends) {
       if (root.recipes.has(parent)) continue;
       const localAt = localRecipesAnywhere.get(parent);
-      if (localAt) findings.push(`L3 ${file}: extends ${shownName(parent, "recipe name")}, which is local (${localAt.join(", ")}) — a root recipe does not see a profile's recipes`);
-      else findings.push(`L4 ${file}: extends ${shownName(parent, "recipe name")}, which does not exist`);
+      if (localAt) findings.push(`L3 ${file}: extends ${shownLocalName(parent, "recipe name")}, which is local (${localAt.join(", ")}) — a root recipe does not see a profile's recipes`);
+      else findings.push(`L4 ${file}: extends ${shownLocalName(parent, "recipe name")}, which does not exist`);
     }
   }
 
@@ -134,11 +134,11 @@ export function checkLocals(root: RootView, locals: ReadonlyMap<string, LocalLay
     for (const r of layer.recipes.values()) {
       for (const ref of r.recipe.ingredients) {
         if (layer.ingredients.has(ref as IngredientRef) || root.ingredients.has(ref as IngredientRef)) continue;
-        findings.push(`L4 ${r.file}: cites ${shownRef(ref)}, which profile ${shownName(p, "profile")} does not have`);
+        findings.push(`L4 ${r.file}: cites ${shownIngredientRef(ref)}, which profile ${shownLocalName(p, "profile")} does not have`);
       }
       for (const parent of r.recipe.extends) {
         if (layer.recipes.has(parent) || root.recipes.has(parent)) continue;
-        findings.push(`L4 ${r.file}: extends ${shownName(parent, "recipe name")}, which profile ${shownName(p, "profile")} does not have`);
+        findings.push(`L4 ${r.file}: extends ${shownLocalName(parent, "recipe name")}, which profile ${shownLocalName(p, "profile")} does not have`);
       }
     }
   }
@@ -151,7 +151,7 @@ export function checkLocals(root: RootView, locals: ReadonlyMap<string, LocalLay
       if (done.has(name)) return;
       const at = chain.indexOf(name);
       if (at >= 0) {
-        cycles.add([...chain.slice(at), name].map((n) => shownName(n, "recipe name")).join(" → "));
+        cycles.add([...chain.slice(at), name].map((n) => shownLocalName(n, "recipe name")).join(" → "));
         return;
       }
       const r = get(name);
@@ -176,7 +176,9 @@ export type ProfileView = Forge & { readonly view: string };
  * them disjoint, so the order of the merge decides nothing. Without locals the maps are the root's own.
  */
 export function forgeFor(forge: Forge, profile: string): ProfileView {
-  if ((forge as Partial<ProfileView>).view === profile) return forge as ProfileView;
+  const seen = (forge as Partial<ProfileView>).view;
+  if (seen === profile) return forge as ProfileView;
+  if (seen !== undefined) throw new Error(`internal: a view of profile ${seen} asked for profile ${profile}`);
   const layer = forge.locals.get(profile);
   if (!layer || (layer.ingredients.size === 0 && layer.recipes.size === 0)) return { ...forge, view: profile };
   const ingredients = new Map(forge.ingredients);
@@ -186,11 +188,6 @@ export function forgeFor(forge: Forge, profile: string): ProfileView {
   return { ...forge, ingredients, recipes, view: profile };
 }
 
-/** Whether `ref` is local to `profile`, and where (Forge-relative), for `explain` and the catalogue (spec 51 §4.4). */
-export function localOf(forge: Forge, profile: string, ref: string): LoadedIngredient | undefined {
-  return forge.locals.get(profile)?.ingredients.get(ref as IngredientRef);
-}
-
 /** The profiles that hold `ref` as a local, sorted (spec 51 §4.5). */
 export function localOwners(forge: Forge, ref: string): string[] {
   return [...forge.locals].filter(([, l]) => l.ingredients.has(ref as IngredientRef)).map(([p]) => p).sort();
@@ -198,7 +195,7 @@ export function localOwners(forge: Forge, ref: string): string[] {
 
 /** `<ref> is local to profile <p>` (or `to profiles <p>, <q>`): what a Forge-wide command says of a local (spec 51 §4.5). */
 export function isLocalMessage(ref: string, owners: string[]): string {
-  return `${shownRef(ref)} is local to ${owners.length === 1 ? "profile" : "profiles"} ${owners.map((p) => shownName(p, "profile")).join(", ")}`;
+  return `${shownIngredientRef(ref)} is local to ${owners.length === 1 ? "profile" : "profiles"} ${owners.map((p) => shownLocalName(p, "profile")).join(", ")}`;
 }
 
 /**
