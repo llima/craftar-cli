@@ -144,6 +144,23 @@ export function escapeReason(escapes: Escape): string {
   }
 }
 
+/** The words for what `import` takes from a workspace (spec 48 §4.4): a source that leaves or leads into `.git`. */
+export function escapeSourceLine(rel: string, escapes: Escape): string {
+  return escapes === "git" ? `${rel} is a symbolic link into the workspace's .git` : `${rel} ${escapeReason(escapes)}`;
+}
+
+/** The words for a staged path `import` will not write through (spec 48 §4.4), relative to the Forge. */
+export function escapeDestinationLine(rel: string, escapes: Escape): string {
+  switch (escapes) {
+    case "leaves":
+      return `${rel}: a symbolic link out of the Forge — import does not write through it; replace it with a directory or a file inside the Forge`;
+    case "unresolved":
+      return `${rel}: a symbolic link that leads nowhere — fix or remove it`;
+    case "git":
+      return `${rel}: a symbolic link into the Forge's .git — import does not write through it; replace it`;
+  }
+}
+
 /**
  * The refusal block, without the `error: ` prefix: one line per escaping path. `thenSync` is `init`'s form, as in
  * `unsetRefusal`: it has just written `craftar.yaml`, so that is what it says, and it ends with the sync to run.

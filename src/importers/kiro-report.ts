@@ -116,7 +116,8 @@ export async function kiroReport(
     for (const dir of SOURCED_DIRS) {
       const abs = path.join(root, dir);
       // Only a directory is walked: a file sitting where one is expected is not Kiro's, and not this report's.
-      if ((await fs.stat(abs).catch(() => null))?.isDirectory()) for (const rel of await listFiles(abs)) found.push(`${dir}/${rel}`);
+      // lstat, and asked of the path: a linked directory's file names do not reach the report (spec 48 §5 edge 5).
+      if ((await fs.lstat(abs).catch(() => null))?.isDirectory() && !(await escapeOf(await containRoot(root), abs))) for (const rel of await listFiles(abs)) found.push(`${dir}/${rel}`);
     }
     if ((await fs.stat(path.join(root, SOURCED_FILE)).catch(() => null))?.isFile()) found.push(SOURCED_FILE);
     return {
