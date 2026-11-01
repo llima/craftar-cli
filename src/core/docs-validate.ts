@@ -841,7 +841,7 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
       id: "scope",
       level: "warn",
       message: "git could not say which files it ignores: every file was scanned",
-      fix: inRepo ? "check that git runs here; a scanned private file is named, never printed" : "run in a git repository with git on PATH; a scanned private file is named, never printed",
+      fix: inRepo ? "check that git runs here, and that no submodule or nested repository sits under docs/ or .claude/; a scanned private file is named, never printed" : "run in a git repository with git on PATH; a scanned private file is named, never printed",
     });
   const files = [...walked.files];
   files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
