@@ -705,6 +705,8 @@ describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.6–§
 
     const home = await tmpDir("craftar-doctor-home-");
     cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    // Spec 50 §11: the walk above the workspace stays inside the scenario, and the user's directory is a temporary one.
+    const inside = (await fs.realpath(path.dirname(wsRoot))) + path.sep;
 
     return runDoctor({
       version: "0.0.0",
@@ -716,6 +718,8 @@ describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.6–§
       env: {},
       nodeVersion: "22.11.0",
       gitVersion: async () => "2.53.0",
+      claudeUserDir: path.join(home, "claude"),
+      claudeMdExists: (f) => (f.startsWith(inside) ? fs.lstat(f).then(() => true, () => false) : Promise.resolve(false)),
     });
   }
 
