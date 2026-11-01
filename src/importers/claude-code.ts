@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { forgeFor, ProfileLocalLoadError, readsProfileLocal, type LocalLayer } from "../core/profile-local.js";
 import path from "node:path";
 import os from "node:os";
+import { readWorkspaceConfig } from "../core/sync.js";
 import { containRoot, escapeDestinationLine, escapeFileLine, escapeOf, escapeSourceLine, escapingPaths, readForgeFile, readForgeText, type ContainRoot, type Escape, type EscapingPath } from "../core/contain.js";
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
@@ -12,7 +13,7 @@ import { registrationCitations, serverSecret, windowsOnlyLauncher, launcherImpor
 import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
-import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
+import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, resolve, sectionKey, type Resolution } from "../core/resolve.js";
 import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE } from "../core/rules-index.js";
@@ -113,10 +114,10 @@ const BASE_RULES = new Set([
  */
 export async function importClaudeCode(opts: ImportOptions): Promise<ImportReport> {
   const stage = new ForgeStage(path.resolve(opts.forgeRoot));
-  let planned: { report: ImportReport; targets: Target[]; config: PlannedConfig | null };
+  let planned: { report: ImportReport; targets: Target[]; config: PlannedConfig | null; mcpOrder: string[] };
   try {
     planned = await planImport(opts, stage);
-    await checkStagedLocals(opts, stage, planned.report);
+    await checkStagedLocals(opts, stage, planned.report, planned.mcpOrder);
   } catch (e) {
     throw new Error(`${e instanceof Error ? e.message : String(e)}\nThe Forge was left untouched.`, { cause: e });
   }
@@ -150,7 +151,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
  * in an order the recipes cannot express is refused rather than read as a collision. A link under `profiles/<p>` that
  * would carry a write into another profile's folder is refused first.
  */
-async function checkStagedLocals(opts: ImportOptions, stage: ForgeStage, report: ImportReport): Promise<void> {
+async function checkStagedLocals(opts: ImportOptions, stage: ForgeStage, report: ImportReport, mcpOrder: string[]): Promise<void> {
   const root = stage.root;
   const manifestAbs = path.join(root, FORGE_MANIFEST);
   if (!(await exists(manifestAbs))) return;
@@ -175,29 +176,34 @@ async function checkStagedLocals(opts: ImportOptions, stage: ForgeStage, report:
       staged = await loadForge(scratch);
     } catch (e) {
       if (e instanceof ProfileLocalLoadError) throw new Error(`import: the Forge would not load after this import:\n${e.message}`);
-      throw e;
+      // Any other load error names the scratch copy's path: say the Forge's instead.
+      throw new Error(`import: the Forge would not load after this import: ${errorText(e).split(scratch).join(root)}`);
+    }
+    // The workspace's own recipe choice and overrides, so a local only its recipes.add brings in is seen (spec 51 §4.5).
+    let wsConfig = WorkspaceConfigSchema.parse({ forge: ".", profile: p });
+    try {
+      const merged = await readWorkspaceConfig(opts.workspaceRoot);
+      if (merged.config.profile === p) wsConfig = { ...merged.config, forge: "." };
+    } catch {
+      // No craftar.yaml, or one that does not read: the profile's own recipes decide, as for a new workspace.
     }
     let res: Resolution | null = null;
+    let unresolved: string | null = null;
     try {
-      res = resolve(staged, WorkspaceConfigSchema.parse({ forge: ".", profile: p }));
-    } catch {
-      res = null;
+      res = resolve(staged, wsConfig);
+    } catch (e) {
+      unresolved = errorText(e).split(scratch).join(root).replace(/[\r\n]+/g, " ");
     }
     for (const x of report.localReused ?? []) {
-      if (!res?.ingredients.some((i) => i.ref === x.ref)) {
+      if (res === null) throw new Error(`import: ${x.ref} (${x.dir}) matches the workspace, but profile ${p} would not resolve after this import (${unresolved}) — fix the Forge, then re-run`);
+      if (!res.ingredients.some((i) => i.ref === x.ref)) {
         throw new Error(`import: ${x.ref} (${x.dir}) matches the workspace, but no recipe profile ${p} resolves cites it — sync would remove its file; add it to a recipe in profiles/${p}/recipes, then re-run`);
       }
     }
     const local = staged.locals.get(p)?.ingredients;
     const mcp = res?.ingredients.filter((i) => i.meta.type === "mcp") ?? [];
     if (local && mcp.some((i) => local.has(i.ref))) {
-      let disk: string[] = [];
-      try {
-        const parsed = JSON.parse(stripBom(await fs.readFile(path.join(opts.workspaceRoot, ".mcp.json"), "utf8"))) as { mcpServers?: Record<string, unknown> };
-        disk = Object.keys(parsed.mcpServers ?? {});
-      } catch {
-        disk = [];
-      }
+      const disk = mcpOrder;
       const planned = mcp.map((i) => outName(i.meta)).filter((n) => disk.includes(n));
       const held = disk.filter((n) => planned.includes(n));
       if (JSON.stringify(planned) !== JSON.stringify(held)) {
@@ -230,7 +236,7 @@ interface PlannedConfig {
   keptRemote: string | null;
 }
 
-async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ report: ImportReport; targets: Target[]; config: PlannedConfig | null }> {
+async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ report: ImportReport; targets: Target[]; config: PlannedConfig | null; mcpOrder: string[] }> {
   const ws = path.resolve(opts.workspaceRoot);
   const forge = stage.root;
   const report: ImportReport = {
@@ -448,6 +454,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
 
   /* ---- MCP servers ---- */
   const mcpFile = path.join(ws, ".mcp.json");
+  // The workspace's server order, as read here: spec 51 §4.5's order check reads it, not the file again.
+  const mcpOrder: string[] = [];
   if (await exists(mcpFile)) {
     const raw = await fs.readFile(mcpFile, "utf8");
     let json: { mcpServers?: Record<string, unknown> };
@@ -461,6 +469,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       throw new Error(".mcp.json has no valid mcpServers object — fix the file and re-run import");
     }
     for (const [name, server] of Object.entries(json.mcpServers ?? {}) as [string, McpServer][]) {
+      mcpOrder.push(name);
       if (!isPlainObject(server)) {
         throw new Error(`.mcp.json server "${name}" is not an object — fix the file and re-run import`);
       }
@@ -778,7 +787,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     } catch (e) {
       // The profile exists in the Forge but does not resolve (e.g. two recipes on one slot).
       // Only warn when the Forge declares authEnv somewhere — otherwise 0.17.4 was silent (spec 27 §10 criterion 2).
-      const forgeDeclaresAuthEnv = [...loaded.ingredients.values()].some((ing) => ing.meta.type === "mcp" && ing.meta.authEnv && ing.meta.authEnv.length > 0);
+      const forgeDeclaresAuthEnv = [...forgeFor(loaded, opts.profileName).ingredients.values()].some((ing) => ing.meta.type === "mcp" && ing.meta.authEnv && ing.meta.authEnv.length > 0);
       if (forgeDeclaresAuthEnv) {
         const msg = e instanceof Error ? e.message.replace(/[\r\n]+/g, " ") : String(e);
         report.warnings.push(`profile ${opts.profileName} did not resolve before this import (${msg}) — authEnv declarations were not compared`);
@@ -856,7 +865,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const config = opts.writeWorkspaceConfig ? await planConfig(ws, forge, opts.profileName, targets) : null;
   report.configWrite = config?.action ?? null;
   report.configForgeKept = config?.keptRemote ?? null;
-  return { report, targets, config };
+  return { report, targets, config, mcpOrder };
 }
 
 /**
@@ -1694,7 +1703,7 @@ async function decideLocal(
 ): Promise<string | null> {
   const forge = run.ctx.forge;
   if (!forge || !readsProfileLocal(forge.manifest)) return null;
-  const local = forge.locals.get(profile)?.ingredients.get(ref as never);
+  const local = forge.locals.get(profile)?.ingredients.get(ref as IngredientRef);
   if (local) {
     const d = await decide(run.ctx, local.dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases, run.indexExpand);
     const equal = d.kind === "reuse" || (d.kind === "literal" && (await fingerprintDir(local.dir, stage.reader())) === fingerprint);
@@ -1711,7 +1720,7 @@ async function decideLocal(
     return ref;
   }
   const rootHas = await stage.exists(path.join(stage.root, "ingredients", typeFolder(sourceMeta.type), sourceMeta.name, "ingredient.yaml"));
-  if (!rootHas && [...forge.locals.values()].some((l) => l.ingredients.has(ref as never))) {
+  if (!rootHas && [...forge.locals.values()].some((l) => l.ingredients.has(ref as IngredientRef))) {
     throw new Error(`import: I14 ${source} would become ${ref} at the root, a name another profile holds as a local — the Forge would not load; rename the source in the workspace`);
   }
   return null;
@@ -2231,7 +2240,7 @@ function primaryFor(
   const setSomewhere =
     Object.hasOwn(own, AGENTS_MD_PRIMARY_KEY) ||
     Object.hasOwn(ctx.W, AGENTS_MD_PRIMARY_KEY) ||
-    [...loaded.recipes.values()].some((r) => r.params[AGENTS_MD_PRIMARY_KEY]?.default !== undefined);
+    [...forgeFor(loaded, profile).recipes.values()].some((r) => r.params[AGENTS_MD_PRIMARY_KEY]?.default !== undefined);
 
   // Use the cached resolution if available
   if (cachedResolution === null) {
@@ -2262,7 +2271,7 @@ async function indexHolderInQueue(
 ): Promise<string | null> {
   const refs = [...queued].flatMap((r) => [r, `${r}--${profile}`]).sort();
   for (const ref of refs) {
-    const ing = loaded.ingredients.get(ref as `rule/${string}` | `steering/${string}`);
+    const ing = forgeFor(loaded, profile).ingredients.get(ref as `rule/${string}` | `steering/${string}`);
     if (ing && (ing.meta.type === "rule" || ing.meta.type === "steering") && RULES_INDEX_LINE.test(await readIngredientText(ing, ing.meta.file))) return ref;
   }
   return null;

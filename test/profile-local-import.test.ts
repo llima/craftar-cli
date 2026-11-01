@@ -87,6 +87,15 @@ describe("import and the profile's locals (spec 51 §4.5)", () => {
     expect(await snapshot(s.forge)).toEqual(before);
   });
 
+  it("a reused local only the workspace's recipes.add brings in is seen, not refused", async () => {
+    const s = await setup({ ...spec, profiles: [profile("acme", ["base"]), profile("globex", ["base"])] }, files);
+    await fs.writeFile(path.join(s.ws, "craftar.yaml"), YAML.stringify({ forge: path.relative(s.ws, s.forge), profile: "acme", recipes: { add: ["acme-extra"] } }));
+    expect(runCli(["sync", "--workspace", s.ws]).code).toBe(0);
+    const r = importInto(s);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("local to profile acme: rule/x (profiles/acme/ingredients/rules/x) — reused there");
+  });
+
   it("I14: a new root ingredient named after another profile's local is refused, naming no profile", async () => {
     const s = await setup({ ...spec, profiles: [profile("acme", ["base"]), profile("globex", ["base", "globex-extra"])] }, { ...localRule("globex", "secret", "# S\n"), ...localRecipe("globex", "globex-extra", ["rule/secret"]) });
     await writeFiles(s.ws, { ".claude/rules/secret.md": "# mine\n" });
