@@ -538,3 +538,57 @@ describe.skipIf(!BUILT)("a real round on a path Forge, through dist/ (spec 46 §
     expect(vendor === "azure" ? edited.stdout : readFileSync(out, "utf8")).toContain(vendor === "azure" ? "isOutput=true]out-of-sync" : "result=out-of-sync");
   });
 });
+
+describe("the README (spec 46 §9)", () => {
+  const README = read("README.md");
+  const lines = README.split(/\r?\n/);
+  const section = (): string => {
+    const start = lines.indexOf("## In CI");
+    const end = lines.findIndex((l, i) => i > start && l.startsWith("## "));
+    return lines.slice(start, end).join("\n");
+  };
+
+  it("one section In CI, right after Remote Forge, which links to it", () => {
+    expect(lines.filter((l) => l === "## In CI")).toHaveLength(1);
+    const h2 = lines.filter((l) => l.startsWith("## "));
+    expect(h2[h2.indexOf("## Remote Forge") + 1]).toBe("## In CI");
+    expect(README).toContain("In CI, see [*In CI*](#in-ci)");
+    expect(README).not.toContain("In CI, configure git");
+  });
+
+  it("it holds both consumers, the token's form, what a check cannot prove, the pin rule and the plain steps", () => {
+    const s = section();
+    for (const needle of [
+      "uses: llima/craftar-cli/ci/github@<",
+      "template: ci/azure/check.yml@craftar",
+      "forge-origin",
+      "forge-token",
+      "forgeOrigin",
+      "forgeToken",
+      "CODEOWNERS",
+      "a tag or a SHA",
+      "on a schedule",
+      "`in-sync`, `out-of-sync` or `error`",
+      "changes the job's `node`",
+      "--ignore-scripts",
+      "have not run on a real runner yet",
+    ]) expect(s, needle).toContain(needle);
+    expect(s).not.toMatch(/@main\b|pull_request_target|@latest/);
+    expect(s).not.toMatch(/uses: \S+@v\d/);
+  });
+
+  it("the roadmap: Phase 1 ends with the wrappers, Later loses them and keeps the rest", () => {
+    const phase1 = lines.find((l) => l.startsWith("Phase 1"))!;
+    expect(phase1.endsWith("the CI wrappers (`ci/github/action.yml`, `ci/azure/check.yml`: `sync --check` as a pull request's gate).")).toBe(true);
+    const later = lines.find((l) => l.startsWith("Later:"))!;
+    expect(later).not.toContain("sync --check");
+    expect(later).not.toContain("GitHub Action");
+    expect(later).not.toContain("Azure");
+    expect(later).toContain("the Agent Plugin packaging of `craftar mcp`");
+    expect(later).toContain("`craftar docs validate`");
+  });
+
+  it("the status line gains its sentence", () => {
+    expect(lines.slice(0, 6).join("\n")).toContain("A GitHub Action and an Azure Pipelines template in this repository run `craftar sync --check` as a pull request's gate (see *In CI*).");
+  });
+});
