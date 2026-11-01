@@ -148,6 +148,21 @@ describe("review round 4 — a fence ends with its container", () => {
   });
 });
 
+describe("review round 5 — a top-level fence after a list", () => {
+  it("a fence at column 0 after a list item, with a blank line, is a top-level fence", () => {
+    expect(at("- item\n\n```js\ncode [a](a.md)\n```\n\n[b](b.md)\n")).toEqual(["7:5 b.md"]);
+  });
+  it("the same with no blank line", () => {
+    expect(at("- item\n```js\ncode [a](a.md)\n```\n\n[b](b.md)\n")).toEqual(["6:5 b.md"]);
+  });
+  it("after an ordered item", () => {
+    expect(dests("1. item\n\n```\n[a](a.md)\n```\n")).toEqual([]);
+  });
+  it("a tab inside an item's fence counts as the item's indent", () => {
+    expect(at("- ```\n\t[a](a.md)\n  ```\n[b](b.md)\n")).toEqual(["4:5 b.md"]);
+  });
+});
+
 describe("§6.2 — anchors", () => {
   it("GitHub slugs, with -1 for a repeat, and <a id> / <a name>", () => {
     const s = scanMarkdown("# Hello World!\n\n## Hello World\n\nSetext Title\n---\n\n## `code` and [link](x.md)\n\n<a id=\"custom\"></a> <a name='other'>\n");

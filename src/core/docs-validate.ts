@@ -325,6 +325,17 @@ function titleBetween(s: string, from: number, to: number): boolean {
   return true;
 }
 
+/** The width of a line's leading whitespace, a tab advancing to the next multiple of 4 (CommonMark). */
+function indentOf(line: string): number {
+  let w = 0;
+  for (const c of line) {
+    if (c === " ") w++;
+    else if (c === "\t") w += 4 - (w % 4);
+    else break;
+  }
+  return w;
+}
+
 /** `line` without up to `n` leading spaces. */
 function withoutIndent(line: string, n: number): string {
   let i = 0;
@@ -397,7 +408,7 @@ export function scanMarkdown(input: string): Scan {
       // A fence ends with its container: an unquoted line ends one opened in a quote, and a non-blank line indented less
       // than the item ends one opened in a list item; that line is then read as any other.
       const leftQuote = fence.quoted && !quote;
-      const leftItem = fence.strip > 0 && raw.trim() !== "" && raw.length - raw.trimStart().length < fence.strip;
+      const leftItem = fence.strip > 0 && raw.trim() !== "" && indentOf(raw) < fence.strip;
       if (!leftQuote && !leftItem) {
         if (close.test(withoutIndent(raw, fence.strip))) fence = null;
         continue;
@@ -417,6 +428,8 @@ export function scanMarkdown(input: string): Scan {
       continue;
     }
 
+    // A fence indented less than the item's content is not the item's: it ends the list (CommonMark), a top-level fence.
+    if (inList && indentOf(raw) < listIndent && FENCE_OPEN.test(raw)) inList = false;
     const strip = inList ? listIndent : 0;
     const open = FENCE_OPEN.exec(withoutIndent(raw, strip));
     if (open && !(open[1][0] === "`" && open[2].includes("`"))) {
