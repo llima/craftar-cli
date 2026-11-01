@@ -1,7 +1,8 @@
 /**
  * External-process execution (design D3): every external program craftar runs — git, dotnet, docker — is run
  * from here; `process.env` is read only as `execProgram`'s default. capture (stdout of a finished process,
- * execFile), execProgram (stdout and stderr, resolved by onPath) and spawnInherited (inherited output, spawn).
+ * execFile), execProgram (stdout and stderr, resolved by onPath), spawnInherited (inherited output, spawn),
+ * streamProgram (stdin written, stdout read, whatever the exit) and openProgram (a child craftar talks to).
  * A program is resolved by onPath before it is run. No shell.
  */
 import { execFile, spawn } from "node:child_process";
@@ -130,10 +131,10 @@ function childEnv(env: NodeJS.ProcessEnv, program: string, opts: { keepIndexFile
   return result;
 }
 
-/** Whether `file` is named `git` (`git.exe` on win32, without case), given by name or by an absolute path. */
+/** Whether `file` is named `git` (`git.exe` or `git.com` on win32, the names `onPath` takes, without case), given by name or by an absolute path. */
 function isGitProgram(file: string): boolean {
   const name = path.basename(file);
-  return WIN ? ["git", "git.exe"].includes(name.toLowerCase()) : name === "git";
+  return WIN ? ["git", "git.exe", "git.com"].includes(name.toLowerCase()) : name === "git";
 }
 
 /** A file; off win32 also executable; any error → false. */

@@ -7,6 +7,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { gitIsRepo, gitRead } from "./forge.js";
 import { execProgram, openProgram, streamProgram, type OpenedProgram } from "./proc.js";
+import { findSecrets } from "./secrets.js";
 import { climbsOut } from "./text.js";
 
 export interface WorkspaceSource {
@@ -51,7 +52,8 @@ export interface GitSource extends WorkspaceSource {
   label: { name: "commit"; short: string } | { name: "index" };
 }
 
-const shownRevision = (rev: string) => (/^[\w./@^~+-]{1,200}$/.test(rev) ? rev : "(not shown)");
+// The value reaches a terminal and a CI log: as `shownName`, only what is shaped like what it claims to be is printed.
+const shownRevision = (rev: string) => (/^[\w./@^~+][\w./@^~+-]{0,199}$/.test(rev) && findSecrets(rev).length === 0 ? rev : "(not shown)");
 
 /** A git version as numbers; [0, 0] when it cannot be read, so every version-gated flag is left out. */
 async function gitVersion(): Promise<[number, number]> {
@@ -83,14 +85,16 @@ export async function gitSource(root: string, spec: GitSourceSpec): Promise<GitS
   // --no-lazy-fetch needs git 2.45: without it, a partial clone's missing blob would be fetched.
   const lazy = atLeast(version, 2, 45) ? ["--no-lazy-fetch"] : [];
   const base = [...lazy, ...gitRead(start)];
-  const { stdout: prefixOut } = await execProgram("git", [...gitRead(start), "rev-parse", "--show-prefix"]);
+  const { stdout: prefixOut } = await execProgram("git", [...base, "rev-parse", "--show-prefix"]);
+  // Only the line ending: a directory can start with a space, and a wrong prefix reads as `no craftar.yaml`.
+  const atStart = prefixOut.replace(/\r?\n$/, "");
   const rest = path.relative(start, root).split(path.sep).join("/");
-  const prefix = rest === "" ? prefixOut.trim() : `${prefixOut.trim()}${rest}/`;
+  const prefix = rest === "" ? atStart : `${atStart}${rest}/`;
 
   const entries = new Map<string, { mode: string; oid: string }>();
   let label: GitSource["label"];
   if ("rev" in spec) {
-    const commit = await resolveCommit(start, spec.rev, atLeast(version, 2, 30));
+    const commit = await resolveCommit(base, spec.rev, atLeast(version, 2, 30));
     label = { name: "commit", short: commit.slice(0, 8) };
     const listed = await streamProgram("git", [...base, "ls-tree", "-r", "-z", "--full-tree", commit], { input: "" });
     if (listed.code !== 0) throw new GitSourceRefusal(`cannot read commit ${label.short}`);
@@ -135,12 +139,12 @@ export async function gitSource(root: string, spec: GitSourceSpec): Promise<GitS
   };
 }
 
-async function resolveCommit(dir: string, rev: string, endOfOptions: boolean): Promise<string> {
+async function resolveCommit(base: string[], rev: string, endOfOptions: boolean): Promise<string> {
   const shown = shownRevision(rev);
   if (rev.startsWith("-")) throw new GitSourceRefusal(`unknown revision ${shown}`);
   const verify = async (spelled: string): Promise<string | null> => {
     try {
-      const args = [...gitRead(dir), "rev-parse", "--verify", "-q", ...(endOfOptions ? ["--end-of-options"] : []), spelled];
+      const args = [...base, "rev-parse", "--verify", "-q", ...(endOfOptions ? ["--end-of-options"] : []), spelled];
       return (await execProgram("git", args)).stdout.trim() || null;
     } catch {
       return null;

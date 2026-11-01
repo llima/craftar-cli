@@ -836,10 +836,11 @@ program
 const DIFF_PAINT = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
 
 /** `sync --check --committed` / `--index`: the same listing and exit as `sync --check`, over what git holds (spec 49 §5). */
-async function checkGitSource(o: { workspace: string; check: boolean; committed?: string | boolean; index: boolean; unavailableOk: boolean; offline: boolean }): Promise<void> {
+async function checkGitSource(o: { workspace: string; check: boolean; committed?: string | boolean; index: boolean; unavailableOk: boolean; offline: boolean; dryRun: boolean; overwriteDrift: boolean }): Promise<void> {
   if (o.unavailableOk && o.committed === undefined && !o.index) fail("--unavailable-ok needs --committed or --index");
   if (!o.check) fail("--committed and --index need --check");
   if (o.committed !== undefined && o.index) fail("--committed and --index are exclusive");
+  if (o.dryRun || o.overwriteDrift) fail("--dry-run and --overwrite-drift cannot be combined with --committed or --index: nothing is written");
   const notChecked = (reason: string) => {
     console.error(`not checked: ${reason}`);
   };

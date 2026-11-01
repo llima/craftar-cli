@@ -12,6 +12,7 @@ import { diskSource, gitSource } from "../src/core/workspace-source.js";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
 import { removeWithRetry } from "./helpers/fs.js";
+import { acmePrimary } from "./helpers/agents-md-primary.js";
 import { remoteForge } from "./helpers/remote.js";
 import { TSX_LOADER } from "./helpers/tsx-loader.js";
 
@@ -152,22 +153,76 @@ describe("sync --check --committed", () => {
     expect(git(repo, "status", "--porcelain")).toBe(before);
     expect(await fs.readFile(path.join(ws, "craftar.lock"))).toEqual(lockBefore);
   });
-  it("does not start a filter, a textconv or an fsmonitor", async () => {
+  it.skipIf(process.platform === "win32")("does not start a filter, a textconv or an fsmonitor, for --committed and --index", async () => {
     const { repo, ws } = await committed();
     const record = path.join(repo, ".git", "ran");
     const script = path.join(repo, ".git", "record.sh");
-    await fs.writeFile(script, `#!/bin/sh\necho ran >> "${record.replace(/\\/g, "/")}"\ncat\n`, { mode: 0o755 });
-    const quoted = script.replace(/\\/g, "/");
-    git(repo, "config", "filter.x.clean", quoted);
-    git(repo, "config", "filter.x.smudge", quoted);
-    git(repo, "config", "diff.x.textconv", quoted);
-    git(repo, "config", "core.fsmonitor", quoted);
-    await fs.appendFile(path.join(repo, ".git/info/attributes"), "* filter=x diff=x\n").catch(async () => {
-      await writeFiles(repo, { ".git/info/attributes": "* filter=x diff=x\n" });
-    });
+    await fs.writeFile(script, `#!/bin/sh\necho ran >> "${record}"\ncat\n`, { mode: 0o755 });
+    git(repo, "config", "filter.x.clean", script);
+    git(repo, "config", "filter.x.smudge", script);
+    git(repo, "config", "diff.x.textconv", script);
+    await writeFiles(repo, { ".git/info/attributes": "* filter=x diff=x\n" });
+    // The control: the recorder does run when git has a reason to start it.
+    await writeFiles(repo, { "control.txt": "x\n" });
+    git(repo, "add", "control.txt");
+    await expect(fs.access(record)).resolves.toBeUndefined();
+    git(repo, "commit", "-qm", "control");
+    git(repo, "config", "core.fsmonitor", script);
+    await fs.rm(record);
     expect(check(ws, "--committed").code).toBe(0);
+    expect(check(ws, "--index").code).toBe(0);
     await expect(fs.access(record)).rejects.toThrow();
   });
+  it("reads what plan() reads from the commit: a Kiro resource and CLAUDE.md", async () => {
+    const s = await acmePrimary({
+      schema: 5,
+      params: { "agents-md.primary": true },
+      extraIngredients: [{ meta: { type: "agent", name: "reader", description: "d", resources: ["file://.kiro/steering/sub/"] }, files: { "agent.md": "body\n" } }],
+    });
+    cleanups.push(s.cleanup);
+    const ws = s.wsRoot;
+    git(ws, "init", "-q");
+    expect(runCli(["sync", "--workspace", ws]).code).toBe(0);
+    await writeFiles(ws, { ".kiro/steering/style.md": "x\n", ".kiro/steering/sub/x.md": "x\n", "CLAUDE.md": "# no import\n" });
+    git(ws, "add", ".");
+    git(ws, "commit", "-qm", "c");
+    await fs.rm(path.join(ws, ".kiro/steering/style.md"));
+    await fs.rm(path.join(ws, ".kiro/steering/sub"), { recursive: true });
+    await fs.rm(path.join(ws, "CLAUDE.md"));
+    const refusal = "name a file the plan does not write";
+    const disk = check(ws);
+    expect(disk.stderr).toContain(refusal);
+    expect(disk.stdout).not.toContain("keeps Claude Code from reading");
+    const held = check(ws, "--committed");
+    expect(held.stderr).not.toContain(refusal);
+    expect(held.stdout).toContain("keeps Claude Code from reading");
+  });
+  it("reads an intent-to-add entry as a different file under --index", async () => {
+    const { ws, repo } = await committed();
+    git(repo, "rm", "-q", "--cached", RULE);
+    git(repo, "add", "-N", RULE);
+    const r = check(ws, "--index");
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/drift/);
+  });
+  it("fails on a blob git no longer holds, and does not read it as new", async () => {
+    const { ws, repo } = await committed();
+    const oid = git(repo, "rev-parse", `HEAD:${RULE}`).trim();
+    await fs.rm(path.join(repo, ".git/objects", oid.slice(0, 2), oid.slice(2)), { force: true });
+    for (const args of [["--committed"], ["--committed", "--unavailable-ok"]]) {
+      const r = check(ws, ...args);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("cannot read object");
+    }
+  });
+  for (const lead of [" sp", "\tt"]) {
+    it.skipIf(process.platform === "win32")(`reads a workspace below a directory starting with ${JSON.stringify(lead)}`, async () => {
+      const { ws } = await committed(`${lead}/w`);
+      const r = check(ws, "--committed", "--unavailable-ok");
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("in sync");
+    });
+  }
 });
 
 describe("refusals", () => {
@@ -183,6 +238,24 @@ describe("refusals", () => {
     expect(check(ws, "--committed", "--index").stderr).toContain("exclusive");
     expect(check(ws, "--unavailable-ok").stderr).toContain("needs --committed or --index");
   });
+  it("--dry-run and --overwrite-drift beside either flag", async () => {
+    const { ws } = await committed();
+    expect(check(ws, "--committed", "--dry-run").code).toBe(1);
+    expect(check(ws, "--index", "--overwrite-drift").stderr).toContain("cannot be combined");
+  });
+  it("a bare repository", async () => {
+    const dir = await tmpDir();
+    cleanups.push(() => removeWithRetry(dir));
+    git(dir, "init", "-q", "--bare");
+    const r = check(dir, "--committed");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("git repository");
+  });
+  it("the index with no craftar.yaml names the index", async () => {
+    const { ws, repo } = await committed();
+    git(repo, "rm", "-q", "--cached", "craftar.yaml");
+    expect(check(ws, "--index").stderr).toContain("the index has no craftar.yaml");
+  });
   it("off a repository", async () => {
     const dir = await tmpDir();
     cleanups.push(() => removeWithRetry(dir));
@@ -196,10 +269,15 @@ describe("refusals", () => {
     const dashed = check(ws, "--committed=--foo");
     expect(dashed.code).toBe(1);
     expect(dashed.stderr).toContain("unknown revision");
+    expect(dashed.stderr).not.toContain("--foo");
     const token = "a b\u001b[31m";
     const odd = check(ws, `--committed=${token}`);
     expect(odd.code).toBe(1);
     expect(odd.stderr).not.toContain(token);
+    const secret = "ghp_" + "x".repeat(36);
+    const flagged = check(ws, `--committed=${secret}`);
+    expect(flagged.code).toBe(1);
+    expect(flagged.stderr).not.toContain(secret);
   });
   it("a commit with no craftar.yaml is refused without --unavailable-ok and passes with it", async () => {
     const { ws, repo } = await committed();
@@ -261,6 +339,30 @@ describe("--unavailable-ok", () => {
     const r = check(ws, "--committed", "--unavailable-ok");
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("invalid craftar.yaml");
+  });
+  it("passes a failed fetch with no cached copy, and a cached copy that cannot resolve the ref", async () => {
+    const rf = await remoteForge(FORGE);
+    cleanups.push(rf.cleanup);
+    const home = await tmpDir();
+    cleanups.push(() => removeWithRetry(home));
+    const dir = await tmpDir();
+    cleanups.push(() => removeWithRetry(dir));
+    git(dir, "init", "-q");
+    const env = { CRAFTAR_HOME: home };
+    const url = `${rf.url}-gone`;
+    await writeFiles(dir, { "craftar.yaml": `forge: ${url}\nprofile: acme\n` });
+    git(dir, "add", ".");
+    git(dir, "commit", "-qm", "gone");
+    const none = runCli(["sync", "--check", "--committed", "--unavailable-ok", "--workspace", dir], { env });
+    expect(none.code).toBe(0);
+    expect(none.stderr).toContain("not checked: cannot fetch the Forge");
+    await writeFiles(dir, { "craftar.yaml": `forge: ${rf.url}\nref: no-such-ref\nprofile: acme\n` });
+    git(dir, "add", ".");
+    git(dir, "commit", "-qm", "ref");
+    expect(runCli(["sync", "--check", "--committed", "--workspace", dir], { env }).code).toBe(1);
+    const noRef = runCli(["sync", "--check", "--committed", "--offline", "--unavailable-ok", "--workspace", dir], { env });
+    expect(noRef.code).toBe(0);
+    expect(noRef.stderr).toContain("not checked:");
   });
   it("passes a remote Forge with no cached copy under --offline", async () => {
     const rf = await remoteForge(FORGE);
@@ -424,13 +526,14 @@ describe("gitSource", () => {
     const w = await loadWorkspace(ws);
     const p = await plan(w);
     const st = await status(w, p, null);
-    w.source = await gitSource(ws, { rev: "HEAD" });
+    const source = await gitSource(ws, { rev: "HEAD" });
+    w.source = source;
     try {
       await expect(apply(w, p, st)).rejects.toThrow("cannot be written");
       w.source = diskSource(ws);
       await expect(apply(w, p, st, { dryRun: true })).resolves.toBeDefined();
     } finally {
-      await w.source.close();
+      await source.close();
     }
   });
 });
@@ -466,6 +569,50 @@ describe.skipIf(process.platform === "win32")("from a real git hook", () => {
     git(repo, "commit", "-qm", "partial", "other.txt");
     const text = await fs.readFile(out, "utf8");
     expect(text).toContain("index in sync");
+  });
+  it("passes a commit from a branch without the workspace's directory", async () => {
+    const { repo, root } = await committed("acme/harness");
+    git(repo, "rm", "-rq", "acme");
+    git(repo, "commit", "-qm", "no workspace");
+    const out = path.join(root, "hook.out");
+    const bare = path.join(root, "bare.git");
+    execFileSync("git", ["init", "-q", "--bare", bare]);
+    await hook(repo, "pre-push", `sync --check --committed HEAD --unavailable-ok --workspace acme/harness`, out);
+    git(repo, "push", "-q", bare, "HEAD:refs/heads/x");
+    const text = await fs.readFile(out, "utf8");
+    expect(text).toContain("not checked: this commit has no craftar.yaml");
+    expect(text).toContain("exit=0");
+  });
+  it("in a linked worktree, a sync records the Forge's commit, and a remote Forge's cache leaves the repository alone", async () => {
+    const { repo, root, forge, ws } = await committed();
+    git(forge, "init", "-q");
+    git(forge, "add", ".");
+    git(forge, "commit", "-qm", "forge");
+    const forgeHead = git(forge, "rev-parse", "HEAD").trim();
+    const tree = path.join(root, "linked");
+    git(repo, "worktree", "add", "-q", tree);
+    const out = path.join(root, "hook.out");
+    const rf = await remoteForge(FORGE);
+    cleanups.push(rf.cleanup);
+    const away = await tmpDir();
+    cleanups.push(() => removeWithRetry(away));
+    await writeFiles(away, { "craftar.yaml": `forge: ${rf.url}\nprofile: acme\n` });
+    const refs = git(repo, "for-each-ref");
+    const trees = git(repo, "worktree", "list");
+    const file = path.join(repo, ".git", "hooks", "pre-commit");
+    const home = await tmpDir();
+    cleanups.push(() => removeWithRetry(home));
+    const cli = `"${process.execPath}" --import "${TSX_LOADER}" "${CLI}"`;
+    await fs.writeFile(file, `#!/bin/sh\nexport CRAFTAR_NO_REGISTRY=1 CRAFTAR_HOME="${home}"\n${cli} sync --workspace "${ws}" > "${out}" 2>&1\n${cli} sync --workspace "${away}" >> "${out}" 2>&1\necho "exit=$?" >> "${out}"\nexit 0\n`, { mode: 0o755 });
+    await fs.writeFile(path.join(tree, "other.txt"), "x\n");
+    git(tree, "add", "other.txt");
+    git(tree, "commit", "-qm", "c");
+    expect(await fs.readFile(out, "utf8")).toContain("exit=0");
+    expect(JSON.parse(await fs.readFile(path.join(ws, "craftar.lock"), "utf8")).forge.commit).toBe(forgeHead);
+    // The commit moved the linked branch, and nothing else: the cache's fetch and `worktree add` went to the cache.
+    const line = (t: string) => t.split("\n").filter((l) => !l.endsWith("refs/heads/linked")).join("\n");
+    expect(line(git(repo, "for-each-ref"))).toBe(line(refs));
+    expect(line(git(repo, "worktree", "list")).split("\n").length).toBe(line(trees).split("\n").length);
   });
   it("under pre-push, reads the pushed commit", async () => {
     const { repo, root } = await committed();
