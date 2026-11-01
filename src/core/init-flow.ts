@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { forgeFor } from "./profile-local.js";
 import { escapeSummary, escapingRows } from "./contain.js";
 import { ProfileSchema, TARGETS, type Registry, type RegistryEntry, type WorkspaceConfig } from "../schema/index.js";
 import { planClone } from "./clone.js";
@@ -741,6 +742,7 @@ export async function askInit(
 
         // Show the Forge's recipes list
         io.say(`Recipes in ${answeredForge}:`);
+        // A new profile has no locals: the root's recipes (spec 51 §4.3).
         const allRecipes = [...forge.recipes.values()].sort((a, b) => a.name.localeCompare(b.name));
         for (let i = 0; i < allRecipes.length; i++) {
           const r = allRecipes[i];
@@ -978,7 +980,8 @@ export async function askInit(
       if (yn !== true) break recipeLoop;
 
       io.say(`Recipes in ${answeredForge}:`);
-      const allRecipes = [...forge.recipes.values()].sort((a, b) => a.name.localeCompare(b.name));
+      // The profile's view (spec 51 §4.3): its local recipes are listed, and found when in use.
+      const allRecipes = [...forgeFor(forge, answeredProfile!).recipes.values()].sort((a, b) => a.name.localeCompare(b.name));
       const inUse = resolution.recipes;
       const orderedInUse = inUse.map((name) => allRecipes.find((r) => r.name === name)!);
       const notInUseRecipes = allRecipes.filter((r) => !inUse.includes(r.name));

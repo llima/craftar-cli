@@ -34,6 +34,7 @@ import { diffIngredients, listVariants, profileOf, type Distance, type Ingredien
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { forgeFor as profileView } from "./core/profile-local.js";
+import type { Forge } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
   hunkAt,
@@ -1283,6 +1284,11 @@ program
     console.log(pc.bold(f.path));
     console.log(`  target      ${f.target}`);
     console.log(`  ingredient  ${f.ingredient}${f.origin ? pc.dim(`  (imported from ${f.origin.workspace}:${f.origin.path})`) : ""}`);
+    // Spec 51 §4.4: at schema 8, where the file's ingredient lives.
+    if (f.scope !== undefined) {
+      const where = f.scope === null ? "several ingredients" : f.scope === "profile" ? `profile ${f.profile} (${f.dir})` : `forge (${f.dir})`;
+      console.log(`  source      ${where}`);
+    }
     if (f.via) console.log(`  via recipes ${f.via.join(" → ")}`);
     // Spec 11 §4.2 (Ruling 15): which layer filled each section. AGENTS.md (rule/*) is not one ingredient.
     if (f.sections.length) {
@@ -1723,7 +1729,7 @@ program
     // Column 2: <N ingredient(s)>
     // Column 3: ← parents (empty when none)
     // Column 4: reason (empty when none)
-    const col1 = r.recipes.map((rec) => `${rec.name}${rec.slot ? ` [slot ${rec.slot}]` : ""}`);
+    const col1 = r.recipes.map((rec) => `${rec.name}${localMark(rec)}${rec.slot ? ` [slot ${rec.slot}]` : ""}`);
     const col2 = r.recipes.map((rec) => `${rec.ingredients.length} ingredient${rec.ingredients.length === 1 ? "" : "s"}`);
     const col3 = r.recipes.map((rec) => rec.extends.length ? `← ${rec.extends.join(", ")}` : "");
     const col4 = r.recipes.map((rec) => {
@@ -1784,6 +1790,17 @@ program
     console.log(`\n  ${countLine}`);
     for (const w of r.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   });
+
+/** A catalogue row local to a profile (spec 51 §4.4): marked in the text; empty below schema 8, where no row has a scope. */
+function localMark(row: { scope?: string; profile?: string | null }): string {
+  return row.scope === "profile" ? ` (local to ${row.profile})` : "";
+}
+
+/** A local recipe the `--recipe` chain names: the context profile's, else the one profile that holds it. */
+function localRecipeOf(forge: Forge, name: string, profile: string | undefined) {
+  if (profile !== undefined) return forge.locals.get(profile)?.recipes.get(name)?.recipe;
+  return [...forge.locals.values()].map((l) => l.recipes.get(name)?.recipe).find((r) => r !== undefined);
+}
 
 /* ---------------------------------------------------------------- ingredients */
 program
@@ -1864,7 +1881,7 @@ program
       const w1Recipe = Math.max(...col1Recipe.map((s) => s.length), 0);
 
       for (const entry of result.recipe.chain) {
-        const rec = forg.recipes.get(entry.recipe);
+        const rec = forg.recipes.get(entry.recipe) ?? localRecipeOf(forg, entry.recipe, context?.profile);
         const ext = rec?.extends.length ? `  ← ${rec.extends.join(", ")}` : "";
         const slot = rec?.slot ? `  [slot ${rec.slot}]` : "";
         console.log(`${entry.recipe}${ext}${slot}`);
@@ -1903,7 +1920,7 @@ program
       const allCol3: string[] = [];
       for (const ing of result.ingredients) {
         const col1 = ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name;
-        allCol1.push(col1);
+        allCol1.push(col1 + localMark(ing));
         allCol2.push(`targets ${ing.targets === "*" ? "*" : ((ing.targets as string[]).join(", ") || "none")}`);
         allCol3.push(`in ${ing.recipes.length ? ing.recipes.join(", ") : "no recipe"}`);
       }
@@ -1924,7 +1941,7 @@ program
         if (!ings?.length) continue;
         console.log(type);
         for (const ing of ings) {
-          const col1 = ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name;
+          const col1 = (ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name) + localMark(ing);
           const col2 = `targets ${ing.targets === "*" ? "*" : ((ing.targets as string[]).join(", ") || "none")}`;
           const col3 = `in ${ing.recipes.length ? ing.recipes.join(", ") : "no recipe"}`;
           const desc = ing.description ? `— ${ing.description}` : "";

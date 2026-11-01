@@ -13,6 +13,7 @@ import { resolve, type ParamLayer } from "./resolve.js";
 import { errorText } from "./schema-fault.js";
 import { loadForgeFor, unsetDeclared, unsetRefused, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
+import { readsProfileLocal } from "./profile-local.js";
 
 /*
  * What the reading commands answer, as data (spec 35 §5.1): one builder per shape, called by the CLI, by
@@ -189,6 +190,10 @@ export interface ExplainedFile {
   profile: string;
   recipes: string[];
   hash: string;
+  /** At Forge schema 8 and above only (spec 51 §4.4): where the file's ingredient lives — null for a file built from several. */
+  scope?: "forge" | "profile" | null;
+  /** Its folder, Forge-relative and POSIX, so a cached tree never prints its entry's name; null as `scope` is. */
+  dir?: string | null;
 }
 
 /** The planned file at `file`, compared as given (the caller normalizes); null when the Forge does not produce it. */
@@ -210,7 +215,16 @@ export function explainFile(ws: Workspace, p: Plan, file: string): ExplainedFile
     profile: ws.config.profile,
     recipes: [...p.resolution.recipes],
     hash: hashNormalized(f.content),
+    ...(readsProfileLocal(ws.forge.manifest) ? sourceOf(ws, ing) : {}),
   };
+}
+
+/** Where a file's one ingredient lives (spec 51 §4.4). */
+function sourceOf(ws: Workspace, ing: { ref: string; dir: string } | undefined): { scope: "forge" | "profile" | null; dir: string | null } {
+  if (!ing) return { scope: null, dir: null };
+  const dir = path.relative(ws.forge.root, ing.dir).split(path.sep).join("/");
+  const local = ws.forge.locals.get(ws.config.profile)?.ingredients.get(ing.ref as never);
+  return { scope: local && local.dir === ing.dir ? "profile" : "forge", dir };
 }
 
 /** The document `craftar targets --json` prints (spec 16 §4.4). */
