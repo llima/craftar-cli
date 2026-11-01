@@ -135,6 +135,19 @@ describe("review round 3", () => {
   });
 });
 
+describe("review round 4 — a fence ends with its container", () => {
+  it("an unclosed fence in a list item ends at a line indented less than the item", () => {
+    expect(dests("- ```\n  code\n\nNext [z](z.md)\n")).toEqual(["z.md"]);
+    expect(dests("1. x\n\n    ```\n    code\n\nNext [z](z.md)\n")).toEqual(["z.md"]);
+  });
+  it("an unclosed fence in a block quote ends at an unquoted line", () => {
+    expect(dests("> ```\n> code\n\nplain [q](q.md)\n")).toEqual(["q.md"]);
+  });
+  it("a blank line inside an item's fence does not end it", () => {
+    expect(dests("- ```\n  a\n\n  [x](m.md)\n  ```\n")).toEqual([]);
+  });
+});
+
 describe("§6.2 — anchors", () => {
   it("GitHub slugs, with -1 for a repeat, and <a id> / <a name>", () => {
     const s = scanMarkdown("# Hello World!\n\n## Hello World\n\nSetext Title\n---\n\n## `code` and [link](x.md)\n\n<a id=\"custom\"></a> <a name='other'>\n");

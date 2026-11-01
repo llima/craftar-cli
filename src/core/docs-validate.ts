@@ -347,7 +347,7 @@ export function scanMarkdown(input: string): Scan {
   }
 
   let paragraph: SrcLine[] = [];
-  let fence: { char: string; len: number; strip: number } | null = null;
+  let fence: { char: string; len: number; strip: number; quoted: boolean } | null = null;
   /** Where the current list item's content starts: a fence indented that far belongs to the item (CommonMark). */
   let listIndent = 0;
   let htmlBlock: string | null = null;
@@ -394,8 +394,16 @@ export function scanMarkdown(input: string): Scan {
 
     if (fence) {
       const close = new RegExp(`^ {0,3}${fence.char === "`" ? "`" : "~"}{${fence.len},}[ \\t]*$`);
-      if (close.test(withoutIndent(raw, fence.strip))) fence = null;
-      continue;
+      // A fence ends with its container: an unquoted line ends one opened in a quote, and a non-blank line indented less
+      // than the item ends one opened in a list item; that line is then read as any other.
+      const leftQuote = fence.quoted && !quote;
+      const leftItem = fence.strip > 0 && raw.trim() !== "" && raw.length - raw.trimStart().length < fence.strip;
+      if (!leftQuote && !leftItem) {
+        if (close.test(withoutIndent(raw, fence.strip))) fence = null;
+        continue;
+      }
+      fence = null;
+      inList = false;
     }
     if (htmlBlock) {
       if (raw.toLowerCase().includes(htmlBlock)) htmlBlock = null;
@@ -413,7 +421,7 @@ export function scanMarkdown(input: string): Scan {
     const open = FENCE_OPEN.exec(withoutIndent(raw, strip));
     if (open && !(open[1][0] === "`" && open[2].includes("`"))) {
       flush();
-      fence = { char: open[1][0], len: open[1].length, strip };
+      fence = { char: open[1][0], len: open[1].length, strip, quoted: quote !== null };
       afterBlank = false;
       continue;
     }
@@ -449,7 +457,7 @@ export function scanMarkdown(input: string): Scan {
       // A fence on the item's own line opens there, its content indented to the item's.
       const itemFence = FENCE_OPEN.exec(raw.slice(listItem[0].length));
       if (itemFence && !(itemFence[1][0] === "`" && itemFence[2].includes("`"))) {
-        fence = { char: itemFence[1][0], len: itemFence[1].length, strip: listIndent };
+        fence = { char: itemFence[1][0], len: itemFence[1].length, strip: listIndent, quoted: quote !== null };
         afterBlank = false;
         continue;
       }
