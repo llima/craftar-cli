@@ -16,6 +16,8 @@ import { listFiles, realpathOfNearest } from "./forge.js";
 export interface ContainRoot {
   given: string;
   real: string;
+  /** For a tree inside a Forge (a profile's folder, spec 51 §4.2): its Forge-relative POSIX path, which prefixes every path a message names, and what the tree is called there. */
+  label?: { rel: string; tree: string };
 }
 
 /** `leaves`: outside the root. `git`: under the root's top-level `.git`. `unresolved`: a dangling link, or a loop. */
@@ -24,6 +26,11 @@ export type Escape = "leaves" | "unresolved" | "git";
 export async function containRoot(given: string): Promise<ContainRoot> {
   const abs = path.resolve(given);
   return { given: abs, real: await realpathOfNearest(abs) };
+}
+
+/** A tree inside a Forge, measured on its own (spec 51 §4.2): `rel` is Forge-relative and POSIX, `tree` names it in a refusal. */
+export async function containSubRoot(forge: ContainRoot, rel: string, tree: string): Promise<ContainRoot> {
+  return { ...(await containRoot(path.join(forge.given, rel))), label: { rel, tree } };
 }
 
 const posix = (p: string) => p.split(path.sep).join("/");
@@ -186,13 +193,14 @@ export function escapingRows(rows: ReadonlyArray<{ path: string; escapes?: Escap
 
 /** Refuse anything but a regular file inside the root, before a byte is read and before an `open` that could block. */
 async function assertReadable(root: ContainRoot, abs: string): Promise<void> {
-  const rel = relOf(root, abs);
+  const rel = root.label ? `${root.label.rel}/${relOf(root, abs)}` : relOf(root, abs);
+  const tree = root.label?.tree ?? "the Forge";
   const { escape, viaLink } = await probe(root, abs, new Map());
   if (escape === "unresolved") throw new Error(`${rel}: a symbolic link that leads nowhere — fix or remove it`);
   if (escape === "git") throw new Error(`${rel}: a symbolic link into the Forge's .git — craftar does not read it; replace it with a file`);
   if (escape === "leaves") {
-    if (viaLink) throw new Error(`${rel}: a symbolic link out of the Forge — craftar does not read it; replace it with a file inside the Forge`);
-    throw new Error(`${rel}: outside the Forge — craftar does not read it`);
+    if (viaLink) throw new Error(`${rel}: a symbolic link out of ${tree} — craftar does not read it; replace it with a file inside ${tree}`);
+    throw new Error(`${rel}: outside ${tree} — craftar does not read it`);
   }
   let st;
   try {

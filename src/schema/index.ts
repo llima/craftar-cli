@@ -599,6 +599,8 @@ export const FORGE_SCHEMA_AGENTS_MD_PRIMARY = 5;
 export const FORGE_SCHEMA_TARGET_SECTIONS = 6;
 /** Forge schema that reads the rules index (spec 44 §4.1). */
 export const FORGE_SCHEMA_RULES_INDEX = 7;
+/** Forge schema that reads a profile's own ingredients and recipes under `profiles/<p>/` (spec 51 §4.1). */
+export const FORGE_SCHEMA_PROFILE_LOCAL = 8;
 
 export const ForgeManifestSchema = z.object({
   name: z.string(),
@@ -611,6 +613,7 @@ export const ForgeManifestSchema = z.object({
       z.literal(FORGE_SCHEMA_AGENTS_MD_PRIMARY),
       z.literal(FORGE_SCHEMA_TARGET_SECTIONS),
       z.literal(FORGE_SCHEMA_RULES_INDEX),
+      z.literal(FORGE_SCHEMA_PROFILE_LOCAL),
     ])
     .default(1),
   description: z.string().optional(),
