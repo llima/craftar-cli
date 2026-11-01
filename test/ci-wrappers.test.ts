@@ -125,7 +125,7 @@ function newBase(): string {
 
 function cleanEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
-  for (const k of Object.keys(env)) if (/^(GITHUB_|RUNNER_|TF_BUILD$|AGENT_|CRAFTAR_CI_|GIT_CONFIG)/i.test(k)) delete env[k];
+  for (const k of Object.keys(env)) if (/^(GITHUB_|RUNNER_|TF_BUILD$|AGENT_|CRAFTAR_CI_|GIT_CONFIG|NO_COLOR$|FORCE_COLOR$)/i.test(k)) delete env[k];
   return env;
 }
 
@@ -253,6 +253,7 @@ const HOSTILE = [
   "##[error]x",
   "::add-mask::x",
   "  ::error::x",
+  "\u0085::add-mask::nel",
 ].join("\n");
 const HOSTILE_PATH = "a%b:c,d;e]f\ng.md";
 
@@ -265,6 +266,7 @@ function hostileFaults(source: string, vendor: Vendor): string[] {
   for (const s of ["##vso[task.setvariable variable=EVIL]", "##VSO[task.setvariable variable=EVIL2]", "##vso[task.complete", "##[error]"]) if (r.stdout.includes(s)) faults.push(`intact: ${s}`);
   if (/^\s*::add-mask::x/m.test(r.stdout)) faults.push("intact: add-mask");
   if (/^\s*::error::x/m.test(r.stdout)) faults.push("intact: error");
+  if (/^[\s\u0085]*::add-mask::nel/m.test(r.stdout)) faults.push("intact: a line behind a next-line character");
   const annotation = vendor === "azure" ? "##vso[task.logissue type=error;sourcepath=a%25b:c,d%3Be%5Df%0Ag.md]craftar: drift" : "::error file=a%25b%3Ac%2Cd;e]f%0Ag.md::craftar: drift";
   if (!r.stdout.split("\n").includes(annotation)) faults.push("path not escaped");
   return faults;
@@ -273,7 +275,8 @@ function hostileFaults(source: string, vendor: Vendor): string[] {
 /** The legitimate command must be the only one on its line, whatever the agent's parser does with a second. */
 function annotationPathFaults(source: string): string[] {
   const r = runProgram(source, "azure", { check: DRIFT, status: statusJson(["##vso[task.setvariable variable=EVIL]x.sh", "##VSO[task.complete]y.sh", "##[error]z.sh"].map((p) => ({ path: p, state: "new" }))) });
-  return anno(r).filter((l) => /##(vso)?\[/gi[Symbol.match](l)!.length !== 1);
+  const lines = anno(r);
+  return lines.length !== 3 ? [`${lines.length} annotations`] : lines.filter((l) => /##(vso)?\[/gi[Symbol.match](l)!.length !== 1);
 }
 
 const VENDORS: Vendor[] = ["github", "azure"];
@@ -467,7 +470,7 @@ describe.each(VENDORS)("the token and hostile text under %s (spec 46 §10, 6 and
     ["redirects left on", '`GIT_CONFIG_VALUE_${n + 1}`]: "false"', '`GIT_CONFIG_VALUE_${n + 1}`]: "true"', tokenFaults],
     ["the Base64 not masked", "console.log(azure ? `${VSO}task.setsecret]${basic}` : `::add-mask::${basic}`);", "", tokenFaults],
     ["the status given the check's environment", 'craftar(["status", "--json", "--offline"], childEnv)', 'craftar(["status", "--json", "--offline"], checkEnv)', tokenFaults],
-    ["neuter as identity", 'const neuter = (t) => t.replace(/##(vso)?\\[/gi, (m) => m.slice(0, -1) + " [").replace(/^(\\s*)::/gm, "$1: :");', "const neuter = (t) => t;", hostileFaults],
+    ["neuter as identity", 'const neuter = (t) => t.replace(/##(vso)?\\[/gi, (m) => m.slice(0, -1) + " [").replace(/^([\\s\\u0085]*)::/gm, "$1: :");', "const neuter = (t) => t;", hostileFaults],
     ["prop as identity", 'const prop = (s) => azure ? esc(s).replace(/;/g, "%3B").replace(/\\]/g, "%5D").replace(/\\[/g, "%5B") : esc(s).replace(/:/g, "%3A").replace(/,/g, "%2C");', "const prop = (s) => s;", hostileFaults],
   ];
   it.each(removedSafety)("catches %s", (_name, from, to, faults) => {

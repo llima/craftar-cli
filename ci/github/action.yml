@@ -78,7 +78,7 @@ runs:
             [`GIT_CONFIG_KEY_${n + 1}`]: "http.followRedirects", [`GIT_CONFIG_VALUE_${n + 1}`]: "false",
           });
         }
-        const neuter = (t) => t.replace(/##(vso)?\[/gi, (m) => m.slice(0, -1) + " [").replace(/^(\s*)::/gm, "$1: :");
+        const neuter = (t) => t.replace(/##(vso)?\[/gi, (m) => m.slice(0, -1) + " [").replace(/^([\s\u0085]*)::/gm, "$1: :");
         // cwd outside the checkout: git must not read the checkout's .git/config, which may persist a credential
         const craftar = (args, e) => spawnSync(process.execPath, [bin, ...args, "--workspace", root], { cwd: temp, env: e, encoding: "utf8", maxBuffer: 1 << 26 });
         const check = craftar(["sync", "--check"], checkEnv);
