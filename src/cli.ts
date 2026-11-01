@@ -129,6 +129,8 @@ program
     for (const x of r.rejected) console.log(`  ${pc.red("rejected")} ${x.name} — ${x.reason}`);
     for (const x of r.preferKiro ?? []) console.log(`  ${pc.cyan("prefer-kiro")} ${preferredLine(x)}`);
     // Spec 33 §5.3: what the block provides is left to its recipe.
+    // Spec 51 §4.5: a source equal to the profile's local is reused there, never placed at the root.
+    for (const x of r.localReused ?? []) console.log(`  local to profile ${r.profile}: ${x.ref} (${x.dir}) — reused there`);
     for (const x of r.leftToRecipes) console.log(`  left to recipe ${x.recipe} (integrations.${x.slot}): ${x.refs.join(", ")} — not compared; when this workspace resolves that recipe, craftar status shows whether its copies differ`);
     // Spec 10 §4.2: how a templated base was reused, and what the profile gained.
     // Spec 11 §4.3: `; sections …` when a section value filled the render.

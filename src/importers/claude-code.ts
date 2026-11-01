@@ -1,17 +1,18 @@
 import { promises as fs } from "node:fs";
-import { forgeFor } from "../core/profile-local.js";
+import { forgeFor, ProfileLocalLoadError, readsProfileLocal, type LocalLayer } from "../core/profile-local.js";
 import path from "node:path";
+import os from "node:os";
 import { containRoot, escapeDestinationLine, escapeFileLine, escapeOf, escapeSourceLine, escapingPaths, readForgeFile, readForgeText, type ContainRoot, type Escape, type EscapingPath } from "../core/contain.js";
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
-import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST, readIngredientText } from "../core/forge.js";
+import { copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, FORGE_MANIFEST, readIngredientText, type Forge } from "../core/forge.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, hasUtf16Bom } from "../core/secrets.js";
 import { registrationCitations, serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
 import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
-import { FORGE_SCHEMA_SECTIONS, IngredientSchema, ProfileSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
+import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, resolve, sectionKey, type Resolution } from "../core/resolve.js";
 import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE } from "../core/rules-index.js";
@@ -69,6 +70,8 @@ export interface ImportReport {
   recipeSplits: { shared: string; owned: string; reason: string }[];
   /** Sources left to an integration recipe: not scanned, not compared, not written (spec 33 §5.3). */
   leftToRecipes: { recipe: string; slot: string; refs: string[] }[];
+  /** Spec 51 §4.5: sources equal to a local of the importing profile — reused there, never placed in a root recipe. Absent when none. */
+  localReused?: { ref: string; dir: string }[];
   /** What happened to profiles/<p>/profile.yaml. */
   profileWrite: { path: string; action: "created" | "edited" | "unchanged"; fields: string[] };
   /** What happened to craftar.forge.yaml: created, bumped to `schema: 2`, or left alone (spec 11 §6.14). */
@@ -113,6 +116,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
   let planned: { report: ImportReport; targets: Target[]; config: PlannedConfig | null };
   try {
     planned = await planImport(opts, stage);
+    await checkStagedLocals(opts, stage, planned.report);
   } catch (e) {
     throw new Error(`${e instanceof Error ? e.message : String(e)}\nThe Forge was left untouched.`, { cause: e });
   }
@@ -137,6 +141,72 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
     if (report.kiro.kind === "not-computed") report.warnings.push(`import report: Kiro sections not computed: ${report.kiro.message}`);
   }
   return report;
+}
+
+/**
+ * Spec 51 §4.2 and §4.5, at Forge schema 8 and above, before the first write: the staged result is written to a scratch
+ * copy and loaded there, so an import never leaves a Forge that does not load (L1–L9); a reused local that no recipe the
+ * profile resolves cites is refused, since sync would remove its file; and a `.mcp.json` mixing local and root servers
+ * in an order the recipes cannot express is refused rather than read as a collision. A link under `profiles/<p>` that
+ * would carry a write into another profile's folder is refused first.
+ */
+async function checkStagedLocals(opts: ImportOptions, stage: ForgeStage, report: ImportReport): Promise<void> {
+  const root = stage.root;
+  const manifestAbs = path.join(root, FORGE_MANIFEST);
+  if (!(await exists(manifestAbs))) return;
+  const manifest = parseYaml(manifestAbs, stripBom(await stage.readText(manifestAbs)), ForgeManifestSchema);
+  if (!readsProfileLocal(manifest)) return;
+  const p = opts.profileName;
+  const folder = path.join(root, "profiles", p);
+  if (await fs.lstat(folder).then((st) => st.isSymbolicLink(), () => false)) {
+    throw new Error(`import: profiles/${p} is a symbolic link — a profile's folder holds its own files; replace it with a directory`);
+  }
+  const sub = await containRoot(folder);
+  for (const e of await stage.entries()) {
+    if (!e.abs.startsWith(folder + path.sep)) continue;
+    if (await escapeOf(sub, e.abs)) throw new Error(`import: ${e.rel}: a symbolic link out of the profile's folder — import does not write through it; replace it with a directory or a file inside the folder`);
+  }
+  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-import-proof-"));
+  try {
+    await copyForgeForProof(root, scratch);
+    await stage.flushTo(scratch);
+    let staged: Forge;
+    try {
+      staged = await loadForge(scratch);
+    } catch (e) {
+      if (e instanceof ProfileLocalLoadError) throw new Error(`import: the Forge would not load after this import:\n${e.message}`);
+      throw e;
+    }
+    let res: Resolution | null = null;
+    try {
+      res = resolve(staged, WorkspaceConfigSchema.parse({ forge: ".", profile: p }));
+    } catch {
+      res = null;
+    }
+    for (const x of report.localReused ?? []) {
+      if (!res?.ingredients.some((i) => i.ref === x.ref)) {
+        throw new Error(`import: ${x.ref} (${x.dir}) matches the workspace, but no recipe profile ${p} resolves cites it — sync would remove its file; add it to a recipe in profiles/${p}/recipes, then re-run`);
+      }
+    }
+    const local = staged.locals.get(p)?.ingredients;
+    const mcp = res?.ingredients.filter((i) => i.meta.type === "mcp") ?? [];
+    if (local && mcp.some((i) => local.has(i.ref))) {
+      let disk: string[] = [];
+      try {
+        const parsed = JSON.parse(stripBom(await fs.readFile(path.join(opts.workspaceRoot, ".mcp.json"), "utf8"))) as { mcpServers?: Record<string, unknown> };
+        disk = Object.keys(parsed.mcpServers ?? {});
+      } catch {
+        disk = [];
+      }
+      const planned = mcp.map((i) => outName(i.meta)).filter((n) => disk.includes(n));
+      const held = disk.filter((n) => planned.includes(n));
+      if (JSON.stringify(planned) !== JSON.stringify(held)) {
+        throw new Error(`import: .mcp.json lists its servers in an order the recipes cannot express once some are local to profile ${p} — order the file as the recipes resolve them, or keep those servers at the root`);
+      }
+    }
+  } finally {
+    await fs.rm(scratch, { recursive: true, force: true });
+  }
 }
 
 /** One ingredient read from the workspace, not yet decided (spec 10 §3, *Source*). */
@@ -736,22 +806,27 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const isVariant = (ref: string) => report.variants.some((v) => v.name === ref);
   const recipeOpts: RecipeOptions = { stage, dir: recipesDir, profile: opts.profileName, forge: ctx.forge, report, currentRules: currentRuleOrder(ctx.forge, opts.profileName), agentsMdOnly: primary?.agentsMdOnly ?? new Set() };
 
+  // Spec 51 §4.5: the importing profile's own recipes, at schema 8 and above.
+  const own = ctx.forge && readsProfileLocal(ctx.forge.manifest) ? ctx.forge.locals.get(opts.profileName) : undefined;
+  if (own) await swapInLocalRecipes(stage, forge, opts.profileName, own, report);
+  const place = (name: string, list: string[], description: string, holdsVariant: boolean) => placeComputed(recipeOpts, own, name, list, description, { holdsVariant });
+
   const stackRecipes: string[] = [];
   for (const [ruleRef, pattern] of scopedRules) {
     const ruleName = ruleRef.split("/")[1].replace(/--.*$/, "");
     const agents = [...agentBodies].filter(([ref, body]) => agentBelongsTo(ref.split("/")[1], ruleName, body)).map(([ref]) => ref);
     for (const a of agents) refs.base = refs.base.filter((r) => r !== a);
     const ingredients = [ruleRef, ...agents];
-    stackRecipes.push(await placeRecipe(recipeOpts, `stack-${ruleName}`, ingredients, `Conventions + reviewer for repos matching ${pattern}`, ingredients.some(isVariant)));
+    const placed = await place(`stack-${ruleName}`, ingredients, `Conventions + reviewer for repos matching ${pattern}`, ingredients.some(isVariant));
+    if (placed !== null) stackRecipes.push(placed);
   }
 
   const baseIngredients = unique(refs.base);
-  const baseName = await placeRecipe(recipeOpts, "base", baseIngredients, "Always-on conventions, commands, agents, scripts and MCP servers.", baseIngredients.some(isVariant));
-  const profileRecipes = [baseName, ...stackRecipes];
+  const baseName = await place("base", baseIngredients, "Always-on conventions, commands, agents, scripts and MCP servers.", baseIngredients.some(isVariant));
+  const profileRecipes = [...(baseName !== null ? [baseName] : []), ...stackRecipes];
   if (refs.steering.length) {
-    const n = `${opts.profileName}-steering`;
-    await writeOwnedRecipe(recipeOpts, n, refs.steering, `Hand-written Kiro steering specific to ${opts.profileName}.`);
-    profileRecipes.push(n);
+    const n = await placeComputed(recipeOpts, own, `${opts.profileName}-steering`, refs.steering, `Hand-written Kiro steering specific to ${opts.profileName}.`, "owned");
+    if (n !== null) profileRecipes.push(n);
   }
 
   /* ---- profile ---- */
@@ -1356,6 +1431,9 @@ async function writeIngredient(
   // The registration and cited params to carry into a hook variant — from the decision (spec 43 §7.2 row 10).
   let variantRegistration: unknown[] | undefined;
   let variantRegistrationParams: Record<string, { default?: string | number | boolean; description?: string }> | undefined;
+  // Spec 51 §4.5: a local of the importing profile is compared first, and never shadowed at the root.
+  const localDecision = run ? await decideLocal(stage, run, ref, sourceMeta, files, fingerprint, profile, source, report) : null;
+  if (localDecision) return localDecision;
   if (await stage.exists(path.join(dir, "ingredient.yaml"))) {
     let why: string | undefined;
     const d = run ? await decide(run.ctx, dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases, run.indexExpand) : { kind: "literal" as const, warn: "" };
@@ -1597,6 +1675,48 @@ async function writeIngredient(
  * `env` value, a name that is not slug-like) fails the whole import, naming its source, before the
  * first write — 0.2.4 wrote a Forge no command could load (spec 07, Ruling 6).
  */
+/**
+ * Spec 51 §4.5, at schema 8 and above: a source the importing profile holds as a local is reused when `decide()` answers
+ * `reuse` (or the bytes are equal), and refused otherwise — `import --local` (spec 51 Part B) is what rewrites a local.
+ * A source no root base and no own local holds, while another profile holds a local of that ref, is refused (I14): a
+ * root ingredient of that name would make the Forge fail its load (L1). Null when neither applies.
+ */
+async function decideLocal(
+  stage: ForgeStage,
+  run: { ctx: RunContext; others: Array<{ ref: string; meta: Ingredient; files: Record<string, string | Buffer> }>; runBases: Set<string>; indexExpand?: (text: string, target: "claude-code" | "kiro") => string },
+  ref: string,
+  sourceMeta: Ingredient,
+  files: Record<string, string | Buffer>,
+  fingerprint: string,
+  profile: string,
+  source: string,
+  report: ImportReport,
+): Promise<string | null> {
+  const forge = run.ctx.forge;
+  if (!forge || !readsProfileLocal(forge.manifest)) return null;
+  const local = forge.locals.get(profile)?.ingredients.get(ref as never);
+  if (local) {
+    const d = await decide(run.ctx, local.dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases, run.indexExpand);
+    const equal = d.kind === "reuse" || (d.kind === "literal" && (await fingerprintDir(local.dir, stage.reader())) === fingerprint);
+    const dir = path.relative(forge.root, local.dir).split(path.sep).join("/");
+    if (!equal) throw new Error(`import: ${source} differs from ${ref}, local to profile ${profile} (${dir}) — edit the local in the Forge, then re-run`);
+    if (d.kind === "reuse") {
+      if (d.inferred) report.inferred.push({ name: ref, values: d.inferred });
+      for (const x of d.delta ?? []) report.params.push({ ...x, from: ref });
+      if (d.sectioned) report.sectioned.push({ name: ref, sections: d.sectioned });
+      for (const x of d.sectionDelta ?? []) report.sections.push({ ...x, from: ref });
+    }
+    report.reused.push(ref);
+    (report.localReused ??= []).push({ ref, dir });
+    return ref;
+  }
+  const rootHas = await stage.exists(path.join(stage.root, "ingredients", typeFolder(sourceMeta.type), sourceMeta.name, "ingredient.yaml"));
+  if (!rootHas && [...forge.locals.values()].some((l) => l.ingredients.has(ref as never))) {
+    throw new Error(`import: I14 ${source} would become ${ref} at the root, a name another profile holds as a local — the Forge would not load; rename the source in the workspace`);
+  }
+  return null;
+}
+
 export function validateImported(meta: Ingredient): Ingredient {
   const r = IngredientSchema.safeParse(meta);
   if (r.success) return r.data;
@@ -1614,6 +1734,8 @@ export interface RecipeOptions {
   currentRules: string[] | null;
   /** Under agents-md.primary, the rules the importing workspace holds in AGENTS.md alone (spec 41 §4.10); empty otherwise. */
   agentsMdOnly: ReadonlySet<string>;
+  /** Set for a recipe in the profile's folder (spec 51 §4.5): the profile's local refs, which the recipe keeps. */
+  keepLocals?: ReadonlySet<string>;
 }
 
 /**
@@ -1663,6 +1785,60 @@ const recipeText = (name: string, description: string, ingredients: string[]) =>
  * a set — and, for a profile that already exists, in the same relative rule order, so AGENTS.md
  * does not reorder (Q10). Otherwise the profile gets its own `<name>--<profile>`.
  */
+/**
+ * Where a computed list goes at schema 8 (spec 51 §4.5), and below it what it always did. A computed recipe the profile
+ * holds in its folder is edited there and keeps its locals; any other loses the profile's locals, and the root refs a
+ * local recipe cites that the root recipe does not list (so neither forks it); left empty by that, it writes no recipe
+ * and the name is null. A name another profile holds as a local recipe takes the profile's own `<name>--<p>`.
+ */
+async function placeComputed(o: RecipeOptions, own: LocalLayer | undefined, name: string, list: string[], description: string, how: "owned" | { holdsVariant: boolean }): Promise<string | null> {
+  const below = (l: string[]) => (how === "owned" ? writeOwnedRecipe(o, name, l, description) : placeRecipe(o, name, l, description, how.holdsVariant));
+  if (!o.forge || !readsProfileLocal(o.forge.manifest)) return below(list);
+  const inFolder = own?.recipes.has(name) ? name : own?.recipes.has(`${name}--${o.profile}`) ? `${name}--${o.profile}` : null;
+  if (inFolder !== null) {
+    const dir = path.join(o.stage.root, "profiles", o.profile, "recipes");
+    return writeOwnedRecipe({ ...o, dir, keepLocals: new Set(own!.ingredients.keys()) }, inFolder, list, description);
+  }
+  const locals = new Set<string>(own?.ingredients.keys() ?? []);
+  const citedLocally = new Set<string>([...(own?.recipes.values() ?? [])].flatMap((r) => r.recipe.ingredients));
+  const rootListed = new Set(o.forge.recipes.get(name)?.ingredients ?? []);
+  const kept = list.filter((r) => !locals.has(r) && !(citedLocally.has(r) && !rootListed.has(r)));
+  if (list.length > 0 && kept.length === 0) return null;
+  const elsewhere = [...o.forge.locals.entries()].some(([q, l]) => q !== o.profile && l.recipes.has(name));
+  if (elsewhere) return writeOwnedRecipe(o, `${name}--${o.profile}`, kept, description);
+  return below(kept);
+}
+
+/**
+ * The variant swap in a recipe of the profile's folder that import does not compute (spec 51 §4.5): a base this run
+ * replaced by the profile's variant is replaced in place, and the profile's variant this run replaced by its base too,
+ * so the two never both resolve.
+ */
+async function swapInLocalRecipes(stage: ForgeStage, forge: string, profile: string, own: LocalLayer, report: ImportReport): Promise<void> {
+  const variants = new Set(report.variants.map((v) => v.name));
+  const reused = new Set(report.reused);
+  const suffix = `--${profile}`;
+  const to = (x: string): string => {
+    if (variants.has(`${x}${suffix}`)) return `${x}${suffix}`;
+    if (x.endsWith(suffix) && reused.has(x.slice(0, -suffix.length)) && !variants.has(x)) return x.slice(0, -suffix.length);
+    return x;
+  };
+  for (const r of own.recipes.values()) {
+    const next = r.recipe.ingredients.map(to);
+    if (JSON.stringify(next) === JSON.stringify(r.recipe.ingredients)) continue;
+    const abs = path.join(forge, r.file);
+    const raw = await stage.readText(abs);
+    const content = editYamlText(raw, { command: "import", label: r.file, keys: ["ingredients"] }, (doc) => {
+      const seq = doc.get("ingredients", true);
+      if (!YAML.isSeq(seq)) return;
+      for (const it of seq.items) if (YAML.isScalar(it)) it.value = to(String(it.value));
+    });
+    const after = RecipeSchema.safeParse(parseYamlText(r.file, content) ?? {});
+    if (!after.success || !isDeepStrictEqual(after.data.ingredients, next)) throw new Error(`import: cannot edit ${r.file} in place — reformat it by hand, commit, and re-run`);
+    stage.write(abs, content);
+  }
+}
+
 async function placeRecipe(o: RecipeOptions, name: string, list: string[], description: string, holdsVariant: boolean): Promise<string> {
   const owned = `${name}--${o.profile}`;
   const read = async (file: string) => parseYaml(file, stripBom(await o.stage.readText(file)), RecipeSchema).ingredients;
@@ -1711,6 +1887,7 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
  */
 async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], description: string): Promise<string> {
   const file = await recipeFile(o, name);
+  const label = `${path.relative(o.stage.root, o.dir).split(path.sep).join("/")}/${name}.yaml`;
   o.report.recipes.push(name);
   if (!(await o.stage.exists(file))) {
     o.stage.write(file, recipeText(name, description, list));
@@ -1718,7 +1895,8 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
   }
   const raw = await o.stage.readText(file);
   const before = parseYaml(file, stripBom(raw), RecipeSchema);
-  list = keepAgentsMdOnly(before.ingredients, list, o.agentsMdOnly);
+  // A recipe in the profile's folder keeps its locals, whose sources import does not read back (spec 51 §4.5).
+  list = keepAgentsMdOnly(before.ingredients, list, o.keepLocals ? new Set([...o.agentsMdOnly, ...o.keepLocals]) : o.agentsMdOnly);
   // Each existing entry in order: kept, swapped for its base in place, or dropped; then the rest of the list appended.
   const inPlace = (x: string): string | null => {
     if (list.includes(x)) return x;
@@ -1728,12 +1906,13 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
   const kept = before.ingredients.map(inPlace).filter((x): x is string => x !== null);
   const next = [...kept, ...list.filter((x) => !kept.includes(x))];
   if (JSON.stringify(next) === JSON.stringify(before.ingredients)) return name;
-  if (o.forge) {
+  if (o.forge && !o.keepLocals) {
     for (const q of o.forge.profiles.keys()) {
+      // Another profile's local of this name is not this recipe (spec 51 §4.5).
+      if (o.forge.locals.get(q)?.recipes.has(name)) continue;
       if (q !== o.profile && recipesOf(o.forge, q).has(name)) throw new Error(`import: recipe ${name} is also used by profile ${q} — its ingredients would change there`);
     }
   }
-  const label = `recipes/${name}.yaml`;
   const content = editYamlText(raw, { command: "import", label, keys: ["ingredients"] }, (doc) => {
     const seq = doc.get("ingredients", true);
     if (!YAML.isSeq(seq)) {
@@ -1893,10 +2072,14 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
   const before = parseYaml(file, stripBom(raw), ProfileSchema);
   const values = Object.fromEntries(report.params.map((x) => [x.key, String(ctx.P[x.key])]));
   const sectionValues = sectionChange(report, ctx);
-  const firstOwned = before.recipes.findIndex((r) => importOwned(r, name));
-  const kept = before.recipes.filter((r) => !importOwned(r, name));
-  const at = firstOwned === -1 ? kept.length : before.recipes.slice(0, firstOwned).filter((r) => !importOwned(r, name)).length;
-  const recipes = [...kept.slice(0, at), ...computed.recipes, ...kept.slice(at)];
+  // Spec 51 §4.5: a recipe in the profile's folder keeps its slot, whether or not this run computed it.
+  const folder = ctx.forge && readsProfileLocal(ctx.forge.manifest) ? new Set(ctx.forge.locals.get(name)?.recipes.keys() ?? []) : new Set<string>();
+  const owned = (r: string) => importOwned(r, name) && !folder.has(r);
+  const firstOwned = before.recipes.findIndex(owned);
+  const kept = before.recipes.filter((r) => !owned(r));
+  const at = firstOwned === -1 ? kept.length : before.recipes.slice(0, firstOwned).filter((r) => !owned(r)).length;
+  const placed = computed.recipes.filter((r) => !folder.has(r) || !before.recipes.includes(r));
+  const recipes = [...kept.slice(0, at), ...placed, ...kept.slice(at)];
   const targets = [...before.targets, ...computed.targets.filter((t) => !before.targets.includes(t))];
   const fields = [
     ...(Object.keys(values).length ? ["params"] : []),
@@ -1914,8 +2097,8 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
     if (fields.includes("recipes")) {
       const seq = doc.get("recipes", true);
       if (YAML.isSeq(seq)) {
-        const nodes = seq.items.filter((it) => !importOwned(String(YAML.isScalar(it) ? it.value : it), name));
-        seq.items = [...nodes.slice(0, at), ...computed.recipes.map((r) => doc.createNode(r)), ...nodes.slice(at)];
+        const nodes = seq.items.filter((it) => !owned(String(YAML.isScalar(it) ? it.value : it)));
+        seq.items = [...nodes.slice(0, at), ...placed.map((r) => doc.createNode(r)), ...nodes.slice(at)];
       } else doc.set("recipes", recipes);
     }
     if (fields.includes("targets")) {
