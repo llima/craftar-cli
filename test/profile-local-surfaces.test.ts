@@ -77,6 +77,24 @@ describe("recipes and ingredients --json at schema 8 (spec 51 §4.4)", () => {
     expect(ok.recipe.chain).toEqual([{ recipe: "extra", ingredients: ["rule/y"] }]);
   });
 
+  it("ingredients --recipe in a workspace context sees only that profile's locals", async () => {
+    const s = await at(8, { profile: "acme" });
+    await writeFiles(s.forgeRoot, localRecipe("globex", "globex-only", ["rule/y"]));
+    const r = runCli(["ingredients", "--recipe", "globex-only", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('recipe "globex-only" not found');
+    const own = json(["ingredients", "--recipe", "extra", "--json", "--workspace", s.wsRoot]);
+    expect(own.ingredients.map((x: { ref: string }) => x.ref)).toEqual(["rule/x"]);
+  });
+
+  it("ingredients --recipe with --forge alone takes the one profile that holds it, and prints its parents", async () => {
+    const s = await at(8);
+    await writeFiles(s.forgeRoot, { [`profiles/acme/recipes/acme-more.yaml`]: YAML.stringify({ name: "acme-more", extends: ["extra"], ingredients: [] }) });
+    const r = runCli(["ingredients", "--recipe", "acme-more", "--forge", s.forgeRoot]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("acme-more  ← extra");
+  });
+
   it("the text marks a local row", async () => {
     const s = await at(8);
     const r = runCli(["recipes", "--workspace", s.wsRoot]);

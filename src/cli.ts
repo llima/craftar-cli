@@ -1798,10 +1798,13 @@ function localMark(row: { scope?: string; profile?: string | null }): string {
   return row.scope === "profile" ? ` (local to ${row.profile})` : "";
 }
 
-/** A local recipe the `--recipe` chain names: the context profile's, else the one profile that holds it. */
-function localRecipeOf(forge: Forge, name: string, profile: string | undefined) {
-  if (profile !== undefined) return forge.locals.get(profile)?.recipes.get(name)?.recipe;
-  return [...forge.locals.values()].map((l) => l.recipes.get(name)?.recipe).find((r) => r !== undefined);
+/**
+ * A recipe of the `--recipe` chain, in the view `listIngredients` chose (spec 51 §4.4): the context profile's, else —
+ * with no context — the one profile that holds the chain's own recipe, which `listIngredients` has proved unique.
+ */
+function chainRecipeOf(forge: Forge, name: string, chainRoot: string, profile: string | undefined) {
+  const owner = profile ?? [...forge.locals].find(([, l]) => l.recipes.has(chainRoot))?.[0];
+  return (owner !== undefined ? profileView(forge, owner) : forge).recipes.get(name);
 }
 
 /* ---------------------------------------------------------------- ingredients */
@@ -1883,7 +1886,7 @@ program
       const w1Recipe = Math.max(...col1Recipe.map((s) => s.length), 0);
 
       for (const entry of result.recipe.chain) {
-        const rec = forg.recipes.get(entry.recipe) ?? localRecipeOf(forg, entry.recipe, context?.profile);
+        const rec = chainRecipeOf(forg, entry.recipe, result.recipe.name, context?.profile);
         const ext = rec?.extends.length ? `  ← ${rec.extends.join(", ")}` : "";
         const slot = rec?.slot ? `  [slot ${rec.slot}]` : "";
         console.log(`${entry.recipe}${ext}${slot}`);

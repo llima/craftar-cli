@@ -323,7 +323,8 @@ export function listIngredients(
   if (opts?.recipe !== undefined) {
     recipeName = opts.recipe;
     if (!chainView.recipes.has(recipeName)) {
-      const owners = gated ? [...forge.locals].filter(([, l]) => l.recipes.has(recipeName!)).map(([p]) => p).sort() : [];
+      // With a context the profile sees only its own locals; without one, the one profile that holds the name (spec 51 §4.4).
+      const owners = gated && !context ? [...forge.locals].filter(([, l]) => l.recipes.has(recipeName!)).map(([p]) => p).sort() : [];
       if (owners.length > 1) throw new Error(`recipe "${recipeName}" is local to profiles ${owners.join(", ")} — pass --profile`);
       if (owners.length === 1) {
         chainView = forgeFor(forge, owners[0]);
