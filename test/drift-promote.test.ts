@@ -2625,7 +2625,7 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     await expect(fs.access(path.join(scratchDir, "craftar.forge.yaml"))).resolves.toBeUndefined();
   });
 
-  it("R4b. copyForgeForProof — dangling link throws refusal", async () => {
+  it("R4b. copyForgeForProof — a dangling link is left out of the copy (spec 48 §4.2)", async () => {
     const { copyForgeForProof } = await import("../src/importers/drift-promote.js");
     const f = await F();
     gitInit(f.forgeRoot);
@@ -2644,9 +2644,8 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     const scratchDir = await tmpDir("craftar-scratch-");
     cleanups.push(() => fs.rm(scratchDir, { recursive: true, force: true }));
 
-    await expect(copyForgeForProof(f.forgeRoot, scratchDir)).rejects.toThrow(
-      "dangling-link.md is a symbolic link out of the Forge, or to nothing — promote cannot copy the Forge to prove its edit; fix or remove it",
-    );
+    await copyForgeForProof(f.forgeRoot, scratchDir);
+    await expect(fs.lstat(path.join(scratchDir, "dangling-link.md"))).rejects.toThrow();
   });
 
   it("R4c. copyForgeForProof — link to '.' (directory link) is skipped, not ELOOP", async () => {
@@ -2677,7 +2676,7 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     await expect(fs.access(path.join(scratchDir, "craftar.forge.yaml"))).resolves.toBeUndefined();
   });
 
-  it("R4d. copyForgeForProof — file link pointing outside the Forge throws refusal", async () => {
+  it("R4d. copyForgeForProof — a file link out of the Forge is left out of the copy (spec 48 §4.2)", async () => {
     const { copyForgeForProof } = await import("../src/importers/drift-promote.js");
     const f = await F();
     gitInit(f.forgeRoot);
@@ -2701,9 +2700,8 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     const scratchDir = await tmpDir("craftar-scratch-");
     cleanups.push(() => fs.rm(scratchDir, { recursive: true, force: true }));
 
-    await expect(copyForgeForProof(f.forgeRoot, scratchDir)).rejects.toThrow(
-      "outside-file-link.md is a symbolic link out of the Forge, or to nothing — promote cannot copy the Forge to prove its edit; fix or remove it",
-    );
+    await copyForgeForProof(f.forgeRoot, scratchDir);
+    await expect(fs.lstat(path.join(scratchDir, "outside-file-link.md"))).rejects.toThrow();
   });
 
   it("63. CLI: outside directory link → promote succeeds, nothing copied", async () => {
@@ -2738,13 +2736,16 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     expect(porcelain(f.forgeRoot)).not.toBe("");
   });
 
-  it("64. CLI: dangling link → refusal, exit 1, Forge untouched, no scratch left", async () => {
+  it("64. CLI: an unread dangling link and an unread file link out no longer refuse a promote (spec 48 §4.2)", async () => {
     const f = await F();
     gitInit(f.forgeRoot);
 
-    const linkPath = path.join(f.forgeRoot, "dangling.md");
+    const outside = await tmpDir("craftar-outside-");
+    cleanups.push(() => fs.rm(outside, { recursive: true, force: true }));
+    await fs.writeFile(path.join(outside, "secret.md"), "OUTSIDE-CONTENT");
     try {
-      await fs.symlink(path.join(f.forgeRoot, "gone.md"), linkPath);
+      await fs.symlink(path.join(f.forgeRoot, "gone.md"), path.join(f.forgeRoot, "dangling.md"));
+      await fs.symlink(path.join(outside, "secret.md"), path.join(f.forgeRoot, "out.md"));
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "EPERM") {
         // Windows without privilege — skip
@@ -2759,20 +2760,11 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
 
     expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
     await fs.writeFile(path.join(f.ws, A), "A edited\n");
-    const lockBefore = await f.lockBytes();
-    // Capture porcelain BEFORE promote - the dangling link is untracked
-    const porcelainBefore = porcelain(f.forgeRoot);
 
     const r = runCli(["drift", "promote", A, "--workspace", f.ws], { env: { TMPDIR: tmp, TEMP: tmp, TMP: tmp } });
-    expect(r.code).toBe(1);
-    expect(r.stdout).toBe("");
-    expect(r.stderr).toBe(
-      "error: dangling.md is a symbolic link out of the Forge, or to nothing — promote cannot copy the Forge to prove its edit; fix or remove it\n",
-    );
-    // Forge untouched — porcelain same as before
-    expect(porcelain(f.forgeRoot)).toBe(porcelainBefore);
-    // Lock unchanged
-    expect((await f.lockBytes()).equals(lockBefore)).toBe(true);
+    expect(r.code).toBe(0);
+    expect(r.stdout + r.stderr).not.toContain("OUTSIDE-CONTENT");
+    expect(r.stdout + r.stderr).not.toContain(outside);
 
     // No craftar-promote-* scratch left in the private temp dir
     expect(await scratchDirs(tmp)).toEqual([]);

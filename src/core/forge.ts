@@ -349,8 +349,6 @@ const SYMLINK_REFUSAL = (rel: string, command: string) =>
   `${rel} is a symbolic link in the Forge — ${command} does not write through a link; replace it with the file and commit`;
 const SYMLINK_DIR_REFUSAL = (rel: string, command: string) =>
   `${rel} is a symbolic link in the Forge — ${command} does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit`;
-const SYMLINK_OUT_OR_DANGLING = (rel: string) =>
-  `${rel} is a symbolic link out of the Forge, or to nothing — promote cannot copy the Forge to prove its edit; fix or remove it`;
 const NON_REGULAR_FILE_REFUSAL = (rel: string) =>
   `${rel} is not a regular file — promote cannot copy the Forge to prove its edit; remove it`;
 
@@ -364,7 +362,7 @@ const ROOT_DIRS = new Set(["ingredients", "recipes", "profiles"]);
  * - A symbolic link to a FILE whose real path is inside the Forge: copied as a regular file (dereferenced).
  * - A symbolic link to a DIRECTORY (inside or outside): skipped — except a root directory link
  *   (ingredients, recipes, profiles), which is refused because loadForge follows it and the scratch would not.
- * - A symbolic link that is dangling, or whose target is a file OUTSIDE the Forge: refused.
+ * - A symbolic link that is dangling, or whose target is a file OUTSIDE the Forge: left out; nothing can read it (spec 48 §4.2).
  * - A non-regular file (FIFO, socket, device): refused.
  * Exported so tests can verify the copy behaviour directly.
  */
@@ -392,8 +390,8 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string): P
           targetReal = await fs.realpath(entSrc);
           targetStat = await fs.stat(targetReal);
         } catch (e) {
-          // Dangling link or unresolvable — refuse
-          throw new Error(SYMLINK_OUT_OR_DANGLING(entRel));
+          // Dangling or unresolvable: nothing can read it, since the real Forge's readers refuse it first (spec 48 §4.2).
+          continue;
         }
 
         // If it's a directory (inside or outside Forge)
@@ -418,8 +416,8 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string): P
         // A name starting with ".." but not a ".." segment is valid (e.g. "..notes")
         const isOutside = relToForge === ".." || relToForge.startsWith(".." + path.sep) || path.isAbsolute(relToForge);
         if (isOutside) {
-          // File link to outside the Forge — refuse
-          throw new Error(SYMLINK_OUT_OR_DANGLING(entRel));
+          // Left out, for the same reason as a dangling link.
+          continue;
         }
 
         // File link to inside the Forge — copy the target's bytes as a regular file (dereferenced)
