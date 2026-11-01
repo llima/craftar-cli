@@ -774,9 +774,9 @@ reposCmd
 /* ---------------------------------------------------------------- sync */
 program
   .command("sync")
-  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces); refuses, writing nothing, when a declared parameter a file cites has no value; with --check, also exits 1 when AGENTS.md is over an explicit budget; warns for a generated file git ignores (mayBeIgnored in craftar.yaml lists one kept out on purpose)")
+  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces); refuses, writing nothing, when a declared parameter a file cites has no value; with --check, also exits 1 when AGENTS.md is over an explicit budget; warns for a generated file git ignores (mayBeIgnored in craftar.yaml lists one kept out on purpose); refuses the whole run when a path leaves the workspace through a symbolic link")
   .option("--workspace <dir>", "workspace root", ".")
-  .option("--check", "exit 1 when the workspace is out of date or has drift, or when AGENTS.md is over an explicit budget (CI mode)", false)
+  .option("--check", "exit 1 when the workspace is out of date or has drift, or when AGENTS.md is over an explicit budget, or when a path leaves the workspace through a symbolic link (CI mode)", false)
   .option("--dry-run", "show the plan, write nothing", false)
   .option("--overwrite-drift", "regenerate files that were hand-edited (their edits are lost)", false)
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
@@ -1417,7 +1417,7 @@ program
 program
   .command("doctor")
   .description(
-    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, generated files git ignores, the profile's templates block and dotnet when it has one, hooks-registered when the plan writes a registration, lock, status, registry entry): one line per finding — ok, warn or error — each with its fix. Reports only; reads without the network unless --fetch",
+    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, generated files git ignores, the profile's templates block and dotnet when it has one, hooks-registered when the plan writes a registration, lock, status, registry entry): one line per finding — ok, warn or error — each with its fix; a path that leaves the workspace through a symbolic link is an error (workspace-links). Reports only; reads without the network unless --fetch",
   )
   // No commander default: an explicit --workspace without craftar.yaml exits 1, the current directory without one runs the machine checks (spec 24 §4.1).
   .option("--workspace <dir>", "the workspace to check (default: the current directory, when it holds craftar.yaml)")
