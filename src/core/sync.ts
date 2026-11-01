@@ -1041,41 +1041,33 @@ export function kiroResourcesRefusal(u: Array<{ agent: string; path: string }>):
 /**
  * Check whether a CLAUDE.md imports AGENTS.md or blocks Claude Code from reading it (spec 41 §4.7).
  * @param readExisting - Function to read workspace files
- * @returns imports (true when @AGENTS.md found) and blocking (the files that block when not importing)
+ * @returns imports (true when an import line is found), importedBy (the first file holding one, else null) and blocking
+ * (the files that block when not importing)
  */
 export async function claudeMdBlocks(
   readExisting: (rel: string) => Promise<Buffer | null>,
-): Promise<{ imports: boolean; blocking: string[] }> {
-  const FILES = ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md"];
+): Promise<{ imports: boolean; importedBy: string | null; blocking: string[] }> {
   // An import is relative to the file that holds it (measured, Claude Code 2.1.310): from .claude/CLAUDE.md only
-  // `@../AGENTS.md` reaches the root's AGENTS.md. CLAUDE.local.md is not looked at for an import.
+  // `@../AGENTS.md` reaches the root's AGENTS.md; CLAUDE.local.md, beside CLAUDE.md, imports as it does (spec 50 §4.1,
+  // measured with Claude Code 2.1.316). What decides is whether the file holds the line, not whether it holds only that.
   const IMPORT_LINES: Array<[string, string[]]> = [
     ["CLAUDE.md", ["@AGENTS.md", "@./AGENTS.md"]],
     [".claude/CLAUDE.md", ["@../AGENTS.md"]],
+    ["CLAUDE.local.md", ["@AGENTS.md", "@./AGENTS.md"]],
   ];
 
+  const blocking: string[] = [];
   for (const [file, lines] of IMPORT_LINES) {
     const content = await readExisting(file);
-    if (content !== null) {
-      const text = stripBom(content.toString("utf8"));
-      for (const line of text.split("\n")) {
-        // Strip trailing CR first, then trailing spaces/tabs
-        const trimmed = line.replace(/\r$/, "").replace(/[ \t]+$/, "");
-        if (lines.includes(trimmed)) {
-          return { imports: true, blocking: [] };
-        }
-      }
+    if (content === null) continue;
+    const text = stripBom(content.toString("utf8"));
+    // Strip a trailing CR first, then trailing spaces and tabs.
+    if (text.split("\n").some((line) => lines.includes(line.replace(/\r$/, "").replace(/[ \t]+$/, "")))) {
+      return { imports: true, importedBy: file, blocking: [] };
     }
+    blocking.push(file);
   }
-
-  // Not importing: collect blocking files
-  const blocking: string[] = [];
-  for (const file of FILES) {
-    const content = await readExisting(file);
-    if (content !== null) blocking.push(file);
-  }
-
-  return { imports: false, blocking };
+  return { imports: false, importedBy: null, blocking };
 }
 
 /** The warning message for a CLAUDE.md that blocks AGENTS.md (spec 41 §4.7). */
