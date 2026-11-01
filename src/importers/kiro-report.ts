@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { containRoot, escapeOf, escapeSummary, escapingRows } from "../core/contain.js";
 import { exists, listFiles } from "../core/forge.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { loadWorkspaceConfig, plan, status, unsetDeclared, unsetSummary } from "../core/sync.js";
@@ -64,7 +65,7 @@ async function noteFor(workspaceRoot: string, rel: string, from: string, steerin
   // A rule --prefer-kiro took from its steering file: that mirror is the source now, so the note does not apply.
   if (preferred.includes(m[1])) return "";
   const rule = path.join(workspaceRoot, ".claude", "rules", `${m[1]}.md`);
-  if (!(await exists(rule))) return "";
+  if (!(await exists(rule)) || (await escapeOf(await containRoot(workspaceRoot), rule))) return "";
   return textLines(steeringBody(steering)) > textLines(await fs.readFile(rule, "utf8")) ? STEERING_BIGGER : "";
 }
 
@@ -94,8 +95,11 @@ export async function kiroReport(
     // A plan sync refuses (spec 29 §4.1) is compared with nothing: its files still hold the `{{key}}` and are never written.
     const unset = unsetDeclared(p);
     if (unset.length) return { kind: "not-computed", message: unsetSummary(unset) };
+    const rows = await status(ws, p, null);
+    const escaping = escapingRows(rows);
+    if (escaping.length) return { kind: "not-computed", message: escapeSummary(escaping) };
     const collisions: KiroCollision[] = [];
-    for (const s of await status(ws, p, null)) {
+    for (const s of rows) {
       if (s.state !== "collision" || !s.path.startsWith(".kiro/")) continue;
       const disk = await fs.readFile(path.join(root, s.path), "utf8");
       const from = s.ingredient ?? "";

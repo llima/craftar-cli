@@ -7,6 +7,7 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { containRoot, escapeFileLine, escapeOf } from "./contain.js";
 import type { InitIo } from "./init-flow.js";
 import { yesNo } from "./init-flow.js";
 import { generatedIgnored } from "./generated-ignored.js";
@@ -119,6 +120,9 @@ export async function editRecipes(
   }
 
   const file = path.join(ws.root, WORKSPACE_FILE);
+  // A link is fine to read, and is not written through when it escapes (spec 48 §4.3, case S).
+  const configEscape = await escapeOf(await containRoot(ws.root), file);
+  if (configEscape) throw new Error(escapeFileLine(WORKSPACE_FILE, configEscape));
   const content = editRecipesText(await fs.readFile(file, "utf8"), edit.recipes, `${op} recipe`);
 
   // The report is computed before the write, so a plan that fails leaves craftar.yaml untouched (§5.2 step 4).
@@ -158,14 +162,12 @@ export async function statusDigest(ws: Workspace, statuses: FileStatus[]): Promi
 
   for (const s of sorted) {
     const planned = s.planned ? hashNormalized(s.planned.content) : "-";
-    let disk: string;
-    try {
-      disk = hashNormalized(await fs.readFile(path.join(ws.root, s.path)));
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-        disk = "-";
-      } else {
-        throw e;
+    let disk = "-"; // what lies behind a link that escapes is not read (spec 48 §4.3)
+    if (!s.escapes) {
+      try {
+        disk = hashNormalized(await fs.readFile(path.join(ws.root, s.path)));
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
       }
     }
     rows.push(`${s.path}\0${s.state}\0${planned}\0${disk}`);

@@ -5,6 +5,7 @@
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { containRoot, escapeOf, type Escape } from "./contain.js";
 import { gitIsRepo, gitRead } from "./forge.js";
 import { execProgram, openProgram, streamProgram, type OpenedProgram } from "./proc.js";
 import { findSecrets } from "./secrets.js";
@@ -16,11 +17,22 @@ export interface WorkspaceSource {
   read(rel: string): Promise<Buffer | null>;
   /** Whether anything is at the path, a directory included (as an `lstat` answers). */
   exists(rel: string): Promise<boolean>;
+  /** Whether the path leaves the workspace through a link (spec 48 §4.3); a git source follows no link, so it is always null. */
+  escape(rel: string): Promise<Escape | null>;
+  /** Whether a `stat` finds something behind the path, so a dangling link does not count. */
+  reaches(rel: string): Promise<boolean>;
   close(): Promise<void>;
 }
 
 export function diskSource(root: string): WorkspaceSource {
+  let contain: ReturnType<typeof containRoot> | undefined;
+  const asked = new Map(); // parents shared by the paths of one source are asked once
   return {
+    escape: async (rel) => {
+      const r = await (contain ??= containRoot(root));
+      return escapeOf(r, path.join(r.given, rel), asked);
+    },
+    reaches: (rel) => fs.stat(path.join(root, rel)).then(() => true, () => false),
     kind: "disk",
     async read(rel) {
       try {
@@ -120,6 +132,10 @@ export async function gitSource(root: string, spec: GitSourceSpec): Promise<GitS
   const batch = new CatFile([...base, "cat-file", "--batch"], "rev" in spec ? {} : { keepIndexFile: true });
   return {
     kind: "git",
+    escape: async () => null,
+    reaches(rel) {
+      return this.exists(rel);
+    },
     label,
     async read(rel) {
       if (climbsOut(rel)) return null;

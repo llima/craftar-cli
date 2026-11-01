@@ -1,6 +1,7 @@
 import { promises as fs, constants as fsc } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { escapeLine, escapingRows } from "./contain.js";
 import { ENV_NAME, type ForgeSchema, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
@@ -11,7 +12,7 @@ import { FULL_SHA, cacheKey, classifyForge, CREDENTIAL_HIDDEN, inspectCache, UNV
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
-import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK } from "./sync.js";
+import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK , type FileStatus } from "./sync.js";
 import { outName, MCP_FILE, renderRegistration, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
 import { stripBom } from "./text.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX, dotnetVersion as defaultDotnetVersion, dotnetVersionInOwnDir, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
@@ -521,20 +522,30 @@ async function lockAndStatus(
   }
   if (lock === null) {
     w("lock", "warn", "absent — never synced", "craftar sync");
+    if (ws !== null && p !== null) workspaceLinks(await status(ws, p, null), w);
     return;
   }
   w("lock", "ok", `schema ${lock.schema}, generated ${lock.generatedAt.slice(0, 16).replace("T", " ")} UTC`);
   if (ws === null || p === null) return;
-  const st = await status(ws, p, lock);
+  const all = await status(ws, p, lock);
+  // `workspace-links` owns those rows, so the status check does not count them.
+  const st = all.filter((s) => !s.escapes);
   const row = rowStatus(st, lock);
   if (row === "up-to-date") {
     w("status", "ok", "up to date");
+    workspaceLinks(all, w);
     return;
   }
   const counts: Record<string, number> = {};
   for (const s of st) if (s.state !== "unchanged" && s.state !== "adopt") counts[s.state] = (counts[s.state] ?? 0) + 1;
   const detail = Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(", ");
   w("status", "warn", `${row} — ${detail}`, "craftar status, then craftar sync");
+  workspaceLinks(all, w);
+}
+
+/** Spec 48 §4.3: one `error` per path that escapes, present only with one. A refused sync, like `params`. */
+function workspaceLinks(st: FileStatus[], w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void): void {
+  for (const r of escapingRows(st)) w("workspace-links", "error", escapeLine(r.path, r.escapes), null);
 }
 
 /**

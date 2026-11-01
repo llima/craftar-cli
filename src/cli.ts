@@ -1,4 +1,4 @@
-import { forgeReader } from "./core/contain.js";
+import { escapeRefusal, escapingRows, forgeReader } from "./core/contain.js";
 import { Command } from "commander";
 import pc from "picocolors";
 import path from "node:path";
@@ -28,7 +28,7 @@ import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
-import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport } from "./core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
@@ -194,11 +194,12 @@ program
       console.log(JSON.stringify(report, null, 2));
       // exitCode, not process.exit: a piped object is not cut (spec 29 §4.1)
       // The object carries both reasons (unsetParams, the budget line in warnings): nothing on stderr
-      if (unset.length || agentsMdOverBudget(p) || kiroResourcesUnplanned(p)?.length) process.exitCode = 1;
+      if (unset.length || agentsMdOverBudget(p) || kiroResourcesUnplanned(p)?.length || escapingRows(st).length) process.exitCode = 1;
       return;
     }
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, false, forgeLine(ws, lock));
     if (refusalBlock(unset)) process.exitCode = 1;
+    if (escapeBlock(st)) process.exitCode = 1;
     if (budgetRefusalBlock(p)) process.exitCode = 1;
   });
 
@@ -209,6 +210,13 @@ program
 function refusalBlock(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): boolean {
   if (unset.length) errorLine(unsetRefusal(unset, opts));
   return unset.length > 0;
+}
+
+/** The refusal of spec 48 §4.3 for a command that goes on to print or exit by itself. Says whether there was one. */
+function escapeBlock(st: FileStatus[], opts: { thenSync?: boolean } = {}): boolean {
+  const rows = escapingRows(st);
+  if (rows.length) errorLine(escapeRefusal(rows, opts));
+  return rows.length > 0;
 }
 
 /**
@@ -586,7 +594,8 @@ program
       for (const n of step1Notes) console.log(`  note ${n}`);
       const unset = unsetDeclared(p);
       const cloning = cloneEntries.length > 0;
-      const refused = unset.length > 0;
+      const escaping = escapingRows(init.statuses);
+      const refused = unset.length > 0 || escaping.length > 0;
       if (!o.sync) {
         console.log(nextSyncLine(init.statuses, unset));
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
@@ -602,12 +611,13 @@ program
       }
       // Spec 29 §4.1, §6 case 11: craftar.yaml is written — the workspace layer is a place for the value — and the
       // first sync is not run. exitCode, not fail(): the `again` line still follows the block.
-      if (unset.length) {
+      if (refused) {
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
         if (cloning && answers === null) {
           console.log(NOT_CLONED_REFUSED);
         }
         refusalBlock(unset, { thenSync: true });
+        if (unset.length === 0) escapeBlock(init.statuses, { thenSync: true });
         again();
         process.exitCode = 1;
         return;
@@ -789,7 +799,7 @@ program
       // A refused sync is not "in sync", whatever the files say: the listing, then the block, and the exit is
       // exitCode's, so nothing queued is cut (spec 29 §4.1)
       // Both blocks are printed; either one, or a file out of sync, fails the check.
-      const refused = [refusalBlock(unset), budgetRefusalBlock(p)].some(Boolean);
+      const refused = [refusalBlock(unset), escapeBlock(st), budgetRefusalBlock(p)].some(Boolean);
       if (refused || bad.length) process.exitCode = 1;
       else console.log(pc.green("\nworkspace in sync"));
       return;
@@ -799,6 +809,11 @@ program
     if (unset.length) {
       for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
       fail(unsetRefusal(unset));
+    }
+    const escaping = escapingRows(st);
+    if (escaping.length) {
+      for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+      fail(escapeRefusal(escaping));
     }
     await applyAndReport(ws, p, st, lock, { dryRun: o.dryRun, overwriteDrift: o.overwriteDrift });
   });
@@ -830,6 +845,7 @@ program
     else if (o.exitCode) process.exitCode = 1;
     // Spec 29 §4.1: with no [path], --exit-code fails exactly when `sync --check` does — a refused sync included
     if (refusalBlock(unsetDeclared(p)) && o.exitCode && !only) process.exitCode = 1;
+    if (escapeBlock(st) && o.exitCode && !only) process.exitCode = 1;
     // The AGENTS.md budget, as the refusal above: always printed, failing only --exit-code with no [path]
     if (budgetRefusalBlock(p) && o.exitCode && !only) process.exitCode = 1;
   });
@@ -941,19 +957,21 @@ drift
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
-      console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: [...p.warnings, ...providedWarnings], unsetParams: unset }, null, 2));
-      if (unset.length) process.exitCode = 1;
+      console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: withEscapeLine([...p.warnings, ...providedWarnings], st), unsetParams: unset }, null, 2));
+      if (unset.length || escapingRows(st).length) process.exitCode = 1;
       return;
     }
     warnStderr(providedWarnings);
     if (named && !rows.length) {
       console.log(`${named.path} is not drifted (${named.state})`);
       if (refusalBlock(unset)) process.exitCode = 1;
+      if (escapeBlock(st)) process.exitCode = 1;
       return;
     }
     if (!rows.length) {
       console.log("no drift");
       if (refusalBlock(unset)) process.exitCode = 1;
+      if (escapeBlock(st)) process.exitCode = 1;
       return;
     }
     // Columns as wide as their longest value, as the spec's example lines them up (§4.2).
@@ -965,6 +983,7 @@ drift
       );
     if (!named) {
       if (refusalBlock(unset)) process.exitCode = 1;
+      if (escapeBlock(st)) process.exitCode = 1;
       return;
     }
     if (named.state === "orphan-drift") {
@@ -979,6 +998,7 @@ drift
       }
     } else await printFileDiff(ws.root, named);
     if (refusalBlock(unset)) process.exitCode = 1;
+    if (escapeBlock(st)) process.exitCode = 1;
   });
 
 drift
@@ -1004,6 +1024,11 @@ drift
     if (unset.length) {
       for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
       fail(unsetRefusal(unset));
+    }
+    const escaping = escapingRows(st);
+    if (escaping.length) {
+      for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+      fail(escapeRefusal(escaping));
     }
     const overwritePaths = new Set(paths);
     console.log(`discarding ${paths.length} hand edit(s): ${st.filter((s) => overwritePaths.has(s.path)).map((s) => s.path).join(", ")}`);

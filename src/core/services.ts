@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { containRoot, escapeOf } from "./contain.js";
 import type { EmitBase, PlannedFile } from "../emitters/types.js";
 import { outName } from "../emitters/shared.js";
 import { execProgram } from "./proc.js";
@@ -362,7 +363,7 @@ export function projectName(realRoot: string): string {
   return /^-*$/.test(slug) ? `craftar--${hash}` : `craftar-${slug}-${hash}`;
 }
 
-export type PendingReason = "missing" | "edited" | "unrecorded";
+export type PendingReason = "missing" | "edited" | "unrecorded" | "link";
 export interface PendingFile { path: string; reason: PendingReason }
 export interface RecordedService { name: string; ingredient: string }
 export interface Recorded {
@@ -387,7 +388,13 @@ export async function recordedServices(root: string, lock: Lock | null): Promise
   if (entries.length === 0) return out;
   if (!out.stack) out.pending.push({ path: STACK, reason: "unrecorded" });
   const intact = new Map<string, Buffer>();
+  const contain = await containRoot(root);
   for (const e of entries) {
+    // Any answer, so nothing behind such a path is read or handed to Compose (spec 48 §4.3).
+    if (await escapeOf(contain, path.join(contain.given, e.path))) {
+      out.pending.push({ path: e.path, reason: "link" });
+      continue;
+    }
     const bytes = await fs.readFile(path.join(root, e.path)).catch(() => null);
     if (bytes === null) out.pending.push({ path: e.path, reason: "missing" });
     else if (hashNormalized(bytes) !== e.hash) out.pending.push({ path: e.path, reason: "edited" });
@@ -457,6 +464,8 @@ export function pendingLine(p: PendingFile): string {
       return `${p.path} — edited — run craftar drift discard ${p.path}: it regenerates the file, or removes it when the Forge no longer produces it`;
     case "unrecorded":
       return `${p.path} is not craftar's — run craftar status`;
+    case "link":
+      return `${p.path} is a symbolic link craftar does not follow — replace it with a file`;
   }
 }
 

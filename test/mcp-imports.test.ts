@@ -74,7 +74,7 @@ describe("craftar mcp — what the server may import", () => {
         "./diff.js": ["renderDiff"],
         "./doctor.js": ["runDoctor", "workspaceReport"],
         "./drift.js": ["unmanaged"],
-        "./report.js": ["cachedCopyLine", "diffReport", "explainFile", "notProduced", "statusPath", "statusReport", "targetsReport"],
+        "./report.js": ["cachedCopyLine", "diffReport", "explainFile", "notProduced", "statusPath", "statusReport", "targetsReport", "withEscapeLine"],
         "./schema-fault.js": ["errorText", "schemaFault"],
         "./sync.js": ["loadForgeFor", "plan", "readLock", "readWorkspaceConfig", "status"],
         zod: ["z"],

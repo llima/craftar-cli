@@ -1,3 +1,4 @@
+import { escapeSummary, escapingRows } from "../core/contain.js";
 import { catalogueContext, listIngredients, listRecipes, withLoadWarnings } from "../core/catalogue.js";
 import { renderDiff } from "../core/diff.js";
 import { oneLine } from "../core/doctor.js";
@@ -219,6 +220,10 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
     if (unset.length) {
       return { status: 409, body: { error: unsetSummary(unset), warnings: [] } };
     }
+    const escaping = escapingRows(st);
+    if (escaping.length) {
+      return { status: 409, body: { error: escapeSummary(escaping), warnings: [] } };
+    }
 
     const outcome = await syncWorkspace(ws, p, st, lock, {
       home: deps.home,
@@ -238,7 +243,7 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
       recipes: p.resolution.recipes,
       targets: p.resolution.targets,
       ...report,
-      refused: report.unsetParams.length ? unsetSummary(report.unsetParams) : null,
+      refused: report.unsetParams.length ? unsetSummary(report.unsetParams) : escapingRows(st).length ? escapeSummary(escapingRows(st)) : null,
     };
     if (deps.allowWrites) {
       return {

@@ -144,9 +144,16 @@ export function escapeReason(escapes: Escape): string {
   }
 }
 
-/** The refusal block's lines: one per escaping path. */
-export function escapeRefusal(rows: readonly EscapingPath[]): string[] {
-  return rows.map((r) => escapeLine(r.path, r.escapes));
+/**
+ * The refusal block, without the `error: ` prefix: one line per escaping path. `thenSync` is `init`'s form, as in
+ * `unsetRefusal`: it has just written `craftar.yaml`, so that is what it says, and it ends with the sync to run.
+ */
+export function escapeRefusal(rows: readonly EscapingPath[], opts: { thenSync?: boolean } = {}): string {
+  return [
+    `${rows.length} path(s) craftar does not follow — ${opts.thenSync ? "craftar.yaml written, sync not run" : "nothing written"}`,
+    ...rows.map((r) => `  ${escapeLine(r.path, r.escapes)}`),
+    ...(opts.thenSync ? ["  fix each, then run craftar sync"] : []),
+  ].join("\n");
 }
 
 /** The one-line reason, for a surface that shows a workspace as refused. */

@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { containRoot, readForgeFile, readForgeText, type ContainRoot } from "../core/contain.js";
+import { containRoot, escapeFileLine, escapeOf, escapeReason, escapingPaths, readForgeFile, readForgeText, type ContainRoot, type Escape, type EscapingPath } from "../core/contain.js";
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST, readIngredientText } from "../core/forge.js";
@@ -907,6 +907,24 @@ export function rulePaths(rawText: string | null): { present: boolean; value?: s
     }
     return items.length ? { present: true, value: items } : { present: true };
   }
+}
+
+/**
+ * The files of one ingredient `readEmitted` would read that escape the workspace, as workspace-relative paths; shared by
+ * `planImport` and `drift promote`, each deciding what its answers mean (spec 48 §4.4). A linked `skills/<name>`
+ * directory is not among them: `readEmitted` skips it. Its names reach no output from here but the path that escapes.
+ */
+export async function escapingSource(root: string, type: "rule" | "agent" | "command" | "skill" | "script" | "hook", rel: string): Promise<EscapingPath[]> {
+  const folder = { rule: "rules", agent: "agents", command: "commands", skill: "skills", script: "scripts", hook: "hooks" }[type];
+  const base = `.claude/${folder}/${rel}`;
+  const contain = await containRoot(root);
+  let names = [base];
+  if (type === "skill") {
+    const stat = await fs.lstat(path.join(contain.given, base)).catch(() => null);
+    if (stat?.isDirectory()) names = (await listFiles(path.join(contain.given, base))).map((f) => `${base}/${f}`);
+    else if (stat?.isSymbolicLink() && !rel.endsWith(".md")) names = [];
+  }
+  return escapingPaths(contain, names);
 }
 
 /**
@@ -1889,6 +1907,9 @@ async function planConfig(ws: string, forge: string, profile: string, targets: T
   const abs = path.join(ws, "craftar.yaml");
   const rel = path.relative(ws, forge).replace(/\\/g, "/") || ".";
   const fresh = YAML.stringify({ forge: rel, profile, targets });
+  // Asked with lstat, before the Forge is flushed: a dangling link is not read as absent (spec 48 §4.3, case S).
+  const configEscape = await escapeOf(await containRoot(ws), path.resolve(abs));
+  if (configEscape) throw new Error(escapeFileLine("craftar.yaml", configEscape));
   const raw = (await exists(abs)) ? await fs.readFile(abs, "utf8") : null;
   // Read as a mapping; the shape is checked below (not a mapping → refused, then WorkspaceConfigSchema).
   const before = (raw === null ? null : parseWorkspaceYaml("craftar.yaml", raw)) as Record<string, unknown> | null | undefined;

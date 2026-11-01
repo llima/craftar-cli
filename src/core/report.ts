@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { escapeReason, escapeSummary, escapingRows } from "./contain.js";
 import { EXAMPLE_SETTINGS } from "../emitters/shared.js";
 import type { Lock } from "../schema/index.js";
 import { listTargets, type ListTargetsResult } from "./capabilities.js";
@@ -36,7 +37,8 @@ export const statusPath = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, 
 export const notProduced = (p: string, profile: string) => `${p} is not produced by the Forge for profile ${profile}`;
 
 /** Why sync leaves a file alone, for the three states it skips. */
-export function explainSkip(s: Pick<FileStatus, "state">): string {
+export function explainSkip(s: Pick<FileStatus, "state" | "path" | "escapes">): string {
+  if (s.escapes) return escapeSummary([{ path: s.path, escapes: s.escapes }]);
   switch (s.state) {
     case "drift":
       return "hand-edited since last sync — `craftar drift show <path>`, then `craftar drift discard` or `craftar drift promote`";
@@ -74,6 +76,12 @@ export interface StatusReport {
   unsetParams: UnsetParam[];
 }
 
+/** Spec 48 §4.3: the reason is built from the rows, since `plan()` does not see the lock. No key is added for it. */
+export function withEscapeLine(warnings: string[], statuses: ReadonlyArray<Pick<FileStatus, "path" | "escapes">>): string[] {
+  const rows = escapingRows(statuses);
+  return rows.length ? [...warnings, escapeSummary(rows)] : warnings;
+}
+
 export function statusReport(ws: Workspace, p: Plan, lock: Lock | null, statuses: FileStatus[]): StatusReport {
   const o = ws.origin;
   return {
@@ -87,8 +95,8 @@ export function statusReport(ws: Workspace, p: Plan, lock: Lock | null, statuses
       fetched: o.fetched,
     },
     // The planned buffer never leaves the process: dropped here, once, for every reader of the document.
-    statuses: statuses.map(({ planned, ...s }) => s),
-    warnings: p.warnings,
+    statuses: statuses.map(({ planned, escapes, ...s }) => s),
+    warnings: withEscapeLine(p.warnings, statuses),
     unsetParams: unsetDeclared(p),
   };
 }
@@ -117,6 +125,11 @@ export async function diffReport(ws: Pick<Workspace, "root">, rows: FileStatus[]
   for (const s of rows) {
     if (!diffShows(s.state)) continue;
     const noted = (note: string): DiffRow => ({ path: s.path, state: s.state, added: null, removed: null, note, disk: null, forge: null });
+    if (s.escapes) {
+      // Nothing of what lies behind the link is read: a header and a note, on every surface.
+      out.push(noted(`content not shown: ${escapeReason(s.escapes)}`));
+      continue;
+    }
     if (s.state === "orphan-drift") {
       // No body: sync keeps this file
       out.push(noted(explainSkip(s)));
@@ -155,8 +168,9 @@ export async function diffReport(ws: Pick<Workspace, "root">, rows: FileStatus[]
  * the whole body read from disk, or — for EXAMPLE_SETTINGS, whose content is never shown — `{ body: null, note:
  * EXAMPLE_CONTENT_HIDDEN }`. The one reader of such a body.
  */
-export async function orphanDriftBody(root: string, s: Pick<FileStatus, "path" | "state">): Promise<{ body: string | null; note: string | null }> {
+export async function orphanDriftBody(root: string, s: Pick<FileStatus, "path" | "state" | "escapes">): Promise<{ body: string | null; note: string | null }> {
   if (s.state !== "orphan-drift") throw new Error("state must be orphan-drift");
+  if (s.escapes) return { body: null, note: `content not shown: ${escapeReason(s.escapes)}` };
   if (s.path === EXAMPLE_SETTINGS) return { body: null, note: EXAMPLE_CONTENT_HIDDEN };
   return { body: (await readText(path.join(root, s.path))) ?? "", note: null };
 }
@@ -253,6 +267,8 @@ export function forgeLine(ws: Workspace, lock: Lock | null): string | null {
  */
 export function nextSyncLine(st: FileStatus[], unset: UnsetParam[]): string {
   if (unset.length) return `next sync: ${unsetRefused(unset)}`;
+  const escaping = escapingRows(st);
+  if (escaping.length) return `next sync: refused — ${escapeSummary(escaping)}`;
   const counts = countStates(st).map(([k, n]) => `${n} ${k}`);
   return `next sync: ${counts.length ? `${counts.join(", ")} — run \`craftar sync\`` : "nothing to sync"}`;
 }

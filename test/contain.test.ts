@@ -152,7 +152,10 @@ describe("the one wording", () => {
     const rows = [{ path: "a", escapes: "leaves" as const }, { path: "b", escapes: "git" as const }];
     expect(escapeSummary(rows)).toBe(`${escapeLine("a", "leaves")} (and 1 more)`);
     expect(escapeSummary(rows.slice(0, 1))).toBe(escapeLine("a", "leaves"));
-    expect(escapeRefusal(rows)).toEqual([escapeLine("a", "leaves"), escapeLine("b", "git")]);
+    expect(escapeRefusal(rows)).toBe(`2 path(s) craftar does not follow — nothing written\n  ${escapeLine("a", "leaves")}\n  ${escapeLine("b", "git")}`);
+    expect(escapeRefusal(rows.slice(0, 1), { thenSync: true })).toBe(
+      `1 path(s) craftar does not follow — craftar.yaml written, sync not run\n  ${escapeLine("a", "leaves")}\n  fix each, then run craftar sync`,
+    );
   });
 });
 

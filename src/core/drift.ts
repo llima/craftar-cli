@@ -1,3 +1,4 @@
+import { escapeReason } from "./contain.js";
 import type { Owner } from "../schema/index.js";
 import type { FileStatus } from "./sync.js";
 import { hashNormalized } from "./text.js";
@@ -32,10 +33,11 @@ export const INDEXED_REASON = "holds the rules index";
 
 /**
  * The static half of promote's refusals: it reads the status, never the Forge's git state.
- * The order is: orphan, then service file (spec 31), then provided (spec 33i), then reworded (spec 41), then indexed (spec 44), then kiro, then
+ * The order is: a path that escapes (spec 48), orphan, then service file (spec 31), then provided (spec 33i), then reworded (spec 41), then indexed (spec 44), then kiro, then
  * AGENTS.md, then .mcp.json.
  */
 function staticReason(s: FileStatus, provided: Map<string, { slot: string; recipe: string }>, reworded: ReadonlySet<string>, indexed: ReadonlySet<string>): string | null {
+  if (s.escapes) return escapeReason(s.escapes);
   if (s.state === "orphan-drift") return "no longer produced";
   if (s.target === "services") return "service file";
   // Provided by integrations block — after "no longer produced" and "service file", before "kiro file"
