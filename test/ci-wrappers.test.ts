@@ -584,7 +584,7 @@ describe("the README (spec 46 §9)", () => {
       "`in-sync`, `out-of-sync` or `error`",
       "changes the job's `node`",
       "--ignore-scripts",
-      "have not run on a real runner yet",
+      "has not run on a real agent",
     ]) expect(s, needle).toContain(needle);
     expect(s).not.toMatch(/@main\b|pull_request_target|@latest/);
     expect(s).not.toMatch(/uses: \S+@v\d/);

@@ -551,7 +551,7 @@ Copy a workspace with `.claude/` and `.kiro/` into `fixtures/` (keep `local-stac
 
 ## In CI
 
-Two thin files in this repository make a pull request fail when a workspace's generated harness is out of step with its Forge. `craftar sync --check` is the verdict, and its exit code is the step's; they write nothing to the workspace and ask for no write permission. They add annotations (at most ten) and a job summary naming each file and its state, never a file's content, and an output `result`: `in-sync`, `out-of-sync` or `error`. Both were tested with their program run by hand and against a stub; they have not run on a real runner yet.
+Two thin files in this repository make a pull request fail when a workspace's generated harness is out of step with its Forge. `craftar sync --check` is the verdict, and its exit code is the step's; they write nothing to the workspace and ask for no write permission. They add annotations (at most ten) and a job summary naming each file and its state, never a file's content, and an output `result`: `in-sync`, `out-of-sync` or `error`. The action was run on GitHub's `ubuntu-latest` and `windows-latest` runners; the Azure template has not run on a real agent.
 
 GitHub Actions:
 
