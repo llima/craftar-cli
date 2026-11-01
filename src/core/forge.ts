@@ -167,7 +167,7 @@ export async function gitIgnored(dir: string, rel: string): Promise<boolean> {
  * These keep `git` from running a `core.fsmonitor` command and a `post-index-change` hook
  * of the Forge's own `.git`; a `filter.<x>.clean` still runs.
  */
-function gitRead(dir: string): string[] {
+export function gitRead(dir: string): string[] {
   return ["--no-optional-locks", "-C", dir, "-c", "core.fsmonitor=false"];
 }
 
