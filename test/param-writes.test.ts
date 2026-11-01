@@ -47,6 +47,15 @@ describe("checkParamWrites — the YAML edits (spec 09 §6.4)", () => {
     const forge = await forgeOf(spec());
     const m = await err(check(forge, [ext("k", "globex-api", "  \n")]));
     expect(m).toContain("in place (the edit does not read back as exactly the new values: params › k reads back changed, whitespace only)");
+    expect(m).not.toContain("acme-api");
+  });
+
+  it("a section that does not read back names the section and the kind (spec 50 §11 item 6)", async () => {
+    const forge = await forgeOf(spec());
+    const w = checkParamWrites(forge, forge.ingredients.get("rule/deploy")!, forge.ingredients.get("rule/deploy--acme")!, "acme", [], [
+      { key: "rule/deploy", name: "z", file: "rule.md", default: "", value: "  \n", existing: false } as never,
+    ]);
+    expect(await err(w)).toContain("the edit does not read back as exactly the new values: sections › rule/deploy › z reads back changed, whitespace only)");
   });
 
   it("declares the default in ingredient.yaml and sets the value in the profile, quoting what YAML would retype", async () => {
