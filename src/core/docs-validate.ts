@@ -890,13 +890,16 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
   }
 
   // Sorted by the file's place in the walk, then line and column; lines with no path last, in their order (§4.6).
-  const order = (c: DocsCheck) => (c.path === null ? files.length + 2 + ID_ORDER.indexOf(c.id) : state.get(c.path)?.index ?? walkIndex(c.path, files));
+  // Every path the walk met — files, ignored or not, and the links and directories it did not enter — sorted once (§7).
+  const met = [...new Set([...walked.files, ...walked.scope.map((x) => x.rel)])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const place = new Map(met.map((p, i) => [p, i] as const));
+  const order = (c: DocsCheck) => (c.path === null ? met.length + 1 + ID_ORDER.indexOf(c.id) : place.get(c.path) ?? met.length);
   const indexed = kept.map((c, i) => ({ c, i }));
   indexed.sort((a, b) => order(a.c) - order(b.c) || (a.c.path === b.c.path ? (a.c.line ?? 0) - (b.c.line ?? 0) || (a.c.column ?? 0) - (b.c.column ?? 0) : cmp(a.c.path, b.c.path)) || a.i - b.i);
   const ordered = indexed.map(({ c }) => c);
 
   // A name not shown is replaced whole by its label, numbered by its place in the sorted walk (§7).
-  const labelled = ordered.map((c) => (c.path !== null && !nameShown(c.path) ? { ...c, path: HIDDEN_NAME(labelIndex(c.path, files)) } : c));
+  const labelled = ordered.map((c) => (c.path !== null && !nameShown(c.path) ? { ...c, path: HIDDEN_NAME((place.get(c.path) ?? met.length) + 1) } : c));
 
   const summary = { ok: 0, warn: 0, error: 0 };
   for (const c of labelled) summary[c.level]++;
@@ -908,17 +911,6 @@ const filesWord = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
 /** The order of the lines with no path, after every finding on a file (§4.6). */
 const ID_ORDER = ["links", "leaked-tags", "encoding", "scope", "policy", "categories", "frontmatter", "names", "related"];
 const cmp = (a: string | null, b: string | null) => ((a ?? "") < (b ?? "") ? -1 : (a ?? "") > (b ?? "") ? 1 : 0);
-
-/** A path's place among the walked files (skipped ones included) for a finding about a file not scanned: its sorted position. */
-function walkIndex(rel: string, files: string[]): number {
-  const i = files.indexOf(rel);
-  return i === -1 ? files.length + 1 : i;
-}
-/** The `#<n>` of a hidden name: its 1-based position in the sorted list of every path the walk met. */
-function labelIndex(rel: string, files: string[]): number {
-  const all = [...new Set([...files, rel])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return all.indexOf(rel) + 1;
-}
 
 async function declaredChecks(
   block: DocsBlock,

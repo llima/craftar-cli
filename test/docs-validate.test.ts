@@ -185,6 +185,15 @@ describe("§7 — what a finding prints", () => {
     expect(findings(r).map((c) => c.path)).toEqual(["(a file name — not shown) #1", "(a file name — not shown) #2", "docs/b.md", "(a file name — not shown) #4"]);
   });
 
+  it("hidden names are numbered by one sorted walk: two links not followed never share a label", async () => {
+    if (process.platform === "win32") return; // these names are not valid on Windows
+    const s = await ws({ "docs/b.md": "x\n", "real/t.md": "x\n" });
+    await fs.symlink(path.join(s.wsRoot, "real", "t.md"), path.join(s.wsRoot, "docs", "a::1.md"));
+    await fs.symlink(path.join(s.wsRoot, "real", "t.md"), path.join(s.wsRoot, "docs", "a::2.md"));
+    const r = await run(s.wsRoot);
+    expect(findings(r, "scope").map((c) => c.path)).toEqual(["(a file name — not shown) #1", "(a file name — not shown) #2"]);
+  });
+
   it("nameShown uses TERMINAL_UNSAFE's class and the CI commands", () => {
     expect(nameShown("docs/a.md")).toBe(true);
     for (const bad of ["a\u202eb", "a\u0085b", "x##[y", "a::b", "##Vso[x"]) expect(nameShown(bad)).toBe(false);
