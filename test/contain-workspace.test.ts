@@ -492,6 +492,33 @@ describe("the other surfaces", () => {
     expect(JSON.stringify(add)).toContain("next sync: refused — ");
   });
 
+  posixIt("S: add_recipe and remove_recipe do not write through a craftar.yaml that leaves", async () => {
+    const s = await base();
+    const { dir } = await outside();
+    const cfg = path.join(dir, "craftar.yaml");
+    const text = (await fs.readFile(path.join(s.wsRoot, "craftar.yaml"), "utf8")).replace(/forge: .*/, `forge: ${s.forgeRoot.replace(/\\/g, "/")}`);
+    await fs.writeFile(cfg, text);
+    await fs.rm(path.join(s.wsRoot, "craftar.yaml"));
+    await fs.symlink(cfg, path.join(s.wsRoot, "craftar.yaml"));
+    const home = process.env.CRAFTAR_HOME!;
+    const { readWorkspaceConfig } = await import("../src/core/sync.js");
+    const { handleLine, pinOf } = await import("../src/core/mcp-protocol.js");
+    const { mcpWriters } = await import("../src/core/write-actions.js");
+    const { allowWrites } = await import("../src/core/registry.js");
+    await allowWrites(home, s.wsRoot, { forge: { source: s.forgeRoot.replace(/\\/g, "/"), ref: null }, profile: "acme" });
+    const ctx = { root: s.wsRoot, fetch: false, home, version: "9.9.9", registryOff: false, env: {}, pin: pinOf(await readWorkspaceConfig(s.wsRoot)), writers: mcpWriters(home, false) };
+    const state = { initialized: false };
+    const request = async (method: string, params?: unknown) => JSON.parse((await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method, ...(params === undefined ? {} : { params }) }), ctx as never, state as never))!);
+    await request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
+    for (const [name, recipeName] of [["add_recipe", "more"], ["remove_recipe", "base"]]) {
+      const a = (await request("tools/call", { name, arguments: { names: [recipeName] } })).result;
+      expect(a.isError, name).toBe(true);
+      expect(JSON.stringify(a), name).toContain("craftar.yaml leaves the workspace through a symbolic link");
+      expect(JSON.stringify(a), name).not.toContain(MARK);
+    }
+    expect(await fs.readFile(cfg, "utf8")).toBe(text);
+  });
+
   it("craftar ui: refused on the workspace answer, nothing in the diff route, both writing routes refused", async () => {
     const { s, dir } = await rows();
     const { get, post } = await import("./helpers/ui.js");
@@ -534,6 +561,12 @@ describe("the other surfaces", () => {
     expect(up.stderr).not.toContain("docker not found");
     const st = runCli(["services", "status", "--json", "--workspace", s.wsRoot], { env });
     expect(JSON.parse(st.stdout).pending).toContainEqual({ path: ".craftar/services/echo/compose.yaml", reason: "link" });
+    // `canUseStack` is false: down looks for Docker and would stop the project by name, passing no file of the stack.
+    const down = runCli(["services", "down", "--workspace", s.wsRoot], { env });
+    expect(down.stderr).toContain("docker not found");
+    const { recordedServices, canUseStack } = await import("../src/core/services.js");
+    const { readLock } = await import("../src/core/sync.js");
+    expect(canUseStack(await recordedServices(s.wsRoot, await readLock(s.wsRoot)))).toBe(false);
   });
 
   posixIt("U: drift promote refuses an ingredient holding a file that leaves, the Forge untouched, also under --dry-run", async () => {
@@ -577,6 +610,51 @@ describe("the other surfaces", () => {
     const r = runCli(["drift", "promote", RULE, ...W(s)]);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain(LEAVES);
+    quiet(r);
+  });
+
+  posixIt("drift promote refuses when another target's file of the ingredient leaves: the proof would read it", async () => {
+    const s = await scenario(
+      {
+        ingredients: [rule("r", "# R\nBody.\n")],
+        recipes: [recipe("base", ["rule/r"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "kiro"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    const { execFileSync } = await import("node:child_process");
+    const { git } = await import("./helpers/remote.js");
+    execFileSync("git", ["init", "-q", "-b", "main", s.forgeRoot]);
+    git(s.forgeRoot, "add", "-A");
+    git(s.forgeRoot, "commit", "-q", "-m", "forge");
+    expect(runCli(["sync", ...W(s as S)]).code).toBe(0);
+    const { file } = await outside();
+    await fs.writeFile(path.join(s.wsRoot, RULE), "# R\nEdited.\n");
+    await fs.rm(path.join(s.wsRoot, ".kiro/steering/r.md"));
+    await fs.symlink(file, path.join(s.wsRoot, ".kiro/steering/r.md"));
+    const r = runCli(["drift", "promote", RULE, ...W(s as S), "--dry-run"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(".kiro/steering/r.md leaves the workspace through a symbolic link");
+    expect(r.stderr).not.toContain("would not match");
+    quiet(r);
+  });
+
+  posixIt("drift promote on an unrelated path goes on, and next sync says refused", async () => {
+    const s = await base();
+    await writeFiles(s.forgeRoot, { "recipes/base.yaml": "name: base\ningredients: [rule/r, rule/other]\n" });
+    const { execFileSync } = await import("node:child_process");
+    const { git } = await import("./helpers/remote.js");
+    execFileSync("git", ["init", "-q", "-b", "main", s.forgeRoot]);
+    git(s.forgeRoot, "add", "-A");
+    git(s.forgeRoot, "commit", "-q", "-m", "forge");
+    expect(runCli(["sync", ...W(s)]).code).toBe(0);
+    const { file } = await outside();
+    await fs.writeFile(path.join(s.wsRoot, ".claude/rules/other.md"), "# Other\nEdited.\n");
+    await linkedRule(s, file);
+    const r = runCli(["drift", "promote", ".claude/rules/other.md", ...W(s), "--dry-run"]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("next sync: refused — ");
     quiet(r);
   });
 

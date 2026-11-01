@@ -592,7 +592,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const normalized = inputPath.replace(/\\/g, "/").replace(/^\.\//, "");
   const fileStatus = st.find((s) => s.path === normalized);
   if (!fileStatus) throw new Error(unmanaged(normalized));
-  if (fileStatus.escapes) throw new Error(escapeLine(normalized, fileStatus.escapes));
+  // The path itself, or another target's file of the same ingredient, which the proof compares with the disk (spec 48 §4.3).
+  const escaping = fileStatus.escapes ? fileStatus : st.find((s) => s.escapes && s.ingredient === fileStatus.ingredient);
+  if (escaping) throw new Error(escapeLine(escaping.path, escaping.escapes!));
   if (fileStatus.state === "orphan-drift") throw new Error(D4_ORPHAN(normalized));
   if (fileStatus.state !== "drift") throw new Error(D4_OTHER(normalized, fileStatus.state));
 
