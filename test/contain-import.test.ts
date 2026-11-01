@@ -62,6 +62,31 @@ describe("sources", () => {
     await expect(fs.lstat(path.join(t.forge, "ingredients/skills/k"))).rejects.toThrow();
   });
 
+  posixIt("an agent and a command that leave are rejected, and nothing of them reaches the Forge", async () => {
+    const t = await setup();
+    await fs.mkdir(path.join(t.ws, ".claude/agents"), { recursive: true });
+    await fs.mkdir(path.join(t.ws, ".claude/commands"), { recursive: true });
+    await fs.symlink(t.secret, path.join(t.ws, ".claude/agents/a.md"));
+    await fs.symlink(t.secret, path.join(t.ws, ".claude/commands/c.md"));
+    const r = imp(t);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("agent/a — .claude/agents/a.md leaves the workspace");
+    expect(r.stdout).toContain("command/c — .claude/commands/c.md leaves the workspace");
+    quiet(r);
+    expect(await forgeText(t.forge)).not.toContain(SECRET);
+  });
+
+  posixIt("R, in bytes: a Forge file of a skill linked out is refused when import compares the directory", async () => {
+    const t = await setup({ ".claude/skills/k/SKILL.md": "---\nname: k\ndescription: d\n---\nDo.\n", ".claude/skills/k/data.bin": "bytes" });
+    expect(imp(t).code).toBe(0);
+    await fs.rm(path.join(t.forge, "ingredients/skills/k/data.bin"));
+    await fs.symlink(t.secret, path.join(t.forge, "ingredients/skills/k/data.bin"));
+    const r = imp(t);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("ingredients/skills/k/data.bin: a symbolic link out of the Forge");
+    quiet(r);
+  });
+
   posixIt("one escaping file of a script group rejects the whole group", async () => {
     const t = await setup({ ".claude/scripts/run-x.sh": "#!/bin/sh\n" });
     await fs.symlink(t.secret, path.join(t.ws, ".claude/scripts/run-x.ps1"));

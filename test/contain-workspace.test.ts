@@ -706,3 +706,73 @@ describe("init --clone", () => {
     await expect(fs.lstat(path.join(n, "app"))).rejects.toThrow();
   });
 });
+
+describe("what the outside file must not decide", () => {
+  const home = () => process.env.CRAFTAR_HOME!;
+
+  posixIt("readExisting: the outside file's EOL and BOM do not reach the planned bytes", async () => {
+    const s = await base();
+    const { file } = await outside();
+    await fs.writeFile(file, "﻿a\r\nb\r\n");
+    await linkedRule(s, file);
+    const { loadWorkspace, plan, status, readLock } = await import("../src/core/sync.js");
+    const ws = await loadWorkspace(s.wsRoot, { home: home() });
+    const p = await plan(ws);
+    const bytes = p.files.find((f) => f.path === RULE)!.content;
+    expect(bytes.includes("\r")).toBe(false);
+    expect(bytes[0]).not.toBe(0xef);
+    const row = (await status(ws, p, await readLock(s.wsRoot))).find((x) => x.path === RULE)!;
+    expect(row.state).toBe("collision");
+    expect(row.escapes).toBe("leaves");
+  });
+
+  posixIt("statusDigest does not move with the outside file's bytes", async () => {
+    const s = await base();
+    const { file } = await outside();
+    await linkedRule(s, file);
+    const { loadWorkspace, plan, status, readLock } = await import("../src/core/sync.js");
+    const { statusDigest } = await import("../src/core/write-actions.js");
+    const ws = await loadWorkspace(s.wsRoot, { home: home() });
+    const p = await plan(ws);
+    const before = await statusDigest(ws, await status(ws, p, await readLock(s.wsRoot)));
+    await fs.writeFile(file, "changed");
+    expect(await statusDigest(ws, await status(ws, p, await readLock(s.wsRoot)))).toBe(before);
+  });
+
+  it("the diff tool's warnings carry the reason, and explainSkip words such a row by it", async () => {
+    const s = await base();
+    const { dir } = await outside();
+    await fs.mkdir(path.join(s.wsRoot, ".claude"));
+    await fs.symlink(dir, path.join(s.wsRoot, ".claude/rules"), "junction");
+    const { readWorkspaceConfig } = await import("../src/core/sync.js");
+    const { handleLine, pinOf } = await import("../src/core/mcp-protocol.js");
+    const { explainSkip } = await import("../src/core/report.js");
+    const ctx = { root: s.wsRoot, fetch: false, home: home(), version: "9.9.9", registryOff: false, env: {}, pin: pinOf(await readWorkspaceConfig(s.wsRoot)) };
+    const state = { initialized: false };
+    const request = async (method: string, params?: unknown) => JSON.parse((await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method, ...(params === undefined ? {} : { params }) }), ctx as never, state as never))!);
+    await request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
+    const a = (await request("tools/call", { name: "diff" })).result;
+    const answer = a.structuredContent ?? JSON.parse(a.content[0].text);
+    expect(answer.warnings.join("\n")).toContain(LEAVES);
+    expect(explainSkip({ path: RULE, state: "drift", escapes: "leaves" })).toContain(LEAVES);
+  });
+
+  posixIt("a CLAUDE.md behind a link out is still read for what blocks AGENTS.md (spec 48 §5 edge 5)", async () => {
+    const s = await scenario(
+      {
+        ingredients: [rule("r", "# R\n")],
+        recipes: [recipe("base", ["rule/r"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "agents-md"], { params: { "agents-md.primary": true } })],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await writeFiles(s.forgeRoot, { "craftar.forge.yaml": "name: test-forge\nschema: 5\n" });
+    const { file } = await outside();
+    await fs.symlink(file, path.join(s.wsRoot, "CLAUDE.md"));
+    const { loadWorkspace, plan } = await import("../src/core/sync.js");
+    const p = await plan(await loadWorkspace(s.wsRoot, { home: home() }));
+    expect(p.warnings.join("\n")).toContain("CLAUDE.md");
+    expect(p.warnings.join("\n")).not.toContain(SECRET);
+  });
+});

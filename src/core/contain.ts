@@ -40,7 +40,7 @@ function placed(root: ContainRoot, real: string): Escape | null {
 }
 
 type Kind = "link" | "other" | "missing" | "unreadable";
-type KindCache = Map<string, Promise<Kind>>;
+export type KindCache = Map<string, Promise<Kind>>;
 
 function kindOf(abs: string, cache: KindCache): Promise<Kind> {
   let known = cache.get(abs);

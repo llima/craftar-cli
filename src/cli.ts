@@ -617,7 +617,7 @@ program
           console.log(NOT_CLONED_REFUSED);
         }
         refusalBlock(unset, { thenSync: true });
-        if (unset.length === 0) escapeBlock(init.statuses, { thenSync: true });
+        escapeBlock(init.statuses, { thenSync: true });
         again();
         process.exitCode = 1;
         return;

@@ -12,7 +12,7 @@ import { FULL_SHA, cacheKey, classifyForge, CREDENTIAL_HIDDEN, inspectCache, UNV
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
-import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK , type FileStatus } from "./sync.js";
+import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK, type FileStatus } from "./sync.js";
 import { outName, MCP_FILE, renderRegistration, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
 import { stripBom } from "./text.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX, dotnetVersion as defaultDotnetVersion, dotnetVersionInOwnDir, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";

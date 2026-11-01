@@ -5,7 +5,7 @@
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { containRoot, escapeOf, type Escape } from "./contain.js";
+import { containRoot, escapeOf, type Escape, type KindCache } from "./contain.js";
 import { gitIsRepo, gitRead } from "./forge.js";
 import { execProgram, openProgram, streamProgram, type OpenedProgram } from "./proc.js";
 import { findSecrets } from "./secrets.js";
@@ -26,7 +26,7 @@ export interface WorkspaceSource {
 
 export function diskSource(root: string): WorkspaceSource {
   let contain: ReturnType<typeof containRoot> | undefined;
-  const asked = new Map(); // parents shared by the paths of one source are asked once
+  const asked: KindCache = new Map(); // parents shared by the paths of one source are asked once
   return {
     escape: async (rel) => {
       const r = await (contain ??= containRoot(root));
