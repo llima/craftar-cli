@@ -470,7 +470,7 @@ const ROOT_DIRS = new Set(["ingredients", "recipes", "profiles"]);
  * - A non-regular file (FIFO, socket, device): refused.
  * Exported so tests can verify the copy behaviour directly.
  */
-export async function copyForgeForProof(forgeDir: string, scratchDir: string): Promise<void> {
+export async function copyForgeForProof(forgeDir: string, scratchDir: string, command = "promote"): Promise<void> {
   const forgeReal = await fs.realpath(forgeDir);
 
   async function walk(rel: string): Promise<void> {
@@ -503,7 +503,7 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string): P
           // A root directory link (ingredients, recipes, profiles) is refused: loadForge follows it
           // but the scratch would skip it, so the scratch would not load the same as the real Forge.
           if (rel === "" && ROOT_DIRS.has(ent.name)) {
-            throw new Error(SYMLINK_DIR_REFUSAL(ent.name, "promote"));
+            throw new Error(SYMLINK_DIR_REFUSAL(ent.name, command));
           }
           // Other directory links are skipped entirely — loadForge doesn't traverse them
           continue;

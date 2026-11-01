@@ -168,7 +168,7 @@ async function checkStagedLocals(opts: ImportOptions, stage: ForgeStage, report:
   }
   const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-import-proof-"));
   try {
-    await copyForgeForProof(root, scratch);
+    await copyForgeForProof(root, scratch, "import");
     await stage.flushTo(scratch);
     let staged: Forge;
     try {
@@ -1896,6 +1896,11 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
   const raw = await o.stage.readText(file);
   const before = parseYaml(file, stripBom(raw), RecipeSchema);
   // A recipe in the profile's folder keeps its locals, whose sources import does not read back (spec 51 §4.5).
+  if (o.keepLocals) {
+    for (const x of before.ingredients) {
+      if (o.keepLocals.has(x) && !list.includes(x)) o.report.warnings.push(`${x}: local to profile ${o.profile}, kept in ${label} though the workspace no longer holds its source — the next sync writes its file back`);
+    }
+  }
   list = keepAgentsMdOnly(before.ingredients, list, o.keepLocals ? new Set([...o.agentsMdOnly, ...o.keepLocals]) : o.agentsMdOnly);
   // Each existing entry in order: kept, swapped for its base in place, or dropped; then the rest of the list appended.
   const inPlace = (x: string): string | null => {

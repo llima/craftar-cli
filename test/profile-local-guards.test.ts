@@ -88,7 +88,7 @@ describe("init --new-profile --like and a template's local recipe (spec 51 §4.5
     const ws2 = path.join(f.root, "ws2");
     const r = runCli(["init", "--forge", f.dir, "--new-profile", "initech", "--like", "globex", "--workspace", ws2]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain("recipe globex-extra is local to profile globex — a new profile cannot use it");
+    expect(r.stderr).toContain("recipe globex-extra is local to profile globex — a new profile cannot use it; leave it out, or move it to the root by hand");
   });
 });
 

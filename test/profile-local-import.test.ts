@@ -138,6 +138,7 @@ describe("import and the profile's locals (spec 51 §4.5)", () => {
     expect(r.code, r.stderr).toBe(0);
     expect(await fs.stat(path.join(s.forge, "recipes/base.yaml")).then(() => true, () => false)).toBe(false);
     expect(YAML.parse(await fs.readFile(path.join(s.forge, "profiles/acme/recipes/base.yaml"), "utf8")).ingredients).toEqual(["rule/style", "rule/x"]);
+    expect(r.stdout).toContain("rule/x: local to profile acme, kept in profiles/acme/recipes/base.yaml though the workspace no longer holds its source — the next sync writes its file back");
     expect(YAML.parse(await fs.readFile(path.join(s.forge, "profiles/acme/profile.yaml"), "utf8")).recipes).toEqual(["base"]);
     await loadForge(s.forge);
   });
