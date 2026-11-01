@@ -153,6 +153,21 @@ async function foundAt(file: string, name: string): Promise<Found> {
   }
 }
 
+/**
+ * Whether a file stands at the path or on its way. Each level is asked in turn, since what `lstat` answers below a file differs:
+ * ENOTDIR on Linux, ENOENT on Windows.
+ */
+export async function hooksPathBlocked(
+  dir: string,
+  lstat: (p: string) => Promise<{ isDirectory(): boolean }> = fs.lstat,
+): Promise<boolean> {
+  for (let d = dir; ; d = path.dirname(d)) {
+    const stat = await lstat(d).catch(() => null);
+    if (stat !== null) return !stat.isDirectory();
+    if (path.dirname(d) === d) return false;
+  }
+}
+
 export interface InstallResult {
   place: HooksPlace;
   written: HookName[];
@@ -180,8 +195,7 @@ export async function installHooks(
     throw new GitHooksRefusal("the hooks directory is inside the Forge: a Forge write has to be gated on git, and this is not one");
   // The file has to give the workspace back, or craftar could not recognise or remove the hook it wrote.
   if (!readsBack(place.workspaceDir)) throw new GitHooksRefusal("the workspace's path holds a quote or a control character, or looks like a credential or a token, which a hook cannot name");
-  const stat = await fs.lstat(place.dir).catch((e: { code?: unknown }) => (e.code === "ENOTDIR" ? "blocked" : null));
-  if (stat === "blocked" || (stat !== null && !stat.isDirectory())) throw new GitHooksRefusal("the hooks path exists and is not a directory, or a file stands in its way");
+  if (await hooksPathBlocked(place.dir)) throw new GitHooksRefusal("the hooks path exists and is not a directory, or a file stands in its way");
 
   const notes: string[] = [];
   // Step 5: `sync` writes there too, and a hook is no file of the lock.

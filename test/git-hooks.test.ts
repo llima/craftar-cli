@@ -6,7 +6,7 @@ import { promises as fs, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { hookScript, installHooks, readHookMarker } from "../src/core/git-hooks.js";
+import { hookScript, hooksPathBlocked, installHooks, readHookMarker } from "../src/core/git-hooks.js";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
 import { removeWithRetry } from "./helpers/fs.js";
@@ -71,8 +71,9 @@ async function gitOnly(root: string): Promise<string> {
   const dir = path.join(root, "only-git");
   await fs.mkdir(dir, { recursive: true });
   const real = execFileSync(process.platform === "win32" ? "where" : "which", ["git"], { encoding: "utf8" }).split(/\r?\n/)[0];
-  if (process.platform === "win32") await fs.copyFile(real, path.join(dir, "git.exe"));
-  else await fs.symlink(real, path.join(dir, "git"));
+  // Git for Windows' git.exe does not run away from its own directory, which holds no craftar on a runner.
+  if (process.platform === "win32") return path.dirname(real);
+  await fs.symlink(real, path.join(dir, "git"));
   return dir;
 }
 
@@ -80,6 +81,23 @@ const hooks = (...args: string[]) => runCli(["git-hooks", ...args]);
 const hookFile = (repo: string, name = "pre-push") => path.join(repo, ".git", "hooks", name);
 const read = (f: string) => fs.readFile(f, "utf8");
 const gone = (f: string) => expect(fs.lstat(f)).rejects.toThrow();
+
+describe("hooksPathBlocked", () => {
+  const stat = (kinds: Record<string, "dir" | "file">) => async (p: string) => {
+    const kind = kinds[p];
+    if (kind === undefined) throw Object.assign(new Error("no"), { code: "ENOENT" });
+    return { isDirectory: () => kind === "dir" };
+  };
+  it("sees a file on the way, whichever error the platform gives below it", async () => {
+    const f = path.join(path.sep, "r", "f");
+    // On Windows, lstat of a path below a file answers ENOENT, not ENOTDIR.
+    await expect(hooksPathBlocked(path.join(f, "a", "hk"), stat({ [f]: "file" }))).resolves.toBe(true);
+    await expect(hooksPathBlocked(f, stat({ [f]: "file" }))).resolves.toBe(true);
+    const d = path.join(path.sep, "r", "d");
+    await expect(hooksPathBlocked(path.join(d, "hk"), stat({ [d]: "dir" }))).resolves.toBe(false);
+    await expect(hooksPathBlocked(d, stat({ [d]: "dir" }))).resolves.toBe(false);
+  });
+});
 
 describe("hookScript and readHookMarker", () => {
   it("writes LF, the marker on the second line, and only the craftar of PATH", () => {
