@@ -123,6 +123,18 @@ describe("review round 2 — scanner nits", () => {
   });
 });
 
+describe("review round 3", () => {
+  it("a character whose lower case is longer (İ) before <code> does not shift what is blanked", () => {
+    const tag = "<" + ["in", "voke"].join("") + ">";
+    const s = scanMarkdown(`İ <code>[x](m.md) ${tag}</code> [y](y.md)\n`);
+    expect(s.links.map((l) => l.dest)).toEqual(["y.md"]);
+    expect(s.tags).toEqual([]);
+  });
+  it("a fence on the list item's own line is a fence", () => {
+    expect(dests("- ```\n  [x](m.md)\n  ```\n[y](y.md)\n")).toEqual(["y.md"]);
+  });
+});
+
 describe("§6.2 — anchors", () => {
   it("GitHub slugs, with -1 for a repeat, and <a id> / <a name>", () => {
     const s = scanMarkdown("# Hello World!\n\n## Hello World\n\nSetext Title\n---\n\n## `code` and [link](x.md)\n\n<a id=\"custom\"></a> <a name='other'>\n");

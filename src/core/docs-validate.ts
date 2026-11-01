@@ -194,7 +194,8 @@ export function blankCode(s: string): string {
     const pieces: string[] = [];
     let from = 0;
     const element = open !== "<!--";
-    const lower = element ? out.toLowerCase() : out;
+    // ASCII letters only: a full toLowerCase can lengthen the text (İ is two characters in lower case) and shift positions.
+    const lower = element ? out.replace(/[A-Z]/g, (c) => c.toLowerCase()) : out;
     let search = 0;
     for (;;) {
       const a = lower.indexOf(open, search);
@@ -445,6 +446,13 @@ export function scanMarkdown(input: string): Scan {
       flush();
       inList = true;
       listIndent = listItem[0].length;
+      // A fence on the item's own line opens there, its content indented to the item's.
+      const itemFence = FENCE_OPEN.exec(raw.slice(listItem[0].length));
+      if (itemFence && !(itemFence[1][0] === "`" && itemFence[2].includes("`"))) {
+        fence = { char: itemFence[1][0], len: itemFence[1].length, strip: listIndent };
+        afterBlank = false;
+        continue;
+      }
       paragraph.push({ text: raw.slice(listItem[0].length), line: lineNo, col0: col0 + listItem[0].length });
       afterBlank = false;
       continue;
