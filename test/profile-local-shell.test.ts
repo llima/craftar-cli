@@ -41,7 +41,7 @@ describe("a section in a skill's shell file (spec 51 §4.6)", () => {
     expect(r.code, r.stderr).toBe(0);
     expect(await read(s, ".claude/skills/sk/run.sh")).toBe("#!/bin/sh\necho hi from acme\nV=a b\n");
     expect(await read(s, ".kiro/skills/sk/run.sh")).toBe(RUN_SH);
-    expect(r.stdout).toContain("skill/sk run.sh: kiro copies run.sh as bytes: its sections and params are not rendered");
+    expect(r.stdout).toContain("skill/sk run.sh: kiro copies it as bytes — its sections and params are not rendered there");
     expect(r.stdout).not.toContain("section markers are read only in files every target renders as text");
   });
 
@@ -63,6 +63,14 @@ describe("a section in a skill's shell file (spec 51 §4.6)", () => {
   it("no warning for a shell file with neither a marker nor a param any layer sets", async () => {
     const s = await at(8, { "plain.sh": "#!/bin/sh\necho {{ .Go }}\n" });
     expect(runCli(["sync", "--workspace", s.wsRoot]).stdout).not.toContain("plain.sh: kiro copies");
+  });
+
+  it("no Kiro warning in a workspace that does not write kiro", async () => {
+    const s = await at(8);
+    await fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), YAML.stringify({ forge: path.relative(s.wsRoot, s.forgeRoot), profile: "acme", targets: ["claude-code"] }));
+    const r = runCli(["sync", "--workspace", s.wsRoot]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).not.toContain("kiro copies");
   });
 
   it("a section declared in both SKILL.md and the shell file fails the plan at schema 8", async () => {

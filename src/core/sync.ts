@@ -511,10 +511,10 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
         // Edge case 14: warn if a targeted section reaches no target that writes the ingredient
         const effTargets = effectiveTargets(ing.meta, resolution);
         // Spec 51 §4.6: Kiro copies a skill's shell file as bytes, so what claude-code renders there reaches Kiro raw.
-        if (shellAtGate(ing.meta, rel, forge.manifest.schema) && appliesTo(effTargets, "kiro") && CAPABILITIES.kiro[ing.meta.type].state !== "unsupported") {
+        if (shellAtGate(ing.meta, rel, forge.manifest.schema) && resolution.targets.includes("kiro") && appliesTo(effTargets, "kiro") && CAPABILITIES.kiro[ing.meta.type].state !== "unsupported") {
           const keys = new Set([...Object.keys(ing.meta.params ?? {}), ...Object.keys(resolution.params)]);
           const text = await readForgeText(ing.forgeRoot, abs);
-          if (p.sections.length || placeholders(text).some((k) => keys.has(k))) warnings.push(`${ing.ref} ${rel}: kiro copies ${rel} as bytes: its sections and params are not rendered`);
+          if (p.sections.length || placeholders(text).some((k) => keys.has(k))) warnings.push(`${ing.ref} ${rel}: kiro copies it as bytes — its sections and params are not rendered there`);
         }
         for (const s of p.sections) {
           if (s.targets) {
