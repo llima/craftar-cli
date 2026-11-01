@@ -133,9 +133,7 @@ export async function gitSource(root: string, spec: GitSourceSpec): Promise<GitS
   return {
     kind: "git",
     escape: async () => null,
-    reaches(rel) {
-      return this.exists(rel);
-    },
+    reaches: async () => true, // no link to follow here: `read` answers null for a path that is not held
     label,
     async read(rel) {
       if (climbsOut(rel)) return null;

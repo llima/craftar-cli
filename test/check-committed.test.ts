@@ -677,3 +677,20 @@ describe.skipIf(process.platform === "win32")("from a real git hook", () => {
     expect(text).toContain(`commit ${sha.slice(0, 8)} in sync`);
   });
 });
+
+describe("--committed and links that leave (spec 48)", () => {
+  it("reads what git holds: a link on disk does not refuse the check of a commit, and refuses the plain check", async () => {
+    const { ws } = await committed();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-outside-"));
+    try {
+      await fs.rm(path.join(ws, ".claude/rules"), { recursive: true });
+      await fs.symlink(outside, path.join(ws, ".claude/rules"), "junction");
+      expect(check(ws, "--committed").code).toBe(0);
+      const plain = check(ws);
+      expect(plain.code).toBe(1);
+      expect(plain.stderr).toContain("leaves the workspace through a symbolic link");
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+});

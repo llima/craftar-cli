@@ -199,7 +199,7 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
     return { status: 409, body: { error: routeReason(e), warnings: ws?.warnings ?? [] } };
   }
 
-  // Write routes: digest → (discard) path → unset → sync → answer (spec 40 §6.4).
+  // Write routes: digest → (discard) path → unset → escape (spec 48) → sync → answer (spec 40 §6.4).
   if (isWritePattern) {
     const body = req.body!;
     const action = what as "sync" | "discard";
