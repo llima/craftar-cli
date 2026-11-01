@@ -1,0 +1,14 @@
+{
+  "files": {
+    ".claude/rules/scoped.md": "12083d8161e3e557af4d9d66515bd5b42640cbb847755f927f8564d0e5f68458",
+    ".claude/rules/style.md": "26a0e626ec2bdeadcc8465c1cd9d692a5659bead2267558b5153372e3f378071",
+    ".kiro/settings/mcp.json": "56a14666971549cdb75bdfd96bb5939d2076c2259df7e83d17441ff97474b7b7",
+    ".kiro/steering/scoped.md": "9551fa35b815b71fe215d56b6cdd5396ebbee5acfc96162f8f3642bea1929e06",
+    ".kiro/steering/style.md": "3d07d4e323d3978a0f58b90ef9a9fca763b43d051c1895efb8bf1d8185950228",
+    ".mcp.json": "d2d0f6fcf0f720ba5c0c53c5abf8489812db35b0d88464455d50531be02dfbbd",
+    "AGENTS.md": "66ad12c21efac8c2e15a8ff89dce726b196fad2f63d60fbcf28b01154e8d349c"
+  },
+  "warnings": [
+    "agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/tracker"
+  ]
+}

@@ -530,6 +530,111 @@ export const TemplatesSchema = z.array(
 );
 
 /* ------------------------------------------------------------------ */
+/* Docs block (spec 47)                                                 */
+/* ------------------------------------------------------------------ */
+
+/** Rule texts of spec 47 §5.4 — each refusal names its position and one of these, never a value from the block. */
+export const DOCS_RULES = {
+  block: "the docs block is a mapping with categories, uncovered and related",
+  unknownKey: "the docs block has no such key (it has categories, uncovered and related)",
+  categories: "categories is a list of entries, each with a path",
+  entry: "a category is a mapping with a path",
+  entryKey: "a category has no such key (it has path, frontmatter and name)",
+  path: "a category path is a relative POSIX path under docs/: segments of letters, digits and . _ @ + -, no . or .. segment, no backslash, not absolute",
+  frontmatter: "frontmatter is a list of key names",
+  key: "a key name is letters, digits, _ and -, starting with a letter or _, at most 64 characters, and not a token",
+  name: "name is any or dated",
+  uncovered: "uncovered is ignore or error",
+  related: "related is off, resolve or symmetric",
+} as const;
+
+/** A key name the docs block may echo (spec 47 §5.4, §7): no `#`, no `:`, nothing a token of a known format matches. */
+export function docsKeyShaped(key: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(key) && findSecrets(key).length === 0;
+}
+
+export interface DocsCategory {
+  path: string;
+  frontmatter: string[];
+  name: "any" | "dated";
+}
+export interface DocsBlock {
+  categories: DocsCategory[];
+  uncovered: "ignore" | "error";
+  related: "off" | "resolve" | "symmetric";
+}
+
+const DOCS_KEYS = ["categories", "uncovered", "related"];
+const CATEGORY_KEYS = ["path", "frontmatter", "name"];
+const isMapping = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+
+/** A category path (spec 47 §5.1): plain segments in ServicePath's class, nothing that leaves or anchors. */
+function docsCategoryPath(v: unknown): v is string {
+  if (typeof v !== "string" || v === "" || v.includes("\\") || /^\/|^[A-Za-z]:/.test(v)) return false;
+  return v.split("/").every((seg) => SEGMENT_OK.test(seg) && seg !== "." && seg !== "..");
+}
+
+/**
+ * The docs block of a profile (spec 47 §5): validated by hand so that every issue carries a fixed text of DOCS_RULES and
+ * a position — an unknown key is named only when `docsKeyShaped`, else the mapping holding it is the position. Read by
+ * `declaredDocs` alone.
+ */
+export const DocsBlockSchema = z.unknown().transform((v, ctx): DocsBlock => {
+  const issue = (path: Array<string | number>, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path, message });
+  const out: DocsBlock = { categories: [], uncovered: "ignore", related: "off" };
+  if (!isMapping(v)) {
+    issue([], DOCS_RULES.block);
+    return out;
+  }
+  const unknownKeys = (m: Record<string, unknown>, allowed: string[], at: Array<string | number>, message: string) => {
+    for (const key of Object.keys(m)) {
+      if (key === "__proto__") issue([...at, "__proto__"], NO_PROTO_KEY);
+      else if (!allowed.includes(key)) issue(docsKeyShaped(key) ? [...at, key] : at, message);
+    }
+  };
+  if (v.uncovered !== undefined) {
+    if (v.uncovered === "ignore" || v.uncovered === "error") out.uncovered = v.uncovered;
+    else issue(["uncovered"], DOCS_RULES.uncovered);
+  }
+  if (v.related !== undefined) {
+    if (v.related === "off" || v.related === "resolve" || v.related === "symmetric") out.related = v.related;
+    else issue(["related"], DOCS_RULES.related);
+  }
+  if (v.categories !== undefined && v.categories !== null && !Array.isArray(v.categories)) issue(["categories"], DOCS_RULES.categories);
+  // Unknown keys last, so that a misspelt key does not hide a value's refusal.
+  if (!Array.isArray(v.categories)) {
+    unknownKeys(v, DOCS_KEYS, [], DOCS_RULES.unknownKey);
+    return out;
+  }
+  v.categories.forEach((c: unknown, i: number) => {
+    const at = ["categories", i];
+    if (!isMapping(c)) {
+      issue(at, DOCS_RULES.entry);
+      return;
+    }
+    unknownKeys(c, CATEGORY_KEYS, at, DOCS_RULES.entryKey);
+    const category: DocsCategory = { path: "", frontmatter: [], name: "any" };
+    if (docsCategoryPath(c.path)) category.path = c.path;
+    else issue([...at, "path"], DOCS_RULES.path);
+    if (c.frontmatter !== undefined && c.frontmatter !== null) {
+      if (!Array.isArray(c.frontmatter)) issue([...at, "frontmatter"], DOCS_RULES.frontmatter);
+      else
+        c.frontmatter.forEach((k: unknown, j: number) => {
+          if (typeof k === "string" && docsKeyShaped(k)) category.frontmatter.push(k);
+          else issue([...at, "frontmatter", j], DOCS_RULES.key);
+        });
+    }
+    if (c.name !== undefined) {
+      if (c.name === "any" || c.name === "dated") category.name = c.name;
+      else issue([...at, "name"], DOCS_RULES.name);
+    }
+    out.categories.push(category);
+  });
+  unknownKeys(v, DOCS_KEYS, [], DOCS_RULES.unknownKey);
+  return out;
+});
+
+/* ------------------------------------------------------------------ */
 /* Recipes                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -580,6 +685,8 @@ export const ProfileSchema = z.object({
   sections: SectionsSchema,
   /** Project templates (spec 32 §5.1): kept as written, NOT validated at load — `declaredTemplates` is its one reader. */
   templates: z.unknown().optional(),
+  /** The docs block (spec 47 §5.2): kept as written, NOT validated at load — `declaredDocs` is its one reader. */
+  docs: z.unknown().optional(),
 });
 export type Profile = z.infer<typeof ProfileSchema>;
 

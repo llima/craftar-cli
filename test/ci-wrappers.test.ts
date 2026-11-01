@@ -603,7 +603,7 @@ describe("the README (spec 46 §9)", () => {
     expect(later).not.toContain("GitHub Action");
     expect(later).not.toContain("Azure");
     expect(later).toContain("the Agent Plugin packaging of `craftar mcp`");
-    expect(later).toContain("`craftar docs validate`");
+    // Spec 47 §14 item 14 moved `craftar docs validate` out of Later into Phase 2's shipped list (test/docs-validate-cli.test.ts).
   });
 
   it("the status line gains its sentence", () => {
