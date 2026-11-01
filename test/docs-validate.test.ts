@@ -1,30 +1,17 @@
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { POLICY, nameShown, validateDocs, type DocsCheck, type DocsReport } from "../src/core/docs-validate.js";
 import { profile, recipe, rule, scenario, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 import { removeWithRetry } from "./helpers/fs.js";
+import { hermeticGit } from "./helpers/hermetic-git.js";
 import { remoteForge } from "./helpers/remote.js";
 
 // Spec 47 §4, §5.3, §7, §8 — the checks over a real directory, through validateDocs.
 
-// git reads the developer's global and system configuration (a core.excludesFile can ignore *.md): every git this file starts,
-// in process and in a CLI child, gets a scratch global file that does not exist and no system file.
-const SAVED_GIT = { global: process.env.GIT_CONFIG_GLOBAL, nosystem: process.env.GIT_CONFIG_NOSYSTEM };
-let gitScratch = "";
-beforeAll(async () => {
-  const dir = (gitScratch = await tmpDir("craftar-docs-git-"));
-  process.env.GIT_CONFIG_GLOBAL = path.join(dir, "no-global-config");
-  process.env.GIT_CONFIG_NOSYSTEM = "1";
-});
-afterAll(async () => {
-  await removeWithRetry(gitScratch);
-  for (const [k, v] of [["GIT_CONFIG_GLOBAL", SAVED_GIT.global], ["GIT_CONFIG_NOSYSTEM", SAVED_GIT.nosystem]] as const) {
-    if (v === undefined) delete process.env[k];
-    else process.env[k] = v;
-  }
-});
+// Every git this file starts, in process and in a CLI child, reads none of the developer's configuration.
+hermeticGit();
 
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
