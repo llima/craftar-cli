@@ -717,12 +717,11 @@ export async function resolveLimit(root: string, typed: string): Promise<string>
   const abs = path.resolve(root, typed);
   const rel = path.relative(path.resolve(root), abs);
   if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) throw new DocsRefusal(`${typed} is outside the workspace`);
-  try {
-    await fs.lstat(abs);
-  } catch {
-    throw new DocsRefusal(`${typed} names nothing in the workspace`);
-  }
-  return rel.split(path.sep).join("/");
+  const posix = rel.split(path.sep).join("/");
+  // Resolved as a link is (§7): a symbolic link on the way counts as something, and nothing beyond it is asked about.
+  const r = await new Resolver(path.resolve(root)).resolve(".", posix || ".");
+  if (r.kind !== "ok" && r.kind !== "link") throw new DocsRefusal(`${typed} names nothing in the workspace`);
+  return posix;
 }
 
 /** Run every check of spec 47 over one workspace. Reads only: no file, lock, registry entry or cache layout is written. */

@@ -451,6 +451,17 @@ describe("§4.1 — [path]", () => {
     expect(findings(await run(s.wsRoot, { limit: "src/x.ts" }))).toEqual([]);
   });
 
+  it("a [path] through a link is not followed: an outside file that exists reads the same as one that does not", async () => {
+    const outside = await tmpDir();
+    cleanups.push(() => removeWithRetry(outside));
+    await writeFiles(outside, { "present.md": "x\n" });
+    const s = await ws({ "docs/a.md": "x\n" });
+    await fs.symlink(outside, path.join(s.wsRoot, "docs", "lnk"), "junction");
+    const present = await run(s.wsRoot, { limit: "docs/lnk/present.md" });
+    const absent = await run(s.wsRoot, { limit: "docs/lnk/absent.md" });
+    expect(absent.checks).toEqual(present.checks);
+  });
+
   it("a path outside the workspace, or naming nothing, is refused", async () => {
     const s = await ws({ "docs/a.md": "x\n" });
     await expect(run(s.wsRoot, { limit: "../x" })).rejects.toThrow("../x is outside the workspace");
