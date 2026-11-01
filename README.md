@@ -631,6 +631,11 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; `craftar docs validate`;
 
 ## Upgrading
 
+### to 0.44.1
+
+- **`forge unify`, `import`, `drift promote`, `forge promote` and `add recipe` / `remove recipe` accept a YAML file holding a double-quoted string with `\n` over 40 characters**, which they refused as not round-tripping. A file they accepted before is written exactly as before, and only the lines an edit adds or changes move.
+- **The refusal says where:** `it does not round-trip unchanged through the YAML writer: line 12, under sections › rule/x › a`, and for a double-quoted value the fix reads `write that value as a | block or without its escape, commit, and re-run`. A string with an escape the writer does not reproduce (`\u00e9`, `\/`) is still refused. `forge unify`'s `the edit does not read back as exactly the new values` (and `… the new declarations`) also names the key and the kind of difference (`changed`, `changed, whitespace only`, `missing`, `added`). No message carries a value. A tool that matches the old text of either message changes, including `reason` in `forge unify --json`'s `recipes.kept`, whose keys do not. No emitted byte changes.
+
 ### to 0.44.0
 
 - **`craftar doctor` gains `git-hooks`**, present only when a marked hook is installed; a `warn` when no `craftar` is on `PATH`, since the hook then checks nothing, or when a marked hook names another workspace, so `doctor --strict` exits 1 there. Nothing else changes for a workspace with no hook.
