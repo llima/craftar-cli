@@ -6,6 +6,7 @@
  * This module needs `resolve()` and `recipeOrder`, which `integrations.ts` must not import.
  */
 
+import { forgeFor } from "../core/profile-local.js";
 import { WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { recipeOrder, resolve } from "../core/resolve.js";
@@ -39,7 +40,7 @@ export function providedByBlock(forge: Forge, profileName: string): Map<string, 
   const resolution = resolve(forge, ws);
 
   // The profile's written recipes: what the profile lists and extends brings, without the block.
-  const writtenRecipes = new Set(recipeOrder(forge, profile.recipes, `profile ${profileName}`));
+  const writtenRecipes = new Set(recipeOrder(forgeFor(forge, profileName), profile.recipes, `profile ${profileName}`));
 
   // The integration set: recipes the block alone adds, in block order — each `selected` entry's
   // `extends` walk minus what the profile's written recipes cover.
@@ -47,7 +48,7 @@ export function providedByBlock(forge: Forge, profileName: string): Map<string, 
   const recipeToSlot = new Map<string, string>(); // recipe → the slot whose closure holds it first
   for (const s of eff.selected) {
     // A recipe two slots reach belongs to the first.
-    const walk = recipeOrder(forge, [s.recipe], `integrations.${s.slot} of profile ${profileName}`);
+    const walk = recipeOrder(forgeFor(forge, profileName), [s.recipe], `integrations.${s.slot} of profile ${profileName}`);
     for (const r of walk) {
       if (!writtenRecipes.has(r) && !integrationSet.has(r)) {
         integrationSet.add(r);

@@ -60,7 +60,7 @@ export interface ImportBase {
  * declared twice across the ingredient's files, is I12 (spec 11 §4.5). `forgeRoot`, when given,
  * makes the file the error names Forge-relative. `opts`, when given, is passed to `parseSections`.
  */
-export async function readBase(dir: string, io: DirReader, forgeRoot?: string, opts?: ParseSectionsOptions): Promise<ImportBase> {
+export async function readBase(dir: string, io: DirReader, forgeRoot: string | undefined, opts: ParseSectionsOptions | undefined, schema: number): Promise<ImportBase> {
   const metaFile = path.join(dir, "ingredient.yaml");
   const meta = parseYaml(metaFile, await io.readText(metaFile), IngredientSchema);
   const texts = new Map<string, string>();
@@ -70,7 +70,7 @@ export async function readBase(dir: string, io: DirReader, forgeRoot?: string, o
   try {
     for (const rel of await io.list(dir)) {
       if (rel === "ingredient.yaml") continue;
-      if (bodyFile(meta, rel, dir)) {
+      if (bodyFile(meta, rel, dir, schema)) {
         const text = norm(await io.readText(path.join(dir, rel)));
         texts.set(rel, text);
         parsed.set(rel, parseSections(text, label(rel), `${meta.type}/${meta.name}`, opts));

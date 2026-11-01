@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { loadForge } from "../src/core/forge.js";
-import { ForgeManifestSchema, FORGE_SCHEMA_AGENTS_MD_PRIMARY, FORGE_SCHEMA_INTEGRATIONS, FORGE_SCHEMA_RULES_INDEX, FORGE_SCHEMA_SECTIONS, FORGE_SCHEMA_SERVER_PARAMS, FORGE_SCHEMA_TARGET_SECTIONS, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, RecipeSchema, RegistrySchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
+import { ForgeManifestSchema, FORGE_SCHEMA_AGENTS_MD_PRIMARY, FORGE_SCHEMA_INTEGRATIONS, FORGE_SCHEMA_RULES_INDEX,
+  FORGE_SCHEMA_PROFILE_LOCAL, FORGE_SCHEMA_SECTIONS, FORGE_SCHEMA_SERVER_PARAMS, FORGE_SCHEMA_TARGET_SECTIONS, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, RecipeSchema, RegistrySchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
 import { makeForge, tmpDir, writeFiles } from "./helpers/forge.js";
 
 /** A minimal valid ingredient of each type. */
@@ -159,13 +160,15 @@ describe("sections and the manifest schema (spec 11 §5.2)", () => {
     expect(ForgeManifestSchema.parse({ name: "f", schema: 6 }).schema).toBe(6);
     expect(FORGE_SCHEMA_RULES_INDEX).toBe(7);
     expect(ForgeManifestSchema.parse({ name: "f", schema: 7 }).schema).toBe(7);
-    expect(ForgeManifestSchema.safeParse({ name: "f", schema: 8 }).success).toBe(false);
+    expect(FORGE_SCHEMA_PROFILE_LOCAL).toBe(8);
+    expect(ForgeManifestSchema.parse({ name: "f", schema: 8 }).schema).toBe(8);
+    expect(ForgeManifestSchema.safeParse({ name: "f", schema: 9 }).success).toBe(false);
   });
 
-  it("a Forge whose manifest says schema: 8 fails the load, naming the file", async () => {
+  it("a Forge whose manifest says schema: 9 fails the load, naming the file", async () => {
     const root = await tmpDir();
     cleanups.push(root);
-    await writeFiles(root, { "craftar.forge.yaml": "name: f\nschema: 8\n" });
+    await writeFiles(root, { "craftar.forge.yaml": "name: f\nschema: 9\n" });
     await expect(loadForge(root)).rejects.toThrow(/craftar\.forge\.yaml/);
   });
 

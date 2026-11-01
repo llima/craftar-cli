@@ -33,6 +33,8 @@ import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
+import { forgeFor as profileView, isLocalMessage, localCiters, localOwners } from "./core/profile-local.js";
+import type { Forge } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
   hunkAt,
@@ -79,7 +81,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.44.2");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.45.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -127,6 +129,8 @@ program
     for (const x of r.rejected) console.log(`  ${pc.red("rejected")} ${x.name} — ${x.reason}`);
     for (const x of r.preferKiro ?? []) console.log(`  ${pc.cyan("prefer-kiro")} ${preferredLine(x)}`);
     // Spec 33 §5.3: what the block provides is left to its recipe.
+    // Spec 51 §4.5: a source equal to the profile's local is reused there, never placed at the root.
+    for (const x of r.localReused ?? []) console.log(`  local to profile ${r.profile}: ${x.ref} (${x.dir}) — reused there`);
     for (const x of r.leftToRecipes) console.log(`  left to recipe ${x.recipe} (integrations.${x.slot}): ${x.refs.join(", ")} — not compared; when this workspace resolves that recipe, craftar status shows whether its copies differ`);
     // Spec 10 §4.2: how a templated base was reused, and what the profile gained.
     // Spec 11 §4.3: `; sections …` when a section value filled the render.
@@ -954,7 +958,7 @@ drift
       providedWarnings.push(`profile ${ws.config.profile} does not resolve on its own (${(e as Error).message}) — what its integrations provide was not computed, and craftar drift promote will refuse`);
     }
     const indexedPaths = new Set(p.indexed.map((x) => x.path));
-    const rows = driftList(named ? [named] : st, provided, new Set(p.reworded), indexedPaths);
+    const rows = driftList(named ? [named] : st, provided, new Set(p.reworded), indexedPaths, new Set(ws.forge.locals.get(ws.config.profile)?.ingredients.keys()));
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
@@ -1269,7 +1273,7 @@ program
 /* ---------------------------------------------------------------- explain */
 program
   .command("explain")
-  .description("Why does this file exist? Which ingredient, recipe chain and target produced it, which layer filled each section and each parameter it cites, and the rules index when the file holds it")
+  .description("Why does this file exist? Which ingredient, recipe chain and target produced it — at Forge schema 8, from the root or a profile's folder — which layer filled each section and each parameter it cites, and the rules index when the file holds it")
   .argument("<path>", "workspace-relative path of a generated file")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
@@ -1282,6 +1286,11 @@ program
     console.log(pc.bold(f.path));
     console.log(`  target      ${f.target}`);
     console.log(`  ingredient  ${f.ingredient}${f.origin ? pc.dim(`  (imported from ${f.origin.workspace}:${f.origin.path})`) : ""}`);
+    // Spec 51 §4.4: at schema 8, where the file's ingredient lives.
+    if (f.scope !== undefined) {
+      const where = f.scope === null ? "several ingredients" : f.scope === "profile" ? `profile ${f.profile} (${f.dir})` : `forge (${f.dir})`;
+      console.log(`  source      ${where}`);
+    }
     if (f.via) console.log(`  via recipes ${f.via.join(" → ")}`);
     // Spec 11 §4.2 (Ruling 15): which layer filled each section. AGENTS.md (rule/*) is not one ingredient.
     if (f.sections.length) {
@@ -1317,7 +1326,7 @@ program
     const fl = forgeLine(ws, await readLock(ws.root));
     if (fl) console.log(fl);
     for (const r of p.resolution.recipes) {
-      const rec = ws.forge.recipes.get(r)!;
+      const rec = profileView(ws.forge, ws.config.profile).recipes.get(r)!;
       console.log(`\n${pc.cyan(r)}${rec.slot ? pc.dim(` [slot ${rec.slot}]`) : ""}${rec.description ? pc.dim(" — " + rec.description) : ""}`);
       for (const ref of rec.ingredients) {
         const disabled = p.resolution.disabled.includes(ref as never);
@@ -1674,7 +1683,7 @@ mcpCmd
 /* ---------------------------------------------------------------- recipes */
 program
   .command("recipes")
-  .description("List every recipe of the Forge — slot, parents, the profiles that use it — marked against this workspace or a profile. Read-only")
+  .description("List every recipe of the Forge — slot, parents, the profiles that use it — marked against this workspace or a profile; at Forge schema 8 a profile's local recipes too. Read-only")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--profile <name>", "with --forge: mark what this profile resolves")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
@@ -1722,7 +1731,7 @@ program
     // Column 2: <N ingredient(s)>
     // Column 3: ← parents (empty when none)
     // Column 4: reason (empty when none)
-    const col1 = r.recipes.map((rec) => `${rec.name}${rec.slot ? ` [slot ${rec.slot}]` : ""}`);
+    const col1 = r.recipes.map((rec) => `${rec.name}${localMark(rec)}${rec.slot ? ` [slot ${rec.slot}]` : ""}`);
     const col2 = r.recipes.map((rec) => `${rec.ingredients.length} ingredient${rec.ingredients.length === 1 ? "" : "s"}`);
     const col3 = r.recipes.map((rec) => rec.extends.length ? `← ${rec.extends.join(", ")}` : "");
     const col4 = r.recipes.map((rec) => {
@@ -1784,10 +1793,24 @@ program
     for (const w of r.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   });
 
+/** A catalogue row local to a profile (spec 51 §4.4): marked in the text; empty below schema 8, where no row has a scope. */
+function localMark(row: { scope?: string; profile?: string | null }): string {
+  return row.scope === "profile" ? ` (local to ${row.profile})` : "";
+}
+
+/**
+ * A recipe of the `--recipe` chain, in the view `listIngredients` chose (spec 51 §4.4): the context profile's, else —
+ * with no context — the one profile that holds the chain's own recipe, which `listIngredients` has proved unique.
+ */
+function chainRecipeOf(forge: Forge, name: string, chainRoot: string, profile: string | undefined) {
+  const owner = profile ?? [...forge.locals].find(([, l]) => l.recipes.has(chainRoot))?.[0];
+  return (owner !== undefined ? profileView(forge, owner) : forge).recipes.get(name);
+}
+
 /* ---------------------------------------------------------------- ingredients */
 program
   .command("ingredients")
-  .description("List every ingredient of the Forge — its recipes and targets, references to missing ones — or what one recipe brings with its parents. Read-only")
+  .description("List every ingredient of the Forge — its recipes and targets, references to missing ones — or what one recipe brings with its parents; at Forge schema 8 a profile's local ingredients too. Read-only")
   .option("--recipe <name>", "only what this recipe brings, with the parents it extends, parents first")
   .option("--type <type>", "only this ingredient type")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
@@ -1863,7 +1886,7 @@ program
       const w1Recipe = Math.max(...col1Recipe.map((s) => s.length), 0);
 
       for (const entry of result.recipe.chain) {
-        const rec = forg.recipes.get(entry.recipe);
+        const rec = chainRecipeOf(forg, entry.recipe, result.recipe.name, context?.profile);
         const ext = rec?.extends.length ? `  ← ${rec.extends.join(", ")}` : "";
         const slot = rec?.slot ? `  [slot ${rec.slot}]` : "";
         console.log(`${entry.recipe}${ext}${slot}`);
@@ -1902,7 +1925,7 @@ program
       const allCol3: string[] = [];
       for (const ing of result.ingredients) {
         const col1 = ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name;
-        allCol1.push(col1);
+        allCol1.push(col1 + localMark(ing));
         allCol2.push(`targets ${ing.targets === "*" ? "*" : ((ing.targets as string[]).join(", ") || "none")}`);
         allCol3.push(`in ${ing.recipes.length ? ing.recipes.join(", ") : "no recipe"}`);
       }
@@ -1923,7 +1946,7 @@ program
         if (!ings?.length) continue;
         console.log(type);
         for (const ing of ings) {
-          const col1 = ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name;
+          const col1 = (ing.outputName !== ing.name ? `${ing.name} → ${ing.outputName}` : ing.name) + localMark(ing);
           const col2 = `targets ${ing.targets === "*" ? "*" : ((ing.targets as string[]).join(", ") || "none")}`;
           const col3 = `in ${ing.recipes.length ? ing.recipes.join(", ") : "no recipe"}`;
           const desc = ing.description ? `— ${ing.description}` : "";
@@ -2204,6 +2227,7 @@ forge
   .action(async (ref: string, o) => {
     const f = await forgeFor(o);
     const base = f.ingredients.get(ref as IngredientRef);
+    if (!base && localOwners(f, ref).length) fail(`${isLocalMessage(ref, localOwners(f, ref))} — forge diff compares the root's ingredients`);
     if (!base) fail(`${ref} is not an ingredient of this Forge`);
     const variants = [...f.ingredients.values()].filter((i) => {
       const profile = profileOf(i.meta);
@@ -2276,12 +2300,16 @@ forge
       refuseRemote: (url) => `the Forge of this workspace is remote (${url}) — clone it and pass --forge <dir>`,
     });
     const base = f.ingredients.get(ref as IngredientRef);
+    if (!base && localOwners(f, ref).length) fail(`unify: ${isLocalMessage(ref, localOwners(f, ref))} — unify works on the root's ingredients`);
     if (!base) fail(`${ref} is not an ingredient of this Forge`);
     const variant = [...f.ingredients.values()].find((i) => {
       const p = profileOf(i.meta);
       return i.meta.type === base.meta.type && i.meta.as === base.meta.name && p === o.profile;
     });
     if (!variant) fail(`${ref} has no variant for profile ${o.profile}`);
+    // Spec 51 §4.5: unify removes the variant, which a profile's local recipe may cite.
+    const citers = localCiters(f, [variant.ref]);
+    if (citers.length) fail(`unify: ${citers.map((c) => c.file).join(", ")} cites ${variant.ref} — unify does not edit a profile's local recipe; edit it by hand, commit, and re-run`);
 
     // Only when about to write — --save-plan touches nothing inside the Forge, so it is exempt.
     if (!o.savePlan) {
@@ -2503,6 +2531,7 @@ forge
     }
     // Spec 25 §4.2: push warnings from forgeWorkspaces (credential lines)
     warnings.push(...impactWarnings);
+    warnings.push(...result.notes);
     // Spec 33 §4.4: push warnings from pruneCandidates (malformed blocks)
     warnings.push(...pruneWarnings);
 

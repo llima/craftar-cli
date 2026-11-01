@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { escapeReason, escapeSummary, escapingRows } from "./contain.js";
 import { EXAMPLE_SETTINGS } from "../emitters/shared.js";
-import type { Lock } from "../schema/index.js";
+import type { IngredientRef, Lock } from "../schema/index.js";
 import { listTargets, type ListTargetsResult } from "./capabilities.js";
 import { diffOps } from "./diff.js";
 import { mcpTagged } from "./drift.js";
@@ -13,6 +13,8 @@ import { resolve, type ParamLayer } from "./resolve.js";
 import { errorText } from "./schema-fault.js";
 import { loadForgeFor, unsetDeclared, unsetRefused, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
+import { readsProfileLocal } from "./profile-local.js";
+import { shellAtGate } from "./extract.js";
 
 /*
  * What the reading commands answer, as data (spec 35 §5.1): one builder per shape, called by the CLI, by
@@ -189,6 +191,10 @@ export interface ExplainedFile {
   profile: string;
   recipes: string[];
   hash: string;
+  /** At Forge schema 8 and above only (spec 51 §4.4): where the file's ingredient lives — null for a file built from several. */
+  scope?: "forge" | "profile" | null;
+  /** Its folder, Forge-relative and POSIX, so a cached tree never prints its entry's name; null as `scope` is. */
+  dir?: string | null;
 }
 
 /** The planned file at `file`, compared as given (the caller normalizes); null when the Forge does not produce it. */
@@ -203,14 +209,24 @@ export function explainFile(ws: Workspace, p: Plan, file: string): ExplainedFile
     ingredient: f.ingredient,
     origin: ing?.meta.origin ? { workspace: ing.meta.origin.workspace, path: ing.meta.origin.path } : null,
     via: ing ? [...ing.via] : null,
-    sections: (p.sections.get(f.ingredient) ?? [])
+    // Spec 51 §4.6: a file Kiro copies as bytes renders no section there.
+    sections: (f.target === "kiro" && ing && shellAtGate(ing.meta, f.path, ws.forge.manifest.schema) ? [] : (p.sections.get(f.ingredient) ?? []))
       .filter((x) => !x.targets || (x.targets as readonly string[]).includes(f.target))
       .map((x) => ({ name: x.name, layer: x.layer })),
     params: (p.params.get(f.ingredient) ?? []).map((x) => ({ key: x.key, layer: x.layer })),
     profile: ws.config.profile,
     recipes: [...p.resolution.recipes],
     hash: hashNormalized(f.content),
+    ...(readsProfileLocal(ws.forge.manifest) ? sourceOf(ws, ing) : {}),
   };
+}
+
+/** Where a file's one ingredient lives (spec 51 §4.4). */
+function sourceOf(ws: Workspace, ing: { ref: string; dir: string } | undefined): { scope: "forge" | "profile" | null; dir: string | null } {
+  if (!ing) return { scope: null, dir: null };
+  const dir = path.relative(ws.forge.root, ing.dir).split(path.sep).join("/");
+  const local = ws.forge.locals.get(ws.config.profile)?.ingredients.get(ing.ref as IngredientRef);
+  return { scope: local && local.dir === ing.dir ? "profile" : "forge", dir };
 }
 
 /** The document `craftar targets --json` prints (spec 16 §4.4). */

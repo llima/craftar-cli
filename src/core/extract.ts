@@ -1,6 +1,7 @@
 import path from "node:path";
 import { FORGE_SCHEMA_INTEGRATIONS, normalizeDeclared, type Ingredient, type PlanParam } from "../schema/index.js";
 import { INTEGRATIONS_PREFIX } from "./integrations.js";
+import { readsProfileLocal } from "./profile-local.js";
 import { changedRegions } from "./classify.js";
 import { TEXT_EXT } from "../emitters/claude-code.js";
 import { KIRO_TEXT_EXT } from "../emitters/kiro.js";
@@ -110,8 +111,17 @@ export function emittedFile(meta: Ingredient, file: string, dir: string | null):
  *
  * `null` only for metadata the importer builds itself, whose names are canonical.
  */
-export function bodyFile(meta: Ingredient, file: string, dir: string | null): boolean {
-  return emittedFile(meta, file, dir) && substitutedFile(meta, file);
+export function bodyFile(meta: Ingredient, file: string, dir: string | null, schema: number): boolean {
+  return emittedFile(meta, file, dir) && (substitutedFile(meta, file) || shellAtGate(meta, file, schema));
+}
+
+/**
+ * A directory skill's text file `claude-code` substitutes and Kiro copies as bytes (a `.sh`, a `.py`…), at Forge schema 8
+ * and above (spec 51 §4.6, Ruling 4): a body file there, so `claude-code` expands its sections, while Kiro keeps the bytes.
+ * `substitutedFile` does not change, so `forge unify` still refuses to write a marker or a `{{key}}` into it.
+ */
+export function shellAtGate(meta: Ingredient, file: string, schema: number): boolean {
+  return readsProfileLocal({ schema }) && meta.type === "skill" && meta.layout === "dir" && TEXT_EXT.test(file) && !KIRO_TEXT_EXT.test(file);
 }
 
 /** `substitute` restricted to `keys`: every other placeholder is left as it is. */

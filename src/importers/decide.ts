@@ -36,6 +36,8 @@ export interface RunContext {
   pinned: Map<string, string | undefined>;
   /** The Forge as it stood before the run; null for an empty Forge. */
   forge: Forge | null;
+  /** What the importing profile sees (spec 51 §4.3): its locals over the root; the Forge itself when it has none. */
+  view?: Forge | null;
   /**
    * Under agents-md.primary for the importing workspace, the rewording the claude-code emitter applied, so a base is compared
    * as sync wrote it (spec 41 §4.10); null otherwise.
@@ -81,10 +83,10 @@ const textOf = (c: string | Buffer) => norm(typeof c === "string" ? c : c.toStri
 const valueOf = (m: Record<string, unknown>, k: string) => (Object.hasOwn(m, k) ? String(m[k]) : undefined);
 
 /** The keys a source's body files cite literally. */
-export function sourceKeys(meta: Ingredient, files: Record<string, string | Buffer>): Set<string> {
+export function sourceKeys(meta: Ingredient, files: Record<string, string | Buffer>, schema: number): Set<string> {
   const out = new Set<string>();
   // the importer builds meta and file keys itself, with canonical names
-  for (const [rel, c] of Object.entries(files)) if (bodyFile(meta, rel, null)) for (const k of placeholders(textOf(c))) out.add(k);
+  for (const [rel, c] of Object.entries(files)) if (bodyFile(meta, rel, null, schema)) for (const k of placeholders(textOf(c))) out.add(k);
   return out;
 }
 
@@ -142,7 +144,7 @@ export async function decide(
   const schema = ctx.forge?.manifest.schema ?? 1;
   const parseOpts = { targets: readsTargetSections({ schema }) };
   const owner = ctx.sourceTarget;
-  const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."), parseOpts);
+  const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."), parseOpts, schema);
   // The base's authEnv, to carry into the variant answer (spec 27 §5.3).
   const baseAuthEnv = base.meta.type === "mcp" ? base.meta.authEnv : undefined;
   // The base's registration and cited params, to carry into the variant answer (spec 43 §7.2 row 10).
@@ -182,7 +184,7 @@ export async function decide(
     for (const k of cited) {
       if (atRulesIndexGate && k === RULES_INDEX_KEY) continue;
       if (Object.hasOwn(ctx.P, k) || Object.hasOwn(ctx.W, k)) continue;
-      for (const [name, r] of ctx.forge.recipes) {
+      for (const [name, r] of (ctx.view ?? ctx.forge).recipes) {
         if (r.params[k]?.default !== undefined) return { kind: "literal", warn: `${ref} cites {{${k}}}, which recipe ${name} defaults — compared literally` };
       }
     }
@@ -190,7 +192,7 @@ export async function decide(
     for (const k of serverKeys) {
       if (atRulesIndexGate && k === RULES_INDEX_KEY) continue;
       if (Object.hasOwn(ctx.P, k) || Object.hasOwn(ctx.W, k)) continue;
-      for (const [name, r] of ctx.forge.recipes) {
+      for (const [name, r] of (ctx.view ?? ctx.forge).recipes) {
         if (r.params[k]?.default !== undefined) return withAuthEnv({ kind: "variant", why: `recipe ${name} defaults ${k}, which the server cites` });
       }
     }
@@ -294,7 +296,7 @@ async function inferParams(
   const values = deepMerge(ctx.PS, ctx.WS) as Sections;
   for (const { key } of delta) {
     if (ctx.forge) {
-      for (const ing of ctx.forge.ingredients.values()) {
+      for (const ing of (ctx.view ?? ctx.forge).ingredients.values()) {
         // F9 for hook registrations (spec 43 §7.2 row 8, ungated): check even for runBases ingredients
         // because registrations are not imported from the workspace - they stay from the Forge.
         // Only skip the current ingredient being decided.
@@ -302,7 +304,7 @@ async function inferParams(
           return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
         }
         if (ing.ref === ref || runBases.has(ing.ref)) continue;
-        for (const rel of await listAdmitted(ing)) {
+        for (const rel of await listAdmitted(ing, schema)) {
           if (placeholders(norm(await readIngredientText(ing, rel))).includes(key)) return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
         }
         for (const v of Object.values(valuesAt(values, sectionKey(ing.meta)))) {
@@ -316,7 +318,7 @@ async function inferParams(
       }
     }
     for (const o of others) {
-      if (sourceKeys(o.meta, o.files).has(key)) return { kind: "variant", why: `setting ${key} would change ${o.ref}` };
+      if (sourceKeys(o.meta, o.files, schema).has(key)) return { kind: "variant", why: `setting ${key} would change ${o.ref}` };
     }
   }
 
@@ -377,8 +379,8 @@ function inferSectionValues(
   return { kind: "reuse", sectioned: assigned, sectionDelta };
 }
 
-async function listAdmitted(ing: { dir: string; meta: Ingredient }): Promise<string[]> {
-  return (await listFiles(ing.dir)).filter((rel) => rel !== "ingredient.yaml" && bodyFile(ing.meta, rel, ing.dir));
+async function listAdmitted(ing: { dir: string; meta: Ingredient }, schema: number): Promise<string[]> {
+  return (await listFiles(ing.dir)).filter((rel) => rel !== "ingredient.yaml" && bodyFile(ing.meta, rel, ing.dir, schema));
 }
 
 /** `W`: overrides.params of craftar.yaml and craftar.local.yaml, merged as loadWorkspace merges them (I6). */

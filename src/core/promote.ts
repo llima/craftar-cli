@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { forgeFor, isLocalMessage, localCiters, localOwners, localRecipeNamed } from "./profile-local.js";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -154,6 +155,8 @@ function ingredientText(raw: string, label: string, meta: Ingredient, name: stri
  */
 export async function planBasePromotion(forge: Forge, ref: string, profile: string): Promise<BasePromotion> {
   const base = forge.ingredients.get(ref as IngredientRef);
+  const owners = localOwners(forge, ref);
+  if (!base && owners.length) throw new Error(`${COMMAND}: ${isLocalMessage(ref, owners)} — promote works on the root's ingredients`);
   if (!base) throw new Error(`${COMMAND}: ${ref} is not an ingredient of this Forge`);
   if (base.meta.as) throw new Error(`${COMMAND}: ${ref} is a variant — name its base, ${base.meta.type}/${base.meta.as}, with --profile`);
   const type = base.meta.type;
@@ -162,6 +165,10 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
     [...forge.ingredients.values()].find((i) => i.meta.type === type && i.meta.as === base.meta.name && profileOf(i.meta) === q);
   const variant = variantOf(profile);
   if (!variant) throw new Error(`${COMMAND}: ${ref} has no variant for profile ${profile}`);
+
+  // Spec 51 §4.5: a local recipe that cites the base or the variant would be left naming what promote renames.
+  const citers = localCiters(forge, [X, variant.ref]);
+  if (citers.length) throw new Error(`${COMMAND}: ${citers.map((c) => c.file).join(", ")} cites ${X} or ${variant.ref} — promote does not edit a profile's local recipe; edit it by hand, commit, and re-run`);
 
   // Check for symlinks to directories inside the base and variant directories before reading their files.
   await assertNoDirLinkIn(forge.root, base.dir, COMMAND);
@@ -273,11 +280,11 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
         if (sel) {
           throw new Error(`${COMMAND}: profile ${q} selects recipe ${name} (which names ${X}) through integrations.${sel.slot} — promote cannot repoint a recipe a block selects by editing a recipes list; edit the Forge by hand`);
         }
-        throw new Error(`${COMMAND}: profile ${q} reaches recipe ${name} (which names ${X}) through ${chainTo(forge, eff.recipes, name)} — promote would have to copy that chain; edit the Forge by hand`);
+        throw new Error(`${COMMAND}: profile ${q} reaches recipe ${name} (which names ${X}) through ${chainTo(forgeFor(forge, q), eff.recipes, name)} — promote would have to copy that chain; edit the Forge by hand`);
       }
       const copy = `${name}--${q}`;
       const abs = path.join(forge.root, "recipes", `${copy}.yaml`);
-      if (forge.recipes.has(copy) || (await exists(abs)) || (await exists(path.join(forge.root, "recipes", `${copy}.yml`)))) {
+      if (forge.recipes.has(copy) || localRecipeNamed(forge, copy) || (await exists(abs)) || (await exists(path.join(forge.root, "recipes", `${copy}.yml`)))) {
         throw new Error(`${COMMAND}: recipe ${copy} already exists — promote would create it for profile ${q} from ${name}; remove or rename it by hand, commit, and re-run`);
       }
       const f = fileOf(name);
@@ -416,7 +423,7 @@ export async function proveBasePromotion(forge: Forge, promotion: BasePromotion)
       const wantRecipes = was.recipes.map((r) => split.get(r) ?? r);
       for (let i = 0; i < Math.max(wantRecipes.length, now.recipes.length); i++) {
         if (wantRecipes[i] !== now.recipes[i]) throw refused(q, `its recipes differ at position ${i + 1} (${now.recipes[i] ?? "nothing"} ≠ ${wantRecipes[i] ?? "nothing"})`);
-        if (edited.recipes.get(now.recipes[i])!.slot !== forge.recipes.get(was.recipes[i])!.slot) throw refused(q, `recipe ${now.recipes[i]} changes slot`);
+        if (forgeFor(edited, q).recipes.get(now.recipes[i])!.slot !== forgeFor(forge, q).recipes.get(was.recipes[i])!.slot) throw refused(q, `recipe ${now.recipes[i]} changes slot`);
       }
       for (const k of new Set([...Object.keys(was.params), ...Object.keys(now.params)])) {
         if (!isDeepStrictEqual(was.params[k], now.params[k])) throw refused(q, `its parameters differ (${k})`);

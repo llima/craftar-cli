@@ -2,6 +2,7 @@
  * `craftar drift promote` (spec 30 §4.4–§4.7): carry a hand-edited file back to the Forge as a variant.
  * Writes nothing in a workspace, its lock, the registry or the Forge cache.
  */
+import { forgeFor, localCiters } from "../core/profile-local.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,7 +26,7 @@ import {
   copyForgeForProof,
 } from "../core/forge.js";
 import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type UnsetParam, type Plan, type Workspace } from "../core/sync.js";
-import { driftList, REWORDED_REASON, INDEXED_REASON, unmanaged } from "../core/drift.js";
+import { driftList, REWORDED_REASON, INDEXED_REASON, PROFILE_LOCAL_REASON, unmanaged } from "../core/drift.js";
 import { readsRulesIndex, RULES_INDEX_KEY } from "../core/rules-index.js";
 import { hashNormalized, toLf } from "../core/text.js";
 import { fingerprintOf } from "../core/fingerprint.js";
@@ -180,6 +181,8 @@ const D10 = (ing: string, q: string) => `${ing} is also used by profile ${q} —
 const D20 = (p: string) => `${p} holds references agents-md.primary reworded — edit the Forge's ingredient`;
 /** D21 (spec 44 §4.5): the file holds the generated rules index — promoting it would carry sync-generated content into the Forge. */
 const D21 = (p: string) => `${p} holds the generated rules index — edit the Forge's rule, or the description of the rule it lists`;
+/** D22 (spec 51 §4.5): a profile-local ingredient's file — edit it in the profile's folder. */
+const D22 = (p: string, dir: string) => `${p} comes from ${dir}, local to this profile — edit it there; promote does not carry a local's hand edit`;
 const D11 = (p: string, line: number) => `${p}:${line} holds a section marker — a variant body cannot hold one; remove it and promote again`;
 const D12_SECTION = (ing: string, name: string) =>
   `${ing} takes section "${name}" from this workspace's overrides (craftar.yaml) — a variant would silently stop applying it; edit craftar.yaml, or remove the override and sync first`;
@@ -600,7 +603,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
   // Static checks (promotability) using driftList's row
   const indexedPaths = new Set(p0.indexed.map((x) => x.path));
-  const rows = driftList([fileStatus], provided, new Set(p0.reworded), indexedPaths);
+  const localRefs = new Set<string>(forge.locals.get(profile)?.ingredients.keys());
+  const rows = driftList([fileStatus], provided, new Set(p0.reworded), indexedPaths, localRefs);
   if (rows.length === 0) {
     throw new Error(D4_OTHER(normalized, fileStatus.state));
   }
@@ -621,6 +625,10 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     }
     if (reason === REWORDED_REASON) throw new Error(D20(normalized));
     if (reason === INDEXED_REASON) throw new Error(D21(normalized));
+    if (reason === PROFILE_LOCAL_REASON) {
+      const local = forge.locals.get(profile)!.ingredients.get(fileStatus.ingredient! as IngredientRef)!;
+      throw new Error(D22(normalized, path.relative(forge.root, local.dir).split(path.sep).join("/")));
+    }
     if (reason === "kiro file") {
       // D5 kiro: check if the plan has a claude-code path for this ingredient
       const ingredientRef = fileStatus.ingredient;
@@ -799,7 +807,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   let flattenedSections: string[] = [];
 
   const parseOpts = { targets: readsTargetSections(forge.manifest) };
-  const base = await readBase(X.dir, stage.reader(), forge.root, parseOpts);
+  const base = await readBase(X.dir, stage.reader(), forge.root, parseOpts, forge.manifest.schema);
   const ingKey = sectionKey(X.meta);
   const PSk = ctx.PS[ingKey] ?? {};
   const WSk = ctx.WS[ingKey] ?? {};
@@ -853,6 +861,12 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     flattenedSections = baseSectionNames;
   }
 
+  // Spec 51 §4.5: a new variant would leave a local recipe of this profile naming the base beside it.
+  if (outcome === "variant") {
+    const citers = localCiters(forge, [X.ref], { profile, viaExtends: true });
+    if (citers.length) throw new Error(`${normalized}: ${citers.map((c) => c.file).join(", ")} reaches ${X.ref}, local to this profile — promote does not edit a local recipe; edit the Forge by hand`);
+  }
+
   // D12: check workspace overrides before variant outcomes (not for params/sections)
   if (outcome === "variant" || outcome === "variant-updated") {
     // Check if the workspace sets a section of this ingredient
@@ -881,7 +895,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
   // D11: marker check (only for variant outcomes)
   if (outcome === "variant" || outcome === "variant-updated") {
-    const marker = markerIn(sourceMeta, emitted.files, normalized);
+    const marker = markerIn(sourceMeta, emitted.files, normalized, forge.manifest.schema);
     if (marker) throw new Error(D11(marker.where, marker.line));
   }
 
@@ -1105,11 +1119,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       }
 
       // Find the extends chain to R
-      const extendsChain = findExtendsChain(forge, p0.resolution.recipes, R);
+      const extendsChain = findExtendsChain(forgeFor(forge, profile), p0.resolution.recipes, R);
       // Check if R is in the profile's recipes list
       const inProfileRecipes = profileRecipes.includes(R);
       // Check if any other resolved recipe extends R
-      const extendedByOther = isExtendedByOtherResolved(forge, p0.resolution.recipes, R);
+      const extendedByOther = isExtendedByOtherResolved(forgeFor(forge, profile), p0.resolution.recipes, R);
 
       if (profileOwns && !othersMay) {
         // Case 1: profile owns it alone — edit recipe in place

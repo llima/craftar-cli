@@ -16,7 +16,8 @@ import { SchemaError, schemaIssues } from "./schema-fault.js";
 import { execProgram, streamProgram } from "./proc.js";
 import { findSecrets } from "./secrets.js";
 import { climbsOut } from "./text.js";
-import { containRoot, readForgeText, type ContainRoot } from "./contain.js";
+import { containRoot, containSubRoot, readForgeText, type ContainRoot } from "./contain.js";
+import { checkLocals, ProfileLocalLoadError, readsProfileLocal, type IgnoredLocals, type LocalLayer, type LocalRecipe } from "./profile-local.js";
 
 export interface LoadedIngredient {
   ref: IngredientRef;
@@ -34,6 +35,10 @@ export interface Forge {
   profiles: Map<string, Profile>;
   /** HEAD commit when the Forge is a git checkout, else null. */
   commit: string | null;
+  /** Each profile's own ingredients and recipes (spec 51 §4.2), by profile name; empty below schema 8. Never in `ingredients` or `recipes`. */
+  locals: Map<string, LocalLayer>;
+  /** Below schema 8, the local folders a profile holds that nothing reads (spec 51 §4.1), by profile name. */
+  ignoredLocals: IgnoredLocals;
 }
 
 export const FORGE_MANIFEST = "craftar.forge.yaml";
@@ -48,8 +53,8 @@ export async function exists(p: string): Promise<boolean> {
 }
 
 /** Parse YAML `text` read from `file` through `schema`; a syntax or schema error names the file. */
-export function parseYaml<T>(file: string, text: string, schema: { parse: (v: unknown) => T }): T {
-  const rel = path.relative(process.cwd(), file);
+export function parseYaml<T>(file: string, text: string, schema: { parse: (v: unknown) => T }, label?: string): T {
+  const rel = label ?? path.relative(process.cwd(), file);
   const parsed = parseYamlText(rel, text) ?? {};
   try {
     return schema.parse(parsed);
@@ -60,7 +65,9 @@ export function parseYaml<T>(file: string, text: string, schema: { parse: (v: un
 }
 
 async function readYaml<T>(root: ContainRoot, file: string, schema: { parse: (v: unknown) => T }): Promise<T> {
-  return parseYaml(file, await readForgeText(root, file), schema);
+  // A profile's folder (spec 51 §4.2) labels its files Forge-relative, so a tree in the cache never prints its entry's name.
+  const label = root.label ? `${root.label.rel}/${path.relative(root.given, file).split(path.sep).join("/")}` : undefined;
+  return parseYaml(file, await readForgeText(root, file), schema, label);
 }
 
 /** Anything at the path, a dangling link included: `exists` would read that as absent and skip the file (spec 48 §15 item 27). */
@@ -73,48 +80,141 @@ export async function loadForge(root: string): Promise<Forge> {
   const contain = await containRoot(root);
   const manifest = await readYaml(contain, manifestPath, ForgeManifestSchema);
 
+  const posixRel = (abs: string) => path.relative(root, abs).split(path.sep).join("/");
+
   const ingredients = new Map<IngredientRef, LoadedIngredient>();
-  const ingRoot = path.join(root, "ingredients");
-  if (await exists(ingRoot)) {
-    for (const typeDir of await fs.readdir(ingRoot, { withFileTypes: true })) {
-      if (!typeDir.isDirectory()) continue;
-      const typeName = typeDir.name; // plural folder: rules, agents, …
-      for (const ingDir of await fs.readdir(path.join(ingRoot, typeName), { withFileTypes: true })) {
-        if (!ingDir.isDirectory()) continue;
-        const dir = path.join(ingRoot, typeName, ingDir.name);
-        const metaFile = path.join(dir, "ingredient.yaml");
-        if (!(await present(metaFile))) continue;
-        const meta = await readYaml(contain, metaFile, IngredientSchema);
-        const ref = `${meta.type}/${meta.name}` as IngredientRef;
-        if (ingredients.has(ref)) throw new Error(`duplicate ingredient ${ref} (${dir})`);
-        ingredients.set(ref, { ref, dir, meta, forgeRoot: contain });
-      }
-    }
+  const ingredientPaths = new Map<IngredientRef, string>();
+  for (const { ref, dir, meta } of await readIngredientTree(contain, path.join(root, "ingredients"))) {
+    if (ingredients.has(ref)) throw new Error(`duplicate ingredient ${ref} (${dir})`);
+    ingredients.set(ref, { ref, dir, meta, forgeRoot: contain });
+    ingredientPaths.set(ref, posixRel(dir));
   }
 
   const recipes = new Map<string, Recipe>();
+  const recipeFiles = new Map<string, string>();
   const recRoot = path.join(root, "recipes");
   if (await exists(recRoot)) {
     for (const f of await fs.readdir(recRoot)) {
       if (!/\.ya?ml$/.test(f)) continue;
       const r = await readYaml(contain, path.join(recRoot, f), RecipeSchema);
       recipes.set(r.name, r);
+      recipeFiles.set(r.name, `recipes/${f}`);
     }
   }
 
   const profiles = new Map<string, Profile>();
+  const locals = new Map<string, LocalLayer>();
+  const localPaths = new Map<string, Map<IngredientRef, string>>();
+  const ignoredLocals: IgnoredLocals = new Map();
+  const early: string[] = [];
+  const reads = readsProfileLocal(manifest);
   const profRoot = path.join(root, "profiles");
   if (await exists(profRoot)) {
     for (const d of await fs.readdir(profRoot, { withFileTypes: true })) {
       if (!d.isDirectory()) continue;
-      const f = path.join(profRoot, d.name, "profile.yaml");
-      if (!(await present(f))) continue;
-      const p = await readYaml(contain, f, ProfileSchema);
-      profiles.set(p.name, p);
+      const folder = path.join(profRoot, d.name);
+      const f = path.join(folder, "profile.yaml");
+      const hasProfile = await present(f);
+      const p = hasProfile ? await readYaml(contain, f, ProfileSchema) : null;
+      if (p) profiles.set(p.name, p);
+      const present2 = [] as Array<"ingredients" | "recipes">;
+      for (const sub of ["ingredients", "recipes"] as const) if (await present(path.join(folder, sub))) present2.push(sub);
+      if (!reads) {
+        if (p && present2.length) ignoredLocals.set(p.name, { folder: d.name, subs: present2 });
+        continue;
+      }
+      const label = `profiles/${d.name}`;
+      // L8: the folders that hold locals are folders, never links (spec 51 §4.2).
+      let linked = false;
+      for (const sub of ["ingredients", "recipes", "sections"]) {
+        const abs = path.join(folder, sub);
+        if (await isLink(abs)) {
+          early.push(`L8 ${label}/${sub}: a symbolic link — a profile's folder holds its own files; replace it with a directory`);
+          linked = true;
+          continue;
+        }
+        if (sub !== "ingredients" || !(await isDir(abs))) continue;
+        for (const t of await fs.readdir(abs, { withFileTypes: true })) {
+          if (t.isSymbolicLink()) {
+            early.push(`L8 ${label}/${sub}/${t.name}: a symbolic link — a profile's folder holds its own files; replace it with a directory`);
+            linked = true;
+          }
+        }
+      }
+      if (!present2.length || linked) continue;
+      // L7: the folder binds the locals to the profile its profile.yaml names.
+      if (!p) {
+        early.push(`L7 ${label}: holds ingredients or recipes but no profile.yaml`);
+        continue;
+      }
+      if (p.name !== d.name) {
+        early.push(`L7 ${label}: holds ingredients or recipes, and its profile.yaml names another profile — rename the folder to the profile's name`);
+        continue;
+      }
+      const sub = await containSubRoot(contain, label, "the profile's folder");
+      const layer: LocalLayer = { ingredients: new Map(), recipes: new Map() };
+      const pathsHere = new Map<IngredientRef, string>();
+      const seenRefs = new Map<string, string>(); // lower-cased ref → path (L9)
+      for (const { ref, dir, meta } of await readIngredientTree(sub, path.join(folder, "ingredients"))) {
+        const at = posixRel(dir);
+        const prior = seenRefs.get(ref.toLowerCase());
+        if (prior !== undefined) {
+          early.push(`L9 ${prior} and ${at}: two local ingredients of one profile with one name`);
+          continue;
+        }
+        seenRefs.set(ref.toLowerCase(), at);
+        layer.ingredients.set(ref, { ref, dir, meta, forgeRoot: sub });
+        pathsHere.set(ref, at);
+      }
+      const localRecRoot = path.join(folder, "recipes");
+      if (await isDir(localRecRoot)) {
+        const seen = new Map<string, string>();
+        for (const e of await fs.readdir(localRecRoot)) {
+          if (!/\.ya?ml$/.test(e)) continue;
+          const r = await readYaml(sub, path.join(localRecRoot, e), RecipeSchema);
+          const file = `${label}/recipes/${e}`;
+          const prior = seen.get(r.name.toLowerCase());
+          if (prior !== undefined) {
+            early.push(`L9 ${prior} and ${file}: two local recipes of one profile with one name`);
+            continue;
+          }
+          seen.set(r.name.toLowerCase(), file);
+          layer.recipes.set(r.name, { recipe: r, file } satisfies LocalRecipe);
+        }
+      }
+      locals.set(p.name, layer);
+      localPaths.set(p.name, pathsHere);
     }
   }
 
-  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root) };
+  if (reads) {
+    const findings = checkLocals({ ingredients, ingredientPaths, recipes, recipeFiles }, locals, localPaths, early);
+    if (findings.length) throw new ProfileLocalLoadError(findings);
+  }
+
+  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals };
+}
+
+const isLink = (p: string) => fs.lstat(p).then((st) => st.isSymbolicLink(), () => false);
+const isDir = (p: string) => fs.stat(p).then((st) => st.isDirectory(), () => false);
+
+/** `ingredients/<type-plural>/<name>/ingredient.yaml` under `dir`, read against `contain`: the root's tree, or a profile's (spec 51 §4.2). */
+async function readIngredientTree(contain: ContainRoot, ingRoot: string): Promise<Array<{ ref: IngredientRef; dir: string; meta: Ingredient }>> {
+  const out: Array<{ ref: IngredientRef; dir: string; meta: Ingredient }> = [];
+  if (!(await exists(ingRoot))) return out;
+  for (const typeDir of await fs.readdir(ingRoot, { withFileTypes: true })) {
+    if (!typeDir.isDirectory()) continue;
+    const typeName = typeDir.name; // plural folder: rules, agents, …
+    for (const ingDir of await fs.readdir(path.join(ingRoot, typeName), { withFileTypes: true })) {
+      if (!ingDir.isDirectory()) continue;
+      const dir = path.join(ingRoot, typeName, ingDir.name);
+      const metaFile = path.join(dir, "ingredient.yaml");
+      if (!(await present(metaFile))) continue;
+      const meta = await readYaml(contain, metaFile, IngredientSchema);
+      out.push({ ref: `${meta.type}/${meta.name}` as IngredientRef, dir, meta });
+    }
+  }
+  return out;
 }
 
 async function gitHead(dir: string): Promise<string | null> {
@@ -353,8 +453,8 @@ const SYMLINK_REFUSAL = (rel: string, command: string) =>
   `${rel} is a symbolic link in the Forge — ${command} does not write through a link; replace it with the file and commit`;
 const SYMLINK_DIR_REFUSAL = (rel: string, command: string) =>
   `${rel} is a symbolic link in the Forge — ${command} does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit`;
-const NON_REGULAR_FILE_REFUSAL = (rel: string) =>
-  `${rel} is not a regular file — promote cannot copy the Forge to prove its edit; remove it`;
+const NON_REGULAR_FILE_REFUSAL = (rel: string, command: string) =>
+  `${rel} is not a regular file — ${command} cannot copy the Forge to prove its edit; remove it`;
 
 /** The root directories loadForge reads; a link there causes the scratch to differ from the real Forge. */
 const ROOT_DIRS = new Set(["ingredients", "recipes", "profiles"]);
@@ -370,7 +470,7 @@ const ROOT_DIRS = new Set(["ingredients", "recipes", "profiles"]);
  * - A non-regular file (FIFO, socket, device): refused.
  * Exported so tests can verify the copy behaviour directly.
  */
-export async function copyForgeForProof(forgeDir: string, scratchDir: string): Promise<void> {
+export async function copyForgeForProof(forgeDir: string, scratchDir: string, command = "promote"): Promise<void> {
   const forgeReal = await fs.realpath(forgeDir);
 
   async function walk(rel: string): Promise<void> {
@@ -403,7 +503,7 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string): P
           // A root directory link (ingredients, recipes, profiles) is refused: loadForge follows it
           // but the scratch would skip it, so the scratch would not load the same as the real Forge.
           if (rel === "" && ROOT_DIRS.has(ent.name)) {
-            throw new Error(SYMLINK_DIR_REFUSAL(ent.name, "promote"));
+            throw new Error(SYMLINK_DIR_REFUSAL(ent.name, command));
           }
           // Other directory links are skipped entirely — loadForge doesn't traverse them
           continue;
@@ -412,7 +512,7 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string): P
         // Target is neither a directory nor a regular file (FIFO, socket, etc.) — refuse
         // Check this BEFORE the "inside Forge" check so the message is clear
         if (!targetStat.isFile()) {
-          throw new Error(NON_REGULAR_FILE_REFUSAL(entRel));
+          throw new Error(NON_REGULAR_FILE_REFUSAL(entRel, command));
         }
 
         // It's a file link — check if target is inside the Forge
@@ -434,7 +534,7 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string): P
         await fs.copyFile(entSrc, entDest);
       } else {
         // Non-regular file (FIFO, socket, device, etc.) — refuse
-        throw new Error(NON_REGULAR_FILE_REFUSAL(entRel));
+        throw new Error(NON_REGULAR_FILE_REFUSAL(entRel, command));
       }
     }
   }

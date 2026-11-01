@@ -102,6 +102,8 @@ export function renderImportReport(i: ImportReportInput): string {
     ...(report.leftToRecipes.length
       ? [[`## Left to an integration recipe (${report.leftToRecipes.length})`, ...report.leftToRecipes.map((x) => `- ${oneLine(`${x.recipe} (integrations.${x.slot}): ${x.refs.join(", ")}`)}`)] as string[]]
       : []),
+    // Spec 51 §4.5: only when a local was reused, so a report without one keeps its bytes.
+    ...(report.localReused?.length ? [[`## Reused as a local of profile ${report.profile} (${report.localReused.length})`, ...report.localReused.map((x) => `- ${oneLine(`${x.ref} (${x.dir})`)}`)] as string[]] : []),
     ...kiroSections(report, said),
     [`## Warnings (${report.warnings.length})`, ...report.warnings.map((x) => `- ${oneLine(said(x))}`)],
   ];

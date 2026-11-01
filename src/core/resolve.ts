@@ -6,6 +6,7 @@ import { outName } from "../emitters/shared.js";
 import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
 import { effectiveProfile, integrationOrigin } from "./integrations.js";
 import { readsRulesIndex, RULES_INDEX_KEY } from "./rules-index.js";
+import { forgeFor, ignoredLocalWarning } from "./profile-local.js";
 
 /** Builds the "profile not found" message (spec 28 §5.2, N5). */
 export function profileNotFoundMessage(profile: string, profileNames: string[]): string {
@@ -75,13 +76,17 @@ export function recipeOrder(forge: Forge, wanted: string[], origin: string): str
  * base recipes → stack recipes → profile → workspace → local.
  * Recipes are expanded depth-first through `extends`, each recipe applied once.
  */
-export function resolve(forge: Forge, ws: WorkspaceConfig): Resolution {
-  const profile = forge.profiles.get(ws.profile);
-  if (!profile) throw new Error(profileNotFoundMessage(ws.profile, [...forge.profiles.keys()]));
+export function resolve(root: Forge, ws: WorkspaceConfig): Resolution {
+  const profile = root.profiles.get(ws.profile);
+  if (!profile) throw new Error(profileNotFoundMessage(ws.profile, [...root.profiles.keys()]));
+  // What this profile sees: its locals over the root (spec 51 §4.3).
+  const forge = forgeFor(root, ws.profile);
 
   // The effective profile once integrations are applied (spec 33 §5.2).
   const eff = effectiveProfile(forge, profile);
   const warnings: string[] = [...eff.warnings];
+  const ignored = root.ignoredLocals.get(profile.name);
+  for (const sub of ignored?.subs ?? []) warnings.push(ignoredLocalWarning(ignored!.folder, sub));
 
   // Check unknown integration recipes before recipes.add (spec 33 §4.3, design.md item 4).
   for (const s of eff.selected) {

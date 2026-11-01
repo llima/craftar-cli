@@ -10,7 +10,7 @@ import { detectEol, isUtf8, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
 import type { HunkTake, Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile, PlanHunk } from "../schema/index.js";
 import { ProfileSchema, RecipeSchema } from "../schema/index.js";
-import { collect, deriveHunk, prove, substitutedFile, bodyFile, emittedFile, type Extraction } from "./extract.js";
+import { collect, deriveHunk, prove, substitutedFile, bodyFile, emittedFile, shellAtGate, type Extraction } from "./extract.js";
 import { firstMarkerLine, parseSections, readsTargetSections, SectionMarkerError, type ParseSectionsOptions } from "./sections.js";
 import { errorText } from "./schema-fault.js";
 import { sectionKey } from "./resolve.js";
@@ -86,7 +86,7 @@ export async function planFrom(
   const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
   for (const rel of baseFiles) {
     if (rel === "ingredient.yaml") continue;
-    if (!bodyFile(base.meta, rel, base.dir)) continue;
+    if (!bodyFile(base.meta, rel, base.dir, forgeSchema)) continue;
     try {
       const text = await readIngredientText(base, rel);
       const parsed = parseSections(text, label(rel), base.ref, parseOpts);
@@ -101,9 +101,10 @@ export async function planFrom(
   for (const f of diff.files) {
     // Pre-fill section names only when the file is a body file (spec 12 §4.2, 0.8.2)
     let sectionNames: Array<string | undefined> = [];
-    if (bodyFile(base.meta, f.file, base.dir)) {
+    if (bodyFile(base.meta, f.file, base.dir, forgeSchema)) {
       try {
         const baseText = await readIngredientText(base, f.file);
+        const onlyDeclared = !substitutedFile(base.meta, f.file);
         sectionNames = prefillSections({
           baseText,
           label: label(f.file),
@@ -112,6 +113,8 @@ export async function planFrom(
           declared,
           parseOpts,
         });
+        // Spec 51 §4.6: in a skill's shell file only a section the base already declares is offered.
+        if (onlyDeclared) sectionNames = sectionNames.map((n) => (n !== undefined && declared.has(n) ? n : undefined));
       } catch {
         // On any error, leave all undefined (spec 12 §4.2: "pre-fill never blocks --save-plan")
       }
@@ -250,6 +253,8 @@ export interface UnifyResult {
   params: Extraction[];
   /** The sections a `take: section` plan extracts (spec 12); [] when it has no section hunk. */
   sections: SectionExtraction[];
+  /** Warnings the run carries (spec 51 §4.6); [] when none. */
+  notes: string[];
 }
 
 /**
@@ -347,6 +352,7 @@ export async function applyPlan(
   opts: ApplyOptions = {},
 ): Promise<UnifyResult> {
   await assertTextMergeable(base, variant);
+  const notes: string[] = [];
   const write: Record<string, string | Buffer> = {};
   const remove: string[] = [];
   let unresolved = 0;
@@ -409,7 +415,7 @@ export async function applyPlan(
     const variantFiles = await listFiles(variant.dir);
     for (const rel of variantFiles) {
       if (rel === "ingredient.yaml") continue;
-      if (!bodyFile(variant.meta, rel, variant.dir)) continue;
+      if (!bodyFile(variant.meta, rel, variant.dir, forgeSchema)) continue;
       const variantText = await readIngredientText(variant, rel);
       const markerLine = firstMarkerLine(toLf(stripBom(variantText)));
       if (markerLine !== null) {
@@ -469,17 +475,18 @@ export async function applyPlan(
             `unify plan: "${pf.file}" is not emitted by any target — a section there would never render`,
           );
         }
-        if (!substitutedFile(base.meta, pf.file)) {
-          throw new Error(
-            `unify plan: "${pf.file}" is copied without expansion by a target that emits it — a section marker there would be emitted literally`,
-          );
+        // Spec 51 §4.6: at schema 8 a skill's shell file is a body file for claude-code only; decided after the runs below.
+        const atGateShell = !substitutedFile(base.meta, pf.file) && shellAtGate(base.meta, pf.file, forgeSchema);
+        const S2 = `unify plan: "${pf.file}" is copied without expansion by a target that emits it — a section marker there would be emitted literally`;
+        if (!substitutedFile(base.meta, pf.file) && !atGateShell) {
+          throw new Error(S2);
         }
 
         // Build declaredElsewhere for this file
         const declaredElsewhere = new Map<string, string>();
         for (const otherFile of baseFiles) {
           if (otherFile === "ingredient.yaml" || otherFile === pf.file) continue;
-          if (!bodyFile(base.meta, otherFile, base.dir)) continue;
+          if (!bodyFile(base.meta, otherFile, base.dir, forgeSchema)) continue;
           const otherText = await readIngredientText(base, otherFile);
           const parsed = parseSections(otherText, label(otherFile), base.ref, parseOpts);
           for (const s of parsed.sections) {
@@ -501,6 +508,12 @@ export async function applyPlan(
           declaredElsewhere,
           parseOpts,
         });
+
+        // Spec 51 §4.6: in such a file only a value for a section the base already declares — no new marker, no param.
+        if (atGateShell) {
+          if (runs.some((r) => !r.existing) || paramOf.size > 0) throw new Error(S2);
+          for (const run of runs) notes.push(`unify: ${pf.file}: kiro keeps the base's text; the value of section ${run.name} reaches only claude-code`);
+        }
 
         // S3 second form: a name used in two different files
         for (const run of runs) {
@@ -660,7 +673,7 @@ export async function applyPlan(
   }
 
   // Spec 41 Part B §5: parseOpts was already built above with target-scoped section options from the Forge schema
-  await checkMarkers(base, write, remove, newSectionNames, parseOpts);
+  await checkMarkers(base, write, remove, newSectionNames, parseOpts, forgeSchema);
 
   const metaDiffers = opts.discardVariantMeta ? [] : metaDifferences(base, variant, forgeSchema);
   const params = [...extractions.values()];
@@ -701,7 +714,7 @@ export async function applyPlan(
     });
   }
 
-  return { write, remove, resolved: unresolved === 0 && metaDiffers.length === 0, unresolved, metaDiffers, params, sections };
+  return { write, remove, resolved: unresolved === 0 && metaDiffers.length === 0, unresolved, metaDiffers, params, sections, notes };
 }
 
 /**
@@ -739,9 +752,10 @@ async function checkMarkers(
   remove: string[],
   newNames: Map<string, string[]> = new Map(),
   opts?: ParseSectionsOptions,
+  schema = 1,
 ): Promise<void> {
   const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
-  const touched = [...Object.keys(write), ...remove].filter((rel) => bodyFile(base.meta, rel, base.dir)).sort();
+  const touched = [...Object.keys(write), ...remove].filter((rel) => bodyFile(base.meta, rel, base.dir, schema)).sort();
   for (const rel of touched) {
     const abs = path.join(base.dir, rel);
     const before = (await exists(abs)) ? markerStructure(await readForgeText(base.forgeRoot, abs), label(rel), opts) : { names: [] };
@@ -1281,6 +1295,10 @@ export async function pruneRecipes(
     const extendedBy: string[] = [];
     for (const [rn, r] of current.recipes) {
       if (r.extends.includes(candidate.recipe)) extendedBy.push(rn);
+    }
+    // Spec 51 §4.5: a profile's local recipe that extends it keeps it too.
+    for (const layer of current.locals.values()) {
+      for (const lr of layer.recipes.values()) if (lr.recipe.extends.includes(candidate.recipe)) extendedBy.push(lr.file);
     }
     if (extendedBy.length > 0) {
       kept.push({
