@@ -33,7 +33,7 @@ describe("README — init --clone and craftar repos", () => {
     expect(count("| `craftar repos clone [<name>…] [--workspace .]` |")).toBe(1);
     expect(count("[--clone \\| --no-clone]")).toBe(1);
     expect(count("**Repositories.** A profile's `repos`")).toBe(1);
-    expect(count("; cloning a profile's repositories (`init --clone`, `craftar repos`); a new profile from `craftar init` (`--new-profile`, `--like`); writing tools for `craftar mcp` (`--allow-writes`: `sync`, `add_recipe`, `remove_recipe`, behind a consent typed per workspace); writing actions in `craftar ui` (`--allow-writes`: Sync and Discard edit, confirmed in the page); the Claude Code plugin of `craftar mcp` (`plugins/craftar/`: a `/craftar` skill and the reading tools).")).toBe(1);
+    expect(count("; cloning a profile's repositories (`init --clone`, `craftar repos`); a new profile from `craftar init` (`--new-profile`, `--like`); writing tools for `craftar mcp` (`--allow-writes`: `sync`, `add_recipe`, `remove_recipe`, behind a consent typed per workspace); writing actions in `craftar ui` (`--allow-writes`: Sync and Discard edit, confirmed in the page); the Claude Code plugin of `craftar mcp` (`plugins/craftar/`: a `/craftar` skill and the reading tools); the CI wrappers (`ci/github/action.yml`, `ci/azure/check.yml`: `sync --check` as a pull request's gate).")).toBe(1);
     expect(count("Next: cloning")).toBe(0);
     expect(count("Everything else in the spec (cloning a profile's repositories at init) is not built yet.")).toBe(0);
   });
