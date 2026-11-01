@@ -1273,7 +1273,7 @@ program
 /* ---------------------------------------------------------------- explain */
 program
   .command("explain")
-  .description("Why does this file exist? Which ingredient, recipe chain and target produced it, which layer filled each section and each parameter it cites, and the rules index when the file holds it")
+  .description("Why does this file exist? Which ingredient, recipe chain and target produced it — at Forge schema 8, from the root or a profile's folder — which layer filled each section and each parameter it cites, and the rules index when the file holds it")
   .argument("<path>", "workspace-relative path of a generated file")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
@@ -1683,7 +1683,7 @@ mcpCmd
 /* ---------------------------------------------------------------- recipes */
 program
   .command("recipes")
-  .description("List every recipe of the Forge — slot, parents, the profiles that use it — marked against this workspace or a profile. Read-only")
+  .description("List every recipe of the Forge — slot, parents, the profiles that use it — marked against this workspace or a profile; at Forge schema 8 a profile's local recipes too. Read-only")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--profile <name>", "with --forge: mark what this profile resolves")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
@@ -1807,7 +1807,7 @@ function localRecipeOf(forge: Forge, name: string, profile: string | undefined) 
 /* ---------------------------------------------------------------- ingredients */
 program
   .command("ingredients")
-  .description("List every ingredient of the Forge — its recipes and targets, references to missing ones — or what one recipe brings with its parents. Read-only")
+  .description("List every ingredient of the Forge — its recipes and targets, references to missing ones — or what one recipe brings with its parents; at Forge schema 8 a profile's local ingredients too. Read-only")
   .option("--recipe <name>", "only what this recipe brings, with the parents it extends, parents first")
   .option("--type <type>", "only this ingredient type")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
