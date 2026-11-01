@@ -1,6 +1,4 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { acmePrimary } from "./helpers/agents-md-primary.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
@@ -792,15 +790,8 @@ describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.6–§
     expect(ancestorCheck).toBeDefined();
   });
 
-  // The scenario lives under os.tmpdir(): a CLAUDE.md in one of its real ancestors would make this case a warn, not an ok.
-  const realAncestorClaude = (() => {
-    for (let d = os.tmpdir(); ; d = path.dirname(d)) {
-      // Since spec 50 §4.2 any of the three files there is a warn.
-      if (["CLAUDE.md", "CLAUDE.local.md", path.join(".claude", "CLAUDE.md")].some((f) => existsSync(path.join(d, f)))) return true;
-      if (d === path.dirname(d)) return false;
-    }
-  })();
-  it.skipIf(realAncestorClaude)("6. mode on, nothing at root and no ancestor CLAUDE.md → one ok: nothing keeps Claude Code from reading AGENTS.md", async () => {
+  // The walk above the workspace is confined to the scenario (runDoc), so no real ancestor can change this case.
+  it("6. mode on, nothing at root and no ancestor CLAUDE.md → one ok: nothing keeps Claude Code from reading AGENTS.md", async () => {
     const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
     const report = await runDoc(s.wsRoot);
     const primaryChecks = report.checks.filter((c) => c.id === "agents-md-primary");
@@ -814,13 +805,9 @@ describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.6–§
     const seen: string[] = [];
     const found = await claudeMdAncestors(ws, async (f) => (seen.push(f), f === path.join(root, "CLAUDE.md")));
     expect(found).toEqual([path.join(root, "CLAUDE.md")]);
-    // Since spec 50 §4.2 each directory is asked for three files; the last directory asked is the file-system root.
-    expect(seen.filter((f) => path.basename(f) === "CLAUDE.md" && path.basename(path.dirname(f)) !== ".claude")).toEqual([
-      path.join(root, "a", "b", "CLAUDE.md"),
-      path.join(root, "a", "CLAUDE.md"),
-      path.join(root, "CLAUDE.md"),
-    ]);
-    expect(seen.at(-1)).toBe(path.join(root, ".claude", "CLAUDE.md"));
+    // Since spec 50 §4.2 each directory is asked for three files, up to and including the file-system root.
+    const three = (d: string) => [path.join(d, "CLAUDE.md"), path.join(d, "CLAUDE.local.md"), path.join(d, ".claude", "CLAUDE.md")];
+    expect(seen).toEqual([...three(path.join(root, "a", "b")), ...three(path.join(root, "a")), ...three(root)]);
   });
 });
 
