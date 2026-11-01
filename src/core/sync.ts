@@ -1104,7 +1104,9 @@ function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {
 /* ------------------------------------------------------------------ */
 
 export async function readLock(root: string, source: WorkspaceSource = diskSource(root)): Promise<Lock | null> {
-  const bytes = await source.read(LOCK_FILE);
+  // On disk a lock that exists and cannot be read is an error, not an absent lock; `read` answers null for both.
+  if (source.kind === "disk" && !(await exists(path.join(root, LOCK_FILE)))) return null;
+  const bytes = source.kind === "disk" ? await fs.readFile(path.join(root, LOCK_FILE)) : await source.read(LOCK_FILE);
   if (bytes === null) return null;
   const text = bytes.toString("utf8");
   let raw: unknown;
