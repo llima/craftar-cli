@@ -5,7 +5,7 @@ import path from "node:path";
 import { escapeLine, escapingRows } from "./contain.js";
 import { ENV_NAME, type ForgeSchema, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
-import { exists } from "./forge.js";
+import { exists, realpathOfNearest } from "./forge.js";
 import { hookFindsCraftar, hooksStatus, HooksUnreadable } from "./git-hooks.js";
 import { generatedIgnored, IGNORED_FIX, staleLine, UNCHECKED_LINE } from "./generated-ignored.js";
 import { renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix } from "./mcp-server.js";
@@ -373,7 +373,11 @@ async function workspaceChecks(
           }
 
           // The three files of every directory above, by lstat only, the user's own left out (spec 50 §4.2).
-          const ancestors = await claudeMdAncestors(root, opts.claudeMdExists, path.join(claudeUserDirOf(opts, env), "CLAUDE.md"));
+          // The walk is over the root's real path, so the user's directory is compared by its real path too (a home
+          // through a link, an 8.3 short name); the file itself is not resolved, since a link there is not followed.
+          const userDir = claudeUserDirOf(opts, env);
+          const userFile = path.join(await realpathOfNearest(userDir).catch(() => userDir), "CLAUDE.md");
+          const ancestors = await claudeMdAncestors(root, opts.claudeMdExists, userFile);
           for (const file of ancestors) w("agents-md-primary", "warn", claudeMdAncestorMessage(file), CLAUDE_MD_ANCESTOR_FIX, "blocking");
 
           // nothing found at all → one ok

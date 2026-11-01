@@ -39,7 +39,10 @@ async function primaryWorkspace(wsFiles: Record<string, string> = {}): Promise<S
     { config: { profile: "acme" }, files: wsFiles },
   );
   await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "acme-forge", schema: 5 }));
-  return kept(s);
+  kept(s);
+  // doctor walks from the workspace's real path; os.tmpdir() can be a link or an 8.3 short name (windows-latest).
+  const root = await fs.realpath(s.root);
+  return { ...s, root, forgeRoot: path.join(root, "forge"), wsRoot: path.join(root, "ws") };
 }
 
 /** `doctor` with the ancestor walk confined to the scenario's own directories (§11: never the real ancestors). */
@@ -234,9 +237,21 @@ describe("doctor's agents-md-primary above the root (spec 50 §4.2, §11 items 9
 
   it("the user's own .claude/CLAUDE.md is not warned — CLAUDE_CONFIG_DIR set", async () => {
     const s = await primaryWorkspace();
-    await writeFiles(s.root, { ".claude/CLAUDE.md": "x\n" });
+    await writeFiles(s.root, { ".claude/CLAUDE.md": "x\n", "CLAUDE.md": "x\n" });
     const r = await doctorOf(s, { claudeUserDir: undefined, env: { CLAUDE_CONFIG_DIR: path.join(s.root, ".claude") } });
-    expect(primaryLines(r)).toEqual([expect.objectContaining({ level: "ok", message: "nothing keeps Claude Code from reading AGENTS.md" })]);
+    // The walk reached that directory (its CLAUDE.md warns); only the user's file is left out.
+    expect(primaryLines(r)).toEqual([expect.objectContaining({ level: "warn", message: ancestorMessage(path.join(s.root, "CLAUDE.md")) })]);
+  });
+
+  it("the user's own .claude/CLAUDE.md is left out when CLAUDE_CONFIG_DIR is spelled through a link", async () => {
+    const s = await primaryWorkspace();
+    await writeFiles(s.root, { ".claude/CLAUDE.md": "x\n", "CLAUDE.md": "x\n" });
+    const other = await tmpDir("craftar-claude-link-");
+    cleanups.push(() => fs.rm(other, { recursive: true, force: true }));
+    const alias = path.join(other, "home");
+    await fs.symlink(s.root, alias, "junction");
+    const r = await doctorOf(s, { claudeUserDir: undefined, env: { CLAUDE_CONFIG_DIR: path.join(alias, ".claude") } });
+    expect(primaryLines(r)).toEqual([expect.objectContaining({ level: "warn", message: ancestorMessage(path.join(s.root, "CLAUDE.md")) })]);
   });
 
   it("the user's own .claude/CLAUDE.md is not warned — CLAUDE_CONFIG_DIR unset, the home directory's", async () => {
@@ -259,7 +274,8 @@ describe("doctor's agents-md-primary above the root (spec 50 §4.2, §11 items 9
   });
 });
 
-// The CLI walks the real ancestors of the temporary directory: one holding any of the three files would add a line.
+// The CLI walks the real ancestors of the temporary directory: one holding any of the three files would add a line, so the
+// test is skipped there (on a developer machine with a CLAUDE.md above the temporary directory, for one).
 const realAncestorFile = (() => {
   for (let d = os.tmpdir(); ; d = path.dirname(d)) {
     if (["CLAUDE.md", "CLAUDE.local.md", path.join(".claude", "CLAUDE.md")].some((f) => existsSync(path.join(d, f)))) return true;
