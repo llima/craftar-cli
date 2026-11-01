@@ -578,39 +578,39 @@ export function nameShown(rel: string): boolean {
 
 const isMd = (name: string) => name.endsWith(".md");
 
-/** The files of §4.2, walked with lstat, following no link: each link met and each unreadable directory is a scope warn. */
-async function walk(root: string): Promise<{ files: string[]; scope: Array<{ rel: string; what: "link" | "unreadable" }> }> {
+/**
+ * The files of §4.2, walked with lstat, following no link, one level at a time: each level's entries are asked of `drop` in
+ * one call (git's ignore rules, a repos destination), so an ignored tree is never entered and nothing inside it is named.
+ * Each link met and each unreadable directory is a scope warn.
+ */
+async function walk(
+  root: string,
+  drop: (rels: string[]) => Promise<Set<string>>,
+): Promise<{ files: string[]; scope: Array<{ rel: string; what: "link" | "unreadable" }> }> {
   const files: string[] = [];
   const scope: Array<{ rel: string; what: "link" | "unreadable" }> = [];
-  const dir = async (rel: string): Promise<void> => {
-    let entries: Dirent[];
+  const read = async (rel: string): Promise<Dirent[] | null> => {
     try {
-      entries = await fs.readdir(path.join(root, rel), { withFileTypes: true });
+      return await fs.readdir(rel === "" ? root : path.join(root, rel), { withFileTypes: true });
     } catch {
-      scope.push({ rel, what: "unreadable" });
-      return;
-    }
-    for (const e of entries) {
-      const child = `${rel}/${e.name}`;
-      if (e.isSymbolicLink()) scope.push({ rel: child, what: "link" });
-      else if (e.isDirectory()) await dir(child);
-      else if (e.isFile() && isMd(e.name)) files.push(child);
+      scope.push({ rel: rel === "" ? "." : rel, what: "unreadable" });
+      return null;
     }
   };
-  let top: Dirent[] = [];
-  try {
-    top = await fs.readdir(root, { withFileTypes: true });
-  } catch {
-    scope.push({ rel: ".", what: "unreadable" });
-  }
-  for (const e of top) {
-    if (e.name === "docs" || e.name === ".claude") {
-      if (e.isSymbolicLink()) scope.push({ rel: e.name, what: "link" });
-      else if (e.isDirectory()) await dir(e.name);
-    } else if (isMd(e.name)) {
-      if (e.isSymbolicLink()) scope.push({ rel: e.name, what: "link" });
-      else if (e.isFile()) files.push(e.name);
+  const top = (await read("")) ?? [];
+  let level: Array<{ rel: string; entry: Dirent }> = top
+    .filter((e) => ((e.name === "docs" || e.name === ".claude") && (e.isDirectory() || e.isSymbolicLink())) || (isMd(e.name) && (e.isFile() || e.isSymbolicLink())))
+    .map((e) => ({ rel: e.name, entry: e }));
+  while (level.length > 0) {
+    const dropped = await drop(level.map((x) => x.rel));
+    const next: Array<{ rel: string; entry: Dirent }> = [];
+    for (const { rel, entry } of level) {
+      if (dropped.has(rel)) continue;
+      if (entry.isSymbolicLink()) scope.push({ rel, what: "link" });
+      else if (entry.isDirectory()) for (const e of (await read(rel)) ?? []) next.push({ rel: `${rel}/${e.name}`, entry: e });
+      else if (entry.isFile() && isMd(entry.name)) files.push(rel);
     }
+    level = next;
   }
   return { files, scope };
 }
@@ -792,20 +792,30 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
   }
 
   // The walk (§4.2).
-  const walked = await walk(root);
+  // A destination is compared without case on Windows, where the disk folds it.
+  const fold = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p);
+  const inRepo = await gitIsRepo(root);
+  let unchecked = !inRepo;
+  const walked = await walk(root, async (rels) => {
+    const out = new Set(rels.filter((f) => skipDirs.some((d) => d !== "" && (fold(f) === fold(d) || fold(f).startsWith(`${fold(d)}/`)))));
+    if (!inRepo) return out;
+    const answer = await ignoredPaths(root, rels.filter((r) => !out.has(r)));
+    if (answer.unchecked) unchecked = true;
+    for (const i of answer.ignored) out.add(i.path);
+    return out;
+  });
   for (const s of walked.scope) {
     if (s.what === "link") add({ id: "scope", level: "warn", path: s.rel, message: "symbolic link not followed: not scanned", fix: "link to real files, or ignore it in git" });
     else add({ id: "scope", level: "warn", path: s.rel === "." ? null : s.rel, message: "directory cannot be read: not scanned", fix: "check its permissions" });
   }
-  // A destination is compared without case on Windows, where the disk folds it.
-  const fold = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p);
-  let files = walked.files.filter((f) => !skipDirs.some((d) => d !== "" && (fold(f) === fold(d) || fold(f).startsWith(`${fold(d)}/`))));
-  if (await gitIsRepo(root)) {
-    const { ignored, unchecked } = await ignoredPaths(root, files);
-    const skip = new Set(ignored.map((i) => i.path));
-    files = files.filter((f) => !skip.has(f));
-    if (unchecked) add({ id: "scope", level: "warn", message: "git could not say which files it ignores: every file was scanned", fix: "check that git runs here; a scanned private file is named, never printed" });
-  } else add({ id: "scope", level: "warn", message: "git could not say which files it ignores: every file was scanned", fix: "run in a git repository with git on PATH; a scanned private file is named, never printed" });
+  if (unchecked)
+    add({
+      id: "scope",
+      level: "warn",
+      message: "git could not say which files it ignores: every file was scanned",
+      fix: inRepo ? "check that git runs here; a scanned private file is named, never printed" : "run in a git repository with git on PATH; a scanned private file is named, never printed",
+    });
+  const files = [...walked.files];
   files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
   const state = new Map<string, FileState>();

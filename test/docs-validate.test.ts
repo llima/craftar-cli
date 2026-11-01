@@ -155,6 +155,24 @@ describe("§4.3 leaked-tags, encoding, scope", () => {
     expect(findings(await run(s.wsRoot)).map(brief)).toEqual(["error links docs/private/notes.md:1:5 target does not exist"]);
   });
 
+  it("an ignored directory is not entered: nothing inside it, a link included, is reported; an ignored link is not either", async () => {
+    const s = await ws({ "docs/a.md": "x\n", "docs/private/n.md": "[x](nope.md)\n", ".claude/worktrees/w/x.md": "[x](nope.md)\n", "real/t.md": "x\n", ".gitignore": "docs/private/\n.claude/worktrees/\ndocs/lnk\n" });
+    await fs.symlink(path.join(s.wsRoot, "real"), path.join(s.wsRoot, "docs", "private", "in"), "junction");
+    await fs.symlink(path.join(s.wsRoot, "real"), path.join(s.wsRoot, ".claude", "worktrees", "w", "bin"), "junction");
+    await fs.symlink(path.join(s.wsRoot, "real"), path.join(s.wsRoot, "docs", "lnk"), "junction");
+    const r = await run(s.wsRoot);
+    expect(findings(r)).toEqual([]);
+    expect(r.scanned).toBe(1);
+  });
+
+  it("a repos destination is not entered either: a link inside it is not reported", async () => {
+    const extra = { repos: [{ name: "app", url: "https://example.com/acme/app.git", path: "docs/app" }] };
+    const s = await ws({ "docs/a.md": "x\n", "real/t.md": "x\n" }, { extra });
+    await fs.mkdir(path.join(s.wsRoot, "docs", "app"));
+    await fs.symlink(path.join(s.wsRoot, "real"), path.join(s.wsRoot, "docs", "app", "bin"), "junction");
+    expect(findings(await run(s.wsRoot))).toEqual([]);
+  });
+
   it("a file name with a space and a newline goes through -z to git", async () => {
     if (process.platform === "win32") return; // no newline in a Windows file name
     const s = await ws({ "docs/a b.md": "[x](nope.md)\n", "docs/c\nd.md": "[x](nope.md)\n", ".gitignore": "docs/a b.md\ndocs/c?d.md\n" });
