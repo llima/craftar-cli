@@ -5,6 +5,7 @@ import { escapeLine, escapingRows } from "./contain.js";
 import { ENV_NAME, type ForgeSchema, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
+import { hookFindsCraftar, hooksStatus, HooksUnreadable } from "./git-hooks.js";
 import { generatedIgnored, IGNORED_FIX, staleLine, UNCHECKED_LINE } from "./generated-ignored.js";
 import { renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix } from "./mcp-server.js";
 import { credentialKeys, hideCacheSegment, hideKeys, isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus, vouchedKeys } from "./registry.js";
@@ -446,6 +447,9 @@ async function workspaceChecks(
       // generated-ignored: present only in a git repository (spec 49 §4.4)
       await generatedIgnoredCheck(ws, p, w);
     }
+
+    // git-hooks: present only when a marked hook is installed (spec 49 §6.5)
+    await gitHooksCheck(root, env, w);
 
     // docker, services-env: present only when the plan or the lock has a service (spec 31 §4.7)
     // Read lock here so we can check for services in it when plan failed
@@ -1039,4 +1043,31 @@ async function generatedIgnoredCheck(
   if (r.unchecked) w("generated-ignored", "warn", UNCHECKED_LINE, "a generated folder that is a symbolic link is the usual cause: make it a real directory, or run git check-ignore on the path");
   if (r.stale.length > 0) w("generated-ignored", "warn", staleLine(r.stale), "remove the entry from mayBeIgnored in craftar.yaml");
   if (r.lines.length === 0 && !r.unchecked && r.stale.length === 0) w("generated-ignored", "ok", "git ignores no generated file");
+}
+
+/* ------------------------------------------------------------------ */
+/* git-hooks check (spec 49 §6.5)                                      */
+/* ------------------------------------------------------------------ */
+
+async function gitHooksCheck(
+  root: string,
+  env: NodeJS.ProcessEnv,
+  w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void,
+): Promise<void> {
+  let status: Awaited<ReturnType<typeof hooksStatus>>;
+  try {
+    status = await hooksStatus(root);
+  } catch (e) {
+    if (e instanceof HooksUnreadable) w("git-hooks", "warn", e.message, "check the hooks directory's permissions");
+    return;
+  }
+  const marked = status.hooks.filter((h) => h.state === "installed");
+  if (marked.length === 0) return;
+  for (const h of marked) {
+    if (h.workspace !== status.workspaceDir) w("git-hooks", "warn", `${h.name} is installed for workspace ${h.workspace}, not this one`, "one hook per repository: craftar git-hooks uninstall there");
+  }
+  const mine = marked.filter((h) => h.workspace === status.workspaceDir).map((h) => h.name);
+  if (mine.length === 0) return;
+  if (await hookFindsCraftar(status.top, env)) w("git-hooks", "ok", `installed: ${mine.join(", ")}`);
+  else w("git-hooks", "warn", `installed (${mine.join(", ")}), but no craftar is on PATH, so the hook checks nothing`, "install craftar globally: npm install -g craftar");
 }

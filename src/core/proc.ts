@@ -172,6 +172,11 @@ export async function onPath(file: string, env: NodeJS.ProcessEnv, cwd: string =
   return null;
 }
 
+/** The entries `onPath` looks in, for a caller asking about a file `onPath` would not start (a `.cmd`, an extensionless shim). */
+export function lookupEntries(env: NodeJS.ProcessEnv): string[] {
+  return pathEntries(pathOf(env) ?? "");
+}
+
 /** Reject with an ENOENT error for a file not on PATH, matching what Node gives for a program it cannot find. */
 function notOnPath(file: string): Error {
   return Object.assign(new Error(`spawn ${file} ENOENT`), { code: "ENOENT", errno: -2, syscall: `spawn ${file}`, path: file });
