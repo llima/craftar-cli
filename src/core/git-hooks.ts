@@ -25,6 +25,9 @@ const MARKER_BYTES = 4096;
 /** The one rule of a `<dir>` in a hook: it goes single-quoted into a shell script, and it is read back from a file. */
 const usableDir = (dir: string) => !dir.includes("'") && !TERMINAL_UNSAFE.test(dir);
 
+/** Whether a hook written for `dir` gives it back; if not, craftar could not recognise it, and `dir` is not printed either. */
+const readsBack = (dir: string) => readHookMarker(`#!/bin/sh\n# craftar git-hooks 1 workspace='${dir}' — \n`)?.workspace === dir;
+
 /** The hook, LF, no BOM (spec 49 §6.3). */
 export function hookScript(name: HookName, dir: string, opts: { blockWhenUnavailable: boolean }): string {
   const ok = opts.blockWhenUnavailable ? "" : " --unavailable-ok";
@@ -126,7 +129,7 @@ export async function locateHooks(root: string): Promise<HooksPlace> {
 }
 
 function outsideRefusal(place: HooksPlace): GitHooksRefusal {
-  const line = usableDir(place.workspaceDir) ? `craftar sync --check --committed <sha> --workspace '${place.workspaceDir}'` : "craftar sync --check --committed <sha>";
+  const line = readsBack(place.workspaceDir) ? `craftar sync --check --committed <sha> --workspace '${place.workspaceDir}'` : "craftar sync --check --committed <sha>";
   return new GitHooksRefusal(`${place.outside}: craftar writes nothing there. Add the line by hand: ${line}`);
 }
 
@@ -176,8 +179,7 @@ export async function installHooks(
   if (!place.inGitDir && classifyForge(forge) === "path" && isUnderOrEqual(place.dir, await realpathOfNearest(path.resolve(root, forge))))
     throw new GitHooksRefusal("the hooks directory is inside the Forge: a Forge write has to be gated on git, and this is not one");
   // The file has to give the workspace back, or craftar could not recognise or remove the hook it wrote.
-  if (!usableDir(place.workspaceDir)) throw new GitHooksRefusal("the workspace's path holds a quote or a control character, which a hook cannot name");
-  if (readHookMarker(hookScript("pre-push", place.workspaceDir, { blockWhenUnavailable: false }))?.workspace !== place.workspaceDir) throw new GitHooksRefusal("the workspace's path looks like a credential or a token, which a hook would not read back");
+  if (!readsBack(place.workspaceDir)) throw new GitHooksRefusal("the workspace's path holds a quote or a control character, or looks like a credential or a token, which a hook cannot name");
   const stat = await fs.lstat(place.dir).catch((e: { code?: unknown }) => (e.code === "ENOTDIR" ? "blocked" : null));
   if (stat === "blocked" || (stat !== null && !stat.isDirectory())) throw new GitHooksRefusal("the hooks path exists and is not a directory, or a file stands in its way");
 
@@ -299,7 +301,7 @@ export async function hooksStatus(root: string): Promise<HooksStatus & { workspa
 
 /**
  * What the hook's own rule would find, approximately: a relative entry ahead of an absolute one is not seen (spec 49 §6.5).
- * On win32 an npm global install leaves an extensionless shim, which `sh` finds and `onPath` would not start.
+ * On win32 an npm global install leaves an extensionless shim, which `sh` finds and `onPath` would not start; a `.cmd` alone `sh` does not find.
  */
 export async function hookFindsCraftar(top: string, env: NodeJS.ProcessEnv): Promise<boolean> {
   if (!WIN) {
@@ -308,8 +310,10 @@ export async function hookFindsCraftar(top: string, env: NodeJS.ProcessEnv): Pro
   }
   // As the hook does: the first entry with a bare `craftar` is the answer, and under the repository it counts as none.
   for (const entry of lookupEntries(env)) {
-    const stat = await fs.stat(path.join(entry, "craftar")).catch(() => null);
-    if (stat?.isFile()) return !isUnderOrEqual(entry, top);
+    for (const name of ["craftar", "craftar.exe"]) {
+      const stat = await fs.stat(path.join(entry, name)).catch(() => null);
+      if (stat?.isFile()) return !isUnderOrEqual(entry, top);
+    }
   }
   return false;
 }

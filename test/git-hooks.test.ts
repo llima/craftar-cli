@@ -2,7 +2,7 @@
  * Spec 49 Part C: `craftar git-hooks`. Real git in temporary repositories; a real push goes to a local bare repository.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { promises as fs, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -49,7 +49,8 @@ const FORGE = { ingredients: [rule("a", "body a\n")], recipes: [recipe("base", [
 
 /** A repository with a synced, committed workspace: at its root, or at `sub` below it. */
 async function committed(sub = ".") {
-  const root = await fs.realpath(await tmpDir());
+  // `.native`: on Windows the temporary directory can be an 8.3 short path, and git answers with the long one.
+  const root = realpathSync.native(await tmpDir());
   cleanups.push(() => removeWithRetry(root));
   const forge = path.join(root, "forge");
   await makeForge(forge, FORGE);
@@ -359,6 +360,41 @@ describe("install", () => {
     expect(r.stderr).not.toContain(token);
     await gone(hookFile(repo));
   });
+  it("does not print such a path when the hooks are outside either", async () => {
+    const token = "ghp_" + "x".repeat(36);
+    const { repo, root } = await committed(token);
+    git(repo, "config", "core.hooksPath", path.join(root, "global"));
+    for (const verb of ["install", "uninstall"]) {
+      const r = hooks(verb, "--workspace", path.join(repo, token));
+      expect(r.code).toBe(1);
+      expect(r.stderr).not.toContain(token);
+      expect(r.stderr).toContain("craftar sync --check --committed");
+    }
+  });
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("refuses in words when the hooks directory cannot be written or a hook removed", async () => {
+    const { repo, ws } = await committed();
+    const dir = path.join(repo, ".git/hooks");
+    await fs.rm(dir, { recursive: true, force: true });
+    await fs.chmod(path.join(repo, ".git"), 0o555);
+    try {
+      const made = hooks("install", "--workspace", ws);
+      expect(made.code).toBe(1);
+      expect(made.stderr).toContain("nothing changed");
+      expect(made.stderr).not.toContain(repo);
+    } finally {
+      await fs.chmod(path.join(repo, ".git"), 0o755);
+    }
+    expect(hooks("install", "--workspace", ws).code).toBe(0);
+    await fs.chmod(dir, 0o555);
+    try {
+      const r = hooks("uninstall", "--workspace", ws);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("cannot remove pre-push");
+      expect(r.stderr).not.toContain(repo);
+    } finally {
+      await fs.chmod(dir, 0o755);
+    }
+  });
   it("warns of a hooks directory in the working tree whatever makes it so, and not of one under .git", async () => {
     const { repo, ws } = await committed();
     git(repo, "config", "core.hooksPath", ".git/custom");
@@ -391,6 +427,8 @@ describe("install", () => {
     await fs.rm(path.join(bin, "craftar"));
     await writeFiles(bin, { "craftar.cmd": "@echo off\n" });
     expect(check(bin)).toBe("warn");
+    await writeFiles(bin, { "craftar.exe": "" });
+    expect(check(bin)).toBe("ok");
   });
   it.skipIf(process.platform === "win32")("is executable whatever the umask", async () => {
     const { repo, ws } = await committed();
