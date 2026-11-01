@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { escapeSummary, escapingRows } from "./contain.js";
+import { forgeFor, oneLineOfFindings, ProfileLocalLoadError } from "./profile-local.js";
 import { REGISTRY_SCHEMAS, RegistrySchema, type Lock, type Registry, type RegistryEntry, type WriteConsent } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { exists } from "./forge.js";
@@ -94,7 +95,7 @@ async function forgeKey(ws: Workspace): Promise<string | null> {
 function stackOf(ws: Workspace, recipes: string[]): Record<string, string> {
   const stack: Record<string, string> = {};
   for (const name of recipes) {
-    const slot = ws.forge.recipes.get(name)?.slot;
+    const slot = forgeFor(ws.forge, ws.config.profile).recipes.get(name)?.slot;
     if (slot !== undefined) stack[slot] = name;
   }
   return stack;
@@ -537,7 +538,8 @@ export async function listWorkspaces(home: string, opts: { fetch: boolean; reaso
     } catch (err) {
       rows.push(fromEntry(e, "error"));
       if (!planSaid) for (const w of ws?.warnings ?? []) say(w);
-      say((opts.reason ?? ((e: unknown) => (e instanceof Error ? e.message : String(e))))(err));
+      // A profile-local load error is one line here (spec 51 §4.2): its findings are on the command that loads.
+      say((opts.reason ?? ((e: unknown) => (e instanceof ProfileLocalLoadError ? oneLineOfFindings(e) : e instanceof Error ? e.message : String(e))))(err));
     }
   }
   return { registry: registryFile(home), rows, warnings };

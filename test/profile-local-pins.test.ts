@@ -174,6 +174,29 @@ async function observeAll(schema: number) {
   };
 }
 
+/** §4.1's warning, the one change below the gate: taken out before the comparison, and asserted present. */
+const IGNORED = /^ *(warn )?profiles\/acme\/(ingredients|recipes): ignored below schema 8$/;
+let ignoredSeen = 0;
+function withoutIgnored(value: unknown): unknown {
+  if (typeof value === "string") {
+    const lines = value.split("\n");
+    const kept = lines.filter((l) => !IGNORED.test(l));
+    ignoredSeen += lines.length - kept.length;
+    return kept.join("\n");
+  }
+  if (Array.isArray(value)) {
+    return value
+      .filter((v) => {
+        const hit = (typeof v === "string" && IGNORED.test(v)) || (v !== null && typeof v === "object" && typeof (v as { message?: unknown }).message === "string" && IGNORED.test((v as { message: string }).message));
+        if (hit) ignoredSeen++;
+        return !hit;
+      })
+      .map(withoutIgnored);
+  }
+  if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withoutIgnored(v)]));
+  return value;
+}
+
 describe("profile-local=off baseline pin (spec 51 §10)", () => {
   it("a Forge at schema 7 with a profiles/<p>/ingredients folder, a broken unused recipe and a skill shell file", { timeout: 120_000 }, async () => {
     const observed = await observeAll(7);
@@ -181,6 +204,9 @@ describe("profile-local=off baseline pin (spec 51 §10)", () => {
       await fs.writeFile(PIN_FILE, JSON.stringify(observed, null, 2) + "\n");
       return;
     }
-    expect(observed).toEqual(JSON.parse(await fs.readFile(PIN_FILE, "utf8")));
+    ignoredSeen = 0;
+    expect(withoutIgnored(observed)).toEqual(JSON.parse(await fs.readFile(PIN_FILE, "utf8")));
+    // Since spec 51: the folder this Forge does not read is said, on every surface that warns.
+    expect(ignoredSeen).toBeGreaterThan(0);
   });
 });

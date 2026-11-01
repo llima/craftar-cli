@@ -33,6 +33,7 @@ import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
+import { forgeFor as profileView } from "./core/profile-local.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
   hunkAt,
@@ -1317,7 +1318,7 @@ program
     const fl = forgeLine(ws, await readLock(ws.root));
     if (fl) console.log(fl);
     for (const r of p.resolution.recipes) {
-      const rec = ws.forge.recipes.get(r)!;
+      const rec = profileView(ws.forge, ws.config.profile).recipes.get(r)!;
       console.log(`\n${pc.cyan(r)}${rec.slot ? pc.dim(` [slot ${rec.slot}]`) : ""}${rec.description ? pc.dim(" — " + rec.description) : ""}`);
       for (const ref of rec.ingredients) {
         const disabled = p.resolution.disabled.includes(ref as never);

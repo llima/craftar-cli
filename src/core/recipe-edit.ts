@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import type { Forge } from "./forge.js";
+import { forgeFor } from "./profile-local.js";
 import { effectiveProfile } from "./integrations.js";
 import { WorkspaceConfigSchema, type WorkspaceConfig } from "../schema/index.js";
 import { recipeOrder, resolve } from "./resolve.js";
@@ -50,12 +51,14 @@ export interface RecipeEdit {
  * through `resolve()` (§3.3). Throws R2–R4, R7, and R5 for a resolve failure.
  */
 export function planRecipeEdit(
-  forge: Forge,
+  root: Forge,
   config: WorkspaceConfig,
   op: RecipeOp,
   names: string[],
   opts: { replace?: boolean } = {},
 ): RecipeEdit {
+  // The profile's view (spec 51 §4.3): its local recipes may be added or removed as the root's are.
+  const forge = forgeFor(root, config.profile);
   const profile = forge.profiles.get(config.profile);
   if (!profile) throw new Error(`profile "${config.profile}" not found in Forge (${[...forge.profiles.keys()].join(", ") || "none"})`);
   // Use the effective profile's recipes (spec 33 §4.4): a block-selected recipe is the profile's.

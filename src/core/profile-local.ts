@@ -5,7 +5,7 @@
 import type { IngredientRef, Recipe } from "../schema/index.js";
 import { FORGE_SCHEMA_PROFILE_LOCAL } from "../schema/index.js";
 import { nameShaped } from "./integrations.js";
-import type { LoadedIngredient } from "./forge.js";
+import type { Forge, LoadedIngredient } from "./forge.js";
 
 /** Whether the Forge reads `profiles/<p>/ingredients` and `recipes` (spec 51 §4.1). The ONE comparison with that constant. */
 export function readsProfileLocal(manifest: { schema: number }): boolean {
@@ -38,6 +38,12 @@ export class ProfileLocalLoadError extends Error {
     super(findings.join("\n"));
     this.name = "ProfileLocalLoadError";
   }
+}
+
+/** The one-line form of a profile-local load error: the first finding and how many follow. */
+export function oneLineOfFindings(e: ProfileLocalLoadError): string {
+  const n = e.findings.length;
+  return `${e.findings[0]}${n > 1 ? ` (and ${n - 1} more)` : ""}`;
 }
 
 /** A name read from a file, printed only when shaped like one (spec 51 §4.2); `what` says what it is otherwise. */
@@ -160,4 +166,27 @@ export function checkLocals(root: RootView, locals: ReadonlyMap<string, LocalLay
   for (const c of [...cycles].sort()) findings.push(`L5 recipe cycle: ${c}`);
 
   return findings;
+}
+
+/** What one profile sees (spec 51 §4.3): its locals over the root. A plain `Forge` does not satisfy a reader that requires it. */
+export type ProfileView = Forge & { readonly view: string };
+
+/**
+ * The one answer to "what does this profile see": the root's maps with the profile's locals added. L1, L2 and L9 keep
+ * them disjoint, so the order of the merge decides nothing. Without locals the maps are the root's own.
+ */
+export function forgeFor(forge: Forge, profile: string): ProfileView {
+  if ((forge as Partial<ProfileView>).view === profile) return forge as ProfileView;
+  const layer = forge.locals.get(profile);
+  if (!layer || (layer.ingredients.size === 0 && layer.recipes.size === 0)) return { ...forge, view: profile };
+  const ingredients = new Map(forge.ingredients);
+  for (const [ref, ing] of layer.ingredients) ingredients.set(ref, ing);
+  const recipes = new Map(forge.recipes);
+  for (const [name, r] of layer.recipes) recipes.set(name, r.recipe);
+  return { ...forge, ingredients, recipes, view: profile };
+}
+
+/** Whether `ref` is local to `profile`, and where (Forge-relative), for `explain` and the catalogue (spec 51 §4.4). */
+export function localOf(forge: Forge, profile: string, ref: string): LoadedIngredient | undefined {
+  return forge.locals.get(profile)?.ingredients.get(ref as IngredientRef);
 }

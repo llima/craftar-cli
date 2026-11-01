@@ -1,4 +1,5 @@
 import { promises as fs, constants as fsc } from "node:fs";
+import { oneLineOfFindings, ProfileLocalLoadError } from "./profile-local.js";
 import os from "node:os";
 import path from "node:path";
 import { escapeLine, escapingRows } from "./contain.js";
@@ -557,6 +558,8 @@ function workspaceLinks(st: FileStatus[], w: (id: string, level: CheckLevel, mes
  * its first issue is shown with the count of any that follow. Everything else goes through `errorText`.
  */
 export function oneLine(e: unknown): string {
+  // A profile-local layer that does not load (spec 51 §4.2): the first finding and how many follow.
+  if (e instanceof ProfileLocalLoadError && e.findings.length > 0) return oneLineOfFindings(e);
   if (e instanceof SchemaError && e.issues.length > 0) {
     const first = e.issues[0];
     const n = e.issues.length;

@@ -23,6 +23,7 @@ import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
 import { appliesTo, effectiveTargets } from "../emitters/shared.js";
+import { forgeFor } from "./profile-local.js";
 import { RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
@@ -549,7 +550,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
   }
 
   // Values that apply to nothing (Ruling 12): an unknown key always; an unknown name only on a resolved key.
-  const forgeKeys = new Set([...forge.ingredients.values()].map((i) => sectionKey(i.meta)));
+  const forgeKeys = new Set([...forgeFor(forge, resolution.profile.name).ingredients.values()].map((i) => sectionKey(i.meta)));
   const said = new Set<string>();
   const say = (w: string) => {
     if (!said.has(w)) warnings.push(w);
