@@ -100,17 +100,23 @@ export async function locateHooks(root: string): Promise<HooksPlace> {
   const common = await fs.realpath(await askAt(start, "rev-parse", "--path-format=absolute", "--git-common-dir"));
   // From the top, so a `..` in the answer is the configuration's and not this directory's.
   const answer = await askAt(top, "rev-parse", "--git-path", "hooks");
-  const dir = await realpathOfNearest(path.resolve(top, answer));
+  // A dangling link throws with its path in the message, and that path can be outside the repository.
+  const dir = await realpathOfNearest(path.resolve(top, answer)).catch(() => {
+    throw new GitHooksRefusal("the hooks path passes through a link that does not resolve");
+  });
   const scoped = await askAt(top, "config", "--show-scope", "--get", "core.hooksPath").catch(() => "");
   const configured = scoped !== "";
   const allRepos = /^(global|system)\s/.test(scoped);
   // The kernel walks `lnk/../hk` through the link and a lexical resolve does not: such a path cannot be vouched for.
   const climbs = configured && answer.split(/[\\/]/).includes("..");
   const inGitDir = isUnderOrEqual(dir, common);
-  const inside = !allRepos && !climbs && (isUnderOrEqual(dir, top) || inGitDir);
+  const empty = /^\w+\s*$/.test(scoped);
+  const inside = !allRepos && !climbs && !empty && (isUnderOrEqual(dir, top) || inGitDir);
   const label = configured ? (inside ? "core.hooksPath (inside the repository)" : "core.hooksPath (outside the repository)") : inside ? ".git/hooks" : ".git/hooks (outside the repository)";
   const outside = !configured
     ? ".git/hooks is a link out of the repository"
+    : empty
+      ? "core.hooksPath is empty, which puts hooks at the top of the working tree"
     : allRepos
       ? "core.hooksPath comes from a configuration every repository reads, so a hook there would run for every repository"
       : climbs
@@ -169,7 +175,9 @@ export async function installHooks(
   // A workspace inside its Forge's repository still has its hooks in `.git`, which is no file of the Forge.
   if (!place.inGitDir && classifyForge(forge) === "path" && isUnderOrEqual(place.dir, await realpathOfNearest(path.resolve(root, forge))))
     throw new GitHooksRefusal("the hooks directory is inside the Forge: a Forge write has to be gated on git, and this is not one");
+  // The file has to give the workspace back, or craftar could not recognise or remove the hook it wrote.
   if (!usableDir(place.workspaceDir)) throw new GitHooksRefusal("the workspace's path holds a quote or a control character, which a hook cannot name");
+  if (readHookMarker(hookScript("pre-push", place.workspaceDir, { blockWhenUnavailable: false }))?.workspace !== place.workspaceDir) throw new GitHooksRefusal("the workspace's path looks like a credential or a token, which a hook would not read back");
   const stat = await fs.lstat(place.dir).catch((e: { code?: unknown }) => (e.code === "ENOTDIR" ? "blocked" : null));
   if (stat === "blocked" || (stat !== null && !stat.isDirectory())) throw new GitHooksRefusal("the hooks path exists and is not a directory, or a file stands in its way");
 
@@ -199,17 +207,21 @@ export async function installHooks(
       backedUp.push(name);
     }
   }
-  if (place.label !== ".git/hooks") notes.push("core.hooksPath is inside the repository: if it is tracked, this hook reaches everyone who clones it — review before committing");
+  if (!place.inGitDir) notes.push("the hooks directory is inside the repository's working tree: if it is tracked, this hook reaches everyone who clones it — review before committing");
   if (merged.fromLocalFile) notes.push("forge: comes from craftar.local.yaml, which a check over a commit does not read: name the Forge in craftar.yaml, or every push is refused");
 
-  await fs.mkdir(place.dir, { recursive: true });
   // Every new file exists before any hook moves: a failure then leaves the hooks where they were.
   const tmps = new Map<HookName, string>();
   const dropTmps = () => Promise.all([...tmps.values()].map((t) => fs.rm(t, { force: true })));
   try {
+    await fs.mkdir(place.dir, { recursive: true });
     for (const name of names) {
       const tmp = `${path.join(place.dir, name)}.craftar-${process.pid}.tmp`;
-      await fs.writeFile(tmp, hookScript(name, place.workspaceDir, { blockWhenUnavailable: opts.blockWhenUnavailable }), { flag: "wx", mode: 0o755 });
+      await fs.writeFile(tmp, hookScript(name, place.workspaceDir, { blockWhenUnavailable: opts.blockWhenUnavailable }), { flag: "wx", mode: 0o755 }).catch((e: { code?: unknown }) => {
+        // `wx` lost to a file already there: that one is not ours to remove.
+        if (e.code !== "EEXIST") tmps.set(name, tmp);
+        throw e;
+      });
       tmps.set(name, tmp);
       // `mode` above is subject to umask, and git does not run a hook it cannot execute.
       if (!WIN) await fs.chmod(tmp, 0o755);
@@ -229,7 +241,7 @@ export async function installHooks(
     } catch (e) {
       if (moved) await fs.rename(file + BACKUP_SUFFIX, file).catch(() => {});
       await dropTmps();
-      throw new GitHooksRefusal(`cannot write ${name} (${String((e as { code?: unknown }).code)}): ${done.length > 0 ? `${done.join(", ")} written, ` : ""}the existing ${name} is where it was`);
+      throw new GitHooksRefusal(`cannot write ${name} (${String((e as { code?: unknown }).code)}): ${done.length > 0 ? `${done.join(", ")} written${done.some((d) => backedUp.includes(d)) ? ", the old one kept as its .craftar-backup" : ""}, ` : ""}the existing ${name} is where it was`);
     }
   }
   return { place, written: [...names], backedUp, notes };
@@ -256,8 +268,10 @@ export async function uninstallHooks(root: string, named: readonly HookName[]): 
     else left.push(name);
   }
   const backups: string[] = [];
-  for (const name of removing) {
-    await fs.rm(path.join(place.dir, name));
+  for (const [i, name] of removing.entries()) {
+    await fs.rm(path.join(place.dir, name)).catch((e: { code?: unknown }) => {
+      throw new GitHooksRefusal(`cannot remove ${name} (${String(e.code)})${i > 0 ? `: ${removing.slice(0, i).join(", ")} removed` : ""}`);
+    });
     if (await fs.lstat(path.join(place.dir, name + BACKUP_SUFFIX)).then(() => true, () => false)) backups.push(name + BACKUP_SUFFIX);
   }
   return { removed: removing, left, backups };
@@ -285,19 +299,17 @@ export async function hooksStatus(root: string): Promise<HooksStatus & { workspa
 
 /**
  * What the hook's own rule would find, approximately: a relative entry ahead of an absolute one is not seen (spec 49 §6.5).
- * On win32 an npm global install leaves an extensionless shim and a `.cmd`, which `sh` finds and `onPath` would not start.
+ * On win32 an npm global install leaves an extensionless shim, which `sh` finds and `onPath` would not start.
  */
 export async function hookFindsCraftar(top: string, env: NodeJS.ProcessEnv): Promise<boolean> {
   if (!WIN) {
     const found = await onPath("craftar", env);
     return found !== null && !isUnderOrEqual(found, top);
   }
+  // As the hook does: the first entry with a bare `craftar` is the answer, and under the repository it counts as none.
   for (const entry of lookupEntries(env)) {
-    if (isUnderOrEqual(entry, top)) continue;
-    for (const name of ["craftar", "craftar.cmd", "craftar.exe"]) {
-      const stat = await fs.stat(path.join(entry, name)).catch(() => null);
-      if (stat?.isFile()) return true;
-    }
+    const stat = await fs.stat(path.join(entry, "craftar")).catch(() => null);
+    if (stat?.isFile()) return !isUnderOrEqual(entry, top);
   }
   return false;
 }

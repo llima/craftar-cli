@@ -163,7 +163,7 @@ describe("install", () => {
       git(repo, "config", "core.hooksPath", ".githooks");
       const r = hooks("install", "--workspace", ws);
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain("core.hooksPath is inside the repository");
+      expect(r.stdout).toContain("reaches everyone who clones it");
       expect(readHookMarker(await read(path.join(repo, ".githooks/pre-push")))).toEqual({ workspace: "." });
     });
     it("outside the repository: refused with the line to add by hand, --force or not, nothing written", async () => {
@@ -229,6 +229,40 @@ describe("install", () => {
       expect(r.code).toBe(1);
       expect(r.stderr).toContain("hooks path");
       expect(r.stderr).not.toContain(root);
+    });
+    it("through a dangling link: a refusal that names no path", async () => {
+      const { repo, ws, root } = await committed();
+      const out = path.join(root, "outside-dir");
+      await fs.mkdir(out);
+      await fs.symlink(path.join(out, "nothing"), path.join(out, "dangling"));
+      git(repo, "config", "core.hooksPath", path.join(out, "dangling/hk"));
+      for (const args of [["install"], ["uninstall"], ["status", "--json"]]) {
+        const r = hooks(...args, "--workspace", ws);
+        expect(r.stderr + r.stdout).not.toContain(out);
+        expect(r.code).toBe(1);
+      }
+    });
+    it("~/hk: refused, nothing written in the home", async () => {
+      const { repo, ws, root } = await committed();
+      const home = path.join(root, "home");
+      await fs.mkdir(home);
+      git(repo, "config", "core.hooksPath", "~/hk");
+      const r = runCli(["git-hooks", "install", "--workspace", ws], { env: { HOME: home, USERPROFILE: home } });
+      expect(r.code).toBe(1);
+      await gone(path.join(home, "hk"));
+    });
+    it("empty: refused, so no hook lands at the top of the tree", async () => {
+      const { repo, ws } = await committed();
+      git(repo, "config", "core.hooksPath", "");
+      expect(hooks("install", "--workspace", ws).code).toBe(1);
+      await gone(path.join(repo, "pre-push"));
+    });
+    it("a workspace inside its Forge's repository still has its hooks in .git", async () => {
+      const { repo, ws } = await committed("ws");
+      await fs.writeFile(path.join(ws, "craftar.yaml"), "forge: ..\nprofile: acme\n");
+      await makeForge(repo, FORGE);
+      expect(hooks("install", "--workspace", ws).code).toBe(0);
+      await expect(fs.access(hookFile(repo))).resolves.toBeUndefined();
     });
     it("inside a path Forge: refused, --force or not", async () => {
       const { repo, ws } = await committed("ws");
@@ -316,6 +350,47 @@ describe("install", () => {
       }
       expect(readHookMarker(await read(hookFile(repo)))).toEqual({ workspace: "two" });
     });
+  });
+  it("refuses a workspace path it could not read back from the hook", async () => {
+    const token = "ghp_" + "x".repeat(36);
+    const { repo } = await committed(token);
+    const r = hooks("install", "--workspace", path.join(repo, token));
+    expect(r.code).toBe(1);
+    expect(r.stderr).not.toContain(token);
+    await gone(hookFile(repo));
+  });
+  it("warns of a hooks directory in the working tree whatever makes it so, and not of one under .git", async () => {
+    const { repo, ws } = await committed();
+    git(repo, "config", "core.hooksPath", ".git/custom");
+    const under = hooks("install", "--workspace", ws);
+    expect(under.code).toBe(0);
+    expect(under.stdout).not.toContain("reaches everyone");
+    hooks("uninstall", "--workspace", ws);
+    git(repo, "config", "--unset", "core.hooksPath");
+    await fs.rm(path.join(repo, ".git/hooks"), { recursive: true, force: true });
+    await fs.mkdir(path.join(repo, "tools"));
+    await fs.symlink(path.join(repo, "tools"), path.join(repo, ".git/hooks"), "junction");
+    const linked = hooks("install", "--workspace", ws);
+    expect(linked.code).toBe(0);
+    expect(linked.stdout).toContain("reaches everyone");
+  });
+  it.runIf(process.platform === "win32")("on win32, doctor agrees with the hook: the first craftar is the one", async () => {
+    const { ws, repo, root } = await committed();
+    hooks("install", "--workspace", ws);
+    const planted = path.join(repo, "planted");
+    const bin = path.join(root, "bin");
+    await writeFiles(planted, { craftar: "#!/bin/sh\n" });
+    await writeFiles(bin, { craftar: "#!/bin/sh\n" });
+    const onlyGit = await gitOnly(root);
+    const check = (...entries: string[]) => {
+      const PATH = [...entries, onlyGit].join(path.delimiter);
+      return JSON.parse(runCli(["doctor", "--json", "--workspace", ws], { env: { PATH, Path: PATH } }).stdout).checks.find((c: { id: string }) => c.id === "git-hooks").level;
+    };
+    expect(check(planted, bin)).toBe("warn");
+    expect(check(bin, planted)).toBe("ok");
+    await fs.rm(path.join(bin, "craftar"));
+    await writeFiles(bin, { "craftar.cmd": "@echo off\n" });
+    expect(check(bin)).toBe("warn");
   });
   it.skipIf(process.platform === "win32")("is executable whatever the umask", async () => {
     const { repo, ws } = await committed();
