@@ -322,6 +322,13 @@ function titleBetween(s: string, from: number, to: number): boolean {
   return true;
 }
 
+/** `line` without up to `n` leading spaces. */
+function withoutIndent(line: string, n: number): string {
+  let i = 0;
+  while (i < n && line[i] === " ") i++;
+  return line.slice(i);
+}
+
 /** Scan one Markdown file's text (spec 47 §6.1–§6.3). */
 export function scanMarkdown(input: string): Scan {
   const text = toLf(stripBom(input));
@@ -337,7 +344,9 @@ export function scanMarkdown(input: string): Scan {
   }
 
   let paragraph: SrcLine[] = [];
-  let fence: { char: string; len: number } | null = null;
+  let fence: { char: string; len: number; strip: number } | null = null;
+  /** Where the current list item's content starts: a fence indented that far belongs to the item (CommonMark). */
+  let listIndent = 0;
   let htmlBlock: string | null = null;
   let inList = false;
   let afterBlank = true;
@@ -382,7 +391,7 @@ export function scanMarkdown(input: string): Scan {
 
     if (fence) {
       const close = new RegExp(`^ {0,3}${fence.char === "`" ? "`" : "~"}{${fence.len},}[ \\t]*$`);
-      if (close.test(raw)) fence = null;
+      if (close.test(withoutIndent(raw, fence.strip))) fence = null;
       continue;
     }
     if (htmlBlock) {
@@ -397,10 +406,11 @@ export function scanMarkdown(input: string): Scan {
       continue;
     }
 
-    const open = FENCE_OPEN.exec(raw);
+    const strip = inList ? listIndent : 0;
+    const open = FENCE_OPEN.exec(withoutIndent(raw, strip));
     if (open && !(open[1][0] === "`" && open[2].includes("`"))) {
       flush();
-      fence = { char: open[1][0], len: open[1].length };
+      fence = { char: open[1][0], len: open[1].length, strip };
       afterBlank = false;
       continue;
     }
@@ -432,6 +442,7 @@ export function scanMarkdown(input: string): Scan {
     if (listItem && !indented) {
       flush();
       inList = true;
+      listIndent = listItem[0].length;
       paragraph.push({ text: raw.slice(listItem[0].length), line: lineNo, col0: col0 + listItem[0].length });
       afterBlank = false;
       continue;

@@ -105,6 +105,18 @@ describe("review round 1 — scanner nits", () => {
   });
 });
 
+describe("review round 2 — a fence inside a list item", () => {
+  it("a fence indented to an ordered item's content is a fence, a blank line inside included", () => {
+    expect(dests("1. x\n\n    ```\n    [x](missing.md)\n\n    ```\n\ntext [y](y.md)\n")).toEqual(["y.md"]);
+  });
+  it("a fence in a nested bullet is a fence", () => {
+    expect(dests("- a\n  - b\n\n      ```\n      [x](m.md)\n\n      ```\n")).toEqual([]);
+  });
+  it("at the top level a closer indented four spaces still does not close", () => {
+    expect(dests("```\n    ```\n[x](x.md)\n```\n[y](y.md)\n")).toEqual(["y.md"]);
+  });
+});
+
 describe("§6.2 — anchors", () => {
   it("GitHub slugs, with -1 for a repeat, and <a id> / <a name>", () => {
     const s = scanMarkdown("# Hello World!\n\n## Hello World\n\nSetext Title\n---\n\n## `code` and [link](x.md)\n\n<a id=\"custom\"></a> <a name='other'>\n");
