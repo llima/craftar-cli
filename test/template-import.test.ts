@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { forgeReader } from "../src/core/contain.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerprint } from "../src/core/template-import.js";
 import { fingerprintOf } from "../src/core/fingerprint.js";
-import { tmpDir, writeFiles } from "./helpers/forge.js";
+import { tmpDir, writeFiles, fsRoot } from "./helpers/forge.js";
 import { IngredientSchema } from "../src/schema/index.js";
 import { fingerprintDir } from "../src/core/fingerprint.js";
 import { listFiles } from "../src/core/forge.js";
@@ -88,7 +89,7 @@ describe("renderedFingerprint — identity with fingerprintDir (spec 10 AC 1, 2)
       for (const type of await fs.readdir(root)) {
         for (const name of await fs.readdir(path.join(root, type))) {
           const dir = path.join(root, type, name);
-          expect(renderedFingerprint(await readBase(dir, reader), {}, {}, 1), dir).toBe(await fingerprintDir(dir));
+          expect(renderedFingerprint(await readBase(dir, reader), {}, {}, 1), dir).toBe(await fingerprintDir(dir, forgeReader(fsRoot(dir))));
         }
       }
     }

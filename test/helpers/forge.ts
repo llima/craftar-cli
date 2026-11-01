@@ -77,3 +77,9 @@ export const profile = (name: string, recipes: string[], targets: string[] = ["c
   targets,
   ...extra,
 });
+
+/** A root every path of the file system is inside, for a test that hands an ingredient to a function with no Forge around it. */
+export function fsRoot(dir: string): { given: string; real: string } {
+  const root = path.parse(path.resolve(dir)).root;
+  return { given: root, real: root };
+}

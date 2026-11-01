@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { escapeSummary, escapingRows } from "./contain.js";
 import { ProfileSchema, TARGETS, type Registry, type RegistryEntry, type WorkspaceConfig } from "../schema/index.js";
 import { planClone } from "./clone.js";
 import { countStates } from "./impact.js";
@@ -118,7 +119,7 @@ export async function askClone(
 
   // a plan whose first sync would be refused → no list, no question, refused flag
   const unset = unsetDeclared(init.plan);
-  if (unset.length > 0) {
+  if (unset.length > 0 || escapingRows(init.statuses).length > 0) {
     return { clone: false, entries: [], refused: true };
   }
 
@@ -190,6 +191,8 @@ export async function confirmInit(
   const counts = countStates(init.statuses);
   if (unset.length > 0) {
     io.say(`  first sync: ${unsetRefused(unset)}`);
+  } else if (escapingRows(init.statuses).length > 0) {
+    io.say(`  first sync: refused — ${escapeSummary(escapingRows(init.statuses))}`);
   } else if (counts.length === 0) {
     io.say("  first sync: nothing to write");
   } else {

@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { escapeSummary, escapingRows } from "./contain.js";
 import { REGISTRY_SCHEMAS, RegistrySchema, type Lock, type Registry, type RegistryEntry, type WriteConsent } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { exists } from "./forge.js";
@@ -500,6 +501,13 @@ export async function listWorkspaces(home: string, opts: { fetch: boolean; reaso
       }
       const lock = await readLock(ws.root);
       const st = await status(ws, p, lock);
+      // Spec 48 §4.3: refused as an unset parameter is; the reason needs the rows, so it is asked after the lock.
+      const escaping = escapingRows(st);
+      if (escaping.length) {
+        for (const w of p.warnings) say(w);
+        planSaid = true;
+        throw new Error(escapeSummary(escaping));
+      }
       const commit = ws.forge.commit;
       const lockCommit = lock?.forge.commit ?? null;
       rows.push({

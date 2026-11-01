@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { forgeReader } from "../src/core/contain.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
@@ -6,7 +7,7 @@ import { ForgeStage, importClaudeCode } from "../src/importers/claude-code.js";
 import { fingerprintDir } from "../src/core/fingerprint.js";
 import { exists, loadForge } from "../src/core/forge.js";
 import { apply, loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
-import { tmpDir, writeFiles } from "./helpers/forge.js";
+import { tmpDir, writeFiles, fsRoot } from "./helpers/forge.js";
 
 const TOKEN = "ghp_" + "x".repeat(36); // assembled at runtime on purpose
 const cleanups: Array<() => Promise<void>> = [];
@@ -501,9 +502,9 @@ describe("ForgeStage — one fingerprintDir for staged and flushed ingredients (
     stage.write(path.join(dir, "guard.sh"), "echo new\n");
     stage.write(path.join(dir, "guard.ps1"), Buffer.from("Write-Output ps1\n"));
     const staged = await fingerprintDir(dir, stage.reader());
-    expect(staged).not.toBe(await fingerprintDir(dir));
+    expect(staged).not.toBe(await fingerprintDir(dir, forgeReader(fsRoot(dir))));
     await stage.flush();
-    expect(await fingerprintDir(dir)).toBe(staged);
+    expect(await fingerprintDir(dir, forgeReader(fsRoot(dir)))).toBe(staged);
   });
 });
 
@@ -1670,13 +1671,13 @@ describe("import — authEnv (spec 27)", () => {
     await syncWs(ws);
     // Capture fingerprint before import
     const variantDir = path.join(t.forge, "ingredients/mcp/tracker--acme");
-    const fpBefore = await fingerprintDir(variantDir);
+    const fpBefore = await fingerprintDir(variantDir, forgeReader(fsRoot(variantDir)));
     // Import unchanged — should NOT throw I8 (the variant fingerprint matches after authEnv is applied)
     const r = await importInto(t.forge, ws, "acme");
     // The variant is reported (not reused) as 0.17.4 behavior.
     expect(r.variants.map((v) => v.name)).toEqual(["mcp/tracker--acme"]);
     // Fingerprint should be unchanged
-    const fpAfter = await fingerprintDir(variantDir);
+    const fpAfter = await fingerprintDir(variantDir, forgeReader(fsRoot(variantDir)));
     expect(fpAfter).toBe(fpBefore);
     // The variant still declares its authEnv
     const variantMeta = await yaml(path.join(variantDir, "ingredient.yaml"));

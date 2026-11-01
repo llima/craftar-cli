@@ -455,7 +455,8 @@ describe("proveBasePromotion and applyBasePromotion", () => {
     const atPlan = await forgeOf(THREE);
     const outside = await swap(atPlan);
     const before = await fs.readFile(path.join(outside, "base--acme.yaml"), "utf8");
-    await expect(planBasePromotion(await loadForge(atPlan.dir), "rule/workflow", "acme")).rejects.toThrow(message);
+    // Spec 48 §4.2: such a Forge no longer loads, so the plan's own check is reached only by a link that holds no file read.
+    await expect(loadForge(atPlan.dir)).rejects.toThrow("a symbolic link out of the Forge");
 
     const atApply = await forgeOf(THREE);
     const p = await planned(atApply);

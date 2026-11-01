@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { escapeFileLine, escapeRefusal, escapingRows, readForgeFile, readForgeText, type Escape } from "./contain.js";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
 import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
@@ -494,7 +495,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
       if (rel === "ingredient.yaml") continue;
       const abs = path.join(ing.dir, rel);
       if (bodyFile(ing.meta, rel, ing.dir)) {
-        const p = parseSections(await fs.readFile(abs, "utf8"), forgeRel(forge, abs), ing.ref, parseOpts);
+        const p = parseSections(await readForgeText(ing.forgeRoot, abs), forgeRel(forge, abs), ing.ref, parseOpts);
         parsed.set(abs, p);
         files.push({ rel, p });
         if (p.sections.length && firstMarker === null) firstMarker = `${p.file}:${p.sections[0].line}`;
@@ -521,7 +522,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
       } else if (emittedFile(ing.meta, rel, ing.dir)) {
         // A file emitted but not every target renders as text keeps its markers; one, whatever its extension, is warned, never dropped
         // silently. Every marker form contains "craftar:section", so a file without it is not decoded.
-        const bytes = await fs.readFile(abs);
+        const bytes = await readForgeFile(ing.forgeRoot, abs);
         if (bytes.includes("craftar:section") && toLf(stripBom(bytes.toString("utf8"))).split("\n").some((l) => markerLine(l) !== null)) {
           warnings.push(`${ing.ref} ${rel}: section markers are read only in files every target renders as text — copied with them`);
         }
@@ -626,14 +627,18 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const indexLeftPaths = new Set<string>();
   /** Below-gate literals: `ref (file)` for each rendered text that holds `{{craftar.rules.index}}` alone on a line (spec 44 §4.2). */
   const belowGateLiterals = new Set<string>();
+  const source = sourceOf(ws);
   const ctx: EmitBase = {
     forge: ws.forge,
     resolution,
     workspaceRoot: ws.root,
-    readExisting: (rel: string) => sourceOf(ws).read(rel),
+    async readExisting(rel: string) {
+      // A planned path that escapes is never read: to the emitters it is a new file (spec 48 §4.3).
+      if (await source.escape(rel)) return null;
+      return source.read(rel);
+    },
     async text(ing: ResolvedIngredient, file: string, owner: Owner) {
       const abs = path.join(ing.dir, file);
-      const raw = await fs.readFile(abs, "utf8");
       const missing = new Set<string>();
       const params = paramsFor(ing, resolution);
       // Sections first, then params (spec 11 §6.4), in body files only (§6.5, 0.8.2).
@@ -641,10 +646,12 @@ export async function plan(ws: Workspace): Promise<Plan> {
       // Every body file of a resolved ingredient was parsed and gated in the section pass; a miss here means the file is
       // outside the ingredient directory, behind a symlinked directory that listFiles did not descend into, or spelled
       // with different letter case on a case-insensitive file system.
-      if (parsed === undefined)
+      // Tested before the read, so what lies behind such a path is not read; a path that is plainly missing stays its ENOENT.
+      if (parsed === undefined && (await exists(abs)))
         throw new Error(
           `${forgeRel(ws.forge, abs)}: ${ing.ref} declares a file outside its directory, behind a symlinked directory, or spelled differently from the file on disk — keep the file inside ${forgeRel(ws.forge, ing.dir)} and spell the declared path as it is on disk`,
         );
+      const raw = await readForgeText(ing.forgeRoot, abs);
       const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution), owner) : toLf(stripBom(raw));
       const out = substitute(expanded, params, missing);
       if (parsed) guardOutput(ing, file, out, parsed, resolution, params, owner);
@@ -668,7 +675,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
       return out;
     },
     bytes(ing: ResolvedIngredient, file: string) {
-      return fs.readFile(path.join(ing.dir, file));
+      return readForgeFile(ing.forgeRoot, path.join(ing.dir, file));
     },
     warn(msg: string) {
       warnings.push(msg);
@@ -760,7 +767,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
 
   // CLAUDE.md blocking check (spec 41 §4.7): only when the mode is on and claude-code is a target
   if (resolution.primary && resolution.targets.includes("claude-code")) {
-    const blocks = await claudeMdBlocks(ctx.readExisting);
+    const blocks = await claudeMdBlocks((rel) => source.read(rel)); // not planned paths: read as they are (spec 48 §5 edge 5)
     if (blocks.blocking.length > 0) {
       warnings.push(claudeMdBlockedMessage(blocks.blocking[0]));
     }
@@ -1104,6 +1111,9 @@ function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {
 /* ------------------------------------------------------------------ */
 
 export async function readLock(root: string, source: WorkspaceSource = diskSource(root)): Promise<Lock | null> {
+  // Asked first, with lstat: a dangling link is not read as no lock, and the outside file decides nothing (spec 48 §4.3).
+  const lockEscape = await source.escape(LOCK_FILE);
+  if (lockEscape) throw new Error(escapeFileLine(LOCK_FILE, lockEscape));
   // On disk a lock that exists and cannot be read is an error, not an absent lock; `read` answers null for both.
   if (source.kind === "disk" && !(await exists(path.join(root, LOCK_FILE)))) return null;
   const bytes = source.kind === "disk" ? await fs.readFile(path.join(root, LOCK_FILE)) : await source.read(LOCK_FILE);
@@ -1151,6 +1161,8 @@ export interface FileStatus {
   ingredient?: string;
   planned?: PlannedFile;
   lock?: LockEntry | LockEntryV3;
+  /** Set only on a row whose path escapes the workspace (spec 48 §4.3); `statusReport` drops it, so it reaches no `--json`. */
+  escapes?: Escape;
 }
 
 /** Does the disk content match the lock entry? Recognises both current and pre-0.17.4 hashes for non-UTF-8 files. */
@@ -1163,8 +1175,14 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
   const out: FileStatus[] = [];
   const lockByPath = new Map((lock?.files ?? []).map((e) => [e.path, e]));
   for (const f of p.files) {
-    const disk = await source.read(f.path);
     const entry = lockByPath.get(f.path);
+    // The first branch of the order below (spec 48 §4.3): such a path is never read, so nothing of the file behind it decides anything.
+    const escapes = await source.escape(f.path);
+    if (escapes) {
+      out.push({ path: f.path, state: entry ? "drift" : "collision", target: f.target, ingredient: f.ingredient, planned: f, lock: entry, escapes });
+      continue;
+    }
+    const disk = await source.read(f.path);
     const planHash = hashNormalized(f.content);
     let state: FileState;
     if (disk === null) state = "new";
@@ -1184,6 +1202,13 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
   const planned = new Set(p.files.map((f) => f.path));
   for (const e of lock?.files ?? []) {
     if (planned.has(e.path)) continue;
+    // Nothing behind it (a dangling link, a file gone under a parent that now leaves): the `already gone` it always was.
+    if (!(await source.reaches(e.path))) continue;
+    const escapes = await source.escape(e.path);
+    if (escapes) {
+      out.push({ path: e.path, state: "orphan-drift", target: e.target, ingredient: e.ingredient, lock: e, escapes });
+      continue;
+    }
     const disk = await source.read(e.path);
     if (disk === null) continue; // already gone
     out.push({ path: e.path, state: matchesLock(disk, e) ? "orphan" : "orphan-drift", target: e.target, ingredient: e.ingredient, lock: e });
@@ -1229,6 +1254,9 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   // asks first and prints the block itself; this is what no writer can go around.
   const unset = unsetDeclared(p);
   if (unset.length) throw new Error(unsetRefusal(unset));
+  // The whole run is refused: a path skipped on its own would leave a half-written plan and a lock that describes it (spec 48 §4.3).
+  const escaping = escapingRows(statuses);
+  if (escaping.length) throw new Error(escapeRefusal(escaping));
   const written: string[] = [];
   const removed: string[] = [];
   const skipped: FileStatus[] = [];

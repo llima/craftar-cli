@@ -1,8 +1,7 @@
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import { IngredientSchema, type Ingredient } from "../schema/index.js";
 import { hashNormalized } from "./text.js";
-import { listFiles, parseYaml } from "./forge.js";
+import { parseYaml } from "./forge.js";
 
 /**
  * Identity of an ingredient's content: metadata minus the fields a variant
@@ -56,17 +55,11 @@ export interface DirReader {
   list(dir: string): Promise<string[]>;
 }
 
-const diskReader: DirReader = {
-  readText: (abs) => fs.readFile(abs, "utf8"),
-  readBytes: (abs) => fs.readFile(abs),
-  list: (dir) => listFiles(dir),
-};
-
 /**
  * Fingerprint of an ingredient directory. Its `ingredient.yaml` goes through `IngredientSchema`,
  * like every other side a fingerprint is compared with, so defaults and refusals are the same on both.
  */
-export async function fingerprintDir(dir: string, io: DirReader = diskReader): Promise<string> {
+export async function fingerprintDir(dir: string, io: DirReader): Promise<string> {
   const metaFile = path.join(dir, "ingredient.yaml");
   const meta = parseYaml(metaFile, await io.readText(metaFile), IngredientSchema);
   const files: Record<string, Buffer> = {};

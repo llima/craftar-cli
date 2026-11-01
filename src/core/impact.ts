@@ -5,6 +5,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { escapeSummary, escapingRows } from "./contain.js";
 import type { Forge } from "./forge.js";
 import { isMissing, readRegistry, samePath } from "./registry.js";
 import { cacheKey, classifyForge, credentialFault } from "./remote.js";
@@ -394,6 +395,8 @@ export async function nextSync(p: Planned): Promise<NextSyncResult> {
     if (unset.length) return { state: "error", counts: {}, error: unsetSummary(unset) };
     lock = await readLock(ws.root);
     statuses = await status(ws, planned, lock);
+    const escaping = escapingRows(statuses);
+    if (escaping.length) return { state: "error", counts: {}, error: escapeSummary(escaping) };
   } catch (e) {
     // An error here (e.g. a lock with schema: 9) becomes an error row, not a failed command
     return { state: "error", counts: {}, error: e instanceof Error ? e.message : String(e) };

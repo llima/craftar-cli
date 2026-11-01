@@ -6,6 +6,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { escapeLine } from "../core/contain.js";
 import YAML from "yaml";
 import { classifyForge, cacheKey as computeCacheKey, assertNotCacheTree } from "../core/remote.js";
 import {
@@ -46,6 +47,7 @@ import { findProfileFile, resolvedBy } from "../core/param-writes.js";
 import { outName } from "../emitters/shared.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import {
+  escapingSource,
   readEmitted,
   rulePaths,
   secretIn,
@@ -590,6 +592,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const normalized = inputPath.replace(/\\/g, "/").replace(/^\.\//, "");
   const fileStatus = st.find((s) => s.path === normalized);
   if (!fileStatus) throw new Error(unmanaged(normalized));
+  // The path itself, or another target's file of the same ingredient, which the proof compares with the disk (spec 48 §4.3).
+  const escaping = fileStatus.escapes ? fileStatus : st.find((s) => s.escapes && s.ingredient === fileStatus.ingredient);
+  if (escaping) throw new Error(escapeLine(escaping.path, escaping.escapes!));
   if (fileStatus.state === "orphan-drift") throw new Error(D4_ORPHAN(normalized));
   if (fileStatus.state !== "drift") throw new Error(D4_OTHER(normalized, fileStatus.state));
 
@@ -702,6 +707,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
   // For scripts/hooks with multiple files, read each file and merge using mergeEmitted
   const scriptHookFiles = (meta.type === "script" || meta.type === "hook") ? (meta.files ?? [rel]) : null;
+  // Case U: a file of what would be promoted that escapes, before anything is read. Promote has no per-ingredient rejection.
+  for (const part of scriptHookFiles ?? [rel]) {
+    const [out] = await escapingSource(root, readType, part);
+    if (out) throw new Error(escapeLine(out.path, out.escapes));
+  }
   let emitted: EmittedSource | null;
 
   if (scriptHookFiles && scriptHookFiles.length > 1) {

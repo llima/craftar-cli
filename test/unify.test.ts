@@ -9,7 +9,7 @@ import { applyPlan, metaDifferences, planFrom, rewriteRecipes, writeUnified } fr
 import { prove } from "../src/core/extract.js";
 import { diffIngredients } from "../src/core/variants.js";
 import { HunkSuggestionSchema, UnifyPlanSchema, type UnifyPlan } from "../src/schema/index.js";
-import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec, type IngredientSpec } from "./helpers/forge.js";
+import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec, type IngredientSpec, fsRoot } from "./helpers/forge.js";
 import { runCli } from "./helpers/cli.js";
 
 const execFileP = promisify(execFile);
@@ -99,8 +99,8 @@ describe("planFrom", () => {
     await writeFiles(VARIANT_DIR, { "ingredient.yaml": "type: rule\nname: workflow--acme\nas: workflow\n" });
 
     const plan = await planFrom(
-      { ref: "rule/workflow", dir: BASE_DIR, meta: { type: "rule", name: "workflow" } } as never,
-      { ref: "rule/workflow--acme", dir: VARIANT_DIR, meta: { type: "rule", name: "workflow--acme", as: "workflow" } } as never,
+      { ref: "rule/workflow", dir: BASE_DIR, forgeRoot: fsRoot(BASE_DIR), meta: { type: "rule", name: "workflow" } } as never,
+      { ref: "rule/workflow--acme", dir: VARIANT_DIR, forgeRoot: fsRoot(VARIANT_DIR), meta: { type: "rule", name: "workflow--acme", as: "workflow" } } as never,
       fakeDiff() as never,
       "acme",
     );
@@ -136,8 +136,8 @@ describe("planFrom", () => {
       "rule.md": "# Rules\n\n## Reviewer Table\n| a |\n| b |\n",
     });
 
-    const base = { ref: "rule/review-posture", dir: baseDir, meta: { type: "rule", name: "review-posture" } } as never;
-    const variant = { ref: "rule/review-posture--acme", dir: variantDir, meta: { type: "rule", name: "review-posture--acme", as: "review-posture" } } as never;
+    const base = { ref: "rule/review-posture", dir: baseDir, forgeRoot: fsRoot(baseDir), meta: { type: "rule", name: "review-posture" } } as never;
+    const variant = { ref: "rule/review-posture--acme", dir: variantDir, forgeRoot: fsRoot(variantDir), meta: { type: "rule", name: "review-posture--acme", as: "review-posture" } } as never;
     const diff = await diffIngredients(base, variant);
 
     const plan = await planFrom(base, variant, diff, "acme");
@@ -174,8 +174,8 @@ describe("planFrom", () => {
       "rule.md": "# Rules\n\n<!-- craftar:section reviewer-table -->\nOld\n<!-- /craftar:section -->\n\n## Reviewer Table\n| a |\n| b |\n",
     });
 
-    const base = { ref: "rule/review-posture", dir: baseDir, meta: { type: "rule", name: "review-posture", file: "./rule.md" } } as never;
-    const variant = { ref: "rule/review-posture--acme", dir: variantDir, meta: { type: "rule", name: "review-posture--acme", as: "review-posture", file: "./rule.md" } } as never;
+    const base = { ref: "rule/review-posture", dir: baseDir, forgeRoot: fsRoot(baseDir), meta: { type: "rule", name: "review-posture", file: "./rule.md" } } as never;
+    const variant = { ref: "rule/review-posture--acme", dir: variantDir, forgeRoot: fsRoot(variantDir), meta: { type: "rule", name: "review-posture--acme", as: "review-posture", file: "./rule.md" } } as never;
     const diff = await diffIngredients(base, variant);
 
     const plan = await planFrom(base, variant, diff, "acme");
@@ -198,8 +198,8 @@ async function scenario(baseFiles: Record<string, string>, variantFiles: Record<
   cleanups.push(() => fs.rm(variantDir, { recursive: true, force: true }));
   await writeFiles(variantDir, { "ingredient.yaml": "type: rule\nname: workflow--acme\nas: workflow\n", ...variantFiles });
 
-  const base = { ref: "rule/workflow", dir: baseDir, meta: { type: "rule", name: "workflow" } } as never;
-  const variant = { ref: "rule/workflow--acme", dir: variantDir, meta: { type: "rule", name: "workflow--acme", as: "workflow" } } as never;
+  const base = { ref: "rule/workflow", dir: baseDir, forgeRoot: fsRoot(baseDir), meta: { type: "rule", name: "workflow" } } as never;
+  const variant = { ref: "rule/workflow--acme", dir: variantDir, forgeRoot: fsRoot(variantDir), meta: { type: "rule", name: "workflow--acme", as: "workflow" } } as never;
   const diff = await diffIngredients(base, variant);
   return { base, variant, diff };
 }
@@ -784,8 +784,8 @@ describe("take: param — the engine (spec 09 §6.1, §6.2)", () => {
     cleanups.push(() => fs.rm(baseDir, { recursive: true, force: true }), () => fs.rm(variantDir, { recursive: true, force: true }));
     await writeFiles(baseDir, { "ingredient.yaml": "type: rule\nname: workflow\nfile: ./rule.md\n", "rule.md": "use globex-api\n" });
     await writeFiles(variantDir, { "ingredient.yaml": "type: rule\nname: workflow--acme\nas: workflow\nfile: ./rule.md\n", "rule.md": "use acme-api\n" });
-    const base = { ref: "rule/workflow", dir: baseDir, meta: { type: "rule", name: "workflow", file: "./rule.md" } } as never;
-    const variant = { ref: "rule/workflow--acme", dir: variantDir, meta: { type: "rule", name: "workflow--acme", as: "workflow", file: "./rule.md" } } as never;
+    const base = { ref: "rule/workflow", dir: baseDir, forgeRoot: fsRoot(baseDir), meta: { type: "rule", name: "workflow", file: "./rule.md" } } as never;
+    const variant = { ref: "rule/workflow--acme", dir: variantDir, forgeRoot: fsRoot(variantDir), meta: { type: "rule", name: "workflow--acme", as: "workflow", file: "./rule.md" } } as never;
     const diff = await diffIngredients(base, variant);
     const plan = await planFrom(base, variant, diff, "acme");
     Object.assign(plan.files[0].hunks![0], { take: "param", params: [{ token: "globex-api", key: "deploy.api" }] });
@@ -807,8 +807,8 @@ describe("take: param — the remaining engine rows (spec 09 AC 9)", () => {
     cleanups.push(() => fs.rm(baseDir, { recursive: true, force: true }), () => fs.rm(variantDir, { recursive: true, force: true }));
     await writeFiles(baseDir, { "ingredient.yaml": "type: skill\nname: run\n", "run.sh": "echo globex-api\n" });
     await writeFiles(variantDir, { "ingredient.yaml": "type: skill\nname: run--acme\nas: run\n", "run.sh": "echo acme-api\n" });
-    const base = { ref: "skill/run", dir: baseDir, meta: { type: "skill", name: "run", layout: "dir" } } as never;
-    const variant = { ref: "skill/run--acme", dir: variantDir, meta: { type: "skill", name: "run--acme", as: "run", layout: "dir" } } as never;
+    const base = { ref: "skill/run", dir: baseDir, forgeRoot: fsRoot(baseDir), meta: { type: "skill", name: "run", layout: "dir" } } as never;
+    const variant = { ref: "skill/run--acme", dir: variantDir, forgeRoot: fsRoot(variantDir), meta: { type: "skill", name: "run--acme", as: "run", layout: "dir" } } as never;
     const diff = await diffIngredients(base, variant);
     const plan = await planFrom(base, variant, diff, "acme");
     Object.assign(plan.files[0].hunks![0], { take: "param", params: [{ token: "globex-api", key: "k" }] });

@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { containRoot, escapeDestinationLine, escapeFileLine, escapeOf, escapeSourceLine, escapingPaths, readForgeFile, readForgeText, type ContainRoot, type Escape, type EscapingPath } from "../core/contain.js";
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { exists, listFiles, parseYaml, typeFolder, FORGE_MANIFEST, readIngredientText } from "../core/forge.js";
@@ -171,6 +172,31 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const claudeDir = path.join(ws, ".claude");
   if (!(await exists(claudeDir))) throw new Error(`${claudeDir} not found — is this a Claude Code workspace?`);
 
+  // Spec 48 §4.4. In the source rules "escapes" means `leaves` and `git`: `unresolved` falls through to what it always did.
+  const contain = await containRoot(ws);
+  const sourceEscape = async (rel: string): Promise<Escape | null> => {
+    const answer = await escapeOf(contain, path.join(contain.given, rel));
+    return answer === "unresolved" ? null : answer;
+  };
+  // What lies behind a linked directory is not the workspace's: rejecting it would drop its ingredients from the recipes.
+  const refuseLinkedDir = async (rel: string): Promise<void> => {
+    const answer = await sourceEscape(rel);
+    if (answer) throw new Error(`import: ${escapeSourceLine(rel, answer)} — replace it with a directory inside the workspace`);
+  };
+  for (const dir of [".kiro/steering", ".claude/rules", ".claude/agents", ".claude/commands", ".claude/skills", ".claude/scripts", ".claude/hooks"]) await refuseLinkedDir(dir);
+  const mcpEscape = await sourceEscape(".mcp.json");
+  if (mcpEscape) throw new Error(`import: ${escapeSourceLine(".mcp.json", mcpEscape)} — replace it with a file inside the workspace`);
+  /** Rejected by a file that escapes, as a secret is; `--prefer-kiro` refuses in the same words. */
+  const escapedSources = new Map<string, string>();
+  const rejectEscaping = async (type: "rule" | "agent" | "command" | "skill" | "script" | "hook", name: string, rel: string): Promise<boolean> => {
+    const out = (await escapingSource(ws, type, rel)).find((r) => r.escapes !== "unresolved");
+    if (!out) return false;
+    const reason = escapeSourceLine(out.path, out.escapes);
+    report.rejected.push({ name: `${type}/${name}`, reason });
+    if (type === "rule") escapedSources.set(name, reason);
+    return true;
+  };
+
   // The manifest is staged after the decisions (spec 11 §6.13 step 7): its schema depends on them.
   const manifestOnDisk = path.join(forge, FORGE_MANIFEST);
 
@@ -187,9 +213,15 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- Kiro steering gives us inclusion modes and hand-written steering ---- */
   const steeringDir = path.join(ws, ".kiro", "steering");
   const steeringMeta = new Map<string, { inclusion: string; fileMatchPattern?: string; generated: boolean; setsInclusion: boolean; text: string; scan?: string }>();
+  const escapedMirrors = new Map<string, string>();
   if (await exists(steeringDir)) {
     for (const f of (await fs.readdir(steeringDir)).sort()) {
       if (!f.endsWith(".md")) continue;
+      const mirrorEscape = await sourceEscape(`.kiro/steering/${f}`);
+      if (mirrorEscape) {
+        escapedMirrors.set(f.replace(/\.md$/, ""), escapeSourceLine(`.kiro/steering/${f}`, mirrorEscape));
+        continue;
+      }
       const src = await readSource(path.join(steeringDir, f));
       const text = toLf(stripBom(src.text));
       const { data, body, raw } = parseFrontmatter<{ inclusion?: string; fileMatchPattern?: string }>(text);
@@ -208,6 +240,14 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   for (const f of await safeList(path.join(claudeDir, "rules"))) {
     if (!f.endsWith(".md")) continue;
     const name = f.replace(/\.md$/, "");
+    // A mirror that escapes rejects its rule, rather than letting the scope fall through to `paths:` or `always` with no word.
+    const mirror = escapedMirrors.get(name);
+    if (mirror) {
+      report.rejected.push({ name: `rule/${name}`, reason: mirror });
+      escapedSources.set(name, mirror);
+      continue;
+    }
+    if (await rejectEscaping("rule", name, f)) continue;
     const sm = steeringMeta.get(name);
     const emitted = await readEmitted(claudeDir, "rule", f, origin, sm ? { inclusion: sm.inclusion, fileMatchPattern: sm.fileMatchPattern, generated: sm.generated, setsInclusion: sm.setsInclusion } : undefined);
     if (!emitted) continue;
@@ -234,6 +274,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const agentBodies = new Map<string, string>();
   for (const f of await safeList(path.join(claudeDir, "agents"))) {
     if (!f.endsWith(".md")) continue;
+    if (await rejectEscaping("agent", f.replace(/\.md$/, ""), f)) continue;
     const emitted = await readEmitted(claudeDir, "agent", f, origin);
     if (!emitted) continue;
     const agentMeta = emitted.meta as Ingredient & { description?: string };
@@ -246,6 +287,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   /* ---- commands ---- */
   for (const f of await safeList(path.join(claudeDir, "commands"))) {
     if (!f.endsWith(".md")) continue;
+    if (await rejectEscaping("command", f.replace(/\.md$/, ""), f)) continue;
     const emitted = await readEmitted(claudeDir, "command", f, origin);
     if (!emitted) continue;
     read(emitted.meta, emitted.files, emitted.scan, (ref) => addRef(refs.base, ref));
@@ -257,6 +299,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     // Sorted, so the decision order — and which of two sources is "the later one" — is reproducible (spec 10 §14 Q6).
     for (const e of (await fs.readdir(skillsDir, { withFileTypes: true })).sort((x, y) => x.name.localeCompare(y.name))) {
       if (e.name === ".gitkeep") continue;
+      if (await rejectEscaping("skill", e.name.replace(/\.md$/, ""), e.name)) continue;
       const emitted = await readEmitted(claudeDir, "skill", e.name, origin);
       if (!emitted) {
         if (e.isDirectory()) report.warnings.push(`skill dir ${e.name} has no SKILL.md; skipped`);
@@ -280,8 +323,13 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     const type = kind === "scripts" ? "script" : "hook";
     // Read each file and group by the base name (lowercased) that readEmitted gives
     const emittedList: EmittedSource[] = [];
-    for (const f of await safeList(path.join(claudeDir, kind))) {
-      if (f === ".gitkeep" || f.startsWith("__pycache__") || f.endsWith(".pyc")) continue;
+    const listed = (await safeList(path.join(claudeDir, kind))).filter((f) => !(f === ".gitkeep" || f.startsWith("__pycache__") || f.endsWith(".pyc")));
+    // One escaping file rejects its whole group, as a secret does, so its siblings are not read either.
+    const baseName = (f: string) => f.replace(/\.[^.]+$/, "").toLowerCase();
+    const rejectedGroups = new Set<string>();
+    for (const f of listed) if (!rejectedGroups.has(baseName(f)) && (await rejectEscaping(type, baseName(f), f))) rejectedGroups.add(baseName(f));
+    for (const f of listed) {
+      if (rejectedGroups.has(baseName(f))) continue;
       const emitted = await readEmitted(claudeDir, type, f, origin);
       if (!emitted) continue;
       emittedList.push(emitted);
@@ -358,6 +406,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     const meta: Ingredient = { type: "steering", name, file: "steering.md", targets: ["kiro"], tags: ["client"], origin: origin(`.kiro/steering/${name}.md`) };
     read(meta, { "steering.md": sm.text }, scanOf("steering.md", sm), (ref) => addRef(refs.steering, ref), () => ruleNames.includes(name) || sm.generated || name === "commands", "kiro");
   }
+
+  for (const [name, reason] of escapedMirrors) if (!escapedSources.has(name)) report.rejected.push({ name: `steering/${name}`, reason });
 
   /* ---- what the importing profile renders (spec 10 §6.1, §6.8 step 2) ---- */
   const loaded = await forgeBefore(forge, manifestOnDisk);
@@ -504,6 +554,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       }
 
       const q = rules.get(name);
+      const escaped = escapedSources.get(name);
+      if (escaped) throw new Error(`import: --prefer-kiro ${name}: ${escaped}`);
       if (!q) throw new Error(`import: --prefer-kiro ${name}: there is no .claude/rules/${name}.md — --prefer-kiro takes rules; a steering file with no rule is already imported as steering`);
       const sm = steeringMeta.get(name);
       if (!sm) throw new Error(`import: --prefer-kiro ${name}: there is no .kiro/steering/${name}.md to prefer`);
@@ -712,7 +764,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     scm: await sniffScm(claudeDir),
     naming: {},
     frontend: {},
-    executor: (await exists(path.join(claudeDir, "rules", "kiro-execution.md"))) ? { kind: "kiro", terminal: "orca" } : {},
+    executor: (await exists(path.join(claudeDir, "rules", "kiro-execution.md"))) && !(await sourceEscape(".claude/rules/kiro-execution.md")) ? { kind: "kiro", terminal: "orca" } : {},
     integrations: {},
     // A new profile holds the values this run inferred, in acceptance order (spec 10 §6.6).
     params: Object.fromEntries(report.params.map((x) => [x.key, ctx.P[x.key]])),
@@ -738,7 +790,13 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
  */
 export class ForgeStage {
   private readonly files = new Map<string, string | Buffer>();
+  private contain: Promise<ContainRoot> | null = null;
   constructor(readonly root: string) {}
+
+  /** `import` can target a Forge that does not exist yet, so the root is resolved on first use, by its nearest ancestor. */
+  private forgeRoot(): Promise<ContainRoot> {
+    return (this.contain ??= containRoot(this.root));
+  }
 
   write(abs: string, content: string | Buffer): void {
     this.files.set(abs, content);
@@ -750,7 +808,7 @@ export class ForgeStage {
 
   async readText(abs: string): Promise<string> {
     const staged = this.files.get(abs);
-    if (staged === undefined) return fs.readFile(abs, "utf8");
+    if (staged === undefined) return readForgeText(await this.forgeRoot(), abs);
     return Buffer.isBuffer(staged) ? staged.toString("utf8") : staged;
   }
 
@@ -760,7 +818,7 @@ export class ForgeStage {
       readText: (abs) => this.readText(abs),
       readBytes: async (abs) => {
         const staged = this.files.get(abs);
-        if (staged === undefined) return fs.readFile(abs);
+        if (staged === undefined) return readForgeFile(await this.forgeRoot(), abs);
         return Buffer.isBuffer(staged) ? staged : Buffer.from(staged, "utf8");
       },
       list: async (dir) => {
@@ -773,6 +831,12 @@ export class ForgeStage {
 
   /** Write every staged file. A failure here names what was already written, since the Forge is no longer untouched. */
   async flush(): Promise<void> {
+    // Before the first write (spec 48 §4.4, case M). Import stays ungated on git; any other link inside the Forge is written through.
+    const contain = await this.forgeRoot();
+    for (const abs of this.files.keys()) {
+      const escapes = await escapeOf(contain, abs);
+      if (escapes) throw new Error(`import: ${escapeDestinationLine(path.relative(this.root, abs).split(path.sep).join("/"), escapes)}\nThe Forge was left untouched.`);
+    }
     const written: string[] = [];
     try {
       await fs.mkdir(this.root, { recursive: true });
@@ -900,6 +964,24 @@ export function rulePaths(rawText: string | null): { present: boolean; value?: s
     }
     return items.length ? { present: true, value: items } : { present: true };
   }
+}
+
+/**
+ * The files of one ingredient `readEmitted` would read that escape the workspace, as workspace-relative paths; shared by
+ * `planImport` and `drift promote`, each deciding what its answers mean (spec 48 §4.4). A linked `skills/<name>`
+ * directory is not among them: `readEmitted` skips it. Its names reach no output from here but the path that escapes.
+ */
+export async function escapingSource(root: string, type: "rule" | "agent" | "command" | "skill" | "script" | "hook", rel: string): Promise<EscapingPath[]> {
+  const folder = { rule: "rules", agent: "agents", command: "commands", skill: "skills", script: "scripts", hook: "hooks" }[type];
+  const base = `.claude/${folder}/${rel}`;
+  const contain = await containRoot(root);
+  let names = [base];
+  if (type === "skill") {
+    const stat = await fs.lstat(path.join(contain.given, base)).catch(() => null);
+    if (stat?.isDirectory()) names = (await listFiles(path.join(contain.given, base))).map((f) => `${base}/${f}`);
+    else if (stat?.isSymbolicLink() && !rel.endsWith(".md")) names = [];
+  }
+  return escapingPaths(contain, names);
 }
 
 /**
@@ -1227,7 +1309,12 @@ async function safeList(dir: string): Promise<string[]> {
 
 async function sniffScm(claudeDir: string): Promise<Profile["scm"]> {
   let text = "";
-  for (const f of await safeList(path.join(claudeDir, "commands"))) text += await fs.readFile(path.join(claudeDir, "commands", f), "utf8");
+  const contain = await containRoot(path.dirname(claudeDir));
+  for (const f of await safeList(path.join(claudeDir, "commands"))) {
+    // An outside file does not decide `profile.scm` (spec 48 §4.4).
+    const abs = path.join(claudeDir, "commands", f);
+    if ((await escapeOf(contain, path.resolve(abs))) === null) text += await fs.readFile(abs, "utf8");
+  }
   if (/az repos pr create|dev\.azure\.com/.test(text)) return { kind: "azure-devops", prTool: /az repos pr create/.test(text) ? "az" : "rest" };
   if (/\bgh pr create\b/.test(text)) return { kind: "github", prTool: "gh" };
   return {};
@@ -1734,7 +1821,7 @@ async function existingProfile(
     if (!d.isDirectory()) continue;
     const abs = path.join(dir, d.name, "profile.yaml");
     if (!(await exists(abs))) continue;
-    const name = parseYaml(abs, stripBom(await fs.readFile(abs, "utf8")), ProfileSchema).name;
+    const name = parseYaml(abs, stripBom(await readForgeText(await containRoot(forge), abs)), ProfileSchema).name;
     if ((name === profile) !== (d.name === profile)) {
       throw new Error(`import: profile ${profile} is profiles/${d.name}/profile.yaml — import writes profiles/${profile}/profile.yaml`);
     }
@@ -1882,6 +1969,9 @@ async function planConfig(ws: string, forge: string, profile: string, targets: T
   const abs = path.join(ws, "craftar.yaml");
   const rel = path.relative(ws, forge).replace(/\\/g, "/") || ".";
   const fresh = YAML.stringify({ forge: rel, profile, targets });
+  // Asked with lstat, before the Forge is flushed: a dangling link is not read as absent (spec 48 §4.3, case S).
+  const configEscape = await escapeOf(await containRoot(ws), path.resolve(abs));
+  if (configEscape) throw new Error(escapeFileLine("craftar.yaml", configEscape));
   const raw = (await exists(abs)) ? await fs.readFile(abs, "utf8") : null;
   // Read as a mapping; the shape is checked below (not a mapping → refused, then WorkspaceConfigSchema).
   const before = (raw === null ? null : parseWorkspaceYaml("craftar.yaml", raw)) as Record<string, unknown> | null | undefined;

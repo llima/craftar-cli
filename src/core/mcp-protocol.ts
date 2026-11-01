@@ -3,7 +3,7 @@ import { catalogueContext, checkType, listIngredients, listRecipes, withLoadWarn
 import { renderDiff } from "./diff.js";
 import { runDoctor, workspaceReport, type DoctorOptions } from "./doctor.js";
 import { unmanaged } from "./drift.js";
-import { cachedCopyLine, diffReport, explainFile, notProduced, statusPath, statusReport, targetsReport } from "./report.js";
+import { cachedCopyLine, diffReport, explainFile, notProduced, statusPath, statusReport, targetsReport, withEscapeLine } from "./report.js";
 import { errorText, schemaFault } from "./schema-fault.js";
 import { loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig } from "./sync.js";
 import type { McpWriters } from "./write-actions.js";
@@ -391,7 +391,7 @@ async function call(name: ToolName, args: ToolArguments, ctx: McpContext): Promi
     diff: args.path !== undefined && row.note === null ? renderDiff(row.disk ?? "", row.forge ?? "") : null,
     note: row.note,
   }));
-  return { files, warnings: loadWarnings, unsetParams: report.unsetParams };
+  return { files, warnings: withEscapeLine(loadWarnings, statuses), unsetParams: report.unsetParams };
 }
 
 /** One writing tool call (spec 40 §5.5). */

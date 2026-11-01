@@ -1,3 +1,4 @@
+import { escapeRefusal, escapingRows, forgeReader } from "./core/contain.js";
 import { Command } from "commander";
 import pc from "picocolors";
 import path from "node:path";
@@ -27,7 +28,7 @@ import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
-import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport } from "./core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
@@ -77,7 +78,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.42.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.43.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -178,7 +179,7 @@ program
 /* ---------------------------------------------------------------- status */
 program
   .command("status")
-  .description("Show what sync would do: new, update, drift, orphan, collision; exits 1 when a declared parameter a file cites has no value, or when AGENTS.md is over an explicit budget")
+  .description("Show what sync would do: new, update, drift, orphan, collision; exits 1 when a declared parameter a file cites has no value, or when AGENTS.md is over an explicit budget; exits 1 when a workspace path leaves through a symbolic link")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--json", "machine-readable output", false)
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
@@ -193,11 +194,12 @@ program
       console.log(JSON.stringify(report, null, 2));
       // exitCode, not process.exit: a piped object is not cut (spec 29 §4.1)
       // The object carries both reasons (unsetParams, the budget line in warnings): nothing on stderr
-      if (unset.length || agentsMdOverBudget(p) || kiroResourcesUnplanned(p)?.length) process.exitCode = 1;
+      if (unset.length || agentsMdOverBudget(p) || kiroResourcesUnplanned(p)?.length || escapingRows(st).length) process.exitCode = 1;
       return;
     }
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, false, forgeLine(ws, lock));
     if (refusalBlock(unset)) process.exitCode = 1;
+    if (escapeBlock(st)) process.exitCode = 1;
     if (budgetRefusalBlock(p)) process.exitCode = 1;
   });
 
@@ -208,6 +210,13 @@ program
 function refusalBlock(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): boolean {
   if (unset.length) errorLine(unsetRefusal(unset, opts));
   return unset.length > 0;
+}
+
+/** The refusal of spec 48 §4.3 for a command that goes on to print or exit by itself. Says whether there was one. */
+function escapeBlock(st: FileStatus[], opts: { thenSync?: boolean } = {}): boolean {
+  const rows = escapingRows(st);
+  if (rows.length) errorLine(escapeRefusal(rows, opts));
+  return rows.length > 0;
 }
 
 /**
@@ -585,7 +594,8 @@ program
       for (const n of step1Notes) console.log(`  note ${n}`);
       const unset = unsetDeclared(p);
       const cloning = cloneEntries.length > 0;
-      const refused = unset.length > 0;
+      const escaping = escapingRows(init.statuses);
+      const refused = unset.length > 0 || escaping.length > 0;
       if (!o.sync) {
         console.log(nextSyncLine(init.statuses, unset));
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
@@ -601,12 +611,13 @@ program
       }
       // Spec 29 §4.1, §6 case 11: craftar.yaml is written — the workspace layer is a place for the value — and the
       // first sync is not run. exitCode, not fail(): the `again` line still follows the block.
-      if (unset.length) {
+      if (refused) {
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
         if (cloning && answers === null) {
           console.log(NOT_CLONED_REFUSED);
         }
         refusalBlock(unset, { thenSync: true });
+        escapeBlock(init.statuses, { thenSync: true });
         again();
         process.exitCode = 1;
         return;
@@ -763,9 +774,9 @@ reposCmd
 /* ---------------------------------------------------------------- sync */
 program
   .command("sync")
-  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces); refuses, writing nothing, when a declared parameter a file cites has no value; with --check, also exits 1 when AGENTS.md is over an explicit budget; warns for a generated file git ignores (mayBeIgnored in craftar.yaml lists one kept out on purpose)")
+  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces); refuses, writing nothing, when a declared parameter a file cites has no value; with --check, also exits 1 when AGENTS.md is over an explicit budget; warns for a generated file git ignores (mayBeIgnored in craftar.yaml lists one kept out on purpose); refuses the whole run when a path leaves the workspace through a symbolic link, or leads into its .git or nowhere")
   .option("--workspace <dir>", "workspace root", ".")
-  .option("--check", "exit 1 when the workspace is out of date or has drift, or when AGENTS.md is over an explicit budget (CI mode)", false)
+  .option("--check", "exit 1 when the workspace is out of date or has drift, or when AGENTS.md is over an explicit budget, or when a path leaves the workspace through a symbolic link, or leads into its .git or nowhere (CI mode)", false)
   .option("--dry-run", "show the plan, write nothing", false)
   .option("--overwrite-drift", "regenerate files that were hand-edited (their edits are lost)", false)
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
@@ -788,7 +799,7 @@ program
       // A refused sync is not "in sync", whatever the files say: the listing, then the block, and the exit is
       // exitCode's, so nothing queued is cut (spec 29 §4.1)
       // Both blocks are printed; either one, or a file out of sync, fails the check.
-      const refused = [refusalBlock(unset), budgetRefusalBlock(p)].some(Boolean);
+      const refused = [refusalBlock(unset), escapeBlock(st), budgetRefusalBlock(p)].some(Boolean);
       if (refused || bad.length) process.exitCode = 1;
       else console.log(pc.green("\nworkspace in sync"));
       return;
@@ -799,13 +810,18 @@ program
       for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
       fail(unsetRefusal(unset));
     }
+    const escaping = escapingRows(st);
+    if (escaping.length) {
+      for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+      fail(escapeRefusal(escaping));
+    }
     await applyAndReport(ws, p, st, lock, { dryRun: o.dryRun, overwriteDrift: o.overwriteDrift });
   });
 
 /* ---------------------------------------------------------------- diff */
 program
   .command("diff")
-  .description("Unified diff between the files on disk and what the Forge would generate, orphans included (files the Forge no longer produces); also says when a declared parameter a file cites has no value, which sync refuses, and when AGENTS.md is over an explicit budget")
+  .description("Unified diff between the files on disk and what the Forge would generate, orphans included (files the Forge no longer produces); also says when a declared parameter a file cites has no value, which sync refuses, and when AGENTS.md is over an explicit budget; never prints a file behind a symbolic link that leaves the workspace")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--exit-code", "exit 1 when there are differences (exactly when `sync --check` would fail), including when AGENTS.md is over an explicit budget; a [path] that names no file craftar manages becomes an error; with a remote Forge, a failed fetch exits 1 as `sync --check` does (--offline to use the cached copy)", false)
   .argument("[path]", "limit to one file")
@@ -829,6 +845,7 @@ program
     else if (o.exitCode) process.exitCode = 1;
     // Spec 29 §4.1: with no [path], --exit-code fails exactly when `sync --check` does — a refused sync included
     if (refusalBlock(unsetDeclared(p)) && o.exitCode && !only) process.exitCode = 1;
+    if (escapeBlock(st) && o.exitCode && !only) process.exitCode = 1;
     // The AGENTS.md budget, as the refusal above: always printed, failing only --exit-code with no [path]
     if (budgetRefusalBlock(p) && o.exitCode && !only) process.exitCode = 1;
   });
@@ -940,19 +957,21 @@ drift
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
-      console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: [...p.warnings, ...providedWarnings], unsetParams: unset }, null, 2));
-      if (unset.length) process.exitCode = 1;
+      console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: withEscapeLine([...p.warnings, ...providedWarnings], st), unsetParams: unset }, null, 2));
+      if (unset.length || escapingRows(st).length) process.exitCode = 1;
       return;
     }
     warnStderr(providedWarnings);
     if (named && !rows.length) {
       console.log(`${named.path} is not drifted (${named.state})`);
       if (refusalBlock(unset)) process.exitCode = 1;
+      if (escapeBlock(st)) process.exitCode = 1;
       return;
     }
     if (!rows.length) {
       console.log("no drift");
       if (refusalBlock(unset)) process.exitCode = 1;
+      if (escapeBlock(st)) process.exitCode = 1;
       return;
     }
     // Columns as wide as their longest value, as the spec's example lines them up (§4.2).
@@ -964,6 +983,7 @@ drift
       );
     if (!named) {
       if (refusalBlock(unset)) process.exitCode = 1;
+      if (escapeBlock(st)) process.exitCode = 1;
       return;
     }
     if (named.state === "orphan-drift") {
@@ -978,6 +998,7 @@ drift
       }
     } else await printFileDiff(ws.root, named);
     if (refusalBlock(unset)) process.exitCode = 1;
+    if (escapeBlock(st)) process.exitCode = 1;
   });
 
 drift
@@ -1003,6 +1024,11 @@ drift
     if (unset.length) {
       for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
       fail(unsetRefusal(unset));
+    }
+    const escaping = escapingRows(st);
+    if (escaping.length) {
+      for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+      fail(escapeRefusal(escaping));
     }
     const overwritePaths = new Set(paths);
     console.log(`discarding ${paths.length} hand edit(s): ${st.filter((s) => overwritePaths.has(s.path)).map((s) => s.path).join(", ")}`);
@@ -1391,7 +1417,7 @@ program
 program
   .command("doctor")
   .description(
-    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, generated files git ignores, the profile's templates block and dotnet when it has one, hooks-registered when the plan writes a registration, lock, status, registry entry): one line per finding — ok, warn or error — each with its fix. Reports only; reads without the network unless --fetch",
+    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, generated files git ignores, the profile's templates block and dotnet when it has one, hooks-registered when the plan writes a registration, lock, status, registry entry): one line per finding — ok, warn or error — each with its fix; a path that leaves the workspace through a symbolic link is an error (workspace-links). Reports only; reads without the network unless --fetch",
   )
   // No commander default: an explicit --workspace without craftar.yaml exits 1, the current directory without one runs the machine checks (spec 24 §4.1).
   .option("--workspace <dir>", "the workspace to check (default: the current directory, when it holds craftar.yaml)")
@@ -2289,7 +2315,7 @@ forge
       if (loadedPlan.base !== base.ref || loadedPlan.variant !== variant.ref || loadedPlan.profile !== o.profile) {
         fail(`the plan is for ${loadedPlan.base} (profile ${loadedPlan.profile}), not ${ref} (profile ${o.profile})`);
       }
-      const [baseFp, variantFp] = await Promise.all([fingerprintDir(base.dir), fingerprintDir(variant.dir)]);
+      const [baseFp, variantFp] = await Promise.all([fingerprintDir(base.dir, forgeReader(base.forgeRoot)), fingerprintDir(variant.dir, forgeReader(variant.forgeRoot))]);
       if (loadedPlan.baseFingerprint !== baseFp) fail(`the plan is stale: the base changed since it was saved`);
       if (loadedPlan.variantFingerprint !== variantFp) fail(`the plan is stale: the variant changed since it was saved`);
     }

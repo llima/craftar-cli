@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import { planFrom, applyPlan, type UnifyPlan } from "../src/core/unify.js";
 import { diffIngredients } from "../src/core/variants.js";
 import { loadForge, typeFolder } from "../src/core/forge.js";
-import { makeForge, profile, recipe, tmpDir } from "./helpers/forge.js";
+import { makeForge, profile, recipe, tmpDir, fsRoot } from "./helpers/forge.js";
 import type { Ingredient, IngredientRef } from "../src/schema/index.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -53,7 +53,7 @@ async function loadIngredient(forgeRoot: string, ref: IngredientRef): Promise<Lo
   const dir = path.join(forgeRoot, "ingredients", typeFolder(type), name);
   const metaFile = path.join(dir, "ingredient.yaml");
   const meta = YAML.parse(await fs.readFile(metaFile, "utf8")) as Ingredient;
-  return { ref, dir, meta };
+  return { ref, dir, meta, forgeRoot: fsRoot(dir) };
 }
 
 describe("unify with target-scoped sections (spec 41 Part B Task 05)", () => {

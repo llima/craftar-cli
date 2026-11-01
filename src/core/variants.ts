@@ -1,5 +1,5 @@
-import { promises as fs } from "node:fs";
 import path from "node:path";
+import { forgeReader, readForgeFile } from "./contain.js";
 import { classifyHunk, type ClassifiedHunk } from "./classify.js";
 import { diffLines, splitLines, type Hunk } from "./diff.js";
 import { fingerprintDir } from "./fingerprint.js";
@@ -67,7 +67,7 @@ async function filesOf(ing: LoadedIngredient): Promise<Map<string, Buffer>> {
   const out = new Map<string, Buffer>();
   for (const rel of await listFiles(ing.dir)) {
     if (rel === "ingredient.yaml") continue;
-    out.set(rel, await fs.readFile(path.join(ing.dir, rel)));
+    out.set(rel, await readForgeFile(ing.forgeRoot, path.join(ing.dir, rel)));
   }
   return out;
 }
@@ -134,7 +134,7 @@ async function measure(base: LoadedIngredient, variant: LoadedIngredient): Promi
   const hunks = d.files.reduce((n, f) => n + f.hunks.length, 0) + d.onlyInBase.length + d.onlyInVariant.length;
   const lines = d.files.reduce((n, f) => n + lineCount(f.hunks), 0) + oneSidedLines;
   const bodyDiffers = hunks > 0;
-  const sameFingerprint = (await fingerprintDir(base.dir)) === (await fingerprintDir(variant.dir));
+  const sameFingerprint = (await fingerprintDir(base.dir, forgeReader(base.forgeRoot))) === (await fingerprintDir(variant.dir, forgeReader(variant.forgeRoot)));
   const classes: Record<HunkClass, number> = { evolution: 0, value: 0, block: d.onlyInBase.length + d.onlyInVariant.length };
   for (const f of d.files) for (const h of f.hunks) classes[h.suggestion.class]++;
   return {

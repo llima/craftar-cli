@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { containRoot, escapeOf, escapeSummary, escapingRows } from "../core/contain.js";
 import { exists, listFiles } from "../core/forge.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { loadWorkspaceConfig, plan, status, unsetDeclared, unsetSummary } from "../core/sync.js";
@@ -64,7 +65,7 @@ async function noteFor(workspaceRoot: string, rel: string, from: string, steerin
   // A rule --prefer-kiro took from its steering file: that mirror is the source now, so the note does not apply.
   if (preferred.includes(m[1])) return "";
   const rule = path.join(workspaceRoot, ".claude", "rules", `${m[1]}.md`);
-  if (!(await exists(rule))) return "";
+  if (!(await exists(rule)) || (await escapeOf(await containRoot(workspaceRoot), rule))) return "";
   return textLines(steeringBody(steering)) > textLines(await fs.readFile(rule, "utf8")) ? STEERING_BIGGER : "";
 }
 
@@ -94,8 +95,11 @@ export async function kiroReport(
     // A plan sync refuses (spec 29 §4.1) is compared with nothing: its files still hold the `{{key}}` and are never written.
     const unset = unsetDeclared(p);
     if (unset.length) return { kind: "not-computed", message: unsetSummary(unset) };
+    const rows = await status(ws, p, null);
+    const escaping = escapingRows(rows);
+    if (escaping.length) return { kind: "not-computed", message: escapeSummary(escaping) };
     const collisions: KiroCollision[] = [];
-    for (const s of await status(ws, p, null)) {
+    for (const s of rows) {
       if (s.state !== "collision" || !s.path.startsWith(".kiro/")) continue;
       const disk = await fs.readFile(path.join(root, s.path), "utf8");
       const from = s.ingredient ?? "";
@@ -112,7 +116,8 @@ export async function kiroReport(
     for (const dir of SOURCED_DIRS) {
       const abs = path.join(root, dir);
       // Only a directory is walked: a file sitting where one is expected is not Kiro's, and not this report's.
-      if ((await fs.stat(abs).catch(() => null))?.isDirectory()) for (const rel of await listFiles(abs)) found.push(`${dir}/${rel}`);
+      // lstat, and asked of the path: a linked directory's file names do not reach the report (spec 48 §5 edge 5).
+      if ((await fs.lstat(abs).catch(() => null))?.isDirectory() && !(await escapeOf(await containRoot(root), abs))) for (const rel of await listFiles(abs)) found.push(`${dir}/${rel}`);
     }
     if ((await fs.stat(path.join(root, SOURCED_FILE)).catch(() => null))?.isFile()) found.push(SOURCED_FILE);
     return {

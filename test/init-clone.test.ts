@@ -150,6 +150,20 @@ describe("askClone — the list and the question (§4.3)", () => {
     expect(await askClone(sc.io, init, { root: s.ws, offline: false, git: GIT })).toEqual({ clone: false, entries: [], refused: true });
     expect([...sc.said, ...sc.confirmed]).toEqual([]);
   });
+  it("a first sync refused for a path that leaves the workspace: no list, no question, and first sync says why (spec 48 §4.3)", async () => {
+    const s = await setup();
+    const outside = await fs.mkdtemp(path.join(s.ws, "..", "private-outside-"));
+    await fs.mkdir(path.join(s.ws, ".claude"), { recursive: true });
+    await fs.symlink(outside, path.join(s.ws, ".claude/rules"), "junction");
+    const init = await planInit(s.ws, { forge: s.forge, profile: "acme" });
+    const sc = script([]);
+    expect(await askClone(sc.io, init, { root: s.ws, offline: false, git: GIT })).toEqual({ clone: false, entries: [], refused: true });
+    const sc2 = script(["yes"]);
+    await confirmInit(init, s.ws, sc2.io, { sync: true });
+    expect(sc2.said.join("\n")).toContain("first sync: refused — .claude/rules/");
+    expect(sc2.said.join("\n")).toContain("leaves the workspace through a symbolic link");
+    expect(sc2.said.join("\n")).not.toContain("private-outside");
+  });
   it("yes meeting C6 (no git) or C5 (a destination appeared): said, and the question asked again", async () => {
     const s = await setup();
     const init = await planInit(s.ws, { forge: s.forge, profile: "acme" });
