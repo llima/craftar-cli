@@ -478,10 +478,17 @@ export function scanMarkdown(input: string): Scan {
       continue;
     }
 
-    const indented = /^(?: {4}|\t)/.test(raw);
+    // Block decisions read the leading whitespace in columns from the line's real column, as the fence checks do; the
+    // paragraph text and its columns stay the line's own characters.
+    const blockLine = expandedLead(raw, col0, owed);
+    const rawLead = /^[ \t]*/.exec(raw)![0].length;
+    const blockLead = /^ */.exec(blockLine)![0].length;
+    const indented = blockLead >= 4;
     if (indented && paragraph.length === 0 && !inList) continue;
 
-    const listItem = LIST_ITEM.exec(raw);
+    const listMatch = LIST_ITEM.exec(blockLine);
+    // The item prefix in the line's own characters: the expanded lead swapped back for the written one.
+    const listItem = listMatch ? [raw.slice(0, listMatch[0].length - blockLead + rawLead)] : null;
     if (listItem && !indented) {
       flush();
       inList = true;
@@ -500,7 +507,7 @@ export function scanMarkdown(input: string): Scan {
     }
     if (afterBlank && !indented) inList = false;
 
-    const atx = ATX.exec(raw);
+    const atx = ATX.exec(blockLine);
     if (atx && !indented) {
       flush();
       const content = withoutClosingRun(atx[2]);
@@ -509,7 +516,7 @@ export function scanMarkdown(input: string): Scan {
       afterBlank = false;
       continue;
     }
-    if (SETEXT.test(raw) && paragraph.length > 0 && !indented) {
+    if (SETEXT.test(blockLine) && paragraph.length > 0 && !indented) {
       flush(true);
       afterBlank = false;
       continue;

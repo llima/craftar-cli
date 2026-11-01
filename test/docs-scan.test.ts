@@ -190,6 +190,24 @@ describe("review round 7 — tabs counted from their real column", () => {
   });
 });
 
+describe("review round 8 — indented code read in columns after a quote marker", () => {
+  it("a tab after > is two or three columns: a paragraph, not indented code", () => {
+    expect(dests(">\t[a](x.md)\n")).toEqual(["x.md"]);
+    expect(dests("> \t[a](x.md)\n")).toEqual(["x.md"]);
+    expect(dests(">\t- [a](x.md)\n")).toEqual(["x.md"]);
+  });
+  it("a heading after > and a tab gives its anchor", () => {
+    expect([...scanMarkdown("> \t# Head\n").anchors]).toEqual(["head"]);
+  });
+  it("a quoted list item after a tab keeps its content column", () => {
+    expect(at(">\t- see [a](x.md)\n")).toEqual(["1:13 x.md"]);
+  });
+  it("four columns after > is still indented code", () => {
+    expect(dests(">     [a](x.md)\n")).toEqual([]);
+    expect(dests("\t[a](x.md)\n")).toEqual([]);
+  });
+});
+
 describe("§6.2 — anchors", () => {
   it("GitHub slugs, with -1 for a repeat, and <a id> / <a name>", () => {
     const s = scanMarkdown("# Hello World!\n\n## Hello World\n\nSetext Title\n---\n\n## `code` and [link](x.md)\n\n<a id=\"custom\"></a> <a name='other'>\n");
