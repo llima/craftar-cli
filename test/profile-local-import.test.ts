@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
@@ -38,7 +39,7 @@ async function setup(spec: ForgeSpec, files: Record<string, string>, opts: { sch
 
 async function snapshot(dir: string): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
-  for (const f of await listFiles(dir)) out[f] = await fs.readFile(path.join(dir, f), "utf8");
+  for (const f of await listFiles(dir)) if ((await fs.lstat(path.join(dir, f))).isFile()) out[f] = await fs.readFile(path.join(dir, f), "utf8");
   return out;
 }
 
@@ -206,5 +207,15 @@ describe("import and the profile's locals (spec 51 §4.5)", () => {
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).not.toContain("local to profile");
     expect(await fs.stat(path.join(s.forge, "ingredients/rules/x/ingredient.yaml")).then(() => true, () => false)).toBe(true);
+  });
+  it.skipIf(process.platform === "win32")("a file that is not regular in the Forge stops the proof's copy in import's words, the Forge untouched", async () => {
+    const s = await setup(spec, files);
+    execFileSync("mkfifo", [path.join(s.forge, "fifo")]);
+    const before = await snapshot(s.forge);
+    const r = importInto(s);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("fifo is not a regular file — import cannot copy the Forge to prove its edit; remove it");
+    expect(r.stderr).toContain("The Forge was left untouched.");
+    expect(await snapshot(s.forge)).toEqual(before);
   });
 });

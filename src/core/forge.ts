@@ -453,8 +453,8 @@ const SYMLINK_REFUSAL = (rel: string, command: string) =>
   `${rel} is a symbolic link in the Forge — ${command} does not write through a link; replace it with the file and commit`;
 const SYMLINK_DIR_REFUSAL = (rel: string, command: string) =>
   `${rel} is a symbolic link in the Forge — ${command} does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit`;
-const NON_REGULAR_FILE_REFUSAL = (rel: string) =>
-  `${rel} is not a regular file — promote cannot copy the Forge to prove its edit; remove it`;
+const NON_REGULAR_FILE_REFUSAL = (rel: string, command: string) =>
+  `${rel} is not a regular file — ${command} cannot copy the Forge to prove its edit; remove it`;
 
 /** The root directories loadForge reads; a link there causes the scratch to differ from the real Forge. */
 const ROOT_DIRS = new Set(["ingredients", "recipes", "profiles"]);
@@ -512,7 +512,7 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
         // Target is neither a directory nor a regular file (FIFO, socket, etc.) — refuse
         // Check this BEFORE the "inside Forge" check so the message is clear
         if (!targetStat.isFile()) {
-          throw new Error(NON_REGULAR_FILE_REFUSAL(entRel));
+          throw new Error(NON_REGULAR_FILE_REFUSAL(entRel, command));
         }
 
         // It's a file link — check if target is inside the Forge
@@ -534,7 +534,7 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
         await fs.copyFile(entSrc, entDest);
       } else {
         // Non-regular file (FIFO, socket, device, etc.) — refuse
-        throw new Error(NON_REGULAR_FILE_REFUSAL(entRel));
+        throw new Error(NON_REGULAR_FILE_REFUSAL(entRel, command));
       }
     }
   }
