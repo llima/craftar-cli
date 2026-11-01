@@ -6,7 +6,8 @@ import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forg
 import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
 import { climbsOut, hashNormalized, isUtf8, legacyHash, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
-import { classifyForge, credentialFault, ensureTree, refHoldsCredentials, shownRef, ForgeFetchError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
+import { classifyForge, credentialFault, ensureTree, refHoldsCredentials, shownRef, ForgeFetchError, ForgeUnavailableError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
+import { diskSource, type WorkspaceSource } from "./workspace-source.js";
 import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, projectSections, readsTargetSections, type ParsedSections } from "./sections.js";
@@ -69,7 +70,11 @@ export interface Workspace {
   origin: ForgeOrigin;
   /** Warnings from loading the workspace itself (spec 13 §4.2); `plan()` puts them first. */
   warnings: string[];
+  /** Where its files are read; the disk when absent. A git source is for a check: `apply()` refuses it (spec 49 §5.2). */
+  source?: WorkspaceSource;
 }
+
+const sourceOf = (ws: Workspace): WorkspaceSource => ws.source ?? diskSource(ws.root);
 
 /**
  * How a command treats the network for a remote Forge (spec 13 §4.1, Ruling 6): `sync` fails when the
@@ -125,7 +130,7 @@ export async function loadWorkspace(root: string, opts: LoadOptions = {}): Promi
 
 /**
  * The two workspace files read and merged, the Forge not loaded (spec 24 §5.1): what `doctor` needs to
- * know a Forge's kind and cache key even when the Forge does not load. The one reader of the files.
+ * know a Forge's kind and cache key even when the Forge does not load. The one reader of the files on disk; `readConfigFrom` reads a git source.
  */
 export async function readWorkspaceConfig(root: string): Promise<MergedConfig> {
   root = path.resolve(root);
@@ -138,6 +143,18 @@ export async function readWorkspaceConfig(root: string): Promise<MergedConfig> {
   const localFile = path.join(root, LOCAL_FILE);
   const local = (await exists(localFile)) ? parseWorkspaceYaml(LOCAL_FILE, await fs.readFile(localFile, "utf8")) ?? {} : null;
   return mergeWorkspaceConfig(base, local);
+}
+
+/**
+ * The configuration a git source holds (spec 49 §5.2): `craftar.yaml` alone, as a clone reads it, so never
+ * `craftar.local.yaml`; a line says so when that file is on disk. Null when the source holds no `craftar.yaml`.
+ */
+export async function readConfigFrom(root: string, source: WorkspaceSource): Promise<MergedConfig | null> {
+  const bytes = await source.read(WORKSPACE_FILE);
+  if (bytes === null) return null;
+  const merged = mergeWorkspaceConfig(parseWorkspaceYaml(WORKSPACE_FILE, bytes.toString("utf8")) ?? {}, null);
+  if (await exists(path.join(path.resolve(root), LOCAL_FILE))) merged.warnings.push(`${LOCAL_FILE} is not read: this checks what a clone would hold`);
+  return merged;
 }
 
 /**
@@ -210,7 +227,7 @@ export async function loadForgeSource(
     return { forge: await loadForge(tree), origin, warnings };
   }
   const forgeRoot = path.resolve(root, source);
-  if (!(await exists(forgeRoot))) throw new Error(`Forge not found at ${forgeRoot}`);
+  if (!(await exists(forgeRoot))) throw new ForgeUnavailableError(`Forge not found at ${forgeRoot}`);
   // A path means the working tree as it is; a ref beside it is ignored, said out loud (Ruling 9).
   if (ref !== null) warnings.push(`${shownRef(ref)} is ignored: the Forge is a path (${source}), read as its working tree`);
   const origin: ForgeOrigin = { kind: "path", source, ref: null, defaultBranch: null, fetched: false, fromLocalFile };
@@ -248,7 +265,7 @@ async function remoteTree(
     } catch (e) {
       if (!(e instanceof NoCachedCopyError)) throw e;
       // `targets` (no-fetch) takes no --offline: point at a command that fetches.
-      throw new Error(`${e.message} — ${opts.offline ? "run without --offline once to fetch it" : "run craftar status once to fetch it"}`);
+      throw new ForgeUnavailableError(`${e.message} — ${opts.offline ? "run without --offline once to fetch it" : "run craftar status once to fetch it"}`);
     }
     return { tree: t.dir, origin: origin(t), warning: opts.offline ? `Forge ${url} not fetched (--offline) — using ${used(t)}` : null };
   }
@@ -258,7 +275,7 @@ async function remoteTree(
   } catch (e) {
     if (!(e instanceof ForgeFetchError)) throw e;
     if (!e.cached)
-      throw new Error(
+      throw new ForgeUnavailableError(
         `cannot fetch the Forge ${url}: ${e.gitMessage} — ${e.haveCopy ? `and the cached copy cannot resolve ${ref === null ? "the default branch" : refHoldsCredentials(ref) ? shownRef(ref) : ref}` : "and there is no cached copy to fall back on"}`,
       );
     if (mode === "sync") {
@@ -613,13 +630,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
     forge: ws.forge,
     resolution,
     workspaceRoot: ws.root,
-    async readExisting(rel: string) {
-      try {
-        return await fs.readFile(path.join(ws.root, rel));
-      } catch {
-        return null;
-      }
-    },
+    readExisting: (rel: string) => sourceOf(ws).read(rel),
     async text(ing: ResolvedIngredient, file: string, owner: Owner) {
       const abs = path.join(ing.dir, file);
       const raw = await fs.readFile(abs, "utf8");
@@ -744,7 +755,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
 
   // Kiro agent resources check (spec 41 §4.5–§4.6): null when the mode is off
   // Existence only (lstat): a hand-written entry's file is never read.
-  const onDisk = (rel: string) => fs.lstat(path.join(ws.root, rel)).then(() => true, () => false);
+  const onDisk = (rel: string) => sourceOf(ws).exists(rel);
   const kiroResources = await computeKiroResources(planned, kiroResourceRecords, onDisk, warnings, resolution.primary);
 
   // CLAUDE.md blocking check (spec 41 §4.7): only when the mode is on and claude-code is a target
@@ -1092,10 +1103,12 @@ function dedupeLastWins(files: PlannedFile[]): PlannedFile[] {
 /* Lock                                                                 */
 /* ------------------------------------------------------------------ */
 
-export async function readLock(root: string): Promise<Lock | null> {
-  const f = path.join(root, LOCK_FILE);
-  if (!(await exists(f))) return null;
-  const text = await fs.readFile(f, "utf8");
+export async function readLock(root: string, source: WorkspaceSource = diskSource(root)): Promise<Lock | null> {
+  // On disk a lock that exists and cannot be read is an error, not an absent lock; `read` answers null for both.
+  if (source.kind === "disk" && !(await exists(path.join(root, LOCK_FILE)))) return null;
+  const bytes = source.kind === "disk" ? await fs.readFile(path.join(root, LOCK_FILE)) : await source.read(LOCK_FILE);
+  if (bytes === null) return null;
+  const text = bytes.toString("utf8");
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -1146,10 +1159,11 @@ function matchesLock(disk: Buffer, entry: LockEntry | LockEntryV3): boolean {
 }
 
 export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise<FileStatus[]> {
+  const source = sourceOf(ws);
   const out: FileStatus[] = [];
   const lockByPath = new Map((lock?.files ?? []).map((e) => [e.path, e]));
   for (const f of p.files) {
-    const disk = await readDisk(ws.root, f.path);
+    const disk = await source.read(f.path);
     const entry = lockByPath.get(f.path);
     const planHash = hashNormalized(f.content);
     let state: FileState;
@@ -1170,7 +1184,7 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
   const planned = new Set(p.files.map((f) => f.path));
   for (const e of lock?.files ?? []) {
     if (planned.has(e.path)) continue;
-    const disk = await readDisk(ws.root, e.path);
+    const disk = await source.read(e.path);
     if (disk === null) continue; // already gone
     out.push({ path: e.path, state: matchesLock(disk, e) ? "orphan" : "orphan-drift", target: e.target, ingredient: e.ingredient, lock: e });
   }
@@ -1184,14 +1198,6 @@ function sameJson(rel: string, a: Buffer, b: Buffer): boolean {
     return JSON.stringify(JSON.parse(stripBom(a.toString("utf8")))) === JSON.stringify(JSON.parse(stripBom(b.toString("utf8"))));
   } catch {
     return false;
-  }
-}
-
-async function readDisk(root: string, rel: string): Promise<Buffer | null> {
-  try {
-    return await fs.readFile(path.join(root, rel));
-  } catch {
-    return null;
   }
 }
 
@@ -1214,6 +1220,8 @@ export interface ApplyResult {
 }
 
 export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts: ApplyOptions = {}): Promise<ApplyResult> {
+  // A plan compared with a commit or the index never reaches the disk (spec 49 §5.2).
+  if (sourceOf(ws).kind !== "disk") throw new Error("a workspace read from git cannot be written");
   // A backstop, before the first write: `plan()` and `readLock()` already refuse such a path.
   const outside = statuses.find((s) => outsideWorkspace(s.path));
   if (outside) throw new Error(`${outside.path} is outside the workspace — refused`);

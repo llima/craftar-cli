@@ -335,6 +335,9 @@ export class ForgeFetchError extends Error {
   }
 }
 
+/** A Forge that cannot be had at all — its words are the message; `--unavailable-ok` passes it (spec 49 §5.4). */
+export class ForgeUnavailableError extends Error {}
+
 /** Reading the cache only (`--offline`, `targets`) found no copy of this Forge. */
 export class NoCachedCopyError extends Error {
   constructor(readonly url: string) {
@@ -382,8 +385,12 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
   let fetched = false;
   if (opts.offline || cachedSha) {
     if (!haveCopy) throw new NoCachedCopyError(url);
-    resolved = cachedSha ? { commit: ref!, defaultBranch: null } : resolveRef(await cachedRefs(git, repo), ref, url);
-    if (!(await hasCommit(git, repo, resolved.commit))) throw new Error(`${label} not found in ${url}`);
+    try {
+      resolved = cachedSha ? { commit: ref!, defaultBranch: null } : resolveRef(await cachedRefs(git, repo), ref, url);
+    } catch (e) {
+      throw new ForgeUnavailableError((e as Error).message);
+    }
+    if (!(await hasCommit(git, repo, resolved.commit))) throw new ForgeUnavailableError(`${label} not found in ${url}`);
   } else {
     let refs: LsRemote;
     try {

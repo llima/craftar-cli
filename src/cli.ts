@@ -8,17 +8,18 @@ import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
 import { holdsBaseCitations, rendersServers } from "./core/mcp-server.js";
-import { assertNotCacheTree, classifyForge, CREDENTIAL_HIDDEN, hideUnderCaches, isUnderOrEqual, shownCachePath, refHoldsCredentials, shownRef, UNVOUCHED_HIDDEN } from "./core/remote.js";
+import { assertNotCacheTree, ForgeUnavailableError, classifyForge, CREDENTIAL_HIDDEN, hideUnderCaches, isUnderOrEqual, shownCachePath, refHoldsCredentials, shownRef, UNVOUCHED_HIDDEN } from "./core/remote.js";
 import { allowWrites, forget, listWorkspaces, prune, readRegistry, revokeWrites, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
 import { generatedIgnored } from "./core/generated-ignored.js";
+import { GitSourceRefusal, gitSource, NotACommitError, type GitSource } from "./core/workspace-source.js";
 import { launchRefusal, pinOf } from "./core/mcp-protocol.js";
 import { serve } from "./mcp.js";
 import { mcpWriters } from "./core/write-actions.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, loadForgeFor, readConfigFrom, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -76,7 +77,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.41.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.42.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -768,7 +769,11 @@ program
   .option("--dry-run", "show the plan, write nothing", false)
   .option("--overwrite-drift", "regenerate files that were hand-edited (their edits are lost)", false)
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
+  .option("--committed [rev]", "with --check: compare the plan with a commit (default HEAD) instead of the folder; craftar.yaml and craftar.lock are the commit's, craftar.local.yaml is not read")
+  .option("--index", "with --check: compare the plan with git's index instead of the folder", false)
+  .option("--unavailable-ok", "with --committed or --index: a Forge that cannot be had, a commit with no craftar.yaml or an object that is not a commit prints `not checked` and exits 0", false)
   .action(async (o) => {
+    if (o.committed !== undefined || o.index || o.unavailableOk) return checkGitSource(o);
     const ws = await loadWorkspace(o.workspace, load(o, "sync"));
     const p = await plan(ws);
     const lock = await readLock(ws.root);
@@ -829,6 +834,54 @@ program
   });
 
 const DIFF_PAINT = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
+
+/** `sync --check --committed` / `--index`: the same listing and exit as `sync --check`, over what git holds (spec 49 §5). */
+async function checkGitSource(o: { workspace: string; check: boolean; committed?: string | boolean; index: boolean; unavailableOk: boolean; offline: boolean; dryRun: boolean; overwriteDrift: boolean }): Promise<void> {
+  if (o.unavailableOk && o.committed === undefined && !o.index) fail("--unavailable-ok needs --committed or --index");
+  if (!o.check) fail("--committed and --index need --check");
+  if (o.committed !== undefined && o.index) fail("--committed and --index are exclusive");
+  if (o.dryRun || o.overwriteDrift) fail("--dry-run and --overwrite-drift cannot be combined with --committed or --index: nothing is written");
+  const notChecked = (reason: string) => {
+    console.error(`not checked: ${reason}`);
+  };
+  const root = path.resolve(o.workspace);
+  let source: GitSource;
+  try {
+    source = await gitSource(root, o.index ? { index: true } : { rev: typeof o.committed === "string" ? o.committed : "HEAD" });
+  } catch (e) {
+    if (e instanceof NotACommitError && o.unavailableOk) return notChecked(e.message);
+    if (e instanceof GitSourceRefusal) fail(e.message);
+    throw e;
+  }
+  try {
+    const named = source.label.name === "commit" ? `commit ${source.label.short}` : "index";
+    const merged = await readConfigFrom(root, source);
+    if (merged === null) {
+      const reason = `${source.label.name === "commit" ? "this commit" : "the index"} has no craftar.yaml`;
+      if (o.unavailableOk) return notChecked(reason);
+      fail(reason);
+    }
+    let ws: Workspace;
+    try {
+      ws = await loadForgeFor(root, merged!, load(o, o.unavailableOk ? "read" : "sync"));
+    } catch (e) {
+      if (e instanceof ForgeUnavailableError && o.unavailableOk) return notChecked(e.message);
+      throw e;
+    }
+    ws.source = source;
+    const p = await plan(ws);
+    const lock = await readLock(root, source);
+    const st = await status(ws, p, lock);
+    const bad = st.filter((s) => !["unchanged", "adopt"].includes(s.state));
+    printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true, forgeLine(ws, lock));
+    if (bad.length) console.log(pc.red(`\n${bad.length} file(s) out of sync`));
+    const refused = [refusalBlock(unsetDeclared(p)), budgetRefusalBlock(p)].some(Boolean);
+    if (refused || bad.length) process.exitCode = 1;
+    else console.log(pc.green(`\n${named} in sync`));
+  } finally {
+    await source.close();
+  }
+}
 
 /** What `craftar diff` prints for one file `sync --check` refuses; `drift show <path>` prints the same for a drifted one. */
 async function printFileDiff(root: string, s: FileStatus, opts: { isPrimary?: boolean } = {}): Promise<boolean> {

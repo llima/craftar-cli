@@ -1,10 +1,12 @@
 /**
  * External-process execution (design D3): every external program craftar runs — git, dotnet, docker — is run
  * from here; `process.env` is read only as `execProgram`'s default. capture (stdout of a finished process,
- * execFile), execProgram (stdout and stderr, resolved by onPath) and spawnInherited (inherited output, spawn).
+ * execFile), execProgram (stdout and stderr, resolved by onPath), spawnInherited (inherited output, spawn),
+ * streamProgram (stdin written, stdout read, whatever the exit) and openProgram (a child craftar talks to).
  * A program is resolved by onPath before it is run. No shell.
  */
 import { execFile, spawn } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
 import { promisify } from "node:util";
 import { promises as fs, constants } from "node:fs";
 import path from "node:path";
@@ -28,6 +30,29 @@ const PROBE_TIMEOUT_MS = 30_000;
 const WIN_EXTENSIONS = [".exe", ".com"];
 
 const WIN = process.platform === "win32";
+
+/**
+ * The git variables that say which repository to act on (spec 49 §3, §5.5). These are cleared from the environment
+ * when craftar starts git so that a craftar command run from inside a git hook sees its own repositories, not
+ * the hook's caller. Configuration variables (`GIT_CONFIG`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`) stay.
+ */
+export const LOCATION_VARIABLES = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_PREFIX",
+  "GIT_IMPLICIT_WORK_TREE",
+  "GIT_GRAFT_FILE",
+  "GIT_SHALLOW_FILE",
+  "GIT_NO_REPLACE_OBJECTS",
+  "GIT_REPLACE_REF_BASE",
+] as const;
+
+/** Set for O(1) lookup, upper-case for win32 comparison. */
+const LOCATION_SET = new Set(LOCATION_VARIABLES.map((v) => v.toUpperCase()));
 
 /**
  * Whether `entry` is `<dir>/node_modules/.bin` for `cwd` or a directory above it — the entries `npm` and `npx`
@@ -88,14 +113,28 @@ function pathOf(env: NodeJS.ProcessEnv): string | undefined {
  * Only the PATH key is replaced — on win32 every spelling of it, by one `PATH`; elsewhere `Path` and `path` are
  * other variables.
  */
-function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function childEnv(env: NodeJS.ProcessEnv, program: string, opts: { keepIndexFile?: boolean } = {}): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = {};
+  const git = isGitProgram(program);
   for (const [k, v] of Object.entries(env)) {
-    if ((WIN ? k.toUpperCase() : k) !== "PATH") result[k] = v;
+    const name = WIN ? k.toUpperCase() : k;
+    if (name === "PATH") continue;
+    if (git && LOCATION_SET.has(name)) {
+      // A relative value would be read against the `-C` directory; the caller meant its own.
+      if (opts.keepIndexFile && name === "GIT_INDEX_FILE" && v !== undefined) result[k] = path.resolve(process.cwd(), v);
+      continue;
+    }
+    result[k] = v;
   }
   const entries = pathEntries(pathOf(env) ?? "");
   if (WIN || entries.length > 0) result.PATH = entries.join(path.delimiter);
   return result;
+}
+
+/** Whether `file` is named `git` (`git.exe` or `git.com` on win32, the names `onPath` takes, without case), given by name or by an absolute path. */
+function isGitProgram(file: string): boolean {
+  const name = path.basename(file);
+  return WIN ? ["git", "git.exe", "git.com"].includes(name.toLowerCase()) : name === "git";
 }
 
 /** A file; off win32 also executable; any error → false. */
@@ -144,18 +183,23 @@ export interface ExecOptions {
   cwd?: string;
   maxBuffer?: number;
   timeout?: number;
+  /** When true, keep `GIT_INDEX_FILE` for git children (made absolute against cwd). */
+  keepIndexFile?: boolean;
 }
 
 /**
  * stdout and stderr of a program that exited 0, the program resolved by `onPath` over `opts.env` (the process's
  * environment when none is given) — never by the platform's lookup. Rejects as `execFile` does: with `code`,
  * `stdout` and `stderr` on a non-zero exit, and with `code: "ENOENT"` when the program is on no absolute PATH entry.
+ * For git children, location variables are removed from the environment (spec 49 §5.5); pass `keepIndexFile: true`
+ * to preserve `GIT_INDEX_FILE`.
  */
 export async function execProgram(file: string, args: string[], opts: ExecOptions = {}): Promise<{ stdout: string; stderr: string }> {
   const env = opts.env ?? process.env;
   const program = await onPath(file, env);
   if (program === null) throw notOnPath(file);
-  const { stdout, stderr } = await promisify(execFile)(program, args, { ...opts, env: childEnv(env), encoding: "utf8" });
+  const { keepIndexFile, ...rest } = opts;
+  const { stdout, stderr } = await promisify(execFile)(program, args, { ...rest, env: childEnv(env, program, { keepIndexFile }), encoding: "utf8" });
   return { stdout, stderr };
 }
 
@@ -163,14 +207,14 @@ export async function execProgram(file: string, args: string[], opts: ExecOption
 export const capture: Probe = async (file, args, env, cwd) =>
   (await execProgram(file, args, { env, cwd, timeout: PROBE_TIMEOUT_MS })).stdout;
 
-/** Output inherited, stdin as asked; resolves with the exit code (null when killed by a signal); rejects when it cannot start. No shell. */
+/** Output inherited, stdin as asked; resolves with the exit code (null when killed by a signal); rejects when it cannot start. No shell. For git children, location variables are removed (spec 49 §5.5). */
 export const spawnInherited: Runner = async (req) => {
   const program = await onPath(req.file, req.env);
   if (program === null) throw notOnPath(req.file);
   return new Promise((resolve, reject) => {
     const child = spawn(program, req.args, {
       cwd: req.cwd,
-      env: childEnv(req.env),
+      env: childEnv(req.env, program),
       stdio: [req.stdin, "inherit", "inherit"],
     });
     child.on("error", reject);
@@ -181,24 +225,63 @@ export const spawnInherited: Runner = async (req) => {
 /**
  * Input written to a program's stdin, resolved with its exit code and stdout whatever the code: a caller that keeps what
  * a failing program printed before it stopped needs both (spec 49 §5.2). Rejects with ENOENT as `execProgram` does. The
- * program's stderr is dropped, so nothing it quotes can reach an output.
+ * program's stderr is dropped, so nothing it quotes can reach an output. For git children, location variables are
+ * removed (spec 49 §5.5); pass `keepIndexFile: true` to preserve `GIT_INDEX_FILE`.
  */
 export async function streamProgram(
   file: string,
   args: string[],
-  opts: { input: string; env?: NodeJS.ProcessEnv; cwd?: string },
+  opts: { input: string; env?: NodeJS.ProcessEnv; cwd?: string; keepIndexFile?: boolean },
 ): Promise<{ code: number | null; stdout: string }> {
+  const child = await openProgram(file, args, opts);
+  const chunks: Buffer[] = [];
+  child.stdout.on("data", (d: Buffer) => chunks.push(d));
+  child.stdin.write(opts.input);
+  const code = await child.close();
+  return { code, stdout: Buffer.concat(chunks).toString("utf8") };
+}
+
+/** A program craftar talks to: see `openProgram`. */
+export interface OpenedProgram {
+  stdin: Writable;
+  /** Raw Buffers. */
+  stdout: Readable;
+  /** Ends stdin and resolves with the exit code (null when killed by a signal), once stdout has ended. */
+  close(): Promise<number | null>;
+}
+
+/**
+ * A running program with its stdin and stdout open, for one craftar sends several requests to (`cat-file --batch`,
+ * spec 49 §5.2). Resolved by `onPath`, no shell, environment through `childEnv`; stderr is dropped, so nothing it quotes
+ * can reach an output. Rejects with ENOENT as `execProgram` does, and when the program cannot start.
+ */
+export async function openProgram(
+  file: string,
+  args: string[],
+  opts: { env?: NodeJS.ProcessEnv; cwd?: string; keepIndexFile?: boolean } = {},
+): Promise<OpenedProgram> {
   const env = opts.env ?? process.env;
   const program = await onPath(file, env);
   if (program === null) throw notOnPath(file);
-  return new Promise((resolve, reject) => {
-    const child = spawn(program, args, { cwd: opts.cwd, env: childEnv(env), stdio: ["pipe", "pipe", "ignore"] });
-    const chunks: Buffer[] = [];
-    child.stdout.on("data", (d: Buffer) => chunks.push(d));
-    // A program that stops before reading its stdin (a failed git) ends the pipe: its exit says so, not this error.
-    child.stdin.on("error", () => {});
+  const child = spawn(program, args, { cwd: opts.cwd, env: childEnv(env, program, { keepIndexFile: opts.keepIndexFile }), stdio: ["pipe", "pipe", "ignore"] });
+  // A program that stops before reading its stdin (a failed git) ends the pipe: its exit says so, not this error.
+  child.stdin.on("error", () => {});
+  const closed = new Promise<number | null>((resolve, reject) => {
     child.on("error", reject);
-    child.on("close", (code) => resolve({ code, stdout: Buffer.concat(chunks).toString("utf8") }));
-    child.stdin.end(opts.input);
+    child.on("close", resolve);
   });
+  // A failed start rejects below; this promise is then never asked.
+  closed.catch(() => {});
+  await new Promise<void>((resolve, reject) => {
+    child.once("spawn", resolve);
+    child.once("error", reject);
+  });
+  return {
+    stdin: child.stdin,
+    stdout: child.stdout,
+    close: () => {
+      child.stdin.end();
+      return closed;
+    },
+  };
 }

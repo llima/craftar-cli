@@ -14,7 +14,7 @@ import path from "node:path";
 import type { Profile } from "../schema/index.js";
 import { realpathOfNearest } from "./forge.js";
 import { nameShaped } from "./integrations.js";
-import { onPath, spawnInherited, type Runner } from "./proc.js";
+import { LOCATION_VARIABLES, onPath, spawnInherited, type Runner } from "./proc.js";
 import { cloneArgs, isRepoName, profileRepos, type RepoEntry } from "./repos.js";
 
 /* ------------------------------------------------------------------ */
@@ -44,24 +44,15 @@ const WIN = process.platform === "win32";
 
 /**
  * The repository-local environment variables git itself clears when it moves to another repository.
- * This is what `git rev-parse --local-env-vars` lists (git 2.53).
+ * This is what `git rev-parse --local-env-vars` lists (git 2.53): the location variables plus
+ * configuration entries (`GIT_CONFIG`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`).
+ * Built from `LOCATION_VARIABLES` so there is no second spelling (spec 49 §5.5).
  */
-const GIT_LOCAL_ENV = [
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+export const GIT_LOCAL_ENV = [
+  ...LOCATION_VARIABLES,
   "GIT_CONFIG",
   "GIT_CONFIG_PARAMETERS",
   "GIT_CONFIG_COUNT",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_IMPLICIT_WORK_TREE",
-  "GIT_GRAFT_FILE",
-  "GIT_INDEX_FILE",
-  "GIT_NO_REPLACE_OBJECTS",
-  "GIT_REPLACE_REF_BASE",
-  "GIT_PREFIX",
-  "GIT_SHALLOW_FILE",
-  "GIT_COMMON_DIR",
 ] as const;
 
 /** Set for O(1) lookup, upper-case for win32. */
