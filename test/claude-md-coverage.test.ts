@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync, promises as fs, realpathSync } from "node:fs";
+import { lstatSync, promises as fs, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
@@ -145,7 +145,9 @@ describe("claudeMdAncestors: the three files of every directory above, by lstat 
     const unc: string[] = [];
     await claudeMdAncestors("\\\\host\\share\\w", async (f) => (unc.push(f), false));
     expect(unc).toEqual(["\\\\host\\share\\CLAUDE.md", "\\\\host\\share\\CLAUDE.local.md", "\\\\host\\share\\.claude\\CLAUDE.md"]);
-    expect(await claudeMdAncestors("C:\\Users\\u\\w", async () => true, "c:\\users\\U\\.CLAUDE\\claude.md")).not.toContain("C:\\Users\\u\\.claude\\CLAUDE.md");
+    const folded = await claudeMdAncestors("C:\\Users\\u\\w", async () => true, "c:\\users\\U\\.CLAUDE\\claude.md");
+    expect(folded).not.toContain("C:\\Users\\u\\.claude\\CLAUDE.md");
+    expect(folded).toContain("C:\\Users\\u\\CLAUDE.md");
   });
 });
 
@@ -302,11 +304,21 @@ describe("doctor's agents-md-primary above the root (spec 50 §4.2, §11 items 9
   });
 });
 
-// The CLI walks the real ancestors of the temporary directory: one holding any of the three files would add a line, so the
-// test is skipped there (on a developer machine with a CLAUDE.md above the temporary directory, for one).
+// The CLI child has no seam: like any typed `doctor`, it lstats the three files in each real directory above the
+// temporary directory, never reading one (on macOS and Windows that walk crosses the home directory, so a developer's
+// own ~/.claude/CLAUDE.md is lstat'd there, unless CLAUDE_CONFIG_DIR — set by the test setup — names it). Any file found
+// there would add a line, so the test is skipped, by the same lstat predicate doctor uses; Linux CI has none above /tmp.
 const realAncestorFile = (() => {
+  const present = (f: string) => {
+    try {
+      lstatSync(f);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   for (let d = realpathSync(os.tmpdir()); ; d = path.dirname(d)) {
-    if (["CLAUDE.md", "CLAUDE.local.md", path.join(".claude", "CLAUDE.md")].some((f) => existsSync(path.join(d, f)))) return true;
+    if (["CLAUDE.md", "CLAUDE.local.md", path.join(".claude", "CLAUDE.md")].some((f) => present(path.join(d, f)))) return true;
     if (d === path.dirname(d)) return false;
   }
 })();
