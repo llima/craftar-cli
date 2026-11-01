@@ -774,9 +774,9 @@ reposCmd
 /* ---------------------------------------------------------------- sync */
 program
   .command("sync")
-  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces); refuses, writing nothing, when a declared parameter a file cites has no value; with --check, also exits 1 when AGENTS.md is over an explicit budget; warns for a generated file git ignores (mayBeIgnored in craftar.yaml lists one kept out on purpose); refuses the whole run when a path leaves the workspace through a symbolic link")
+  .description("Generate the harness for every target from the Forge and update craftar.lock; a writing sync also records the workspace in $CRAFTAR_HOME/registry.json (see craftar workspaces); refuses, writing nothing, when a declared parameter a file cites has no value; with --check, also exits 1 when AGENTS.md is over an explicit budget; warns for a generated file git ignores (mayBeIgnored in craftar.yaml lists one kept out on purpose); refuses the whole run when a path leaves the workspace through a symbolic link, or leads into its .git or nowhere")
   .option("--workspace <dir>", "workspace root", ".")
-  .option("--check", "exit 1 when the workspace is out of date or has drift, or when AGENTS.md is over an explicit budget, or when a path leaves the workspace through a symbolic link (CI mode)", false)
+  .option("--check", "exit 1 when the workspace is out of date or has drift, or when AGENTS.md is over an explicit budget, or when a path leaves the workspace through a symbolic link, or leads into its .git or nowhere (CI mode)", false)
   .option("--dry-run", "show the plan, write nothing", false)
   .option("--overwrite-drift", "regenerate files that were hand-edited (their edits are lost)", false)
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)

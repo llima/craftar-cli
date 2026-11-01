@@ -397,6 +397,7 @@ describe("every surface that answers would sync fail", () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("declared parameter(s) have no value — craftar.yaml written, sync not run");
     expect(r.stderr).toContain("path(s) craftar does not follow — craftar.yaml written, sync not run");
+    quiet(r);
   });
 
   it("doctor: workspace-links at error, one per path, and status leaves those rows out", async () => {
