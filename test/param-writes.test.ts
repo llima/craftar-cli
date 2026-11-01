@@ -36,6 +36,19 @@ async function check(forge: Awaited<ReturnType<typeof forgeOf>>, extractions: Ex
 const err = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => e.message);
 
 describe("checkParamWrites — the YAML edits (spec 09 §6.4)", () => {
+  it("accepts a profile holding a long one-line section (spec 50 Part C)", async () => {
+    const line = `name: acme\nrecipes:\n  - base--acme\nsections:\n  rule/other:\n    a: "line one of a section that is long enough\\nline two of it\\n"\n`;
+    const forge = await forgeOf(spec(), { "profiles/acme/profile.yaml": line });
+    const w = await check(forge, [ext("k", "globex-api", "acme-api")]);
+    expect(w.profile!.content).toBe(`${line}params:\n  k: acme-api\n`);
+  });
+
+  it("a value that does not read back names the key and the kind, not the value (spec 50 §6.2)", async () => {
+    const forge = await forgeOf(spec());
+    const m = await err(check(forge, [ext("k", "globex-api", "  \n")]));
+    expect(m).toContain("in place (the edit does not read back as exactly the new values: params › k reads back changed, whitespace only)");
+  });
+
   it("declares the default in ingredient.yaml and sets the value in the profile, quoting what YAML would retype", async () => {
     const forge = await forgeOf(spec());
     const w = await check(forge, [ext("deploy.api", "globex-api", "acme-api"), ext("port", "8080", "9090")]);

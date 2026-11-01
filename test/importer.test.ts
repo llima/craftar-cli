@@ -1004,7 +1004,7 @@ describe("template-aware import — --write-config merges craftar.yaml (spec 10 
     const t = await setup();
     await writeFiles(t.ws("a"), { ".claude/rules/a.md": "# A\n", "craftar.yaml": "forge: x      # aligned\nprofile: a\n" });
     const err = await fail(imp(t, "a", "a"));
-    expect(err?.message).toContain("import: cannot edit craftar.yaml in place (it does not round-trip unchanged through the YAML writer) — reformat it by hand and re-run");
+    expect(err?.message).toContain("import: cannot edit craftar.yaml in place (it does not round-trip unchanged through the YAML writer: line 1, under forge) — reformat it by hand and re-run");
     expect(err?.message).toContain("The Forge was left untouched.");
     expect(await exists(t.forge)).toBe(false);
   });
@@ -1377,7 +1377,7 @@ describe("section-aware import — the manifest's schema (spec 11 §6.14, Ruling
     const before = await snapshot(t.forge);
     const e = await fail(importInto(t.forge, t.ws("acme"), "acme"));
     expect(e?.message).toContain(
-      "import: cannot edit craftar.forge.yaml in place (it does not round-trip unchanged through the YAML writer) — set schema: 2 by hand, commit, and re-run",
+      "import: cannot edit craftar.forge.yaml in place (it does not round-trip unchanged through the YAML writer: line 1, under name) — set schema: 2 by hand, commit, and re-run",
     );
     expect(e?.message).toContain("The Forge was left untouched.");
     expect(await snapshot(t.forge)).toEqual(before);

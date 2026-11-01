@@ -10,7 +10,7 @@ import { resolve, sectionKey } from "./resolve.js";
 import { errorText } from "./schema-fault.js";
 import { canonicalValue } from "./sections.js";
 import type { SectionExtraction, WriteJournal } from "./unify.js";
-import { editYamlText } from "./yaml-edit.js";
+import { editYamlText, readBackDifference } from "./yaml-edit.js";
 import { deepMerge } from "./merge.js";
 import { parseYamlText } from "./yaml-read.js";
 
@@ -230,7 +230,7 @@ export async function checkParamWrites(
     const after = parseOr(label, () => IngredientSchema.parse(parseYamlText(label, content)));
     const expected = { ...before, params: { ...(before.params ?? {}), ...Object.fromEntries(declare.map((e) => [e.key, { default: e.default }])) } };
     if (!isDeepStrictEqual(after, expected) || declare.some((e) => !same(after.params?.[e.key]?.default, e.default))) {
-      throw new Error(`unify: cannot edit ${label} in place (the edit does not read back as exactly the new declarations)`);
+      throw new Error(`unify: cannot edit ${label} in place (the edit does not read back as exactly the new declarations${readBackSuffix(after, expected)})`);
     }
     ingredientYaml = { abs, content };
   }
@@ -255,19 +255,14 @@ export async function checkParamWrites(
       params: { ...before.params, ...Object.fromEntries(assign.map((e) => [e.key, e.value])) },
       sections: expectedSections,
     };
-    if (!isDeepStrictEqual(after, expected)) {
-      throw new Error(`unify: cannot edit ${label} in place (the edit does not read back as exactly the new values)`);
-    }
+    const notTheValues = () => new Error(`unify: cannot edit ${label} in place (the edit does not read back as exactly the new values${readBackSuffix(after, expected)})`);
+    if (!isDeepStrictEqual(after, expected)) throw notTheValues();
     // Also verify each value reads back exactly (string equality)
-    if (assign.some((e) => !same(after.params[e.key], e.value))) {
-      throw new Error(`unify: cannot edit ${label} in place (the edit does not read back as exactly the new values)`);
-    }
+    if (assign.some((e) => !same(after.params[e.key], e.value))) throw notTheValues();
     // For sections, verify each value reads back exactly
     for (const s of sectionAssign) {
       const afterVal = after.sections[s.key]?.[s.name];
-      if (afterVal !== s.value) {
-        throw new Error(`unify: cannot edit ${label} in place (the edit does not read back as exactly the new values)`);
-      }
+      if (afterVal !== s.value) throw notTheValues();
     }
     profileWrite = { abs: profileAbs, content };
   }
@@ -300,6 +295,12 @@ export async function checkParamWrites(
     written: extractions.map((e) => e.key).filter((k) => written.has(k)),
     sectionsWritten,
   };
+}
+
+/** `: <key> reads back <kind>`, or nothing when the two compare equal under the schema's own reading. */
+function readBackSuffix(after: unknown, expected: unknown): string {
+  const found = readBackDifference(after, expected);
+  return found ? `: ${found}` : "";
 }
 
 function parseOr<T>(label: string, parse: () => T): T {

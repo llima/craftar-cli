@@ -3886,7 +3886,7 @@ describe("cli — the workspace registry (spec 21 §10.3)", () => {
 describe("cli — add recipe / remove recipe (spec 22)", () => {
   const R2 = (x: string) => `error: recipe "${x}" not found in this Forge (base, front-a, front-b, front-c, stack-api)\n`;
   const R6 = (cmd: string) =>
-    `error: ${cmd}: cannot edit craftar.yaml in place (it does not round-trip unchanged through the YAML writer) — reformat it by hand and re-run\n`;
+    `error: ${cmd}: cannot edit craftar.yaml in place (it does not round-trip unchanged through the YAML writer: line 3, under recipes) — reformat it by hand and re-run\n`;
   const BASE_YAML = "forge: ../forge\nprofile: acme\n";
 
   /** Spec 22 §9's Forge, profile acme = [stack-api, front-a]; synced unless asked not to. */
@@ -6125,7 +6125,7 @@ targets:
     expect(out.recipes.kept).toEqual([
       {
         recipe: "base--acme",
-        reason: "unify: cannot edit profiles/acme/profile.yaml in place (it does not round-trip unchanged through the YAML writer) — reformat it by hand, commit, and re-run",
+        reason: "unify: cannot edit profiles/acme/profile.yaml in place (it does not round-trip unchanged through the YAML writer: line 2, under recipes) — reformat it by hand, commit, and re-run",
       },
     ]);
 

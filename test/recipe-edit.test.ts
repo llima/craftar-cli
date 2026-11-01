@@ -351,12 +351,12 @@ describe("editRecipesText (spec 22 §5.1, §5.2, §6 items 1–3)", () => {
   });
   it("the README's padded flow form does not round-trip (R6)", () => {
     expect(() => editRecipesText("forge: ../forge\nprofile: acme\nrecipes: { add: [], remove: [] }\n", after, "add recipe")).toThrow(
-      new Error("add recipe: cannot edit craftar.yaml in place (it does not round-trip unchanged through the YAML writer) — reformat it by hand and re-run"),
+      new Error("add recipe: cannot edit craftar.yaml in place (it does not round-trip unchanged through the YAML writer: line 3, under recipes) — reformat it by hand and re-run"),
     );
   });
   it("names the command it runs for (R6)", () => {
     expect(() => editRecipesText("forge: ../forge\nprofile: acme   # aligned\nrecipes: {add: [], remove: []}\n", after, "remove recipe")).toThrow(
-      new Error("remove recipe: cannot edit craftar.yaml in place (it does not round-trip unchanged through the YAML writer) — reformat it by hand and re-run"),
+      new Error("remove recipe: cannot edit craftar.yaml in place (it does not round-trip unchanged through the YAML writer: line 2, under profile) — reformat it by hand and re-run"),
     );
   });
 });
