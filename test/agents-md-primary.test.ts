@@ -1,6 +1,4 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { acmePrimary } from "./helpers/agents-md-primary.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
@@ -549,7 +547,7 @@ describe("claudeMdBlocks unit (spec 41 §4.7)", () => {
   it("absent → {imports: false, blocking: []}", async () => {
     const { claudeMdBlocks } = await import("../src/core/sync.js");
     const result = await claudeMdBlocks(makeReadExisting({}));
-    expect(result).toEqual({ imports: false, blocking: [] });
+    expect(result).toEqual({ imports: false, importedBy: null, blocking: [] });
   });
 
   it("CLAUDE.md with '# x\\n@AGENTS.md  \\n' → imports", async () => {
@@ -562,13 +560,13 @@ describe("claudeMdBlocks unit (spec 41 §4.7)", () => {
   it("CLAUDE.md starting with a UTF-8 BOM before @AGENTS.md → imports (measured: Claude Code 2.1.310 reads it)", async () => {
     const { claudeMdBlocks } = await import("../src/core/sync.js");
     const result = await claudeMdBlocks(makeReadExisting({ "CLAUDE.md": "\uFEFF@AGENTS.md\n" }));
-    expect(result).toEqual({ imports: true, blocking: [] });
+    expect(result).toEqual({ imports: true, importedBy: "CLAUDE.md", blocking: [] });
   });
 
   it(".claude/CLAUDE.md starting with a UTF-8 BOM before @../AGENTS.md → imports", async () => {
     const { claudeMdBlocks } = await import("../src/core/sync.js");
     const result = await claudeMdBlocks(makeReadExisting({ ".claude/CLAUDE.md": "\uFEFF@../AGENTS.md\r\n" }));
-    expect(result).toEqual({ imports: true, blocking: [] });
+    expect(result).toEqual({ imports: true, importedBy: ".claude/CLAUDE.md", blocking: [] });
   });
 
   it("CLAUDE.md with '@AGENTS.md \\r\\n' (space before CRLF) → imports", async () => {
@@ -591,14 +589,14 @@ describe("claudeMdBlocks unit (spec 41 §4.7)", () => {
     const { claudeMdBlocks } = await import("../src/core/sync.js");
     for (const line of ["@AGENTS.md\n", "@./AGENTS.md\n"]) {
       const result = await claudeMdBlocks(makeReadExisting({ ".claude/CLAUDE.md": line }));
-      expect(result).toEqual({ imports: false, blocking: [".claude/CLAUDE.md"] });
+      expect(result).toEqual({ imports: false, importedBy: null, blocking: [".claude/CLAUDE.md"] });
     }
   });
 
   it("CLAUDE.md with '@./AGENTS.md' → imports; CLAUDE.md with '@../AGENTS.md' → blocking", async () => {
     const { claudeMdBlocks } = await import("../src/core/sync.js");
     expect((await claudeMdBlocks(makeReadExisting({ "CLAUDE.md": "@./AGENTS.md\n" }))).imports).toBe(true);
-    expect(await claudeMdBlocks(makeReadExisting({ "CLAUDE.md": "@../AGENTS.md\n" }))).toEqual({ imports: false, blocking: ["CLAUDE.md"] });
+    expect(await claudeMdBlocks(makeReadExisting({ "CLAUDE.md": "@../AGENTS.md\n" }))).toEqual({ imports: false, importedBy: null, blocking: ["CLAUDE.md"] });
   });
 
   it("CLAUDE.md '# notes\\n' → blocking ['CLAUDE.md']", async () => {
@@ -705,6 +703,8 @@ describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.6–§
 
     const home = await tmpDir("craftar-doctor-home-");
     cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    // Spec 50 §11: the walk above the workspace stays inside the scenario, and the user's directory is a temporary one.
+    const inside = (await fs.realpath(path.dirname(wsRoot))) + path.sep;
 
     return runDoctor({
       version: "0.0.0",
@@ -716,6 +716,8 @@ describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.6–§
       env: {},
       nodeVersion: "22.11.0",
       gitVersion: async () => "2.53.0",
+      claudeUserDir: path.join(home, "claude"),
+      claudeMdExists: (f) => (f.startsWith(inside) ? fs.lstat(f).then(() => true, () => false) : Promise.resolve(false)),
     });
   }
 
@@ -759,14 +761,14 @@ describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.6–§
     expect(planFindings).toHaveLength(0);
   });
 
-  it("4. mode on, CLAUDE.md with @AGENTS.md → exactly one agents-md-primary line, level ok, AGENTS.md is imported by CLAUDE.md", async () => {
+  it("4. mode on, CLAUDE.md with @AGENTS.md → exactly one agents-md-primary line, level ok, naming CLAUDE.md (spec 50 §4.1)", async () => {
     const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
     const report = await runDoc(s.wsRoot, { "CLAUDE.md": "@AGENTS.md\n" });
 
     const primaryChecks = report.checks.filter((c) => c.id === "agents-md-primary");
     expect(primaryChecks).toHaveLength(1);
     expect(primaryChecks[0].level).toBe("ok");
-    expect(primaryChecks[0].message).toBe("AGENTS.md is imported by CLAUDE.md");
+    expect(primaryChecks[0].message).toBe("AGENTS.md arrives through the import in CLAUDE.md");
   });
 
   it("5. ancestor: CLAUDE.md in parent directory → agents-md-primary warn naming the absolute path", async () => {
@@ -788,14 +790,8 @@ describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.6–§
     expect(ancestorCheck).toBeDefined();
   });
 
-  // The scenario lives under os.tmpdir(): a CLAUDE.md in one of its real ancestors would make this case a warn, not an ok.
-  const realAncestorClaude = (() => {
-    for (let d = os.tmpdir(); ; d = path.dirname(d)) {
-      if (existsSync(path.join(d, "CLAUDE.md"))) return true;
-      if (d === path.dirname(d)) return false;
-    }
-  })();
-  it.skipIf(realAncestorClaude)("6. mode on, nothing at root and no ancestor CLAUDE.md → one ok: nothing keeps Claude Code from reading AGENTS.md", async () => {
+  // The walk above the workspace is confined to the scenario (runDoc), so no real ancestor can change this case.
+  it("6. mode on, nothing at root and no ancestor CLAUDE.md → one ok: nothing keeps Claude Code from reading AGENTS.md", async () => {
     const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true } }));
     const report = await runDoc(s.wsRoot);
     const primaryChecks = report.checks.filter((c) => c.id === "agents-md-primary");
@@ -809,7 +805,9 @@ describe("agents-md-primary and kiro-resources doctor checks (spec 41 §4.6–§
     const seen: string[] = [];
     const found = await claudeMdAncestors(ws, async (f) => (seen.push(f), f === path.join(root, "CLAUDE.md")));
     expect(found).toEqual([path.join(root, "CLAUDE.md")]);
-    expect(seen).toEqual([path.join(root, "a", "b", "CLAUDE.md"), path.join(root, "a", "CLAUDE.md"), path.join(root, "CLAUDE.md")]);
+    // Since spec 50 §4.2 each directory is asked for three files, up to and including the file-system root.
+    const three = (d: string) => [path.join(d, "CLAUDE.md"), path.join(d, "CLAUDE.local.md"), path.join(d, ".claude", "CLAUDE.md")];
+    expect(seen).toEqual([...three(path.join(root, "a", "b")), ...three(path.join(root, "a")), ...three(root)]);
   });
 });
 

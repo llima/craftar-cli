@@ -5,7 +5,7 @@ import path from "node:path";
 import { escapeLine, escapingRows } from "./contain.js";
 import { ENV_NAME, type ForgeSchema, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
-import { exists } from "./forge.js";
+import { exists, realpathOfNearest } from "./forge.js";
 import { hookFindsCraftar, hooksStatus, HooksUnreadable } from "./git-hooks.js";
 import { generatedIgnored, IGNORED_FIX, staleLine, UNCHECKED_LINE } from "./generated-ignored.js";
 import { renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix } from "./mcp-server.js";
@@ -36,6 +36,8 @@ export interface Check {
   level: CheckLevel;
   message: string;
   fix: string | null;
+  /** Only on an `agents-md-primary` line that names a file (spec 50 §15 item 2): the file imports `AGENTS.md`, or may block it. */
+  case?: "imports" | "blocking";
 }
 
 export interface DoctorReport {
@@ -77,6 +79,11 @@ export interface DoctorOptions {
    * Defaults to `opts.env.CLAUDE_CONFIG_DIR` if set, else `path.join(os.homedir(), ".claude")`.
    */
   claudeUserDir?: string;
+  /**
+   * Test seam for `agents-md-primary`'s walk above the workspace (spec 50 §11): whether a file exists, by `lstat` only;
+   * absent, `lstat` itself.
+   */
+  claudeMdExists?: (file: string) => Promise<boolean>;
   /** Run `dotnet --version` in a directory of its own (`dotnetVersionInOwnDir`); absent, at the workspace root. */
   dotnetOwnDir?: boolean;
   /** Test seam for the dotnet probe (which directory it recorded). */
@@ -101,7 +108,8 @@ const CACHE_FIX = "craftar cache prune";
 export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
   const checks: Check[] = [];
   const m = (id: string, level: CheckLevel, message: string, fix: string | null = null) => checks.push({ id, scope: "machine", level, message, fix });
-  const w = (id: string, level: CheckLevel, message: string, fix: string | null = null) => checks.push({ id, scope: "workspace", level, message, fix });
+  const w = (id: string, level: CheckLevel, message: string, fix: string | null = null, kase?: Check["case"]) =>
+    checks.push(kase === undefined ? { id, scope: "workspace", level, message, fix } : { id, scope: "workspace", level, message, fix, case: kase });
   const env = opts.env ?? process.env;
   // Loaded as given, as every other command loads it (a relative `forge:` reads from the path the user named);
   // the real path is what the report, `forge-inside` and `registered` compare (§4.5).
@@ -232,7 +240,7 @@ async function workspaceChecks(
   reg: Registry | null,
   registryWhyNot: string | null,
   opts: DoctorOptions,
-  w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void,
+  w: (id: string, level: CheckLevel, message: string, fix?: string | null, kase?: Check["case"]) => void,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
   // `git` missing with a remote Forge is git's error: the checks that need the load are not run (§4.2).
@@ -292,7 +300,7 @@ async function workspaceChecks(
       // Also exclude the kiro resources warning — it is reported by kiro-resources
       if (p.kiroResources?.warning) owned.add(p.kiroResources.warning);
       // Compute claudeMdBlocks early so we can add its warning to owned before the plan filter
-      let claudeMdBlocksResult: { imports: boolean; blocking: string[] } | null = null;
+      let claudeMdBlocksResult: Awaited<ReturnType<typeof claudeMdBlocks>> | null = null;
       if (p.resolution.primary && p.resolution.targets.includes("claude-code")) {
         const readExisting = async (rel: string): Promise<Buffer | null> => {
           try {
@@ -356,28 +364,26 @@ async function workspaceChecks(
         const blocks = claudeMdBlocksResult;
 
         if (blocks.imports) {
-          // imports → ONE ok: "AGENTS.md is imported by CLAUDE.md"
-          w("agents-md-primary", "ok", "AGENTS.md is imported by CLAUDE.md", null);
+          // The root imports: one ok naming the file that does (spec 50 §4.1); nothing above is asked (§4.2).
+          w("agents-md-primary", "ok", `AGENTS.md arrives through the import in ${blocks.importedBy}`, null, "imports");
         } else {
           // each root blocking file → one warn
           for (const file of blocks.blocking) {
-            w("agents-md-primary", "warn", claudeMdBlockedMessage(file), "add a line @AGENTS.md to CLAUDE.md");
+            w("agents-md-primary", "warn", claudeMdBlockedMessage(file), "add a line @AGENTS.md to CLAUDE.md", "blocking");
           }
 
-          // Check ancestors for CLAUDE.md (not when the root imports)
-          let ancestorFound = false;
-          for (const ancestorClaudeMd of await claudeMdAncestors(root)) {
-            ancestorFound = true;
-            w(
-              "agents-md-primary",
-              "warn",
-              `agents-md.primary: ${ancestorClaudeMd} may keep Claude Code from reading AGENTS.md`,
-              "add a line @AGENTS.md to the workspace's CLAUDE.md",
-            );
-          }
+          // The three files of every directory above, by lstat only, the user's own left out (spec 50 §4.2).
+          // The walk names `<real ancestor>/.claude/CLAUDE.md` and passes through `.claude` by lstat, so the user's file
+          // is compared in that form: its parent's real path (a home through a link, an 8.3 short name), the directory's
+          // own name kept as typed, so a `.claude` that is itself a link (a dotfiles setup) still matches.
+          const userDir = claudeUserDirOf(opts, env);
+          const parent = path.dirname(userDir);
+          const userFile = path.join(await realpathOfNearest(parent).catch(() => parent), path.basename(userDir), "CLAUDE.md");
+          const ancestors = await claudeMdAncestors(root, opts.claudeMdExists, userFile);
+          for (const file of ancestors) w("agents-md-primary", "warn", claudeMdAncestorMessage(file), CLAUDE_MD_ANCESTOR_FIX, "blocking");
 
           // nothing found at all → one ok
-          if (blocks.blocking.length === 0 && !ancestorFound) {
+          if (blocks.blocking.length === 0 && ancestors.length === 0) {
             w("agents-md-primary", "ok", "nothing keeps Claude Code from reading AGENTS.md", null);
           }
         }
@@ -745,20 +751,43 @@ export function workspaceReport(report: DoctorReport): DoctorReport {
   return { version: report.version, workspace: report.workspace, fetch: report.fetch, strict: report.strict, checks, summary };
 }
 
+/** The warning for a file above the workspace (spec 50 §4.2): `may`, since the file is never read. */
+export function claudeMdAncestorMessage(file: string): string {
+  return `agents-md.primary: ${file} may keep Claude Code from reading AGENTS.md — Claude Code 2.1.277+ reads this file instead, and the always-on rules do not arrive`;
+}
+
+export const CLAUDE_MD_ANCESTOR_FIX =
+  "add a line @AGENTS.md to the workspace's CLAUDE.md, delete that file, or set Project instructions to claude-md-and-agents-md";
+
+/** The user's Claude configuration directory: the seam, else `$CLAUDE_CONFIG_DIR`, else `~/.claude` (spec 43 §6). */
+function claudeUserDirOf(opts: DoctorOptions, env: NodeJS.ProcessEnv): string {
+  return opts.claudeUserDir ?? (env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"));
+}
+
+/** Compared as the platform compares paths: without case on win32. */
+const samePathKey = (p: string) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
+
 /**
- * The `CLAUDE.md` of every directory strictly above `root`, up to and including the file-system root, that exists (spec 41
- * §4.7) — by `lstat` only, never read. `exists` is a parameter for the test that reaches the file-system root.
+ * `CLAUDE.md`, `CLAUDE.local.md` and `.claude/CLAUDE.md` of every directory strictly above `root`, up to and including the
+ * file-system root, that exist (spec 41 §4.7, spec 50 §4.2) — by `lstat` only, never read. `userFile`, the user's own
+ * `CLAUDE.md` (user-level memory), is left out. A `root` that is the file-system root has no ancestor (spec 50 edge 4).
+ * `exists` is a parameter for the tests, which never walk the real ancestors.
  */
 export async function claudeMdAncestors(
   root: string,
   exists: (file: string) => Promise<boolean> = (f) => fs.lstat(f).then(() => true, () => false),
+  userFile?: string,
 ): Promise<string[]> {
+  const user = userFile === undefined ? null : samePathKey(userFile);
   const out: string[] = [];
-  for (let dir = path.dirname(root); ; dir = path.dirname(dir)) {
-    const file = path.join(dir, "CLAUDE.md");
-    if (await exists(file)) out.push(file);
-    if (dir === path.dirname(dir)) return out;
+  for (let dir = root; dir !== path.dirname(dir); ) {
+    dir = path.dirname(dir);
+    for (const file of [path.join(dir, "CLAUDE.md"), path.join(dir, "CLAUDE.local.md"), path.join(dir, ".claude", "CLAUDE.md")]) {
+      if (user !== null && samePathKey(file) === user) continue;
+      if (await exists(file)) out.push(file);
+    }
   }
+  return out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -917,7 +946,7 @@ async function hooksRegistered(
   if (plannedEntries.length === 0) return;
 
   // Determine claudeUserDir: seam or default (spec 43 §6)
-  const claudeUserDir = opts.claudeUserDir ?? (env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"));
+  const claudeUserDir = claudeUserDirOf(opts, env);
   const useEnvLabel = Boolean(env.CLAUDE_CONFIG_DIR) && !opts.claudeUserDir;
 
   // Read settings files
