@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { POLICY, nameShown, validateDocs, type DocsCheck, type DocsReport } from "../src/core/docs-validate.js";
 import { profile, recipe, rule, scenario, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 import { removeWithRetry } from "./helpers/fs.js";
+import { remoteForge } from "./helpers/remote.js";
 
 // Spec 47 §4, §5.3, §7, §8 — the checks over a real directory, through validateDocs.
 
@@ -357,6 +358,25 @@ describe("§4.4 — policy, and the always-on checks in every case", () => {
     const r = await run(s.wsRoot);
     expect(r.checks.find((c) => c.id === "policy")).toMatchObject({ level: "error", message: POLICY.notRead("Forge"), fix: "run craftar doctor; with no cached copy, run again with --fetch" });
     expect(findings(r, "links")).toHaveLength(1);
+  });
+
+  it("a remote Forge: --fetch reads the block; a failed fetch over a cached copy is a policy warn whose fix says --fetch", async () => {
+    const remote = await remoteForge(forgeWith({ categories: [{ path: "missing" }] }));
+    cleanups.push(() => remote.cleanup());
+    const s = await ws(BROKEN, { config: { forge: remote.url } });
+    const fetched = await run(s.wsRoot, { fetch: true });
+    expect(fetched.checks.filter((c) => c.id === "policy").map((c) => `${c.level} ${c.message}`)).toEqual([`ok ${POLICY.categories(1)}`]);
+    expect(findings(fetched, "categories")).toHaveLength(1);
+    // The cached copy, read with no --fetch: no warning.
+    expect((await run(s.wsRoot)).checks.filter((c) => c.id === "policy").map((c) => c.level)).toEqual(["ok"]);
+    await fs.rename(remote.bare, `${remote.bare}.gone`);
+    const failed = await run(s.wsRoot, { fetch: true, typedWorkspace: "w" });
+    expect(failed.checks.filter((c) => c.id === "policy").map((c) => `${c.level} ${c.message} ${c.fix}`)).toEqual([
+      `warn ${POLICY.warned} run craftar doctor --workspace w --fetch`,
+      `ok ${POLICY.categories(1)} null`,
+    ]);
+    expect(JSON.stringify(failed)).not.toContain(remote.url);
+    expect(findings(failed, "links")).toHaveLength(1);
   });
 
   it("a configuration that does not read", async () => {
