@@ -82,7 +82,7 @@ steps:
         } catch { /* the check's own lines above say why */ }
       }
       const esc = (s) => s.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
-      const prop = (s) => azure ? esc(s).replace(/;/g, "%3B").replace(/\]/g, "%5D") : esc(s).replace(/:/g, "%3A").replace(/,/g, "%2C");
+      const prop = (s) => azure ? esc(s).replace(/;/g, "%3B").replace(/\]/g, "%5D").replace(/\[/g, "%5B") : esc(s).replace(/:/g, "%3A").replace(/,/g, "%2C");
       const at = (p) => prop(relative(process.cwd(), join(root, p)).replace(/\\/g, "/"));
       for (const r of rows.slice(0, 10)) console.log(azure ? `${VSO}task.logissue type=error;sourcepath=${at(r.path)}]craftar: ${r.state}` : `::error file=${at(r.path)}::craftar: ${r.state}`);
       const cell = (s) => s.replace(/[`|\r\n]/g, "?");

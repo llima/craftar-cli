@@ -270,6 +270,12 @@ function hostileFaults(source: string, vendor: Vendor): string[] {
   return faults;
 }
 
+/** The legitimate command must be the only one on its line, whatever the agent's parser does with a second. */
+function annotationPathFaults(source: string): string[] {
+  const r = runProgram(source, "azure", { check: DRIFT, status: statusJson(["##vso[task.setvariable variable=EVIL]x.sh", "##VSO[task.complete]y.sh", "##[error]z.sh"].map((p) => ({ path: p, state: "new" }))) });
+  return anno(r).filter((l) => /##(vso)?\[/gi[Symbol.match](l)!.length !== 1);
+}
+
 const VENDORS: Vendor[] = ["github", "azure"];
 const textOf = (vendor: Vendor): string => program(read(vendor === "azure" ? AZURE : GITHUB), vendor === "azure");
 const anno = (r: Run): string[] => r.stdout.split("\n").filter((l) => l.startsWith("::error") || l.startsWith("##vso[task.logissue"));
@@ -462,10 +468,17 @@ describe.each(VENDORS)("the token and hostile text under %s (spec 46 §10, 6 and
     ["the Base64 not masked", "console.log(azure ? `${VSO}task.setsecret]${basic}` : `::add-mask::${basic}`);", "", tokenFaults],
     ["the status given the check's environment", 'craftar(["status", "--json", "--offline"], childEnv)', 'craftar(["status", "--json", "--offline"], checkEnv)', tokenFaults],
     ["neuter as identity", 'const neuter = (t) => t.replace(/##(vso)?\\[/gi, (m) => m.slice(0, -1) + " [").replace(/^(\\s*)::/gm, "$1: :");', "const neuter = (t) => t;", hostileFaults],
-    ["prop as identity", 'const prop = (s) => azure ? esc(s).replace(/;/g, "%3B").replace(/\\]/g, "%5D") : esc(s).replace(/:/g, "%3A").replace(/,/g, "%2C");', "const prop = (s) => s;", hostileFaults],
+    ["prop as identity", 'const prop = (s) => azure ? esc(s).replace(/;/g, "%3B").replace(/\\]/g, "%5D").replace(/\\[/g, "%5B") : esc(s).replace(/:/g, "%3A").replace(/,/g, "%2C");', "const prop = (s) => s;", hostileFaults],
   ];
   it.each(removedSafety)("catches %s", (_name, from, to, faults) => {
     expect(faults(mutate(textOf(vendor), from, to), vendor)).not.toEqual([]);
+  });
+});
+
+describe("a hostile path in Azure's annotation (spec 46 §7)", () => {
+  it("leaves one command on the line", () => expect(annotationPathFaults(textOf("azure"))).toEqual([]));
+  it("catches [ left as written", () => {
+    expect(annotationPathFaults(mutate(textOf("azure"), '.replace(/\\[/g, "%5B")', ""))).not.toEqual([]);
   });
 });
 
