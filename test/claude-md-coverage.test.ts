@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync, promises as fs } from "node:fs";
+import { existsSync, promises as fs, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
@@ -243,6 +243,24 @@ describe("doctor's agents-md-primary above the root (spec 50 §4.2, §11 items 9
     expect(primaryLines(r)).toEqual([expect.objectContaining({ level: "warn", message: ancestorMessage(path.join(s.root, "CLAUDE.md")) })]);
   });
 
+  it("the user's own CLAUDE.md is left out when the .claude directory itself is a link (a dotfiles setup)", async () => {
+    const s = await primaryWorkspace();
+    await writeFiles(s.root, { "dotfiles/claude/CLAUDE.md": "x\n", "CLAUDE.md": "x\n" });
+    await fs.symlink(path.join(s.root, "dotfiles", "claude"), path.join(s.root, ".claude"), "junction");
+    const r = await doctorOf(s, { claudeUserDir: undefined, env: { CLAUDE_CONFIG_DIR: path.join(s.root, ".claude") } });
+    expect(primaryLines(r)).toEqual([expect.objectContaining({ level: "warn", message: ancestorMessage(path.join(s.root, "CLAUDE.md")) })]);
+  });
+
+  it("a dangling link and a directory named CLAUDE.md above: each warned by lstat, never followed (edges 1, 3)", async () => {
+    const s = await primaryWorkspace();
+    await fs.symlink(path.join(s.root, "nowhere"), path.join(s.root, "CLAUDE.local.md"));
+    await fs.mkdir(path.join(s.root, "CLAUDE.md"));
+    expect(primaryLines(await doctorOf(s))).toEqual([
+      expect.objectContaining({ level: "warn", message: ancestorMessage(path.join(s.root, "CLAUDE.md")) }),
+      expect.objectContaining({ level: "warn", message: ancestorMessage(path.join(s.root, "CLAUDE.local.md")) }),
+    ]);
+  });
+
   it("the user's own .claude/CLAUDE.md is left out when CLAUDE_CONFIG_DIR is spelled through a link", async () => {
     const s = await primaryWorkspace();
     await writeFiles(s.root, { ".claude/CLAUDE.md": "x\n", "CLAUDE.md": "x\n" });
@@ -277,7 +295,7 @@ describe("doctor's agents-md-primary above the root (spec 50 §4.2, §11 items 9
 // The CLI walks the real ancestors of the temporary directory: one holding any of the three files would add a line, so the
 // test is skipped there (on a developer machine with a CLAUDE.md above the temporary directory, for one).
 const realAncestorFile = (() => {
-  for (let d = os.tmpdir(); ; d = path.dirname(d)) {
+  for (let d = realpathSync(os.tmpdir()); ; d = path.dirname(d)) {
     if (["CLAUDE.md", "CLAUDE.local.md", path.join(".claude", "CLAUDE.md")].some((f) => existsSync(path.join(d, f)))) return true;
     if (d === path.dirname(d)) return false;
   }

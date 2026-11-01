@@ -373,10 +373,12 @@ async function workspaceChecks(
           }
 
           // The three files of every directory above, by lstat only, the user's own left out (spec 50 §4.2).
-          // The walk is over the root's real path, so the user's directory is compared by its real path too (a home
-          // through a link, an 8.3 short name); the file itself is not resolved, since a link there is not followed.
+          // The walk names `<real ancestor>/.claude/CLAUDE.md` and passes through `.claude` by lstat, so the user's file
+          // is compared in that form: its parent's real path (a home through a link, an 8.3 short name), the directory's
+          // own name kept as typed, so a `.claude` that is itself a link (a dotfiles setup) still matches.
           const userDir = claudeUserDirOf(opts, env);
-          const userFile = path.join(await realpathOfNearest(userDir).catch(() => userDir), "CLAUDE.md");
+          const parent = path.dirname(userDir);
+          const userFile = path.join(await realpathOfNearest(parent).catch(() => parent), path.basename(userDir), "CLAUDE.md");
           const ancestors = await claudeMdAncestors(root, opts.claudeMdExists, userFile);
           for (const file of ancestors) w("agents-md-primary", "warn", claudeMdAncestorMessage(file), CLAUDE_MD_ANCESTOR_FIX, "blocking");
 
