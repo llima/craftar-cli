@@ -92,6 +92,19 @@ describe("§6.1 — blocks", () => {
   });
 });
 
+describe("review round 1 — scanner nits", () => {
+  it("a reference definition cannot interrupt a paragraph; consecutive definitions at its start all count", () => {
+    expect(dests("intro text\n[ref]: nope.md\n")).toEqual([]);
+    expect(dests("[a]: x.md\n[b]: y.md\n")).toEqual(["x.md", "y.md"]);
+  });
+  it("<codex> is not a <code> element", () => {
+    expect(dests("<codex>[x](x.md)</codex>\n")).toEqual(["x.md"]);
+  });
+  it("a backslash before a closing backtick is literal inside the span", () => {
+    expect(dests("`a\\` [x](x.md) `\n")).toEqual(["x.md"]);
+  });
+});
+
 describe("§6.2 — anchors", () => {
   it("GitHub slugs, with -1 for a repeat, and <a id> / <a name>", () => {
     const s = scanMarkdown("# Hello World!\n\n## Hello World\n\nSetext Title\n---\n\n## `code` and [link](x.md)\n\n<a id=\"custom\"></a> <a name='other'>\n");

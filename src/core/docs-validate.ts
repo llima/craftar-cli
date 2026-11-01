@@ -144,7 +144,8 @@ function escapes(s: string): Uint8Array {
  */
 export function blankCode(s: string): string {
   const esc = escapes(s);
-  const runs: Array<{ start: number; len: number }> = [];
+  // A backslash escapes only an opening backtick: inside a span it is literal, so a run keeps its full length as a closer.
+  const runs: Array<{ start: number; len: number; escaped: boolean }> = [];
   for (let i = 0; i < s.length; ) {
     if (s[i] !== "`") {
       i++;
@@ -152,9 +153,7 @@ export function blankCode(s: string): string {
     }
     let j = i;
     while (j < s.length && s[j] === "`") j++;
-    // An escaped first backtick is literal; the rest of the run still counts.
-    const start = esc[i] ? i + 1 : i;
-    if (j > start) runs.push({ start, len: j - start });
+    runs.push({ start: i, len: j - i, escaped: esc[i] === 1 });
     i = j;
   }
   const byLen = new Map<number, number[]>();
@@ -163,13 +162,17 @@ export function blankCode(s: string): string {
   const ranges: Array<[number, number]> = [];
   for (let idx = 0; idx < runs.length; idx++) {
     const r = runs[idx];
-    const list = byLen.get(r.len)!;
-    let p = pointer.get(r.len) ?? 0;
+    // An escaped first backtick is literal; the rest of the run can still open.
+    const len = r.escaped ? r.len - 1 : r.len;
+    const start = r.escaped ? r.start + 1 : r.start;
+    const list = byLen.get(len);
+    if (len === 0 || !list) continue;
+    let p = pointer.get(len) ?? 0;
     while (p < list.length && list[p] <= idx) p++;
-    pointer.set(r.len, p);
+    pointer.set(len, p);
     if (p >= list.length) continue;
     const close = runs[list[p]];
-    ranges.push([r.start, close.start + close.len]);
+    ranges.push([start, close.start + close.len]);
     idx = list[p];
   }
   const blank = (from: number, to: number, out: string[]) => out.push(s.slice(from, to).replace(/[^\n]/g, " "));
@@ -190,14 +193,20 @@ export function blankCode(s: string): string {
     const pieces: string[] = [];
     let from = 0;
     const lower = open === "<code" ? out.toLowerCase() : out;
+    let search = 0;
     for (;;) {
-      const a = lower.indexOf(open, from);
+      const a = lower.indexOf(open, search);
       if (a === -1) break;
+      // `<code` names the element only when a space, `>` or the end follows (`<codex>` is another element).
+      if (open === "<code" && a + open.length < out.length && !/[\s>]/.test(out[a + open.length])) {
+        search = a + 1;
+        continue;
+      }
       const b = lower.indexOf(close, a + open.length);
       const end = b === -1 ? out.length : b + close.length;
       pieces.push(out.slice(from, a));
       blank(a, end, pieces);
-      from = end;
+      from = search = end;
     }
     pieces.push(out.slice(from));
     out = pieces.join("");
@@ -267,15 +276,15 @@ function scanParagraph(s: string, at: (pos: number) => { line: number; column: n
     }
   }
 
-  // Reference definitions: at a line's start, a destination and at most a title; never a footnote or a task box.
+  // Reference definitions: the paragraph's leading lines (one cannot interrupt a paragraph), each a destination and at most
+  // a title; never a footnote or a task box.
   let lineStart = 0;
   for (const line of s.split("\n")) {
     const m = /^ {0,3}\[([^\]\n]{1,999})\]:[ \t]*(<[^>\n]*>|\S+)(.*)$/.exec(line);
-    if (m && !m[1].startsWith("^") && !/^[ xX]$/.test(m[1]) && TITLE_OR_EMPTY(m[3])) {
-      const angle = m[2].startsWith("<");
-      const col = line.indexOf(m[2], line.indexOf("]:") + 2) + (angle ? 1 : 0);
-      scan.links.push({ dest: angle ? m[2].slice(1, -1) : m[2], markdown: true, ...at(lineStart + col) });
-    }
+    if (!m || m[1].startsWith("^") || /^[ xX]$/.test(m[1]) || !TITLE_OR_EMPTY(m[3])) break;
+    const angle = m[2].startsWith("<");
+    const col = line.indexOf(m[2], line.indexOf("]:") + 2) + (angle ? 1 : 0);
+    scan.links.push({ dest: angle ? m[2].slice(1, -1) : m[2], markdown: true, ...at(lineStart + col) });
     lineStart += line.length + 1;
   }
 
