@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { forgeFor } from "../core/profile-local.js";
 import path from "node:path";
 import { containRoot, escapeDestinationLine, escapeFileLine, escapeOf, escapeSourceLine, escapingPaths, readForgeFile, readForgeText, type ContainRoot, type Escape, type EscapingPath } from "../core/contain.js";
 import YAML from "yaml";
@@ -450,6 +451,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     WS: await workspaceSections(ws, readWs),
     pinned: new Map(),
     forge: loaded,
+    view: loaded ? forgeFor(loaded, opts.profileName) : null,
     markedBase: false,
     primaryRefs: null,
     sourceTarget: "claude-code",

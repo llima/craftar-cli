@@ -156,6 +156,9 @@ export function newProfile(forge: Forge, o: NewProfileOptions): NewProfileResult
 
   // 6. P10: the first recipe of the final list with ownedBy(forge, r) non-null (the LOADED forge, not the copy)
   for (const r of finalRecipes) {
+    // Spec 51 §4.5: a recipe local to another profile is that profile's, by location — never copied into a new one.
+    const holder = [...forge.locals].find(([, l]) => l.recipes.has(r));
+    if (holder) throw new Error(`recipe ${r} is local to profile ${holder[0]} — a new profile cannot use it; leave it out, or move it to the root with craftar forge share`);
     const owner = ownedBy(forge, r);
     if (owner !== null) {
       throw new Error(ownedRecipeRefusal(r, owner));

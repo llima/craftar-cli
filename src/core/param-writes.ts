@@ -140,7 +140,7 @@ export async function checkParamWrites(
     if (await cites(variant, e.key, forge.manifest.schema)) throw new Error(`unify: ${variant.ref} already uses {{${e.key}}}`);
     // P15, P16: a stronger layer that sets the key would override the base's default. Not for a
     // reused key: the base already renders {{key}} through every layer, so nothing it sees moves.
-    for (const [name, r] of e.reused ? [] : forge.recipes) {
+    for (const [name, r] of e.reused ? [] : [...forge.recipes, ...[...forge.locals.values()].flatMap((l) => [...l.recipes].map(([n, lr]) => [n, lr.recipe] as const))]) {
       const d = r.params[e.key]?.default;
       if (d !== undefined && !same(d, e.default)) {
         throw new Error(`unify: recipe ${name} declares ${e.key} (default ${JSON.stringify(d)}), which would override ${base.ref}'s default`);
@@ -160,14 +160,15 @@ export async function checkParamWrites(
       continue;
     }
     // P18: the new profile value would reach every other ingredient citing the key (checked Forge-wide, spec 09 Q3).
-    for (const ing of forge.ingredients.values()) {
+    // Spec 51 §4.3: a local of any profile counts — a profile value reaches its locals too.
+    for (const ing of [...forge.ingredients.values(), ...[...forge.locals.values()].flatMap((l) => [...l.ingredients.values()])]) {
       if (ing.ref === base.ref || ing.ref === variant.ref) continue;
       if (await cites(ing, e.key, forge.manifest.schema)) throw new Error(`unify: ${ing.ref} also uses {{${e.key}}} under profile ${profile} — its text would change`);
     }
     // …and so would the profile's own section values (spec 11 §6.11). Every key a Forge ingredient
     // has, the base's included: a value of this profile for the base that cites the key renders
     // literally today and would start rendering the new value (conservative, toward a refusal).
-    for (const k of new Set([...forge.ingredients.values()].map((i) => sectionKey(i.meta)))) {
+    for (const k of new Set([...forge.ingredients.values(), ...(forge.locals.get(profile)?.ingredients.values() ?? [])].map((i) => sectionKey(i.meta)))) {
       const where = citingSection(current, k, e.key);
       if (where) throw new Error(`unify: profile ${profile} ${where} also uses {{${e.key}}} — its text would change`);
     }

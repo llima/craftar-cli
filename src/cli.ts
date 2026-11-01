@@ -33,7 +33,7 @@ import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
-import { forgeFor as profileView } from "./core/profile-local.js";
+import { forgeFor as profileView, isLocalMessage, localCiters, localOwners } from "./core/profile-local.js";
 import type { Forge } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
@@ -956,7 +956,7 @@ drift
       providedWarnings.push(`profile ${ws.config.profile} does not resolve on its own (${(e as Error).message}) — what its integrations provide was not computed, and craftar drift promote will refuse`);
     }
     const indexedPaths = new Set(p.indexed.map((x) => x.path));
-    const rows = driftList(named ? [named] : st, provided, new Set(p.reworded), indexedPaths);
+    const rows = driftList(named ? [named] : st, provided, new Set(p.reworded), indexedPaths, new Set(ws.forge.locals.get(ws.config.profile)?.ingredients.keys()));
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
@@ -2222,6 +2222,7 @@ forge
   .action(async (ref: string, o) => {
     const f = await forgeFor(o);
     const base = f.ingredients.get(ref as IngredientRef);
+    if (!base && localOwners(f, ref).length) fail(`${isLocalMessage(ref, localOwners(f, ref))} — forge diff compares the root's ingredients`);
     if (!base) fail(`${ref} is not an ingredient of this Forge`);
     const variants = [...f.ingredients.values()].filter((i) => {
       const profile = profileOf(i.meta);
@@ -2294,12 +2295,16 @@ forge
       refuseRemote: (url) => `the Forge of this workspace is remote (${url}) — clone it and pass --forge <dir>`,
     });
     const base = f.ingredients.get(ref as IngredientRef);
+    if (!base && localOwners(f, ref).length) fail(`unify: ${isLocalMessage(ref, localOwners(f, ref))} — unify works on the root's ingredients`);
     if (!base) fail(`${ref} is not an ingredient of this Forge`);
     const variant = [...f.ingredients.values()].find((i) => {
       const p = profileOf(i.meta);
       return i.meta.type === base.meta.type && i.meta.as === base.meta.name && p === o.profile;
     });
     if (!variant) fail(`${ref} has no variant for profile ${o.profile}`);
+    // Spec 51 §4.5: unify removes the variant, which a profile's local recipe may cite.
+    const citers = localCiters(f, [variant.ref]);
+    if (citers.length) fail(`unify: ${citers.map((c) => c.file).join(", ")} cites ${variant.ref} — unify does not edit a profile's local recipe; edit it by hand, commit, and re-run`);
 
     // Only when about to write — --save-plan touches nothing inside the Forge, so it is exempt.
     if (!o.savePlan) {

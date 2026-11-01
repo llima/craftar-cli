@@ -1282,6 +1282,10 @@ export async function pruneRecipes(
     for (const [rn, r] of current.recipes) {
       if (r.extends.includes(candidate.recipe)) extendedBy.push(rn);
     }
+    // Spec 51 §4.5: a profile's local recipe that extends it or cites what it holds keeps it too.
+    for (const layer of current.locals.values()) {
+      for (const lr of layer.recipes.values()) if (lr.recipe.extends.includes(candidate.recipe)) extendedBy.push(lr.file);
+    }
     if (extendedBy.length > 0) {
       kept.push({
         recipe: candidate.recipe,

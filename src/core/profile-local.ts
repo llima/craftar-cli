@@ -190,3 +190,41 @@ export function forgeFor(forge: Forge, profile: string): ProfileView {
 export function localOf(forge: Forge, profile: string, ref: string): LoadedIngredient | undefined {
   return forge.locals.get(profile)?.ingredients.get(ref as IngredientRef);
 }
+
+/** The profiles that hold `ref` as a local, sorted (spec 51 §4.5). */
+export function localOwners(forge: Forge, ref: string): string[] {
+  return [...forge.locals].filter(([, l]) => l.ingredients.has(ref as IngredientRef)).map(([p]) => p).sort();
+}
+
+/** `<ref> is local to profile <p>` (or `to profiles <p>, <q>`): what a Forge-wide command says of a local (spec 51 §4.5). */
+export function isLocalMessage(ref: string, owners: string[]): string {
+  return `${shownRef(ref)} is local to ${owners.length === 1 ? "profile" : "profiles"} ${owners.map((p) => shownName(p, "profile")).join(", ")}`;
+}
+
+/**
+ * The local recipes that cite one of `refs` (spec 51 §4.5) — or, with `viaExtends`, reach one through `extends` in
+ * their profile's view — for every profile, or for `profile` alone. Each is named by its Forge-relative file.
+ */
+export function localCiters(forge: Forge, refs: readonly string[], opts: { profile?: string; viaExtends?: boolean } = {}): Array<{ profile: string; recipe: string; file: string }> {
+  const out: Array<{ profile: string; recipe: string; file: string }> = [];
+  const wanted = new Set(refs);
+  for (const [p, layer] of forge.locals) {
+    if (opts.profile !== undefined && p !== opts.profile) continue;
+    const view = forgeFor(forge, p);
+    const reaches = (name: string, seen: Set<string>): boolean => {
+      if (seen.has(name)) return false;
+      seen.add(name);
+      const r = view.recipes.get(name);
+      if (!r) return false;
+      if (r.ingredients.some((i) => wanted.has(i))) return true;
+      return opts.viaExtends === true && r.extends.some((parent) => reaches(parent, seen));
+    };
+    for (const [name, r] of layer.recipes) if (reaches(name, new Set())) out.push({ profile: p, recipe: name, file: r.file });
+  }
+  return out;
+}
+
+/** Whether a recipe name is held as a local by any profile (spec 51 §4.5): a root recipe of that name would be L2. */
+export function localRecipeNamed(forge: Forge, name: string): boolean {
+  return [...forge.locals.values()].some((l) => l.recipes.has(name));
+}

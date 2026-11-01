@@ -36,6 +36,8 @@ export interface RunContext {
   pinned: Map<string, string | undefined>;
   /** The Forge as it stood before the run; null for an empty Forge. */
   forge: Forge | null;
+  /** What the importing profile sees (spec 51 §4.3): its locals over the root; the Forge itself when it has none. */
+  view?: Forge | null;
   /**
    * Under agents-md.primary for the importing workspace, the rewording the claude-code emitter applied, so a base is compared
    * as sync wrote it (spec 41 §4.10); null otherwise.
@@ -182,7 +184,7 @@ export async function decide(
     for (const k of cited) {
       if (atRulesIndexGate && k === RULES_INDEX_KEY) continue;
       if (Object.hasOwn(ctx.P, k) || Object.hasOwn(ctx.W, k)) continue;
-      for (const [name, r] of ctx.forge.recipes) {
+      for (const [name, r] of (ctx.view ?? ctx.forge).recipes) {
         if (r.params[k]?.default !== undefined) return { kind: "literal", warn: `${ref} cites {{${k}}}, which recipe ${name} defaults — compared literally` };
       }
     }
@@ -190,7 +192,7 @@ export async function decide(
     for (const k of serverKeys) {
       if (atRulesIndexGate && k === RULES_INDEX_KEY) continue;
       if (Object.hasOwn(ctx.P, k) || Object.hasOwn(ctx.W, k)) continue;
-      for (const [name, r] of ctx.forge.recipes) {
+      for (const [name, r] of (ctx.view ?? ctx.forge).recipes) {
         if (r.params[k]?.default !== undefined) return withAuthEnv({ kind: "variant", why: `recipe ${name} defaults ${k}, which the server cites` });
       }
     }
@@ -294,7 +296,7 @@ async function inferParams(
   const values = deepMerge(ctx.PS, ctx.WS) as Sections;
   for (const { key } of delta) {
     if (ctx.forge) {
-      for (const ing of ctx.forge.ingredients.values()) {
+      for (const ing of (ctx.view ?? ctx.forge).ingredients.values()) {
         // F9 for hook registrations (spec 43 §7.2 row 8, ungated): check even for runBases ingredients
         // because registrations are not imported from the workspace - they stay from the Forge.
         // Only skip the current ingredient being decided.
