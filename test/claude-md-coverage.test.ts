@@ -261,7 +261,7 @@ describe("doctor's agents-md-primary above the root (spec 50 §4.2, §11 items 9
 
 // The CLI walks the real ancestors of the temporary directory: one holding any of the three files would add a line.
 const realAncestorFile = (() => {
-  for (let d = path.dirname(os.tmpdir()); ; d = path.dirname(d)) {
+  for (let d = os.tmpdir(); ; d = path.dirname(d)) {
     if (["CLAUDE.md", "CLAUDE.local.md", path.join(".claude", "CLAUDE.md")].some((f) => existsSync(path.join(d, f)))) return true;
     if (d === path.dirname(d)) return false;
   }
