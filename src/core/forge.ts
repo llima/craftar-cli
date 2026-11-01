@@ -194,9 +194,13 @@ export async function gitDirty(dir: string): Promise<boolean> {
   }
 }
 
+/** What must not reach a terminal from a file: C0, C1 and the bidirectional embeddings, overrides and isolates. */
+export const TERMINAL_UNSAFE = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+const TERMINAL_UNSAFE_ALL = new RegExp(TERMINAL_UNSAFE.source, "g");
+
 /** How one ignore rule is named in a message (spec 49 §4.2, Ruling 3): no path outside the tree, no control character. */
 export function shownRule(source: string, line: string, pattern: string, commonDir: string | null): string {
-  const clean = (t: string) => t.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, "");
+  const clean = (t: string) => t.replace(TERMINAL_UNSAFE_ALL, "");
   const slashed = (t: string) => {
     const p = t.replace(/\\/g, "/");
     return process.platform === "win32" ? p.toLowerCase() : p;

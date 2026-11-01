@@ -5,7 +5,7 @@ import { escapeLine, escapingRows } from "./contain.js";
 import { ENV_NAME, type ForgeSchema, type Lock, type Registry } from "../schema/index.js";
 import { written } from "./capabilities.js";
 import { exists } from "./forge.js";
-import { hookFindsCraftar, hooksStatus, locateHooks } from "./git-hooks.js";
+import { hookFindsCraftar, hooksStatus, HooksUnreadable } from "./git-hooks.js";
 import { generatedIgnored, IGNORED_FIX, staleLine, UNCHECKED_LINE } from "./generated-ignored.js";
 import { renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix } from "./mcp-server.js";
 import { credentialKeys, hideCacheSegment, hideKeys, isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus, vouchedKeys } from "./registry.js";
@@ -1055,11 +1055,10 @@ async function gitHooksCheck(
   w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void,
 ): Promise<void> {
   let status: Awaited<ReturnType<typeof hooksStatus>>;
-  let top: string;
   try {
     status = await hooksStatus(root);
-    top = (await locateHooks(root)).top;
-  } catch {
+  } catch (e) {
+    if (e instanceof HooksUnreadable) w("git-hooks", "warn", e.message, "check the hooks directory's permissions");
     return;
   }
   const marked = status.hooks.filter((h) => h.state === "installed");
@@ -1069,6 +1068,6 @@ async function gitHooksCheck(
   }
   const mine = marked.filter((h) => h.workspace === status.workspaceDir).map((h) => h.name);
   if (mine.length === 0) return;
-  if (await hookFindsCraftar(top, env)) w("git-hooks", "ok", `installed: ${mine.join(", ")}`);
+  if (await hookFindsCraftar(status.top, env)) w("git-hooks", "ok", `installed: ${mine.join(", ")}`);
   else w("git-hooks", "warn", `installed (${mine.join(", ")}), but no craftar is on PATH, so the hook checks nothing`, "install craftar globally: npm install -g craftar");
 }

@@ -6,7 +6,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { hookScript, readHookMarker } from "../src/core/git-hooks.js";
+import { hookScript, installHooks, readHookMarker } from "../src/core/git-hooks.js";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
 import { removeWithRetry } from "./helpers/fs.js";
@@ -65,6 +65,16 @@ async function committed(sub = ".") {
   return { root, forge, repo, ws };
 }
 
+/** A PATH entry holding `git` and nothing else, so a craftar installed on the machine cannot answer. */
+async function gitOnly(root: string): Promise<string> {
+  const dir = path.join(root, "only-git");
+  await fs.mkdir(dir, { recursive: true });
+  const real = execFileSync(process.platform === "win32" ? "where" : "which", ["git"], { encoding: "utf8" }).split(/\r?\n/)[0];
+  if (process.platform === "win32") await fs.copyFile(real, path.join(dir, "git.exe"));
+  else await fs.symlink(real, path.join(dir, "git"));
+  return dir;
+}
+
 const hooks = (...args: string[]) => runCli(["git-hooks", ...args]);
 const hookFile = (repo: string, name = "pre-push") => path.join(repo, ".git", "hooks", name);
 const read = (f: string) => fs.readFile(f, "utf8");
@@ -95,6 +105,8 @@ describe("hookScript and readHookMarker", () => {
       "# craftar git-hooks 1 workspace='a' — on the first line\n",
       "#!/bin/sh\n# craftar git-hooks 1 workspace='a\u001b[31m' — x\n",
       `#!/bin/sh\n# craftar git-hooks 1 workspace='${token}' — x\n`,
+      "#!/bin/sh\n# craftar git-hooks 1 workspace='https://u:s3cret@host/x' — x\n",
+      "#!/bin/sh\n# craftar git-hooks 1 workspace='a\u202eb' — x\n",
       "#!/bin/sh\n# craftar git-hooks 1 workspace='a'b' — x\n",
     ]) expect(readHookMarker(text)).toBeNull();
   });
@@ -166,14 +178,57 @@ describe("install", () => {
       }
       await gone(out);
     });
-    it.skipIf(process.platform === "win32")("reaching outside through a link: refused", async () => {
+    it("reaching outside through a link: refused", async () => {
       const { repo, ws, root } = await committed();
       const out = path.join(root, "away");
       await fs.mkdir(out);
-      await fs.symlink(out, path.join(repo, "hk"));
+      await fs.symlink(out, path.join(repo, "hk"), "junction");
       git(repo, "config", "core.hooksPath", "hk");
       expect(hooks("install", "--workspace", ws).code).toBe(1);
       await gone(path.join(out, "pre-push"));
+    });
+    it("holding a .. segment: refused, since git walks it through a link where a lexical answer would not", async () => {
+      const { repo, ws, root } = await committed();
+      const out = path.join(root, "away");
+      await fs.mkdir(out);
+      await fs.symlink(out, path.join(repo, "lnk"), "junction");
+      git(repo, "config", "core.hooksPath", "lnk/../hk");
+      expect(hooks("install", "--workspace", ws).code).toBe(1);
+      await gone(path.join(repo, "hk/pre-push"));
+    });
+    it("from the global configuration: refused though it lands inside the repository", async () => {
+      const { repo, ws } = await committed();
+      await fs.writeFile(process.env.GIT_CONFIG_GLOBAL!, `[core]\n\thooksPath = ${path.join(repo, "hk").replace(/\\/g, "/")}\n`);
+      try {
+        const r = hooks("install", "--workspace", ws);
+        expect(r.code).toBe(1);
+        expect(r.stderr).toContain("every repository");
+        await gone(path.join(repo, "hk/pre-push"));
+      } finally {
+        await fs.writeFile(process.env.GIT_CONFIG_GLOBAL!, "");
+      }
+    });
+    it(".git/hooks itself a link out: refused in its own words, labelled apart", async () => {
+      const { repo, ws, root } = await committed();
+      const out = path.join(root, "away");
+      await fs.mkdir(out);
+      await fs.rm(path.join(repo, ".git/hooks"), { recursive: true, force: true });
+      await fs.symlink(out, path.join(repo, ".git/hooks"), "junction");
+      const r = hooks("install", "--workspace", ws);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain(".git/hooks");
+      expect(r.stderr).not.toContain("core.hooksPath");
+      await gone(path.join(out, "pre-push"));
+      expect(JSON.parse(hooks("status", "--json", "--workspace", ws).stdout).hooksDir).toBe(".git/hooks (outside the repository)");
+    });
+    it("a file in the way of the hooks path: a refusal in its own words, no path", async () => {
+      const { repo, ws, root } = await committed();
+      await writeFiles(repo, { f: "x\n" });
+      git(repo, "config", "core.hooksPath", "f/hk");
+      const r = hooks("install", "--workspace", ws);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("hooks path");
+      expect(r.stderr).not.toContain(root);
     });
     it("inside a path Forge: refused, --force or not", async () => {
       const { repo, ws } = await committed("ws");
@@ -261,6 +316,26 @@ describe("install", () => {
       }
       expect(readHookMarker(await read(hookFile(repo)))).toEqual({ workspace: "two" });
     });
+  });
+  it.skipIf(process.platform === "win32")("is executable whatever the umask", async () => {
+    const { repo, ws } = await committed();
+    const cli = path.resolve(__dirname, "../src/cli.ts");
+    execFileSync("sh", ["-c", `umask 0177; exec "${process.execPath}" --import "${TSX_LOADER}" "${cli}" git-hooks install --workspace "${ws}"`], { stdio: "pipe" });
+    expect((await fs.stat(hookFile(repo))).mode & 0o777).toBe(0o755);
+  });
+  it("a write that fails leaves the existing hook in place and no temporary file", async () => {
+    const { repo, ws } = await committed();
+    const theirs = "#!/bin/sh\necho theirs\n";
+    await fs.writeFile(hookFile(repo), theirs);
+    // The temporary file of the second hook is already there: `wx` fails after the first was prepared.
+    const blocker = `${hookFile(repo, "pre-commit")}.craftar-${process.pid}.tmp`;
+    await fs.writeFile(blocker, "x");
+    await expect(installHooks(ws, ["pre-push", "pre-commit"], { force: true, blockWhenUnavailable: false })).rejects.toThrow("nothing changed");
+    await fs.rm(blocker);
+    expect(await read(hookFile(repo))).toBe(theirs);
+    await gone(`${hookFile(repo)}.craftar-backup`);
+    await gone(hookFile(repo, "pre-commit"));
+    expect((await fs.readdir(path.join(repo, ".git/hooks"))).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   });
   describe("refusals before anything", () => {
     it("off a repository, in a bare one, with no craftar.yaml, or one that does not read", async () => {
@@ -365,6 +440,22 @@ describe("uninstall", () => {
 });
 
 describe("status", () => {
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("fails closed on a hooks directory it cannot read", async () => {
+    const { repo, ws } = await committed();
+    hooks("install", "--workspace", ws);
+    const dir = path.join(repo, ".git/hooks");
+    await fs.chmod(dir, 0);
+    try {
+      const r = hooks("status", "--workspace", ws);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("cannot read");
+      expect(hooks("uninstall", "--workspace", ws).code).toBe(1);
+      const c = JSON.parse(runCli(["doctor", "--json", "--workspace", ws]).stdout).checks.filter((x: { id: string }) => x.id === "git-hooks");
+      expect(c[0].level).toBe("warn");
+    } finally {
+      await fs.chmod(dir, 0o755);
+    }
+  });
   it("--json is the contract, and never prints a path outside", async () => {
     const { repo, ws, root } = await committed();
     hooks("install", "--workspace", ws);
@@ -405,16 +496,16 @@ describe("doctor", () => {
   it("warns when the hook would find no craftar, and is ok when it would", async () => {
     const { ws, root } = await committed();
     hooks("install", "--workspace", ws);
-    const nowhere = path.join(root, "empty");
-    await fs.mkdir(nowhere);
-    const git_ = path.dirname(execFileSync(process.platform === "win32" ? "where" : "which", ["git"], { encoding: "utf8" }).split(/\r?\n/)[0]);
-    const without = checks(ws, { PATH: [nowhere, git_].join(path.delimiter), Path: [nowhere, git_].join(path.delimiter) });
+    const onlyGit = await gitOnly(root);
+    const without = checks(ws, { PATH: onlyGit, Path: onlyGit });
     expect(without[0].level).toBe("warn");
     expect(without[0].message).toContain("craftar");
     const bin = path.join(root, "bin");
-    await writeFiles(bin, { craftar: "#!/bin/sh\n", "craftar.exe": "" });
+    // Extensionless, as an npm global install also leaves on Windows, where a bare name is what `sh` finds.
+    await writeFiles(bin, { craftar: "#!/bin/sh\n" });
     await fs.chmod(path.join(bin, "craftar"), 0o755);
-    const withIt = checks(ws, { PATH: [bin, git_].join(path.delimiter), Path: [bin, git_].join(path.delimiter) });
+    const both = [bin, onlyGit].join(path.delimiter);
+    const withIt = checks(ws, { PATH: both, Path: both });
     expect(withIt[0].level).toBe("ok");
     expect(withIt[0].message).toContain("pre-push");
   });
@@ -486,7 +577,7 @@ describe.skipIf(process.platform === "win32")("a real push", () => {
       expect(r.text).toContain("craftar not found on PATH");
     }
     await gone(record);
-    const none = push(repo, {}, bare, "HEAD:refs/heads/none");
+    const none = push(repo, { PATH: await gitOnly(root) }, bare, "HEAD:refs/heads/none");
     expect(none.code).toBe(0);
     expect(none.text).toContain("craftar not found on PATH");
   });

@@ -3004,7 +3004,6 @@ services
     }
   });
 
-/* ---------------------------------------------------------------- cache ---------------------------------------------------------------- */
 /* ----------------------------------------------------------- git-hooks */
 const gitHooks = program.command("git-hooks").description("An optional git hook that runs sync --check over what is pushed or committed, written only when you type install, and only inside the repository");
 
@@ -3038,7 +3037,7 @@ gitHooks
       installHooks(root, namedHooks(o, ["pre-push"]), { force: o.force, blockWhenUnavailable: o.blockWhenUnavailable, home: process.env.CRAFTAR_HOME || undefined }),
     );
     for (const name of r.backedUp) console.log(`  kept the existing ${name} as ${name}.craftar-backup`);
-    const where = r.place.label === ".git/hooks" ? ".git/hooks" : "core.hooksPath";
+    const where = r.place.label.startsWith(".git/hooks") ? ".git/hooks" : "core.hooksPath";
     for (const name of r.written) console.log(`  ${pc.green("+")} ${where}/${name}`);
     for (const n of r.notes) console.log(`  ${pc.yellow("warn")} ${n}`);
   });
@@ -3072,6 +3071,7 @@ gitHooks
     for (const h of hooks) console.log(`  ${h.name}: ${h.state}${h.workspace === null ? "" : ` (workspace ${h.workspace})`}`);
   });
 
+/* ---------------------------------------------------------------- cache ---------------------------------------------------------------- */
 const cache = program.command("cache").description("The per-machine Forge cache in $CRAFTAR_HOME/forges/");
 
 cache
