@@ -337,20 +337,26 @@ const TOOL_MAP: Record<string, string | null> = {
   todowrite: null,
 };
 
-/** Tools that grant fs_read capability. */
-const FS_READ_TOOLS = new Set(["read", "grep", "glob"]);
+/**
+ * Known tools and their permission capabilities, in the order rules appear.
+ * Includes Claude Code names (read, grep, glob, write, shell) and Kiro's own names (fs_read, fs_write, execute_bash).
+ */
+const CAPABILITY_TOOLS = [
+  { capability: "fs_read", tools: ["read", "grep", "glob", "fs_read"] },
+  { capability: "fs_write", tools: ["write", "fs_write"] },
+  { capability: "shell", tools: ["shell", "execute_bash"] },
+  { capability: "web_fetch", tools: ["web_fetch"] },
+  { capability: "web_search", tools: ["web_search"] },
+] as const;
 
-/** Tools with known permission capabilities. */
-const PERMISSION_TOOLS = new Set([...FS_READ_TOOLS, "write", "shell", "web_fetch", "web_search"]);
+/** All tools that have a known permission capability — derived from the table, not duplicated. */
+const KNOWN_PERMISSION_TOOLS = new Set<string>(CAPABILITY_TOOLS.flatMap((row) => [...row.tools]));
 
-/** Tools with known permission capabilities, in rule order. */
-const CAPABILITY_TOOLS: Array<{ tools: Set<string>; capability: string }> = [
-  { tools: FS_READ_TOOLS, capability: "fs_read" },
-  { tools: new Set(["write"]), capability: "fs_write" },
-  { tools: new Set(["shell"]), capability: "shell" },
-  { tools: new Set(["web_fetch"]), capability: "web_fetch" },
-  { tools: new Set(["web_search"]), capability: "web_search" },
-];
+/** Tools that count as "reading" for the fs_read capability. */
+const FS_READ_TOOL_SET = new Set<string>(CAPABILITY_TOOLS[0].tools);
+
+/** Tools that grant the skill capability (read or fs_read, not grep or glob alone). */
+const SKILL_TOOLS = new Set(["read", "fs_read"]);
 
 interface PermissionRule {
   capability: string;
@@ -360,34 +366,56 @@ interface PermissionRule {
 
 /**
  * Derive Kiro permission rules from the mapped tools.
- * Rules are ordered: fs_read, fs_write, shell, web_fetch, web_search, then FALLBACK (if no read/grep/glob), then skill (if read present).
- * A tool with no capability mapping gets no rule and a warning.
+ * Mirrors what kiro-cli 2.37.1 writes when it converts an agent without permissions.rules.
  */
-export function permissionRules(agentName: string, tools: string[], ctx: EmitBase): PermissionRule[] {
-  const rules: PermissionRule[] = [];
+function permissionRules(agentName: string, tools: string[], ctx: EmitBase): PermissionRule[] {
   const toolSet = new Set(tools);
 
-  // Check each capability in order
-  for (const { tools: capTools, capability } of CAPABILITY_TOOLS) {
-    if ([...capTools].some((t) => toolSet.has(t))) {
+  // If * is among the tools, return all and no warnings
+  if (toolSet.has("*")) {
+    return [{ capability: "all", effect: "allow" }];
+  }
+
+  const rules: PermissionRule[] = [];
+
+  // One rule per capability row whose tools intersect the agent's tools
+  for (const { capability, tools: capTools } of CAPABILITY_TOOLS) {
+    if (capTools.some((t) => toolSet.has(t))) {
       rules.push({ capability, effect: "allow" });
     }
   }
 
-  // Rule 6: if NONE of read, grep, glob is in tools → FALLBACK with match
-  const hasAnyFsRead = [...FS_READ_TOOLS].some((t) => toolSet.has(t));
+  // One mcp rule for all @server tools, sorted and deduplicated
+  const mcpMatches: string[] = [];
+  for (const t of tools) {
+    if (t.startsWith("@")) {
+      const rest = t.slice(1);
+      // @server → server/*, @server/tool → server/tool
+      const match = rest.includes("/") ? rest : `${rest}/*`;
+      if (!mcpMatches.includes(match)) {
+        mcpMatches.push(match);
+      }
+    }
+  }
+  if (mcpMatches.length > 0) {
+    mcpMatches.sort();
+    rules.push({ capability: "mcp", match: mcpMatches, effect: "allow" });
+  }
+
+  // Fallback: if none of the fs_read tools is present, add fs_read limited to ./**
+  const hasAnyFsRead = [...FS_READ_TOOL_SET].some((t) => toolSet.has(t));
   if (!hasAnyFsRead) {
     rules.push({ capability: "fs_read", match: ["./**"], effect: "allow" });
   }
 
-  // Rule 7: if read itself is in tools (NOT grep or glob alone) → skill rule, last
-  if (toolSet.has("read")) {
+  // Skill rule: if read or fs_read is present (not grep or glob alone)
+  if ([...SKILL_TOOLS].some((t) => toolSet.has(t))) {
     rules.push({ capability: "skill", effect: "allow" });
   }
 
-  // Warn for tools with no known capability
+  // Warn for tools with no known capability (not in table, not *, not @server)
   for (const t of tools) {
-    if (!PERMISSION_TOOLS.has(t)) {
+    if (!KNOWN_PERMISSION_TOOLS.has(t) && t !== "*" && !t.startsWith("@")) {
       ctx.warn(`kiro: agent "${agentName}": tool "${t}" has no Kiro permission capability; no rule written`);
     }
   }
