@@ -27,7 +27,7 @@ import {
 } from "../core/forge.js";
 import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type UnsetParam, type Plan, type Workspace } from "../core/sync.js";
 import { driftList, metadataEdits, METADATA_PARAM_REASON, REWORDED_REASON, INDEXED_REASON, PROFILE_LOCAL_REASON, unmanaged } from "../core/drift.js";
-import { templatedMetadataEdit } from "../core/metadata-params.js";
+import { substituteMetadata, templatedMetadataEdit, withTemplatedFields } from "../core/metadata-params.js";
 import { readsRulesIndex, RULES_INDEX_KEY } from "../core/rules-index.js";
 import { hashNormalized, toLf } from "../core/text.js";
 import { fingerprintOf } from "../core/fingerprint.js";
@@ -66,7 +66,7 @@ import { decide, workspaceParams, workspaceSections, type RunContext } from "./d
 import { providedRefs } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
 import { readsTargetSections } from "../core/sections.js";
-import { sectionKey } from "../core/resolve.js";
+import { paramsFor, sectionKey } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
@@ -751,11 +751,17 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
   // Source metadata: X's own, but re-read certain fields; strip Forge-only keys (params, authEnv, registration)
   // so decide/shapeDiffers/renderedFingerprint compare apples to apples (spec 43 §7.2).
-  const sourceMeta: Ingredient = stripForgeOnlyKeys({
+  // At the metadata gate the disk holds the base's fields rendered (spec 50 §5.6): compared with the rendered base, an
+  // unchanged field keeps the Forge's text — a hand edit of a templated field was refused above (D23).
+  const metaParams = p0.resolution.metadataParams ? paramsFor(X, p0.resolution) : null;
+  const renderedBase = metaParams ? substituteMetadata(X.meta, metaParams) : X.meta;
+  const readMeta: Ingredient = stripForgeOnlyKeys({
     ...X.meta,
     // A base with no frontmatterRaw may hold its `paths:` in its body (imported before rules kept it apart)
-    ...emittedMetaFields(emitted.meta, readType, X.meta, meta.type === "rule" && meta.frontmatterRaw === undefined ? await readIngredientText(X, meta.file) : null, emitted.files["rule.md"]),
+    ...emittedMetaFields(emitted.meta, readType, renderedBase, meta.type === "rule" && meta.frontmatterRaw === undefined ? await readIngredientText(X, meta.file) : null, emitted.files["rule.md"]),
   }) as Ingredient;
+  // A field the disk holds as the base renders it keeps the Forge's template, so no outcome freezes its value.
+  const sourceMeta: Ingredient = metaParams ? withTemplatedFields(readMeta, stripForgeOnlyKeys({ ...X.meta }) as Ingredient, renderedBase) : readMeta;
 
   // D9: Secret check
   const secret = secretIn(sourceMeta, emitted.files, emitted.scan);
@@ -794,7 +800,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     writtenTargets: [],
   };
 
-  const fingerprint = fingerprintOf(validateImported(sourceMeta), emitted.files);
+  // The disk's own reading at the metadata gate: the source's fields rendered as the base's are (spec 50 §5.6).
+  const fingerprint = fingerprintOf(validateImported(metaParams ? substituteMetadata(sourceMeta, metaParams) : sourceMeta), emitted.files);
   const decision = await decide(ctx, X.dir, stage.reader(), ingredientRef, sourceMeta, emitted.files, fingerprint, [], new Set());
 
   // Handle the decision

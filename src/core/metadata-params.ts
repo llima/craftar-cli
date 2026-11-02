@@ -242,3 +242,18 @@ export function templatedMetadataEdit(meta: Ingredient, planned: string, disk: s
   }
   return null;
 }
+
+/**
+ * Spec 50 §5.6, for `drift promote`: the source's fields of §5.2 that read exactly as the base renders them (`rendered`)
+ * take the base's own text back, so an outcome built from a body edit keeps the Forge's `{{key}}` in its metadata.
+ */
+export function withTemplatedFields<M extends Ingredient>(source: M, base: Ingredient, rendered: Ingredient): M {
+  const out: Record<string, unknown> = { ...source };
+  for (const field of metadataFields(base)) {
+    if (metadataText(source, field) !== metadataText(rendered, field)) continue;
+    const v = (base as Record<string, unknown>)[field];
+    if (v === undefined) delete out[field];
+    else out[field] = v;
+  }
+  return out as M;
+}

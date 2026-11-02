@@ -103,3 +103,45 @@ describe("templatedMetadataEdit (pure)", () => {
     expect(templatedMetadataEdit(cmd, planned, planned.replace(/\n/g, "\r\n"))).toBeNull();
   });
 });
+
+describe("spec 50 §5.6: a body edit of an ingredient whose metadata is templated promotes as it would with literal metadata", () => {
+  async function promoted(raw: string) {
+    const { scenario, recipe, profile } = await import("./helpers/forge.js");
+    const YAML = (await import("yaml")).default;
+    const s = await scenario(
+      {
+        ingredients: [{ meta: { type: "rule", name: "paths", inclusion: "fileMatch", fileMatchPattern: "src/**", frontmatterRaw: raw, params: { team: { default: "core" } } }, files: { "rule.md": "# Paths\nKeep {{team}} tidy.\n" } }],
+        recipes: [recipe("base", ["rule/paths"])],
+        profiles: [profile("acme", ["base"], ["claude-code"], { params: { glob: "src/**" } })],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: GATE }));
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await edit(s as never, RULE, "Keep core tidy", "Keep alpha tidy");
+    const r = runCli(["drift", "promote", RULE, "--workspace", s.wsRoot, "--dry-run", "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    return JSON.parse(r.stdout).outcome;
+  }
+
+  it("a token swap in the body is a profile value whether paths: is templated or literal", async () => {
+    expect(await promoted("paths: src/**")).toBe("params");
+    expect(await promoted("paths: {{glob}}")).toBe("params");
+  });
+});
+
+describe("spec 50 §5.6: a variant drift promote makes from a body edit keeps the templated metadata", () => {
+  it("writes paths: {{glob}} into the variant, never the rendered value", async () => {
+    const s = await synced();
+    await edit(s, RULE, "# Paths\n", "# Paths\nOne more line by hand.\n");
+    const r = runCli(["drift", "promote", RULE, "--workspace", s.wsRoot]);
+    expect(r.code, r.stderr).toBe(0);
+    const YAML = (await import("yaml")).default;
+    const meta = YAML.parse(await fs.readFile(path.join(s.forgeRoot, "ingredients/rules/paths--acme/ingredient.yaml"), "utf8"));
+    expect(meta.frontmatterRaw).toBe("paths: {{glob}}");
+    expect(meta.fileMatchPattern).toBe("{{glob}}");
+    expect(meta.description).toBe("Rules for {{org}} sources");
+  });
+});
