@@ -4,14 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { forgeReader, readForgeFile, readForgeText } from "./contain.js";
-import YAML from "yaml";
-import { IngredientSchema, ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient, type IngredientRef } from "../schema/index.js";
+import { ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { fingerprintDir } from "./fingerprint.js";
+import { ingredientText, occupied, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
 import { assertNoDirLinkIn, assertNoLinkOnPath, copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
 import { effectiveProfile } from "./integrations.js";
 import { findProfileFile } from "./param-writes.js";
 import { resolve, type Resolution } from "./resolve.js";
-import { note, type WriteJournal } from "./unify.js";
+import { type WriteJournal } from "./unify.js";
 import { profileOf } from "./variants.js";
 import { editYamlText } from "./yaml-edit.js";
 
@@ -29,11 +29,7 @@ export function namedForProfile(name: string, q: string): boolean {
 const COMMAND = "forge promote";
 
 /** One file the promotion writes; `created` when nothing is there today. */
-export interface PromotionWrite {
-  abs: string;
-  content: string | Buffer;
-  created: boolean;
-}
+export type PromotionWrite = ForgeWrite;
 
 export interface BasePromotion {
   /** The Forge's root, absolute. */
@@ -66,88 +62,6 @@ export interface BasePromotion {
 const posix = (root: string, abs: string) => path.relative(root, abs).split(path.sep).join("/");
 const firstLine = (e: unknown) => (e instanceof Error ? e.message : String(e)).split("\n")[0];
 const byPath = (a: { abs: string }, b: { abs: string }) => (a.abs < b.abs ? -1 : a.abs > b.abs ? 1 : 0);
-
-/** Every profile's resolution with no workspace layer — the part decidable in the Forge; a profile that does not resolve maps to its error. */
-function resolveAll(forge: Forge): Map<string, Resolution | Error> {
-  const out = new Map<string, Resolution | Error>();
-  for (const q of [...forge.profiles.keys()].sort()) {
-    try {
-      out.set(q, resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile: q })));
-    } catch (e) {
-      out.set(q, e instanceof Error ? e : new Error(String(e)));
-    }
-  }
-  return out;
-}
-
-/** The recipe files of a Forge by declared name, as `loadForge` keys them (last file wins). */
-async function recipeFiles(root: string): Promise<Map<string, { abs: string; stem: string; raw: string }>> {
-  const dir = path.join(root, "recipes");
-  const out = new Map<string, { abs: string; stem: string; raw: string }>();
-  if (!(await exists(dir))) return out;
-  for (const f of await fs.readdir(dir)) {
-    if (!/\.ya?ml$/.test(f)) continue;
-    const abs = path.join(dir, f);
-    const raw = await fs.readFile(abs, "utf8");
-    out.set(parseYaml(abs, raw, RecipeSchema).name, { abs, stem: f.replace(/\.ya?ml$/, ""), raw });
-  }
-  return out;
-}
-
-/**
- * Whether something stands where a new directory would go: anything but nothing, or a directory holding no file.
- * Throws on lstat errors other than ENOENT (fail-closed), with a message naming `label` (forge-relative POSIX path).
- */
-async function occupied(dir: string, label: string): Promise<boolean> {
-  let stat;
-  try {
-    stat = await fs.lstat(dir);
-  } catch (e) {
-    // Only ENOENT means "not occupied"; other errors (EACCES, EIO, etc.) fail closed.
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
-    const code = (e as NodeJS.ErrnoException).code ?? "unknown";
-    throw new Error(`${COMMAND}: cannot read ${label} (${code})`);
-  }
-  if (!stat.isDirectory()) return true;
-  try {
-    return (await listFiles(dir)).length > 0;
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code ?? "unknown";
-    throw new Error(`${COMMAND}: cannot read ${label} (${code})`);
-  }
-}
-
-/** Replace the plain scalar entries equal to `old` in the sequence under `key`; says how many it replaced. */
-function swapEntry(doc: YAML.Document, key: string, old: string, value: string): number {
-  const seq = doc.get(key, true);
-  if (!YAML.isSeq(seq)) return 0;
-  let n = 0;
-  for (const item of seq.items) {
-    if (YAML.isScalar(item) && item.value === old) {
-      item.value = value;
-      n++;
-    }
-  }
-  return n;
-}
-
-const unreadable = (label: string, what: string) =>
-  new Error(`${COMMAND}: cannot edit ${label} in place (the edit does not read back as exactly ${what}) — reformat it by hand, commit, and re-run`);
-
-/** An `ingredient.yaml` with `name` set and `as` set or removed, in place; read back through the schema. */
-function ingredientText(raw: string, label: string, meta: Ingredient, name: string, as: string | null): string {
-  const text = editYamlText(raw, { command: COMMAND, label, keys: ["name", "as"] }, (doc) => {
-    doc.set("name", name);
-    if (as === null) doc.delete("as");
-    else doc.set("as", as);
-  });
-  const { as: _dropped, ...rest } = meta as Ingredient & { as?: string };
-  const expected = as === null ? { ...rest, name } : { ...rest, name, as };
-  if (!isDeepStrictEqual(parseYaml(label, text, IngredientSchema), IngredientSchema.parse(expected))) {
-    throw unreadable(label, as === null ? "name set and as removed" : "name and as set");
-  }
-  return text;
-}
 
 /**
  * The edit set of a promotion (design of spec 29 §4.4): what would be written and removed, and the refusals that need
@@ -209,17 +123,17 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
     const dir = path.join(folder, `${base.meta.name}--${q}`);
     const variantLabel = `ingredients/${typeFolder(type)}/${base.meta.name}--${q}`;
     // An empty directory is no ingredient: a late failure undone with git leaves one behind, and the re-run must pass.
-    if (variantOf(q) || forge.ingredients.has(variantRef(q)) || (await occupied(dir, variantLabel))) {
+    if (variantOf(q) || forge.ingredients.has(variantRef(q)) || (await occupied(dir, variantLabel, COMMAND))) {
       throw new Error(
         `${COMMAND}: ${variantRef(q)} already exists, and profile ${q} also resolves ${X} — the Forge is inconsistent (both would write one file); remove one by hand, commit, and re-run`,
       );
     }
-    const yaml = ingredientText(await metaText(base), label(path.join(base.dir, "ingredient.yaml")), base.meta, `${base.meta.name}--${q}`, base.meta.name);
+    const yaml = ingredientText(await metaText(base), label(path.join(base.dir, "ingredient.yaml")), base.meta, `${base.meta.name}--${q}`, base.meta.name, COMMAND);
     createdWrites.push(...(await ingredientWrites(base, dir, yaml)));
   }
 
   /* ---- the base takes the variant's directory ---- */
-  const baseYaml = ingredientText(await metaText(variant), label(path.join(variant.dir, "ingredient.yaml")), variant.meta, base.meta.name, null);
+  const baseYaml = ingredientText(await metaText(variant), label(path.join(variant.dir, "ingredient.yaml")), variant.meta, base.meta.name, null, COMMAND);
   const baseWrites = await ingredientWrites(variant, base.dir, baseYaml);
   const kept = new Set(baseWrites.map((w) => w.abs));
   const removes = [
@@ -247,7 +161,7 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
     });
     const was = forge.recipes.get(source)!;
     const expected = { ...was, name, ingredients: was.ingredients.map((i) => (i === old ? value : i)) };
-    if (!isDeepStrictEqual(parseYaml(where, text, RecipeSchema), expected)) throw unreadable(where, `${old} replaced by ${value}`);
+    if (!isDeepStrictEqual(parseYaml(where, text, RecipeSchema), expected)) throw unreadable(where, `${old} replaced by ${value}`, COMMAND);
     return text;
   };
   for (const name of [...forge.recipes.keys()].sort()) {
@@ -306,7 +220,7 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
     });
     const was = forge.profiles.get(q)!;
     const expected = { ...was, recipes: was.recipes.map((r) => list.find((s) => s.old === r)?.new ?? r) };
-    if (!isDeepStrictEqual(parseYaml(where, text, ProfileSchema), expected)) throw unreadable(where, `recipes ${list.map((s) => `${s.old} replaced by ${s.new}`).join(", ")}`);
+    if (!isDeepStrictEqual(parseYaml(where, text, ProfileSchema), expected)) throw unreadable(where, `recipes ${list.map((s) => `${s.old} replaced by ${s.new}`).join(", ")}`, COMMAND);
     profileWrites.push({ abs, content: text, created: false });
     detail.profiles.push({ profile: q, file: where, swaps: list });
   }
@@ -352,30 +266,6 @@ function chainTo(forge: Forge, own: string[], target: string): string {
   return target;
 }
 
-/** Put a promotion's files under `root` (the Forge, or its scratch copy), deleting what it removes and the directories that leaves empty. */
-async function writeInto(root: string, promotion: BasePromotion, journal?: WriteJournal): Promise<void> {
-  const at = (abs: string) => path.join(root, path.relative(promotion.root, abs));
-  for (const w of promotion.writes) {
-    const abs = at(w.abs);
-    await fs.mkdir(path.dirname(abs), { recursive: true });
-    await note(journal, abs);
-    await fs.writeFile(abs, w.content);
-  }
-  for (const r of promotion.removes) {
-    const abs = at(r);
-    journal?.push({ abs, created: false });
-    await fs.rm(abs);
-  }
-  // Deepest first, and never above the ingredient's own type folder.
-  const dirs = [...new Set(promotion.removes.map((r) => path.dirname(at(r))))].sort((a, b) => b.length - a.length);
-  for (let dir of dirs) {
-    while (path.relative(root, dir).split(path.sep).length > 2 && (await exists(dir)) && (await fs.readdir(dir)).length === 0) {
-      await fs.rmdir(dir);
-      dir = path.dirname(dir);
-    }
-  }
-}
-
 const refused = (q: string, what: string) => new Error(`${COMMAND}: profile ${q} would not resolve the same after the promotion — ${what}; nothing written`);
 
 /**
@@ -396,7 +286,7 @@ export async function proveBasePromotion(forge: Forge, promotion: BasePromotion)
   try {
     await copyForgeForProof(forge.root, scratch);
     try {
-      await writeInto(scratch, promotion);
+      await writeEdits(promotion.root, scratch, promotion);
     } catch (e) {
       // The copy carries each file's mode, so what cannot be written there cannot be written in the Forge either.
       const at = (e as NodeJS.ErrnoException).path;
@@ -448,5 +338,5 @@ export async function proveBasePromotion(forge: Forge, promotion: BasePromotion)
 /** Write a promotion into its Forge: every write, then every removal, each noted in `journal` before it is touched. */
 export async function applyBasePromotion(promotion: BasePromotion, journal: WriteJournal): Promise<void> {
   await assertNoLinkOnPath(promotion.root, [...promotion.writes.map((w) => w.abs), ...promotion.removes]);
-  await writeInto(promotion.root, promotion, journal);
+  await writeEdits(promotion.root, promotion.root, promotion, journal);
 }

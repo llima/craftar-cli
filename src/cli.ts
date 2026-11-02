@@ -4,7 +4,7 @@ import pc from "picocolors";
 import path from "node:path";
 import { promises as fs, statSync } from "node:fs";
 import YAML from "yaml";
-import { importClaudeCode } from "./importers/claude-code.js";
+import { importClaudeCode, LOCAL_MODES } from "./importers/claude-code.js";
 import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
@@ -34,6 +34,7 @@ import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
+import { applyMove, planLocalize, planShare, proveMove, type ForgeMove, type MoveCommand } from "./core/localize.js";
 import { forgeFor as profileView, isLocalMessage, localCiters, localOwners } from "./core/profile-local.js";
 import type { Forge } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
@@ -82,7 +83,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.47.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.48.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -111,8 +112,14 @@ program
     "--prefer-kiro <rule,…>",
     "take the named rules from .kiro/steering/<name>.md instead of .claude/rules/<name>.md — each proved to render back to that steering file's body; refused for a name that is not a rule, has no steering file, or whose steering does not render back",
   )
+  .option(
+    "--local <mode>",
+    "where a source goes in a Forge at schema 8 or above: never (the default — today's import), auto (a source no root ingredient holds becomes a local of the profile, and a local that differs is rewritten) or always (the same, and no ingredient is written at the root); new locals are wired into the recipe <profile>-local",
+  )
   .action(async (o) => {
     if (o.from !== "claude-code") fail(`unsupported source "${o.from}" (only claude-code for now)`);
+    // Spec 51 §5.3: checked before anything is read.
+    if (o.local !== undefined && !(LOCAL_MODES as readonly string[]).includes(o.local)) fail("--local takes never, auto or always");
     // import writes a local Forge; a URL would become a directory named after it (spec 13 §4.4).
     if (classifyForge(o.forge) === "url") fail("--forge takes a directory; to read a remote Forge, run inside a workspace that names it");
     // A cache tree is refused first: it reads only the real paths of --forge and of the cache, nothing of the workspace.
@@ -121,7 +128,7 @@ program
     // Spec 29 §4.3: PK5, before the workspace is read.
     const preferKiro = o.preferKiro === undefined ? undefined : parsePreferKiro(o.preferKiro);
     const reportAbs = o.report === undefined ? null : await gateOutsideForge(o.report, o.forge, REPORT_GATE);
-    const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig, report: reportAbs !== null, preferKiro });
+    const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig, report: reportAbs !== null, preferKiro, local: o.local });
     console.log(pc.bold(`Imported ${path.resolve(o.workspace)} → ${path.resolve(o.forge)} as profile "${r.profile}"`));
     console.log(
       `  ${pc.green(String(r.created.length))} created, ${pc.cyan(String(r.reused.length))} reused, ${pc.yellow(String(r.variants.length))} variants, ${pc.red(String(r.rejected.length))} rejected`,
@@ -132,6 +139,9 @@ program
     // Spec 33 §5.3: what the block provides is left to its recipe.
     // Spec 51 §4.5: a source equal to the profile's local is reused there, never placed at the root.
     for (const x of r.localReused ?? []) console.log(`  local to profile ${r.profile}: ${x.ref} (${x.dir}) — reused there`);
+    for (const x of r.localCreated ?? []) console.log(`  local to profile ${r.profile}: ${x.ref} (${x.dir}) — created there`);
+    for (const x of r.localRewritten ?? []) console.log(`  local to profile ${r.profile}: ${x.ref} (${x.dir}) — rewritten from ${x.source}`);
+    if (r.localRecipe) console.log(`  local recipe ${r.localRecipe.name} (${r.localRecipe.file}): ${r.localRecipe.refs.join(", ")} — wired, last in profile ${r.profile}'s recipes`);
     for (const x of r.leftToRecipes) console.log(`  left to recipe ${x.recipe} (integrations.${x.slot}): ${x.refs.join(", ")} — not compared; when this workspace resolves that recipe, craftar status shows whether its copies differ`);
     // Spec 10 §4.2: how a templated base was reused, and what the profile gained.
     // Spec 11 §4.3: `; sections …` when a section value filled the render.
@@ -960,7 +970,7 @@ drift
     }
     const indexedPaths = new Set(p.indexed.map((x) => x.path));
     const shown = named ? [named] : st;
-    const rows = driftList(shown, provided, new Set(p.reworded), indexedPaths, new Set(ws.forge.locals.get(ws.config.profile)?.ingredients.keys()), await metadataEdits(ws.root, p, shown));
+    const rows = driftList(shown, provided, new Set(p.reworded), indexedPaths, await metadataEdits(ws.root, p, shown));
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
@@ -1044,7 +1054,7 @@ drift
 
 drift
   .command("promote")
-  .description("Carry a hand-edited file to the Forge as a profile variant, behind git's gate, proved before any write; never writes the lock, the registry or the cache")
+  .description("Carry a hand-edited file to the Forge — a profile value, a profile variant, or the profile-local ingredient edited in place — behind git's gate, proved before any write; never writes the lock, the registry or the cache")
   .argument("<path>", "the hand-edited file, as `craftar status` prints it")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--forge <dir>", "the Forge directory to write (required for a URL Forge)")
@@ -2969,6 +2979,143 @@ forge
     }
     if (promotion.created.length) console.log(`  next     craftar forge variants — the old base ${o.dryRun ? "would show" : "now shows"} as ${promotion.created.length} variant(s) to unify`);
   });
+
+/**
+ * `forge localize` and `forge share` (spec 51 §5): gated as `forge promote` is — no remote Forge or cache tree, git
+ * with a commit and a clean tree, every overwritten or deleted path held, no created path ignored — and proved on a
+ * scratch copy against every profile and every registered workspace, so the registry must be `read`. No --no-impact.
+ */
+async function runForgeMove(command: MoveCommand, ref: string, o: { profile: string; forge?: string; workspace?: string; dryRun: boolean; json: boolean }): Promise<void> {
+  const f = await resolveForge({
+    forge: o.forge,
+    workspace: o.workspace,
+    refuseRemote: (url) => `the Forge of this workspace is remote (${url}) — clone it and pass --forge <dir>`,
+  });
+  await assertNotCacheTree(f.root, craftarHome()).catch((e) => fail(e instanceof Error ? e.message : String(e)));
+  if (f.commit === null) {
+    if (await gitIsRepo(f.root)) fail(`${f.root} has no commits yet — ${command} writes to the Forge and needs git as the undo`);
+    fail(`${f.root} is not a git repository — ${command} writes to the Forge and needs git as the undo`);
+  }
+  if (await gitDirty(f.root)) fail(`${f.root} is not a clean git checkout — commit or stash your changes first`);
+
+  let move: ForgeMove;
+  try {
+    move = command === "forge localize" ? await planLocalize(f, ref, o.profile) : await planShare(f, ref, o.profile);
+  } catch (e) {
+    return fail(errorText(e));
+  }
+  const forgeRel = (abs: string) => path.relative(f.root, abs).split(path.sep).join("/");
+  const unheld = await gitUnheld(f.root, move.mustHold);
+  for (const w of move.writes) {
+    if (w.created && (await gitIgnored(f.root, forgeRel(w.abs)))) unheld.push({ path: forgeRel(w.abs), reason: "ignored" });
+  }
+  if (unheld.length) fail(unheldMessage(command, f.root, unheld));
+
+  // The proof needs every registered workspace of this Forge (spec 51 §5.1, as --prune-recipes does).
+  let fw: Awaited<ReturnType<typeof forgeWorkspaces>>;
+  try {
+    fw = await forgeWorkspaces(craftarHome(), f.root);
+  } catch (e) {
+    return fail(`${command}: the registry could not be read (${errorText(e)}) — the move is proved against every registered workspace of this Forge`);
+  }
+  const before = await planAll(fw.workspaces, f);
+  const state = refineRegistryState(fw.state, before);
+  if (state !== "read") {
+    const why =
+      state === "off"
+        ? "the registry is off"
+        : state === "none"
+          ? "no workspace of this Forge is registered on this machine"
+          : "the registry names a workspace of this Forge that is missing or whose configuration does not read";
+    fail(`${command}: ${why} — the move is proved against every registered workspace of this Forge; sync one, or forget the missing ones, and re-run`);
+  }
+  const warnings = [...fw.warnings, ...move.warnings];
+  try {
+    warnings.push(...(await proveMove(f, move, fw.workspaces)));
+  } catch (e) {
+    return fail(errorText(e));
+  }
+
+  const journal: WriteJournal = [];
+  let impact: ImpactResult[] = [];
+  if (!o.dryRun) {
+    try {
+      await applyMove(move, journal);
+    } catch (e) {
+      fail(lateFailure(e, f.root, journal, command));
+    }
+    let after: Planned[];
+    try {
+      after = await planAll(fw.workspaces, await loadForge(f.root));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      after = fw.workspaces.map(() => ({ kind: "error", stage: "plan", message }));
+    }
+    impact = fw.workspaces.map((_, i) => impactOf(before[i], after[i]));
+  }
+
+  if (o.json) {
+    return console.log(
+      JSON.stringify(
+        {
+          ref: move.ref,
+          profile: move.profile,
+          dryRun: o.dryRun,
+          moved: move.moved,
+          recipes: move.recipes,
+          impact: impact.map((r, i) => ({
+            path: fw.workspaces[i].entry.path,
+            profile: fw.workspaces[i].entry.profile,
+            match: fw.workspaces[i].match,
+            via: fw.workspaces[i].via,
+            ref: fw.workspaces[i].ref,
+            state: r.state,
+            files: r.files,
+            error: r.error,
+          })),
+          warnings,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+  const where = command === "forge localize" ? `profile ${move.profile}` : "the root";
+  console.log(pc.bold(`craftar ${command} ${move.ref} → ${where}${o.dryRun ? " (dry run — nothing written)" : ""}`));
+  console.log(`  moved    ${move.moved.from} → ${move.moved.to}${move.to !== move.ref ? ` (now ${move.to})` : ""}`);
+  for (const r of move.recipes) console.log(`  recipe   ${r.name}: ${r.from} → ${r.to}`);
+  for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+  const n = (count: number) => `${count} workspace(s)`;
+  if (o.dryRun) console.log(`  impact   ${n(fw.workspaces.length)} proved on a scratch copy: not written, not compared`);
+  else if (impact.every((r) => r.state === "no-effect")) console.log(`  impact   ${n(impact.length)} planned before and after: no effect`);
+  else for (let i = 0; i < impact.length; i++) console.log(`  ${impactLine(fw.workspaces[i], impact[i])}`);
+}
+
+forge
+  .command("localize")
+  .description(
+    "Move a root ingredient only one profile resolves into that profile's folder (profiles/<p>/), with every root recipe that cites it and every one that extends those; a base-less variant becomes the local under its output name. Proved on a scratch copy against every profile and every registered workspace before anything is written. Needs a Forge at schema 8. Writes to the Forge, never commits",
+  )
+  .argument("<type/name>", "root ingredient (rule/x, or the base-less variant rule/x--<p>)")
+  .requiredOption("--profile <p>", "the one profile that resolves it")
+  .option("--forge <dir>", "Forge directory (instead of --workspace)")
+  .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
+  .option("--dry-run", "prove and show the move, write nothing in the Forge (the proof needs a writable temporary directory)", false)
+  .option("--json", "machine-readable output", false)
+  .action(async (ref: string, o) => runForgeMove("forge localize", ref, o));
+
+forge
+  .command("share")
+  .description(
+    "Move a profile's local ingredient (profiles/<p>/ingredients/) to the root, where every profile's catalogue sees it; its local recipes stay local and now cite the root. Proved on a scratch copy against every profile and every registered workspace before anything is written. Needs a Forge at schema 8. Writes to the Forge, never commits",
+  )
+  .argument("<type/name>", "the local ingredient (rule/x)")
+  .requiredOption("--profile <p>", "the profile that holds it")
+  .option("--forge <dir>", "Forge directory (instead of --workspace)")
+  .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
+  .option("--dry-run", "prove and show the move, write nothing in the Forge (the proof needs a writable temporary directory)", false)
+  .option("--json", "machine-readable output", false)
+  .action(async (ref: string, o) => runForgeMove("forge share", ref, o));
 
 /* ---------------------------------------------------------------- services ---------------------------------------------------------------- */
 const services = program.command("services").description("Local services of this workspace: run Docker Compose on what craftar.lock records under .craftar/");

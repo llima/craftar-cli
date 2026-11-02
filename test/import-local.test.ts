@@ -1,0 +1,405 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import YAML from "yaml";
+import { listFiles, loadForge } from "../src/core/forge.js";
+import { resolve } from "../src/core/resolve.js";
+import { WorkspaceConfigSchema } from "../src/schema/index.js";
+import { runCli } from "./helpers/cli.js";
+import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
+import { git } from "./helpers/remote.js";
+
+/** Spec 51 §5.3 and acceptance 8: `craftar import --local=never|auto|always`. */
+
+const roots: string[] = [];
+afterEach(async () => {
+  while (roots.length) await fs.rm(roots.pop()!, { recursive: true, force: true });
+});
+
+const localRule = (p: string, name: string, body: string) => ({
+  [`profiles/${p}/ingredients/rules/${name}/ingredient.yaml`]: YAML.stringify({ type: "rule", name }),
+  [`profiles/${p}/ingredients/rules/${name}/rule.md`]: body,
+});
+const localRecipe = (p: string, name: string, ingredients: string[]) => ({ [`profiles/${p}/recipes/${name}.yaml`]: YAML.stringify({ name, ingredients }) });
+
+const spec: ForgeSpec = {
+  ingredients: [rule("style", "# Style\n")],
+  recipes: [recipe("base", ["rule/style"])],
+  profiles: [profile("acme", ["base"]), profile("globex", ["base"])],
+};
+
+async function setup(s: ForgeSpec = spec, opts: { schema?: number; files?: Record<string, string>; ws?: Record<string, string>; profile?: string } = {}) {
+  const root = await tmpDir("craftar-import-local-");
+  roots.push(root);
+  const forge = path.join(root, "forge");
+  await makeForge(forge, s);
+  await fs.writeFile(path.join(forge, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: opts.schema ?? 8 }));
+  if (opts.files) await writeFiles(forge, opts.files);
+  const ws = path.join(root, "ws");
+  await makeWorkspace(ws, forge, { config: { profile: opts.profile ?? "acme" } });
+  const sync = runCli(["sync", "--workspace", ws]);
+  expect(sync.code, sync.stderr).toBe(0);
+  if (opts.ws) await writeFiles(ws, opts.ws);
+  return { root, forge, ws };
+}
+
+async function snapshot(dir: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const f of await listFiles(dir)) if (!f.startsWith(".git/") && (await fs.lstat(path.join(dir, f))).isFile()) out[f] = await fs.readFile(path.join(dir, f), "utf8");
+  return out;
+}
+
+const importInto = (s: { ws: string; forge: string }, local?: string, profileName = "acme") =>
+  runCli(["import", "--from", "claude-code", "--workspace", s.ws, "--forge", s.forge, "--profile", profileName, ...(local ? [`--local=${local}`] : [])]);
+
+describe("import --local (spec 51 §5.3)", () => {
+  it("acceptance 8: --local=auto writes a new rule under profiles/acme, wires it into acme-local last, and a re-import reuses it", async () => {
+    const s = await setup(spec, { ws: { ".claude/rules/new.md": "# New\n" } });
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("local to profile acme: rule/new (profiles/acme/ingredients/rules/new) — created there");
+    const after = await snapshot(s.forge);
+    expect(after["profiles/acme/ingredients/rules/new/rule.md"]).toBe("# New\n");
+    expect(Object.keys(after).some((k) => k.startsWith("ingredients/rules/new"))).toBe(false);
+    expect(YAML.parse(after["profiles/acme/recipes/acme-local.yaml"]).ingredients).toEqual(["rule/new"]);
+    expect(YAML.parse(after["profiles/acme/profile.yaml"]).recipes).toEqual(["base", "acme-local"]);
+    expect(YAML.parse(after["recipes/base.yaml"]).ingredients).toEqual(["rule/style"]);
+    expect(runCli(["sync", "--check", "--workspace", s.ws]).code).toBe(0);
+
+    const again = importInto(s, "auto");
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.stdout).toContain("local to profile acme: rule/new (profiles/acme/ingredients/rules/new) — reused there");
+    const twice = await snapshot(s.forge);
+    for (const k of Object.keys(after)) if (k !== "profiles/acme/profile.yaml") expect(twice[k], k).toBe(after[k]);
+    expect(YAML.parse(twice["profiles/acme/profile.yaml"]).recipes).toEqual(["base", "acme-local"]);
+  });
+
+  it("--report names each new local and the local recipe by path, never by text", async () => {
+    const s = await setup(spec, { ws: { ".claude/rules/new.md": "# New, private words\n" } });
+    const out = path.join(s.root, "report.md");
+    const r = runCli(["import", "--from", "claude-code", "--workspace", s.ws, "--forge", s.forge, "--profile", "acme", "--local=auto", "--report", out]);
+    expect(r.code, r.stderr).toBe(0);
+    const md = await fs.readFile(out, "utf8");
+    expect(md).toContain("## Created as a local of profile acme (1)\n- rule/new (profiles/acme/ingredients/rules/new)");
+    expect(md).toContain("## Wired into acme-local (1)\n- profiles/acme/recipes/acme-local.yaml: rule/new");
+    expect(md).not.toContain("private words");
+  });
+
+  it("acceptance 8: --local=always over a differing root base refuses, naming the source, the Forge untouched", async () => {
+    const s = await setup(spec, { ws: { ".claude/rules/style.md": "# Style, ours\n" } });
+    const before = await snapshot(s.forge);
+    const r = importInto(s, "always");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("import: .claude/rules/style.md differs from rule/style at the root — --local=always writes no ingredient at the root");
+    expect(r.stderr).toContain("The Forge was left untouched.");
+    expect(await snapshot(s.forge)).toEqual(before);
+  });
+
+  it("--local=always refuses a differing root variant of the profile, and reuses an equal one", async () => {
+    const withVariant: ForgeSpec = { ...spec, ingredients: [...spec.ingredients!, rule("style--acme", "# Style, acme\n", { as: "style" })], recipes: [...spec.recipes!, recipe("base--acme", ["rule/style--acme"])], profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"])] };
+    const same = await setup(withVariant);
+    const ok = importInto(same, "always");
+    expect(ok.code, ok.stderr).toBe(0);
+    const differs = await setup(withVariant, { ws: { ".claude/rules/style.md": "# Style, acme again\n" } });
+    const before = await snapshot(differs.forge);
+    const r = importInto(differs, "always");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("import: .claude/rules/style.md differs from rule/style--acme, profile acme's variant at the root — --local=always does not rewrite a root ingredient");
+    expect(await snapshot(differs.forge)).toEqual(before);
+  });
+
+  it("--local other than never is refused below schema 8", async () => {
+    const s = await setup(spec, { schema: 7, ws: { ".claude/rules/new.md": "# New\n" } });
+    const r = importInto(s, "auto");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("import: --local=auto needs a Forge at schema 8 or above");
+    const bad = runCli(["import", "--from", "claude-code", "--workspace", s.ws, "--forge", s.forge, "--profile", "acme", "--local=sometimes"]);
+    expect(bad.code).toBe(1);
+    expect(bad.stderr).toContain("--local takes never, auto or always");
+  });
+
+  it("under never, the two refusals name --local=auto", async () => {
+    const differs = await setup({ ...spec, profiles: [profile("acme", ["base", "acme-extra"]), profile("globex", ["base"])] }, { files: { ...localRule("acme", "x", "# X\n"), ...localRecipe("acme", "acme-extra", ["rule/x"]) }, ws: {} });
+    await fs.writeFile(path.join(differs.ws, ".claude/rules/x.md"), "# X, edited\n");
+    expect(importInto(differs).stderr).toContain("— edit the local in the Forge and re-run, or re-run with --local=auto to rewrite it");
+    const i14 = await setup({ ...spec, profiles: [profile("acme", ["base"]), profile("globex", ["base", "globex-extra"])] }, { files: { ...localRule("globex", "secret", "# S\n"), ...localRecipe("globex", "globex-extra", ["rule/secret"]) }, ws: { ".claude/rules/secret.md": "# mine\n" } });
+    const r = importInto(i14);
+    expect(r.stderr).toContain("rename the source in the workspace, or re-run with --local=auto to keep it local to this profile");
+    expect(r.stderr).not.toContain("globex");
+  });
+
+  it("under auto, a source that differs from the profile's local rewrites it, warning each {{key}} and section it loses", async () => {
+    const s = await setup(
+      { ...spec, profiles: [profile("acme", ["base", "acme-extra"], ["claude-code"], { params: { tool: "npm" } }), profile("globex", ["base"])] },
+      { schema: 8, files: { ...localRule("acme", "x", "Use {{tool}}.\n<!-- craftar:section tips -->\nTip.\n<!-- /craftar:section -->\n"), ...localRecipe("acme", "acme-extra", ["rule/x"]) } },
+    );
+    await fs.writeFile(path.join(s.ws, ".claude/rules/x.md"), "Use npm, always.\n");
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("local to profile acme: rule/x (profiles/acme/ingredients/rules/x) — rewritten from .claude/rules/x.md");
+    expect(r.stdout).toContain("rule/x: local rewritten from .claude/rules/x.md — {{tool}} is no longer in it");
+    expect(r.stdout).toContain("rule/x: local rewritten from .claude/rules/x.md — section tips is no longer in it");
+    expect(await fs.readFile(path.join(s.forge, "profiles/acme/ingredients/rules/x/rule.md"), "utf8")).toBe("Use npm, always.\n");
+    expect(runCli(["sync", "--check", "--workspace", s.ws]).code).toBe(0);
+  });
+
+  it("under auto, a name another profile holds as a local becomes this profile's own local", async () => {
+    const s = await setup({ ...spec, profiles: [profile("acme", ["base"]), profile("globex", ["base", "globex-extra"])] }, { files: { ...localRule("globex", "secret", "# S\n"), ...localRecipe("globex", "globex-extra", ["rule/secret"]) }, ws: { ".claude/rules/secret.md": "# mine\n" } });
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    const f = await loadForge(s.forge);
+    expect(f.locals.get("acme")!.ingredients.has("rule/secret" as never)).toBe(true);
+    expect(f.locals.get("globex")!.ingredients.has("rule/secret" as never)).toBe(true);
+    expect(r.stdout).not.toContain("globex");
+  });
+
+  it("under auto, a base-less root variant of the profile is reused, and no root base is created beside it", async () => {
+    const s = await setup({ ingredients: [rule("style", "# S\n"), rule("x--acme", "# X acme\n", { as: "x" })], recipes: [recipe("base", ["rule/style", "rule/x--acme"])], profiles: [profile("acme", ["base"])] });
+    const before = await snapshot(s.forge);
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    const after = await snapshot(s.forge);
+    expect(Object.keys(after).some((k) => k.startsWith("ingredients/rules/x/"))).toBe(false);
+    expect(after["ingredients/rules/x--acme/rule.md"]).toBe(before["ingredients/rules/x--acme/rule.md"]);
+    expect(runCli(["sync", "--check", "--workspace", s.ws]).code).toBe(0);
+    await fs.writeFile(path.join(s.ws, ".claude/rules/x.md"), "# X acme, changed\n");
+    const changed = await snapshot(s.forge);
+    const refused = importInto(s, "always");
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("import: .claude/rules/x.md differs from rule/x--acme, profile acme's variant at the root");
+    expect(await snapshot(s.forge)).toEqual(changed);
+  });
+
+  it("a source equal to the base while a differing variant exists: the base is reused under each --local", async () => {
+    for (const mode of ["never", "auto", "always"]) {
+      const s = await setup({ ...spec, ingredients: [...spec.ingredients!, rule("style--acme", "# Style, acme\n", { as: "style" })], recipes: [...spec.recipes!, recipe("base--acme", ["rule/style--acme"])], profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"])] });
+      await fs.writeFile(path.join(s.ws, ".claude/rules/style.md"), "# Style\n");
+      const r = importInto(s, mode);
+      expect(r.code, `${mode}: ${r.stderr}`).toBe(0);
+      const res = resolve(await loadForge(s.forge), WorkspaceConfigSchema.parse({ forge: ".", profile: "acme" }));
+      expect(res.ingredients.map((i) => i.ref), mode).toEqual(["rule/style"]);
+      const st = JSON.parse(runCli(["status", "--json", "--workspace", s.ws]).stdout);
+      expect(st.statuses.filter((x: { state: string }) => x.state !== "unchanged"), mode).toEqual([]);
+    }
+  });
+
+  it("a hand-written Kiro steering file under --local=auto becomes a local, and a re-import reuses it", async () => {
+    const s = await setup({ ...spec, profiles: [profile("acme", ["base"], ["claude-code", "kiro"]), profile("globex", ["base"])] }, { ws: { ".kiro/steering/notes.md": "# Notes\nKeep it short.\n" } });
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    const f = await loadForge(s.forge);
+    expect(f.locals.get("acme")!.ingredients.has("steering/notes" as never)).toBe(true);
+    expect(f.recipes.has("acme-steering")).toBe(false);
+    expect(runCli(["sync", "--check", "--workspace", s.ws]).code).toBe(0);
+    const again = importInto(s, "auto");
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.stdout).toContain("steering/notes (profiles/acme/ingredients/steerings/notes) — reused there");
+  });
+
+  it("forge localize for acme, then a globex import of the same name under --local=auto", async () => {
+    const s = await setup({ ingredients: [rule("style", "# S\n"), rule("x", "# X\n")], recipes: [recipe("base", ["rule/style"]), recipe("stack-x", ["rule/x"])], profiles: [profile("acme", ["base", "stack-x"]), profile("globex", ["base"])] });
+    git(s.forge, "init", "-q", "-b", "main");
+    git(s.forge, "add", "-A");
+    git(s.forge, "commit", "-q", "-m", "forge");
+    const loc = runCli(["forge", "localize", "rule/x", "--profile", "acme", "--forge", s.forge]);
+    expect(loc.code, loc.stderr).toBe(0);
+    const gws = path.join(s.root, "globex-ws");
+    await makeWorkspace(gws, s.forge, { config: { profile: "globex" } });
+    expect(runCli(["sync", "--workspace", gws]).code).toBe(0);
+    await writeFiles(gws, { ".claude/rules/x.md": "# X for globex\n" });
+    const r = importInto({ ws: gws, forge: s.forge }, "auto", "globex");
+    expect(r.code, r.stderr).toBe(0);
+    const f = await loadForge(s.forge);
+    expect(f.locals.get("globex")!.ingredients.has("rule/x" as never)).toBe(true);
+    expect(runCli(["sync", "--check", "--workspace", s.ws]).code).toBe(0);
+  });
+
+  it("a reused local no resolved recipe cites: refused under never, wired into acme-local under auto", async () => {
+    const files = { ...localRule("acme", "x", "# X\n"), ...localRecipe("acme", "acme-extra", ["rule/x"]) };
+    const s = await setup({ ...spec, profiles: [profile("acme", ["base", "acme-extra"]), profile("globex", ["base"])] }, { files });
+    await writeFiles(s.forge, localRecipe("acme", "acme-extra", []));
+    const before = await snapshot(s.forge);
+    const never = importInto(s);
+    expect(never.code).toBe(1);
+    expect(never.stderr).toContain("import: rule/x (profiles/acme/ingredients/rules/x) matches the workspace, but no recipe profile acme resolves cites it");
+    expect(await snapshot(s.forge)).toEqual(before);
+    const auto = importInto(s, "auto");
+    expect(auto.code, auto.stderr).toBe(0);
+    const after = await snapshot(s.forge);
+    expect(YAML.parse(after["profiles/acme/recipes/acme-local.yaml"]).ingredients).toEqual(["rule/x"]);
+    expect(YAML.parse(after["profiles/acme/profile.yaml"]).recipes).toEqual(["base", "acme-extra", "acme-local"]);
+    expect(runCli(["sync", "--check", "--workspace", s.ws]).code).toBe(0);
+  });
+
+  it("a moved stack-x whose local's source is gone: a re-import keeps the local and the plan is unchanged", async () => {
+    const s = await setup({ ingredients: [rule("style", "# S\n"), rule("x", "# X\n")], recipes: [recipe("base", ["rule/style"]), recipe("stack-x", ["rule/x"])], profiles: [profile("acme", ["base", "stack-x"]), profile("globex", ["base"])] });
+    git(s.forge, "init", "-q", "-b", "main");
+    git(s.forge, "add", "-A");
+    git(s.forge, "commit", "-q", "-m", "forge");
+    expect(runCli(["forge", "localize", "rule/x", "--profile", "acme", "--forge", s.forge]).code).toBe(0);
+    await fs.rm(path.join(s.ws, ".claude/rules/x.md"));
+    const r = importInto(s);
+    expect(r.code, r.stderr).toBe(0);
+    // The moved stack-x is not a recipe import computes, so it is left as it is (no kept-local warning: that one is
+    // worded for a computed recipe of the folder — a Part A loose end, recorded in the spec).
+    expect(r.stdout).toContain("recipes: base");
+    expect(await fs.readFile(path.join(s.forge, "profiles/acme/ingredients/rules/x/rule.md"), "utf8")).toBe("# X\n");
+    const st = JSON.parse(runCli(["status", "--json", "--workspace", s.ws]).stdout);
+    expect(st.statuses.filter((x: { state: string }) => x.state !== "unchanged").map((x: { path: string; state: string }) => [x.path, x.state])).toEqual([[".claude/rules/x.md", "new"]]);
+  });
+
+  const hookMeta = (name: string, extra: Record<string, unknown> = {}) => ({
+    type: "hook",
+    name,
+    files: ["guard.py"],
+    params: { "hooks.python": { default: "python3" } },
+    registration: [{ event: "PreToolUse", matcher: "Bash", command: "{{hooks.python}}", args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard.py"] }],
+    ...extra,
+  });
+
+  it("under auto, a rewritten local hook keeps its registration and the params it cites", async () => {
+    const s = await setup(
+      { ...spec, profiles: [profile("acme", ["base", "acme-extra"]), profile("globex", ["base"])] },
+      { files: { "profiles/acme/ingredients/hooks/guard/ingredient.yaml": YAML.stringify(hookMeta("guard")), "profiles/acme/ingredients/hooks/guard/guard.py": 'print("ok")\n', ...localRecipe("acme", "acme-extra", ["hook/guard"]) } },
+    );
+    const example = await fs.readFile(path.join(s.ws, ".claude/settings.craftar.example.json"), "utf8");
+    await fs.writeFile(path.join(s.ws, ".claude/hooks/guard.py"), 'print("ok, edited")\n');
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    const meta = YAML.parse(await fs.readFile(path.join(s.forge, "profiles/acme/ingredients/hooks/guard/ingredient.yaml"), "utf8"));
+    expect(meta.registration).toEqual(hookMeta("guard").registration);
+    expect(meta.params).toEqual({ "hooks.python": { default: "python3" } });
+    expect(runCli(["sync", "--workspace", s.ws]).code).toBe(0);
+    expect(await fs.readFile(path.join(s.ws, ".claude/settings.craftar.example.json"), "utf8")).toBe(example);
+  });
+
+  it("under auto, a rewritten base-less root variant hook keeps its registration, and one another profile resolves is refused (I8)", async () => {
+    const v = { meta: hookMeta("guard--acme", { as: "guard" }), files: { "guard.py": 'print("ok")\n' } };
+    const s = await setup({ ingredients: [rule("style", "# S\n"), v], recipes: [recipe("base", ["rule/style", "hook/guard--acme"])], profiles: [profile("acme", ["base"])] });
+    await fs.writeFile(path.join(s.ws, ".claude/hooks/guard.py"), 'print("ok, edited")\n');
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    const meta = YAML.parse(await fs.readFile(path.join(s.forge, "ingredients/hooks/guard--acme/ingredient.yaml"), "utf8"));
+    expect(meta.registration).toEqual(hookMeta("guard").registration);
+    expect(meta.as).toBe("guard");
+
+    const shared = await setup({ ingredients: [rule("style", "# S\n"), v], recipes: [recipe("base", ["rule/style", "hook/guard--acme"])], profiles: [profile("acme", ["base"]), profile("globex", ["base"])] });
+    await fs.writeFile(path.join(shared.ws, ".claude/hooks/guard.py"), 'print("ok, edited")\n');
+    const before = await snapshot(shared.forge);
+    const refused = importInto(shared, "auto");
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("import: hook/guard--acme is also used by profile globex — its files would change there");
+    expect(await snapshot(shared.forge)).toEqual(before);
+  });
+
+  // Review round 2: authEnv on both rewrite paths, an unchanged local hook reused under never, and a server citation lost.
+  const mcpMeta = (name: string, extra: Record<string, unknown> = {}) => ({ type: "mcp", name, authEnv: ["IDP_TOKEN"], server: { command: "npx", args: ["idp"] }, ...extra });
+  const editServer = async (ws: string, args: string[]) => {
+    const file = path.join(ws, ".mcp.json");
+    const j = JSON.parse(await fs.readFile(file, "utf8"));
+    j.mcpServers.idp.args = args;
+    await fs.writeFile(file, JSON.stringify(j, null, 2) + "\n");
+  };
+
+  it("under auto, a rewritten local MCP server keeps its authEnv", async () => {
+    const s = await setup(
+      { ...spec, profiles: [profile("acme", ["base", "acme-extra"]), profile("globex", ["base"])] },
+      { files: { "profiles/acme/ingredients/mcp/idp/ingredient.yaml": YAML.stringify(mcpMeta("idp")), ...localRecipe("acme", "acme-extra", ["mcp/idp"]) } },
+    );
+    await editServer(s.ws, ["idp", "--v2"]);
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    const meta = YAML.parse(await fs.readFile(path.join(s.forge, "profiles/acme/ingredients/mcp/idp/ingredient.yaml"), "utf8"));
+    expect(meta.authEnv).toEqual(["IDP_TOKEN"]);
+    expect(meta.server.args).toEqual(["idp", "--v2"]);
+  });
+
+  it("under auto, a rewritten base-less root variant MCP server keeps its authEnv", async () => {
+    const s = await setup({ ingredients: [rule("style", "# S\n"), { meta: mcpMeta("idp--acme", { as: "idp" }) }], recipes: [recipe("base", ["rule/style", "mcp/idp--acme"])], profiles: [profile("acme", ["base"])] });
+    await editServer(s.ws, ["idp", "--v2"]);
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    const meta = YAML.parse(await fs.readFile(path.join(s.forge, "ingredients/mcp/idp--acme/ingredient.yaml"), "utf8"));
+    expect(meta.authEnv).toEqual(["IDP_TOKEN"]);
+    expect(meta.server.args).toEqual(["idp", "--v2"]);
+  });
+
+  it("an unchanged local hook with a registration is reused under never, not refused as different", async () => {
+    const s = await setup(
+      { ...spec, profiles: [profile("acme", ["base", "acme-extra"]), profile("globex", ["base"])] },
+      { files: { "profiles/acme/ingredients/hooks/guard/ingredient.yaml": YAML.stringify(hookMeta("guard")), "profiles/acme/ingredients/hooks/guard/guard.py": 'print("ok")\n', ...localRecipe("acme", "acme-extra", ["hook/guard"]) } },
+    );
+    const before = await snapshot(s.forge);
+    const r = importInto(s);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("local to profile acme: hook/guard (profiles/acme/ingredients/hooks/guard) — reused there");
+    for (const k of Object.keys(before)) if (k !== "profiles/acme/profile.yaml") expect((await snapshot(s.forge))[k], k).toBe(before[k]);
+  });
+
+  it("at schema 9, under auto, a rewritten local command whose description cited a key says it is gone", async () => {
+    const s = await setup(
+      { ...spec, profiles: [profile("acme", ["base", "acme-extra"], ["claude-code"], { params: { org: "acme-org" } }), profile("globex", ["base"])] },
+      {
+        schema: 9,
+        files: {
+          "profiles/acme/ingredients/commands/ship/ingredient.yaml": YAML.stringify({ type: "command", name: "ship", description: "Ship {{org}}", file: "command.md" }),
+          "profiles/acme/ingredients/commands/ship/command.md": "Ship it.\n",
+          ...localRecipe("acme", "acme-extra", ["command/ship"]),
+        },
+      },
+    );
+    const file = path.join(s.ws, ".claude/commands/ship.md");
+    expect(await fs.readFile(file, "utf8")).toContain("Ship acme-org");
+    await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace("Ship it.", "Ship it now."));
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("command/ship: local rewritten from .claude/commands/ship.md — {{org}} is no longer in it");
+  });
+
+  it("under auto, a rewritten local MCP server whose server cited a declared key says it is gone", async () => {
+    const s = await setup(
+      { ...spec, profiles: [profile("acme", ["base", "acme-extra"], ["claude-code"], { params: { host: "idp.example.invalid" } }), profile("globex", ["base"])] },
+      { files: { "profiles/acme/ingredients/mcp/idp/ingredient.yaml": YAML.stringify({ type: "mcp", name: "idp", params: { host: {} }, server: { command: "npx", args: ["idp", "--host", "{{host}}"] } }), ...localRecipe("acme", "acme-extra", ["mcp/idp"]) } },
+    );
+    await editServer(s.ws, ["idp", "--other"]);
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("mcp/idp: local rewritten from .mcp.json — {{host}} is no longer in it");
+    expect(r.stdout).not.toContain("idp.example.invalid");
+  });
+
+  // Review round 3: a local reached by decide()'s literal branch — its file cites a key a recipe the profile does not
+  // resolve defaults, so sync leaves the placeholder as written. Reused under never, its literal warning said, at an
+  // explicit targets and at the default ones.
+  for (const targets of [["claude-code"], undefined]) {
+    it(`an unchanged local hook compared literally is reused under never, with its warning (targets ${targets ? "claude-code" : "default"})`, async () => {
+      const meta = { ...hookMeta("guard"), ...(targets ? { targets } : {}) };
+      const s = await setup(
+        { ...spec, recipes: [...spec.recipes!, recipe("other", ["rule/style"], { params: { "lit.key": { default: "x" } } })], profiles: [profile("acme", ["base", "acme-extra"]), profile("globex", ["base"])] },
+        { files: { "profiles/acme/ingredients/hooks/guard/ingredient.yaml": YAML.stringify(meta), "profiles/acme/ingredients/hooks/guard/guard.py": 'print("{{lit.key}}")\n', ...localRecipe("acme", "acme-extra", ["hook/guard"]) } },
+      );
+      const before = await snapshot(s.forge);
+      const r = importInto(s);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toContain("local to profile acme: hook/guard (profiles/acme/ingredients/hooks/guard) — reused there");
+      expect(r.stdout).toContain("lit.key");
+      const after = await snapshot(s.forge);
+      for (const k of Object.keys(before)) if (k !== "profiles/acme/profile.yaml") expect(after[k], k).toBe(before[k]);
+    });
+  }
+
+  it("forge localize of a rule held in base--acme, then a re-import: every file unchanged", async () => {
+    const s = await setup({ ingredients: [rule("style", "# S\n"), rule("x", "# X\n")], recipes: [recipe("base", ["rule/style"]), recipe("base--acme", ["rule/style", "rule/x"])], profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"])] });
+    git(s.forge, "init", "-q", "-b", "main");
+    git(s.forge, "add", "-A");
+    git(s.forge, "commit", "-q", "-m", "forge");
+    const loc = runCli(["forge", "localize", "rule/x", "--profile", "acme", "--forge", s.forge]);
+    expect(loc.code, loc.stderr).toBe(0);
+    expect(await fs.readFile(path.join(s.forge, "profiles/acme/recipes/base--acme.yaml"), "utf8")).toContain("rule/x");
+    const r = importInto(s);
+    expect(r.code, r.stderr).toBe(0);
+    const st = JSON.parse(runCli(["status", "--json", "--workspace", s.ws]).stdout);
+    expect(st.statuses.filter((x: { state: string }) => x.state !== "unchanged")).toEqual([]);
+    expect(Object.keys(await snapshot(s.forge)).some((k) => k.startsWith("recipes/base--acme"))).toBe(false);
+  });
+});

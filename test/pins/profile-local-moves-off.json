@@ -1,0 +1,203 @@
+{
+  "importReuse": {
+    "code": 0,
+    "stdout": "Imported <root>/ws → <root>/forge as profile \"acme\"\n  0 created, 2 reused, 1 variants, 0 rejected\n  variant rule/workflow--acme — differs from rule/workflow already in the Forge\n  local to profile acme: rule/x (profiles/acme/ingredients/rules/x) — reused there\n  profile profiles/acme/profile.yaml unchanged\n  recipes: base--acme\n",
+    "stderr": "",
+    "forge": {
+      "craftar.forge.yaml": "name: test-forge\nschema: 8\n",
+      "ingredients/rules/style/ingredient.yaml": "type: rule\nname: style\n",
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/rules/workflow--acme/ingredient.yaml": "type: rule\nname: workflow--acme\ninclusion: always\nfile: rule.md\ntargets: \"*\"\ntags: []\norigin:\n  workspace: ws\n  path: .claude/rules/workflow.md\nas: workflow\n",
+      "ingredients/rules/workflow--acme/rule.md": "acme text\n",
+      "ingredients/rules/workflow/ingredient.yaml": "type: rule\nname: workflow\n",
+      "ingredients/rules/workflow/rule.md": "base text\n",
+      "profiles/acme/ingredients/rules/x/ingredient.yaml": "type: rule\nname: x\n",
+      "profiles/acme/ingredients/rules/x/rule.md": "# X\n",
+      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\n  - acme-extra\ntargets:\n  - claude-code\n",
+      "profiles/acme/recipes/acme-extra.yaml": "name: acme-extra\ningredients:\n  - rule/x\n",
+      "profiles/globex/ingredients/rules/secret/ingredient.yaml": "type: rule\nname: secret\n",
+      "profiles/globex/ingredients/rules/secret/rule.md": "# S\n",
+      "profiles/globex/profile.yaml": "name: globex\nrecipes:\n  - base\n  - globex-extra\ntargets:\n  - claude-code\n",
+      "profiles/globex/recipes/globex-extra.yaml": "name: globex-extra\ningredients:\n  - rule/secret\n",
+      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/style\n  - rule/workflow--acme\n",
+      "recipes/base.yaml": "name: base\ningredients:\n  - rule/style\n  - rule/workflow\n"
+    }
+  },
+  "importDiffers": {
+    "code": 1,
+    "stdout": "",
+    "stderr": "error: import: .claude/rules/x.md differs from rule/x, local to profile acme (profiles/acme/ingredients/rules/x) — edit the local in the Forge, then re-run\nThe Forge was left untouched.\n"
+  },
+  "importI14": {
+    "code": 1,
+    "stdout": "",
+    "stderr": "error: import: I14 .claude/rules/secret.md would become rule/secret at the root, a name another profile holds as a local — the Forge would not load; rename the source in the workspace\nThe Forge was left untouched.\n"
+  },
+  "importSchema7": {
+    "code": 0,
+    "stdout": "Imported <root>/ws → <root>/forge as profile \"acme\"\n  0 created, 1 reused, 1 variants, 0 rejected\n  variant rule/workflow--acme — differs from rule/workflow already in the Forge\n  profile profiles/acme/profile.yaml unchanged\n  recipes: base--acme\n",
+    "stderr": "",
+    "forge": {
+      "craftar.forge.yaml": "name: test-forge\nschema: 7\n",
+      "ingredients/rules/style/ingredient.yaml": "type: rule\nname: style\n",
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/rules/workflow--acme/ingredient.yaml": "type: rule\nname: workflow--acme\ninclusion: always\nfile: rule.md\ntargets: \"*\"\ntags: []\norigin:\n  workspace: ws\n  path: .claude/rules/workflow.md\nas: workflow\n",
+      "ingredients/rules/workflow--acme/rule.md": "acme text\n",
+      "ingredients/rules/workflow/ingredient.yaml": "type: rule\nname: workflow\n",
+      "ingredients/rules/workflow/rule.md": "base text\n",
+      "profiles/acme/ingredients/rules/x/ingredient.yaml": "type: rule\nname: x\n",
+      "profiles/acme/ingredients/rules/x/rule.md": "# X\n",
+      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\ntargets:\n  - claude-code\n",
+      "profiles/acme/recipes/acme-extra.yaml": "name: acme-extra\ningredients:\n  - rule/x\n",
+      "profiles/globex/ingredients/rules/secret/ingredient.yaml": "type: rule\nname: secret\n",
+      "profiles/globex/ingredients/rules/secret/rule.md": "# S\n",
+      "profiles/globex/profile.yaml": "name: globex\nrecipes:\n  - base\ntargets:\n  - claude-code\n",
+      "profiles/globex/recipes/globex-extra.yaml": "name: globex-extra\ningredients:\n  - rule/secret\n",
+      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/style\n  - rule/workflow--acme\n",
+      "recipes/base.yaml": "name: base\ningredients:\n  - rule/style\n  - rule/workflow\n"
+    }
+  },
+  "driftShow": {
+    "code": 0,
+    "json": {
+      "workspace": "<root>/ws",
+      "profile": "acme",
+      "files": [
+        {
+          "path": ".claude/rules/style.md",
+          "state": "drift",
+          "target": "claude-code",
+          "ingredient": "rule/style",
+          "forge": "same",
+          "promotable": true,
+          "reason": null
+        },
+        {
+          "path": ".claude/rules/x.md",
+          "state": "drift",
+          "target": "claude-code",
+          "ingredient": "rule/x",
+          "forge": "same",
+          "promotable": false,
+          "reason": "profile-local"
+        }
+      ],
+      "warnings": [],
+      "unsetParams": []
+    },
+    "stderr": ""
+  },
+  "driftPromoteRoot": {
+    "code": 0,
+    "json": {
+      "workspace": "<root>/ws",
+      "forge": "<root>/forge",
+      "profile": "acme",
+      "dryRun": false,
+      "path": ".claude/rules/style.md",
+      "ingredient": "rule/style",
+      "outcome": "variant",
+      "promoted": "rule/style--acme",
+      "written": [
+        {
+          "path": "ingredients/rules/style--acme/ingredient.yaml",
+          "action": "created"
+        },
+        {
+          "path": "ingredients/rules/style--acme/rule.md",
+          "action": "created"
+        },
+        {
+          "path": "recipes/base--acme.yaml",
+          "action": "edited"
+        }
+      ],
+      "params": [],
+      "sections": [],
+      "flattened": {
+        "params": [],
+        "sections": []
+      },
+      "dependents": [],
+      "nextSync": {
+        "counts": {}
+      },
+      "impact": {
+        "registry": "read",
+        "workspaces": []
+      },
+      "warnings": []
+    },
+    "stderr": "",
+    "forge": {
+      "craftar.forge.yaml": "name: test-forge\nschema: 8\n",
+      "ingredients/rules/style--acme/ingredient.yaml": "name: style--acme\ntargets: \"*\"\ntags: []\ntype: rule\ninclusion: always\nfile: rule.md\nas: style\norigin:\n  workspace: ws\n  path: .claude/rules/style.md\n",
+      "ingredients/rules/style--acme/rule.md": "# Style, edited by hand\n",
+      "ingredients/rules/style/ingredient.yaml": "type: rule\nname: style\n",
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/rules/workflow--acme/ingredient.yaml": "type: rule\nname: workflow--acme\nas: workflow\n",
+      "ingredients/rules/workflow--acme/rule.md": "acme text\n",
+      "ingredients/rules/workflow/ingredient.yaml": "type: rule\nname: workflow\n",
+      "ingredients/rules/workflow/rule.md": "base text\n",
+      "profiles/acme/ingredients/rules/x/ingredient.yaml": "type: rule\nname: x\n",
+      "profiles/acme/ingredients/rules/x/rule.md": "# X\n",
+      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\n  - acme-extra\ntargets:\n  - claude-code\n",
+      "profiles/acme/recipes/acme-extra.yaml": "name: acme-extra\ningredients:\n  - rule/x\n",
+      "profiles/globex/ingredients/rules/secret/ingredient.yaml": "type: rule\nname: secret\n",
+      "profiles/globex/ingredients/rules/secret/rule.md": "# S\n",
+      "profiles/globex/profile.yaml": "name: globex\nrecipes:\n  - base\n  - globex-extra\ntargets:\n  - claude-code\n",
+      "profiles/globex/recipes/globex-extra.yaml": "name: globex-extra\ningredients:\n  - rule/secret\n",
+      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/style--acme\n  - rule/workflow--acme\n",
+      "recipes/base.yaml": "name: base\ningredients:\n  - rule/style\n  - rule/workflow\n"
+    }
+  },
+  "forgePromote": {
+    "code": 0,
+    "json": {
+      "base": "rule/workflow",
+      "profile": "acme",
+      "dryRun": false,
+      "removed": "rule/workflow--acme",
+      "created": [
+        "rule/workflow--globex"
+      ],
+      "recipes": {
+        "edited": [
+          "base--acme"
+        ],
+        "created": [
+          {
+            "name": "base--globex",
+            "from": "base"
+          }
+        ]
+      },
+      "profiles": [
+        "globex"
+      ],
+      "impact": [],
+      "warnings": []
+    },
+    "stderr": "",
+    "forge": {
+      "craftar.forge.yaml": "name: test-forge\nschema: 8\n",
+      "ingredients/rules/style/ingredient.yaml": "type: rule\nname: style\n",
+      "ingredients/rules/style/rule.md": "# Style\n",
+      "ingredients/rules/workflow--globex/ingredient.yaml": "type: rule\nname: workflow--globex\nas: workflow\n",
+      "ingredients/rules/workflow--globex/rule.md": "base text\n",
+      "ingredients/rules/workflow/ingredient.yaml": "type: rule\nname: workflow\n",
+      "ingredients/rules/workflow/rule.md": "acme text\n",
+      "profiles/acme/ingredients/rules/x/ingredient.yaml": "type: rule\nname: x\n",
+      "profiles/acme/ingredients/rules/x/rule.md": "# X\n",
+      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\n  - acme-extra\ntargets:\n  - claude-code\n",
+      "profiles/acme/recipes/acme-extra.yaml": "name: acme-extra\ningredients:\n  - rule/x\n",
+      "profiles/globex/ingredients/rules/secret/ingredient.yaml": "type: rule\nname: secret\n",
+      "profiles/globex/ingredients/rules/secret/rule.md": "# S\n",
+      "profiles/globex/profile.yaml": "name: globex\nrecipes:\n  - base--globex\n  - globex-extra\ntargets:\n  - claude-code\n",
+      "profiles/globex/recipes/globex-extra.yaml": "name: globex-extra\ningredients:\n  - rule/secret\n",
+      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/style\n  - rule/workflow\n",
+      "recipes/base--globex.yaml": "name: base--globex\ningredients:\n  - rule/style\n  - rule/workflow--globex\n",
+      "recipes/base.yaml": "name: base\ningredients:\n  - rule/style\n  - rule/workflow\n"
+    }
+  }
+}
