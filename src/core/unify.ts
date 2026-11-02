@@ -10,6 +10,7 @@ import { detectEol, isUtf8, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
 import type { HunkTake, Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile, PlanHunk } from "../schema/index.js";
 import { ProfileSchema, RecipeSchema } from "../schema/index.js";
+import { metadataEntryField, metadataText, metadataValue, type MetadataField } from "./metadata-params.js";
 import { collect, deriveHunk, prove, substitutedFile, bodyFile, emittedFile, shellAtGate, type Extraction } from "./extract.js";
 import { firstMarkerLine, parseSections, readsTargetSections, SectionMarkerError, type ParseSectionsOptions } from "./sections.js";
 import { errorText } from "./schema-fault.js";
@@ -101,7 +102,8 @@ export async function planFrom(
   for (const f of diff.files) {
     // Pre-fill section names only when the file is a body file (spec 12 §4.2, 0.8.2)
     let sectionNames: Array<string | undefined> = [];
-    if (bodyFile(base.meta, f.file, base.dir, forgeSchema)) {
+    // A metadata entry (spec 50 §5.5) takes no section: nothing is pre-filled there.
+    if (metadataEntryField(f.file) === null && bodyFile(base.meta, f.file, base.dir, forgeSchema)) {
       try {
         const baseText = await readIngredientText(base, f.file);
         const onlyDeclared = !substitutedFile(base.meta, f.file);
@@ -164,7 +166,7 @@ function comparableMeta(meta: Ingredient): Record<string, unknown> {
  * the differing fields can be named — never through `JSON.stringify(x, keys)`, whose key-array
  * replacer filters at every depth and sees two different nested `server` objects as the same `{}`.
  */
-export function metaDifferences(base: LoadedIngredient, variant: LoadedIngredient, schema: number): string[] {
+export function metaDifferences(base: LoadedIngredient, variant: LoadedIngredient, schema: number, decided: ReadonlySet<string> = new Set()): string[] {
   const a = comparableMeta(base.meta);
   const b = comparableMeta(variant.meta);
   // A variant never needs declarations of its own; the base's are what an extraction added (spec 09 §6.6).
@@ -195,7 +197,8 @@ export function metaDifferences(base: LoadedIngredient, variant: LoadedIngredien
     a.params = Object.keys(restrictedBaseParams).length > 0 ? restrictedBaseParams : undefined;
   }
   
-  return [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => !isDeepStrictEqual(a[k], b[k])).sort();
+  // A metadata field a plan decided in full (spec 50 §5.5) no longer holds the variant back.
+  return [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => !decided.has(k) && !isDeepStrictEqual(a[k], b[k])).sort();
 }
 
 export interface ApplyOptions {
@@ -255,6 +258,17 @@ export interface UnifyResult {
   sections: SectionExtraction[];
   /** Warnings the run carries (spec 51 §4.6); [] when none. */
   notes: string[];
+  /**
+   * The metadata fields of the base this plan changes (spec 50 §5.5), each with its new value (`undefined` removes the
+   * field); written into the base's `ingredient.yaml` with the declarations, never into `write`. [] when none.
+   */
+  metaWrites: MetaWrite[];
+}
+
+/** One metadata field a plan rewrites in the base (spec 50 §5.5). */
+export interface MetaWrite {
+  field: MetadataField;
+  value: string | string[] | undefined;
 }
 
 /**
@@ -374,6 +388,9 @@ export async function applyPlan(
   const filesWithSectionHunks = new Set<string>();
   /** Names used across all files, for S3 second form. */
   const globalNameUsage = new Map<string, string>(); // name → file
+  /** Metadata fields the plan changes, and the ones it decides in full (spec 50 §5.5). */
+  const metaWrites: MetaWrite[] = [];
+  const decidedMeta = new Set<string>();
 
   const hunksByFile = new Map(diff.files.map((f) => [f.file, f.hunks]));
   const onlyInBase = new Set(diff.onlyInBase);
@@ -464,6 +481,30 @@ export async function applyPlan(
 
       // Section hunks are not counted as unresolved decisions (spec 12 §6.1 step 5: "A section hunk is a decision")
       unresolved += takes.filter((t) => t === "keep").length;
+
+      // A metadata entry (spec 50 §5.5): merged as text, written into ingredient.yaml, never as a file.
+      const field = metadataEntryField(pf.file);
+      if (field !== null) {
+        if (sectionOf.size) {
+          throw new Error(`unify plan: "${pf.file}" is a metadata field — take: section is refused there; take base, variant or param`);
+        }
+        const baseText = metadataText(base.meta, field);
+        const variantText = metadataText(variant.meta, field);
+        const templates: (string[] | undefined)[] = new Array(hunks.length);
+        for (const [k, ph] of paramOf) {
+          const { lines, pairs } = deriveHunk(pf.file, k + 1, hunks[k], ph.params, base.meta.params, forgeSchema);
+          templates[k] = lines;
+          collect(extractions, pf.file, k + 1, pairs);
+        }
+        const template = mergeFile(baseText, variantText, hunks, takes, templates);
+        if (paramOf.size) {
+          const as = (side: HunkTake) => takes.map((t) => (t === "param" ? side : t));
+          proofs.push({ file: pf.file, template, mBase: mergeFile(baseText, variantText, hunks, as("base")), mVar: mergeFile(baseText, variantText, hunks, as("variant")) });
+        }
+        if (!takes.includes("keep")) decidedMeta.add(field);
+        if (template !== baseText) metaWrites.push({ field, value: metadataValue(template, field, base.meta) });
+        continue;
+      }
 
       // Files with section hunks
       if (sectionOf.size > 0) {
@@ -675,7 +716,7 @@ export async function applyPlan(
   // Spec 41 Part B §5: parseOpts was already built above with target-scoped section options from the Forge schema
   await checkMarkers(base, write, remove, newSectionNames, parseOpts, forgeSchema);
 
-  const metaDiffers = opts.discardVariantMeta ? [] : metaDifferences(base, variant, forgeSchema);
+  const metaDiffers = opts.discardVariantMeta ? [] : metaDifferences(base, variant, forgeSchema, decidedMeta);
   const params = [...extractions.values()];
   const sections = sectionExtractions;
 
@@ -714,7 +755,7 @@ export async function applyPlan(
     });
   }
 
-  return { write, remove, resolved: unresolved === 0 && metaDiffers.length === 0, unresolved, metaDiffers, params, sections, notes };
+  return { write, remove, resolved: unresolved === 0 && metaDiffers.length === 0, unresolved, metaDiffers, params, sections, notes, metaWrites };
 }
 
 /**

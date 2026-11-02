@@ -145,3 +145,108 @@ describe("spec 50 §5.5 / §15 item 11: a real file named ingredient.yaml#<field
     await expect(plan(await loadWorkspace(ws, { home: process.env.CRAFTAR_HOME }))).resolves.toBeDefined();
   });
 });
+
+/** Saves a plan, sets every hunk's take (params as pre-filled), and applies it. Returns the apply run. */
+function unifyWith(forge: string, root: string, ref: string, take: (file: string) => string) {
+  const planFile = path.join(root, `plan-${Math.random().toString(36).slice(2)}.yaml`);
+  const saved = runCli(["forge", "unify", ref, "--profile", "acme", "--forge", forge, "--save-plan", planFile, "--no-impact"]);
+  expect(saved.code, saved.stderr).toBe(0);
+  return fs.readFile(planFile, "utf8").then(async (text) => {
+    const doc = YAML.parse(text) as { files: Array<{ file: string; hunks?: Array<{ take: string }>; take?: string }> };
+    for (const pf of doc.files) {
+      if (pf.hunks) for (const h of pf.hunks) h.take = take(pf.file);
+      else pf.take = take(pf.file);
+    }
+    await fs.writeFile(planFile, YAML.stringify(doc));
+    return runCli(["forge", "unify", ref, "--profile", "acme", "--forge", forge, "--plan", planFile, "--no-impact"]);
+  });
+}
+
+async function planned(ws: string, profileName: string, forge: string) {
+  await fs.writeFile(path.join(ws, "craftar.yaml"), YAML.stringify({ forge: path.relative(ws, forge), profile: profileName, targets: ["claude-code", "kiro", "agents-md"] }));
+  const p = await plan(await loadWorkspace(ws, { home: process.env.CRAFTAR_HOME }));
+  return new Map(p.files.map((f) => [f.path, f.content.toString("utf8")]));
+}
+
+describe("spec 50 §5.5: forge unify resolves a metadata entry (§11 items 17, 20, 22)", () => {
+  /** A rule pair that differs in a body token and in `paths:` by a path component. */
+  const bodyAndPaths = () =>
+    pair("rule", { frontmatterRaw: "paths: lib/app/**" }, { frontmatterRaw: "paths: src/app/**" });
+  const withBodies = (spec: ForgeSpec) => {
+    spec.ingredients[0].files = { "rule.md": "Use beta_api.\n" };
+    spec.ingredients[1].files = { "rule.md": "Use acme_api.\n" };
+    return spec;
+  };
+
+  it("take: param on a body token and on paths: in one plan; every profile plans the same bytes before and after (item 17)", async () => {
+    const { root, forge, ws } = await forgeOf(GATE, withBodies(bodyAndPaths()));
+    const before = { acme: await planned(ws, "acme", forge), globex: await planned(ws, "globex", forge) };
+    const run = await unifyWith(forge, root, "rule/x", () => "param");
+    expect(run.code, run.stderr).toBe(0);
+    const after = { acme: await planned(ws, "acme", forge), globex: await planned(ws, "globex", forge) };
+    expect(after).toEqual(before);
+    const meta = YAML.parse(await fs.readFile(path.join(forge, "ingredients/rules/x/ingredient.yaml"), "utf8"));
+    expect(meta.frontmatterRaw).toMatch(/^paths: \{\{param\.[a-z_]+\}\}\/\*\*$/);
+    await expect(fs.stat(path.join(forge, "ingredients/rules/x--acme"))).rejects.toThrow();
+  });
+
+  it("take: variant on a description alone writes the base's field and removes the variant", async () => {
+    const { root, forge } = await forgeOf(GATE, pair("agent", { description: "Helps beta users" }, { description: "Helps acme users" }));
+    const run = await unifyWith(forge, root, "agent/x", () => "variant");
+    expect(run.code, run.stderr).toBe(0);
+    const meta = YAML.parse(await fs.readFile(path.join(forge, "ingredients/agents/x/ingredient.yaml"), "utf8"));
+    expect(meta.description).toBe("Helps acme users");
+    await expect(fs.stat(path.join(forge, "ingredients/agents/x--acme"))).rejects.toThrow();
+  });
+
+  it("a tools difference still blocks take: param (item 20)", async () => {
+    const { root, forge } = await forgeOf(GATE, pair("agent", { description: "Helps beta_api users", tools: ["Read"] }, { description: "Helps acme_api users", tools: ["Read", "Write"] }));
+    const run = await unifyWith(forge, root, "agent/x", () => "param");
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain("ingredient.yaml differs in tools");
+    expect(git(forge, "status", "--porcelain")).toBe("");
+  });
+
+  it("take: section on a metadata entry is refused, the Forge untouched (item 22)", async () => {
+    const { root, forge } = await forgeOf(GATE, pair("agent", { description: "Helps beta users" }, { description: "Helps acme users" }));
+    const run = await unifyWith(forge, root, "agent/x", () => "section");
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain('"ingredient.yaml#description" is a metadata field — take: section');
+    expect(git(forge, "status", "--porcelain")).toBe("");
+  });
+
+  it("the proof refuses, before its first write, a param that would stand under model in a raw block (§5.4)", async () => {
+    const { root, forge } = await forgeOf(GATE, pair("agent", { frontmatterRaw: "name: x\nmodel: beta_m" }, { frontmatterRaw: "name: x\nmodel: acme_m" }));
+    const run = await unifyWith(forge, root, "agent/x", () => "param");
+    expect(run.code).toBe(1);
+    expect(run.stderr).toMatch(/in frontmatterRaw would break the file it is written to — it stands under model/);
+    expect(run.stderr).not.toContain("acme_m");
+    expect(git(forge, "status", "--porcelain")).toBe("");
+  });
+
+  it("leaves a field the plan does not decide in metaDifferences", async () => {
+    const { root, forge } = await forgeOf(GATE, pair("command", { description: "Ship beta", argumentHint: "<b>" }, { description: "Ship acme", argumentHint: "<a>" }));
+    const run = await unifyWith(forge, root, "command/x", (file) => (file === "ingredient.yaml#description" ? "variant" : "keep"));
+    expect(run.code, run.stderr).toBe(0);
+    expect(run.stdout).toContain("resolved no · unresolved 1");
+    expect(run.stdout).toContain("ingredient.yaml differs in argumentHint");
+    expect(run.stdout).not.toMatch(/differs in [^\n]*description/);
+    const meta = YAML.parse(await fs.readFile(path.join(forge, "ingredients/commands/x/ingredient.yaml"), "utf8"));
+    expect(meta).toMatchObject({ description: "Ship acme", argumentHint: "<b>" });
+    await expect(fs.stat(path.join(forge, "ingredients/commands/x--acme"))).resolves.toBeDefined();
+  });
+});
+
+describe("spec 50 §5.3: a metadata citation counts in forge unify's cites (P18)", () => {
+  it("refuses a take: param whose new profile value another ingredient's description cites", async () => {
+    const spec = pair("rule", {}, {});
+    spec.ingredients[0].files = { "rule.md": "Use beta_api.\n" };
+    spec.ingredients[1].files = { "rule.md": "Use acme_api.\n" };
+    spec.ingredients.push({ meta: { type: "agent", name: "other", description: "For {{param.beta_api}}" }, files: { "agent.md": "Body.\n" } });
+    const { root, forge } = await forgeOf(GATE, spec);
+    const run = await unifyWith(forge, root, "rule/x", () => "param");
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain("agent/other also uses {{param.beta_api}} under profile acme");
+    expect(git(forge, "status", "--porcelain")).toBe("");
+  });
+});
