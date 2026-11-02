@@ -4,6 +4,7 @@
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import YAML from "yaml";
 import { afterEach, describe, expect, it, beforeEach, vi } from "vitest";
 import { runCli } from "./helpers/cli.js";
 import { forgeAt, sync } from "./helpers/integrations.js";
@@ -258,9 +259,6 @@ describe("settings apply command (spec 52 §12)", () => {
     // Check registry
     const reg = await readReg(home);
     noValue(JSON.stringify(reg), [ACME_TOKEN_VALUE]);
-
-    // Now update the hook registration in the Forge and sync again
-    // ... (This would require modifying the Forge, which is complex for this test)
   });
 
   it("C2. twice in a row → second prints unchanged, file and registry bytes equal", async () => {
@@ -395,7 +393,7 @@ describe("settings apply command (spec 52 §12)", () => {
     }
   });
 
-  it("C5. hand copy → unchanged and record written; then Forge changes → apply removes hand-copied handler", async () => {
+  it("C5. hand copy → unchanged and record written", async () => {
     const s = await forgeAt(1, standardForge());
     cleanups.push(s.cleanup);
 
@@ -1894,5 +1892,113 @@ describe("F7. env value never leaves the file, on every path", () => {
     expect(r.code).toBe(0);
     // The warning might not appear if the settings are unchanged; this is OK
     // What we're testing is that a failed record write doesn't cause exit 1
+  });
+});
+
+
+describe("a Forge change replaces only the Forge's handler (spec 52 §12 tests 1 and 16)", () => {
+  const PAT = "ghp_" + "x".repeat(36);
+  const LF = "s3cr3t-" + "w".repeat(8) + "\nmore";
+  const LOCAL = { type: "command", command: "sh", args: [".claude/hooks/acme-lint.sh"] };
+  const forge = (): ForgeSpec => ({
+    ingredients: [fixtureH(), fixtureM()],
+    recipes: [recipe("base", ["hook/guard-path", "mcp/acme"])],
+    profiles: [profile("acme", ["base"], ["claude-code"])],
+  });
+  let home: string;
+  let claudeDir: string;
+  beforeEach(async () => {
+    home = await tmpDir("craftar-fc-home-");
+    claudeDir = await tmpDir("craftar-fc-claude-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(() => fs.rm(claudeDir, { recursive: true, force: true }));
+  });
+  const env = () => ({ CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir });
+  const cli = (args: string[], wsRoot: string) => runCli([...args, "--workspace", wsRoot], { env: env() });
+  async function changeArgs(forgeRoot: string, args: string[]) {
+    const file = path.join(forgeRoot, "ingredients", "hooks", "guard-path", "ingredient.yaml");
+    const meta = YAML.parse(await fs.readFile(file, "utf8"));
+    meta.registration[0].args = args;
+    await fs.writeFile(file, YAML.stringify(meta));
+  }
+  const handlersOf = (v: any, event: string) =>
+    (v.hooks?.[event] ?? []).flatMap((g: any) => g.hooks);
+  const read = async (ws: string) => JSON.parse(await fs.readFile(path.join(ws, ".claude", "settings.json"), "utf8"));
+  const noVal = async (out: string) => {
+    const reg = await fs.readFile(path.join(home, "registry.json"), "utf8").catch(() => "");
+    for (const v of [PAT, LF, JSON.stringify(LF).slice(1, -1)]) {
+      expect(out).not.toContain(v);
+      expect(reg).not.toContain(v);
+    }
+  };
+
+  it("keeps env values, permissions and a local hook; swaps the Forge handler after a Forge change", async () => {
+    const s = await forgeAt(1, forge());
+    cleanups.push(s.cleanup);
+    expect(cli(["sync"], s.wsRoot).code).toBe(0);
+    await fs.mkdir(path.join(s.wsRoot, ".claude"), { recursive: true });
+    await fs.writeFile(
+      path.join(s.wsRoot, ".claude", "settings.json"),
+      JSON.stringify({ env: { ACME_TOKEN: PAT, OTHER: LF }, permissions: { allow: ["Bash(ls)"] },
+        hooks: { PreToolUse: [{ matcher: "Bash", hooks: [LOCAL] }] } }, null, 2) + "\n",
+    );
+    const a1 = cli(["settings", "apply", "--yes"], s.wsRoot);
+    expect(a1.code, a1.stderr).toBe(0);
+    await noVal(a1.stdout + a1.stderr);
+    const v1 = await read(s.wsRoot);
+    expect(v1.env).toEqual({ ACME_TOKEN: PAT, OTHER: LF });
+    expect(v1.permissions).toEqual({ allow: ["Bash(ls)"] });
+    const h1 = handlersOf(v1, "PreToolUse");
+    expect(h1[0]).toEqual(LOCAL);
+    expect(h1.some((h: any) => h.args?.[0]?.endsWith("/.claude/hooks/guard-path.py"))).toBe(true);
+
+    await changeArgs(s.forgeRoot, ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py", "--strict"]);
+    expect(cli(["sync"], s.wsRoot).code).toBe(0);
+    const a2 = cli(["settings", "apply", "--yes"], s.wsRoot);
+    expect(a2.code, a2.stderr).toBe(0);
+    await noVal(a2.stdout + a2.stderr);
+    const v2 = await read(s.wsRoot);
+    const h2 = handlersOf(v2, "PreToolUse");
+    expect(h2[0]).toEqual(LOCAL);
+    expect(h2.filter((h: any) => h.command === "python3")).toHaveLength(1);
+    expect(h2.find((h: any) => h.command === "python3").args).toEqual(["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py", "--strict"]);
+    expect(v2.env).toEqual({ ACME_TOKEN: PAT, OTHER: LF });
+
+    const a3 = cli(["settings", "apply", "--yes"], s.wsRoot);
+    expect(a3.stdout).toContain("unchanged");
+  });
+
+  it("a block copied by hand is recognised after the Forge changes (record written on an unchanged run)", async () => {
+    const s = await forgeAt(1, forge());
+    cleanups.push(s.cleanup);
+    expect(cli(["sync"], s.wsRoot).code).toBe(0);
+    const example = await fs.readFile(path.join(s.wsRoot, ".claude", "settings.craftar.example.json"), "utf8");
+    await fs.writeFile(path.join(s.wsRoot, ".claude", "settings.json"), example);
+    const a1 = cli(["settings", "apply", "--yes"], s.wsRoot);
+    expect(a1.stdout).toContain("unchanged");
+    expect((await readRegistry(home)).settingsApplied?.length).toBe(1);
+
+    await changeArgs(s.forgeRoot, ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py", "--v2"]);
+    expect(cli(["sync"], s.wsRoot).code).toBe(0);
+    const a2 = cli(["settings", "apply", "--yes"], s.wsRoot);
+    expect(a2.code, a2.stderr).toBe(0);
+    const h = handlersOf(await read(s.wsRoot), "PreToolUse");
+    expect(h).toHaveLength(1);
+    expect(h[0].args).toEqual(["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py", "--v2"]);
+  });
+
+  it("without a record the old copy is kept, and the run says so", async () => {
+    const s = await forgeAt(1, forge());
+    cleanups.push(s.cleanup);
+    const off = { ...env(), CRAFTAR_NO_REGISTRY: "1" };
+    expect(runCli(["sync", "--workspace", s.wsRoot], { env: off }).code).toBe(0);
+    const example = await fs.readFile(path.join(s.wsRoot, ".claude", "settings.craftar.example.json"), "utf8");
+    await fs.writeFile(path.join(s.wsRoot, ".claude", "settings.json"), example);
+    await changeArgs(s.forgeRoot, ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py", "--v2"]);
+    expect(runCli(["sync", "--workspace", s.wsRoot], { env: off }).code).toBe(0);
+    const a = runCli(["settings", "apply", "--yes", "--workspace", s.wsRoot], { env: off });
+    expect(a.code, a.stderr).toBe(0);
+    expect(a.stdout).toContain("no record of the last apply (the registry is off)");
+    expect(handlersOf(await read(s.wsRoot), "PreToolUse")).toHaveLength(2);
   });
 });
