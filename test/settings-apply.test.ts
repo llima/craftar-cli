@@ -15,8 +15,10 @@ import {
   mergeSettings,
   handlerHash,
   SettingsShapeError,
+  wantedHooksObject,
   type MergeResult,
   type PlannedRegistration,
+  type WantedBlocks,
 } from "../src/core/settings-apply.js";
 import { settingsExample, EXAMPLE_SETTINGS, type HooksObject } from "../src/emitters/shared.js";
 import {
@@ -102,7 +104,7 @@ const fixtureM2 = (): IngredientSpec => ({
 });
 
 describe("wanted blocks (spec 52 §4.1 step 3)", () => {
-  it("1. settingsExample(w.env, w.hooks) deep-equals JSON.parse of the planned EXAMPLE_SETTINGS bytes (step-1 fixture)", async () => {
+  it("1. settingsExample(env, wantedHooksObject(regs)) deep-equals JSON.parse of the planned EXAMPLE_SETTINGS bytes (D6)", async () => {
     const forge: ForgeSpec = {
       ingredients: [fixtureH(), fixtureM()],
       recipes: [recipe("base", ["hook/guard-path", "mcp/acme"])],
@@ -122,7 +124,16 @@ describe("wanted blocks (spec 52 §4.1 step 3)", () => {
     expect(exampleFile).toBeDefined();
 
     const planned = JSON.parse(exampleFile!.content.toString("utf8"));
-    const built = settingsExample(w!.env, w!.hooks);
+
+    // Build env from envNames
+    const env: Record<string, string> | null = w!.envNames.length > 0 ? Object.create(null) : null;
+    if (env) {
+      for (const name of w!.envNames) env[name] = "";
+    }
+
+    // Build hooks from registrations using wantedHooksObject
+    const hooks = wantedHooksObject(w!.registrations);
+    const built = settingsExample(env, hooks);
 
     expect(built).toEqual(planned);
   });
@@ -147,17 +158,25 @@ describe("wanted blocks (spec 52 §4.1 step 3)", () => {
     expect(exampleFile).toBeDefined();
 
     const planned = JSON.parse(exampleFile!.content.toString("utf8"));
-    const built = settingsExample(w!.env, w!.hooks);
+
+    // Build env from envNames
+    const env: Record<string, string> | null = w!.envNames.length > 0 ? Object.create(null) : null;
+    if (env) {
+      for (const name of w!.envNames) env[name] = "";
+    }
+
+    // Build hooks from registrations
+    const hooks = wantedHooksObject(w!.registrations);
+    const built = settingsExample(env, hooks);
 
     expect(built).toEqual(planned);
 
     // Verify env has all names
-    expect(Object.keys(w!.env!).sort()).toEqual(["ACME_TOKEN", "OTHER_SECRET", "OTHER_TOKEN"]);
+    expect(w!.envNames.sort()).toEqual(["ACME_TOKEN", "OTHER_SECRET", "OTHER_TOKEN"]);
 
-    // Verify hooks structure
-    expect(Object.keys(w!.hooks!).sort()).toEqual(["PreToolUse", "Stop"]);
-    expect(w!.hooks!.PreToolUse).toHaveLength(2); // Two hooks with PreToolUse
-    expect(w!.hooks!.Stop).toHaveLength(1); // One hook with Stop (no matcher)
+    // Verify registrations
+    expect(w!.registrations.filter((r) => r.event === "PreToolUse")).toHaveLength(2);
+    expect(w!.registrations.filter((r) => r.event === "Stop")).toHaveLength(1);
   });
 
   it("3. targets=['kiro'] → wantedBlocks is null; no registration and no authEnv → null", async () => {
@@ -222,10 +241,20 @@ describe("wanted blocks (spec 52 §4.1 step 3)", () => {
 });
 
 describe("merge (spec 52 §5)", () => {
-  // Helper to build a minimal wanted structure
-  const wantedWith = (env: Record<string, string> | null, hooks: Record<string, unknown[]> | null) => ({
-    env,
-    hooks: hooks as HooksObject | null,
+  // Helper to build a minimal wanted structure (backward compat)
+  const wantedWith = (envNames: string[], regs: PlannedRegistration[]): WantedBlocks => ({
+    envNames: envNames,
+    registrations: regs,
+  });
+
+  // Helper to build a registration
+  const makeReg = (event: string, matcher: string | undefined, handler: unknown, ref = "", index = 0): PlannedRegistration => ({
+    ref,
+    index,
+    event,
+    matcher,
+    handler,
+    hasMissing: false,
   });
 
   // A simple handler shape
@@ -235,8 +264,8 @@ describe("merge (spec 52 §5)", () => {
 
   it("1. null current + wanted → returns value with wanted blocks, changed=true", () => {
     const wanted = wantedWith(
-      { ACME_TOKEN: "", OTHER_TOKEN: "" },
-      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+      ["ACME_TOKEN", "OTHER_TOKEN"],
+      [makeReg("PreToolUse", "Bash", handler1)],
     );
 
     const result = mergeSettings(null, wanted, new Set());
@@ -253,8 +282,8 @@ describe("merge (spec 52 §5)", () => {
   it("2. empty current {} + wanted → returns value with wanted blocks, changed=true", () => {
     const current: Record<string, unknown> = Object.create(null);
     const wanted = wantedWith(
-      { ACME_TOKEN: "" },
-      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+      ["ACME_TOKEN"],
+      [makeReg("PreToolUse", "Bash", handler1)],
     );
 
     const result = mergeSettings(current, wanted, new Set());
@@ -279,8 +308,8 @@ describe("merge (spec 52 §5)", () => {
     current.hooks = hooks;
 
     const wanted = wantedWith(
-      { ACME_TOKEN: "" },
-      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+      ["ACME_TOKEN"],
+      [makeReg("PreToolUse", "Bash", handler1)],
     );
 
     const result = mergeSettings(current, wanted, new Set());
@@ -305,8 +334,8 @@ describe("merge (spec 52 §5)", () => {
 
     // New wanted has a different handler
     const wanted = wantedWith(
-      null,
-      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+      [],
+      [makeReg("PreToolUse", "Bash", handler1)],
     );
 
     // The old handler is in the recorded set
@@ -335,8 +364,8 @@ describe("merge (spec 52 §5)", () => {
 
     // Wanted adds a different handler to same event
     const wanted = wantedWith(
-      null,
-      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+      [],
+      [makeReg("PreToolUse", "Bash", handler1)],
     );
 
     const result = mergeSettings(current, wanted, new Set());
@@ -371,8 +400,8 @@ describe("merge (spec 52 §5)", () => {
     current.hooks = hooks;
 
     const wanted = wantedWith(
-      null,
-      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+      [],
+      [makeReg("PreToolUse", "Bash", handler1)],
     );
 
     // The old handler is in the recorded set, triggering a change
@@ -394,8 +423,8 @@ describe("merge (spec 52 §5)", () => {
     current.env = env;
 
     const wanted = wantedWith(
-      { ACME_TOKEN: "", NEW_VAR: "" },
-      null,
+      ["ACME_TOKEN", "NEW_VAR"],
+      [],
     );
 
     const result = mergeSettings(current, wanted, new Set());
@@ -415,8 +444,8 @@ describe("merge (spec 52 §5)", () => {
     current.hooks = "not-an-object";
 
     const wanted = wantedWith(
-      null,
-      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+      [],
+      [makeReg("PreToolUse", "Bash", handler1)],
     );
 
     expect(() => mergeSettings(current, wanted, new Set())).toThrow(SettingsShapeError);
@@ -428,8 +457,8 @@ describe("merge (spec 52 §5)", () => {
     current.env = ["array-not-object"];
 
     const wanted = wantedWith(
-      { ACME_TOKEN: "" },
-      null,
+      ["ACME_TOKEN"],
+      [],
     );
 
     expect(() => mergeSettings(current, wanted, new Set())).toThrow(SettingsShapeError);
@@ -444,8 +473,8 @@ describe("merge (spec 52 §5)", () => {
     current.hooks = hooks;
 
     const wanted = wantedWith(
-      null,
-      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+      [],
+      [makeReg("PreToolUse", "Bash", handler1)],
     );
 
     expect(() => mergeSettings(current, wanted, new Set())).toThrow(SettingsShapeError);
@@ -462,8 +491,8 @@ describe("merge (spec 52 §5)", () => {
     current.hooks = hooks;
 
     const wanted = wantedWith(
-      null,
-      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+      [],
+      [makeReg("PreToolUse", "Bash", handler1)],
     );
 
     expect(() => mergeSettings(current, wanted, new Set())).toThrow(SettingsShapeError);
@@ -566,28 +595,9 @@ describe("merge — spec cases", () => {
     return { ref, index, event, matcher, handler, hasMissing: false };
   }
 
-  // Helper: build a Wanted structure
-  // Note: The current API uses { env: Record | null, hooks: HooksObject | null }
-  // D6 will change this to { envNames: string[], registrations: PlannedRegistration[] }
-  // For now, we'll use the current API since the tests need to expose the defects
-  function W(envNames: string[], regs: import("../src/core/settings-apply.js").PlannedRegistration[]) {
-    // Build env
-    const env: Record<string, string> | null = envNames.length > 0 ? Object.create(null) : null;
-    if (env) {
-      for (const name of envNames) env[name] = "";
-    }
-    // Build hooks from registrations
-    const hooks: Record<string, unknown[]> | null = regs.length > 0 ? Object.create(null) : null;
-    if (hooks) {
-      for (const r of regs) {
-        if (!hooks[r.event]) hooks[r.event] = [];
-        const group: Record<string, unknown> = Object.create(null);
-        if (r.matcher !== undefined) group.matcher = r.matcher;
-        group.hooks = [r.handler];
-        (hooks[r.event] as unknown[]).push(group);
-      }
-    }
-    return { env, hooks: hooks as import("../src/emitters/shared.js").HooksObject | null };
+  // Helper: build a Wanted structure (new D6 API)
+  function W(envNames: string[], regs: PlannedRegistration[]): WantedBlocks {
+    return { envNames, registrations: regs };
   }
 
   // Handlers

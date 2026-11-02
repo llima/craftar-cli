@@ -2,21 +2,38 @@
  * Settings apply core logic (spec 52): the merge computation, the handler hash, and the
  * record. This module is pure — it reads no file system and holds no state.
  */
+import { createHash } from "node:crypto";
 import { written } from "./capabilities.js";
+import { nameShaped } from "./integrations.js";
 import { paramsFor, type Resolution } from "./resolve.js";
 import {
   authEnvNames,
   EXAMPLE_SETTINGS,
-  hookRegistrations,
   renderRegistration,
   settingsExample,
   type HooksObject,
-  type RenderedRegistration,
 } from "../emitters/shared.js";
 import type { Plan } from "./sync.js";
 import type { ResolvedIngredient } from "./resolve.js";
 import type { Ingredient } from "../schema/index.js";
-import type { PlannedFile } from "../emitters/types.js";
+
+/* ------------------------------------------------------------------ */
+/* cloneJson: deep copy into null-prototype objects (D1)               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Deep clone a JSON value, rebuilding objects with null prototypes.
+ * structuredClone does not preserve null prototypes; this does.
+ */
+function cloneJson(obj: unknown): unknown {
+  if (obj === null || typeof obj !== "object") return obj;
+  if (Array.isArray(obj)) return obj.map(cloneJson);
+  const out: Record<string, unknown> = Object.create(null);
+  for (const key of Object.keys(obj)) {
+    out[key] = cloneJson((obj as Record<string, unknown>)[key]);
+  }
+  return out;
+}
 
 /* ------------------------------------------------------------------ */
 /* sameHandler (spec 52 §5.1): key-order-insensitive deep equality     */
@@ -123,93 +140,64 @@ export function wantedEnvNames(p: Plan): string[] {
 }
 
 /* ------------------------------------------------------------------ */
-/* wantedBlocks (spec 52 §4.1 step 3)                                  */
+/* wantedHooksObject (spec 52 D6)                                      */
 /* ------------------------------------------------------------------ */
 
 /**
- * The wanted env and hooks blocks from the plan (spec 52 §4.1 step 3):
- * - null when the plan writes no EXAMPLE_SETTINGS file (claude-code not among targets,
- *   or no registration and no authEnv).
- * - Otherwise { env, hooks } where each is null or the object.
- *
- * env is a record of names → "" (the names from wantedEnvNames).
- * hooks is built exactly as hookRegistrations builds it.
+ * Build the hooks object from planned registrations (spec 52 D6):
+ * one group per entry, matcher key only when defined, event keys in first-seen order.
  */
-export function wantedBlocks(p: Plan): { env: Record<string, string> | null; hooks: HooksObject | null } | null {
-  // Check if the plan writes the EXAMPLE_SETTINGS file
-  const hasExampleFile = p.files.some((f) => f.path === EXAMPLE_SETTINGS);
-  if (!hasExampleFile) return null;
+export function wantedHooksObject(registrations: readonly PlannedRegistration[]): HooksObject | null {
+  if (registrations.length === 0) return null;
 
-  // Build env: names → ""
-  const names = wantedEnvNames(p);
-  const env: Record<string, string> | null = names.length > 0 ? Object.create(null) : null;
-  if (env) {
-    for (const name of names) env[name] = "";
-  }
-
-  // Build hooks: collect hook ingredients from the claude-code walk
-  const hooks: ResolvedIngredient[] = [];
-  const walk = written(p.resolution, "claude-code", () => {});
-  for (const ing of walk) {
-    if (ing.meta.type === "hook") hooks.push(ing);
-  }
-
-  // Build hooks object exactly as claude-code.ts does, using the shared hookRegistrations
-  // We need to build a minimal EmitBase context for hookRegistrations
-  const hooksObj = buildHooksObject(hooks, p.resolution);
-
-  return { env, hooks: hooksObj };
-}
-
-/**
- * Build the hooks object as hookRegistrations does, but without the EmitBase context.
- * This reproduces the logic of hookRegistrations for pure use.
- */
-function buildHooksObject(hooks: readonly ResolvedIngredient[], resolution: Resolution): HooksObject | null {
-  // Filter to hooks with registration
-  const withReg = hooks.filter(
-    (ing): ing is ResolvedIngredient & { meta: Extract<Ingredient, { type: "hook" }> } =>
-      ing.meta.type === "hook" && (ing.meta as Extract<Ingredient, { type: "hook" }>).registration !== undefined
-  );
-
-  if (withReg.length === 0) return null;
-
-  // A null prototype map so __proto__ is a key, not the prototype
   const result: HooksObject = Object.create(null);
 
-  for (const ing of withReg) {
-    const meta = ing.meta;
-    const declared = meta.params ?? {};
-    const params = paramsFor(ing, resolution);
+  for (const r of registrations) {
+    // Build the group with keys in order: matcher (optional), hooks
+    const group: { matcher?: string; hooks: unknown[] } = Object.create(null);
+    if (r.matcher !== undefined) group.matcher = r.matcher;
+    group.hooks = [r.handler];
 
-    for (let i = 0; i < meta.registration!.length; i++) {
-      const entry = meta.registration![i];
-
-      // Render the entry using the shared builder (spec 43 §7.2)
-      const { event, matcher, handler } = renderRegistration(entry, declared, params, ing.ref);
-
-      // Build the group with keys in order: matcher (optional), hooks
-      const group: { matcher?: string; hooks: unknown[] } = Object.create(null);
-      if (matcher !== undefined) group.matcher = matcher;
-      group.hooks = [handler];
-
-      // Add to the event's list (create if first)
-      if (!result[event]) {
-        result[event] = [];
-      }
-      (result[event] as unknown[]).push(group);
+    // Add to the event's list (create if first)
+    if (!result[r.event]) {
+      result[r.event] = [];
     }
+    (result[r.event] as unknown[]).push(group);
   }
 
   return Object.keys(result).length > 0 ? result : null;
 }
 
 /* ------------------------------------------------------------------ */
-/* handlerHash (spec 52 §5.3)                                          */
+/* wantedBlocks (spec 52 §4.1 step 3, D6 refactor)                     */
 /* ------------------------------------------------------------------ */
 
-import { createHash } from "node:crypto";
-import { nameShaped } from "./integrations.js";
+/** The wanted structure returned by wantedBlocks (spec 52 D6). */
+export interface WantedBlocks {
+  envNames: string[];
+  registrations: PlannedRegistration[];
+}
+
+/**
+ * The wanted env names and registrations from the plan (spec 52 §4.1 step 3, D6):
+ * - null when the plan writes no EXAMPLE_SETTINGS file (claude-code not among targets,
+ *   or no registration and no authEnv).
+ * - Otherwise { envNames, registrations }.
+ */
+export function wantedBlocks(p: Plan): WantedBlocks | null {
+  // Check if the plan writes the EXAMPLE_SETTINGS file
+  const hasExampleFile = p.files.some((f) => f.path === EXAMPLE_SETTINGS);
+  if (!hasExampleFile) return null;
+
+  return {
+    envNames: wantedEnvNames(p),
+    registrations: plannedRegistrations(p),
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* handlerHash (spec 52 §5.3)                                          */
+/* ------------------------------------------------------------------ */
 
 /**
  * The canonical form of a handler: keys sorted recursively (spec 52 §5.3).
@@ -311,7 +299,7 @@ interface WantedHandlerInfo {
  * Merge the wanted hooks and env names into a settings object (spec 52 §5).
  *
  * @param current - The parsed settings file (null-prototype objects), or null if absent.
- * @param wanted - The wanted env and hooks from the plan (from wantedBlocks).
+ * @param wanted - The wanted env names and registrations from the plan (from wantedBlocks).
  * @param recorded - The set of handler hashes from the last apply on this machine.
  * @returns The merge result with changed flag, merged value, and diff.
  *
@@ -319,25 +307,50 @@ interface WantedHandlerInfo {
  */
 export function mergeSettings(
   current: Record<string, unknown> | null,
-  wanted: { env: Record<string, string> | null; hooks: HooksObject | null },
+  wanted: WantedBlocks | { env: Record<string, string> | null; hooks: HooksObject | null },
   recorded: Set<string>,
 ): MergeResult {
-  // Build the wanted handlers list with hashes
-  const wantedHandlers: WantedHandlerInfo[] = [];
-  if (wanted.hooks) {
-    for (const event of Object.keys(wanted.hooks)) {
-      const groups = wanted.hooks[event];
-      for (let gi = 0; gi < groups.length; gi++) {
-        const group = groups[gi];
-        const matcher = group.matcher;
-        for (const handler of group.hooks) {
-          const hash = handlerHash(event, matcher, handler);
-          // Find ref/index from the wanted structure - we use gi as index since each group has one handler
-          wantedHandlers.push({ event, matcher, handler, ref: "", index: gi, hash });
+  // Normalize wanted to the new shape (support both old and new API)
+  let wantedEnvNames: string[];
+  let wantedRegistrations: PlannedRegistration[];
+
+  if ("envNames" in wanted) {
+    // New API
+    wantedEnvNames = wanted.envNames;
+    wantedRegistrations = wanted.registrations;
+  } else {
+    // Old API (for backward compatibility during transition)
+    wantedEnvNames = wanted.env ? Object.keys(wanted.env) : [];
+    wantedRegistrations = [];
+    if (wanted.hooks) {
+      for (const event of Object.keys(wanted.hooks)) {
+        const groups = wanted.hooks[event];
+        for (let gi = 0; gi < groups.length; gi++) {
+          const group = groups[gi];
+          for (const handler of group.hooks) {
+            wantedRegistrations.push({
+              ref: "",
+              index: gi,
+              event,
+              matcher: group.matcher,
+              handler,
+              hasMissing: false,
+            });
+          }
         }
       }
     }
   }
+
+  // Build the wanted handlers list with hashes
+  const wantedHandlers: WantedHandlerInfo[] = wantedRegistrations.map((r) => ({
+    event: r.event,
+    matcher: r.matcher,
+    handler: r.handler,
+    ref: r.ref,
+    index: r.index,
+    hash: handlerHash(r.event, r.matcher, r.handler),
+  }));
   const wantedHashes = new Set(wantedHandlers.map((w) => w.hash));
 
   // Diff tracking
@@ -354,19 +367,23 @@ export function mergeSettings(
     otherKeys: [],
   };
 
-  // Start with an empty value or a copy of current
-  const value: Record<string, unknown> = Object.create(null);
-  if (current !== null) {
-    for (const key of Object.keys(current)) {
-      value[key] = current[key];
-    }
-  }
+  // D2: Decide key existence on current, not on value after edits
+  const currentHasEnv = current !== null && Object.hasOwn(current, "env");
+  const currentHasHooks = current !== null && Object.hasOwn(current, "hooks");
+
+  // D4: Process env and hooks independently, track changes separately
+  let envChanged = false;
+  let hooksChanged = false;
+
+  // D1: Deep clone current to avoid mutation
+  const value: Record<string, unknown> = current !== null
+    ? cloneJson(current) as Record<string, unknown>
+    : Object.create(null);
 
   // ---- Process env (spec 52 §5.4) ----
-  const wantedEnv = wanted.env;
-  if (wantedEnv && Object.keys(wantedEnv).length > 0) {
+  if (wantedEnvNames.length > 0) {
     let existingEnv = value.env;
-    
+
     // Validate env shape
     if (existingEnv !== undefined) {
       if (existingEnv === null || typeof existingEnv !== "object" || Array.isArray(existingEnv)) {
@@ -382,12 +399,13 @@ export function mergeSettings(
       }
     }
 
-    for (const name of Object.keys(wantedEnv)) {
+    for (const name of wantedEnvNames) {
       if (Object.hasOwn(newEnv, name)) {
         diff.envPresent++;
       } else {
         newEnv[name] = "";
         diff.envAdded.push(name);
+        envChanged = true;
       }
     }
 
@@ -395,86 +413,93 @@ export function mergeSettings(
   }
 
   // ---- Process hooks (spec 52 §5.1–§5.2) ----
-  const wantedHooksObj = wanted.hooks;
+  // D5: Process hooks even when wanted is empty (to remove recorded handlers)
+  const existingHooks = value.hooks;
 
-  if (wantedHooksObj && Object.keys(wantedHooksObj).length > 0) {
-    let existingHooks = value.hooks;
+  // Validate hooks shape if it exists
+  if (existingHooks !== undefined) {
+    if (existingHooks === null || typeof existingHooks !== "object" || Array.isArray(existingHooks)) {
+      throw new SettingsShapeError(".claude/settings.json: hooks is not an object — fix it by hand");
+    }
+  }
 
-    // Validate hooks shape
-    if (existingHooks !== undefined) {
-      if (existingHooks === null || typeof existingHooks !== "object" || Array.isArray(existingHooks)) {
-        throw new SettingsShapeError(".claude/settings.json: hooks is not an object — fix it by hand");
-      }
+  // Work with the hooks object (clone it to avoid mutation)
+  const hooksObj = existingHooks
+    ? cloneJson(existingHooks) as Record<string, unknown>
+    : Object.create(null);
+
+  // Track which wanted handlers are already present
+  const presentWantedHashes = new Set<string>();
+  // Track handlers to remove: { event, groupIndex, handlerIndex, hash, handler }
+  const toRemove: Array<{
+    event: string;
+    groupIndex: number;
+    handlerIndex: number;
+    hash: string;
+    handler: unknown;
+    matcher: string | undefined;
+  }> = [];
+
+  // First pass: find all Forge handlers and wanted handlers
+  for (const event of Object.keys(hooksObj)) {
+    const eventList = hooksObj[event];
+
+    // Validate event is a list
+    if (!Array.isArray(eventList)) {
+      const eventLabel = nameShaped(event) ? event : `#${Object.keys(hooksObj).indexOf(event) + 1}`;
+      throw new SettingsShapeError(`.claude/settings.json: hooks.${eventLabel} is not a list — fix it by hand`);
     }
 
-    // Work with the hooks object
-    const hooksObj = (existingHooks ?? Object.create(null)) as Record<string, unknown>;
+    for (let gi = 0; gi < eventList.length; gi++) {
+      const group = eventList[gi];
 
-    // Track which wanted handlers are already present
-    const presentWantedHashes = new Set<string>();
-    // Track handlers to remove and where they are
-    const toRemove: Array<{ event: string; groupIndex: number; handlerIndex: number; hash: string }> = [];
-
-    // First pass: find all Forge handlers and wanted handlers
-    for (const event of Object.keys(hooksObj)) {
-      const eventList = hooksObj[event];
-
-      // Validate event is a list
-      if (!Array.isArray(eventList)) {
+      // Validate group is an object with a hooks list
+      if (group === null || typeof group !== "object" || Array.isArray(group)) {
         const eventLabel = nameShaped(event) ? event : `#${Object.keys(hooksObj).indexOf(event) + 1}`;
-        throw new SettingsShapeError(`.claude/settings.json: hooks.${eventLabel} is not a list — fix it by hand`);
+        throw new SettingsShapeError(`.claude/settings.json: hooks.${eventLabel} holds a group that is not an object with a hooks list — fix it by hand`);
       }
 
-      for (let gi = 0; gi < eventList.length; gi++) {
-        const group = eventList[gi];
+      const groupObj = group as Record<string, unknown>;
+      const groupHooks = groupObj.hooks;
 
-        // Validate group is an object with a hooks list
-        if (group === null || typeof group !== "object" || Array.isArray(group)) {
-          const eventLabel = nameShaped(event) ? event : `#${Object.keys(hooksObj).indexOf(event) + 1}`;
-          throw new SettingsShapeError(`.claude/settings.json: hooks.${eventLabel} holds a group that is not an object with a hooks list — fix it by hand`);
-        }
+      if (!Array.isArray(groupHooks)) {
+        const eventLabel = nameShaped(event) ? event : `#${Object.keys(hooksObj).indexOf(event) + 1}`;
+        throw new SettingsShapeError(`.claude/settings.json: hooks.${eventLabel} holds a group that is not an object with a hooks list — fix it by hand`);
+      }
 
-        const groupObj = group as Record<string, unknown>;
-        const groupHooks = groupObj.hooks;
+      const groupMatcher = groupObj.matcher as string | undefined;
 
-        if (!Array.isArray(groupHooks)) {
-          const eventLabel = nameShaped(event) ? event : `#${Object.keys(hooksObj).indexOf(event) + 1}`;
-          throw new SettingsShapeError(`.claude/settings.json: hooks.${eventLabel} holds a group that is not an object with a hooks list — fix it by hand`);
-        }
+      for (let hi = 0; hi < groupHooks.length; hi++) {
+        const handler = groupHooks[hi];
+        const hash = handlerHash(event, groupMatcher, handler);
 
-        const groupMatcher = groupObj.matcher as string | undefined;
+        // Is this a Forge handler? (equal to wanted, or in recorded)
+        const isForge = wantedHashes.has(hash) || recorded.has(hash);
+        const isWanted = wantedHashes.has(hash);
 
-        for (let hi = 0; hi < groupHooks.length; hi++) {
-          const handler = groupHooks[hi];
-          const hash = handlerHash(event, groupMatcher, handler);
+        if (isForge) {
+          // D3: Record handler BEFORE removal
+          toRemove.push({ event, groupIndex: gi, handlerIndex: hi, hash, handler, matcher: groupMatcher });
+          if (isWanted) {
+            presentWantedHashes.add(hash);
+          }
+        } else {
+          // Local handler
+          diff.localKept++;
 
-          // Is this a Forge handler? (equal to wanted, or in recorded)
-          const isForge = wantedHashes.has(hash) || recorded.has(hash);
-          const isWanted = wantedHashes.has(hash);
-
-          if (isForge) {
-            toRemove.push({ event, groupIndex: gi, handlerIndex: hi, hash });
-            if (isWanted) {
-              presentWantedHashes.add(hash);
-            }
-          } else {
-            // Local handler
-            diff.localKept++;
-
-            // Check if it has the same command/args as a wanted handler
-            if (typeof handler === "object" && handler !== null) {
-              const handlerObj = handler as Record<string, unknown>;
-              for (const w of wantedHandlers) {
-                if (
-                  typeof w.handler === "object" &&
-                  w.handler !== null &&
-                  w.event === event &&
-                  w.matcher === groupMatcher
-                ) {
-                  const wObj = w.handler as Record<string, unknown>;
-                  if (handlerObj.command === wObj.command && sameHandler(handlerObj.args, wObj.args)) {
-                    diff.sameCommandLocal++;
-                  }
+          // Check if it has the same command/args as a wanted handler
+          if (typeof handler === "object" && handler !== null) {
+            const handlerObj = handler as Record<string, unknown>;
+            for (const w of wantedHandlers) {
+              if (
+                typeof w.handler === "object" &&
+                w.handler !== null &&
+                w.event === event &&
+                w.matcher === groupMatcher
+              ) {
+                const wObj = w.handler as Record<string, unknown>;
+                if (handlerObj.command === wObj.command && sameHandler(handlerObj.args, wObj.args)) {
+                  diff.sameCommandLocal++;
                 }
               }
             }
@@ -482,45 +507,57 @@ export function mergeSettings(
         }
       }
     }
+  }
 
-    // Check for idempotence: every wanted present, no recorded-not-wanted present
-    const recordedNotWantedPresent = toRemove.some((r) => recorded.has(r.hash) && !wantedHashes.has(r.hash));
-    const allWantedPresent = wantedHandlers.every((w) => presentWantedHashes.has(w.hash));
+  // Check for idempotence: every wanted present, no recorded-not-wanted present
+  const recordedNotWantedPresent = toRemove.some((r) => recorded.has(r.hash) && !wantedHashes.has(r.hash));
+  const allWantedPresent = wantedHandlers.every((w) => presentWantedHashes.has(w.hash));
 
-    if (allWantedPresent && !recordedNotWantedPresent) {
-      // Unchanged: return current as-is
-      // Handle key placement for env if needed
-      const result = ensureKeyPlacement(value, wantedEnv !== null && Object.keys(wantedEnv).length > 0, true);
-      if (diff.envAdded.length === 0) {
-        return { changed: false, value: current ?? result, diff };
+  // D4: Hooks unchanged when all wanted present and no stale recorded
+  if (allWantedPresent && !recordedNotWantedPresent) {
+    // Hooks are unchanged
+    // Keep original hooks from current (not the cloned one)
+    if (currentHasHooks) {
+      value.hooks = cloneJson(current!.hooks);
+    }
+  } else {
+    // Hooks need to change
+    hooksChanged = true;
+
+    // D3: Group removals by event and group, sort by descending handler index within each group
+    const removalsByGroup = new Map<string, typeof toRemove>();
+    for (const r of toRemove) {
+      const key = `${r.event}:${r.groupIndex}`;
+      if (!removalsByGroup.has(key)) removalsByGroup.set(key, []);
+      removalsByGroup.get(key)!.push(r);
+    }
+
+    // D3: Process removals per group, descending handler index
+    for (const removals of removalsByGroup.values()) {
+      removals.sort((a, b) => b.handlerIndex - a.handlerIndex);
+      for (const r of removals) {
+        const eventList = hooksObj[r.event] as unknown[];
+        const group = eventList[r.groupIndex] as Record<string, unknown>;
+        const groupHooks = group.hooks as unknown[];
+
+        // D3: Record removed handler BEFORE splice (already captured in toRemove)
+        if (recorded.has(r.hash) && !wantedHashes.has(r.hash)) {
+          diff.removed.push({ event: r.event, matcher: r.matcher, handler: r.handler });
+        }
+
+        // Remove the handler
+        groupHooks.splice(r.handlerIndex, 1);
       }
     }
 
-    // Remove Forge handlers
-    const removedCounts = new Map<string, number>(); // hash -> count removed
+    // Count duplicates removed
+    const removedCounts = new Map<string, number>();
     for (const r of toRemove) {
       removedCounts.set(r.hash, (removedCounts.get(r.hash) ?? 0) + 1);
     }
-
-    // Actually perform the removal, processing from end to preserve indices
-    const sortedToRemove = [...toRemove].sort((a, b) => {
-      if (a.event !== b.event) return 0;
-      if (a.groupIndex !== b.groupIndex) return b.groupIndex - a.groupIndex;
-      return b.handlerIndex - a.handlerIndex;
-    });
-
-    for (const r of sortedToRemove) {
-      const eventList = hooksObj[r.event] as unknown[];
-      const group = eventList[r.groupIndex] as Record<string, unknown>;
-      const groupHooks = group.hooks as unknown[];
-
-      // Remove the handler
-      groupHooks.splice(r.handlerIndex, 1);
-
-      // Track if this was a removal of an old Forge handler
-      if (recorded.has(r.hash) && !wantedHashes.has(r.hash)) {
-        const matcher = group.matcher as string | undefined;
-        diff.removed.push({ event: r.event, matcher, handler: groupHooks[r.handlerIndex] });
+    for (const [hash, count] of removedCounts) {
+      if (wantedHashes.has(hash) && count > 1) {
+        diff.duplicatesRemoved += count - 1;
       }
     }
 
@@ -550,8 +587,8 @@ export function mergeSettings(
       if (keptGroups.length === 0) {
         // Remove the event if all groups were removed by this process
         // BUT if the event was already [] before, keep it
-        const wasOriginallyEmpty = current !== null && 
-          typeof current.hooks === "object" && 
+        const wasOriginallyEmpty = current !== null &&
+          typeof current.hooks === "object" &&
           current.hooks !== null &&
           Array.isArray((current.hooks as Record<string, unknown>)[event]) &&
           ((current.hooks as Record<string, unknown>)[event] as unknown[]).length === 0;
@@ -589,13 +626,6 @@ export function mergeSettings(
       }
     }
 
-    // Count duplicates removed
-    for (const [hash, count] of removedCounts) {
-      if (wantedHashes.has(hash) && count > 1) {
-        diff.duplicatesRemoved += count - 1;
-      }
-    }
-
     value.hooks = hooksObj;
   }
 
@@ -608,54 +638,66 @@ export function mergeSettings(
     }
   }
 
-  // Ensure key placement (spec 52 §5.5)
+  // D4: Determine overall changed status
+  const changed = envChanged || hooksChanged;
+
+  // If unchanged, return current as-is (same object reference)
+  if (!changed) {
+    return { changed: false, value: current!, diff };
+  }
+
+  // D2: Ensure key placement based on CURRENT's keys, not value's
   const result = ensureKeyPlacement(
     value,
-    wantedEnv !== null && Object.keys(wantedEnv).length > 0,
-    wantedHooksObj !== null && Object.keys(wantedHooksObj).length > 0,
+    currentHasEnv,
+    currentHasHooks,
+    wantedEnvNames.length > 0,
+    wantedHandlers.length > 0,
   );
 
   return { changed: true, value: result, diff };
 }
 
 /**
- * Ensure env and hooks keys are placed correctly (spec 52 §5.5):
+ * Ensure env and hooks keys are placed correctly (spec 52 §5.5, D2):
  * - In a file with neither: env first, then hooks at the TOP
  * - In a file with one: the other goes right after it
+ *
+ * D2: Decision is based on what CURRENT had, not what value has after edits.
  */
 function ensureKeyPlacement(
   obj: Record<string, unknown>,
-  hasEnv: boolean,
-  hasHooks: boolean,
+  currentHadEnv: boolean,
+  currentHadHooks: boolean,
+  wantsEnv: boolean,
+  wantsHooks: boolean,
 ): Record<string, unknown> {
   const keys = Object.keys(obj);
-  const hasExistingEnv = keys.includes("env");
-  const hasExistingHooks = keys.includes("hooks");
 
-  // If both already exist, or neither wanted, return as-is
-  if ((hasExistingEnv && hasExistingHooks) || (!hasEnv && !hasHooks)) {
+  // If current had both, or neither is wanted, return as-is
+  if ((currentHadEnv && currentHadHooks) || (!wantsEnv && !wantsHooks)) {
     return obj;
   }
 
   const result: Record<string, unknown> = Object.create(null);
 
-  if (!hasExistingEnv && !hasExistingHooks) {
-    // Neither exists: add env first, then hooks, then rest
-    if (hasEnv && obj.env !== undefined) result.env = obj.env;
-    if (hasHooks && obj.hooks !== undefined) result.hooks = obj.hooks;
+  if (!currentHadEnv && !currentHadHooks) {
+    // Current had neither: add env first, then hooks, then rest
+    if (wantsEnv && obj.env !== undefined) result.env = obj.env;
+    if (wantsHooks && obj.hooks !== undefined) result.hooks = obj.hooks;
     for (const key of keys) {
       if (key !== "env" && key !== "hooks") result[key] = obj[key];
     }
-  } else if (hasExistingEnv && !hasExistingHooks && hasHooks) {
-    // env exists, hooks doesn't: add hooks right after env
+  } else if (currentHadEnv && !currentHadHooks && wantsHooks) {
+    // Current had env only, now adding hooks: hooks right after env
     for (const key of keys) {
       result[key] = obj[key];
       if (key === "env" && obj.hooks !== undefined) {
         result.hooks = obj.hooks;
       }
     }
-  } else if (!hasExistingEnv && hasExistingHooks && hasEnv) {
-    // hooks exists, env doesn't: add env right after hooks
+  } else if (!currentHadEnv && currentHadHooks && wantsEnv) {
+    // Current had hooks only, now adding env: env right after hooks
     for (const key of keys) {
       result[key] = obj[key];
       if (key === "hooks" && obj.env !== undefined) {
