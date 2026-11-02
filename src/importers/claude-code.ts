@@ -206,10 +206,16 @@ async function checkStagedLocals(opts: ImportOptions, stage: ForgeStage, report:
     } catch (e) {
       unresolved = errorText(e).split(scratch).join(root).replace(/[\r\n]+/g, " ");
     }
-    for (const x of [...(report.localReused ?? []), ...(report.localCreated ?? []), ...(report.localRewritten ?? [])]) {
-      if (res === null) throw new Error(`import: ${x.ref} (${x.dir}) matches the workspace, but profile ${p} would not resolve after this import (${unresolved}) — fix the Forge, then re-run`);
+    const how = (words: string) => (x: { ref: string; dir: string }) => ({ ...x, words });
+    const runLocals = [
+      ...(report.localReused ?? []).map(how("matches the workspace")),
+      ...(report.localCreated ?? []).map(how("is written from the workspace")),
+      ...(report.localRewritten ?? []).map(how("is rewritten from the workspace")),
+    ];
+    for (const x of runLocals) {
+      if (res === null) throw new Error(`import: ${x.ref} (${x.dir}) ${x.words}, but profile ${p} would not resolve after this import (${unresolved}) — fix the Forge, then re-run`);
       if (!res.ingredients.some((i) => i.ref === x.ref)) {
-        throw new Error(`import: ${x.ref} (${x.dir}) matches the workspace, but no recipe profile ${p} resolves cites it — sync would remove its file; add it to a recipe in profiles/${p}/recipes, then re-run`);
+        throw new Error(`import: ${x.ref} (${x.dir}) ${x.words}, but no recipe profile ${p} resolves cites it — sync would remove its file; add it to a recipe in profiles/${p}/recipes, then re-run`);
       }
     }
     const local = staged.locals.get(p)?.ingredients;
@@ -1468,8 +1474,10 @@ async function writeIngredient(
   if (typeof localDecision === "string") return localDecision;
   const mode = run?.local ?? "never";
   if (localDecision !== null) {
-    // Spec 51 §5.3: the profile's own local, rewritten in place under --local=auto|always.
+    // Spec 51 §5.3: the profile's own local, rewritten in place under --local=auto|always, keeping what the workspace
+    // cannot express (`authEnv`, a hook's `registration` and the params it cites), as a variant's rewrite keeps them.
     dir = localDecision.rewrite;
+    meta = await carryFromExisting(stage, path.join(dir, "ingredient.yaml"), meta);
   } else if (await stage.exists(path.join(dir, "ingredient.yaml"))) {
     let why: string | undefined;
     const d = run ? await decide(run.ctx, dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases, run.indexExpand) : { kind: "literal" as const, warn: "" };
@@ -1674,13 +1682,19 @@ async function writeIngredient(
     const as = meta.name;
     name = `${meta.name}--${profile}`;
     dir = path.join(forge, "ingredients", folder, name);
-    meta = { ...meta, name, as } as Ingredient;
+    meta = await carryFromExisting(stage, path.join(dir, "ingredient.yaml"), { ...meta, name, as } as Ingredient);
     validateImported(meta);
     if ((await fingerprintDir(dir, stage.reader())) === fingerprintOf(validateImported(meta), files)) {
       report.reused.push(`${meta.type}/${name}`);
       return `${meta.type}/${name}`;
     }
     if (mode === "always") throw new Error(alwaysVariantRefusal(source, `${meta.type}/${name}`, profile));
+    // I8, as for a variant with a base: rewriting one another profile resolves would change its files there.
+    if (run?.ctx.forge) {
+      for (const q of run.ctx.forge.profiles.keys()) {
+        if (q !== profile && resolvedBy(run.ctx.forge, q).has(`${meta.type}/${name}`)) throw new Error(`import: ${meta.type}/${name} is also used by profile ${q} — its files would change there`);
+      }
+    }
     report.variants.push({ name: `${meta.type}/${name}`, reason: `rewritten from ${source} (no ${meta.type}/${as} at the root)` });
   } else if (mode !== "never") {
     // Spec 51 §5.3 case 5: a source nothing holds becomes a local of the profile.
@@ -1760,7 +1774,7 @@ async function decideLocal(
     const d = await decide(run.ctx, local.dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases, run.indexExpand);
     const equal = d.kind === "reuse" || (d.kind === "literal" && (await fingerprintDir(local.dir, stage.reader())) === fingerprint);
     const dir = path.relative(forge.root, local.dir).split(path.sep).join("/");
-    if (!equal && mode === "never") throw new Error(`import: ${source} differs from ${ref}, local to profile ${profile} (${dir}) — edit the local in the Forge, or re-run with --local=auto to rewrite it, then re-run`);
+    if (!equal && mode === "never") throw new Error(`import: ${source} differs from ${ref}, local to profile ${profile} (${dir}) — edit the local in the Forge and re-run, or re-run with --local=auto to rewrite it`);
     if (!equal) {
       // Spec 51 §5.3: a local belongs to one profile, so it is rewritten whole, as a variant no other profile resolves is;
       // each `{{key}}` and section it held is said by name, never by value.
@@ -1790,6 +1804,23 @@ async function decideLocal(
     throw new Error(`import: I14 ${source} would become ${ref} at the root, a name another profile holds as a local — the Forge would not load; rename the source in the workspace, or re-run with --local=auto to keep it local to this profile`);
   }
   return null;
+}
+
+/**
+ * Spec 51 §5.3: a rewrite of the profile's own local, or of its base-less root variant, keeps what the workspace cannot
+ * express — an MCP ingredient's `authEnv`, a hook's `registration` and the `params` entries that registration cites — from
+ * the ingredient it overwrites, as the rewrite of a variant with a base keeps them when the variant exists.
+ */
+async function carryFromExisting(stage: ForgeStage, file: string, meta: Ingredient): Promise<Ingredient> {
+  if (!(await stage.exists(file))) return meta;
+  const existing = parseYaml(file, stripBom(await stage.readText(file)), IngredientSchema);
+  if (meta.type === "mcp" && existing.type === "mcp" && existing.authEnv) return { ...meta, authEnv: existing.authEnv } as Ingredient;
+  if (meta.type === "hook" && existing.type === "hook" && existing.registration) {
+    const cited = registrationCitations(existing).filter((c) => c.declared).map((c) => c.key);
+    const params = Object.fromEntries(cited.filter((k) => existing.params && Object.hasOwn(existing.params, k)).map((k) => [k, existing.params![k]]));
+    return { ...meta, registration: existing.registration, ...(Object.keys(params).length ? { params } : {}) } as Ingredient;
+  }
+  return meta;
 }
 
 const alwaysVariantRefusal = (source: string, variant: string, profile: string) =>
@@ -2134,7 +2165,6 @@ function sectionChange(report: ImportReport, ctx: RunContext): Sections {
   return out;
 }
 
-/** Recipe entries import owns in a profile's `recipes`: the ones it computes and replaces (spec 10 §6.6, §14 Q4). */
 /**
  * Spec 51 §5.3: the run's locals that no recipe in the profile's folder the profile reaches cites go into `<p>-local`,
  * edited in place or created. The folder is read as staged, so a recipe this run computed there counts. Returns the
@@ -2171,8 +2201,9 @@ async function wireLocals(stage: ForgeStage, forge: string, profile: string, loa
       if (YAML.isSeq(seq)) for (const r of add) seq.items.push(doc.createNode(r));
       else doc.set("ingredients", [...held.ingredients, ...add]);
     });
+    const original = RecipeSchema.parse(parseYamlText(label, raw) ?? {});
     const after = RecipeSchema.safeParse(parseYamlText(label, content) ?? {});
-    if (!after.success || !isDeepStrictEqual(after.data.ingredients, [...held.ingredients, ...add])) throw new Error(`import: cannot edit ${label} in place — reformat it by hand, commit, and re-run`);
+    if (!after.success || !isDeepStrictEqual(after.data, { ...original, ingredients: [...original.ingredients, ...add] })) throw new Error(`import: cannot edit ${label} in place — reformat it by hand, commit, and re-run`);
     stage.write(held.abs, content);
   } else {
     stage.write(path.join(dir, `${name}.yaml`), recipeText(name, `Ingredients local to ${profile}, wired by import --local.`, toWire));
@@ -2182,6 +2213,7 @@ async function wireLocals(stage: ForgeStage, forge: string, profile: string, loa
   return name;
 }
 
+/** Recipe entries import owns in a profile's `recipes`: the ones it computes and replaces (spec 10 §6.6, §14 Q4). */
 const importOwned = (name: string, profile: string) =>
   name === "base" || name === `base--${profile}` || name === `${profile}-steering` || (/^stack-/.test(name) && (!name.includes("--") || name.endsWith(`--${profile}`)));
 

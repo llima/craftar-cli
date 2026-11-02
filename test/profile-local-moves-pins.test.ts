@@ -142,7 +142,7 @@ async function observe() {
  * refusals gain (spec 51 §4.2, §5.3) and drift show's row for a local's file (§5.4). Nothing else of the pin may move.
  */
 const HINTS: Array<[string, string]> = [
-  ["importDiffers", " — edit the local in the Forge, or re-run with --local=auto to rewrite it, then re-run"],
+  ["importDiffers", " — edit the local in the Forge and re-run, or re-run with --local=auto to rewrite it"],
   ["importI14", ", or re-run with --local=auto to keep it local to this profile"],
 ];
 const WAS: Record<string, string> = { importDiffers: " — edit the local in the Forge, then re-run", importI14: "" };

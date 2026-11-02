@@ -121,7 +121,7 @@ describe("import --local (spec 51 §5.3)", () => {
   it("under never, the two refusals name --local=auto", async () => {
     const differs = await setup({ ...spec, profiles: [profile("acme", ["base", "acme-extra"]), profile("globex", ["base"])] }, { files: { ...localRule("acme", "x", "# X\n"), ...localRecipe("acme", "acme-extra", ["rule/x"]) }, ws: {} });
     await fs.writeFile(path.join(differs.ws, ".claude/rules/x.md"), "# X, edited\n");
-    expect(importInto(differs).stderr).toContain("— edit the local in the Forge, or re-run with --local=auto to rewrite it, then re-run");
+    expect(importInto(differs).stderr).toContain("— edit the local in the Forge and re-run, or re-run with --local=auto to rewrite it");
     const i14 = await setup({ ...spec, profiles: [profile("acme", ["base"]), profile("globex", ["base", "globex-extra"])] }, { files: { ...localRule("globex", "secret", "# S\n"), ...localRecipe("globex", "globex-extra", ["rule/secret"]) }, ws: { ".claude/rules/secret.md": "# mine\n" } });
     const r = importInto(i14);
     expect(r.stderr).toContain("rename the source in the workspace, or re-run with --local=auto to keep it local to this profile");
@@ -246,6 +246,50 @@ describe("import --local (spec 51 §5.3)", () => {
     expect(await fs.readFile(path.join(s.forge, "profiles/acme/ingredients/rules/x/rule.md"), "utf8")).toBe("# X\n");
     const st = JSON.parse(runCli(["status", "--json", "--workspace", s.ws]).stdout);
     expect(st.statuses.filter((x: { state: string }) => x.state !== "unchanged").map((x: { path: string; state: string }) => [x.path, x.state])).toEqual([[".claude/rules/x.md", "new"]]);
+  });
+
+  const hookMeta = (name: string, extra: Record<string, unknown> = {}) => ({
+    type: "hook",
+    name,
+    files: ["guard.py"],
+    params: { "hooks.python": { default: "python3" } },
+    registration: [{ event: "PreToolUse", matcher: "Bash", command: "{{hooks.python}}", args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard.py"] }],
+    ...extra,
+  });
+
+  it("under auto, a rewritten local hook keeps its registration and the params it cites", async () => {
+    const s = await setup(
+      { ...spec, profiles: [profile("acme", ["base", "acme-extra"]), profile("globex", ["base"])] },
+      { files: { "profiles/acme/ingredients/hooks/guard/ingredient.yaml": YAML.stringify(hookMeta("guard")), "profiles/acme/ingredients/hooks/guard/guard.py": 'print("ok")\n', ...localRecipe("acme", "acme-extra", ["hook/guard"]) } },
+    );
+    const example = await fs.readFile(path.join(s.ws, ".claude/settings.craftar.example.json"), "utf8");
+    await fs.writeFile(path.join(s.ws, ".claude/hooks/guard.py"), 'print("ok, edited")\n');
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    const meta = YAML.parse(await fs.readFile(path.join(s.forge, "profiles/acme/ingredients/hooks/guard/ingredient.yaml"), "utf8"));
+    expect(meta.registration).toEqual(hookMeta("guard").registration);
+    expect(meta.params).toEqual({ "hooks.python": { default: "python3" } });
+    expect(runCli(["sync", "--workspace", s.ws]).code).toBe(0);
+    expect(await fs.readFile(path.join(s.ws, ".claude/settings.craftar.example.json"), "utf8")).toBe(example);
+  });
+
+  it("under auto, a rewritten base-less root variant hook keeps its registration, and one another profile resolves is refused (I8)", async () => {
+    const v = { meta: hookMeta("guard--acme", { as: "guard" }), files: { "guard.py": 'print("ok")\n' } };
+    const s = await setup({ ingredients: [rule("style", "# S\n"), v], recipes: [recipe("base", ["rule/style", "hook/guard--acme"])], profiles: [profile("acme", ["base"])] });
+    await fs.writeFile(path.join(s.ws, ".claude/hooks/guard.py"), 'print("ok, edited")\n');
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    const meta = YAML.parse(await fs.readFile(path.join(s.forge, "ingredients/hooks/guard--acme/ingredient.yaml"), "utf8"));
+    expect(meta.registration).toEqual(hookMeta("guard").registration);
+    expect(meta.as).toBe("guard");
+
+    const shared = await setup({ ingredients: [rule("style", "# S\n"), v], recipes: [recipe("base", ["rule/style", "hook/guard--acme"])], profiles: [profile("acme", ["base"]), profile("globex", ["base"])] });
+    await fs.writeFile(path.join(shared.ws, ".claude/hooks/guard.py"), 'print("ok, edited")\n');
+    const before = await snapshot(shared.forge);
+    const refused = importInto(shared, "auto");
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("import: hook/guard--acme is also used by profile globex — its files would change there");
+    expect(await snapshot(shared.forge)).toEqual(before);
   });
 
   it("forge localize of a rule held in base--acme, then a re-import: every file unchanged", async () => {
