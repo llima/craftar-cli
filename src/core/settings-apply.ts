@@ -325,40 +325,11 @@ interface WantedHandlerInfo {
  */
 export function mergeSettings(
   current: Record<string, unknown> | null,
-  wanted: WantedBlocks | { env: Record<string, string> | null; hooks: HooksObject | null },
+  wanted: WantedBlocks,
   recorded: Set<string>,
 ): MergeResult {
-  // Normalize wanted to the new shape (support both old and new API)
-  let wantedEnvNames: string[];
-  let wantedRegistrations: PlannedRegistration[];
-
-  if ("envNames" in wanted) {
-    // New API
-    wantedEnvNames = wanted.envNames;
-    wantedRegistrations = wanted.registrations;
-  } else {
-    // Old API (for backward compatibility during transition)
-    wantedEnvNames = wanted.env ? Object.keys(wanted.env) : [];
-    wantedRegistrations = [];
-    if (wanted.hooks) {
-      for (const event of Object.keys(wanted.hooks)) {
-        const groups = wanted.hooks[event];
-        for (let gi = 0; gi < groups.length; gi++) {
-          const group = groups[gi];
-          for (const handler of group.hooks) {
-            wantedRegistrations.push({
-              ref: "",
-              index: gi,
-              event,
-              matcher: group.matcher,
-              handler,
-              hasMissing: false,
-            });
-          }
-        }
-      }
-    }
-  }
+  const wantedEnvNames = wanted.envNames;
+  const wantedRegistrations = wanted.registrations;
 
   // Build the wanted handlers list with hashes
   const wantedHandlers: WantedHandlerInfo[] = wantedRegistrations.map((r) => ({
@@ -398,17 +369,16 @@ export function mergeSettings(
     ? cloneJson(current) as Record<string, unknown>
     : Object.create(null);
 
+  // ---- Validate env shape (even when no names wanted) ----
+  const existingEnv = value.env;
+  if (existingEnv !== undefined) {
+    if (existingEnv === null || typeof existingEnv !== "object" || Array.isArray(existingEnv)) {
+      throw new SettingsShapeError(".claude/settings.json: env is not an object — fix it by hand");
+    }
+  }
+
   // ---- Process env (spec 52 §5.4) ----
   if (wantedEnvNames.length > 0) {
-    let existingEnv = value.env;
-
-    // Validate env shape
-    if (existingEnv !== undefined) {
-      if (existingEnv === null || typeof existingEnv !== "object" || Array.isArray(existingEnv)) {
-        throw new SettingsShapeError(".claude/settings.json: env is not an object — fix it by hand");
-      }
-    }
-
     // Build new env: keep existing values, add missing names with ""
     const newEnv: Record<string, unknown> = Object.create(null);
     if (existingEnv) {
@@ -1299,6 +1269,8 @@ export async function writeSettingsFile(
         error: `.claude/settings.json.craftar-${process.pid}.tmp exists — remove it and run again`,
       };
     }
+    // Non-EEXIST error (like ENOSPC) - clean up any partial temp file
+    await fsOps.unlink(tempPath).catch(() => {});
     throw e;
   }
 

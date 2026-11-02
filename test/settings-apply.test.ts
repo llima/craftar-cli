@@ -295,7 +295,7 @@ describe("merge (spec 52 §5)", () => {
     expect(result.diff.added).toHaveLength(1);
   });
 
-  it("3. all wanted handlers present + no stale recorded → unchanged=false", () => {
+  it("3. all wanted handlers present + no stale recorded → changed=false", () => {
     // Current already has the wanted handler
     const hooks: Record<string, unknown> = Object.create(null);
     hooks.PreToolUse = [{ matcher: "Bash", hooks: [handler1] }];
@@ -906,6 +906,18 @@ describe("merge — spec cases", () => {
   it("M15. handlerHash: '-' matcher !== undefined matcher", () => {
     const h = { type: "command", command: "test" };
     expect(handlerHash("E", "-", h)).not.toBe(handlerHash("E", undefined, h));
+  });
+
+  it("M16. env validation: malformed env throws even when no names wanted", () => {
+    // env is an array, not an object - should throw even when wantedEnvNames is empty
+    const c1: Record<string, unknown> = Object.create(null);
+    c1.env = [];
+    c1.hooks = Object.create(null);
+    (c1.hooks as Record<string, unknown>).PreToolUse = [{ matcher: "Bash", hooks: [NEW] }];
+
+    // Even with no env names wanted, malformed env should be caught
+    expect(() => mergeSettings(c1, W([], [reg("PreToolUse", "Bash", NEW)]), new Set())).toThrow(SettingsShapeError);
+    expect(() => mergeSettings(c1, W([], [reg("PreToolUse", "Bash", NEW)]), new Set())).toThrow(/env is not an object/);
   });
 });
 

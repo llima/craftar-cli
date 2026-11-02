@@ -997,6 +997,43 @@ describe("C10. writeSettingsFile with injected errors", () => {
     const tempContent = await fs.readFile(tempPath, "utf8");
     expect(tempContent).toBe("pre-existing temp content");
   });
+
+  it("C10c. injected writeFile throwing ENOSPC → throws, any temp file cleaned up", async () => {
+    const wsRoot = await tmpDir("craftar-c10c-");
+    cleanups.push(() => fs.rm(wsRoot, { recursive: true, force: true }));
+
+    // Create .claude directory
+    await fs.mkdir(path.join(wsRoot, ".claude"), { recursive: true });
+
+    // Create a temp file to simulate partial write (edge case)
+    const tempPath = path.join(wsRoot, ".claude", `settings.json.craftar-${process.pid}.tmp`);
+
+    // Create fsOps that writes the temp file first (simulating partial success), then throws ENOSPC
+    const fsOps: FsOps = {
+      writeFile: async (p, content, opts) => {
+        // Simulate: create the file, then fail
+        await fs.writeFile(p, content, opts);
+        // Now throw ENOSPC as if disk filled mid-write
+        const err = new Error("ENOSPC") as NodeJS.ErrnoException;
+        err.code = "ENOSPC";
+        throw err;
+      },
+      readFile: fs.readFile,
+      rename: fs.rename,
+      unlink: fs.unlink,
+      chmod: fs.chmod,
+      stat: fs.stat,
+    };
+
+    const newContent = Buffer.from('{"env":{"ACME_TOKEN":""}}\n');
+
+    // Should throw
+    await expect(writeSettingsFile(wsRoot, newContent, null, null, fsOps)).rejects.toThrow("ENOSPC");
+
+    // The temp file should be cleaned up (even though write "succeeded" then threw)
+    const tempExists = await fs.access(tempPath).then(() => true).catch(() => false);
+    expect(tempExists).toBe(false);
+  });
 });
 
 describe("C15. confirmSettings through fake InitIo", () => {

@@ -3947,10 +3947,7 @@ async function settingsApplyCommand(o: {
     return;
   }
 
-  // Compute the new value
-  const newValue = created ? mergeResult.value : mergeResult.value;
-
-  // If creating, build from settingsExample shape
+  // Compute content buffer
   let contentBuffer: Buffer;
   if (created) {
     // Build the new file content using settingsExample structure
@@ -3962,7 +3959,7 @@ async function settingsApplyCommand(o: {
     const exampleObj = settingsExample(envRecord, exampleHooks);
     contentBuffer = serialize(exampleObj as Record<string, unknown>, indent, eol, bom, finalNewline);
   } else {
-    contentBuffer = serialize(newValue, indent, eol, bom, finalNewline);
+    contentBuffer = serialize(mergeResult.value, indent, eol, bom, finalNewline);
   }
 
   // Step 9: Print diff
