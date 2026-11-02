@@ -270,6 +270,21 @@ export async function gitIgnored(dir: string, rel: string): Promise<boolean> {
 }
 
 /**
+ * Whether `rel` (a workspace-relative POSIX path) is tracked by git. Fails closed: when git cannot
+ * answer, the path counts as tracked (spec 52 §6.3). Exit 0 → tracked; exit 1 → not tracked; error → tracked.
+ */
+export async function gitTracked(dir: string, rel: string): Promise<boolean> {
+  try {
+    await execProgram("git", [...gitRead(dir), "ls-files", "--error-unmatch", "--", rel]);
+    return true; // exit 0 means tracked
+  } catch (e) {
+    // exit 1 means not tracked; any other error fails closed (counts as tracked)
+    if ((e as { code?: number }).code === 1) return false;
+    return true; // fail closed
+  }
+}
+
+/**
  * The git arguments for a read-only command that must not run hooks or take locks.
  * These keep `git` from running a `core.fsmonitor` command and a `post-index-change` hook
  * of the Forge's own `.git`; a `filter.<x>.clean` still runs.

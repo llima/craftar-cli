@@ -1,0 +1,146 @@
+{
+  "planned": [
+    {
+      "path": ".claude/hooks/guard-path.py",
+      "sha256": "3a66aebdedbad3cf107d24e72a07d4b735819b1cf4020fdd922f63c064708172"
+    },
+    {
+      "path": ".claude/settings.craftar.example.json",
+      "sha256": "21658ef562690c1a3110e3295716924577302f40ac349a2862edb4357adc7eeb"
+    },
+    {
+      "path": ".mcp.json",
+      "sha256": "3c61720db254dc59106584bca1c2eafc8956cb259b55b9a48476aaddf3caa912"
+    }
+  ],
+  "status": {
+    "forge": {
+      "kind": "path",
+      "source": "../forge",
+      "ref": null,
+      "defaultBranch": null,
+      "commit": null,
+      "lockCommit": null,
+      "fetched": false
+    },
+    "statuses": [
+      {
+        "path": ".claude/hooks/guard-path.py",
+        "state": "unchanged",
+        "target": "claude-code",
+        "ingredient": "hook/guard-path",
+        "lock": {
+          "path": ".claude/hooks/guard-path.py",
+          "hash": "sha256:3a66aebdedbad3cf107d24e72a07d4b735819b1cf4020fdd922f63c064708172",
+          "target": "claude-code",
+          "ingredient": "hook/guard-path"
+        }
+      },
+      {
+        "path": ".claude/settings.craftar.example.json",
+        "state": "unchanged",
+        "target": "claude-code",
+        "ingredient": "mcp/*",
+        "lock": {
+          "path": ".claude/settings.craftar.example.json",
+          "hash": "sha256:21658ef562690c1a3110e3295716924577302f40ac349a2862edb4357adc7eeb",
+          "target": "claude-code",
+          "ingredient": "mcp/*"
+        }
+      },
+      {
+        "path": ".mcp.json",
+        "state": "unchanged",
+        "target": "claude-code",
+        "ingredient": "mcp/*",
+        "lock": {
+          "path": ".mcp.json",
+          "hash": "sha256:3c61720db254dc59106584bca1c2eafc8956cb259b55b9a48476aaddf3caa912",
+          "target": "claude-code",
+          "ingredient": "mcp/*"
+        }
+      }
+    ],
+    "warnings": [],
+    "unsetParams": []
+  },
+  "doctorChecks": [
+    {
+      "id": "config",
+      "scope": "workspace",
+      "level": "ok",
+      "message": "craftar.yaml loads (forge ../forge, profile acme)",
+      "fix": null
+    },
+    {
+      "id": "forge",
+      "scope": "workspace",
+      "level": "ok",
+      "message": "../forge @ no git",
+      "fix": null
+    },
+    {
+      "id": "forge-inside",
+      "scope": "workspace",
+      "level": "ok",
+      "message": "outside the Forge",
+      "fix": null
+    },
+    {
+      "id": "plan",
+      "scope": "workspace",
+      "level": "ok",
+      "message": "3 files",
+      "fix": null
+    },
+    {
+      "id": "params",
+      "scope": "workspace",
+      "level": "ok",
+      "message": "every declared parameter has a value",
+      "fix": null
+    },
+    {
+      "id": "mcp-env",
+      "scope": "workspace",
+      "level": "warn",
+      "message": "server \"acme\" expects ACME_TOKEN, not set",
+      "fix": "export ACME_TOKEN"
+    },
+    {
+      "id": "mcp-launcher",
+      "scope": "workspace",
+      "level": "ok",
+      "message": "no written MCP server is Windows-only",
+      "fix": null
+    },
+    {
+      "id": "hooks-registered",
+      "scope": "workspace",
+      "level": "warn",
+      "message": "hook/guard-path: registration 0 (PreToolUse) is in no settings file Claude Code reads",
+      "fix": "run craftar settings apply (or copy it from .claude/settings.craftar.example.json into .claude/settings.json)"
+    },
+    {
+      "id": "lock",
+      "scope": "workspace",
+      "level": "ok",
+      "message": "schema 2, generated <timestamp>",
+      "fix": null
+    },
+    {
+      "id": "status",
+      "scope": "workspace",
+      "level": "ok",
+      "message": "up to date",
+      "fix": null
+    },
+    {
+      "id": "registered",
+      "scope": "workspace",
+      "level": "ok",
+      "message": "in the registry",
+      "fix": null
+    }
+  ]
+}
