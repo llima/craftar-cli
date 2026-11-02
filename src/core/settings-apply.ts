@@ -853,6 +853,7 @@ export async function readSettingsFile(
 /**
  * Check if the value round-trips through serialize to the original bytes.
  * The indent must be 2 spaces, 4 spaces, or tab; any other indent fails the gate.
+ * When no indent is detected (one-line), compares against compact JSON.stringify(value).
  */
 export function roundTrips(
   value: Record<string, unknown>,
@@ -867,11 +868,42 @@ export function roundTrips(
     return { ok: false, reason: "non-standard indent" };
   }
 
-  const serialized = serialize(value, indent ?? "  ", eol, bom, finalNewline);
+  // For one-line files (indent === null), compare against compact JSON
+  if (indent === null) {
+    const compactSerialized = serializeCompact(value, eol, bom, finalNewline);
+    if (compactSerialized.equals(originalBytes)) {
+      return { ok: true };
+    }
+    return { ok: false, reason: "bytes differ" };
+  }
+
+  const serialized = serialize(value, indent, eol, bom, finalNewline);
   if (serialized.equals(originalBytes)) {
     return { ok: true };
   }
   return { ok: false, reason: "bytes differ" };
+}
+
+/**
+ * Serialize a value in compact form (no indent, single line).
+ */
+function serializeCompact(
+  value: Record<string, unknown>,
+  eol: Eol,
+  bom: boolean,
+  finalNewline: boolean,
+): Buffer {
+  // JSON.stringify without indent (compact)
+  let text = JSON.stringify(value);
+  // Add final newline if needed
+  if (finalNewline) text += "\n";
+  // Apply EOL
+  text = withEol(text, eol);
+  // Apply BOM
+  if (bom) {
+    return Buffer.concat([UTF8_BOM, Buffer.from(text, "utf8")]);
+  }
+  return Buffer.from(text, "utf8");
 }
 
 /**

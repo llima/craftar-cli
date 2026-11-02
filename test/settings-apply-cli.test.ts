@@ -1329,3 +1329,68 @@ describe("F1. empty file is written, keeping its mode", () => {
     }
   });
 });
+
+
+describe("F2. one-line file is rewritten with two spaces", () => {
+  let home: string;
+  let claudeDir: string;
+
+  beforeEach(async () => {
+    home = await tmpDir("craftar-f2-home-");
+    claudeDir = await tmpDir("craftar-f2-claude-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(() => fs.rm(claudeDir, { recursive: true, force: true }));
+  });
+
+  it('{"env":{}}\\n → exit 0, written with two spaces, reformatted line printed', async () => {
+    const s = await forgeAt(1, standardForge());
+    cleanups.push(s.cleanup);
+
+    await initGit(s.wsRoot);
+    await gitignoreSettings(s.wsRoot);
+
+    runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir } });
+
+    // Write a one-line file
+    await fs.mkdir(path.join(s.wsRoot, ".claude"), { recursive: true });
+    await fs.writeFile(path.join(s.wsRoot, ".claude", "settings.json"), '{"env":{}}\n');
+
+    const r = runCli(["settings", "apply", "--workspace", s.wsRoot, "--yes"], {
+      env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir },
+    });
+
+    expect(r.code, `apply failed: ${r.stderr}`).toBe(0);
+    expect(r.stdout).toContain("reformatted");
+
+    // Check written with 2-space indent
+    const content = await fs.readFile(path.join(s.wsRoot, ".claude", "settings.json"), "utf8");
+    const lines = content.split("\n");
+    expect(lines.some((l) => l.startsWith('  "'))).toBe(true);
+  });
+
+  it('{"permissions":{"allow":[]}}\\n → exit 0, written with two spaces, permissions value equal', async () => {
+    const s = await forgeAt(1, standardForge());
+    cleanups.push(s.cleanup);
+
+    await initGit(s.wsRoot);
+    await gitignoreSettings(s.wsRoot);
+
+    runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir } });
+
+    // Write a one-line file with permissions
+    await fs.mkdir(path.join(s.wsRoot, ".claude"), { recursive: true });
+    await fs.writeFile(path.join(s.wsRoot, ".claude", "settings.json"), '{"permissions":{"allow":[]}}\n');
+
+    const r = runCli(["settings", "apply", "--workspace", s.wsRoot, "--yes"], {
+      env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir },
+    });
+
+    expect(r.code, `apply failed: ${r.stderr}`).toBe(0);
+    expect(r.stdout).toContain("reformatted");
+
+    // Check permissions value is preserved
+    const content = await fs.readFile(path.join(s.wsRoot, ".claude", "settings.json"), "utf8");
+    const parsed = JSON.parse(content);
+    expect(parsed.permissions).toEqual({ allow: [] });
+  });
+});
