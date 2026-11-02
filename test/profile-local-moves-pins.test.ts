@@ -139,7 +139,7 @@ async function observe() {
 
 /**
  * What Part B changes on purpose, taken out before the comparison and asserted present: the hint the two import
- * refusals gain (spec 51 §4.2, §5.3). Nothing else of the pin may move.
+ * refusals gain (spec 51 §4.2, §5.3) and drift show's row for a local's file (§5.4). Nothing else of the pin may move.
  */
 const HINTS: Array<[string, string]> = [
   ["importDiffers", " — edit the local in the Forge, or re-run with --local=auto to rewrite it, then re-run"],
@@ -148,6 +148,10 @@ const HINTS: Array<[string, string]> = [
 const WAS: Record<string, string> = { importDiffers: " — edit the local in the Forge, then re-run", importI14: "" };
 function deliberate(observed: Record<string, unknown>): Record<string, unknown> {
   const out = structuredClone(observed);
+  // Spec 51 §5.4: a local's file is promotable — drift show's row for it was `promotable: false`, `profile-local`.
+  const row = (out.driftShow as { json: { files: Array<{ path: string; promotable: boolean; reason: string | null }> } }).json.files.find((f) => f.path === ".claude/rules/x.md")!;
+  expect(row).toMatchObject({ promotable: true, reason: null });
+  Object.assign(row, { promotable: false, reason: "profile-local" });
   for (const [key, hint] of HINTS) {
     const o = out[key] as { stderr: string };
     expect(o.stderr, key).toContain(hint);

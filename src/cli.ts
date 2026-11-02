@@ -970,7 +970,7 @@ drift
     }
     const indexedPaths = new Set(p.indexed.map((x) => x.path));
     const shown = named ? [named] : st;
-    const rows = driftList(shown, provided, new Set(p.reworded), indexedPaths, new Set(ws.forge.locals.get(ws.config.profile)?.ingredients.keys()), await metadataEdits(ws.root, p, shown));
+    const rows = driftList(shown, provided, new Set(p.reworded), indexedPaths, await metadataEdits(ws.root, p, shown));
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {

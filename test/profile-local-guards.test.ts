@@ -93,16 +93,16 @@ describe("init --new-profile --like and a template's local recipe (spec 51 §4.5
 });
 
 describe("drift show and drift promote on a local's file (spec 51 §4.5)", () => {
-  it("drift show says profile-local, and drift promote refuses with D22", async () => {
+  it("Part B lifts D22: drift show calls a local's file promotable, and drift promote edits the local in place", async () => {
     const s: ForgeSpec = { ...spec, profiles: [profile("acme", ["core--acme", "acme-extra"]), profile("globex", ["core"])] };
     const f = await forgeWith({ ...localRule("acme", "x"), ...citing("acme", "acme-extra", ["rule/x"]) }, s);
     expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
     await fs.writeFile(path.join(f.ws, ".claude/rules/x.md"), "# x, edited by hand\n");
     const show = JSON.parse(runCli(["drift", "show", "--json", "--workspace", f.ws]).stdout);
-    expect(show.files.find((x: { path: string }) => x.path === ".claude/rules/x.md")).toMatchObject({ promotable: false, reason: "profile-local" });
+    expect(show.files.find((x: { path: string }) => x.path === ".claude/rules/x.md")).toMatchObject({ promotable: true, reason: null });
     const promote = runCli(["drift", "promote", ".claude/rules/x.md", "--workspace", f.ws]);
-    expect(promote.code).toBe(1);
-    expect(promote.stderr).toContain(".claude/rules/x.md comes from profiles/acme/ingredients/rules/x, local to this profile — edit it there");
+    expect(promote.code, promote.stderr).toBe(0);
+    expect(await fs.readFile(path.join(f.dir, "profiles/acme/ingredients/rules/x/rule.md"), "utf8")).toBe("# x, edited by hand\n");
   });
 
   it("drift promote's variant outcome refuses when a local recipe of this profile reaches the base", async () => {

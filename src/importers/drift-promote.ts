@@ -26,7 +26,7 @@ import {
   copyForgeForProof,
 } from "../core/forge.js";
 import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type UnsetParam, type Plan, type Workspace } from "../core/sync.js";
-import { driftList, metadataEdits, METADATA_PARAM_REASON, REWORDED_REASON, INDEXED_REASON, PROFILE_LOCAL_REASON, unmanaged } from "../core/drift.js";
+import { driftList, metadataEdits, METADATA_PARAM_REASON, REWORDED_REASON, INDEXED_REASON, unmanaged } from "../core/drift.js";
 import { substituteMetadata, templatedMetadataEdit, withTemplatedFields } from "../core/metadata-params.js";
 import { readsRulesIndex, RULES_INDEX_KEY } from "../core/rules-index.js";
 import { hashNormalized, toLf } from "../core/text.js";
@@ -118,7 +118,8 @@ export interface ImpactWorkspaceRow {
 }
 
 export interface PromotePlan {
-  outcome: "params" | "sections" | "variant" | "variant-updated";
+  /** `local` (spec 51 §5.4): a profile-local ingredient's own files, edited in place — no variant. */
+  outcome: "params" | "sections" | "variant" | "variant-updated" | "local";
   /** The ref of the promoted ingredient (null for params/sections). */
   promoted: string | null;
   profile: string;
@@ -185,8 +186,6 @@ const D21 = (p: string) => `${p} holds the generated rules index — edit the Fo
 /** D23 (spec 50 §5.6): a hand edit of a metadata field the Forge renders from a parameter — promoting would freeze the value. */
 const D23 = (p: string, field: string) =>
   `${p} changes ${field}, which the Forge renders from a parameter — set the parameter's value in the profile, or edit the Forge's ingredient`;
-/** D22 (spec 51 §4.5): a profile-local ingredient's file — edit it in the profile's folder. */
-const D22 = (p: string, dir: string) => `${p} comes from ${dir}, local to this profile — edit it there; promote does not carry a local's hand edit`;
 const D11 = (p: string, line: number) => `${p}:${line} holds a section marker — a variant body cannot hold one; remove it and promote again`;
 const D12_SECTION = (ing: string, name: string) =>
   `${ing} takes section "${name}" from this workspace's overrides (craftar.yaml) — a variant would silently stop applying it; edit craftar.yaml, or remove the override and sync first`;
@@ -351,7 +350,7 @@ async function checkOtherWorkspaces(
     forge: Forge;
     scratchForge: Forge;
     profile: string;
-    outcome: "params" | "sections" | "variant" | "variant-updated";
+    outcome: "params" | "sections" | "variant" | "variant-updated" | "local";
     ingredientRef: IngredientRef;
     variantRef: IngredientRef | null;
     ingredientName: string;
@@ -463,7 +462,7 @@ async function checkOtherWorkspaces(
 
     // Same profile - check if the change is within allowed bounds
     // For variant outcomes, check if the workspace fills the ingredient from overrides
-    if (outcome === "variant" || outcome === "variant-updated") {
+    if (outcome === "variant" || outcome === "variant-updated" || outcome === "local") {
       // Check if this workspace's merged config sets sections or params that X cites
       const merged = aPlan.workspace.merged;
       const wsSections = merged.config.overrides?.sections?.[ingKey];
@@ -607,9 +606,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
   // Static checks (promotability) using driftList's row
   const indexedPaths = new Set(p0.indexed.map((x) => x.path));
-  const localRefs = new Set<string>(forge.locals.get(profile)?.ingredients.keys());
   const metadataPaths = await metadataEdits(root, p0, [fileStatus]);
-  const rows = driftList([fileStatus], provided, new Set(p0.reworded), indexedPaths, localRefs, metadataPaths);
+  const rows = driftList([fileStatus], provided, new Set(p0.reworded), indexedPaths, metadataPaths);
   if (rows.length === 0) {
     throw new Error(D4_OTHER(normalized, fileStatus.state));
   }
@@ -634,10 +632,6 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       const ing = p0.resolution.ingredients.find((i) => i.ref === fileStatus.ingredient)!;
       const disk = await fs.readFile(path.join(root, normalized), "utf8");
       throw new Error(D23(normalized, templatedMetadataEdit(ing.meta, fileStatus.planned!.content.toString("utf8"), disk)!));
-    }
-    if (reason === PROFILE_LOCAL_REASON) {
-      const local = forge.locals.get(profile)!.ingredients.get(fileStatus.ingredient! as IngredientRef)!;
-      throw new Error(D22(normalized, path.relative(forge.root, local.dir).split(path.sep).join("/")));
     }
     if (reason === "kiro file") {
       // D5 kiro: check if the plan has a claude-code path for this ingredient
@@ -805,8 +799,10 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const decision = await decide(ctx, X.dir, stage.reader(), ingredientRef, sourceMeta, emitted.files, fingerprint, [], new Set());
 
   // Handle the decision
-  let outcome: "params" | "sections" | "variant" | "variant-updated";
+  let outcome: "params" | "sections" | "variant" | "variant-updated" | "local";
   const N = outputName;
+  // Spec 51 §5.4: a local of this profile is edited in place — nothing else resolves it, so it has no variant.
+  const isLocal = forge.locals.get(profile)?.ingredients.has(ingredientRef) === true;
 
   // Determine if X is this profile's variant (name is `<N>--<p>` AND as is `<N>`)
   const isOwnVariant = X.meta.name === `${N}--${profile}` && X.meta.as === N;
@@ -863,7 +859,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     }
   } else if (decision.kind === "variant" || decision.kind === "literal") {
     // Check if this is updating an existing variant
-    if (isOwnVariant) {
+    if (isLocal) {
+      outcome = "local";
+    } else if (isOwnVariant) {
       outcome = "variant-updated";
     } else {
       outcome = "variant";
@@ -873,7 +871,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     flattenedSections = baseSectionNames;
   } else {
     // literal — shouldn't happen with no others, treat as variant
-    outcome = isOwnVariant ? "variant-updated" : "variant";
+    outcome = isLocal ? "local" : isOwnVariant ? "variant-updated" : "variant";
     flattenedParams = [...baseCitedKeys].sort();
     flattenedSections = baseSectionNames;
   }
@@ -885,7 +883,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   }
 
   // D12: check workspace overrides before variant outcomes (not for params/sections)
-  if (outcome === "variant" || outcome === "variant-updated") {
+  if (outcome === "variant" || outcome === "variant-updated" || outcome === "local") {
     // Check if the workspace sets a section of this ingredient
     const wsIngSections = ctx.WS[ingKey];
     if (wsIngSections) {
@@ -911,7 +909,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   }
 
   // D11: marker check (only for variant outcomes)
-  if (outcome === "variant" || outcome === "variant-updated") {
+  if (outcome === "variant" || outcome === "variant-updated" || outcome === "local") {
     const marker = markerIn(sourceMeta, emitted.files, normalized, forge.manifest.schema);
     if (marker) throw new Error(D11(marker.where, marker.line));
   }
@@ -1010,8 +1008,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Build the variant ingredient — strip params for flattened variants
   const variantMeta: Ingredient = {
     ...validateImported(sourceMeta),
-    name: variantName,
-    as: N,
+    name: isLocal ? X.meta.name : variantName,
+    ...(isLocal ? {} : { as: N }),
     origin: {
       workspace: path.basename(root),
       path: meta.type === "skill" && meta.layout === "dir" ? `.claude/skills/${N}/` : normalized,
@@ -1041,8 +1039,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
   // Stage the variant files using typeFolder
   const folder = typeFolder(meta.type);
-  const variantDir = path.join(forgeDir, "ingredients", folder, variantName);
-  const variantDirRel = `ingredients/${folder}/${variantName}`;
+  // A local's own folder under profiles/<p>/ (spec 51 §5.4), else the root variant's.
+  const variantDir = isLocal ? path.join(forgeDir, path.relative(forge.root, X.dir)) : path.join(forgeDir, "ingredients", folder, variantName);
+  const variantDirRel = isLocal ? path.relative(forge.root, X.dir).split(path.sep).join("/") : `ingredients/${folder}/${variantName}`;
 
   // For variant-updated, we don't check D13 — we're updating the existing directory
   if (outcome === "variant") {
@@ -1305,7 +1304,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       profile,
       outcome,
       ingredientRef,
-      variantRef,
+      variantRef: isLocal ? ingredientRef : variantRef,
       ingredientName: N,
       baseCitedKeys,
       baseSectionNames,
@@ -1318,14 +1317,14 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       const profileIngSections = profileSections[ingKey] ?? {};
       for (const name of flattenedSections) {
         if (Object.hasOwn(profileIngSections, name)) {
-          warnings.push(`profile ${profile} still sets section ${ingKey} ${name}, which ${variantRef} no longer holds — every plan will warn until it is removed`);
+          warnings.push(`profile ${profile} still sets section ${ingKey} ${name}, which ${isLocal ? ingredientRef : variantRef} no longer holds — every plan will warn until it is removed`);
         }
       }
     }
 
     return {
       outcome,
-      promoted: variantRef,
+      promoted: isLocal ? ingredientRef : variantRef,
       profile,
       inputPath: normalized,
       entries: entries.map((e) => ({ rel: e.rel, created: e.created })),
