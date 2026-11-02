@@ -120,7 +120,7 @@ export function guardedKeyMoved(text: string, params: Record<string, unknown>): 
  * the middle of plain text it is a character. Inside double quotes a `'` means nothing and `\"` does not close; inside
  * single quotes a `"` means nothing. `depth` counts the flow collections open.
  */
-function quoteState(prefix: string): { inDouble: boolean; inSingle: boolean; depth: number } {
+function quoteState(prefix: string): { inDouble: boolean; inSingle: boolean; depth: number; start: boolean } {
   let inDouble = false;
   let inSingle = false;
   let depth = 0;
@@ -153,7 +153,7 @@ function quoteState(prefix: string): { inDouble: boolean; inSingle: boolean; dep
     } else if (start && c === "-" && (next === " " || next === "\t")) continue;
     start = false;
   }
-  return { inDouble, inSingle, depth };
+  return { inDouble, inSingle, depth, start: start && !inDouble && !inSingle };
 }
 
 /**
@@ -194,6 +194,35 @@ function opensOther(value: string): boolean {
 }
 
 /**
+ * The line checks of spec 50 §5.4 for one valued citation at `index` (of `length`) in `line`, or null: a value that
+ * breaks a one-line scalar, a backslash inside double quotes, a `#` or `: ` formed with the text beside it, and an opener
+ * where a value starts. Where a value starts, and the quoting around it, are read from the line rendered up to the
+ * citation, so an empty or whitespace neighbour hides nothing. `quotes`: a quote in the value breaks it (a raw block).
+ * `under`: the top-level key the line sits under, for the `paths:` glob exemption.
+ */
+function valueFault(line: string, index: number, length: number, value: string, params: Record<string, unknown>, quotes: boolean, under: string | null): string | null {
+  const broken = scalarBreak(value, quotes);
+  if (broken) return `its value holds ${broken}`;
+  const before = substitute(line.slice(0, index), params);
+  const after = substitute(line.slice(index + length), params);
+  const q = quoteState(before);
+  // Inside a double-quoted scalar a backslash starts an escape YAML may refuse.
+  if (q.inDouble && value.includes("\\")) return "its value holds a backslash inside double quotes";
+  if (q.inDouble || q.inSingle) return null;
+  const across = boundaryBreak(before, value, after);
+  if (across) return `its value forms ${across} with the text beside it`;
+  // A flow element: after `[` or `,` with a `[` or `{` open. `*` is let through for a paths: block value or item only.
+  const flow = q.depth > 0 && /[[,]\s*$/.test(before);
+  // Inside a flow collection a flow indicator in the value ends or splits the element.
+  if (q.depth > 0 && /[,[\]{}]/.test(value)) return "its value holds a flow indicator inside a flow collection";
+  const lead = value.replace(/^[ \t]+/, "");
+  if (q.start && opensOther(lead) && !(lead[0] === "*" && under === "paths" && !flow)) {
+    return "its value starts with a character that opens something other than plain text";
+  }
+  return null;
+}
+
+/**
  * The first value of this ingredient's metadata that would break its file, at the gate, or null. A citation that has
  * no value is not tested: it is left as written and joins `missingParams`. A literal in the Forge is never tested.
  */
@@ -217,24 +246,8 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
             if (/^\s*(?:-\s+)?\{(?!\{)/.test(line)) return { field, key, why: "it stands in a flow mapping, which a parameter may not change" };
             const value = valueOf(key);
             if (value === null) continue;
-            const broken = scalarBreak(value, true);
-            if (broken) return { field, key, why: `its value holds ${broken}` };
-            const prefix = line.slice(0, m.index);
-            const q = quoteState(prefix);
-            // Inside a double-quoted scalar a backslash starts an escape YAML may refuse.
-            if (q.inDouble && value.includes("\\")) return { field, key, why: "its value holds a backslash inside double quotes" };
-            if (!q.inDouble && !q.inSingle) {
-              // The neighbours as rendered, so two placeholders side by side are tested as written to the file.
-              const across = boundaryBreak(substitute(prefix, params), value, substitute(line.slice(m.index + m[0].length), params));
-              if (across) return { field, key, why: `its value forms ${across} with the text beside it` };
-            }
-            // At the start of a value or an item — or of a flow element: after `[` or `,` with a `[` or `{` open, outside quotes.
-            const flow = /[[,]\s*$/.test(prefix) && !q.inDouble && !q.inSingle && q.depth > 0;
-            const opens = /^\s*(?:-\s+)?(?:[^\s"'#\-][^"']*?:\s+)?(?:-\s+)?$/.test(prefix) || flow;
-            // `*` is let through for a paths: block value or item, never a flow element.
-            if (opens && opensOther(value) && !(value[0] === "*" && under === "paths" && !flow)) {
-              return { field, key, why: "its value starts with a character that opens something other than plain text" };
-            }
+            const why = valueFault(line, m.index, m[0].length, value, params, true, under);
+            if (why) return { field, key, why };
           }
         }
         // Whatever spelling the lines above do not catch (spec 50 §8).
@@ -248,25 +261,20 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
         const cited = [...text.matchAll(PLACEHOLDER_RE)];
         if (cited.length > 0 && substitute(text, params).trim() === "") return { field, key: cited[0][1], why: "the pattern renders empty" };
       } else if (meta.type === "agent" || meta.type === "command") {
-        // An agent's or a command's description and argumentHint are written unquoted into a frontmatter.
-        for (const m of text.matchAll(PLACEHOLDER_RE)) {
+        // An agent's or a command's description and argumentHint are written unquoted into a frontmatter: checked as the
+        // one line the emitter writes, with the raw block's line checks.
+        const line = `${field === "argumentHint" ? "argument-hint" : "description"}: ${text}`;
+        for (const m of line.matchAll(PLACEHOLDER_RE)) {
           const value = valueOf(m[1]);
           if (value === null) continue;
-          const broken = scalarBreak(value, false);
-          if (broken) return { field, key: m[1], why: `its value holds ${broken}` };
-          const across = boundaryBreak(substitute(text.slice(0, m.index), params), value, substitute(text.slice(m.index + m[0].length), params));
-          if (across) return { field, key: m[1], why: `its value forms ${across} with the text beside it` };
-          if (m.index === 0 && opensOther(value)) {
-            return { field, key: m[1], why: "its value starts with a character that opens something other than plain text" };
-          }
+          const why = valueFault(line, m.index, m[0].length, value, params, false, null);
+          if (why) return { field, key: m[1], why };
         }
       }
     }
   }
   return null;
 }
-
-/** The plan's refusal for a fault: the ingredient, the field and the key, never the value (spec 50 §5.4). */
 export function metadataFaultMessage(ref: string, f: MetadataFault): string {
   return `${ref}: {{${f.key}}} in ${f.field} would break the file it is written to — ${f.why}; set another value or move the citation into the body`;
 }

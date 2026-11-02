@@ -349,3 +349,26 @@ describe("review round 7: quotes and flow open only where a value starts; neighb
     expect(metadataFault(rule("description: a {b, {{k}}\npaths: src/x"), { k: "*x" })).toBeNull();
   });
 });
+
+describe("review round 8: where a value starts is read from the rendered line, in both branches", async () => {
+  const { metadataFault } = await import("../src/core/metadata-params.js");
+  const rule = (fm: string) => ({ type: "rule", name: "r", frontmatterRaw: fm, file: "rule.md", targets: "*" }) as never;
+  const agent = (description: string) => ({ type: "agent", name: "a", description, file: "agent.md", targets: "*" }) as never;
+  const command = (argumentHint: string) => ({ type: "command", name: "c", description: "Ship", argumentHint, file: "command.md", targets: "*" }) as never;
+  it("an empty neighbour does not hide an opener", () => {
+    expect(metadataFault(rule("description: {{a}}{{b}}\npaths: src/x"), { a: "", b: "&x hello" })).not.toBeNull();
+    expect(metadataFault(rule("description: {{a}}{{b}}\npaths: src/x"), { a: "", b: "!!int 5" })).not.toBeNull();
+    expect(metadataFault(agent("{{a}}{{b}}"), { a: "", b: "#x" })).not.toBeNull();
+    expect(metadataFault(agent("{{a}}{{b}}"), { a: "", b: "*x" })).not.toBeNull();
+    expect(metadataFault(rule('"description": {{k}}\npaths: src/x'), { k: "&a hello" })).not.toBeNull();
+  });
+  it("leading whitespace does not hide an opener", () => {
+    expect(metadataFault(agent("{{k}}"), { k: " &x hello" })).not.toBeNull();
+    expect(metadataFault(rule("description: {{k}}\npaths: src/x"), { k: "\t*x" })).not.toBeNull();
+  });
+  it("a typed argument-hint in a flow sequence is checked as the raw block's lines are", () => {
+    for (const k of ["#x", "&a b", "a]", "*x"]) expect(metadataFault(command("[{{k}}]"), { k }), k).not.toBeNull();
+    expect(metadataFault(command("[{{k}}]"), { k: "file" })).toBeNull();
+    expect(metadataFault(command("<{{k}}-version>"), { k: "acme" })).toBeNull();
+  });
+});
