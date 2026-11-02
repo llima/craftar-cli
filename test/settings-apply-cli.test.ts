@@ -1454,3 +1454,37 @@ describe("F3. every printed handler passes the terminal filter", () => {
     expect(result2).toContain("badcmd");
   });
 });
+
+
+describe("F4. count top-level keys not shaped like a name", () => {
+  it('key "bad key!" → output "kept: permissions, 1 key not shown" (never the key itself)', async () => {
+    const { settingsDiffLines, mergeSettings } = await import("../src/core/settings-apply.js");
+    type WantedBlocks = import("../src/core/settings-apply.js").WantedBlocks;
+
+    // Create current with a key that is not name-shaped
+    const current: Record<string, unknown> = Object.create(null);
+    current["bad key!"] = "some value";
+    current.permissions = { allow: [] };
+
+    // Empty wanted
+    const wanted: WantedBlocks = { envNames: [], registrations: [] };
+
+    const result = mergeSettings(current, wanted, new Set());
+
+    // Both keys should be in otherKeys
+    expect(result.diff.otherKeys).toContain("permissions");
+    expect(result.diff.otherKeys).toContain("bad key!");
+
+    // Now check settingsDiffLines splits them
+    const display = settingsDiffLines(result.diff, false);
+
+    // permissions is name-shaped, so should be in otherKeys
+    expect(display.otherKeys).toContain("permissions");
+
+    // "bad key!" is NOT name-shaped, so should be counted in otherKeysNotShaped
+    expect(display.otherKeysNotShaped).toBe(1);
+
+    // And "bad key!" should NOT be in otherKeys (the shaped ones)
+    expect(display.otherKeys).not.toContain("bad key!");
+  });
+});

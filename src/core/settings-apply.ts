@@ -647,12 +647,10 @@ export function mergeSettings(
     value.hooks = hooksObj;
   }
 
-  // Track other top-level keys
+  // Track other top-level keys (all keys except env/hooks)
   for (const key of Object.keys(value)) {
     if (key !== "env" && key !== "hooks") {
-      if (nameShaped(key)) {
-        diff.otherKeys.push(key);
-      }
+      diff.otherKeys.push(key);
     }
   }
 
