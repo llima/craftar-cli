@@ -344,8 +344,8 @@ describe("kiro emitter — rule references (spec 17)", () => {
 describe("kiro agent permissions", () => {
   const R = (c: string) => ({ capability: c, effect: "allow" });
   const FALLBACK = { capability: "fs_read", match: ["./**"], effect: "allow" };
+  const MCP = (...m: string[]) => ({ capability: "mcp", match: m, effect: "allow" });
   const kw = (p: Plan) => p.warnings.filter((w) => w.startsWith("kiro:"));
-  const lf = (p: Plan, rel: string) => file(p, rel)?.content.toString("utf8").replace(/\r\n/g, "\n");
 
   it("tools [Read,Grep,Glob,Bash] → [fs_read, shell, skill]", async () => {
     const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews.", tools: ["Read", "Grep", "Glob", "Bash"] }, files: { "agent.md": "\n# Rev\n" } }]);
@@ -357,6 +357,7 @@ describe("kiro agent permissions", () => {
     const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews.", tools: ["Read", "Grep", "Glob", "Bash", "Write"] }, files: { "agent.md": "\n# Rev\n" } }]);
     const json = JSON.parse(file(p, ".kiro/agents/rev.json")!.content.toString("utf8"));
     expect(json.permissions.rules).toEqual([R("fs_read"), R("fs_write"), R("shell"), R("skill")]);
+    expect(kw(p).filter((w) => w.includes("permission capability"))).toEqual([]);
   });
 
   it("tools [Bash,Write,Read] → [fs_read, fs_write, shell, skill]", async () => {
@@ -369,6 +370,7 @@ describe("kiro agent permissions", () => {
     const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews.", tools: ["read", "web_fetch"] }, files: { "agent.md": "\n# Rev\n" } }]);
     const json = JSON.parse(file(p, ".kiro/agents/rev.json")!.content.toString("utf8"));
     expect(json.permissions.rules).toEqual([R("fs_read"), R("web_fetch"), R("skill")]);
+    expect(kw(p).filter((w) => w.includes("permission capability"))).toEqual([]);
   });
 
   it("tools [Grep] → [fs_read]", async () => {
@@ -452,6 +454,79 @@ describe("kiro agent permissions", () => {
     const { name, description, prompt, tools, allowedTools, resources, permissions } = json;
     const expected = (JSON.stringify({ name, description, prompt, tools, allowedTools, resources, permissions }, null, 2) + "\n").replace(/\n/g, "\r\n");
     expect(content).toBe(expected);
+  });
+
+  // Kiro's own tool names
+  it("tools [fs_read] → [fs_read, skill]", async () => {
+    const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews.", tools: ["fs_read"] }, files: { "agent.md": "\n# Rev\n" } }]);
+    const json = JSON.parse(file(p, ".kiro/agents/rev.json")!.content.toString("utf8"));
+    expect(json.permissions.rules).toEqual([R("fs_read"), R("skill")]);
+    expect(kw(p).filter((w) => w.includes("permission capability"))).toEqual([]);
+  });
+
+  it("tools [execute_bash,fs_write] → [fs_write, shell, FALLBACK]", async () => {
+    const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews.", tools: ["execute_bash", "fs_write"] }, files: { "agent.md": "\n# Rev\n" } }]);
+    const json = JSON.parse(file(p, ".kiro/agents/rev.json")!.content.toString("utf8"));
+    expect(json.permissions.rules).toEqual([R("fs_write"), R("shell"), FALLBACK]);
+    expect(kw(p).filter((w) => w.includes("permission capability"))).toEqual([]);
+  });
+
+  // Wildcard *
+  it("tools [*] → [all]", async () => {
+    const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews.", tools: ["*"] }, files: { "agent.md": "\n# Rev\n" } }]);
+    const json = JSON.parse(file(p, ".kiro/agents/rev.json")!.content.toString("utf8"));
+    expect(json.permissions.rules).toEqual([R("all")]);
+    expect(kw(p).filter((w) => w.includes("permission capability"))).toEqual([]);
+  });
+
+  it("tools [*,read] → [all]", async () => {
+    const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews.", tools: ["*", "read"] }, files: { "agent.md": "\n# Rev\n" } }]);
+    const json = JSON.parse(file(p, ".kiro/agents/rev.json")!.content.toString("utf8"));
+    expect(json.permissions.rules).toEqual([R("all")]);
+    expect(kw(p).filter((w) => w.includes("permission capability"))).toEqual([]);
+  });
+
+  // @server tools
+  it("tools [@acme] → [mcp(acme/*), FALLBACK]", async () => {
+    const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews.", tools: ["@acme"] }, files: { "agent.md": "\n# Rev\n" } }]);
+    const json = JSON.parse(file(p, ".kiro/agents/rev.json")!.content.toString("utf8"));
+    expect(json.permissions.rules).toEqual([MCP("acme/*"), FALLBACK]);
+    expect(kw(p).filter((w) => w.includes("permission capability"))).toEqual([]);
+  });
+
+  it("tools [@acme/search] → [mcp(acme/search), FALLBACK]", async () => {
+    const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews.", tools: ["@acme/search"] }, files: { "agent.md": "\n# Rev\n" } }]);
+    const json = JSON.parse(file(p, ".kiro/agents/rev.json")!.content.toString("utf8"));
+    expect(json.permissions.rules).toEqual([MCP("acme/search"), FALLBACK]);
+    expect(kw(p).filter((w) => w.includes("permission capability"))).toEqual([]);
+  });
+
+  it("tools [web_search,@acme,read,shell] → [fs_read, shell, web_search, mcp(acme/*), skill]", async () => {
+    const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews.", tools: ["web_search", "@acme", "read", "shell"] }, files: { "agent.md": "\n# Rev\n" } }]);
+    const json = JSON.parse(file(p, ".kiro/agents/rev.json")!.content.toString("utf8"));
+    expect(json.permissions.rules).toEqual([R("fs_read"), R("shell"), R("web_search"), MCP("acme/*"), R("skill")]);
+    expect(kw(p).filter((w) => w.includes("permission capability"))).toEqual([]);
+  });
+
+  it("tools [@zeta,read,@alpha] → [fs_read, mcp(alpha/*, zeta/*), skill]", async () => {
+    const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews.", tools: ["@zeta", "read", "@alpha"] }, files: { "agent.md": "\n# Rev\n" } }]);
+    const json = JSON.parse(file(p, ".kiro/agents/rev.json")!.content.toString("utf8"));
+    expect(json.permissions.rules).toEqual([R("fs_read"), MCP("alpha/*", "zeta/*"), R("skill")]);
+    expect(kw(p).filter((w) => w.includes("permission capability"))).toEqual([]);
+  });
+
+  it("tools [@acme,@acme] → [mcp(acme/*), FALLBACK]", async () => {
+    const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews.", tools: ["@acme", "@acme"] }, files: { "agent.md": "\n# Rev\n" } }]);
+    const json = JSON.parse(file(p, ".kiro/agents/rev.json")!.content.toString("utf8"));
+    expect(json.permissions.rules).toEqual([MCP("acme/*"), FALLBACK]);
+    expect(kw(p).filter((w) => w.includes("permission capability"))).toEqual([]);
+  });
+
+  it("tools [web] → [FALLBACK] with warning", async () => {
+    const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews.", tools: ["web"] }, files: { "agent.md": "\n# Rev\n" } }]);
+    const json = JSON.parse(file(p, ".kiro/agents/rev.json")!.content.toString("utf8"));
+    expect(json.permissions.rules).toEqual([FALLBACK]);
+    expect(kw(p)).toContain('kiro: agent "rev": tool "web" has no Kiro permission capability; no rule written');
   });
 });
 
