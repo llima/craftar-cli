@@ -372,3 +372,13 @@ describe("review round 8: where a value starts is read from the rendered line, i
     expect(metadataFault(command("<{{k}}-version>"), { k: "acme" })).toBeNull();
   });
 });
+
+describe("review round 9: a quote in the value that closes the typed text's own quotes", async () => {
+  const { metadataFault } = await import("../src/core/metadata-params.js");
+  const agent = (description: string) => ({ type: "agent", name: "a", description, file: "agent.md", targets: "*" }) as never;
+  it("is refused inside double and single quotes", () => {
+    expect(metadataFault(agent('"Ship {{k}}"'), { k: 'x" y' })).not.toBeNull();
+    expect(metadataFault(agent("'Ship {{k}}'"), { k: "it's" })).not.toBeNull();
+    expect(metadataFault(agent('"Ship {{k}}"'), { k: "it's" })).toBeNull();
+  });
+});

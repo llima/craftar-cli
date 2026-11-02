@@ -208,6 +208,8 @@ function valueFault(line: string, index: number, length: number, value: string, 
   const q = quoteState(before);
   // Inside a double-quoted scalar a backslash starts an escape YAML may refuse.
   if (q.inDouble && value.includes("\\")) return "its value holds a backslash inside double quotes";
+  // A quote that matches the one the text opened closes it, whether the quotes are the Forge's or the value's.
+  if ((q.inDouble && value.includes('"')) || (q.inSingle && value.includes("'"))) return "its value holds a quote";
   if (q.inDouble || q.inSingle) return null;
   const across = boundaryBreak(before, value, after);
   if (across) return `its value forms ${across} with the text beside it`;
@@ -275,6 +277,8 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
   }
   return null;
 }
+
+/** The plan's refusal for a fault: the ingredient, the field and the key, never the value (spec 50 §5.4). */
 export function metadataFaultMessage(ref: string, f: MetadataFault): string {
   return `${ref}: {{${f.key}}} in ${f.field} would break the file it is written to — ${f.why}; set another value or move the citation into the body`;
 }
