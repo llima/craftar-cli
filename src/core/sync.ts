@@ -13,6 +13,7 @@ import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, projectSections, readsTargetSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile, shellAtGate } from "./extract.js";
+import { metadataCitations, metadataFileClash, renderedMeta } from "./metadata-params.js";
 import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockV2, type LockV3, type Owner, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
@@ -490,9 +491,15 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
     const key = sectionKey(ing.meta);
     const names = declared.get(key) ?? new Set<string>();
     declared.set(key, names);
-    if (ing.meta.type === "mcp") continue; // no file, so no marker: a value keyed mcp/<name> is warned below
+    // Spec 50 §15 item 11: at the metadata gate a file may not be spelled as forge diff names a metadata field — for
+    // every type, as forge diff checks.
+    if (ing.meta.type === "mcp" && !resolution.metadataParams) continue; // no file, so no marker: a value keyed mcp/<name> is warned below
+    const rels = await listFiles(ing.dir);
+    const clash = resolution.metadataParams ? metadataFileClash(ing.ref, rels) : null;
+    if (clash) throw new Error(clash);
+    if (ing.meta.type === "mcp") continue;
     const files: Array<{ rel: string; p: ParsedSections }> = [];
-    for (const rel of await listFiles(ing.dir)) {
+    for (const rel of rels) {
       if (rel === "ingredient.yaml") continue;
       const abs = path.join(ing.dir, rel);
       if (bodyFile(ing.meta, rel, ing.dir, forge.manifest.schema)) {
@@ -678,6 +685,20 @@ export async function plan(ws: Workspace): Promise<Plan> {
       // Below the gate, track literals for the warning (spec 44 §4.2)
       if (!resolution.rulesIndex && RULES_INDEX_LINE.test(out)) {
         belowGateLiterals.add(`${ing.ref} (${file})`);
+      }
+      return out;
+    },
+    meta<I extends ResolvedIngredient>(ing: I): I["meta"] {
+      if (!resolution.metadataParams) return ing.meta;
+      const missing = new Set<string>();
+      const out = renderedMeta(ing.meta, paramsFor(ing, resolution), ing.ref, missing);
+      // Counted wherever a body's citation is (spec 50 §5.3); the rules index's token is never a parameter.
+      const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
+      for (const key of metadataCitations(ing.meta)) if (key !== RULES_INDEX_KEY) c.keys.add(key);
+      if (c.keys.size) cited.set(ing.ref, c);
+      for (const key of missing) {
+        if (key === RULES_INDEX_KEY) continue;
+        missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ing.ref));
       }
       return out;
     },

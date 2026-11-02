@@ -708,6 +708,8 @@ export const FORGE_SCHEMA_TARGET_SECTIONS = 6;
 export const FORGE_SCHEMA_RULES_INDEX = 7;
 /** Forge schema that reads a profile's own ingredients and recipes under `profiles/<p>/` (spec 51 §4.1). */
 export const FORGE_SCHEMA_PROFILE_LOCAL = 8;
+/** Forge schema that renders params in an ingredient's metadata fields (spec 50 §5.1). */
+export const FORGE_SCHEMA_METADATA_PARAMS = 9;
 
 export const ForgeManifestSchema = z.object({
   name: z.string(),
@@ -721,6 +723,7 @@ export const ForgeManifestSchema = z.object({
       z.literal(FORGE_SCHEMA_TARGET_SECTIONS),
       z.literal(FORGE_SCHEMA_RULES_INDEX),
       z.literal(FORGE_SCHEMA_PROFILE_LOCAL),
+      z.literal(FORGE_SCHEMA_METADATA_PARAMS),
     ])
     .default(1),
   description: z.string().optional(),

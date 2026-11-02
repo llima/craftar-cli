@@ -1,15 +1,16 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema, type ForgeManifest } from "../schema/index.js";
+import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema, type ForgeManifest, type Ingredient } from "../schema/index.js";
 import { placeholders, bodyFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
 import { manifestWithSections } from "./manifest-edit.js";
 import { registrationCitations, rendersServers, serverCitations } from "./mcp-server.js";
-import { resolve, sectionKey } from "./resolve.js";
+import { paramsFor, resolve, sectionKey } from "./resolve.js";
 import { errorText } from "./schema-fault.js";
 import { canonicalValue } from "./sections.js";
-import type { SectionExtraction, WriteJournal } from "./unify.js";
+import type { MetaWrite, SectionExtraction, WriteJournal } from "./unify.js";
+import { metadataCitations, metadataFault, metadataFaultMessage, rendersMetadata } from "./metadata-params.js";
 import { editYamlText, readBackDifference } from "./yaml-edit.js";
 import { deepMerge } from "./merge.js";
 import { parseYamlText } from "./yaml-read.js";
@@ -83,6 +84,8 @@ async function cites(ing: LoadedIngredient, key: string, schema: ForgeManifest["
   if (rendersServers({ schema }) && serverCitations(ing.meta).some((c) => c.declared && c.key === key)) return true;
   // Hook registration citations (ungated per spec 43 §7.2 row 8)
   if (registrationCitations(ing.meta).some((c) => c.declared && c.key === key)) return true;
+  // Metadata citations at the metadata gate (spec 50 §5.3): declared or not, as a body's, since metadata takes a body's map.
+  if (rendersMetadata({ schema }) && metadataCitations(ing.meta).includes(key)) return true;
   return false;
 }
 
@@ -109,6 +112,7 @@ export async function checkParamWrites(
   profile: string,
   extractions: Extraction[],
   sections: SectionExtraction[] = [],
+  metaWrites: MetaWrite[] = [],
 ): Promise<ParamWrites> {
   const profileAbs = await findProfileFile(forge.root, profile);
   const current = forge.profiles.get(profile);
@@ -220,20 +224,10 @@ export async function checkParamWrites(
     }
   }
 
-  let ingredientYaml: ParamWrites["ingredientYaml"] = null;
-  if (declare.length) {
-    const abs = path.join(base.dir, "ingredient.yaml");
-    const label = path.relative(forge.root, abs).split(path.sep).join("/");
-    const content = await editYamlText(await fs.readFile(abs, "utf8"), { command: "unify", label, keys: ["params"] }, (doc) => {
-      for (const e of declare) doc.setIn(["params", e.key, "default"], e.default);
-    });
-    const before = IngredientSchema.parse(parseYamlText(label, await fs.readFile(abs, "utf8")));
-    const after = parseOr(label, () => IngredientSchema.parse(parseYamlText(label, content)));
-    const expected = { ...before, params: { ...(before.params ?? {}), ...Object.fromEntries(declare.map((e) => [e.key, { default: e.default }])) } };
-    if (!isDeepStrictEqual(after, expected) || declare.some((e) => !same(after.params?.[e.key]?.default, e.default))) {
-      throw new Error(`unify: cannot edit ${label} in place (the edit does not read back as exactly the new declarations${readBackSuffix(after, expected)})`);
-    }
-    ingredientYaml = { abs, content };
+  const ingredientYaml = await ingredientYamlWrite(forge, base, declare, metaWrites);
+  // Spec 50 §5.4: the base's new metadata must not break a file under any profile, the unifying one with its values.
+  if (metaWrites.length || rendersMetadata(forge.manifest)) {
+    proveMetadata(forge, base, variant.ref, ingredientYaml?.meta ?? base.meta, profile, new Map(extractions.map((e) => [e.key, e.value])));
   }
 
   // Profile edit: ONE editYamlText call with both params and sections (spec 12 §6.7 step 4)
@@ -289,13 +283,84 @@ export async function checkParamWrites(
   if (manifestWrite) mustHold.push(manifestWrite.abs);
 
   return {
-    ingredientYaml,
+    ingredientYaml: ingredientYaml && { abs: ingredientYaml.abs, content: ingredientYaml.content },
     profile: profileWrite,
     manifest: manifestWrite,
     mustHold,
     written: extractions.map((e) => e.key).filter((k) => written.has(k)),
     sectionsWritten,
   };
+}
+
+/**
+ * The base's `ingredient.yaml` with the new declarations and the metadata fields a plan rewrites (spec 50 §5.5), in one
+ * `editYamlText` call, read back as exactly those changes; null when there is neither. `meta` is the read-back.
+ */
+async function ingredientYamlWrite(
+  forge: Forge,
+  base: LoadedIngredient,
+  declare: Extraction[],
+  metaWrites: MetaWrite[],
+): Promise<{ abs: string; content: string; meta: Ingredient } | null> {
+  if (!declare.length && !metaWrites.length) return null;
+  const abs = path.join(base.dir, "ingredient.yaml");
+  const label = path.relative(forge.root, abs).split(path.sep).join("/");
+  const keys = [...(declare.length ? ["params"] : []), ...metaWrites.map((w) => w.field)];
+  const content = await editYamlText(await fs.readFile(abs, "utf8"), { command: "unify", label, keys }, (doc) => {
+    for (const e of declare) doc.setIn(["params", e.key, "default"], e.default);
+    for (const w of metaWrites) {
+      if (w.value === undefined) doc.deleteIn([w.field]);
+      else doc.setIn([w.field], w.value);
+    }
+  });
+  const before = IngredientSchema.parse(parseYamlText(label, await fs.readFile(abs, "utf8")));
+  const after = parseOr(label, () => IngredientSchema.parse(parseYamlText(label, content)));
+  const expected: Record<string, unknown> = { ...before };
+  if (declare.length) expected.params = { ...(before.params ?? {}), ...Object.fromEntries(declare.map((e) => [e.key, { default: e.default }])) };
+  for (const w of metaWrites) {
+    if (w.value === undefined) delete expected[w.field];
+    else expected[w.field] = w.value;
+  }
+  if (!isDeepStrictEqual(after, expected) || declare.some((e) => !same(after.params?.[e.key]?.default, e.default))) {
+    const what = metaWrites.length ? "the new declarations and fields" : "the new declarations";
+    throw new Error(`unify: cannot edit ${label} in place (the edit does not read back as exactly ${what}${readBackSuffix(after, expected)})`);
+  }
+  return { abs, content, meta: after };
+}
+
+/**
+ * Spec 50 §5.4 in `forge unify`'s proof: the base's metadata as it will be, rendered for every profile that resolves
+ * the base and for the unifying profile with its new values, holds no value that would break the file it lands in.
+ * Throws naming the profile, the ingredient, the field and the key, never the value.
+ */
+function proveMetadata(forge: Forge, base: LoadedIngredient, variantRef: string, meta: Ingredient, profile: string, values: Map<string, string>): void {
+  if (!rendersMetadata(forge.manifest)) return;
+  const ing = { ...base, meta } as LoadedIngredient;
+  for (const q of forge.profiles.keys()) {
+    // A profile that does not resolve today renders nothing, so its metadata cannot break (as forge promote skips it).
+    let resolution: ReturnType<typeof resolve>;
+    try {
+      resolution = resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile: q }));
+    } catch {
+      continue;
+    }
+    // A profile that resolves the variant resolves the base after the cascade, with its own params.
+    if (q !== profile && !resolution.ingredients.some((i) => i.ref === base.ref || i.ref === variantRef)) continue;
+    const params = paramsFor(ing, resolution);
+    if (q === profile) for (const [k, v] of values) params[k] = v;
+    const fault = metadataFault(meta, params);
+    if (fault) throw new Error(`unify: under profile ${q}, ${metadataFaultMessage(base.ref, fault)}`);
+  }
+}
+
+/**
+ * The base's `ingredient.yaml` for a plan that rewrites metadata fields and extracts nothing (spec 50 §5.5): the same
+ * edit and proof as `checkParamWrites`, with no declaration and no profile edit.
+ */
+export async function metadataWrites(forge: Forge, base: LoadedIngredient, variantRef: string, profile: string, metaWrites: MetaWrite[]): Promise<{ abs: string; content: string } | null> {
+  const w = await ingredientYamlWrite(forge, base, [], metaWrites);
+  if (w) proveMetadata(forge, base, variantRef, w.meta, profile, new Map());
+  return w && { abs: w.abs, content: w.content };
 }
 
 /** `: <key> reads back <kind>`, or nothing when the two compare equal under the schema's own reading. */

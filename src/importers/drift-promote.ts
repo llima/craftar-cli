@@ -26,7 +26,8 @@ import {
   copyForgeForProof,
 } from "../core/forge.js";
 import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type UnsetParam, type Plan, type Workspace } from "../core/sync.js";
-import { driftList, REWORDED_REASON, INDEXED_REASON, PROFILE_LOCAL_REASON, unmanaged } from "../core/drift.js";
+import { driftList, metadataEdits, METADATA_PARAM_REASON, REWORDED_REASON, INDEXED_REASON, PROFILE_LOCAL_REASON, unmanaged } from "../core/drift.js";
+import { substituteMetadata, templatedMetadataEdit, withTemplatedFields } from "../core/metadata-params.js";
 import { readsRulesIndex, RULES_INDEX_KEY } from "../core/rules-index.js";
 import { hashNormalized, toLf } from "../core/text.js";
 import { fingerprintOf } from "../core/fingerprint.js";
@@ -65,7 +66,7 @@ import { decide, workspaceParams, workspaceSections, type RunContext } from "./d
 import { providedRefs } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
 import { readsTargetSections } from "../core/sections.js";
-import { sectionKey } from "../core/resolve.js";
+import { paramsFor, sectionKey } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
@@ -181,6 +182,9 @@ const D10 = (ing: string, q: string) => `${ing} is also used by profile ${q} —
 const D20 = (p: string) => `${p} holds references agents-md.primary reworded — edit the Forge's ingredient`;
 /** D21 (spec 44 §4.5): the file holds the generated rules index — promoting it would carry sync-generated content into the Forge. */
 const D21 = (p: string) => `${p} holds the generated rules index — edit the Forge's rule, or the description of the rule it lists`;
+/** D23 (spec 50 §5.6): a hand edit of a metadata field the Forge renders from a parameter — promoting would freeze the value. */
+const D23 = (p: string, field: string) =>
+  `${p} changes ${field}, which the Forge renders from a parameter — set the parameter's value in the profile, or edit the Forge's ingredient`;
 /** D22 (spec 51 §4.5): a profile-local ingredient's file — edit it in the profile's folder. */
 const D22 = (p: string, dir: string) => `${p} comes from ${dir}, local to this profile — edit it there; promote does not carry a local's hand edit`;
 const D11 = (p: string, line: number) => `${p}:${line} holds a section marker — a variant body cannot hold one; remove it and promote again`;
@@ -604,14 +608,15 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Static checks (promotability) using driftList's row
   const indexedPaths = new Set(p0.indexed.map((x) => x.path));
   const localRefs = new Set<string>(forge.locals.get(profile)?.ingredients.keys());
-  const rows = driftList([fileStatus], provided, new Set(p0.reworded), indexedPaths, localRefs);
+  const metadataPaths = await metadataEdits(root, p0, [fileStatus]);
+  const rows = driftList([fileStatus], provided, new Set(p0.reworded), indexedPaths, localRefs, metadataPaths);
   if (rows.length === 0) {
     throw new Error(D4_OTHER(normalized, fileStatus.state));
   }
   const row = rows[0];
   if (!row.promotable) {
     // Build the right D5/D6/D18/D21 message from the static reason.
-    // Order of reasons in driftList: orphan → service file → provided → reworded → indexed → kiro → AGENTS.md → .mcp.json.
+    // Order of reasons in driftList: orphan → service file → provided → reworded → indexed → templated metadata → profile-local → kiro → AGENTS.md → .mcp.json.
     // "no longer produced" cannot reach here: the state is `drift`, not `orphan-drift`.
     const reason = row.reason;
     if (reason === "service file") {
@@ -625,6 +630,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     }
     if (reason === REWORDED_REASON) throw new Error(D20(normalized));
     if (reason === INDEXED_REASON) throw new Error(D21(normalized));
+    if (reason === METADATA_PARAM_REASON) {
+      const ing = p0.resolution.ingredients.find((i) => i.ref === fileStatus.ingredient)!;
+      const disk = await fs.readFile(path.join(root, normalized), "utf8");
+      throw new Error(D23(normalized, templatedMetadataEdit(ing.meta, fileStatus.planned!.content.toString("utf8"), disk)!));
+    }
     if (reason === PROFILE_LOCAL_REASON) {
       const local = forge.locals.get(profile)!.ingredients.get(fileStatus.ingredient! as IngredientRef)!;
       throw new Error(D22(normalized, path.relative(forge.root, local.dir).split(path.sep).join("/")));
@@ -741,11 +751,17 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
   // Source metadata: X's own, but re-read certain fields; strip Forge-only keys (params, authEnv, registration)
   // so decide/shapeDiffers/renderedFingerprint compare apples to apples (spec 43 §7.2).
-  const sourceMeta: Ingredient = stripForgeOnlyKeys({
+  // At the metadata gate the disk holds the base's fields rendered (spec 50 §5.6): compared with the rendered base, an
+  // unchanged field keeps the Forge's text — a hand edit of a templated field was refused above (D23).
+  const metaParams = p0.resolution.metadataParams ? paramsFor(X, p0.resolution) : null;
+  const renderedBase = metaParams ? substituteMetadata(X.meta, metaParams) : X.meta;
+  const readMeta: Ingredient = stripForgeOnlyKeys({
     ...X.meta,
     // A base with no frontmatterRaw may hold its `paths:` in its body (imported before rules kept it apart)
-    ...emittedMetaFields(emitted.meta, readType, X.meta, meta.type === "rule" && meta.frontmatterRaw === undefined ? await readIngredientText(X, meta.file) : null, emitted.files["rule.md"]),
+    ...emittedMetaFields(emitted.meta, readType, renderedBase, meta.type === "rule" && meta.frontmatterRaw === undefined ? await readIngredientText(X, meta.file) : null, emitted.files["rule.md"]),
   }) as Ingredient;
+  // A field the disk holds as the base renders it keeps the Forge's template, so no outcome freezes its value.
+  const sourceMeta: Ingredient = metaParams ? withTemplatedFields(readMeta, stripForgeOnlyKeys({ ...X.meta }) as Ingredient, renderedBase) : readMeta;
 
   // D9: Secret check
   const secret = secretIn(sourceMeta, emitted.files, emitted.scan);
@@ -784,7 +800,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     writtenTargets: [],
   };
 
-  const fingerprint = fingerprintOf(validateImported(sourceMeta), emitted.files);
+  // The disk's own reading at the metadata gate: the source's fields rendered as the base's are (spec 50 §5.6).
+  const fingerprint = fingerprintOf(validateImported(metaParams ? substituteMetadata(sourceMeta, metaParams) : sourceMeta), emitted.files);
   const decision = await decide(ctx, X.dir, stage.reader(), ingredientRef, sourceMeta, emitted.files, fingerprint, [], new Set());
 
   // Handle the decision

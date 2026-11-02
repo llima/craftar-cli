@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import YAML from "yaml";
 import { loadForge } from "../src/core/forge.js";
 import { ForgeManifestSchema, FORGE_SCHEMA_AGENTS_MD_PRIMARY, FORGE_SCHEMA_INTEGRATIONS, FORGE_SCHEMA_RULES_INDEX,
-  FORGE_SCHEMA_PROFILE_LOCAL, FORGE_SCHEMA_SECTIONS, FORGE_SCHEMA_SERVER_PARAMS, FORGE_SCHEMA_TARGET_SECTIONS, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, RecipeSchema, RegistrySchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
+  FORGE_SCHEMA_PROFILE_LOCAL, FORGE_SCHEMA_METADATA_PARAMS, FORGE_SCHEMA_SECTIONS, FORGE_SCHEMA_SERVER_PARAMS, FORGE_SCHEMA_TARGET_SECTIONS, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, RecipeSchema, RegistrySchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
 import { makeForge, tmpDir, writeFiles } from "./helpers/forge.js";
 
 /** A minimal valid ingredient of each type. */
@@ -145,7 +145,7 @@ describe("sections and the manifest schema (spec 11 §5.2)", () => {
     while (cleanups.length) await fs.rm(cleanups.pop()!, { recursive: true, force: true });
   });
 
-  it("loads a manifest at schema 1, 2, 3, 4, 5 and 6, and with no schema (read as 1); refuses schema 7", () => {
+  it("loads a manifest at schema 1 to 9, and with no schema (read as 1); refuses schema 10", () => {
     expect(FORGE_SCHEMA_SECTIONS).toBe(2);
     expect(ForgeManifestSchema.parse({ name: "f", schema: 1 }).schema).toBe(1);
     expect(ForgeManifestSchema.parse({ name: "f", schema: 2 }).schema).toBe(2);
@@ -162,13 +162,15 @@ describe("sections and the manifest schema (spec 11 §5.2)", () => {
     expect(ForgeManifestSchema.parse({ name: "f", schema: 7 }).schema).toBe(7);
     expect(FORGE_SCHEMA_PROFILE_LOCAL).toBe(8);
     expect(ForgeManifestSchema.parse({ name: "f", schema: 8 }).schema).toBe(8);
-    expect(ForgeManifestSchema.safeParse({ name: "f", schema: 9 }).success).toBe(false);
+    expect(FORGE_SCHEMA_METADATA_PARAMS).toBe(9);
+    expect(ForgeManifestSchema.parse({ name: "f", schema: 9 }).schema).toBe(9);
+    expect(ForgeManifestSchema.safeParse({ name: "f", schema: 10 }).success).toBe(false);
   });
 
-  it("a Forge whose manifest says schema: 9 fails the load, naming the file", async () => {
+  it("a Forge whose manifest says schema: 10 fails the load, naming the file", async () => {
     const root = await tmpDir();
     cleanups.push(root);
-    await writeFiles(root, { "craftar.forge.yaml": "name: f\nschema: 9\n" });
+    await writeFiles(root, { "craftar.forge.yaml": "name: f\nschema: 10\n" });
     await expect(loadForge(root)).rejects.toThrow(/craftar\.forge\.yaml/);
   });
 

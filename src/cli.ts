@@ -29,7 +29,7 @@ import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarn
 import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
-import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
+import { driftList, metadataEdits, unmanaged, type DriftRow } from "./core/drift.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
@@ -52,7 +52,7 @@ import {
   type PruneCandidate,
   type PruneResult,
 } from "./core/unify.js";
-import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
+import { checkParamWrites, metadataWrites, writeParamFile } from "./core/param-writes.js";
 import { checkInitFlags, checkLocalKeys, initLine, planInit, forgeSource, type InitInput } from "./core/init.js";
 import { profileName } from "./core/new-profile.js";
 import { newProfileGate } from "./core/new-profile-gate.js";
@@ -82,7 +82,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.46.1");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.47.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -959,7 +959,8 @@ drift
       providedWarnings.push(`profile ${ws.config.profile} does not resolve on its own (${(e as Error).message}) — what its integrations provide was not computed, and craftar drift promote will refuse`);
     }
     const indexedPaths = new Set(p.indexed.map((x) => x.path));
-    const rows = driftList(named ? [named] : st, provided, new Set(p.reworded), indexedPaths, new Set(ws.forge.locals.get(ws.config.profile)?.ingredients.keys()));
+    const shown = named ? [named] : st;
+    const rows = driftList(shown, provided, new Set(p.reworded), indexedPaths, new Set(ws.forge.locals.get(ws.config.profile)?.ingredients.keys()), await metadataEdits(ws.root, p, shown));
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
@@ -2286,7 +2287,7 @@ forge
     const distances = new Map((await listVariants(f)).groups.flatMap((g) => g.variants.map((v) => [v.ref, v.distance] as const)));
     const report: Array<{ ref: IngredientRef; profile: string; distance: Distance; diff: IngredientDiff }> = [];
     for (const v of variants) {
-      report.push({ ref: v.ref, profile: profileOf(v.meta)!, distance: distances.get(v.ref)!, diff: await diffIngredients(base, v) });
+      report.push({ ref: v.ref, profile: profileOf(v.meta)!, distance: distances.get(v.ref)!, diff: await diffIngredients(base, v, f.manifest.schema) });
     }
     if (o.json) return console.log(JSON.stringify(report, null, 2));
 
@@ -2391,7 +2392,7 @@ forge
       if (loadedPlan.variantFingerprint !== variantFp) fail(`the plan is stale: the variant changed since it was saved`);
     }
 
-    const diff = await diffIngredients(base, variant);
+    const diff = await diffIngredients(base, variant, f.manifest.schema);
 
     if (o.savePlan) {
       // Ruling 30: --save-plan skips the clean-tree check because the plan lives outside the
@@ -2442,9 +2443,12 @@ forge
       ? await pruneCandidates(f, base.ref, variant.ref, o.profile, (w) => pruneWarnings.push(w))
       : [];
     // Spec 09 & 12: the Forge-level rows and YAML edits for parameter and section extractions, rendered before any write.
+    // Spec 50 §5.5: a plan that only rewrites metadata fields still edits the base's ingredient.yaml, proved the same way.
     const paramWrites = result.params.length || result.sections.length
-      ? await checkParamWrites(f, base, variant, o.profile, result.params, result.sections)
-      : null;
+      ? await checkParamWrites(f, base, variant, o.profile, result.params, result.sections, result.metaWrites)
+      : result.metaWrites.length
+        ? { ingredientYaml: await metadataWrites(f, base, variant.ref, o.profile, result.metaWrites), profile: null, manifest: null, mustHold: [], written: [], sectionsWritten: [] }
+        : null;
 
     // Ruling 37: "git is the undo" only holds for files git actually has. The whole-repo clean
     // check above cannot see ignored files (a Forge its enclosing repo ignores, an ignored file in
