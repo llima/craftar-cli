@@ -154,7 +154,6 @@ function noValue(out: string, values: string[]): void {
 
 // ---- Helper: generate secret values at runtime (never as string literals) ----
 const ACME_TOKEN_VALUE = "s3cr3t-" + "v".repeat(12);
-const ACME_TOKEN_WITH_LF = "s3cr3t-" + "v".repeat(8) + "\nmore";
 // A value that looks like a GitHub PAT (known token format)
 const GITHUB_PAT_VALUE = "ghp_" + "x".repeat(36);
 
@@ -572,6 +571,8 @@ describe("settings apply command (spec 52 §12)", () => {
       expect(r.stderr).toContain("tracked by git");
     });
 
+    // A .claude or .claude/settings.json link is refused before escapeOf runs,
+    // so escapeOf is a second guard for a link higher up the path.
     it.skipIf(process.platform === "win32")("C7g. .claude/settings.json is a symbolic link", async () => {
       const s = await forgeAt(1, standardForge());
       cleanups.push(s.cleanup);
@@ -1892,6 +1893,125 @@ describe("F7. env value never leaves the file, on every path", () => {
     expect(r.code).toBe(0);
     // The warning might not appear if the settings are unchanged; this is OK
     // What we're testing is that a failed record write doesn't cause exit 1
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("record write fails (a) after a write → warning line, exit 0, file written", async () => {
+    const s = await forgeAt(1, standardForge());
+    cleanups.push(s.cleanup);
+    await initGit(s.wsRoot);
+    await gitignoreSettings(s.wsRoot);
+
+    runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir } });
+
+    // Make CRAFTAR_HOME read-only so the lock file cannot be created
+    await fs.chmod(home, 0o500);
+    cleanups.push(async () => {
+      try { await fs.chmod(home, 0o700); } catch { /* ignore */ }
+    });
+
+    // Run apply - should write the file but fail to write record
+    const r = runCli(["settings", "apply", "--workspace", s.wsRoot, "--yes"], {
+      env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir },
+    });
+
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("could not write the record");
+    // Settings file was written
+    const settingsExists = await fs.access(settingsPath(s.wsRoot)).then(() => true).catch(() => false);
+    expect(settingsExists).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("record write fails (b) on unchanged run → warning line, exit 0", async () => {
+    const s = await forgeAt(1, standardForge());
+    cleanups.push(s.cleanup);
+    await initGit(s.wsRoot);
+    await gitignoreSettings(s.wsRoot);
+
+    runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir } });
+
+    // Copy the example to settings.json (hand-copied example)
+    const example = await fs.readFile(path.join(s.wsRoot, ".claude", "settings.craftar.example.json"), "utf8");
+    await fs.writeFile(settingsPath(s.wsRoot), example);
+
+    // Make CRAFTAR_HOME read-only so the lock file cannot be created
+    await fs.chmod(home, 0o500);
+    cleanups.push(async () => {
+      try { await fs.chmod(home, 0o700); } catch { /* ignore */ }
+    });
+
+    // Run apply - unchanged but should try to write record
+    const r = runCli(["settings", "apply", "--workspace", s.wsRoot, "--yes"], {
+      env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir },
+    });
+
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("unchanged");
+    expect(r.stdout).toContain("could not write the record");
+  });
+
+  it("plan that fails → exit 1, settings file byte-identical, stderr does not contain env value", async () => {
+    // Create a workspace with a non-existent Forge path
+    const wsRoot = await tmpDir("craftar-badf-ws-");
+    cleanups.push(() => fs.rm(wsRoot, { recursive: true, force: true }));
+    
+    // Write craftar.yaml pointing to a non-existent forge
+    await fs.writeFile(path.join(wsRoot, "craftar.yaml"), "forge: /nonexistent/forge/path\nprofile: acme\n");
+    
+    await initGit(wsRoot);
+    await gitignoreSettings(wsRoot);
+
+    // Pre-write settings with an env value
+    const envValue = "s3cr3t-" + "p".repeat(16);
+    await fs.mkdir(path.join(wsRoot, ".claude"), { recursive: true });
+    const initialContent = JSON.stringify({ env: { TOKEN: envValue } }, null, 2) + "\n";
+    await fs.writeFile(settingsPath(wsRoot), initialContent);
+    const bytesBefore = await fs.readFile(settingsPath(wsRoot));
+
+    // Plan will fail because Forge doesn't exist
+    const r = runCli(["settings", "apply", "--workspace", wsRoot, "--yes"], {
+      env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir },
+    });
+
+    expect(r.code).toBe(1);
+    // Settings file unchanged
+    const bytesAfter = await fs.readFile(settingsPath(wsRoot));
+    expect(bytesAfter.equals(bytesBefore)).toBe(true);
+    // Env value not in stderr
+    expect(r.stderr).not.toContain(envValue);
+  });
+
+  it.skipIf(process.platform === "win32")("escape refusal: .claude/hooks is a symlink to outside workspace → exit 1, settings untouched", async () => {
+    const s = await forgeAt(1, standardForge());
+    cleanups.push(s.cleanup);
+    await initGit(s.wsRoot);
+    await gitignoreSettings(s.wsRoot);
+
+    // Sync first to create the workspace structure
+    runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir } });
+
+    // Pre-write settings
+    const initialContent = JSON.stringify({ env: { TOKEN: "value" } }, null, 2) + "\n";
+    await fs.writeFile(settingsPath(s.wsRoot), initialContent);
+    const bytesBefore = await fs.readFile(settingsPath(s.wsRoot));
+
+    // Create an outside directory and make .claude/hooks a symlink to it
+    const outsideDir = await tmpDir("craftar-outside-hooks-");
+    cleanups.push(() => fs.rm(outsideDir, { recursive: true, force: true }));
+
+    const hooksPath = path.join(s.wsRoot, ".claude", "hooks");
+    await fs.rm(hooksPath, { recursive: true, force: true });
+    await fs.symlink(outsideDir, hooksPath, "dir");
+
+    // Apply should fail with escape refusal (status rows escape)
+    const r = runCli(["settings", "apply", "--workspace", s.wsRoot, "--yes"], {
+      env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir },
+    });
+
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("symbolic link");
+    // Settings file unchanged
+    const bytesAfter = await fs.readFile(settingsPath(s.wsRoot));
+    expect(bytesAfter.equals(bytesBefore)).toBe(true);
   });
 });
 

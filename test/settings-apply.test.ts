@@ -919,6 +919,29 @@ describe("merge — spec cases", () => {
     expect(() => mergeSettings(c1, W([], [reg("PreToolUse", "Bash", NEW)]), new Set())).toThrow(SettingsShapeError);
     expect(() => mergeSettings(c1, W([], [reg("PreToolUse", "Bash", NEW)]), new Set())).toThrow(/env is not an object/);
   });
+
+  it("M17. sameCommandLocal: one local handler matches two wanted handlers on different events → counted once", () => {
+    // Spec §5.1: count each LOCAL handler once if command+args match any wanted handler
+    const localHandler = { type: "command", command: "python3", args: ["g.py"], timeout: 99 };
+    const wantedHandler = { type: "command", command: "python3", args: ["g.py"], timeout: 10 };
+
+    const current = nul({
+      hooks: { Stop: [{ hooks: [localHandler] }] },
+    }) as Record<string, unknown>;
+
+    // Two wanted handlers with same command/args but different event/matcher
+    const wanted = W([], [
+      reg("PreToolUse", "A", wantedHandler),
+      reg("PreToolUse", "B", wantedHandler),
+    ]);
+
+    const result = mergeSettings(current, wanted, new Set());
+
+    // Local handler kept, both wanted added
+    expect(result.diff.localKept).toBe(1);
+    // The local handler should be counted ONCE (not 0, not 2)
+    expect(result.diff.sameCommandLocal).toBe(1);
+  });
 });
 
 describe("registry: settingsApplied record (spec 52 §5.3)", () => {
