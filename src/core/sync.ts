@@ -13,6 +13,7 @@ import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, projectSections, readsTargetSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile, shellAtGate } from "./extract.js";
+import { metadataCitations, renderedMeta } from "./metadata-params.js";
 import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockV2, type LockV3, type Owner, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
@@ -678,6 +679,20 @@ export async function plan(ws: Workspace): Promise<Plan> {
       // Below the gate, track literals for the warning (spec 44 §4.2)
       if (!resolution.rulesIndex && RULES_INDEX_LINE.test(out)) {
         belowGateLiterals.add(`${ing.ref} (${file})`);
+      }
+      return out;
+    },
+    meta<I extends ResolvedIngredient>(ing: I): I["meta"] {
+      if (!resolution.metadataParams) return ing.meta;
+      const missing = new Set<string>();
+      const out = renderedMeta(ing.meta, paramsFor(ing, resolution), ing.ref, missing);
+      // Counted wherever a body's citation is (spec 50 §5.3); the rules index's token is never a parameter.
+      const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
+      for (const key of metadataCitations(ing.meta)) if (key !== RULES_INDEX_KEY) c.keys.add(key);
+      if (c.keys.size) cited.set(ing.ref, c);
+      for (const key of missing) {
+        if (key === RULES_INDEX_KEY) continue;
+        missingParams.set(key, (missingParams.get(key) ?? new Set<string>()).add(ing.ref));
       }
       return out;
     },

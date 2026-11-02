@@ -6,6 +6,7 @@ import { outName } from "../emitters/shared.js";
 import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
 import { effectiveProfile, integrationOrigin } from "./integrations.js";
 import { readsRulesIndex, RULES_INDEX_KEY } from "./rules-index.js";
+import { rendersMetadata } from "./metadata-params.js";
 import { forgeFor, ignoredLocalWarning } from "./profile-local.js";
 
 /** Builds the "profile not found" message (spec 28 §5.2, N5). */
@@ -45,6 +46,8 @@ export interface Resolution {
   primary: boolean;
   /** Whether the Forge reads the rules index (spec 44 §4.1); decided once by resolve(). */
   rulesIndex: boolean;
+  /** Whether the Forge renders params in metadata fields (spec 50 §5.1); decided once by resolve(). */
+  metadataParams: boolean;
 }
 
 /**
@@ -179,6 +182,7 @@ export function resolve(root: Forge, ws: WorkspaceConfig): Resolution {
     warnings,
     primary,
     rulesIndex: readsRulesIndex(forge.manifest),
+    metadataParams: rendersMetadata(forge.manifest),
   };
 }
 

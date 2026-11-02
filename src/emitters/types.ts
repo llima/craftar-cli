@@ -25,6 +25,11 @@ export interface EmitBase {
   readExisting(relPath: string): Promise<Buffer | null>;
   /** Read a file inside an ingredient dir as UTF-8 text with LF line endings, sections projected and params substituted. */
   text(ing: ResolvedIngredient, file: string, owner: Owner): Promise<string>;
+  /**
+   * An ingredient's metadata as its files carry it (spec 50 §5.3): as written below the metadata gate, and at the gate a
+   * copy with the fields of §5.2 rendered, its citations counted as a body's are. The one reader of those fields.
+   */
+  meta<I extends ResolvedIngredient>(ing: I): I["meta"];
   /** Raw bytes of a file inside an ingredient dir (binary-safe, no substitution). */
   bytes(ing: ResolvedIngredient, file: string): Promise<Buffer>;
   warn(msg: string): void;
