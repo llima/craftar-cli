@@ -228,3 +228,29 @@ describe("review round 1: metadataFault closes the §8 guard and the §5.4 list"
     expect(metadataFault(command("Run {{d}}"), { d: "- it" })).toBeNull();
   });
 });
+
+describe("review round 2: the §8 guard compares the raw block's structure, not its spellings", async () => {
+  const { metadataFault } = await import("../src/core/metadata-params.js");
+  const agent = (frontmatterRaw: string) => ({ type: "agent", name: "a", frontmatterRaw, file: "agent.md", targets: "*" }) as never;
+  const command = (description: string) => ({ type: "command", name: "c", description, file: "command.md", targets: "*" }) as never;
+  it.each([
+    ["a key after a tab", "name: a\n{{k}}:\topus", { k: "model" }],
+    ["a flow mapping opened on an earlier line", "{name: a,\n model: {{m}}}", { m: "opus" }],
+    ["an anchor and an alias", "x: &v {{m}}\nmodel: *v", { m: "opus" }],
+    ["an explicit key", "name: a\n? model\n: {{m}}", { m: "opus" }],
+    ["a merge key", "base: &v\n  model: {{m}}\nagent:\n  <<: *v\n<<: *v", { m: "opus" }],
+  ])("refuses %s", (_name, raw, params) => {
+    const f = metadataFault(agent(raw), params as Record<string, unknown>);
+    expect(f).not.toBeNull();
+    expect(JSON.stringify(f)).not.toContain("opus");
+  });
+  it("still passes a citation elsewhere in a block whose guarded keys are literal", () => {
+    expect(metadataFault(agent("name: a\nmodel: opus\ndescription: Reviews {{org}} changes"), { org: "acme" })).toBeNull();
+    expect(metadataFault(({ type: "rule", name: "r", frontmatterRaw: "paths:\n  - {{v}}", file: "rule.md", targets: "*" }) as never, { v: "**/*.ts" })).toBeNull();
+  });
+  it("a tab where a space is tested, and a value starting with , ] or }", () => {
+    expect(metadataFault(command("{{d}}"), { d: "x:\ty" })).not.toBeNull();
+    expect(metadataFault(command("Run {{d}}"), { d: "x\t#y" })).not.toBeNull();
+    for (const v of [",x", "]x", "}x"]) expect(metadataFault(command("{{d}}"), { d: v }), v).not.toBeNull();
+  });
+});

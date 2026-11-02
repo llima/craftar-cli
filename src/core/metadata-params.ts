@@ -6,7 +6,8 @@
 import type { Ingredient } from "../schema/index.js";
 import { FORGE_SCHEMA_METADATA_PARAMS } from "../schema/index.js";
 import { PLACEHOLDER_RE, paramsFor, substitute, type Resolution, type ResolvedIngredient } from "./resolve.js";
-import { parseFrontmatter } from "./frontmatter.js";
+import { looseParse, parseFrontmatter } from "./frontmatter.js";
+import { parseYamlText } from "./yaml-read.js";
 import { RULES_INDEX_KEY } from "./rules-index.js";
 
 /** Whether this Forge's metadata fields are rendered (spec 50 §5.1: the schema after profile-local, or above). */
@@ -56,13 +57,55 @@ export interface MetadataFault {
 /** The three top-level keys of a raw block a parameter may not change (spec 50 §8). */
 const GUARDED_KEYS = new Set(["tools", "allowed-tools", "model"]);
 /** Characters that open something other than a plain scalar when they start one (spec 50 §5.4). */
-const OPENERS = new Set(['"', "'", "[", "{", "*", "&", "!", "|", ">", "%", "@", "#"]);
+const OPENERS = new Set(['"', "'", "[", "{", "*", "&", "!", "|", ">", "%", "@", "#", ",", "]", "}"]);
+
+/**
+ * Spec 50 §8, by structure rather than by spelling: the raw block with each valued placeholder replaced by a neutral
+ * token, against the block rendered. A different set of top-level keys, or a different `tools`, `allowed-tools` or
+ * `model`, means a parameter reaches what it may not change — whatever spelling (a tab, an alias, a merge key, an
+ * explicit or a flow key) carried it there. Both sides are read the same way: strict YAML with merge keys, else by lines.
+ */
+function guardedKeyMoved(text: string, params: Record<string, unknown>): { key: string; why: string } | null {
+  const cited = [...text.matchAll(PLACEHOLDER_RE)].filter((m) => Object.hasOwn(params, m[1]));
+  if (cited.length === 0) return null;
+  const tokens = new Map<string, string>();
+  const neutral = text.replace(PLACEHOLDER_RE, (all, key: string) => {
+    if (!Object.hasOwn(params, key)) return all;
+    if (!tokens.has(key)) tokens.set(key, `craftarparam${tokens.size}x`);
+    return tokens.get(key)!;
+  });
+  const rendered = substitute(text, params);
+  const read = (t: string): Record<string, unknown> | null => {
+    const lf = t.replace(/\r\n?/g, "\n");
+    try {
+      const v = parseYamlText("frontmatterRaw", lf, { merge: true });
+      return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  };
+  let a = read(neutral);
+  let b = read(rendered);
+  if (a === null || b === null) {
+    // A block strict YAML refuses (an unquoted ** under paths:) is read by lines on both sides, as import reads it.
+    a = looseParse(neutral.replace(/\r\n?/g, "\n"));
+    b = looseParse(rendered.replace(/\r\n?/g, "\n"));
+  }
+  const key = cited[0][1];
+  const keysA = Object.keys(a).sort();
+  const keysB = Object.keys(b).sort();
+  if (JSON.stringify(keysA) !== JSON.stringify(keysB)) return { key, why: "it changes which keys the block holds, which a parameter may not do" };
+  for (const g of GUARDED_KEYS) {
+    if (JSON.stringify(a[g]) !== JSON.stringify(b[g])) return { key, why: `it reaches ${g}, which a parameter may not change` };
+  }
+  return null;
+}
 
 /** What in a value breaks a one-line YAML scalar, in the order a message names it; null when nothing does. */
 function scalarBreak(value: string, quotes: boolean): string | null {
   if (/[\r\n]/.test(value)) return "a line break";
-  if (value.includes(": ")) return "': '";
-  if (value.includes(" #")) return "' #'";
+  if (/:[ \t]/.test(value)) return "': '";
+  if (/[ \t]#/.test(value)) return "' #'";
   if (value.endsWith(":")) return "a final ':'";
   if (quotes && (value.includes('"') || value.includes("'"))) return "a quote";
   return null;
@@ -100,7 +143,7 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
             const under = topKeyAt(lines, i);
             if (under !== null && GUARDED_KEYS.has(under)) return { field, key, why: `it stands under ${under}, which a parameter may not change` };
             // A citation that could name a key, or that sits in a flow mapping, could reach tools, allowed-tools or model (§8).
-            const colon = line.indexOf(": ");
+            const colon = line.search(/:[ \t]/);
             if (colon === -1 ? /:\s*$/.test(line.slice(m.index)) : m.index < colon) return { field, key, why: "it stands where a key is written, which a parameter may not set" };
             if (/^\s*(?:-\s+)?\{(?!\{)/.test(line)) return { field, key, why: "it stands in a flow mapping, which a parameter may not change" };
             const value = valueOf(key);
@@ -114,6 +157,9 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
             }
           }
         }
+        // Whatever spelling the lines above do not catch (spec 50 §8).
+        const moved = guardedKeyMoved(text, params);
+        if (moved) return { field, key: moved.key, why: moved.why };
       } else if (field === "fileMatchPattern") {
         for (const m of text.matchAll(PLACEHOLDER_RE)) {
           const value = valueOf(m[1]);
