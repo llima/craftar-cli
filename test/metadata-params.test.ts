@@ -254,3 +254,34 @@ describe("review round 2: the §8 guard compares the raw block's structure, not 
     for (const v of [",x", "]x", "}x"]) expect(metadataFault(command("{{d}}"), { d: v }), v).not.toBeNull();
   });
 });
+
+describe("review round 3: a second value cannot switch the guard to reading by lines", async () => {
+  const { metadataFault } = await import("../src/core/metadata-params.js");
+  const agent = (frontmatterRaw: string) => ({ type: "agent", name: "a", frontmatterRaw, file: "agent.md", targets: "*" }) as never;
+  it.each([
+    ["an alias", 'description: &a {{d}}\nmodel: *a\nnote: "{{e}}"'],
+    ["a merge key", 'base: &b {model: {{d}}}\n<<: *b\nnote: "{{e}}"'],
+    ["an explicit key", 'name: a\n? model\n: {{d}}\nnote: "{{e}}"'],
+  ])("the structural guard refuses %s when another value makes the rendered block unreadable", async (_n, raw) => {
+    const { guardedKeyMoved } = await import("../src/core/metadata-params.js");
+    const f = guardedKeyMoved(raw, { d: "opus", e: "C:\\Users\\me" });
+    expect(f).not.toBeNull();
+    expect(JSON.stringify(f)).not.toContain("opus");
+    expect(metadataFault(agent(raw), { d: "opus", e: "C:\\Users\\me" })).not.toBeNull();
+  });
+  it("names the key that reached the guarded key, not the first one cited", () => {
+    expect(metadataFault(agent("when: {{x}}\nnote: &a {{d}}\nmodel: *a"), { x: "now", d: "opus" })?.key).toBe("d");
+  });
+  it("refuses a backslash inside a double-quoted value, and lets it through plain", () => {
+    expect(metadataFault(agent('name: a\ndescription: "{{n}}"'), { n: "C:\\q" })?.why).toMatch(/backslash/);
+    expect(metadataFault(({ type: "rule", name: "r", frontmatterRaw: "paths:\n  - {{p}}", file: "rule.md", targets: "*" }) as never, { p: "src\\x" })).toBeNull();
+  });
+  it("a citation on a comment line is not tested for its value", () => {
+    expect(metadataFault(agent("name: a\n# see {{n}}"), { n: "a: b" })).toBeNull();
+  });
+  it("still passes **/*.ts as a paths: value and an item", () => {
+    const rule = (fm: string) => ({ type: "rule", name: "r", frontmatterRaw: fm, file: "rule.md", targets: "*" }) as never;
+    expect(metadataFault(rule("paths: {{v}}"), { v: "**/*.ts" })).toBeNull();
+    expect(metadataFault(rule("paths:\n  - {{v}}\n  - lib/**"), { v: "**/*.ts" })).toBeNull();
+  });
+});

@@ -60,43 +60,55 @@ const GUARDED_KEYS = new Set(["tools", "allowed-tools", "model"]);
 const OPENERS = new Set(['"', "'", "[", "{", "*", "&", "!", "|", ">", "%", "@", "#", ",", "]", "}"]);
 
 /**
- * Spec 50 §8, by structure rather than by spelling: the raw block with each valued placeholder replaced by a neutral
- * token, against the block rendered. A different set of top-level keys, or a different `tools`, `allowed-tools` or
- * `model`, means a parameter reaches what it may not change — whatever spelling (a tab, an alias, a merge key, an
- * explicit or a flow key) carried it there. Both sides are read the same way: strict YAML with merge keys, else by lines.
+ * Spec 50 §8, by structure rather than by spelling: the raw block with every valued placeholder replaced by a neutral
+ * token, against the block with one key rendered at a time (the others neutral). A different set of top-level keys, or a
+ * different `tools`, `allowed-tools` or `model`, means that key reaches what a parameter may not change — whatever
+ * spelling (a tab, an alias, a merge key, an explicit or a flow key) carried it there. The block is read as strict YAML
+ * with merge keys; only when the neutral block itself is not strict YAML (an unquoted `**` the Forge wrote under
+ * `paths:`) are both sides read by lines. When the neutral block reads and a render does not, the value is refused: a
+ * reader craftar does not control would decide what it means. A citation that is a whole `paths:` value or item and
+ * whose value starts with `*` stays neutral, as §5.4 lets it through.
  */
-function guardedKeyMoved(text: string, params: Record<string, unknown>): { key: string; why: string } | null {
-  const cited = [...text.matchAll(PLACEHOLDER_RE)].filter((m) => Object.hasOwn(params, m[1]));
-  if (cited.length === 0) return null;
-  const tokens = new Map<string, string>();
-  const neutral = text.replace(PLACEHOLDER_RE, (all, key: string) => {
-    if (!Object.hasOwn(params, key)) return all;
-    if (!tokens.has(key)) tokens.set(key, `craftarparam${tokens.size}x`);
-    return tokens.get(key)!;
-  });
-  const rendered = substitute(text, params);
-  const read = (t: string): Record<string, unknown> | null => {
-    const lf = t.replace(/\r\n?/g, "\n");
+export function guardedKeyMoved(text: string, params: Record<string, unknown>): { key: string; why: string } | null {
+  const lf = text.replace(/\r\n?/g, "\n");
+  const valued: string[] = [];
+  for (const m of lf.matchAll(PLACEHOLDER_RE)) if (Object.hasOwn(params, m[1]) && !valued.includes(m[1])) valued.push(m[1]);
+  if (valued.length === 0) return null;
+  const lines = lf.split("\n");
+  const pathsGlob = (key: string): boolean => {
+    if (!String(params[key]).startsWith("*")) return false;
+    const re = new RegExp(`^\\s*(?:paths:\\s+|-\\s+)(["']?)\\{\\{\\s*${key.replace(/\./g, "\\.")}\\s*\\}\\}\\1\\s*$`);
+    const at = lines.flatMap((l, i) => (l.includes(key) && new RegExp(`\\{\\{\\s*${key.replace(/\./g, "\\.")}\\s*\\}\\}`).test(l) ? [i] : []));
+    return at.every((i) => re.test(lines[i]) && (/^\s*paths:/.test(lines[i]) || topKeyAt(lines, i) === "paths"));
+  };
+  const tokens = new Map(valued.map((k, i) => [k, `craftarparam${i}x`]));
+  const render = (only: string | null) =>
+    lf.replace(PLACEHOLDER_RE, (all, key: string) => {
+      if (!tokens.has(key)) return all;
+      return key === only && !pathsGlob(key) ? String(params[key]) : tokens.get(key)!;
+    });
+  const strict = (t: string): Record<string, unknown> | null => {
     try {
-      const v = parseYamlText("frontmatterRaw", lf, { merge: true });
-      return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+      const v = parseYamlText("frontmatterRaw", t, { merge: true });
+      return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
     } catch {
       return null;
     }
   };
-  let a = read(neutral);
-  let b = read(rendered);
-  if (a === null || b === null) {
-    // A block strict YAML refuses (an unquoted ** under paths:) is read by lines on both sides, as import reads it.
-    a = looseParse(neutral.replace(/\r\n?/g, "\n"));
-    b = looseParse(rendered.replace(/\r\n?/g, "\n"));
-  }
-  const key = cited[0][1];
-  const keysA = Object.keys(a).sort();
-  const keysB = Object.keys(b).sort();
-  if (JSON.stringify(keysA) !== JSON.stringify(keysB)) return { key, why: "it changes which keys the block holds, which a parameter may not do" };
-  for (const g of GUARDED_KEYS) {
-    if (JSON.stringify(a[g]) !== JSON.stringify(b[g])) return { key, why: `it reaches ${g}, which a parameter may not change` };
+  const neutral = render(null);
+  const strictNeutral = strict(neutral);
+  const read = strictNeutral === null ? (t: string) => looseParse(t) as Record<string, unknown> : strict;
+  const a = strictNeutral ?? looseParse(neutral);
+  const moved = (b: Record<string, unknown>): string | null => {
+    if (JSON.stringify(Object.keys(a).sort()) !== JSON.stringify(Object.keys(b).sort())) return "it changes which keys the block holds, which a parameter may not do";
+    for (const g of GUARDED_KEYS) if (JSON.stringify(a[g]) !== JSON.stringify(b[g])) return `it reaches ${g}, which a parameter may not change`;
+    return null;
+  };
+  for (const key of valued) {
+    const b = read(render(key));
+    if (b === null) return { key, why: "its value makes the block unreadable as YAML" };
+    const why = moved(b);
+    if (why) return { key, why };
   }
   return null;
 }
@@ -138,6 +150,8 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
         const lines = text.replace(/\r\n?/g, "\n").split("\n");
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
+          // A comment line can break nothing.
+          if (/^\s*#/.test(line)) continue;
           for (const m of line.matchAll(PLACEHOLDER_RE)) {
             const key = m[1];
             const under = topKeyAt(lines, i);
@@ -150,6 +164,9 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
             if (value === null) continue;
             const broken = scalarBreak(value, true);
             if (broken) return { field, key, why: `its value holds ${broken}` };
+            // Inside a double-quoted scalar a backslash starts an escape YAML may refuse.
+            const quotesBefore = (line.slice(0, m.index).match(/(?<!\\)"/g) ?? []).length;
+            if (quotesBefore % 2 === 1 && value.includes("\\")) return { field, key, why: "its value holds a backslash inside double quotes" };
             const prefix = line.slice(0, m.index);
             const opens = /^\s*(?:-\s+)?(?:[^\s"'#\-][^"']*?:\s+)?(?:-\s+)?$/.test(prefix);
             if (opens && opensOther(value) && !(value[0] === "*" && under === "paths")) {
