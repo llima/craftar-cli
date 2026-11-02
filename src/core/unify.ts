@@ -388,7 +388,7 @@ export async function applyPlan(
   const filesWithSectionHunks = new Set<string>();
   /** Names used across all files, for S3 second form. */
   const globalNameUsage = new Map<string, string>(); // name → file
-  /** Metadata fields the plan changes, and the ones it decides in full (spec 50 §5.5). */
+  /** Metadata fields the plan changes, and the ones it names (spec 50 §5.5). */
   const metaWrites: MetaWrite[] = [];
   const decidedMeta = new Set<string>();
 
@@ -501,7 +501,8 @@ export async function applyPlan(
           const as = (side: HunkTake) => takes.map((t) => (t === "param" ? side : t));
           proofs.push({ file: pf.file, template, mBase: mergeFile(baseText, variantText, hunks, as("base")), mVar: mergeFile(baseText, variantText, hunks, as("variant")) });
         }
-        if (!takes.includes("keep")) decidedMeta.add(field);
+        // A field the plan names is the plan's: a hunk still at keep counts as an undecided decision, not as a field unify cannot merge.
+        decidedMeta.add(field);
         if (template !== baseText) metaWrites.push({ field, value: metadataValue(template, field, base.meta) });
         continue;
       }

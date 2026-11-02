@@ -224,13 +224,12 @@ describe("spec 50 §5.5: forge unify resolves a metadata entry (§11 items 17, 2
     expect(git(forge, "status", "--porcelain")).toBe("");
   });
 
-  it("leaves a field the plan does not decide in metaDifferences", async () => {
+  it("a field left at keep holds the variant back as an undecided hunk, not as a field unify cannot merge", async () => {
     const { root, forge } = await forgeOf(GATE, pair("command", { description: "Ship beta", argumentHint: "<b>" }, { description: "Ship acme", argumentHint: "<a>" }));
     const run = await unifyWith(forge, root, "command/x", (file) => (file === "ingredient.yaml#description" ? "variant" : "keep"));
     expect(run.code, run.stderr).toBe(0);
     expect(run.stdout).toContain("resolved no · unresolved 1");
-    expect(run.stdout).toContain("ingredient.yaml differs in argumentHint");
-    expect(run.stdout).not.toMatch(/differs in [^\n]*description/);
+    expect(run.stdout).not.toContain("unify cannot merge ingredient.yaml");
     const meta = YAML.parse(await fs.readFile(path.join(forge, "ingredients/commands/x/ingredient.yaml"), "utf8"));
     expect(meta).toMatchObject({ description: "Ship acme", argumentHint: "<b>" });
     await expect(fs.stat(path.join(forge, "ingredients/commands/x--acme"))).resolves.toBeDefined();
@@ -266,5 +265,15 @@ describe("spec 50 §5.5: a CRLF ingredient.yaml (Windows-shaped)", () => {
     expect(run.code, run.stderr).toBe(0);
     const after = await fs.readFile(file, "utf8");
     expect(after).toBe(lf.replace("Helps beta users", "Helps acme users").replace(/\n/g, "\r\n"));
+  });
+});
+
+describe("spec 50 §5.5: the metadata proof and a profile that does not resolve", () => {
+  it("take: variant on a description passes when another profile does not resolve", async () => {
+    const spec = pair("agent", { description: "Helps beta users" }, { description: "Helps acme users" });
+    spec.profiles.push(profile("broken", ["no-such-recipe"], ["claude-code"]));
+    const { root, forge } = await forgeOf(GATE, spec);
+    const run = await unifyWith(forge, root, "agent/x", () => "variant");
+    expect(run.code, run.stderr).toBe(0);
   });
 });

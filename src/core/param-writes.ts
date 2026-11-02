@@ -337,8 +337,15 @@ function proveMetadata(forge: Forge, base: LoadedIngredient, meta: Ingredient, p
   if (!rendersMetadata(forge.manifest)) return;
   const ing = { ...base, meta } as LoadedIngredient;
   for (const q of forge.profiles.keys()) {
-    if (q !== profile && !resolvedBy(forge, q).has(base.ref)) continue;
-    const params = paramsFor(ing, resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile: q })));
+    // A profile that does not resolve today renders nothing, so its metadata cannot break (as forge promote skips it).
+    let resolution: ReturnType<typeof resolve>;
+    try {
+      resolution = resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile: q }));
+    } catch {
+      continue;
+    }
+    if (q !== profile && !resolution.ingredients.some((i) => i.ref === base.ref)) continue;
+    const params = paramsFor(ing, resolution);
     if (q === profile) for (const [k, v] of values) params[k] = v;
     const fault = metadataFault(meta, params);
     if (fault) throw new Error(`unify: under profile ${q}, ${metadataFaultMessage(base.ref, fault)}`);
