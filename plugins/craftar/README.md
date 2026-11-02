@@ -12,7 +12,7 @@ Install `craftar` first. The plugin starts the `craftar` you installed and insta
 npm install -g craftar
 ```
 
-It needs Node 22 or later and `craftar` 0.40.1 or later. An older one, from 0.29.0, connects, but its `doctor` tool can run a repository's code: a `global.json` at the workspace root can make `dotnet --version` load an SDK the repository ships. The plugin cannot check the version, so keep `craftar` up to date.
+It needs Node 22 or later and `craftar` 0.40.1 or later. An older one, from 0.29.0, connects, but its `doctor` tool can run a repository's code: a `global.json` at the workspace root can make `dotnet --version` load an SDK the repository ships. The plugin cannot check the version, so keep `craftar` up to date. If `craftar` or `node` comes from asdf, volta or mise, read *If `craftar` comes from a version manager* below first.
 
 Then, in Claude Code:
 
@@ -26,6 +26,7 @@ Then, in Claude Code:
 - **The project has no `craftar.yaml`.** The server refuses to start. No tool is offered and nothing is written, so this is harmless: the plugin simply has nothing to answer about there.
 - **The session was opened in a subfolder of a workspace.** The server is pointed at that subfolder, which has no `craftar.yaml`, and nothing walks up. Harmless for the same reason; open the session at the workspace root.
 - **`craftar` is not installed, or is older than 0.29.0.** Install or update it.
+- **mise refused a project file you have not trusted.** See *If `craftar` comes from a version manager*.
 
 A Forge or a `craftar.lock` newer than the installed `craftar` is refused until `craftar` is updated.
 
@@ -35,13 +36,13 @@ The plugin starts the `craftar` found on `PATH`. When that is a version manager'
 
 - **asdf** runs what a `.tool-versions` names with `path:`, in the project or in a directory above it.
 - **volta** runs a project's `node_modules/.bin/craftar` when a `package.json` there or in a directory above it lists `craftar` as a dependency.
-- **mise** refuses a config file you have not trusted, so the server reads as failed; after `mise trust` that project's file applies.
+- **mise** refused the untrusted `.mise.toml` and `.tool-versions` files measured, so the server read as failed; a `.node-version` or `.nvmrc` naming a `path:` ran nothing and the server started. After `mise trust`, that project's file applies.
 
-Measured on Linux with asdf 0.20.2, volta 2.0.2 and mise 2026.10.25; other tools and versions were not. This happens outside `craftar`, which cannot detect or prevent it, and the plugin cannot tell how `craftar` was installed.
+Measured on Linux with asdf 0.20.2, volta 2.0.2 and mise 2026.10.25; other tools and versions were not. This happens outside `craftar`, which never gets a say, and the plugin cannot tell how `craftar` was installed.
 
 Whether Claude Code starts the server before you accept a project's trust dialog was not measured yet: until it is, assume that opening a project is enough for its files to choose what runs.
 
-If you use asdf or volta, either have a `craftar` and a `node` installed outside them come first on `PATH`, or enable the plugin only in projects whose files you trust.
+If you use asdf or volta, or mise with a project's file trusted, either have a `craftar` and a `node` installed outside them come first on `PATH`, or enable the plugin only in projects whose files you trust.
 
 ## What to know before enabling it everywhere
 
