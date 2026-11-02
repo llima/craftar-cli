@@ -165,7 +165,9 @@ export const kiro: Emitter<"kiro"> = {
               }
             }
           }
-          const json = JSON.stringify({ name: outName(m), description, prompt: body.replace(/^\n+/, "").replace(/\n+$/, ""), tools, allowedTools: tools, resources }, null, 2) + "\n";
+          const rules = permissionRules(outName(m), tools, ctx);
+          const permissions = { rules };
+          const json = JSON.stringify({ name: outName(m), description, prompt: body.replace(/^\n+/, "").replace(/\n+$/, ""), tools, allowedTools: tools, resources, permissions }, null, 2) + "\n";
           out.push(crlf(path, json, ing.ref));
           break;
         }
@@ -318,7 +320,7 @@ function crlf(path: string, text: string, ingredient: string): PlannedFile {
   return { path, content: Buffer.from(toCrlf(text), "utf8"), target: "kiro", ingredient };
 }
 
-const TOOL_MAP: Record<string, string | null> = {
+export const TOOL_MAP: Record<string, string | null> = {
   read: "read",
   grep: "grep",
   glob: "glob",
@@ -334,6 +336,62 @@ const TOOL_MAP: Record<string, string | null> = {
   askuserquestion: null,
   todowrite: null,
 };
+
+/** Tools that grant fs_read capability. */
+const FS_READ_TOOLS = new Set(["read", "grep", "glob"]);
+
+/** Tools with known permission capabilities, in rule order. */
+const CAPABILITY_TOOLS: Array<{ tools: Set<string>; capability: string }> = [
+  { tools: FS_READ_TOOLS, capability: "fs_read" },
+  { tools: new Set(["write"]), capability: "fs_write" },
+  { tools: new Set(["shell"]), capability: "shell" },
+  { tools: new Set(["web_fetch"]), capability: "web_fetch" },
+  { tools: new Set(["web_search"]), capability: "web_search" },
+];
+
+interface PermissionRule {
+  capability: string;
+  match?: string[];
+  effect: string;
+}
+
+/**
+ * Derive Kiro permission rules from the mapped tools.
+ * Rules are ordered: fs_read, fs_write, shell, web_fetch, web_search, then FALLBACK (if no read/grep/glob), then skill (if read present).
+ * A tool with no capability mapping gets no rule and a warning.
+ */
+export function permissionRules(agentName: string, tools: string[], ctx: EmitBase): PermissionRule[] {
+  const rules: PermissionRule[] = [];
+  const toolSet = new Set(tools);
+
+  // Check each capability in order
+  for (const { tools: capTools, capability } of CAPABILITY_TOOLS) {
+    if ([...capTools].some((t) => toolSet.has(t))) {
+      rules.push({ capability, effect: "allow" });
+    }
+  }
+
+  // Rule 6: if NONE of read, grep, glob is in tools → FALLBACK with match
+  const hasAnyFsRead = [...FS_READ_TOOLS].some((t) => toolSet.has(t));
+  if (!hasAnyFsRead) {
+    rules.push({ capability: "fs_read", match: ["./**"], effect: "allow" });
+  }
+
+  // Rule 7: if read itself is in tools (NOT grep or glob alone) → skill rule, last
+  if (toolSet.has("read")) {
+    rules.push({ capability: "skill", effect: "allow" });
+  }
+
+  // Warn for tools with no known capability
+  const knownTools = new Set([...FS_READ_TOOLS, "write", "shell", "web_fetch", "web_search"]);
+  for (const t of tools) {
+    if (!knownTools.has(t)) {
+      ctx.warn(`kiro: agent "${agentName}": tool "${t}" has no Kiro permission capability; no rule written`);
+    }
+  }
+
+  return rules;
+}
 
 function mapTools(tools: string[], ctx: EmitBase): string[] {
   const out: string[] = [];
