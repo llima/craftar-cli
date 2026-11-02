@@ -29,7 +29,7 @@ import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarn
 import { canonicalValue } from "./core/sections.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
-import { driftList, unmanaged, type DriftRow } from "./core/drift.js";
+import { driftList, metadataEdits, unmanaged, type DriftRow } from "./core/drift.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
@@ -959,7 +959,8 @@ drift
       providedWarnings.push(`profile ${ws.config.profile} does not resolve on its own (${(e as Error).message}) — what its integrations provide was not computed, and craftar drift promote will refuse`);
     }
     const indexedPaths = new Set(p.indexed.map((x) => x.path));
-    const rows = driftList(named ? [named] : st, provided, new Set(p.reworded), indexedPaths, new Set(ws.forge.locals.get(ws.config.profile)?.ingredients.keys()));
+    const shown = named ? [named] : st;
+    const rows = driftList(shown, provided, new Set(p.reworded), indexedPaths, new Set(ws.forge.locals.get(ws.config.profile)?.ingredients.keys()), await metadataEdits(ws.root, p, shown));
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
