@@ -35,6 +35,7 @@ import { deepMerge } from "../core/merge.js";
 import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { note, type WriteJournal } from "../core/unify.js";
+import { metadataCitations, rendersMetadata } from "../core/metadata-params.js";
 
 export interface ImportOptions {
   workspaceRoot: string;
@@ -1796,6 +1797,9 @@ async function decideLocal(
       // At schema 4 and above an MCP server cites the keys it declares too (spec 34): those are lost with the rewrite as well.
       if (rendersServers(forge.manifest)) for (const c of serverCitations(old.meta)) if (c.declared) held.add(c.key);
       if (rendersServers(forge.manifest)) for (const c of serverCitations(sourceMeta)) if (c.declared) kept.add(c.key);
+      // At schema 9 a metadata field cites keys too (spec 50 §5.3): a citation there is lost with the rewrite as well.
+      if (rendersMetadata(forge.manifest)) for (const k of metadataCitations(old.meta)) if (k !== RULES_INDEX_KEY) held.add(k);
+      if (rendersMetadata(forge.manifest)) for (const k of metadataCitations(sourceMeta)) kept.add(k);
       for (const k of [...held].sort()) if (!kept.has(k)) report.warnings.push(`${ref}: local rewritten from ${source} — {{${k}}} is no longer in it; the text holds what the workspace has`);
       for (const n of [...new Set(sectionNames(old))].sort()) if (!fresh.includes(`craftar:section ${n}`)) report.warnings.push(`${ref}: local rewritten from ${source} — section ${n} is no longer in it; the text holds what the workspace has`);
       (report.localRewritten ??= []).push({ ref, dir, source });

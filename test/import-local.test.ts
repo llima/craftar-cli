@@ -336,6 +336,26 @@ describe("import --local (spec 51 §5.3)", () => {
     for (const k of Object.keys(before)) if (k !== "profiles/acme/profile.yaml") expect((await snapshot(s.forge))[k], k).toBe(before[k]);
   });
 
+  it("at schema 9, under auto, a rewritten local command whose description cited a key says it is gone", async () => {
+    const s = await setup(
+      { ...spec, profiles: [profile("acme", ["base", "acme-extra"], ["claude-code"], { params: { org: "acme-org" } }), profile("globex", ["base"])] },
+      {
+        schema: 9,
+        files: {
+          "profiles/acme/ingredients/commands/ship/ingredient.yaml": YAML.stringify({ type: "command", name: "ship", description: "Ship {{org}}", file: "command.md" }),
+          "profiles/acme/ingredients/commands/ship/command.md": "Ship it.\n",
+          ...localRecipe("acme", "acme-extra", ["command/ship"]),
+        },
+      },
+    );
+    const file = path.join(s.ws, ".claude/commands/ship.md");
+    expect(await fs.readFile(file, "utf8")).toContain("Ship acme-org");
+    await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace("Ship it.", "Ship it now."));
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("command/ship: local rewritten from .claude/commands/ship.md — {{org}} is no longer in it");
+  });
+
   it("under auto, a rewritten local MCP server whose server cited a declared key says it is gone", async () => {
     const s = await setup(
       { ...spec, profiles: [profile("acme", ["base", "acme-extra"], ["claude-code"], { params: { host: "idp.example.invalid" } }), profile("globex", ["base"])] },
