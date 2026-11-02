@@ -1054,7 +1054,7 @@ drift
 
 drift
   .command("promote")
-  .description("Carry a hand-edited file to the Forge as a profile variant, behind git's gate, proved before any write; never writes the lock, the registry or the cache")
+  .description("Carry a hand-edited file to the Forge — a profile value, a profile variant, or the profile-local ingredient edited in place — behind git's gate, proved before any write; never writes the lock, the registry or the cache")
   .argument("<path>", "the hand-edited file, as `craftar status` prints it")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--forge <dir>", "the Forge directory to write (required for a URL Forge)")
