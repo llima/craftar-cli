@@ -154,7 +154,7 @@
       "scope": "workspace",
       "level": "warn",
       "message": "hook/guard-path: registration 0 (PreToolUse) is in no settings file Claude Code reads",
-      "fix": "copy it from .claude/settings.craftar.example.json into .claude/settings.json"
+      "fix": "run craftar settings apply (or copy it from .claude/settings.craftar.example.json into .claude/settings.json)"
     },
     {
       "id": "lock",

@@ -246,7 +246,7 @@ describe("hooks-registered check (spec 43 §6)", () => {
     const check = one(r.checks, "hooks-registered");
     expect(check.level).toBe("warn");
     expect(check.message).toBe("hook/guard-path: registration 0 (PreToolUse) is in no settings file Claude Code reads");
-    expect(check.fix).toBe("copy it from .claude/settings.craftar.example.json into .claude/settings.json");
+    expect(check.fix).toBe("run craftar settings apply (or copy it from .claude/settings.craftar.example.json into .claude/settings.json)");
   });
 
   it("5a. matcher * in settings, absent in planned → warn (absent equals absent only)", async () => {

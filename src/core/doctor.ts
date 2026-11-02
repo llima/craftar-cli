@@ -953,7 +953,7 @@ async function hooksRegistered(
         "hooks-registered",
         "warn",
         `${entry.ref}: registration ${entry.index} (${entry.event}) is in no settings file Claude Code reads`,
-        `copy it from ${EXAMPLE_SETTINGS} into ${SETTINGS_LABELS.project}`,
+        `run craftar settings apply (or copy it from ${EXAMPLE_SETTINGS} into ${SETTINGS_LABELS.project})`,
       );
     }
   }
