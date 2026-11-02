@@ -492,9 +492,9 @@
     },
     {
       "id": "docker",
-      "level": "warn",
-      "message": "docker not found",
-      "fix": "install Docker with the Compose plugin 2.20.0 or later"
+      "level": "ok",
+      "message": "Docker Compose 5.6.1",
+      "fix": null
     },
     {
       "id": "services-env",
