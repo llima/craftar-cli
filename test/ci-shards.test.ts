@@ -41,6 +41,9 @@ describe("CI shards", () => {
     const test = job.steps.find((s: { run?: string }) => s.run?.startsWith("npm test"));
     expect(test.run).toBe("npm test -- --shard=$SHARD");
     expect(test.env).toEqual({ SHARD: "${{ matrix.shard }}" });
+    // windows-latest runs a step under pwsh by default, where $SHARD is a PowerShell variable (empty) and vitest
+    // refuses --shard= with no value; bash reads it from the environment.
+    expect(test.shell).toBe("bash");
   });
 
   it("names each job with its shard, so the two Windows halves are told apart", () => {
