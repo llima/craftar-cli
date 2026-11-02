@@ -2286,7 +2286,7 @@ forge
     const distances = new Map((await listVariants(f)).groups.flatMap((g) => g.variants.map((v) => [v.ref, v.distance] as const)));
     const report: Array<{ ref: IngredientRef; profile: string; distance: Distance; diff: IngredientDiff }> = [];
     for (const v of variants) {
-      report.push({ ref: v.ref, profile: profileOf(v.meta)!, distance: distances.get(v.ref)!, diff: await diffIngredients(base, v) });
+      report.push({ ref: v.ref, profile: profileOf(v.meta)!, distance: distances.get(v.ref)!, diff: await diffIngredients(base, v, f.manifest.schema) });
     }
     if (o.json) return console.log(JSON.stringify(report, null, 2));
 
@@ -2391,7 +2391,7 @@ forge
       if (loadedPlan.variantFingerprint !== variantFp) fail(`the plan is stale: the variant changed since it was saved`);
     }
 
-    const diff = await diffIngredients(base, variant);
+    const diff = await diffIngredients(base, variant, f.manifest.schema);
 
     if (o.savePlan) {
       // Ruling 30: --save-plan skips the clean-tree check because the plan lives outside the
