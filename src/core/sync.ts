@@ -493,10 +493,11 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
     declared.set(key, names);
     // Spec 50 §15 item 11: at the metadata gate a file may not be spelled as forge diff names a metadata field — for
     // every type, as forge diff checks.
+    if (ing.meta.type === "mcp" && !resolution.metadataParams) continue; // no file, so no marker: a value keyed mcp/<name> is warned below
     const rels = await listFiles(ing.dir);
     const clash = resolution.metadataParams ? metadataFileClash(ing.ref, rels) : null;
     if (clash) throw new Error(clash);
-    if (ing.meta.type === "mcp") continue; // no file, so no marker: a value keyed mcp/<name> is warned below
+    if (ing.meta.type === "mcp") continue;
     const files: Array<{ rel: string; p: ParsedSections }> = [];
     for (const rel of rels) {
       if (rel === "ingredient.yaml") continue;
