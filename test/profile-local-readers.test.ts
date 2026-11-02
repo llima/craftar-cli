@@ -14,6 +14,8 @@ const ALLOWED = [
   "src/core/catalogue.ts",
   "src/core/init-flow.ts",
   "src/core/integrations.ts",
+  // forge localize / forge share (spec 51 §5) read the root and each profile's locals by location, on purpose.
+  "src/core/localize.ts",
   "src/core/new-profile.ts",
   "src/core/param-writes.ts",
   "src/core/profile-local.ts",
