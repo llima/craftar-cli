@@ -100,11 +100,12 @@ async function buildScenario() {
 }
 
 /**
- * doctor's `docker` line names the machine's Compose version, or that docker is not on
- * the PATH the test gives: not part of what the pin proves.
+ * Strip machine-dependent checks from doctor output.
+ * Machine-scope checks (e.g. node version) vary by runner environment, and docker
+ * presence depends on the PATH the test gives: not part of what the pin proves.
  */
 function withoutMachine(checks: Observed["doctorChecks"]): Observed["doctorChecks"] {
-  return checks.filter((c) => c.id !== "docker");
+  return checks.filter((c) => c.id !== "docker" && c.scope !== "machine");
 }
 
 /**
@@ -205,9 +206,13 @@ describe("settings-apply baseline pin (spec 52 task 1)", () => {
     const observed = await buildObserved(s);
 
     if (process.env.UPDATE_PINS === "1") {
-      // Write mode: generate the pin file
+      // Write mode: generate the pin file (without machine-scope entries)
+      const pinned = {
+        ...observed,
+        doctorChecks: withoutMachine(observed.doctorChecks),
+      };
       await fs.mkdir(path.dirname(PIN_FILE), { recursive: true });
-      await fs.writeFile(PIN_FILE, JSON.stringify(observed, null, 2) + "\n");
+      await fs.writeFile(PIN_FILE, JSON.stringify(pinned, null, 2) + "\n");
       console.log(`Pin written to ${PIN_FILE}`);
       return;
     }
@@ -215,6 +220,9 @@ describe("settings-apply baseline pin (spec 52 task 1)", () => {
     // Compare mode: load the pin and compare
     const pinText = await fs.readFile(PIN_FILE, "utf8");
     const expected: Observed = JSON.parse(pinText);
+
+    // The pin file must not contain machine-scope entries
+    expect(expected.doctorChecks.some((c) => c.scope === "machine")).toBe(false);
 
     // Compare planned files
     expect(observed.planned).toEqual(expected.planned);
