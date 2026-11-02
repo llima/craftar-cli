@@ -320,7 +320,7 @@ function crlf(path: string, text: string, ingredient: string): PlannedFile {
   return { path, content: Buffer.from(toCrlf(text), "utf8"), target: "kiro", ingredient };
 }
 
-export const TOOL_MAP: Record<string, string | null> = {
+const TOOL_MAP: Record<string, string | null> = {
   read: "read",
   grep: "grep",
   glob: "glob",
@@ -339,6 +339,9 @@ export const TOOL_MAP: Record<string, string | null> = {
 
 /** Tools that grant fs_read capability. */
 const FS_READ_TOOLS = new Set(["read", "grep", "glob"]);
+
+/** Tools with known permission capabilities. */
+const PERMISSION_TOOLS = new Set([...FS_READ_TOOLS, "write", "shell", "web_fetch", "web_search"]);
 
 /** Tools with known permission capabilities, in rule order. */
 const CAPABILITY_TOOLS: Array<{ tools: Set<string>; capability: string }> = [
@@ -383,9 +386,8 @@ export function permissionRules(agentName: string, tools: string[], ctx: EmitBas
   }
 
   // Warn for tools with no known capability
-  const knownTools = new Set([...FS_READ_TOOLS, "write", "shell", "web_fetch", "web_search"]);
   for (const t of tools) {
-    if (!knownTools.has(t)) {
+    if (!PERMISSION_TOOLS.has(t)) {
       ctx.warn(`kiro: agent "${agentName}": tool "${t}" has no Kiro permission capability; no rule written`);
     }
   }
