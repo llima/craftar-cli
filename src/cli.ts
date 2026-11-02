@@ -52,7 +52,7 @@ import {
   type PruneCandidate,
   type PruneResult,
 } from "./core/unify.js";
-import { checkParamWrites, writeParamFile } from "./core/param-writes.js";
+import { checkParamWrites, metadataWrites, writeParamFile } from "./core/param-writes.js";
 import { checkInitFlags, checkLocalKeys, initLine, planInit, forgeSource, type InitInput } from "./core/init.js";
 import { profileName } from "./core/new-profile.js";
 import { newProfileGate } from "./core/new-profile-gate.js";
@@ -2442,9 +2442,12 @@ forge
       ? await pruneCandidates(f, base.ref, variant.ref, o.profile, (w) => pruneWarnings.push(w))
       : [];
     // Spec 09 & 12: the Forge-level rows and YAML edits for parameter and section extractions, rendered before any write.
+    // Spec 50 §5.5: a plan that only rewrites metadata fields still edits the base's ingredient.yaml, proved the same way.
     const paramWrites = result.params.length || result.sections.length
-      ? await checkParamWrites(f, base, variant, o.profile, result.params, result.sections)
-      : null;
+      ? await checkParamWrites(f, base, variant, o.profile, result.params, result.sections, result.metaWrites)
+      : result.metaWrites.length
+        ? { ingredientYaml: await metadataWrites(f, base, o.profile, result.metaWrites), profile: null, manifest: null, mustHold: [], written: [], sectionsWritten: [] }
+        : null;
 
     // Ruling 37: "git is the undo" only holds for files git actually has. The whole-repo clean
     // check above cannot see ignored files (a Forge its enclosing repo ignores, an ignored file in
