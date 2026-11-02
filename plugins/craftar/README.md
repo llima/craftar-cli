@@ -35,10 +35,10 @@ A Forge or a `craftar.lock` newer than the installed `craftar` is refused until 
 The plugin starts the `craftar` found on `PATH`. When that is a version manager's shim, the shim runs first and reads the project's files, so **a project can choose what runs**, with your rights, when the server starts and before any tool is called:
 
 - **asdf** runs what a `.tool-versions` names with `path:` in the project, or with an absolute `path:` in a directory above it.
-- **volta** runs a project's `node_modules/.bin/craftar` when a `package.json` there or in a directory above it lists `craftar` as a dependency.
+- **volta** runs the `node_modules/.bin/craftar` beside a `package.json`, in the project or in a directory above it, that lists `craftar` in `dependencies` or `devDependencies`.
 - **mise** refused each untrusted `.mise.toml` and `.tool-versions` measured, so the server read as failed; a `.node-version` or `.nvmrc` naming a `path:` ran nothing and the server started. After `mise trust`, that project's file applies.
 
-Measured through their shims on Linux with asdf 0.20.2, volta 2.0.2 and mise 2026.10.25, with `craftar` installed by each; other tools, versions and modes (such as `mise activate`) were not, and neither was a `craftar` installed elsewhere that starts their `node` shim, which should be expected to behave the same. This happens outside `craftar`, which never gets a say, and the plugin cannot tell how `craftar` was installed.
+Measured through their shims on Linux with asdf 0.20.2, volta 2.0.2 and mise 2026.10.25, with `craftar` installed by each; other tools, versions and modes (such as `mise activate`) were not, and neither was a `craftar` installed elsewhere that starts their `node` shim: assume it can. This happens outside `craftar`, which never gets a say, and the plugin cannot tell how `craftar` was installed.
 
 Whether Claude Code starts the server before you accept a project's trust dialog was not measured yet: until it is, assume that opening a project is enough for its files to choose what runs.
 

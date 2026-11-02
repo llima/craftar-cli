@@ -658,7 +658,7 @@ An AI coder working in a generated workspace does not know the files are generat
 /plugin install craftar@craftar
 ```
 
-The plugin holds a `/craftar` skill and starts the `craftar` found on `PATH` in every project it is enabled for, with the seven reading tools only: never `--allow-writes`, never `--fetch`. In a project with no `craftar.yaml`, or in a subfolder of a workspace, the server reads as failed: it refuses to start, no tool is offered and nothing is written. If `craftar` or `node` comes from asdf or volta (or mise, once you trust the project's file), their shim runs first and a project's files can choose what runs when the server starts. See [its README](plugins/craftar/README.md) for that and for what it reaches before you enable it everywhere.
+The plugin holds a `/craftar` skill and starts the `craftar` found on `PATH` in every project it is enabled for, with the seven reading tools only: never `--allow-writes`, never `--fetch`. In a project with no `craftar.yaml`, or in a subfolder of a workspace, the server reads as failed: it refuses to start, no tool is offered and nothing is written. If `craftar` comes from asdf or volta (or mise, once you trust the project's file), their shim runs first and a project's files can choose what runs when the server starts; a `node` from them was not measured, so assume the same. See [its README](plugins/craftar/README.md) for that and for what it reaches before you enable it everywhere.
 
 Register it by hand, in the AI coder's own MCP configuration — a file `sync` does not write (the user's own, not a generated `.mcp.json` or `.kiro/settings/mcp.json`):
 
