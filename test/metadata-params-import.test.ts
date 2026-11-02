@@ -97,3 +97,49 @@ describe("spec 50 §5.6: import at the metadata gate", () => {
     expect(prof.params).toEqual({ glob: "src/**" });
   });
 });
+
+describe("spec 50 §5.3 in import: a key cited only in metadata counts as a body's (G1, F9, the pin)", () => {
+  async function forgeWith(files: Record<string, string>, ws: Record<string, string>) {
+    const root = await tmpDir("craftar-meta-import-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const wsRoot = path.join(root, "ws");
+    await writeFiles(forge, { "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: GATE }), ...files });
+    await writeFiles(wsRoot, { "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }), ...ws });
+    return { forge, ws: wsRoot };
+  }
+
+  it("G1: a recipe that defaults a key only a raw block cites is compared literally, with the warning", async () => {
+    const { forge, ws } = await forgeWith(
+      {
+        "ingredients/rules/paths/ingredient.yaml": YAML.stringify({ type: "rule", name: "paths", inclusion: "fileMatch", fileMatchPattern: "src/**", frontmatterRaw: "paths: {{glob}}" }),
+        "ingredients/rules/paths/rule.md": "# Paths\n",
+        "recipes/base.yaml": YAML.stringify({ name: "base", ingredients: ["rule/paths"], params: { glob: { default: "src/**" } } }),
+        "profiles/acme/profile.yaml": YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code"] }),
+      },
+      {},
+    );
+    await synced(ws);
+    const r = await importInto(forge, ws);
+    expect(r.warnings.join("\n")).toContain("rule/paths cites {{glob}}, which recipe base defaults — compared literally");
+  });
+
+  it("F9: a value inferred from one body that another ingredient's metadata cites makes a variant", async () => {
+    const { forge, ws } = await forgeWith(
+      {
+        "ingredients/rules/x/ingredient.yaml": YAML.stringify({ type: "rule", name: "x", params: { team: { default: "core" } } }),
+        "ingredients/rules/x/rule.md": "# X\nKeep {{team}} tidy.\n",
+        // An agent only kiro writes, so this import does not decide it: its description cites the key.
+        "ingredients/agents/b/ingredient.yaml": YAML.stringify({ type: "agent", name: "b", targets: ["kiro"], description: "For {{team}}", tools: [] }),
+        "ingredients/agents/b/agent.md": "Body.\n",
+        "recipes/base.yaml": YAML.stringify({ name: "base", ingredients: ["rule/x", "agent/b"] }),
+        "profiles/acme/profile.yaml": YAML.stringify({ name: "acme", recipes: ["base"], targets: ["claude-code", "kiro"] }),
+      },
+      { ".claude/rules/x.md": "# X\nKeep alpha tidy.\n" },
+    );
+    const r = await importInto(forge, ws);
+    expect(r.variants.map((v) => v.name)).toEqual(["rule/x--acme"]);
+    const prof = YAML.parse(await fs.readFile(path.join(forge, "profiles/acme/profile.yaml"), "utf8"));
+    expect(prof.params?.team).toBeUndefined();
+  });
+});

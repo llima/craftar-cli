@@ -1,4 +1,5 @@
 import path from "node:path";
+import { metadataCitations, rendersMetadata } from "../core/metadata-params.js";
 import { placeholders, reservedKey, bodyFile } from "../core/extract.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { fingerprintOf } from "../core/fingerprint.js";
@@ -175,13 +176,16 @@ export async function decide(
   const projectedNames = sectionNames(base, owner);
   const cited = citedKeys(expandedTexts(base, S, owner));
   // F9: a key another target's section cites still renders there, so pin the unprojected set.
-  const citedAll = citedKeys(expandedTexts(base, S));
+  // Spec 50 §5.3: at the metadata gate a citation in a metadata field counts as a body's, for G1 and the pin — never
+  // for an inference, which reads bodies only (§5.6). The rules index's token is never a parameter.
+  const metaCited = rendersMetadata({ schema }) ? metadataCitations(base.meta).filter((k) => !(readsRulesIndex({ schema }) && k === RULES_INDEX_KEY)) : [];
+  const citedAll = new Set([...citedKeys(expandedTexts(base, S)), ...metaCited]);
 
   // G1: a recipe default the render cannot see — compare literally, as 0.5.0 did.
   // At the rules-index gate (spec 44 §4.2), skip RULES_INDEX_KEY — sync generates it.
   const atRulesIndexGate = readsRulesIndex({ schema });
   if (ctx.forge) {
-    for (const k of cited) {
+    for (const k of new Set([...cited, ...metaCited])) {
       if (atRulesIndexGate && k === RULES_INDEX_KEY) continue;
       if (Object.hasOwn(ctx.P, k) || Object.hasOwn(ctx.W, k)) continue;
       for (const [name, r] of (ctx.view ?? ctx.forge).recipes) {
@@ -304,6 +308,8 @@ async function inferParams(
           return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
         }
         if (ing.ref === ref || runBases.has(ing.ref)) continue;
+        // F9 for metadata (spec 50 §5.3): a field of §5.2 that cites the key.
+        if (rendersMetadata({ schema }) && metadataCitations(ing.meta).includes(key)) return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
         for (const rel of await listAdmitted(ing, schema)) {
           if (placeholders(norm(await readIngredientText(ing, rel))).includes(key)) return { kind: "variant", why: `setting ${key} would change ${ing.ref}` };
         }
@@ -374,8 +380,9 @@ function inferSectionValues(
     for (const d of sectionDelta) next[d.name] = d.value;
     ctx.PS[key] = next;
   }
-  // F9: pin the unprojected cited keys — a key another target's section cites still renders there.
-  pin(ctx, citedKeys(expandedTexts(base, S)), map);
+  // F9: pin the unprojected cited keys — a key another target's section cites still renders there — and, at the
+  // metadata gate, the keys its metadata cites (spec 50 §5.3).
+  pin(ctx, [...citedKeys(expandedTexts(base, S)), ...(rendersMetadata({ schema }) ? metadataCitations(base.meta) : [])], map);
   return { kind: "reuse", sectioned: assigned, sectionDelta };
 }
 
