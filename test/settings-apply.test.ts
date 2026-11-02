@@ -7,8 +7,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import { forgeAt, sync } from "./helpers/integrations.js";
 import { profile, recipe, type ForgeSpec, type IngredientSpec } from "./helpers/forge.js";
-import { sameHandler, wantedBlocks, wantedEnvNames, plannedRegistrations } from "../src/core/settings-apply.js";
-import { settingsExample, EXAMPLE_SETTINGS } from "../src/emitters/shared.js";
+import {
+  sameHandler,
+  wantedBlocks,
+  wantedEnvNames,
+  plannedRegistrations,
+  mergeSettings,
+  handlerHash,
+  SettingsShapeError,
+  type MergeResult,
+} from "../src/core/settings-apply.js";
+import { settingsExample, EXAMPLE_SETTINGS, type HooksObject } from "../src/emitters/shared.js";
 
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -197,6 +206,278 @@ describe("wanted blocks (spec 52 §4.1 step 3)", () => {
     const h7 = { type: "command", command: "a", opts: { b: 1, a: 2 } };
     const h8 = { type: "command", command: "a", opts: { a: 2, b: 1 } };
     expect(sameHandler(h7, h8)).toBe(true);
+  });
+});
+
+describe("merge (spec 52 §5)", () => {
+  // Helper to build a minimal wanted structure
+  const wantedWith = (env: Record<string, string> | null, hooks: Record<string, unknown[]> | null) => ({
+    env,
+    hooks: hooks as HooksObject | null,
+  });
+
+  // A simple handler shape
+  const handler1 = { type: "command", command: "python3", args: [".claude/hooks/guard.py"] };
+  const handler2 = { type: "command", command: "python3", args: [".claude/hooks/other.py"] };
+  const handler3 = { type: "command", command: "bash", args: [".claude/hooks/local.sh"] };
+
+  it("1. null current + wanted → returns value with wanted blocks, changed=true", () => {
+    const wanted = wantedWith(
+      { ACME_TOKEN: "", OTHER_TOKEN: "" },
+      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+    );
+
+    const result = mergeSettings(null, wanted, new Set());
+
+    expect(result.changed).toBe(true);
+    expect(result.value.env).toEqual({ ACME_TOKEN: "", OTHER_TOKEN: "" });
+    expect(result.value.hooks).toBeDefined();
+    const hooks = result.value.hooks as Record<string, unknown[]>;
+    expect(hooks.PreToolUse).toHaveLength(1);
+    expect(result.diff.envAdded).toEqual(["ACME_TOKEN", "OTHER_TOKEN"]);
+    expect(result.diff.added).toHaveLength(1);
+  });
+
+  it("2. empty current {} + wanted → returns value with wanted blocks, changed=true", () => {
+    const current: Record<string, unknown> = Object.create(null);
+    const wanted = wantedWith(
+      { ACME_TOKEN: "" },
+      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+    );
+
+    const result = mergeSettings(current, wanted, new Set());
+
+    expect(result.changed).toBe(true);
+    expect(result.value.env).toEqual({ ACME_TOKEN: "" });
+    expect(result.value.hooks).toBeDefined();
+    expect(result.diff.envAdded).toEqual(["ACME_TOKEN"]);
+    expect(result.diff.added).toHaveLength(1);
+  });
+
+  it("3. all wanted handlers present + no stale recorded → unchanged=false", () => {
+    // Current already has the wanted handler
+    const hooks: Record<string, unknown> = Object.create(null);
+    hooks.PreToolUse = [{ matcher: "Bash", hooks: [handler1] }];
+
+    const env: Record<string, unknown> = Object.create(null);
+    env.ACME_TOKEN = "secret-value";
+
+    const current: Record<string, unknown> = Object.create(null);
+    current.env = env;
+    current.hooks = hooks;
+
+    const wanted = wantedWith(
+      { ACME_TOKEN: "" },
+      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+    );
+
+    const result = mergeSettings(current, wanted, new Set());
+
+    // Should be unchanged since all wanted are present
+    expect(result.changed).toBe(false);
+    expect(result.diff.envPresent).toBe(1);
+    expect(result.diff.envAdded).toHaveLength(0);
+  });
+
+  it("4. recorded handler not in wanted → removed, changed=true", () => {
+    // Handler that was recorded from previous apply but is not in current wanted
+    const oldHandler = { type: "command", command: "python3", args: [".claude/hooks/old.py"] };
+    const oldHash = handlerHash("PreToolUse", "Bash", oldHandler);
+
+    // Current has the old handler
+    const hooks: Record<string, unknown> = Object.create(null);
+    hooks.PreToolUse = [{ matcher: "Bash", hooks: [oldHandler] }];
+
+    const current: Record<string, unknown> = Object.create(null);
+    current.hooks = hooks;
+
+    // New wanted has a different handler
+    const wanted = wantedWith(
+      null,
+      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+    );
+
+    // The old handler is in the recorded set
+    const recorded = new Set([oldHash]);
+
+    const result = mergeSettings(current, wanted, recorded);
+
+    expect(result.changed).toBe(true);
+    // The old handler should be removed
+    expect(result.diff.removed).toHaveLength(1);
+    // The new handler should be added
+    expect(result.diff.added).toHaveLength(1);
+  });
+
+  it("5. local handler kept, counted in diff.localKept", () => {
+    // Current has a local handler (not in wanted, not in recorded)
+    const localHandler = { type: "command", command: "bash", args: ["./local-check.sh"] };
+
+    const hooks: Record<string, unknown> = Object.create(null);
+    hooks.PreToolUse = [
+      { matcher: "Bash", hooks: [localHandler] },
+    ];
+
+    const current: Record<string, unknown> = Object.create(null);
+    current.hooks = hooks;
+
+    // Wanted adds a different handler to same event
+    const wanted = wantedWith(
+      null,
+      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+    );
+
+    const result = mergeSettings(current, wanted, new Set());
+
+    expect(result.changed).toBe(true);
+    expect(result.diff.localKept).toBe(1);
+
+    // Local handler should still be there
+    const resultHooks = result.value.hooks as Record<string, unknown[]>;
+    expect(resultHooks.PreToolUse).toHaveLength(2); // local + wanted
+  });
+
+  it("6. duplicate Forge handlers removed when a change triggers (spec 52 §11.1)", () => {
+    // Per spec 52 §11.1: if all wanted handlers are present and no stale recorded,
+    // duplicates are kept (idempotence). Only when something else triggers a change
+    // are duplicates removed.
+    
+    // Scenario: current has duplicate + a stale recorded handler → changed, duplicate removed
+    const oldHandler = { type: "command", command: "python3", args: [".claude/hooks/old.py"] };
+    const oldHash = handlerHash("Stop", undefined, oldHandler);
+
+    const hooks: Record<string, unknown> = Object.create(null);
+    hooks.PreToolUse = [
+      { matcher: "Bash", hooks: [handler1] },
+      { matcher: "Bash", hooks: [handler1] }, // duplicate wanted
+    ];
+    hooks.Stop = [
+      { hooks: [oldHandler] }, // stale recorded handler triggers change
+    ];
+
+    const current: Record<string, unknown> = Object.create(null);
+    current.hooks = hooks;
+
+    const wanted = wantedWith(
+      null,
+      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+    );
+
+    // The old handler is in the recorded set, triggering a change
+    const recorded = new Set([oldHash]);
+
+    const result = mergeSettings(current, wanted, recorded);
+
+    // Changed because the stale recorded handler triggers the edit
+    expect(result.changed).toBe(true);
+    expect(result.diff.duplicatesRemoved).toBe(1);
+  });
+
+  it("7. env: present name keeps its value, added name gets empty string", () => {
+    const env: Record<string, unknown> = Object.create(null);
+    env.ACME_TOKEN = "my-secret-token";
+    env.EXISTING = 42; // non-string value kept
+
+    const current: Record<string, unknown> = Object.create(null);
+    current.env = env;
+
+    const wanted = wantedWith(
+      { ACME_TOKEN: "", NEW_VAR: "" },
+      null,
+    );
+
+    const result = mergeSettings(current, wanted, new Set());
+
+    expect(result.changed).toBe(true);
+    const resultEnv = result.value.env as Record<string, unknown>;
+    expect(resultEnv.ACME_TOKEN).toBe("my-secret-token"); // kept original value
+    expect(resultEnv.NEW_VAR).toBe(""); // added with empty string
+    expect(resultEnv.EXISTING).toBe(42); // non-wanted key kept with original value
+
+    expect(result.diff.envPresent).toBe(1); // ACME_TOKEN was present
+    expect(result.diff.envAdded).toEqual(["NEW_VAR"]);
+  });
+
+  it("8. SettingsShapeError: hooks is not an object", () => {
+    const current: Record<string, unknown> = Object.create(null);
+    current.hooks = "not-an-object";
+
+    const wanted = wantedWith(
+      null,
+      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+    );
+
+    expect(() => mergeSettings(current, wanted, new Set())).toThrow(SettingsShapeError);
+    expect(() => mergeSettings(current, wanted, new Set())).toThrow(/hooks is not an object/);
+  });
+
+  it("9. SettingsShapeError: env is not an object", () => {
+    const current: Record<string, unknown> = Object.create(null);
+    current.env = ["array-not-object"];
+
+    const wanted = wantedWith(
+      { ACME_TOKEN: "" },
+      null,
+    );
+
+    expect(() => mergeSettings(current, wanted, new Set())).toThrow(SettingsShapeError);
+    expect(() => mergeSettings(current, wanted, new Set())).toThrow(/env is not an object/);
+  });
+
+  it("10. SettingsShapeError: event value is not a list", () => {
+    const hooks: Record<string, unknown> = Object.create(null);
+    hooks.PreToolUse = "not-a-list";
+
+    const current: Record<string, unknown> = Object.create(null);
+    current.hooks = hooks;
+
+    const wanted = wantedWith(
+      null,
+      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+    );
+
+    expect(() => mergeSettings(current, wanted, new Set())).toThrow(SettingsShapeError);
+    expect(() => mergeSettings(current, wanted, new Set())).toThrow(/is not a list/);
+  });
+
+  it("11. SettingsShapeError: group is not an object with a hooks list", () => {
+    const hooks: Record<string, unknown> = Object.create(null);
+    hooks.PreToolUse = [
+      { matcher: "Bash" }, // missing hooks key
+    ];
+
+    const current: Record<string, unknown> = Object.create(null);
+    current.hooks = hooks;
+
+    const wanted = wantedWith(
+      null,
+      { PreToolUse: [{ matcher: "Bash", hooks: [handler1] }] },
+    );
+
+    expect(() => mergeSettings(current, wanted, new Set())).toThrow(SettingsShapeError);
+    expect(() => mergeSettings(current, wanted, new Set())).toThrow(/not an object with a hooks list/);
+  });
+
+  it("12. handlerHash: same event/matcher/handler → same hash; different matcher → different hash", () => {
+    const h = { type: "command", command: "test" };
+
+    const hash1 = handlerHash("PreToolUse", "Bash", h);
+    const hash2 = handlerHash("PreToolUse", "Bash", h);
+    expect(hash1).toBe(hash2);
+
+    // Different matcher
+    const hash3 = handlerHash("PreToolUse", "PowerShell", h);
+    expect(hash1).not.toBe(hash3);
+
+    // Absent matcher vs literal "-" (spec 52 §5.3)
+    const hash4 = handlerHash("PreToolUse", undefined, h);
+    const hash5 = handlerHash("PreToolUse", "-", h);
+    expect(hash4).not.toBe(hash5);
+
+    // Same handler with different key order → same hash
+    const h1 = { type: "command", command: "test", args: ["a"] };
+    const h2 = { args: ["a"], command: "test", type: "command" };
+    expect(handlerHash("E", "M", h1)).toBe(handlerHash("E", "M", h2));
   });
 });
 
