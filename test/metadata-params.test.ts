@@ -331,3 +331,21 @@ describe("review round 6: a break formed across the placeholder, and a flow elem
     expect(metadataFault(rule("paths: [{{v}}]"), { v: "*x" })).not.toBeNull();
   });
 });
+
+describe("review round 7: quotes and flow open only where a value starts; neighbours are rendered", async () => {
+  const { metadataFault } = await import("../src/core/metadata-params.js");
+  const rule = (fm: string) => ({ type: "rule", name: "r", frontmatterRaw: fm, file: "rule.md", targets: "*" }) as never;
+  const agent = (description: string) => ({ type: "agent", name: "a", description, file: "agent.md", targets: "*" }) as never;
+  it("a quote in the middle of a plain value does not switch the boundary check off", () => {
+    expect(metadataFault(rule("description: it's {{k}}\npaths: src/x"), { k: "#x" })).not.toBeNull();
+    expect(metadataFault(rule('description: a 6" pipe {{k}}\npaths: src/x'), { k: "#x" })).not.toBeNull();
+    expect(metadataFault(rule('description: a 6" pipe {{k}}\npaths: src/x'), { k: "y\\z" })).toBeNull();
+  });
+  it("two placeholders side by side are tested as rendered", () => {
+    expect(metadataFault(agent("{{a}}{{b}}"), { a: "x ", b: "#y" })).not.toBeNull();
+    expect(metadataFault(rule("description: {{a}}{{b}}\npaths: src/x"), { a: "x ", b: "#y" })).not.toBeNull();
+  });
+  it("a { or [ inside plain text opens no flow collection", () => {
+    expect(metadataFault(rule("description: a {b, {{k}}\npaths: src/x"), { k: "*x" })).toBeNull();
+  });
+});

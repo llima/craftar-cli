@@ -115,25 +115,43 @@ export function guardedKeyMoved(text: string, params: Record<string, unknown>): 
 }
 
 /**
- * The quoting state at the end of `prefix`, in one left-to-right scan: a `'` means nothing inside double quotes, a `"`
- * nothing inside single quotes, `\"` does not close a double-quoted value, and `depth` counts the `[` and `{` open
- * outside quotes — a flow collection.
+ * The quoting state at the end of `prefix`, in one left-to-right scan. A quote or a `[`/`{` opens something only where a
+ * value starts — at the line's start, or after `: `, `- `, `[`, `{` or `,` inside a flow collection — as YAML reads it; in
+ * the middle of plain text it is a character. Inside double quotes a `'` means nothing and `\"` does not close; inside
+ * single quotes a `"` means nothing. `depth` counts the flow collections open.
  */
 function quoteState(prefix: string): { inDouble: boolean; inSingle: boolean; depth: number } {
   let inDouble = false;
   let inSingle = false;
   let depth = 0;
+  let start = true;
   for (let i = 0; i < prefix.length; i++) {
     const c = prefix[i];
     if (inDouble) {
       if (c === "\\") i++;
       else if (c === '"') inDouble = false;
-    } else if (inSingle) {
+      continue;
+    }
+    if (inSingle) {
       if (c === "'") inSingle = false;
-    } else if (c === '"') inDouble = true;
-    else if (c === "'") inSingle = true;
-    else if (c === "[" || c === "{") depth++;
-    else if ((c === "]" || c === "}") && depth > 0) depth--;
+      continue;
+    }
+    if (c === " " || c === "\t") continue;
+    const next = prefix[i + 1] ?? "";
+    if (start && c === '"') inDouble = true;
+    else if (start && c === "'") inSingle = true;
+    else if (start && (c === "[" || c === "{")) {
+      depth++;
+      continue;
+    } else if ((c === "]" || c === "}") && depth > 0) depth--;
+    else if (c === "," && depth > 0) {
+      start = true;
+      continue;
+    } else if (c === ":" && (next === " " || next === "\t" || next === "")) {
+      start = true;
+      continue;
+    } else if (start && c === "-" && (next === " " || next === "\t")) continue;
+    start = false;
   }
   return { inDouble, inSingle, depth };
 }
@@ -206,7 +224,8 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
             // Inside a double-quoted scalar a backslash starts an escape YAML may refuse.
             if (q.inDouble && value.includes("\\")) return { field, key, why: "its value holds a backslash inside double quotes" };
             if (!q.inDouble && !q.inSingle) {
-              const across = boundaryBreak(prefix, value, line.slice(m.index + m[0].length));
+              // The neighbours as rendered, so two placeholders side by side are tested as written to the file.
+              const across = boundaryBreak(substitute(prefix, params), value, substitute(line.slice(m.index + m[0].length), params));
               if (across) return { field, key, why: `its value forms ${across} with the text beside it` };
             }
             // At the start of a value or an item — or of a flow element: after `[` or `,` with a `[` or `{` open, outside quotes.
@@ -235,7 +254,7 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
           if (value === null) continue;
           const broken = scalarBreak(value, false);
           if (broken) return { field, key: m[1], why: `its value holds ${broken}` };
-          const across = boundaryBreak(text.slice(0, m.index), value, text.slice(m.index + m[0].length));
+          const across = boundaryBreak(substitute(text.slice(0, m.index), params), value, substitute(text.slice(m.index + m[0].length), params));
           if (across) return { field, key: m[1], why: `its value forms ${across} with the text beside it` };
           if (m.index === 0 && opensOther(value)) {
             return { field, key: m[1], why: "its value starts with a character that opens something other than plain text" };
