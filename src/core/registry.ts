@@ -300,12 +300,25 @@ export function namedCacheKeys(reg: Registry, checked: { key: string; path: stri
   return named;
 }
 
-/** `craftar workspaces prune` (§4.4): removes every `missing` entry; returns their paths. Loads nothing else. */
+/** `craftar workspaces prune` (§4.4, D7): removes every `missing` workspace and orphan settingsApplied entries. */
 export async function prune(home: string): Promise<string[]> {
   if (!(await exists(registryFile(home)))) return [];
+  const reg = await readRegistry(home);
+
+  // Find missing workspaces
   const gone: string[] = [];
-  for (const e of (await readRegistry(home)).workspaces) if (await isMissing(e)) gone.push(e.path);
-  if (gone.length === 0) return [];
+  for (const e of reg.workspaces) if (await isMissing(e)) gone.push(e.path);
+
+  // D7: Find orphan settingsApplied entries (path has no workspaces entry)
+  const workspacePaths = new Set(reg.workspaces.map((w) => w.path));
+  const orphanApplied = reg.settingsApplied?.filter(
+    (a) => !Array.from(workspacePaths).some((p) => samePath(a.path, p))
+  ) ?? [];
+  const hasOrphans = orphanApplied.length > 0;
+
+  // If nothing to prune and no orphans, return early
+  if (gone.length === 0 && !hasOrphans) return [];
+
   return update(home, {}, async (reg) => {
     const removed: string[] = [];
     const kept: RegistryEntry[] = [];
@@ -315,6 +328,16 @@ export async function prune(home: string): Promise<string[]> {
     }
     reg.workspaces = kept;
     removeRecordsFor(reg, removed);
+
+    // D7: Also drop orphan settingsApplied entries
+    if (reg.settingsApplied) {
+      const keptPaths = new Set(kept.map((w) => w.path));
+      reg.settingsApplied = reg.settingsApplied.filter(
+        (a) => Array.from(keptPaths).some((p) => samePath(a.path, p))
+      );
+      if (reg.settingsApplied.length === 0) delete reg.settingsApplied;
+    }
+
     return removed;
   });
 }
@@ -401,18 +424,18 @@ export async function consentFor(reg: Registry, dir: string): Promise<WriteConse
 /* ------------------------------------------------------------------ */
 
 /**
- * Record the handler hashes of the last `craftar settings apply` for a workspace (spec 52 §5.3).
- * Replaces any existing record for the same path. Returns the recorded entry.
+ * Record the handler hashes of the last `craftar settings apply` for a workspace (spec 52 §5.3, D7).
+ * Replaces any existing record for the same path.
  *
- * NOTE: This function does NOT check if the workspace is registered — the caller must ensure that
- * (spec 52 §5.3: "written only for a registered workspace").
+ * Returns "written" if the record was written, or "not-registered" if the workspace is not registered.
+ * A record is written only for a registered workspace (spec 52 §5.3).
  */
 export async function recordApplied(
   home: string,
   dir: string,
   handlers: string[],
   opts: { now?: Date; lock?: LockTiming } = {},
-): Promise<SettingsApplied> {
+): Promise<"written" | "not-registered"> {
   const target = await realOrResolved(dir);
   const entry: SettingsApplied = {
     path: target,
@@ -420,11 +443,17 @@ export async function recordApplied(
     appliedAt: (opts.now ?? new Date()).toISOString(),
   };
   return update(home, opts.lock ?? {}, (reg) => {
+    // D7: Check if workspace is registered
+    const isRegistered = reg.workspaces.some((w) => samePath(w.path, target));
+    if (!isRegistered) {
+      return "not-registered";
+    }
+
     const list = (reg.settingsApplied ?? []).filter((a) => !samePath(a.path, target));
     list.push(entry);
     list.sort(byAppliedPath);
     reg.settingsApplied = list;
-    return entry;
+    return "written";
   });
 }
 

@@ -928,11 +928,9 @@ describe("registry: settingsApplied record (spec 52 §5.3)", () => {
 
     // Record some handler hashes
     const hashes = ["hash1", "hash2", "hash3"];
-    const now = new Date("2026-11-02T12:00:00Z");
-    const entry = await recordApplied(home, s.wsRoot, hashes, { now });
+    const result = await recordApplied(home, s.wsRoot, hashes);
 
-    expect(entry.handlers).toEqual(hashes);
-    expect(entry.appliedAt).toBe("2026-11-02T12:00:00.000Z");
+    expect(result).toBe("written");
 
     // Read it back
     const reg = await readRegistry(home);
