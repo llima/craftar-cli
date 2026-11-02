@@ -277,3 +277,48 @@ describe("spec 50 §5.5: the metadata proof and a profile that does not resolve"
     expect(run.code, run.stderr).toBe(0);
   });
 });
+
+describe("review round 1: a real ingredient.yaml#<field> file below the gate is an ordinary file in forge unify", () => {
+  it("take: variant writes the skill's file and leaves the description alone (schema 8)", async () => {
+    const spec: ForgeSpec = {
+      ingredients: [
+        { meta: { type: "skill", name: "x", layout: "dir", description: "Base desc" }, files: { "SKILL.md": "---\nname: x\n---\nBody.\n", "ingredient.yaml#description": "one\ntwo\n" } },
+        { meta: { type: "skill", name: "x--acme", as: "x", layout: "dir", description: "Base desc" }, files: { "SKILL.md": "---\nname: x\n---\nBody.\n", "ingredient.yaml#description": "one\ntwo\nTHREE\n" } },
+      ],
+      recipes: [recipe("base", ["skill/x"]), recipe("base--acme", ["skill/x--acme"])],
+      profiles: [profile("acme", ["base--acme"], ["claude-code"])],
+    };
+    const { forge } = await forgeOf(BELOW, spec);
+    const run = runCli(["forge", "unify", "skill/x", "--profile", "acme", "--forge", forge, "--take", "variant", "--no-impact"]);
+    expect(run.code, run.stderr).toBe(0);
+    expect(await fs.readFile(path.join(forge, "ingredients/skills/x/ingredient.yaml#description"), "utf8")).toBe("one\ntwo\nTHREE\n");
+    expect(YAML.parse(await fs.readFile(path.join(forge, "ingredients/skills/x/ingredient.yaml"), "utf8")).description).toBe("Base desc");
+  });
+});
+
+describe("review round 1: a field that differs only as forge diff normalises it does not hold the variant back", () => {
+  it("a CRLF-only frontmatterRaw difference and a string against a one-element list resolve with take: variant", async () => {
+    for (const [a, b] of [
+      [{ frontmatterRaw: "paths: src/**\r\nkeep: 1" }, { frontmatterRaw: "paths: src/**\nkeep: 1" }],
+      [{ inclusion: "fileMatch", fileMatchPattern: "src/**" }, { inclusion: "fileMatch", fileMatchPattern: ["src/**"] }],
+    ] as const) {
+      const { forge } = await forgeOf(GATE, pair("rule", a, b));
+      const run = runCli(["forge", "unify", "rule/x", "--profile", "acme", "--forge", forge, "--take", "variant", "--no-impact", "--json"]);
+      expect(run.code, run.stderr).toBe(0);
+      expect(JSON.parse(run.stdout)).toMatchObject({ resolved: true, metaDiffers: [] });
+    }
+  });
+});
+
+describe("review round 1: the metadata proof covers a profile that resolves the variant", () => {
+  it("refuses a take: variant whose new description would break another profile resolving the variant", async () => {
+    const spec = pair("command", { description: "Ship it" }, { description: "{{d}}" });
+    spec.profiles = [profile("acme", ["base--acme"], ["claude-code"], { params: { d: "now" } }), profile("other", ["base--acme"], ["claude-code"], { params: { d: "- broken" } })];
+    const { root, forge } = await forgeOf(GATE, spec);
+    const run = await unifyWith(forge, root, "command/x", () => "variant");
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain("under profile other");
+    expect(run.stderr).not.toContain("- broken");
+    expect(git(forge, "status", "--porcelain")).toBe("");
+  });
+});

@@ -227,7 +227,7 @@ export async function checkParamWrites(
   const ingredientYaml = await ingredientYamlWrite(forge, base, declare, metaWrites);
   // Spec 50 §5.4: the base's new metadata must not break a file under any profile, the unifying one with its values.
   if (metaWrites.length || rendersMetadata(forge.manifest)) {
-    proveMetadata(forge, base, ingredientYaml?.meta ?? base.meta, profile, new Map(extractions.map((e) => [e.key, e.value])));
+    proveMetadata(forge, base, variant.ref, ingredientYaml?.meta ?? base.meta, profile, new Map(extractions.map((e) => [e.key, e.value])));
   }
 
   // Profile edit: ONE editYamlText call with both params and sections (spec 12 §6.7 step 4)
@@ -333,7 +333,7 @@ async function ingredientYamlWrite(
  * the base and for the unifying profile with its new values, holds no value that would break the file it lands in.
  * Throws naming the profile, the ingredient, the field and the key, never the value.
  */
-function proveMetadata(forge: Forge, base: LoadedIngredient, meta: Ingredient, profile: string, values: Map<string, string>): void {
+function proveMetadata(forge: Forge, base: LoadedIngredient, variantRef: string, meta: Ingredient, profile: string, values: Map<string, string>): void {
   if (!rendersMetadata(forge.manifest)) return;
   const ing = { ...base, meta } as LoadedIngredient;
   for (const q of forge.profiles.keys()) {
@@ -344,7 +344,8 @@ function proveMetadata(forge: Forge, base: LoadedIngredient, meta: Ingredient, p
     } catch {
       continue;
     }
-    if (q !== profile && !resolution.ingredients.some((i) => i.ref === base.ref)) continue;
+    // A profile that resolves the variant resolves the base after the cascade, with its own params.
+    if (q !== profile && !resolution.ingredients.some((i) => i.ref === base.ref || i.ref === variantRef)) continue;
     const params = paramsFor(ing, resolution);
     if (q === profile) for (const [k, v] of values) params[k] = v;
     const fault = metadataFault(meta, params);
@@ -356,9 +357,9 @@ function proveMetadata(forge: Forge, base: LoadedIngredient, meta: Ingredient, p
  * The base's `ingredient.yaml` for a plan that rewrites metadata fields and extracts nothing (spec 50 §5.5): the same
  * edit and proof as `checkParamWrites`, with no declaration and no profile edit.
  */
-export async function metadataWrites(forge: Forge, base: LoadedIngredient, profile: string, metaWrites: MetaWrite[]): Promise<{ abs: string; content: string } | null> {
+export async function metadataWrites(forge: Forge, base: LoadedIngredient, variantRef: string, profile: string, metaWrites: MetaWrite[]): Promise<{ abs: string; content: string } | null> {
   const w = await ingredientYamlWrite(forge, base, [], metaWrites);
-  if (w) proveMetadata(forge, base, w.meta, profile, new Map());
+  if (w) proveMetadata(forge, base, variantRef, w.meta, profile, new Map());
   return w && { abs: w.abs, content: w.content };
 }
 

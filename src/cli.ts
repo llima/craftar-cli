@@ -2447,7 +2447,7 @@ forge
     const paramWrites = result.params.length || result.sections.length
       ? await checkParamWrites(f, base, variant, o.profile, result.params, result.sections, result.metaWrites)
       : result.metaWrites.length
-        ? { ingredientYaml: await metadataWrites(f, base, o.profile, result.metaWrites), profile: null, manifest: null, mustHold: [], written: [], sectionsWritten: [] }
+        ? { ingredientYaml: await metadataWrites(f, base, variant.ref, o.profile, result.metaWrites), profile: null, manifest: null, mustHold: [], written: [], sectionsWritten: [] }
         : null;
 
     // Ruling 37: "git is the undo" only holds for files git actually has. The whole-repo clean

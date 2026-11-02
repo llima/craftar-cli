@@ -10,7 +10,7 @@ import { detectEol, isUtf8, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
 import type { HunkTake, Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile, PlanHunk } from "../schema/index.js";
 import { ProfileSchema, RecipeSchema } from "../schema/index.js";
-import { metadataEntryField, metadataText, metadataValue, type MetadataField } from "./metadata-params.js";
+import { metadataEntryField, metadataFields, metadataText, metadataValue, rendersMetadata, type MetadataField } from "./metadata-params.js";
 import { collect, deriveHunk, prove, substitutedFile, bodyFile, emittedFile, shellAtGate, type Extraction } from "./extract.js";
 import { firstMarkerLine, parseSections, readsTargetSections, SectionMarkerError, type ParseSectionsOptions } from "./sections.js";
 import { errorText } from "./schema-fault.js";
@@ -103,7 +103,7 @@ export async function planFrom(
     // Pre-fill section names only when the file is a body file (spec 12 §4.2, 0.8.2)
     let sectionNames: Array<string | undefined> = [];
     // A metadata entry (spec 50 §5.5) takes no section: nothing is pre-filled there.
-    if (metadataEntryField(f.file) === null && bodyFile(base.meta, f.file, base.dir, forgeSchema)) {
+    if ((!rendersMetadata({ schema: forgeSchema }) || metadataEntryField(f.file) === null) && bodyFile(base.meta, f.file, base.dir, forgeSchema)) {
       try {
         const baseText = await readIngredientText(base, f.file);
         const onlyDeclared = !substitutedFile(base.meta, f.file);
@@ -197,8 +197,12 @@ export function metaDifferences(base: LoadedIngredient, variant: LoadedIngredien
     a.params = Object.keys(restrictedBaseParams).length > 0 ? restrictedBaseParams : undefined;
   }
   
-  // A metadata field a plan decided in full (spec 50 §5.5) no longer holds the variant back.
-  return [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => !decided.has(k) && !isDeepStrictEqual(a[k], b[k])).sort();
+  // At the metadata gate a field of §5.2 is compared as forge diff shows it (CRLF folded, a list by element), so a
+  // difference no plan can name never holds the variant back; a field a plan names is the plan's (spec 50 §5.5).
+  const asDiffed = rendersMetadata({ schema }) ? new Set<string>(metadataFields(base.meta)) : new Set<string>();
+  const same = (k: string) =>
+    asDiffed.has(k) ? metadataText(base.meta, k as MetadataField) === metadataText(variant.meta, k as MetadataField) : isDeepStrictEqual(a[k], b[k]);
+  return [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => !decided.has(k) && !same(k)).sort();
 }
 
 export interface ApplyOptions {
@@ -483,7 +487,8 @@ export async function applyPlan(
       unresolved += takes.filter((t) => t === "keep").length;
 
       // A metadata entry (spec 50 §5.5): merged as text, written into ingredient.yaml, never as a file.
-      const field = metadataEntryField(pf.file);
+      // Only at the gate: below it a file spelled so is an ordinary file of the ingredient.
+      const field = rendersMetadata({ schema: forgeSchema }) ? metadataEntryField(pf.file) : null;
       if (field !== null) {
         if (sectionOf.size) {
           throw new Error(`unify plan: "${pf.file}" is a metadata field — take: section is refused there; take base, variant or param`);
