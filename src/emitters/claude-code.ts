@@ -91,7 +91,8 @@ export const claudeCode: Emitter<"claude-code"> = {
 
     // What this target writes comes from its walk; the matrix decides the rest and warns (spec 18).
     for (const ing of ctx.aimed) {
-      const m = ing.meta;
+      // The metadata as the files carry it: rendered at the metadata gate (spec 50 §5.3).
+      const m = ctx.meta(ing);
       switch (m.type) {
         case "rule": {
           const rawBody = await ctx.text(ing, m.file, "claude-code");

@@ -88,7 +88,7 @@ export const agentsMd: Emitter<"agents-md"> = {
         const writer = ruleWriter(ctx.resolution.targets, effectiveTargets(ing.meta, ctx.resolution));
         const scopeText =
           ing.meta.inclusion === "fileMatch"
-            ? `applies to \`${[ing.meta.fileMatchPattern].flat().join("`, `")}\``
+            ? `applies to \`${[ctx.meta(ing).fileMatchPattern].flat().join("`, `")}\``
             : ing.meta.inclusion;
         if (writer === "claude-code") {
           pathLines.push(`- \`${ruleFile("claude-code", ing.meta)}\` — ${scopeText}`);

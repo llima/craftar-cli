@@ -5,6 +5,7 @@ import { paramsFor } from "../core/resolve.js";
 import type { Ingredient, Target } from "../schema/index.js";
 import { rendersServers, renderServer, renderLeaves, credentialIn, credentialMessage, entropyMessage, undeclaredMessage, type RenderedLeaves } from "../core/mcp-server.js";
 import { RULES_INDEX_LINE, RULES_INDEX_KEY, RULES_INDEX_TOKEN } from "../core/rules-index.js";
+import { metaFor } from "../core/metadata-params.js";
 import type { Resolution } from "../core/resolve.js";
 
 export function appliesTo(targets: "*" | string[], target: string): boolean {
@@ -881,7 +882,9 @@ export function expandRulesIndex(
 
   for (const ing of rules) {
     if (ing.meta.type !== "rule") continue;
-    const meta = ing.meta;
+    // The rule's metadata as its files carry it (spec 50 §5.3); this builder has no ctx.
+    const meta = metaFor(ing, resolution);
+    if (meta.type !== "rule") continue;
     const name = outName(meta);
 
     // Get the reference for this rule in the current target's index (spec 44 §4.3)
