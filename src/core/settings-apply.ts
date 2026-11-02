@@ -1,19 +1,27 @@
 /**
- * Settings apply core logic (spec 52): the merge computation, the handler hash, and the
- * record. This module is pure — it reads no file system and holds no state.
+ * Settings apply core logic (spec 52): the merge computation, the handler hash, the
+ * file I/O (read, write, round-trip gate), and the diff. The merge is pure; the I/O
+ * functions take an fsOps seam for testing.
  */
 import { createHash } from "node:crypto";
+import { promises as fs, type Stats } from "node:fs";
+import path from "node:path";
 import { written } from "./capabilities.js";
+import { TERMINAL_UNSAFE } from "./forge.js";
 import { nameShaped } from "./integrations.js";
+import { urlCredentialIn } from "./remote.js";
 import { paramsFor, type Resolution } from "./resolve.js";
+import { findSecrets } from "./secrets.js";
+import { detectEol, hasBom, withEol, isUtf8, type Eol } from "./text.js";
 import {
   authEnvNames,
   EXAMPLE_SETTINGS,
+  HOOK_PATH_PATTERN,
   renderRegistration,
   settingsExample,
   type HooksObject,
 } from "../emitters/shared.js";
-import type { Plan } from "./sync.js";
+import type { Plan, FileState } from "./sync.js";
 import type { ResolvedIngredient } from "./resolve.js";
 import type { Ingredient } from "../schema/index.js";
 
@@ -230,9 +238,16 @@ export function handlerHash(event: string, matcher: string | undefined, handler:
 
 /** Thrown when the settings file has a shape craftar refuses (spec 52 §5.2). */
 export class SettingsShapeError extends Error {
-  constructor(message: string) {
+  /** The kind of error (for special handling of absent/empty). */
+  readonly kind: "absent" | "empty" | "shape";
+  /** The file stats, if available (for empty files to preserve mode). */
+  readonly stats?: Stats;
+
+  constructor(message: string, kind: "absent" | "empty" | "shape" = "shape", stats?: Stats) {
     super(message);
     this.name = "SettingsShapeError";
+    this.kind = kind;
+    this.stats = stats;
   }
 }
 
@@ -709,4 +724,471 @@ function ensureKeyPlacement(
   }
 
   return result;
+}
+
+/* ------------------------------------------------------------------ */
+/* File I/O: readSettingsFile, roundTrips, serialize, writeSettingsFile */
+/* (spec 52 §6)                                                         */
+/* ------------------------------------------------------------------ */
+
+/** BOM as a Buffer. */
+const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+
+/** Result of reading the settings file (spec 52 §6.2). */
+export interface ReadSettingsResult {
+  /** The parsed value (null-prototype object). */
+  value: Record<string, unknown>;
+  /** The raw bytes read. */
+  bytes: Buffer;
+  /** The detected indent (2 spaces, 4 spaces, tab, or null for one-line). */
+  indent: string | null;
+  /** The detected line ending. */
+  eol: Eol;
+  /** Whether the file had a UTF-8 BOM. */
+  bom: boolean;
+  /** Whether the file had a final newline. */
+  finalNewline: boolean;
+  /** The file stats. */
+  stats: Stats;
+}
+
+/**
+ * Detect the indent of a JSON file from its first indented line.
+ * Returns "  " (2 spaces), "    " (4 spaces), "\t" (tab), or null (one-line).
+ */
+function detectIndent(text: string): string | null {
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const match = line.match(/^(\s+)/);
+    if (match) {
+      const ws = match[1];
+      if (ws.startsWith("\t")) return "\t";
+      if (ws.startsWith("    ")) return "    ";
+      if (ws.startsWith("  ")) return "  ";
+      // Any other whitespace (e.g. 3 spaces) — return as-is for round-trip check
+      return ws;
+    }
+  }
+  return null; // one-line file
+}
+
+/**
+ * Read and validate the settings file (spec 52 §6.2).
+ *
+ * Returns a SettingsShapeError for:
+ * - Not UTF-8
+ * - Not valid JSON
+ * - Not a JSON object
+ * - Does not round-trip (spec 52 §6.2)
+ */
+export async function readSettingsFile(
+  filePath: string,
+): Promise<{ ok: true; result: ReadSettingsResult } | { ok: false; error: SettingsShapeError }> {
+  let bytes: Buffer;
+  let stats: Stats;
+  try {
+    [bytes, stats] = await Promise.all([fs.readFile(filePath), fs.stat(filePath)]);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      // File does not exist — return a special marker so caller knows to create
+      return { ok: false, error: new SettingsShapeError("absent", "absent") };
+    }
+    throw e;
+  }
+
+  // Empty file (0 bytes or only whitespace/BOM) → treated as absent (spec 52 §6.2)
+  const hasBomFlag = hasBom(bytes);
+  const textRaw = bytes.toString("utf8");
+  const textNoBom = hasBomFlag ? textRaw.slice(1) : textRaw;
+  if (textNoBom.trim() === "") {
+    // Return as absent with the stats (for mode preservation)
+    return { ok: false, error: new SettingsShapeError("empty", "empty", stats) };
+  }
+
+  // Check UTF-8
+  if (!isUtf8(bytes)) {
+    return { ok: false, error: new SettingsShapeError(".claude/settings.json is not UTF-8") };
+  }
+
+  // Parse JSON
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(textNoBom);
+  } catch {
+    // Never print parser message (it quotes the text)
+    return { ok: false, error: new SettingsShapeError(".claude/settings.json is not valid JSON — fix it by hand") };
+  }
+
+  // Must be an object
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, error: new SettingsShapeError(".claude/settings.json is not a JSON object — fix it by hand") };
+  }
+
+  // Clone into null-prototype object (D1)
+  const value = cloneJson(parsed) as Record<string, unknown>;
+
+  // Detect formatting
+  const eol = detectEol(textRaw);
+  const bom = hasBomFlag;
+  const indent = detectIndent(textNoBom);
+  const finalNewline = textRaw.endsWith("\n") || textRaw.endsWith("\r");
+
+  // Round-trip check (spec 52 §6.2)
+  const roundTripResult = roundTrips(value, bytes, indent, eol, bom, finalNewline);
+  if (!roundTripResult.ok) {
+    return {
+      ok: false,
+      error: new SettingsShapeError(
+        ".claude/settings.json is not formatted as JSON.stringify writes it — reformat it once (2-space JSON) and run again",
+      ),
+    };
+  }
+
+  return { ok: true, result: { value, bytes, indent, eol, bom, finalNewline, stats } };
+}
+
+/**
+ * Check if the value round-trips through serialize to the original bytes.
+ * The indent must be 2 spaces, 4 spaces, or tab; any other indent fails the gate.
+ */
+export function roundTrips(
+  value: Record<string, unknown>,
+  originalBytes: Buffer,
+  indent: string | null,
+  eol: Eol,
+  bom: boolean,
+  finalNewline: boolean,
+): { ok: true } | { ok: false; reason: string } {
+  // Only allow standard indents (spec 52 §6.2)
+  if (indent !== null && indent !== "  " && indent !== "    " && indent !== "\t") {
+    return { ok: false, reason: "non-standard indent" };
+  }
+
+  const serialized = serialize(value, indent ?? "  ", eol, bom, finalNewline);
+  if (serialized.equals(originalBytes)) {
+    return { ok: true };
+  }
+  return { ok: false, reason: "bytes differ" };
+}
+
+/**
+ * Serialize a value with the given formatting options.
+ * Uses two spaces when indent is null (one-line → two-space, spec 52 §6.2).
+ */
+export function serialize(
+  value: Record<string, unknown>,
+  indent: string,
+  eol: Eol,
+  bom: boolean,
+  finalNewline: boolean,
+): Buffer {
+  // JSON.stringify with the indent
+  let text = JSON.stringify(value, null, indent);
+  // Add final newline if needed
+  if (finalNewline) text += "\n";
+  // Apply EOL
+  text = withEol(text, eol);
+  // Apply BOM
+  if (bom) {
+    return Buffer.concat([UTF8_BOM, Buffer.from(text, "utf8")]);
+  }
+  return Buffer.from(text, "utf8");
+}
+
+/* ------------------------------------------------------------------ */
+/* settingsDiffLines — the diff output (spec 52 §7)                    */
+/* ------------------------------------------------------------------ */
+
+/** The diff information for display. */
+export interface SettingsDiffDisplay {
+  envAdded: { name: string; shown: boolean }[];
+  envPresent: number;
+  envNotShaped: number;
+  hooksAdded: { event: string; matcher: string | undefined; handler: unknown; ref: string; index: number }[];
+  hooksRemoved: { event: string; matcher: string | undefined; handler: unknown; notShown: boolean }[];
+  hooksLocalKept: number;
+  hooksMoved: number;
+  hooksDuplicatesRemoved: number;
+  hooksEmptiedKept: number;
+  hooksSameCommand: number;
+  otherKeys: string[];
+  otherKeysNotShaped: number;
+  reformatted: boolean;
+}
+
+/**
+ * Generate diff display info from the merge diff (spec 52 §7).
+ * Handlers are filtered for terminal safety and secrets before display.
+ */
+export function settingsDiffLines(diff: MergeDiff, reformatted: boolean): SettingsDiffDisplay {
+  const envAdded: { name: string; shown: boolean }[] = [];
+  let envNotShaped = 0;
+
+  for (const name of diff.envAdded) {
+    if (nameShaped(name)) {
+      envAdded.push({ name, shown: true });
+    } else {
+      envNotShaped++;
+    }
+  }
+
+  const hooksAdded: SettingsDiffDisplay["hooksAdded"] = [];
+  for (const h of diff.added) {
+    hooksAdded.push({
+      event: h.event,
+      matcher: h.matcher,
+      handler: h.handler,
+      ref: h.ref,
+      index: h.index,
+    });
+  }
+
+  const hooksRemoved: SettingsDiffDisplay["hooksRemoved"] = [];
+  for (const h of diff.removed) {
+    const notShown = shouldHideHandler(h.matcher, h.handler);
+    hooksRemoved.push({
+      event: h.event,
+      matcher: h.matcher,
+      handler: h.handler,
+      notShown,
+    });
+  }
+
+  // Count other keys not shaped
+  let otherKeysNotShaped = 0;
+  const otherKeysShaped: string[] = [];
+  for (const key of diff.otherKeys) {
+    if (nameShaped(key)) {
+      otherKeysShaped.push(key);
+    } else {
+      otherKeysNotShaped++;
+    }
+  }
+
+  return {
+    envAdded,
+    envPresent: diff.envPresent,
+    envNotShaped,
+    hooksAdded,
+    hooksRemoved,
+    hooksLocalKept: diff.localKept,
+    hooksMoved: diff.moved,
+    hooksDuplicatesRemoved: diff.duplicatesRemoved,
+    hooksEmptiedKept: diff.emptiedKept,
+    hooksSameCommand: diff.sameCommandLocal,
+    otherKeys: otherKeysShaped,
+    otherKeysNotShaped,
+    reformatted,
+  };
+}
+
+/**
+ * Whether a handler should be hidden in the diff (contains secrets or terminal-unsafe chars).
+ */
+function shouldHideHandler(matcher: string | undefined, handler: unknown): boolean {
+  // Check matcher
+  if (matcher !== undefined) {
+    if (TERMINAL_UNSAFE.test(matcher)) return true;
+    if (findSecrets(matcher).length > 0) return true;
+    if (urlCredentialIn(matcher)) return true;
+  }
+
+  // Check handler as JSON string
+  const handlerStr = JSON.stringify(handler);
+  if (TERMINAL_UNSAFE.test(handlerStr)) return true;
+  if (findSecrets(handlerStr).length > 0) return true;
+  if (urlCredentialIn(handlerStr)) return true;
+
+  return false;
+}
+
+/**
+ * Make a string safe for terminal display (remove C0, C1, bidirectional chars).
+ */
+export function terminalSafe(s: string): string {
+  return s.replace(new RegExp(TERMINAL_UNSAFE.source, "g"), "");
+}
+
+/**
+ * Format a handler for display: compact JSON with terminal safety.
+ */
+export function formatHandler(handler: unknown): string {
+  return terminalSafe(JSON.stringify(handler));
+}
+
+/**
+ * Format matcher for display: quoted or "no matcher".
+ */
+export function formatMatcher(matcher: string | undefined): string {
+  if (matcher === undefined) return "no matcher";
+  return `matcher ${JSON.stringify(terminalSafe(matcher))}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* missingHookWarnings — warn about missing .claude/hooks/<x> (§4.1 step 4) */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Check for missing or non-unchanged .claude/hooks/<x> files cited in registrations.
+ * Returns warning messages (spec 52 §4.1 step 4).
+ */
+export function missingHookWarnings(
+  registrations: readonly PlannedRegistration[],
+  status: Map<string, FileState>,
+): string[] {
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+
+  for (const r of registrations) {
+    const handler = r.handler as Record<string, unknown>;
+
+    // Check command and args for hook paths
+    const toCheck: string[] = [];
+    if (typeof handler.command === "string") toCheck.push(handler.command);
+    if (Array.isArray(handler.args)) {
+      for (const arg of handler.args) {
+        if (typeof arg === "string") toCheck.push(arg);
+      }
+    }
+
+    for (const value of toCheck) {
+      // Reset lastIndex since HOOK_PATH_PATTERN is /g
+      HOOK_PATH_PATTERN.lastIndex = 0;
+      let match;
+      while ((match = HOOK_PATH_PATTERN.exec(value)) !== null) {
+        const hookPath = `.claude/hooks/${match[1]}`;
+        if (seen.has(hookPath)) continue;
+        seen.add(hookPath);
+
+        const state = status.get(hookPath);
+        if (state && state !== "unchanged") {
+          warnings.push(`.claude/hooks/${match[1]} is ${state} — run craftar sync first`);
+        }
+      }
+    }
+  }
+
+  return warnings;
+}
+
+/* ------------------------------------------------------------------ */
+/* writeSettingsFile — atomic write with temp file (spec 52 §6.4)      */
+/* ------------------------------------------------------------------ */
+
+/** Options for writeSettingsFile, allowing injection of fs operations for testing. */
+export interface FsOps {
+  writeFile: typeof fs.writeFile;
+  readFile: typeof fs.readFile;
+  rename: typeof fs.rename;
+  unlink: typeof fs.unlink;
+  chmod: typeof fs.chmod;
+  stat: typeof fs.stat;
+}
+
+const defaultFsOps: FsOps = {
+  writeFile: fs.writeFile,
+  readFile: fs.readFile,
+  rename: fs.rename,
+  unlink: fs.unlink,
+  chmod: fs.chmod,
+  stat: fs.stat,
+};
+
+/**
+ * Write settings.json atomically (spec 52 §6.4).
+ *
+ * - Creates a sibling temp file `.claude/settings.json.craftar-<pid>.tmp`
+ * - Compares original bytes before rename
+ * - Preserves mode on existing files, uses 0600 for new files (non-win32)
+ * - Returns { written: true } on success, { written: false, error: string } on failure
+ */
+export async function writeSettingsFile(
+  wsRoot: string,
+  content: Buffer,
+  originalBytes: Buffer | null,
+  originalStats: Stats | null,
+  fsOps: FsOps = defaultFsOps,
+): Promise<{ written: true; created: boolean } | { written: false; error: string }> {
+  const settingsPath = path.join(wsRoot, ".claude", "settings.json");
+  const tempPath = path.join(wsRoot, ".claude", `settings.json.craftar-${process.pid}.tmp`);
+  const created = originalBytes === null;
+
+  // Ensure .claude directory exists
+  await fs.mkdir(path.join(wsRoot, ".claude"), { recursive: true });
+
+  // Write temp file with wx flag (fails if exists)
+  try {
+    await fsOps.writeFile(tempPath, content, { flag: "wx", mode: 0o600 });
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "EEXIST") {
+      return {
+        written: false,
+        error: `.claude/settings.json.craftar-${process.pid}.tmp exists — remove it and run again`,
+      };
+    }
+    throw e;
+  }
+
+  try {
+    // Re-read original to check for changes (spec 52 §6.4 step 1)
+    if (originalBytes !== null) {
+      let currentBytes: Buffer;
+      try {
+        currentBytes = await fsOps.readFile(settingsPath);
+      } catch (e) {
+        // File was deleted between read and write
+        await fsOps.unlink(tempPath).catch(() => {});
+        return {
+          written: false,
+          error: ".claude/settings.json changed while craftar was reading it — run again",
+        };
+      }
+
+      if (!currentBytes.equals(originalBytes)) {
+        await fsOps.unlink(tempPath).catch(() => {});
+        return {
+          written: false,
+          error: ".claude/settings.json changed while craftar was reading it — run again",
+        };
+      }
+    } else {
+      // Check file wasn't created while we were working
+      try {
+        await fsOps.stat(settingsPath);
+        // File was created
+        await fsOps.unlink(tempPath).catch(() => {});
+        return {
+          written: false,
+          error: ".claude/settings.json changed while craftar was reading it — run again",
+        };
+      } catch (e) {
+        // Expected: file still doesn't exist
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      }
+    }
+
+    // Preserve mode on existing file (non-win32)
+    if (originalStats !== null && process.platform !== "win32") {
+      await fsOps.chmod(tempPath, originalStats.mode & 0o777);
+    }
+
+    // Rename over the target
+    try {
+      await fsOps.rename(tempPath, settingsPath);
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      await fsOps.unlink(tempPath).catch(() => {});
+      return {
+        written: false,
+        error: `could not replace .claude/settings.json (${err.code ?? "unknown"}) — close what holds it and run again`,
+      };
+    }
+
+    return { written: true, created };
+  } catch (e) {
+    // Cleanup temp file on any error
+    await fsOps.unlink(tempPath).catch(() => {});
+    throw e;
+  }
 }

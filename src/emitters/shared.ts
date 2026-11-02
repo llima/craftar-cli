@@ -647,8 +647,8 @@ interface HookGroup {
 /** The hooks object for the example file. */
 export type HooksObject = Record<string, HookGroup[]>;
 
-/** Pattern to find .claude/hooks/<x> references in command/args (spec 43 §5.6). */
-const HOOK_PATH_PATTERN = /\.claude\/hooks\/([^\s"']+)/g;
+/** Pattern to find .claude/hooks/<x> references in command/args (spec 43 §5.6, spec 52 §5.1). Exported for settings apply. */
+export const HOOK_PATH_PATTERN = /\.claude\/hooks\/([^\s"']+)/g;
 
 /** A registration entry from the hook ingredient's registration array. */
 type HookRegistrationEntry = NonNullable<Extract<Ingredient, { type: "hook" }>["registration"]>[number];
