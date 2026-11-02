@@ -6,6 +6,7 @@ import { fingerprintDir } from "./fingerprint.js";
 import { listFiles, type Forge, type LoadedIngredient } from "./forge.js";
 import { isUtf8, hashNormalized } from "./text.js";
 import type { HunkClass, IngredientRef } from "../schema/index.js";
+import { metadataEntry, metadataFields, metadataFileClash, metadataText, rendersMetadata } from "./metadata-params.js";
 
 export interface Distance {
   lines: number;
@@ -72,9 +73,21 @@ async function filesOf(ing: LoadedIngredient): Promise<Map<string, Buffer>> {
   return out;
 }
 
-export async function diffIngredients(base: LoadedIngredient, variant: LoadedIngredient): Promise<IngredientDiff> {
+/**
+ * The files of a base and its variant that differ, hunk by hunk, each hunk classified. At the metadata gate (`schema`,
+ * spec 50 §5.5) each differing field of §5.2 follows, spelled `ingredient.yaml#<field>`, and a real file spelled so
+ * is refused. The schema is required, so no caller diffs a Forge as if it were below the gate by omission.
+ */
+export async function diffIngredients(base: LoadedIngredient, variant: LoadedIngredient, schema: number): Promise<IngredientDiff> {
   const a = await filesOf(base);
   const b = await filesOf(variant);
+  const atGate = rendersMetadata({ schema });
+  if (atGate) {
+    for (const [ing, files] of [[base, a], [variant, b]] as const) {
+      const clash = metadataFileClash(ing.ref, files.keys());
+      if (clash) throw new Error(clash);
+    }
+  }
   const files: FileDiff[] = [];
   for (const rel of [...a.keys()].sort()) {
     const otherBuf = b.get(rel);
@@ -102,6 +115,16 @@ export async function diffIngredients(base: LoadedIngredient, variant: LoadedIng
     const hunks = diffLines(baseText, otherText).map((h) => ({ ...h, suggestion: classifyHunk(h) }));
     if (hunks.length) files.push({ file: rel, hunks });
   }
+  if (atGate) {
+    // A field on one side only is a hunk against nothing: never a one-sided entry, which unify would remove or copy.
+    for (const field of metadataFields(base.meta)) {
+      const baseText = metadataText(base.meta, field);
+      const otherText = metadataText(variant.meta, field);
+      if (baseText === otherText) continue;
+      const hunks = diffLines(baseText, otherText).map((h) => ({ ...h, suggestion: classifyHunk(h) }));
+      if (hunks.length) files.push({ file: metadataEntry(field), hunks });
+    }
+  }
   return {
     files,
     onlyInBase: [...a.keys()].filter((k) => !b.has(k)).sort(),
@@ -110,7 +133,8 @@ export async function diffIngredients(base: LoadedIngredient, variant: LoadedIng
 }
 
 async function measure(base: LoadedIngredient, variant: LoadedIngredient): Promise<{ distance: Distance; classes: Record<HunkClass, number> }> {
-  const d = await diffIngredients(base, variant);
+  // Below the metadata gate on purpose: the distance, its classes and "meta only" leave metadata entries out (spec 50 §5.5).
+  const d = await diffIngredients(base, variant, 1);
   const baseFiles = await filesOf(base);
   const variantFiles = await filesOf(variant);
   // A file present on one side only counts as one hunk carrying all of its lines (spec 04,

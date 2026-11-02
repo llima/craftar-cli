@@ -13,7 +13,7 @@ import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, projectSections, readsTargetSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile, shellAtGate } from "./extract.js";
-import { metadataCitations, renderedMeta } from "./metadata-params.js";
+import { metadataCitations, metadataFileClash, renderedMeta } from "./metadata-params.js";
 import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockV2, type LockV3, type Owner, type Target, type WorkspaceConfig } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
@@ -493,7 +493,11 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
     declared.set(key, names);
     if (ing.meta.type === "mcp") continue; // no file, so no marker: a value keyed mcp/<name> is warned below
     const files: Array<{ rel: string; p: ParsedSections }> = [];
-    for (const rel of await listFiles(ing.dir)) {
+    const rels = await listFiles(ing.dir);
+    // Spec 50 §15 item 11: at the metadata gate a file may not be spelled as forge diff names a metadata field.
+    const clash = resolution.metadataParams ? metadataFileClash(ing.ref, rels) : null;
+    if (clash) throw new Error(clash);
+    for (const rel of rels) {
       if (rel === "ingredient.yaml") continue;
       const abs = path.join(ing.dir, rel);
       if (bodyFile(ing.meta, rel, ing.dir, forge.manifest.schema)) {

@@ -154,3 +154,53 @@ export function renderedMeta<M extends Ingredient>(meta: M, params: Record<strin
 export function metaFor<I extends ResolvedIngredient>(ing: I, resolution: Resolution): I["meta"] {
   return resolution.metadataParams ? renderedMeta(ing.meta, paramsFor(ing, resolution), ing.ref) : ing.meta;
 }
+
+/** The spelling of a metadata field in `forge diff` and a unify plan (spec 50 §5.5, §15 item 11). */
+export const METADATA_ENTRY_PREFIX = "ingredient.yaml#";
+
+/** `ingredient.yaml#<field>`. */
+export function metadataEntry(field: MetadataField): string {
+  return `${METADATA_ENTRY_PREFIX}${field}`;
+}
+
+/** The field a plan entry names, or null when the entry is an ordinary file. */
+export function metadataEntryField(file: string): MetadataField | null {
+  if (!file.startsWith(METADATA_ENTRY_PREFIX)) return null;
+  const field = file.slice(METADATA_ENTRY_PREFIX.length);
+  return field === "frontmatterRaw" || field === "fileMatchPattern" || field === "description" || field === "argumentHint" ? field : null;
+}
+
+/**
+ * The text `forge diff` compares for a field (spec 50 §5.5): `frontmatterRaw` with LF line endings, a list
+ * `fileMatchPattern` one element per line, any other field as written; an absent field is "".
+ */
+export function metadataText(meta: Ingredient, field: MetadataField): string {
+  const v = (meta as Record<string, unknown>)[field];
+  if (typeof v === "string") return field === "frontmatterRaw" ? v.replace(/\r\n?/g, "\n") : v;
+  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string").join("\n");
+  return "";
+}
+
+/**
+ * Back from a merged text to the field's value: "" is no field; a `fileMatchPattern` is a list when it holds more
+ * than one line or the base held a list, a string otherwise.
+ */
+export function metadataValue(text: string, field: MetadataField, base: Ingredient): string | string[] | undefined {
+  if (text === "") return undefined;
+  if (field !== "fileMatchPattern") return text;
+  const lines = text.split("\n");
+  return lines.length > 1 || Array.isArray((base as Record<string, unknown>).fileMatchPattern) ? lines : text;
+}
+
+/**
+ * The refusal for a real file of an ingredient spelled as a metadata entry, at the gate (spec 50 §15 item 11), or
+ * null. Names the ingredient and the file, which the Forge's author chose.
+ */
+export function metadataFileClash(ref: string, files: Iterable<string>): string | null {
+  for (const rel of files) {
+    if (rel.startsWith(METADATA_ENTRY_PREFIX)) {
+      return `${ref}: ${rel} is a file named as forge diff names a metadata field at Forge schema ${FORGE_SCHEMA_METADATA_PARAMS} — rename it`;
+    }
+  }
+  return null;
+}
