@@ -869,11 +869,25 @@ export const WriteConsentSchema = z
   .passthrough();
 export type WriteConsent = z.infer<typeof WriteConsentSchema>;
 
+/** A record of the handlers the last `craftar settings apply` wrote for one workspace (spec 52 §5.3). */
+export const SettingsAppliedSchema = z
+  .object({
+    /** The workspace's native real path, compared with `samePath`. */
+    path: z.string(),
+    /** The hashes of the handlers the last apply wrote (sha256 of [event, matcher ?? null, canonical(handler)]). */
+    handlers: z.array(z.string()),
+    /** ISO time of the apply. */
+    appliedAt: z.string(),
+  })
+  .passthrough();
+export type SettingsApplied = z.infer<typeof SettingsAppliedSchema>;
+
 export const RegistrySchema = z
   .object({
     schema: z.literal(1),
     workspaces: z.array(RegistryEntrySchema),
     writeConsent: z.array(WriteConsentSchema).optional(),
+    settingsApplied: z.array(SettingsAppliedSchema).optional(),
   })
   .passthrough();
 /** Registry schemas this craftar reads; anything else is refused by name. */

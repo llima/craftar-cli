@@ -18,6 +18,17 @@ import {
   type MergeResult,
 } from "../src/core/settings-apply.js";
 import { settingsExample, EXAMPLE_SETTINGS, type HooksObject } from "../src/emitters/shared.js";
+import {
+  readRegistry,
+  register,
+  recordApplied,
+  appliedFor,
+  forget,
+  prune,
+  isRegistered,
+  isMissing,
+} from "../src/core/registry.js";
+import { tmpDir } from "./helpers/forge.js";
 
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -528,5 +539,135 @@ describe("doctor and hook-registration tests still pass", () => {
 
     const names = wantedEnvNames(p);
     expect(names).toEqual(["ACME_TOKEN", "OTHER_SECRET", "OTHER_TOKEN"]);
+  });
+});
+
+describe("registry: settingsApplied record (spec 52 §5.3)", () => {
+  it("1. recordApplied stores handlers and appliedFor returns them", async () => {
+    const s = await forgeAt(1, {
+      ingredients: [fixtureH()],
+      recipes: [recipe("base", ["hook/guard-path"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    cleanups.push(s.cleanup);
+
+    const home = await tmpDir();
+    cleanups.push(async () => await fs.rm(home, { recursive: true, force: true }));
+
+    // First register the workspace (recordApplied requires registration)
+    const ws = await loadWorkspace(s.wsRoot);
+    const p = await plan(ws);
+    await register(home, ws, p);
+
+    // Record some handler hashes
+    const hashes = ["hash1", "hash2", "hash3"];
+    const now = new Date("2026-11-02T12:00:00Z");
+    const entry = await recordApplied(home, s.wsRoot, hashes, { now });
+
+    expect(entry.handlers).toEqual(hashes);
+    expect(entry.appliedAt).toBe("2026-11-02T12:00:00.000Z");
+
+    // Read it back
+    const reg = await readRegistry(home);
+    const recorded = await appliedFor(reg, s.wsRoot);
+    expect(recorded.size).toBe(3);
+    expect(recorded.has("hash1")).toBe(true);
+    expect(recorded.has("hash2")).toBe(true);
+    expect(recorded.has("hash3")).toBe(true);
+  });
+
+  it("2. appliedFor returns empty set when no record exists", async () => {
+    const s = await forgeAt(1, {
+      ingredients: [fixtureH()],
+      recipes: [recipe("base", ["hook/guard-path"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    cleanups.push(s.cleanup);
+
+    const home = await tmpDir();
+    cleanups.push(async () => await fs.rm(home, { recursive: true, force: true }));
+
+    // Register but don't record applied
+    const ws = await loadWorkspace(s.wsRoot);
+    const p = await plan(ws);
+    await register(home, ws, p);
+
+    const reg = await readRegistry(home);
+    const recorded = await appliedFor(reg, s.wsRoot);
+    expect(recorded.size).toBe(0);
+  });
+
+  it("3. forget drops settingsApplied record with the workspace", async () => {
+    const s = await forgeAt(1, {
+      ingredients: [fixtureH()],
+      recipes: [recipe("base", ["hook/guard-path"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    cleanups.push(s.cleanup);
+
+    const home = await tmpDir();
+    cleanups.push(async () => await fs.rm(home, { recursive: true, force: true }));
+
+    // Register and record
+    const ws = await loadWorkspace(s.wsRoot);
+    const p = await plan(ws);
+    await register(home, ws, p);
+    await recordApplied(home, s.wsRoot, ["hash1"]);
+
+    // Verify it's there
+    let reg = await readRegistry(home);
+    expect(reg.settingsApplied).toBeDefined();
+    expect(reg.settingsApplied!.length).toBe(1);
+
+    // Forget the workspace
+    await forget(home, s.wsRoot);
+
+    // Verify both workspace and settingsApplied are gone
+    reg = await readRegistry(home);
+    expect(reg.workspaces.length).toBe(0);
+    expect(reg.settingsApplied).toBeUndefined();
+  });
+
+  it("4. prune drops settingsApplied record with the workspace", async () => {
+    const s = await forgeAt(1, {
+      ingredients: [fixtureH()],
+      recipes: [recipe("base", ["hook/guard-path"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    cleanups.push(s.cleanup);
+
+    const home = await tmpDir();
+    cleanups.push(async () => await fs.rm(home, { recursive: true, force: true }));
+
+    // Register and record
+    const ws = await loadWorkspace(s.wsRoot);
+    const p = await plan(ws);
+    await register(home, ws, p);
+    await recordApplied(home, s.wsRoot, ["hash1"]);
+
+    // Make the workspace "missing" by removing craftar.yaml
+    await fs.rm(path.join(s.wsRoot, "craftar.yaml"));
+
+    // Verify it's missing
+    const regBefore = await readRegistry(home);
+    expect(await isMissing(regBefore.workspaces[0])).toBe(true);
+
+    // Prune
+    const pruned = await prune(home);
+    expect(pruned.length).toBe(1);
+
+    // Verify both workspace and settingsApplied are gone
+    const regAfter = await readRegistry(home);
+    expect(regAfter.workspaces.length).toBe(0);
+    expect(regAfter.settingsApplied).toBeUndefined();
+  });
+
+  it("5. handlerHash: absent matcher vs literal '-' are different hashes (spec 52 §5.3)", () => {
+    const handler = { type: "command", command: "test" };
+
+    const hashUndefined = handlerHash("PreToolUse", undefined, handler);
+    const hashDash = handlerHash("PreToolUse", "-", handler);
+
+    expect(hashUndefined).not.toBe(hashDash);
   });
 });
