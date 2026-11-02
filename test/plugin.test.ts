@@ -87,6 +87,13 @@ describe("the Claude Code plugin (spec 45)", () => {
     expect(createHash("sha256").update(text).digest("hex")).toBe("9d8fec001bdb9329023f6ef04acff03bebf50488300f4ff9bf7632d483ec632e");
   });
 
+  it("4d. the plugin's README warns about a version manager's shim, with no placeholder left", async () => {
+    const text = await read("plugins", "craftar", "README.md");
+    expect(text).toContain("a project can choose what runs");
+    for (const tool of ["asdf", "volta", "mise"]) expect(text).toContain(`**${tool}**`);
+    expect(text).not.toContain("{{");
+  });
+
   it("5. the skill never offers --allow-writes, and names --overwrite-drift only to forbid it", async () => {
     const lines = await skillLines();
     expect(lines.filter((l) => l.includes("--allow-writes"))).toEqual([]);

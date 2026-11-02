@@ -29,6 +29,20 @@ Then, in Claude Code:
 
 A Forge or a `craftar.lock` newer than the installed `craftar` is refused until `craftar` is updated.
 
+## If `craftar` comes from a version manager
+
+The plugin starts the `craftar` found on `PATH`. When that is a version manager's shim, the shim runs first and reads the project's files, so **a project can choose what runs**, with your rights, when the server starts and before any tool is called:
+
+- **asdf** runs what a `.tool-versions` names with `path:`, in the project or in a directory above it.
+- **volta** runs a project's `node_modules/.bin/craftar` when a `package.json` there or in a directory above it lists `craftar` as a dependency.
+- **mise** refuses a config file you have not trusted, so the server reads as failed; after `mise trust` that project's file applies.
+
+Measured on Linux with asdf 0.20.2, volta 2.0.2 and mise 2026.10.25; other tools and versions were not. This happens outside `craftar`, which cannot detect or prevent it, and the plugin cannot tell how `craftar` was installed.
+
+Whether Claude Code starts the server before you accept a project's trust dialog was not measured yet: until it is, assume that opening a project is enough for its files to choose what runs.
+
+If you use asdf or volta, either have a `craftar` and a `node` installed outside them come first on `PATH`, or enable the plugin only in projects whose files you trust.
+
 ## What to know before enabling it everywhere
 
 - The plugin starts the `craftar` found on `PATH` in every project it is enabled for.
