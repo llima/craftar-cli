@@ -8,8 +8,8 @@
     ".claude/scripts/lint.sh": "#!/bin/sh\n# see .claude/rules/style.md\nexit 0\n",
     ".claude/skills/checks/run.sh": "#!/bin/sh\n# follows .claude/rules/style.md\necho ok\n",
     ".claude/skills/checks/SKILL.md": "---\nname: checks\ndescription: Run the checks\n---\nUse .claude/rules/style.md.\n",
-    ".kiro/agents/api-reviewer.json": "{\r\n  \"name\": \"api-reviewer\",\r\n  \"description\": \"Reviews API changes against .kiro/steering/style.md\",\r\n  \"prompt\": \"Review the diff.\\nFollow .kiro/steering/style.md and AGENTS.md (rule: release).\\nSee [the style](.kiro/steering/style.md#scope).\\nNotes: .kiro/steering/kiro-notes.md\",\r\n  \"tools\": [],\r\n  \"allowedTools\": [],\r\n  \"resources\": [\r\n    \"file://.kiro/steering/api.md\"\r\n  ]\r\n}\r\n",
-    ".kiro/agents/planner.json": "{\r\n  \"name\": \"planner\",\r\n  \"description\": \"\",\r\n  \"prompt\": \"Plan the work.\",\r\n  \"tools\": [],\r\n  \"allowedTools\": [],\r\n  \"resources\": [\r\n    \"file://.kiro/steering/style.md\",\r\n    \"file://.kiro/steering/**/*.md\",\r\n    \"file://docs/plan.md\"\r\n  ]\r\n}\r\n",
+    ".kiro/agents/api-reviewer.json": "{\r\n  \"name\": \"api-reviewer\",\r\n  \"description\": \"Reviews API changes against .kiro/steering/style.md\",\r\n  \"prompt\": \"Review the diff.\\nFollow .kiro/steering/style.md and AGENTS.md (rule: release).\\nSee [the style](.kiro/steering/style.md#scope).\\nNotes: .kiro/steering/kiro-notes.md\",\r\n  \"tools\": [],\r\n  \"allowedTools\": [],\r\n  \"resources\": [\r\n    \"file://.kiro/steering/api.md\"\r\n  ],\r\n  \"permissions\": {\r\n    \"rules\": [\r\n      {\r\n        \"capability\": \"fs_read\",\r\n        \"match\": [\r\n          \"./**\"\r\n        ],\r\n        \"effect\": \"allow\"\r\n      }\r\n    ]\r\n  }\r\n}\r\n",
+    ".kiro/agents/planner.json": "{\r\n  \"name\": \"planner\",\r\n  \"description\": \"\",\r\n  \"prompt\": \"Plan the work.\",\r\n  \"tools\": [],\r\n  \"allowedTools\": [],\r\n  \"resources\": [\r\n    \"file://.kiro/steering/style.md\",\r\n    \"file://.kiro/steering/**/*.md\",\r\n    \"file://docs/plan.md\"\r\n  ],\r\n  \"permissions\": {\r\n    \"rules\": [\r\n      {\r\n        \"capability\": \"fs_read\",\r\n        \"match\": [\r\n          \"./**\"\r\n        ],\r\n        \"effect\": \"allow\"\r\n      }\r\n    ]\r\n  }\r\n}\r\n",
     ".kiro/skills/checks/run.sh": "#!/bin/sh\n# follows .claude/rules/style.md\necho ok\n",
     ".kiro/skills/checks/SKILL.md": "---\r\nname: checks\r\ndescription: Run the checks\r\n---\r\nUse .kiro/steering/style.md.\r\n",
     ".kiro/steering/api.md": "---\r\ninclusion: fileMatch\r\nfileMatchPattern: \"src/api/**\"\r\n---\r\n\r\n<!-- GENERATED from .claude/rules/api.md by craftar -- do not edit. -->\r\n\r\n# API\r\nEvery endpoint follows .kiro/steering/style.md.\r\n",
@@ -216,13 +216,13 @@
       },
       {
         "path": ".kiro/agents/api-reviewer.json",
-        "hash": "sha256:30577374ad5d00c76a087054ade10ab13852b67e5fa2cd1c8ca51eda345f664b",
+        "hash": "sha256:1eed8591d62f9d8a63051da5ba78f5f405acac8066ae1e64d67105d36bd01d4d",
         "target": "kiro",
         "ingredient": "agent/api-reviewer"
       },
       {
         "path": ".kiro/agents/planner.json",
-        "hash": "sha256:df11a4d2663471ed8af9d738e7d5b640399e0c281b6ac7d75fb0755681d7b0b0",
+        "hash": "sha256:8e7cb01415821a680c896cfff4508c737209d317ec18864f460250636ae419cd",
         "target": "kiro",
         "ingredient": "agent/planner"
       },
@@ -384,7 +384,7 @@
         "ingredient": "agent/api-reviewer",
         "lock": {
           "path": ".kiro/agents/api-reviewer.json",
-          "hash": "sha256:30577374ad5d00c76a087054ade10ab13852b67e5fa2cd1c8ca51eda345f664b",
+          "hash": "sha256:1eed8591d62f9d8a63051da5ba78f5f405acac8066ae1e64d67105d36bd01d4d",
           "target": "kiro",
           "ingredient": "agent/api-reviewer"
         }
@@ -396,7 +396,7 @@
         "ingredient": "agent/planner",
         "lock": {
           "path": ".kiro/agents/planner.json",
-          "hash": "sha256:df11a4d2663471ed8af9d738e7d5b640399e0c281b6ac7d75fb0755681d7b0b0",
+          "hash": "sha256:8e7cb01415821a680c896cfff4508c737209d317ec18864f460250636ae419cd",
           "target": "kiro",
           "ingredient": "agent/planner"
         }

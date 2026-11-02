@@ -6,7 +6,7 @@
     ".claude/rules/style.md": "# Style\nUse consistent formatting.\n",
     ".claude/skills/deploy/run.sh": "#!/bin/sh\necho deploying\n",
     ".claude/skills/deploy/SKILL.md": "---\nname: deploy\ndescription: Deploy the app\n---\nRun the deployment.\n",
-    ".kiro/agents/helper.json": "{\r\n  \"name\": \"helper\",\r\n  \"description\": \"\",\r\n  \"prompt\": \"Help the user.\",\r\n  \"tools\": [],\r\n  \"allowedTools\": [],\r\n  \"resources\": [\r\n    \"file://.kiro/steering/**/*.md\"\r\n  ]\r\n}\r\n",
+    ".kiro/agents/helper.json": "{\r\n  \"name\": \"helper\",\r\n  \"description\": \"\",\r\n  \"prompt\": \"Help the user.\",\r\n  \"tools\": [],\r\n  \"allowedTools\": [],\r\n  \"resources\": [\r\n    \"file://.kiro/steering/**/*.md\"\r\n  ],\r\n  \"permissions\": {\r\n    \"rules\": [\r\n      {\r\n        \"capability\": \"fs_read\",\r\n        \"match\": [\r\n          \"./**\"\r\n        ],\r\n        \"effect\": \"allow\"\r\n      }\r\n    ]\r\n  }\r\n}\r\n",
     ".kiro/skills/deploy/run.sh": "#!/bin/sh\necho deploying\n",
     ".kiro/skills/deploy/SKILL.md": "---\r\nname: deploy\r\ndescription: Deploy the app\r\n---\r\nRun the deployment.\r\n",
     ".kiro/steering/api.md": "---\r\ninclusion: fileMatch\r\nfileMatchPattern: \"src/api/**\"\r\n---\r\n\r\n<!-- GENERATED from .claude/rules/api.md by craftar -- do not edit. -->\r\n\r\n# API\r\nEvery endpoint is RESTful.\r\n",
@@ -181,7 +181,7 @@
       },
       {
         "path": ".kiro/agents/helper.json",
-        "hash": "sha256:f400888142a3897d223af876e565d1e40d3a538207e44a6c2bf3693bc9c8fb8e",
+        "hash": "sha256:6617d02d46ae01422644a3f13f5cf5efbea4bf2c9a6cc742ca2e976526296742",
         "target": "kiro",
         "ingredient": "agent/helper"
       },
@@ -319,7 +319,7 @@
         "ingredient": "agent/helper",
         "lock": {
           "path": ".kiro/agents/helper.json",
-          "hash": "sha256:f400888142a3897d223af876e565d1e40d3a538207e44a6c2bf3693bc9c8fb8e",
+          "hash": "sha256:6617d02d46ae01422644a3f13f5cf5efbea4bf2c9a6cc742ca2e976526296742",
           "target": "kiro",
           "ingredient": "agent/helper"
         }

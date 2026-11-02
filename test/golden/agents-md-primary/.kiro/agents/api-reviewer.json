@@ -6,5 +6,16 @@
   "allowedTools": [],
   "resources": [
     "file://.kiro/steering/api.md"
-  ]
+  ],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "match": [
+          "./**"
+        ],
+        "effect": "allow"
+      }
+    ]
+  }
 }

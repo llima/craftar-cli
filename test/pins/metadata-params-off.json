@@ -5,8 +5,8 @@
     ".claude/commands/ship.md": "---\ndescription: Ship an {{org}} release\nargument-hint: <{{org}}-version>\n---\nShip it.\n",
     ".claude/rules/paths.md": "---\npaths: {{glob}}\n---\n# Paths\nKeep acme code tidy.\n",
     ".claude/rules/style.md": "# Style\nUse consistent formatting.\n",
-    ".kiro/agents/helper.json": "{\r\n  \"name\": \"helper\",\r\n  \"description\": \"Helps {{org}} engineers\",\r\n  \"prompt\": \"Help the user.\",\r\n  \"tools\": [],\r\n  \"allowedTools\": [],\r\n  \"resources\": [\r\n    \"file://.kiro/steering/**/*.md\"\r\n  ]\r\n}\r\n",
-    ".kiro/agents/raw.json": "{\r\n  \"name\": \"raw\",\r\n  \"description\": \"\",\r\n  \"prompt\": \"Review the change.\",\r\n  \"tools\": [],\r\n  \"allowedTools\": [],\r\n  \"resources\": [\r\n    \"file://.kiro/steering/**/*.md\"\r\n  ]\r\n}\r\n",
+    ".kiro/agents/helper.json": "{\r\n  \"name\": \"helper\",\r\n  \"description\": \"Helps {{org}} engineers\",\r\n  \"prompt\": \"Help the user.\",\r\n  \"tools\": [],\r\n  \"allowedTools\": [],\r\n  \"resources\": [\r\n    \"file://.kiro/steering/**/*.md\"\r\n  ],\r\n  \"permissions\": {\r\n    \"rules\": [\r\n      {\r\n        \"capability\": \"fs_read\",\r\n        \"match\": [\r\n          \"./**\"\r\n        ],\r\n        \"effect\": \"allow\"\r\n      }\r\n    ]\r\n  }\r\n}\r\n",
+    ".kiro/agents/raw.json": "{\r\n  \"name\": \"raw\",\r\n  \"description\": \"\",\r\n  \"prompt\": \"Review the change.\",\r\n  \"tools\": [],\r\n  \"allowedTools\": [],\r\n  \"resources\": [\r\n    \"file://.kiro/steering/**/*.md\"\r\n  ],\r\n  \"permissions\": {\r\n    \"rules\": [\r\n      {\r\n        \"capability\": \"fs_read\",\r\n        \"match\": [\r\n          \"./**\"\r\n        ],\r\n        \"effect\": \"allow\"\r\n      }\r\n    ]\r\n  }\r\n}\r\n",
     ".kiro/steering/commands/ship.md": "---\r\ninclusion: manual\r\n---\r\n\r\n---\r\ndescription: Ship an {{org}} release\r\nargument-hint: <{{org}}-version>\r\n---\r\nShip it.\r\n",
     ".kiro/steering/paths.md": "---\r\ninclusion: fileMatch\r\nfileMatchPattern: \"{{glob}}\"\r\n---\r\n\r\n<!-- GENERATED from .claude/rules/paths.md by craftar -- do not edit. -->\r\n\r\n# Paths\r\nKeep acme code tidy.\r\n",
     ".kiro/steering/style.md": "---\r\ninclusion: always\r\n---\r\n\r\n<!-- GENERATED from .claude/rules/style.md by craftar -- do not edit. -->\r\n\r\n# Style\r\nUse consistent formatting.\r\n",
@@ -154,13 +154,13 @@
       },
       {
         "path": ".kiro/agents/helper.json",
-        "hash": "sha256:cea8bb955fe788e8b6a6c80d53ec1005e1c938d3244dc39575c1ea2eb2069383",
+        "hash": "sha256:c98df2fd6a6178e8091dd60b6149c1b907d54d6011176e132cd4635a91a82ce1",
         "target": "kiro",
         "ingredient": "agent/helper"
       },
       {
         "path": ".kiro/agents/raw.json",
-        "hash": "sha256:a0bc6cc10139c620b10d74650492d57f2bc9a5f192e42706e2cfec9b9f7be2a3",
+        "hash": "sha256:c365c4fea9de642d7c072976515f78c3d71883c9e4962da43db4384803abfdab",
         "target": "kiro",
         "ingredient": "agent/raw"
       },
@@ -268,7 +268,7 @@
         "ingredient": "agent/helper",
         "lock": {
           "path": ".kiro/agents/helper.json",
-          "hash": "sha256:cea8bb955fe788e8b6a6c80d53ec1005e1c938d3244dc39575c1ea2eb2069383",
+          "hash": "sha256:c98df2fd6a6178e8091dd60b6149c1b907d54d6011176e132cd4635a91a82ce1",
           "target": "kiro",
           "ingredient": "agent/helper"
         }
@@ -280,7 +280,7 @@
         "ingredient": "agent/raw",
         "lock": {
           "path": ".kiro/agents/raw.json",
-          "hash": "sha256:a0bc6cc10139c620b10d74650492d57f2bc9a5f192e42706e2cfec9b9f7be2a3",
+          "hash": "sha256:c365c4fea9de642d7c072976515f78c3d71883c9e4962da43db4384803abfdab",
           "target": "kiro",
           "ingredient": "agent/raw"
         }

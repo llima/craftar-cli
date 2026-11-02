@@ -165,7 +165,9 @@ export const kiro: Emitter<"kiro"> = {
               }
             }
           }
-          const json = JSON.stringify({ name: outName(m), description, prompt: body.replace(/^\n+/, "").replace(/\n+$/, ""), tools, allowedTools: tools, resources }, null, 2) + "\n";
+          const rules = permissionRules(outName(m), tools, ctx);
+          const permissions = { rules };
+          const json = JSON.stringify({ name: outName(m), description, prompt: body.replace(/^\n+/, "").replace(/\n+$/, ""), tools, allowedTools: tools, resources, permissions }, null, 2) + "\n";
           out.push(crlf(path, json, ing.ref));
           break;
         }
@@ -334,6 +336,92 @@ const TOOL_MAP: Record<string, string | null> = {
   askuserquestion: null,
   todowrite: null,
 };
+
+/**
+ * Known tools and their permission capabilities, in the order rules appear.
+ * Includes Claude Code names (read, grep, glob, write, shell) and Kiro's own names (fs_read, fs_write, execute_bash).
+ */
+const CAPABILITY_TOOLS = [
+  { capability: "fs_read", tools: ["read", "grep", "glob", "fs_read"] },
+  { capability: "fs_write", tools: ["write", "fs_write"] },
+  { capability: "shell", tools: ["shell", "execute_bash"] },
+  { capability: "web_fetch", tools: ["web_fetch"] },
+  { capability: "web_search", tools: ["web_search"] },
+] as const;
+
+/** All tools that have a known permission capability — derived from the table, not duplicated. */
+const KNOWN_PERMISSION_TOOLS = new Set<string>(CAPABILITY_TOOLS.flatMap((row) => [...row.tools]));
+
+/** Tools that count as "reading" for the fs_read capability. */
+const FS_READ_TOOL_SET = new Set<string>(CAPABILITY_TOOLS[0].tools);
+
+/** Tools that grant the skill capability (read or fs_read, not grep or glob alone). */
+const SKILL_TOOLS = new Set(["read", "fs_read"]);
+
+interface PermissionRule {
+  capability: string;
+  match?: string[];
+  effect: string;
+}
+
+/**
+ * Derive Kiro permission rules from the mapped tools.
+ * Mirrors what kiro-cli 2.37.1 writes when it converts an agent without permissions.rules.
+ */
+function permissionRules(agentName: string, tools: string[], ctx: EmitBase): PermissionRule[] {
+  const toolSet = new Set(tools);
+
+  // If * is among the tools, return all and no warnings
+  if (toolSet.has("*")) {
+    return [{ capability: "all", effect: "allow" }];
+  }
+
+  const rules: PermissionRule[] = [];
+
+  // One rule per capability row whose tools intersect the agent's tools
+  for (const { capability, tools: capTools } of CAPABILITY_TOOLS) {
+    if (capTools.some((t) => toolSet.has(t))) {
+      rules.push({ capability, effect: "allow" });
+    }
+  }
+
+  // One mcp rule for all @server tools, sorted and deduplicated
+  const mcpMatches: string[] = [];
+  for (const t of tools) {
+    if (t.startsWith("@")) {
+      const rest = t.slice(1);
+      // @server → server/*, @server/tool → server/tool
+      const match = rest.includes("/") ? rest : `${rest}/*`;
+      if (!mcpMatches.includes(match)) {
+        mcpMatches.push(match);
+      }
+    }
+  }
+  if (mcpMatches.length > 0) {
+    mcpMatches.sort();
+    rules.push({ capability: "mcp", match: mcpMatches, effect: "allow" });
+  }
+
+  // Fallback: if none of the fs_read tools is present, add fs_read limited to ./**
+  const hasAnyFsRead = [...FS_READ_TOOL_SET].some((t) => toolSet.has(t));
+  if (!hasAnyFsRead) {
+    rules.push({ capability: "fs_read", match: ["./**"], effect: "allow" });
+  }
+
+  // Skill rule: if read or fs_read is present (not grep or glob alone)
+  if ([...SKILL_TOOLS].some((t) => toolSet.has(t))) {
+    rules.push({ capability: "skill", effect: "allow" });
+  }
+
+  // Warn for tools with no known capability (not in table, not *, not @server)
+  for (const t of tools) {
+    if (!KNOWN_PERMISSION_TOOLS.has(t) && t !== "*" && !t.startsWith("@")) {
+      ctx.warn(`kiro: agent "${agentName}": tool "${t}" has no Kiro permission capability; no rule written`);
+    }
+  }
+
+  return rules;
+}
 
 function mapTools(tools: string[], ctx: EmitBase): string[] {
   const out: string[] = [];
