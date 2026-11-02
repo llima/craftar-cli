@@ -59,6 +59,9 @@ export const agentsMd: Emitter<"agents-md"> = {
     const alwaysReports: RefReport[] = [];
     const embeddedReports: RefReport[] = [];
     for (const ing of rules) {
+      // The metadata as the files carry it (spec 50 §5.3), read here for every rule so a citation in a rule written to
+      // AGENTS.md alone is counted as a body's is.
+      const m = ctx.meta(ing);
       const rawBody = await ctx.text(ing, ing.meta.file, "agents-md");
       if (ing.meta.inclusion === "always") {
         // Resolve references, then expand the index, then trim trailing newlines
@@ -88,7 +91,7 @@ export const agentsMd: Emitter<"agents-md"> = {
         const writer = ruleWriter(ctx.resolution.targets, effectiveTargets(ing.meta, ctx.resolution));
         const scopeText =
           ing.meta.inclusion === "fileMatch"
-            ? `applies to \`${[ctx.meta(ing).fileMatchPattern].flat().join("`, `")}\``
+            ? `applies to \`${[m.fileMatchPattern].flat().join("`, `")}\``
             : ing.meta.inclusion;
         if (writer === "claude-code") {
           pathLines.push(`- \`${ruleFile("claude-code", ing.meta)}\` — ${scopeText}`);

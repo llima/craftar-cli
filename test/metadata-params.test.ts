@@ -105,6 +105,20 @@ describe("spec 50 §5.3: a declared key with no value cited only in metadata", (
     const doctor = JSON.parse(runCli(["doctor", "--json", ...W]).stdout);
     expect(doctor.checks.find((c: { id: string }) => c.id === "params").level).toBe("error");
   });
+
+  it("refuses it for a rule written to AGENTS.md alone, whose description reaches the rules index only", async () => {
+    // agents-md is the only target: neither claude-code nor kiro reads this rule's metadata.
+    const s = kept(
+      await one(
+        { meta: { type: "rule", name: "style", description: "Style of {{org}}", params: { org: {} } }, files: { "rule.md": "# Style\n\n{{craftar.rules.index}}\n" } },
+        {},
+        GATE,
+        ["agents-md"],
+      ),
+    );
+    const { p } = await planOf(s);
+    expect(unsetDeclared(p).map((u) => u.key)).toEqual(["org"]);
+  });
 });
 
 describe("spec 50 §5.4: a value that would break the file fails the plan, never naming the value (§11 item 15)", () => {
