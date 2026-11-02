@@ -292,6 +292,62 @@ describe("import --local (spec 51 §5.3)", () => {
     expect(await snapshot(shared.forge)).toEqual(before);
   });
 
+  // Review round 2: authEnv on both rewrite paths, an unchanged local hook reused under never, and a server citation lost.
+  const mcpMeta = (name: string, extra: Record<string, unknown> = {}) => ({ type: "mcp", name, authEnv: ["IDP_TOKEN"], server: { command: "npx", args: ["idp"] }, ...extra });
+  const editServer = async (ws: string, args: string[]) => {
+    const file = path.join(ws, ".mcp.json");
+    const j = JSON.parse(await fs.readFile(file, "utf8"));
+    j.mcpServers.idp.args = args;
+    await fs.writeFile(file, JSON.stringify(j, null, 2) + "\n");
+  };
+
+  it("under auto, a rewritten local MCP server keeps its authEnv", async () => {
+    const s = await setup(
+      { ...spec, profiles: [profile("acme", ["base", "acme-extra"]), profile("globex", ["base"])] },
+      { files: { "profiles/acme/ingredients/mcp/idp/ingredient.yaml": YAML.stringify(mcpMeta("idp")), ...localRecipe("acme", "acme-extra", ["mcp/idp"]) } },
+    );
+    await editServer(s.ws, ["idp", "--v2"]);
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    const meta = YAML.parse(await fs.readFile(path.join(s.forge, "profiles/acme/ingredients/mcp/idp/ingredient.yaml"), "utf8"));
+    expect(meta.authEnv).toEqual(["IDP_TOKEN"]);
+    expect(meta.server.args).toEqual(["idp", "--v2"]);
+  });
+
+  it("under auto, a rewritten base-less root variant MCP server keeps its authEnv", async () => {
+    const s = await setup({ ingredients: [rule("style", "# S\n"), { meta: mcpMeta("idp--acme", { as: "idp" }) }], recipes: [recipe("base", ["rule/style", "mcp/idp--acme"])], profiles: [profile("acme", ["base"])] });
+    await editServer(s.ws, ["idp", "--v2"]);
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    const meta = YAML.parse(await fs.readFile(path.join(s.forge, "ingredients/mcp/idp--acme/ingredient.yaml"), "utf8"));
+    expect(meta.authEnv).toEqual(["IDP_TOKEN"]);
+    expect(meta.server.args).toEqual(["idp", "--v2"]);
+  });
+
+  it("an unchanged local hook with a registration is reused under never, not refused as different", async () => {
+    const s = await setup(
+      { ...spec, profiles: [profile("acme", ["base", "acme-extra"]), profile("globex", ["base"])] },
+      { files: { "profiles/acme/ingredients/hooks/guard/ingredient.yaml": YAML.stringify(hookMeta("guard")), "profiles/acme/ingredients/hooks/guard/guard.py": 'print("ok")\n', ...localRecipe("acme", "acme-extra", ["hook/guard"]) } },
+    );
+    const before = await snapshot(s.forge);
+    const r = importInto(s);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("local to profile acme: hook/guard (profiles/acme/ingredients/hooks/guard) — reused there");
+    for (const k of Object.keys(before)) if (k !== "profiles/acme/profile.yaml") expect((await snapshot(s.forge))[k], k).toBe(before[k]);
+  });
+
+  it("under auto, a rewritten local MCP server whose server cited a declared key says it is gone", async () => {
+    const s = await setup(
+      { ...spec, profiles: [profile("acme", ["base", "acme-extra"], ["claude-code"], { params: { host: "idp.example.invalid" } }), profile("globex", ["base"])] },
+      { files: { "profiles/acme/ingredients/mcp/idp/ingredient.yaml": YAML.stringify({ type: "mcp", name: "idp", params: { host: {} }, server: { command: "npx", args: ["idp", "--host", "{{host}}"] } }), ...localRecipe("acme", "acme-extra", ["mcp/idp"]) } },
+    );
+    await editServer(s.ws, ["idp", "--other"]);
+    const r = importInto(s, "auto");
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("mcp/idp: local rewritten from .mcp.json — {{host}} is no longer in it");
+    expect(r.stdout).not.toContain("idp.example.invalid");
+  });
+
   it("forge localize of a rule held in base--acme, then a re-import: every file unchanged", async () => {
     const s = await setup({ ingredients: [rule("style", "# S\n"), rule("x", "# X\n")], recipes: [recipe("base", ["rule/style"]), recipe("base--acme", ["rule/style", "rule/x"])], profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"])] });
     git(s.forge, "init", "-q", "-b", "main");

@@ -9,7 +9,7 @@ import { parseFrontmatter } from "../core/frontmatter.js";
 import { copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, FORGE_MANIFEST, readIngredientText, type Forge } from "../core/forge.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, hasUtf16Bom } from "../core/secrets.js";
-import { registrationCitations, serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
+import { registrationCitations, rendersServers, serverCitations, serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
 import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
@@ -1772,7 +1772,9 @@ async function decideLocal(
   const local = forge.locals.get(profile)?.ingredients.get(ref as IngredientRef);
   if (local) {
     const d = await decide(run.ctx, local.dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases, run.indexExpand);
-    const equal = d.kind === "reuse" || (d.kind === "literal" && (await fingerprintDir(local.dir, stage.reader())) === fingerprint);
+    // A literal comparison carries first what the workspace cannot express, as the base-less variant's does (fingerprintOf hashes it).
+    const carried = d.kind === "literal" ? fingerprintOf(validateImported(await carryFromExisting(stage, path.join(local.dir, "ingredient.yaml"), sourceMeta)), files) : fingerprint;
+    const equal = d.kind === "reuse" || (d.kind === "literal" && (await fingerprintDir(local.dir, stage.reader())) === carried);
     const dir = path.relative(forge.root, local.dir).split(path.sep).join("/");
     if (!equal && mode === "never") throw new Error(`import: ${source} differs from ${ref}, local to profile ${profile} (${dir}) — edit the local in the Forge and re-run, or re-run with --local=auto to rewrite it`);
     if (!equal) {
@@ -1782,7 +1784,11 @@ async function decideLocal(
       const old = await readBase(local.dir, stage.reader(), stage.root, { targets: readsTargetSections(forge.manifest) }, schema);
       const fresh = Object.values(files).filter((c): c is string => typeof c === "string").join("\n");
       const kept = citedKeys(new Map(Object.entries(files).filter((e): e is [string, string] => typeof e[1] === "string")));
-      for (const k of [...citedKeys(old.texts)].sort()) if (!kept.has(k)) report.warnings.push(`${ref}: local rewritten from ${source} — {{${k}}} is no longer in it; the text holds what the workspace has`);
+      const held = citedKeys(old.texts);
+      // At schema 4 and above an MCP server cites the keys it declares too (spec 34): those are lost with the rewrite as well.
+      if (rendersServers(forge.manifest)) for (const c of serverCitations(old.meta)) if (c.declared) held.add(c.key);
+      if (rendersServers(forge.manifest)) for (const c of serverCitations(sourceMeta)) if (c.declared) kept.add(c.key);
+      for (const k of [...held].sort()) if (!kept.has(k)) report.warnings.push(`${ref}: local rewritten from ${source} — {{${k}}} is no longer in it; the text holds what the workspace has`);
       for (const n of [...new Set(sectionNames(old))].sort()) if (!fresh.includes(`craftar:section ${n}`)) report.warnings.push(`${ref}: local rewritten from ${source} — section ${n} is no longer in it; the text holds what the workspace has`);
       (report.localRewritten ??= []).push({ ref, dir, source });
       run.runLocals?.push(ref);
@@ -2201,7 +2207,7 @@ async function wireLocals(stage: ForgeStage, forge: string, profile: string, loa
       if (YAML.isSeq(seq)) for (const r of add) seq.items.push(doc.createNode(r));
       else doc.set("ingredients", [...held.ingredients, ...add]);
     });
-    const original = RecipeSchema.parse(parseYamlText(label, raw) ?? {});
+    const original = parseYaml(label, stripBom(raw), RecipeSchema);
     const after = RecipeSchema.safeParse(parseYamlText(label, content) ?? {});
     if (!after.success || !isDeepStrictEqual(after.data, { ...original, ingredients: [...original.ingredients, ...add] })) throw new Error(`import: cannot edit ${label} in place — reformat it by hand, commit, and re-run`);
     stage.write(held.abs, content);
