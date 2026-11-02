@@ -91,6 +91,8 @@ describe("the Claude Code plugin (spec 45)", () => {
     const text = await read("plugins", "craftar", "README.md");
     expect(text).toContain("a project can choose what runs");
     for (const tool of ["asdf", "volta", "mise"]) expect(text).toContain(`**${tool}**`);
+    expect(text).toContain("trust dialog was not measured yet");
+    expect(text).toContain("enable the plugin only in projects whose files you trust");
     expect(text).not.toContain("{{");
   });
 
