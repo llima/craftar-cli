@@ -15,7 +15,8 @@ import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, frag
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK, type FileStatus } from "./sync.js";
-import { outName, MCP_FILE, renderRegistration, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
+import { outName, MCP_FILE, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
+import { plannedRegistrations, sameHandler, type PlannedRegistration } from "./settings-apply.js";
 import { stripBom } from "./text.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX, dotnetVersion as defaultDotnetVersion, dotnetVersionInOwnDir, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram, type Probe } from "./proc.js";
@@ -794,16 +795,6 @@ export async function claudeMdAncestors(
 /* hooks-registered check (spec 43 §6)                                 */
 /* ------------------------------------------------------------------ */
 
-/** A planned hook registration entry after rendering. */
-interface PlannedHookEntry {
-  ref: string;
-  index: number;
-  event: string;
-  matcher: string | undefined;
-  handler: unknown;
-  hasMissing: boolean;
-}
-
 /** Settings file labels (spec 43 §6: fixed, never an absolute path). */
 const SETTINGS_LABELS = {
   project: ".claude/settings.json",
@@ -811,23 +802,6 @@ const SETTINGS_LABELS = {
   userDefault: "~/.claude/settings.json",
   userEnv: "$CLAUDE_CONFIG_DIR/settings.json",
 } as const;
-
-/**
- * Deep equality check for JSON values, ignoring key order in objects.
- * Uses JSON.stringify with sorted keys for comparison.
- */
-function sameJsonValue(a: unknown, b: unknown): boolean {
-  const sortKeys = (obj: unknown): unknown => {
-    if (obj === null || typeof obj !== "object") return obj;
-    if (Array.isArray(obj)) return obj.map(sortKeys);
-    const sorted: Record<string, unknown> = Object.create(null);
-    for (const key of Object.keys(obj).sort()) {
-      sorted[key] = sortKeys((obj as Record<string, unknown>)[key]);
-    }
-    return sorted;
-  };
-  return JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
-}
 
 /**
  * Read and parse a settings file. Returns null if missing, the parsed value if valid JSON object,
@@ -861,7 +835,7 @@ async function readSettingsFile(
  * Compares event, matcher (absent equals absent), and handler object (key order ignored).
  */
 function handlerInSettings(
-  entry: PlannedHookEntry,
+  entry: PlannedRegistration,
   settingsFiles: Array<{ value: unknown }>,
 ): boolean {
   for (const file of settingsFiles) {
@@ -890,7 +864,7 @@ function handlerInSettings(
       if (!Array.isArray(groupHooks)) continue;
 
       for (const handler of groupHooks) {
-        if (sameJsonValue(handler, entry.handler)) return true;
+        if (sameHandler(handler, entry.handler)) return true;
       }
     }
   }
@@ -908,39 +882,8 @@ async function hooksRegistered(
   w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
-  // Collect planned registrations from hooks written by claude-code
-  if (!p.resolution.targets.includes("claude-code")) return;
-
-  const plannedEntries: PlannedHookEntry[] = [];
-
-  const walk = written(p.resolution, "claude-code", () => {});
-  for (const ing of walk) {
-    if (ing.meta.type !== "hook") continue;
-    const hookMeta = ing.meta;
-    if (!hookMeta.registration) continue;
-
-    const declared = hookMeta.params ?? {};
-    const params = paramsFor(ing, p.resolution);
-
-    for (let i = 0; i < hookMeta.registration.length; i++) {
-      const entry = hookMeta.registration[i];
-
-      // Render the entry using the shared builder (spec 43 §7.2)
-      const { event, matcher, handler, rendered } = renderRegistration(entry, declared, params, ing.ref);
-
-      // Check if this entry's render left a declared key with no value (spec 43 §6)
-      const hasMissing = rendered.missing.length > 0;
-
-      plannedEntries.push({
-        ref: ing.ref,
-        index: i,
-        event,
-        matcher,
-        handler,
-        hasMissing,
-      });
-    }
-  }
+  // Collect planned registrations from hooks written by claude-code (shared with settings apply)
+  const plannedEntries = plannedRegistrations(p);
 
   // No registrations → no check
   if (plannedEntries.length === 0) return;
