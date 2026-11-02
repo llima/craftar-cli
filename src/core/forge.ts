@@ -597,6 +597,35 @@ export async function assertNoDirLinkIn(forgeDir: string, dir: string, command: 
 }
 
 /**
+ * Refuse any symbolic link at or inside `dir` — to a file, to a directory (a junction on Windows) or leading nowhere —
+ * for a command that moves `dir` whole (spec 51 §5): the scratch copy a proof runs on turns a file link into a plain
+ * file, so the proof would pass and the moved link would then fail every plan. Names the link's Forge-relative path,
+ * never its target; `readlink` is not called.
+ */
+export async function assertNoLinkIn(forgeDir: string, dir: string, command: string): Promise<void> {
+  const rel = (abs: string) => path.relative(forgeDir, abs).split(path.sep).join("/");
+  const refusal = (abs: string) => new Error(`${rel(abs)} is a symbolic link in the Forge — ${command} does not move a link; replace it with the file and commit`);
+  const walk = async (at: string): Promise<void> => {
+    let st;
+    try {
+      st = await fs.lstat(at);
+    } catch (e) {
+      throw new Error(`${command}: cannot read ${rel(at)} (${(e as NodeJS.ErrnoException).code ?? "unreadable"})`);
+    }
+    if (st.isSymbolicLink()) throw refusal(at);
+    if (!st.isDirectory()) return;
+    let entries;
+    try {
+      entries = await fs.readdir(at);
+    } catch (e) {
+      throw new Error(`${command}: cannot read ${rel(at)} (${(e as NodeJS.ErrnoException).code ?? "unreadable"})`);
+    }
+    for (const name of entries.sort()) await walk(path.join(at, name));
+  };
+  await walk(dir);
+}
+
+/**
  * The real path of `abs`, resolved through its nearest existing ancestor: `fs.realpath` needs the
  * path to exist, and a plan target usually does not yet — so the part that exists is resolved
  * (symlinks and all) and the part that does not is appended as written.
