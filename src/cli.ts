@@ -4,7 +4,7 @@ import pc from "picocolors";
 import path from "node:path";
 import { promises as fs, statSync } from "node:fs";
 import YAML from "yaml";
-import { importClaudeCode } from "./importers/claude-code.js";
+import { importClaudeCode, LOCAL_MODES } from "./importers/claude-code.js";
 import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
@@ -112,8 +112,14 @@ program
     "--prefer-kiro <rule,…>",
     "take the named rules from .kiro/steering/<name>.md instead of .claude/rules/<name>.md — each proved to render back to that steering file's body; refused for a name that is not a rule, has no steering file, or whose steering does not render back",
   )
+  .option(
+    "--local <mode>",
+    "where a source goes in a Forge at schema 8 or above: never (the default — today's import), auto (a source no root ingredient holds becomes a local of the profile, and a local that differs is rewritten) or always (the same, and no ingredient is written at the root); new locals are wired into the recipe <profile>-local",
+  )
   .action(async (o) => {
     if (o.from !== "claude-code") fail(`unsupported source "${o.from}" (only claude-code for now)`);
+    // Spec 51 §5.3: checked before anything is read.
+    if (o.local !== undefined && !(LOCAL_MODES as readonly string[]).includes(o.local)) fail("--local takes never, auto or always");
     // import writes a local Forge; a URL would become a directory named after it (spec 13 §4.4).
     if (classifyForge(o.forge) === "url") fail("--forge takes a directory; to read a remote Forge, run inside a workspace that names it");
     // A cache tree is refused first: it reads only the real paths of --forge and of the cache, nothing of the workspace.
@@ -122,7 +128,7 @@ program
     // Spec 29 §4.3: PK5, before the workspace is read.
     const preferKiro = o.preferKiro === undefined ? undefined : parsePreferKiro(o.preferKiro);
     const reportAbs = o.report === undefined ? null : await gateOutsideForge(o.report, o.forge, REPORT_GATE);
-    const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig, report: reportAbs !== null, preferKiro });
+    const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig, report: reportAbs !== null, preferKiro, local: o.local });
     console.log(pc.bold(`Imported ${path.resolve(o.workspace)} → ${path.resolve(o.forge)} as profile "${r.profile}"`));
     console.log(
       `  ${pc.green(String(r.created.length))} created, ${pc.cyan(String(r.reused.length))} reused, ${pc.yellow(String(r.variants.length))} variants, ${pc.red(String(r.rejected.length))} rejected`,
@@ -133,6 +139,9 @@ program
     // Spec 33 §5.3: what the block provides is left to its recipe.
     // Spec 51 §4.5: a source equal to the profile's local is reused there, never placed at the root.
     for (const x of r.localReused ?? []) console.log(`  local to profile ${r.profile}: ${x.ref} (${x.dir}) — reused there`);
+    for (const x of r.localCreated ?? []) console.log(`  local to profile ${r.profile}: ${x.ref} (${x.dir}) — created there`);
+    for (const x of r.localRewritten ?? []) console.log(`  local to profile ${r.profile}: ${x.ref} (${x.dir}) — rewritten from ${x.source}`);
+    if (r.localRecipe) console.log(`  local recipe ${r.localRecipe.name} (${r.localRecipe.file}): ${r.localRecipe.refs.join(", ")} — wired, last in profile ${r.profile}'s recipes`);
     for (const x of r.leftToRecipes) console.log(`  left to recipe ${x.recipe} (integrations.${x.slot}): ${x.refs.join(", ")} — not compared; when this workspace resolves that recipe, craftar status shows whether its copies differ`);
     // Spec 10 §4.2: how a templated base was reused, and what the profile gained.
     // Spec 11 §4.3: `; sections …` when a section value filled the render.

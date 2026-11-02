@@ -104,6 +104,12 @@ export function renderImportReport(i: ImportReportInput): string {
       : []),
     // Spec 51 §4.5: only when a local was reused, so a report without one keeps its bytes.
     ...(report.localReused?.length ? [[`## Reused as a local of profile ${report.profile} (${report.localReused.length})`, ...report.localReused.map((x) => `- ${oneLine(`${x.ref} (${x.dir})`)}`)] as string[]] : []),
+    // Spec 51 §5.3: only under --local=auto|always, so a report without them keeps its bytes. Paths and refs, never text.
+    ...(report.localCreated?.length ? [[`## Created as a local of profile ${report.profile} (${report.localCreated.length})`, ...report.localCreated.map((x) => `- ${oneLine(`${x.ref} (${x.dir})`)}`)] as string[]] : []),
+    ...(report.localRewritten?.length
+      ? [[`## Rewritten as a local of profile ${report.profile} (${report.localRewritten.length})`, ...report.localRewritten.map((x) => `- ${oneLine(`${x.ref} (${x.dir}) from ${x.source}`)}`)] as string[]]
+      : []),
+    ...(report.localRecipe ? [[`## Wired into ${report.localRecipe.name} (${report.localRecipe.refs.length})`, `- ${oneLine(`${report.localRecipe.file}: ${report.localRecipe.refs.join(", ")}`)}`]] : []),
     ...kiroSections(report, said),
     [`## Warnings (${report.warnings.length})`, ...report.warnings.map((x) => `- ${oneLine(said(x))}`)],
   ];

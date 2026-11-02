@@ -137,6 +137,25 @@ async function observe() {
   return out;
 }
 
+/**
+ * What Part B changes on purpose, taken out before the comparison and asserted present: the hint the two import
+ * refusals gain (spec 51 §4.2, §5.3). Nothing else of the pin may move.
+ */
+const HINTS: Array<[string, string]> = [
+  ["importDiffers", " — edit the local in the Forge, or re-run with --local=auto to rewrite it, then re-run"],
+  ["importI14", ", or re-run with --local=auto to keep it local to this profile"],
+];
+const WAS: Record<string, string> = { importDiffers: " — edit the local in the Forge, then re-run", importI14: "" };
+function deliberate(observed: Record<string, unknown>): Record<string, unknown> {
+  const out = structuredClone(observed);
+  for (const [key, hint] of HINTS) {
+    const o = out[key] as { stderr: string };
+    expect(o.stderr, key).toContain(hint);
+    o.stderr = o.stderr.replace(hint, WAS[key]);
+  }
+  return out;
+}
+
 describe("profile-local moves=off baseline pin (spec 51 Part B §10)", () => {
   it("import without --local, drift show, drift promote and forge promote on a Forge whose profiles hold locals", { timeout: 180_000 }, async () => {
     const observed = await observe();
@@ -144,6 +163,6 @@ describe("profile-local moves=off baseline pin (spec 51 Part B §10)", () => {
       await fs.writeFile(PIN_FILE, JSON.stringify(observed, null, 2) + "\n");
       return;
     }
-    expect(observed).toEqual(JSON.parse(await fs.readFile(PIN_FILE, "utf8")));
+    expect(deliberate(observed)).toEqual(JSON.parse(await fs.readFile(PIN_FILE, "utf8")));
   });
 });
