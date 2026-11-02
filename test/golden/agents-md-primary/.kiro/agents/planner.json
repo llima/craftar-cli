@@ -8,5 +8,16 @@
     "file://.kiro/steering/style.md",
     "file://.kiro/steering/**/*.md",
     "file://docs/plan.md"
-  ]
+  ],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "match": [
+          "./**"
+        ],
+        "effect": "allow"
+      }
+    ]
+  }
 }

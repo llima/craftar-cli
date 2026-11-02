@@ -16,5 +16,21 @@
   ],
   "resources": [
     "file://.kiro/steering/backend-node.md"
-  ]
+  ],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "shell",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ]
+  }
 }
