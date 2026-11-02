@@ -250,3 +250,21 @@ describe("spec 50 §5.3: a metadata citation counts in forge unify's cites (P18)
     expect(git(forge, "status", "--porcelain")).toBe("");
   });
 });
+
+describe("spec 50 §5.5: a CRLF ingredient.yaml (Windows-shaped)", () => {
+  it("take: variant on a description keeps the base's CRLF line endings and changes only that line", async () => {
+    const spec = pair("agent", { description: "Helps beta users" }, { description: "Helps acme users" });
+    const { root, forge } = await forgeOf(GATE, spec);
+    const file = path.join(forge, "ingredients/agents/x/ingredient.yaml");
+    const lf = await fs.readFile(file, "utf8");
+    await fs.writeFile(file, lf.replace(/\n/g, "\r\n"));
+    // Keep the CRLF bytes in the blob whatever the developer's or the runner's core.autocrlf says.
+    git(forge, "config", "core.autocrlf", "false");
+    git(forge, "add", "--renormalize", "-A");
+    git(forge, "commit", "-q", "-m", "crlf");
+    const run = await unifyWith(forge, root, "agent/x", () => "variant");
+    expect(run.code, run.stderr).toBe(0);
+    const after = await fs.readFile(file, "utf8");
+    expect(after).toBe(lf.replace("Helps beta users", "Helps acme users").replace(/\n/g, "\r\n"));
+  });
+});
