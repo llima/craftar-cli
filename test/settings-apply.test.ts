@@ -16,6 +16,7 @@ import {
   handlerHash,
   SettingsShapeError,
   type MergeResult,
+  type PlannedRegistration,
 } from "../src/core/settings-apply.js";
 import { settingsExample, EXAMPLE_SETTINGS, type HooksObject } from "../src/emitters/shared.js";
 import {
@@ -539,6 +540,362 @@ describe("doctor and hook-registration tests still pass", () => {
 
     const names = wantedEnvNames(p);
     expect(names).toEqual(["ACME_TOKEN", "OTHER_SECRET", "OTHER_TOKEN"]);
+  });
+});
+
+describe("merge — spec cases", () => {
+  // Helper: deep copy into null-prototype objects
+  function nul(obj: unknown): unknown {
+    if (obj === null || typeof obj !== "object") return obj;
+    if (Array.isArray(obj)) return obj.map(nul);
+    const out: Record<string, unknown> = Object.create(null);
+    for (const key of Object.keys(obj)) {
+      out[key] = nul((obj as Record<string, unknown>)[key]);
+    }
+    return out;
+  }
+
+  // Helper: build a PlannedRegistration
+  function reg(
+    event: string,
+    matcher: string | undefined,
+    handler: unknown,
+    ref = "hook/guard",
+    index = 0,
+  ): import("../src/core/settings-apply.js").PlannedRegistration {
+    return { ref, index, event, matcher, handler, hasMissing: false };
+  }
+
+  // Helper: build a Wanted structure
+  // Note: The current API uses { env: Record | null, hooks: HooksObject | null }
+  // D6 will change this to { envNames: string[], registrations: PlannedRegistration[] }
+  // For now, we'll use the current API since the tests need to expose the defects
+  function W(envNames: string[], regs: import("../src/core/settings-apply.js").PlannedRegistration[]) {
+    // Build env
+    const env: Record<string, string> | null = envNames.length > 0 ? Object.create(null) : null;
+    if (env) {
+      for (const name of envNames) env[name] = "";
+    }
+    // Build hooks from registrations
+    const hooks: Record<string, unknown[]> | null = regs.length > 0 ? Object.create(null) : null;
+    if (hooks) {
+      for (const r of regs) {
+        if (!hooks[r.event]) hooks[r.event] = [];
+        const group: Record<string, unknown> = Object.create(null);
+        if (r.matcher !== undefined) group.matcher = r.matcher;
+        group.hooks = [r.handler];
+        (hooks[r.event] as unknown[]).push(group);
+      }
+    }
+    return { env, hooks: hooks as import("../src/emitters/shared.js").HooksObject | null };
+  }
+
+  // Handlers
+  const OLD = { type: "command", command: "python3", args: [".claude/hooks/old-guard.py"] };
+  const NEW = { type: "command", command: "python3", args: [".claude/hooks/guard.py"], timeout: 10 };
+  const LOCAL = { type: "command", command: "sh", args: [".claude/hooks/acme-lint.sh"] };
+
+  it("M1. the request's case: replace OLD with NEW, keep LOCAL and env value, don't mutate input (D1)", () => {
+    const current = nul({
+      env: { ACME_TOKEN: "s3cr3t-value" },
+      permissions: { allow: ["Bash(ls)"] },
+      hooks: { PreToolUse: [{ matcher: "Bash", hooks: [LOCAL] }, { matcher: "Bash", hooks: [OLD] }] },
+    }) as Record<string, unknown>;
+
+    const currentBefore = JSON.stringify(current);
+    const recorded = new Set([handlerHash("PreToolUse", "Bash", OLD)]);
+    const wanted = W(["ACME_TOKEN"], [reg("PreToolUse", "Bash", NEW)]);
+
+    const result = mergeSettings(current, wanted, recorded);
+
+    // Input not mutated (D1)
+    expect(JSON.stringify(current)).toBe(currentBefore);
+
+    // Value correct
+    expect(result.value).toEqual(nul({
+      env: { ACME_TOKEN: "s3cr3t-value" },
+      permissions: { allow: ["Bash(ls)"] },
+      hooks: { PreToolUse: [{ matcher: "Bash", hooks: [LOCAL] }, { matcher: "Bash", hooks: [NEW] }] },
+    }));
+
+    // Key order preserved
+    expect(Object.keys(result.value)).toEqual(["env", "permissions", "hooks"]);
+
+    // Diff correct
+    expect(result.diff.removed).toEqual([{ event: "PreToolUse", matcher: "Bash", handler: OLD }]);
+    expect(result.diff.added[0].ref).toBe("hook/guard");
+    expect(result.diff.added[0].index).toBe(0);
+  });
+
+  it("M2. idempotence: second apply with same wanted → changed false", () => {
+    const value = nul({
+      env: { ACME_TOKEN: "s3cr3t-value" },
+      permissions: { allow: ["Bash(ls)"] },
+      hooks: { PreToolUse: [{ matcher: "Bash", hooks: [LOCAL] }, { matcher: "Bash", hooks: [NEW] }] },
+    }) as Record<string, unknown>;
+
+    const recorded = new Set([handlerHash("PreToolUse", "Bash", OLD), handlerHash("PreToolUse", "Bash", NEW)]);
+    const wanted = W(["ACME_TOKEN"], [reg("PreToolUse", "Bash", NEW)]);
+
+    const result = mergeSettings(value, wanted, recorded);
+
+    expect(result.changed).toBe(false);
+    expect(result.value).toBe(value); // Same object reference when unchanged
+  });
+
+  it("M3. current null, wanted with env and hooks → keys [env, hooks]", () => {
+    const wanted = W(["ACME_TOKEN"], [reg("PreToolUse", "Bash", NEW)]);
+    const result = mergeSettings(null, wanted, new Set());
+
+    expect(Object.keys(result.value)).toEqual(["env", "hooks"]);
+    expect(result.value.env).toEqual(nul({ ACME_TOKEN: "" }));
+  });
+
+  it("M4. current {permissions:{}} → keys [env, hooks, permissions] (D2)", () => {
+    const current = nul({ permissions: {} }) as Record<string, unknown>;
+    const wanted = W(["ACME_TOKEN"], [reg("PreToolUse", "Bash", NEW)]);
+
+    const result = mergeSettings(current, wanted, new Set());
+
+    expect(Object.keys(result.value)).toEqual(["env", "hooks", "permissions"]);
+  });
+
+  it("M5. existing hooks with wanted handler → hooks unchanged, env added, moved 0 (D2, D4)", () => {
+    const current = nul({
+      hooks: { PreToolUse: [{ matcher: "Bash", hooks: [NEW] }] },
+      model: "x",
+    }) as Record<string, unknown>;
+
+    const wanted = W(["ACME_TOKEN"], [reg("PreToolUse", "Bash", NEW)]);
+    const result = mergeSettings(current, wanted, new Set());
+
+    // Keys: hooks first (existed), then env (added after hooks), then model
+    expect(Object.keys(result.value)).toEqual(["hooks", "env", "model"]);
+
+    // Hooks unchanged (D4: env-only change doesn't touch hooks)
+    expect(result.value.hooks).toEqual(current.hooks);
+    expect(result.diff.moved).toBe(0);
+  });
+
+  it("M6. no record, current has only OLD, wanted [NEW] → OLD kept as local, NEW appended, localKept 1", () => {
+    const current = nul({
+      hooks: { PreToolUse: [{ matcher: "Bash", hooks: [OLD] }] },
+    }) as Record<string, unknown>;
+
+    const wanted = W([], [reg("PreToolUse", "Bash", NEW)]);
+    const result = mergeSettings(current, wanted, new Set());
+
+    // OLD is local (not in recorded, not equal to wanted), NEW is added
+    const hooks = result.value.hooks as Record<string, unknown[]>;
+    expect(hooks.PreToolUse).toHaveLength(2);
+    expect(result.diff.localKept).toBe(1);
+  });
+
+  it("M7. duplicates: unchanged when all wanted present; env-only change doesn't remove duplicates (D4)", () => {
+    const current = nul({
+      hooks: { PreToolUse: [{ matcher: "Bash", hooks: [NEW] }, { matcher: "Bash", hooks: [NEW] }] },
+    }) as Record<string, unknown>;
+
+    // No env, just hooks → unchanged (both copies of wanted present)
+    const wanted1 = W([], [reg("PreToolUse", "Bash", NEW)]);
+    const result1 = mergeSettings(current, wanted1, new Set());
+    expect(result1.changed).toBe(false);
+
+    // With env → hooks unchanged (D4: env-only change), both copies stay
+    const wanted2 = W(["ACME_TOKEN"], [reg("PreToolUse", "Bash", NEW)]);
+    const result2 = mergeSettings(current, wanted2, new Set());
+    expect(result2.changed).toBe(true);
+    const hooks2 = result2.value.hooks as Record<string, unknown[]>;
+    expect(hooks2.PreToolUse).toHaveLength(2); // Both copies stay (env-only change)
+
+    // With recorded OLD and extra group → duplicates removed
+    const currentWithOld = nul({
+      hooks: { PreToolUse: [{ matcher: "Bash", hooks: [NEW] }, { matcher: "Bash", hooks: [NEW] }, { hooks: [OLD] }] },
+    }) as Record<string, unknown>;
+    const recorded = new Set([handlerHash("PreToolUse", undefined, OLD)]);
+    const result3 = mergeSettings(currentWithOld, wanted1, recorded);
+    expect(result3.diff.duplicatesRemoved).toBe(1);
+    expect(result3.diff.removed).toHaveLength(1);
+  });
+
+  it("M8. groups: LOCAL in same group as OLD kept, emptied group with description kept with hooks:[] (emptiedKept 1)", () => {
+    const current = nul({
+      hooks: {
+        PreToolUse: [
+          { matcher: "Bash", hooks: [LOCAL, OLD] },
+          { matcher: "X", description: "d", hooks: [OLD] },
+        ],
+        Stop: [],
+      },
+    }) as Record<string, unknown>;
+
+    const recorded = new Set([
+      handlerHash("PreToolUse", "Bash", OLD),
+      handlerHash("PreToolUse", "X", OLD),
+    ]);
+    const wanted = W([], [reg("PreToolUse", "Bash", NEW)]);
+
+    const result = mergeSettings(current, wanted, recorded);
+
+    const hooks = result.value.hooks as Record<string, unknown[]>;
+
+    // LOCAL kept in first group
+    expect((hooks.PreToolUse[0] as Record<string, unknown>).hooks).toEqual([LOCAL]);
+
+    // Emptied group with description kept with hooks:[]
+    expect(hooks.PreToolUse[1]).toEqual(nul({ matcher: "X", description: "d", hooks: [] }));
+
+    // NEW appended
+    expect(hooks.PreToolUse[2]).toEqual(nul({ matcher: "Bash", hooks: [NEW] }));
+
+    // Stop kept (was empty before)
+    expect(hooks.Stop).toEqual([]);
+
+    expect(result.diff.emptiedKept).toBe(1);
+  });
+
+  it("M9. event emptied by removal goes: Stop:[{hooks:[OLD]}] recorded → no Stop key after merge", () => {
+    const current = nul({
+      hooks: { Stop: [{ hooks: [OLD] }] },
+    }) as Record<string, unknown>;
+
+    const recorded = new Set([handlerHash("Stop", undefined, OLD)]);
+    const wanted = W([], [reg("PreToolUse", "Bash", NEW)]);
+
+    const result = mergeSettings(current, wanted, recorded);
+
+    const hooks = result.value.hooks as Record<string, unknown>;
+    expect(Object.hasOwn(hooks, "Stop")).toBe(false);
+  });
+
+  it("M10. plan wants no hooks (D5): recorded OLD removed, env added, hooks empty object or no Stop", () => {
+    const current = nul({
+      hooks: { Stop: [{ hooks: [OLD] }] },
+    }) as Record<string, unknown>;
+
+    const recorded = new Set([handlerHash("Stop", undefined, OLD)]);
+    const wanted = W(["A"], []); // No hooks wanted
+
+    const result = mergeSettings(current, wanted, recorded);
+
+    expect(result.changed).toBe(true);
+    expect(result.value.env).toEqual(nul({ A: "" }));
+
+    // hooks should be empty (Stop was the only event, and it was emptied by removal)
+    const hooks = result.value.hooks as Record<string, unknown>;
+    expect(Object.hasOwn(hooks, "Stop")).toBe(false);
+  });
+
+  it("M11. env: present names keep values, new names added empty, no env key when no wanted names", () => {
+    const current = nul({
+      env: { A: "", B: 5, C: "keep" },
+    }) as Record<string, unknown>;
+
+    const wanted = W(["A", "B", "D"], []);
+    const result = mergeSettings(current, wanted, new Set());
+
+    expect(result.value.env).toEqual(nul({ A: "", B: 5, C: "keep", D: "" }));
+    expect(result.diff.envPresent).toBe(2); // A and B
+    expect(result.diff.envAdded).toEqual(["D"]);
+
+    // No wanted env names and no env key → no env key in value
+    const current2 = nul({ permissions: {} }) as Record<string, unknown>;
+    const wanted2 = W([], []);
+    const result2 = mergeSettings(current2, wanted2, new Set());
+    expect(Object.hasOwn(result2.value, "env")).toBe(false);
+  });
+
+  it("M12. sameCommandLocal: local handler with same command/args but different timeout → both present, sameCommandLocal 1", () => {
+    const localWithDifferentTimeout = { ...NEW, timeout: 99 };
+    const current = nul({
+      hooks: { PreToolUse: [{ matcher: "Bash", hooks: [localWithDifferentTimeout] }] },
+    }) as Record<string, unknown>;
+
+    const wanted = W([], [reg("PreToolUse", "Bash", NEW)]);
+    const result = mergeSettings(current, wanted, new Set());
+
+    // Both present
+    const hooks = result.value.hooks as Record<string, unknown[]>;
+    expect(hooks.PreToolUse).toHaveLength(2);
+    expect(result.diff.sameCommandLocal).toBe(1);
+  });
+
+  it("M13. __proto__ key round-trips", () => {
+    // Parse with reviver that builds null-prototype objects
+    const json = '{"__proto__":{"a":1},"permissions":{}}';
+    const reviver = (_key: string, value: unknown) => {
+      if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+        const out: Record<string, unknown> = Object.create(null);
+        for (const k of Object.keys(value)) {
+          out[k] = (value as Record<string, unknown>)[k];
+        }
+        return out;
+      }
+      return value;
+    };
+    const current = JSON.parse(json, reviver) as Record<string, unknown>;
+
+    const wanted = W(["A"], []);
+    const result = mergeSettings(current, wanted, new Set());
+
+    expect(Object.hasOwn(result.value, "__proto__")).toBe(true);
+    expect(result.value["__proto__"]).toEqual(nul({ a: 1 }));
+  });
+
+  it("M14. shape refusals: each throws SettingsShapeError with exact message, none contains secret value", () => {
+    const secret = "s3cr3t-value";
+
+    // env []
+    const c1 = nul({ env: [] }) as Record<string, unknown>;
+    c1.env = []; // Force array
+    (c1 as Record<string, unknown>).secretTest = secret;
+    expect(() => mergeSettings(c1, W(["A"], []), new Set())).toThrow(SettingsShapeError);
+    try { mergeSettings(c1, W(["A"], []), new Set()); } catch (e) {
+      expect((e as Error).message).toContain("env is not an object");
+      expect((e as Error).message).not.toContain(secret);
+    }
+
+    // hooks []
+    const c2 = nul({ hooks: [], env: { SECRET: secret } }) as Record<string, unknown>;
+    c2.hooks = [];
+    expect(() => mergeSettings(c2, W([], [reg("E", "M", NEW)]), new Set())).toThrow(SettingsShapeError);
+    try { mergeSettings(c2, W([], [reg("E", "M", NEW)]), new Set()); } catch (e) {
+      expect((e as Error).message).toContain("hooks is not an object");
+      expect((e as Error).message).not.toContain(secret);
+    }
+
+    // hooks {PreToolUse:{}}
+    const c3 = nul({ hooks: { PreToolUse: {} }, env: { SECRET: secret } }) as Record<string, unknown>;
+    expect(() => mergeSettings(c3, W([], [reg("PreToolUse", "M", NEW)]), new Set())).toThrow(SettingsShapeError);
+    try { mergeSettings(c3, W([], [reg("PreToolUse", "M", NEW)]), new Set()); } catch (e) {
+      expect((e as Error).message).toContain("is not a list");
+      expect((e as Error).message).not.toContain(secret);
+    }
+
+    // hooks {PreToolUse:[3]}
+    const c4 = nul({ hooks: { PreToolUse: [3] }, env: { SECRET: secret } }) as Record<string, unknown>;
+    expect(() => mergeSettings(c4, W([], [reg("PreToolUse", "M", NEW)]), new Set())).toThrow(SettingsShapeError);
+    try { mergeSettings(c4, W([], [reg("PreToolUse", "M", NEW)]), new Set()); } catch (e) {
+      expect((e as Error).message).toContain("not an object with a hooks list");
+      expect((e as Error).message).not.toContain(secret);
+    }
+
+    // hooks {"bad key!":[3]} → prints #1
+    const c5: Record<string, unknown> = Object.create(null);
+    c5.hooks = Object.create(null);
+    (c5.hooks as Record<string, unknown>)["bad key!"] = [3];
+    c5.env = Object.create(null);
+    (c5.env as Record<string, unknown>).SECRET = secret;
+    expect(() => mergeSettings(c5, W([], [reg("bad key!", "M", NEW)]), new Set())).toThrow(SettingsShapeError);
+    try { mergeSettings(c5, W([], [reg("bad key!", "M", NEW)]), new Set()); } catch (e) {
+      expect((e as Error).message).toContain("#1");
+      expect((e as Error).message).not.toContain(secret);
+    }
+  });
+
+  it("M15. handlerHash: '-' matcher !== undefined matcher", () => {
+    const h = { type: "command", command: "test" };
+    expect(handlerHash("E", "-", h)).not.toBe(handlerHash("E", undefined, h));
   });
 });
 
