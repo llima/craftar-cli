@@ -26,7 +26,7 @@ function git(dir: string, ...args: string[]) {
   });
 }
 
-/** A Forge at `schema` (a git repository with one commit) and a workspace on profile `acme`. */
+/** A Forge at `schema` and a workspace on profile `acme`; with `repo` (the default) the Forge is a git repository with one commit. */
 async function forgeOf(schema: number, spec: ForgeSpec, targets = ["claude-code", "kiro", "agents-md"], repo = true) {
   const root = await tmpDir("craftar-meta-unify-");
   cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
