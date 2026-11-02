@@ -1081,3 +1081,189 @@ describe("C16. mcp --allow-writes and ui unchanged", () => {
     expect(settingsTools, "settings apply must not be exposed via MCP (spec 52 D12)").toHaveLength(0);
   });
 });
+
+describe("G1. ignoreWarning fails open", () => {
+  // The pure function ignoreWarning decides when to warn about .claude/settings.json not being ignored.
+  // It must warn when git cannot answer (unchecked=true), not stay silent.
+  it("unchecked=true → the warning (git cannot answer)", async () => {
+    const { ignoreWarning } = await import("../src/core/settings-apply.js");
+    const result = ignoreWarning({ ignored: [], unchecked: true });
+    expect(result).not.toBeNull();
+    expect(result).toContain("not ignored");
+  });
+
+  it("path in ignored → null (no warning)", async () => {
+    const { ignoreWarning } = await import("../src/core/settings-apply.js");
+    const result = ignoreWarning({ ignored: [{ path: ".claude/settings.json" }], unchecked: false });
+    expect(result).toBeNull();
+  });
+
+  it("path not in ignored, unchecked=false → the warning", async () => {
+    const { ignoreWarning } = await import("../src/core/settings-apply.js");
+    const result = ignoreWarning({ ignored: [], unchecked: false });
+    expect(result).not.toBeNull();
+    expect(result).toContain("not ignored");
+  });
+});
+
+describe("G2. staleLocalHookWarnings (spec 52 §5.1)", () => {
+  let home: string;
+  let claudeDir: string;
+
+  beforeEach(async () => {
+    home = await tmpDir("craftar-g2-home-");
+    claudeDir = await tmpDir("craftar-g2-claude-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(() => fs.rm(claudeDir, { recursive: true, force: true }));
+  });
+
+  // When the command has NO record, every LOCAL handler citing .claude/hooks/<x> with no such file gives a warning.
+  it("CRAFTAR_NO_REGISTRY=1, local handler cites missing .claude/hooks/old-guard.py → warning", async () => {
+    const s = await forgeAt(1, standardForge());
+    cleanups.push(s.cleanup);
+
+    await initGit(s.wsRoot);
+    await gitignoreSettings(s.wsRoot);
+
+    // Run sync to generate the settings example
+    const r1 = runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir } });
+    expect(r1.code, `sync failed: ${r1.stderr}`).toBe(0);
+
+    // Create .claude/settings.json with a local handler that cites a non-existent hook file
+    const settingsWithStaleHook = {
+      env: {},
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [
+              { type: "command", command: "python3", args: [".claude/hooks/old-guard.py"] },
+            ],
+          },
+        ],
+      },
+    };
+    await fs.writeFile(path.join(s.wsRoot, ".claude", "settings.json"), JSON.stringify(settingsWithStaleHook, null, 2));
+
+    // Run settings apply with CRAFTAR_NO_REGISTRY=1
+    const r2 = runCli(["settings", "apply", "--workspace", s.wsRoot, "--yes"], {
+      env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir, CRAFTAR_NO_REGISTRY: "1" },
+    });
+
+    // Should succeed but have the warning about stale hook
+    expect(r2.stdout).toContain("hooks.PreToolUse: a handler cites .claude/hooks/old-guard.py, which does not exist");
+
+    // The handler should still be in the file (local handlers are kept)
+    const finalSettings = JSON.parse(await fs.readFile(path.join(s.wsRoot, ".claude", "settings.json"), "utf8"));
+    const preToolUse = finalSettings.hooks?.PreToolUse ?? [];
+    const found = preToolUse.some((g: { hooks?: unknown[] }) =>
+      g.hooks?.some((h: { args?: string[] }) => h.args?.some((a: string) => a.includes("old-guard.py"))),
+    );
+    expect(found, "local handler should be kept").toBe(true);
+  });
+
+  it("file present under .claude/hooks/ → no warning", async () => {
+    const s = await forgeAt(1, standardForge());
+    cleanups.push(s.cleanup);
+
+    await initGit(s.wsRoot);
+    await gitignoreSettings(s.wsRoot);
+
+    const r1 = runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir } });
+    expect(r1.code, `sync failed: ${r1.stderr}`).toBe(0);
+
+    // Create .claude/settings.json with a local handler and the hook file
+    await fs.mkdir(path.join(s.wsRoot, ".claude", "hooks"), { recursive: true });
+    await fs.writeFile(path.join(s.wsRoot, ".claude", "hooks", "old-guard.py"), 'print("ok")\n');
+
+    const settingsWithHook = {
+      env: {},
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [
+              { type: "command", command: "python3", args: [".claude/hooks/old-guard.py"] },
+            ],
+          },
+        ],
+      },
+    };
+    await fs.writeFile(path.join(s.wsRoot, ".claude", "settings.json"), JSON.stringify(settingsWithHook, null, 2));
+
+    const r2 = runCli(["settings", "apply", "--workspace", s.wsRoot, "--yes"], {
+      env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir, CRAFTAR_NO_REGISTRY: "1" },
+    });
+
+    // Should NOT contain the warning
+    expect(r2.stdout).not.toContain("which does not exist");
+  });
+
+  it("registered workspace with record → no warning", async () => {
+    const s = await forgeAt(1, standardForge());
+    cleanups.push(s.cleanup);
+
+    await initGit(s.wsRoot);
+    await gitignoreSettings(s.wsRoot);
+
+    // Run sync to register the workspace
+    const r1 = runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir } });
+    expect(r1.code, `sync failed: ${r1.stderr}`).toBe(0);
+
+    // Run settings apply first to create the record
+    const r2 = runCli(["settings", "apply", "--workspace", s.wsRoot, "--yes"], { env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir } });
+    expect(r2.code, `settings apply failed: ${r2.stderr}`).toBe(0);
+
+    // Now add a local handler that cites a missing hook
+    const settings = JSON.parse(await fs.readFile(path.join(s.wsRoot, ".claude", "settings.json"), "utf8"));
+    if (!settings.hooks.PreToolUse) settings.hooks.PreToolUse = [];
+    settings.hooks.PreToolUse.push({
+      matcher: "Bash",
+      hooks: [{ type: "command", command: "python3", args: [".claude/hooks/old-guard.py"] }],
+    });
+    await fs.writeFile(path.join(s.wsRoot, ".claude", "settings.json"), JSON.stringify(settings, null, 2));
+
+    // Run settings apply again (with record)
+    const r3 = runCli(["settings", "apply", "--workspace", s.wsRoot, "--yes"], { env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir } });
+
+    // Should NOT contain the stale hook warning (we have a record)
+    expect(r3.stdout).not.toContain("which does not exist");
+  });
+});
+
+describe("G3. printSettingsDiff prints events safely", () => {
+  // Events containing terminal-unsafe characters should be printed as #<position>
+  it("event key with \\u001b is printed as #<position>, not raw", async () => {
+    const { settingsDiffLines } = await import("../src/core/settings-apply.js");
+    const diff = {
+      envAdded: [],
+      envPresent: 0,
+      added: [],
+      removed: [
+        {
+          event: "Pre\u001bTool",
+          matcher: undefined,
+          handler: { type: "command", command: "test" },
+        },
+      ],
+      moved: 0,
+      duplicatesRemoved: 0,
+      localKept: 0,
+      sameCommandLocal: 0,
+      emptiedKept: 0,
+      otherKeys: [],
+    };
+
+    // Build the display structure — settingsDiffLines should now add a safeEvent field
+    const display = settingsDiffLines(diff, false);
+
+    // The safeEvent should NOT contain the escape character — it should be something like "#1"
+    const entry = display.hooksRemoved[0];
+    // After the fix, there should be a safeEvent field that doesn't contain \u001b
+    expect("safeEvent" in entry, "settingsDiffLines should add safeEvent field").toBe(true);
+    const safeEvent = (entry as { safeEvent: string }).safeEvent;
+    expect(safeEvent.includes("\u001b")).toBe(false);
+    // It should be #<position> since the event is not nameShaped
+    expect(safeEvent).toMatch(/^#\d+$/);
+  });
+});
