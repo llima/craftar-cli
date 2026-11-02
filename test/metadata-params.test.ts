@@ -265,7 +265,7 @@ describe("review round 3: a second value cannot switch the guard to reading by l
   ])("the structural guard refuses %s when another value makes the rendered block unreadable", async (_n, raw) => {
     const { guardedKeyMoved } = await import("../src/core/metadata-params.js");
     const f = guardedKeyMoved(raw, { d: "opus", e: "C:\\Users\\me" });
-    expect(f).not.toBeNull();
+    expect(f).toMatchObject({ key: "d", why: "it reaches model, which a parameter may not change" });
     expect(JSON.stringify(f)).not.toContain("opus");
     expect(metadataFault(agent(raw), { d: "opus", e: "C:\\Users\\me" })).not.toBeNull();
   });
@@ -283,5 +283,17 @@ describe("review round 3: a second value cannot switch the guard to reading by l
     const rule = (fm: string) => ({ type: "rule", name: "r", frontmatterRaw: fm, file: "rule.md", targets: "*" }) as never;
     expect(metadataFault(rule("paths: {{v}}"), { v: "**/*.ts" })).toBeNull();
     expect(metadataFault(rule("paths:\n  - {{v}}\n  - lib/**"), { v: "**/*.ts" })).toBeNull();
+  });
+});
+
+describe("review round 4: the paths: glob exemption is per citation", async () => {
+  const { metadataFault } = await import("../src/core/metadata-params.js");
+  const rule = (fm: string) => ({ type: "rule", name: "r", frontmatterRaw: fm, file: "rule.md", targets: "*" }) as never;
+  it("a key cited in a description and as a paths: item passes with **/*.ts", () => {
+    expect(metadataFault(rule("description: files under {{glob}}\npaths:\n  - {{glob}}"), { glob: "**/*.ts" })).toBeNull();
+    expect(metadataFault(rule("# uses {{glob}}\npaths: {{glob}}"), { glob: "**/*.ts" })).toBeNull();
+  });
+  it("a double quote inside a single-quoted value does not count for the backslash check", () => {
+    expect(metadataFault(rule(`description: 'say "{{k}}"'\npaths: src/x`), { k: "a\\b" })).toBeNull();
   });
 });

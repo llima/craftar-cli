@@ -75,17 +75,18 @@ export function guardedKeyMoved(text: string, params: Record<string, unknown>): 
   for (const m of lf.matchAll(PLACEHOLDER_RE)) if (Object.hasOwn(params, m[1]) && !valued.includes(m[1])) valued.push(m[1]);
   if (valued.length === 0) return null;
   const lines = lf.split("\n");
-  const pathsGlob = (key: string): boolean => {
+  // Whether one citation, at `offset` in the block, is a whole `paths:` value or item whose value starts with `*`.
+  const pathsGlob = (key: string, offset: number): boolean => {
     if (!String(params[key]).startsWith("*")) return false;
+    const i = lf.slice(0, offset).split("\n").length - 1;
     const re = new RegExp(`^\\s*(?:paths:\\s+|-\\s+)(["']?)\\{\\{\\s*${key.replace(/\./g, "\\.")}\\s*\\}\\}\\1\\s*$`);
-    const at = lines.flatMap((l, i) => (l.includes(key) && new RegExp(`\\{\\{\\s*${key.replace(/\./g, "\\.")}\\s*\\}\\}`).test(l) ? [i] : []));
-    return at.every((i) => re.test(lines[i]) && (/^\s*paths:/.test(lines[i]) || topKeyAt(lines, i) === "paths"));
+    return re.test(lines[i]) && (/^\s*paths:/.test(lines[i]) || topKeyAt(lines, i) === "paths");
   };
   const tokens = new Map(valued.map((k, i) => [k, `craftarparam${i}x`]));
   const render = (only: string | null) =>
-    lf.replace(PLACEHOLDER_RE, (all, key: string) => {
+    lf.replace(PLACEHOLDER_RE, (all: string, key: string, offset: number) => {
       if (!tokens.has(key)) return all;
-      return key === only && !pathsGlob(key) ? String(params[key]) : tokens.get(key)!;
+      return key === only && !pathsGlob(key, offset) ? String(params[key]) : tokens.get(key)!;
     });
   const strict = (t: string): Record<string, unknown> | null => {
     try {
@@ -165,7 +166,10 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
             const broken = scalarBreak(value, true);
             if (broken) return { field, key, why: `its value holds ${broken}` };
             // Inside a double-quoted scalar a backslash starts an escape YAML may refuse.
-            const quotesBefore = (line.slice(0, m.index).match(/(?<!\\)"/g) ?? []).length;
+            // Quotes inside a single-quoted span do not open a double-quoted one.
+            const outside = line.slice(0, m.index).replace(/'[^']*'/g, "");
+            const inSingle = (outside.match(/'/g) ?? []).length % 2 === 1;
+            const quotesBefore = inSingle ? 0 : (outside.match(/(?<!\\)"/g) ?? []).length;
             if (quotesBefore % 2 === 1 && value.includes("\\")) return { field, key, why: "its value holds a backslash inside double quotes" };
             const prefix = line.slice(0, m.index);
             const opens = /^\s*(?:-\s+)?(?:[^\s"'#\-][^"']*?:\s+)?(?:-\s+)?$/.test(prefix);
