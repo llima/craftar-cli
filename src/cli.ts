@@ -1,8 +1,8 @@
-import { escapeRefusal, escapingRows, forgeReader } from "./core/contain.js";
+import { containRoot, escapeFileLine, escapeOf, escapeRefusal, escapingRows, forgeReader } from "./core/contain.js";
 import { Command } from "commander";
 import pc from "picocolors";
 import path from "node:path";
-import { promises as fs, statSync } from "node:fs";
+import { promises as fs, statSync, type Stats } from "node:fs";
 import YAML from "yaml";
 import { importClaudeCode, LOCAL_MODES } from "./importers/claude-code.js";
 import { parsePreferKiro } from "./importers/prefer-kiro.js";
@@ -13,6 +13,24 @@ import { assertNotCacheTree, ForgeUnavailableError, classifyForge, CREDENTIAL_HI
 import { allowWrites, forget, listWorkspaces, prune, readRegistry, revokeWrites, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
+import {
+  mergeSettings,
+  missingHookWarnings,
+  plannedRegistrations,
+  readSettingsFile,
+  serialize,
+  settingsDiffLines,
+  wantedBlocks,
+  wantedEnvNames,
+  wantedHooksObject,
+  writeSettingsFile,
+  handlerHash,
+  SettingsShapeError,
+  type ReadSettingsResult,
+  type SettingsDiffDisplay,
+} from "./core/settings-apply.js";
+import { appliedFor, isRegistered, recordApplied } from "./core/registry.js";
+import { EXAMPLE_SETTINGS, settingsExample } from "./emitters/shared.js";
 import { DocsRefusal, validateDocs, type DocsReport } from "./core/docs-validate.js";
 import { generatedIgnored } from "./core/generated-ignored.js";
 import { GitHooksRefusal, HOOK_NAMES, hooksStatus, installHooks, uninstallHooks, type HookName } from "./core/git-hooks.js";
@@ -32,7 +50,7 @@ import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, metadataEdits, unmanaged, type DriftRow } from "./core/drift.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
-import { exists, gitDirty, gitIgnored, gitIsRepo, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
+import { exists, gitDirty, gitIgnored, gitIsRepo, gitTracked, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { applyMove, planLocalize, planShare, proveMove, type ForgeMove, type MoveCommand } from "./core/localize.js";
 import { forgeFor as profileView, isLocalMessage, localCiters, localOwners } from "./core/profile-local.js";
@@ -62,8 +80,9 @@ import { askInit, askClone, confirmInit, againLine, NOT_CLONED_REFUSED, type Ini
 import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type DestinationContext, type RepoState } from "./core/clone.js";
 import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
 import { readlineIo } from "./prompt.js";
+import type { Eol } from "./core/text.js";
 import { recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
-import { syncWorkspace, editRecipes, confirmWrites, DISCARDED_ORPHAN } from "./core/write-actions.js";
+import { syncWorkspace, editRecipes, confirmWrites, confirmSettings, DISCARDED_ORPHAN } from "./core/write-actions.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type UnifyPlan } from "./schema/index.js";
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
@@ -1380,6 +1399,22 @@ workspaces
     const gone = await prune(craftarHome());
     if (gone.length === 0) console.log("nothing to prune");
     for (const p of gone) console.log(`pruned ${p}`);
+  });
+
+/* ---------------------------------------------------------------- settings */
+const settings = program.command("settings").description("Per-machine settings for Claude Code");
+
+settings
+  .command("apply")
+  .description(
+    "Merge the generated hooks and env blocks into .claude/settings.json, keeping local handlers and env values; writes only that file, never craftar.lock — run sync first when the generated example is out of date",
+  )
+  .option("--workspace <dir>", "workspace root", ".")
+  .option("--dry-run", "show the diff, write nothing", false)
+  .option("--yes", "write without asking (required off a terminal)", false)
+  .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
+  .action(async (o) => {
+    await settingsApplyCommand(o);
   });
 
 /* ---------------------------------------------------------------- ui */
@@ -3695,4 +3730,344 @@ function describeDistance(d: Distance): string {
   if (d.identicalAfterNormalization) return "identical after normalization";
   if (d.sameBodyDifferentMeta) return "meta only";
   return `${d.lines} line${d.lines === 1 ? "" : "s"}, ${d.hunks} hunk${d.hunks === 1 ? "" : "s"}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* settingsApplyCommand (spec 52 §4)                                   */
+/* ------------------------------------------------------------------ */
+
+async function settingsApplyCommand(o: {
+  workspace: string;
+  dryRun: boolean;
+  yes: boolean;
+  offline?: boolean;
+}): Promise<void> {
+  // Step 1: Load workspace
+  const ws = await loadWorkspace(o.workspace, load(o, "sync"));
+  warnStderr(ws.warnings);
+  const p = await plan(ws);
+  const lock = await readLock(ws.root);
+  const st = await status(ws, p, lock);
+
+  // Step 2: Refuse as sync refuses — unset declared and escaping paths
+  const unset = unsetDeclared(p);
+  if (unset.length) {
+    for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+    fail(unsetRefusal(unset));
+  }
+  const escaping = escapingRows(st);
+  if (escaping.length) {
+    for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+    fail(escapeRefusal(escaping));
+  }
+
+  // Step 3: Compute wanted blocks
+  const wanted = wantedBlocks(p);
+  if (wanted === null) {
+    console.log("nothing to apply — the plan writes no .claude/settings.craftar.example.json");
+    return;
+  }
+
+  // Step 4: Warn about missing hook files
+  const stateMap = new Map(st.map((s) => [s.path, s.state]));
+  const hookWarnings = missingHookWarnings(wanted.registrations, stateMap);
+  for (const w of hookWarnings) {
+    console.log(`  ${pc.yellow("warn")} ${w}`);
+  }
+
+  // Step 5: Check destination
+  const settingsPath = path.join(ws.root, ".claude", "settings.json");
+  const claudePath = path.join(ws.root, ".claude");
+  const root = await containRoot(ws.root);
+
+  // Check for symbolic links at .claude/settings.json or .claude
+  try {
+    const settingsStat = await fs.lstat(settingsPath);
+    if (settingsStat.isSymbolicLink()) {
+      fail(".claude/settings.json is a symbolic link — craftar does not write through it");
+    }
+  } catch (e) {
+    // File doesn't exist, that's fine
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+
+  try {
+    const claudeStat = await fs.lstat(claudePath);
+    if (claudeStat.isSymbolicLink()) {
+      fail(".claude is a symbolic link — craftar does not write through it");
+    }
+  } catch (e) {
+    // Directory doesn't exist, that's fine
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+
+  // Check escape
+  const escape = await escapeOf(root, settingsPath);
+  if (escape) {
+    fail(escapeFileLine(".claude/settings.json", escape));
+  }
+
+  // Check git
+  const isGit = await gitIsRepo(ws.root);
+  let gitWarning: string | null = null;
+
+  if (isGit) {
+    // Check if tracked
+    const tracked = await gitTracked(ws.root, ".claude/settings.json");
+    if (tracked) {
+      fail(
+        ".claude/settings.json is tracked by git — craftar settings apply writes only a per-machine file; add it to .gitignore and untrack it, or copy the block from .claude/settings.craftar.example.json by hand",
+      );
+    }
+
+    // Check if ignored
+    const ignored = await gitIgnored(ws.root, ".claude/settings.json");
+    if (!ignored) {
+      gitWarning = ".claude/settings.json is not ignored by git — the env values it holds could be committed";
+    }
+  }
+
+  // Step 6: Read record of last apply
+  const home = craftarHome();
+  const regOff = registryOff();
+  let reg: Registry | null = null;
+  let recordHashes: Set<string> = new Set();
+  let noRecordReason: string | null = null;
+
+  if (regOff) {
+    noRecordReason = "the registry is off";
+  } else {
+    try {
+      reg = await readRegistry(home);
+      const wsRegistered = await isRegistered(reg, ws.root);
+      if (wsRegistered) {
+        recordHashes = await appliedFor(reg, ws.root);
+      } else {
+        noRecordReason = "this workspace is not registered — run craftar sync";
+      }
+    } catch {
+      noRecordReason = "the registry cannot be read";
+    }
+  }
+
+  if (noRecordReason && recordHashes.size === 0) {
+    console.log(`  ${pc.yellow("warn")} no record of the last apply (${noRecordReason}): a handler the Forge dropped is kept`);
+  }
+
+  // Step 7: Compute merge and diff
+  // Read the file
+  const readResult = await readSettingsFile(settingsPath);
+
+  let currentValue: Record<string, unknown> | null = null;
+  let currentBytes: Buffer | null = null;
+  let currentStats: Stats | null = null;
+  let indent: string = "  ";
+  let eol: Eol = "lf";
+  let bom = false;
+  let finalNewline = true;
+  let created = false;
+  let reformatted = false;
+
+  if (!readResult.ok) {
+    const err = readResult.error;
+    if (err.kind === "absent" || err.kind === "empty") {
+      // File absent or empty — create new
+      currentValue = null;
+      created = true;
+      if (err.kind === "empty" && err.stats) {
+        currentStats = err.stats; // Preserve mode
+      }
+    } else {
+      // Shape error — refuse
+      fail(err.message);
+    }
+  } else {
+    currentValue = readResult.result.value;
+    currentBytes = readResult.result.bytes;
+    currentStats = readResult.result.stats;
+    indent = readResult.result.indent ?? "  ";
+    eol = readResult.result.eol;
+    bom = readResult.result.bom;
+    finalNewline = readResult.result.finalNewline;
+
+    // Check if reformatting from one-line
+    if (readResult.result.indent === null) {
+      reformatted = true;
+    }
+  }
+
+  // Compute wanted handlers
+  const wantedHandlers = wanted.registrations.map((r) => ({
+    event: r.event,
+    matcher: r.matcher,
+    handler: r.handler,
+    ref: r.ref,
+    index: r.index,
+    hash: handlerHash(r.event, r.matcher, r.handler),
+  }));
+
+  // Merge
+  const mergeResult = mergeSettings(currentValue, wanted, recordHashes);
+
+  // Step 8: Nothing changes?
+  if (!mergeResult.changed && !created) {
+    console.log("unchanged — .claude/settings.json already holds every generated block");
+
+    // Write record if needed (spec 52 §4.1 step 8)
+    if (!o.dryRun && reg && noRecordReason === null) {
+      const wantedHashes = wantedHandlers.map((h) => h.hash);
+      const currentHashSet = new Set(wantedHashes);
+      if (!setsEqual(recordHashes, currentHashSet)) {
+        try {
+          await recordApplied(home, ws.root, wantedHashes);
+        } catch (e) {
+          console.log(`  ${pc.yellow("warn")} could not write the record: ${errorText(e)}`);
+        }
+      }
+    }
+    return;
+  }
+
+  // Compute the new value
+  const newValue = created ? mergeResult.value : mergeResult.value;
+
+  // If creating, build from settingsExample shape
+  let contentBuffer: Buffer;
+  if (created) {
+    // Build the new file content using settingsExample structure
+    const exampleHooks = wantedHooksObject(wanted.registrations);
+    // Convert env names to Record<string, string> with empty values
+    const envRecord: Record<string, string> | null = wanted.envNames.length > 0
+      ? Object.fromEntries(wanted.envNames.map((name) => [name, ""]))
+      : null;
+    const exampleObj = settingsExample(envRecord, exampleHooks);
+    contentBuffer = serialize(exampleObj as Record<string, unknown>, indent, eol, bom, finalNewline);
+  } else {
+    contentBuffer = serialize(newValue, indent, eol, bom, finalNewline);
+  }
+
+  // Step 9: Print diff
+  const diffDisplay = settingsDiffLines(mergeResult.diff, reformatted);
+  printSettingsDiff(diffDisplay, created);
+
+  // Print git warning
+  if (gitWarning) {
+    console.log(`  ${pc.yellow("warn")} ${gitWarning}`);
+  }
+
+  // Step 9 (cont): Under --dry-run, stop here
+  if (o.dryRun) {
+    return;
+  }
+
+  // Step 10: Confirm
+  const isTty = process.stdin.isTTY && process.stdout.isTTY;
+  if (!isTty && !o.yes) {
+    fail("not a terminal — pass --yes to write .claude/settings.json, or --dry-run to see the diff");
+  }
+
+  if (isTty && !o.yes) {
+    const io = readlineIo(process.stdin, process.stdout, { terminal: true });
+    const confirmed = await confirmSettings(io);
+    if (!confirmed) {
+      fail("settings apply cancelled — nothing written");
+    }
+  }
+
+  // Step 11: Write
+  const writeResult = await writeSettingsFile(ws.root, contentBuffer, currentBytes, currentStats);
+  if (!writeResult.written) {
+    fail(writeResult.error);
+  }
+
+  // Write record
+  if (reg && noRecordReason === null) {
+    const wantedHashes = wantedHandlers.map((h) => h.hash);
+    try {
+      await recordApplied(home, ws.root, wantedHashes);
+    } catch (e) {
+      console.log(`  ${pc.yellow("warn")} could not write the record: ${errorText(e)}`);
+    }
+  }
+
+  // Print result
+  console.log(writeResult.created ? "created .claude/settings.json" : "wrote .claude/settings.json");
+}
+
+/** Print the settings diff (spec 52 §7). */
+function printSettingsDiff(diff: SettingsDiffDisplay, created: boolean): void {
+  console.log(".claude/settings.json");
+
+  // env section
+  if (diff.envAdded.length > 0 || diff.envPresent > 0 || diff.envNotShaped > 0) {
+    console.log("  env:");
+    for (const e of diff.envAdded) {
+      if (e.shown) {
+        console.log(`    ${pc.green("+")} ${e.name} (empty)`);
+      }
+    }
+    if (diff.envPresent > 0) {
+      console.log(`    = ${diff.envPresent} wanted name${diff.envPresent === 1 ? "" : "s"} already present`);
+    }
+    if (diff.envNotShaped > 0) {
+      console.log(`    + ${diff.envNotShaped} name${diff.envNotShaped === 1 ? "" : "s"} not shaped like a variable name`);
+    }
+  }
+
+  // hooks section
+  for (const h of diff.hooksRemoved) {
+    if (h.notShown) {
+      console.log(`  hooks.${h.event}:`);
+      console.log(`    ${pc.red("-")} (a handler — not shown: it holds what looks like a credential)`);
+    } else {
+      const matcherStr = h.matcher !== undefined ? `matcher ${JSON.stringify(h.matcher)}` : "no matcher";
+      console.log(`  hooks.${h.event}:`);
+      console.log(`    ${pc.red("-")} ${matcherStr}: ${JSON.stringify(h.handler)}   (from the Forge, no longer planned)`);
+    }
+  }
+
+  for (const h of diff.hooksAdded) {
+    const matcherStr = h.matcher !== undefined ? `matcher ${JSON.stringify(h.matcher)}` : "no matcher";
+    console.log(`  hooks.${h.event}:`);
+    console.log(`    ${pc.green("+")} ${matcherStr}: ${JSON.stringify(h.handler)}   (${h.ref}, registration ${h.index})`);
+  }
+
+  if (diff.hooksMoved > 0) {
+    console.log(`  = ${diff.hooksMoved} Forge handler${diff.hooksMoved === 1 ? "" : "s"} moved to the end of their event`);
+  }
+  if (diff.hooksDuplicatesRemoved > 0) {
+    console.log(`  = ${diff.hooksDuplicatesRemoved} duplicate Forge handler${diff.hooksDuplicatesRemoved === 1 ? "" : "s"} removed`);
+  }
+  if (diff.hooksLocalKept > 0) {
+    console.log(`  hooks: ${diff.hooksLocalKept} local handler${diff.hooksLocalKept === 1 ? "" : "s"} kept`);
+  }
+  if (diff.hooksSameCommand > 0) {
+    console.log(`  ${pc.yellow("warn")} hooks: ${diff.hooksSameCommand} local handler${diff.hooksSameCommand === 1 ? "" : "s"} run${diff.hooksSameCommand === 1 ? "s" : ""} the same command as a Forge handler — remove them by hand if they are old copies`);
+  }
+  if (diff.hooksEmptiedKept > 0) {
+    console.log(`  ${diff.hooksEmptiedKept} emptied group${diff.hooksEmptiedKept === 1 ? "" : "s"} kept for their other keys`);
+  }
+
+  // other keys
+  if (diff.otherKeys.length > 0 || diff.otherKeysNotShaped > 0) {
+    const parts: string[] = [...diff.otherKeys];
+    if (diff.otherKeysNotShaped > 0) {
+      parts.push(`${diff.otherKeysNotShaped} key${diff.otherKeysNotShaped === 1 ? "" : "s"} not shown`);
+    }
+    console.log(`  kept: ${parts.join(", ")}`);
+  }
+
+  // reformatted
+  if (diff.reformatted) {
+    console.log("  reformatted: one line → two spaces");
+  }
+}
+
+/** Check if two sets are equal. */
+function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
+  if (a.size !== b.size) return false;
+  for (const item of a) {
+    if (!b.has(item)) return false;
+  }
+  return true;
 }

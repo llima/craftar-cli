@@ -195,6 +195,21 @@ export async function confirmWrites(io: Pick<InitIo, "confirm" | "say">): Promis
   }
 }
 
+/**
+ * The question of `craftar settings apply` (spec 52 §4.1 step 10): `[yes]` — Enter, y, yes are yes,
+ * n, no and an input that ended are no (yesNo, the init flow's parser), anything else is asked again.
+ */
+export async function confirmSettings(io: Pick<InitIo, "confirm" | "say">): Promise<boolean> {
+  for (;;) {
+    const answer = await io.confirm("Write .claude/settings.json [yes]: ");
+    if (answer === null) return false;
+    if (answer.trim() === "") return true; // default is yes
+    const yn = yesNo(answer);
+    if (yn !== null) return yn;
+    io.say("answer yes or no");
+  }
+}
+
 
 /* ------------------------------------------------------------------ */
 /* McpWriters (spec 40 Part B §5.3–§5.6)                               */
