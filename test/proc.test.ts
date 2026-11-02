@@ -254,3 +254,17 @@ describe("the child's own PATH holds absolute entries only", () => {
     expect((await execProgram(TOOL, ["-e", script], { env })).stdout).toBe(`${PLANTED}|keep-1|keep-2\n`);
   });
 });
+
+describe("streamProgram — a git that stops before reading its stdin (spec 47 §11 item 11)", () => {
+  it("a long list to a git exiting 128 early resolves with the exit code, no EPIPE crash", async () => {
+    const { streamProgram } = await import("../src/core/proc.js");
+    const dir = await tmpDir();
+    try {
+      const input = Array.from({ length: 200_000 }, (_, i) => `docs/file-${i}.md\0`).join("");
+      const r = await streamProgram("git", ["-C", dir, "check-ignore", "--stdin", "-z"], { input, env: { ...process.env, GIT_CEILING_DIRECTORIES: path.dirname(dir) } });
+      expect(r.code).toBe(128);
+    } finally {
+      await removeWithRetry(dir);
+    }
+  });
+});

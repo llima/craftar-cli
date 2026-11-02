@@ -13,6 +13,7 @@ import { assertNotCacheTree, ForgeUnavailableError, classifyForge, CREDENTIAL_HI
 import { allowWrites, forget, listWorkspaces, prune, readRegistry, revokeWrites, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
+import { DocsRefusal, validateDocs, type DocsReport } from "./core/docs-validate.js";
 import { generatedIgnored } from "./core/generated-ignored.js";
 import { GitHooksRefusal, HOOK_NAMES, hooksStatus, installHooks, uninstallHooks, type HookName } from "./core/git-hooks.js";
 import { GitSourceRefusal, gitSource, NotACommitError, type GitSource } from "./core/workspace-source.js";
@@ -81,7 +82,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.45.1");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.46.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -1452,6 +1453,47 @@ program
     if (o.json) console.log(JSON.stringify(report, null, 2));
     else printDoctor(report);
     // exitCode, not process.exit: a piped --json is never cut (spec 24 §5.1).
+    if (report.summary.error > 0 || (o.strict && report.summary.warn > 0)) process.exitCode = 1;
+  });
+
+/* ---------------------------------------------------------------- docs */
+const docs = program.command("docs").description("The workspace's documentation: validate it");
+
+docs
+  .command("validate [path]")
+  .description(
+    "Check the Markdown files under docs/ and .claude/ and at the workspace root, skipping what git ignores: links that resolve inside the workspace (a missing fragment is a warn), tool-call tags leaked outside code, files that are not UTF-8 text, and, where the profile declares a docs block, its categories, required frontmatter, dated file names and related: entries. One line per finding with its fix, never a line of a file, a link's target or a frontmatter value; reads no link over the network and writes nothing. [path], relative to the workspace (not the current directory), limits which findings about a file are reported",
+  )
+  // No commander default: an explicit --workspace without craftar.yaml exits 1, the current directory without one runs the always-on checks only (spec 47 §4.1).
+  .option("--workspace <dir>", "the workspace to check (default: the current directory)")
+  .option("--fetch", "fetch a remote Forge first instead of reading the cached copy (the Forge only, never a link)", false)
+  .option("--strict", "exit 1 on a warn too, not only on an error", false)
+  .option("--json", "machine-readable output", false)
+  .action(async (limit: string | undefined, o) => {
+    const root = o.workspace ?? process.cwd();
+    let configured = true;
+    if (o.workspace !== undefined) {
+      if (!(await exists(path.join(o.workspace, WORKSPACE_FILE))))
+        fail(`no ${WORKSPACE_FILE} in ${path.resolve(o.workspace)} — run docs validate inside a workspace, or without --workspace for the checks that need no configuration`);
+    } else configured = await exists(path.join(root, WORKSPACE_FILE));
+    let report: DocsReport;
+    try {
+      report = await validateDocs({
+        root,
+        version: program.version() ?? "unknown",
+        fetch: o.fetch,
+        strict: o.strict,
+        limit: limit ?? null,
+        configured,
+        typedWorkspace: o.workspace ?? null,
+        home: craftarHome(),
+      });
+    } catch (e) {
+      fail(e instanceof DocsRefusal ? e.message : errorText(e));
+    }
+    if (o.json) console.log(JSON.stringify(report, null, 2));
+    else printDocs(report);
+    // exitCode, not process.exit: a piped report is never cut (spec 47 §4.6).
     if (report.summary.error > 0 || (o.strict && report.summary.warn > 0)) process.exitCode = 1;
   });
 
@@ -3164,6 +3206,19 @@ function printDoctor(r: DoctorReport): void {
   const suffix = (c: DoctorReport["checks"][number]) => (c.fix && c.level !== "ok" && !c.message.endsWith(c.fix) ? ` — ${c.fix}` : "");
   for (const c of r.checks) console.log(`  ${paint(c.level)} ${c.id.padEnd(13)} ${c.message}${suffix(c)}`);
   console.log(`summary: ${r.summary.ok} ok, ${r.summary.warn} warn, ${r.summary.error} error`);
+}
+
+/** The text report of `craftar docs validate` (spec 47 §4.6) — presentation, not contract. */
+function printDocs(r: DocsReport): void {
+  const paint = (l: string) => (l === "error" ? pc.red : l === "warn" ? pc.yellow : pc.dim)(l.padEnd(6));
+  for (const c of r.checks) {
+    const where = c.path === null ? "" : `${c.path}${c.line === null ? "" : `:${c.line}${c.column === null ? "" : `:${c.column}`}`} — `;
+    console.log(`  ${paint(c.level)} ${c.id.padEnd(11)} ${where}${c.message}`);
+    if (c.fix !== null) console.log(`           fix: ${c.fix}`);
+  }
+  const n = (k: number, one: string) => `${k} ${k === 1 ? one : `${one}s`}`;
+  // `warn` stays a level word, as in doctor's summary.
+  console.log(`\n${n(r.summary.error, "error")}, ${r.summary.warn} warn in ${n(r.scanned, "file")}`);
 }
 
 /** The text report of `craftar cache prune` (spec 26 §4.4) — presentation, not contract. */
