@@ -9,7 +9,6 @@ import { ingredientText, occupied, recipeFiles, resolveAll, swapEntry, unreadabl
 import { impactOf, planAll, type ForgeWorkspace, type Planned } from "./impact.js";
 import { recipesOrWritten } from "./integrations.js";
 import { isLocalMessage, localOwners, readsProfileLocal } from "./profile-local.js";
-import { resolve } from "./resolve.js";
 import { plan, type Workspace } from "./sync.js";
 import type { WriteJournal } from "./unify.js";
 import { editYamlText } from "./yaml-edit.js";
@@ -294,6 +293,7 @@ export async function proveMove(forge: Forge, move: ForgeMove, registered: Forge
       throw new Error(`${command}: the Forge would not load after the move:\n${(e instanceof Error ? e.message : String(e)).split(copy).join(forge.root)}\nnothing written`);
     }
 
+    const resolvedBefore = resolveAll(forge);
     for (const q of [...forge.profiles.keys()].sort()) {
       let before: Map<string, Buffer>;
       try {
@@ -301,13 +301,7 @@ export async function proveMove(forge: Forge, move: ForgeMove, registered: Forge
       } catch (e) {
         // A profile that does not resolve was warned about, or refused, by planLocalize / planShare; one that resolves
         // and does not plan is said here, never skipped silently.
-        let resolves = true;
-        try {
-          resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile: q }));
-        } catch {
-          resolves = false;
-        }
-        if (resolves) warnings.push(`profile ${q} does not plan today (${firstLine(e).split(copy).join(forge.root)}) — not proved`);
+        if (!(resolvedBefore.get(q) instanceof Error)) warnings.push(`profile ${q} does not plan today (${firstLine(e).split(copy).join(forge.root)}) — not proved`);
         continue;
       }
       let after: Map<string, Buffer>;

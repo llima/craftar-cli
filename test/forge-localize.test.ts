@@ -5,7 +5,6 @@ import YAML from "yaml";
 import { listFiles, loadForge } from "../src/core/forge.js";
 import { forgeWorkspaces } from "../src/core/impact.js";
 import { applyMove, planLocalize, planShare, proveMove, type ForgeMove } from "../src/core/localize.js";
-import { realpathSync } from "node:fs";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 
@@ -17,7 +16,6 @@ afterEach(async () => {
 });
 
 const home = () => process.env.CRAFTAR_HOME!;
-const fsReal = (p: string) => realpathSync.native(p);
 
 const base: ForgeSpec = {
   ingredients: [rule("style", "# Style\n"), rule("x", "# X\n")],
@@ -199,7 +197,8 @@ describe("forge localize — what the proof cannot plan, and links on the edit's
     // Register it by hand: a writing sync would refuse, since its plan fails.
     const reg = path.join(home(), "registry.json");
     const r = JSON.parse(await fs.readFile(reg, "utf8"));
-    const acmeEntry = r.workspaces.find((w: { path: string }) => w.path === fsReal(s.ws.acme));
+    const acmeReal = await fs.realpath(s.ws.acme);
+    const acmeEntry = r.workspaces.find((w: { path: string }) => w.path === acmeReal);
     r.workspaces.push({ ...acmeEntry, path: await fs.realpath(gws), profile: "globex" });
     await fs.writeFile(reg, JSON.stringify(r, null, 2));
     const f = await loadForge(s.forge);
