@@ -475,21 +475,17 @@ export function mergeSettings(
           // Local handler
           diff.localKept++;
 
-          // Check if it has the same command/args as a wanted handler
+          // Check if it has the same command/args as any wanted handler (spec §5.1)
+          // Count each local handler once if command+args match any wanted handler
           if (typeof handler === "object" && handler !== null) {
             const handlerObj = handler as Record<string, unknown>;
-            for (const w of wantedHandlers) {
-              if (
-                typeof w.handler === "object" &&
-                w.handler !== null &&
-                w.event === event &&
-                w.matcher === groupMatcher
-              ) {
-                const wObj = w.handler as Record<string, unknown>;
-                if (handlerObj.command === wObj.command && sameHandler(handlerObj.args, wObj.args)) {
-                  diff.sameCommandLocal++;
-                }
-              }
+            const matchesAny = wantedHandlers.some((w) => {
+              if (typeof w.handler !== "object" || w.handler === null) return false;
+              const wObj = w.handler as Record<string, unknown>;
+              return handlerObj.command === wObj.command && sameHandler(handlerObj.args, wObj.args);
+            });
+            if (matchesAny) {
+              diff.sameCommandLocal++;
             }
           }
         }
