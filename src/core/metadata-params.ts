@@ -114,6 +114,26 @@ export function guardedKeyMoved(text: string, params: Record<string, unknown>): 
   return null;
 }
 
+/**
+ * Whether the end of `prefix` sits inside a double-quoted scalar: one left-to-right scan, where a `'` means nothing
+ * inside double quotes, a `"` means nothing inside single quotes, and `\"` does not close a double-quoted value.
+ */
+function insideDoubleQuotes(prefix: string): boolean {
+  let inDouble = false;
+  let inSingle = false;
+  for (let i = 0; i < prefix.length; i++) {
+    const c = prefix[i];
+    if (inDouble) {
+      if (c === "\\") i++;
+      else if (c === '"') inDouble = false;
+    } else if (inSingle) {
+      if (c === "'") inSingle = false;
+    } else if (c === '"') inDouble = true;
+    else if (c === "'") inSingle = true;
+  }
+  return inDouble;
+}
+
 /** What in a value breaks a one-line YAML scalar, in the order a message names it; null when nothing does. */
 function scalarBreak(value: string, quotes: boolean): string | null {
   if (/[\r\n]/.test(value)) return "a line break";
@@ -167,13 +187,13 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
             if (broken) return { field, key, why: `its value holds ${broken}` };
             // Inside a double-quoted scalar a backslash starts an escape YAML may refuse.
             // Quotes inside a single-quoted span do not open a double-quoted one.
-            const outside = line.slice(0, m.index).replace(/'[^']*'/g, "");
-            const inSingle = (outside.match(/'/g) ?? []).length % 2 === 1;
-            const quotesBefore = inSingle ? 0 : (outside.match(/(?<!\\)"/g) ?? []).length;
-            if (quotesBefore % 2 === 1 && value.includes("\\")) return { field, key, why: "its value holds a backslash inside double quotes" };
+            if (insideDoubleQuotes(line.slice(0, m.index)) && value.includes("\\")) return { field, key, why: "its value holds a backslash inside double quotes" };
             const prefix = line.slice(0, m.index);
-            const opens = /^\s*(?:-\s+)?(?:[^\s"'#\-][^"']*?:\s+)?(?:-\s+)?$/.test(prefix);
-            if (opens && opensOther(value) && !(value[0] === "*" && under === "paths")) {
+            // At the start of a value or an item — or of a flow element, after `[` or `,`.
+            const flow = /[[,]\s*$/.test(prefix) && !insideDoubleQuotes(prefix);
+            const opens = /^\s*(?:-\s+)?(?:[^\s"'#\-][^"']*?:\s+)?(?:-\s+)?$/.test(prefix) || flow;
+            // `*` is let through for a paths: block value or item, never a flow element.
+            if (opens && opensOther(value) && !(value[0] === "*" && under === "paths" && !flow)) {
               return { field, key, why: "its value starts with a character that opens something other than plain text" };
             }
           }

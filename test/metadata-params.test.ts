@@ -297,3 +297,17 @@ describe("review round 4: the paths: glob exemption is per citation", async () =
     expect(metadataFault(rule(`description: 'say "{{k}}"'\npaths: src/x`), { k: "a\\b" })).toBeNull();
   });
 });
+
+describe("review round 5: one scan of the quoting state, and a flow element opens a scalar", async () => {
+  const { metadataFault } = await import("../src/core/metadata-params.js");
+  const rule = (fm: string) => ({ type: "rule", name: "r", frontmatterRaw: fm, file: "rule.md", targets: "*" }) as never;
+  it("an apostrophe inside a double-quoted value keeps the backslash check, strict block or not", () => {
+    expect(metadataFault(rule(`description: "it's under {{root}}"\npaths: src/x`), { root: "C:\\new" })?.why).toMatch(/backslash/);
+    expect(metadataFault(rule(`description: "it's under {{root}}"\npaths: **/*.ts`), { root: "C:\\new" })?.why).toMatch(/backslash/);
+    expect(metadataFault(rule(`description: 'say "{{k}}"'\npaths: src/x`), { k: "a\\b" })).toBeNull();
+  });
+  it("a flow element that a value would open is refused in a block read by lines", () => {
+    expect(metadataFault(rule("paths: [{{v}}, **/*.md]"), { v: "*x" })).not.toBeNull();
+    expect(metadataFault(rule("paths: [lib/**, {{v}}]\nnote: **"), { v: "]" })).not.toBeNull();
+  });
+});
