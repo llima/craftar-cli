@@ -2,7 +2,9 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import YAML from "yaml";
 import { POLICY, nameShown, validateDocs, type DocsCheck, type DocsReport } from "../src/core/docs-validate.js";
+import { loadForge } from "../src/core/forge.js";
 import { profile, recipe, rule, scenario, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 import { removeWithRetry } from "./helpers/fs.js";
 import { hermeticGit } from "./helpers/hermetic-git.js";
@@ -430,10 +432,13 @@ describe("§4.4 — policy, and the always-on checks in every case", () => {
 
   it("an unknown profile, and profile names holding a marker, ##vso[ or a line feed, are absent from the output", async () => {
     const s = await scenario(
-      { ...forgeWith(), profiles: [profile("acme", ["base"]), profile(`${M}`, ["base"]), profile("##vso[task.x]", ["base"]), profile("a\nb", ["base"])] },
+      { ...forgeWith(), profiles: [profile("acme", ["base"]), profile(`${M}`, ["base"]), profile("##vso[task.x]", ["base"])] },
       { config: { profile: `nope${M}` }, files: BROKEN },
     );
     cleanups.push(() => removeWithRetry(s.root));
+    // Windows cannot hold a line feed in a folder name; the Forge keys a profile by its `name:`, not its folder.
+    await writeFiles(s.forgeRoot, { "profiles/lf/profile.yaml": YAML.stringify(profile("a\nb", ["base"])) });
+    expect([...(await loadForge(s.forgeRoot)).profiles.keys()]).toContain("a\nb");
     const r = await run(s.wsRoot);
     expect(r.checks.find((c) => c.id === "policy")).toMatchObject({ level: "error", message: POLICY.notRead("profile") });
     const out = JSON.stringify(r);
