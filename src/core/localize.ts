@@ -1,18 +1,17 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { RecipeSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
+import { isDeepStrictEqual } from "node:util";
+import { FORGE_SCHEMA_PROFILE_LOCAL, RecipeSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { readForgeFile, readForgeText } from "./contain.js";
 import { assertNoLinkIn, assertNoLinkOnPath, copyForgeForProof, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
 import { ingredientText, occupied, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
 import { impactOf, planAll, type ForgeWorkspace, type Planned } from "./impact.js";
 import { recipesOrWritten } from "./integrations.js";
 import { isLocalMessage, localOwners, readsProfileLocal } from "./profile-local.js";
-import { FORGE_SCHEMA_PROFILE_LOCAL } from "../schema/index.js";
 import { plan, type Workspace } from "./sync.js";
 import type { WriteJournal } from "./unify.js";
 import { editYamlText } from "./yaml-edit.js";
-import { isDeepStrictEqual } from "node:util";
 
 // Spec 51 §5 — `forge localize` moves a root ingredient only one profile resolves into `profiles/<p>/`, with the root
 // recipes that would otherwise cite a local (L3); `forge share` moves a local back to the root. Three steps a caller

@@ -214,6 +214,40 @@ describe("import --local (spec 51 §5.3)", () => {
     expect(runCli(["sync", "--check", "--workspace", s.ws]).code).toBe(0);
   });
 
+  it("a reused local no resolved recipe cites: refused under never, wired into acme-local under auto", async () => {
+    const files = { ...localRule("acme", "x", "# X\n"), ...localRecipe("acme", "acme-extra", ["rule/x"]) };
+    const s = await setup({ ...spec, profiles: [profile("acme", ["base", "acme-extra"]), profile("globex", ["base"])] }, { files });
+    await writeFiles(s.forge, localRecipe("acme", "acme-extra", []));
+    const before = await snapshot(s.forge);
+    const never = importInto(s);
+    expect(never.code).toBe(1);
+    expect(never.stderr).toContain("import: rule/x (profiles/acme/ingredients/rules/x) matches the workspace, but no recipe profile acme resolves cites it");
+    expect(await snapshot(s.forge)).toEqual(before);
+    const auto = importInto(s, "auto");
+    expect(auto.code, auto.stderr).toBe(0);
+    const after = await snapshot(s.forge);
+    expect(YAML.parse(after["profiles/acme/recipes/acme-local.yaml"]).ingredients).toEqual(["rule/x"]);
+    expect(YAML.parse(after["profiles/acme/profile.yaml"]).recipes).toEqual(["base", "acme-extra", "acme-local"]);
+    expect(runCli(["sync", "--check", "--workspace", s.ws]).code).toBe(0);
+  });
+
+  it("a moved stack-x whose local's source is gone: a re-import keeps the local and the plan is unchanged", async () => {
+    const s = await setup({ ingredients: [rule("style", "# S\n"), rule("x", "# X\n")], recipes: [recipe("base", ["rule/style"]), recipe("stack-x", ["rule/x"])], profiles: [profile("acme", ["base", "stack-x"]), profile("globex", ["base"])] });
+    git(s.forge, "init", "-q", "-b", "main");
+    git(s.forge, "add", "-A");
+    git(s.forge, "commit", "-q", "-m", "forge");
+    expect(runCli(["forge", "localize", "rule/x", "--profile", "acme", "--forge", s.forge]).code).toBe(0);
+    await fs.rm(path.join(s.ws, ".claude/rules/x.md"));
+    const r = importInto(s);
+    expect(r.code, r.stderr).toBe(0);
+    // The moved stack-x is not a recipe import computes, so it is left as it is (no kept-local warning: that one is
+    // worded for a computed recipe of the folder — a Part A loose end, recorded in the spec).
+    expect(r.stdout).toContain("recipes: base");
+    expect(await fs.readFile(path.join(s.forge, "profiles/acme/ingredients/rules/x/rule.md"), "utf8")).toBe("# X\n");
+    const st = JSON.parse(runCli(["status", "--json", "--workspace", s.ws]).stdout);
+    expect(st.statuses.filter((x: { state: string }) => x.state !== "unchanged").map((x: { path: string; state: string }) => [x.path, x.state])).toEqual([[".claude/rules/x.md", "new"]]);
+  });
+
   it("forge localize of a rule held in base--acme, then a re-import: every file unchanged", async () => {
     const s = await setup({ ingredients: [rule("style", "# S\n"), rule("x", "# X\n")], recipes: [recipe("base", ["rule/style"]), recipe("base--acme", ["rule/style", "rule/x"])], profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"])] });
     git(s.forge, "init", "-q", "-b", "main");
