@@ -4,4 +4,6 @@ import { defineConfig } from "vitest/config";
 // testTimeout: 60 s on Windows only. A CLI child costs about three times what it costs on Linux there, and
 // the CI runners now and then run one test at 2.5 times its usual time: tests that normally take 12–17 s
 // passed 30 s three times in two days (2026-10-12 and 13) and passed when run again. Elsewhere 30 s stays.
-export default defineConfig({ test: { include: ["test/**/*.test.ts"], setupFiles: ["test/setup/craftar-home.ts"], testTimeout: process.platform === "win32" ? 60000 : 30000, maxWorkers: 6 } });
+// hookTimeout: 30 s on Windows only. An afterEach that removes three git-used directories through removeWithRetry
+// can pass vitest's 10 s default there (seen in three ci runs, 2026-11-02). Elsewhere the default stays.
+export default defineConfig({ test: { include: ["test/**/*.test.ts"], setupFiles: ["test/setup/craftar-home.ts"], testTimeout: process.platform === "win32" ? 60000 : 30000, hookTimeout: process.platform === "win32" ? 30000 : 10000, maxWorkers: 6 } });

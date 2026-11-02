@@ -25,7 +25,7 @@ describe("CI contract", () => {
 
   it("runs install, typecheck, build and test", () => {
     const runs = ci.jobs.test.steps.map((s: { run?: string }) => s.run).filter(Boolean);
-    expect(runs).toEqual(expect.arrayContaining(["npm ci", "npm run typecheck", "npm run build", "npm test"]));
+    expect(runs).toEqual(expect.arrayContaining(["npm ci", "npm run typecheck", "npm run build", "npm test -- --shard=$SHARD"]));
   });
 
   it("is read-only", () => {
