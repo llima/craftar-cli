@@ -242,12 +242,15 @@ export class SettingsShapeError extends Error {
   readonly kind: "absent" | "empty" | "shape";
   /** The file stats, if available (for empty files to preserve mode). */
   readonly stats?: Stats;
+  /** The file bytes, if available (for empty files to compare on re-read). */
+  readonly bytes?: Buffer;
 
-  constructor(message: string, kind: "absent" | "empty" | "shape" = "shape", stats?: Stats) {
+  constructor(message: string, kind: "absent" | "empty" | "shape" = "shape", stats?: Stats, bytes?: Buffer) {
     super(message);
     this.name = "SettingsShapeError";
     this.kind = kind;
     this.stats = stats;
+    this.bytes = bytes;
   }
 }
 
@@ -801,8 +804,8 @@ export async function readSettingsFile(
   const textRaw = bytes.toString("utf8");
   const textNoBom = hasBomFlag ? textRaw.slice(1) : textRaw;
   if (textNoBom.trim() === "") {
-    // Return as absent with the stats (for mode preservation)
-    return { ok: false, error: new SettingsShapeError("empty", "empty", stats) };
+    // Return as absent with the stats and bytes (for mode preservation and re-read comparison)
+    return { ok: false, error: new SettingsShapeError("empty", "empty", stats, bytes) };
   }
 
   // Check UTF-8

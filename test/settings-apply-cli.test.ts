@@ -1267,3 +1267,65 @@ describe("G3. printSettingsDiff prints events safely", () => {
     expect(safeEvent).toMatch(/^#\d+$/);
   });
 });
+
+describe("F1. empty file is written, keeping its mode", () => {
+  let home: string;
+  let claudeDir: string;
+
+  beforeEach(async () => {
+    home = await tmpDir("craftar-f1-home-");
+    claudeDir = await tmpDir("craftar-f1-claude-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(() => fs.rm(claudeDir, { recursive: true, force: true }));
+  });
+
+  it("0-byte file with mode 0640 → exit 0, content equals example's object, mode 0640 kept, stdout says wrote", async () => {
+    const s = await forgeAt(1, standardForge());
+    cleanups.push(s.cleanup);
+
+    await initGit(s.wsRoot);
+    await gitignoreSettings(s.wsRoot);
+
+    // Run sync
+    runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir } });
+
+    // Create a 0-byte file with mode 0640
+    await fs.mkdir(path.join(s.wsRoot, ".claude"), { recursive: true });
+    const settingsFile = path.join(s.wsRoot, ".claude", "settings.json");
+    await fs.writeFile(settingsFile, "");
+    if (process.platform !== "win32") {
+      await fs.chmod(settingsFile, 0o640);
+    }
+
+    // Run settings apply
+    const r = runCli(["settings", "apply", "--workspace", s.wsRoot, "--yes"], {
+      env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir },
+    });
+
+    expect(r.code, `apply failed: ${r.stderr}`).toBe(0);
+    expect(r.stdout).toContain("wrote");
+
+    // Check content equals example's object (2-space, LF)
+    const content = await fs.readFile(settingsFile, "utf8");
+    const parsed = JSON.parse(content);
+    expect(parsed.env).toBeDefined();
+    expect(typeof parsed.env.ACME_TOKEN).toBe("string");
+
+    // Verify 2-space indent (the JSON has 2-space base indent, nested content goes deeper)
+    // Check that the file starts with 2-space indented keys (env, hooks)
+    const lines = content.split("\n");
+    // The env and hooks keys should be 2-space indented
+    expect(lines.some((l) => l.startsWith('  "env"'))).toBe(true);
+    expect(content).not.toContain("\t"); // no tabs
+
+    // Check LF line endings
+    expect(content).toContain("\n");
+    expect(content).not.toContain("\r\n");
+
+    // Check mode is preserved (skip on win32)
+    if (process.platform !== "win32") {
+      const stat = await fs.stat(settingsFile);
+      expect(stat.mode & 0o777).toBe(0o640);
+    }
+  });
+});

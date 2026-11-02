@@ -3870,11 +3870,18 @@ async function settingsApplyCommand(o: {
 
   if (!readResult.ok) {
     const err = readResult.error;
-    if (err.kind === "absent" || err.kind === "empty") {
-      // File absent or empty — create new
+    if (err.kind === "absent") {
+      // File absent — create new
       currentValue = null;
       created = true;
-      if (err.kind === "empty" && err.stats) {
+    } else if (err.kind === "empty") {
+      // File empty — treat as creation but carry bytes and stats for re-read comparison
+      currentValue = null;
+      created = false; // Not really "created" — the file exists, just empty
+      if (err.bytes) {
+        currentBytes = err.bytes;
+      }
+      if (err.stats) {
         currentStats = err.stats; // Preserve mode
       }
     } else {
