@@ -209,3 +209,22 @@ describe("spec 50 §5.4: a value that would break the file fails the plan, never
     expect(files.get(".claude/agents/ag.md")).toContain("description: {{v}}");
   });
 });
+
+describe("review round 1: metadataFault closes the §8 guard and the §5.4 list", async () => {
+  const { metadataFault } = await import("../src/core/metadata-params.js");
+  const agent = (frontmatterRaw: string) => ({ type: "agent", name: "a", frontmatterRaw, file: "agent.md", targets: "*" }) as never;
+  const command = (description: string) => ({ type: "command", name: "c", description, file: "command.md", targets: "*" }) as never;
+  it("a citation under a quoted guarded key, in key position, or on a flow mapping line is refused", () => {
+    expect(metadataFault(agent('name: a\n"model": {{m}}'), { m: "opus" })?.why).toMatch(/model/);
+    expect(metadataFault(agent("name: a\n'tools': {{m}}"), { m: "Read" })?.why).toMatch(/tools/);
+    expect(metadataFault(agent("name: a\n{{k}}: opus"), { k: "model" })).not.toBeNull();
+    expect(metadataFault(agent("{name: a, model: {{m}}}"), { m: "opus" })).not.toBeNull();
+  });
+  it("a value starting with '- ', '? ' or a backtick where it opens a scalar is refused", () => {
+    for (const v of ["- run it", "? why", "`cmd`"]) {
+      expect(metadataFault(command("{{d}}"), { d: v }), v).not.toBeNull();
+      expect(metadataFault(agent("name: a\ndescription: {{d}}"), { d: v }), v).not.toBeNull();
+    }
+    expect(metadataFault(command("Run {{d}}"), { d: "- it" })).toBeNull();
+  });
+});

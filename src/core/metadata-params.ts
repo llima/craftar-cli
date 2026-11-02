@@ -71,10 +71,16 @@ function scalarBreak(value: string, quotes: boolean): string | null {
 /** The top-level key of a raw block that a given line sits under, or null (a line before any key). */
 function topKeyAt(lines: string[], index: number): string | null {
   for (let i = index; i >= 0; i--) {
-    const m = /^([^\s#'"\-][^:]*?):(?:\s|$)/.exec(lines[i]);
-    if (m) return m[1].trim();
+    // A key may be quoted (`"model": x` reads as `model`).
+    const m = /^(?:"([^"]*)"|'([^']*)'|([^\s#'"\-][^:]*?)):(?:\s|$)/.exec(lines[i]);
+    if (m) return (m[1] ?? m[2] ?? m[3]).trim();
   }
   return null;
+}
+
+/** A value that opens something other than plain text when it starts a scalar (spec 50 §5.4, and `- `, `? `, a backtick). */
+function opensOther(value: string): boolean {
+  return value.length > 0 && (OPENERS.has(value[0]) || value.startsWith("- ") || value === "-" || value.startsWith("? ") || value === "?" || value[0] === "`");
 }
 
 /**
@@ -93,13 +99,17 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
             const key = m[1];
             const under = topKeyAt(lines, i);
             if (under !== null && GUARDED_KEYS.has(under)) return { field, key, why: `it stands under ${under}, which a parameter may not change` };
+            // A citation that could name a key, or that sits in a flow mapping, could reach tools, allowed-tools or model (§8).
+            const colon = line.indexOf(": ");
+            if (colon === -1 ? /:\s*$/.test(line.slice(m.index)) : m.index < colon) return { field, key, why: "it stands where a key is written, which a parameter may not set" };
+            if (/^\s*(?:-\s+)?\{(?!\{)/.test(line)) return { field, key, why: "it stands in a flow mapping, which a parameter may not change" };
             const value = valueOf(key);
             if (value === null) continue;
             const broken = scalarBreak(value, true);
             if (broken) return { field, key, why: `its value holds ${broken}` };
             const prefix = line.slice(0, m.index);
             const opens = /^\s*(?:-\s+)?(?:[^\s"'#\-][^"']*?:\s+)?(?:-\s+)?$/.test(prefix);
-            if (opens && value.length > 0 && OPENERS.has(value[0]) && !(value[0] === "*" && under === "paths")) {
+            if (opens && opensOther(value) && !(value[0] === "*" && under === "paths")) {
               return { field, key, why: "its value starts with a character that opens something other than plain text" };
             }
           }
@@ -118,7 +128,7 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
           if (value === null) continue;
           const broken = scalarBreak(value, false);
           if (broken) return { field, key: m[1], why: `its value holds ${broken}` };
-          if (m.index === 0 && value.length > 0 && OPENERS.has(value[0])) {
+          if (m.index === 0 && opensOther(value)) {
             return { field, key: m[1], why: "its value starts with a character that opens something other than plain text" };
           }
         }
