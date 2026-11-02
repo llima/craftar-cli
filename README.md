@@ -699,7 +699,7 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packagi
 
 ## Upgrading
 
-### to the next release
+### to 0.49.0
 
 - **Every `.kiro/agents/*.json` gains `permissions.rules`**, after `resources`, derived from the agent's tools as kiro-cli 2.37 derives them (*Targets*); `tools`, `allowedTools` and every other key keep their bytes, and no `kiroUpgrade` is written. kiro-cli 2.37 rewrites an agent file without `permissions` at every session and leaves a `<agent>.json.bak` beside it; with the key present it leaves the file alone.
 - **A workspace Kiro has not rewritten** sees `update` on those files: run `craftar sync`.
