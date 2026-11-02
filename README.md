@@ -150,7 +150,7 @@ An ingredient's `as` and a script's or hook's `files` entries become part of the
 
 ```yaml
 name: forge
-schema: 2          # 1 (the default), 2, 3, 4, 5, 6, 7 or 8; 2 is required for section markers, 3 for integrations, 4 for params in an MCP server, 5 for agents-md.primary, 6 for target-scoped sections, 7 for the rules index, 8 for profile-local ingredients and recipes — each includes the ones below it
+schema: 2          # 1 (the default), 2, 3, 4, 5, 6, 7, 8 or 9; 2 is required for section markers, 3 for integrations, 4 for params in an MCP server, 5 for agents-md.primary, 6 for target-scoped sections, 7 for the rules index, 8 for profile-local ingredients and recipes, 9 for params in metadata — each includes the ones below it
 description: Craftar Forge — shared harness ingredients, recipes and client profiles.
 ```
 
