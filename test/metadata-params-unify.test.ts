@@ -322,3 +322,15 @@ describe("review round 1: the metadata proof covers a profile that resolves the 
     expect(git(forge, "status", "--porcelain")).toBe("");
   });
 });
+
+describe("review round 2: an mcp ingredient's file spelled as a metadata entry fails the plan as forge diff does", () => {
+  it("the plan refuses it at the gate", async () => {
+    const spec: ForgeSpec = {
+      ingredients: [{ meta: { type: "mcp", name: "m", server: { command: "npx", args: ["x"] } }, files: { "ingredient.yaml#description": "x\n" } }],
+      recipes: [recipe("base", ["mcp/m"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    };
+    const { ws } = await forgeOf(GATE, spec, ["claude-code"]);
+    await expect(plan(await loadWorkspace(ws, { home: process.env.CRAFTAR_HOME }))).rejects.toThrow(/mcp\/m: .*ingredient\.yaml#description/);
+  });
+});
