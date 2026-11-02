@@ -23,7 +23,7 @@ import {
 } from "../emitters/shared.js";
 import type { Plan, FileState } from "./sync.js";
 import type { ResolvedIngredient } from "./resolve.js";
-import type { Ingredient } from "../schema/index.js";
+import { ENV_NAME, type Ingredient } from "../schema/index.js";
 
 /* ------------------------------------------------------------------ */
 /* cloneJson: deep copy into null-prototype objects (D1)               */
@@ -949,6 +949,12 @@ export interface SettingsDiffDisplay {
   reformatted: boolean;
 }
 
+/** Whether an env name matches the ENV_NAME pattern (spec 27 §5.1). */
+const ENV_NAME_REGEX = new RegExp(`^${ENV_NAME}$`);
+function isEnvNameShaped(name: string): boolean {
+  return ENV_NAME_REGEX.test(name);
+}
+
 /**
  * Generate diff display info from the merge diff (spec 52 §7).
  * Handlers are filtered for terminal safety and secrets before display.
@@ -963,7 +969,7 @@ export function settingsDiffLines(
   let envNotShaped = 0;
 
   for (const name of diff.envAdded) {
-    if (nameShaped(name)) {
+    if (isEnvNameShaped(name)) {
       envAdded.push({ name, shown: true });
     } else {
       envNotShaped++;

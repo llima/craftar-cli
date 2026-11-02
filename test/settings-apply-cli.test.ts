@@ -1574,3 +1574,32 @@ describe("F5. name a stale local hook whenever there is no record", () => {
     expect(r.stdout).toContain("which does not exist");
   });
 });
+
+
+describe("F6. env names shown by ENV_NAME", () => {
+  it('env name "ACME-TOKEN" (nameShaped but not ENV_NAME) → counted as not shaped, not printed', async () => {
+    const { settingsDiffLines } = await import("../src/core/settings-apply.js");
+
+    // Create a diff with an env name that is nameShaped but not ENV_NAME
+    const diff = {
+      envAdded: ["ACME-TOKEN"], // dash makes it not ENV_NAME, but NAME_LIKE allows it
+      envPresent: 0,
+      added: [],
+      removed: [],
+      moved: 0,
+      duplicatesRemoved: 0,
+      localKept: 0,
+      sameCommandLocal: 0,
+      emptiedKept: 0,
+      otherKeys: [],
+    };
+
+    const display = settingsDiffLines(diff, false);
+
+    // ACME-TOKEN should NOT be in envAdded (not ENV_NAME shaped)
+    expect(display.envAdded.find((e) => e.name === "ACME-TOKEN")).toBeUndefined();
+
+    // It should be counted in envNotShaped
+    expect(display.envNotShaped).toBe(1);
+  });
+});
