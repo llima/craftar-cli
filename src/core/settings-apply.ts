@@ -904,8 +904,8 @@ export interface SettingsDiffDisplay {
   envAdded: { name: string; shown: boolean }[];
   envPresent: number;
   envNotShaped: number;
-  hooksAdded: { event: string; matcher: string | undefined; handler: unknown; ref: string; index: number }[];
-  hooksRemoved: { event: string; matcher: string | undefined; handler: unknown; notShown: boolean }[];
+  hooksAdded: { event: string; safeEvent: string; matcher: string | undefined; handler: unknown; ref: string; index: number }[];
+  hooksRemoved: { event: string; safeEvent: string; matcher: string | undefined; handler: unknown; notShown: boolean }[];
   hooksLocalKept: number;
   hooksMoved: number;
   hooksDuplicatesRemoved: number;
@@ -920,7 +920,12 @@ export interface SettingsDiffDisplay {
  * Generate diff display info from the merge diff (spec 52 §7).
  * Handlers are filtered for terminal safety and secrets before display.
  */
-export function settingsDiffLines(diff: MergeDiff, reformatted: boolean): SettingsDiffDisplay {
+export function settingsDiffLines(
+  diff: MergeDiff,
+  reformatted: boolean,
+  plannedEventKeys?: string[],
+  fileHooksKeys?: string[],
+): SettingsDiffDisplay {
   const envAdded: { name: string; shown: boolean }[] = [];
   let envNotShaped = 0;
 
@@ -933,9 +938,13 @@ export function settingsDiffLines(diff: MergeDiff, reformatted: boolean): Settin
   }
 
   const hooksAdded: SettingsDiffDisplay["hooksAdded"] = [];
-  for (const h of diff.added) {
+  for (let i = 0; i < diff.added.length; i++) {
+    const h = diff.added[i];
+    // Position among planned events for added handlers (G3)
+    const position = plannedEventKeys ? plannedEventKeys.indexOf(h.event) + 1 : i + 1;
     hooksAdded.push({
       event: h.event,
+      safeEvent: safeEventName(h.event, position),
       matcher: h.matcher,
       handler: h.handler,
       ref: h.ref,
@@ -944,10 +953,14 @@ export function settingsDiffLines(diff: MergeDiff, reformatted: boolean): Settin
   }
 
   const hooksRemoved: SettingsDiffDisplay["hooksRemoved"] = [];
-  for (const h of diff.removed) {
+  for (let i = 0; i < diff.removed.length; i++) {
+    const h = diff.removed[i];
     const notShown = shouldHideHandler(h.matcher, h.handler);
+    // Position among file's hooks keys for removed handlers (G3)
+    const position = fileHooksKeys ? fileHooksKeys.indexOf(h.event) + 1 : i + 1;
     hooksRemoved.push({
       event: h.event,
+      safeEvent: safeEventName(h.event, position > 0 ? position : i + 1),
       matcher: h.matcher,
       handler: h.handler,
       notShown,
@@ -985,6 +998,15 @@ export function settingsDiffLines(diff: MergeDiff, reformatted: boolean): Settin
 /**
  * Whether a handler should be hidden in the diff (contains secrets or terminal-unsafe chars).
  */
+/**
+ * Safe event name for display (G3): nameShaped → the event itself, else #<position>.
+ * Position is 1-based among the relevant list (planned events for added, file's hooks keys for removed).
+ */
+function safeEventName(event: string, position: number): string {
+  if (nameShaped(event)) return event;
+  return `#${position}`;
+}
+
 function shouldHideHandler(matcher: string | undefined, handler: unknown): boolean {
   // Check matcher
   if (matcher !== undefined) {
@@ -1022,6 +1044,112 @@ export function formatHandler(handler: unknown): string {
 export function formatMatcher(matcher: string | undefined): string {
   if (matcher === undefined) return "no matcher";
   return `matcher ${JSON.stringify(terminalSafe(matcher))}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* ignoreWarning — decide the git-ignore warning (spec 52 §6.3, G1)   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Decide the git-ignore warning from ignoredPaths result (spec 52 §6.3, G1).
+ * Returns the warning message, or null if no warning.
+ * Fails open: when git cannot answer (unchecked=true), returns the warning.
+ */
+export function ignoreWarning(result: { ignored: { path: string }[]; unchecked: boolean }): string | null {
+  // If the path is in ignored, no warning
+  if (result.ignored.some((i) => i.path === ".claude/settings.json")) {
+    return null;
+  }
+  // If unchecked is true (git couldn't answer) or path not in ignored, warn
+  return ".claude/settings.json is not ignored by git — the env values it holds could be committed";
+}
+
+/* ------------------------------------------------------------------ */
+/* staleLocalHookWarnings — warn about stale local hooks (§5.1, G2)   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Warn about local handlers citing missing .claude/hooks/<x> files (spec 52 §5.1, G2).
+ * Only called when there's no record (registry off, unreadable, or workspace not registered).
+ * Walks the merged value.hooks and skips handlers whose handlerHash is wanted.
+ */
+export async function staleLocalHookWarnings(
+  root: string,
+  value: Record<string, unknown>,
+  wantedHashes: Set<string>,
+): Promise<string[]> {
+  const warnings: string[] = [];
+  const hooks = value.hooks;
+  if (!hooks || typeof hooks !== "object" || hooks === null) return warnings;
+
+  const seen = new Set<string>();
+  const hooksObj = hooks as Record<string, unknown>;
+  const eventKeys = Object.keys(hooksObj);
+
+  for (let keyIndex = 0; keyIndex < eventKeys.length; keyIndex++) {
+    const event = eventKeys[keyIndex];
+    const groups = hooksObj[event];
+    if (!Array.isArray(groups)) continue;
+
+    for (const group of groups) {
+      if (typeof group !== "object" || group === null) continue;
+      const g = group as Record<string, unknown>;
+      const matcher = typeof g.matcher === "string" ? g.matcher : undefined;
+      const handlerArray = g.hooks;
+      if (!Array.isArray(handlerArray)) continue;
+
+      for (const handler of handlerArray) {
+        // Skip if this handler is wanted (from the Forge)
+        const hash = handlerHash(event, matcher, handler);
+        if (wantedHashes.has(hash)) continue;
+
+        // This is a local handler — check if it cites missing hook files
+        const toCheck: string[] = [];
+        if (typeof handler === "object" && handler !== null) {
+          const h = handler as Record<string, unknown>;
+          if (typeof h.command === "string") toCheck.push(h.command);
+          if (Array.isArray(h.args)) {
+            for (const arg of h.args) {
+              if (typeof arg === "string") toCheck.push(arg);
+            }
+          }
+        }
+
+        for (const val of toCheck) {
+          HOOK_PATH_PATTERN.lastIndex = 0;
+          let match;
+          while ((match = HOOK_PATH_PATTERN.exec(val)) !== null) {
+            const hookFile = match[1];
+            const hookPath = `.claude/hooks/${hookFile}`;
+            if (seen.has(hookPath)) continue;
+            seen.add(hookPath);
+
+            // Check if the file exists (lstat ENOENT)
+            const fullPath = path.join(root, hookPath);
+            try {
+              await fs.lstat(fullPath);
+              // File exists, no warning
+            } catch (e) {
+              if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+                // File doesn't exist — emit warning
+                // Event printed only when nameShaped, else #<position> (1-based among hooks keys)
+                const safeEvent = nameShaped(event) ? event : `#${keyIndex + 1}`;
+                // Path printed only when safe
+                const safePath = !TERMINAL_UNSAFE.test(hookFile) && findSecrets(hookFile).length === 0
+                  ? hookFile
+                  : "(a path — not shown)";
+                warnings.push(
+                  `hooks.${safeEvent}: a handler cites .claude/hooks/${safePath}, which does not exist — remove it by hand if it came from the Forge`,
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return warnings;
 }
 
 /* ------------------------------------------------------------------ */

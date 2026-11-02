@@ -25,6 +25,8 @@ import {
   wantedHooksObject,
   writeSettingsFile,
   handlerHash,
+  ignoreWarning,
+  staleLocalHookWarnings,
   SettingsShapeError,
   type ReadSettingsResult,
   type SettingsDiffDisplay,
@@ -50,7 +52,7 @@ import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, metadataEdits, unmanaged, type DriftRow } from "./core/drift.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
-import { exists, gitDirty, gitIgnored, gitIsRepo, gitTracked, gitUnheld, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
+import { exists, gitDirty, gitIgnored, gitIsRepo, gitTracked, gitUnheld, ignoredPaths, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { applyMove, planLocalize, planShare, proveMove, type ForgeMove, type MoveCommand } from "./core/localize.js";
 import { forgeFor as profileView, isLocalMessage, localCiters, localOwners } from "./core/profile-local.js";
@@ -3820,11 +3822,9 @@ async function settingsApplyCommand(o: {
       );
     }
 
-    // Check if ignored
-    const ignored = await gitIgnored(ws.root, ".claude/settings.json");
-    if (!ignored) {
-      gitWarning = ".claude/settings.json is not ignored by git — the env values it holds could be committed";
-    }
+    // Check if ignored (G1: use ignoredPaths which fails open)
+    const ignoredResult = await ignoredPaths(ws.root, [".claude/settings.json"]);
+    gitWarning = ignoreWarning(ignoredResult);
   }
 
   // Step 6: Read record of last apply
@@ -3947,8 +3947,22 @@ async function settingsApplyCommand(o: {
   }
 
   // Step 9: Print diff
-  const diffDisplay = settingsDiffLines(mergeResult.diff, reformatted);
+  // Get event keys for safe event names (G3)
+  const plannedEventKeys = wanted.registrations.map((r) => r.event);
+  const fileHooksKeys = currentValue?.hooks && typeof currentValue.hooks === "object"
+    ? Object.keys(currentValue.hooks as Record<string, unknown>)
+    : [];
+  const diffDisplay = settingsDiffLines(mergeResult.diff, reformatted, plannedEventKeys, fileHooksKeys);
   printSettingsDiff(diffDisplay, created);
+
+  // Print stale local hook warnings (G2: spec 52 §5.1)
+  if (noRecordReason) {
+    const wantedHashSet = new Set(wantedHandlers.map((h) => h.hash));
+    const staleWarnings = await staleLocalHookWarnings(ws.root, mergeResult.value, wantedHashSet);
+    for (const w of staleWarnings) {
+      console.log(`  ${pc.yellow("warn")} ${w}`);
+    }
+  }
 
   // Print git warning
   if (gitWarning) {
@@ -4017,18 +4031,18 @@ function printSettingsDiff(diff: SettingsDiffDisplay, created: boolean): void {
   // hooks section
   for (const h of diff.hooksRemoved) {
     if (h.notShown) {
-      console.log(`  hooks.${h.event}:`);
+      console.log(`  hooks.${h.safeEvent}:`);
       console.log(`    ${pc.red("-")} (a handler — not shown: it holds what looks like a credential)`);
     } else {
       const matcherStr = h.matcher !== undefined ? `matcher ${JSON.stringify(h.matcher)}` : "no matcher";
-      console.log(`  hooks.${h.event}:`);
+      console.log(`  hooks.${h.safeEvent}:`);
       console.log(`    ${pc.red("-")} ${matcherStr}: ${JSON.stringify(h.handler)}   (from the Forge, no longer planned)`);
     }
   }
 
   for (const h of diff.hooksAdded) {
     const matcherStr = h.matcher !== undefined ? `matcher ${JSON.stringify(h.matcher)}` : "no matcher";
-    console.log(`  hooks.${h.event}:`);
+    console.log(`  hooks.${h.safeEvent}:`);
     console.log(`    ${pc.green("+")} ${matcherStr}: ${JSON.stringify(h.handler)}   (${h.ref}, registration ${h.index})`);
   }
 
