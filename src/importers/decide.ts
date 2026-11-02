@@ -382,7 +382,8 @@ function inferSectionValues(
   }
   // F9: pin the unprojected cited keys — a key another target's section cites still renders there — and, at the
   // metadata gate, the keys its metadata cites (spec 50 §5.3).
-  pin(ctx, [...citedKeys(expandedTexts(base, S)), ...(rendersMetadata({ schema }) ? metadataCitations(base.meta) : [])], map);
+  const metaKeys = rendersMetadata({ schema }) ? metadataCitations(base.meta).filter((k) => !(readsRulesIndex({ schema }) && k === RULES_INDEX_KEY)) : [];
+  pin(ctx, [...citedKeys(expandedTexts(base, S)), ...metaKeys], map);
   return { kind: "reuse", sectioned: assigned, sectionDelta };
 }
 

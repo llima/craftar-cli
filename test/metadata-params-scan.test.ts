@@ -8,7 +8,8 @@ import { describe, expect, it } from "vitest";
  */
 
 const DIR = path.join(import.meta.dirname, "..", "src", "emitters");
-const FIELD = /\.meta\.(frontmatterRaw|fileMatchPattern|description|argumentHint)\b/;
+const FIELD =
+  /\.meta\.(frontmatterRaw|fileMatchPattern|description|argumentHint)\b|\.meta\[\s*["'`](frontmatterRaw|fileMatchPattern|description|argumentHint)|\{[^}]*\b(frontmatterRaw|fileMatchPattern|description|argumentHint)\b[^}]*\}\s*=\s*[\w$.]+\.meta\b/;
 const ALIAS = /=\s*([A-Za-z_$][\w$]*)\.meta\s*;/;
 
 /**
