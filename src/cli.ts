@@ -3922,6 +3922,16 @@ async function settingsApplyCommand(o: {
   if (!mergeResult.changed && !created) {
     console.log("unchanged — .claude/settings.json already holds every generated block");
 
+    // Print stale local hook warnings when no record (G2: spec 52 §5.1)
+    // Must be called before return, and even when unchanged
+    if (recordHashes.size === 0) {
+      const wantedHashSet = new Set(wantedHandlers.map((h) => h.hash));
+      const staleWarnings = await staleLocalHookWarnings(ws.root, currentValue!, wantedHashSet);
+      for (const w of staleWarnings) {
+        console.log(`  ${pc.yellow("warn")} ${w}`);
+      }
+    }
+
     // Write record if needed (spec 52 §4.1 step 8)
     if (!o.dryRun && reg && noRecordReason === null) {
       const wantedHashes = wantedHandlers.map((h) => h.hash);
@@ -3964,8 +3974,8 @@ async function settingsApplyCommand(o: {
   const diffDisplay = settingsDiffLines(mergeResult.diff, reformatted, plannedEventKeys, fileHooksKeys);
   printSettingsDiff(diffDisplay, created);
 
-  // Print stale local hook warnings (G2: spec 52 §5.1)
-  if (noRecordReason) {
+  // Print stale local hook warnings when no record (G2: spec 52 §5.1)
+  if (recordHashes.size === 0) {
     const wantedHashSet = new Set(wantedHandlers.map((h) => h.hash));
     const staleWarnings = await staleLocalHookWarnings(ws.root, mergeResult.value, wantedHashSet);
     for (const w of staleWarnings) {

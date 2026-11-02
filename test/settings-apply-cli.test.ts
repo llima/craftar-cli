@@ -1488,3 +1488,89 @@ describe("F4. count top-level keys not shaped like a name", () => {
     expect(display.otherKeys).not.toContain("bad key!");
   });
 });
+
+
+describe("F5. name a stale local hook whenever there is no record", () => {
+  let home: string;
+  let claudeDir: string;
+
+  beforeEach(async () => {
+    home = await tmpDir("craftar-f5-home-");
+    claudeDir = await tmpDir("craftar-f5-claude-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    cleanups.push(() => fs.rm(claudeDir, { recursive: true, force: true }));
+  });
+
+  it("a. registry off, file holds every wanted handler + stale handler → unchanged AND stale warning", async () => {
+    const s = await forgeAt(1, standardForge());
+    cleanups.push(s.cleanup);
+
+    await initGit(s.wsRoot);
+    await gitignoreSettings(s.wsRoot);
+
+    // Sync to generate the example file
+    runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir } });
+
+    // Read example and add the stale handler
+    const examplePath = path.join(s.wsRoot, ".claude", "settings.craftar.example.json");
+    const exampleContent = await fs.readFile(examplePath, "utf8");
+    const exampleSettings = JSON.parse(exampleContent);
+
+    // Add a stale local handler
+    if (!exampleSettings.hooks) exampleSettings.hooks = {};
+    if (!exampleSettings.hooks.PreToolUse) exampleSettings.hooks.PreToolUse = [];
+    exampleSettings.hooks.PreToolUse.push({
+      matcher: "Bash",
+      hooks: [{ type: "command", command: "python3", args: [".claude/hooks/old-guard.py"] }],
+    });
+
+    await fs.writeFile(path.join(s.wsRoot, ".claude", "settings.json"), JSON.stringify(exampleSettings, null, 2) + "\n");
+
+    // Run apply with registry off
+    const r = runCli(["settings", "apply", "--workspace", s.wsRoot, "--yes"], {
+      env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir, CRAFTAR_NO_REGISTRY: "1" },
+    });
+
+    expect(r.code, `apply failed: ${r.stderr}`).toBe(0);
+    // Should be unchanged (all wanted handlers present)
+    expect(r.stdout).toContain("unchanged");
+    // Should still warn about the stale handler
+    expect(r.stdout).toContain("old-guard.py");
+    expect(r.stdout).toContain("which does not exist");
+  });
+
+  it("b. registered workspace on first apply (no record yet) → stale warning", async () => {
+    const s = await forgeAt(1, standardForge());
+    cleanups.push(s.cleanup);
+
+    await initGit(s.wsRoot);
+    await gitignoreSettings(s.wsRoot);
+
+    // Sync to register workspace
+    runCli(["sync", "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir } });
+
+    // Create settings with a stale handler (but don't run apply yet to avoid record)
+    const settingsWithStale = {
+      env: { ACME_TOKEN: "" },
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [{ type: "command", command: "python3", args: [".claude/hooks/old-guard.py"] }],
+          },
+        ],
+      },
+    };
+    await fs.writeFile(path.join(s.wsRoot, ".claude", "settings.json"), JSON.stringify(settingsWithStale, null, 2) + "\n");
+
+    // Run apply (first time, no record yet)
+    const r = runCli(["settings", "apply", "--workspace", s.wsRoot, "--yes"], {
+      env: { CRAFTAR_HOME: home, CLAUDE_CONFIG_DIR: claudeDir },
+    });
+
+    expect(r.code, `apply failed: ${r.stderr}`).toBe(0);
+    // Should warn about the stale handler (no record means we don't know what's from Forge)
+    expect(r.stdout).toContain("old-guard.py");
+    expect(r.stdout).toContain("which does not exist");
+  });
+});
