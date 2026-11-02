@@ -690,10 +690,11 @@ describe("cli — drift --help", () => {
         "                               Forge (their edits are lost) and remove a named\n" +
         "                               hand-edited file the Forge no longer produces;\n" +
         "                               otherwise a sync like any other\n" +
-        "  promote [options] <path>     Carry a hand-edited file to the Forge as a\n" +
-        "                               profile variant, behind git's gate, proved before\n" +
-        "                               any write; never writes the lock, the registry or\n" +
-        "                               the cache\n" +
+        "  promote [options] <path>     Carry a hand-edited file to the Forge — a profile\n" +
+        "                               value, a profile variant, or the profile-local\n" +
+        "                               ingredient edited in place — behind git's gate,\n" +
+        "                               proved before any write; never writes the lock,\n" +
+        "                               the registry or the cache\n" +
         "  help [command]               display help for command\n",
     );
   });
