@@ -1772,9 +1772,17 @@ async function decideLocal(
   const local = forge.locals.get(profile)?.ingredients.get(ref as IngredientRef);
   if (local) {
     const d = await decide(run.ctx, local.dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases, run.indexExpand);
-    // A literal comparison carries first what the workspace cannot express, as the base-less variant's does (fingerprintOf hashes it).
-    const carried = d.kind === "literal" ? fingerprintOf(validateImported(await carryFromExisting(stage, path.join(local.dir, "ingredient.yaml"), sourceMeta)), files) : fingerprint;
-    const equal = d.kind === "reuse" || (d.kind === "literal" && (await fingerprintDir(local.dir, stage.reader())) === carried);
+    // A literal comparison, as the root path's: its warning said, what the workspace cannot express carried first
+    // (fingerprintOf hashes it), and a script or hook also compared at the default targets, as `asImportTargets` reads it.
+    let equal = d.kind === "reuse";
+    if (d.kind === "literal") {
+      if (d.warn) report.warnings.push(d.warn);
+      const carried = await carryFromExisting(stage, path.join(local.dir, "ingredient.yaml"), sourceMeta);
+      const localFingerprint = await fingerprintDir(local.dir, stage.reader());
+      equal =
+        localFingerprint === fingerprintOf(validateImported(carried), files) ||
+        ((carried.type === "script" || carried.type === "hook") && localFingerprint === fingerprintOf(validateImported({ ...carried, targets: "*" } as Ingredient), files));
+    }
     const dir = path.relative(forge.root, local.dir).split(path.sep).join("/");
     if (!equal && mode === "never") throw new Error(`import: ${source} differs from ${ref}, local to profile ${profile} (${dir}) — edit the local in the Forge and re-run, or re-run with --local=auto to rewrite it`);
     if (!equal) {

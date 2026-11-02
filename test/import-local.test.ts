@@ -348,6 +348,26 @@ describe("import --local (spec 51 §5.3)", () => {
     expect(r.stdout).not.toContain("idp.example.invalid");
   });
 
+  // Review round 3: a local reached by decide()'s literal branch — its file cites a key a recipe the profile does not
+  // resolve defaults, so sync leaves the placeholder as written. Reused under never, its literal warning said, at an
+  // explicit targets and at the default ones.
+  for (const targets of [["claude-code"], undefined]) {
+    it(`an unchanged local hook compared literally is reused under never, with its warning (targets ${targets ? "claude-code" : "default"})`, async () => {
+      const meta = { ...hookMeta("guard"), ...(targets ? { targets } : {}) };
+      const s = await setup(
+        { ...spec, recipes: [...spec.recipes!, recipe("other", ["rule/style"], { params: { "lit.key": { default: "x" } } })], profiles: [profile("acme", ["base", "acme-extra"]), profile("globex", ["base"])] },
+        { files: { "profiles/acme/ingredients/hooks/guard/ingredient.yaml": YAML.stringify(meta), "profiles/acme/ingredients/hooks/guard/guard.py": 'print("{{lit.key}}")\n', ...localRecipe("acme", "acme-extra", ["hook/guard"]) } },
+      );
+      const before = await snapshot(s.forge);
+      const r = importInto(s);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toContain("local to profile acme: hook/guard (profiles/acme/ingredients/hooks/guard) — reused there");
+      expect(r.stdout).toContain("lit.key");
+      const after = await snapshot(s.forge);
+      for (const k of Object.keys(before)) if (k !== "profiles/acme/profile.yaml") expect(after[k], k).toBe(before[k]);
+    });
+  }
+
   it("forge localize of a rule held in base--acme, then a re-import: every file unchanged", async () => {
     const s = await setup({ ingredients: [rule("style", "# S\n"), rule("x", "# X\n")], recipes: [recipe("base", ["rule/style"]), recipe("base--acme", ["rule/style", "rule/x"])], profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"])] });
     git(s.forge, "init", "-q", "-b", "main");
