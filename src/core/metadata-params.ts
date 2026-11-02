@@ -139,6 +139,14 @@ export function metadataFaultMessage(ref: string, f: MetadataFault): string {
 export function renderedMeta<M extends Ingredient>(meta: M, params: Record<string, unknown>, ref: string, missing?: Set<string>): M {
   const fault = metadataFault(meta, params);
   if (fault) throw new Error(metadataFaultMessage(ref, fault));
+  return substituteMetadata(meta, params, missing);
+}
+
+/**
+ * The fields of §5.2 through `substitute`, with no fault test: what `renderedMeta` returns once the test passed, and
+ * what import compares a base with (spec 50 §5.6), where a value that would break a file makes a variant, not a refusal.
+ */
+export function substituteMetadata<M extends Ingredient>(meta: M, params: Record<string, unknown>, missing?: Set<string>): M {
   const fields = metadataFields(meta);
   if (fields.length === 0) return meta;
   const out: Record<string, unknown> = { ...meta };
