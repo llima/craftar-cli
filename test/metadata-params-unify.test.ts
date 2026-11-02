@@ -27,7 +27,7 @@ function git(dir: string, ...args: string[]) {
 }
 
 /** A Forge at `schema` (a git repository with one commit) and a workspace on profile `acme`. */
-async function forgeOf(schema: number, spec: ForgeSpec, targets = ["claude-code", "kiro", "agents-md"]) {
+async function forgeOf(schema: number, spec: ForgeSpec, targets = ["claude-code", "kiro", "agents-md"], repo = true) {
   const root = await tmpDir("craftar-meta-unify-");
   cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
   const forge = path.join(root, "forge");
@@ -35,6 +35,8 @@ async function forgeOf(schema: number, spec: ForgeSpec, targets = ["claude-code"
   await makeForge(forge, spec);
   await fs.writeFile(path.join(forge, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema }));
   await makeWorkspace(ws, forge, { config: { profile: "acme", targets } });
+  // Only forge unify needs a repository; forge diff and plan read the directory (and a git child is slow on Windows).
+  if (!repo) return { root, forge, ws };
   execFileSync("git", ["init", "-q", forge]);
   git(forge, "config", "gc.auto", "0");
   git(forge, "add", "-A");
@@ -55,7 +57,7 @@ function pair(type: "rule" | "agent" | "command", baseMeta: Record<string, unkno
 }
 
 async function diffOf(schema: number, spec: ForgeSpec, ref: string) {
-  const { forge } = await forgeOf(schema, spec);
+  const { forge } = await forgeOf(schema, spec, undefined, false);
   const f = await loadForge(forge);
   return diffIngredients(f.ingredients.get(ref as never)!, f.ingredients.get(`${ref}--acme` as never)!, f.manifest.schema);
 }
@@ -78,7 +80,7 @@ describe("spec 50 §5.5: forge diff shows a metadata field as ingredient.yaml#<f
     expect(entry!.hunks[0].suggestion.class).toBe("evolution");
   });
 
-  it("a list fileMatchPattern by element, and a field on one side only as a hunk against nothing", async () => {
+  it("a field on one side only is a hunk against nothing", async () => {
     const d = await diffOf(
       GATE,
       pair("command", { description: "Ship" }, { description: "Ship", argumentHint: "<v>" }),
@@ -88,6 +90,9 @@ describe("spec 50 §5.5: forge diff shows a metadata field as ingredient.yaml#<f
     expect(hint?.hunks).toHaveLength(1);
     expect(hint!.hunks[0].a.lines).toEqual([]);
     expect(hint!.hunks[0].b.lines).toEqual(["<v>"]);
+  });
+
+  it("a list fileMatchPattern is diffed by element", async () => {
     const r = await diffOf(
       GATE,
       pair("rule", { inclusion: "fileMatch", fileMatchPattern: ["lib/**", "test/**"] }, { inclusion: "fileMatch", fileMatchPattern: ["src/**", "test/**"] }),
@@ -108,7 +113,7 @@ describe("spec 50 §5.5: forge diff shows a metadata field as ingredient.yaml#<f
 
   it("leaves the entries out of forge variants' distance, which stays meta only", async () => {
     for (const schema of [BELOW, GATE]) {
-      const { forge } = await forgeOf(schema, pair("agent", { description: "Helps beta_api users" }, { description: "Helps acme_api users" }));
+      const { forge } = await forgeOf(schema, pair("agent", { description: "Helps beta_api users" }, { description: "Helps acme_api users" }), undefined, false);
       const v = (await listVariants(await loadForge(forge))).groups[0].variants[0];
       expect(v.distance).toEqual({ lines: 0, hunks: 0, sameBodyDifferentMeta: true, identicalAfterNormalization: false });
       expect(v.classes).toEqual({ evolution: 0, value: 0, block: 0 });
@@ -116,7 +121,7 @@ describe("spec 50 §5.5: forge diff shows a metadata field as ingredient.yaml#<f
   });
 
   it("the CLI prints the entry and carries it in --json", async () => {
-    const { forge } = await forgeOf(GATE, pair("agent", { description: "Helps beta_api users" }, { description: "Helps acme_api users" }));
+    const { forge } = await forgeOf(GATE, pair("agent", { description: "Helps beta_api users" }, { description: "Helps acme_api users" }), undefined, false);
     const text = runCli(["forge", "diff", "agent/x", "--forge", forge]);
     expect(text.code).toBe(0);
     expect(text.stdout).toContain("  ingredient.yaml#description\n");
@@ -129,7 +134,7 @@ describe("spec 50 §5.5 / §15 item 11: a real file named ingredient.yaml#<field
   const spec = () => pair("rule", { description: "a" }, { description: "b" }, { "ingredient.yaml#description": "x\n" });
 
   it("fails forge diff and the plan, naming it", async () => {
-    const { forge, ws } = await forgeOf(GATE, spec());
+    const { forge, ws } = await forgeOf(GATE, spec(), undefined, false);
     const f = await loadForge(forge);
     await expect(diffIngredients(f.ingredients.get("rule/x")!, f.ingredients.get("rule/x--acme")!, f.manifest.schema)).rejects.toThrow(/rule\/x: .*ingredient\.yaml#description/);
     // The workspace of profile globex resolves the base.
@@ -138,7 +143,7 @@ describe("spec 50 §5.5 / §15 item 11: a real file named ingredient.yaml#<field
   });
 
   it("is an ordinary file below the gate", async () => {
-    const { forge, ws } = await forgeOf(BELOW, spec());
+    const { forge, ws } = await forgeOf(BELOW, spec(), undefined, false);
     const f = await loadForge(forge);
     await expect(diffIngredients(f.ingredients.get("rule/x")!, f.ingredients.get("rule/x--acme")!, f.manifest.schema)).resolves.toBeDefined();
     await fs.writeFile(path.join(ws, "craftar.yaml"), YAML.stringify({ forge: path.relative(ws, forge), profile: "globex" }));
@@ -330,7 +335,7 @@ describe("review round 2: an mcp ingredient's file spelled as a metadata entry f
       recipes: [recipe("base", ["mcp/m"])],
       profiles: [profile("acme", ["base"], ["claude-code"])],
     };
-    const { ws } = await forgeOf(GATE, spec, ["claude-code"]);
+    const { ws } = await forgeOf(GATE, spec, ["claude-code"], false);
     await expect(plan(await loadWorkspace(ws, { home: process.env.CRAFTAR_HOME }))).rejects.toThrow(/mcp\/m: .*ingredient\.yaml#description/);
   });
 });
