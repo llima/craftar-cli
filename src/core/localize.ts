@@ -9,6 +9,7 @@ import { ingredientText, occupied, recipeFiles, resolveAll, swapEntry, unreadabl
 import { impactOf, planAll, type ForgeWorkspace, type Planned } from "./impact.js";
 import { recipesOrWritten } from "./integrations.js";
 import { isLocalMessage, localOwners, readsProfileLocal } from "./profile-local.js";
+import { resolve } from "./resolve.js";
 import { plan, type Workspace } from "./sync.js";
 import type { WriteJournal } from "./unify.js";
 import { editYamlText } from "./yaml-edit.js";
@@ -175,6 +176,7 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
     }
   }
 
+  await assertNoLinkOnPath(forge.root, [...writes.map((w) => w.abs), ...removes], command);
   return {
     command,
     root: forge.root,
@@ -217,6 +219,7 @@ export async function planShare(forge: Forge, ref: string, profile: string): Pro
   if (await occupied(toDir, toDirRel, command)) throw new Error(`${command}: ${toDirRel} already exists — remove it by hand, commit, and re-run`);
   const writes = await copyFiles(ing, toDir, null);
   const removes = (await listFiles(ing.dir)).map((rel) => path.join(ing.dir, rel));
+  await assertNoLinkOnPath(forge.root, [...writes.map((w) => w.abs), ...removes], command);
   return {
     command,
     root: forge.root,
@@ -295,8 +298,17 @@ export async function proveMove(forge: Forge, move: ForgeMove, registered: Forge
       let before: Map<string, Buffer>;
       try {
         before = await planProfile(forge, q, wsRoot);
-      } catch {
-        continue; // planLocalize / planShare already warned or refused about a profile that does not resolve
+      } catch (e) {
+        // A profile that does not resolve was warned about, or refused, by planLocalize / planShare; one that resolves
+        // and does not plan is said here, never skipped silently.
+        let resolves = true;
+        try {
+          resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile: q }));
+        } catch {
+          resolves = false;
+        }
+        if (resolves) warnings.push(`profile ${q} does not plan today (${firstLine(e).split(copy).join(forge.root)}) — not proved`);
+        continue;
       }
       let after: Map<string, Buffer>;
       try {
@@ -312,9 +324,11 @@ export async function proveMove(forge: Forge, move: ForgeMove, registered: Forge
     const beforeWs: Planned[] = await planAll(registered, forge);
     for (let i = 0; i < registered.length; i++) {
       const b = beforeWs[i];
-      if (b.kind !== "planned") continue;
-      const q = b.workspace.config.profile;
-      const added = b.workspace.config.recipes.add.filter((r) => moving.has(r));
+      // Read from the configuration whenever it was read, a workspace whose plan fails included.
+      const config = b.kind === "planned" ? b.workspace.config : b.kind === "error" ? b.merged?.config : undefined;
+      if (!config) continue;
+      const q = config.profile;
+      const added = config.recipes.add.filter((r) => moving.has(r));
       if (q !== move.profile && added.length) {
         throw new Error(`${command}: workspace ${registered[i].entry.path} (profile ${q}) adds recipe ${added[0]}, which would move to profiles/${move.profile} — remove it from that workspace's recipes.add first; nothing written`);
       }

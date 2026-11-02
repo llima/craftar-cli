@@ -604,7 +604,7 @@ export async function assertNoDirLinkIn(forgeDir: string, dir: string, command: 
  */
 export async function assertNoLinkIn(forgeDir: string, dir: string, command: string): Promise<void> {
   const rel = (abs: string) => path.relative(forgeDir, abs).split(path.sep).join("/");
-  const refusal = (abs: string) => new Error(`${rel(abs)} is a symbolic link in the Forge — ${command} does not move a link; replace it with the file and commit`);
+  const refusal = (abs: string) => new Error(`${rel(abs)} is a symbolic link in the Forge — ${command} does not move a link; replace the link with what it points to, and commit`);
   const walk = async (at: string): Promise<void> => {
     let st;
     try {

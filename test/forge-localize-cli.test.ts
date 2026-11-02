@@ -143,6 +143,23 @@ describe("craftar forge localize (spec 51 §5.1)", () => {
   });
 });
 
+describe("craftar forge localize and a link (spec 51 §5, §12)", () => {
+  it.skipIf(process.platform === "win32")("an ingredient holding a file link inside the Forge is refused, the Forge untouched, under --dry-run too", async () => {
+    const s = await setup();
+    await fs.symlink(path.join(s.forge, "ingredients/rules/style/rule.md"), path.join(s.forge, "ingredients/rules/x/extra.md"));
+    git(s.forge, "add", "-A");
+    git(s.forge, "commit", "-q", "-m", "a link");
+    const before = await snapshot(s.forge);
+    for (const extra of [[], ["--dry-run"]]) {
+      const r = runCli(["forge", "localize", "rule/x", "--profile", "acme", "--forge", s.forge, ...extra]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("ingredients/rules/x/extra.md is a symbolic link in the Forge — forge localize does not move a link");
+      expect(r.stderr).not.toContain("rules/style");
+    }
+    expect(await snapshot(s.forge)).toEqual(before);
+  });
+});
+
 describe("craftar forge share (spec 51 §5.2)", () => {
   it("acceptance 7: share then sync — every file unchanged, the lock changed only in forge.commit", async () => {
     const s = await setup({

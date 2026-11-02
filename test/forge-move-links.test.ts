@@ -38,7 +38,7 @@ describe("assertNoLinkIn (spec 51 §5)", () => {
     await fs.symlink(path.join(f.root, "shared/body.md"), path.join(f.dir, "extra.md"));
     const e = await assertNoLinkIn(f.root, f.dir, "forge localize").catch((x: Error) => x);
     expect(e).toBeInstanceOf(Error);
-    expect((e as Error).message).toBe("ingredients/rules/x/extra.md is a symbolic link in the Forge — forge localize does not move a link; replace it with the file and commit");
+    expect((e as Error).message).toBe("ingredients/rules/x/extra.md is a symbolic link in the Forge — forge localize does not move a link; replace the link with what it points to, and commit");
     expect((e as Error).message).not.toContain("shared");
   });
 

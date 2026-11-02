@@ -5,6 +5,7 @@ import YAML from "yaml";
 import { listFiles, loadForge } from "../src/core/forge.js";
 import { forgeWorkspaces } from "../src/core/impact.js";
 import { applyMove, planLocalize, planShare, proveMove, type ForgeMove } from "../src/core/localize.js";
+import { realpathSync } from "node:fs";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 
@@ -16,6 +17,7 @@ afterEach(async () => {
 });
 
 const home = () => process.env.CRAFTAR_HOME!;
+const fsReal = (p: string) => realpathSync.native(p);
 
 const base: ForgeSpec = {
   ingredients: [rule("style", "# Style\n"), rule("x", "# X\n")],
@@ -169,6 +171,47 @@ describe("forge localize (spec 51 §5.1)", () => {
     const before = await snapshot(s.forge);
     await expect(loadForge(s.forge).then((f) => planLocalize(f, "rule/x", "acme"))).rejects.toThrow("ingredients/rules/x/extra.md is a symbolic link in the Forge — forge localize does not move a link");
     expect(await snapshot(s.forge)).toEqual(before);
+  });
+});
+
+describe("forge localize — what the proof cannot plan, and links on the edit's path (review round 1)", () => {
+  // A profile that resolves but whose plan fails: an MCP server takes a token as a declared param (schema 8 includes 4).
+  const token = "ghp_" + "x".repeat(36);
+  const failing: ForgeSpec = {
+    ...base,
+    ingredients: [...base.ingredients!, { meta: { type: "mcp", name: "idp", server: { type: "http", url: "https://example.invalid/{{tok}}" }, params: { tok: {} } } }],
+    recipes: [...base.recipes!, recipe("idp", ["mcp/idp"])],
+    profiles: [profile("acme", ["base", "stack-y"]), profile("globex", ["base", "idp"], ["claude-code"], { params: { tok: token } })],
+  };
+
+  it("a profile that resolves but does not plan is warned as not proved, never skipped silently", async () => {
+    const s = await setup(failing);
+    const { warnings } = await planAndProve(s.forge, (f) => planLocalize(f, "rule/x", "acme"));
+    expect(warnings.join("\n")).toContain("profile globex does not plan today");
+    expect(warnings.join("\n")).toContain("not proved");
+    expect(warnings.join("\n")).not.toContain(token);
+  });
+
+  it("a registered workspace of another profile that does not plan but adds a moving recipe is still refused", async () => {
+    const s = await setup(failing, { workspaces: [{ name: "acme", config: { profile: "acme" } }] });
+    const gws = path.join(s.root, "globex");
+    await makeWorkspace(gws, s.forge, { config: { profile: "globex", recipes: { add: ["stack-x"] } } });
+    // Register it by hand: a writing sync would refuse, since its plan fails.
+    const reg = path.join(home(), "registry.json");
+    const r = JSON.parse(await fs.readFile(reg, "utf8"));
+    const acmeEntry = r.workspaces.find((w: { path: string }) => w.path === fsReal(s.ws.acme));
+    r.workspaces.push({ ...acmeEntry, path: await fs.realpath(gws), profile: "globex" });
+    await fs.writeFile(reg, JSON.stringify(r, null, 2));
+    const f = await loadForge(s.forge);
+    const move = await planLocalize(f, "rule/x", "acme");
+    await expect(proveMove(f, move, (await forgeWorkspaces(home(), s.forge)).workspaces)).rejects.toThrow(/\(profile globex\) adds recipe stack-x, which would move to profiles\/acme/);
+  });
+
+  it.skipIf(process.platform === "win32")("a recipe file the move removes, reached through a link inside the Forge, is refused by the plan, so --dry-run refuses too", async () => {
+    const s = await setup();
+    await fs.rename(path.join(s.forge, "recipes/stack-x.yaml"), path.join(s.forge, "stack-x.real.yaml"));
+    await fs.symlink(path.join(s.forge, "stack-x.real.yaml"), path.join(s.forge, "recipes/stack-x.yaml"));
+    await expect(loadForge(s.forge).then((f) => planLocalize(f, "rule/x", "acme"))).rejects.toThrow("recipes/stack-x.yaml is a symbolic link in the Forge — forge localize does not write through a link");
   });
 });
 
