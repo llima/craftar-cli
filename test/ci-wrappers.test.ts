@@ -595,9 +595,10 @@ describe("the README (spec 46 §9)", () => {
     expect(s).not.toMatch(/uses: \S+@v\d/);
   });
 
-  it("the roadmap: Phase 1 ends with the wrappers, Later loses them and keeps the rest", () => {
+  it("the roadmap: Phase 1 lists the wrappers, Later loses them and keeps the rest", () => {
     const phase1 = lines.find((l) => l.startsWith("Phase 1"))!;
-    expect(phase1.endsWith("the CI wrappers (`ci/github/action.yml`, `ci/azure/check.yml`: `sync --check` as a pull request's gate).")).toBe(true);
+    // Since 0.50.1 Phase 1's list goes on past the wrappers, with 0.49.0's and 0.50.0's items (test/roadmap-readme.test.ts).
+    expect(phase1).toContain("; the CI wrappers (`ci/github/action.yml`, `ci/azure/check.yml`: `sync --check` as a pull request's gate); ");
     const later = lines.find((l) => l.startsWith("Later:"))!;
     expect(later).not.toContain("sync --check");
     expect(later).not.toContain("GitHub Action");
