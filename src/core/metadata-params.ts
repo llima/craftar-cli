@@ -6,6 +6,8 @@
 import type { Ingredient } from "../schema/index.js";
 import { FORGE_SCHEMA_METADATA_PARAMS } from "../schema/index.js";
 import { PLACEHOLDER_RE, paramsFor, substitute, type Resolution, type ResolvedIngredient } from "./resolve.js";
+import { parseFrontmatter } from "./frontmatter.js";
+import { RULES_INDEX_KEY } from "./rules-index.js";
 
 /** Whether this Forge's metadata fields are rendered (spec 50 §5.1: the schema after profile-local, or above). */
 export function rendersMetadata(manifest: { schema: number }): boolean {
@@ -209,6 +211,34 @@ export function metadataFileClash(ref: string, files: Iterable<string>): string 
     if (rel.startsWith(METADATA_ENTRY_PREFIX)) {
       return `${ref}: ${rel} is a file named as forge diff names a metadata field at Forge schema ${FORGE_SCHEMA_METADATA_PARAMS} — rename it`;
     }
+  }
+  return null;
+}
+
+/** Whether a field's text cites a key; the rules index's token is never a parameter. */
+function citesIn(meta: Ingredient, field: MetadataField): boolean {
+  return texts(meta, field).some((t) => [...t.matchAll(PLACEHOLDER_RE)].some((m) => m[1] !== RULES_INDEX_KEY));
+}
+
+/**
+ * Spec 50 §5.6: the first field of §5.2 that the resolved ingredient's metadata cites a key in and that a hand edit of
+ * its `claude-code` file changed, or null. Compares only what that file carries: a raw block whole (it replaces the
+ * typed fields, §15 item 6), else an agent's or a command's `description` and `argument-hint`; a rule's `description`
+ * and a `fileMatchPattern` with no raw block reach no `.claude/` file. Pure; never returns a value.
+ */
+export function templatedMetadataEdit(meta: Ingredient, planned: string, disk: string): MetadataField | null {
+  const a = parseFrontmatter(planned, { loose: true });
+  const b = parseFrontmatter(disk, { loose: true });
+  for (const field of metadataFields(meta)) {
+    if (!citesIn(meta, field)) continue;
+    const raw = (meta as { frontmatterRaw?: string }).frontmatterRaw;
+    if (field === "frontmatterRaw") {
+      if (a.raw !== b.raw) return field;
+      continue;
+    }
+    if (meta.type === "rule" || raw !== undefined) continue;
+    const key = field === "argumentHint" ? "argument-hint" : "description";
+    if ((a.data as Record<string, string>)[key] !== (b.data as Record<string, string>)[key]) return field;
   }
   return null;
 }
