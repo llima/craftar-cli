@@ -82,7 +82,7 @@ export const CAPABILITIES = {
     agent: {
       state: "converted",
       output: [".kiro/agents/<name>.json"],
-      note: "written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files",
+      note: "written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; permissions.rules derived from the mapped tools; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files",
     },
     command: {
       state: "converted",

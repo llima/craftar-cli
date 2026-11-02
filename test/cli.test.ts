@@ -2762,7 +2762,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       "kiro · rule .kiro/steering/<name>.md — inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)",
       "agents-md · rule AGENTS.md — always-on rules are embedded in AGENTS.md; a scoped rule is listed at the file another target writes, or embedded when none does; .claude/rules/ references in the bodies, link text included, point at the file a target writes or the rule's place in AGENTS.md, or read <x> (rule not in this workspace) with a warning",
       "claude-code · agent .claude/agents/<name>.md",
-      "kiro · agent .kiro/agents/<name>.json — written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files",
+      "kiro · agent .kiro/agents/<name>.json — written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; permissions.rules derived from the mapped tools; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files",
       "claude-code · command .claude/commands/<name>.md",
       "kiro · command .kiro/steering/commands/<name>.md — written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description",
       "claude-code · skill .claude/skills/<name>/<file>, .claude/skills/<name>.md",

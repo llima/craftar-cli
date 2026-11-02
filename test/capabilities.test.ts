@@ -440,7 +440,7 @@ describe("capability notes are plain text (spec 16 §4.4)", () => {
       "inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)",
     );
     expect(CAPABILITIES.kiro.agent.note).toBe(
-      "written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files",
+      "written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; permissions.rules derived from the mapped tools; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files",
     );
     expect(CAPABILITIES.kiro.command.note).toBe(
       "written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description",
