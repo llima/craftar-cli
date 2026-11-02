@@ -159,7 +159,8 @@ describe("writes nothing (§11 item 13)", () => {
 
 describe("the README (spec 47 §10)", () => {
   it("Phase 2's shipped list ends with docs validate, Later no longer lists it, the status line and the Commands row say it", async () => {
-    const readme = await fs.readFile(path.join(__dirname, "..", "README.md"), "utf8");
+    // A Windows checkout holds the README with CRLF; every assertion below reads it as LF.
+    const readme = (await fs.readFile(path.join(__dirname, "..", "README.md"), "utf8")).replace(/\r\n/g, "\n");
     const lines = readme.split("\n");
     expect(lines.find((l) => l.startsWith("Phase 2"))!).toMatch(/`craftar docs validate` \([^)]*\)\.$/);
     expect(lines.find((l) => l.startsWith("Later:"))!).not.toContain("docs validate");
