@@ -1394,3 +1394,63 @@ describe("F2. one-line file is rewritten with two spaces", () => {
     expect(parsed.permissions).toEqual({ allow: [] });
   });
 });
+
+
+describe("F3. every printed handler passes the terminal filter", () => {
+  it("added handler whose command holds \\u202e and \\u0085 → printed text holds neither", async () => {
+    const { settingsDiffLines, formatHandler, formatMatcher } = await import("../src/core/settings-apply.js");
+
+    // Create a diff with an added handler containing terminal-unsafe characters
+    const diff = {
+      envAdded: [],
+      envPresent: 0,
+      added: [
+        {
+          event: "PreToolUse",
+          matcher: "Bash",
+          // Handler with RTL override (U+202E) and NEL (U+0085) in command
+          handler: { type: "command", command: "test\u202e\u0085cmd", args: [] },
+          ref: "hook/test",
+          index: 0,
+        },
+      ],
+      removed: [],
+      moved: 0,
+      duplicatesRemoved: 0,
+      localKept: 0,
+      sameCommandLocal: 0,
+      emptiedKept: 0,
+      otherKeys: [],
+    };
+
+    const display = settingsDiffLines(diff, false);
+
+    // The handler should be there
+    expect(display.hooksAdded.length).toBe(1);
+
+    // Use formatHandler to format the handler — it should NOT contain the unsafe chars
+    const formattedHandler = formatHandler(display.hooksAdded[0].handler);
+    expect(formattedHandler.includes("\u202e")).toBe(false);
+    expect(formattedHandler.includes("\u0085")).toBe(false);
+
+    // Also test formatMatcher — although this test's matcher is safe
+    const formattedMatcher = formatMatcher(display.hooksAdded[0].matcher);
+    expect(formattedMatcher).toBe('matcher "Bash"');
+  });
+
+  it("formatHandler removes terminal-unsafe characters from handler JSON", async () => {
+    const { formatHandler } = await import("../src/core/settings-apply.js");
+
+    // Test with RTL override
+    const handler1 = { type: "command", command: "bad\u202ecmd" };
+    const result1 = formatHandler(handler1);
+    expect(result1.includes("\u202e")).toBe(false);
+    expect(result1).toContain("badcmd");
+
+    // Test with C1 control character (NEL U+0085)
+    const handler2 = { type: "command", command: "bad\u0085cmd" };
+    const result2 = formatHandler(handler2);
+    expect(result2.includes("\u0085")).toBe(false);
+    expect(result2).toContain("badcmd");
+  });
+});

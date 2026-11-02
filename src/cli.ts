@@ -28,6 +28,8 @@ import {
   ignoreWarning,
   staleLocalHookWarnings,
   SettingsShapeError,
+  formatHandler,
+  formatMatcher,
   type ReadSettingsResult,
   type SettingsDiffDisplay,
 } from "./core/settings-apply.js";
@@ -4041,16 +4043,16 @@ function printSettingsDiff(diff: SettingsDiffDisplay, created: boolean): void {
       console.log(`  hooks.${h.safeEvent}:`);
       console.log(`    ${pc.red("-")} (a handler — not shown: it holds what looks like a credential)`);
     } else {
-      const matcherStr = h.matcher !== undefined ? `matcher ${JSON.stringify(h.matcher)}` : "no matcher";
+      const matcherStr = formatMatcher(h.matcher);
       console.log(`  hooks.${h.safeEvent}:`);
-      console.log(`    ${pc.red("-")} ${matcherStr}: ${JSON.stringify(h.handler)}   (from the Forge, no longer planned)`);
+      console.log(`    ${pc.red("-")} ${matcherStr}: ${formatHandler(h.handler)}   (from the Forge, no longer planned)`);
     }
   }
 
   for (const h of diff.hooksAdded) {
-    const matcherStr = h.matcher !== undefined ? `matcher ${JSON.stringify(h.matcher)}` : "no matcher";
+    const matcherStr = formatMatcher(h.matcher);
     console.log(`  hooks.${h.safeEvent}:`);
-    console.log(`    ${pc.green("+")} ${matcherStr}: ${JSON.stringify(h.handler)}   (${h.ref}, registration ${h.index})`);
+    console.log(`    ${pc.green("+")} ${matcherStr}: ${formatHandler(h.handler)}   (${h.ref}, registration ${h.index})`);
   }
 
   if (diff.hooksMoved > 0) {
