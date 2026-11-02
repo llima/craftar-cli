@@ -115,12 +115,14 @@ export function guardedKeyMoved(text: string, params: Record<string, unknown>): 
 }
 
 /**
- * Whether the end of `prefix` sits inside a double-quoted scalar: one left-to-right scan, where a `'` means nothing
- * inside double quotes, a `"` means nothing inside single quotes, and `\"` does not close a double-quoted value.
+ * The quoting state at the end of `prefix`, in one left-to-right scan: a `'` means nothing inside double quotes, a `"`
+ * nothing inside single quotes, `\"` does not close a double-quoted value, and `depth` counts the `[` and `{` open
+ * outside quotes — a flow collection.
  */
-function insideDoubleQuotes(prefix: string): boolean {
+function quoteState(prefix: string): { inDouble: boolean; inSingle: boolean; depth: number } {
   let inDouble = false;
   let inSingle = false;
+  let depth = 0;
   for (let i = 0; i < prefix.length; i++) {
     const c = prefix[i];
     if (inDouble) {
@@ -130,8 +132,22 @@ function insideDoubleQuotes(prefix: string): boolean {
       if (c === "'") inSingle = false;
     } else if (c === '"') inDouble = true;
     else if (c === "'") inSingle = true;
+    else if (c === "[" || c === "{") depth++;
+    else if ((c === "]" || c === "}") && depth > 0) depth--;
   }
-  return inDouble;
+  return { inDouble, inSingle, depth };
+}
+
+/**
+ * A `#` or `: ` the value forms with the text beside it (spec 50 §5.4): a comment opened by a value starting with `#`
+ * after a space, or by a value ending in a space before `#`; a key separator made by a value starting with a space or a
+ * tab after `:`. Null when none.
+ */
+function boundaryBreak(before: string, value: string, after: string): string | null {
+  if (value.startsWith("#") && /[ \t]$/.test(before)) return "' #'";
+  if (/[ \t]$/.test(value) && after.startsWith("#")) return "' #'";
+  if (/^[ \t]/.test(value) && before.endsWith(":")) return "': '";
+  return null;
 }
 
 /** What in a value breaks a one-line YAML scalar, in the order a message names it; null when nothing does. */
@@ -185,12 +201,16 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
             if (value === null) continue;
             const broken = scalarBreak(value, true);
             if (broken) return { field, key, why: `its value holds ${broken}` };
-            // Inside a double-quoted scalar a backslash starts an escape YAML may refuse.
-            // Quotes inside a single-quoted span do not open a double-quoted one.
-            if (insideDoubleQuotes(line.slice(0, m.index)) && value.includes("\\")) return { field, key, why: "its value holds a backslash inside double quotes" };
             const prefix = line.slice(0, m.index);
-            // At the start of a value or an item — or of a flow element, after `[` or `,`.
-            const flow = /[[,]\s*$/.test(prefix) && !insideDoubleQuotes(prefix);
+            const q = quoteState(prefix);
+            // Inside a double-quoted scalar a backslash starts an escape YAML may refuse.
+            if (q.inDouble && value.includes("\\")) return { field, key, why: "its value holds a backslash inside double quotes" };
+            if (!q.inDouble && !q.inSingle) {
+              const across = boundaryBreak(prefix, value, line.slice(m.index + m[0].length));
+              if (across) return { field, key, why: `its value forms ${across} with the text beside it` };
+            }
+            // At the start of a value or an item — or of a flow element: after `[` or `,` with a `[` or `{` open, outside quotes.
+            const flow = /[[,]\s*$/.test(prefix) && !q.inDouble && !q.inSingle && q.depth > 0;
             const opens = /^\s*(?:-\s+)?(?:[^\s"'#\-][^"']*?:\s+)?(?:-\s+)?$/.test(prefix) || flow;
             // `*` is let through for a paths: block value or item, never a flow element.
             if (opens && opensOther(value) && !(value[0] === "*" && under === "paths" && !flow)) {
@@ -215,6 +235,8 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
           if (value === null) continue;
           const broken = scalarBreak(value, false);
           if (broken) return { field, key: m[1], why: `its value holds ${broken}` };
+          const across = boundaryBreak(text.slice(0, m.index), value, text.slice(m.index + m[0].length));
+          if (across) return { field, key: m[1], why: `its value forms ${across} with the text beside it` };
           if (m.index === 0 && opensOther(value)) {
             return { field, key: m[1], why: "its value starts with a character that opens something other than plain text" };
           }

@@ -311,3 +311,23 @@ describe("review round 5: one scan of the quoting state, and a flow element open
     expect(metadataFault(rule("paths: [lib/**, {{v}}]\nnote: **"), { v: "]" })).not.toBeNull();
   });
 });
+
+describe("review round 6: a break formed across the placeholder, and a flow element only inside [ or {", async () => {
+  const { metadataFault } = await import("../src/core/metadata-params.js");
+  const rule = (fm: string) => ({ type: "rule", name: "r", frontmatterRaw: fm, file: "rule.md", targets: "*" }) as never;
+  const command = (description: string, argumentHint?: string) => ({ type: "command", name: "c", description, ...(argumentHint ? { argumentHint } : {}), file: "command.md", targets: "*" }) as never;
+  it("refuses a # or : that the value forms with the text beside it", () => {
+    expect(metadataFault(command("Use {{k}}"), { k: "#x" })).not.toBeNull();
+    expect(metadataFault(command("Ship", "[file] {{k}}"), { k: "#x" })).not.toBeNull();
+    expect(metadataFault(command("Use:{{k}}"), { k: " x" })).not.toBeNull();
+    expect(metadataFault(command("{{k}}#t"), { k: "a " })).not.toBeNull();
+    expect(metadataFault(rule("description: a {{k}}\npaths: src/x"), { k: "#x" })).not.toBeNull();
+  });
+  it("lets a comma in plain or single-quoted text through, and pins the passes beside the round-5 refusals", () => {
+    expect(metadataFault(rule("description: 'a, {{k}}'\npaths: src/x"), { k: "*x" })).toBeNull();
+    expect(metadataFault(rule("description: a, {{k}}\npaths: src/x"), { k: "*x" })).toBeNull();
+    expect(metadataFault(rule('description: "a, {{k}}"\npaths: src/x'), { k: "*x" })).toBeNull();
+    expect(metadataFault(rule("description: {{k}}\npaths: [src/**, lib/**]"), { k: "plain" })).toBeNull();
+    expect(metadataFault(rule("paths: [{{v}}]"), { v: "*x" })).not.toBeNull();
+  });
+});
