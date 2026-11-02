@@ -1113,8 +1113,13 @@ export async function writeSettingsFile(
   const tempPath = path.join(wsRoot, ".claude", `settings.json.craftar-${process.pid}.tmp`);
   const created = originalBytes === null;
 
-  // Ensure .claude directory exists
-  await fs.mkdir(path.join(wsRoot, ".claude"), { recursive: true });
+  // Ensure .claude directory exists (spec 52 §6.1: non-recursively, only that directory)
+  try {
+    await fs.mkdir(path.join(wsRoot, ".claude"));
+  } catch (e) {
+    // Ignore EEXIST — the directory already exists
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+  }
 
   // Write temp file with wx flag (fails if exists)
   try {

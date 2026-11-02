@@ -13,6 +13,8 @@ import { runDoctor, type DoctorReport } from "../src/core/doctor.js";
 import {
   wantedBlocks,
   wantedHooksObject,
+  writeSettingsFile,
+  type FsOps,
 } from "../src/core/settings-apply.js";
 import { readRegistry } from "../src/core/registry.js";
 import { settingsExample, EXAMPLE_SETTINGS } from "../src/emitters/shared.js";
@@ -874,9 +876,125 @@ describe("settings apply command (spec 52 §12)", () => {
 });
 
 describe("C10. writeSettingsFile with injected errors", () => {
-  // These tests need to be implemented as unit tests with the writeSettingsFile seam
-  it.todo("C10a. injected rename throwing EPERM → error, original intact, no temp");
-  it.todo("C10b. injected re-read returning other bytes → 'changed while craftar was reading it'");
+  it("C10a. injected rename throwing EPERM → error, original intact, no temp", async () => {
+    const wsRoot = await tmpDir("craftar-c10a-");
+    cleanups.push(() => fs.rm(wsRoot, { recursive: true, force: true }));
+
+    // Create .claude directory and original file
+    await fs.mkdir(path.join(wsRoot, ".claude"), { recursive: true });
+    const originalContent = Buffer.from('{"env":{}}\n');
+    const settingsPath = path.join(wsRoot, ".claude", "settings.json");
+    await fs.writeFile(settingsPath, originalContent);
+    const originalStats = await fs.stat(settingsPath);
+
+    // Create fsOps that rejects rename with EPERM
+    const fsOps: FsOps = {
+      writeFile: fs.writeFile,
+      readFile: fs.readFile,
+      rename: async () => {
+        const err = new Error("EPERM") as NodeJS.ErrnoException;
+        err.code = "EPERM";
+        throw err;
+      },
+      unlink: fs.unlink,
+      chmod: fs.chmod,
+      stat: fs.stat,
+    };
+
+    const newContent = Buffer.from('{"env":{"ACME_TOKEN":""}}\n');
+    const result = await writeSettingsFile(wsRoot, newContent, originalContent, originalStats, fsOps);
+
+    // Check result
+    expect(result.written).toBe(false);
+    if (!result.written) {
+      expect(result.error).toBe("could not replace .claude/settings.json (EPERM) — close what holds it and run again");
+    }
+
+    // Original file intact
+    const currentBytes = await fs.readFile(settingsPath);
+    expect(currentBytes.equals(originalContent)).toBe(true);
+
+    // No temp file left
+    const files = await fs.readdir(path.join(wsRoot, ".claude"));
+    const temps = files.filter((f) => f.endsWith(".tmp"));
+    expect(temps).toHaveLength(0);
+  });
+
+  it("C10b. injected re-read returning other bytes → 'changed while craftar was reading it'", async () => {
+    const wsRoot = await tmpDir("craftar-c10b-");
+    cleanups.push(() => fs.rm(wsRoot, { recursive: true, force: true }));
+
+    // Create .claude directory and original file
+    await fs.mkdir(path.join(wsRoot, ".claude"), { recursive: true });
+    const originalContent = Buffer.from('{"env":{}}\n');
+    const settingsPath = path.join(wsRoot, ".claude", "settings.json");
+    await fs.writeFile(settingsPath, originalContent);
+    const originalStats = await fs.stat(settingsPath);
+
+    // Create fsOps that returns different bytes on re-read
+    const fsOps: FsOps = {
+      writeFile: fs.writeFile,
+      readFile: async (p) => {
+        if (p === settingsPath) {
+          // Return different bytes to simulate concurrent change
+          return Buffer.from('{"env":{"OTHER":"value"}}\n');
+        }
+        return fs.readFile(p);
+      },
+      rename: fs.rename,
+      unlink: fs.unlink,
+      chmod: fs.chmod,
+      stat: fs.stat,
+    };
+
+    const newContent = Buffer.from('{"env":{"ACME_TOKEN":""}}\n');
+    const result = await writeSettingsFile(wsRoot, newContent, originalContent, originalStats, fsOps);
+
+    // Check result
+    expect(result.written).toBe(false);
+    if (!result.written) {
+      expect(result.error).toBe(".claude/settings.json changed while craftar was reading it — run again");
+    }
+
+    // Original file intact (the real fs still has original)
+    const currentBytes = await fs.readFile(settingsPath);
+    expect(currentBytes.equals(originalContent)).toBe(true);
+
+    // No temp file left
+    const files = await fs.readdir(path.join(wsRoot, ".claude"));
+    const temps = files.filter((f) => f.endsWith(".tmp"));
+    expect(temps).toHaveLength(0);
+  });
+
+  it("C10b-2. pre-existing temp file → error, temp NOT removed", async () => {
+    const wsRoot = await tmpDir("craftar-c10b2-");
+    cleanups.push(() => fs.rm(wsRoot, { recursive: true, force: true }));
+
+    // Create .claude directory
+    await fs.mkdir(path.join(wsRoot, ".claude"), { recursive: true });
+
+    // Create the pre-existing temp file
+    const tempPath = path.join(wsRoot, ".claude", `settings.json.craftar-${process.pid}.tmp`);
+    await fs.writeFile(tempPath, "pre-existing temp content");
+
+    const newContent = Buffer.from('{"env":{"ACME_TOKEN":""}}\n');
+    // originalBytes = null means file doesn't exist (creating new)
+    const result = await writeSettingsFile(wsRoot, newContent, null, null);
+
+    // Check result
+    expect(result.written).toBe(false);
+    if (!result.written) {
+      expect(result.error).toBe(`.claude/settings.json.craftar-${process.pid}.tmp exists — remove it and run again`);
+    }
+
+    // The pre-existing temp file should NOT be removed
+    const tempExists = await fs.access(tempPath).then(() => true).catch(() => false);
+    expect(tempExists).toBe(true);
+
+    // Verify it still has the original content
+    const tempContent = await fs.readFile(tempPath, "utf8");
+    expect(tempContent).toBe("pre-existing temp content");
+  });
 });
 
 describe("C15. confirmSettings through fake InitIo", () => {
@@ -953,6 +1071,13 @@ describe("C15. confirmSettings through fake InitIo", () => {
 });
 
 describe("C16. mcp --allow-writes and ui unchanged", () => {
-  // These are covered by existing pins - no new code should change them
-  it.todo("existing mcp and ui pins pass");
+  // Verify the existing mcp tools list does NOT include a settings tool (spec 52 D12)
+  it("mcp tools/list pin contains no tool with 'settings' in the name", async () => {
+    const toolsPin = await fs.readFile(path.join(__dirname, "pins/mcp-tools-list.json"), "utf8");
+    const toolsResult = JSON.parse(toolsPin) as { tools: Array<{ name: string }> };
+
+    // Verify none of the tool names contain "settings"
+    const settingsTools = toolsResult.tools.filter((t) => t.name.toLowerCase().includes("settings"));
+    expect(settingsTools, "settings apply must not be exposed via MCP (spec 52 D12)").toHaveLength(0);
+  });
 });
