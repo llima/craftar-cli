@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { runCli } from "./helpers/cli.js";
-import { acmeRecipeSections, DEFAULT_EXECUTION } from "./helpers/recipe-sections.js";
+import { acmeRecipeSections } from "./helpers/recipe-sections.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import { explainFile } from "../src/core/report.js";
 
@@ -94,10 +94,9 @@ describe("recipe-sections=off baseline pin (spec 54 §9)", () => {
     expect(observed).toEqual(JSON.parse(await fs.readFile(PIN_FILE, "utf8")));
   });
 
-  it("the deliberate delta, recorded before the change: today a recipe holding sections at schema 9 loads and plans the default", async () => {
-    // Spec 54 §4.1 turns this into a load refusal. This case is replaced by that refusal's test when the gate lands.
+  it("the deliberate delta: a recipe holding sections below the gate now fails the load (spec 54 §4.1)", async () => {
+    // Before the change this Forge loaded and planned the body's default (recorded in 351f7d0).
     const s = kept(await acmeRecipeSections({ schema: 9, kiroSections: { "command/open-pr": { execution: "Run it through Kiro.\n" } } }));
-    const p = await plan(await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME }));
-    expect(p.files.find((f) => f.path === OPEN_PR)!.content.toString("utf8")).toContain(DEFAULT_EXECUTION);
+    await expect(loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME })).rejects.toThrow("recipes/executor-kiro.yaml: sections in a recipe needs schema: 10");
   });
 });
