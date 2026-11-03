@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { escapeFileLine, escapeRefusal, escapingRows, readForgeFile, readForgeText, type Escape } from "./contain.js";
+import { containRoot, escapeFileLine, escapeOf, escapeRefusal, escapingRows, readForgeFile, readForgeText, type ContainRoot, type Escape } from "./contain.js";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
 import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
@@ -1218,11 +1218,11 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
       continue;
     }
     const disk = await source.read(f.path);
+    const diskHash = disk === null ? null : hashNormalized(disk);
     const planHash = hashNormalized(f.content);
     let state: FileState;
     if (disk === null) state = "new";
     else if (entry) {
-      const diskHash = hashNormalized(disk);
       if (diskHash === planHash) state = "unchanged";
       // The lock records this very plan — under the current hash (a valid UTF-8 plan hashes the same in both) or under
       // the pre-0.17.4 one, which did not record invalid bytes. The Forge did not change in any way the lock can show, so
@@ -1231,8 +1231,8 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
       else if (legacyHash(f.content) === entry.hash) state = "drift";
       else if (matchesLock(disk, entry)) state = "update";
       else state = "drift";
-    } else state = hashNormalized(disk) === planHash || sameJson(f.path, disk, f.content) ? "adopt" : "collision";
-    out.push({ path: f.path, state, target: f.target, ingredient: f.ingredient, planned: f, lock: entry, diskHash: disk === null ? null : hashNormalized(disk) });
+    } else state = diskHash === planHash || sameJson(f.path, disk, f.content) ? "adopt" : "collision";
+    out.push({ path: f.path, state, target: f.target, ingredient: f.ingredient, planned: f, lock: entry, diskHash });
   }
   const planned = new Set(p.files.map((f) => f.path));
   for (const e of lock?.files ?? []) {
@@ -1297,16 +1297,16 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   const skipped: FileStatus[] = [];
   const entries: LockEntryV3[] = [];
 
-  // Fresh source so no answer cached during status() is reused.
-  const fresh = diskSource(ws.root);
+  // Compute once, used per row for escape checks with a fresh cache each time.
+  const root = await containRoot(ws.root);
 
   /**
    * Check if the file at s.path has changed since status() read it.
    * Returns true if the file has changed or cannot be read, false otherwise.
    */
   const changedSince = async (s: FileStatus): Promise<boolean> => {
-    // Never read through a path that escapes
-    if (await fresh.escape(s.path)) return true;
+    // Never read through a path that escapes — a fresh cache per row (spec 48 §4.3)
+    if (await escapeOf(root, path.join(root.given, s.path), new Map())) return true;
     let bytes: Buffer | null;
     try {
       bytes = await fs.readFile(path.join(ws.root, s.path));

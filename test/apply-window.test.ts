@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
+import * as fsMod from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { apply, loadWorkspace, plan, readLock, status, type ApplyOptions, type FileStatus } from "../src/core/sync.js";
@@ -9,6 +10,7 @@ import { explainSkip } from "../src/core/report.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir } from "./helpers/forge.js";
 
 const A = ".claude/rules/a.md";
+const B = ".claude/rules/b.md";
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   while (cleanups.length) await cleanups.pop()!();
@@ -24,6 +26,20 @@ async function oneRule(files?: Record<string, string>) {
     profiles: [profile("acme", ["base"])],
   });
   await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" }, files });
+  cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+  return { root, forgeRoot, wsRoot };
+}
+
+async function twoRules() {
+  const root = await tmpDir();
+  const forgeRoot = path.join(root, "forge");
+  const wsRoot = path.join(root, "ws");
+  await makeForge(forgeRoot, {
+    ingredients: [rule("a", "# A\n"), rule("b", "# B\n")],
+    recipes: [recipe("base", ["rule/a", "rule/b"])],
+    profiles: [profile("acme", ["base"])],
+  });
+  await makeWorkspace(wsRoot, forgeRoot, { config: { profile: "acme" } });
   cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
   return { root, forgeRoot, wsRoot };
 }
@@ -323,7 +339,7 @@ describe("apply window: file edited between status() and apply()", () => {
     expect(entry).toEqual(originalEntry);
   });
 
-  it("8. parent directory replaced by symlink to outside → nothing written outside, row skipped, no OUTSIDE in result", async () => {
+  it("8. parent directory replaced by symlink to outside (empty dir) → row skipped with changedSinceStatus: true, nothing written outside", async () => {
     const s = await oneRule();
     // No initial sync - file is "new"
     const w = await loadWorkspace(s.wsRoot);
@@ -333,11 +349,9 @@ describe("apply window: file edited between status() and apply()", () => {
     const newRow = st.find((x) => x.state === "new");
     expect(newRow).toBeDefined();
 
-    // Create an outside directory
+    // Create an outside directory WITHOUT a.md
     const outsideDir = path.join(s.root, "outside");
     await fs.mkdir(outsideDir, { recursive: true });
-    const outsideFile = path.join(outsideDir, "a.md");
-    await fs.writeFile(outsideFile, "OUTSIDE");
 
     // *** IN THE WINDOW: replace the parent directory with a symlink to outside ***
     const parentDir = path.join(s.wsRoot, ".claude/rules");
@@ -350,17 +364,16 @@ describe("apply window: file edited between status() and apply()", () => {
 
     const result = await apply(w, p, st);
 
-    // Nothing written outside (the outside file still reads "OUTSIDE")
-    expect(await fs.readFile(outsideFile, "utf8")).toBe("OUTSIDE");
+    // Outside a.md does NOT exist (nothing was written outside)
+    const outsideFile = path.join(outsideDir, "a.md");
+    await expect(fs.stat(outsideFile)).rejects.toMatchObject({ code: "ENOENT" });
     // NOT in written
     expect(result.written).not.toContain(A);
-    // IS in skipped with changedSinceStatus: true
+    // IS in skipped with changedSinceStatus: true and state collision
     const skipped = result.skipped.find((x) => x.path === A);
     expect(skipped).toBeDefined();
     expect(skipped!.changedSinceStatus).toBe(true);
-    // The outside file's content appears in no string of the result
-    const resultJson = JSON.stringify(result);
-    expect(resultJson).not.toContain("OUTSIDE");
+    expect(skipped!.state).toBe("collision");
   });
 
   it("9. no edit in the window → exactly today's result: written, removed, skipped and lock as without change", async () => {
@@ -454,4 +467,102 @@ describe("apply window: file edited between status() and apply()", () => {
       }
     },
   );
+
+  it("12. two new files under same parent, link swap between writes → second file skipped with changedSinceStatus", async () => {
+    const s = await twoRules();
+    // No initial sync - both files are "new"
+    const w = await loadWorkspace(s.wsRoot);
+    const p = await plan(w);
+    const lock = await readLock(w.root);
+    const st = await status(w, p, lock);
+    // Both a.md and b.md are new
+    expect(st.filter((x) => x.state === "new").length).toBe(2);
+
+    // Create an outside directory
+    const outsideDir = path.join(s.root, "outside");
+    await fs.mkdir(outsideDir, { recursive: true });
+
+    const parentDir = path.join(s.wsRoot, ".claude/rules");
+    let firstWriteDone = false;
+
+    // Spy on fs.promises.writeFile to swap the parent to a junction after the first write
+    const realWriteFile = fsMod.promises.writeFile;
+    const spy = vi.spyOn(fsMod.promises, "writeFile").mockImplementation(async (...args) => {
+      const [filePath, data, options] = args as [fsMod.PathLike, Parameters<typeof realWriteFile>[1], Parameters<typeof realWriteFile>[2]];
+      await realWriteFile(filePath, data, options);
+
+      // After first write (a.md), replace the parent with a junction
+      if (!firstWriteDone && String(filePath).endsWith("a.md")) {
+        firstWriteDone = true;
+        // Move a.md out
+        const aMd = path.join(parentDir, "a.md");
+        const tmpA = path.join(s.root, "tmp-a.md");
+        await fs.rename(aMd, tmpA);
+        // Remove the directory
+        await fs.rm(parentDir, { recursive: true, force: true });
+        // Create junction to outside
+        await fs.symlink(outsideDir, parentDir, "junction");
+        // Move a.md back (into outside, through the junction)
+        await fs.rename(tmpA, aMd);
+      }
+    });
+
+    try {
+      const result = await apply(w, p, st);
+
+      // a.md was written (before the swap)
+      expect(result.written).toContain(A);
+      // b.md was NOT written outside
+      const outsideB = path.join(outsideDir, "b.md");
+      await expect(fs.stat(outsideB)).rejects.toMatchObject({ code: "ENOENT" });
+      // b.md row is skipped with changedSinceStatus: true
+      const skipped = result.skipped.find((x) => x.path === B);
+      expect(skipped).toBeDefined();
+      expect(skipped!.changedSinceStatus).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("13. update row with LF→CRLF change (same normalized content) → written, not skipped (hashNormalized folds CRLF)", async () => {
+    // This test passes before and after the per-row cache change; it pins behaviour.
+    const s = await oneRule();
+    // Initial sync
+    await syncOnce(s.wsRoot);
+
+    // Verify initial state (LF from Forge)
+    const initialContent = await readText(s.wsRoot, A);
+    expect(initialContent).toBe("# A\n");
+
+    // Resave the file with CRLF (same text after normalization)
+    const crlf = "# A\r\n";
+    await fs.writeFile(path.join(s.wsRoot, A), crlf);
+
+    // Change the Forge so that the file would need an update
+    await fs.writeFile(path.join(s.forgeRoot, "ingredients/rules/a/rule.md"), "# A updated\n");
+
+    const w = await loadWorkspace(s.wsRoot);
+    const p = await plan(w);
+    const lock = await readLock(w.root);
+    const st = await status(w, p, lock);
+    // Should be update (disk matches lock via hashNormalized, plan differs)
+    const row = st.find((x) => x.path === A);
+    expect(row).toBeDefined();
+    expect(row!.state).toBe("update");
+
+    // Now "edit in window" by changing line endings (CRLF back to LF of same original text)
+    // The normalized hash is the same, so changedSince returns false → file is written
+    const lfOriginal = "# A\n";
+    await fs.writeFile(path.join(s.wsRoot, A), lfOriginal);
+
+    const result = await apply(w, p, st);
+
+    // The row should be written (update proceeds), NOT skipped
+    // (disk content normalized equals status diskHash, so no changedSinceStatus)
+    expect(result.written).toContain(A);
+    expect(result.skipped.find((x) => x.path === A)).toBeUndefined();
+    // The file now has the Forge's new content (with CRLF preserved from when plan read the disk)
+    // textFile preserves EOL style from existing file when status() was computed (file had CRLF)
+    expect(await readText(s.wsRoot, A)).toBe("# A updated\r\n");
+  });
 });
