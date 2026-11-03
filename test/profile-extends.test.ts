@@ -364,3 +364,22 @@ describe("spec 41 §4.10 under a family — agents-md.primary a parent sets keep
   });
 });
 
+describe("spec 54 §5.9 — a child's edit of a base its parent's recipe brings", () => {
+  async function snapshot(root: string): Promise<string> {
+    const { listFiles } = await import("../src/core/forge.js");
+    const out: string[] = [];
+    for (const rel of (await listFiles(root)).sort()) out.push(rel + "\0" + (await fs.readFile(path.join(root, rel), "utf8")));
+    return out.join("\n");
+  }
+  it("import refuses it with the Forge untouched, where a variant would sit beside the base", async () => {
+    const f = kept(await acmeHoisted(GATE, { importShaped: true }));
+    expect(runCli(["sync", "--workspace", f.ws.portal]).code).toBe(0);
+    await fs.writeFile(path.join(f.ws.portal, ".claude/rules/style.md"), "# Style\nKeep it very short.\n");
+    const before = await snapshot(f.forgeRoot);
+    await expect(importClaudeCode({ workspaceRoot: f.ws.portal, forgeRoot: f.forgeRoot, profileName: "acme-portal" })).rejects.toThrow(
+      "import: this workspace's rule/style differs from the rule/style that acme-portal's parent acme brings through its recipes — a variant would sit beside the base, and no command writes a parent",
+    );
+    expect(await snapshot(f.forgeRoot)).toBe(before);
+  });
+});
+

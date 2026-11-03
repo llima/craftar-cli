@@ -2007,10 +2007,28 @@ async function placeComputed(o: RecipeOptions, own: LocalLayer | undefined, name
   const parentRecipes = familyOf(forge, o.profile).slice(1).flatMap((q) => forge.profiles.get(q)?.recipes ?? []);
   const view = forgeFor(forge, o.profile);
   let fromParents = new Set<string>();
-  try {
-    fromParents = new Set(recipeOrder(view, parentRecipes, `the parents of profile ${o.profile}`).flatMap((r) => view.recipes.get(r)?.ingredients ?? []));
-  } catch {
-    // A parent's list that does not resolve leaves the list as computed; the proof on the scratch copy says the rest.
+  if (parentRecipes.length) {
+    try {
+      fromParents = new Set(recipeOrder(view, parentRecipes, `the parents of profile ${o.profile}`).flatMap((r) => view.recipes.get(r)?.ingredients ?? []));
+    } catch (e) {
+      // A parent's list that does not resolve leaves the list as computed, and says so.
+      o.report.warnings.push(`profile ${o.profile}: its parents' recipes do not resolve (${errorText(e)}) — what they bring was not left out of ${name}`);
+    }
+  }
+  // A child's variant of a base its parents' recipes bring would sit beside that base (two ingredients, one file): the
+  // parent's recipe would have to change, and no command writes a parent (spec 54 §5.9).
+  const suffix = `--${o.profile}`;
+  for (const r of list) {
+    if (!r.endsWith(suffix) || !fromParents.has(r.slice(0, -suffix.length))) continue;
+    const base = r.slice(0, -suffix.length);
+    const parent = familyOf(forge, o.profile).slice(1).find((q) => {
+      try {
+        return recipeOrder(view, forge.profiles.get(q)?.recipes ?? [], `profile ${q}`).some((x) => view.recipes.get(x)?.ingredients.includes(base));
+      } catch {
+        return false;
+      }
+    });
+    throw new Error(`import: this workspace's ${base} differs from the ${base} that ${o.profile}'s parent ${parent ?? "(unknown)"} brings through its recipes — a variant would sit beside the base, and no command writes a parent: edit the parent's recipe, or the Forge's ${base}, by hand, then re-run`);
   }
   const kept = list.filter((r) => !locals.has(r) && !fromParents.has(r) && !(citedLocally.has(r) && !rootListed.has(r)));
   if (list.length > 0 && kept.length === 0) return null;
