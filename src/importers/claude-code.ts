@@ -1692,7 +1692,10 @@ async function writeIngredient(
     // At spec 56's gate a new one is the profile's override of the base instead (§7, row 4).
     const overrides = run?.ctx.forge !== undefined && run.ctx.forge !== null && readsLocalOverride(run.ctx.forge.manifest);
     if (mode === "always" && !(await stage.exists(variantFile)) && overrides) {
-      report.variants.pop(); // the entry pushed above for this source: it becomes a local, not a variant
+      // The entries pushed above for this source name a variant that is never written: it becomes a local instead.
+      const dropped = `${meta.type}/${name}`;
+      report.variants = report.variants.filter((v) => v.name !== dropped);
+      report.warnings = report.warnings.filter((w) => !w.startsWith(`import: ${dropped} holds the generated list`));
       const { as: _as, ...rest } = meta as Ingredient & { as?: string };
       void _as;
       meta = validateImported({ ...rest, name: as } as Ingredient);
