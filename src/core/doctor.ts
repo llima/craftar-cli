@@ -396,7 +396,7 @@ async function workspaceChecks(
             "kiro-resources",
             "warn",
             `agent ${agent} lists ${resourcePath}, which the plan does not write (on disk only)`,
-            "edit the agent's resources in the Forge",
+            "edit the agent's resources in the Forge — if sync removes that file as an orphan, this entry becomes an error",
           );
         }
 
