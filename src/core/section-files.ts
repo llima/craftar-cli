@@ -3,6 +3,7 @@ import path from "node:path";
 import { FORGE_SCHEMA_SECTION_FILES, type ForgeManifest, type ProfileSections, type Sections } from "../schema/index.js";
 import { readForgeFile, type ContainRoot } from "./contain.js";
 import { isUtf8 } from "./text.js";
+import { TERMINAL_UNSAFE } from "./forge.js";
 
 /**
  * Spec 55 Part B: a section value held in a file, `{ file: sections/….md }`, in a `profile.yaml` (and, once spec 54 builds them,
@@ -26,7 +27,7 @@ export interface ResolvedSections {
   findings: string[];
 }
 
-const BOM = "﻿";
+const BOM = "\uFEFF";
 
 /**
  * Resolve the `{ file: }` values of one declaring file.
@@ -107,6 +108,9 @@ export function unnamedSectionFileWarning(rel: string): string {
   return `${rel}: no section value names this file`;
 }
 
+/** A name a terminal prints as it is: no control or bidirectional character (`TERMINAL_UNSAFE`'s class, spelled once there). */
+const printable = (name: string) => !TERMINAL_UNSAFE.test(name);
+
 /**
  * The files under `<folder>/sections/` that no value of the declaring file names, Forge-relative, sorted; compared without
  * case. Listed with `lstat`, so a link is reported by its own name and never followed.
@@ -125,7 +129,8 @@ export async function unnamedSectionFiles(folderAbs: string, folderRel: string, 
     for (const e of entries) {
       const r = `${rel}/${e.name}`;
       if (e.isDirectory()) await walk(path.join(dirAbs, e.name), r);
-      else if (!named.has(r.toLowerCase())) out.push(`${folderRel}/${r}`);
+      // A name a terminal would not print as it is reads by position in its folder.
+      else if (!named.has(r.toLowerCase())) out.push(printable(e.name) ? `${folderRel}/${r}` : `${folderRel}/${rel}/#${entries.indexOf(e) + 1} (a name not shown)`);
     }
   }
   await walk(path.join(folderAbs, "sections"), "sections");

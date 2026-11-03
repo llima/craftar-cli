@@ -95,6 +95,17 @@ describe("a section value held in a file (spec 55 §5)", () => {
     expect(msg).not.toContain("SECRET-CONTENT");
   });
 
+  it.skipIf(process.platform === "win32").each([
+    ["sections/con.md", "a Windows device name"],
+    ["sections/rule./checklist.md", "a segment ending in a dot"],
+  ])("refuses %s (%s) even when the file is there, a Forge a Windows checkout cannot hold", async (p) => {
+    const root = await forgeAt(GATE, file(p), { [`profiles/acme/${p}`]: "SECRET-CONTENT\n" });
+    const msg = await loadError(root);
+    expect(msg).toContain("rule/review");
+    expect(msg).toContain("Windows cannot hold");
+    expect(msg).not.toContain("SECRET-CONTENT");
+  });
+
   it("refuses a key beside file", async () => {
     const root = await forgeAt(GATE, { "rule/review": { checklist: { file: "sections/rule/review/checklist.md", encoding: "utf8" } } }, {
       "profiles/acme/sections/rule/review/checklist.md": "x\n",
@@ -154,6 +165,16 @@ describe("a section value held in a file (spec 55 §5)", () => {
     ]);
   });
 
+  it.skipIf(process.platform === "win32")("an unnamed file whose name holds a control character is named by position, never as it is", async () => {
+    const root = await forgeAt(GATE, {}, { "profiles/acme/sections/bad\u001b[31mname.md": "x\n" });
+    const ws = `${root}-ws3`;
+    roots.push(ws);
+    await makeWorkspace(ws, root, { config: { profile: "acme" } });
+    const p = await plan(await loadWorkspace(ws));
+    const w = p.warnings.filter((x) => x.includes("no section value names this file"));
+    expect(w).toEqual(["profiles/acme/sections/#1 (a name not shown): no section value names this file"]);
+  });
+
   it("craftar.yaml cannot hold a { file: } value: the workspace's load fails naming the key", async () => {
     const root = await forgeAt(GATE, {});
     const ws = `${root}-ws2`;
@@ -163,8 +184,8 @@ describe("a section value held in a file (spec 55 §5)", () => {
   });
 });
 
-describe("one reader of a section file (spec 55 §5.4)", () => {
-  it("no file under src/ but section-files.ts reads a { file: } section value", async () => {
+describe("one home for the shape of a section file (spec 55 §5.4)", () => {
+  it("only the schema and section-files.ts spell the file value, its path grammar or its resolver", async () => {
     const src = path.resolve(__dirname, "../src");
     const offenders: string[] = [];
     for (const f of await listFiles(src)) {

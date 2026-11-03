@@ -464,9 +464,19 @@ export type Sections = z.infer<typeof SectionsSchema>;
  * starting with `.` — so no backslash, no `..`, no absolute path, no empty segment, never `profile.yaml` or a body file.
  */
 export const SECTION_FILE_PATH = /^sections\/(?:[A-Za-z0-9_-][A-Za-z0-9._-]*\/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\.md$/;
+const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+/** A path segment Windows cannot hold as a file name (spec 55 B6): ending in `.` or a space, or a device name such as `con.md`. */
+export function windowsShaped(segment: string): boolean {
+  return /[. ]$/.test(segment) || WINDOWS_DEVICE.test(segment);
+}
 /** A section value held in a file (spec 55 §5.2): `{ file: <path> }`, no other key. */
 export const SectionFileValue = z
-  .object({ file: z.string().regex(SECTION_FILE_PATH, "a section file is sections/….md: segments of letters, digits, '.', '_' and '-', not starting with '.'") })
+  .object({
+    file: z
+      .string()
+      .regex(SECTION_FILE_PATH, "a section file is sections/….md: segments of letters, digits, '.', '_' and '-', not starting with '.'")
+      .refine((p) => !p.split("/").some(windowsShaped), "a section file's path holds a name Windows cannot hold (a device name such as con, or a segment ending in '.')"),
+  })
   .strict();
 /**
  * A profile's section values as its `profile.yaml` writes them (spec 55 §5.2): a string, or `{ file: }`. `loadForge` resolves

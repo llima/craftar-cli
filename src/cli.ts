@@ -3167,7 +3167,11 @@ forge
   .option("--json", "machine-readable output", false)
   .action(async (ref: string, o) => runForgeMove("forge share", ref, o));
 
-/** Spec 55 §5.6: a gated Forge writer, in the order of its steps — remote and cache tree, gate, profile, git, created paths, proof. */
+/**
+ * Spec 55 §5.6: a gated Forge writer — remote and cache tree; then `planExtract`, which reads only (gate, profile, the created
+ * paths, the YAML round-trip); then git (a repository with a commit, profile.yaml held, nothing created ignored), links, the
+ * proof on a scratch copy; then the writes.
+ */
 async function runSectionsExtract(o: { profile: string; minBytes: string; forge?: string; workspace?: string; dryRun: boolean; json: boolean }): Promise<void> {
   const command = EXTRACT_COMMAND;
   const minBytes = /^\d+$/.test(o.minBytes) ? Number(o.minBytes) : NaN;

@@ -934,12 +934,12 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     const editKeys = outcome === "params" ? ["params"] : ["sections"];
     // Spec 55 §5.5: a section value the profile holds in a file is written to that file, whole, LF with no BOM, and
     // profile.yaml is left as it is; the file joins mustHold as profile.yaml does.
-    const heldFiles: Array<{ abs: string; label: string; value: string }> = [];
+    const heldFiles: Array<{ abs: string; value: string }> = [];
     const inYaml = sectionsChanged.filter((s) => {
       const held = outcome === "sections" ? profileSectionFile(forge, profile, s.key, s.name) : undefined;
       if (held === undefined) return true;
       const abs = path.join(path.dirname(profileAbs), ...held.split("/"));
-      heldFiles.push({ abs, label: path.relative(forgeDir, abs).split(path.sep).join("/"), value: s.value.replace(/\r\n?/g, "\n") });
+      heldFiles.push({ abs, value: s.value.replace(/\r\n?/g, "\n") });
       return false;
     });
     const unheldFiles = heldFiles.length ? await gitUnheld(forgeDir, heldFiles.map((h) => h.abs)) : [];

@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { FORGE_SCHEMA_SECTION_FILES, ProfileWrittenSchema, type ProfileWritten } from "../schema/index.js";
+import { FORGE_SCHEMA_SECTION_FILES, ProfileWrittenSchema, windowsShaped, type ProfileWritten } from "../schema/index.js";
 import { assertNoLinkOnPath, copyForgeForProof, loadForge, parseYaml, type Forge } from "./forge.js";
 import { impactOf, planAll, type ForgeWorkspace, type Planned } from "./impact.js";
 import { readsSectionFiles } from "./section-files.js";
@@ -47,13 +47,7 @@ export interface ExtractPlan {
   warnings: string[];
 }
 
-const BOM = "﻿";
-const DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
-
-/** A segment Windows cannot hold as a file name (spec 55 B6): ending in `.` or a space, or a device name. */
-function windowsShaped(segment: string): boolean {
-  return /[. ]$/.test(segment) || DEVICE.test(segment);
-}
+const BOM = "\uFEFF";
 
 const posix = (p: string) => p.split(path.sep).join("/");
 
@@ -174,6 +168,9 @@ export async function proveExtract(forge: Forge, plan: ExtractPlan, registered: 
   try {
     const copy = path.join(scratch, "forge");
     await copyForgeForProof(forge.root, copy, EXTRACT_COMMAND);
+    // A message from the copy names the Forge, whichever spelling of the scratch path it holds.
+    const realCopy = await fs.realpath(copy);
+    const unscratch = (t: string) => t.split(realCopy).join(forge.root).split(copy).join(forge.root);
     try {
       await writeExtract(plan, copy);
     } catch (e) {
@@ -185,7 +182,7 @@ export async function proveExtract(forge: Forge, plan: ExtractPlan, registered: 
     try {
       edited = await loadForge(copy);
     } catch (e) {
-      throw new Error(`${EXTRACT_COMMAND}: the Forge would not load after the move:\n${(e instanceof Error ? e.message : String(e)).split(copy).join(forge.root)}\nnothing written`);
+      throw new Error(`${EXTRACT_COMMAND}: the Forge would not load after the move:\n${unscratch(e instanceof Error ? e.message : String(e))}\nnothing written`);
     }
     const now = edited.profiles.get(plan.profile)!.sections;
     for (const m of plan.moved) {
@@ -203,7 +200,7 @@ export async function proveExtract(forge: Forge, plan: ExtractPlan, registered: 
         continue;
       }
       const r = impactOf(before[i], after[i]);
-      if (r.state === "error") throw new Error(`${EXTRACT_COMMAND}: ${where} would not plan after the move — ${(r.error ?? "it fails").split("\n")[0].split(copy).join(forge.root)}; nothing written`);
+      if (r.state === "error") throw new Error(`${EXTRACT_COMMAND}: ${where} would not plan after the move — ${unscratch((r.error ?? "it fails").split("\n")[0])}; nothing written`);
       if (r.state !== "no-effect") throw new Error(`${EXTRACT_COMMAND}: ${where} would not plan the same after the move — ${r.files.join(", ")}; nothing written`);
     }
     return { warnings, before };
