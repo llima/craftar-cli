@@ -2405,9 +2405,10 @@ async function resolveForImport(
 ): Promise<{ resolution: Resolution; lookup: RuleLookup }> {
   if (!loaded.profiles.has(profile)) throw new Error(`profile ${profile} is not in the Forge`);
   const targets = await workspaceTargets(ws, read);
-  // The workspace's recipes.add / recipes.remove too, so the recipe layer of sections is the one sync renders (spec 54 §4.3).
-  const recipes = await workspaceRecipes(ws, read);
-  const config = WorkspaceConfigSchema.parse({ forge: ".", profile, ...(targets ? { targets } : {}), recipes, overrides: { params: ctx.W, sections: ctx.WS } });
+  // At schema 10 the workspace's recipes.add / recipes.remove too, so the recipe layer of sections is the one sync renders
+  // (spec 54 §4.3); below it the resolution stays the profile's own, as before.
+  const recipes = readsRecipeSections(loaded.manifest) ? await workspaceRecipes(ws, read) : undefined;
+  const config = WorkspaceConfigSchema.parse({ forge: ".", profile, ...(targets ? { targets } : {}), ...(recipes ? { recipes } : {}), overrides: { params: ctx.W, sections: ctx.WS } });
   const resolution = resolve(loaded, config);
   const lookup = buildRuleLookup(resolution.ingredients, resolution);
   return { resolution, lookup };

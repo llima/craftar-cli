@@ -417,7 +417,6 @@ export async function workspaceParams(ws: string, read: (abs: string) => Promise
   return out;
 }
 
-/** The workspace's `targets`: craftar.local.yaml's replaces craftar.yaml's, as loadWorkspace merges them; undefined when neither sets it. */
 /**
  * The workspace's `recipes` (`add`, `remove`), craftar.local.yaml over craftar.yaml as loadWorkspace merges them, so a
  * resolution import makes of the importing profile resolves the recipes sync resolves (spec 54 §4.3).
@@ -441,6 +440,7 @@ export async function workspaceRecipes(ws: string, read: (abs: string) => Promis
   }
 }
 
+/** The workspace's `targets`: craftar.local.yaml's replaces craftar.yaml's, as loadWorkspace merges them; undefined when neither sets it. */
 export async function workspaceTargets(
   ws: string,
   read: (abs: string) => Promise<string>,
