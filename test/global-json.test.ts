@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -126,8 +127,9 @@ describe("sdkPathsUnsafe", () => {
       expect(sdkPathsUnsafe('{\r\n"a":1\r\n}')).toBe(false);
     });
 
-    it("accepts JSON escapes in strings including \\uXXXX", () => {
-      expect(sdkPathsUnsafe('{"key":"value\\nwith\\ttabs\\u0041"}')).toBe(false);
+    it("accepts the JSON escapes but \\u (which is refused, review round 1)", () => {
+      expect(sdkPathsUnsafe('{"key":"value\\nwith\\ttabs\\"q\\" \\\\ \\/"}')).toBe(false);
+      expect(sdkPathsUnsafe('{"key":"value\\u0041"}')).toBe(true);
     });
   });
 });
@@ -227,6 +229,74 @@ describe("globalJsonFault walks the real path too", () => {
     const link = path.join(linkParent, "ws");
     await fs.symlink(real, link, "junction"); // a junction needs no privilege on Windows; "junction" is ignored elsewhere
     expect(await globalJsonFault(link)).toEqual({ where: "above", kind: "paths" });
+  });
+});
+
+describe("sdkPathsUnsafe reads what the dotnet host reads, or refuses (review round 1)", () => {
+  // rapidjson ends a `//` comment at `\n` only: here it hides the first `sdk` value's opening brace, so the host's `sdk`
+  // is the second object, whose `paths` names a directory. Byte for byte the payload measured against dotnet 10.0.401.
+  it("a // comment ended by a bare CR is not where the host ends it — refused", () => {
+    expect(sdkPathsUnsafe('{"sdk": //\r{"paths":["$host$"]}, "w":\n{"paths":["X"]}}')).toBe(true);
+  });
+  it("a bare CR anywhere outside a CRLF is refused", () => {
+    expect(sdkPathsUnsafe('{"sdk":\r{"version":"8.0.100"}}')).toBe(true);
+  });
+  it("an unterminated /* comment is refused", () => {
+    expect(sdkPathsUnsafe('{"sdk":{"version":"8.0.100"}} /* ')).toBe(true);
+  });
+  it("a raw control character inside a string is refused", () => {
+    expect(sdkPathsUnsafe('{"sdk":{"version":"8.0\u0001.100"}}')).toBe(true);
+  });
+  it("any \\u escape is refused, in a key or a value", () => {
+    expect(sdkPathsUnsafe('{"s\\u0064k":{"version":"8.0.100"}}')).toBe(true);
+    expect(sdkPathsUnsafe('{"sdk":{"version":"8.0.10\\u0030"}}')).toBe(true);
+  });
+  it("the word paths where the reader found no paths key — a comment, say — is refused", () => {
+    expect(sdkPathsUnsafe('{"sdk":{"version":"8.0.100"} /* "paths": ["x"] */}')).toBe(true);
+    expect(sdkPathsUnsafe('{"sdk":{"version":"8.0.100"}} // paths')).toBe(true);
+  });
+  it("duplicates: an unsafe second sdk, or an unsafe second paths inside a safe sdk", () => {
+    expect(sdkPathsUnsafe('{"sdk":{"paths":["$host$"]},"sdk":{"paths":["x"]}}')).toBe(true);
+    expect(sdkPathsUnsafe('{"sdk":{"paths":["$host$"],"paths":["x"]}}')).toBe(true);
+  });
+  it("$host$ in another case is a path, not the host", () => {
+    expect(sdkPathsUnsafe('{"sdk":{"paths":["$HOST$"]}}')).toBe(true);
+  });
+  it("content after the root value is refused", () => {
+    expect(sdkPathsUnsafe('{} {"sdk":{"paths":["x"]}}')).toBe(true);
+  });
+  it("(control) the safe forms still read as safe", () => {
+    expect(sdkPathsUnsafe('{\r\n  "sdk": { "version": "8.0.100", "paths": ["$host$"] } // pinned\r\n}\r\n')).toBe(false);
+    expect(sdkPathsUnsafe("﻿{}")).toBe(false);
+  });
+});
+
+describe("globalJsonFault on what is not a plain file (review round 1)", () => {
+  async function root(): Promise<string> {
+    const r = await tmpDir("craftar-global-json-kind-");
+    cleanups.push(() => fs.rm(r, { recursive: true, force: true }));
+    return r;
+  }
+  it("a file over 1 MiB is unreadable, whatever it holds", async () => {
+    const r = await root();
+    await fs.writeFile(path.join(r, "global.json"), "{" + " ".repeat(1024 * 1024 + 1) + "}");
+    expect(await globalJsonFault(r)).toEqual({ where: "root", kind: "unreadable" });
+  });
+  it.skipIf(process.platform === "win32")("a link to a safe file is followed and read as safe", async () => {
+    const r = await root();
+    await fs.writeFile(path.join(r, "safe.json"), "{}");
+    await fs.symlink(path.join(r, "safe.json"), path.join(r, "global.json"));
+    expect(await globalJsonFault(r)).toBeNull();
+  });
+  it.skipIf(process.platform === "win32")("a dangling link is unreadable", async () => {
+    const r = await root();
+    await fs.symlink(path.join(r, "nowhere.json"), path.join(r, "global.json"));
+    expect(await globalJsonFault(r)).toEqual({ where: "root", kind: "unreadable" });
+  });
+  it.skipIf(process.platform === "win32")("a FIFO is unreadable, and is not opened", async () => {
+    const r = await root();
+    execFileSync("mkfifo", [path.join(r, "global.json")]);
+    expect(await globalJsonFault(r)).toEqual({ where: "root", kind: "unreadable" });
   });
 });
 

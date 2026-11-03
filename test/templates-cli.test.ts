@@ -335,6 +335,14 @@ describe("templates install refuses when global.json sets sdk.paths (E35)", () =
     expect(r.stdout + r.stderr).not.toContain(mark);
   });
 
+  it("a // comment ended by a bare CR (the host ends it at LF only) is refused, not read as safe", async () => {
+    const s = await fresh([TOOLS], { "global.json": '{"sdk": //\r{"paths":["$host$"]}, "w":\n{"paths":["HIDDEN_DIR"]}}' });
+    const r = cli(["templates", "install", "--dry-run"], s.wsRoot);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("global.json does not read as JSON: craftar cannot tell which SDK dotnet would load — craftar templates install does not run dotnet here");
+    expect(r.stdout + r.stderr).not.toContain("HIDDEN_DIR");
+  });
+
   it("a safe global.json at the root stops the walk before an unsafe one above it, as the dotnet host does", async () => {
     const s = await fresh([TOOLS], { "global.json": "{}" });
     await fs.writeFile(path.join(s.root, "global.json"), '{"sdk":{"paths":["/custom"]}}');

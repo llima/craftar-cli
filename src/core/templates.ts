@@ -26,9 +26,11 @@ import { capture as defaultCapture, type Probe, type Runner } from "./proc.js";
  *
  * Returns `false` otherwise (no `sdk`, `sdk` not an object, no `paths`, `paths: ["$host$"]`, `paths: []`).
  *
- * Accepts: leading UTF-8 BOM, `//` and `/* * /` comments outside strings, trailing commas in
- * objects and arrays, CRLF; strings with every JSON escape including `\uXXXX`; numbers, `true`,
- * `false`, `null`; nesting depth ≤ 64; text ≤ 1 MiB.
+ * Accepts: leading UTF-8 BOM, `//` (ended at LF, as the host ends it) and `/* * /` comments outside strings,
+ * trailing commas in objects and arrays, CRLF; numbers, `true`, `false`, `null`; nesting depth ≤ 64; text ≤ 1 MiB.
+ * Fails closed (unsafe) where the host could read another document: a bare CR, any `\u` escape, an unterminated
+ * comment, a raw control character in a string, content after the root, and the word `paths` in the text more often
+ * than in what was read.
  */
 export function sdkPathsUnsafe(text: string): boolean {
   const result = parseGlobalJson(text);
@@ -55,9 +57,16 @@ function parseGlobalJson(text: string): GlobalJsonParseResult {
     text = text.slice(1);
   }
 
+  // Where craftar and the host (rapidjson, comments on) could read two documents, refuse: a bare CR (a `//` comment ends
+  // at LF only there), and any `\u` escape (a key spelled so could hide where a raw scan below would miss it).
+  if (/\r(?!\n)/.test(text) || text.includes("\\u")) return "unreadable";
+
   try {
     const parsed = tolerantJsonParse(text);
     if (parsed.kind !== "object") return "unreadable";
+    // Backstop: the word `paths` in the text more often than in what was read (a comment, a stretch the two parsers split
+    // differently) means something craftar did not read could be what the host reads.
+    if (countPaths(text) > countPathsIn(parsed)) return "unreadable";
 
     // Look for sdk key (case-insensitive)
     for (const [key, value] of parsed.entries) {
@@ -83,6 +92,15 @@ function parseGlobalJson(text: string): GlobalJsonParseResult {
   } catch {
     return "unreadable";
   }
+}
+
+const PATHS_WORD = /paths/gi;
+const countPaths = (t: string): number => t.match(PATHS_WORD)?.length ?? 0;
+function countPathsIn(v: JsonValue): number {
+  if (v.kind === "string") return countPaths(v.value);
+  if (v.kind === "array") return v.items.reduce((n, i) => n + countPathsIn(i), 0);
+  if (v.kind === "object") return v.entries.reduce((n, [k, x]) => n + countPaths(k) + countPathsIn(x), 0);
+  return 0;
 }
 
 /** AST node types for tolerant JSON parsing */
@@ -117,7 +135,8 @@ function tolerantJsonParse(text: string): JsonValue {
       // Single-line comment
       if (ch === "/" && text[pos + 1] === "/") {
         pos += 2;
-        while (pos < text.length && text[pos] !== "\n" && text[pos] !== "\r") {
+        // Ends at LF only, as the host's reader ends it.
+        while (pos < text.length && text[pos] !== "\n") {
           pos++;
         }
         continue;
@@ -125,13 +144,16 @@ function tolerantJsonParse(text: string): JsonValue {
       // Block comment
       if (ch === "/" && text[pos + 1] === "*") {
         pos += 2;
+        let closed = false;
         while (pos < text.length - 1) {
           if (text[pos] === "*" && text[pos + 1] === "/") {
             pos += 2;
+            closed = true;
             break;
           }
           pos++;
         }
+        if (!closed) throw new Error("Unterminated comment");
         continue;
       }
       break;
@@ -286,6 +308,7 @@ function tolerantJsonParse(text: string): JsonValue {
         pos++;
         continue;
       }
+      if (ch.charCodeAt(0) < 0x20) throw new Error("Control character in string");
       result += ch;
       pos++;
     }
@@ -405,7 +428,8 @@ async function walkChainForGlobalJson(start: string): Promise<GlobalJsonFault | 
     let statResult: { isFile: boolean } | null = null;
     try {
       const st = await fs.stat(globalJsonPath);
-      statResult = { isFile: st.isFile() };
+      // Not a regular file (a FIFO is never opened), or too big to be read whole: unreadable.
+      statResult = { isFile: st.isFile() && st.size <= 1024 * 1024 };
     } catch {
       // stat failed (broken symlink, etc.) → unreadable
       return { where, kind: "unreadable" };
@@ -462,7 +486,7 @@ export const GLOBAL_JSON_REFUSED = "craftar templates install does not run dotne
 
 const CREDENTIAL = "a source must not carry a user or a password: NuGet's own configuration holds credentials";
 
-/** The missing-SDK finding and its fix: one spelling for `templates install` and doctor's `dotnet` check. */
+/** The missing-SDK finding, one spelling for `templates install` and doctor's `dotnet` check; this fix is `templates install`'s (doctor's is `DOTNET_MISSING_DOCTOR_FIX`). */
 export const DOTNET_MISSING = "the .NET SDK is not available: dotnet --version gave no version";
 export const DOTNET_MISSING_FIX = "install the .NET SDK (the version a global.json at the workspace root pins, if there is one) and check PATH";
 /** Doctor's fix for missing SDK (runs in its own directory, not at the workspace root). */
@@ -745,8 +769,9 @@ export async function dotnetVersionInOwnDir(probe: Probe = defaultCapture, env: 
 }
 
 /**
- * The SDK's version, or null (D5). Probed in `cwd` (the workspace root) because `dotnet` reads
- * `global.json` from its working directory — the install runs there.
+ * The SDK's version, or null (D5), probed in `cwd`. `templates install` passes the workspace root, because `dotnet` reads
+ * `global.json` from its working directory and the install runs there (after `globalJsonFault` has refused `sdk.paths`);
+ * `doctor` calls it only through `dotnetVersionInOwnDir`.
  */
 export async function dotnetVersion(probe: Probe = defaultCapture, env: NodeJS.ProcessEnv = process.env, cwd?: string): Promise<string | null> {
   try {
