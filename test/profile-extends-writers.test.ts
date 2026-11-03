@@ -12,9 +12,11 @@ import { applyMove, planLocalize, planShare, proveMove } from "../src/core/local
 import { newProfile } from "../src/core/new-profile.js";
 import { importClaudeCode } from "../src/importers/claude-code.js";
 import { planPromote } from "../src/importers/drift-promote.js";
+import { planBasePromotion } from "../src/core/promote.js";
+import { pruneCandidates, pruneRecipes } from "../src/core/unify.js";
 import { runCli } from "./helpers/cli.js";
 import { acmeHoisted, house, ingredients, rootRecipes } from "./helpers/profile-extends.js";
-import { makeForge, makeWorkspace, recipe, tmpDir, writeFiles } from "./helpers/forge.js";
+import { makeForge, makeWorkspace, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
 
 const GATE = 12;
 const roots: string[] = [];
@@ -116,6 +118,55 @@ describe("spec 54 Part B — the writers", () => {
       planPromote({ workspaceRoot: f0.ws.portal, forgeDir: null, path: ".claude/rules/house.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
     ).rejects.toThrow(
       "D24 .claude/rules/house.md comes from rule/house, local to acme, which acme-portal extends (profiles/acme/ingredients/rules/house) — no command writes a parent: edit it there by hand, then sync every workspace of the family",
+    );
+  });
+
+  it("forge unify refuses an abstract --profile before anything is read from git (no command writes a parent)", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    const v = rule("style--acme", "# Style\nKeep it shorter.\n", { as: "style" });
+    await writeFiles(f0.forgeRoot, {
+      "ingredients/rules/style--acme/ingredient.yaml": YAML.stringify(v.meta),
+      "ingredients/rules/style--acme/rule.md": v.files!["rule.md"] as string,
+    });
+    const r = runCli(["forge", "unify", "rule/style", "--profile", "acme", "--take", "base", "--forge", f0.forgeRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("unify: profile acme is abstract — no command writes a parent: unify rule/style--acme by hand, commit, and re-run");
+  });
+
+  it("forge unify --prune-recipes keeps a candidate an abstract profile lists", async () => {
+    const root = await tmpDir("craftar-extends-prune-");
+    roots.push(root);
+    const forge = path.join(root, "forge");
+    await makeForge(forge, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme-portal", "a\n", { as: "wf" })],
+      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme-portal", ["rule/wf--acme-portal"])],
+      profiles: [
+        { name: "acme", abstract: true, recipes: ["base--acme-portal"] },
+        { name: "acme-portal", extends: "acme", recipes: [], targets: ["claude-code"] },
+      ],
+    });
+    await writeFiles(forge, { "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: GATE }) });
+    const f = await loadForge(forge);
+    const c = await pruneCandidates(f, "rule/wf" as `${string}/${string}`, "rule/wf--acme-portal" as `${string}/${string}`, "acme-portal");
+    expect(c.map((x) => [x.recipe, x.abstractProfiles])).toEqual([["base--acme-portal", ["acme"]]]);
+    const result = await pruneRecipes(forge, c, { state: "read", entries: [], after: [] });
+    expect(result).toEqual({ pruned: [], kept: [{ recipe: "base--acme-portal", reason: "profile acme lists it and is abstract — no command writes a parent" }] });
+  });
+
+  it("forge promote refuses a recipe a child reaches only through its parent's written list", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    const v = rule("style--globex", "# Style\nGlobex style.\n", { as: "style" });
+    await writeFiles(f0.forgeRoot, {
+      "ingredients/rules/style--globex/ingredient.yaml": YAML.stringify(v.meta),
+      "ingredients/rules/style--globex/rule.md": v.files!["rule.md"] as string,
+      "recipes/base--globex.yaml": YAML.stringify(recipe("base--globex", ["rule/style--globex", "command/open-pr"])),
+      "profiles/globex/profile.yaml": YAML.stringify({ name: "globex", recipes: ["base--globex"], targets: ["claude-code"] }),
+    });
+    const f = await loadForge(f0.forgeRoot);
+    await expect(planBasePromotion(f, "rule/style", "globex")).rejects.toThrow(
+      "forge promote: profile acme-portal reaches recipe base (which names rule/style) through acme, which it extends — no command writes a parent: edit the Forge by hand",
     );
   });
 });

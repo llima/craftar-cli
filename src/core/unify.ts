@@ -1117,6 +1117,8 @@ export interface PruneCandidate {
   missingProfiles: string[];
   /** Profiles that select this candidate through `integrations`, sorted (spec 33 §4.4). */
   viaIntegrations: string[];
+  /** Abstract profiles that list this candidate, sorted (spec 54 §5.10: no command writes a parent). */
+  abstractProfiles?: string[];
 }
 
 /**
@@ -1191,7 +1193,8 @@ export async function pruneCandidates(
     // viaIntegrations: profiles that select this recipe through integrations (spec 33 §4.4, choice B10).
     const viaIntegrations = [...(selectedBy.get(edit.name) ?? [])].sort();
 
-    out.push({ recipe: edit.name, sibling, file: edit.file, profiles, missingProfiles, viaIntegrations });
+    const abstractProfiles = profiles.filter((q) => forge.profiles.get(q.name)?.abstract === true).map((q) => q.name).sort();
+    out.push({ recipe: edit.name, sibling, file: edit.file, profiles, missingProfiles, viaIntegrations, ...(abstractProfiles.length ? { abstractProfiles } : {}) });
   }
 
   return out;
@@ -1361,6 +1364,15 @@ export async function pruneRecipes(
       kept.push({
         recipe: candidate.recipe,
         reason: `profile ${candidate.viaIntegrations.join(", ")} selects it through integrations`,
+      });
+      continue;
+    }
+
+    // Check 1d: an abstract profile lists it — pruning would edit a parent's profile.yaml (spec 54 §5.10).
+    if (candidate.abstractProfiles?.length) {
+      kept.push({
+        recipe: candidate.recipe,
+        reason: `profile ${candidate.abstractProfiles.join(", ")} lists it and is abstract — no command writes a parent`,
       });
       continue;
     }

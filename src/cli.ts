@@ -1,5 +1,5 @@
 import { containRoot, escapeFileLine, escapeOf, escapeRefusal, escapingRows, forgeReader } from "./core/contain.js";
-import { mergedProfile as familyProfile } from "./core/profile-extends.js";
+import { isAbstract, mergedProfile as familyProfile } from "./core/profile-extends.js";
 import { Command } from "commander";
 import pc from "picocolors";
 import path from "node:path";
@@ -2446,6 +2446,8 @@ forge
       return i.meta.type === base.meta.type && i.meta.as === base.meta.name && p === o.profile;
     });
     if (!variant) fail(`${ref} has no variant for profile ${o.profile}`);
+    // Spec 54 §5.10: no command writes a parent — unify would write the abstract profile's params and sections.
+    if (isAbstract(f, o.profile)) fail(`unify: profile ${o.profile} is abstract — no command writes a parent: unify ${variant.ref} by hand, commit, and re-run`);
     // Spec 51 §4.5: unify removes the variant, which a profile's local recipe may cite.
     const citers = localCiters(f, [variant.ref]);
     if (citers.length) fail(`unify: ${citers.map((c) => c.file).join(", ")} cites ${variant.ref} — unify does not edit a profile's local recipe; edit it by hand, commit, and re-run`);
