@@ -105,7 +105,7 @@ describe("list params and the writers (spec 55 §4.8)", () => {
     expect(m).toContain("unify: rule/deploy already uses {{k}}");
   });
 
-  it("test 13: drift show gives a file citing a list key the reason, and drift promote refuses it (D24)", async () => {
+  it("test 13: drift show gives a file citing a list key the reason, and drift promote refuses it (D25)", async () => {
     const s = kept(await acmeLists({ schema: GATE, declare: true, body: BODY }));
     await synced(s);
     const file = path.join(s.wsRoot, ".claude/rules/allow.md");
@@ -119,7 +119,7 @@ describe("list params and the writers (spec 55 §4.8)", () => {
     expect(both.files.find((f: { path: string }) => f.path === ".kiro/steering/allow.md")).toMatchObject({ reason: "cites a list param" });
     await expect(
       planPromote({ workspaceRoot: s.wsRoot, forgeDir: null, path: ".claude/rules/allow.md", home: path.join(s.root, ".craftar"), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
-    ).rejects.toThrow("its ingredient cites a list param, so the file holds a rendered list — promoting it would freeze the list in the Forge; edit the list in the profile's params, or the Forge by hand (D24)");
+    ).rejects.toThrow("its ingredient cites a list param, so the file holds a rendered list — promoting it would freeze the list in the Forge; edit the list in the profile's params, or the Forge by hand (D25)");
   });
 
   it("test 13: forge unify take: param onto a list key is refused (P21)", async () => {

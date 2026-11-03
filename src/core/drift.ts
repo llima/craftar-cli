@@ -35,7 +35,7 @@ export const REWORDED_REASON = "reworded by agents-md.primary";
 export const INDEXED_REASON = "holds the rules index";
 /** Spec 50 §5.6: a hand edit of a metadata field the Forge renders from a parameter; promoting it would freeze the value. */
 export const METADATA_PARAM_REASON = "metadata renders a parameter";
-/** Spec 55 §4.8: a file whose ingredient cites a list param — promoting the rendered text would freeze the list (D24). */
+/** Spec 55 §4.8: a file whose ingredient cites a list param — promoting the rendered text would freeze the list (D25). */
 export const LIST_PARAM_REASON = "cites a list param";
 
 /** Spec 54 §5.9: the reason a file from a parent's local is not promotable — no command writes a parent (D24). */
