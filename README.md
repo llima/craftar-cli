@@ -332,7 +332,7 @@ sections:
     execution: "Run the checks through Kiro.\n"
 ```
 
-A profile that does not resolve the recipe gets the body's default. A key that names no ingredient in the Forge is warned, naming the recipe. `craftar explain` names the layer (`execution (recipe executor-kiro)`), and at `schema: 10` the `explain` tool of `craftar mcp` gives a section's `layer` as `{"recipe": "<name>"}` or `{"profile": "<name>"}`. `import` and `drift promote` render a base with the recipes' sections, and never write into a profile a value a recipe already gives; no command writes a recipe's `sections`. Below `schema: 10` a recipe that holds `sections` fails the load: `recipes/<file>: sections in a recipe needs schema: 10 in craftar.forge.yaml`.
+A profile that does not resolve the recipe gets the body's default. A key that names no ingredient in the Forge is warned, naming the recipe. `craftar explain` names the layer (`execution (recipe executor-kiro)`), and at `schema: 10` the `explain` tool of `craftar mcp` gives a section's `layer` as `{"recipe": "<name>"}` or `{"profile": "<name>"}`. `import` and `drift promote` render a base with the recipes' sections, resolved as `sync` resolves them (the workspace's `recipes.add` and `recipes.remove` included), and do not write into the profile a value equal to what the recipes give where the profile sets none; a split of a shared recipe into an owned one (`<recipe>--<profile>`) keeps the shared recipe's `sections`. Where the importing profile does not resolve and a recipe it sees holds sections, `import` refuses with the Forge untouched. No command edits a recipe's `sections`. Below `schema: 10` a recipe that holds `sections` — at the root or in a profile's folder — fails the load: `<recipe file>: sections in a recipe needs schema: 10 in craftar.forge.yaml`.
 
 **Repositories.** A profile's `repos` lists the client's repositories, for `craftar init --clone` and `craftar repos`:
 
@@ -715,7 +715,7 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packagi
 ### to 0.51.0
 
 - **A Forge can declare `schema: 10`**, which includes 9 and below, and there a recipe may hold `sections` (*Sections in a recipe*). Every craftar before 0.51.0 refuses such a Forge at load; a Forge below it sees no change.
-- **Below `schema: 10`, a recipe that holds `sections` now fails the load** (`recipes/<file>: sections in a recipe needs schema: 10 in craftar.forge.yaml`), where it loaded and the key was ignored. Remove the key, or raise the Forge to `schema: 10`.
+- **Below `schema: 10`, a recipe that holds `sections` now fails the load** (`<recipe file>: sections in a recipe needs schema: 10 in craftar.forge.yaml`, the file Forge-relative), where it loaded and the key was ignored. Remove the key, or raise the Forge to `schema: 10` — no command raises the schema. The refusal of an unknown manifest schema now lists 10.
 - **At `schema: 10`, a section's `layer` in the `explain` tool of `craftar mcp` is an object for a profile's or a recipe's value** — `{"profile": "<name>"}` where it read `"profile"`, `{"recipe": "<name>"}` for a recipe's; `"default"` and `"workspace"` stay strings. `craftar explain`'s text keeps its words for a profile's value and reads `(recipe <name>)` for a recipe's. Below `schema: 10` nothing changes.
 
 ### to 0.50.2
