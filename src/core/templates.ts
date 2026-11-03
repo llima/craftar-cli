@@ -27,7 +27,8 @@ import { capture as defaultCapture, type Probe, type Runner } from "./proc.js";
  * Returns `false` otherwise (no `sdk`, `sdk` not an object, no `paths`, `paths: ["$host$"]`, `paths: []`).
  *
  * Accepts: leading UTF-8 BOM, `//` (ended at LF, as the host ends it) and `/* * /` comments outside strings,
- * trailing commas in objects and arrays, CRLF; numbers, `true`, `false`, `null`; nesting depth ≤ 64; text ≤ 1 MiB.
+ * trailing commas in objects and arrays (which the host rejects, ignoring the file — accepting them here only refuses
+ * more), CRLF; numbers, `true`, `false`, `null`; nesting depth ≤ 64; text ≤ 1 MiB.
  * Fails closed (unsafe) where the host could read another document: a bare CR, any `\u` escape, an unterminated
  * comment, a raw control character in a string, content after the root, and the word `paths` in the text more often
  * than in what was read.
@@ -115,9 +116,10 @@ type JsonValue =
 /**
  * A tolerant JSON parser that:
  * - Accepts `//` and `/* * /` comments outside strings
- * - Accepts trailing commas in objects and arrays
+ * - Accepts trailing commas in objects and arrays (the host rejects them; here that only refuses more)
  * - Accepts CRLF line endings
- * - Parses strings with every JSON escape including \uXXXX
+ * - Parses strings with every JSON escape, `\uXXXX` included — reached only when this parser is called on its own:
+ *   `parseGlobalJson` refuses any `\u` before it calls it
  * - Supports nesting depth ≤ 64
  * - Keeps duplicate keys (object as list of [key, value] entries)
  */

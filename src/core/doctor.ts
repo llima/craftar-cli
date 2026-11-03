@@ -623,8 +623,8 @@ function writtenServers(p: Plan, schema: ForgeSchema): Array<[string, unknown, s
  * writing the same name from different ingredients are both checked. Names are the union of the
  * ingredient's `authEnv` and every `${NAME}` in a string value of its server's `env`.
  *
- * E24.4: a `${NAME}` in a value a param brought in is NOT checked — the profile wrote the reference,
- * so the profile author knows what to set. Only values authored in the Forge are scanned.
+ * E24.4: a value a param was substituted into is left unread, whole — a `${NAME}` the Forge wrote beside the `{{param}}`
+ * included — so no part of a param's value reaches the report. Every other value is scanned.
  *
  * Reads the servers `writtenServers` returns.
  */
