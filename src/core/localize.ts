@@ -240,7 +240,11 @@ export async function planShare(forge: Forge, ref: string, profile: string): Pro
     throw new Error(`${command}: ${ref} is not local to profile ${profile}`);
   }
   const { type, name } = ing.meta;
-  if (forge.ingredients.has(ref as IngredientRef)) throw new Error(`${command}: ${ref} is also at the root (L1) — remove one by hand, commit, and re-run`);
+  if (forge.ingredients.has(ref as IngredientRef)) {
+    // At spec 56's gate the local is the profile's override of that root base (§5.3); below it, L1 as before.
+    if (readsLocalOverride(forge.manifest)) throw new Error(`${command}: ${ref} is also at the root — profile ${profile} overrides it; share would leave two bases`);
+    throw new Error(`${command}: ${ref} is also at the root (L1) — remove one by hand, commit, and re-run`);
+  }
   const variant = [...forge.ingredients.values()].find((i) => i.meta.type === type && i.meta.as === name);
   if (variant) throw new Error(`${command}: ${variant.ref} at the root is a variant named ${name} — sharing ${ref} would give it a base other profiles resolve beside it; promote or unify it first`);
   const others = localOwners(forge, ref).filter((q) => q !== profile);

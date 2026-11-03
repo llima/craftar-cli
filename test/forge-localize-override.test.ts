@@ -100,3 +100,14 @@ describe("forge localize of <name>--<p> with the base at the root (spec 56 §5.1
     expect(r.stdout).toContain("  rewired  recipes/base--acme.yaml: rule/y--acme → rule/y");
   });
 });
+
+describe("forge share of an override (spec 56 §5.3)", () => {
+  it("at the gate refuses, naming the root ingredient, in words of its own", async () => {
+    const { OVERRIDDEN, OVERRIDE_FILES } = await import("./helpers/local-override.js");
+    const { planShare } = await import("../src/core/localize.js");
+    const s = await build(cleanups, OVERRIDDEN, { extra: OVERRIDE_FILES, git: false });
+    await expect(planShare(await loadForge(s.forge), "rule/y", "acme")).rejects.toThrow(
+      "forge share: rule/y is also at the root — profile acme overrides it; share would leave two bases",
+    );
+  });
+});
