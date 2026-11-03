@@ -308,3 +308,18 @@ describe("spec 54 §5.3 — an inherited block's refusal names the file that hol
   });
 });
 
+describe("spec 54 §5.3 — what an integrations block alone provides, under a family", () => {
+  it("a recipe the parent lists by hand is not the block's, as when the child lists it", async () => {
+    const { providedByBlock } = await import("../src/importers/provided.js");
+    for (const [mk, file] of [[acmeHoisted, "profiles/acme/profile.yaml"], [acmeCopies, "profiles/acme-portal/profile.yaml"]] as const) {
+      const f = kept(await mk(GATE));
+      await fs.writeFile(path.join(f.forgeRoot, "recipes/executor-kiro.yaml"), YAML.stringify({ name: "executor-kiro", ingredients: ["rule/dotnet"] }));
+      const pf = path.join(f.forgeRoot, file);
+      const doc = YAML.parse(await fs.readFile(pf, "utf8"));
+      doc.recipes.push("executor-kiro");
+      await fs.writeFile(pf, YAML.stringify(doc));
+      expect([...providedByBlock(await loadForge(f.forgeRoot), "acme-portal").keys()]).toEqual([]);
+    }
+  });
+});
+

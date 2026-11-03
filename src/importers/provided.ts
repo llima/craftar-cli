@@ -6,6 +6,7 @@
  * This module needs `resolve()` and `recipeOrder`, which `integrations.ts` must not import.
  */
 
+import { mergedProfile } from "../core/profile-extends.js";
 import { forgeFor } from "../core/profile-local.js";
 import { WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { effectiveProfile } from "../core/integrations.js";
@@ -40,7 +41,8 @@ export function providedByBlock(forge: Forge, profileName: string): Map<string, 
   const resolution = resolve(forge, ws);
 
   // The profile's written recipes: what the profile lists and extends brings, without the block.
-  const writtenRecipes = new Set(recipeOrder(forgeFor(forge, profileName), profile.recipes, `profile ${profileName}`));
+  // Under a family (spec 54 §5.3) the written lists are the family's: a recipe a parent lists by hand is not the block's.
+  const writtenRecipes = new Set(recipeOrder(forgeFor(forge, profileName), mergedProfile(forge, profileName).recipes, `profile ${profileName}`));
 
   // The integration set: recipes the block alone adds, in block order — each `selected` entry's
   // `extends` walk minus what the profile's written recipes cover.
