@@ -116,7 +116,7 @@ export function effectiveProfile(
 ): EffectiveProfile {
   // Spec 54 §5.4 (D4): a profile that extends another is computed layer by layer, farthest first — within a layer its own
   // params over its own block, then the nearer layer over the farther — and each integrations slot belongs, whole, to the
-  // nearest profile that writes it (D6). Below Forge schema 12 no profile holds `extends`, so this is never taken.
+  // nearest profile that writes it (D6). Below Forge schema 13 no profile holds `extends`, so this is never taken.
   const chain: Profile[] = [];
   for (let at: Profile | undefined = profile; at && !chain.includes(at); at = at.extends !== undefined ? forge.profiles?.get(at.extends) : undefined) chain.push(at);
   if (chain.length > 1) return familyEffective(forge, chain.reverse());

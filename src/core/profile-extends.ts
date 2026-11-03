@@ -1,6 +1,6 @@
 /**
  * A profile that extends a profile (spec 54 Part B): the gate, the family, the merged profile and the load checks E1–E3.
- * Pure: `loadForge` reads the files and hands their contents in. Below Forge schema 12 no loaded profile holds `extends`
+ * Pure: `loadForge` reads the files and hands their contents in. Below Forge schema 13 no loaded profile holds `extends`
  * or `abstract` (the load refuses them), so every function here answers a profile's own self.
  */
 import type { Profile, Sections } from "../schema/index.js";

@@ -92,6 +92,13 @@ describe("profile-extends=off baseline pin (spec 54 §9)", () => {
     expect(observed).toEqual(JSON.parse(await fs.readFile(PIN_FILE, "utf8")));
   });
 
+  it("the same Forge at schema 12 (spec 56's, the highest before this change since the rebase) gives the same observation", async () => {
+    // Spec 56's own delta at schema 12, `ingredients --json` rows gaining `overrides: null` with --forge alone, left out.
+    const noOverrides = (v: unknown): unknown =>
+      Array.isArray(v) ? v.map(noOverrides) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).filter(([k, x]) => !(k === "overrides" && x === null)).map(([k, x]) => [k, noOverrides(x)])) : v;
+    expect(noOverrides(await observe(kept(await acmeCopies(12))))).toEqual(JSON.parse(await fs.readFile(PIN_FILE, "utf8")));
+  });
+
   it("the same Forge at schema 10 gives the same observation", async () => {
     expect(await observe(kept(await acmeCopies(10)))).toEqual(JSON.parse(await fs.readFile(PIN_FILE, "utf8")));
   });
@@ -99,6 +106,6 @@ describe("profile-extends=off baseline pin (spec 54 §9)", () => {
   it("the deliberate delta: a profile holding extends or abstract below the gate now fails the load (spec 54 §5.2)", async () => {
     // Before the change this Forge loaded and the child resolved only its own recipes (recorded in c6f765e).
     const f = kept(await acmeHoisted(11));
-    await expect(loadWorkspace(f.ws.portal, { home: process.env.CRAFTAR_HOME })).rejects.toThrow("profiles/acme/profile.yaml: abstract in a profile needs schema: 12");
+    await expect(loadWorkspace(f.ws.portal, { home: process.env.CRAFTAR_HOME })).rejects.toThrow("profiles/acme/profile.yaml: abstract in a profile needs schema: 13");
   });
 });

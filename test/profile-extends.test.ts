@@ -1,6 +1,6 @@
 /**
  * Spec 54 Part B — a profile that extends a profile (§5). Every case here failed before the change (the build report says
- * how): the gate did not exist, so a schema 12 Forge did not load, and `extends` / `abstract` were dropped.
+ * how): the gate did not exist, so a schema 13 Forge did not load, and `extends` / `abstract` were dropped.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
@@ -14,7 +14,7 @@ import { explainFile } from "../src/core/report.js";
 import { importClaudeCode } from "../src/importers/claude-code.js";
 import { apply, readLock, status } from "../src/core/sync.js";
 
-const GATE = 12;
+const GATE = 13;
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
   while (cleanups.length) await cleanups.pop()!();
@@ -123,7 +123,7 @@ describe("spec 54 Part B — a profile that extends a profile", () => {
     expect(t).toContain("Short paragraphs.\n");
   });
 
-  it("below the gate a profile holding extends or abstract fails the load, naming the file and schema 12", async () => {
+  it("below the gate a profile holding extends or abstract fails the load, naming the file and schema 13", async () => {
     const f = kept(await acmeHoisted(11));
     await expect(loadForge(f.forgeRoot)).rejects.toThrow(`profiles/acme/profile.yaml: abstract in a profile needs schema: ${GATE} in craftar.forge.yaml`);
   });

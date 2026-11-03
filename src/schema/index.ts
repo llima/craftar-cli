@@ -717,9 +717,9 @@ export const ProfileSchema = z.object({
   templates: z.unknown().optional(),
   /** The docs block (spec 47 §5.2): kept as written, NOT validated at load — `declaredDocs` is its one reader. */
   docs: z.unknown().optional(),
-  /** The abstract profile this one extends (spec 54 §5.1), read at Forge schema 12 and above only. */
+  /** The abstract profile this one extends (spec 54 §5.1), read at Forge schema 13 and above only. */
   extends: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "a profile name: lowercase letters and digits joined by one -").optional(),
-  /** A profile no workspace uses, which others extend (spec 54 §5.1), read at Forge schema 12 and above only. */
+  /** A profile no workspace uses, which others extend (spec 54 §5.1), read at Forge schema 13 and above only. */
   abstract: z.boolean().optional(),
 });
 export type Profile = z.infer<typeof ProfileSchema>;

@@ -18,7 +18,7 @@ import { runCli } from "./helpers/cli.js";
 import { acmeHoisted, house, ingredients, rootRecipes } from "./helpers/profile-extends.js";
 import { makeForge, makeWorkspace, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
 
-const GATE = 12;
+const GATE = 13;
 const roots: string[] = [];
 afterEach(async () => {
   while (roots.length) await fs.rm(roots.pop()!, { recursive: true, force: true });
