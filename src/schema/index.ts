@@ -683,6 +683,11 @@ export type Recipe = z.infer<typeof RecipeSchema>;
 /* Profiles                                                             */
 /* ------------------------------------------------------------------ */
 
+/** Profile name grammar (spec 38 §5.1 P3): lowercase letters and digits, in groups joined by one "-". One spelling. */
+export const PROFILE_NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+/** Windows device names (spec 38 §5.1 P3), refused as a profile name. */
+export const DEVICE_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
 export const ProfileSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
@@ -717,8 +722,12 @@ export const ProfileSchema = z.object({
   templates: z.unknown().optional(),
   /** The docs block (spec 47 §5.2): kept as written, NOT validated at load — `declaredDocs` is its one reader. */
   docs: z.unknown().optional(),
-  /** The abstract profile this one extends (spec 54 §5.1), read at Forge schema 13 and above only. */
-  extends: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "a profile name: lowercase letters and digits joined by one -").optional(),
+  /** The abstract profile this one extends (spec 54 §5.1), read at Forge schema 13 and above only. P3's grammar, `init --new-profile`'s. */
+  extends: z
+    .string()
+    .regex(PROFILE_NAME_RE, "a profile name: lowercase letters and digits joined by one -")
+    .refine((v) => !DEVICE_NAMES.test(v), "a profile name that is not a Windows device name")
+    .optional(),
   /** A profile no workspace uses, which others extend (spec 54 §5.1), read at Forge schema 13 and above only. */
   abstract: z.boolean().optional(),
 });

@@ -5,7 +5,7 @@
 
 import { isAbstract } from "./profile-extends.js";
 import YAML from "yaml";
-import { ProfileSchema, WorkspaceConfigSchema, type Profile } from "../schema/index.js";
+import { DEVICE_NAMES, PROFILE_NAME_RE, ProfileSchema, WorkspaceConfigSchema, type Profile } from "../schema/index.js";
 import type { Forge } from "./forge.js";
 import { effectiveProfile } from "./integrations.js";
 import { namedForProfile } from "./promote.js";
@@ -13,11 +13,6 @@ import { planRecipeEdit } from "./recipe-edit.js";
 import { profileNotFoundMessage } from "./resolve.js";
 import { parseYamlText } from "./yaml-read.js";
 
-/** Windows device names (spec 38 §5.1 P3). */
-const DEVICE_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
-
-/** Profile name grammar: lowercase letters and digits, in groups joined by one "-". */
-const PROFILE_NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /**
  * YAML-safe a list item: when `YAML.stringify(value).trim()` differs from the plain value,

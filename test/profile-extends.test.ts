@@ -266,3 +266,14 @@ describe("spec 54 O6 — a parent's override stands for its family", () => {
     expect(rows.map((i: { profile: string | null }) => i.profile)).toEqual(["acme"]);
   });
 });
+
+describe("spec 54 §5.2 — extends follows init --new-profile's name grammar (P3)", () => {
+  it("a Windows device name is refused, by its rule and never its value", async () => {
+    const { ProfileSchema } = await import("../src/schema/index.js");
+    const { schemaFault } = await import("../src/core/schema-fault.js");
+    const r = ProfileSchema.safeParse({ name: "acme-portal", extends: "con" });
+    expect(r.success).toBe(false);
+    expect(schemaFault(r.error!)).toBe("extends: a profile name that is not a Windows device name");
+  });
+});
+
