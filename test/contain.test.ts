@@ -97,7 +97,7 @@ describe("escapeOf", () => {
     const { tree } = await scratch();
     await fs.mkdir(path.join(tree, ".git/hooks"), { recursive: true });
     const root = await containRoot(tree);
-    for (const spelling of [".git.", ".git ", ".GIT..", "git~1", "GIT~1", ".git::$INDEX_ALLOCATION"]) {
+    for (const spelling of [".git.", ".git ", ".GIT..", "git~1", "GIT~1", ".git::$INDEX_ALLOCATION", ".git.:x"]) {
       expect(await escapeOf(root, path.join(tree, spelling, "hooks", "x")), spelling).toBe("git");
     }
     // A short name the volume gives `.git` that is not GIT~1 is caught by identity, when the volume keeps short names.
