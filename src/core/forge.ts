@@ -269,7 +269,7 @@ export async function gitHasCommit(dir: string): Promise<boolean> {
  */
 export async function gitIgnored(dir: string, rel: string): Promise<boolean> {
   try {
-    await execProgram("git", [...gitRead(dir), "check-ignore", "-q", "--", rel]);
+    await execProgram("git", [...(await gateRead(dir)), "check-ignore", "-q", "--", rel]);
     return true; // exit 0 means ignored
   } catch (e) {
     // exit 1 means not ignored; any other error fails closed
@@ -296,10 +296,45 @@ export async function gitTracked(dir: string, rel: string): Promise<boolean> {
 /**
  * The git arguments for a read-only command that must not run hooks or take locks.
  * These keep `git` from running a `core.fsmonitor` command and a `post-index-change` hook
- * of the Forge's own `.git`; a `filter.<x>.clean` still runs.
+ * of the Forge's own `.git`; a `filter.<x>.clean` still runs, except under the gate's own commands (`gateRead`).
  */
 export function gitRead(dir: string): string[] {
   return ["--no-optional-locks", "-C", dir, "-c", "core.fsmonitor=false"];
+}
+
+/** A filter key git reads, `filter.<name>.<clean|process|required>`; `<name>` may hold dots. */
+const FILTER_KEY = /^filter\.(.+)\.(clean|process|required)$/;
+
+/**
+ * `gitRead`'s arguments for the gate's own commands (`gitDirty`, `gitUnheld`, `gitIgnored`), with every filter the
+ * repository's own configuration names — local or worktree scope, an included file counting as the file that includes
+ * it — blanked: `filter.<x>.clean=` and `filter.<x>.process=` keep git from running it, and `filter.<x>.required=false`
+ * keeps git from dying on the blanked filter. A `git status` over a stale index otherwise re-reads a file through
+ * `filter.<x>.clean`, a command the Forge directory names (E11.2). A filter set globally, by the system or on the
+ * command line is not the Forge's and still runs (a global LFS setup keeps working). Throws when git cannot list the
+ * keys or a name cannot be passed as `-c name=` — the callers fail closed.
+ */
+async function gateRead(dir: string): Promise<string[]> {
+  let listed = "";
+  try {
+    ({ stdout: listed } = await execProgram("git", [...gitRead(dir), "config", "--show-scope", "--includes", "--name-only", "--get-regexp", FILTER_KEY.source]));
+  } catch (e) {
+    // Exit 1: no such key.
+    if ((e as { code?: number }).code !== 1) throw e;
+  }
+  const names = new Set<string>();
+  for (const line of listed.split("\n")) {
+    const tab = line.indexOf("\t");
+    if (tab === -1) continue;
+    const scope = line.slice(0, tab);
+    const m = FILTER_KEY.exec(line.slice(tab + 1));
+    if (!m || (scope !== "local" && scope !== "worktree")) continue;
+    if (/[=\u0000-\u001f]/.test(m[1])) throw new Error("a filter name git cannot be handed");
+    names.add(m[1]);
+  }
+  const args = gitRead(dir);
+  for (const x of [...names].sort()) args.push("-c", `filter.${x}.clean=`, "-c", `filter.${x}.process=`, "-c", `filter.${x}.required=false`);
+  return args;
 }
 
 /**
@@ -311,7 +346,7 @@ export function gitRead(dir: string): string[] {
  */
 export async function gitDirty(dir: string): Promise<boolean> {
   try {
-    const { stdout } = await execProgram("git", [...gitRead(dir), "status", "--porcelain"]);
+    const { stdout } = await execProgram("git", [...(await gateRead(dir)), "status", "--porcelain"]);
     return stdout.trim().length > 0;
   } catch {
     return true;
@@ -411,15 +446,16 @@ export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPa
   if (paths.length === 0) return [];
   const rel = paths.map((p) => path.relative(root, p).split(path.sep).join("/") || ".");
   try {
+    const gate = await gateRead(root);
     const { stdout } = await execProgram(
       "git",
-      [...gitRead(root), "status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--", ...rel],
+      [...gate, "status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--", ...rel],
       { maxBuffer: 64 * 1024 * 1024 },
     );
     // `status --porcelain` names paths from the repository root, which is not the Forge root when
     // the Forge sits inside a larger repo; strip the Forge's prefix so every path unify prints —
     // here and in the late-failure message — is Forge-relative. `ls-files` below already is.
-    const { stdout: prefixOut } = await execProgram("git", [...gitRead(root), "rev-parse", "--show-prefix"]);
+    const { stdout: prefixOut } = await execProgram("git", [...gate, "rev-parse", "--show-prefix"]);
     const prefix = prefixOut.trim();
     const forgeRel = (p: string) => (prefix && p.startsWith(prefix) ? p.slice(prefix.length) : p) || ".";
     const out: UnheldPath[] = [];
@@ -436,7 +472,7 @@ export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPa
     // assume-unchanged reports clean however much its file was edited — and that edit exists
     // nowhere git can restore it from. `ls-files -v` shows the flag: `S` for skip-worktree, a
     // lowercase tag for assume-unchanged.
-    const { stdout: listed } = await execProgram("git", [...gitRead(root), "ls-files", "-v", "-z", "--", ...rel], {
+    const { stdout: listed } = await execProgram("git", [...gate, "ls-files", "-v", "-z", "--", ...rel], {
       maxBuffer: 64 * 1024 * 1024,
     });
     for (const e of listed.split("\0")) {
