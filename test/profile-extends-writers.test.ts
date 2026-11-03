@@ -117,7 +117,7 @@ describe("spec 54 Part B — the writers", () => {
     await expect(
       planPromote({ workspaceRoot: f0.ws.portal, forgeDir: null, path: ".claude/rules/house.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
     ).rejects.toThrow(
-      "D24 .claude/rules/house.md comes from rule/house, local to acme, which acme-portal extends (profiles/acme/ingredients/rules/house) — no command writes a parent: edit it there by hand, then sync every workspace of the family",
+      ".claude/rules/house.md comes from rule/house, local to acme, which acme-portal extends (profiles/acme/ingredients/rules/house) — no command writes a parent: edit it there by hand, then sync every workspace of the family",
     );
   });
 
@@ -200,7 +200,7 @@ describe("spec 54 Part B — the writers", () => {
     expect([row.promotable, row.reason]).toEqual([false, "local to acme, which this profile extends"]);
     await expect(
       planPromote({ workspaceRoot: f0.ws.portal, forgeDir: null, path: ".claude/rules/house.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
-    ).rejects.toThrow("D24 .claude/rules/house.md comes from rule/house, local to acme, which acme-portal extends (profiles/acme/ingredients/rules/house)");
+    ).rejects.toThrow(".claude/rules/house.md comes from rule/house, local to acme, which acme-portal extends (profiles/acme/ingredients/rules/house)");
   });
 
   it("init --new-profile --like a child says the new profile gets nothing of the child's parent", async () => {
@@ -209,6 +209,19 @@ describe("spec 54 Part B — the writers", () => {
     const f = await loadForge(f0.forgeRoot);
     expect(newProfile(f, { name: "acme-api", like: "acme-portal" }).notes).toContain(
       "acme-portal extends acme — acme-api gets none of acme's recipes, values or locals; write extends: acme in it by hand for them",
+    );
+  });
+
+  it("drift promote of a base only a parent's recipe brings names the parent, where it said re-import", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    gitInit(f0.forgeRoot);
+    expect(runCli(["sync", "--workspace", f0.ws.portal]).code).toBe(0);
+    await fs.writeFile(path.join(f0.ws.portal, ".claude/rules/style.md"), "# Style\nKeep it very short.\n");
+    await expect(
+      planPromote({ workspaceRoot: f0.ws.portal, forgeDir: null, path: ".claude/rules/style.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
+    ).rejects.toThrow(
+      ".claude/rules/style.md: recipe base reaches acme-portal through profile acme, which it extends — forking it would edit acme's recipes, and no command writes a parent: edit the Forge by hand",
     );
   });
 });

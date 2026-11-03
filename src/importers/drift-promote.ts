@@ -189,9 +189,12 @@ const D10 = (ing: string, q: string) => `${ing} is also used by profile ${q} —
 const D20 = (p: string) => `${p} holds references agents-md.primary reworded — edit the Forge's ingredient`;
 /** D21 (spec 44 §4.5): the file holds the generated rules index — promoting it would carry sync-generated content into the Forge. */
 const D21 = (p: string) => `${p} holds the generated rules index — edit the Forge's rule, or the description of the rule it lists`;
+/** D17 under a family (spec 54 §5.9): the recipe to fork is listed by a parent only. */
+const D17_PARENT = (p: string, recipe: string, parent: string, profile: string) =>
+  `${p}: recipe ${recipe} reaches ${profile} through profile ${parent}, which it extends — forking it would edit ${parent}'s recipes, and no command writes a parent: edit the Forge by hand`;
 /** D24 (spec 54 §5.9): a hand edit of a file that comes from a parent's local. */
 const D24 = (p: string, ref: string, parent: string, profile: string, dir: string) =>
-  `D24 ${p} comes from ${ref}, local to ${parent}, which ${profile} extends (${dir}) — no command writes a parent: edit it there by hand, then sync every workspace of the family`;
+  `${p} comes from ${ref}, local to ${parent}, which ${profile} extends (${dir}) — no command writes a parent: edit it there by hand, then sync every workspace of the family`;
 /** D23 (spec 50 §5.6): a hand edit of a metadata field the Forge renders from a parameter — promoting would freeze the value. */
 const D23 = (p: string, field: string) =>
   `${p} changes ${field}, which the Forge renders from a parameter — set the parameter's value in the profile, or edit the Forge's ingredient`;
@@ -1268,6 +1271,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         // Case 3: D17 — recipe reaches through extends or recipes.add, or case 2 applies but another resolved recipe extends R
         let chain: string;
         const wsAdds = ws.config.recipes?.add ?? [];
+        // Spec 54 §5.9: a recipe only a parent lists — the fork would edit the parent's list, and no command writes a parent.
+        const listedBy = familyOf(forge, profile).slice(1).find((q) => forge.profiles.get(q)!.recipes.includes(R));
+        if (listedBy !== undefined && !(forge.profiles.get(profile)?.recipes ?? []).includes(R) && !wsAdds.includes(R)) {
+          throw new Error(D17_PARENT(normalized, R, listedBy, profile));
+        }
         if (wsAdds.includes(R)) {
           chain = "recipes.add (craftar.yaml)";
         } else if (extendsChain) {
