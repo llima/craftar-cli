@@ -2,6 +2,7 @@ import type { Forge, LoadedIngredient } from "./forge.js";
 import type { IngredientRef, Profile, Sections, Target, WorkspaceConfig } from "../schema/index.js";
 import { FORGE_SCHEMA_AGENTS_MD_PRIMARY } from "../schema/index.js";
 import { deepMerge } from "./merge.js";
+import { abstractRefusal, isAbstract, mergedProfile, parentSections } from "./profile-extends.js";
 import { readsRecipeSections, recipeSectionLayer, type RecipeSectionLayer } from "./recipe-sections.js";
 import { outName } from "../emitters/shared.js";
 import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
@@ -38,12 +39,12 @@ export interface Resolution {
    * The layers `sections` was merged from, kept so `plan()` can name the one that set a value: since spec 54 Part A the
    * recipe layer too (`{}` below Forge schema 10), with the recipe that set each value.
    */
-  sectionLayers: { recipes: RecipeSectionLayer; profile: Sections; workspace: Sections };
+  sectionLayers: { recipes: RecipeSectionLayer; parents: RecipeSectionLayer; profile: Sections; workspace: Sections };
   /**
    * The global layers `params` was merged from, kept so `paramLayer` can name the one that set a key (spec 29
    * §4.1): per key the last recipe with a default, then the profile's and the workspace's own records.
    */
-  paramLayers: { recipes: Map<string, string>; profile: Record<string, unknown>; workspace: Record<string, unknown> };
+  paramLayers: { recipes: Map<string, string>; profile: Record<string, unknown>; workspace: Record<string, unknown>; profileOf?: Map<string, string> };
   ingredients: ResolvedIngredient[];
   disabled: IngredientRef[];
   warnings: string[];
@@ -87,13 +88,17 @@ export function recipeOrder(forge: Forge, wanted: string[], origin: string): str
  * Recipes are expanded depth-first through `extends`, each recipe applied once.
  */
 export function resolve(root: Forge, ws: WorkspaceConfig): Resolution {
-  const profile = root.profiles.get(ws.profile);
-  if (!profile) throw new Error(profileNotFoundMessage(ws.profile, [...root.profiles.keys()]));
+  const own = root.profiles.get(ws.profile);
+  if (!own) throw new Error(profileNotFoundMessage(ws.profile, [...root.profiles.keys()]));
+  // Spec 54 §5.7: an abstract profile is no workspace's.
+  if (isAbstract(root, ws.profile)) throw new Error(abstractRefusal(root, ws.profile));
+  // Spec 54 §5.3: the profile as its family makes it; itself when it extends nothing.
+  const profile = mergedProfile(root, ws.profile);
   // What this profile sees: its locals over the root (spec 51 §4.3).
   const forge = forgeFor(root, ws.profile);
 
   // The effective profile once integrations are applied (spec 33 §5.2).
-  const eff = effectiveProfile(forge, profile);
+  const eff = effectiveProfile(forge, own);
   const warnings: string[] = [...eff.warnings];
   const ignored = root.ignoredLocals.get(profile.name);
   for (const sub of ignored?.subs ?? []) warnings.push(ignoredLocalWarning(ignored!.folder, sub));
@@ -141,7 +146,9 @@ export function resolve(root: Forge, ws: WorkspaceConfig): Resolution {
   // keeps the weaker layers' others (P4).
   const recipeSections = readsRecipeSections(forge.manifest);
   const recipeLayer = recipeSectionLayer(order, (name) => forge.recipes.get(name), recipeSections);
-  const sections: Sections = deepMerge(deepMerge(recipeLayer.sections, profile.sections), ws.overrides.sections);
+  // Spec 54 §5.5: the profile's parents, farthest first, between the recipes and the profile's own.
+  const parents = parentSections(root, ws.profile);
+  const sections: Sections = deepMerge(deepMerge(deepMerge(recipeLayer.sections, parents.sections), own.sections), ws.overrides.sections);
 
   // Ingredients
   const disabled = ws.overrides.ingredients.disable as IngredientRef[];
@@ -188,8 +195,8 @@ export function resolve(root: Forge, ws: WorkspaceConfig): Resolution {
     targets,
     params,
     sections,
-    sectionLayers: { recipes: recipeLayer, profile: profile.sections, workspace: ws.overrides.sections },
-    paramLayers: { recipes: recipeParams, profile: eff.params, workspace: ws.overrides.params },
+    sectionLayers: { recipes: recipeLayer, parents, profile: own.sections, workspace: ws.overrides.sections },
+    paramLayers: { recipes: recipeParams, profile: eff.params, workspace: ws.overrides.params, profileOf: eff.owners },
     ingredients: [...picked.values()],
     disabled,
     warnings,
@@ -239,7 +246,7 @@ export type ParamLayer = "default" | "workspace" | "unset" | { recipe: string } 
 export function paramLayer(key: string, ing: LoadedIngredient, resolution: Resolution): ParamLayer {
   const { recipes, profile, workspace } = resolution.paramLayers;
   if (Object.hasOwn(workspace, key)) return "workspace";
-  if (Object.hasOwn(profile, key)) return { profile: resolution.profile.name };
+  if (Object.hasOwn(profile, key)) return { profile: resolution.paramLayers.profileOf?.get(key) ?? resolution.profile.name };
   const recipe = recipes.get(key);
   if (recipe !== undefined) return { recipe };
   const declared = ing.meta.params ?? {};

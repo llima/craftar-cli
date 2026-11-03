@@ -94,6 +94,8 @@ export interface EffectiveProfile {
   selected: Selected[];
   /** The `integrations.*` keys whose value comes from the block (no `params` entry of that key). */
   blockKeys: string[];
+  /** For a profile that extends another (spec 54 §5.4): the family member each param's value came from. */
+  owners?: Map<string, string>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -109,9 +111,48 @@ export interface EffectiveProfile {
  * At the gate: validates in the order design.md gives and throws on the first fault.
  */
 export function effectiveProfile(
-  forge: Pick<Forge, "manifest">,
+  forge: Pick<Forge, "manifest"> & { profiles?: ReadonlyMap<string, Profile> },
   profile: Profile,
 ): EffectiveProfile {
+  // Spec 54 §5.4 (D4): a profile that extends another is computed layer by layer, farthest first — within a layer its own
+  // params over its own block, then the nearer layer over the farther — and each integrations slot belongs, whole, to the
+  // nearest profile that writes it (D6). Below Forge schema 12 no profile holds `extends`, so this is never taken.
+  const chain: Profile[] = [];
+  for (let at: Profile | undefined = profile; at && !chain.includes(at); at = at.extends !== undefined ? forge.profiles?.get(at.extends) : undefined) chain.push(at);
+  if (chain.length > 1) return familyEffective(forge, chain.reverse());
+  return ownEffective(forge, profile);
+}
+
+/** The layered form of `effectiveProfile` over a family, farthest first. */
+function familyEffective(forge: Pick<Forge, "manifest">, layers: Profile[]): EffectiveProfile {
+  const slotOwner = new Map<string, string>();
+  for (const l of layers) for (const slot of Object.keys(l.integrations)) slotOwner.set(slot, l.name);
+  const params: Record<string, unknown> = {};
+  const owners = new Map<string, string>();
+  const fromBlock = new Set<string>();
+  const warnings: string[] = [];
+  const selected: Selected[] = [];
+  const recipes: string[] = [];
+  for (const l of layers) {
+    for (const r of l.recipes) if (!recipes.includes(r)) recipes.push(r);
+    const integrations = Object.fromEntries(Object.entries(l.integrations).filter(([slot]) => slotOwner.get(slot) === l.name));
+    const e = ownEffective(forge, { ...l, integrations, recipes: [] });
+    warnings.push(...e.warnings);
+    selected.push(...e.selected);
+    const block = new Set(e.blockKeys);
+    for (const [k, v] of Object.entries(e.params)) {
+      params[k] = v;
+      owners.set(k, l.name);
+      if (block.has(k)) fromBlock.add(k);
+      else fromBlock.delete(k);
+    }
+  }
+  for (const s of selected) if (!recipes.includes(s.recipe)) recipes.push(s.recipe);
+  return { recipes, params, warnings, selected, blockKeys: [...fromBlock], owners };
+}
+
+/** One profile's own `effectiveProfile` (spec 33 §5.2). */
+function ownEffective(forge: Pick<Forge, "manifest">, profile: Profile): EffectiveProfile {
   // Below the gate: the profile's own two objects, by reference, the block not even enumerated.
   if (!readsIntegrations(forge.manifest)) {
     return {

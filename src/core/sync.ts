@@ -528,9 +528,12 @@ function forgeRel(forge: Forge, abs: string): string {
 /** The strongest layer that sets section `name` of `key` (Ruling 15); at schema 10 a profile or a recipe by name (spec 54 §4.5). */
 function layerOf(resolution: Resolution, key: string, name: string): SectionLayer {
   const has = (m: Record<string, Record<string, string>>) => Object.hasOwn(m, key) && Object.hasOwn(m[key], name);
-  const { recipes, profile, workspace } = resolution.sectionLayers;
+  const { recipes, parents, profile, workspace } = resolution.sectionLayers;
   if (has(workspace)) return "workspace";
   if (has(profile)) return resolution.recipeSections ? { profile: resolution.profile.name } : "profile";
+  // Spec 54 §5.5: a value only a parent gives names that parent.
+  const parent = parents.setBy.get(`${key}\0${name}`);
+  if (parent !== undefined) return { profile: parent };
   const recipe = recipes.setBy.get(`${key}\0${name}`);
   if (recipe !== undefined) return { recipe };
   return "default";
