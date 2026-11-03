@@ -235,7 +235,9 @@ describe("one reader (spec 32 §8)", () => {
     const offenders: string[] = [];
     for (const f of await listFiles(src)) {
       if (!f.endsWith(".ts") || f === "core/templates.ts") continue;
-      const text = await fs.readFile(path.join(src, f), "utf8");
+      let text = await fs.readFile(path.join(src, f), "utf8");
+      // Spec 54 §5.3: the family merge copies the block whole, never reading it — that one statement is allowed.
+      if (f === "core/profile-extends.ts") text = text.replace('if (written(forge, l, "templates")) out.templates = l.templates;', "");
       if (/\.templates\b|\[["']templates["']\]/.test(text)) offenders.push(`${f}: reads .templates`);
       if (f !== "schema/index.ts" && /\b(TemplatesSchema|DotnetNewTemplateSchema)\b/.test(text)) offenders.push(`${f}: uses a templates schema`);
     }

@@ -62,9 +62,6 @@ export function abstractRefusal(forge: FamilySource, name: string): string {
   return `profile ${shownLocalName(name, "profile")} is abstract — a workspace uses ${which}`;
 }
 
-/** The keys a child replaces whole when it writes them (spec 54 §5.3, D6). */
-const REPLACED = ["targets", "repos", "templates", "docs"] as const;
-
 const written = (forge: FamilySource, p: Profile, key: string): boolean => {
   const keys = forge.writtenKeys?.get(p.name);
   return keys ? keys.has(key) : true;
@@ -96,9 +93,13 @@ export function mergedProfile(forge: FamilySource, name: string): Profile {
     sections = deepMerge(sections, l.sections) as Sections;
     for (const r of l.recipes) if (!recipes.includes(r)) recipes.push(r);
     for (const b of blocks) merged[b] = { ...merged[b], ...(l[b] as Record<string, unknown>) };
-    // Taken whole from the nearest profile that writes them, as values this function never reads: each keeps its one
-    // reader (`declaredTemplates`, `declaredDocs`, `profileRepos`), which reads the merged profile.
-    for (const key of REPLACED) if (written(forge, l, key)) (out as Record<string, unknown>)[key] = (l as Record<string, unknown>)[key];
+    // `targets`, `repos`, `templates` and `docs` are taken whole from the nearest profile that writes them (spec 54 §5.3,
+    // D6), copied as values this function never reads: each keeps its one reader (`declaredTemplates`, `declaredDocs`,
+    // `profileRepos`), which reads the merged profile. The one-reader scans allow exactly these copy statements.
+    if (written(forge, l, "targets")) out.targets = l.targets;
+    if (written(forge, l, "repos")) out.repos = l.repos;
+    if (written(forge, l, "templates")) out.templates = l.templates;
+    if (written(forge, l, "docs")) out.docs = l.docs;
   }
   Object.assign(out, merged);
   // `integrations` per slot, through its one reader's module (spec 33): a slot the child writes replaces the parent's whole.
