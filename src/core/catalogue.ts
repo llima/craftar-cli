@@ -45,6 +45,11 @@ export function catalogueContext(forge: Forge, source: ContextSource | null): Ca
     ? WorkspaceConfigSchema.parse({ forge: forge.root, profile })
     : source.config;
 
+  // Spec 54 §5.8: `--profile <abstract>` lists what the parent sees; it is no workspace's, so nothing is in use — said as such.
+  if (source.kind === "profile" && isAbstract(forge, profile)) {
+    return { kind: source.kind, profile, config, resolution: null, warnings: [`profile ${profile} is abstract — no workspace uses it, so nothing is marked as in use`] };
+  }
+
   try {
     const resolution = resolve(forge, config);
     return { kind: source.kind, profile, config, resolution, warnings: resolution.warnings };

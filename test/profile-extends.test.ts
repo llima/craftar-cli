@@ -285,3 +285,14 @@ describe("spec 54 §5.2 — the near miss comes before the schema", () => {
   });
 });
 
+describe("spec 54 §5.8 — the catalogue with an abstract --profile", () => {
+  it("lists the parent's view and says, in its own words, that nothing is in use", async () => {
+    const f = kept(await acmeHoisted(GATE));
+    const r = runCli(["ingredients", "--forge", f.forgeRoot, "--profile", "acme", "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    const j = JSON.parse(r.stdout);
+    expect(j.warnings).toEqual(["profile acme is abstract — no workspace uses it, so nothing is marked as in use"]);
+    expect(j.ingredients.some((i: { ref: string; profile: string | null }) => i.ref === "rule/house" && i.profile === "acme")).toBe(true);
+  });
+});
+
