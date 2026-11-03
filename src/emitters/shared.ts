@@ -1,7 +1,8 @@
+import { assertNoListLeaf } from "../core/list-params.js";
 import { detectEol, hasBom, withEol, type Eol } from "../core/text.js";
 import type { EmitBase, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
-import { paramsFor } from "../core/resolve.js";
+import { paramsFor, listsOf } from "../core/resolve.js";
 import type { Ingredient, Target } from "../schema/index.js";
 import { rendersServers, renderServer, renderLeaves, credentialIn, credentialMessage, entropyMessage, undeclaredMessage, type RenderedLeaves } from "../core/mcp-server.js";
 import { RULES_INDEX_LINE, RULES_INDEX_KEY, RULES_INDEX_TOKEN } from "../core/rules-index.js";
@@ -595,6 +596,7 @@ export function mcpServers(ctx: EmitBase, target: string, file: string, collecte
     }
     // At schema 4: render the server's declared params
     const params = paramsFor(ing, ctx.resolution);
+    assertNoListLeaf(ing.meta.server, listsOf(ctx.resolution), ing.ref, "server");
     const r = renderServer(ing.meta, params);
     // Missing: declared, cited, no value
     for (const k of r.missing) ctx.missing(k, ing.ref);
@@ -722,6 +724,7 @@ export function hookRegistrations(
 
     for (let i = 0; i < meta.registration!.length; i++) {
       const entry = meta.registration![i];
+      assertNoListLeaf(entry, listsOf(ctx.resolution), ing.ref, `registration[${i}]`);
 
       // Render the entry using the shared builder (spec 43 §7.2)
       const { event, matcher, handler, rendered } = renderRegistration(entry, declared, params, ing.ref);

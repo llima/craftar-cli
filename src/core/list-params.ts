@@ -226,3 +226,26 @@ export function listDeclarationNearMiss(file: string, params: Record<string, { t
   }
   return null;
 }
+
+/**
+ * Spec 55 §4.7 (A11): a list key cited in an MCP `server` or a hook's `registration`, with or without a filter, fails the plan,
+ * naming the ingredient, the field path and the key, never a value — so no list item reaches `credentialIn`.
+ */
+export function assertNoListLeaf(value: unknown, lists: ListContext, ref: string, field: string): void {
+  if (!lists.keys.size) return;
+  const seen = new Set<object>();
+  const walk = (v: unknown, at: string): void => {
+    if (typeof v === "string") {
+      for (const m of v.matchAll(BOTH_RE)) {
+        const key = m[1] ?? m[2];
+        if (lists.keys.has(key)) throw new ListParamError(`${ref}: list param ${key} in ${at} — an MCP server or a hook registration cannot take a list in this version; cite it in a body`);
+      }
+      return;
+    }
+    if (v === null || typeof v !== "object" || seen.has(v)) return;
+    seen.add(v);
+    if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${at}[${i}]`));
+    else for (const [k, x] of Object.entries(v)) walk(x, KEY_SHAPED.test(k) ? `${at}.${k}` : `${at}.(a key not shaped like a name)`);
+  };
+  walk(value, field);
+}
