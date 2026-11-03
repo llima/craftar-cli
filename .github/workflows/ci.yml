@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   test:
-    name: ${{ matrix.os }} · node ${{ matrix.node }}
+    name: ${{ matrix.os }} · node ${{ matrix.node }} · shard ${{ matrix.shard }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     strategy:
@@ -24,6 +24,14 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         node: [22, 24]
+        # Windows runs the suite in two halves (vitest --shard): whole, it took 18–30 min of the 35 min limit.
+        # A shard splits by file, and a file runs in one worker: this pays only while no file dominates the
+        # suite, which is why test/cli.test.ts is four files.
+        shard: ["1/1", "1/2", "2/2"]
+        exclude:
+          - { os: ubuntu-latest, shard: "1/2" }
+          - { os: ubuntu-latest, shard: "2/2" }
+          - { os: windows-latest, shard: "1/1" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,7 +41,10 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
-      - run: npm test
+      - run: npm test -- --shard=$SHARD
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
       - name: Oracle status
         if: always()
         shell: bash
