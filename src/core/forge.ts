@@ -55,6 +55,8 @@ export interface Forge {
   sectionFiles: Map<string, SectionFileMap>;
   /** Spec 55 §5.3: by profile name, the files under its folder's `sections/` that no value names (Forge-relative); empty below the gate. */
   unnamedSectionFiles: Map<string, string[]>;
+  /** Each profile's `profile.yaml`, Forge-relative and POSIX, by profile name: the declaring file `sectionFiles` is keyed by. */
+  profileFiles: Map<string, string>;
 }
 
 export const FORGE_MANIFEST = "craftar.forge.yaml";
@@ -134,6 +136,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
   const reads = readsProfileLocal(manifest);
   const sectionFiles = new Map<string, SectionFileMap>();
   const unnamed = new Map<string, string[]>();
+  const profileFiles = new Map<string, string>();
   const sectionGate = readsSectionFiles(manifest);
   const profRoot = path.join(root, "profiles");
   if (await exists(profRoot)) {
@@ -158,6 +161,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
           if (left.length) unnamed.set(p.name, left);
         }
         profiles.set(p.name, p);
+        profileFiles.set(p.name, declaring);
       }
       const present2 = [] as Array<"ingredients" | "recipes">;
       for (const sub of ["ingredients", "recipes"] as const) if (await present(path.join(folder, sub))) present2.push(sub);
@@ -244,7 +248,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     const target = await fs.stat(path.join(root, rel)).catch(() => null);
     if (target === null || target.isDirectory()) folders.push(rel);
   }
-  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals, skippedLinks: folders.sort(), sectionFiles, unnamedSectionFiles: unnamed };
+  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals, skippedLinks: folders.sort(), sectionFiles, unnamedSectionFiles: unnamed, profileFiles };
 }
 
 const isLink = (p: string) => fs.lstat(p).then((st) => st.isSymbolicLink(), () => false);

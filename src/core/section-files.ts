@@ -88,6 +88,20 @@ function notFoundOr(e: NodeJS.ErrnoException, shown: string): Error {
   return e.code === "ENOENT" || e.code === "ENOTDIR" ? new Error(`${shown} not found`) : e;
 }
 
+/**
+ * The file a profile's section value came from (spec 55 §5.4), as written relative to the profile's folder — `undefined` for a
+ * string value, or a Forge loaded without provenance.
+ */
+export function profileSectionFile(
+  forge: { sectionFiles?: Map<string, SectionFileMap>; profileFiles?: Map<string, string> },
+  profile: string,
+  key: string,
+  section: string,
+): string | undefined {
+  const declaring = forge.profileFiles?.get(profile);
+  return declaring === undefined ? undefined : forge.sectionFiles?.get(declaring)?.get(key)?.get(section);
+}
+
 /** Spec 55 §5.3: the warning for a file under the folder's `sections/` that no value names. */
 export function unnamedSectionFileWarning(rel: string): string {
   return `${rel}: no section value names this file`;

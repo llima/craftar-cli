@@ -49,6 +49,7 @@ import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
 import { canonicalValue } from "./core/sections.js";
+import { profileSectionFile } from "./core/section-files.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, metadataEdits, unmanaged, type DriftRow } from "./core/drift.js";
@@ -1331,7 +1332,15 @@ program
     if (f.sections.length) {
       const layer = (l: SectionLayer) =>
         l === "profile" ? `profile ${p.resolution.profile.name}` : typeof l === "string" ? l : "recipe" in l ? `recipe ${l.recipe}` : `profile ${l.profile}`;
-      console.log(`  sections    ${f.sections.map((x) => `${x.name} (${layer(x.layer)})`).join(", ")}`);
+      // Spec 55 §5.4: a profile value held in a file names it inside the layer's parenthesis; the explain tool gains no key.
+      const ing = p.resolution.ingredients.find((i) => i.ref === f.ingredient);
+      const layerProfile = (l: SectionLayer) => (l === "profile" ? p.resolution.profile.name : typeof l === "object" && "profile" in l ? l.profile : undefined);
+      const shown = (x: { name: string; layer: SectionLayer }) => {
+        const q = layerProfile(x.layer);
+        const file = ing && q !== undefined ? profileSectionFile(ws.forge, q, sectionKey(ing.meta), x.name) : undefined;
+        return `${x.name} (${layer(x.layer)}${file ? `, ${file}` : ""})`;
+      };
+      console.log(`  sections    ${f.sections.map(shown).join(", ")}`);
     }
     // Spec 44 §4.5: if this file holds the rules index, name it and its rule count.
     // AGENTS.md does not print the index line (it would always be the full list of always-on rules)
