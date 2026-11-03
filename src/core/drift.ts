@@ -35,6 +35,8 @@ export const REWORDED_REASON = "reworded by agents-md.primary";
 export const INDEXED_REASON = "holds the rules index";
 /** Spec 50 §5.6: a hand edit of a metadata field the Forge renders from a parameter; promoting it would freeze the value. */
 export const METADATA_PARAM_REASON = "metadata renders a parameter";
+/** Spec 55 §4.8: a file whose ingredient cites a list param — promoting the rendered text would freeze the list (D24). */
+export const LIST_PARAM_REASON = "cites a list param";
 
 /** Spec 54 §5.9: the reason a file from a parent's local is not promotable — no command writes a parent (D24). */
 export const parentLocalReason = (parent: string): string => `local to ${parent}, which this profile extends`;
@@ -46,7 +48,7 @@ export const parentLocalReason = (parent: string): string => `local to ${parent}
  * then kiro, then AGENTS.md, then .mcp.json.
  */
 
-function staticReason(s: FileStatus, provided: Map<string, { slot: string; recipe: string }>, reworded: ReadonlySet<string>, indexed: ReadonlySet<string>, metadata: ReadonlySet<string>, parentLocals: ReadonlyMap<string, string>): string | null {
+function staticReason(s: FileStatus, provided: Map<string, { slot: string; recipe: string }>, reworded: ReadonlySet<string>, indexed: ReadonlySet<string>, metadata: ReadonlySet<string>, parentLocals: ReadonlyMap<string, string>, listCiting: ReadonlySet<string>): string | null {
   if (s.escapes) return escapeReason(s.escapes);
   if (s.state === "orphan-drift") return "no longer produced";
   if (s.target === "services") return "service file";
@@ -58,6 +60,7 @@ function staticReason(s: FileStatus, provided: Map<string, { slot: string; recip
   if (reworded.has(s.path)) return REWORDED_REASON;
   if (indexed.has(s.path)) return INDEXED_REASON;
   if (metadata.has(s.path)) return METADATA_PARAM_REASON;
+  if (s.ingredient && listCiting.has(s.ingredient)) return LIST_PARAM_REASON;
   if (s.target === "kiro") return "kiro file";
   if (s.target === "agents-md") return "AGENTS.md";
   if (mcpTagged(s)) return ".mcp.json";
@@ -79,13 +82,14 @@ export function driftList(
   indexed: ReadonlySet<string> = new Set(),
   metadata: ReadonlySet<string> = new Set(),
   parentLocals: ReadonlyMap<string, string> = new Map(),
+  listCiting: ReadonlySet<string> = new Set(),
 ): DriftRow[] {
   const rows: DriftRow[] = [];
   for (const s of statuses) {
     if (s.state !== "drift" && s.state !== "orphan-drift") continue;
     // `same`: the lock's hash is the plan's, so only the hand edit separates the disk from the Forge.
     const forge: ForgeSide = s.state === "orphan-drift" ? "removed" : s.lock!.hash === hashNormalized(s.planned!.content) ? "same" : "changed";
-    const reason = staticReason(s, provided, reworded, indexed, metadata, parentLocals);
+    const reason = staticReason(s, provided, reworded, indexed, metadata, parentLocals, listCiting);
     rows.push({ path: s.path, state: s.state, target: s.target!, ingredient: s.ingredient ?? "", forge, promotable: reason === null, reason });
   }
   return rows;

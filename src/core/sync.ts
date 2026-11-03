@@ -386,6 +386,11 @@ export interface Plan {
    * the gate and with no override. What refuses the sync, as an unset declared parameter does.
    */
   overrideConflicts: OverrideConflict[];
+  /**
+   * Spec 55 §4.8: the ingredients whose body or metadata cites a list key, sorted — `drift show` gives their files the reason
+   * `cites a list param` and `drift promote` refuses them (D25). Empty below the list-params gate.
+   */
+  listCiting: string[];
 }
 
 /** A profile resolving its override `override` and the root variant `variant` whose `as` names the same output (spec 56 §4.3). */
@@ -726,6 +731,8 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const kiroResourceRecords: Array<{ agent: string; path: string }> = [];
   /** Rules index expansion results (spec 44 §4.4). */
   const indexRecords: Array<{ path: string; rules: number; undescribed: string[]; misplaced?: number[]; expanded?: boolean }> = [];
+  /** Ingredients whose body or metadata cites a list key (spec 55 §4.8). */
+  const listCiting = new Set<string>();
   /** Paths where the index placeholder was left as written (spec 44 §4.5). */
   const indexLeftPaths = new Set<string>();
   /** Below-gate literals: `ref (file)` for each rendered text that holds `{{craftar.rules.index}}` alone on a line (spec 44 §4.2). */
@@ -760,7 +767,9 @@ export async function plan(ws: Workspace): Promise<Plan> {
       if (parsed) guardOutput(ing, file, out, parsed, resolution, params, owner);
       // Every file rendered here, body file or not: `explain` names each key the refusal can name (spec 29 §4.1).
       const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
-      for (const key of [...placeholders(expanded), ...filteredCitations(expanded, listsOf(resolution))]) {
+      const filtered = filteredCitations(expanded, listsOf(resolution));
+      if (filtered.length) listCiting.add(ing.ref);
+      for (const key of [...placeholders(expanded), ...filtered]) {
         // At the gate, drop the key from cited (spec 44 §4.2)
         if (resolution.rulesIndex && key === RULES_INDEX_KEY) continue;
         c.keys.add(key);
@@ -783,7 +792,11 @@ export async function plan(ws: Workspace): Promise<Plan> {
       const out = renderedMeta(ing.meta, paramsFor(ing, resolution), ing.ref, listsOf(resolution), missing);
       // Counted wherever a body's citation is (spec 50 §5.3); the rules index's token is never a parameter.
       const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
-      for (const key of metadataCitations(ing.meta, listsOf(resolution))) if (key !== RULES_INDEX_KEY) c.keys.add(key);
+      for (const key of metadataCitations(ing.meta, listsOf(resolution))) {
+        if (key === RULES_INDEX_KEY) continue;
+        c.keys.add(key);
+        if (listsOf(resolution).keys.has(key)) listCiting.add(ing.ref);
+      }
       if (c.keys.size) cited.set(ing.ref, c);
       for (const key of missing) {
         if (key === RULES_INDEX_KEY) continue;
@@ -1000,7 +1013,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
   }
 
   const overrideConflicts = overrideConflictsOf(ws.forge, resolution);
-  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed, overrideConflicts, claudeMd };
+  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed, overrideConflicts, claudeMd, listCiting: [...listCiting].sort() };
 }
 
 /**
