@@ -296,6 +296,16 @@ function sameBytes(a: Record<string, Buffer>, b: Record<string, Buffer>): boolea
 }
 
 describe("proveBasePromotion and applyBasePromotion", () => {
+  it("a linked ingredient folder (its warning on the Forge side only — the scratch copy drops the link) does not fail the proof", async () => {
+    const f = await forgeOf(THREE);
+    await writeFiles(path.join(f.root, "elsewhere"), { "ingredient.yaml": "type: rule\nname: linked\n", "rule.md": "# Linked\n" });
+    await fs.symlink(path.join(f.root, "elsewhere"), path.join(f.dir, "ingredients/rules/linked"), "junction");
+    const forge = await loadForge(f.dir);
+    expect(forge.skippedLinks).toEqual(["ingredients/rules/linked"]);
+    const p = await planBasePromotion(forge, "rule/workflow", "acme");
+    await expect(proveBasePromotion(forge, p)).resolves.toBeUndefined();
+  });
+
   it("11. the proof passes for a sound edit set, leaves no scratch directory and reads the Forge only", async () => {
     for (const spec of [THREE, { ...THREE, profiles: [profile("acme", ["base--acme"])] }]) {
       const f = await forgeOf(spec);
