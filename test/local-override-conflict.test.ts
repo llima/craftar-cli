@@ -143,3 +143,50 @@ describe("the override conflict (spec 56 §4.3)", () => {
     expect(p.warnings.some((w) => w.startsWith("two ingredients write .claude/rules/y.md"))).toBe(true);
   });
 });
+
+describe("the override conflict on the remaining surfaces (spec 56 §4.3)", () => {
+  const PROFILES = [profile("acme", ["base", "extra"]), profile("globex", ["base"])];
+
+  it("kiroReport answers not-computed with the one-line summary", async () => {
+    const { kiroReport } = await import("../src/importers/kiro-report.js");
+    const s = await build(cleanups, { ...CONFLICT, profiles: PROFILES }, { extra: OVERRIDE_FILES, workspaces: [{ name: "acme", config: { profile: "acme" }, sync: false }] });
+    await fs.mkdir(path.join(s.ws.acme, ".kiro/steering"), { recursive: true });
+    const k = await kiroReport({ workspaceRoot: s.ws.acme, forgeRoot: s.forge, profile: "acme", targets: ["claude-code", "kiro"] });
+    expect(k).toEqual({ kind: "not-computed", message: `sync refused: ${LINE}` });
+  });
+
+  it("the interactive init's first sync: line reads refused with the pair", async () => {
+    const { planInit } = await import("../src/core/init.js");
+    const { confirmInit } = await import("../src/core/init-flow.js");
+    const s = await build(cleanups, { ...CONFLICT, profiles: PROFILES }, { extra: OVERRIDE_FILES });
+    const dir = path.join(s.root, "new");
+    await fs.mkdir(dir);
+    const init = await planInit(dir, { forge: s.forge, profile: "acme" });
+    const said: string[] = [];
+    await confirmInit(init, dir, { ask: async () => "", confirm: async () => "yes", say: (l: string) => void said.push(l) }, { sync: true });
+    expect(said).toContain(`  first sync: refused — ${LINE}`);
+  });
+
+  it("craftar ui's writing sync route answers 409 with the summary, writing nothing", async () => {
+    const { post } = await import("./helpers/ui.js");
+    const s = await conflicted();
+    const id = workspaceId(await fs.realpath(s.wsDir));
+    const a = await get(`/api/workspaces/${id}`, { allowWrites: true });
+    const digest = (a.body as { digest: string }).digest;
+    const r = await post(`/api/workspaces/${id}/sync`, { digest });
+    expect(r.status).toBe(409);
+    expect((r.body as { error: string }).error).toBe(`sync refused: ${LINE}`);
+    expect(await exists(path.join(s.wsDir, ".claude/rules/style.md"))).toBe(false);
+  });
+
+  it("sync --check --committed refuses it, naming the pair", async () => {
+    const { git } = await import("./helpers/remote.js");
+    const s = await conflicted();
+    git(s.wsDir, "init", "-q", "-b", "main");
+    git(s.wsDir, "add", "-A");
+    git(s.wsDir, "commit", "-q", "-m", "ws");
+    const r = runCli(["sync", "--check", "--committed", "--workspace", s.wsDir]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(LINE);
+  });
+});

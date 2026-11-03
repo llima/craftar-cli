@@ -111,3 +111,18 @@ describe("forge share of an override (spec 56 §5.3)", () => {
     );
   });
 });
+
+describe("a Windows-shaped Forge (spec 56 §11)", () => {
+  it("rewires a recipe file checked out with CRLF line endings, keeping them", async () => {
+    const s = await build(cleanups, CASE2, { git: false });
+    const file = path.join(s.forge, "recipes/base--acme.yaml");
+    await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace(/\n/g, "\r\n"));
+    const f = await loadForge(s.forge);
+    const move = await planLocalize(f, "rule/y--acme", "acme");
+    await applyMove(move, []);
+    const text = await fs.readFile(file, "utf8");
+    expect(YAML.parse(text)).toEqual({ name: "base--acme", ingredients: ["rule/style", "rule/y"] });
+    expect(text.includes("\r\n")).toBe(true);
+    expect(text.replace(/\r\n/g, "").includes("\n")).toBe(false);
+  });
+});
