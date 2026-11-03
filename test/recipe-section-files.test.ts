@@ -219,4 +219,20 @@ describe("a recipe's section value held in a file (spec 54 §4.4)", () => {
     const owned = YAML.parse(await fs.readFile(path.join(s.forgeRoot, "recipes/base--acme-portal.yaml"), "utf8"));
     expect(owned.sections).toEqual({ "command/open-pr": { execution: { file: "sections/command/open-pr/execution.md" } } });
   });
+
+  it("import --local=always reads a root recipe holding { file: } as written when it wires a new local", async () => {
+    const { importClaudeCode } = await import("../src/importers/claude-code.js");
+    const { apply, readLock, status } = await import("../src/core/sync.js");
+    const s = await forgeAt(GATE, { rootSections: held, files: { "recipes/sections/rule/review/checklist.md": "From the file.\n" } });
+    const ws = await loadWorkspace(s.ws);
+    const p = await plan(ws);
+    await apply(ws, p, await status(ws, p, await readLock(ws.root)), {});
+    await fs.mkdir(path.join(s.ws, ".claude/commands"), { recursive: true });
+    await fs.writeFile(path.join(s.ws, ".claude/commands/extra.md"), "---\ndescription: Extra\n---\nDo the extra thing.\n");
+    const r = await importClaudeCode({ workspaceRoot: s.ws, forgeRoot: s.forge, profileName: "acme", local: "always" });
+    expect(r.rejected).toEqual([]);
+    expect(YAML.parse(await fs.readFile(path.join(s.forge, "recipes/core.yaml"), "utf8")).sections).toEqual(held);
+    expect(await rendered(s.ws)).toContain("From the file.");
+    expect(await fs.readFile(path.join(s.forge, "profiles/acme/recipes/acme-local.yaml"), "utf8")).toContain("command/extra");
+  });
 });

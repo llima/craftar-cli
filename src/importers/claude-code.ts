@@ -2332,7 +2332,7 @@ async function wireLocals(stage: ForgeStage, forge: string, profile: string, loa
   for (const rel of await stage.reader().list(rootDir)) {
     if (rel.includes("/") || !/\.ya?ml$/.test(rel)) continue;
     const abs = path.join(rootDir, rel);
-    const r = parseYaml(abs, stripBom(await stage.readText(abs)), RecipeSchema);
+    const r = parseYaml(abs, stripBom(await stage.readText(abs)), RecipeWrittenSchema);
     root.set(r.name, { ingredients: r.ingredients, extends: r.extends });
   }
   const recipeOf = (n: string) => folder.get(n) ?? root.get(n) ?? loaded.recipes.get(n);
