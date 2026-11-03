@@ -85,6 +85,14 @@ describe("the override conflict (spec 56 §4.3)", () => {
     expect(checks).toContainEqual(expect.objectContaining({ id: "status", level: "error", message: LINE }));
   });
 
+  it("doctor reports it on a workspace that was never synced too", async () => {
+    const s = await build(cleanups, { ...CONFLICT, profiles: [profile("acme", ["base", "extra"]), profile("globex", ["base"])] }, { extra: OVERRIDE_FILES, workspaces: [{ name: "acme", config: { profile: "acme" }, sync: false }] });
+    const r = runCli(["doctor", "--json", "--workspace", s.ws.acme]);
+    expect(r.code).toBe(1);
+    const checks = (JSON.parse(r.stdout) as { checks: Array<{ id: string; level: string; message: string }> }).checks;
+    expect(checks).toContainEqual(expect.objectContaining({ id: "status", level: "error", message: LINE }));
+  });
+
   it("workspaces and forge impact show the workspace as error with the one-line summary", async () => {
     const s = await conflicted();
     // The registry is this file's (one per test file): earlier tests' workspaces read `missing` once removed.
