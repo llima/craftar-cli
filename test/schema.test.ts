@@ -4,7 +4,7 @@ import YAML from "yaml";
 import { loadForge } from "../src/core/forge.js";
 import { ForgeManifestSchema, FORGE_SCHEMA_AGENTS_MD_PRIMARY, FORGE_SCHEMA_INTEGRATIONS, FORGE_SCHEMA_RULES_INDEX,
   FORGE_SCHEMA_PROFILE_LOCAL, FORGE_SCHEMA_METADATA_PARAMS,
-  FORGE_SCHEMA_RECIPE_SECTIONS, FORGE_SCHEMA_SECTION_FILES, FORGE_SCHEMA_LOCAL_OVERRIDE, FORGE_SCHEMA_SECTIONS, FORGE_SCHEMA_SERVER_PARAMS, FORGE_SCHEMA_TARGET_SECTIONS, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, RecipeSchema, RegistrySchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
+  FORGE_SCHEMA_RECIPE_SECTIONS, FORGE_SCHEMA_SECTION_FILES, FORGE_SCHEMA_LOCAL_OVERRIDE, FORGE_SCHEMA_PROFILE_EXTENDS, FORGE_SCHEMA_SECTIONS, FORGE_SCHEMA_SERVER_PARAMS, FORGE_SCHEMA_TARGET_SECTIONS, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, RecipeSchema, RegistrySchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
 import { makeForge, tmpDir, writeFiles } from "./helpers/forge.js";
 
 /** A minimal valid ingredient of each type. */
@@ -171,7 +171,9 @@ describe("sections and the manifest schema (spec 11 §5.2)", () => {
     expect(ForgeManifestSchema.parse({ name: "f", schema: 11 }).schema).toBe(11);
     expect(FORGE_SCHEMA_LOCAL_OVERRIDE).toBe(12);
     expect(ForgeManifestSchema.parse({ name: "f", schema: 12 }).schema).toBe(12);
-    expect(ForgeManifestSchema.safeParse({ name: "f", schema: 13 }).success).toBe(false);
+    expect(FORGE_SCHEMA_PROFILE_EXTENDS).toBe(13);
+    expect(ForgeManifestSchema.parse({ name: "f", schema: 13 }).schema).toBe(13);
+    expect(ForgeManifestSchema.safeParse({ name: "f", schema: 14 }).success).toBe(false);
   });
 
   it("a Forge whose manifest says schema: 13 fails the load, naming the file", async () => {
