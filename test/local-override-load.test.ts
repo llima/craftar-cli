@@ -64,7 +64,7 @@ describe("an override at resolution (spec 56 §4.3)", () => {
 });
 
 describe("a Forge at the gate with no override (spec 56 §9)", () => {
-  it("plans, warns, explains and lists as at schema 9, but for the catalogue's overrides: null", async () => {
+  it("plans, warns, explains and lists as the schema below it, but for the catalogue's overrides: null", async () => {
     const spec = { ...CASE2, profiles: [...CASE2.profiles!.filter((p) => p.name !== "acme"), { ...CASE2.profiles!.find((p) => p.name === "acme")!, recipes: ["base--acme", "acme-extra"] }] };
     const extra = { ...localRule("acme", "x", "# X\n"), ...localRecipe("acme", "acme-extra", ["rule/x"]) };
     const at = async (schema: number) => {
@@ -81,13 +81,13 @@ describe("a Forge at the gate with no override (spec 56 §9)", () => {
         catalogue: (JSON.parse(rel(runCli(["ingredients", "--forge", s.forge, "--json"]).stdout)) as { ingredients: Array<Record<string, unknown>> }).ingredients,
       };
     };
-    const nine = await at(9);
-    const ten = await at(S);
-    expect(nine.catalogue.length).toBeGreaterThan(3);
-    expect(nine.explain).toContain("source      profile acme (profiles/acme/ingredients/rules/x)");
-    expect(Object.keys(nine.acme).length).toBeGreaterThan(1);
-    expect(ten.catalogue.every((r) => r.overrides === null)).toBe(true);
-    for (const r of ten.catalogue) delete r.overrides;
-    expect(ten).toEqual(nine);
+    const below = await at(S - 1);
+    const atGate = await at(S);
+    expect(below.catalogue.length).toBeGreaterThan(3);
+    expect(below.explain).toContain("source      profile acme (profiles/acme/ingredients/rules/x)");
+    expect(Object.keys(below.acme).length).toBeGreaterThan(1);
+    expect(atGate.catalogue.every((r) => r.overrides === null)).toBe(true);
+    for (const r of atGate.catalogue) delete r.overrides;
+    expect(atGate).toEqual(below);
   });
 });
