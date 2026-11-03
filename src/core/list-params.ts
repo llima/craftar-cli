@@ -189,6 +189,8 @@ export function listParamFault(
   layers: ReadonlyArray<{ name: string; values: Record<string, unknown> }>,
 ): string | null {
   if (!lists.size) return null;
+  // `<key>.__join<n>` and `<key>.__item<n>` are craftar's own keys while a list renders: a key spelled so would be overwritten.
+  for (const l of layers) for (const k of Object.keys(l.values)) if (k.includes(".__")) return `param ${KEY_SHAPED.test(k) ? k : "(a key not shaped like a name)"}: a key holding ".__" is craftar's own at schema ${FORGE_SCHEMA_LIST_PARAMS} — rename it`;
   const all = [...lists];
   for (const key of all) {
     const declarers: Array<{ who: string; list: boolean }> = [];
