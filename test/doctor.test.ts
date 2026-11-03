@@ -322,6 +322,25 @@ describe("workspace checks", () => {
     expect(JSON.stringify(of(r.checks, "mcp-env"))).toBe(PINNED_MCP_ENV);
   });
 
+  it("mcp-env: E24.4 passthrough values (KEY: ${KEY}) are not checked — the MCP client substitutes them", async () => {
+    const f = await fixture({
+      ingredients: [
+        // PASSTHROUGH: ${PASSTHROUGH} is a pure passthrough — key matches the reference
+        // RENAMED: ${ACME_RENAMED} is NOT a passthrough — key differs from the reference
+        // MIXED has a ${NAME} reference but also other text — still checked
+        mcp("api", { PASSTHROUGH: "${PASSTHROUGH}", RENAMED: "${ACME_RENAMED}", MIXED: "Bearer ${MIXED_TOKEN}" }),
+      ],
+      recipes: [recipe("base", ["mcp/api"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a"), env: {} });
+    // PASSTHROUGH is skipped (pure passthrough), RENAMED and MIXED_TOKEN are reported
+    expect(of(r.checks, "mcp-env").map((c) => c.message)).toEqual([
+      'server "api" expects ACME_RENAMED, not set',
+      'server "api" expects MIXED_TOKEN, not set',
+    ]);
+  });
+
   it("forge-inside: a workspace inside its path Forge warns; a directory named ..x inside it too", async () => {
     const f = await fixture();
     const inner = path.join(f.forgeRoot, "ws");
