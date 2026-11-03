@@ -56,13 +56,13 @@ function identityUnder(root: ContainRoot, segment: string): Promise<Identity> {
 
 /**
  * The names NTFS and git for Windows read as `.git` (git's own `is_ntfs_dotgit`, behind `core.protectNTFS`): `.git` or its
- * short name `git~1`, without case, followed by nothing, by spaces and dots only (`.git.`, `.git `), or by a `:` and a
- * stream name (`.git::$INDEX_ALLOCATION`). Node hands Windows a `\\?\` path, which keeps a trailing dot literal, so such a
+ * short name `git~1`, without case, then any run of spaces and dots (`.git.`, `.git `), then nothing or a `:` and a
+ * stream name (`.git::$INDEX_ALLOCATION`, `.git.:x`). Node hands Windows a `\\?\` path, which keeps a trailing dot literal, so such a
  * spelling may name no file `stat` can see, while git and any other program that goes through the Win32 normalisation
- * reach `.git` through it: it is decided by its name (E39.1, measured on windows-latest).
+ * reach `.git` through it: it is decided by its name (E39.1; inferred from the windows-latest failure of the identity check).
  */
 export function isNtfsDotGit(name: string): boolean {
-  return /^(?:\.git|git~1)(?:[ .]*|:.*)$/i.test(name);
+  return /^(?:\.git|git~1)[ .]*(?::.*)?$/i.test(name);
 }
 
 /**
@@ -119,6 +119,10 @@ async function probe(root: ContainRoot, abs: string, cache: KindCache): Promise<
       return { escape: "unresolved", viaLink: false };
     }
   }
+  // On win32 a first segment git reads as `.git` is decided by its name before anything is asked of the disk: an lstat of
+  // a stream name may answer an error rather than the directory (E39.1).
+  const first = rel.split(path.sep).filter(Boolean)[0];
+  if (process.platform === "win32" && first !== undefined && isNtfsDotGit(first)) return { escape: "git", viaLink: false };
   let head = root.given;
   for (const part of rel.split(path.sep).filter(Boolean)) {
     head = path.join(head, part);

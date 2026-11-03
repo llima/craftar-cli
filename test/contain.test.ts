@@ -105,7 +105,8 @@ describe("escapeOf", () => {
     expect(await escapeOf(root, path.join(tree, "GIT~1", "hooks", "x"))).toBe("git");
   });
 
-  // What made E39.1's identity check blind on Windows (measured on windows-latest): Node's fs keeps `.git.` literal.
+  // What made E39.1's identity check blind on Windows (inferred from the windows-latest failure of the identity check):
+  // Node's fs keeps `.git.` literal.
   it.runIf(process.platform === "win32")("measure: Node's fs does not reach .git through `.git.` on Windows", async () => {
     const { tree } = await scratch();
     await fs.mkdir(path.join(tree, ".git/hooks"), { recursive: true });
@@ -114,7 +115,7 @@ describe("escapeOf", () => {
   });
 
   it("isNtfsDotGit: git's names for .git on NTFS, and nothing else", () => {
-    for (const n of [".git", ".GIT", ".git.", ".git ", ".git. .", "git~1", "GIT~1", "git~1.", ".git::$INDEX_ALLOCATION", ".git:x"]) expect(isNtfsDotGit(n), n).toBe(true);
+    for (const n of [".git", ".GIT", ".git.", ".git ", ".git. .", "git~1", "GIT~1", "git~1.", ".git::$INDEX_ALLOCATION", ".git:x", ".git.:x", ".git ::$INDEX_ALLOCATION", "git~1.:s"]) expect(isNtfsDotGit(n), n).toBe(true);
     for (const n of [".gitx", ".git_", "git", ".gi", "git~2", "x.git", ".git.x", ".gitignore", ".gitattributes"]) expect(isNtfsDotGit(n), n).toBe(false);
   });
 
