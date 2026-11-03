@@ -2,6 +2,7 @@ import type { Forge, LoadedIngredient } from "./forge.js";
 import type { IngredientRef, Profile, Sections, Target, WorkspaceConfig } from "../schema/index.js";
 import { FORGE_SCHEMA_AGENTS_MD_PRIMARY } from "../schema/index.js";
 import { deepMerge } from "./merge.js";
+import { readsRecipeSections, recipeSectionLayer, type RecipeSectionLayer } from "./recipe-sections.js";
 import { outName } from "../emitters/shared.js";
 import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
 import { effectiveProfile, integrationOrigin } from "./integrations.js";
@@ -32,8 +33,11 @@ export interface Resolution {
   params: Record<string, unknown>;
   /** Section values by `<type>/<outName>`, then name: the profile's deep-merged under the workspace's (spec 11 §6.3). */
   sections: Sections;
-  /** The two layers `sections` was merged from, kept so `plan()` can name the one that set a value. */
-  sectionLayers: { profile: Sections; workspace: Sections };
+  /**
+   * The layers `sections` was merged from, kept so `plan()` can name the one that set a value: since spec 54 Part A the
+   * recipe layer too (`{}` below Forge schema 10), with the recipe that set each value.
+   */
+  sectionLayers: { recipes: RecipeSectionLayer; profile: Sections; workspace: Sections };
   /**
    * The global layers `params` was merged from, kept so `paramLayer` can name the one that set a key (spec 29
    * §4.1): per key the last recipe with a default, then the profile's and the workspace's own records.
@@ -48,6 +52,8 @@ export interface Resolution {
   rulesIndex: boolean;
   /** Whether the Forge renders params in metadata fields (spec 50 §5.1); decided once by resolve(). */
   metadataParams: boolean;
+  /** Whether the Forge reads a recipe's sections (spec 54 §4.1); decided once by resolve(). */
+  recipeSections: boolean;
 }
 
 /**
@@ -126,9 +132,12 @@ export function resolve(root: Forge, ws: WorkspaceConfig): Resolution {
   }
   Object.assign(params, eff.params, ws.overrides.params);
 
-  // Sections: body default → profile → workspace (craftar.yaml under craftar.local.yaml, merged by
-  // loadWorkspace). Deep, so a workspace setting one section of a key keeps the profile's others (P4).
-  const sections: Sections = deepMerge(profile.sections, ws.overrides.sections);
+  // Sections: body default → recipes in application order (spec 54 §4.2, at schema 10) → profile → workspace
+  // (craftar.yaml under craftar.local.yaml, merged by loadWorkspace). Deep, so a layer setting one section of a key
+  // keeps the weaker layers' others (P4).
+  const recipeSections = readsRecipeSections(forge.manifest);
+  const recipeLayer = recipeSectionLayer(order, (name) => forge.recipes.get(name), recipeSections);
+  const sections: Sections = deepMerge(deepMerge(recipeLayer.sections, profile.sections), ws.overrides.sections);
 
   // Ingredients
   const disabled = ws.overrides.ingredients.disable as IngredientRef[];
@@ -175,7 +184,7 @@ export function resolve(root: Forge, ws: WorkspaceConfig): Resolution {
     targets,
     params,
     sections,
-    sectionLayers: { profile: profile.sections, workspace: ws.overrides.sections },
+    sectionLayers: { recipes: recipeLayer, profile: profile.sections, workspace: ws.overrides.sections },
     paramLayers: { recipes: recipeParams, profile: eff.params, workspace: ws.overrides.params },
     ingredients: [...picked.values()],
     disabled,
@@ -183,6 +192,7 @@ export function resolve(root: Forge, ws: WorkspaceConfig): Resolution {
     primary,
     rulesIndex: readsRulesIndex(forge.manifest),
     metadataParams: rendersMetadata(forge.manifest),
+    recipeSections,
   };
 }
 
