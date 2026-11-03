@@ -726,7 +726,7 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packagi
 
 ### to 0.53.0
 
-- **A Forge can declare `schema: 11`**, which includes 10 and below, and there a profile's section value can be held in a file, `{ file: sections/….md }` (*Forge layout*). Every craftar before 0.53.0 refuses a `schema: 11` Forge, so every workspace of such a Forge needs this one. No command raises the schema; below it no byte, warning, `--json` value or exit code changes, except that a `{ file: }` value, which failed the load before as a value of the wrong type, now fails it naming `schema: 11`.
+- **A Forge can declare `schema: 11`**, which includes 10 and below, and there a profile's section value can be held in a file, `{ file: sections/….md }` (*Forge layout*). Every craftar before 0.53.0 refuses a `schema: 11` Forge, so every workspace of such a Forge needs this one. No command raises the schema; below it no byte, warning, `--json` value or exit code changes, except that a `{ file: }` value, which failed the load before as a value of the wrong type, now fails it naming `schema: 11`, and that the refusal of an unknown manifest schema lists 11 among the values it expected.
 - **`craftar forge sections extract`** (new) moves a profile's long section values into files, proved first against every registered workspace (*Commands*).
 - **`craftar doctor` gains `skill-trigger`**, a `warn` per skill whose `SKILL.md` description does not say when to use it, so **`doctor --strict` exits 1** for a workspace with such a skill, at every schema; `doctor --json` and the `doctor` tool of `craftar mcp` gain the id. `sync`, `status` and every other surface are unchanged, and no byte changes.
 

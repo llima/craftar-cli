@@ -28,11 +28,12 @@ describe("README — the roadmap with phases 1 and 2 closed", () => {
     expect(later).toEqual(["Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packaging of `craftar mcp`."]);
   });
 
-  it("the status line opens with the three phases done and gains the 0.49.0 and 0.50.0 sentences", () => {
+  it("the status line opens with the three phases done and gains the 0.49.0, 0.50.0 and 0.51.0 sentences", () => {
     const status = lines[4];
     expect(status.startsWith("> Status: **phases 0, 1 and 2 done** — the foundations, the client profile and the environment. ")).toBe(true);
     expect(status).not.toContain("in progress");
     expect(status).toContain("Each Kiro agent gets `permissions.rules`, derived from its tools as kiro-cli 2.37 derives them, so Kiro no longer rewrites the file (see *Targets*).");
-    expect(status.endsWith("`craftar settings apply` merges the generated `hooks` and the `env` names into `.claude/settings.json` — only when a person types it, keeping every `env` value, `permissions` and every other key (see *Commands*).")).toBe(true);
+    expect(status).toContain("`craftar settings apply` merges the generated `hooks` and the `env` names into `.claude/settings.json` — only when a person types it, keeping every `env` value, `permissions` and every other key (see *Commands*).");
+    expect(status.endsWith("In a Forge that declares `schema: 10`, a profile's section value can be held in a file under its folder (`{ file: sections/….md }`), and `craftar forge sections extract` moves the long ones there; `craftar doctor`'s `skill-trigger` says when a skill's description does not say when to use it (see *Forge layout* and *Commands*).")).toBe(true);
   });
 });
