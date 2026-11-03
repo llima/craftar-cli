@@ -3,7 +3,7 @@ import { childrenOf, concreteProfiles, isAbstract } from "./profile-extends.js";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { FORGE_SCHEMA_LOCAL_OVERRIDE, FORGE_SCHEMA_PROFILE_LOCAL, RecipeSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
+import { FORGE_SCHEMA_LOCAL_OVERRIDE, FORGE_SCHEMA_PROFILE_LOCAL, RecipeWrittenSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { readForgeFile, readForgeText } from "./contain.js";
 import { assertNoLinkIn, assertNoLinkOnPath, copyForgeForProof, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
 import { ingredientText, occupied, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
@@ -187,9 +187,12 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
   // The recipe files: moved unchanged, or rewired to the new ref.
   const files = await recipeFiles(forge.root);
   const recipes: ForgeMove["recipes"] = [];
-  const rewire = (raw: string, label: string, expected: unknown, schema = RecipeSchema): string => {
+  // As written against as written (spec 54 §4.4), so a `{ file: }` section value compares unchanged.
+  const rewire = (raw: string, label: string): string => {
     const text = editYamlText(raw, { command, label, keys: ["ingredients"] }, (doc) => void swapEntry(doc, "ingredients", ref, to));
-    if (!isDeepStrictEqual(parseYaml(label, text, schema), expected)) throw unreadable(label, `${ref} replaced by ${to}`, command);
+    const was = parseYaml(label, raw, RecipeWrittenSchema);
+    const expected = { ...was, ingredients: was.ingredients.map((i) => (i === ref ? to : i)) };
+    if (!isDeepStrictEqual(parseYaml(label, text, RecipeWrittenSchema), expected)) throw unreadable(label, `${ref} replaced by ${to}`, command);
     return text;
   };
   for (const r of [...moving].sort()) {
@@ -199,8 +202,15 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
     const toRel = `profiles/${profile}/recipes/${path.basename(f.abs)}`;
     const toAbs = path.join(forge.root, ...toRel.split("/"));
     if (await occupied(toAbs, toRel, command)) throw new Error(`${command}: ${toRel} already exists — remove it by hand, commit, and re-run`);
+    // A section value the recipe holds in a file is relative to recipes/; moved unchanged, it would name a file the profile's
+    // folder does not hold (spec 54 §4.4).
+    const held = forge.sectionFiles.get(from);
+    if (held?.size) {
+      const first = [...held.values()][0].values().next().value as string;
+      throw new Error(`${command}: recipe ${r} holds a section value in a file (recipes/${first}), which would not move with it — write the value as a string, or move the recipe and its file by hand, commit, and re-run`);
+    }
     const recipe = forge.recipes.get(r)!;
-    const content = renamed && recipe.ingredients.includes(ref) ? rewire(f.raw, from, { ...recipe, ingredients: recipe.ingredients.map((i) => (i === ref ? to : i)) }) : await fs.readFile(f.abs);
+    const content = renamed && recipe.ingredients.includes(ref) ? rewire(f.raw, from) : await fs.readFile(f.abs);
     writes.push({ abs: toAbs, content, created: true });
     removes.push(f.abs);
     recipes.push({ name: r, from, to: toRel });
@@ -221,7 +231,7 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
     for (const l of forge.locals.get(profile)?.recipes.values() ?? []) {
       if (!l.recipe.ingredients.includes(ref)) continue;
       const abs = path.join(forge.root, ...l.file.split("/"));
-      writes.push({ abs, content: rewire(await fs.readFile(abs, "utf8"), l.file, { ...l.recipe, ingredients: l.recipe.ingredients.map((i) => (i === ref ? to : i)) }), created: false });
+      writes.push({ abs, content: rewire(await fs.readFile(abs, "utf8"), l.file), created: false });
       edited.push(abs);
       rewired.push(l.file);
     }

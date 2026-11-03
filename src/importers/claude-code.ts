@@ -15,7 +15,8 @@ import { registrationCitations, rendersServers, serverCitations, serverSecret, w
 import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
-import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileWrittenSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
+import { writtenSections } from "../core/section-files.js";
+import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileWrittenSchema, RecipeWrittenSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type ProfileSections, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, recipeOrder, resolve, sectionKey, type Resolution } from "../core/resolve.js";
 import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE } from "../core/rules-index.js";
@@ -1971,7 +1972,7 @@ function swapRef(ref: string, profile: string, list: string[]): string {
   return list.includes(base) && !list.includes(ref) ? base : ref;
 }
 
-const recipeText = (name: string, description: string, ingredients: string[], sections?: Sections) =>
+const recipeText = (name: string, description: string, ingredients: string[], sections?: ProfileSections) =>
   // today's bytes; `sections` only when a shared recipe that holds some is split into an owned one (spec 54 §4.3)
   YAML.stringify(JSON.parse(JSON.stringify({ name, description, extends: [], ingredients, params: {}, ...(sections && Object.keys(sections).length ? { sections } : {}) })));
 
@@ -2070,20 +2071,20 @@ async function swapInLocalRecipes(stage: ForgeStage, forge: string, profile: str
       if (!YAML.isSeq(seq)) return;
       for (const it of seq.items) if (YAML.isScalar(it)) it.value = to(String(it.value));
     });
-    const after = RecipeSchema.safeParse(parseYamlText(r.file, content) ?? {});
+    const after = RecipeWrittenSchema.safeParse(parseYamlText(r.file, content) ?? {});
     if (!after.success || !isDeepStrictEqual(after.data.ingredients, next)) throw new Error(`import: cannot edit ${r.file} in place — reformat it by hand, commit, and re-run`);
     stage.write(abs, content);
   }
 }
 
 /** A shared recipe's `sections`, carried into the owned recipe a split writes (spec 54 §4.3); none below Forge schema 10. */
-async function sharedSections(o: RecipeOptions, file: string): Promise<Sections | undefined> {
-  return parseYaml(file, stripBom(await o.stage.readText(file)), RecipeSchema).sections;
+async function sharedSections(o: RecipeOptions, file: string): Promise<ProfileSections | undefined> {
+  return parseYaml(file, stripBom(await o.stage.readText(file)), RecipeWrittenSchema).sections;
 }
 
 async function placeRecipe(o: RecipeOptions, name: string, list: string[], description: string, holdsVariant: boolean): Promise<string> {
   const owned = `${name}--${o.profile}`;
-  const read = async (file: string) => parseYaml(file, stripBom(await o.stage.readText(file)), RecipeSchema).ingredients;
+  const read = async (file: string) => parseYaml(file, stripBom(await o.stage.readText(file)), RecipeWrittenSchema).ingredients;
   if (holdsVariant) {
     // Under agents-md.primary the shared recipe's rules held in AGENTS.md alone join the owned list (spec 41 §4.10); with the
     // mode off the shared file is not read here, as before.
@@ -2092,7 +2093,12 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
       if (await o.stage.exists(file)) list = keepAgentsMdOnly(await read(file), list, o.agentsMdOnly);
     }
     // The shared recipe's sections from the Forge as loaded, at the gate only: this path never reads the shared file (spec 41 §1).
-    const sections = o.forge && readsRecipeSections(o.forge.manifest) ? forgeFor(o.forge, o.profile).recipes.get(name)?.sections : undefined;
+    // A value the shared recipe holds in a file is carried as its `{ file: }` when the owned recipe lands in the same folder,
+    // so the file is not copied into text (spec 54 §4.4); elsewhere the path would not resolve, and the text is carried.
+    const shared = o.forge && readsRecipeSections(o.forge.manifest) ? forgeFor(o.forge, o.profile).recipes.get(name)?.sections : undefined;
+    const sharedFile = o.forge ? (o.forge.locals.get(o.profile)?.recipes.get(name)?.file ?? o.forge.recipeFiles?.get(name)) : undefined;
+    const sameFolder = sharedFile !== undefined && path.posix.dirname(sharedFile) === path.relative(o.stage.root, o.dir).split(path.sep).join("/");
+    const sections = shared && sameFolder ? writtenSections(shared, o.forge!.sectionFiles.get(sharedFile!)) : shared;
     return writeOwnedRecipe(o, owned, list, description, sections);
   }
   const file = await recipeFile(o, name);
@@ -2130,7 +2136,7 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
  * replaced by its base swapped for the base where it stands (spec 11 §6.15), dropped ones removed,
  * new ones appended — refused if another profile resolves it (I7) or it cannot be edited in place (I2).
  */
-async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], description: string, sections?: Sections): Promise<string> {
+async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], description: string, sections?: ProfileSections): Promise<string> {
   const file = await recipeFile(o, name);
   const label = `${path.relative(o.stage.root, o.dir).split(path.sep).join("/")}/${name}.yaml`;
   o.report.recipes.push(name);
@@ -2139,7 +2145,7 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
     return name;
   }
   const raw = await o.stage.readText(file);
-  const before = parseYaml(file, stripBom(raw), RecipeSchema);
+  const before = parseYaml(file, stripBom(raw), RecipeWrittenSchema);
   // A recipe in the profile's folder keeps its locals, whose sources import does not read back (spec 51 §4.5).
   if (o.keepLocals) {
     for (const x of before.ingredients) {
@@ -2183,7 +2189,7 @@ async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], 
     });
     for (const x of next.slice(kept.length)) seq.items.push(doc.createNode(x));
   });
-  const after = RecipeSchema.safeParse(parseYamlText(label, content) ?? {});
+  const after = RecipeWrittenSchema.safeParse(parseYamlText(label, content) ?? {});
   if (!after.success || !isDeepStrictEqual(after.data, { ...before, ingredients: next })) {
     throw new Error(`import: cannot edit ${label} in place (the edit does not read back as exactly the new ingredients) — reformat it by hand, commit, and re-run`);
   }
@@ -2202,7 +2208,7 @@ export async function recipeFile(o: Pick<RecipeOptions, "stage" | "dir">, name: 
   for (const f of await o.stage.reader().list(o.dir)) {
     if (f.includes("/") || !/\.ya?ml$/.test(f)) continue;
     const abs = path.join(o.dir, f);
-    const declared = parseYaml(abs, stripBom(await o.stage.readText(abs)), RecipeSchema).name;
+    const declared = parseYaml(abs, stripBom(await o.stage.readText(abs)), RecipeWrittenSchema).name;
     if (abs === file && declared !== name) throw new Error(`${command}: recipes/${f} is recipe ${declared} — ${command} writes recipe ${name} there`);
     if (abs !== file && declared === name) throw new Error(`${command}: recipe ${name} is recipes/${f} — ${command} writes recipes/${name}.yaml`);
   }
@@ -2313,7 +2319,7 @@ async function wireLocals(stage: ForgeStage, forge: string, profile: string, loa
   for (const rel of await stage.reader().list(dir)) {
     if (rel.includes("/") || !/\.ya?ml$/.test(rel)) continue;
     const abs = path.join(dir, rel);
-    const r = parseYaml(abs, stripBom(await stage.readText(abs)), RecipeSchema);
+    const r = parseYaml(abs, stripBom(await stage.readText(abs)), RecipeWrittenSchema);
     folder.set(r.name, { abs, ingredients: r.ingredients, extends: r.extends });
   }
   // The profile's view: its folder's recipes over the root's, the root's read as this run stages them (a recipe it
@@ -2350,8 +2356,8 @@ async function wireLocals(stage: ForgeStage, forge: string, profile: string, loa
       if (YAML.isSeq(seq)) for (const r of add) seq.items.push(doc.createNode(r));
       else doc.set("ingredients", [...held.ingredients, ...add]);
     });
-    const original = parseYaml(label, stripBom(raw), RecipeSchema);
-    const after = RecipeSchema.safeParse(parseYamlText(label, content) ?? {});
+    const original = parseYaml(label, stripBom(raw), RecipeWrittenSchema);
+    const after = RecipeWrittenSchema.safeParse(parseYamlText(label, content) ?? {});
     if (!after.success || !isDeepStrictEqual(after.data, { ...original, ingredients: [...original.ingredients, ...add] })) throw new Error(`import: cannot edit ${label} in place — reformat it by hand, commit, and re-run`);
     stage.write(held.abs, content);
   } else {

@@ -3,7 +3,7 @@ import { concreteProfiles } from "./profile-extends.js";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
-import { IngredientSchema, RecipeSchema, WorkspaceConfigSchema, type Ingredient } from "../schema/index.js";
+import { IngredientSchema, RecipeWrittenSchema, WorkspaceConfigSchema, type Ingredient } from "../schema/index.js";
 import { exists, listFiles, parseYaml, type Forge } from "./forge.js";
 import { resolve, type Resolution } from "./resolve.js";
 import { note, type WriteJournal } from "./unify.js";
@@ -35,7 +35,7 @@ export async function recipeFiles(root: string, dir = "recipes"): Promise<Map<st
     if (!/\.ya?ml$/.test(f)) continue;
     const abs = path.join(at, f);
     const raw = await fs.readFile(abs, "utf8");
-    out.set(parseYaml(abs, raw, RecipeSchema).name, { abs, stem: f.replace(/\.ya?ml$/, ""), raw });
+    out.set(parseYaml(abs, raw, RecipeWrittenSchema).name, { abs, stem: f.replace(/\.ya?ml$/, ""), raw });
   }
   return out;
 }
