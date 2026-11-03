@@ -7,7 +7,7 @@ import type { Forge } from "./forge.js";
 import { effectiveProfile, recipesOrWritten } from "./integrations.js";
 import { recipeOrder, resolve, type Resolution } from "./resolve.js";
 import { outName } from "../emitters/shared.js";
-import { forgeFor, forgeRelative, overriddenBase, readsLocalOverride, readsProfileLocal } from "./profile-local.js";
+import { forgeFor, forgeRelative, overriddenBase, readsLocalOverride, readsProfileLocal, shownLocalName } from "./profile-local.js";
 import { INGREDIENT_TYPES, WorkspaceConfigSchema, type IngredientRef, type IngredientType, type Target, type WorkspaceConfig } from "../schema/index.js";
 
 /* ------------------------------------------------------------------ */
@@ -47,7 +47,7 @@ export function catalogueContext(forge: Forge, source: ContextSource | null): Ca
 
   // Spec 54 §5.8: `--profile <abstract>` lists what the parent sees; it is no workspace's, so nothing is in use — said as such.
   if (source.kind === "profile" && isAbstract(forge, profile)) {
-    return { kind: source.kind, profile, config, resolution: null, warnings: [`profile ${profile} is abstract — no workspace uses it, so nothing is marked as in use`] };
+    return { kind: source.kind, profile, config, resolution: null, warnings: [`profile ${shownLocalName(profile, "profile")} is abstract — no workspace uses it, so nothing is marked as in use`] };
   }
 
   try {

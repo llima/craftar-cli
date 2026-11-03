@@ -283,7 +283,8 @@ export function overriddenWarnings(forge: Forge, ref: string): string[] {
   if (!overriddenBase(forge, ref)) return [];
   // Spec 54 O6: a parent's override stands for every profile that extends it, so the warning names them.
   return localOwners(forge, ref).flatMap((p) => {
-    const kids = [...forge.profiles.keys()].filter((q) => q !== p && familyOf(forge, q).includes(p)).sort();
+    // The concrete ones: an abstract profile between them resolves nothing.
+    const kids = [...forge.profiles.keys()].filter((q) => q !== p && forge.profiles.get(q)?.abstract !== true && familyOf(forge, q).includes(p)).sort();
     const who = kids.length ? `profile ${shownLocalName(p, "profile")} and every profile that extends it (${kids.map((k) => shownLocalName(k, "profile")).join(", ")})` : `profile ${shownLocalName(p, "profile")}`;
     return [`${shownIngredientRef(ref)} is overridden for ${who} — this run does not change what ${kids.length ? "they resolve" : `${shownLocalName(p, "profile")} resolves`}`];
   });

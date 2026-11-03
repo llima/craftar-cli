@@ -189,10 +189,10 @@ const D10 = (ing: string, q: string) => `${ing} is also used by profile ${q} —
 const D20 = (p: string) => `${p} holds references agents-md.primary reworded — edit the Forge's ingredient`;
 /** D21 (spec 44 §4.5): the file holds the generated rules index — promoting it would carry sync-generated content into the Forge. */
 const D21 = (p: string) => `${p} holds the generated rules index — edit the Forge's rule, or the description of the rule it lists`;
-/** D23 (spec 50 §5.6): a hand edit of a metadata field the Forge renders from a parameter — promoting would freeze the value. */
 /** D24 (spec 54 §5.9): a hand edit of a file that comes from a parent's local. */
 const D24 = (p: string, ref: string, parent: string, profile: string, dir: string) =>
   `D24 ${p} comes from ${ref}, local to ${parent}, which ${profile} extends (${dir}) — no command writes a parent: edit it there by hand, then sync every workspace of the family`;
+/** D23 (spec 50 §5.6): a hand edit of a metadata field the Forge renders from a parameter — promoting would freeze the value. */
 const D23 = (p: string, field: string) =>
   `${p} changes ${field}, which the Forge renders from a parameter — set the parameter's value in the profile, or edit the Forge's ingredient`;
 const D11 = (p: string, line: number) => `${p}:${line} holds a section marker — a variant body cannot hold one; remove it and promote again`;
@@ -821,7 +821,6 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const N = outputName;
   // Spec 51 §5.4: a local of this profile is edited in place — nothing else resolves it, so it has no variant.
   const isLocal = forge.locals.get(profile)?.ingredients.has(ingredientRef) === true;
-
 
   // Determine if X is this profile's variant (name is `<N>--<p>` AND as is `<N>`)
   const isOwnVariant = X.meta.name === `${N}--${profile}` && X.meta.as === N;

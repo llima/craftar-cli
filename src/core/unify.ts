@@ -1372,7 +1372,9 @@ export async function pruneRecipes(
     if (candidate.abstractProfiles?.length) {
       kept.push({
         recipe: candidate.recipe,
-        reason: `profile ${candidate.abstractProfiles.join(", ")} lists it and is abstract — no command writes a parent`,
+        reason: candidate.abstractProfiles.length === 1
+          ? `profile ${candidate.abstractProfiles[0]} lists it and is abstract — no command writes a parent`
+          : `profiles ${candidate.abstractProfiles.join(", ")} list it and are abstract — no command writes a parent`,
       });
       continue;
     }
