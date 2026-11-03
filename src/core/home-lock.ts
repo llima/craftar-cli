@@ -17,7 +17,7 @@ export interface LockTiming {
 /** How long a Windows EPERM on the lock's acquisition is taken for a release still landing (2 s). */
 const PENDING_DELETE_MS = 2_000;
 
-/** Lock options, extending timing with behavior for directory creation. */
+/** Lock options, extending timing with behavior for directory creation and release error handling. */
 export interface LockOptions extends LockTiming {
   /**
    * When true, `mkdir -p` is run on the lock file's directory before each exclusive-write attempt,
@@ -35,6 +35,12 @@ export interface LockOptions extends LockTiming {
   platform?: NodeJS.Platform;
   /** Test seam: the wait an EPERM gets on `win32`; `PENDING_DELETE_MS` otherwise. */
   pendingDeleteMs?: number;
+  /**
+   * Called when removing the lock file after the body fails; the body's result or error stands
+   * either way; the default ignores it, because a lock file left behind is taken over once it
+   * is stale (`staleMs`).
+   */
+  onReleaseError?: (e: unknown) => void;
 }
 
 /** Thrown when a lock is busy and the wait has run out. */
@@ -53,6 +59,8 @@ export class LockBusyError extends Error {
  * stale one is taken over. The directory holding `file` must exist unless `createDir` is set, which
  * re-creates it on each attempt. On `win32` an EPERM from an attempt is waited out for a short time
  * of its own, as a release still landing, then rethrown. Acquisition only: the body runs once.
+ * An error removing the lock file after the body is caught and handed to `onReleaseError` if given,
+ * never thrown; the body's return value or error stands either way.
  */
 export async function withLock<T>(file: string, label: string, timing: LockOptions, body: () => Promise<T>): Promise<T> {
   const waitMs = timing.waitMs ?? 60_000;
@@ -101,9 +109,22 @@ export async function withLock<T>(file: string, label: string, timing: LockOptio
       await new Promise((r) => setTimeout(r, pollMs));
     }
   }
+
+  const release = async () => {
+    try {
+      await fs.rm(file, { force: true });
+    } catch (e) {
+      if (timing.onReleaseError) timing.onReleaseError(e);
+    }
+  };
+
+  let result: T;
   try {
-    return await body();
-  } finally {
-    await fs.rm(file, { force: true });
+    result = await body();
+  } catch (e) {
+    await release();
+    throw e;
   }
+  await release();
+  return result;
 }
