@@ -1,3 +1,4 @@
+import { declaredListKeys, filteredCitations, rendersListParams } from "./list-params.js";
 import { promises as fs } from "node:fs";
 import { isAbstract } from "./profile-extends.js";
 import path from "node:path";
@@ -83,14 +84,17 @@ export function resolvedBy(forge: Forge, profile: string): Set<string> {
 async function cites(ing: LoadedIngredient, key: string, schema: ForgeManifest["schema"]): Promise<boolean> {
   for (const rel of await listFiles(ing.dir)) {
     if (rel === "ingredient.yaml" || !bodyFile(ing.meta, rel, ing.dir, schema)) continue;
-    if (placeholders(await readIngredientText(ing, rel)).includes(key)) return true;
+    const text = await readIngredientText(ing, rel);
+    if (placeholders(text).includes(key)) return true;
+    // Spec 55 §4.3: a filtered citation counts, at the list-params gate — the key asked about read as a list key.
+    if (rendersListParams({ schema }) && filteredCitations(text, { keys: new Set([key]) }).length) return true;
   }
   // MCP server citations (gated by schema)
   if (rendersServers({ schema }) && serverCitations(ing.meta).some((c) => c.declared && c.key === key)) return true;
   // Hook registration citations (ungated per spec 43 §7.2 row 8)
   if (registrationCitations(ing.meta).some((c) => c.declared && c.key === key)) return true;
   // Metadata citations at the metadata gate (spec 50 §5.3): declared or not, as a body's, since metadata takes a body's map.
-  if (rendersMetadata({ schema }) && metadataCitations(ing.meta).includes(key)) return true;
+  if (rendersMetadata({ schema }) && metadataCitations(ing.meta, { keys: new Set([key]) }).includes(key)) return true;
   return false;
 }
 
@@ -137,7 +141,15 @@ export async function checkParamWrites(
   const sectionRecipes = readsRecipeSections(forge.manifest)
     ? [...forge.recipes, ...[...forge.locals.values()].flatMap((l) => [...l.recipes].map(([n, lr]) => [n, lr.recipe] as const))].filter(([, r]) => r.sections)
     : [];
+  // P21 (spec 55 §4.8): a hunk is a scalar, so take: param never writes a key that is a list anywhere in the Forge.
+  const forgeLists = rendersListParams(forge.manifest)
+    ? declaredListKeys(
+        [...forge.ingredients.values(), ...[...forge.locals.values()].flatMap((l) => [...l.ingredients.values()])],
+        [...forge.recipes.values(), ...[...forge.locals.values()].flatMap((l) => [...l.recipes.values()].map((lr) => lr.recipe))],
+      )
+    : new Set<string>();
   for (const e of extractions) {
+    if (forgeLists.has(e.key)) throw new Error(`unify: ${e.key} is a list param — take: param writes a scalar; take this hunk from a side, or name another key (P21)`);
     const decl = base.meta.params?.[e.key];
     // P13: a declaration must already say what the base's text says.
     if (decl && !same(decl.default, e.default)) {

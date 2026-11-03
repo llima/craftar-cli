@@ -1,10 +1,11 @@
+import { filteredCitations, listParamFault, rendersListParams, undeclaredListWarning, undeclaredLists } from "./list-params.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { containRoot, escapeFileLine, escapeOf, escapeRefusal, escapingRows, readForgeFile, readForgeText, type Escape } from "./contain.js";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
-import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
+import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor, listsOf } from "./resolve.js";
 import { climbsOut, hashNormalized, isUtf8, legacyHash, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
 import { classifyForge, credentialFault, ensureTree, shownByRealPath, refHoldsCredentials, shownRef, ForgeFetchError, ForgeUnavailableError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
@@ -385,6 +386,11 @@ export interface Plan {
    * the gate and with no override. What refuses the sync, as an unset declared parameter does.
    */
   overrideConflicts: OverrideConflict[];
+  /**
+   * Spec 55 §4.8: the ingredients whose body or metadata cites a list key, sorted — `drift show` gives their files the reason
+   * `cites a list param` and `drift promote` refuses them (D25). Empty below the list-params gate.
+   */
+  listCiting: string[];
 }
 
 /** A profile resolving its override `override` and the root variant `variant` whose `as` names the same output (spec 56 §4.3). */
@@ -596,7 +602,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
         if (shellAtGate(ing.meta, rel, forge.manifest.schema) && resolution.targets.includes("kiro") && appliesTo(effTargets, "kiro") && CAPABILITIES.kiro[ing.meta.type].state !== "unsupported") {
           const keys = new Set([...Object.keys(ing.meta.params ?? {}), ...Object.keys(resolution.params)]);
           const text = await readForgeText(ing.forgeRoot, abs);
-          if (p.sections.length || placeholders(text).some((k) => keys.has(k))) warnings.push(`${ing.ref} ${rel}: kiro copies it as bytes — its sections and params are not rendered there`);
+          if (p.sections.length || [...placeholders(text), ...filteredCitations(text, listsOf(resolution))].some((k) => keys.has(k))) warnings.push(`${ing.ref} ${rel}: kiro copies it as bytes — its sections and params are not rendered there`);
         }
         for (const s of p.sections) {
           if (s.targets) {
@@ -665,7 +671,7 @@ function guardOutput(ing: ResolvedIngredient, file: string, out: string, p: Pars
   const values = sectionsFor(ing, resolution);
   let from = "a section or param value";
   const q = projectSections(p, owner);
-  const section = q.sections.find((s) => Object.hasOwn(values, s.name) && firstMarkerLine(substitute(canonicalValue(values[s.name]), params)) !== null);
+  const section = q.sections.find((s) => Object.hasOwn(values, s.name) && firstMarkerLine(substitute(canonicalValue(values[s.name]), params, listsOf(resolution))) !== null);
   if (section) from = `${layerLabel(resolution, layerOf(resolution, key, section.name))}, section ${section.name}`;
   else {
     const k = placeholders(expandSections(q, values)).find((x) => Object.hasOwn(params, x) && /<!--[ \t]*\/?[ \t]*craftar:section/.test(String(params[x])));
@@ -697,6 +703,39 @@ export async function plan(ws: Workspace): Promise<Plan> {
         : "no targets resolved — nothing will be emitted and every file in craftar.lock becomes an orphan (an empty list in craftar.local.yaml replaces the workspace's)",
     );
   }
+  // Spec 55 §4.2: a list key's declarations and values fail the plan before anything renders; a YAML list for a key nobody
+  // declares a list renders as before and warns, at the gate only.
+  // The profile layer is the family merged (spec 54 §5.3): each value is named by the profile that gives it.
+  const profileLayers = (() => {
+    const by = new Map<string, Record<string, unknown>>();
+    for (const [k, v] of Object.entries(resolution.paramLayers.profile)) {
+      const owner = resolution.paramLayers.profileOf?.get(k) ?? resolution.profile.name;
+      if (!by.has(owner)) by.set(owner, {});
+      by.get(owner)![k] = v;
+    }
+    return [...by].map(([owner, values]) => ({ name: `profile ${owner}`, values }));
+  })();
+  const listFault = listParamFault(
+    resolution.listKeys,
+    resolution.ingredients,
+    resolution.recipes.map((n) => forgeFor(ws.forge, ws.config.profile).recipes.get(n)!).filter(Boolean),
+    [
+      ...profileLayers,
+      { name: "the workspace", values: resolution.paramLayers.workspace },
+    ],
+  );
+  if (listFault) throw new Error(listFault);
+  if (rendersListParams(ws.forge.manifest)) {
+    const layers = [
+      ...resolution.recipes.flatMap((n) => {
+        const r = forgeFor(ws.forge, ws.config.profile).recipes.get(n);
+        return r ? [{ name: `recipe ${n}`, values: Object.fromEntries(Object.entries(r.params).map(([k, v]) => [k, v.default])) }] : [];
+      }),
+      ...profileLayers,
+      { name: "the workspace", values: resolution.paramLayers.workspace },
+    ];
+    for (const u of undeclaredLists(resolution.listKeys, layers)) warnings.push(undeclaredListWarning(u.key, u.layer));
+  }
   const sections = await sectionPass(ws.forge, resolution, warnings);
   /** Unresolved placeholder → refs of the ingredients citing it. */
   const missingParams = new Map<string, Set<string>>();
@@ -712,6 +751,8 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const kiroResourceRecords: Array<{ agent: string; path: string }> = [];
   /** Rules index expansion results (spec 44 §4.4). */
   const indexRecords: Array<{ path: string; rules: number; undescribed: string[]; misplaced?: number[]; expanded?: boolean }> = [];
+  /** Ingredients whose body or metadata cites a list key (spec 55 §4.8). */
+  const listCiting = new Set<string>();
   /** Paths where the index placeholder was left as written (spec 44 §4.5). */
   const indexLeftPaths = new Set<string>();
   /** Below-gate literals: `ref (file)` for each rendered text that holds `{{craftar.rules.index}}` alone on a line (spec 44 §4.2). */
@@ -742,11 +783,13 @@ export async function plan(ws: Workspace): Promise<Plan> {
         );
       const raw = await readForgeText(ing.forgeRoot, abs);
       const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution), owner) : toLf(stripBom(raw));
-      const out = substitute(expanded, params, missing);
+      const out = substitute(expanded, params, listsOf(resolution, `${ing.ref} ${file}`), missing);
       if (parsed) guardOutput(ing, file, out, parsed, resolution, params, owner);
       // Every file rendered here, body file or not: `explain` names each key the refusal can name (spec 29 §4.1).
       const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
-      for (const key of placeholders(expanded)) {
+      const filtered = filteredCitations(expanded, listsOf(resolution));
+      if (filtered.length) listCiting.add(ing.ref);
+      for (const key of [...placeholders(expanded), ...filtered]) {
         // At the gate, drop the key from cited (spec 44 §4.2)
         if (resolution.rulesIndex && key === RULES_INDEX_KEY) continue;
         c.keys.add(key);
@@ -766,10 +809,14 @@ export async function plan(ws: Workspace): Promise<Plan> {
     meta<I extends ResolvedIngredient>(ing: I): I["meta"] {
       if (!resolution.metadataParams) return ing.meta;
       const missing = new Set<string>();
-      const out = renderedMeta(ing.meta, paramsFor(ing, resolution), ing.ref, missing);
+      const out = renderedMeta(ing.meta, paramsFor(ing, resolution), ing.ref, listsOf(resolution), missing);
       // Counted wherever a body's citation is (spec 50 §5.3); the rules index's token is never a parameter.
       const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
-      for (const key of metadataCitations(ing.meta)) if (key !== RULES_INDEX_KEY) c.keys.add(key);
+      for (const key of metadataCitations(ing.meta, listsOf(resolution))) {
+        if (key === RULES_INDEX_KEY) continue;
+        c.keys.add(key);
+        if (listsOf(resolution).keys.has(key)) listCiting.add(ing.ref);
+      }
       if (c.keys.size) cited.set(ing.ref, c);
       for (const key of missing) {
         if (key === RULES_INDEX_KEY) continue;
@@ -986,7 +1033,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
   }
 
   const overrideConflicts = overrideConflictsOf(ws.forge, resolution);
-  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed, overrideConflicts, claudeMd };
+  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed, overrideConflicts, claudeMd, listCiting: [...listCiting].sort() };
 }
 
 /**

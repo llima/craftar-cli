@@ -27,7 +27,7 @@ import {
   copyForgeForProof,
 } from "../core/forge.js";
 import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type OverrideConflict, type UnsetParam, type Plan, type Workspace } from "../core/sync.js";
-import { driftList, metadataEdits, METADATA_PARAM_REASON, REWORDED_REASON, INDEXED_REASON, unmanaged } from "../core/drift.js";
+import { driftList, metadataEdits, METADATA_PARAM_REASON, REWORDED_REASON, INDEXED_REASON, LIST_PARAM_REASON, unmanaged } from "../core/drift.js";
 import { substituteMetadata, templatedMetadataEdit, withTemplatedFields } from "../core/metadata-params.js";
 import { readsRulesIndex, RULES_INDEX_KEY } from "../core/rules-index.js";
 import { hashNormalized, toLf } from "../core/text.js";
@@ -75,7 +75,7 @@ import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { registrationCitations } from "../core/mcp-server.js";
 import type { WriteJournal } from "../core/unify.js";
-import { stripForgeOnlyKeys, type Ingredient, type IngredientRef, type Lock } from "../schema/index.js";
+import { stripForgeOnlyKeys, type Ingredient, type IngredientRef, type Lock, type IngredientParamDecl } from "../schema/index.js";
 import { deepMerge } from "../core/merge.js";
 import type { Sections } from "../schema/index.js";
 
@@ -196,6 +196,10 @@ const D17_PARENT = (p: string, recipe: string, parent: string, profile: string) 
 /** D24 (spec 54 §5.9): a hand edit of a file that comes from a parent's local. */
 const D24 = (p: string, ref: string, parent: string, profile: string, dir: string) =>
   `${p} comes from ${ref}, local to ${parent}, which ${profile} extends (${dir}) — no command writes a parent: edit it there by hand, then sync every workspace of the family`;
+/** D25 (spec 55 §4.8): a hand edit of a file whose ingredient cites a list param — promoting would freeze the list. */
+const D25 = (p: string) =>
+  `${p}: its ingredient cites a list param, so the file holds a rendered list — promoting it would freeze the list in the Forge; edit the list in the profile's params, or the Forge by hand (D25)`;
+
 /** D23 (spec 50 §5.6): a hand edit of a metadata field the Forge renders from a parameter — promoting would freeze the value. */
 const D23 = (p: string, field: string) =>
   `${p} changes ${field}, which the Forge renders from a parameter — set the parameter's value in the profile, or edit the Forge's ingredient`;
@@ -621,7 +625,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const indexedPaths = new Set(p0.indexed.map((x) => x.path));
   const metadataPaths = await metadataEdits(root, p0, [fileStatus]);
   const parentLocals = parentLocalsOf(forge, profile);
-  const rows = driftList([fileStatus], provided, new Set(p0.reworded), indexedPaths, metadataPaths, parentLocals);
+  const rows = driftList([fileStatus], provided, new Set(p0.reworded), indexedPaths, metadataPaths, parentLocals, new Set(p0.listCiting));
   if (rows.length === 0) {
     throw new Error(D4_OTHER(normalized, fileStatus.state));
   }
@@ -648,6 +652,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     }
     if (reason === REWORDED_REASON) throw new Error(D20(normalized));
     if (reason === INDEXED_REASON) throw new Error(D21(normalized));
+    if (reason === LIST_PARAM_REASON) throw new Error(D25(normalized));
     if (reason === METADATA_PARAM_REASON) {
       const ing = p0.resolution.ingredients.find((i) => i.ref === fileStatus.ingredient)!;
       const disk = await fs.readFile(path.join(root, normalized), "utf8");
@@ -1066,7 +1071,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     const citedDeclared = registrationCitations(X.meta).filter((c) => c.declared).map((c) => c.key);
     if (citedDeclared.length > 0) {
       const declared = X.meta.params;
-      const keptParams: Record<string, { default?: string | number | boolean; description?: string }> = {};
+      const keptParams: Record<string, IngredientParamDecl> = {};
       for (const k of citedDeclared) {
         if (Object.hasOwn(declared, k)) keptParams[k] = declared[k];
       }

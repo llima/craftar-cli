@@ -1,3 +1,4 @@
+import { NO_LISTS, type ListContext } from "./list-params.js";
 import { FORGE_SCHEMA_TARGET_SECTIONS, SECTION_NAME, TARGETS, type Owner, type Target } from "../schema/index.js";
 import { FORGE_MANIFEST } from "./forge.js";
 import { substitute } from "./resolve.js";
@@ -263,12 +264,13 @@ type Piece = { fixed: string; ws?: string } | { gap: string };
  * is a gap that starts at a line start and is empty or ends with a newline. Exactly one assignment
  * must spell the source. Not proved here — the caller renders with the result and compares.
  */
-export function inferSections(parsed: ParsedSections, source: string, fixed: Record<string, string>, map: Record<string, unknown>): SectionInference {
+export function inferSections(parsed: ParsedSections, source: string, fixed: Record<string, string>, map: Record<string, unknown>, lists: ListContext = NO_LISTS): SectionInference {
   const src = toLf(stripBom(source));
   const pieces: Piece[] = [];
   for (const s of parsed.segments) {
-    if ("text" in s) pieces.push({ fixed: substitute(s.text, map) });
-    else if (Object.hasOwn(fixed, s.name)) pieces.push({ fixed: substitute(canonicalValue(fixed[s.name]), map), ws: s.name });
+    // A list key's citation renders with the importing profile's list, a fixed literal — never a gap (spec 55 §4.8).
+    if ("text" in s) pieces.push({ fixed: substitute(s.text, map, lists) });
+    else if (Object.hasOwn(fixed, s.name)) pieces.push({ fixed: substitute(canonicalValue(fixed[s.name]), map, lists), ws: s.name });
     else pieces.push({ gap: s.name });
   }
   const atLineStart = (pos: number) => pos === 0 || src[pos - 1] === "\n";

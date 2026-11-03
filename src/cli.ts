@@ -109,7 +109,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.58.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.59.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -1009,7 +1009,7 @@ drift
     }
     const indexedPaths = new Set(p.indexed.map((x) => x.path));
     const shown = named ? [named] : st;
-    const rows = driftList(shown, provided, new Set(p.reworded), indexedPaths, await metadataEdits(ws.root, p, shown), parentLocalsOf(ws.forge, ws.config.profile));
+    const rows = driftList(shown, provided, new Set(p.reworded), indexedPaths, await metadataEdits(ws.root, p, shown), parentLocalsOf(ws.forge, ws.config.profile), new Set(p.listCiting));
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {

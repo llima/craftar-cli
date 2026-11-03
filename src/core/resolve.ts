@@ -11,6 +11,7 @@ import { readsRulesIndex, RULES_INDEX_KEY } from "./rules-index.js";
 import { rendersMetadata } from "./metadata-params.js";
 import { forgeFor, ignoredLocalWarning, skippedLinkWarning } from "./profile-local.js";
 import { unnamedSectionFileWarning } from "./section-files.js";
+import { declaredListKeys, expandYamlItems, renderFiltered, rendersListParams, type ListContext } from "./list-params.js";
 
 /** Builds the "profile not found" message (spec 28 §5.2, N5). */
 export function profileNotFoundMessage(profile: string, profileNames: string[]): string {
@@ -56,6 +57,11 @@ export interface Resolution {
   metadataParams: boolean;
   /** Whether the Forge reads a recipe's sections (spec 54 §4.1); decided once by resolve(). */
   recipeSections: boolean;
+  /**
+   * Spec 55 §4.2: the keys an ingredient this resolution holds, or a recipe it applies, declares `type: list` — empty below the
+   * list-params gate. Decided once by resolve(); `listParamFault` (src/core/list-params.ts) checks their values for `plan()`.
+   */
+  listKeys: ReadonlySet<string>;
 }
 
 /**
@@ -205,6 +211,7 @@ export function resolve(root: Forge, ws: WorkspaceConfig): Resolution {
     rulesIndex: readsRulesIndex(forge.manifest),
     metadataParams: rendersMetadata(forge.manifest),
     recipeSections,
+    listKeys: rendersListParams(forge.manifest) ? declaredListKeys([...picked.values()], order.map((n) => forge.recipes.get(n)!)) : new Set<string>(),
   };
 }
 
@@ -237,6 +244,11 @@ export function paramsFor(ing: LoadedIngredient, resolution: Resolution): Record
   return out;
 }
 
+/** The list keys of a resolution as a `ListContext` (spec 55 §4.3), `where` naming the text a refusal comes from. */
+export function listsOf(resolution: Pick<Resolution, "listKeys">, where?: string): ListContext {
+  return { keys: resolution.listKeys ?? new Set<string>(), where };
+}
+
 /** The layer that fills a parameter for one ingredient; `workspace` is either workspace file. */
 export type ParamLayer = "default" | "workspace" | "unset" | { recipe: string } | { profile: string };
 
@@ -258,7 +270,12 @@ export function paramLayer(key: string, ing: LoadedIngredient, resolution: Resol
 export const PLACEHOLDER_RE = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 
 /** Substitute `{{param}}` placeholders. Unknown placeholders are left untouched (and reported by the caller). */
-export function substitute(text: string, params: Record<string, unknown>, missing?: Set<string>): string {
+export function substitute(text: string, params: Record<string, unknown>, lists: ListContext, missing?: Set<string>): string {
+  // Spec 55 §4.3: with a list key in the resolution, both forms in one pass, `yaml-items` lines first.
+  if (lists.keys.size) {
+    const y = expandYamlItems(text, params, lists, missing);
+    return renderFiltered(y.text, y.params, lists, missing);
+  }
   return text.replace(PLACEHOLDER_RE, (m, key: string) => {
     // Own properties only: `key in params` resolved {{constructor}} to Object.prototype.constructor.
     if (Object.hasOwn(params, key)) return String(params[key]);

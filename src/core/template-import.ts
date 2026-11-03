@@ -1,11 +1,12 @@
 import path from "node:path";
-import { rendersMetadata, substituteMetadata } from "./metadata-params.js";
+import { rendersMetadata, substituteMetadata, substituteImportedMetadata } from "./metadata-params.js";
 import { IngredientSchema, stripForgeOnlyKeys, type ForgeSchema, type Ingredient, type Owner } from "../schema/index.js";
 import { placeholders, bodyFile } from "./extract.js";
 import { fingerprintOf, type DirReader } from "./fingerprint.js";
 import { parseYaml } from "./forge.js";
 import { renderServer, rendersServers } from "./mcp-server.js";
 import { substitute } from "./resolve.js";
+import type { ListContext } from "./list-params.js";
 import { RULES_INDEX_KEY } from "./rules-index.js";
 import { checkDeclaredOnce, expandSections, parseSections, projectSections, SectionMarkerError, type ParsedSections, type ParseSectionsOptions } from "./sections.js";
 import { stripBom, toLf } from "./text.js";
@@ -133,6 +134,7 @@ export function renderedFingerprint(
   map: Record<string, unknown>,
   sections: Record<string, string>,
   schema: ForgeSchema,
+  lists: ListContext,
   refs?: (text: string, citing: string) => string,
   owner?: Owner,
   index?: (text: string) => string,
@@ -147,7 +149,7 @@ export function renderedFingerprint(
   }
   meta = asImportTargets(meta);
   // Spec 50 §5.6: at the metadata gate the fields of §5.2 are compared as sync renders them, before reference resolution.
-  if (rendersMetadata({ schema })) meta = substituteMetadata(meta, map);
+  if (rendersMetadata({ schema })) meta = substituteImportedMetadata(meta, map, lists);
   const citing = `${base.meta.type}/${base.meta.name}`;
   if (refs && (meta.type === "agent" || meta.type === "command")) {
     if (meta.frontmatterRaw !== undefined) meta.frontmatterRaw = refs(meta.frontmatterRaw, citing);
@@ -155,7 +157,7 @@ export function renderedFingerprint(
   }
   const files: Record<string, string | Buffer> = {};
   for (const [rel, text] of expandedTexts(base, sections, owner)) {
-    let out = substitute(text, map);
+    let out = substitute(text, map, lists);
     if (refs && claudeResolves(base.meta, rel)) out = refs(out, citing);
     // Apply index expansion to rule and steering bases, after refs (spec 44 §4.8)
     if (index && (base.meta.type === "rule" || base.meta.type === "steering")) out = index(out);

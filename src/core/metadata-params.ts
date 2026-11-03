@@ -5,7 +5,8 @@
 
 import type { Ingredient } from "../schema/index.js";
 import { FORGE_SCHEMA_METADATA_PARAMS } from "../schema/index.js";
-import { PLACEHOLDER_RE, paramsFor, substitute, type Resolution, type ResolvedIngredient } from "./resolve.js";
+import { PLACEHOLDER_RE, listsOf, paramsFor, substitute, type Resolution, type ResolvedIngredient } from "./resolve.js";
+import { FILTER_OPEN_RE, FILTERED_RE, NO_LISTS, YAML_ITEMS_ELEMENT, YAML_ITEMS_LINE, holdsControl, filteredCitations, formatList, parseFilter, type ListContext } from "./list-params.js";
 import { looseParse, parseFrontmatter } from "./frontmatter.js";
 import { parseYamlText } from "./yaml-read.js";
 import { RULES_INDEX_KEY } from "./rules-index.js";
@@ -37,13 +38,115 @@ function texts(meta: Ingredient, field: MetadataField): string[] {
   return [];
 }
 
-/** The keys this ingredient's metadata fields cite, in order of first appearance (spec 50 §5.3). */
-export function metadataCitations(meta: Ingredient): string[] {
+/** The keys this ingredient's metadata fields cite, in order of first appearance (spec 50 §5.3); a filtered citation of a list key too (spec 55 §4.3). */
+export function metadataCitations(meta: Ingredient, lists: ListContext = NO_LISTS): string[] {
   const out = new Set<string>();
   for (const field of metadataFields(meta)) {
-    for (const text of texts(meta, field)) for (const m of text.matchAll(PLACEHOLDER_RE)) out.add(m[1]);
+    for (const text of texts(meta, field)) {
+      for (const m of text.matchAll(PLACEHOLDER_RE)) out.add(m[1]);
+      for (const k of filteredCitations(text, lists)) out.add(k);
+    }
   }
   return [...out];
+}
+
+/**
+ * Spec 55 §4.6: a list key in a metadata field, before spec 50's tests. Only two forms are accepted — `yaml-items`, alone after
+ * `- ` on a line of a raw block (never under `tools`, `allowed-tools` or `model`; not empty under `paths:`) or as a whole
+ * element of a list `fileMatchPattern`, which splices one element per item; and `join`, anywhere a scalar may stand, turned
+ * into a key of its own so `metadataFault` tests the joined text as one value. Any other filter, a list key with no filter,
+ * or a malformed one, fails, naming the ingredient, the field and the key. Returns the metadata and the map spec 50 renders.
+ */
+export function listMetadata<M extends Ingredient>(
+  meta: M,
+  params: Record<string, unknown>,
+  lists: ListContext,
+  ref: string,
+  missing?: Set<string>,
+): { meta: M; params: Record<string, unknown> } {
+  if (!lists.keys.size) return { meta, params };
+  const out: Record<string, unknown> = { ...meta };
+  const map: Record<string, unknown> = Object.assign(Object.create(null), params);
+  let n = 0;
+  const refuse = (field: string, key: string, why: string): never => {
+    throw new Error(`${ref}: list param ${key} in ${field} ${why}`);
+  };
+  /** `{{k | join: "s"}}` → `{{k.__join<n>}}`, valued with the joined items; every other list form refused. */
+  const joins = (field: string, text: string): string => {
+    for (const m of text.matchAll(FILTER_OPEN_RE)) {
+      if (!lists.keys.has(m[1])) continue;
+      const whole = [...text.matchAll(FILTERED_RE)].find((w) => w.index === m.index);
+      if (!whole) refuse(field, m[1], "has a malformed filter");
+    }
+    for (const m of text.matchAll(PLACEHOLDER_RE)) if (lists.keys.has(m[1])) refuse(field, m[1], "is cited with no filter — in metadata write join: \"<sep>\" or yaml-items");
+    return text.replace(FILTERED_RE, (all, key: string, filterText: string) => {
+      if (!lists.keys.has(key)) return all;
+      const f = parseFilter(filterText);
+      if (f === null || f.kind !== "join") refuse(field, key, `takes ${f === null ? "an unknown filter" : f.kind}, which a metadata field cannot hold — use join: "<sep>" or yaml-items`);
+      if (!Object.hasOwn(params, key)) {
+        missing?.add(key);
+        return all;
+      }
+      const synthetic = `${key}.__join${n++}`;
+      map[synthetic] = formatList(params[key] as string[], f!, (why) => refuse(field, key, why));
+      return `{{${synthetic}}}`;
+    });
+  };
+  for (const field of metadataFields(meta)) {
+    const v = out[field];
+    if (field === "frontmatterRaw" && typeof v === "string") {
+      const lines = v.split("\n");
+      let under: string | null = null;
+      const kept: string[] = [];
+      for (const line of lines) {
+        const top = /^([A-Za-z0-9_-]+)\s*:/.exec(line);
+        if (top) under = top[1];
+        const y = YAML_ITEMS_LINE.exec(line);
+        if (y && lists.keys.has(y[2])) {
+          if (under !== null && GUARDED_KEYS.has(under)) refuse(field, y[2], `stands under ${under}, which a parameter may not change`);
+          if (!Object.hasOwn(params, y[2])) {
+            missing?.add(y[2]);
+            kept.push(line);
+            continue;
+          }
+          const items = params[y[2]] as string[];
+          if (items.length === 0 && under === "paths") refuse(field, y[2], "is empty under paths:, which may make a scoped rule load always — give it an item or drop the citation");
+          items.forEach((item, i) => {
+            if (holdsControl(item)) refuse(field, y[2], `item ${i} holds a line break or a control character`);
+          });
+          // Each item written here, a JSON string (a valid YAML double-quoted scalar) whose `{` that opens a `{{` is `\u007b`, so
+          // no placeholder is left for the pass that follows (E2), a glob's single braces stay readable, and craftar's own quotes
+          // and escapes are never tested as a value's (§4.6).
+          for (const item of items) kept.push(`${y[1]}- ${JSON.stringify(item).replace(/\{(?=\{)/g, "\\u007b")}`);
+          continue;
+        }
+        kept.push(joins(field, line));
+      }
+      out[field] = kept.join("\n");
+    } else if (field === "fileMatchPattern" && Array.isArray(v)) {
+      const spliced: unknown[] = [];
+      for (const x of v) {
+        const y = typeof x === "string" ? YAML_ITEMS_ELEMENT.exec(x) : null;
+        if (y && lists.keys.has(y[1])) {
+          if (!Object.hasOwn(params, y[1])) {
+            missing?.add(y[1]);
+            spliced.push(x);
+          } else {
+            for (const item of params[y[1]] as string[]) {
+              const k = `${y[1]}.__item${n++}`;
+              map[k] = item;
+              spliced.push(`{{${k}}}`);
+            }
+          }
+        } else spliced.push(typeof x === "string" ? joins(field, x) : x);
+      }
+      // An empty list leaves no element: spec 50's refusal of a pattern that renders empty (spec 55 §4.6).
+      if (v.length > 0 && spliced.length === 0) refuse(field, YAML_ITEMS_ELEMENT.exec(String(v.find((x) => typeof x === "string" && YAML_ITEMS_ELEMENT.test(x))))![1], "leaves the pattern empty");
+      out[field] = spliced;
+    } else if (typeof v === "string") out[field] = joins(field, v);
+    else if (Array.isArray(v)) out[field] = v.map((x) => (typeof x === "string" ? joins(field, x) : x));
+  }
+  return { meta: out as M, params: map };
 }
 
 /** A value that would break the file its field lands in (spec 50 §5.4). Never carries the value. */
@@ -203,8 +306,8 @@ function opensOther(value: string): boolean {
 function valueFault(line: string, index: number, length: number, value: string, params: Record<string, unknown>, quotes: boolean, under: string | null): string | null {
   const broken = scalarBreak(value, quotes);
   if (broken) return `its value holds ${broken}`;
-  const before = substitute(line.slice(0, index), params);
-  const after = substitute(line.slice(index + length), params);
+  const before = substitute(line.slice(0, index), params, NO_LISTS);
+  const after = substitute(line.slice(index + length), params, NO_LISTS);
   const q = quoteState(before);
   // Inside a double-quoted scalar a backslash starts an escape YAML may refuse.
   if (q.inDouble && value.includes("\\")) return "its value holds a backslash inside double quotes";
@@ -261,7 +364,7 @@ export function metadataFault(meta: Ingredient, params: Record<string, unknown>)
           if (value !== null && /[\r\n]/.test(value)) return { field, key: m[1], why: "its value holds a line break" };
         }
         const cited = [...text.matchAll(PLACEHOLDER_RE)];
-        if (cited.length > 0 && substitute(text, params).trim() === "") return { field, key: cited[0][1], why: "the pattern renders empty" };
+        if (cited.length > 0 && substitute(text, params, NO_LISTS).trim() === "") return { field, key: cited[0][1], why: "the pattern renders empty" };
       } else if (meta.type === "agent" || meta.type === "command") {
         // An agent's or a command's description and argumentHint are written unquoted into a frontmatter: checked as the
         // one line the emitter writes, with the raw block's line checks.
@@ -288,10 +391,12 @@ export function metadataFaultMessage(ref: string, f: MetadataFault): string {
  * body gets (spec 50 §5.3), after `metadataFault` has passed. `missing` collects the cited keys that have no value.
  * `craftar.rules.index` is never a parameter: `paramsFor` leaves it out, so it stays as written.
  */
-export function renderedMeta<M extends Ingredient>(meta: M, params: Record<string, unknown>, ref: string, missing?: Set<string>): M {
-  const fault = metadataFault(meta, params);
-  if (fault) throw new Error(metadataFaultMessage(ref, fault));
-  return substituteMetadata(meta, params, missing);
+export function renderedMeta<M extends Ingredient>(meta: M, params: Record<string, unknown>, ref: string, lists: ListContext, missing?: Set<string>): M {
+  const l = listMetadata(meta, params, lists, ref, missing);
+  const fault = metadataFault(l.meta, l.params);
+  // A joined list is tested under a key of its own; the refusal names the list key (spec 55 §4.6).
+  if (fault) throw new Error(metadataFaultMessage(ref, { ...fault, key: fault.key.replace(/\.__(join|item)\d+$/, "") }));
+  return substituteMetadata(l.meta, l.params, missing);
 }
 
 /**
@@ -304,15 +409,16 @@ export function substituteMetadata<M extends Ingredient>(meta: M, params: Record
   const out: Record<string, unknown> = { ...meta };
   for (const field of fields) {
     const v = out[field];
-    if (typeof v === "string") out[field] = substitute(v, params, missing);
-    else if (Array.isArray(v)) out[field] = v.map((x) => (typeof x === "string" ? substitute(x, params, missing) : x));
+    // List forms were rendered by `listMetadata` first; what is left is scalars.
+    if (typeof v === "string") out[field] = substitute(v, params, NO_LISTS, missing);
+    else if (Array.isArray(v)) out[field] = v.map((x) => (typeof x === "string" ? substitute(x, params, NO_LISTS, missing) : x));
   }
   return out as M;
 }
 
 /** `renderedMeta` for a reader with a resolution and no plan context (the rules index's builder): as written below the gate. */
 export function metaFor<I extends ResolvedIngredient>(ing: I, resolution: Resolution): I["meta"] {
-  return resolution.metadataParams ? renderedMeta(ing.meta, paramsFor(ing, resolution), ing.ref) : ing.meta;
+  return resolution.metadataParams ? renderedMeta(ing.meta, paramsFor(ing, resolution), ing.ref, listsOf(resolution)) : ing.meta;
 }
 
 /** The spelling of a metadata field in `forge diff` and a unify plan (spec 50 §5.5, §15 item 11). */
@@ -406,4 +512,18 @@ export function withTemplatedFields<M extends Ingredient>(source: M, base: Ingre
     else out[field] = v;
   }
   return out as M;
+}
+
+/**
+ * Import's reading of metadata as `sync` renders it (spec 50 §5.6), with a list key's forms rendered too (spec 55 §4.8): a form
+ * `sync` would refuse is left as written, so the comparison makes a variant rather than failing the import.
+ */
+export function substituteImportedMetadata<M extends Ingredient>(meta: M, params: Record<string, unknown>, lists: ListContext): M {
+  if (!lists.keys.size) return substituteMetadata(meta, params);
+  try {
+    const l = listMetadata(meta, params, lists, "import");
+    return substituteMetadata(l.meta, l.params);
+  } catch {
+    return substituteMetadata(meta, params);
+  }
 }

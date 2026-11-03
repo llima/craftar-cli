@@ -1,3 +1,4 @@
+import { NO_LISTS } from "../src/core/list-params.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { forgeReader } from "../src/core/contain.js";
 import { promises as fs } from "node:fs";
@@ -89,7 +90,7 @@ describe("renderedFingerprint — identity with fingerprintDir (spec 10 AC 1, 2)
       for (const type of await fs.readdir(root)) {
         for (const name of await fs.readdir(path.join(root, type))) {
           const dir = path.join(root, type, name);
-          expect(renderedFingerprint(await readBase(dir, reader, undefined, undefined, 1), {}, {}, 1), dir).toBe(await fingerprintDir(dir, forgeReader(fsRoot(dir))));
+          expect(renderedFingerprint(await readBase(dir, reader, undefined, undefined, 1), {}, {}, 1, NO_LISTS), dir).toBe(await fingerprintDir(dir, forgeReader(fsRoot(dir))));
         }
       }
     }
@@ -102,7 +103,7 @@ describe("renderedFingerprint — identity with fingerprintDir (spec 10 AC 1, 2)
     const map = renderMap(base.meta, { "deploy.api": "acme-api" }, {}, false);
     expect(map["deploy.api"]).toBe("acme-api");
     expect(map["deploy.web"]).toBe("globex-web");
-    expect(renderedFingerprint(base, map, {}, 1)).not.toBe(renderedFingerprint(base, {}, {}, 1));
+    expect(renderedFingerprint(base, map, {}, 1, NO_LISTS)).not.toBe(renderedFingerprint(base, {}, {}, 1, NO_LISTS));
   });
 });
 
@@ -125,13 +126,13 @@ describe("the render with sections (spec 11 §6.7)", () => {
     const { root, dir } = await forgeWith({ "ingredients/rules/review/rule.md": BODY });
     const base = await readBase(dir, reader, root, undefined, 1);
     expect(base.parsed.get("rule.md")!.sections.map((s) => s.name)).toEqual(["flavors"]);
-    expect(renderedFingerprint(base, { reviewer: "bob", target: "x" }, {}, 1)).toBe(fp("# Review\n\n| `acme-api` | bob |\n\nNever edit x.\n"));
+    expect(renderedFingerprint(base, { reviewer: "bob", target: "x" }, {}, 1, NO_LISTS)).toBe(fp("# Review\n\n| `acme-api` | bob |\n\nNever edit x.\n"));
   });
 
   it("renders a section value, which may cite a key the map sets", async () => {
     const { root, dir } = await forgeWith({ "ingredients/rules/review/rule.md": BODY });
     const base = await readBase(dir, reader, root, undefined, 1);
-    expect(renderedFingerprint(base, { target: "x", owner: "ann" }, { flavors: "| `globex-api` | {{owner}} |" }, 1)).toBe(fp("# Review\n\n| `globex-api` | ann |\n\nNever edit x.\n"));
+    expect(renderedFingerprint(base, { target: "x", owner: "ann" }, { flavors: "| `globex-api` | {{owner}} |" }, 1, NO_LISTS)).toBe(fp("# Review\n\n| `globex-api` | ann |\n\nNever edit x.\n"));
   });
 
   it("C(X) is read over the expanded text: a key cited only by a replaced default is not cited, one in the value is", async () => {

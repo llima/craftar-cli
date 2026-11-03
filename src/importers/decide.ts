@@ -1,3 +1,4 @@
+import { importLists } from "../core/list-params.js";
 import path from "node:path";
 import { metadataCitations, rendersMetadata } from "../core/metadata-params.js";
 import { placeholders, reservedKey, bodyFile } from "../core/extract.js";
@@ -13,7 +14,7 @@ import { sectionKey } from "../core/resolve.js";
 import { registrationCitations, rendersServers, serverCitations } from "../core/mcp-server.js";
 import { readsRulesIndex, RULES_INDEX_KEY } from "../core/rules-index.js";
 import type { DirReader } from "../core/fingerprint.js";
-import { OverridesParamsSchema, SectionsSchema, WorkspaceConfigSchema, stripForgeOnlyKeys, type ForgeSchema, type Ingredient, type Owner, type Sections, type Target } from "../schema/index.js";
+import { OverridesParamsSchema, SectionsSchema, WorkspaceConfigSchema, stripForgeOnlyKeys, type ForgeSchema, type Ingredient, type Owner, type Sections, type Target, type IngredientParamDecl } from "../schema/index.js";
 
 /**
  * The decision half of template-aware import (spec 10 §6.1–§6.5): what the importing profile
@@ -44,6 +45,8 @@ export interface RunContext {
   forge: Forge | null;
   /** What the importing profile sees (spec 51 §4.3): its locals over the root; the Forge itself when it has none. */
   view?: Forge | null;
+  /** The list keys of the importing profile's resolution (spec 55 §4.8); absent when it is new or does not resolve. */
+  lists?: ReadonlySet<string>;
   /**
    * Under agents-md.primary for the importing workspace, the rewording the claude-code emitter applied, so a base is compared
    * as sync wrote it (spec 41 §4.10); null otherwise.
@@ -81,7 +84,7 @@ export type Decision =
       sectioned?: string[];
       sectionDelta?: SectionChange[];
     }
-  | { kind: "variant"; why?: string; authEnv?: string[]; registration?: unknown[]; registrationParams?: Record<string, { default?: string | number | boolean; description?: string }> }
+  | { kind: "variant"; why?: string; authEnv?: string[]; registration?: unknown[]; registrationParams?: Record<string, IngredientParamDecl> }
   | { kind: "literal"; warn: string };
 
 const norm = (s: string) => toLf(stripBom(s));
@@ -108,7 +111,7 @@ export function pin(ctx: RunContext, keys: Iterable<string>, map: Record<string,
  */
 export function registrationCarry(meta: Ingredient): {
   registration?: unknown[];
-  registrationParams?: Record<string, { default?: string | number | boolean; description?: string }>;
+  registrationParams?: Record<string, IngredientParamDecl>;
 } {
   if (meta.type !== "hook") return {};
   const registration = meta.registration;
@@ -118,7 +121,7 @@ export function registrationCarry(meta: Ingredient): {
   const citedDeclared = citations.filter((c) => c.declared).map((c) => c.key);
   if (!citedDeclared.length) return { registration };
   const declared = meta.params ?? {};
-  const registrationParams: Record<string, { default?: string | number | boolean; description?: string }> = {};
+  const registrationParams: Record<string, IngredientParamDecl> = {};
   for (const k of citedDeclared) {
     if (Object.hasOwn(declared, k)) registrationParams[k] = declared[k];
   }
@@ -214,7 +217,7 @@ export async function decide(
   // Rules use claude-code form; steering uses kiro form.
   const indexTarget = base.meta.type === "rule" ? "claude-code" : base.meta.type === "steering" ? "kiro" : undefined;
   const ruleIndex = indexTarget && indexExpand ? (text: string) => indexExpand(text, indexTarget) : undefined;
-  const computedFp = renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined, owner, ruleIndex);
+  const computedFp = renderedFingerprint(base, map, S, schema, importLists(ctx.forge, base.meta, ctx.lists), ctx.primaryRefs ?? undefined, owner, ruleIndex);
   if (computedFp === fingerprint) {
     pin(ctx, [...citedAll, ...serverKeys], map);
     const changed = [...cited].filter((k) => Object.hasOwn(map, k));
@@ -300,7 +303,7 @@ async function inferParams(
     .map(([key, value]) => ({ key, old: valueOf(ctx.P, key) ?? null, value }));
 
   // F10: the proof, through the same expansion and substitution ctx.text uses.
-  if (renderedFingerprint(base, { ...map, ...sigma }, S, schema, ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
+  if (renderedFingerprint(base, { ...map, ...sigma }, S, schema, importLists(ctx.forge, base.meta, ctx.lists), ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
 
   // F9: a profile change must not move anything else the profile renders — its files, or a section value
   // that applies to it under this profile or workspace (spec 11 §6.11).
@@ -367,7 +370,7 @@ function inferSectionValues(
   for (const [rel, parsed] of base.parsed) {
     // Project sections for the owner before inferring (spec 41 Part B §5.2)
     const projected = projectSections(parsed, owner);
-    const r = inferSections(projected, textOf(files[rel]), WSk, map);
+    const r = inferSections(projected, textOf(files[rel]), WSk, map, importLists(ctx.forge, base.meta, ctx.lists));
     if ("fallback" in r) return { kind: "variant", why: r.reason };
     Object.assign(sigma, r.values);
     for (const s of projected.sections) defaults.set(s.name, s.default);
@@ -375,7 +378,7 @@ function inferSectionValues(
   const RSk = valuesAt(ctx.RS, key);
   const S = { ...RSk, ...PSk, ...WSk, ...sigma };
   // F14: the proof, through the same expansion and substitution ctx.text uses.
-  if (renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
+  if (renderedFingerprint(base, map, S, schema, importLists(ctx.forge, base.meta, ctx.lists), ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
 
   const assigned = sectionNames(base).filter((n) => Object.hasOwn(sigma, n));
   const sectionDelta: SectionChange[] = [];
