@@ -2011,24 +2011,33 @@ async function placeComputed(o: RecipeOptions, own: LocalLayer | undefined, name
     try {
       fromParents = new Set(recipeOrder(view, parentRecipes, `the parents of profile ${o.profile}`).flatMap((r) => view.recipes.get(r)?.ingredients ?? []));
     } catch (e) {
-      // A parent's list that does not resolve leaves the list as computed, and says so.
-      o.report.warnings.push(`profile ${o.profile}: its parents' recipes do not resolve (${errorText(e)}) — what they bring was not left out of ${name}`);
+      // Fail closed: what the parents bring is not known, so a variant or a local of this run could sit beside it.
+      throw new Error(`import: the recipes of ${o.profile}'s parents do not resolve (${errorText(e)}) — fix the Forge and re-run`);
     }
   }
-  // A child's variant of a base its parents' recipes bring would sit beside that base (two ingredients, one file): the
-  // parent's recipe would have to change, and no command writes a parent (spec 54 §5.9).
+  // A child's variant or local that writes the output a parent's recipes already write — the base itself or a root variant
+  // named for the parent — would sit beside it (two ingredients, one file): the parent's recipe would have to change, and
+  // no command writes a parent (spec 54 §5.9). The child's override of the very ref the parents bring is not that.
+  const outOf = (ref: string): string => {
+    const m = view.ingredients.get(ref as IngredientRef)?.meta;
+    return m ? `${m.type}/${m.as ?? m.name}` : ref;
+  };
+  const brought = new Map<string, string>(); // type/outName → the ref the parents bring
+  for (const r of fromParents) brought.set(outOf(r), r);
   const suffix = `--${o.profile}`;
   for (const r of list) {
-    if (!r.endsWith(suffix) || !fromParents.has(r.slice(0, -suffix.length))) continue;
-    const base = r.slice(0, -suffix.length);
+    const key = r.endsWith(suffix) ? r.slice(0, -suffix.length) : r;
+    const theirs = brought.get(key);
+    if (theirs === undefined || fromParents.has(r)) continue;
     const parent = familyOf(forge, o.profile).slice(1).find((q) => {
       try {
-        return recipeOrder(view, forge.profiles.get(q)?.recipes ?? [], `profile ${q}`).some((x) => view.recipes.get(x)?.ingredients.includes(base));
+        return recipeOrder(view, forge.profiles.get(q)?.recipes ?? [], `profile ${q}`).some((x) => view.recipes.get(x)?.ingredients.includes(theirs));
       } catch {
         return false;
       }
     });
-    throw new Error(`import: this workspace's ${base} differs from the ${base} that ${o.profile}'s parent ${parent ?? "(unknown)"} brings through its recipes — a variant would sit beside the base, and no command writes a parent: edit the parent's recipe, or the Forge's ${base}, by hand, then re-run`);
+    const who = parent !== undefined ? `${o.profile}'s parent ${parent}` : `one of ${o.profile}'s parents`;
+    throw new Error(`import: ${r} would write the file of ${theirs}, which ${who} brings through its recipes — the two would sit side by side, and no command writes a parent: edit the parent's recipe, or the Forge's ${theirs}, by hand, then re-run`);
   }
   const kept = list.filter((r) => !locals.has(r) && !fromParents.has(r) && !(citedLocally.has(r) && !rootListed.has(r)));
   if (list.length > 0 && kept.length === 0) return null;

@@ -377,9 +377,41 @@ describe("spec 54 §5.9 — a child's edit of a base its parent's recipe brings"
     await fs.writeFile(path.join(f.ws.portal, ".claude/rules/style.md"), "# Style\nKeep it very short.\n");
     const before = await snapshot(f.forgeRoot);
     await expect(importClaudeCode({ workspaceRoot: f.ws.portal, forgeRoot: f.forgeRoot, profileName: "acme-portal" })).rejects.toThrow(
-      "import: this workspace's rule/style differs from the rule/style that acme-portal's parent acme brings through its recipes — a variant would sit beside the base, and no command writes a parent",
+      "import: rule/style--acme-portal would write the file of rule/style, which acme-portal's parent acme brings through its recipes — the two would sit side by side, and no command writes a parent",
     );
     expect(await snapshot(f.forgeRoot)).toBe(before);
+  });
+});
+
+describe("spec 54 §5.9 — a parent's root variant is what the family writes for that file", () => {
+  async function withParentVariant(): Promise<Family> {
+    const f = kept(await acmeHoisted(GATE, { importShaped: true }));
+    const w = (rel: string, text: string) => fs.mkdir(path.dirname(path.join(f.forgeRoot, rel)), { recursive: true }).then(() => fs.writeFile(path.join(f.forgeRoot, rel), text));
+    await w("ingredients/rules/style--acme/ingredient.yaml", YAML.stringify({ type: "rule", name: "style--acme", as: "style" }));
+    await w("ingredients/rules/style--acme/rule.md", "# Style\nAcme short.\n");
+    await w("recipes/base-acme.yaml", YAML.stringify({ name: "base-acme", ingredients: ["rule/style--acme", "command/open-pr"] }));
+    const pf = path.join(f.forgeRoot, "profiles/acme/profile.yaml");
+    await fs.writeFile(pf, YAML.stringify({ ...YAML.parse(await fs.readFile(pf, "utf8")), recipes: ["base-acme", "acme-base"] }));
+    expect(runCli(["sync", "--workspace", f.ws.portal]).code).toBe(0);
+    return f;
+  }
+  for (const local of ["never", "always"] as const) {
+    for (const edit of [true, false]) {
+      it(`import --local=${local}${edit ? " after a hand edit" : ", unchanged,"} never writes the child's own style beside the parent's variant`, async () => {
+        const f = await withParentVariant();
+        if (edit) await fs.writeFile(path.join(f.ws.portal, ".claude/rules/style.md"), "# Style\nEdited by hand.\n");
+        await expect(importClaudeCode({ workspaceRoot: f.ws.portal, forgeRoot: f.forgeRoot, profileName: "acme-portal", local })).rejects.toThrow(
+          "which acme-portal's parent acme brings through its recipes — the two would sit side by side, and no command writes a parent",
+        );
+      });
+    }
+  }
+  it("the load refuses a child's local of the name a parent's root variant writes (L1′)", async () => {
+    const f = await withParentVariant();
+    await fs.mkdir(path.join(f.forgeRoot, "profiles/acme-portal/ingredients/rules/style"), { recursive: true });
+    await fs.writeFile(path.join(f.forgeRoot, "profiles/acme-portal/ingredients/rules/style/ingredient.yaml"), YAML.stringify({ type: "rule", name: "style" }));
+    await fs.writeFile(path.join(f.forgeRoot, "profiles/acme-portal/ingredients/rules/style/rule.md"), "# Style\nPortal.\n");
+    await expect(loadForge(f.forgeRoot)).rejects.toThrow("a local ingredient and the root variant of the same name for profile acme, which it extends");
   });
 });
 

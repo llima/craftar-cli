@@ -129,6 +129,12 @@ export function checkLocals(
       const variant = `${ref}--${p}` as IngredientRef;
       const vAt = root.ingredients.has(variant) ? root.ingredientPaths.get(variant) : undefined;
       if (vAt !== undefined) findings.push(`L1 ${at} and ${vAt}: a local ingredient and the root variant of the same name for its own profile`);
+      // Spec 54 §5.6: a root variant of that name for a parent writes the same file for this profile too.
+      for (const q of family(p).slice(1)) {
+        const pv = `${ref}--${q}` as IngredientRef;
+        const pAt = root.ingredients.has(pv) ? root.ingredientPaths.get(pv) : undefined;
+        if (pAt !== undefined) findings.push(`L1′ ${at} and ${pAt}: a local ingredient and the root variant of the same name for profile ${shownLocalName(q, "profile")}, which it extends`);
+      }
     }
     for (const [name, r] of layer.recipes) {
       const rootFile = root.recipeFiles.get(name);
