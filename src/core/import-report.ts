@@ -39,18 +39,27 @@ function variantLine(name: string, profile: string): string {
   return name.endsWith(suffix) ? `- ${name} — differs from ${name.slice(0, -suffix.length)}` : `- ${name}`;
 }
 
+/** The shortest value also taken out where it stands bare (E12.1): a shorter one — `1`, `true` — would blank the report's own words. */
+const BARE_MIN = 8;
+const escapeRe = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /**
  * Takes out of a line of import's own wording every value this run read from the workspace — a parameter or section
- * value it accepted or replaced, an inferred value — in the quoted form import prints them (`JSON.stringify`).
+ * value it accepted or replaced, an inferred value, and a value of the workspace's `overrides` the Kiro part's plan read
+ * (`report.kiro.values`) — in the quoted form import prints them (`JSON.stringify`), and, from `BARE_MIN` characters,
+ * bare where no letter, digit or `_` touches it (a core message may print a value unquoted).
  */
 function withoutValues(report: ImportReport): (text: string) => string {
   const values = new Set<string>();
   for (const x of report.params) for (const v of [x.value, x.old]) if (v !== null) values.add(v);
   for (const x of report.sections) for (const v of [x.value, x.old]) if (v !== null) values.add(v);
   for (const x of report.inferred) for (const v of Object.values(x.values)) values.add(v);
+  if (report.kiro && report.kiro.kind !== "none") for (const v of report.kiro.values ?? []) values.add(v);
   // Longest first, so a value that contains another is replaced whole.
-  const quoted = [...values].sort((a, b) => b.length - a.length).map((v) => JSON.stringify(v));
-  return (text) => quoted.reduce((t, q) => t.split(q).join('"…"'), text);
+  const sorted = [...values].sort((a, b) => b.length - a.length);
+  const quoted = sorted.map((v) => JSON.stringify(v));
+  const bare = sorted.filter((v) => v.length >= BARE_MIN).map((v) => new RegExp(`(?<![A-Za-z0-9_])${escapeRe(v)}(?![A-Za-z0-9_])`, "g"));
+  return (text) => bare.reduce((t, re) => t.replace(re, "…"), quoted.reduce((t, q) => t.split(q).join('"…"'), text));
 }
 
 /** The Kiro sections (spec 29 §4.2): `status()`'s collisions and the files nothing sources, or why there are none. */
@@ -71,7 +80,10 @@ function kiroSections(report: ImportReport, said: (text: string) => string): str
       collisions.push(`| ${cell(c.path)} | ${cell(c.from)} | ${c.workspaceLines} | ${c.generatedLines} |${c.note ? ` ${cell(c.note)}` : ""} |`);
     }
   }
-  return [collisions, [`## Unsourced Kiro files (${kiro.unsourced.length})`, ...kiro.unsourced.map((f) => `- ${oneLine(f)}`)]];
+  const unsourced = [`## Unsourced Kiro files (${kiro.unsourced.length})`, ...kiro.unsourced.map((f) => `- ${oneLine(f)}`)];
+  // E12.5: only when the plan warned, so a report without plan warnings keeps its bytes.
+  const warned = kiro.warnings?.length ? [[`## Kiro plan warnings (${kiro.warnings.length})`, ...kiro.warnings.map((w) => `- ${oneLine(said(w))}`)]] : [];
+  return [collisions, unsourced, ...warned];
 }
 
 /** A rule taken from its steering file (spec 29 §4.3), as the summary and the report both say it: paths and line counts. */

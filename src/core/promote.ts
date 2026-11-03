@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { forgeFor, isLocalMessage, localCiters, localOwners, localRecipeNamed } from "./profile-local.js";
+import { forgeFor, isLocalMessage, localCiters, localOwners, localRecipeNamed, skippedLinkWarning } from "./profile-local.js";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -321,7 +321,11 @@ export async function proveBasePromotion(forge: Forge, promotion: BasePromotion)
       if (!isDeepStrictEqual(was.sections, now.sections)) throw refused(q, "its sections differ");
       if (!isDeepStrictEqual(was.targets, now.targets)) throw refused(q, "its targets differ");
       const said = (w: string) => [...split].reduce((t, [old, value]) => t.split(`recipe "${old}"`).join(`recipe "${value}"`), w);
-      if (!isDeepStrictEqual(was.warnings.map(said), now.warnings)) throw refused(q, "its warnings differ");
+      // A skipped linked folder (E39.2) is said of the whole Forge, and the scratch copy drops the link: its line is on
+      // one side only, and is not the promotion's to prove.
+      const linkLines = new Set([...(forge.skippedLinks ?? []), ...(edited.skippedLinks ?? [])].map(skippedLinkWarning));
+      const own = (ws: string[]) => ws.filter((w) => !linkLines.has(w));
+      if (!isDeepStrictEqual(own(was.warnings.map(said)), own(now.warnings))) throw refused(q, "its warnings differ");
       // Each renamed entry holds the files of the one it replaces (`name` and `as` are outside the fingerprint).
       for (const i of was.ingredients) {
         const to = rename(i.ref);

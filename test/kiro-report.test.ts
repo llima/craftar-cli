@@ -5,6 +5,7 @@ import YAML from "yaml";
 import { listFiles } from "../src/core/forge.js";
 import { importClaudeCode } from "../src/importers/claude-code.js";
 import { kiroReport, textLines } from "../src/importers/kiro-report.js";
+import { plan } from "../src/core/sync.js";
 import { tmpDir, writeFiles } from "./helpers/forge.js";
 
 // Spec 29 §4.2 / §9 slice B — what differs under .kiro/ from what sync would generate, by status(), with no lock.
@@ -121,11 +122,17 @@ describe("import with report: the Kiro part", () => {
     await writeFiles(s.ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\noverrides:\n  params:\n    deploy.api: acme-api\n" });
     const r = await importClaudeCode({ workspaceRoot: s.ws, forgeRoot: s.forge, profileName: "acme", report: true });
     expect(r.reused).toContain("rule/deploy");
-    expect(r.kiro).toEqual({ kind: "computed", collisions: [], unsourced: [] });
+    expect(r.kiro).toEqual({ kind: "computed", collisions: [], unsourced: [], values: ["acme-api"] });
     // (control) without the override the same mirror is a collision: the plan renders the default
     await fs.rm(path.join(s.ws, "craftar.yaml"));
     const k = await kiroReport({ workspaceRoot: s.ws, forgeRoot: s.forge, profile: "acme", targets: ["claude-code", "kiro"] });
     expect(k.kind === "computed" && k.collisions.map((c) => c.path)).toEqual([".kiro/steering/deploy.md"]);
+  });
+
+  it("a body line that only mentions the banner's wording is counted (E13.2)", async () => {
+    const said = "see <!-- GENERATED from x --> here\n";
+    const { r } = await imported({ ".claude/rules/style.md": "# Style\n" + said, ".kiro/steering/style.md": mirror("style", "# Style\n" + said + "kept by hand\n") });
+    expect(r.kiro?.kind === "computed" && r.kiro.collisions.map((c) => c.note)).toEqual(["steering bigger than the rule"]);
   });
 
   it("a mirror that differs only by a BOM and its line endings is not a collision", async () => {
@@ -136,6 +143,21 @@ describe("import with report: the Kiro part", () => {
   it("a location that is a file, not a directory, is not listed and does not stop the report", async () => {
     const { r } = await imported({ ".claude/rules/style.md": "# Style\n", ".kiro/steering/style.md": mirror("style", "# Style\n"), ".kiro/agents": "not a directory\n" });
     expect(r.kiro).toEqual({ kind: "computed", collisions: [], unsourced: [] });
+  });
+
+  it("carries the plan's warnings and the values of the workspace's overrides, for the report to redact (E12.1, E12.5)", async () => {
+    const s = await setup();
+    await importClaudeCode({ workspaceRoot: s.ws, forgeRoot: s.forge, profileName: "acme" });
+    await writeFiles(s.ws, { "craftar.yaml": "forge: ../forge\nprofile: acme\noverrides:\n  params:\n    deploy:\n      api: nested-override-value\n    port: 12345678\n  sections:\n    rule/exact:\n      who: section-override-value\n" });
+    const k = await kiroReport(
+      { workspaceRoot: s.ws, forgeRoot: s.forge, profile: "acme", targets: ["claude-code", "kiro"] },
+      { plan: async (ws) => ({ ...(await plan(ws)), warnings: ["a plan warning"] }) },
+    );
+    expect(k.kind).toBe("computed");
+    expect(k.kind === "computed" && k.warnings).toEqual(["a plan warning"]);
+    expect(k.kind === "computed" && [...(k.values ?? [])].sort()).toEqual(["12345678", "nested-override-value", "section-override-value"]);
+    const t = await kiroReport({ workspaceRoot: s.ws, forgeRoot: s.forge, profile: "acme", targets: ["claude-code", "kiro"] }, { plan: async () => { throw new Error("boom nested-override-value"); } });
+    expect(t).toEqual({ kind: "not-computed", message: "boom nested-override-value", values: ["nested-override-value", "12345678", "section-override-value"] });
   });
 
   it("a plan that throws after the flush: not computed, with the first line of the message; the Forge written, no throw", async () => {

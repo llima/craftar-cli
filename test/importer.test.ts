@@ -213,6 +213,67 @@ describe("import --from claude-code", () => {
     expect(r.rejected).toEqual([{ name: "rule/deploy", reason: "secret-like value (aws-access-key) in .claude/rules/deploy.md line 3" }]);
   });
 
+  // E2.2: BOM-less UTF-16 on the text path (an allowlisted extension) was scanned as UTF-8 full of NULs.
+  const utf16leBare = (text: string) => Buffer.from(text, "utf16le");
+  const utf16beBare = (text: string) => {
+    const b = Buffer.from(text, "utf16le");
+    b.swap16();
+    return b;
+  };
+
+  it("rejects an allowlisted script saved as UTF-16LE without a BOM holding a token", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), { ".claude/scripts/deploy.ps1": utf16leBare("# deploy\r\n$token = '" + TOKEN + "'\r\n") });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([{ name: "script/deploy", reason: "secret-like value (github-token) in .claude/scripts/deploy.ps1 line 2" }]);
+    expect(await exists(path.join(t.forge, "ingredients/scripts/deploy"))).toBe(false);
+  });
+
+  it("rejects a rule saved as UTF-16BE without a BOM holding a token", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), { ".claude/rules/deploy.md": utf16beBare("# Deploy\n\nkey " + "AKIA" + "ABCDEFGHIJKLMNOP" + "\n") });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([{ name: "rule/deploy", reason: "secret-like value (aws-access-key) in .claude/rules/deploy.md line 3" }]);
+  });
+
+  it("warns once per UTF-16 source it stores as read, with or without a BOM, naming the file only (E2.1)", async () => {
+    const t = await setup();
+    const withBom = utf16le("Write-Host 'hello'\r\n");
+    const bare = utf16leBare("# Hello\n\nsay hello\n");
+    await writeFiles(t.ws("api"), { ".claude/scripts/hello.ps1": withBom, ".claude/rules/hello.md": bare, ".claude/rules/plain.md": "# Plain\n" });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.rejected).toEqual([]);
+    const utf16 = r.warnings.filter((w) => w.includes("UTF-16"));
+    expect(utf16).toEqual([
+      ".claude/rules/hello.md is UTF-16 text; import reads it as UTF-8, so what the Forge holds for it does not keep its bytes — save it as UTF-8",
+      ".claude/scripts/hello.ps1 is UTF-16 text; import reads it as UTF-8, so what the Forge holds for it does not keep its bytes — save it as UTF-8",
+    ]);
+    expect(r.warnings.join("\n")).not.toContain("hello'");
+    // What is stored does not change.
+    const stored = await fs.readFile(path.join(t.forge, "ingredients/scripts/hello/hello.ps1"), "utf8");
+    expect(stored).toBe(withBom.toString("utf8").replace(/\r\n?/g, "\n"));
+  });
+
+  it("does not warn for a UTF-16 steering mirror it skips unread", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/hello.md": "# Hello\n",
+      ".kiro/steering/hello.md": utf16le("---\ninclusion: always\n---\n\n<!-- GENERATED from .claude/rules/hello.md by craftar -- do not edit. -->\n\n# Hello\n"),
+    });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.warnings.filter((w) => w.includes("UTF-16"))).toEqual([]);
+  });
+
+  it("imports a hand-written steering file that only mentions the generated banner's wording (E13.2)", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/plain.md": "# Plain\n",
+      ".kiro/steering/notes.md": "---\ninclusion: always\n---\n\n# Notes\n\nKiro marks a generated file with `<!-- GENERATED from <file> by craftar -->`.\n",
+    });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.created).toContain("steering/notes");
+  });
+
   it("stores a clean UTF-16 file exactly as before (the decode is for scanning only)", async () => {
     const t = await setup();
     const script = utf16le("Write-Host 'hello'\r\n");

@@ -187,3 +187,160 @@ exit 0
     expect(reasons).toContain("ignored");
   });
 });
+
+// E11.2: a `filter.<x>.clean` set in the Forge's own configuration ran under the gate's `git status` (a stale index makes
+// git re-read the file through the filter). The gate's three commands blank it; a filter set globally keeps running.
+describe.skipIf(process.platform === "win32")("the gate's git commands do not run the Forge's own filters", () => {
+  const stale = async (dir: string) => {
+    const later = new Date(Date.now() + 2000 + Math.floor(Math.random() * 5000));
+    await fs.utimes(path.join(dir, "file.txt"), later, later);
+  };
+  const ran = (marker: string) => fs.lstat(marker).then(() => true, () => false);
+  async function filtered(): Promise<{ dir: string; marker: string; script: string }> {
+    const dir = await createGitRepo();
+    const marker = path.join(dir, "..", `${path.basename(dir)}-filter-ran`);
+    cleanups.push(() => fs.rm(marker, { force: true }));
+    const script = path.join(dir, "..", `${path.basename(dir)}-filter.sh`);
+    cleanups.push(() => fs.rm(script, { force: true }));
+    await fs.writeFile(script, `#!/bin/sh\ntouch "${marker}"\ncat\n`, { mode: 0o755 });
+    await fs.writeFile(path.join(dir, ".gitattributes"), "*.txt filter=mark\n");
+    await execProgram("git", ["-C", dir, "add", ".gitattributes"]);
+    await execProgram("git", ["-C", dir, "commit", "-m", "attributes"]);
+    return { dir, marker, script };
+  }
+
+  it("a repo-local filter.<x>.clean does not run under gitDirty, gitUnheld or gitIgnored, and the tree reads clean", async () => {
+    const { dir, marker, script } = await filtered();
+    await execProgram("git", ["-C", dir, "config", "filter.mark.clean", script]);
+    // Control: a plain status runs it.
+    await stale(dir);
+    await execProgram("git", ["-C", dir, "status", "--porcelain"]);
+    expect(await ran(marker), "control: plain git status runs the filter").toBe(true);
+    await fs.rm(marker);
+    await stale(dir);
+    expect(await gitDirty(dir)).toBe(false);
+    await stale(dir);
+    expect(await gitUnheld(dir, [path.join(dir, "file.txt")])).toEqual([]);
+    await stale(dir);
+    expect(await gitIgnored(dir, "file.txt")).toBe(false);
+    expect(await ran(marker), "the Forge's own filter ran under the gate").toBe(false);
+  });
+
+  it("filter.<x>.required=true does not turn the blanked filter into a failure (the gate would refuse for ever)", async () => {
+    const { dir, marker, script } = await filtered();
+    await execProgram("git", ["-C", dir, "config", "filter.mark.clean", script]);
+    await execProgram("git", ["-C", dir, "config", "filter.mark.required", "true"]);
+    await stale(dir);
+    expect(await gitDirty(dir)).toBe(false);
+    await stale(dir);
+    expect(await gitUnheld(dir, [path.join(dir, "file.txt")])).toEqual([]);
+    expect(await ran(marker)).toBe(false);
+  });
+
+  it("a filter set in the worktree's own configuration is blanked too", async () => {
+    const { dir, marker, script } = await filtered();
+    await execProgram("git", ["-C", dir, "config", "extensions.worktreeConfig", "true"]);
+    await execProgram("git", ["-C", dir, "config", "--worktree", "filter.mark.clean", script]);
+    await stale(dir);
+    expect(await gitDirty(dir)).toBe(false);
+    expect(await ran(marker)).toBe(false);
+  });
+
+  it("a Forge whose repository has a linked worktree, without extensions.worktreeConfig, still reads clean", async () => {
+    const { dir, marker, script } = await filtered();
+    await execProgram("git", ["-C", dir, "config", "filter.mark.clean", script]);
+    const linked = `${dir}-linked`;
+    cleanups.push(() => removeWithRetry(linked));
+    await execProgram("git", ["-C", dir, "worktree", "add", "-q", linked]);
+    await stale(dir);
+    expect(await gitDirty(dir)).toBe(false);
+    expect(await gitIgnored(dir, "file.txt")).toBe(false);
+    await stale(dir);
+    expect(await gitUnheld(dir, [path.join(dir, "file.txt")])).toEqual([]);
+    expect(await gitDirty(linked)).toBe(false);
+    expect(await ran(marker)).toBe(false);
+  });
+
+  it("extensions.worktreeConfig set outside the repository's own config does not count (git ignores it there)", async () => {
+    const { dir } = await filtered();
+    const linked = `${dir}-linked`;
+    cleanups.push(() => removeWithRetry(linked));
+    await execProgram("git", ["-C", dir, "worktree", "add", "-q", linked]);
+    const global = `${dir}-global.cfg`;
+    cleanups.push(() => fs.rm(global, { force: true }));
+    await fs.writeFile(global, "[extensions]\n\tworktreeConfig = true\n");
+    const before = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = global;
+    try {
+      expect(await gitDirty(dir)).toBe(false);
+      expect(await gitIgnored(dir, "file.txt")).toBe(false);
+    } finally {
+      if (before === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = before;
+    }
+  });
+
+  it("a linked worktree's own filter, with extensions.worktreeConfig, is blanked in that worktree", async () => {
+    const { dir, marker, script } = await filtered();
+    const linked = `${dir}-linked`;
+    cleanups.push(() => removeWithRetry(linked));
+    await execProgram("git", ["-C", dir, "worktree", "add", "-q", linked]);
+    await execProgram("git", ["-C", dir, "config", "extensions.worktreeConfig", "true"]);
+    await execProgram("git", ["-C", linked, "config", "--worktree", "filter.mark.clean", script]);
+    const later = new Date(Date.now() + 3000);
+    await fs.utimes(path.join(linked, "file.txt"), later, later);
+    expect(await gitDirty(linked)).toBe(false);
+    expect(await ran(marker)).toBe(false);
+  });
+
+  it("a filter from a file the repository's configuration includes is blanked too", async () => {
+    const { dir, marker, script } = await filtered();
+    const inc = path.join(dir, "..", `${path.basename(dir)}-inc.cfg`);
+    cleanups.push(() => fs.rm(inc, { force: true }));
+    await fs.writeFile(inc, `[filter "mark"]\n\tclean = ${script}\n`);
+    await execProgram("git", ["-C", dir, "config", "include.path", inc]);
+    await stale(dir);
+    expect(await gitDirty(dir)).toBe(false);
+    expect(await ran(marker)).toBe(false);
+  });
+
+  it("a filter set in the global configuration still runs (a global LFS setup keeps working)", async () => {
+    const { dir, marker, script } = await filtered();
+    const global = path.join(dir, "..", `${path.basename(dir)}-global.cfg`);
+    cleanups.push(() => fs.rm(global, { force: true }));
+    await fs.writeFile(global, `[filter "mark"]\n\tclean = ${script}\n`);
+    const before = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = global;
+    try {
+      await stale(dir);
+      await gitDirty(dir);
+    } finally {
+      if (before === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = before;
+    }
+    expect(await ran(marker)).toBe(true);
+  });
+
+  // E11.3: the gate's commands run no diff driver: `diff.external` and a `textconv` planted in the Forge's configuration.
+  it("diff.external and a textconv driver do not run under the gate's commands", async () => {
+    const dir = await createGitRepo();
+    const marker = path.join(dir, "..", `${path.basename(dir)}-diff-ran`);
+    cleanups.push(() => fs.rm(marker, { force: true }));
+    const script = path.join(dir, "..", `${path.basename(dir)}-diff.sh`);
+    cleanups.push(() => fs.rm(script, { force: true }));
+    await fs.writeFile(script, `#!/bin/sh\ntouch "${marker}"\ncat "$1" 2>/dev/null\n`, { mode: 0o755 });
+    await fs.writeFile(path.join(dir, ".gitattributes"), "*.txt diff=conv\n");
+    await execProgram("git", ["-C", dir, "add", ".gitattributes"]);
+    await execProgram("git", ["-C", dir, "commit", "-m", "attributes"]);
+    await execProgram("git", ["-C", dir, "config", "diff.external", script]);
+    await execProgram("git", ["-C", dir, "config", "diff.conv.textconv", script]);
+    await fs.writeFile(path.join(dir, "file.txt"), "changed\n");
+    await gitDirty(dir);
+    await gitUnheld(dir, [path.join(dir, "file.txt")]);
+    await gitIgnored(dir, "file.txt");
+    expect(await ran(marker), "a diff driver ran under the gate").toBe(false);
+    // Control: a plain git diff runs it.
+    await execProgram("git", ["-C", dir, "diff"]);
+    expect(await ran(marker), "control: git diff runs the driver").toBe(true);
+  });
+});

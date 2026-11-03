@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeForScan, findSecrets, hasUtf16Bom, looksLikeSecretValue, secretValueKind, shannonEntropy } from "../src/core/secrets.js";
+import { decodeForScan, findSecrets, hasUtf16Bom, isUtf16Text, looksLikeSecretValue, secretValueKind, shannonEntropy } from "../src/core/secrets.js";
 
 // Token-shaped values are assembled at runtime so no scanner ever sees a literal token in this file.
 const fake = {
@@ -82,6 +82,48 @@ describe("decodeForScan", () => {
 
   it("ignores a dangling odd byte after a UTF-16 BOM", () => {
     expect(decodeForScan(Buffer.concat([le("ab"), Buffer.from([0x63])]))).toBe("ab");
+  });
+
+  // E2.2: a UTF-16 file saved without a BOM was read as binary and never scanned.
+  const leBare = (t: string) => Buffer.from(t, "utf16le");
+  const beBare = (t: string) => {
+    const b = Buffer.from(t, "utf16le");
+    b.swap16();
+    return b;
+  };
+
+  it("decodes BOM-less UTF-16LE and UTF-16BE text", () => {
+    const text = "# deploy\r\n$token = '" + fake.github + "'\r\n";
+    expect(isUtf16Text(leBare(text))).toBe(true);
+    expect(isUtf16Text(beBare(text))).toBe(true);
+    expect(decodeForScan(leBare(text))).toBe(text);
+    expect(decodeForScan(beBare("key é " + fake.aws + "\n"))).toBe("key é " + fake.aws + "\n");
+  });
+
+  it("decodes BOM-less UTF-16 text that holds a character whose low byte is NUL (U+3000, U+4E00)", () => {
+    const text = "# 部署\u3000一\r\nkey = '" + fake.github + "'\r\n";
+    expect(isUtf16Text(leBare(text))).toBe(true);
+    expect(decodeForScan(leBare(text))).toBe(text);
+    expect(decodeForScan(beBare(text))).toBe(text);
+  });
+
+  it("is not thrown off by a surrogate pair cut at the 64 KiB it measures", () => {
+    const text = "a".repeat(32767) + "😀" + "tail\n";
+    expect(isUtf16Text(leBare(text))).toBe(true);
+  });
+
+  it("keeps binary that holds NUL bytes binary", () => {
+    // A PNG header: its IHDR length holds a pair of NULs, which no text holds.
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x01, 0x00]);
+    expect(isUtf16Text(png)).toBe(false);
+    expect(decodeForScan(png)).toBeNull();
+    // NULs on one parity, but the other bytes are control codes: not text.
+    const controls = Buffer.from(Array.from({ length: 64 }, (_, i) => (i % 2 ? 0 : (i % 7) + 1)));
+    expect(isUtf16Text(controls)).toBe(false);
+    expect(decodeForScan(controls)).toBeNull();
+    // Odd length: never UTF-16.
+    expect(isUtf16Text(Buffer.from([0x61, 0x00, 0x62]))).toBe(false);
+    expect(isUtf16Text(Buffer.from("plain text"))).toBe(false);
   });
 });
 

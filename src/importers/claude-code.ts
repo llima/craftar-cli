@@ -9,7 +9,7 @@ import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, FORGE_MANIFEST, readIngredientText, type Forge } from "../core/forge.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
-import { decodeForScan, findSecrets, hasUtf16Bom } from "../core/secrets.js";
+import { decodeForScan, findSecrets, isUtf16Text } from "../core/secrets.js";
 import { registrationCitations, rendersServers, serverCitations, serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
 import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
@@ -745,6 +745,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const queuedIndexable = new Set(queue.filter((q) => q.meta.type === "rule" || q.meta.type === "steering").map((q) => `${q.meta.type}/${q.meta.name}`));
   const mayBeSkipped = (q: Source) => q.skip?.() || (q.meta.type === "steering" && queuedRules.has(q.meta.name));
   const clean = queue.filter((q) => !secretIn(q.meta, q.files, q.scan, q.lineOffset));
+  // Not for a source the run skips unread (a generated mirror, a steering file its rule shadows): nothing of it is kept.
+  for (const w of [...new Set(clean.filter((q) => !mayBeSkipped(q)).flatMap((q) => utf16Warnings(q.meta, q.scan)))].sort()) report.warnings.push(w);
   const runBases = new Set(clean.filter((q) => !mayBeSkipped(q)).map((q) => `${q.meta.type}/${q.meta.name}`));
   const mayBeDecided = clean.filter((q) => !q.skip?.());
   const literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer>; lineOffset?: number }> = [];
@@ -1409,12 +1411,22 @@ export function secretIn(meta: Ingredient, files: Record<string, string | Buffer
 
 /**
  * Read a source file as UTF-8 text, exactly as import always has — the stored text does not
- * change. When the bytes carry a UTF-16 BOM, that UTF-8 read is mojibake no secret pattern can
- * match, so the correctly decoded text comes back alongside, for the secret scan only.
+ * change. When the bytes are UTF-16 text (a BOM, or the shape `isUtf16Text` recognises without
+ * one), that UTF-8 read is mojibake no secret pattern can match, so the correctly decoded text
+ * comes back alongside, for the secret scan only — and its presence is what `utf16Warnings` warns on.
  */
 async function readSource(abs: string): Promise<{ text: string; scan?: string }> {
   const bytes = await fs.readFile(abs);
-  return { text: bytes.toString("utf8"), scan: hasUtf16Bom(bytes) ? (decodeForScan(bytes) ?? undefined) : undefined };
+  return { text: bytes.toString("utf8"), scan: isUtf16Text(bytes) ? (decodeForScan(bytes) ?? undefined) : undefined };
+}
+
+/**
+ * One warning per UTF-16 source import reads as text (E2.1): it keeps the UTF-8 read, so what the Forge holds does not
+ * keep the file's bytes. Names the file, never its text.
+ */
+function utf16Warnings(meta: Ingredient, scan: Record<string, string>): string[] {
+  const origin = meta.origin?.path ?? `${meta.type}/${meta.name}`;
+  return Object.keys(scan).map((rel) => `${fileWhere(meta, origin, rel)} is UTF-16 text; import reads it as UTF-8, so what the Forge holds for it does not keep its bytes — save it as UTF-8`);
 }
 
 /** The extra scan entry for one stored file, when its source needed a UTF-16 decode. */

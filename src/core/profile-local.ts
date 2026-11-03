@@ -32,6 +32,11 @@ export function ignoredLocalWarning(folder: string, sub: "ingredients" | "recipe
   return `profiles/${folder}/${sub}: ignored below schema ${FORGE_SCHEMA_PROFILE_LOCAL}`;
 }
 
+/** The warning `resolve()` gives for a folder the Forge's loader skipped because it is a symbolic link (E39.2): its path only, never its target. */
+export function skippedLinkWarning(rel: string): string {
+  return `${rel} is a symbolic link — the Forge does not read through it, so what it holds is not loaded; replace it with the folder`;
+}
+
 /** A Forge whose profile-local layer does not load (spec 51 §4.2): every finding, one per line. Not a `SchemaError`, and holds no zod issues. */
 export class ProfileLocalLoadError extends Error {
   constructor(readonly findings: string[]) {

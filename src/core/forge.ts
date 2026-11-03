@@ -41,6 +41,12 @@ export interface Forge {
   locals: Map<string, LocalLayer>;
   /** Below schema 8, the local folders a profile holds that nothing reads (spec 51 §4.1), by profile name. */
   ignoredLocals: IgnoredLocals;
+  /**
+   * The ingredient, ingredient-type and profile folders the loader skipped because each is a symbolic link to a directory
+   * or leading nowhere (E39.2; a link to a file is not one), as Forge-relative POSIX paths, sorted — never what they point at. `resolve()` warns once per entry. Optional so a Forge
+   * built by hand in a test needs none.
+   */
+  skippedLinks?: string[];
 }
 
 export const FORGE_MANIFEST = "craftar.forge.yaml";
@@ -89,9 +95,11 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
 
   const posixRel = (abs: string) => path.relative(root, abs).split(path.sep).join("/");
 
+  const skippedLinks: string[] = [];
+  const skip = (abs: string) => skippedLinks.push(posixRel(abs));
   const ingredients = new Map<IngredientRef, LoadedIngredient>();
   const ingredientPaths = new Map<IngredientRef, string>();
-  for (const { ref, dir, meta } of await readIngredientTree(contain, path.join(root, "ingredients"))) {
+  for (const { ref, dir, meta } of await readIngredientTree(contain, path.join(root, "ingredients"), skip)) {
     if (ingredients.has(ref)) throw new Error(`duplicate ingredient ${ref} (${dir})`);
     ingredients.set(ref, { ref, dir, meta, forgeRoot: contain });
     ingredientPaths.set(ref, posixRel(dir));
@@ -119,6 +127,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
   const profRoot = path.join(root, "profiles");
   if (await exists(profRoot)) {
     for (const d of await fs.readdir(profRoot, { withFileTypes: true })) {
+      if (d.isSymbolicLink()) skip(path.join(profRoot, d.name));
       if (!d.isDirectory()) continue;
       const folder = path.join(profRoot, d.name);
       const f = path.join(folder, "profile.yaml");
@@ -163,7 +172,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
       const layer: LocalLayer = { ingredients: new Map(), recipes: new Map() };
       const pathsHere = new Map<IngredientRef, string>();
       const seenRefs = new Map<string, string>(); // lower-cased ref → path (L9)
-      for (const { ref, dir, meta } of await readIngredientTree(sub, path.join(folder, "ingredients"))) {
+      for (const { ref, dir, meta } of await readIngredientTree(sub, path.join(folder, "ingredients"), skip)) {
         const at = posixRel(dir);
         const prior = seenRefs.get(ref.toLowerCase());
         if (prior !== undefined) {
@@ -201,20 +210,31 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     if (findings.length) throw new ProfileLocalLoadError(findings);
   }
 
-  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals };
+  // A link that leads to a file is no folder skipped: only one to a directory, or leading nowhere, is said.
+  const folders: string[] = [];
+  for (const rel of skippedLinks) {
+    const target = await fs.stat(path.join(root, rel)).catch(() => null);
+    if (target === null || target.isDirectory()) folders.push(rel);
+  }
+  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals, skippedLinks: folders.sort() };
 }
 
 const isLink = (p: string) => fs.lstat(p).then((st) => st.isSymbolicLink(), () => false);
 const isDir = (p: string) => fs.stat(p).then((st) => st.isDirectory(), () => false);
 
-/** `ingredients/<type-plural>/<name>/ingredient.yaml` under `dir`, read against `contain`: the root's tree, or a profile's (spec 51 §4.2). */
-async function readIngredientTree(contain: ContainRoot, ingRoot: string): Promise<Array<{ ref: IngredientRef; dir: string; meta: Ingredient }>> {
+/**
+ * `ingredients/<type-plural>/<name>/ingredient.yaml` under `dir`, read against `contain`: the root's tree, or a profile's
+ * (spec 51 §4.2). A type or ingredient folder that is a symbolic link is not read through and is handed to `skipped`.
+ */
+async function readIngredientTree(contain: ContainRoot, ingRoot: string, skipped: (abs: string) => void): Promise<Array<{ ref: IngredientRef; dir: string; meta: Ingredient }>> {
   const out: Array<{ ref: IngredientRef; dir: string; meta: Ingredient }> = [];
   if (!(await exists(ingRoot))) return out;
   for (const typeDir of await fs.readdir(ingRoot, { withFileTypes: true })) {
+    if (typeDir.isSymbolicLink()) skipped(path.join(ingRoot, typeDir.name));
     if (!typeDir.isDirectory()) continue;
     const typeName = typeDir.name; // plural folder: rules, agents, …
     for (const ingDir of await fs.readdir(path.join(ingRoot, typeName), { withFileTypes: true })) {
+      if (ingDir.isSymbolicLink()) skipped(path.join(ingRoot, typeName, ingDir.name));
       if (!ingDir.isDirectory()) continue;
       const dir = path.join(ingRoot, typeName, ingDir.name);
       const metaFile = path.join(dir, "ingredient.yaml");
@@ -269,7 +289,7 @@ export async function gitHasCommit(dir: string): Promise<boolean> {
  */
 export async function gitIgnored(dir: string, rel: string): Promise<boolean> {
   try {
-    await execProgram("git", [...gitRead(dir), "check-ignore", "-q", "--", rel]);
+    await execProgram("git", [...(await gateRead(dir)), "check-ignore", "-q", "--", rel]);
     return true; // exit 0 means ignored
   } catch (e) {
     // exit 1 means not ignored; any other error fails closed
@@ -296,10 +316,56 @@ export async function gitTracked(dir: string, rel: string): Promise<boolean> {
 /**
  * The git arguments for a read-only command that must not run hooks or take locks.
  * These keep `git` from running a `core.fsmonitor` command and a `post-index-change` hook
- * of the Forge's own `.git`; a `filter.<x>.clean` still runs.
+ * of the Forge's own `.git`; a `filter.<x>.clean` still runs, except under the gate's own commands (`gateRead`).
  */
 export function gitRead(dir: string): string[] {
   return ["--no-optional-locks", "-C", dir, "-c", "core.fsmonitor=false"];
+}
+
+/** A filter key git reads, `filter.<name>.<clean|process|required>`; `<name>` may hold dots. */
+const FILTER_KEY = /^filter\.(.+)\.(clean|process|required)$/;
+
+/**
+ * `gitRead`'s arguments for the gate's own commands (`gitDirty`, `gitUnheld`, `gitIgnored`), with every filter the
+ * repository's own configuration names — its `config` and, with `extensions.worktreeConfig`, its worktree's, an included
+ * file counting as the file that includes it — blanked: `filter.<x>.clean=` and `filter.<x>.process=` keep git from
+ * running it, and `filter.<x>.required=false` keeps git from dying on the blanked filter. A `git status` over a stale
+ * index otherwise re-reads a file through `filter.<x>.clean`, a command the Forge directory names (E11.2). A filter
+ * whose name the repository's own configuration does not set — global, system or on the command line — still runs.
+ * Read with `--local` (and `--worktree` under `extensions.worktreeConfig`) rather than `--show-scope`, which needs git 2.26. Throws when git cannot list the
+ * keys or a name cannot be passed as `-c name=` — the callers fail closed.
+ */
+async function gateRead(dir: string): Promise<string[]> {
+  const names = new Set<string>();
+  // `--worktree` is read only where git keeps a worktree's own configuration: with a linked worktree and
+  // `extensions.worktreeConfig` off, git refuses it (exit 128), and without the extension it reads the same file as `--local`.
+  // `--local`: git honours an extension only from the repository's own `config`, never a global or system one.
+  const perWorktree = await execProgram("git", [...gitRead(dir), "config", "--local", "--bool", "--get", "extensions.worktreeConfig"]).then(
+    ({ stdout }) => stdout.trim() === "true",
+    (e: { code?: number }) => {
+      if (e.code === 1) return false; // not set
+      throw e;
+    },
+  );
+  for (const scope of perWorktree ? ["--local", "--worktree"] : ["--local"]) {
+    let listed = "";
+    try {
+      ({ stdout: listed } = await execProgram("git", [...gitRead(dir), "config", scope, "--includes", "--name-only", "--get-regexp", FILTER_KEY.source]));
+    } catch (e) {
+      const code = (e as { code?: number }).code;
+      // Exit 1: no such key. Exit 129 for --worktree: a git before 2.20, which reads no worktree configuration.
+      if (code !== 1 && !(scope === "--worktree" && code === 129)) throw e;
+    }
+    for (const line of listed.split("\n")) {
+      const m = FILTER_KEY.exec(line.trim());
+      if (!m) continue;
+      if (/[=\u0000-\u001f]/.test(m[1])) throw new Error("a filter name git cannot be handed");
+      names.add(m[1]);
+    }
+  }
+  const args = gitRead(dir);
+  for (const x of [...names].sort()) args.push("-c", `filter.${x}.clean=`, "-c", `filter.${x}.process=`, "-c", `filter.${x}.required=false`);
+  return args;
 }
 
 /**
@@ -311,7 +377,7 @@ export function gitRead(dir: string): string[] {
  */
 export async function gitDirty(dir: string): Promise<boolean> {
   try {
-    const { stdout } = await execProgram("git", [...gitRead(dir), "status", "--porcelain"]);
+    const { stdout } = await execProgram("git", [...(await gateRead(dir)), "status", "--porcelain"]);
     return stdout.trim().length > 0;
   } catch {
     return true;
@@ -411,15 +477,16 @@ export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPa
   if (paths.length === 0) return [];
   const rel = paths.map((p) => path.relative(root, p).split(path.sep).join("/") || ".");
   try {
+    const gate = await gateRead(root);
     const { stdout } = await execProgram(
       "git",
-      [...gitRead(root), "status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--", ...rel],
+      [...gate, "status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--", ...rel],
       { maxBuffer: 64 * 1024 * 1024 },
     );
     // `status --porcelain` names paths from the repository root, which is not the Forge root when
     // the Forge sits inside a larger repo; strip the Forge's prefix so every path unify prints —
     // here and in the late-failure message — is Forge-relative. `ls-files` below already is.
-    const { stdout: prefixOut } = await execProgram("git", [...gitRead(root), "rev-parse", "--show-prefix"]);
+    const { stdout: prefixOut } = await execProgram("git", [...gate, "rev-parse", "--show-prefix"]);
     const prefix = prefixOut.trim();
     const forgeRel = (p: string) => (prefix && p.startsWith(prefix) ? p.slice(prefix.length) : p) || ".";
     const out: UnheldPath[] = [];
@@ -436,7 +503,7 @@ export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPa
     // assume-unchanged reports clean however much its file was edited — and that edit exists
     // nowhere git can restore it from. `ls-files -v` shows the flag: `S` for skip-worktree, a
     // lowercase tag for assume-unchanged.
-    const { stdout: listed } = await execProgram("git", [...gitRead(root), "ls-files", "-v", "-z", "--", ...rel], {
+    const { stdout: listed } = await execProgram("git", [...gate, "ls-files", "-v", "-z", "--", ...rel], {
       maxBuffer: 64 * 1024 * 1024,
     });
     for (const e of listed.split("\0")) {
@@ -612,7 +679,12 @@ export async function assertNoDirLinkIn(forgeDir: string, dir: string, command: 
   }
   for (const rel of files) {
     const abs = path.join(dir, rel);
-    if (!(await fs.lstat(abs)).isSymbolicLink()) continue;
+    // A file listed and gone before this lstat (a narrow race) holds no link: skip it rather than throw a raw ENOENT (E34.2d).
+    const st = await fs.lstat(abs).catch((e: NodeJS.ErrnoException) => {
+      if (e.code === "ENOENT") return null;
+      throw e;
+    });
+    if (!st?.isSymbolicLink()) continue;
     const target = await fs.stat(abs).catch(() => null);
     if (target?.isDirectory()) {
       throw new Error(`${path.relative(forgeDir, abs).split(path.sep).join("/")} is a symbolic link to a directory in the Forge — ${command} does not read through it; replace it with the files and commit`);
