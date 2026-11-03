@@ -326,12 +326,21 @@ const FILTER_KEY = /^filter\.(.+)\.(clean|process|required)$/;
  * running it, and `filter.<x>.required=false` keeps git from dying on the blanked filter. A `git status` over a stale
  * index otherwise re-reads a file through `filter.<x>.clean`, a command the Forge directory names (E11.2). A filter
  * whose name the repository's own configuration does not set — global, system or on the command line — still runs.
- * Read with `--local` and `--worktree` rather than `--show-scope`, which needs git 2.26. Throws when git cannot list the
+ * Read with `--local` (and `--worktree` under `extensions.worktreeConfig`) rather than `--show-scope`, which needs git 2.26. Throws when git cannot list the
  * keys or a name cannot be passed as `-c name=` — the callers fail closed.
  */
 async function gateRead(dir: string): Promise<string[]> {
   const names = new Set<string>();
-  for (const scope of ["--local", "--worktree"]) {
+  // `--worktree` is read only where git keeps a worktree's own configuration: with a linked worktree and
+  // `extensions.worktreeConfig` off, git refuses it (exit 128), and without the extension it reads the same file as `--local`.
+  const perWorktree = await execProgram("git", [...gitRead(dir), "config", "--bool", "--get", "extensions.worktreeConfig"]).then(
+    ({ stdout }) => stdout.trim() === "true",
+    (e: { code?: number }) => {
+      if (e.code === 1) return false; // not set
+      throw e;
+    },
+  );
+  for (const scope of perWorktree ? ["--local", "--worktree"] : ["--local"]) {
     let listed = "";
     try {
       ({ stdout: listed } = await execProgram("git", [...gitRead(dir), "config", scope, "--includes", "--name-only", "--get-regexp", FILTER_KEY.source]));

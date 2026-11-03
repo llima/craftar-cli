@@ -246,6 +246,34 @@ describe.skipIf(process.platform === "win32")("the gate's git commands do not ru
     expect(await ran(marker)).toBe(false);
   });
 
+  it("a Forge whose repository has a linked worktree, without extensions.worktreeConfig, still reads clean", async () => {
+    const { dir, marker, script } = await filtered();
+    await execProgram("git", ["-C", dir, "config", "filter.mark.clean", script]);
+    const linked = `${dir}-linked`;
+    cleanups.push(() => removeWithRetry(linked));
+    await execProgram("git", ["-C", dir, "worktree", "add", "-q", linked]);
+    await stale(dir);
+    expect(await gitDirty(dir)).toBe(false);
+    expect(await gitIgnored(dir, "file.txt")).toBe(false);
+    await stale(dir);
+    expect(await gitUnheld(dir, [path.join(dir, "file.txt")])).toEqual([]);
+    expect(await gitDirty(linked)).toBe(false);
+    expect(await ran(marker)).toBe(false);
+  });
+
+  it("a linked worktree's own filter, with extensions.worktreeConfig, is blanked in that worktree", async () => {
+    const { dir, marker, script } = await filtered();
+    const linked = `${dir}-linked`;
+    cleanups.push(() => removeWithRetry(linked));
+    await execProgram("git", ["-C", dir, "worktree", "add", "-q", linked]);
+    await execProgram("git", ["-C", dir, "config", "extensions.worktreeConfig", "true"]);
+    await execProgram("git", ["-C", linked, "config", "--worktree", "filter.mark.clean", script]);
+    const later = new Date(Date.now() + 3000);
+    await fs.utimes(path.join(linked, "file.txt"), later, later);
+    expect(await gitDirty(linked)).toBe(false);
+    expect(await ran(marker)).toBe(false);
+  });
+
   it("a filter from a file the repository's configuration includes is blanked too", async () => {
     const { dir, marker, script } = await filtered();
     const inc = path.join(dir, "..", `${path.basename(dir)}-inc.cfg`);
