@@ -577,7 +577,7 @@ describe("doctor — the checks 0.25–0.27 added, through injected runners", ()
         seen.push({ cwd, files: await fs.readdir(cwd!), text: await fs.readFile(path.join(cwd!, "global.json"), "utf8"), mode: (await fs.stat(cwd!)).mode & 0o777 });
         return "10.0.401\n";
       };
-      const s = await session(f.ws, { ...seams, dotnetProbe, dotnetOwnDir: true });
+      const s = await session(f.ws, { ...seams, dotnetProbe });
       const first = data(await one("doctor", s));
       await one("doctor", s);
       expect(seen).toHaveLength(2);
@@ -599,7 +599,7 @@ describe("doctor — the checks 0.25–0.27 added, through injected runners", ()
         cwdSeen = cwd;
         throw Object.assign(new Error("not found"), { code: "ENOENT" });
       };
-      const s = await session(f.ws, { ...seams, dotnetProbe, dotnetOwnDir: true });
+      const s = await session(f.ws, { ...seams, dotnetProbe });
       const c = dotnetCheck(data(await one("doctor", s)));
       await expect(fs.lstat(cwdSeen!)).rejects.toMatchObject({ code: "ENOENT" });
       expect(c.level).toBe("warn");
@@ -616,7 +616,7 @@ describe("doctor — the checks 0.25–0.27 added, through injected runners", ()
         return "10.0.401\n";
       };
       const saved = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
-      const s = await session(f.ws, { ...seams, dotnetProbe, dotnetOwnDir: true });
+      const s = await session(f.ws, { ...seams, dotnetProbe });
       Object.assign(process.env, { TMPDIR: missing, TEMP: missing, TMP: missing });
       let report;
       try {
@@ -647,7 +647,7 @@ describe("doctor — the checks 0.25–0.27 added, through injected runners", ()
         await fs.chmod(cwdSeen, 0o700);
         await fs.rm(cwdSeen, { recursive: true, force: true });
       });
-      const s = await session(f.ws, { ...seams, dotnetProbe, dotnetOwnDir: true });
+      const s = await session(f.ws, { ...seams, dotnetProbe });
       const c = dotnetCheck(data(await one("doctor", s)));
       expect(path.dirname(cwdSeen)).toBe(os.tmpdir());
       expect(c.level).toBe("ok");
@@ -661,7 +661,7 @@ describe("doctor — the checks 0.25–0.27 added, through injected runners", ()
       const w = kept(await scenario(BASE, { config: { profile: "acme" } }));
       await syncOnce(w.wsRoot);
       let probed = false;
-      const s = await session(w.wsRoot, { ...seams, dotnetProbe: async () => ((probed = true), "10.0.401\n"), dotnetOwnDir: true });
+      const s = await session(w.wsRoot, { ...seams, dotnetProbe: async () => ((probed = true), "10.0.401\n") });
       const saved = process.env.TMPDIR;
       process.env.TMPDIR = t;
       try {
@@ -675,7 +675,7 @@ describe("doctor — the checks 0.25–0.27 added, through injected runners", ()
     });
   });
 
-  it("runDoctor with dotnetProbe and no dotnetOwnDir records the workspace root (typed doctor unchanged)", async () => {
+  it("runDoctor with dotnetProbe now always uses a temp directory (E35 §4.5)", async () => {
     const f = await fixtureWithServiceAndTemplates();
     let recordedCwd: string | undefined;
     const dotnetProbe: Probe = async (_file, _args, _env, cwd) => {
@@ -694,12 +694,8 @@ describe("doctor — the checks 0.25–0.27 added, through injected runners", ()
       dotnetProbe,
       dockerRunner: async () => ({ code: 0, stdout: "v2.30.0\n", stderr: "" }),
     });
-    expect(recordedCwd).toBe(await fs.realpath(f.ws)); // the workspace root
-  });
-
-  it("src/cli.ts asks for the probe directory in the mcp context", async () => {
-    const cliSource = await fs.readFile(path.resolve(__dirname, "../src/cli.ts"), "utf8");
-    expect(cliSource).toContain("dotnetOwnDir: true");
-    expect(cliSource).not.toContain("dotnetCwd");
+    // Always in a temp directory now, not the workspace root
+    expect(recordedCwd).not.toBe(await fs.realpath(f.ws));
+    expect(path.dirname(recordedCwd!)).toBe(os.tmpdir());
   });
 });

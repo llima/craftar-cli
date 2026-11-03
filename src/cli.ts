@@ -94,7 +94,7 @@ import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type H
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport as servicesStatusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
-import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion, feedMessage, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared, type InstallResult } from "./core/templates.js";
+import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion, feedMessage, globalJsonFault, globalJsonMessage, GLOBAL_JSON_FIX, GLOBAL_JSON_REFUSED, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared, type InstallResult } from "./core/templates.js";
 import { capture, spawnInherited } from "./core/proc.js";
 import { startUi, type UiServer } from "./ui/server.js";
 
@@ -1663,6 +1663,15 @@ templates
     }
 
     const hasInstallable = declared.entries.some((e) => e.installable);
+
+    // E35: check global.json before any dotnet starts, including under --dry-run
+    if (hasInstallable) {
+      const fault = await globalJsonFault(ws.root);
+      if (fault !== null) {
+        fail(`${globalJsonMessage(fault)} — ${GLOBAL_JSON_REFUSED}; ${GLOBAL_JSON_FIX}`);
+      }
+    }
+
     if (hasInstallable && !o.dryRun) {
       const version = await dotnetVersion(capture, process.env, ws.root);
       if (version === null) {
@@ -1720,8 +1729,6 @@ const mcpCmd = program
       env: process.env,
       pin: pinOf(merged),
       writers: o.allowWrites ? mcpWriters(craftarHome(), registryOff()) : undefined,
-      // Not the workspace root or anywhere a global.json can be planted: the dotnet host reads it and loads what its sdk.paths names.
-      dotnetOwnDir: true,
     });
   });
 

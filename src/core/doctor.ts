@@ -19,7 +19,7 @@ import { parseFrontmatter } from "./frontmatter.js";
 import { outName, MCP_FILE, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
 import { plannedRegistrations, sameHandler, type PlannedRegistration } from "./settings-apply.js";
 import { stripBom } from "./text.js";
-import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX, dotnetVersion as defaultDotnetVersion, dotnetVersionInOwnDir, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
+import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_DOCTOR_FIX, DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX, dotnetVersionInOwnDir, feedMessage, globalJsonFault, globalJsonMessage, GLOBAL_JSON_FIX, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram, type Probe } from "./proc.js";
 
 /*
@@ -86,8 +86,6 @@ export interface DoctorOptions {
    * absent, `lstat` itself.
    */
   claudeMdExists?: (file: string) => Promise<boolean>;
-  /** Run `dotnet --version` in a directory of its own (`dotnetVersionInOwnDir`); absent, at the workspace root. */
-  dotnetOwnDir?: boolean;
   /** Test seam for the dotnet probe (which directory it recorded). */
   dotnetProbe?: Probe;
 }
@@ -507,12 +505,14 @@ async function workspaceChecks(
           const probe = opts.dotnetProbe ?? capture;
           const answer = opts.dotnetVersion
             ? { ran: true as const, version: await opts.dotnetVersion() }
-            : opts.dotnetOwnDir
-              ? await dotnetVersionInOwnDir(probe, env)
-              : { ran: true as const, version: await defaultDotnetVersion(probe, env, root) };
+            : await dotnetVersionInOwnDir(probe, env);
           if (!answer.ran) w("dotnet", "warn", DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX);
-          else if (answer.version !== null) w("dotnet", "ok", answer.version);
-          else w("dotnet", "warn", DOTNET_MISSING, DOTNET_MISSING_FIX);
+          else if (answer.version !== null) {
+            w("dotnet", "ok", answer.version);
+            // global.json warn after version line (E35 §4.5)
+            const fault = await globalJsonFault(root);
+            if (fault !== null) w("dotnet", "warn", globalJsonMessage(fault), GLOBAL_JSON_FIX);
+          } else w("dotnet", "warn", DOTNET_MISSING, DOTNET_MISSING_DOCTOR_FIX);
         }
       }
     }
