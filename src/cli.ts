@@ -106,7 +106,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.50.2");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.51.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -1329,7 +1329,8 @@ program
     if (f.via) console.log(`  via recipes ${f.via.join(" → ")}`);
     // Spec 11 §4.2 (Ruling 15): which layer filled each section. AGENTS.md (rule/*) is not one ingredient.
     if (f.sections.length) {
-      const layer = (l: SectionLayer) => (l === "profile" ? `profile ${p.resolution.profile.name}` : l);
+      const layer = (l: SectionLayer) =>
+        l === "profile" ? `profile ${p.resolution.profile.name}` : typeof l === "string" ? l : "recipe" in l ? `recipe ${l.recipe}` : `profile ${l.profile}`;
       console.log(`  sections    ${f.sections.map((x) => `${x.name} (${layer(x.layer)})`).join(", ")}`);
     }
     // Spec 44 §4.5: if this file holds the rules index, name it and its rule count.

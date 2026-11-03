@@ -783,6 +783,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     W: await workspaceParams(root, readWs, "drift promote"),
     PS: structuredClone(profileObj.sections ?? {}),
     WS: await workspaceSections(root, readWs, "drift promote"),
+    // The recipe layer as sync resolved it (spec 54 §4.3): a value it already gives is never written to the profile.
+    RS: p0.resolution.sectionLayers.recipes.sections,
     pinned: new Map(),
     forge,
     markedBase: false,
@@ -822,9 +824,10 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const parseOpts = { targets: readsTargetSections(forge.manifest) };
   const base = await readBase(X.dir, stage.reader(), forge.root, parseOpts, forge.manifest.schema);
   const ingKey = sectionKey(X.meta);
+  const RSk = ctx.RS[ingKey] ?? {};
   const PSk = ctx.PS[ingKey] ?? {};
   const WSk = ctx.WS[ingKey] ?? {};
-  const S: Record<string, string> = { ...PSk, ...WSk };
+  const S: Record<string, string> = { ...RSk, ...PSk, ...WSk };
   // Unprojected on purpose: a variant stores the file one target wrote, so its sections are cited for every target (spec 41 Part B).
   const baseCitedKeys = citedKeys(expandedTexts(base, S));
   // At the gate sync generates this key and ignores a value a layer gives it, so a variant flattens nothing and stops applying nothing.

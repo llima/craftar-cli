@@ -646,6 +646,8 @@ export const RecipeSchema = z.object({
   slot: z.string().optional(),
   ingredients: z.array(z.string()).default([]),
   params: noProtoKey(z.record(z.object({ default: z.unknown().optional(), description: z.string().optional() }))).default({}),
+  /** Section values this recipe gives (spec 54 Part A), read at Forge schema 10 and above only; absent when not written. */
+  sections: SectionsSchema.optional(),
 });
 export type Recipe = z.infer<typeof RecipeSchema>;
 
@@ -710,6 +712,8 @@ export const FORGE_SCHEMA_RULES_INDEX = 7;
 export const FORGE_SCHEMA_PROFILE_LOCAL = 8;
 /** Forge schema that renders params in an ingredient's metadata fields (spec 50 §5.1). */
 export const FORGE_SCHEMA_METADATA_PARAMS = 9;
+/** Forge schema that reads a recipe's `sections` (spec 54 Part A). */
+export const FORGE_SCHEMA_RECIPE_SECTIONS = 10;
 
 export const ForgeManifestSchema = z.object({
   name: z.string(),
@@ -724,6 +728,7 @@ export const ForgeManifestSchema = z.object({
       z.literal(FORGE_SCHEMA_RULES_INDEX),
       z.literal(FORGE_SCHEMA_PROFILE_LOCAL),
       z.literal(FORGE_SCHEMA_METADATA_PARAMS),
+      z.literal(FORGE_SCHEMA_RECIPE_SECTIONS),
     ])
     .default(1),
   description: z.string().optional(),

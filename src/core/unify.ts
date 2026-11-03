@@ -1004,15 +1004,16 @@ async function ingredientEdits(forge: Forge, baseRef: IngredientRef, variantRef:
 }
 
 /**
- * Compare two recipes for identity: `ingredients` (sorted), `extends`, `slot` and `params`,
- * never `description`, which is prose. Used by both `identicalToSibling` and `pruneCandidates`.
+ * Compare two recipes for identity: `ingredients` (sorted), `extends`, `slot`, `params` and, since spec 54, `sections`
+ * (absent and `{}` alike), never `description`, which is prose. Used by both `identicalToSibling` and `pruneCandidates`.
  */
-function recipesSame(a: Recipe, b: Recipe): boolean {
+export function recipesSame(a: Recipe, b: Recipe): boolean {
   return (
     isDeepStrictEqual([...a.ingredients].sort(), [...b.ingredients].sort()) &&
     isDeepStrictEqual(a.extends, b.extends) &&
     a.slot === b.slot &&
-    isDeepStrictEqual(a.params, b.params)
+    isDeepStrictEqual(a.params, b.params) &&
+    isDeepStrictEqual(a.sections ?? {}, b.sections ?? {})
   );
 }
 

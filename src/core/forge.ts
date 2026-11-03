@@ -19,6 +19,7 @@ import { climbsOut } from "./text.js";
 import { CannotResolveError, shownByRealPath } from "./cache-label.js";
 import { containRoot, containSubRoot, readForgeText, type ContainRoot } from "./contain.js";
 import { checkLocals, ProfileLocalLoadError, readsProfileLocal, type IgnoredLocals, type LocalLayer, type LocalRecipe } from "./profile-local.js";
+import { readsRecipeSections, recipeSectionsNearMiss } from "./recipe-sections.js";
 
 export interface LoadedIngredient {
   ref: IngredientRef;
@@ -103,6 +104,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     for (const f of await fs.readdir(recRoot)) {
       if (!/\.ya?ml$/.test(f)) continue;
       const r = await readYaml(contain, path.join(recRoot, f), RecipeSchema);
+      if (r.sections !== undefined && !readsRecipeSections(manifest)) throw new Error(recipeSectionsNearMiss(`recipes/${f}`));
       recipes.set(r.name, r);
       recipeFiles.set(r.name, `recipes/${f}`);
     }
@@ -179,6 +181,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
           if (!/\.ya?ml$/.test(e)) continue;
           const r = await readYaml(sub, path.join(localRecRoot, e), RecipeSchema);
           const file = `${label}/recipes/${e}`;
+          if (r.sections !== undefined && !readsRecipeSections(manifest)) throw new Error(recipeSectionsNearMiss(file));
           const prior = seen.get(r.name.toLowerCase());
           if (prior !== undefined) {
             early.push(`L9 ${prior} and ${file}: two local recipes of one profile with one name`);

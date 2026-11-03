@@ -358,3 +358,28 @@ describe("checkParamWrites — sections (spec 12 §6.6)", () => {
     expect(w.mustHold).toContain(w.manifest!.abs);
   });
 });
+
+describe("checkParamWrites — a recipe's section values cite keys too (spec 54 §4.3)", () => {
+  const sched = { "craftar.forge.yaml": "name: test-forge\nschema: 10\n" };
+
+  it("P14: a recipe's section value for the base's key cites the undeclared key — refused at schema 10", async () => {
+    const forge = await forgeOf(
+      spec({ recipes: [recipe("base", ["rule/deploy"], { sections: { "rule/deploy": { flavors: "{{k}}\n" } } }), recipe("base--acme", ["rule/deploy--acme"])] }),
+      sched,
+    );
+    expect(await err(check(forge, [ext("k", "globex-api", "acme-api")]))).toContain("unify: recipe base section flavors of rule/deploy already uses {{k}}");
+  });
+
+  it("P18: a recipe's section value for another ingredient cites the key — refused at schema 10", async () => {
+    const forge = await forgeOf(
+      spec({
+        ingredients: [rule("notes", "Notes.\n")],
+        recipes: [recipe("base", ["rule/deploy"]), recipe("base--acme", ["rule/deploy--acme", "rule/notes"], { sections: { "rule/notes": { extra: "see {{k}}\n" } } })],
+      }),
+      sched,
+    );
+    expect(await err(check(forge, [ext("k", "globex-api", "acme-api")]))).toContain(
+      "unify: recipe base--acme section extra of rule/notes also uses {{k}} under profile acme — its text would change",
+    );
+  });
+});

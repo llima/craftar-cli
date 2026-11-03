@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import { forgeFor, ProfileLocalLoadError, readsProfileLocal, type LocalLayer } from "../core/profile-local.js";
+import { readsRecipeSections } from "../core/recipe-sections.js";
 import path from "node:path";
 import os from "node:os";
 import { readWorkspaceConfig } from "../core/sync.js";
@@ -22,7 +23,7 @@ import { classifyForge, credentialFault } from "../core/remote.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
-import { decide, forgeBefore, pin, registrationCarry, sourceKeys, valuesAt, workspaceParams, workspaceSections, workspaceTargets, type RunContext } from "./decide.js";
+import { decide, forgeBefore, pin, registrationCarry, sourceKeys, valuesAt, workspaceParams, workspaceSections, workspaceRecipes, workspaceTargets, type RunContext } from "./decide.js";
 import { providedByBlock } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
 import { firstMarkerLine, readsTargetSections } from "../core/sections.js";
@@ -554,6 +555,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     W: await workspaceParams(ws, readWs),
     PS: structuredClone(existing.sections),
     WS: await workspaceSections(ws, readWs),
+    RS: {},
     pinned: new Map(),
     forge: loaded,
     view: loaded ? forgeFor(loaded, opts.profileName) : null,
@@ -575,6 +577,15 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     } catch (e) {
       cachedResolution = { ok: false, error: e };
     }
+  }
+
+  // The recipe layer of sections (spec 54 §4.3), as sync resolves it for this workspace. Where the profile does not
+  // resolve and a recipe of what it sees holds sections, the comparison cannot be made as sync would: fail closed.
+  if (cachedResolution?.ok) ctx.RS = cachedResolution.resolution.sectionLayers.recipes.sections;
+  else if (cachedResolution && loaded && readsRecipeSections(loaded.manifest) && [...forgeFor(loaded, opts.profileName).recipes.values()].some((r) => r.sections !== undefined)) {
+    throw new Error(
+      `import: profile ${opts.profileName} does not resolve (${errorText(cachedResolution.error)}), and its recipes hold sections import must render — fix the Forge and re-run`,
+    );
   }
 
   const primary = primaryFor(loaded, opts.profileName, ctx, cachedResolution);
@@ -1545,7 +1556,7 @@ async function writeIngredient(
       const v = await readBase(variantDir, stage.reader(), forge, { targets: readsTargetSections(run.ctx.forge.manifest) }, run.ctx.forge.manifest.schema);
       if ([...v.texts.values()].some((t) => RULES_INDEX_LINE.test(t))) {
         const key = sectionKey(v.meta);
-        const S: Record<string, string> = { ...valuesAt(run.ctx.PS, key), ...valuesAt(run.ctx.WS, key) };
+        const S: Record<string, string> = { ...valuesAt(run.ctx.RS, key), ...valuesAt(run.ctx.PS, key), ...valuesAt(run.ctx.WS, key) };
         const map = renderMap(v.meta, run.ctx.P, run.ctx.W, readsRulesIndex(run.ctx.forge?.manifest ?? { schema: 1 }));
         const expand = run.indexExpand;
         // What the workspace cannot show is taken from the source, as import writes it: the `description`, the
@@ -1905,8 +1916,9 @@ function swapRef(ref: string, profile: string, list: string[]): string {
   return list.includes(base) && !list.includes(ref) ? base : ref;
 }
 
-const recipeText = (name: string, description: string, ingredients: string[]) =>
-  YAML.stringify(JSON.parse(JSON.stringify({ name, description, extends: [], ingredients, params: {} }))); // today's bytes
+const recipeText = (name: string, description: string, ingredients: string[], sections?: Sections) =>
+  // today's bytes; `sections` only when a shared recipe that holds some is split into an owned one (spec 54 §4.3)
+  YAML.stringify(JSON.parse(JSON.stringify({ name, description, extends: [], ingredients, params: {}, ...(sections && Object.keys(sections).length ? { sections } : {}) })));
 
 /**
  * Where a shared recipe's computed list goes (spec 10 §6.7, Ruling 7): a shared recipe is never
@@ -1968,6 +1980,11 @@ async function swapInLocalRecipes(stage: ForgeStage, forge: string, profile: str
   }
 }
 
+/** A shared recipe's `sections`, carried into the owned recipe a split writes (spec 54 §4.3); none below Forge schema 10. */
+async function sharedSections(o: RecipeOptions, file: string): Promise<Sections | undefined> {
+  return parseYaml(file, stripBom(await o.stage.readText(file)), RecipeSchema).sections;
+}
+
 async function placeRecipe(o: RecipeOptions, name: string, list: string[], description: string, holdsVariant: boolean): Promise<string> {
   const owned = `${name}--${o.profile}`;
   const read = async (file: string) => parseYaml(file, stripBom(await o.stage.readText(file)), RecipeSchema).ingredients;
@@ -1978,7 +1995,9 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
       const file = await recipeFile(o, name);
       if (await o.stage.exists(file)) list = keepAgentsMdOnly(await read(file), list, o.agentsMdOnly);
     }
-    return writeOwnedRecipe(o, owned, list, description);
+    // The shared recipe's sections from the Forge as loaded, at the gate only: this path never reads the shared file (spec 41 §1).
+    const sections = o.forge && readsRecipeSections(o.forge.manifest) ? forgeFor(o.forge, o.profile).recipes.get(name)?.sections : undefined;
+    return writeOwnedRecipe(o, owned, list, description, sections);
   }
   const file = await recipeFile(o, name);
   if (!(await o.stage.exists(file))) {
@@ -2005,7 +2024,8 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
       ? `this workspace has ${extra}, which ${name} lacks`
       : `${name} orders its rules differently`;
   o.report.recipeSplits.push({ shared: name, owned, reason });
-  return writeOwnedRecipe(o, owned, list, description);
+  // A new owned recipe takes the shared one's sections, so the profile keeps the recipe layer it rendered with (spec 54 §4.3).
+  return writeOwnedRecipe(o, owned, list, description, await sharedSections(o, file));
 }
 
 /**
@@ -2014,12 +2034,12 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
  * replaced by its base swapped for the base where it stands (spec 11 §6.15), dropped ones removed,
  * new ones appended — refused if another profile resolves it (I7) or it cannot be edited in place (I2).
  */
-async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], description: string): Promise<string> {
+async function writeOwnedRecipe(o: RecipeOptions, name: string, list: string[], description: string, sections?: Sections): Promise<string> {
   const file = await recipeFile(o, name);
   const label = `${path.relative(o.stage.root, o.dir).split(path.sep).join("/")}/${name}.yaml`;
   o.report.recipes.push(name);
   if (!(await o.stage.exists(file))) {
-    o.stage.write(file, recipeText(name, description, list));
+    o.stage.write(file, recipeText(name, description, list, sections));
     return name;
   }
   const raw = await o.stage.readText(file);
@@ -2385,7 +2405,10 @@ async function resolveForImport(
 ): Promise<{ resolution: Resolution; lookup: RuleLookup }> {
   if (!loaded.profiles.has(profile)) throw new Error(`profile ${profile} is not in the Forge`);
   const targets = await workspaceTargets(ws, read);
-  const config = WorkspaceConfigSchema.parse({ forge: ".", profile, ...(targets ? { targets } : {}), overrides: { params: ctx.W, sections: ctx.WS } });
+  // At schema 10 the workspace's recipes.add / recipes.remove too, so the recipe layer of sections is the one sync renders
+  // (spec 54 §4.3); below it the resolution stays the profile's own, as before.
+  const recipes = readsRecipeSections(loaded.manifest) ? await workspaceRecipes(ws, read) : undefined;
+  const config = WorkspaceConfigSchema.parse({ forge: ".", profile, ...(targets ? { targets } : {}), ...(recipes ? { recipes } : {}), overrides: { params: ctx.W, sections: ctx.WS } });
   const resolution = resolve(loaded, config);
   const lookup = buildRuleLookup(resolution.ingredients, resolution);
   return { resolution, lookup };

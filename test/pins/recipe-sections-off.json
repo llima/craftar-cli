@@ -1,0 +1,202 @@
+{
+  "profileAndWorkspace": {
+    "planned": {
+      ".claude/commands/open-pr.md": "---\ndescription: Open a pull request\n---\n# Open a PR\nRun it through Kiro.\n- [ ] lint\n"
+    },
+    "planWarnings": [],
+    "freshStatus": {
+      "forge": {
+        "kind": "path",
+        "source": "../forge",
+        "ref": null,
+        "defaultBranch": null,
+        "commit": null,
+        "lockCommit": null,
+        "fetched": false
+      },
+      "statuses": [
+        {
+          "path": ".claude/commands/open-pr.md",
+          "state": "new",
+          "target": "claude-code",
+          "ingredient": "command/open-pr"
+        }
+      ],
+      "warnings": [],
+      "unsetParams": []
+    },
+    "freshExit": {
+      "syncCheck": 1,
+      "status": 0,
+      "diffExitCode": 1
+    },
+    "lock": {
+      "schema": 2,
+      "forge": {
+        "source": "../forge",
+        "ref": null,
+        "commit": null
+      },
+      "profile": "acme-portal",
+      "recipes": [
+        "base",
+        "executor-kiro"
+      ],
+      "targets": [
+        "claude-code"
+      ],
+      "files": [
+        {
+          "path": ".claude/commands/open-pr.md",
+          "hash": "sha256:cf4a0ed78f8d86a8af8e9963d0d1530f6d31406b21b472ddb51e9cb8f67873ba",
+          "target": "claude-code",
+          "ingredient": "command/open-pr"
+        }
+      ]
+    },
+    "syncedStatus": {
+      "forge": {
+        "kind": "path",
+        "source": "../forge",
+        "ref": null,
+        "defaultBranch": null,
+        "commit": null,
+        "lockCommit": null,
+        "fetched": false
+      },
+      "statuses": [
+        {
+          "path": ".claude/commands/open-pr.md",
+          "state": "unchanged",
+          "target": "claude-code",
+          "ingredient": "command/open-pr",
+          "lock": {
+            "path": ".claude/commands/open-pr.md",
+            "hash": "sha256:cf4a0ed78f8d86a8af8e9963d0d1530f6d31406b21b472ddb51e9cb8f67873ba",
+            "target": "claude-code",
+            "ingredient": "command/open-pr"
+          }
+        }
+      ],
+      "warnings": [],
+      "unsetParams": []
+    },
+    "syncedExit": {
+      "syncCheck": 0
+    },
+    "explainText": {
+      "code": 0,
+      "stdout": ".claude/commands/open-pr.md\n  target      claude-code\n  ingredient  command/open-pr\n  source      forge (ingredients/commands/open-pr)\n  via recipes base\n  sections    execution (profile acme-portal), checklist (workspace)\n  profile     acme-portal  (recipes: base, executor-kiro)\n  hash        sha256:cf4a0ed78f8d86a8af8e9963d0d1530f6d31406b21b472ddb51e9cb8f67873ba\n"
+    },
+    "explainSections": [
+      {
+        "name": "execution",
+        "layer": "profile"
+      },
+      {
+        "name": "checklist",
+        "layer": "workspace"
+      }
+    ]
+  },
+  "defaultsOnly": {
+    "planned": {
+      ".claude/commands/open-pr.md": "---\ndescription: Open a pull request\n---\n# Open a PR\nRun the checks by hand.\n- [ ] tests\n"
+    },
+    "planWarnings": [],
+    "freshStatus": {
+      "forge": {
+        "kind": "path",
+        "source": "../forge",
+        "ref": null,
+        "defaultBranch": null,
+        "commit": null,
+        "lockCommit": null,
+        "fetched": false
+      },
+      "statuses": [
+        {
+          "path": ".claude/commands/open-pr.md",
+          "state": "new",
+          "target": "claude-code",
+          "ingredient": "command/open-pr"
+        }
+      ],
+      "warnings": [],
+      "unsetParams": []
+    },
+    "freshExit": {
+      "syncCheck": 1,
+      "status": 0,
+      "diffExitCode": 1
+    },
+    "lock": {
+      "schema": 2,
+      "forge": {
+        "source": "../forge",
+        "ref": null,
+        "commit": null
+      },
+      "profile": "globex",
+      "recipes": [
+        "base",
+        "executor-claude-subagent"
+      ],
+      "targets": [
+        "claude-code"
+      ],
+      "files": [
+        {
+          "path": ".claude/commands/open-pr.md",
+          "hash": "sha256:a1fbd1aabdfa58d8a72fafbf3fd83d2160c03b3a1d1a5aba92d1da529eaa36c8",
+          "target": "claude-code",
+          "ingredient": "command/open-pr"
+        }
+      ]
+    },
+    "syncedStatus": {
+      "forge": {
+        "kind": "path",
+        "source": "../forge",
+        "ref": null,
+        "defaultBranch": null,
+        "commit": null,
+        "lockCommit": null,
+        "fetched": false
+      },
+      "statuses": [
+        {
+          "path": ".claude/commands/open-pr.md",
+          "state": "unchanged",
+          "target": "claude-code",
+          "ingredient": "command/open-pr",
+          "lock": {
+            "path": ".claude/commands/open-pr.md",
+            "hash": "sha256:a1fbd1aabdfa58d8a72fafbf3fd83d2160c03b3a1d1a5aba92d1da529eaa36c8",
+            "target": "claude-code",
+            "ingredient": "command/open-pr"
+          }
+        }
+      ],
+      "warnings": [],
+      "unsetParams": []
+    },
+    "syncedExit": {
+      "syncCheck": 0
+    },
+    "explainText": {
+      "code": 0,
+      "stdout": ".claude/commands/open-pr.md\n  target      claude-code\n  ingredient  command/open-pr\n  source      forge (ingredients/commands/open-pr)\n  via recipes base\n  sections    execution (default), checklist (default)\n  profile     globex  (recipes: base, executor-claude-subagent)\n  hash        sha256:a1fbd1aabdfa58d8a72fafbf3fd83d2160c03b3a1d1a5aba92d1da529eaa36c8\n"
+    },
+    "explainSections": [
+      {
+        "name": "execution",
+        "layer": "default"
+      },
+      {
+        "name": "checklist",
+        "layer": "default"
+      }
+    ]
+  }
+}

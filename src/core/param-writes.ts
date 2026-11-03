@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema, type ForgeManifest, type Ingredient } from "../schema/index.js";
+import { readsRecipeSections } from "./recipe-sections.js";
 import { placeholders, bodyFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
 import { manifestWithSections } from "./manifest-edit.js";
@@ -127,6 +128,11 @@ export async function checkParamWrites(
 
   const declare: Extraction[] = [];
   const assign: Extraction[] = [];
+  // Spec 54 §4.3: at Forge schema 10 a recipe's section values render too, so the scans of who cites {{k}} read them
+  // (every recipe, root and local, toward a refusal); below the gate none is read.
+  const sectionRecipes = readsRecipeSections(forge.manifest)
+    ? [...forge.recipes, ...[...forge.locals.values()].flatMap((l) => [...l.recipes].map(([n, lr]) => [n, lr.recipe] as const))].filter(([, r]) => r.sections)
+    : [];
   for (const e of extractions) {
     const decl = base.meta.params?.[e.key];
     // P13: a declaration must already say what the base's text says.
@@ -140,6 +146,10 @@ export async function checkParamWrites(
     for (const [q, p] of decl ? [] : forge.profiles) {
       const where = citingSection(p, sectionKey(base.meta), e.key);
       if (where) throw new Error(`unify: profile ${q} ${where} already uses {{${e.key}}}`);
+    }
+    for (const [name, r] of decl ? [] : sectionRecipes) {
+      const where = citingSection({ sections: r.sections! }, sectionKey(base.meta), e.key);
+      if (where) throw new Error(`unify: recipe ${name} ${where} already uses {{${e.key}}}`);
     }
     if (await cites(variant, e.key, forge.manifest.schema)) throw new Error(`unify: ${variant.ref} already uses {{${e.key}}}`);
     // P15, P16: a stronger layer that sets the key would override the base's default. Not for a
@@ -175,6 +185,11 @@ export async function checkParamWrites(
     for (const k of new Set([...forge.ingredients.values(), ...(forge.locals.get(profile)?.ingredients.values() ?? [])].map((i) => sectionKey(i.meta)))) {
       const where = citingSection(current, k, e.key);
       if (where) throw new Error(`unify: profile ${profile} ${where} also uses {{${e.key}}} — its text would change`);
+      // …and a recipe's value for that key (spec 54 §4.3), whichever recipes the profile resolves (conservative).
+      for (const [name, r] of sectionRecipes) {
+        const inRecipe = citingSection({ sections: r.sections! }, k, e.key);
+        if (inRecipe) throw new Error(`unify: recipe ${name} ${inRecipe} also uses {{${e.key}}} under profile ${profile} — its text would change`);
+      }
     }
     assign.push(e);
   }

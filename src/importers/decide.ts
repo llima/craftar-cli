@@ -31,6 +31,11 @@ export interface RunContext {
   /** The workspace layer's sections: overrides.sections of craftar.yaml and craftar.local.yaml (`WS`). */
   WS: Sections;
   /**
+   * The recipe layer of sections (`RS`, spec 54 §4.3): what the profile's resolved recipes give, under `PS`; `{}` below
+   * Forge schema 10 and for a profile the Forge does not hold yet. Never written by the run.
+   */
+  RS: Sections;
+  /**
    * Keys this run has relied on, with the first value (or absence) it relied on (§6.5). Decisions read only
    * membership; the value is kept for a later relaxation (every reliance at one value).
    */
@@ -165,10 +170,12 @@ export async function decide(
   const serverKeys = rendersServers({ schema }) ? serverCitations(base.meta).filter((c) => c.declared).map((c) => c.key) : [];
 
   const key = sectionKey(base.meta);
+  const RSk = valuesAt(ctx.RS, key);
   const PSk = valuesAt(ctx.PS, key);
   const WSk = valuesAt(ctx.WS, key);
-  // S(X): the profile's values under the workspace's, at (key, name) granularity (spec 11 §6.3, §6.7).
-  const S: Record<string, string> = { ...PSk, ...WSk };
+  // S(X): the recipes' values under the profile's under the workspace's, at (key, name) granularity (spec 11 §6.3, §6.7;
+  // spec 54 §4.3).
+  const S: Record<string, string> = { ...RSk, ...PSk, ...WSk };
   const names = sectionNames(base);
   // Whatever the outcome — reuse, section inference, variant or a G1 literal comparison — the Forge holds these markers after the run.
   if (names.length) ctx.markedBase = true;
@@ -297,7 +304,7 @@ async function inferParams(
 
   // F9: a profile change must not move anything else the profile renders — its files, or a section value
   // that applies to it under this profile or workspace (spec 11 §6.11).
-  const values = deepMerge(ctx.PS, ctx.WS) as Sections;
+  const values = deepMerge(deepMerge(ctx.RS, ctx.PS), ctx.WS) as Sections;
   for (const { key } of delta) {
     if (ctx.forge) {
       for (const ing of (ctx.view ?? ctx.forge).ingredients.values()) {
@@ -365,14 +372,16 @@ function inferSectionValues(
     Object.assign(sigma, r.values);
     for (const s of projected.sections) defaults.set(s.name, s.default);
   }
-  const S = { ...PSk, ...WSk, ...sigma };
+  const RSk = valuesAt(ctx.RS, key);
+  const S = { ...RSk, ...PSk, ...WSk, ...sigma };
   // F14: the proof, through the same expansion and substitution ctx.text uses.
   if (renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
 
   const assigned = sectionNames(base).filter((n) => Object.hasOwn(sigma, n));
   const sectionDelta: SectionChange[] = [];
   for (const name of assigned) {
-    const given = Object.hasOwn(PSk, name) ? canonicalValue(PSk[name]) : defaults.get(name);
+    // What the profile gave, else the recipes (spec 54 §4.3: a value a recipe already gives is no profile value), else the default.
+    const given = Object.hasOwn(PSk, name) ? canonicalValue(PSk[name]) : Object.hasOwn(RSk, name) ? canonicalValue(RSk[name]) : defaults.get(name);
     if (sigma[name] !== given) sectionDelta.push({ key, name, old: Object.hasOwn(PSk, name) ? PSk[name] : null, value: sigma[name] });
   }
   if (sectionDelta.length) {
@@ -406,6 +415,29 @@ export async function workspaceParams(ws: string, read: (abs: string) => Promise
     }
   }
   return out;
+}
+
+/**
+ * The workspace's `recipes` (`add`, `remove`), craftar.local.yaml over craftar.yaml as loadWorkspace merges them, so a
+ * resolution import makes of the importing profile resolves the recipes sync resolves (spec 54 §4.3).
+ */
+export async function workspaceRecipes(ws: string, read: (abs: string) => Promise<string>, command = "import"): Promise<{ add: string[]; remove: string[] }> {
+  let out: unknown = undefined;
+  for (const f of ["craftar.yaml", "craftar.local.yaml"]) {
+    const abs = path.join(ws, f);
+    if (!(await exists(abs))) continue;
+    try {
+      const doc = (parseWorkspaceYaml(f, await read(abs)) ?? {}) as { recipes?: unknown };
+      if (doc?.recipes !== undefined) out = deepMerge(out, doc.recipes);
+    } catch (e) {
+      throw new Error(`${command}: ${f} does not load (${errorText(e)})`);
+    }
+  }
+  try {
+    return WorkspaceConfigSchema.shape.recipes.parse(out);
+  } catch (e) {
+    throw new Error(`${command}: craftar.yaml does not load (${errorText(e)})`);
+  }
 }
 
 /** The workspace's `targets`: craftar.local.yaml's replaces craftar.yaml's, as loadWorkspace merges them; undefined when neither sets it. */
