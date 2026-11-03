@@ -1242,7 +1242,7 @@ drift
     if (promotePlan.dependents.length > 0) {
       console.log(`  also changes ${promotePlan.dependents.join(", ")}`);
     }
-    console.log(`  ${nextSyncLine(promotePlan.nextSync, promotePlan.nextUnset)}`);
+    console.log(`  ${nextSyncLine(promotePlan.nextSync, promotePlan.nextUnset, promotePlan.nextConflicts)}`);
 
     // Impact: print other workspaces or registry warning
     const impact = promotePlan.impact;
