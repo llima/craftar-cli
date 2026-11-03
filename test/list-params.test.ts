@@ -100,6 +100,24 @@ describe("list params in a body (spec 55 Part A)", () => {
     expect(await planError(conflict)).toContain("list param env: rule/allow declares it type: list and recipe core declares it without");
   });
 
+  it("a value from a parent profile is named by the parent, in the refusal and in the undeclared-list warning (spec 54 §5.3)", async () => {
+    const family = async (params: Record<string, unknown>) => {
+      const s = kept(await acmeLists({ schema: GATE, declare: true, ...body("{{env | py}}\nTags: {{tags}}\n") }));
+      const p = path.join(s.forgeRoot, "profiles/acme/profile.yaml");
+      await fs.writeFile(p, YAML.stringify({ ...YAML.parse(await fs.readFile(p, "utf8")), abstract: true, params }));
+      await fs.mkdir(path.join(s.forgeRoot, "profiles/globex"), { recursive: true });
+      await fs.writeFile(path.join(s.forgeRoot, "profiles/globex/profile.yaml"), YAML.stringify({ name: "globex", extends: "acme" }));
+      const c = path.join(s.wsRoot, "craftar.yaml");
+      await fs.writeFile(c, YAML.stringify({ ...YAML.parse(await fs.readFile(c, "utf8")), profile: "globex" }));
+      return s;
+    };
+    expect(await planError(await family({ env: "A", tags: [] }))).toContain("list param env: profile acme gives it a value that is not a sequence");
+    const p = await plan(await loadWorkspace((await family({ env: ["A"], tags: ["a", "b"] })).wsRoot));
+    expect(p.warnings.filter((w) => w.includes("but no ingredient or recipe declares it type: list"))).toEqual([
+      'params: tags is a list in profile acme but no ingredient or recipe declares it type: list — it renders as the items joined by ","',
+    ]);
+  });
+
   it("test 8: a YAML list for an undeclared key renders a,b and warns once at the gate", async () => {
     const s = kept(await acmeLists({ schema: GATE, declare: true, ...body("{{env | py}}\nTags: {{tags}}\n") }));
     const p = await plan(await loadWorkspace(s.wsRoot));

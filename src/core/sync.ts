@@ -705,12 +705,22 @@ export async function plan(ws: Workspace): Promise<Plan> {
   }
   // Spec 55 §4.2: a list key's declarations and values fail the plan before anything renders; a YAML list for a key nobody
   // declares a list renders as before and warns, at the gate only.
+  // The profile layer is the family merged (spec 54 §5.3): each value is named by the profile that gives it.
+  const profileLayers = (() => {
+    const by = new Map<string, Record<string, unknown>>();
+    for (const [k, v] of Object.entries(resolution.paramLayers.profile)) {
+      const owner = resolution.paramLayers.profileOf?.get(k) ?? resolution.profile.name;
+      if (!by.has(owner)) by.set(owner, {});
+      by.get(owner)![k] = v;
+    }
+    return [...by].map(([owner, values]) => ({ name: `profile ${owner}`, values }));
+  })();
   const listFault = listParamFault(
     resolution.listKeys,
     resolution.ingredients,
     resolution.recipes.map((n) => forgeFor(ws.forge, ws.config.profile).recipes.get(n)!).filter(Boolean),
     [
-      { name: `profile ${resolution.profile.name}`, values: resolution.paramLayers.profile },
+      ...profileLayers,
       { name: "the workspace", values: resolution.paramLayers.workspace },
     ],
   );
@@ -721,7 +731,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
         const r = forgeFor(ws.forge, ws.config.profile).recipes.get(n);
         return r ? [{ name: `recipe ${n}`, values: Object.fromEntries(Object.entries(r.params).map(([k, v]) => [k, v.default])) }] : [];
       }),
-      { name: `profile ${resolution.profile.name}`, values: resolution.paramLayers.profile },
+      ...profileLayers,
       { name: "the workspace", values: resolution.paramLayers.workspace },
     ];
     for (const u of undeclaredLists(resolution.listKeys, layers)) warnings.push(undeclaredListWarning(u.key, u.layer));
