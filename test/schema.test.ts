@@ -146,7 +146,7 @@ describe("sections and the manifest schema (spec 11 §5.2)", () => {
     while (cleanups.length) await fs.rm(cleanups.pop()!, { recursive: true, force: true });
   });
 
-  it("loads a manifest at schema 1 to 11, and with no schema (read as 1); refuses schema 12", () => {
+  it("loads a manifest at schema 1 to 12, and with no schema (read as 1); refuses schema 13", () => {
     expect(FORGE_SCHEMA_SECTIONS).toBe(2);
     expect(ForgeManifestSchema.parse({ name: "f", schema: 1 }).schema).toBe(1);
     expect(ForgeManifestSchema.parse({ name: "f", schema: 2 }).schema).toBe(2);
@@ -174,10 +174,10 @@ describe("sections and the manifest schema (spec 11 §5.2)", () => {
     expect(ForgeManifestSchema.safeParse({ name: "f", schema: 13 }).success).toBe(false);
   });
 
-  it("a Forge whose manifest says schema: 12 fails the load, naming the file", async () => {
+  it("a Forge whose manifest says schema: 13 fails the load, naming the file", async () => {
     const root = await tmpDir();
     cleanups.push(root);
-    await writeFiles(root, { "craftar.forge.yaml": "name: f\nschema: 12\n" });
+    await writeFiles(root, { "craftar.forge.yaml": "name: f\nschema: 13\n" });
     await expect(loadForge(root)).rejects.toThrow(/craftar\.forge\.yaml/);
   });
 

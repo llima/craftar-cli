@@ -36,6 +36,6 @@ describe("README — the roadmap with phases 1 and 2 closed", () => {
     expect(status).toContain("`craftar settings apply` merges the generated `hooks` and the `env` names into `.claude/settings.json` — only when a person types it, keeping every `env` value, `permissions` and every other key (see *Commands*).");
     expect(status).toContain("In a Forge that declares `schema: 11`, a profile's section value can be held in a file under its folder (`{ file: sections/….md }`), and `craftar forge sections extract` moves the long ones there; `craftar doctor`'s `skill-trigger` says when a skill's description does not say when to use it (see *Forge layout* and *Commands*).");
     // Spec 56: the status line's last sentence is the local override's.
-    expect(status.endsWith("In a Forge that declares `schema: 11`, a profile's local may override a root base of the same ref for that profile alone — `craftar forge localize` turns the profile's own variant into one, and `craftar forge promote --variant` makes a variant several profiles share the base.")).toBe(true);
+    expect(status.endsWith("In a Forge that declares `schema: 12`, a profile's local may override a root base of the same ref for that profile alone — `craftar forge localize` turns the profile's own variant into one, and `craftar forge promote --variant` makes a variant several profiles share the base.")).toBe(true);
   });
 });

@@ -41,7 +41,7 @@ describe("an override at load (spec 56 §4.2)", () => {
   });
 
   it("below the gate, an override fails the load with today's L1 message", async () => {
-    const s = await build(cleanups, OVERRIDDEN, { schema: 9, extra: OVERRIDE_FILES, git: false });
+    const s = await build(cleanups, OVERRIDDEN, { schema: S - 1, extra: OVERRIDE_FILES, git: false });
     await expect(loadForge(s.forge)).rejects.toThrow(
       "L1 profiles/acme/ingredients/rules/y and ingredients/rules/y: the same ingredient, local to profile acme and at the root",
     );

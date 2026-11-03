@@ -41,7 +41,7 @@ describe("import and an override (spec 56 §7)", () => {
   });
 
   it("--local=always, row 4 below the gate: refused as before", async () => {
-    const s = await build(cleanups, OVERRIDDEN, { schema: 9, workspaces: [{ name: "acme", config: { profile: "acme" } }] });
+    const s = await build(cleanups, OVERRIDDEN, { schema: S - 1, workspaces: [{ name: "acme", config: { profile: "acme" } }] });
     await fs.writeFile(path.join(s.ws.acme, ".claude/rules/y.md"), "# Y, acme's own\n");
     const r = importAs(s.ws.acme, s.forge, "always");
     expect(r.code).toBe(1);
@@ -50,7 +50,7 @@ describe("import and an override (spec 56 §7)", () => {
 
   it("row 3 under always: at the gate the refusal ends with the forge localize hint; below it, not", async () => {
     const hint = "; or run craftar forge localize rule/y--acme --profile acme";
-    for (const schema of [S, 9]) {
+    for (const schema of [S, S - 1]) {
       const s = await build(cleanups, CASE2, { schema, workspaces: [{ name: "acme", config: { profile: "acme" } }] });
       await fs.writeFile(path.join(s.ws.acme, ".claude/rules/y.md"), "# Y, edited\n");
       const r = importAs(s.ws.acme, s.forge, "always");

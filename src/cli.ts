@@ -3176,7 +3176,7 @@ async function runForgeMove(command: MoveCommand, ref: string, o: { profile: str
 forge
   .command("localize")
   .description(
-    "Move a root ingredient only one profile resolves into that profile's folder (profiles/<p>/), with every root recipe that cites it and every one that extends those; a base-less variant becomes the local under its output name, and — at schema 10 — the profile's own variant whose base is at the root becomes its override of that base, the recipes citing it rewired in place. Proved on a scratch copy against every profile and every registered workspace before anything is written. Needs a Forge at schema 8. Writes to the Forge, never commits",
+    "Move a root ingredient only one profile resolves into that profile's folder (profiles/<p>/), with every root recipe that cites it and every one that extends those; a base-less variant becomes the local under its output name, and — at schema 12 — the profile's own variant whose base is at the root becomes its override of that base, the recipes citing it rewired in place. Proved on a scratch copy against every profile and every registered workspace before anything is written. Needs a Forge at schema 8. Writes to the Forge, never commits",
   )
   .argument("<type/name>", "root ingredient (rule/x, or the variant rule/x--<p>)")
   .requiredOption("--profile <p>", "the one profile that resolves it")

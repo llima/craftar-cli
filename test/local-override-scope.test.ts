@@ -82,10 +82,10 @@ describe("one comparison by scope (spec 56 §4.4)", () => {
     "src/core/promote.ts": "the proof compares a profile's refs before and after with itself (one view per profile)",
     "src/importers/drift-promote.ts": "the promoting workspace's own plans (one view), and resolvedBy about a variant's ref (L6)",
     "src/importers/claude-code.ts": "the importing profile's own view, and resolvedBy about a variant's ref (L6)",
-    "src/cli.ts": "rows of the catalogue's own result, not a resolution",
+    "src/cli.ts": "rows of the catalogue's own result, not a resolution; and explain's section file, a planned file's ingredient in the same plan's resolution (one view)",
   };
   const COUNTED: Record<string, number> = {
-    "src/cli.ts": 4,
+    "src/cli.ts": 6,
     "src/core/catalogue.ts": 2,
     "src/core/param-writes.ts": 6,
     "src/core/profile-local.ts": 2,

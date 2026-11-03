@@ -77,7 +77,7 @@ describe("forge localize of <name>--<p> with the base at the root (spec 56 §5.1
   });
 
   it("below the gate keeps refusing with L1, and says which schema makes it an override", async () => {
-    const s = await build(cleanups, CASE2, { schema: 9, git: false });
+    const s = await build(cleanups, CASE2, { schema: S - 1, git: false });
     const err = await planLocalize(await loadForge(s.forge), "rule/y--acme", "acme").catch((e: Error) => e.message);
     expect(err).toContain("forge localize: rule/y--acme is a variant of rule/y, which is at the root — a local and a root variant of its own profile cannot write one file (L1)");
     expect(err).toContain(`at schema ${S} in craftar.forge.yaml it becomes profile acme's override of rule/y`);
