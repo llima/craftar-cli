@@ -100,6 +100,18 @@ describe("decodeForScan", () => {
     expect(decodeForScan(beBare("key é " + fake.aws + "\n"))).toBe("key é " + fake.aws + "\n");
   });
 
+  it("decodes BOM-less UTF-16 text that holds a character whose low byte is NUL (U+3000, U+4E00)", () => {
+    const text = "# 部署\u3000一\r\nkey = '" + fake.github + "'\r\n";
+    expect(isUtf16Text(leBare(text))).toBe(true);
+    expect(decodeForScan(leBare(text))).toBe(text);
+    expect(decodeForScan(beBare(text))).toBe(text);
+  });
+
+  it("is not thrown off by a surrogate pair cut at the 64 KiB it measures", () => {
+    const text = "a".repeat(32767) + "😀" + "tail\n";
+    expect(isUtf16Text(leBare(text))).toBe(true);
+  });
+
   it("keeps binary that holds NUL bytes binary", () => {
     // A PNG header: its IHDR length holds a pair of NULs, which no text holds.
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x01, 0x00]);

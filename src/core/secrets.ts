@@ -41,8 +41,7 @@ export function hasUtf16Bom(bytes: Buffer): boolean {
 /**
  * The byte order of UTF-16 text saved without a BOM, or null (spec E2.2 of the tech-debt list). Text in UTF-16 holds a
  * NUL in one byte of nearly every pair for ASCII, and never a pair of NULs; binary holds NULs anywhere. So the bytes
- * must be an even number, hold no pair of NULs, hold their NULs on one side of the pair (at least a third of the pairs,
- * none on the other side), and decode to text with no control character but tab, line feed, carriage return and form
+ * must be an even number, hold no pair of NULs, hold their NULs mostly on one side of the pair (`leads`), and decode to text with no control character but tab, line feed, carriage return and form
  * feed, and no unpaired surrogate. Measured on the first 64 KiB.
  */
 function bareUtf16(bytes: Buffer): "le" | "be" | null {
@@ -58,9 +57,13 @@ function bareUtf16(bytes: Buffer): "le" | "be" | null {
     if (b) odd++;
   }
   const pairs = n / 2;
-  const order = odd > 0 && even === 0 && odd * 3 >= pairs ? "le" : even > 0 && odd === 0 && even * 3 >= pairs ? "be" : null;
+  // One side holds the NULs: at least a third of the pairs, and the other side at most a sixteenth of the pairs and a
+  // quarter of this side (a character such as U+3000 or U+4E00 puts its NUL on the other side).
+  const leads = (a: number, b: number) => a * 3 >= pairs && b * 16 <= pairs && b * 4 <= a;
+  const order = leads(odd, even) ? "le" : leads(even, odd) ? "be" : null;
   if (order === null) return null;
-  const text = decodeUtf16(bytes.subarray(0, n), order);
+  // Cut short of the last code unit when the measure stops inside the bytes: a surrogate pair may straddle the cut.
+  const text = decodeUtf16(bytes.subarray(0, n < bytes.length ? n - 2 : n), order);
   return /[\u0000-\u0008\u000b\u000e-\u001f\u007f]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(text) ? null : order;
 }
 
