@@ -231,5 +231,15 @@ describe("spec 54 Part A — a recipe layer of sections", () => {
     expect(recipesSame(r(ON("A\n")), r())).toBe(false);
     expect(recipesSame(r(ON("A\n")), r(ON("B\n")))).toBe(false);
   });
+
+  it("a recipe holding a variant for the profile keeps the shared recipe's sections, read from the Forge as loaded", async () => {
+    const s = kept(await acmeRecipeSections({ schema: 10, baseSections: ON(KIRO), importShaped: true }));
+    await sync(s.wsRoot);
+    const file = path.join(s.wsRoot, OPEN_PR);
+    await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace("# Open a PR", "# Open a pull request"));
+    const r = await importClaudeCode({ workspaceRoot: s.wsRoot, forgeRoot: s.forgeRoot, profileName: "acme-portal" });
+    expect(r.variants.map((v) => v.name)).toEqual(["command/open-pr--acme-portal"]);
+    expect((await yamlOf(path.join(s.forgeRoot, "recipes/base--acme-portal.yaml"))).sections).toEqual(ON(KIRO));
+  });
 });
 

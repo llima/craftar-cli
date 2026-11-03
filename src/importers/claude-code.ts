@@ -1995,8 +1995,9 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
       const file = await recipeFile(o, name);
       if (await o.stage.exists(file)) list = keepAgentsMdOnly(await read(file), list, o.agentsMdOnly);
     }
-    const shared = await recipeFile(o, name);
-    return writeOwnedRecipe(o, owned, list, description, (await o.stage.exists(shared)) ? await sharedSections(o, shared) : undefined);
+    // The shared recipe's sections from the Forge as loaded, at the gate only: this path never reads the shared file (spec 41 §1).
+    const sections = o.forge && readsRecipeSections(o.forge.manifest) ? forgeFor(o.forge, o.profile).recipes.get(name)?.sections : undefined;
+    return writeOwnedRecipe(o, owned, list, description, sections);
   }
   const file = await recipeFile(o, name);
   if (!(await o.stage.exists(file))) {
