@@ -1,3 +1,4 @@
+import { NO_LISTS } from "../src/core/list-params.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import { profileNotFoundMessage, resolve, substitute } from "../src/core/resolve.js";
@@ -115,7 +116,7 @@ describe("substitute — own properties only", () => {
   it("leaves {{constructor}}, {{toString}} and {{__proto__}} literal and reports them missing", () => {
     const missing = new Set<string>();
     const text = "{{constructor}} {{toString}} {{__proto__}} {{k}}";
-    expect(substitute(text, { k: "v" }, missing)).toBe("{{constructor}} {{toString}} {{__proto__}} v");
+    expect(substitute(text, { k: "v" }, NO_LISTS, missing)).toBe("{{constructor}} {{toString}} {{__proto__}} v");
     expect([...missing].sort()).toEqual(["__proto__", "constructor", "toString"]);
   });
 });

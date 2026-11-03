@@ -14,6 +14,8 @@ const ALLOWED = [
   "src/core/catalogue.ts",
   "src/core/init-flow.ts",
   "src/core/integrations.ts",
+  // importLists (spec 55 §4.8) reads every recipe of the Forge on purpose: a superset of what any profile's view declares a list.
+  "src/core/list-params.ts",
   // forge localize / forge share (spec 51 §5) read the root and each profile's locals by location, on purpose.
   "src/core/localize.ts",
   "src/core/new-profile.ts",
