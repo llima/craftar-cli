@@ -96,12 +96,9 @@ describe("profile-extends=off baseline pin (spec 54 §9)", () => {
     expect(await observe(kept(await acmeCopies(10)))).toEqual(JSON.parse(await fs.readFile(PIN_FILE, "utf8")));
   });
 
-  it("the deliberate delta, recorded before the change: today `extends` and `abstract` are dropped silently at schema 11", async () => {
-    // Spec 54 §5.2 turns this into a load refusal. Today the child loads with only its own recipes and the parent is a
-    // profile like any other; this case is replaced by that refusal's test when the gate lands.
+  it("the deliberate delta: a profile holding extends or abstract below the gate now fails the load (spec 54 §5.2)", async () => {
+    // Before the change this Forge loaded and the child resolved only its own recipes (recorded in c6f765e).
     const f = kept(await acmeHoisted(11));
-    const p = await plan(await loadWorkspace(f.ws.portal, { home: process.env.CRAFTAR_HOME }));
-    expect(p.files.map((x) => x.path)).not.toContain(".claude/rules/house.md");
-    expect(p.resolution.recipes).toEqual(["stack-angular"]);
+    await expect(loadWorkspace(f.ws.portal, { home: process.env.CRAFTAR_HOME })).rejects.toThrow("profiles/acme/profile.yaml: abstract in a profile needs schema: 12");
   });
 });
