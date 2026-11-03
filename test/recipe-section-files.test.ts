@@ -235,4 +235,26 @@ describe("a recipe's section value held in a file (spec 54 §4.4)", () => {
     expect(await rendered(s.ws)).toContain("From the file.");
     expect(await fs.readFile(path.join(s.forge, "profiles/acme/recipes/acme-local.yaml"), "utf8")).toContain("command/extra");
   });
+
+  it("forge localize of an override rewires a root recipe holding { file: } in place, compared as written", async () => {
+    const { build } = await import("./helpers/local-override.js");
+    const Y = "# Y for acme\n<!-- craftar:section s -->\ndefault\n<!-- /craftar:section -->\n";
+    const yHeld = { "rule/y": { s: { file: "sections/rule/y/s.md" } } };
+    const spec = {
+      ingredients: [rule("style", "# Style\n"), rule("y", "# Y shared\n"), rule("y--acme", Y, { as: "y" })],
+      recipes: [recipe("base", ["rule/style", "rule/y"]), recipe("base--acme", ["rule/style", "rule/y--acme"], { sections: yHeld })],
+      profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"])],
+    };
+    const s = await build(roots, spec, {
+      extra: { "recipes/sections/rule/y/s.md": "From the file.\n" },
+      workspaces: [{ name: "wa", config: { profile: "acme" } }, { name: "wg", config: { profile: "globex" } }],
+    });
+    const r = runCli(["forge", "localize", "rule/y--acme", "--profile", "acme", "--forge", s.forge]);
+    expect(r.stderr).toBe("");
+    expect(r.code).toBe(0);
+    const base = YAML.parse(await fs.readFile(path.join(s.forge, "recipes/base--acme.yaml"), "utf8"));
+    expect(base.ingredients).toEqual(["rule/style", "rule/y"]);
+    expect(base.sections).toEqual(yHeld);
+    expect((await plan(await loadWorkspace(s.ws.wa))).files.find((f) => f.path === ".claude/rules/y.md")!.content.toString("utf8")).toContain("From the file.");
+  });
 });
