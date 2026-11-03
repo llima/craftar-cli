@@ -213,3 +213,56 @@ describe("spec 54 Part B — a profile that extends a profile", () => {
   });
 });
 
+
+/* Spec 56 O6 (spec 54 §5.6): a parent's local that overrides a root base is the whole family's. */
+describe("spec 54 O6 — a parent's override stands for its family", () => {
+  async function withParentOverride(extra: Record<string, string> = {}): Promise<Family> {
+    const f = kept(await acmeHoisted(GATE));
+    await writeOver(f, {
+      "profiles/acme/ingredients/rules/style/ingredient.yaml": YAML.stringify({ type: "rule", name: "style" }),
+      "profiles/acme/ingredients/rules/style/rule.md": "# Style\nThe client's own style.\n",
+      ...extra,
+    });
+    return f;
+  }
+  async function writeOver(f: Family, files: Record<string, string>) {
+    for (const [rel, text] of Object.entries(files)) {
+      await fs.mkdir(path.dirname(path.join(f.forgeRoot, rel)), { recursive: true });
+      await fs.writeFile(path.join(f.forgeRoot, rel), text);
+    }
+  }
+
+  it("every child writes the parent's override, and another client the root base", async () => {
+    const f = await withParentOverride();
+    for (const w of [f.ws.portal, f.ws.shop, f.ws.globex]) expect(runCli(["sync", "--workspace", w]).code).toBe(0);
+    for (const w of [f.ws.portal, f.ws.shop]) expect(await fs.readFile(path.join(w, ".claude/rules/style.md"), "utf8")).toContain("The client's own style.");
+    expect(await fs.readFile(path.join(f.ws.globex, ".claude/rules/style.md"), "utf8")).toContain("Keep it short.");
+  });
+
+  it("a child resolving the parent's override beside a root variant of its name refuses the sync", async () => {
+    const f = await withParentOverride({
+      "ingredients/rules/style--acme-portal/ingredient.yaml": YAML.stringify({ type: "rule", name: "style--acme-portal", as: "style" }),
+      "ingredients/rules/style--acme-portal/rule.md": "# Style\nPortal.\n",
+      "recipes/portal-extra.yaml": YAML.stringify({ name: "portal-extra", ingredients: ["rule/style--acme-portal"] }),
+      "profiles/acme-portal/profile.yaml": YAML.stringify({ name: "acme-portal", extends: "acme", recipes: ["stack-angular", "portal-extra"], targets: ["claude-code", "kiro"] }),
+    });
+    const { p } = await planOf(f.ws.portal);
+    expect(p.overrideConflicts).toEqual([{ profile: "acme-portal", override: "rule/style", variant: "rule/style--acme-portal" }]);
+  });
+
+  it("a Forge writer on the root base names the parent and the profiles that extend it", async () => {
+    const f = await withParentOverride();
+    const { overriddenWarnings } = await import("../src/core/profile-local.js");
+    expect(overriddenWarnings(await loadForge(f.forgeRoot), "rule/style")).toEqual([
+      "rule/style is overridden for profile acme and every profile that extends it (acme-portal, acme-shop) — this run does not change what they resolve",
+    ]);
+  });
+
+  it("the catalogue in a child's context leaves out the root row the parent overrides", async () => {
+    const f = await withParentOverride();
+    const r = runCli(["ingredients", "--workspace", f.ws.portal, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    const rows = JSON.parse(r.stdout).ingredients.filter((i: { ref: string }) => i.ref === "rule/style");
+    expect(rows.map((i: { profile: string | null }) => i.profile)).toEqual(["acme"]);
+  });
+});

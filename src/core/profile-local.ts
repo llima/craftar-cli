@@ -281,7 +281,12 @@ export function localOwners(forge: Forge, ref: string): string[] {
  */
 export function overriddenWarnings(forge: Forge, ref: string): string[] {
   if (!overriddenBase(forge, ref)) return [];
-  return localOwners(forge, ref).map((p) => `${shownIngredientRef(ref)} is overridden for profile ${shownLocalName(p, "profile")} — this run does not change what ${shownLocalName(p, "profile")} resolves`);
+  // Spec 54 O6: a parent's override stands for every profile that extends it, so the warning names them.
+  return localOwners(forge, ref).flatMap((p) => {
+    const kids = [...forge.profiles.keys()].filter((q) => q !== p && familyOf(forge, q).includes(p)).sort();
+    const who = kids.length ? `profile ${shownLocalName(p, "profile")} and every profile that extends it (${kids.map((k) => shownLocalName(k, "profile")).join(", ")})` : `profile ${shownLocalName(p, "profile")}`;
+    return [`${shownIngredientRef(ref)} is overridden for ${who} — this run does not change what ${kids.length ? "they resolve" : `${shownLocalName(p, "profile")} resolves`}`];
+  });
 }
 
 /** `<ref> is local to profile <p>` (or `to profiles <p>, <q>`): what a Forge-wide command says of a local (spec 51 §4.5). */
@@ -304,8 +309,9 @@ export function localCiters(forge: Forge, refs: readonly string[], opts: { profi
       seen.add(name);
       const r = view.recipes.get(name);
       if (!r) return false;
-      // A citation of a ref this profile holds as a local reaches its local — an override (spec 56 §4.4) — never the root's.
-      if (r.ingredients.some((i) => wanted.has(i) && !layer.ingredients.has(i as IngredientRef))) return true;
+      // A citation of a ref this profile holds as a local reaches its local — an override (spec 56 §4.4) — never the root's;
+      // a parent's local is the profile's too (spec 54 O6).
+      if (r.ingredients.some((i) => wanted.has(i) && !familyOf(forge, p).some((q) => forge.locals.get(q)?.ingredients.has(i as IngredientRef)))) return true;
       return opts.viaExtends === true && r.extends.some((parent) => reaches(parent, seen));
     };
     for (const [name, r] of layer.recipes) if (reaches(name, new Set())) out.push({ profile: p, recipe: name, file: r.file });
