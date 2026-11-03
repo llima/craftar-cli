@@ -91,6 +91,19 @@ describe("Kiro resources check — CLI (spec 41 §4.5–§4.6)", () => {
     const syncCheckResult = runCli(["sync", "--check", ...W]);
     // Note: it may still fail because there are orphans, but the refusal message should not appear
     expect(syncCheckResult.stderr).not.toContain("Kiro agent resource(s) name a file the plan does not write");
+
+    // E27.6: doctor's warn for a present entry says what the next sync makes of it
+    const { runDoctor } = await import("../src/core/doctor.js");
+    const report = await runDoctor({ version: "0.0.0", home: process.env.CRAFTAR_HOME!, workspace: s.wsRoot, fetch: false, strict: false, registryOff: true, env: {}, nodeVersion: "22.11.0", gitVersion: async () => "2.53.0" });
+    expect(report.checks.filter((c) => c.id === "kiro-resources")).toEqual([
+      {
+        id: "kiro-resources",
+        scope: "workspace",
+        level: "warn",
+        message: "agent planner lists .kiro/steering/style.md, which the plan does not write (on disk only)",
+        fix: "edit the agent's resources in the Forge — if sync removes that file as an orphan, this entry becomes an error",
+      },
+    ]);
   });
 });
 

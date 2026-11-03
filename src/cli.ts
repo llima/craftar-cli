@@ -94,7 +94,7 @@ import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type H
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport as servicesStatusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
-import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion, feedMessage, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared, type InstallResult } from "./core/templates.js";
+import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion, feedMessage, globalJsonFault, globalJsonMessage, GLOBAL_JSON_FIX, GLOBAL_JSON_REFUSED, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared, type InstallResult } from "./core/templates.js";
 import { capture, spawnInherited } from "./core/proc.js";
 import { startUi, type UiServer } from "./ui/server.js";
 
@@ -108,7 +108,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.55.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.56.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -1513,7 +1513,7 @@ program
 program
   .command("doctor")
   .description(
-    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, generated files git ignores, the profile's templates block and dotnet when it has one, hooks-registered when the plan writes a registration, lock, status, registry entry): one line per finding — ok, warn or error — each with its fix; a path that leaves the workspace through a symbolic link is an error (workspace-links). Reports only; reads without the network unless --fetch",
+    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, generated files git ignores, the profile's templates block and dotnet when it has one, hooks-registered when the plan writes a registration, lock — and lock-credential when it records a Forge URL with credentials —, status, registry entry): one line per finding — ok, warn or error — each with its fix; a path that leaves the workspace through a symbolic link is an error (workspace-links). Reports only; reads without the network unless --fetch",
   )
   // No commander default: an explicit --workspace without craftar.yaml exits 1, the current directory without one runs the machine checks (spec 24 §4.1).
   .option("--workspace <dir>", "the workspace to check (default: the current directory, when it holds craftar.yaml)")
@@ -1644,7 +1644,7 @@ templates
 templates
   .command("install")
   .description(
-    "Run dotnet new install once per dotnet-new entry, in the profile's order, at the workspace root; the packages land in this user's dotnet template store, shared by every workspace. Nothing else runs it. Exits 1 when an entry failed or was skipped (--dry-run exits 0 over an accepted block)",
+    "Run dotnet new install once per dotnet-new entry, in the profile's order, at the workspace root; the packages land in this user's dotnet template store, shared by every workspace. Nothing else runs it. Refuses, before any dotnet starts and under --dry-run too, when the first global.json going up from the workspace root sets sdk.paths or does not read as JSON. Exits 1 when an entry failed or was skipped (--dry-run exits 0 over an accepted block)",
   )
   .option("--dry-run", "print each dotnet new install line; run nothing (needs no dotnet)", false)
   .option("--force", "pass --force to dotnet new install", false)
@@ -1663,6 +1663,15 @@ templates
     }
 
     const hasInstallable = declared.entries.some((e) => e.installable);
+
+    // E35: check global.json before any dotnet starts, including under --dry-run
+    if (hasInstallable) {
+      const fault = await globalJsonFault(ws.root);
+      if (fault !== null) {
+        fail(`${globalJsonMessage(fault)} — ${GLOBAL_JSON_REFUSED}; ${GLOBAL_JSON_FIX}`);
+      }
+    }
+
     if (hasInstallable && !o.dryRun) {
       const version = await dotnetVersion(capture, process.env, ws.root);
       if (version === null) {
@@ -1720,8 +1729,6 @@ const mcpCmd = program
       env: process.env,
       pin: pinOf(merged),
       writers: o.allowWrites ? mcpWriters(craftarHome(), registryOff()) : undefined,
-      // Not the workspace root or anywhere a global.json can be planted: the dotnet host reads it and loads what its sdk.paths names.
-      dotnetOwnDir: true,
     });
   });
 

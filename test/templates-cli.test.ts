@@ -266,7 +266,7 @@ describe("templates --help", () => {
     expect(flat(list.stdout)).toContain("Runs no program and does not know what is installed");
     for (const flag of ["--json", "--workspace <dir>", "--offline"]) expect(list.stdout).toContain(flag);
     const install = runCli(["templates", "install", "--help"], { env: NO_DOTNET });
-    expect(flat(install.stdout)).toContain("the packages land in this user's dotnet template store, shared by every workspace. Nothing else runs it. Exits 1 when an entry failed or was skipped");
+    expect(flat(install.stdout)).toContain("the packages land in this user's dotnet template store, shared by every workspace. Nothing else runs it. Refuses, before any dotnet starts and under --dry-run too, when the first global.json going up from the workspace root sets sdk.paths or does not read as JSON. Exits 1 when an entry failed or was skipped");
     expect(flat(install.stdout)).toContain("print each dotnet new install line; run nothing (needs no dotnet)");
     for (const flag of ["--dry-run", "--force", "--interactive", "--workspace <dir>", "--offline"]) expect(install.stdout).toContain(flag);
   });
@@ -299,5 +299,79 @@ describe("a dotnet planted at the workspace root (spec 32 §7: dotnet is found o
       expect(JSON.parse(d.stdout).checks.filter((c: { id: string }) => c.id === "dotnet").map((c: { level: string }) => c.level), `doctor, PATH=${JSON.stringify(value)}`).toEqual(["warn"]);
     }
     expect(await exists(path.join(s.wsRoot, "planted-ran.txt"))).toBe(false);
+  });
+});
+
+const GLOBAL_JSON_REFUSED_MSG = "craftar templates install does not run dotnet here";
+const GLOBAL_JSON_FIX_MSG = "remove sdk.paths from that global.json, or run dotnet new install by hand in a repository you trust";
+
+describe("templates install refuses when global.json sets sdk.paths (E35)", () => {
+  it("with unsafe sdk.paths at root: exit 1 with refusal message before checking dotnet", async () => {
+    const s = await fresh([TOOLS], { "global.json": '{"sdk":{"paths":["/custom"]}}' });
+    const r = cli(["templates", "install"], s.wsRoot);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("global.json sets sdk.paths: dotnet would load the SDK it names");
+    expect(r.stderr).toContain(GLOBAL_JSON_REFUSED_MSG);
+    expect(r.stderr).toContain(GLOBAL_JSON_FIX_MSG);
+  });
+
+  it("with unsafe sdk.paths: --dry-run also refuses", async () => {
+    const s = await fresh([TOOLS], { "global.json": '{"sdk":{"paths":["/custom"]}}' });
+    const r = cli(["templates", "install", "--dry-run"], s.wsRoot);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("global.json sets sdk.paths: dotnet would load the SDK it names");
+    expect(r.stderr).toContain(GLOBAL_JSON_REFUSED_MSG);
+  });
+
+  it("a global.json above the workspace with sdk.paths: refused, its paths element never printed", async () => {
+    const s = await fresh([TOOLS]);
+    const mark = ["ABOVE", "MARK"].join("_");
+    await fs.writeFile(path.join(s.root, "global.json"), `{"sdk":{"paths":["${mark}"]}}`);
+    const r = cli(["templates", "install", "--dry-run"], s.wsRoot);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("a global.json above the workspace sets sdk.paths: dotnet would load the SDK it names");
+    expect(r.stdout + r.stderr).not.toContain(mark);
+  });
+
+  it("a // comment ended by a bare CR (the host ends it at LF only) is refused, not read as safe", async () => {
+    const s = await fresh([TOOLS], { "global.json": '{"sdk": //\r{"paths":["$host$"]}, "w":\n{"paths":["HIDDEN_DIR"]}}' });
+    const r = cli(["templates", "install", "--dry-run"], s.wsRoot);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("global.json does not read as JSON: craftar cannot tell which SDK dotnet would load — craftar templates install does not run dotnet here");
+    expect(r.stdout + r.stderr).not.toContain("HIDDEN_DIR");
+  });
+
+  it("a safe global.json at the root stops the walk before an unsafe one above it, as the dotnet host does", async () => {
+    const s = await fresh([TOOLS], { "global.json": "{}" });
+    await fs.writeFile(path.join(s.root, "global.json"), '{"sdk":{"paths":["/custom"]}}');
+    const r = cli(["templates", "install", "--dry-run"], s.wsRoot);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("dotnet new install Acme.Tools");
+  });
+
+  it("with safe sdk.paths ($host$) and --dry-run: the install lines are printed as before", async () => {
+    const s = await fresh([TOOLS], { "global.json": '{"sdk":{"paths":["$host$"]}}' });
+    const r = cli(["templates", "install", "--dry-run"], s.wsRoot);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("dotnet new install Acme.Tools");
+  });
+
+  it("with safe sdk.paths ($host$): proceeds normally", async () => {
+    const s = await fresh([TOOLS], { "global.json": '{"sdk":{"paths":["$host$"]}}' });
+    // Will fail for missing dotnet, but NOT for global.json — the global.json is safe
+    const r = cli(["templates", "install"], s.wsRoot);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe(DOTNET_MISSING);
+    expect(r.stderr).not.toContain("global.json sets sdk.paths");
+  });
+
+  it("templates list proceeds regardless of global.json (it does not run dotnet)", async () => {
+    const s = await fresh([TOOLS], { "global.json": '{"sdk":{"paths":["/custom"]}}' });
+    const r = cli(["templates", "list"], s.wsRoot);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("dotnet-new  Acme.Tools");
+    expect(r.stderr).not.toContain("global.json");
   });
 });

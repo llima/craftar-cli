@@ -12,11 +12,487 @@ import { exists } from "./forge.js";
 import { schemaIssues } from "./schema-fault.js";
 import { capture as defaultCapture, type Probe, type Runner } from "./proc.js";
 
+/* ------------------------------------------------------------------ */
+/* global.json handling (E35)                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A hand-written tolerant JSON reader that returns `true` (unsafe) when:
+ * - the text does not parse, or
+ * - the top level is not an object, or
+ * - ANY top-level entry whose key compared without case is `sdk` holds an object
+ *   with ANY entry whose key compared without case is `paths` and whose value is
+ *   not an array of strings each exactly `"$host$"`.
+ *
+ * Returns `false` otherwise (no `sdk`, `sdk` not an object, no `paths`, `paths: ["$host$"]`, `paths: []`).
+ *
+ * Accepts: leading UTF-8 BOM, `//` (ended at LF, as the host ends it) and `/* * /` comments outside strings,
+ * trailing commas in objects and arrays (which the host rejects, ignoring the file — accepting them here only refuses
+ * more), CRLF; numbers, `true`, `false`, `null`; nesting depth ≤ 64; text ≤ 1 MiB.
+ * Fails closed (unsafe) where the host could read another document: a bare CR, any `\u` escape, an unterminated
+ * comment, a raw control character in a string, content after the root, and the word `paths` in the text more often
+ * than in what was read.
+ */
+export function sdkPathsUnsafe(text: string): boolean {
+  const result = parseGlobalJson(text);
+  if (result === "unreadable") return true;
+  if (result === "paths") return true;
+  return false; // null means safe
+}
+
+/** Internal result type for parsing. */
+type GlobalJsonParseResult = "unreadable" | "paths" | null;
+
+/**
+ * Parse global.json text and determine if it's unsafe.
+ * Returns "unreadable" for parse failures or non-object top level.
+ * Returns "paths" if sdk.paths is found and not safe.
+ * Returns null if safe.
+ */
+function parseGlobalJson(text: string): GlobalJsonParseResult {
+  // Max 1 MiB
+  if (text.length > 1024 * 1024) return "unreadable";
+
+  // Strip leading UTF-8 BOM
+  if (text.charCodeAt(0) === 0xfeff) {
+    text = text.slice(1);
+  }
+
+  // Where craftar and the host (rapidjson, comments on) could read two documents, refuse: a bare CR (a `//` comment ends
+  // at LF only there), and any `\u` escape (a key spelled so could hide where a raw scan below would miss it).
+  if (/\r(?!\n)/.test(text) || text.includes("\\u")) return "unreadable";
+
+  try {
+    const parsed = tolerantJsonParse(text);
+    if (parsed.kind !== "object") return "unreadable";
+    // Backstop: the word `paths` in the text more often than in what was read (a comment, a stretch the two parsers split
+    // differently) means something craftar did not read could be what the host reads.
+    if (countPaths(text) > countPathsIn(parsed)) return "unreadable";
+
+    // Look for sdk key (case-insensitive)
+    for (const [key, value] of parsed.entries) {
+      if (key.toLowerCase() === "sdk") {
+        if (value.kind !== "object") continue;
+        // Look for paths key (case-insensitive)
+        for (const [sdkKey, sdkValue] of value.entries) {
+          if (sdkKey.toLowerCase() === "paths") {
+            // paths must be an array of strings each exactly "$host$"
+            if (sdkValue.kind !== "array") return "paths";
+            for (const item of sdkValue.items) {
+              if (item.kind !== "string" || item.value !== "$host$") {
+                return "paths";
+              }
+            }
+            // paths: [] or paths: ["$host$"] is safe — continue looking for more sdk entries
+          }
+        }
+      }
+    }
+
+    return null; // safe
+  } catch {
+    return "unreadable";
+  }
+}
+
+const PATHS_WORD = /paths/gi;
+const countPaths = (t: string): number => t.match(PATHS_WORD)?.length ?? 0;
+function countPathsIn(v: JsonValue): number {
+  if (v.kind === "string") return countPaths(v.value);
+  if (v.kind === "array") return v.items.reduce((n, i) => n + countPathsIn(i), 0);
+  if (v.kind === "object") return v.entries.reduce((n, [k, x]) => n + countPaths(k) + countPathsIn(x), 0);
+  return 0;
+}
+
+/** AST node types for tolerant JSON parsing */
+type JsonValue =
+  | { kind: "object"; entries: Array<[string, JsonValue]> }
+  | { kind: "array"; items: JsonValue[] }
+  | { kind: "string"; value: string }
+  | { kind: "number"; value: number }
+  | { kind: "boolean"; value: boolean }
+  | { kind: "null" };
+
+/**
+ * A tolerant JSON parser that:
+ * - Accepts `//` and `/* * /` comments outside strings
+ * - Accepts trailing commas in objects and arrays (the host rejects them; here that only refuses more)
+ * - Accepts CRLF line endings
+ * - Parses strings with every JSON escape, `\uXXXX` included — reached only when this parser is called on its own:
+ *   `parseGlobalJson` refuses any `\u` before it calls it
+ * - Supports nesting depth ≤ 64
+ * - Keeps duplicate keys (object as list of [key, value] entries)
+ */
+function tolerantJsonParse(text: string): JsonValue {
+  let pos = 0;
+  let depth = 0;
+
+  function skipWhitespaceAndComments(): void {
+    while (pos < text.length) {
+      const ch = text[pos];
+      if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
+        pos++;
+        continue;
+      }
+      // Single-line comment
+      if (ch === "/" && text[pos + 1] === "/") {
+        pos += 2;
+        // Ends at LF only, as the host's reader ends it.
+        while (pos < text.length && text[pos] !== "\n") {
+          pos++;
+        }
+        continue;
+      }
+      // Block comment
+      if (ch === "/" && text[pos + 1] === "*") {
+        pos += 2;
+        let closed = false;
+        while (pos < text.length - 1) {
+          if (text[pos] === "*" && text[pos + 1] === "/") {
+            pos += 2;
+            closed = true;
+            break;
+          }
+          pos++;
+        }
+        if (!closed) throw new Error("Unterminated comment");
+        continue;
+      }
+      break;
+    }
+  }
+
+  function parseValue(): JsonValue {
+    skipWhitespaceAndComments();
+    if (pos >= text.length) throw new Error("Unexpected end of input");
+
+    depth++;
+    if (depth > 64) throw new Error("Nesting too deep");
+
+    try {
+      const ch = text[pos];
+
+      if (ch === "{") return parseObject();
+      if (ch === "[") return parseArray();
+      if (ch === '"') return parseString();
+      if (ch === "-" || (ch >= "0" && ch <= "9")) return parseNumber();
+      if (text.startsWith("true", pos)) {
+        pos += 4;
+        return { kind: "boolean", value: true };
+      }
+      if (text.startsWith("false", pos)) {
+        pos += 5;
+        return { kind: "boolean", value: false };
+      }
+      if (text.startsWith("null", pos)) {
+        pos += 4;
+        return { kind: "null" };
+      }
+
+      throw new Error(`Unexpected character: ${ch}`);
+    } finally {
+      depth--;
+    }
+  }
+
+  function parseObject(): JsonValue {
+    pos++; // skip '{'
+    const entries: Array<[string, JsonValue]> = [];
+
+    skipWhitespaceAndComments();
+    if (text[pos] === "}") {
+      pos++;
+      return { kind: "object", entries };
+    }
+
+    while (true) {
+      skipWhitespaceAndComments();
+      if (text[pos] === "}") {
+        pos++;
+        break; // trailing comma case
+      }
+
+      if (text[pos] !== '"') throw new Error("Expected string key");
+      const keyNode = parseString();
+      if (keyNode.kind !== "string") throw new Error("Expected string key");
+      const key = keyNode.value;
+
+      skipWhitespaceAndComments();
+      if (text[pos] !== ":") throw new Error("Expected :");
+      pos++;
+
+      const value = parseValue();
+      entries.push([key, value]);
+
+      skipWhitespaceAndComments();
+      if (text[pos] === ",") {
+        pos++;
+        continue;
+      }
+      if (text[pos] === "}") {
+        pos++;
+        break;
+      }
+      throw new Error("Expected , or }");
+    }
+
+    return { kind: "object", entries };
+  }
+
+  function parseArray(): JsonValue {
+    pos++; // skip '['
+    const items: JsonValue[] = [];
+
+    skipWhitespaceAndComments();
+    if (text[pos] === "]") {
+      pos++;
+      return { kind: "array", items };
+    }
+
+    while (true) {
+      skipWhitespaceAndComments();
+      if (text[pos] === "]") {
+        pos++;
+        break; // trailing comma case
+      }
+
+      items.push(parseValue());
+
+      skipWhitespaceAndComments();
+      if (text[pos] === ",") {
+        pos++;
+        continue;
+      }
+      if (text[pos] === "]") {
+        pos++;
+        break;
+      }
+      throw new Error("Expected , or ]");
+    }
+
+    return { kind: "array", items };
+  }
+
+  function parseString(): JsonValue {
+    pos++; // skip opening '"'
+    let result = "";
+
+    while (pos < text.length) {
+      const ch = text[pos];
+      if (ch === '"') {
+        pos++;
+        return { kind: "string", value: result };
+      }
+      if (ch === "\\") {
+        pos++;
+        if (pos >= text.length) throw new Error("Unexpected end in string escape");
+        const esc = text[pos];
+        switch (esc) {
+          case '"': result += '"'; break;
+          case "\\": result += "\\"; break;
+          case "/": result += "/"; break;
+          case "b": result += "\b"; break;
+          case "f": result += "\f"; break;
+          case "n": result += "\n"; break;
+          case "r": result += "\r"; break;
+          case "t": result += "\t"; break;
+          case "u": {
+            if (pos + 4 >= text.length) throw new Error("Invalid unicode escape");
+            const hex = text.slice(pos + 1, pos + 5);
+            if (!/^[0-9a-fA-F]{4}$/.test(hex)) throw new Error("Invalid unicode escape");
+            result += String.fromCharCode(parseInt(hex, 16));
+            pos += 4;
+            break;
+          }
+          default:
+            throw new Error(`Invalid escape: \\${esc}`);
+        }
+        pos++;
+        continue;
+      }
+      if (ch.charCodeAt(0) < 0x20) throw new Error("Control character in string");
+      result += ch;
+      pos++;
+    }
+
+    throw new Error("Unterminated string");
+  }
+
+  function parseNumber(): JsonValue {
+    const start = pos;
+    if (text[pos] === "-") pos++;
+
+    if (text[pos] === "0") {
+      pos++;
+    } else if (text[pos] >= "1" && text[pos] <= "9") {
+      while (pos < text.length && text[pos] >= "0" && text[pos] <= "9") pos++;
+    } else {
+      throw new Error("Invalid number");
+    }
+
+    // Fractional part
+    if (text[pos] === ".") {
+      pos++;
+      if (!(text[pos] >= "0" && text[pos] <= "9")) throw new Error("Invalid number");
+      while (pos < text.length && text[pos] >= "0" && text[pos] <= "9") pos++;
+    }
+
+    // Exponent
+    if (text[pos] === "e" || text[pos] === "E") {
+      pos++;
+      if (text[pos] === "+" || text[pos] === "-") pos++;
+      if (!(text[pos] >= "0" && text[pos] <= "9")) throw new Error("Invalid number");
+      while (pos < text.length && text[pos] >= "0" && text[pos] <= "9") pos++;
+    }
+
+    return { kind: "number", value: Number(text.slice(start, pos)) };
+  }
+
+  const value = parseValue();
+  skipWhitespaceAndComments();
+  if (pos < text.length) throw new Error("Trailing content");
+  return value;
+}
+
+/** The kind of global.json fault. */
+export type GlobalJsonFault = { where: "root" | "above"; kind: "paths" | "unreadable" };
+
+/**
+ * Walk two chains — `path.resolve(root)` and `await fs.realpath(root)` (if realpath fails, only the
+ * first) — and for each chain go from the start directory up to the filesystem root, stopping at the
+ * FIRST directory where `global.json` exists.
+ *
+ * Returns the first fault found in either chain, else `null`.
+ */
+export async function globalJsonFault(root: string): Promise<GlobalJsonFault | null> {
+  const resolved = path.resolve(root);
+  let realPath: string | null = null;
+  try {
+    realPath = await fs.realpath(root);
+  } catch {
+    // realpath failed, only walk the resolved path
+  }
+
+  const chains: string[] = [resolved];
+  if (realPath !== null && realPath !== resolved) {
+    chains.push(realPath);
+  }
+
+  for (const start of chains) {
+    const fault = await walkChainForGlobalJson(start);
+    if (fault !== null) return fault;
+  }
+
+  return null;
+}
+
+/**
+ * Walk from `start` up to the filesystem root, stopping at the FIRST directory
+ * where `global.json` exists.
+ */
+async function walkChainForGlobalJson(start: string): Promise<GlobalJsonFault | null> {
+  let dir = start;
+  const startDir = start;
+
+  while (true) {
+    const globalJsonPath = path.join(dir, "global.json");
+
+    // Check if global.json exists with lstat
+    let lstatResult: { isFile?: boolean; isDirectory?: boolean } | null = null;
+    try {
+      const st = await fs.lstat(globalJsonPath);
+      lstatResult = { isFile: st.isFile(), isDirectory: st.isDirectory() };
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        // File does not exist, go to parent
+        const parent = path.dirname(dir);
+        if (parent === dir) break; // reached filesystem root
+        dir = parent;
+        continue;
+      }
+      if (code === "EACCES" || code === "EPERM") {
+        // Cannot read, dotnet cannot either — go to parent
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+        continue;
+      }
+      // Any other error → fault unreadable
+      const where = dir === startDir ? "root" : "above";
+      return { where, kind: "unreadable" };
+    }
+
+    // global.json exists (lstat succeeded)
+    const where = dir === startDir ? "root" : "above";
+
+    // Now use stat to follow symlinks
+    let statResult: { isFile: boolean } | null = null;
+    try {
+      const st = await fs.stat(globalJsonPath);
+      // Not a regular file (a FIFO is never opened), or too big to be read whole: unreadable.
+      statResult = { isFile: st.isFile() && st.size <= 1024 * 1024 };
+    } catch {
+      // stat failed (broken symlink, etc.) → unreadable
+      return { where, kind: "unreadable" };
+    }
+
+    // Not a regular file → unreadable
+    if (!statResult.isFile) {
+      return { where, kind: "unreadable" };
+    }
+
+    // Read the file
+    let text: string;
+    try {
+      const buf = await fs.readFile(globalJsonPath);
+      // Check for file over 1 MiB
+      if (buf.length > 1024 * 1024) {
+        return { where, kind: "unreadable" };
+      }
+      text = buf.toString("utf8");
+    } catch {
+      return { where, kind: "unreadable" };
+    }
+
+    // Parse and check
+    const result = parseGlobalJson(text);
+    if (result === "unreadable") {
+      return { where, kind: "unreadable" };
+    }
+    if (result === "paths") {
+      return { where, kind: "paths" };
+    }
+
+    // Safe global.json found — stop the walk (first file wins as dotnet does)
+    return null;
+  }
+
+  return null; // no global.json found in this chain
+}
+
+/** Build the message for a global.json fault. */
+export function globalJsonMessage(f: GlobalJsonFault): string {
+  const label = f.where === "root" ? "global.json" : "a global.json above the workspace";
+  if (f.kind === "paths") {
+    return `${label} sets sdk.paths: dotnet would load the SDK it names`;
+  }
+  return `${label} does not read as JSON: craftar cannot tell which SDK dotnet would load`;
+}
+
+/** The fix for a global.json fault. */
+export const GLOBAL_JSON_FIX = "remove sdk.paths from that global.json, or run dotnet new install by hand in a repository you trust";
+
+/** The refusal message for templates install. */
+export const GLOBAL_JSON_REFUSED = "craftar templates install does not run dotnet here";
+
 const CREDENTIAL = "a source must not carry a user or a password: NuGet's own configuration holds credentials";
 
-/** The missing-SDK finding and its fix: one spelling for `templates install` and doctor's `dotnet` check. */
+/** The missing-SDK finding, one spelling for `templates install` and doctor's `dotnet` check; this fix is `templates install`'s (doctor's is `DOTNET_MISSING_DOCTOR_FIX`). */
 export const DOTNET_MISSING = "the .NET SDK is not available: dotnet --version gave no version";
 export const DOTNET_MISSING_FIX = "install the .NET SDK (the version a global.json at the workspace root pins, if there is one) and check PATH";
+/** Doctor's fix for missing SDK (runs in its own directory, not at the workspace root). */
+export const DOTNET_MISSING_DOCTOR_FIX = "install the .NET SDK and check PATH";
 
 export interface DotnetNewEntry {
   entry: number;
@@ -295,8 +771,9 @@ export async function dotnetVersionInOwnDir(probe: Probe = defaultCapture, env: 
 }
 
 /**
- * The SDK's version, or null (D5). Probed in `cwd` (the workspace root) because `dotnet` reads
- * `global.json` from its working directory — the install runs there.
+ * The SDK's version, or null (D5), probed in `cwd`. `templates install` passes the workspace root, because `dotnet` reads
+ * `global.json` from its working directory and the install runs there (after `globalJsonFault` has refused `sdk.paths`);
+ * `doctor` calls it only through `dotnetVersionInOwnDir`.
  */
 export async function dotnetVersion(probe: Probe = defaultCapture, env: NodeJS.ProcessEnv = process.env, cwd?: string): Promise<string | null> {
   try {

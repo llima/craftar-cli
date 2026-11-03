@@ -229,6 +229,29 @@ describe("workspace checks", () => {
     expect(one((await run({ home: f.home, workspace: c })).checks, "lock")).toMatchObject({ level: "error", fix: "upgrade craftar", message: expect.stringMatching(/declares schema 9/) });
   });
 
+  it("lock-credential: warns when the lock's forge.source has credentials (E18.3)", async () => {
+    const f = await fixture();
+    const a = await f.ws("acme-a");
+    await syncAndRegister(f.home, a);
+    // Write a lock with credentials in the source
+    const lockPath = path.join(a, "craftar.lock");
+    const lock = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    lock.forge.source = "https://user:pass@github.com/org/forge.git";
+    await fs.writeFile(lockPath, JSON.stringify(lock));
+    const r = await run({ home: f.home, workspace: a });
+    expect(of(r.checks, "lock-credential")).toEqual([
+      { id: "lock-credential", scope: "workspace", level: "warn", message: "craftar.lock records a Forge URL with credentials (not shown)", fix: "rotate the credential, set forge: in craftar.yaml to a URL without it, then craftar sync — the old value stays in git history" },
+    ]);
+  });
+
+  it("lock-credential: absent when the lock's forge.source has no credentials", async () => {
+    const f = await fixture();
+    const a = await f.ws("acme-a");
+    await syncAndRegister(f.home, a);
+    const r = await run({ home: f.home, workspace: a });
+    expect(of(r.checks, "lock-credential")).toEqual([]);
+  });
+
   it("params: a declared, cited key with no value is one error, naming its citers; undeclared keys are silent", async () => {
     const f = await fixture({
       ingredients: [rule("a", "# {{who}}\n", { params: { who: { description: "w" } } }), rule("b", "# {{who}} too\n"), rule("c", "# {{other}}\n")],

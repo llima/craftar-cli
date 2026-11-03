@@ -8,18 +8,18 @@ import { written } from "./capabilities.js";
 import { exists, realpathOfNearest } from "./forge.js";
 import { hookFindsCraftar, hooksStatus, HooksUnreadable } from "./git-hooks.js";
 import { generatedIgnored, IGNORED_FIX, staleLine, UNCHECKED_LINE } from "./generated-ignored.js";
-import { renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix } from "./mcp-server.js";
+import { renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix, type SubstitutedLeaf } from "./mcp-server.js";
 import { credentialKeys, hideCacheSegment, hideKeys, isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus, vouchedKeys } from "./registry.js";
-import { FULL_SHA, cacheKey, classifyForge, CREDENTIAL_HIDDEN, inspectCache, UNVOUCHED_HIDDEN, type CacheSnapshot } from "./remote.js";
+import { FULL_SHA, cacheKey, classifyForge, credentialFault, CREDENTIAL_HIDDEN, inspectCache, UNVOUCHED_HIDDEN, type CacheSnapshot } from "./remote.js";
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
-import { LOCK_FILE, declaredWithoutValue, overrideConflictLine, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK, type FileStatus } from "./sync.js";
+import { LOCK_FILE, declaredWithoutValue, overrideConflictLine, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK, type FileStatus } from "./sync.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { outName, MCP_FILE, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
 import { plannedRegistrations, sameHandler, type PlannedRegistration } from "./settings-apply.js";
 import { stripBom } from "./text.js";
-import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX, dotnetVersion as defaultDotnetVersion, dotnetVersionInOwnDir, feedMessage, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
+import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_DOCTOR_FIX, DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX, dotnetVersionInOwnDir, feedMessage, globalJsonFault, globalJsonMessage, GLOBAL_JSON_FIX, GLOBAL_JSON_REFUSED, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram, type Probe } from "./proc.js";
 
 /*
@@ -86,8 +86,6 @@ export interface DoctorOptions {
    * absent, `lstat` itself.
    */
   claudeMdExists?: (file: string) => Promise<boolean>;
-  /** Run `dotnet --version` in a directory of its own (`dotnetVersionInOwnDir`); absent, at the workspace root. */
-  dotnetOwnDir?: boolean;
   /** Test seam for the dotnet probe (which directory it recorded). */
   dotnetProbe?: Probe;
 }
@@ -301,21 +299,10 @@ async function workspaceChecks(
       if (p.agentsMd?.warning) owned.add(p.agentsMd.warning);
       // Also exclude the kiro resources warning — it is reported by kiro-resources
       if (p.kiroResources?.warning) owned.add(p.kiroResources.warning);
-      // Compute claudeMdBlocks early so we can add its warning to owned before the plan filter
-      let claudeMdBlocksResult: Awaited<ReturnType<typeof claudeMdBlocks>> | null = null;
-      if (p.resolution.primary && p.resolution.targets.includes("claude-code")) {
-        const readExisting = async (rel: string): Promise<Buffer | null> => {
-          try {
-            return await fs.readFile(path.join(root, rel));
-          } catch {
-            return null;
-          }
-        };
-        claudeMdBlocksResult = await claudeMdBlocks(readExisting);
-        // Also exclude the CLAUDE.md blocking warning — it is reported by agents-md-primary
-        if (claudeMdBlocksResult.blocking.length > 0) {
-          owned.add(claudeMdBlockedMessage(claudeMdBlocksResult.blocking[0]));
-        }
+      // agents-md-primary owns the plan's CLAUDE.md warning; plan() read the files once (Plan.claudeMd).
+      const claudeMdBlocksResult = p.claudeMd;
+      if (claudeMdBlocksResult !== null && claudeMdBlocksResult.blocking.length > 0) {
+        owned.add(claudeMdBlockedMessage(claudeMdBlocksResult.blocking[0]));
       }
       // Also exclude the flat skill warning — it is reported by skill-layout (spec 44 §5)
       const flat = flatSkills(p.resolution, p.resolution.targets);
@@ -409,7 +396,7 @@ async function workspaceChecks(
             "kiro-resources",
             "warn",
             `agent ${agent} lists ${resourcePath}, which the plan does not write (on disk only)`,
-            "edit the agent's resources in the Forge",
+            "edit the agent's resources in the Forge — if sync removes that file as an orphan, this entry becomes an error",
           );
         }
 
@@ -451,7 +438,7 @@ async function workspaceChecks(
       await hooksRegistered(root, p, opts, w, env);
 
       // skill-layout: present only when flatSkills is non-empty (spec 44 §5)
-      await skillLayout(p, w);
+      await skillLayout(p, ws.forge.root, w);
 
       // skill-trigger: present only when a planned skill's description says nothing about when to use it (spec 55 Part C)
       skillTrigger(p, w);
@@ -507,12 +494,13 @@ async function workspaceChecks(
           const probe = opts.dotnetProbe ?? capture;
           const answer = opts.dotnetVersion
             ? { ran: true as const, version: await opts.dotnetVersion() }
-            : opts.dotnetOwnDir
-              ? await dotnetVersionInOwnDir(probe, env)
-              : { ran: true as const, version: await defaultDotnetVersion(probe, env, root) };
+            : await dotnetVersionInOwnDir(probe, env);
           if (!answer.ran) w("dotnet", "warn", DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX);
           else if (answer.version !== null) w("dotnet", "ok", answer.version);
-          else w("dotnet", "warn", DOTNET_MISSING, DOTNET_MISSING_FIX);
+          else w("dotnet", "warn", DOTNET_MISSING, DOTNET_MISSING_DOCTOR_FIX);
+          // Whatever the probe answered: craftar templates install refuses here, so say it now (E35).
+          const fault = await globalJsonFault(root);
+          if (fault !== null) w("dotnet", "warn", `${globalJsonMessage(fault)} — ${GLOBAL_JSON_REFUSED}`, GLOBAL_JSON_FIX);
         }
       }
     }
@@ -543,6 +531,13 @@ async function lockAndStatus(
     return;
   }
   w("lock", "ok", `schema ${lock.schema}, generated ${lock.generatedAt.slice(0, 16).replace("T", " ")} UTC`);
+
+  // lock-credential: check if the lock's forge.source holds credentials (E18.3)
+  // This is present only when the lock exists and is valid.
+  if (credentialFault(lock.forge.source)) {
+    w("lock-credential", "warn", "craftar.lock records a Forge URL with credentials (not shown)", "rotate the credential, set forge: in craftar.yaml to a URL without it, then craftar sync — the old value stays in git history");
+  }
+
   if (ws === null || p === null) return;
   // Spec 56 §4.3: a refused sync is the status check's error, whatever the files say.
   if (p.overrideConflicts.length) {
@@ -593,28 +588,31 @@ export function oneLine(e: unknown): string {
 }
 
 /**
- * Every target's written MCP servers, rendered at schema 4 as mcp-env reads them: [outName, server, authEnv, file], in plan order.
+ * Every target's written MCP servers, rendered at schema 4 as mcp-env reads them: [outName, server, authEnv, file, substituted], in plan order.
  * A target with no entry in MCP_FILE (agents-md) is skipped.
- * At schema 4, the server is rendered first, so a `${NAME}` a value brings into `env` is checked (spec 34 §4.4).
+ * At schema 4, the server is rendered first, and its substituted leaves are returned with it so that mcpUnset leaves a
+ * value a param was substituted into unread (E24.4): no part of a param's value reaches the report.
  */
-function writtenServers(p: Plan, schema: ForgeSchema): Array<[string, unknown, string[] | undefined, string]> {
-  const servers: Array<[string, unknown, string[] | undefined, string]> = [];
+function writtenServers(p: Plan, schema: ForgeSchema): Array<[string, unknown, string[] | undefined, string, SubstitutedLeaf[]]> {
+  const servers: Array<[string, unknown, string[] | undefined, string, SubstitutedLeaf[]]> = [];
   for (const target of p.resolution.targets) {
     const file = MCP_FILE[target as keyof typeof MCP_FILE];
     // agents-md only: its mcp cell is `unsupported` in src/core/capabilities.ts
     if (file === undefined) continue;
     // `written()` yields only what the matrix says this target writes; the skip warnings were plan()'s.
     const walk = written(p.resolution, target, () => {});
-    const perTarget = new Map<string, { server: unknown; authEnv: string[] | undefined }>();
+    const perTarget = new Map<string, { server: unknown; authEnv: string[] | undefined; substituted: SubstitutedLeaf[] }>();
     for (const ing of walk) {
       if (ing.meta.type !== "mcp") continue;
       // At schema 4, render the server (spec 34 §4.4); below 4, read as written.
-      const serverDef = rendersServers({ schema })
-        ? renderServer(ing.meta, paramsFor(ing, p.resolution)).server
-        : ing.meta.server;
-      perTarget.set(outName(ing.meta), { server: serverDef, authEnv: ing.meta.authEnv });
+      if (rendersServers({ schema })) {
+        const rendered = renderServer(ing.meta, paramsFor(ing, p.resolution));
+        perTarget.set(outName(ing.meta), { server: rendered.server, authEnv: ing.meta.authEnv, substituted: rendered.substituted });
+      } else {
+        perTarget.set(outName(ing.meta), { server: ing.meta.server, authEnv: ing.meta.authEnv, substituted: [] });
+      }
     }
-    for (const [name, { server, authEnv }] of perTarget) servers.push([name, server, authEnv, file]);
+    for (const [name, { server, authEnv, substituted }] of perTarget) servers.push([name, server, authEnv, file, substituted]);
   }
   return servers;
 }
@@ -625,12 +623,15 @@ function writtenServers(p: Plan, schema: ForgeSchema): Array<[string, unknown, s
  * writing the same name from different ingredients are both checked. Names are the union of the
  * ingredient's `authEnv` and every `${NAME}` in a string value of its server's `env`.
  *
+ * E24.4: a value a param was substituted into is left unread, whole — a `${NAME}` the Forge wrote beside the `{{param}}`
+ * included — so no part of a param's value reaches the report. Every other value is scanned.
+ *
  * Reads the servers `writtenServers` returns.
  */
-function mcpUnset(servers: Array<[string, unknown, string[] | undefined, string]>, env: NodeJS.ProcessEnv): Array<{ server: string; name: string }> {
+function mcpUnset(servers: Array<[string, unknown, string[] | undefined, string, SubstitutedLeaf[]]>, env: NodeJS.ProcessEnv): Array<{ server: string; name: string }> {
   const out: Array<{ server: string; name: string }> = [];
   const seen = new Set<string>();
-  for (const [server, def, authEnv] of servers) {
+  for (const [server, def, authEnv, , substituted] of servers) {
     // Collect from authEnv first (spec 27 §4.3: union of authEnv and ${NAME} references).
     if (authEnv) {
       for (const name of authEnv) {
@@ -640,11 +641,21 @@ function mcpUnset(servers: Array<[string, unknown, string[] | undefined, string]
         out.push({ server, name });
       }
     }
-    // Then from ${NAME} references in env string values.
+    // E24.4: build a set of env keys whose values were substituted (came from a param)
+    const substitutedEnvKeys = new Set<string>();
+    for (const leaf of substituted) {
+      if (leaf.under === "env" && leaf.path.startsWith("env.")) {
+        // path is "env.KEY" — extract the key
+        substitutedEnvKeys.add(leaf.path.slice(4));
+      }
+    }
+    // Then from ${NAME} references in env string values — skip substituted ones.
     const envBlock = def !== null && typeof def === "object" ? (def as { env?: unknown }).env : undefined;
     if (envBlock === null || typeof envBlock !== "object") continue;
-    for (const value of Object.values(envBlock as Record<string, unknown>)) {
+    for (const [envKey, value] of Object.entries(envBlock as Record<string, unknown>)) {
       if (typeof value !== "string") continue;
+      // E24.4: skip scanning this value if it came from a param substitution
+      if (substitutedEnvKeys.has(envKey)) continue;
       for (const match of value.matchAll(NAME_REF)) {
         const name = match[1];
         const key = `${server}\u0000${name}`;
@@ -819,6 +830,12 @@ const SETTINGS_LABELS = {
   userEnv: "$CLAUDE_CONFIG_DIR/settings.json",
 } as const;
 
+/** Where those files are read, apart from their labels: rewording a label never moves a read. */
+const SETTINGS_PATHS = {
+  project: [".claude", "settings.json"],
+  projectLocal: [".claude", "settings.local.json"],
+} as const;
+
 /**
  * Read and parse a settings file. Returns null if missing, the parsed value if valid JSON object,
  * or { error: label } if invalid JSON or not an object.
@@ -914,13 +931,13 @@ async function hooksRegistered(
   // .claude/settings.json
   settingsFiles.push({
     label: SETTINGS_LABELS.project,
-    result: await readSettingsFile(path.join(root, SETTINGS_LABELS.project), SETTINGS_LABELS.project),
+    result: await readSettingsFile(path.join(root, ...SETTINGS_PATHS.project), SETTINGS_LABELS.project),
   });
 
   // .claude/settings.local.json
   settingsFiles.push({
     label: SETTINGS_LABELS.projectLocal,
-    result: await readSettingsFile(path.join(root, SETTINGS_LABELS.projectLocal), SETTINGS_LABELS.projectLocal),
+    result: await readSettingsFile(path.join(root, ...SETTINGS_PATHS.projectLocal), SETTINGS_LABELS.projectLocal),
   });
 
   // User settings: ~/.claude/settings.json or $CLAUDE_CONFIG_DIR/settings.json
@@ -998,19 +1015,26 @@ async function hooksRegistered(
  */
 async function skillLayout(
   p: Plan,
+  forgeRoot: string,
   w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void,
 ): Promise<void> {
   const flat = flatSkills(p.resolution, p.resolution.targets);
   if (flat.length === 0) return;
 
   for (const name of flat) {
-    // The fix names the folder of the ingredient the profile resolves — a variant's own, not its base's.
-    const folder = p.resolution.ingredients.find((i) => i.meta.type === "skill" && outName(i.meta) === name)?.meta.name ?? name;
+    // The fix names the folder the resolved ingredient was loaded from — a variant's own, a profile-local one's
+    // under profiles/<p>/ — Forge-relative with `/`; its name only when that folder is not under the Forge.
+    const ing = p.resolution.ingredients.find((i) => i.meta.type === "skill" && outName(i.meta) === name);
+    const rel = ing === undefined ? "" : path.relative(forgeRoot, ing.dir);
+    const dir =
+      rel === "" || path.isAbsolute(rel) || rel === ".." || rel.startsWith(`..${path.sep}`)
+        ? `ingredients/skills/${ing?.meta.name ?? name}`
+        : rel.split(path.sep).join("/");
     w(
       "skill-layout",
       "warn",
       `.claude/skills/${name}.md is a skill Claude Code does not list`,
-      `set layout: dir in ingredients/skills/${folder}/ingredient.yaml — sync then writes .claude/skills/${name}/SKILL.md`,
+      `set layout: dir in ${dir}/ingredient.yaml — sync then writes .claude/skills/${name}/SKILL.md`,
     );
   }
 }

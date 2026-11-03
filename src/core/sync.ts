@@ -375,6 +375,11 @@ export interface Plan {
    */
   indexed: Array<{ path: string; rules: number }>;
   /**
+   * What keeps Claude Code from reading AGENTS.md (spec 41 §4.7, spec 50 §4.1), read once by `plan()`: null unless
+   * agents-md.primary is on and claude-code is a target. `doctor` reads it rather than the files again.
+   */
+  claudeMd: Awaited<ReturnType<typeof claudeMdBlocks>> | null;
+  /**
    * The profile's overrides it resolves beside a root variant of the same output name (spec 56 §4.3), sorted; `[]` below
    * the gate and with no override. What refuses the sync, as an unset declared parameter does.
    */
@@ -858,10 +863,11 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const kiroResources = await computeKiroResources(planned, kiroResourceRecords, onDisk, warnings, resolution.primary);
 
   // CLAUDE.md blocking check (spec 41 §4.7): only when the mode is on and claude-code is a target
+  let claudeMd: Plan["claudeMd"] = null;
   if (resolution.primary && resolution.targets.includes("claude-code")) {
-    const blocks = await claudeMdBlocks((rel) => source.read(rel)); // not planned paths: read as they are (spec 48 §5 edge 5)
-    if (blocks.blocking.length > 0) {
-      warnings.push(claudeMdBlockedMessage(blocks.blocking[0]));
+    claudeMd = await claudeMdBlocks((rel) => source.read(rel)); // not planned paths: read as they are (spec 48 §5 edge 5)
+    if (claudeMd.blocking.length > 0) {
+      warnings.push(claudeMdBlockedMessage(claudeMd.blocking[0]));
     }
   }
 
@@ -974,7 +980,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
   }
 
   const overrideConflicts = overrideConflictsOf(ws.forge, resolution);
-  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed, overrideConflicts };
+  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed, overrideConflicts, claudeMd };
 }
 
 /**
