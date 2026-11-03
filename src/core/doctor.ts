@@ -830,6 +830,12 @@ const SETTINGS_LABELS = {
   userEnv: "$CLAUDE_CONFIG_DIR/settings.json",
 } as const;
 
+/** Where those files are read, apart from their labels: rewording a label never moves a read. */
+const SETTINGS_PATHS = {
+  project: [".claude", "settings.json"],
+  projectLocal: [".claude", "settings.local.json"],
+} as const;
+
 /**
  * Read and parse a settings file. Returns null if missing, the parsed value if valid JSON object,
  * or { error: label } if invalid JSON or not an object.
@@ -925,13 +931,13 @@ async function hooksRegistered(
   // .claude/settings.json
   settingsFiles.push({
     label: SETTINGS_LABELS.project,
-    result: await readSettingsFile(path.join(root, SETTINGS_LABELS.project), SETTINGS_LABELS.project),
+    result: await readSettingsFile(path.join(root, ...SETTINGS_PATHS.project), SETTINGS_LABELS.project),
   });
 
   // .claude/settings.local.json
   settingsFiles.push({
     label: SETTINGS_LABELS.projectLocal,
-    result: await readSettingsFile(path.join(root, SETTINGS_LABELS.projectLocal), SETTINGS_LABELS.projectLocal),
+    result: await readSettingsFile(path.join(root, ...SETTINGS_PATHS.projectLocal), SETTINGS_LABELS.projectLocal),
   });
 
   // User settings: ~/.claude/settings.json or $CLAUDE_CONFIG_DIR/settings.json
