@@ -180,7 +180,7 @@ describe("spec 54 Part B — a profile that extends a profile", () => {
   });
 
   it("import into a child refuses a source that differs from its parent's local, and reuses one that equals it (D11)", async () => {
-    const f = kept(await acmeHoisted(GATE));
+    const f = kept(await acmeHoisted(GATE, { importShaped: true }));
     await sync(f.ws.portal);
     const same = await importClaudeCode({ workspaceRoot: f.ws.portal, forgeRoot: f.forgeRoot, profileName: "acme-portal" });
     expect(same.variants).toEqual([]);

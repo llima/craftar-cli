@@ -74,6 +74,8 @@ import { editYamlText } from "../core/yaml-edit.js";
 import { registrationCitations } from "../core/mcp-server.js";
 import type { WriteJournal } from "../core/unify.js";
 import { stripForgeOnlyKeys, type Ingredient, type IngredientRef, type Lock } from "../schema/index.js";
+import { deepMerge } from "../core/merge.js";
+import type { Sections } from "../schema/index.js";
 
 // The scratch copy lives in core, where `forge promote` shares it (spec 29, slice D); it stays exported from here.
 export { copyForgeForProof };
@@ -787,7 +789,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     PS: structuredClone(profileObj.sections ?? {}),
     WS: await workspaceSections(root, readWs, "drift promote"),
     // The recipe layer as sync resolved it (spec 54 §4.3): a value it already gives is never written to the profile.
-    RS: p0.resolution.sectionLayers.recipes.sections,
+    RS: deepMerge(p0.resolution.sectionLayers.recipes.sections, p0.resolution.sectionLayers.parents.sections) as Sections,
     pinned: new Map(),
     forge,
     markedBase: false,

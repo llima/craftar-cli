@@ -80,11 +80,15 @@ export async function acmeCopies(schema: number): Promise<Family> {
 }
 
 /** Spec 54 §5.1: the abstract parent `acme` holds what both children shared, its rule and recipe as locals. */
-export async function acmeHoisted(schema: number): Promise<Family> {
+/** `command/open-pr` as import writes one (its frontmatter kept raw beside `description`), so a re-import compares it as the same. */
+const importShaped = (xs: IngredientSpec[]): IngredientSpec[] =>
+  xs.map((x) => (x.meta.name === "open-pr" ? { ...x, meta: { ...x.meta, frontmatterRaw: "description: Open a pull request" } } : x));
+
+export async function acmeHoisted(schema: number, opts: { importShaped?: boolean } = {}): Promise<Family> {
   const root = await tmpDir("craftar-extends-");
   const forgeRoot = path.join(root, "forge");
   await makeForge(forgeRoot, {
-    ingredients,
+    ingredients: opts.importShaped ? importShaped(ingredients) : ingredients,
     recipes: rootRecipes,
     profiles: [
       { name: "acme", abstract: true, recipes: ["base", "acme-base"], ...shared },

@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { forgeFor, overriddenBase, ProfileLocalLoadError, readsLocalOverride, readsProfileLocal, type LocalLayer } from "../core/profile-local.js";
 import { readsRecipeSections } from "../core/recipe-sections.js";
+import { familyOf } from "../core/profile-extends.js";
 import path from "node:path";
 import os from "node:os";
 import { readWorkspaceConfig } from "../core/sync.js";
@@ -581,7 +582,11 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
 
   // The recipe layer of sections (spec 54 §4.3), as sync resolves it for this workspace. Where the profile does not
   // resolve and a recipe of what it sees holds sections, the comparison cannot be made as sync would: fail closed.
-  if (cachedResolution?.ok) ctx.RS = cachedResolution.resolution.sectionLayers.recipes.sections;
+  // Spec 54 §5.9 (D12): the profile's parents are a lower layer too, so their values are never written into the child.
+  if (cachedResolution?.ok) {
+    const layers = cachedResolution.resolution.sectionLayers;
+    ctx.RS = deepMerge(layers.recipes.sections, layers.parents.sections) as Sections;
+  }
   else if (cachedResolution && loaded && readsRecipeSections(loaded.manifest) && [...forgeFor(loaded, opts.profileName).recipes.values()].some((r) => r.sections !== undefined)) {
     throw new Error(
       `import: profile ${opts.profileName} does not resolve (${errorText(cachedResolution.error)}), and its recipes hold sections import must render — fix the Forge and re-run`,
@@ -1859,6 +1864,23 @@ async function decideLocal(
     run.runLocals?.push(ref);
     return ref;
   }
+  // Spec 54 §5.9 (D11): a source a parent of the profile holds as a local is reused when equal and refused otherwise, under
+  // every --local mode — no writer writes a parent.
+  for (const anc of familyOf(forge, profile).slice(1)) {
+    const held = forge.locals.get(anc)?.ingredients.get(ref as IngredientRef);
+    if (!held) continue;
+    const d = await decide(run.ctx, held.dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases, run.indexExpand);
+    let equal = d.kind === "reuse" && !(d.delta?.length || d.sectionDelta?.length);
+    if (d.kind === "literal") {
+      const carried = await carryFromExisting(stage, path.join(held.dir, "ingredient.yaml"), sourceMeta);
+      equal = (await fingerprintDir(held.dir, stage.reader())) === fingerprintOf(validateImported(carried), files);
+    }
+    const dir = path.relative(forge.root, held.dir).split(path.sep).join("/");
+    if (!equal) throw new Error(`import: ${source}: ${ref} differs from the local of ${anc}, which ${profile} extends (${dir}) — edit the parent's local in the Forge by hand, then re-run`);
+    report.reused.push(ref);
+    (report.localReused ??= []).push({ ref, dir });
+    return ref;
+  }
   const rootHas = await stage.exists(path.join(stage.root, "ingredients", typeFolder(sourceMeta.type), sourceMeta.name, "ingredient.yaml"));
   if (mode === "never" && !rootHas && [...forge.locals.values()].some((l) => l.ingredients.has(ref as IngredientRef))) {
     throw new Error(`import: I14 ${source} would become ${ref} at the root, a name another profile holds as a local — the Forge would not load; rename the source in the workspace, or re-run with --local=auto to keep it local to this profile`);
@@ -1974,8 +1996,10 @@ async function placeComputed(o: RecipeOptions, own: LocalLayer | undefined, name
   // An override (spec 56 §7) stays in a computed root list: the root ingredient of that ref is there for other profiles.
   const forge = o.forge;
   const isOverride = (r: string) => overriddenBase(forge, r) !== undefined;
-  const locals = new Set<string>([...(own?.ingredients.keys() ?? []), ...(o.runLocals ?? [])].filter((r) => !isOverride(r)));
-  const citedLocally = new Set<string>([...(own?.recipes.values() ?? [])].flatMap((r) => r.recipe.ingredients));
+  // Spec 54 §5.6: the family's parents' locals are the profile's too — a root recipe never lists them.
+  const parentLayers = familyOf(forge, o.profile).slice(1).map((q) => forge.locals.get(q)).filter((l): l is LocalLayer => l !== undefined);
+  const locals = new Set<string>([...(own?.ingredients.keys() ?? []), ...(o.runLocals ?? []), ...parentLayers.flatMap((l) => [...l.ingredients.keys()])].filter((r) => !isOverride(r)));
+  const citedLocally = new Set<string>([...(own?.recipes.values() ?? []), ...parentLayers.flatMap((l) => [...l.recipes.values()])].flatMap((r) => r.recipe.ingredients));
   const rootListed = new Set(o.forge.recipes.get(name)?.ingredients ?? []);
   const kept = list.filter((r) => !locals.has(r) && !(citedLocally.has(r) && !rootListed.has(r)));
   if (list.length > 0 && kept.length === 0) return null;
