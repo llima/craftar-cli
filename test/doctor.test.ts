@@ -240,7 +240,7 @@ describe("workspace checks", () => {
     await fs.writeFile(lockPath, JSON.stringify(lock));
     const r = await run({ home: f.home, workspace: a });
     expect(of(r.checks, "lock-credential")).toEqual([
-      { id: "lock-credential", scope: "workspace", level: "warn", message: "the lock names a Forge URL with credentials", fix: "remove the credentials from craftar.yaml and sync again" },
+      { id: "lock-credential", scope: "workspace", level: "warn", message: "craftar.lock records a Forge URL with credentials (not shown)", fix: "rotate the credential, set forge: in craftar.yaml to a URL without it, then craftar sync — the old value stays in git history" },
     ]);
   });
 

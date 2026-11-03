@@ -556,7 +556,7 @@ async function lockAndStatus(
   // lock-credential: check if the lock's forge.source holds credentials (E18.3)
   // This is present only when the lock exists and is valid.
   if (credentialFault(lock.forge.source)) {
-    w("lock-credential", "warn", "the lock names a Forge URL with credentials", "remove the credentials from craftar.yaml and sync again");
+    w("lock-credential", "warn", "craftar.lock records a Forge URL with credentials (not shown)", "rotate the credential, set forge: in craftar.yaml to a URL without it, then craftar sync — the old value stays in git history");
   }
 
   if (ws === null || p === null) return;
