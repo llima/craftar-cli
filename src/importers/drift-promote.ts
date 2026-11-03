@@ -1192,9 +1192,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       {
         const view = forgeFor(forge, profile);
         const viaParent = familyOf(forge, profile).slice(1).find((q) => {
-          const names = effectiveProfile(forge, forge.profiles.get(q)!).recipes;
           try {
-            return recipeOrder(view, names, `profile ${q}`).includes(R);
+            return recipeOrder(view, effectiveProfile(forge, forge.profiles.get(q)!).recipes, `profile ${q}`).includes(R);
           } catch (e) {
             throw new Error(`${normalized}: the recipes of profile ${q}, which ${profile} extends, do not resolve (${errorText(e)}) — fix the Forge and re-run`);
           }

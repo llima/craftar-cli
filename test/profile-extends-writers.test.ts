@@ -292,5 +292,32 @@ describe("spec 54 Part B — the writers", () => {
       "forge promote: profile acme-portal reaches recipe base (which names rule/style) through acme, which it extends — no command writes a parent",
     );
   });
+
+  for (const how of ["block", "extends"] as const) {
+    it(`forge promote refuses a recipe a parent reaches through its ${how === "block" ? "integrations block" : "recipe's extends"}, the child listing it too`, async () => {
+      const root = await tmpDir("craftar-extends-fp-");
+      roots.push(root);
+      const forge = path.join(root, "forge");
+      const v = rule("style--globex", "# Style\nGlobex.\n", { as: "style" });
+      await makeForge(forge, {
+        ingredients: [rule("style", "# Style\nShort.\n"), v, rule("angular", "# A\n")],
+        recipes: [
+          recipe("base", ["rule/style"]),
+          recipe("base--globex", ["rule/style--globex"]),
+          recipe("stack-angular", ["rule/angular"]),
+          ...(how === "block" ? [recipe("base-x", ["rule/style"])] : [recipe("wrap", ["rule/angular"], { extends: ["base"] })]),
+        ],
+        profiles: [
+          how === "block" ? { name: "acme", abstract: true, recipes: [], integrations: { base: { kind: "x" } } } : { name: "acme", abstract: true, recipes: ["wrap"] },
+          { name: "acme-portal", extends: "acme", recipes: how === "block" ? ["base-x"] : ["base"], targets: ["claude-code"] },
+          { name: "globex", recipes: ["base--globex"], targets: ["claude-code"] },
+        ],
+      });
+      await writeFiles(forge, { "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: GATE }) });
+      await expect(planBasePromotion(await loadForge(forge), "rule/style", "globex")).rejects.toThrow(
+        `through acme, which it extends — no command writes a parent`,
+      );
+    });
+  }
 });
 
