@@ -245,13 +245,23 @@ describe("import --from claude-code", () => {
     expect(r.rejected).toEqual([]);
     const utf16 = r.warnings.filter((w) => w.includes("UTF-16"));
     expect(utf16).toEqual([
-      ".claude/rules/hello.md is UTF-16 text; import stores it read as UTF-8, which changes its bytes — save it as UTF-8 to keep them",
-      ".claude/scripts/hello.ps1 is UTF-16 text; import stores it read as UTF-8, which changes its bytes — save it as UTF-8 to keep them",
+      ".claude/rules/hello.md is UTF-16 text; import reads it as UTF-8, so what the Forge holds for it does not keep its bytes — save it as UTF-8",
+      ".claude/scripts/hello.ps1 is UTF-16 text; import reads it as UTF-8, so what the Forge holds for it does not keep its bytes — save it as UTF-8",
     ]);
     expect(r.warnings.join("\n")).not.toContain("hello'");
     // What is stored does not change.
     const stored = await fs.readFile(path.join(t.forge, "ingredients/scripts/hello/hello.ps1"), "utf8");
     expect(stored).toBe(withBom.toString("utf8").replace(/\r\n?/g, "\n"));
+  });
+
+  it("does not warn for a UTF-16 steering mirror it skips unread", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/hello.md": "# Hello\n",
+      ".kiro/steering/hello.md": utf16le("---\ninclusion: always\n---\n\n<!-- GENERATED from .claude/rules/hello.md by craftar -- do not edit. -->\n\n# Hello\n"),
+    });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.warnings.filter((w) => w.includes("UTF-16"))).toEqual([]);
   });
 
   it("imports a hand-written steering file that only mentions the generated banner's wording (E13.2)", async () => {

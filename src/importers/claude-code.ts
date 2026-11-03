@@ -745,7 +745,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   const queuedIndexable = new Set(queue.filter((q) => q.meta.type === "rule" || q.meta.type === "steering").map((q) => `${q.meta.type}/${q.meta.name}`));
   const mayBeSkipped = (q: Source) => q.skip?.() || (q.meta.type === "steering" && queuedRules.has(q.meta.name));
   const clean = queue.filter((q) => !secretIn(q.meta, q.files, q.scan, q.lineOffset));
-  for (const w of [...new Set(clean.flatMap((q) => utf16Warnings(q.meta, q.scan)))].sort()) report.warnings.push(w);
+  // Not for a source the run skips unread (a generated mirror, a steering file its rule shadows): nothing of it is kept.
+  for (const w of [...new Set(clean.filter((q) => !mayBeSkipped(q)).flatMap((q) => utf16Warnings(q.meta, q.scan)))].sort()) report.warnings.push(w);
   const runBases = new Set(clean.filter((q) => !mayBeSkipped(q)).map((q) => `${q.meta.type}/${q.meta.name}`));
   const mayBeDecided = clean.filter((q) => !q.skip?.());
   const literal: Array<{ ref: string; source: string; meta: Ingredient; files: Record<string, string | Buffer>; lineOffset?: number }> = [];
@@ -1420,12 +1421,12 @@ async function readSource(abs: string): Promise<{ text: string; scan?: string }>
 }
 
 /**
- * One warning per UTF-16 source an ingredient stores as read (E2.1): import keeps its UTF-8 read, which changes its
- * bytes. Names the file, never its text.
+ * One warning per UTF-16 source import reads as text (E2.1): it keeps the UTF-8 read, so what the Forge holds does not
+ * keep the file's bytes. Names the file, never its text.
  */
 function utf16Warnings(meta: Ingredient, scan: Record<string, string>): string[] {
   const origin = meta.origin?.path ?? `${meta.type}/${meta.name}`;
-  return Object.keys(scan).map((rel) => `${fileWhere(meta, origin, rel)} is UTF-16 text; import stores it read as UTF-8, which changes its bytes — save it as UTF-8 to keep them`);
+  return Object.keys(scan).map((rel) => `${fileWhere(meta, origin, rel)} is UTF-16 text; import reads it as UTF-8, so what the Forge holds for it does not keep its bytes — save it as UTF-8`);
 }
 
 /** The extra scan entry for one stored file, when its source needed a UTF-16 decode. */
