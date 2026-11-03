@@ -16,7 +16,7 @@ import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
 import { writtenSections } from "../core/section-files.js";
-import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileWrittenSchema, RecipeWrittenSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type ProfileSections, type Sections, type Target } from "../schema/index.js";
+import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileWrittenSchema, RecipeWrittenSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type ProfileSections, type Sections, type Target, type IngredientParamDecl } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, recipeOrder, resolve, sectionKey, type Resolution } from "../core/resolve.js";
 import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE } from "../core/rules-index.js";
@@ -1500,7 +1500,7 @@ async function writeIngredient(
   let variantAuthEnv: string[] | undefined;
   // The registration and cited params to carry into a hook variant — from the decision (spec 43 §7.2 row 10).
   let variantRegistration: unknown[] | undefined;
-  let variantRegistrationParams: Record<string, { default?: string | number | boolean; description?: string }> | undefined;
+  let variantRegistrationParams: Record<string, IngredientParamDecl> | undefined;
   // Spec 51 §4.5: a local of the importing profile is compared first, and never shadowed at the root.
   const localDecision = run ? await decideLocal(stage, run, ref, sourceMeta, files, fingerprint, profile, source, report) : null;
   if (typeof localDecision === "string") return localDecision;
@@ -1651,12 +1651,12 @@ async function writeIngredient(
           const variantParams = existingMeta.params;
           // Merge base and variant params for citations: a key is "declared" if either side declares it.
           // Use the type expected by registrationCitations (it only checks key existence).
-          type ParamDecl = { default?: string | number | boolean; description?: string };
+          type ParamDecl = { type?: "list"; default?: string | number | boolean | string[]; description?: string };
           const mergedParams: Record<string, ParamDecl> = { ...variantParams, ...baseParams };
           const variantMetaForCitations = { ...existingMeta, params: mergedParams };
           const citedDeclared = registrationCitations(variantMetaForCitations).filter((c) => c.declared).map((c) => c.key);
           if (citedDeclared.length > 0) {
-            const keptParams: Record<string, { default?: string | number | boolean; description?: string }> = {};
+            const keptParams: Record<string, IngredientParamDecl> = {};
             for (const k of citedDeclared) {
               // Prefer base's entry; fall back to variant's own entry
               if (baseParams && Object.hasOwn(baseParams, k)) keptParams[k] = baseParams[k];

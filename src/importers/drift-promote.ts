@@ -75,7 +75,7 @@ import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { registrationCitations } from "../core/mcp-server.js";
 import type { WriteJournal } from "../core/unify.js";
-import { stripForgeOnlyKeys, type Ingredient, type IngredientRef, type Lock } from "../schema/index.js";
+import { stripForgeOnlyKeys, type Ingredient, type IngredientRef, type Lock, type IngredientParamDecl } from "../schema/index.js";
 import { deepMerge } from "../core/merge.js";
 import type { Sections } from "../schema/index.js";
 
@@ -1066,7 +1066,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     const citedDeclared = registrationCitations(X.meta).filter((c) => c.declared).map((c) => c.key);
     if (citedDeclared.length > 0) {
       const declared = X.meta.params;
-      const keptParams: Record<string, { default?: string | number | boolean; description?: string }> = {};
+      const keptParams: Record<string, IngredientParamDecl> = {};
       for (const k of citedDeclared) {
         if (Object.hasOwn(declared, k)) keptParams[k] = declared[k];
       }

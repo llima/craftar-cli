@@ -65,12 +65,21 @@ const Inclusion = z.enum(["always", "fileMatch", "manual", "auto"]);
 /** A parameter an ingredient declares (spec 09). `default` is the weakest layer, scoped to this ingredient. */
 const IngredientParam = z
   .object({
-    // A scalar: `substitute` renders values with String(), and an object would render "[object Object]".
-    default: z.union([z.string(), z.number(), z.boolean()]).optional(),
+    /** Spec 55 §4.2: a list key, whose values are sequences of strings — read only at `FORGE_SCHEMA_LIST_PARAMS` and above. */
+    type: z.literal("list").optional(),
+    // A scalar: `substitute` renders values with String(), and an object would render "[object Object]"; a sequence of
+    // strings for a key declared `type: list` (spec 55 §4.2).
+    default: z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]).optional(),
     description: z.string().optional(),
     example: z.unknown().optional(),
   })
-  .strict();
+  .strict()
+  .refine((p) => p.default === undefined || Array.isArray(p.default) === (p.type === "list"), {
+    message: "a default is a sequence of strings exactly when the param declares type: list",
+  });
+
+/** One entry of an ingredient's `params` (spec 09; `type: list` since spec 55 §4.2). */
+export type IngredientParamDecl = z.infer<typeof IngredientParam>;
 
 /** Slug-like pattern: starts with alphanumeric, then alphanumeric, dots, underscores or hyphens. Used by ingredient names and service `as`. */
 const SLUG = /^[a-z0-9][a-z0-9._-]*$/i;
@@ -673,7 +682,14 @@ export const RecipeSchema = z.object({
   /** Mutually exclusive slot (e.g. `frontend`): two recipes on the same slot cannot coexist. */
   slot: z.string().optional(),
   ingredients: z.array(z.string()).default([]),
-  params: noProtoKey(z.record(z.object({ default: z.unknown().optional(), description: z.string().optional() }))).default({}),
+  params: noProtoKey(
+    z.record(
+      z
+        .object({ type: z.literal("list").optional(), default: z.unknown().optional(), description: z.string().optional() })
+        // Spec 55 §4.2: a list key's default is a sequence of strings; other items are refused by the plan, which names them.
+        .refine((p) => p.type !== "list" || p.default === undefined || Array.isArray(p.default), { message: "a type: list default is a sequence" }),
+    ),
+  ).default({}),
   /** Section values this recipe gives (spec 54 Part A), read at Forge schema 10 and above only; absent when not written. */
   sections: SectionsSchema.optional(),
 });
@@ -774,6 +790,8 @@ export const FORGE_SCHEMA_SECTION_FILES = 11;
 export const FORGE_SCHEMA_LOCAL_OVERRIDE = 12;
 /** Forge schema that reads a profile's `extends` and `abstract` (spec 54 Part B). */
 export const FORGE_SCHEMA_PROFILE_EXTENDS = 13;
+/** Forge schema that reads a param declared `type: list` and its filtered placeholders, `{{ key | py }}` (spec 55 §4.1). */
+export const FORGE_SCHEMA_LIST_PARAMS = 14;
 
 export const ForgeManifestSchema = z.object({
   name: z.string(),
@@ -792,6 +810,7 @@ export const ForgeManifestSchema = z.object({
       z.literal(FORGE_SCHEMA_SECTION_FILES),
       z.literal(FORGE_SCHEMA_LOCAL_OVERRIDE),
       z.literal(FORGE_SCHEMA_PROFILE_EXTENDS),
+      z.literal(FORGE_SCHEMA_LIST_PARAMS),
     ])
     .default(1),
   description: z.string().optional(),

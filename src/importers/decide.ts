@@ -13,7 +13,7 @@ import { sectionKey } from "../core/resolve.js";
 import { registrationCitations, rendersServers, serverCitations } from "../core/mcp-server.js";
 import { readsRulesIndex, RULES_INDEX_KEY } from "../core/rules-index.js";
 import type { DirReader } from "../core/fingerprint.js";
-import { OverridesParamsSchema, SectionsSchema, WorkspaceConfigSchema, stripForgeOnlyKeys, type ForgeSchema, type Ingredient, type Owner, type Sections, type Target } from "../schema/index.js";
+import { OverridesParamsSchema, SectionsSchema, WorkspaceConfigSchema, stripForgeOnlyKeys, type ForgeSchema, type Ingredient, type Owner, type Sections, type Target, type IngredientParamDecl } from "../schema/index.js";
 
 /**
  * The decision half of template-aware import (spec 10 §6.1–§6.5): what the importing profile
@@ -81,7 +81,7 @@ export type Decision =
       sectioned?: string[];
       sectionDelta?: SectionChange[];
     }
-  | { kind: "variant"; why?: string; authEnv?: string[]; registration?: unknown[]; registrationParams?: Record<string, { default?: string | number | boolean; description?: string }> }
+  | { kind: "variant"; why?: string; authEnv?: string[]; registration?: unknown[]; registrationParams?: Record<string, IngredientParamDecl> }
   | { kind: "literal"; warn: string };
 
 const norm = (s: string) => toLf(stripBom(s));
@@ -108,7 +108,7 @@ export function pin(ctx: RunContext, keys: Iterable<string>, map: Record<string,
  */
 export function registrationCarry(meta: Ingredient): {
   registration?: unknown[];
-  registrationParams?: Record<string, { default?: string | number | boolean; description?: string }>;
+  registrationParams?: Record<string, IngredientParamDecl>;
 } {
   if (meta.type !== "hook") return {};
   const registration = meta.registration;
@@ -118,7 +118,7 @@ export function registrationCarry(meta: Ingredient): {
   const citedDeclared = citations.filter((c) => c.declared).map((c) => c.key);
   if (!citedDeclared.length) return { registration };
   const declared = meta.params ?? {};
-  const registrationParams: Record<string, { default?: string | number | boolean; description?: string }> = {};
+  const registrationParams: Record<string, IngredientParamDecl> = {};
   for (const k of citedDeclared) {
     if (Object.hasOwn(declared, k)) registrationParams[k] = declared[k];
   }
