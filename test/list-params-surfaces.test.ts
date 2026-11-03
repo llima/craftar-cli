@@ -67,6 +67,18 @@ describe("list params in metadata (spec 55 §4.6)", () => {
     expect(kiro).not.toContain("yaml-items");
   });
 
+  it("one pass in metadata: an item holding {{env}} is written as it is, in paths: and in fileMatchPattern", async () => {
+    const rule: IngredientSpec = { meta: { type: "rule", name: "scoped", inclusion: "fileMatch", fileMatchPattern: ["{{ env | yaml-items }}"], params: LIST, frontmatterRaw: "paths:\n  - {{ env | yaml-items }}" }, files: { "rule.md": "# Scoped\n" } };
+    const s = await forgeWith(rule, ["{{env}}/**"]);
+    expect(await fileOf(s, ".claude/rules/scoped.md")).toMatch(/^---\npaths:\n {2}- "\{\{env\}\}\/\*\*"\n---\n/);
+    expect(await fileOf(s, ".kiro/steering/scoped.md")).toContain("{{env}}/**");
+  });
+
+  it("an empty list that leaves fileMatchPattern empty is refused", async () => {
+    const s = await forgeWith({ meta: { type: "rule", name: "scoped", inclusion: "fileMatch", fileMatchPattern: ["{{ env | yaml-items }}"], params: LIST }, files: { "rule.md": "# Scoped\n" } }, []);
+    expect(await planError(s)).toContain("rule/scoped: list param env in fileMatchPattern leaves the pattern empty");
+  });
+
   it("a list key in metadata with no filter is refused", async () => {
     const s = await forgeWith({ meta: { type: "command", name: "go", description: "Runs {{env}}", params: LIST }, files: { "command.md": "Go.\n" } });
     expect(await planError(s)).toContain("command/go: list param env in description is cited with no filter");

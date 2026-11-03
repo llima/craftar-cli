@@ -591,6 +591,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     const layers = cachedResolution.resolution.sectionLayers;
     ctx.RS = deepMerge(layers.recipes.sections, layers.parents.sections) as Sections;
   }
+  if (cachedResolution?.ok) ctx.lists = cachedResolution.resolution.listKeys;
   else if (cachedResolution && loaded && readsRecipeSections(loaded.manifest) && [...forgeFor(loaded, opts.profileName).recipes.values()].some((r) => r.sections !== undefined)) {
     throw new Error(
       `import: profile ${opts.profileName} does not resolve (${errorText(cachedResolution.error)}), and its recipes hold sections import must render — fix the Forge and re-run`,
@@ -1593,7 +1594,7 @@ async function writeIngredient(
           parsed: rekey(v.parsed),
         };
         for (const k of ["description", "targets", "tags"] as const) if ((seen.meta as Record<string, unknown>)[k] === undefined) delete (seen.meta as Record<string, unknown>)[k];
-        const rendered = renderedFingerprint(seen, map, S, run.ctx.forge.manifest.schema, importLists(run.ctx.forge, seen.meta), run.ctx.primaryRefs ?? undefined, run.ctx.sourceTarget, (t) => expand(t, indexTarget));
+        const rendered = renderedFingerprint(seen, map, S, run.ctx.forge.manifest.schema, importLists(run.ctx.forge, seen.meta, run.ctx.lists), run.ctx.primaryRefs ?? undefined, run.ctx.sourceTarget, (t) => expand(t, indexTarget));
         if (rendered !== fingerprint) {
           throw new Error(`import: ${meta.type}/${name} holds {{${RULES_INDEX_KEY}}} and the workspace's ${source} differs from what sync writes from it — edit the variant in the Forge, then re-run`);
         }
@@ -1652,7 +1653,7 @@ async function writeIngredient(
           const variantParams = existingMeta.params;
           // Merge base and variant params for citations: a key is "declared" if either side declares it.
           // Use the type expected by registrationCitations (it only checks key existence).
-          type ParamDecl = { type?: "list"; default?: string | number | boolean | string[]; description?: string };
+          type ParamDecl = IngredientParamDecl;
           const mergedParams: Record<string, ParamDecl> = { ...variantParams, ...baseParams };
           const variantMetaForCitations = { ...existingMeta, params: mergedParams };
           const citedDeclared = registrationCitations(variantMetaForCitations).filter((c) => c.declared).map((c) => c.key);

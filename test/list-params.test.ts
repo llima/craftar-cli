@@ -8,7 +8,6 @@ import { loadForge } from "../src/core/forge.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import { FORGE_SCHEMA_LIST_PARAMS } from "../src/schema/index.js";
 import { acmeLists, type Scenario } from "./helpers/list-params.js";
-import { writeFiles } from "./helpers/forge.js";
 
 /** Spec 55 Part A §4.2–§4.5, tests 1–9 and 15: list params and their filters, in a body. */
 
@@ -105,8 +104,8 @@ describe("list params in a body (spec 55 Part A)", () => {
     const s = kept(await acmeLists({ schema: GATE, declare: true, ...body("{{env | py}}\nTags: {{tags}}\n") }));
     const p = await plan(await loadWorkspace(s.wsRoot));
     expect(p.files.find((f) => f.path === ".claude/rules/allow.md")!.content.toString("utf8")).toContain("Tags: a,b\n");
-    expect(p.warnings.filter((w) => w.includes("is a list but no ingredient or recipe declares it"))).toEqual([
-      'params: tags is a list but no ingredient or recipe declares it type: list — it renders as the items joined by ","',
+    expect(p.warnings.filter((w) => w.includes("but no ingredient or recipe declares it type: list"))).toEqual([
+      'params: tags is a list in profile acme but no ingredient or recipe declares it type: list — it renders as the items joined by ","',
     ]);
   });
 
@@ -122,6 +121,10 @@ describe("list params in a body (spec 55 Part A)", () => {
     expect(await rendered(below)).toBe("{{env | py}}\n");
     const declared = kept(await acmeLists({ schema: GATE - 1, declare: true, ...body("{{env | py}}\n") }));
     await expect(loadForge(declared.forgeRoot)).rejects.toThrow(`ingredients/rules/allow/ingredient.yaml: params.env: type: list needs schema: ${GATE} in craftar.forge.yaml`);
+    const inRecipe = kept(await acmeLists({ schema: GATE - 1, ...body("{{env | py}}\n") }));
+    const r = path.join(inRecipe.forgeRoot, "recipes/core.yaml");
+    await fs.writeFile(r, YAML.stringify({ ...YAML.parse(await fs.readFile(r, "utf8")), params: { env: { type: "list" } } }));
+    await expect(loadForge(inRecipe.forgeRoot)).rejects.toThrow(`recipes/core.yaml: params.env: type: list needs schema: ${GATE} in craftar.forge.yaml`);
   });
 
   it("test 1 (body form): yaml-items expands one quoted line per item and removes the line for []", async () => {
@@ -133,7 +136,16 @@ describe("list params in a body (spec 55 Part A)", () => {
 
   it("test 14: a CRLF body keeps CRLF on every line yaml-items writes", async () => {
     const s = kept(await acmeLists({ schema: GATE, declare: true, ...body("x\r\n  - {{ env | yaml-items }}\r\ny\r\n") }));
+    // The body is read as LF before it renders, so the claude-code file (which keeps a new file LF) shows the lines yaml-items
+    // wrote; kiro then writes CRLF on every line as always (spec 55 §7 item 5).
+    expect(await rendered(s)).toBe('x\n  - "A"\n  - "B"\ny\n');
     expect(await rendered(s, ".kiro/steering/allow.md")).toContain('  - "A"\r\n  - "B"\r\ny');
+  });
+
+  it("test 15: one pass with yaml-items — an item holding {{tags}} or {{env}} is written as it is", async () => {
+    const s = kept(await acmeLists({ schema: GATE, declare: true, ...body("globs:\n  - {{ env | yaml-items }}\n") }));
+    await setParams(s, { env: ["{{tags}}", "{{env}}"], tags: "SECRET" });
+    expect(await rendered(s)).toBe('globs:\n  - "{{tags}}"\n  - "{{env}}"\n');
   });
 
   it("test 15: one pass — an item holding {{tags}} is written as it is", async () => {
@@ -165,4 +177,3 @@ function pythonAvailable(): boolean {
     return false;
   }
 }
-void writeFiles;

@@ -6,7 +6,7 @@
 import type { Ingredient } from "../schema/index.js";
 import { FORGE_SCHEMA_METADATA_PARAMS } from "../schema/index.js";
 import { PLACEHOLDER_RE, listsOf, paramsFor, substitute, type Resolution, type ResolvedIngredient } from "./resolve.js";
-import { FILTER_OPEN_RE, FILTERED_RE, NO_LISTS, YAML_ITEMS_ELEMENT, YAML_ITEMS_LINE, filteredCitations, formatList, parseFilter, type ListContext } from "./list-params.js";
+import { FILTER_OPEN_RE, FILTERED_RE, NO_LISTS, YAML_ITEMS_ELEMENT, YAML_ITEMS_LINE, holdsControl, filteredCitations, formatList, parseFilter, type ListContext } from "./list-params.js";
 import { looseParse, parseFrontmatter } from "./frontmatter.js";
 import { parseYamlText } from "./yaml-read.js";
 import { RULES_INDEX_KEY } from "./rules-index.js";
@@ -112,9 +112,14 @@ export function listMetadata<M extends Ingredient>(
           const items = params[y[2]] as string[];
           if (items.length === 0 && under === "paths") refuse(field, y[2], "is empty under paths:, which may make a scoped rule load always — give it an item or drop the citation");
           items.forEach((item, i) => {
-            if (/[\u0000-\u0008\u000a-\u001f\u007f-\u009f]/.test(item)) refuse(field, y[2], `item ${i} holds a line break or a control character`);
+            if (holdsControl(item)) refuse(field, y[2], `item ${i} holds a line break or a control character`);
           });
-          for (const item of items) kept.push(`${y[1]}- ${JSON.stringify(item)}`);
+          // Each item a key of its own inside craftar's quotes, so spec 50's line tests read it and one pass writes it (E2).
+          for (const item of items) {
+            const k = `${y[2]}.__item${n++}`;
+            map[k] = JSON.stringify(item).slice(1, -1);
+            kept.push(`${y[1]}- "{{${k}}}"`);
+          }
           continue;
         }
         kept.push(joins(field, line));
@@ -128,9 +133,17 @@ export function listMetadata<M extends Ingredient>(
           if (!Object.hasOwn(params, y[1])) {
             missing?.add(y[1]);
             spliced.push(x);
-          } else spliced.push(...(params[y[1]] as string[]));
+          } else {
+            for (const item of params[y[1]] as string[]) {
+              const k = `${y[1]}.__item${n++}`;
+              map[k] = item;
+              spliced.push(`{{${k}}}`);
+            }
+          }
         } else spliced.push(typeof x === "string" ? joins(field, x) : x);
       }
+      // An empty list leaves no element: spec 50's refusal of a pattern that renders empty (spec 55 §4.6).
+      if (v.length > 0 && spliced.length === 0) refuse(field, YAML_ITEMS_ELEMENT.exec(String(v.find((x) => typeof x === "string" && YAML_ITEMS_ELEMENT.test(x))))![1], "leaves the pattern empty");
       out[field] = spliced;
     } else if (typeof v === "string") out[field] = joins(field, v);
     else if (Array.isArray(v)) out[field] = v.map((x) => (typeof x === "string" ? joins(field, x) : x));
@@ -384,7 +397,7 @@ export function renderedMeta<M extends Ingredient>(meta: M, params: Record<strin
   const l = listMetadata(meta, params, lists, ref, missing);
   const fault = metadataFault(l.meta, l.params);
   // A joined list is tested under a key of its own; the refusal names the list key (spec 55 §4.6).
-  if (fault) throw new Error(metadataFaultMessage(ref, { ...fault, key: fault.key.replace(/\.__join\d+$/, "") }));
+  if (fault) throw new Error(metadataFaultMessage(ref, { ...fault, key: fault.key.replace(/\.__(join|item)\d+$/, "") }));
   return substituteMetadata(l.meta, l.params, missing);
 }
 
@@ -501,4 +514,18 @@ export function withTemplatedFields<M extends Ingredient>(source: M, base: Ingre
     else out[field] = v;
   }
   return out as M;
+}
+
+/**
+ * Import's reading of metadata as `sync` renders it (spec 50 §5.6), with a list key's forms rendered too (spec 55 §4.8): a form
+ * `sync` would refuse is left as written, so the comparison makes a variant rather than failing the import.
+ */
+export function substituteImportedMetadata<M extends Ingredient>(meta: M, params: Record<string, unknown>, lists: ListContext): M {
+  if (!lists.keys.size) return substituteMetadata(meta, params);
+  try {
+    const l = listMetadata(meta, params, lists, "import");
+    return substituteMetadata(l.meta, l.params);
+  } catch {
+    return substituteMetadata(meta, params);
+  }
 }

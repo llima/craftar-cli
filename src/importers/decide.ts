@@ -45,6 +45,8 @@ export interface RunContext {
   forge: Forge | null;
   /** What the importing profile sees (spec 51 §4.3): its locals over the root; the Forge itself when it has none. */
   view?: Forge | null;
+  /** The list keys of the importing profile's resolution (spec 55 §4.8); absent when it is new or does not resolve. */
+  lists?: ReadonlySet<string>;
   /**
    * Under agents-md.primary for the importing workspace, the rewording the claude-code emitter applied, so a base is compared
    * as sync wrote it (spec 41 §4.10); null otherwise.
@@ -215,7 +217,7 @@ export async function decide(
   // Rules use claude-code form; steering uses kiro form.
   const indexTarget = base.meta.type === "rule" ? "claude-code" : base.meta.type === "steering" ? "kiro" : undefined;
   const ruleIndex = indexTarget && indexExpand ? (text: string) => indexExpand(text, indexTarget) : undefined;
-  const computedFp = renderedFingerprint(base, map, S, schema, importLists(ctx.forge, base.meta), ctx.primaryRefs ?? undefined, owner, ruleIndex);
+  const computedFp = renderedFingerprint(base, map, S, schema, importLists(ctx.forge, base.meta, ctx.lists), ctx.primaryRefs ?? undefined, owner, ruleIndex);
   if (computedFp === fingerprint) {
     pin(ctx, [...citedAll, ...serverKeys], map);
     const changed = [...cited].filter((k) => Object.hasOwn(map, k));
@@ -301,7 +303,7 @@ async function inferParams(
     .map(([key, value]) => ({ key, old: valueOf(ctx.P, key) ?? null, value }));
 
   // F10: the proof, through the same expansion and substitution ctx.text uses.
-  if (renderedFingerprint(base, { ...map, ...sigma }, S, schema, importLists(ctx.forge, base.meta), ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
+  if (renderedFingerprint(base, { ...map, ...sigma }, S, schema, importLists(ctx.forge, base.meta, ctx.lists), ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
 
   // F9: a profile change must not move anything else the profile renders — its files, or a section value
   // that applies to it under this profile or workspace (spec 11 §6.11).
@@ -368,7 +370,7 @@ function inferSectionValues(
   for (const [rel, parsed] of base.parsed) {
     // Project sections for the owner before inferring (spec 41 Part B §5.2)
     const projected = projectSections(parsed, owner);
-    const r = inferSections(projected, textOf(files[rel]), WSk, map);
+    const r = inferSections(projected, textOf(files[rel]), WSk, map, importLists(ctx.forge, base.meta, ctx.lists));
     if ("fallback" in r) return { kind: "variant", why: r.reason };
     Object.assign(sigma, r.values);
     for (const s of projected.sections) defaults.set(s.name, s.default);
@@ -376,7 +378,7 @@ function inferSectionValues(
   const RSk = valuesAt(ctx.RS, key);
   const S = { ...RSk, ...PSk, ...WSk, ...sigma };
   // F14: the proof, through the same expansion and substitution ctx.text uses.
-  if (renderedFingerprint(base, map, S, schema, importLists(ctx.forge, base.meta), ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
+  if (renderedFingerprint(base, map, S, schema, importLists(ctx.forge, base.meta, ctx.lists), ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
 
   const assigned = sectionNames(base).filter((n) => Object.hasOwn(sigma, n));
   const sectionDelta: SectionChange[] = [];

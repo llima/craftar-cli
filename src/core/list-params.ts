@@ -28,6 +28,10 @@ export const FILTERED_RE = /\{\{\s*([A-Za-z0-9_.]+)\s*\|([^{}\r\n]*)\}\}/g;
 export const FILTER_OPEN_RE = /\{\{\s*([A-Za-z0-9_.]+)\s*\|/g;
 /** `- {{ key | yaml-items }}` alone on a line of a raw block (spec 55 §4.5–§4.6): indent, key. */
 export const YAML_ITEMS_LINE = /^([ \t]*)- \{\{\s*([A-Za-z0-9_.]+)\s*\|\s*yaml-items\s*\}\}[ \t]*$/;
+/** The control characters an item may not hold outside `json` (spec 55 §4.4), for a reader beside this module. */
+export function holdsControl(item: string): boolean {
+  return CONTROL.test(item);
+}
 /** A list `fileMatchPattern` element that is exactly `{{ key | yaml-items }}` (spec 55 §4.6): key. */
 export const YAML_ITEMS_ELEMENT = /^\{\{\s*([A-Za-z0-9_.]+)\s*\|\s*yaml-items\s*\}\}$/;
 
@@ -88,25 +92,32 @@ const lineAt = (text: string, offset: number) => text.slice(0, offset).split("\n
 
 /**
  * `- {{ key | yaml-items }}` alone on its line (spec 55 §4.5): one line per item, `<indent>- "<item>"`, each keeping the line's
- * own ending; an empty list removes the line. Runs before the one pass, so its output holds no placeholder of ours.
+ * own ending; an empty list removes the line. Each item is written as a key of its own (`<key>.__item<n>`), valued with its
+ * JSON string, so the one pass that follows writes it and never reads it again (E2). Returns the text and the map to render.
  */
-export function expandYamlItems(text: string, params: Record<string, unknown>, lists: ListContext, missing?: Set<string>): string {
-  if (!lists.keys.size || !text.includes("yaml-items")) return text;
-  return text.replace(/^([ \t]*)- \{\{\s*([A-Za-z0-9_.]+)\s*\|\s*yaml-items\s*\}\}[ \t]*(\r?\n|$)/gm, (all, indent: string, key: string, eol: string, offset: number) => {
+export function expandYamlItems(text: string, params: Record<string, unknown>, lists: ListContext, missing?: Set<string>): { text: string; params: Record<string, unknown> } {
+  if (!lists.keys.size || !text.includes("yaml-items")) return { text, params };
+  const map: Record<string, unknown> = Object.assign(Object.create(null), params);
+  let n = 0;
+  const out = text.replace(new RegExp(YAML_ITEMS_LINE.source.replace(/\$$/, "(\\r\\n|\\n|\\r|$)"), "gm"), (all, indent: string, key: string, eol: string, offset: number) => {
     if (!lists.keys.has(key)) return all;
     if (!Object.hasOwn(params, key)) {
       missing?.add(key);
       return all;
     }
     const items = params[key] as string[];
-    const refuse = (msg: string): never => {
-      throw new ListParamError(`${lists.where ? `${lists.where}: ` : ""}line ${lineAt(text, offset)}: list param ${key}: ${msg}`);
-    };
     items.forEach((item, i) => {
-      if (CONTROL.test(item)) refuse(`item ${i} holds a line break or a control character, which yaml-items cannot write`);
+      if (CONTROL.test(item)) throw new ListParamError(`${lists.where ? `${lists.where}: ` : ""}line ${lineAt(text, offset)}: list param ${key}: item ${i} holds a line break or a control character, which yaml-items cannot write`);
     });
-    return items.map((item) => `${indent}- ${JSON.stringify(item)}${eol || ""}`).join("");
+    return items
+      .map((item) => {
+        const k = `${key}.__item${n++}`;
+        map[k] = JSON.stringify(item);
+        return `${indent}- {{${k}}}${eol || ""}`;
+      })
+      .join("");
   });
+  return { text: out, params: map };
 }
 
 /**
@@ -200,23 +211,25 @@ export function listParamFault(
   return null;
 }
 
-/** A YAML list given to a key no ingredient or recipe declares `type: list` (spec 55 §4.2, A4): the keys, for one warning each. */
-export function undeclaredLists(lists: ReadonlySet<string>, params: Record<string, unknown>): string[] {
-  return Object.keys(params).filter((k) => Array.isArray(params[k]) && !lists.has(k));
+/** A YAML list given to a key no ingredient or recipe declares `type: list` (spec 55 §4.2, A4): the key and the layer, for one warning each. */
+export function undeclaredLists(lists: ReadonlySet<string>, layers: ReadonlyArray<{ name: string; values: Record<string, unknown> }>): Array<{ key: string; layer: string }> {
+  const out = new Map<string, string>();
+  for (const l of layers) for (const k of Object.keys(l.values)) if (Array.isArray(l.values[k]) && !lists.has(k)) out.set(k, l.name);
+  return [...out].map(([key, layer]) => ({ key, layer }));
 }
 
-export function undeclaredListWarning(key: string): string {
+export function undeclaredListWarning(key: string, layer: string): string {
   const shown = KEY_SHAPED.test(key) ? key : "a key not shaped like a name";
-  return `params: ${shown} is a list but no ingredient or recipe declares it type: list — it renders as the items joined by ","`;
+  return `params: ${shown} is a list in ${layer} but no ingredient or recipe declares it type: list — it renders as the items joined by ","`;
 }
 
 /**
- * The list keys an import renders a base with (spec 55 §4.8): the base's own `type: list` declarations and every recipe's of
- * the Forge — a superset of what a resolution holds, so a filtered citation renders whenever some recipe could make it a list.
+ * The list keys an import renders a base with (spec 55 §4.8): what the importing profile's resolution declares — `resolved`,
+ * absent when the profile is new or does not resolve — and the base's own `type: list` declarations.
  */
-export function importLists(forge: { manifest: Pick<ForgeManifest, "schema">; recipes: Map<string, Recipe> } | null | undefined, meta: Ingredient): ListContext {
+export function importLists(forge: { manifest: Pick<ForgeManifest, "schema"> } | null | undefined, meta: Ingredient, resolved?: ReadonlySet<string>): ListContext {
   if (!forge || !rendersListParams(forge.manifest)) return NO_LISTS;
-  return { keys: declaredListKeys([{ meta }], [...forge.recipes.values()]) };
+  return { keys: new Set([...(resolved ?? []), ...declaredListKeys([{ meta }], [])]) };
 }
 
 /** The near miss below the gate (spec 55 §4.1): a `type: list` declaration names its file, the key and the schema. */
@@ -236,6 +249,9 @@ export function assertNoListLeaf(value: unknown, lists: ListContext, ref: string
   const seen = new Set<object>();
   const walk = (v: unknown, at: string): void => {
     if (typeof v === "string") {
+      for (const m of v.matchAll(FILTER_OPEN_RE)) {
+        if (lists.keys.has(m[1])) throw new ListParamError(`${ref}: list param ${m[1]} in ${at} — an MCP server or a hook registration cannot take a list in this version; cite it in a body`);
+      }
       for (const m of v.matchAll(BOTH_RE)) {
         const key = m[1] ?? m[2];
         if (lists.keys.has(key)) throw new ListParamError(`${ref}: list param ${key} in ${at} — an MCP server or a hook registration cannot take a list in this version; cite it in a body`);

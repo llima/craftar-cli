@@ -602,7 +602,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
         if (shellAtGate(ing.meta, rel, forge.manifest.schema) && resolution.targets.includes("kiro") && appliesTo(effTargets, "kiro") && CAPABILITIES.kiro[ing.meta.type].state !== "unsupported") {
           const keys = new Set([...Object.keys(ing.meta.params ?? {}), ...Object.keys(resolution.params)]);
           const text = await readForgeText(ing.forgeRoot, abs);
-          if (p.sections.length || placeholders(text).some((k) => keys.has(k))) warnings.push(`${ing.ref} ${rel}: kiro copies it as bytes — its sections and params are not rendered there`);
+          if (p.sections.length || [...placeholders(text), ...filteredCitations(text, listsOf(resolution))].some((k) => keys.has(k))) warnings.push(`${ing.ref} ${rel}: kiro copies it as bytes — its sections and params are not rendered there`);
         }
         for (const s of p.sections) {
           if (s.targets) {
@@ -715,7 +715,17 @@ export async function plan(ws: Workspace): Promise<Plan> {
     ],
   );
   if (listFault) throw new Error(listFault);
-  if (rendersListParams(ws.forge.manifest)) for (const k of undeclaredLists(resolution.listKeys, resolution.params)) warnings.push(undeclaredListWarning(k));
+  if (rendersListParams(ws.forge.manifest)) {
+    const layers = [
+      ...resolution.recipes.flatMap((n) => {
+        const r = forgeFor(ws.forge, ws.config.profile).recipes.get(n);
+        return r ? [{ name: `recipe ${n}`, values: Object.fromEntries(Object.entries(r.params).map(([k, v]) => [k, v.default])) }] : [];
+      }),
+      { name: `profile ${resolution.profile.name}`, values: resolution.paramLayers.profile },
+      { name: "the workspace", values: resolution.paramLayers.workspace },
+    ];
+    for (const u of undeclaredLists(resolution.listKeys, layers)) warnings.push(undeclaredListWarning(u.key, u.layer));
+  }
   const sections = await sectionPass(ws.forge, resolution, warnings);
   /** Unresolved placeholder → refs of the ingredients citing it. */
   const missingParams = new Map<string, Set<string>>();

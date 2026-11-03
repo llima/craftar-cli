@@ -48,6 +48,63 @@ describe("list params and the writers (spec 55 §4.8)", () => {
     expect(await paramsOf()).toEqual(paramsBefore);
   });
 
+  it("test 12: an unchanged re-import reuses a base whose metadata holds yaml-items in paths: and join in a description", async () => {
+    const root = await tmpDir("craftar-list-meta-import-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const forge = path.join(root, "forge");
+    const ws = path.join(root, "ws");
+    // The Forge as import writes it, then edited by hand to cite the list (the shape of test/metadata-params-import.test.ts).
+    await writeFiles(ws, {
+      // Quoted as yaml-items writes them: the workspace has no lock yet, so sync would leave a differing file as a collision.
+      ".claude/rules/scoped.md": '---\npaths:\n  - "src/**"\n  - "lib/**"\n---\n# Scoped\n',
+      ".claude/agents/helper.md": "---\nname: helper\ndescription: Helps on src/** and lib/**\n---\nHelp.\n",
+    });
+    await importClaudeCode({ workspaceRoot: ws, forgeRoot: forge, profileName: "acme" });
+    const edit = async (rel: string, f: (doc: Record<string, unknown>) => void) => {
+      const abs = path.join(forge, rel);
+      const doc = YAML.parse(await fs.readFile(abs, "utf8"));
+      f(doc);
+      await fs.writeFile(abs, YAML.stringify(doc));
+    };
+    await edit("ingredients/rules/scoped/ingredient.yaml", (d) => {
+      d.frontmatterRaw = String(d.frontmatterRaw).replace('  - "src/**"\n  - "lib/**"', "  - {{ env | yaml-items }}");
+      d.params = { env: { type: "list" } };
+    });
+    await edit("ingredients/agents/helper/ingredient.yaml", (d) => {
+      d.description = 'Helps on {{ env | join: " and " }}';
+      if (typeof d.frontmatterRaw === "string") d.frontmatterRaw = d.frontmatterRaw.replace("src/** and lib/**", '{{ env | join: " and " }}');
+      d.params = { env: { type: "list" } };
+    });
+    await edit("profiles/acme/profile.yaml", (d) => {
+      d.params = { env: ["src/**", "lib/**"] };
+    });
+    await edit("craftar.forge.yaml", (d) => {
+      d.schema = GATE;
+    });
+    await writeFiles(ws, { "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme" }) });
+    const w = await loadWorkspace(ws);
+    const p = await plan(w);
+    expect(p.files.find((f) => f.path === ".claude/rules/scoped.md")!.content.toString("utf8")).toBe('---\npaths:\n  - "src/**"\n  - "lib/**"\n---\n# Scoped\n');
+    await apply(w, p, await status(w, p, await readLock(w.root)), {});
+    const r = await importClaudeCode({ workspaceRoot: ws, forgeRoot: forge, profileName: "acme" });
+    expect(r.variants.map((v) => v.name)).toEqual([]);
+  });
+
+  it("test 13: forge unify sees a citation that is only filtered (P14)", async () => {
+    const root = await tmpDir("craftar-list-unify-cites-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await makeForge(root, {
+      ingredients: [rule("deploy", "base\nX = {{k | py}}\n"), rule("deploy--acme", "acme\nX = {{k | py}}\n", { as: "deploy" })],
+      recipes: [recipe("base", ["rule/deploy"]), recipe("base--acme", ["rule/deploy--acme"])],
+      profiles: [profile("acme", ["base--acme"])],
+    });
+    await writeFiles(root, { "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: GATE }) });
+    const forge = await loadForge(root);
+    const ext = { key: "k", default: "base", value: "acme", reused: false } as never;
+    const m = await checkParamWrites(forge, forge.ingredients.get("rule/deploy")!, forge.ingredients.get("rule/deploy--acme")!, "acme", [ext]).then(() => "ok", (e: Error) => e.message);
+    expect(m).toContain("unify: rule/deploy already uses {{k}}");
+  });
+
   it("test 13: drift show gives a file citing a list key the reason, and drift promote refuses it (D24)", async () => {
     const s = kept(await acmeLists({ schema: GATE, declare: true, body: BODY }));
     await synced(s);

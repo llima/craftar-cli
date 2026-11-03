@@ -272,7 +272,10 @@ export const PLACEHOLDER_RE = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 /** Substitute `{{param}}` placeholders. Unknown placeholders are left untouched (and reported by the caller). */
 export function substitute(text: string, params: Record<string, unknown>, lists: ListContext, missing?: Set<string>): string {
   // Spec 55 §4.3: with a list key in the resolution, both forms in one pass, `yaml-items` lines first.
-  if (lists.keys.size) return renderFiltered(expandYamlItems(text, params, lists, missing), params, lists, missing);
+  if (lists.keys.size) {
+    const y = expandYamlItems(text, params, lists, missing);
+    return renderFiltered(y.text, y.params, lists, missing);
+  }
   return text.replace(PLACEHOLDER_RE, (m, key: string) => {
     // Own properties only: `key in params` resolved {{constructor}} to Object.prototype.constructor.
     if (Object.hasOwn(params, key)) return String(params[key]);

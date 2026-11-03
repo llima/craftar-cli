@@ -1,5 +1,5 @@
 import path from "node:path";
-import { rendersMetadata, substituteMetadata } from "./metadata-params.js";
+import { rendersMetadata, substituteMetadata, substituteImportedMetadata } from "./metadata-params.js";
 import { IngredientSchema, stripForgeOnlyKeys, type ForgeSchema, type Ingredient, type Owner } from "../schema/index.js";
 import { placeholders, bodyFile } from "./extract.js";
 import { fingerprintOf, type DirReader } from "./fingerprint.js";
@@ -149,7 +149,7 @@ export function renderedFingerprint(
   }
   meta = asImportTargets(meta);
   // Spec 50 §5.6: at the metadata gate the fields of §5.2 are compared as sync renders them, before reference resolution.
-  if (rendersMetadata({ schema })) meta = substituteMetadata(meta, map);
+  if (rendersMetadata({ schema })) meta = substituteImportedMetadata(meta, map, lists);
   const citing = `${base.meta.type}/${base.meta.name}`;
   if (refs && (meta.type === "agent" || meta.type === "command")) {
     if (meta.frontmatterRaw !== undefined) meta.frontmatterRaw = refs(meta.frontmatterRaw, citing);
