@@ -1,4 +1,5 @@
 import { containRoot, escapeFileLine, escapeOf, escapeRefusal, escapingRows, forgeReader } from "./core/contain.js";
+import { isAbstract, mergedProfile as familyProfile, writtenBy } from "./core/profile-extends.js";
 import { Command } from "commander";
 import pc from "picocolors";
 import path from "node:path";
@@ -59,7 +60,7 @@ import { assertNoLinkOnPath, exists, gitDirty, gitIgnored, gitIsRepo, gitTracked
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { applyMove, planLocalize, planShare, proveMove, type ForgeMove, type MoveCommand } from "./core/localize.js";
 import { applyExtract, DEFAULT_MIN_BYTES, EXTRACT_COMMAND, planExtract, proveExtract, type ExtractPlan } from "./core/sections-extract.js";
-import { forgeFor as profileView, forgeRelative, isLocalMessage, localCiters, localOwners, overriddenBase, overriddenWarnings } from "./core/profile-local.js";
+import { forgeFor as profileView, forgeRelative, isLocalMessage, localCiters, localOwners, overriddenBase, overriddenWarnings, parentLocalsOf } from "./core/profile-local.js";
 import type { Forge } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
@@ -108,7 +109,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.56.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.57.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -697,7 +698,7 @@ const reposCmd = program
     const ws = await loadWorkspace(o.workspace, load(o, "read"));
     const p = await plan(ws);
     const lock = await readLock(ws.root);
-    const profile = ws.forge.profiles.get(ws.config.profile)!;
+    const profile = familyProfile(ws.forge, ws.config.profile);
     // C4: profileRepos throws for a block that does not read
     const entries = profileRepos(profile);
     // No entry → one line, exit 0
@@ -773,7 +774,7 @@ reposCmd
     const ws = await loadWorkspace(workspace, { ...load({ offline: false }, "sync"), fetchHint: "fresh-copy" });
     const p = await plan(ws);
     const lock = await readLock(ws.root);
-    const profile = ws.forge.profiles.get(ws.config.profile)!;
+    const profile = familyProfile(ws.forge, ws.config.profile);
     // Build the destination context
     const ctx: DestinationContext = {
       planned: p.files.map((f) => f.path),
@@ -1008,7 +1009,7 @@ drift
     }
     const indexedPaths = new Set(p.indexed.map((x) => x.path));
     const shown = named ? [named] : st;
-    const rows = driftList(shown, provided, new Set(p.reworded), indexedPaths, await metadataEdits(ws.root, p, shown));
+    const rows = driftList(shown, provided, new Set(p.reworded), indexedPaths, await metadataEdits(ws.root, p, shown), parentLocalsOf(ws.forge, ws.config.profile));
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
@@ -1349,7 +1350,9 @@ program
       // Spec 56 §6: an override names the root base it stands over.
       const root = f.scope === "profile" ? overriddenBase(ws.forge, f.ingredient) : undefined;
       const over = root !== undefined ? `, over ${forgeRelative(ws.forge, root.dir)}` : "";
-      const where = f.scope === null ? "several ingredients" : f.scope === "profile" ? `profile ${f.profile} (${f.dir})${over}` : `forge (${f.dir})`;
+      // The owner of a local is the folder that holds it (spec 54 §5.8): the profile's own, or a parent's.
+      const owner = f.dir?.startsWith("profiles/") ? f.dir.split("/")[1] : f.profile;
+      const where = f.scope === null ? "several ingredients" : f.scope === "profile" ? `profile ${owner} (${f.dir})${over}` : `forge (${f.dir})`;
       console.log(`  source      ${where}`);
     }
     if (f.via) console.log(`  via recipes ${f.via.join(" → ")}`);
@@ -1587,10 +1590,10 @@ const templates = program.command("templates").description("Project templates th
 
 /** The profile's declared templates (spec 32 §5.2); a refused block is the command's error. */
 async function declaredFor(ws: Workspace): Promise<{ profile: string; declared: Declared }> {
-  const profile = ws.forge.profiles.get(ws.config.profile);
+  const profile = ws.forge.profiles.has(ws.config.profile) ? familyProfile(ws.forge, ws.config.profile) : undefined;
   if (!profile) fail(`profile "${ws.config.profile}" not found in Forge`);
   try {
-    return { profile: profile.name, declared: declaredTemplates(profile, await profileLabel(ws.forge.root, profile.name)) };
+    return { profile: profile.name, declared: declaredTemplates(profile, await profileLabel(ws.forge.root, writtenBy(ws.forge, profile.name, "templates"))) };
   } catch (e) {
     fail(errorText(e));
   }
@@ -2443,6 +2446,8 @@ forge
       return i.meta.type === base.meta.type && i.meta.as === base.meta.name && p === o.profile;
     });
     if (!variant) fail(`${ref} has no variant for profile ${o.profile}`);
+    // Spec 54 §5.10: no command writes a parent — unify would write the abstract profile's params and sections.
+    if (isAbstract(f, o.profile)) fail(`unify: profile ${o.profile} is abstract — no command writes a parent: unify ${variant.ref} by hand, commit, and re-run`);
     // Spec 51 §4.5: unify removes the variant, which a profile's local recipe may cite.
     const citers = localCiters(f, [variant.ref]);
     if (citers.length) fail(`unify: ${citers.map((c) => c.file).join(", ")} cites ${variant.ref} — unify does not edit a profile's local recipe; edit it by hand, commit, and re-run`);

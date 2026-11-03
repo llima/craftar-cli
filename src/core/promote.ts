@@ -9,8 +9,10 @@ import { fingerprintDir } from "./fingerprint.js";
 import { ingredientText, occupied, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
 import { assertNoDirLinkIn, assertNoLinkOnPath, copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
 import { effectiveProfile } from "./integrations.js";
+import { familyOf } from "./profile-extends.js";
 import { findProfileFile } from "./param-writes.js";
-import { resolve, type Resolution } from "./resolve.js";
+import { recipeOrder, resolve, type Resolution } from "./resolve.js";
+import { errorText } from "./schema-fault.js";
 import { type WriteJournal } from "./unify.js";
 import { profileOf } from "./variants.js";
 import { editYamlText } from "./yaml-edit.js";
@@ -206,8 +208,22 @@ export async function planBasePromotion(forge: Forge, ref: string, who: string |
     for (const q of Q) {
       const res = before.get(q) as Resolution;
       if (!res.recipes.includes(name)) continue;
-      if (!res.profile.recipes.includes(name)) {
-        const eff = effectiveProfile(forge, res.profile);
+      // The written list (the file promote would edit), never the family's merged one (spec 54 §5.10).
+      const written = forge.profiles.get(q)!;
+      // A recipe a parent reaches — listed, selected by its integrations block, or extended — is the family's, the child
+      // listing it too or not (spec 54 §5.10); the one predicate drift promote uses. A parent that does not resolve fails closed.
+      const parent = familyOf(forge, q).slice(1).find((p) => {
+        try {
+          return recipeOrder(forgeFor(forge, q), effectiveProfile(forge, forge.profiles.get(p)!).recipes, `profile ${p}`).includes(name);
+        } catch (e) {
+          throw new Error(`${COMMAND}: the recipes of profile ${p}, which ${q} extends, do not resolve (${errorText(e)}) — fix the Forge and re-run`);
+        }
+      });
+      if (parent) {
+        throw new Error(`${COMMAND}: profile ${q} reaches recipe ${name} (which names ${X}) through ${parent}, which it extends — no command writes a parent: edit the Forge by hand`);
+      }
+      if (!written.recipes.includes(name)) {
+        const eff = effectiveProfile(forge, written);
         const sel = eff.selected.find((s) => s.recipe === name);
         if (sel) {
           throw new Error(`${COMMAND}: profile ${q} selects recipe ${name} (which names ${X}) through integrations.${sel.slot} — promote cannot repoint a recipe a block selects by editing a recipes list; edit the Forge by hand`);

@@ -6,6 +6,7 @@ import type { IngredientRef, Recipe } from "../schema/index.js";
 import { FORGE_SCHEMA_LOCAL_OVERRIDE, FORGE_SCHEMA_PROFILE_LOCAL } from "../schema/index.js";
 import { nameShaped } from "./integrations.js";
 import path from "node:path";
+import { childrenOf, familyOf } from "./profile-extends.js";
 import type { Forge, LoadedIngredient } from "./forge.js";
 
 /** Whether the Forge reads `profiles/<p>/ingredients` and `recipes` (spec 51 §4.1). The ONE comparison with that constant. */
@@ -93,6 +94,8 @@ export function checkLocals(
   localPaths: ReadonlyMap<string, ReadonlyMap<IngredientRef, string>>,
   early: string[],
   overrides = false,
+  /** A profile's family, nearest first (spec 54 §5.6); the profile alone when it extends nothing. */
+  family: (p: string) => string[] = (p) => [p],
 ): string[] {
   const findings = [...early];
   const localRefsAnywhere = new Map<string, string[]>(); // ref → its paths in every profile
@@ -126,10 +129,30 @@ export function checkLocals(
       const variant = `${ref}--${p}` as IngredientRef;
       const vAt = root.ingredients.has(variant) ? root.ingredientPaths.get(variant) : undefined;
       if (vAt !== undefined) findings.push(`L1 ${at} and ${vAt}: a local ingredient and the root variant of the same name for its own profile`);
+      // Spec 54 §5.6: a root variant of that name for a parent writes the same file for this profile too.
+      for (const q of family(p).slice(1)) {
+        const pv = `${ref}--${q}` as IngredientRef;
+        const pAt = root.ingredients.has(pv) ? root.ingredientPaths.get(pv) : undefined;
+        if (pAt !== undefined) findings.push(`L1′ ${at} and ${pAt}: a local ingredient and the root variant of the same name for profile ${shownLocalName(q, "profile")}, which it extends`);
+      }
     }
     for (const [name, r] of layer.recipes) {
       const rootFile = root.recipeFiles.get(name);
       if (root.recipes.has(name)) findings.push(`L2 ${r.file} and ${rootFile ?? "recipes/"}: the same recipe, local to profile ${shownLocalName(p, "profile")} and at the root`);
+    }
+  }
+
+  // L1′, L2′ (spec 54 §5.6): a child's local never shadows a local of a profile it extends.
+  const pathOf = (p: string, ref: IngredientRef) => localPaths.get(p)?.get(ref) ?? `profiles/${p}`;
+  for (const [p, layer] of [...locals].sort(([a], [b]) => a.localeCompare(b))) {
+    const ancestors = family(p).slice(1);
+    for (const ref of layer.ingredients.keys()) {
+      const anc = ancestors.find((q) => locals.get(q)?.ingredients.has(ref));
+      if (anc !== undefined) findings.push(`L1′ ${pathOf(p, ref)} and ${pathOf(anc, ref)}: a local of profile ${shownLocalName(p, "profile")} and of ${shownLocalName(anc, "profile")}, which it extends — rename the child's`);
+    }
+    for (const [name, r] of layer.recipes) {
+      const anc = ancestors.find((q) => locals.get(q)?.recipes.has(name));
+      if (anc !== undefined) findings.push(`L2′ ${r.file} and ${locals.get(anc)!.recipes.get(name)!.file}: a local recipe of profile ${shownLocalName(p, "profile")} and of ${shownLocalName(anc, "profile")}, which it extends — rename the child's`);
     }
   }
 
@@ -150,16 +173,24 @@ export function checkLocals(
     }
   }
 
-  // L4 for local recipes: a local recipe sees its profile's locals and the root, never another profile's.
+  // L4 for local recipes: a local recipe sees its family's locals (spec 54 §5.6) and the root, never another profile's.
+  // L3′: one that cites a local only a profile extending its own holds is a parent's recipe reaching down.
+  const descendantsHolding = (p: string, has: (l: LocalLayer) => boolean) =>
+    [...locals].filter(([q, l]) => q !== p && family(q).includes(p) && has(l)).map(([q]) => q).sort();
   for (const [p, layer] of locals) {
+    const fam = family(p).map((q) => locals.get(q)).filter((l): l is LocalLayer => l !== undefined);
     for (const r of layer.recipes.values()) {
       for (const ref of r.recipe.ingredients) {
-        if (layer.ingredients.has(ref as IngredientRef) || root.ingredients.has(ref as IngredientRef)) continue;
-        findings.push(`L4 ${r.file}: cites ${shownIngredientRef(ref)}, which profile ${shownLocalName(p, "profile")} does not have`);
+        if (fam.some((l) => l.ingredients.has(ref as IngredientRef)) || root.ingredients.has(ref as IngredientRef)) continue;
+        const down = descendantsHolding(p, (l) => l.ingredients.has(ref as IngredientRef));
+        if (down.length) findings.push(`L3′ ${r.file}: cites ${shownIngredientRef(ref)}, which is local to a profile that extends ${shownLocalName(p, "profile")} (${down.map((q) => pathOf(q, ref as IngredientRef)).join(", ")}) — a parent's recipe does not see a child's ingredients`);
+        else findings.push(`L4 ${r.file}: cites ${shownIngredientRef(ref)}, which profile ${shownLocalName(p, "profile")} does not have`);
       }
       for (const parent of r.recipe.extends) {
-        if (layer.recipes.has(parent) || root.recipes.has(parent)) continue;
-        findings.push(`L4 ${r.file}: extends ${shownLocalName(parent, "recipe name")}, which profile ${shownLocalName(p, "profile")} does not have`);
+        if (fam.some((l) => l.recipes.has(parent)) || root.recipes.has(parent)) continue;
+        const down = descendantsHolding(p, (l) => l.recipes.has(parent));
+        if (down.length) findings.push(`L3′ ${r.file}: extends ${shownLocalName(parent, "recipe name")}, which is local to a profile that extends ${shownLocalName(p, "profile")} (${down.map((q) => locals.get(q)!.recipes.get(parent)!.file).join(", ")}) — a parent's recipe does not see a child's recipes`);
+        else findings.push(`L4 ${r.file}: extends ${shownLocalName(parent, "recipe name")}, which profile ${shownLocalName(p, "profile")} does not have`);
       }
     }
   }
@@ -183,7 +214,10 @@ export function checkLocals(
     for (const n of names) visit(n, []);
   };
   walk((n) => root.recipes.get(n), root.recipes.keys());
-  for (const layer of locals.values()) walk((n) => layer.recipes.get(n)?.recipe ?? root.recipes.get(n), layer.recipes.keys());
+  for (const [p, layer] of locals) {
+    const fam = family(p).map((q) => locals.get(q)).filter((l): l is LocalLayer => l !== undefined);
+    walk((n) => fam.find((l) => l.recipes.has(n))?.recipes.get(n)?.recipe ?? root.recipes.get(n), layer.recipes.keys());
+  }
   for (const c of [...cycles].sort()) findings.push(`L5 recipe cycle: ${c}`);
 
   return findings;
@@ -202,12 +236,18 @@ export function forgeFor(forge: Forge, profile: string): ProfileView {
   const seen = (forge as Partial<ProfileView>).view;
   if (seen === profile) return forge as ProfileView;
   if (seen !== undefined) throw new Error(`internal: a view of profile ${seen} asked for profile ${profile}`);
-  const layer = forge.locals.get(profile);
-  if (!layer || (layer.ingredients.size === 0 && layer.recipes.size === 0)) return { ...forge, view: profile };
+  // Spec 54 §5.6: the family's locals, farthest first so the nearest is set last (L1′ and L2′ keep them disjoint anyway).
+  const layers = familyOf(forge, profile)
+    .reverse()
+    .map((q) => forge.locals.get(q))
+    .filter((l): l is LocalLayer => l !== undefined && (l.ingredients.size > 0 || l.recipes.size > 0));
+  if (!layers.length) return { ...forge, view: profile };
   const ingredients = new Map(forge.ingredients);
-  for (const [ref, ing] of layer.ingredients) ingredients.set(ref, ing);
   const recipes = new Map(forge.recipes);
-  for (const [name, r] of layer.recipes) recipes.set(name, r.recipe);
+  for (const layer of layers) {
+    for (const [ref, ing] of layer.ingredients) ingredients.set(ref, ing);
+    for (const [name, r] of layer.recipes) recipes.set(name, r.recipe);
+  }
   return { ...forge, ingredients, recipes, view: profile };
 }
 
@@ -247,7 +287,13 @@ export function localOwners(forge: Forge, ref: string): string[] {
  */
 export function overriddenWarnings(forge: Forge, ref: string): string[] {
   if (!overriddenBase(forge, ref)) return [];
-  return localOwners(forge, ref).map((p) => `${shownIngredientRef(ref)} is overridden for profile ${shownLocalName(p, "profile")} — this run does not change what ${shownLocalName(p, "profile")} resolves`);
+  // Spec 54 O6: a parent's override stands for every profile that extends it, so the warning names them.
+  return localOwners(forge, ref).flatMap((p) => {
+    // The concrete ones: an abstract profile between them resolves nothing.
+    const kids = childrenOf(forge, p);
+    const who = kids.length ? `profile ${shownLocalName(p, "profile")} and every profile that extends it (${kids.map((k) => shownLocalName(k, "profile")).join(", ")})` : `profile ${shownLocalName(p, "profile")}`;
+    return [`${shownIngredientRef(ref)} is overridden for ${who} — this run does not change what ${kids.length ? "they resolve" : `${shownLocalName(p, "profile")} resolves`}`];
+  });
 }
 
 /** `<ref> is local to profile <p>` (or `to profiles <p>, <q>`): what a Forge-wide command says of a local (spec 51 §4.5). */
@@ -270,8 +316,9 @@ export function localCiters(forge: Forge, refs: readonly string[], opts: { profi
       seen.add(name);
       const r = view.recipes.get(name);
       if (!r) return false;
-      // A citation of a ref this profile holds as a local reaches its local — an override (spec 56 §4.4) — never the root's.
-      if (r.ingredients.some((i) => wanted.has(i) && !layer.ingredients.has(i as IngredientRef))) return true;
+      // A citation of a ref this profile holds as a local reaches its local — an override (spec 56 §4.4) — never the root's;
+      // a parent's local is the profile's too (spec 54 O6).
+      if (r.ingredients.some((i) => wanted.has(i) && !familyOf(forge, p).some((q) => forge.locals.get(q)?.ingredients.has(i as IngredientRef)))) return true;
       return opts.viaExtends === true && r.extends.some((parent) => reaches(parent, seen));
     };
     for (const [name, r] of layer.recipes) if (reaches(name, new Set())) out.push({ profile: p, recipe: name, file: r.file });
@@ -282,4 +329,17 @@ export function localCiters(forge: Forge, refs: readonly string[], opts: { profi
 /** Whether a recipe name is held as a local by any profile (spec 51 §4.5): a root recipe of that name would be L2. */
 export function localRecipeNamed(forge: Forge, name: string): boolean {
   return [...forge.locals.values()].some((l) => l.recipes.has(name));
+}
+
+/**
+ * The ingredients a profile resolves from a parent's local (spec 54 §5.9), ref → that parent, nearest first: the files
+ * `drift show` gives `promotable: false` and `drift promote` refuses (D24). Empty for a profile that extends nothing.
+ */
+export function parentLocalsOf(forge: Forge, profile: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const own = forge.locals.get(profile)?.ingredients;
+  for (const q of familyOf(forge, profile).slice(1)) {
+    for (const ref of forge.locals.get(q)?.ingredients.keys() ?? []) if (!own?.has(ref) && !out.has(ref)) out.set(ref, q);
+  }
+  return out;
 }

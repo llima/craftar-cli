@@ -25,6 +25,7 @@ import { planServices } from "./services.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
 import { appliesTo, effectiveTargets } from "../emitters/shared.js";
 import { forgeFor, overriddenBase, readsLocalOverride, shownIngredientRef, shownLocalName } from "./profile-local.js";
+import { familyOf } from "./profile-extends.js";
 import { RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
@@ -397,11 +398,13 @@ export interface OverrideConflict {
 export function overrideConflictsOf(forge: Forge, resolution: Resolution): OverrideConflict[] {
   if (!readsLocalOverride(forge.manifest)) return [];
   const p = resolution.profile.name;
-  const local = forge.locals.get(p)?.ingredients;
-  if (!local) return [];
+  // Spec 54 O6: a parent's override is the whole family's, so a child's resolution is checked against its family's locals.
+  const family = familyOf(forge, p).map((q) => forge.locals.get(q)?.ingredients).filter((l) => l !== undefined);
+  if (!family.length) return [];
+  const isOverride = (ov: Resolution["ingredients"][number]) => overriddenBase(forge, ov.ref) !== undefined && family.some((l) => l.get(ov.ref)?.dir === ov.dir);
   const out: OverrideConflict[] = [];
   for (const ov of resolution.ingredients) {
-    if (overriddenBase(forge, ov.ref) === undefined || local.get(ov.ref)?.dir !== ov.dir) continue; // not an override
+    if (!isOverride(ov)) continue; // not an override
     for (const other of resolution.ingredients) {
       if (other === ov || other.meta.type !== ov.meta.type || other.meta.as !== ov.meta.name) continue;
       out.push({ profile: p, override: ov.ref, variant: other.ref });
@@ -528,9 +531,12 @@ function forgeRel(forge: Forge, abs: string): string {
 /** The strongest layer that sets section `name` of `key` (Ruling 15); at schema 10 a profile or a recipe by name (spec 54 §4.5). */
 function layerOf(resolution: Resolution, key: string, name: string): SectionLayer {
   const has = (m: Record<string, Record<string, string>>) => Object.hasOwn(m, key) && Object.hasOwn(m[key], name);
-  const { recipes, profile, workspace } = resolution.sectionLayers;
+  const { recipes, parents, profile, workspace } = resolution.sectionLayers;
   if (has(workspace)) return "workspace";
   if (has(profile)) return resolution.recipeSections ? { profile: resolution.profile.name } : "profile";
+  // Spec 54 §5.5: a value only a parent gives names that parent.
+  const parent = parents.setBy.get(`${key}\0${name}`);
+  if (parent !== undefined) return { profile: parent };
   const recipe = recipes.setBy.get(`${key}\0${name}`);
   if (recipe !== undefined) return { recipe };
   return "default";

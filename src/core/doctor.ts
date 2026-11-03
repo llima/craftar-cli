@@ -1,4 +1,5 @@
 import { promises as fs, constants as fsc } from "node:fs";
+import { mergedProfile as familyProfile, writtenBy } from "./profile-extends.js";
 import { oneLineOfFindings, ProfileLocalLoadError } from "./profile-local.js";
 import os from "node:os";
 import path from "node:path";
@@ -465,10 +466,10 @@ async function workspaceChecks(
     else if (await exists(path.join(root, LOCK_FILE))) w("registered", "warn", "synced but not registered", "craftar sync");
     else w("registered", "ok", "never synced, nothing to register yet");
 
-    // templates, dotnet — only when the profile has the key (spec 32 §4.3, D11)
-    const profile = ws.forge.profiles.get(ws.config.profile);
+    // templates, dotnet — only when the profile has the key (spec 32 §4.3, D11); a child's as its family makes it (spec 54 §5.3)
+    const profile = ws.forge.profiles.has(ws.config.profile) ? familyProfile(ws.forge, ws.config.profile) : undefined;
     if (profile) {
-      const label = await profileLabel(ws.forge.root, profile.name);
+      const label = await profileLabel(ws.forge.root, writtenBy(ws.forge, profile.name, "templates"));
       let declared: Declared | undefined;
       try {
         declared = declaredTemplates(profile, label);

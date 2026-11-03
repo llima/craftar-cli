@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { childrenOf, concreteProfiles, isAbstract } from "./profile-extends.js";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -120,12 +121,22 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
     }
   }
 
-  // Who resolves what: only this profile may use the ingredient or a recipe that moves.
+  // Who resolves what: only this profile may use the ingredient or a recipe that moves — for an abstract profile, only the
+  // concrete profiles of its family (spec 54 §5.10, D9): it resolves nothing by itself.
   const all = resolveAll(forge);
-  const mine = all.get(profile)!;
-  if (mine instanceof Error) throw new Error(`${command}: profile ${profile} does not resolve (${firstLine(mine)}) — fix it first`);
-  if (override && holdsIngredient(mine, forge.ingredients.get(`${type}/${localName}` as IngredientRef)!)) {
-    throw new Error(`${command}: profile ${profile} resolves both ${type}/${localName} and ${ref} — the Forge is inconsistent (both would write one file); remove one from its recipes by hand, commit, and re-run`);
+  const abstract = isAbstract(forge, profile);
+  const members = abstract ? childrenOf(forge, profile) : [profile];
+  if (abstract && !members.length) throw new Error(`${command}: profile ${profile} is abstract and no profile extends it — nothing would resolve ${ref} there`);
+  const used = new Set<string>();
+  let resolvedRef = false;
+  for (const m of members) {
+    const res = all.get(m)!;
+    if (res instanceof Error) throw new Error(`${command}: profile ${m} does not resolve (${firstLine(res)}) — fix it first`);
+    if (override && holdsIngredient(res, forge.ingredients.get(`${type}/${localName}` as IngredientRef)!)) {
+      throw new Error(`${command}: profile ${m} resolves both ${type}/${localName} and ${ref} — the Forge is inconsistent (both would write one file); remove one from its recipes by hand, commit, and re-run`);
+    }
+    if (holdsIngredient(res, ing)) resolvedRef = true;
+    for (const r of res.recipes) used.add(r);
   }
   if (override) {
     // Another profile's local recipe citing the variant would be left naming a removed ref (L4): refused before the proof.
@@ -135,9 +146,15 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
       if (l) throw new Error(`${command}: ${l.file} cites ${ref} — it would be left naming a removed ingredient (L4); edit it by hand, commit, and re-run`);
     }
   }
-  if (!holdsIngredient(mine, ing)) throw new Error(`${command}: profile ${profile} does not resolve ${ref} — localize moves an ingredient its profile uses`);
+  if (!resolvedRef) {
+    throw new Error(
+      abstract
+        ? `${command}: no profile that extends ${profile} resolves ${ref} — localize moves an ingredient its profiles use`
+        : `${command}: profile ${profile} does not resolve ${ref} — localize moves an ingredient its profile uses`,
+    );
+  }
   for (const [q, res] of all) {
-    if (q === profile) continue;
+    if (members.includes(q)) continue;
     if (res instanceof Error) {
       // Judged on what it names: its written recipes, or what its integrations block selects (spec 51 §5.1).
       const listed = recipesOrWritten(forge, forge.profiles.get(q)!).recipes;
@@ -152,7 +169,7 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
     if (shared.length) throw new Error(`${command}: profile ${q} resolves recipe ${shared[0]}, which would move with ${ref} — only recipes no other profile resolves move`);
   }
   for (const r of [...moving].sort()) {
-    if (!mine.recipes.includes(r)) throw new Error(`${command}: recipe ${r} cites ${ref} and would have to move, but no profile resolves it — a root recipe cannot cite a local (L3); remove ${ref} from it, or delete it, commit, and re-run`);
+    if (!used.has(r)) throw new Error(`${command}: recipe ${r} cites ${ref} and would have to move, but no profile resolves it — a root recipe cannot cite a local (L3); remove ${ref} from it, or delete it, commit, and re-run`);
   }
 
   await assertNoLinkIn(forge.root, ing.dir, command);
@@ -337,7 +354,7 @@ export async function proveMove(forge: Forge, move: ForgeMove, registered: Forge
     }
 
     const resolvedBefore = resolveAll(forge);
-    for (const q of [...forge.profiles.keys()].sort()) {
+    for (const q of concreteProfiles(forge).sort()) {
       let before: Map<string, Buffer>;
       try {
         before = await planProfile(forge, q, wsRoot);

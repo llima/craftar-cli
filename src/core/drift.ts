@@ -36,19 +36,25 @@ export const INDEXED_REASON = "holds the rules index";
 /** Spec 50 §5.6: a hand edit of a metadata field the Forge renders from a parameter; promoting it would freeze the value. */
 export const METADATA_PARAM_REASON = "metadata renders a parameter";
 
+/** Spec 54 §5.9: the reason a file from a parent's local is not promotable — no command writes a parent (D24). */
+export const parentLocalReason = (parent: string): string => `local to ${parent}, which this profile extends`;
+
 /**
  * The static half of promote's refusals: it reads the status, never the Forge's git state.
- * The order is: a path that escapes (spec 48), orphan, then service file (spec 31), then provided (spec 33i), then reworded (spec 41), then indexed (spec 44),
- * then a templated metadata field (spec 50), then kiro, then
- * AGENTS.md, then .mcp.json.
+ * The order is: a path that escapes (spec 48), orphan, then service file (spec 31), then provided (spec 33i), then a
+ * parent's local (spec 54), then reworded (spec 41), then indexed (spec 44), then a templated metadata field (spec 50),
+ * then kiro, then AGENTS.md, then .mcp.json.
  */
-function staticReason(s: FileStatus, provided: Map<string, { slot: string; recipe: string }>, reworded: ReadonlySet<string>, indexed: ReadonlySet<string>, metadata: ReadonlySet<string>): string | null {
+
+function staticReason(s: FileStatus, provided: Map<string, { slot: string; recipe: string }>, reworded: ReadonlySet<string>, indexed: ReadonlySet<string>, metadata: ReadonlySet<string>, parentLocals: ReadonlyMap<string, string>): string | null {
   if (s.escapes) return escapeReason(s.escapes);
   if (s.state === "orphan-drift") return "no longer produced";
   if (s.target === "services") return "service file";
   // Provided by integrations block — after "no longer produced" and "service file", before "kiro file"
   const prov = s.ingredient ? provided.get(s.ingredient) : undefined;
   if (prov) return `provided by integrations.${prov.slot}`;
+  const parent = s.ingredient ? parentLocals.get(s.ingredient) : undefined;
+  if (parent !== undefined) return parentLocalReason(parent);
   if (reworded.has(s.path)) return REWORDED_REASON;
   if (indexed.has(s.path)) return INDEXED_REASON;
   if (metadata.has(s.path)) return METADATA_PARAM_REASON;
@@ -64,6 +70,7 @@ function staticReason(s: FileStatus, provided: Map<string, { slot: string; recip
  * @param reworded - The plan's `reworded` paths (spec 41 §4.10); empty with the mode off.
  * @param indexed - The plan's indexed paths (spec 44 §4.5); empty below schema 7, and when no list was expanded.
  * @param metadata - The paths whose hand edit changes a templated metadata field (`metadataEdits`, spec 50 §5.6); empty below the gate.
+ * @param parentLocals - The refs the profile resolves from a parent's local (`parentLocalsOf`, spec 54 §5.9), ref → parent.
  */
 export function driftList(
   statuses: FileStatus[],
@@ -71,13 +78,14 @@ export function driftList(
   reworded: ReadonlySet<string> = new Set(),
   indexed: ReadonlySet<string> = new Set(),
   metadata: ReadonlySet<string> = new Set(),
+  parentLocals: ReadonlyMap<string, string> = new Map(),
 ): DriftRow[] {
   const rows: DriftRow[] = [];
   for (const s of statuses) {
     if (s.state !== "drift" && s.state !== "orphan-drift") continue;
     // `same`: the lock's hash is the plan's, so only the hand edit separates the disk from the Forge.
     const forge: ForgeSide = s.state === "orphan-drift" ? "removed" : s.lock!.hash === hashNormalized(s.planned!.content) ? "same" : "changed";
-    const reason = staticReason(s, provided, reworded, indexed, metadata);
+    const reason = staticReason(s, provided, reworded, indexed, metadata, parentLocals);
     rows.push({ path: s.path, state: s.state, target: s.target!, ingredient: s.ingredient ?? "", forge, promotable: reason === null, reason });
   }
   return rows;

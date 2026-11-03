@@ -3,8 +3,9 @@
  * No fs, no process, no console — all validation and generation is deterministic.
  */
 
+import { isAbstract } from "./profile-extends.js";
 import YAML from "yaml";
-import { ProfileSchema, WorkspaceConfigSchema, type Profile } from "../schema/index.js";
+import { DEVICE_NAMES, PROFILE_NAME_RE, ProfileSchema, WorkspaceConfigSchema, type Profile } from "../schema/index.js";
 import type { Forge } from "./forge.js";
 import { effectiveProfile } from "./integrations.js";
 import { namedForProfile } from "./promote.js";
@@ -12,11 +13,6 @@ import { planRecipeEdit } from "./recipe-edit.js";
 import { profileNotFoundMessage } from "./resolve.js";
 import { parseYamlText } from "./yaml-read.js";
 
-/** Windows device names (spec 38 §5.1 P3). */
-const DEVICE_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
-
-/** Profile name grammar: lowercase letters and digits, in groups joined by one "-". */
-const PROFILE_NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /**
  * YAML-safe a list item: when `YAML.stringify(value).trim()` differs from the plain value,
@@ -110,6 +106,8 @@ export function newProfile(forge: Forge, o: NewProfileOptions): NewProfileResult
   if (like && !template) {
     throw new Error("--like: " + profileNotFoundMessage(like, [...forge.profiles.keys()]));
   }
+  // Spec 54 §5.7: an abstract profile's recipes are half a profile; a child extends it instead.
+  if (like && isAbstract(forge, like)) throw new Error(`--like: profile ${like} is abstract — start from a profile that extends it, or write extends: ${like} in the new profile by hand`);
 
   // 2. targets = o.targets ?? template's ?? ["claude-code"]
   const targets = targetOverride ?? template?.targets ?? ["claude-code"];
@@ -124,6 +122,10 @@ export function newProfile(forge: Forge, o: NewProfileOptions): NewProfileResult
 
   // 4. the edit, as init does (removes first, then adds)
   const notes: string[] = [];
+  // Spec 54 §5.9: --like copies the template's written lists only, so a template that extends a parent gives none of it.
+  if (template?.extends !== undefined) {
+    notes.push(`${like} extends ${template.extends} — ${name} gets none of ${template.extends}'s recipes, values or locals; write extends: ${template.extends} in it by hand for them`);
+  }
   let config = WorkspaceConfigSchema.parse({
     forge: ".",
     profile: name,

@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { forgeFor, overriddenBase, ProfileLocalLoadError, readsLocalOverride, readsProfileLocal, type LocalLayer } from "../core/profile-local.js";
 import { readsRecipeSections } from "../core/recipe-sections.js";
+import { abstractRefusal, familyOf, isAbstract, mergedProfile } from "../core/profile-extends.js";
 import path from "node:path";
 import os from "node:os";
 import { readWorkspaceConfig } from "../core/sync.js";
@@ -16,7 +17,7 @@ import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
 import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileWrittenSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
-import { readsPrimary, resolve, sectionKey, type Resolution } from "../core/resolve.js";
+import { readsPrimary, recipeOrder, resolve, sectionKey, type Resolution } from "../core/resolve.js";
 import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE } from "../core/rules-index.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { classifyForge, credentialFault } from "../core/remote.js";
@@ -518,6 +519,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   }
   /** The refs this run holds as the profile's locals, reused, rewritten or created, in run order. */
   const runLocals: string[] = [];
+  // Spec 54 §5.7: an abstract profile is no workspace's, so no workspace is imported into it.
+  if (loaded && isAbstract(loaded, opts.profileName)) throw new Error(`import: ${abstractRefusal(loaded, opts.profileName)}`);
   const existing = await existingProfile(forge, opts.profileName, loaded);
   for (const w of existing.warnings) report.warnings.push(w);
   const readWs = (abs: string) => fs.readFile(abs, "utf8");
@@ -581,7 +584,11 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
 
   // The recipe layer of sections (spec 54 §4.3), as sync resolves it for this workspace. Where the profile does not
   // resolve and a recipe of what it sees holds sections, the comparison cannot be made as sync would: fail closed.
-  if (cachedResolution?.ok) ctx.RS = cachedResolution.resolution.sectionLayers.recipes.sections;
+  // Spec 54 §5.9 (D12): the profile's parents are a lower layer too, so their values are never written into the child.
+  if (cachedResolution?.ok) {
+    const layers = cachedResolution.resolution.sectionLayers;
+    ctx.RS = deepMerge(layers.recipes.sections, layers.parents.sections) as Sections;
+  }
   else if (cachedResolution && loaded && readsRecipeSections(loaded.manifest) && [...forgeFor(loaded, opts.profileName).recipes.values()].some((r) => r.sections !== undefined)) {
     throw new Error(
       `import: profile ${opts.profileName} does not resolve (${errorText(cachedResolution.error)}), and its recipes hold sections import must render — fix the Forge and re-run`,
@@ -1859,6 +1866,23 @@ async function decideLocal(
     run.runLocals?.push(ref);
     return ref;
   }
+  // Spec 54 §5.9 (D11): a source a parent of the profile holds as a local is reused when equal and refused otherwise, under
+  // every --local mode — no writer writes a parent.
+  for (const anc of familyOf(forge, profile).slice(1)) {
+    const held = forge.locals.get(anc)?.ingredients.get(ref as IngredientRef);
+    if (!held) continue;
+    const d = await decide(run.ctx, held.dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases, run.indexExpand);
+    let equal = d.kind === "reuse" && !(d.delta?.length || d.sectionDelta?.length);
+    if (d.kind === "literal") {
+      const carried = await carryFromExisting(stage, path.join(held.dir, "ingredient.yaml"), sourceMeta);
+      equal = (await fingerprintDir(held.dir, stage.reader())) === fingerprintOf(validateImported(carried), files);
+    }
+    const dir = path.relative(forge.root, held.dir).split(path.sep).join("/");
+    if (!equal) throw new Error(`import: ${source}: ${ref} differs from the local of ${anc}, which ${profile} extends (${dir}) — edit the parent's local in the Forge by hand, then re-run`);
+    report.reused.push(ref);
+    (report.localReused ??= []).push({ ref, dir });
+    return ref;
+  }
   const rootHas = await stage.exists(path.join(stage.root, "ingredients", typeFolder(sourceMeta.type), sourceMeta.name, "ingredient.yaml"));
   if (mode === "never" && !rootHas && [...forge.locals.values()].some((l) => l.ingredients.has(ref as IngredientRef))) {
     throw new Error(`import: I14 ${source} would become ${ref} at the root, a name another profile holds as a local — the Forge would not load; rename the source in the workspace, or re-run with --local=auto to keep it local to this profile`);
@@ -1974,10 +1998,48 @@ async function placeComputed(o: RecipeOptions, own: LocalLayer | undefined, name
   // An override (spec 56 §7) stays in a computed root list: the root ingredient of that ref is there for other profiles.
   const forge = o.forge;
   const isOverride = (r: string) => overriddenBase(forge, r) !== undefined;
-  const locals = new Set<string>([...(own?.ingredients.keys() ?? []), ...(o.runLocals ?? [])].filter((r) => !isOverride(r)));
-  const citedLocally = new Set<string>([...(own?.recipes.values() ?? [])].flatMap((r) => r.recipe.ingredients));
+  // Spec 54 §5.6: the family's parents' locals are the profile's too — a root recipe never lists them.
+  const parentLayers = familyOf(forge, o.profile).slice(1).map((q) => forge.locals.get(q)).filter((l): l is LocalLayer => l !== undefined);
+  const locals = new Set<string>([...(own?.ingredients.keys() ?? []), ...(o.runLocals ?? []), ...parentLayers.flatMap((l) => [...l.ingredients.keys()])].filter((r) => !isOverride(r)));
+  const citedLocally = new Set<string>([...(own?.recipes.values() ?? []), ...parentLayers.flatMap((l) => [...l.recipes.values()])].flatMap((r) => r.recipe.ingredients));
   const rootListed = new Set(o.forge.recipes.get(name)?.ingredients ?? []);
-  const kept = list.filter((r) => !locals.has(r) && !(citedLocally.has(r) && !rootListed.has(r)));
+  // Spec 54 §5.9: what the parents' recipes already bring is the family's — a child's computed list never copies it.
+  const parentRecipes = familyOf(forge, o.profile).slice(1).flatMap((q) => forge.profiles.get(q)?.recipes ?? []);
+  const view = forgeFor(forge, o.profile);
+  let fromParents = new Set<string>();
+  if (parentRecipes.length) {
+    try {
+      fromParents = new Set(recipeOrder(view, parentRecipes, `the parents of profile ${o.profile}`).flatMap((r) => view.recipes.get(r)?.ingredients ?? []));
+    } catch (e) {
+      // Fail closed: what the parents bring is not known, so a variant or a local of this run could sit beside it.
+      throw new Error(`import: the recipes of ${o.profile}'s parents do not resolve (${errorText(e)}) — fix the Forge and re-run`);
+    }
+  }
+  // A child's variant or local that writes the output a parent's recipes already write — the base itself or a root variant
+  // named for the parent — would sit beside it (two ingredients, one file): the parent's recipe would have to change, and
+  // no command writes a parent (spec 54 §5.9). The child's override of the very ref the parents bring is not that.
+  const outOf = (ref: string): string => {
+    const m = view.ingredients.get(ref as IngredientRef)?.meta;
+    return m ? `${m.type}/${m.as ?? m.name}` : ref;
+  };
+  const brought = new Map<string, string>(); // type/outName → the ref the parents bring
+  for (const r of fromParents) brought.set(outOf(r), r);
+  const suffix = `--${o.profile}`;
+  for (const r of list) {
+    const key = r.endsWith(suffix) ? r.slice(0, -suffix.length) : r;
+    const theirs = brought.get(key);
+    if (theirs === undefined || fromParents.has(r)) continue;
+    const parent = familyOf(forge, o.profile).slice(1).find((q) => {
+      try {
+        return recipeOrder(view, forge.profiles.get(q)?.recipes ?? [], `profile ${q}`).some((x) => view.recipes.get(x)?.ingredients.includes(theirs));
+      } catch {
+        return false;
+      }
+    });
+    const who = parent !== undefined ? `${o.profile}'s parent ${parent}` : `one of ${o.profile}'s parents`;
+    throw new Error(`import: ${r} would write the file of ${theirs}, which ${who} brings through its recipes — the two would sit side by side, and no command writes a parent: edit the parent's recipe, or the Forge's ${theirs}, by hand, then re-run`);
+  }
+  const kept = list.filter((r) => !locals.has(r) && !fromParents.has(r) && !(citedLocally.has(r) && !rootListed.has(r)));
   if (list.length > 0 && kept.length === 0) return null;
   const elsewhere = [...o.forge.locals.entries()].some(([q, l]) => q !== o.profile && l.recipes.has(name));
   if (elsewhere) return writeOwnedRecipe(o, `${name}--${o.profile}`, kept, description);
@@ -2161,6 +2223,8 @@ function resolvedParam(forge: import("../core/forge.js").Forge | null, profile: 
 
 /** The recipes a profile resolves inside the Forge, or null when `resolve` throws — the profile does not resolve. */
 export function resolvedRecipes(forge: import("../core/forge.js").Forge, profile: string): Set<string> | null {
+  // Spec 54 §5.7: an abstract profile resolves nothing by itself — its children are asked in its place.
+  if (isAbstract(forge, profile)) return new Set();
   try {
     return new Set(resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile })).recipes);
   } catch {
@@ -2485,7 +2549,8 @@ function primaryFor(
   cachedResolution: { ok: true; resolution: Resolution; lookup: RuleLookup } | { ok: false; error: unknown } | null,
 ): { refs: NonNullable<RunContext["primaryRefs"]>; agentsMdOnly: Set<string> } | null {
   if (!loaded || !readsPrimary(loaded.manifest)) return null;
-  const own = loaded.profiles.get(profile)?.params ?? {};
+  // A parent's params are the child's too (spec 54 §5.4): the key set by a parent counts.
+  const own = loaded.profiles.has(profile) ? mergedProfile(loaded, profile).params : {};
   const setSomewhere =
     Object.hasOwn(own, AGENTS_MD_PRIMARY_KEY) ||
     Object.hasOwn(ctx.W, AGENTS_MD_PRIMARY_KEY) ||

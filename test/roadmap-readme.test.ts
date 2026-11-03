@@ -28,14 +28,15 @@ describe("README — the roadmap with phases 1 and 2 closed", () => {
     expect(later).toEqual(["Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packaging of `craftar mcp`."]);
   });
 
-  it("the status line opens with the three phases done and gains the 0.49.0, 0.50.0 and 0.53.0 sentences", () => {
+  it("the status line opens with the three phases done and gains the 0.49.0, 0.50.0, 0.53.0 and 0.55.0 sentences", () => {
     const status = lines[4];
     expect(status.startsWith("> Status: **phases 0, 1 and 2 done** — the foundations, the client profile and the environment. ")).toBe(true);
     expect(status).not.toContain("in progress");
     expect(status).toContain("Each Kiro agent gets `permissions.rules`, derived from its tools as kiro-cli 2.37 derives them, so Kiro no longer rewrites the file (see *Targets*).");
     expect(status).toContain("`craftar settings apply` merges the generated `hooks` and the `env` names into `.claude/settings.json` — only when a person types it, keeping every `env` value, `permissions` and every other key (see *Commands*).");
     expect(status).toContain("In a Forge that declares `schema: 11`, a profile's section value can be held in a file under its folder (`{ file: sections/….md }`), and `craftar forge sections extract` moves the long ones there; `craftar doctor`'s `skill-trigger` says when a skill's description does not say when to use it (see *Forge layout* and *Commands*).");
-    // Spec 56: the status line's last sentence is the local override's.
-    expect(status.endsWith("In a Forge that declares `schema: 12`, a profile's local may override a root base of the same ref for that profile alone — `craftar forge localize` turns the profile's own variant into one, and `craftar forge promote --variant` makes a variant several profiles share the base.")).toBe(true);
+    expect(status).toContain("In a Forge that declares `schema: 12`, a profile's local may override a root base of the same ref for that profile alone — `craftar forge localize` turns the profile's own variant into one, and `craftar forge promote --variant` makes a variant several profiles share the base.");
+    // Spec 54 Part B: the status line's last sentence is the profile family's.
+    expect(status.endsWith("In a Forge that declares `schema: 13`, a profile can extend an abstract one, so a client's profiles share one parent's values, recipes and locals (see *Forge layout*).")).toBe(true);
   });
 });

@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { concreteProfiles } from "./profile-extends.js";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
@@ -14,7 +15,8 @@ import { editYamlText } from "./yaml-edit.js";
 /** Every profile's resolution with no workspace layer — the part decidable in the Forge; a profile that does not resolve maps to its error. */
 export function resolveAll(forge: Forge): Map<string, Resolution | Error> {
   const out = new Map<string, Resolution | Error>();
-  for (const q of [...forge.profiles.keys()].sort()) {
+  // Spec 54 §5.7 (D14): over the concrete profiles — an abstract one is proved through the children that extend it.
+  for (const q of concreteProfiles(forge).sort()) {
     try {
       out.set(q, resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile: q })));
     } catch (e) {

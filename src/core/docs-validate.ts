@@ -2,6 +2,7 @@
  * `craftar docs validate` (spec 47): the one module of the command — the docs block's one reader, the scanner, the checks.
  * Returns data and throws; it never prints. No finding carries a line of a file, a link's target or a frontmatter value.
  */
+import { mergedProfile as familyProfile } from "./profile-extends.js";
 import { promises as fs, type Dirent } from "node:fs";
 import path from "node:path";
 import { DocsBlockSchema, type DocsBlock } from "../schema/index.js";
@@ -845,7 +846,7 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
           fix: opts.fetch ? doctor(" --fetch") : remote ? `${doctor()}; with no cached copy, run again with --fetch` : doctor(),
         });
       }
-      const profile = ws?.forge.profiles.get(ws.config.profile);
+      const profile = ws && ws.forge.profiles.has(ws.config.profile) ? familyProfile(ws.forge, ws.config.profile) : undefined;
       if (ws && !profile) add({ id: "policy", level: "error", message: POLICY.notRead("profile"), fix: opts.fetch ? doctor(" --fetch") : doctor() });
       if (ws && profile) {
         const o = ws.origin;

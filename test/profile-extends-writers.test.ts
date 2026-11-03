@@ -1,0 +1,323 @@
+/**
+ * Spec 54 Part B — the writers and an abstract profile (§5.7, §5.9, §5.10). Every case here failed before the change.
+ */
+import { afterEach, describe, expect, it } from "vitest";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import YAML from "yaml";
+import { execFileSync } from "node:child_process";
+import { loadForge } from "../src/core/forge.js";
+import { forgeWorkspaces } from "../src/core/impact.js";
+import { applyMove, planLocalize, planShare, proveMove } from "../src/core/localize.js";
+import { newProfile } from "../src/core/new-profile.js";
+import { importClaudeCode } from "../src/importers/claude-code.js";
+import { planPromote } from "../src/importers/drift-promote.js";
+import { planBasePromotion } from "../src/core/promote.js";
+import { pruneCandidates, pruneRecipes } from "../src/core/unify.js";
+import { runCli } from "./helpers/cli.js";
+import { acmeHoisted, house, ingredients, rootRecipes } from "./helpers/profile-extends.js";
+import { makeForge, makeWorkspace, recipe, rule, tmpDir, writeFiles } from "./helpers/forge.js";
+
+const GATE = 13;
+const roots: string[] = [];
+afterEach(async () => {
+  while (roots.length) await fs.rm(roots.pop()!, { recursive: true, force: true });
+});
+const home = () => process.env.CRAFTAR_HOME!;
+
+const gitEnv = (): NodeJS.ProcessEnv => ({
+  ...process.env,
+  GIT_AUTHOR_NAME: "craftar-test",
+  GIT_AUTHOR_EMAIL: "test@example.invalid",
+  GIT_COMMITTER_NAME: "craftar-test",
+  GIT_COMMITTER_EMAIL: "test@example.invalid",
+});
+function gitInit(dir: string): void {
+  execFileSync("git", ["init", "-q", dir]);
+  execFileSync("git", ["-C", dir, "config", "maintenance.auto", "false"]);
+  execFileSync("git", ["-C", dir, "config", "gc.auto", "0"]);
+  execFileSync("git", ["-C", dir, "add", "-A"]);
+  execFileSync("git", ["-C", dir, "commit", "-q", "-m", "init"], { env: gitEnv() });
+}
+
+/** A family whose client rule is still at the root (recipe acme-base), resolved only by acme's children; each synced and registered. */
+async function familyAtRoot(opts: { globexToo?: boolean } = {}) {
+  const root = await tmpDir("craftar-extends-writers-");
+  roots.push(root);
+  const forge = path.join(root, "forge");
+  await makeForge(forge, {
+    ingredients: [...ingredients, house],
+    recipes: [...rootRecipes, recipe("acme-base", ["rule/house"])],
+    profiles: [
+      { name: "acme", abstract: true, recipes: ["base", "acme-base"], params: { "ticket.prefix": "ACME" }, integrations: { executor: { kind: "kiro" } } },
+      { name: "acme-portal", extends: "acme", recipes: ["stack-angular"], targets: ["claude-code", "kiro"] },
+      { name: "acme-shop", extends: "acme", recipes: ["stack-dotnet"], targets: ["claude-code"] },
+      { name: "globex", recipes: opts.globexToo ? ["base", "acme-base"] : ["base"], targets: ["claude-code"], params: { "ticket.prefix": "GLX" } },
+    ],
+  });
+  await writeFiles(forge, { "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: GATE }) });
+  const ws: Record<string, string> = {};
+  for (const p of ["acme-portal", "acme-shop", "globex"]) {
+    const dir = path.join(root, `ws-${p}`);
+    await makeWorkspace(dir, forge, { config: { profile: p } });
+    const r = runCli(["sync", "--workspace", dir]);
+    expect(r.code, r.stderr).toBe(0);
+    ws[p] = dir;
+  }
+  return { root, forge, ws };
+}
+
+describe("spec 54 Part B — the writers", () => {
+  it("forge localize takes an abstract parent: the rule and its recipe move to profiles/acme, every child plans the same (D9)", async () => {
+    const s = await familyAtRoot();
+    const f = await loadForge(s.forge);
+    const move = await planLocalize(f, "rule/house", "acme");
+    await proveMove(f, move, (await forgeWorkspaces(home(), s.forge)).workspaces);
+    await applyMove(move, []);
+    expect(await fs.readdir(path.join(s.forge, "profiles/acme/ingredients/rules"))).toEqual(["house"]);
+    expect(await fs.readdir(path.join(s.forge, "profiles/acme/recipes"))).toEqual(["acme-base.yaml"]);
+    for (const p of ["acme-portal", "acme-shop", "globex"]) expect(runCli(["sync", "--check", "--workspace", s.ws[p]]).code).toBe(0);
+  });
+
+  it("forge localize to a parent refuses when a profile outside the family resolves the rule", async () => {
+    const s = await familyAtRoot({ globexToo: true });
+    await expect(loadForge(s.forge).then((f) => planLocalize(f, "rule/house", "acme"))).rejects.toThrow("forge localize: profile globex also resolves rule/house");
+  });
+
+  it("forge share moves a parent's local back to the root", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    for (const w of [f0.ws.portal, f0.ws.shop, f0.ws.globex]) expect(runCli(["sync", "--workspace", w]).code).toBe(0);
+    const f = await loadForge(f0.forgeRoot);
+    const move = await planShare(f, "rule/house", "acme");
+    await proveMove(f, move, (await forgeWorkspaces(home(), f0.forgeRoot)).workspaces);
+    await applyMove(move, []);
+    expect(await fs.readdir(path.join(f0.forgeRoot, "ingredients/rules"))).toContain("house");
+    expect(runCli(["sync", "--check", "--workspace", f0.ws.portal]).code).toBe(0);
+  });
+
+  it("import --profile and init --new-profile --like refuse an abstract profile (D7)", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    expect(runCli(["sync", "--workspace", f0.ws.portal]).code).toBe(0);
+    await expect(importClaudeCode({ workspaceRoot: f0.ws.portal, forgeRoot: f0.forgeRoot, profileName: "acme" })).rejects.toThrow(
+      "import: profile acme is abstract — a workspace uses a profile that extends it: acme-portal, acme-shop",
+    );
+    const f = await loadForge(f0.forgeRoot);
+    expect(() => newProfile(f, { name: "acme-api", like: "acme" })).toThrow("--like: profile acme is abstract — start from a profile that extends it, or write extends: acme in the new profile by hand");
+  });
+
+  it("drift promote refuses a hand edit of a file from a parent's local that only a variant could hold (D24)", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    gitInit(f0.forgeRoot);
+    expect(runCli(["sync", "--workspace", f0.ws.portal]).code).toBe(0);
+    const file = path.join(f0.ws.portal, ".claude/rules/house.md");
+    await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace("# House rules", "# House rules for the portal"));
+    await expect(
+      planPromote({ workspaceRoot: f0.ws.portal, forgeDir: null, path: ".claude/rules/house.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
+    ).rejects.toThrow(
+      ".claude/rules/house.md comes from rule/house, local to acme, which acme-portal extends (profiles/acme/ingredients/rules/house) — no command writes a parent: edit it there by hand, then sync every workspace of the family",
+    );
+  });
+
+  it("forge unify refuses an abstract --profile before anything is read from git (no command writes a parent)", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    const v = rule("style--acme", "# Style\nKeep it shorter.\n", { as: "style" });
+    await writeFiles(f0.forgeRoot, {
+      "ingredients/rules/style--acme/ingredient.yaml": YAML.stringify(v.meta),
+      "ingredients/rules/style--acme/rule.md": v.files!["rule.md"] as string,
+    });
+    const r = runCli(["forge", "unify", "rule/style", "--profile", "acme", "--take", "base", "--forge", f0.forgeRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("unify: profile acme is abstract — no command writes a parent: unify rule/style--acme by hand, commit, and re-run");
+  });
+
+  it("forge unify --prune-recipes keeps a candidate an abstract profile lists", async () => {
+    const root = await tmpDir("craftar-extends-prune-");
+    roots.push(root);
+    const forge = path.join(root, "forge");
+    await makeForge(forge, {
+      ingredients: [rule("wf", "a\n"), rule("wf--acme-portal", "a\n", { as: "wf" })],
+      recipes: [recipe("base", ["rule/wf"]), recipe("base--acme-portal", ["rule/wf--acme-portal"])],
+      profiles: [
+        { name: "acme", abstract: true, recipes: ["base--acme-portal"] },
+        { name: "acme-portal", extends: "acme", recipes: [], targets: ["claude-code"] },
+      ],
+    });
+    await writeFiles(forge, { "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: GATE }) });
+    const f = await loadForge(forge);
+    const c = await pruneCandidates(f, "rule/wf" as `${string}/${string}`, "rule/wf--acme-portal" as `${string}/${string}`, "acme-portal");
+    expect(c.map((x) => [x.recipe, x.abstractProfiles])).toEqual([["base--acme-portal", ["acme"]]]);
+    const result = await pruneRecipes(forge, c, { state: "read", entries: [], after: [] });
+    expect(result).toEqual({ pruned: [], kept: [{ recipe: "base--acme-portal", reason: "profile acme lists it and is abstract — no command writes a parent" }] });
+  });
+
+  it("forge promote refuses a recipe a child reaches only through its parent's written list", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    const v = rule("style--globex", "# Style\nGlobex style.\n", { as: "style" });
+    await writeFiles(f0.forgeRoot, {
+      "ingredients/rules/style--globex/ingredient.yaml": YAML.stringify(v.meta),
+      "ingredients/rules/style--globex/rule.md": v.files!["rule.md"] as string,
+      "recipes/base--globex.yaml": YAML.stringify(recipe("base--globex", ["rule/style--globex", "command/open-pr"])),
+      "profiles/globex/profile.yaml": YAML.stringify({ name: "globex", recipes: ["base--globex"], targets: ["claude-code"] }),
+    });
+    const f = await loadForge(f0.forgeRoot);
+    await expect(planBasePromotion(f, "rule/style", "globex")).rejects.toThrow(
+      "forge promote: profile acme-portal reaches recipe base (which names rule/style) through acme, which it extends — no command writes a parent: edit the Forge by hand",
+    );
+  });
+
+  it("drift promote refuses a variant that a parent's local recipe would leave naming the base (spec 54 §5.12)", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    await writeFiles(f0.forgeRoot, {
+      "profiles/acme/recipes/acme-extra.yaml": YAML.stringify(recipe("acme-extra", ["rule/style"])),
+      "profiles/acme/profile.yaml": YAML.stringify({ name: "acme", abstract: true, recipes: ["acme-extra", "base", "acme-base"], params: { "ticket.prefix": "ACME" }, integrations: { executor: { kind: "kiro" } }, sections: { "rule/house": { tone: "Short paragraphs.\n" } } }),
+    });
+    gitInit(f0.forgeRoot);
+    expect(runCli(["sync", "--workspace", f0.ws.portal]).code).toBe(0);
+    const file = path.join(f0.ws.portal, ".claude/rules/style.md");
+    await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace("Keep it short.", "Keep it short, portal."));
+    await expect(
+      planPromote({ workspaceRoot: f0.ws.portal, forgeDir: null, path: ".claude/rules/style.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
+    ).rejects.toThrow(
+      ".claude/rules/style.md: profiles/acme/recipes/acme-extra.yaml reaches rule/style, local to acme, which acme-portal extends — no command writes a parent: edit the Forge by hand",
+    );
+  });
+
+  it("drift show gives a parent's local file promotable: false, and drift promote refuses even a value edit (D24, spec 54 §5.9)", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    gitInit(f0.forgeRoot);
+    expect(runCli(["sync", "--workspace", f0.ws.portal]).code).toBe(0);
+    const file = path.join(f0.ws.portal, ".claude/rules/house.md");
+    await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace("Tickets start with ACME.", "Tickets start with PORTAL."));
+    const show = runCli(["drift", "show", ".claude/rules/house.md", "--workspace", f0.ws.portal, "--json"]);
+    const row = JSON.parse(show.stdout).files[0];
+    expect([row.promotable, row.reason]).toEqual([false, "local to acme, which this profile extends"]);
+    await expect(
+      planPromote({ workspaceRoot: f0.ws.portal, forgeDir: null, path: ".claude/rules/house.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
+    ).rejects.toThrow(".claude/rules/house.md comes from rule/house, local to acme, which acme-portal extends (profiles/acme/ingredients/rules/house)");
+  });
+
+  it("init --new-profile --like a child says the new profile gets nothing of the child's parent", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    const f = await loadForge(f0.forgeRoot);
+    expect(newProfile(f, { name: "acme-api", like: "acme-portal" }).notes).toContain(
+      "acme-portal extends acme — acme-api gets none of acme's recipes, values or locals; write extends: acme in it by hand for them",
+    );
+  });
+
+  it("drift promote of a base only a parent's recipe brings names the parent, where it said re-import", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    gitInit(f0.forgeRoot);
+    expect(runCli(["sync", "--workspace", f0.ws.portal]).code).toBe(0);
+    await fs.writeFile(path.join(f0.ws.portal, ".claude/rules/style.md"), "# Style\nKeep it very short.\n");
+    await expect(
+      planPromote({ workspaceRoot: f0.ws.portal, forgeDir: null, path: ".claude/rules/style.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
+    ).rejects.toThrow(
+      ".claude/rules/style.md: recipe base reaches acme-portal through profile acme, which it extends — forking it would edit acme's recipes, and no command writes a parent: edit the Forge by hand",
+    );
+  });
+
+  it("drift promote refuses a recipe only the parent lists when the parent has a single child, the Forge untouched", async () => {
+    const root = await tmpDir("craftar-extends-one-child-");
+    roots.push(root);
+    const forge = path.join(root, "forge");
+    await makeForge(forge, {
+      ingredients,
+      recipes: rootRecipes,
+      profiles: [
+        { name: "acme", abstract: true, recipes: ["base"] },
+        { name: "acme-portal", extends: "acme", recipes: ["stack-angular"], targets: ["claude-code"] },
+      ],
+    });
+    await writeFiles(forge, { "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: GATE }) });
+    gitInit(forge);
+    const ws = path.join(root, "ws");
+    await makeWorkspace(ws, forge, { config: { profile: "acme-portal" } });
+    expect(runCli(["sync", "--workspace", ws]).code).toBe(0);
+    await fs.writeFile(path.join(ws, ".claude/rules/style.md"), "# Style\nKeep it very short.\n");
+    const base = await fs.readFile(path.join(forge, "recipes/base.yaml"), "utf8");
+    await expect(
+      planPromote({ workspaceRoot: ws, forgeDir: null, path: ".claude/rules/style.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
+    ).rejects.toThrow("recipe base reaches acme-portal through profile acme, which it extends — forking it would edit acme's recipes, and no command writes a parent");
+    expect(await fs.readFile(path.join(forge, "recipes/base.yaml"), "utf8")).toBe(base);
+  });
+
+  for (const how of ["the child lists it too", "the parent's integrations block selects it"] as const) {
+    it(`drift promote refuses a recipe a parent brings when ${how} (no command writes a parent)`, async () => {
+      const root = await tmpDir("craftar-extends-reach-");
+      roots.push(root);
+      const forge = path.join(root, "forge");
+      const viaBlock = how !== "the child lists it too";
+      await makeForge(forge, {
+        ingredients,
+        recipes: [...rootRecipes, recipe("pm-style", ["rule/style", "command/open-pr"])],
+        profiles: [
+          viaBlock ? { name: "acme", abstract: true, recipes: [], integrations: { pm: { kind: "style" } } } : { name: "acme", abstract: true, recipes: ["base"] },
+          { name: "acme-portal", extends: "acme", recipes: viaBlock ? ["stack-angular", "base"] : ["base", "stack-angular"], targets: ["claude-code"] },
+        ],
+      });
+      await writeFiles(forge, { "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: GATE }) });
+      gitInit(forge);
+      const ws = path.join(root, "ws");
+      await makeWorkspace(ws, forge, { config: { profile: "acme-portal" } });
+      expect(runCli(["sync", "--workspace", ws]).code).toBe(0);
+      await fs.writeFile(path.join(ws, ".claude/rules/style.md"), "# Style\nKeep it very short.\n");
+      await expect(
+        planPromote({ workspaceRoot: ws, forgeDir: null, path: ".claude/rules/style.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
+      ).rejects.toThrow(`reaches acme-portal through profile acme, which it extends — forking it would edit acme's recipes, and no command writes a parent`);
+    });
+  }
+
+  it("forge promote refuses a recipe a parent lists even when the child lists it too", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    const v = rule("style--globex", "# Style\nGlobex style.\n", { as: "style" });
+    await writeFiles(f0.forgeRoot, {
+      "ingredients/rules/style--globex/ingredient.yaml": YAML.stringify(v.meta),
+      "ingredients/rules/style--globex/rule.md": v.files!["rule.md"] as string,
+      "recipes/base--globex.yaml": YAML.stringify(recipe("base--globex", ["rule/style--globex", "command/open-pr"])),
+      "profiles/globex/profile.yaml": YAML.stringify({ name: "globex", recipes: ["base--globex"], targets: ["claude-code"] }),
+      "profiles/acme-portal/profile.yaml": YAML.stringify({ name: "acme-portal", extends: "acme", recipes: ["base", "stack-angular"], targets: ["claude-code", "kiro"] }),
+    });
+    const f = await loadForge(f0.forgeRoot);
+    await expect(planBasePromotion(f, "rule/style", "globex")).rejects.toThrow(
+      "forge promote: profile acme-portal reaches recipe base (which names rule/style) through acme, which it extends — no command writes a parent",
+    );
+  });
+
+  for (const how of ["block", "extends"] as const) {
+    it(`forge promote refuses a recipe a parent reaches through its ${how === "block" ? "integrations block" : "recipe's extends"}, the child listing it too`, async () => {
+      const root = await tmpDir("craftar-extends-fp-");
+      roots.push(root);
+      const forge = path.join(root, "forge");
+      const v = rule("style--globex", "# Style\nGlobex.\n", { as: "style" });
+      await makeForge(forge, {
+        ingredients: [rule("style", "# Style\nShort.\n"), v, rule("angular", "# A\n")],
+        recipes: [
+          recipe("base", ["rule/style"]),
+          recipe("base--globex", ["rule/style--globex"]),
+          recipe("stack-angular", ["rule/angular"]),
+          ...(how === "block" ? [recipe("base-x", ["rule/style"])] : [recipe("wrap", ["rule/angular"], { extends: ["base"] })]),
+        ],
+        profiles: [
+          how === "block" ? { name: "acme", abstract: true, recipes: [], integrations: { base: { kind: "x" } } } : { name: "acme", abstract: true, recipes: ["wrap"] },
+          { name: "acme-portal", extends: "acme", recipes: how === "block" ? ["base-x"] : ["base"], targets: ["claude-code"] },
+          { name: "globex", recipes: ["base--globex"], targets: ["claude-code"] },
+        ],
+      });
+      await writeFiles(forge, { "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: GATE }) });
+      await expect(planBasePromotion(await loadForge(forge), "rule/style", "globex")).rejects.toThrow(
+        `through acme, which it extends — no command writes a parent`,
+      );
+    });
+  }
+});
+

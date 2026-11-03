@@ -119,7 +119,9 @@ describe("the docs key at load (spec 47 §5.2)", () => {
     const offenders: string[] = [];
     for (const rel of await listFiles(src)) {
       if (!rel.endsWith(".ts") || rel === "core/docs-validate.ts" || rel === "schema/index.ts") continue;
-      const text = await fs.readFile(path.join(src, rel), "utf8");
+      let text = await fs.readFile(path.join(src, rel), "utf8");
+      // Spec 54 §5.3: the family merge copies the block whole, never reading it — that one statement is allowed.
+      if (rel === "core/profile-extends.ts") text = text.replace('if (written(forge, l, "docs")) out.docs = l.docs;', "");
       if (/\.docs\b(?!\s*\??:)/.test(text.replace(/language\??\.docs/g, "")) || text.includes("DocsBlockSchema")) offenders.push(rel);
     }
     expect(offenders).toEqual([]);

@@ -18,6 +18,7 @@ const ALLOWED = [
   "src/core/localize.ts",
   "src/core/new-profile.ts",
   "src/core/param-writes.ts",
+  "src/core/profile-extends.ts", // spec 54 §5.6: a family's locals, read for the load checks and the view
   "src/core/profile-local.ts",
   "src/core/promote.ts",
   "src/core/recipe-edit.ts",

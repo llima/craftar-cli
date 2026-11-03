@@ -683,6 +683,11 @@ export type Recipe = z.infer<typeof RecipeSchema>;
 /* Profiles                                                             */
 /* ------------------------------------------------------------------ */
 
+/** Profile name grammar (spec 38 §5.1 P3): lowercase letters and digits, in groups joined by one "-". One spelling. */
+export const PROFILE_NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+/** Windows device names (spec 38 §5.1 P3), refused as a profile name. */
+export const DEVICE_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
 export const ProfileSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
@@ -717,6 +722,14 @@ export const ProfileSchema = z.object({
   templates: z.unknown().optional(),
   /** The docs block (spec 47 §5.2): kept as written, NOT validated at load — `declaredDocs` is its one reader. */
   docs: z.unknown().optional(),
+  /** The abstract profile this one extends (spec 54 §5.1), read at Forge schema 13 and above only. P3's grammar, `init --new-profile`'s. */
+  extends: z
+    .string()
+    .regex(PROFILE_NAME_RE, "a profile name: lowercase letters and digits joined by one -")
+    .refine((v) => !DEVICE_NAMES.test(v), "a profile name that is not a Windows device name")
+    .optional(),
+  /** A profile no workspace uses, which others extend (spec 54 §5.1), read at Forge schema 13 and above only. */
+  abstract: z.boolean().optional(),
 });
 export type Profile = z.infer<typeof ProfileSchema>;
 /**
@@ -752,6 +765,8 @@ export const FORGE_SCHEMA_RECIPE_SECTIONS = 10;
 export const FORGE_SCHEMA_SECTION_FILES = 11;
 /** Forge schema at which a profile local may override a root base of the same ref (spec 56 §4.1). */
 export const FORGE_SCHEMA_LOCAL_OVERRIDE = 12;
+/** Forge schema that reads a profile's `extends` and `abstract` (spec 54 Part B). */
+export const FORGE_SCHEMA_PROFILE_EXTENDS = 13;
 
 export const ForgeManifestSchema = z.object({
   name: z.string(),
@@ -769,6 +784,7 @@ export const ForgeManifestSchema = z.object({
       z.literal(FORGE_SCHEMA_RECIPE_SECTIONS),
       z.literal(FORGE_SCHEMA_SECTION_FILES),
       z.literal(FORGE_SCHEMA_LOCAL_OVERRIDE),
+      z.literal(FORGE_SCHEMA_PROFILE_EXTENDS),
     ])
     .default(1),
   description: z.string().optional(),

@@ -21,6 +21,7 @@ import { containRoot, containSubRoot, readForgeText, type ContainRoot } from "./
 import { readsSectionFiles, resolveSectionFiles, unnamedSectionFiles, type SectionFileMap } from "./section-files.js";
 import { checkLocals, ProfileLocalLoadError, readsLocalOverride, readsProfileLocal, type IgnoredLocals, type LocalLayer, type LocalRecipe } from "./profile-local.js";
 import { readsRecipeSections, recipeSectionsNearMiss } from "./recipe-sections.js";
+import { checkFamilies, familyOf, profileExtendsNearMiss, readsProfileExtends } from "./profile-extends.js";
 
 export interface LoadedIngredient {
   ref: IngredientRef;
@@ -57,6 +58,8 @@ export interface Forge {
   unnamedSectionFiles: Map<string, string[]>;
   /** Each profile's `profile.yaml`, Forge-relative and POSIX, by profile name: the declaring file `sectionFiles` is keyed by. */
   profileFiles: Map<string, string>;
+  /** The top-level keys each profile's `profile.yaml` holds (spec 54 §5.3); optional so a Forge built in memory needs none. */
+  writtenKeys?: Map<string, ReadonlySet<string>>;
 }
 
 export const FORGE_MANIFEST = "craftar.forge.yaml";
@@ -83,9 +86,25 @@ export function parseYaml<T>(file: string, text: string, schema: { parse: (v: un
 }
 
 async function readYaml<T>(root: ContainRoot, file: string, schema: { parse: (v: unknown) => T }): Promise<T> {
+  return (await readYamlKeyed(root, file, schema)).value;
+}
+
+/** `readYaml`, and the top-level keys the document holds (spec 54 §5.3: "written" is what the YAML holds, not a default). */
+async function readYamlKeyed<T>(
+  root: ContainRoot,
+  file: string,
+  schema: { parse: (v: unknown) => T },
+  /** Run on the document's keys before the schema: a near miss is named before the schema refuses its value (spec 54 §5.2). */
+  first?: (keys: ReadonlySet<string>) => void,
+): Promise<{ value: T; keys: Set<string> }> {
   // A profile's folder (spec 51 §4.2) labels its files Forge-relative, so a tree in the cache never prints its entry's name.
   const label = root.label ? `${root.label.rel}/${path.relative(root.given, file).split(path.sep).join("/")}` : undefined;
-  return parseYaml(file, await readForgeText(root, file), schema, label);
+  const text = await readForgeText(root, file);
+  const raw = parseYamlText(label ?? path.relative(process.cwd(), file), text);
+  const keys = new Set(raw !== null && typeof raw === "object" && !Array.isArray(raw) ? Object.keys(raw as object) : []);
+  first?.(keys);
+  const value = parseYaml(file, text, schema, label);
+  return { value, keys };
 }
 
 /** Anything at the path, a dangling link included: `exists` would read that as absent and skip the file (spec 48 §15 item 27). */
@@ -137,6 +156,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
   const sectionFiles = new Map<string, SectionFileMap>();
   const unnamed = new Map<string, string[]>();
   const profileFiles = new Map<string, string>();
+  const writtenKeys = new Map<string, ReadonlySet<string>>();
   const sectionGate = readsSectionFiles(manifest);
   const profRoot = path.join(root, "profiles");
   if (await exists(profRoot)) {
@@ -146,7 +166,14 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
       const folder = path.join(profRoot, d.name);
       const f = path.join(folder, "profile.yaml");
       const hasProfile = await present(f);
-      const written = hasProfile ? await readYaml(contain, f, ProfileWrittenSchema) : null;
+      // Spec 54 §5.2: below the gate `extends` and `abstract` are a near miss, where an older craftar dropped them — named
+      // before the schema, so a malformed value there still reads as the near miss.
+      const nearMiss = (keys: ReadonlySet<string>) => {
+        if (readsProfileExtends(manifest)) return;
+        for (const key of ["extends", "abstract"] as const) if (keys.has(key)) throw new Error(profileExtendsNearMiss(`profiles/${d.name}/profile.yaml`, key));
+      };
+      const read = hasProfile ? await readYamlKeyed(contain, f, ProfileWrittenSchema, nearMiss) : null;
+      const written = read?.value ?? null;
       let p: Profile | null = null;
       if (written) {
         // Spec 55 §5.4: every `{ file: }` value resolved here, once, against the folder that holds this profile.yaml.
@@ -162,6 +189,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
         }
         profiles.set(p.name, p);
         profileFiles.set(p.name, declaring);
+        writtenKeys.set(p.name, read!.keys);
       }
       const present2 = [] as Array<"ingredients" | "recipes">;
       for (const sub of ["ingredients", "recipes"] as const) if (await present(path.join(folder, sub))) present2.push(sub);
@@ -234,8 +262,11 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     }
   }
 
+  // E1–E3 (spec 54 §5.2): a family's chain must be whole, abstract and acyclic, in the one load error.
+  if (readsProfileExtends(manifest)) early.push(...checkFamilies({ profiles }, (n) => profileFiles.get(n) ?? `profiles/${n}/profile.yaml`));
   if (reads) {
-    const findings = checkLocals({ ingredients, ingredientPaths, recipes, recipeFiles }, locals, localPaths, early, readsLocalOverride(manifest));
+    const family = (p: string) => familyOf({ profiles }, p);
+    const findings = checkLocals({ ingredients, ingredientPaths, recipes, recipeFiles }, locals, localPaths, early, readsLocalOverride(manifest), family);
     if (findings.length) throw new ProfileLocalLoadError(findings);
   } else if (early.length) {
     // Below schema 8 only a section file's near miss (spec 55 §5.1) can be here: one error listing every finding, as above.
@@ -248,7 +279,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     const target = await fs.stat(path.join(root, rel)).catch(() => null);
     if (target === null || target.isDirectory()) folders.push(rel);
   }
-  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals, skippedLinks: folders.sort(), sectionFiles, unnamedSectionFiles: unnamed, profileFiles };
+  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals, skippedLinks: folders.sort(), sectionFiles, unnamedSectionFiles: unnamed, profileFiles, writtenKeys };
 }
 
 const isLink = (p: string) => fs.lstat(p).then((st) => st.isSymbolicLink(), () => false);

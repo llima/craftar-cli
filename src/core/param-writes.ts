@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { isAbstract } from "./profile-extends.js";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { IngredientSchema, ProfileWrittenSchema, WorkspaceConfigSchema, type ForgeManifest, type Ingredient, type IngredientRef } from "../schema/index.js";
@@ -67,6 +68,8 @@ export async function findProfileFile(root: string, name: string): Promise<strin
 
 /** The ingredient refs a profile resolves inside the Forge, with no workspace layer (the part decidable here). */
 export function resolvedBy(forge: Forge, profile: string): Set<string> {
+  // Spec 54 §5.7: an abstract profile resolves nothing by itself — its children are asked in its place.
+  if (isAbstract(forge, profile)) return new Set();
   const r = resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile }));
   return new Set(r.ingredients.map((i) => i.ref));
 }

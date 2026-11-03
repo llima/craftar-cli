@@ -1,0 +1,624 @@
+{
+  "portal": {
+    "planned": {
+      ".claude/commands/open-pr.md": "---\ndescription: Open a pull request\n---\n# Open a PR\nRun the checks by hand.\n",
+      ".claude/rules/angular.md": "# Angular\nUse signals.\n",
+      ".claude/rules/house.md": "# House rules\nTickets start with ACME.\nShort paragraphs.\n",
+      ".claude/rules/style.md": "# Style\nKeep it short.\n",
+      ".kiro/steering/angular.md": "---\r\ninclusion: always\r\n---\r\n\r\n<!-- GENERATED from .claude/rules/angular.md by craftar -- do not edit. -->\r\n\r\n# Angular\r\nUse signals.\r\n",
+      ".kiro/steering/commands/open-pr.md": "---\r\ninclusion: manual\r\n---\r\n\r\n---\r\ndescription: Open a pull request\r\n---\r\n# Open a PR\r\nRun the checks by hand.\r\n",
+      ".kiro/steering/house.md": "---\r\ninclusion: always\r\n---\r\n\r\n<!-- GENERATED from .claude/rules/house.md by craftar -- do not edit. -->\r\n\r\n# House rules\r\nTickets start with ACME.\r\nShort paragraphs.\r\n",
+      ".kiro/steering/style.md": "---\r\ninclusion: always\r\n---\r\n\r\n<!-- GENERATED from .claude/rules/style.md by craftar -- do not edit. -->\r\n\r\n# Style\r\nKeep it short.\r\n"
+    },
+    "planWarnings": [],
+    "freshStatus": {
+      "forge": {
+        "kind": "path",
+        "source": "../forge",
+        "ref": null,
+        "defaultBranch": null,
+        "commit": null,
+        "lockCommit": null,
+        "fetched": false
+      },
+      "statuses": [
+        {
+          "path": ".claude/commands/open-pr.md",
+          "state": "new",
+          "target": "claude-code",
+          "ingredient": "command/open-pr"
+        },
+        {
+          "path": ".claude/rules/angular.md",
+          "state": "new",
+          "target": "claude-code",
+          "ingredient": "rule/angular"
+        },
+        {
+          "path": ".claude/rules/house.md",
+          "state": "new",
+          "target": "claude-code",
+          "ingredient": "rule/house"
+        },
+        {
+          "path": ".claude/rules/style.md",
+          "state": "new",
+          "target": "claude-code",
+          "ingredient": "rule/style"
+        },
+        {
+          "path": ".kiro/steering/angular.md",
+          "state": "new",
+          "target": "kiro",
+          "ingredient": "rule/angular"
+        },
+        {
+          "path": ".kiro/steering/commands/open-pr.md",
+          "state": "new",
+          "target": "kiro",
+          "ingredient": "command/open-pr"
+        },
+        {
+          "path": ".kiro/steering/house.md",
+          "state": "new",
+          "target": "kiro",
+          "ingredient": "rule/house"
+        },
+        {
+          "path": ".kiro/steering/style.md",
+          "state": "new",
+          "target": "kiro",
+          "ingredient": "rule/style"
+        }
+      ],
+      "warnings": [],
+      "unsetParams": []
+    },
+    "freshExit": 0,
+    "syncStdout": "craftar sync — profile acme-portal · recipes base → acme-base → stack-angular → executor-kiro · targets claude-code, kiro\n  wrote 8, removed 0 orphan(s), skipped 0\n  + .claude/commands/open-pr.md\n  + .claude/rules/angular.md\n  + .claude/rules/house.md\n  + .claude/rules/style.md\n  + .kiro/steering/angular.md\n  + .kiro/steering/commands/open-pr.md\n  + .kiro/steering/house.md\n  + .kiro/steering/style.md\n",
+    "lock": {
+      "schema": 2,
+      "forge": {
+        "source": "../forge",
+        "ref": null,
+        "commit": null
+      },
+      "profile": "acme-portal",
+      "recipes": [
+        "base",
+        "acme-base",
+        "stack-angular",
+        "executor-kiro"
+      ],
+      "targets": [
+        "claude-code",
+        "kiro"
+      ],
+      "files": [
+        {
+          "path": ".claude/commands/open-pr.md",
+          "hash": "sha256:ee70acfc319d3a5ad3f5886088280f1c3ea2877a1da5bb74e7e9afa17e43b9e3",
+          "target": "claude-code",
+          "ingredient": "command/open-pr"
+        },
+        {
+          "path": ".claude/rules/angular.md",
+          "hash": "sha256:007f4b6b40a529e8f1627b71fc93c2dd443772a28ee6ac270eceaca26559ee88",
+          "target": "claude-code",
+          "ingredient": "rule/angular"
+        },
+        {
+          "path": ".claude/rules/house.md",
+          "hash": "sha256:2bb0231bff4b2b8484d9e6983014b110ff24f0567d2de91c5dc306ebf92543e5",
+          "target": "claude-code",
+          "ingredient": "rule/house"
+        },
+        {
+          "path": ".claude/rules/style.md",
+          "hash": "sha256:568a8b7f82999a8005f7161e497d02b1da256b569be291c027532a0b05f89399",
+          "target": "claude-code",
+          "ingredient": "rule/style"
+        },
+        {
+          "path": ".kiro/steering/angular.md",
+          "hash": "sha256:326828a33273fc930f67fd49f0fdb2508cecc16c3237e8f72fb6a3b78c32bfa6",
+          "target": "kiro",
+          "ingredient": "rule/angular"
+        },
+        {
+          "path": ".kiro/steering/commands/open-pr.md",
+          "hash": "sha256:22cae8cd6f7318efb386e4c8631ce9156286dcf8d0b19b21f507f73e66ec6666",
+          "target": "kiro",
+          "ingredient": "command/open-pr"
+        },
+        {
+          "path": ".kiro/steering/house.md",
+          "hash": "sha256:31e13ceac2862a05f75b8579abf87e0d0e9f5ceb166ec9942794bc7a8940f40d",
+          "target": "kiro",
+          "ingredient": "rule/house"
+        },
+        {
+          "path": ".kiro/steering/style.md",
+          "hash": "sha256:79e1f2ef5a19d1f610b5714f36eb03c439dfd829667df6dc4a10929701453ff9",
+          "target": "kiro",
+          "ingredient": "rule/style"
+        }
+      ]
+    },
+    "checkExit": 0,
+    "explain": {
+      "code": 0,
+      "stdout": ".claude/rules/house.md\n  target      claude-code\n  ingredient  rule/house\n  source      forge (ingredients/rules/house)\n  via recipes acme-base\n  sections    tone (profile acme-portal)\n  params      ticket.prefix (profile acme-portal)\n  profile     acme-portal  (recipes: base, acme-base, stack-angular, executor-kiro)\n  hash        sha256:2bb0231bff4b2b8484d9e6983014b110ff24f0567d2de91c5dc306ebf92543e5\n"
+    }
+  },
+  "shop": {
+    "planned": {
+      ".claude/commands/open-pr.md": "---\ndescription: Open a pull request\n---\n# Open a PR\nRun the checks by hand.\n",
+      ".claude/rules/dotnet.md": "# .NET\nUse records.\n",
+      ".claude/rules/house.md": "# House rules\nTickets start with ACME.\nShort paragraphs.\n",
+      ".claude/rules/style.md": "# Style\nKeep it short.\n"
+    },
+    "planWarnings": [],
+    "freshStatus": {
+      "forge": {
+        "kind": "path",
+        "source": "../forge",
+        "ref": null,
+        "defaultBranch": null,
+        "commit": null,
+        "lockCommit": null,
+        "fetched": false
+      },
+      "statuses": [
+        {
+          "path": ".claude/commands/open-pr.md",
+          "state": "new",
+          "target": "claude-code",
+          "ingredient": "command/open-pr"
+        },
+        {
+          "path": ".claude/rules/dotnet.md",
+          "state": "new",
+          "target": "claude-code",
+          "ingredient": "rule/dotnet"
+        },
+        {
+          "path": ".claude/rules/house.md",
+          "state": "new",
+          "target": "claude-code",
+          "ingredient": "rule/house"
+        },
+        {
+          "path": ".claude/rules/style.md",
+          "state": "new",
+          "target": "claude-code",
+          "ingredient": "rule/style"
+        }
+      ],
+      "warnings": [],
+      "unsetParams": []
+    },
+    "freshExit": 0,
+    "syncStdout": "craftar sync — profile acme-shop · recipes base → acme-base → stack-dotnet → executor-kiro · targets claude-code\n  wrote 4, removed 0 orphan(s), skipped 0\n  + .claude/commands/open-pr.md\n  + .claude/rules/dotnet.md\n  + .claude/rules/house.md\n  + .claude/rules/style.md\n",
+    "lock": {
+      "schema": 2,
+      "forge": {
+        "source": "../forge",
+        "ref": null,
+        "commit": null
+      },
+      "profile": "acme-shop",
+      "recipes": [
+        "base",
+        "acme-base",
+        "stack-dotnet",
+        "executor-kiro"
+      ],
+      "targets": [
+        "claude-code"
+      ],
+      "files": [
+        {
+          "path": ".claude/commands/open-pr.md",
+          "hash": "sha256:ee70acfc319d3a5ad3f5886088280f1c3ea2877a1da5bb74e7e9afa17e43b9e3",
+          "target": "claude-code",
+          "ingredient": "command/open-pr"
+        },
+        {
+          "path": ".claude/rules/dotnet.md",
+          "hash": "sha256:98c7b8bed38e57266ef5f5d6b5960e8a4dc28a466f15643fb4d7bfbda483f177",
+          "target": "claude-code",
+          "ingredient": "rule/dotnet"
+        },
+        {
+          "path": ".claude/rules/house.md",
+          "hash": "sha256:2bb0231bff4b2b8484d9e6983014b110ff24f0567d2de91c5dc306ebf92543e5",
+          "target": "claude-code",
+          "ingredient": "rule/house"
+        },
+        {
+          "path": ".claude/rules/style.md",
+          "hash": "sha256:568a8b7f82999a8005f7161e497d02b1da256b569be291c027532a0b05f89399",
+          "target": "claude-code",
+          "ingredient": "rule/style"
+        }
+      ]
+    },
+    "checkExit": 0,
+    "explain": {
+      "code": 0,
+      "stdout": ".claude/rules/house.md\n  target      claude-code\n  ingredient  rule/house\n  source      forge (ingredients/rules/house)\n  via recipes acme-base\n  sections    tone (profile acme-shop)\n  params      ticket.prefix (profile acme-shop)\n  profile     acme-shop  (recipes: base, acme-base, stack-dotnet, executor-kiro)\n  hash        sha256:2bb0231bff4b2b8484d9e6983014b110ff24f0567d2de91c5dc306ebf92543e5\n"
+    }
+  },
+  "globex": {
+    "planned": {
+      ".claude/commands/open-pr.md": "---\ndescription: Open a pull request\n---\n# Open a PR\nRun the checks by hand.\n",
+      ".claude/rules/style.md": "# Style\nKeep it short.\n"
+    },
+    "planWarnings": [],
+    "freshStatus": {
+      "forge": {
+        "kind": "path",
+        "source": "../forge",
+        "ref": null,
+        "defaultBranch": null,
+        "commit": null,
+        "lockCommit": null,
+        "fetched": false
+      },
+      "statuses": [
+        {
+          "path": ".claude/commands/open-pr.md",
+          "state": "new",
+          "target": "claude-code",
+          "ingredient": "command/open-pr"
+        },
+        {
+          "path": ".claude/rules/style.md",
+          "state": "new",
+          "target": "claude-code",
+          "ingredient": "rule/style"
+        }
+      ],
+      "warnings": [],
+      "unsetParams": []
+    },
+    "freshExit": 0,
+    "syncStdout": "craftar sync — profile globex · recipes base → executor-claude-subagent · targets claude-code\n  wrote 2, removed 0 orphan(s), skipped 0\n  + .claude/commands/open-pr.md\n  + .claude/rules/style.md\n",
+    "lock": {
+      "schema": 2,
+      "forge": {
+        "source": "../forge",
+        "ref": null,
+        "commit": null
+      },
+      "profile": "globex",
+      "recipes": [
+        "base",
+        "executor-claude-subagent"
+      ],
+      "targets": [
+        "claude-code"
+      ],
+      "files": [
+        {
+          "path": ".claude/commands/open-pr.md",
+          "hash": "sha256:ee70acfc319d3a5ad3f5886088280f1c3ea2877a1da5bb74e7e9afa17e43b9e3",
+          "target": "claude-code",
+          "ingredient": "command/open-pr"
+        },
+        {
+          "path": ".claude/rules/style.md",
+          "hash": "sha256:568a8b7f82999a8005f7161e497d02b1da256b569be291c027532a0b05f89399",
+          "target": "claude-code",
+          "ingredient": "rule/style"
+        }
+      ]
+    },
+    "checkExit": 0,
+    "explain": {
+      "code": 0,
+      "stdout": ".claude/rules/style.md\n  target      claude-code\n  ingredient  rule/style\n  source      forge (ingredients/rules/style)\n  via recipes base\n  profile     globex  (recipes: base, executor-claude-subagent)\n  hash        sha256:568a8b7f82999a8005f7161e497d02b1da256b569be291c027532a0b05f89399\n"
+    }
+  },
+  "ingredientsGlobex": {
+    "code": 0,
+    "json": {
+      "forge": {
+        "name": "test-forge",
+        "commit": null
+      },
+      "context": {
+        "kind": "profile",
+        "profile": "globex",
+        "recipes": [
+          "base",
+          "executor-claude-subagent"
+        ]
+      },
+      "recipe": null,
+      "ingredients": [
+        {
+          "ref": "rule/angular",
+          "type": "rule",
+          "name": "angular",
+          "outputName": "angular",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "stack-angular"
+          ],
+          "inUse": false,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "rule/dotnet",
+          "type": "rule",
+          "name": "dotnet",
+          "outputName": "dotnet",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "stack-dotnet"
+          ],
+          "inUse": false,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "rule/house",
+          "type": "rule",
+          "name": "house",
+          "outputName": "house",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "acme-base"
+          ],
+          "inUse": false,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "rule/style",
+          "type": "rule",
+          "name": "style",
+          "outputName": "style",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "base"
+          ],
+          "inUse": true,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "command/open-pr",
+          "type": "command",
+          "name": "open-pr",
+          "outputName": "open-pr",
+          "description": "Open a pull request",
+          "targets": "*",
+          "recipes": [
+            "base"
+          ],
+          "inUse": true,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        }
+      ],
+      "missing": [],
+      "warnings": []
+    },
+    "stderr": ""
+  },
+  "ingredientsForge": {
+    "code": 0,
+    "json": {
+      "forge": {
+        "name": "test-forge",
+        "commit": null
+      },
+      "context": null,
+      "recipe": null,
+      "ingredients": [
+        {
+          "ref": "rule/angular",
+          "type": "rule",
+          "name": "angular",
+          "outputName": "angular",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "stack-angular"
+          ],
+          "inUse": null,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "rule/dotnet",
+          "type": "rule",
+          "name": "dotnet",
+          "outputName": "dotnet",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "stack-dotnet"
+          ],
+          "inUse": null,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "rule/house",
+          "type": "rule",
+          "name": "house",
+          "outputName": "house",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "acme-base"
+          ],
+          "inUse": null,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "rule/style",
+          "type": "rule",
+          "name": "style",
+          "outputName": "style",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "base"
+          ],
+          "inUse": null,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "command/open-pr",
+          "type": "command",
+          "name": "open-pr",
+          "outputName": "open-pr",
+          "description": "Open a pull request",
+          "targets": "*",
+          "recipes": [
+            "base"
+          ],
+          "inUse": null,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        }
+      ],
+      "missing": [],
+      "warnings": []
+    },
+    "stderr": ""
+  },
+  "recipesForge": {
+    "code": 0,
+    "json": {
+      "forge": {
+        "name": "test-forge",
+        "commit": null
+      },
+      "context": null,
+      "recipes": [
+        {
+          "name": "acme-base",
+          "description": null,
+          "slot": null,
+          "extends": [],
+          "ingredients": [
+            "rule/house"
+          ],
+          "profiles": [
+            "acme-portal",
+            "acme-shop"
+          ],
+          "inUse": null,
+          "removedByWorkspace": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "name": "base",
+          "description": null,
+          "slot": null,
+          "extends": [],
+          "ingredients": [
+            "rule/style",
+            "command/open-pr"
+          ],
+          "profiles": [
+            "acme-portal",
+            "acme-shop",
+            "globex"
+          ],
+          "inUse": null,
+          "removedByWorkspace": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "name": "executor-claude-subagent",
+          "description": null,
+          "slot": null,
+          "extends": [],
+          "ingredients": [],
+          "profiles": [
+            "globex"
+          ],
+          "inUse": null,
+          "removedByWorkspace": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "name": "executor-kiro",
+          "description": null,
+          "slot": null,
+          "extends": [],
+          "ingredients": [],
+          "profiles": [
+            "acme-portal",
+            "acme-shop"
+          ],
+          "inUse": null,
+          "removedByWorkspace": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "name": "stack-angular",
+          "description": null,
+          "slot": null,
+          "extends": [],
+          "ingredients": [
+            "rule/angular"
+          ],
+          "profiles": [
+            "acme-portal"
+          ],
+          "inUse": null,
+          "removedByWorkspace": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "name": "stack-dotnet",
+          "description": null,
+          "slot": null,
+          "extends": [],
+          "ingredients": [
+            "rule/dotnet"
+          ],
+          "profiles": [
+            "acme-shop"
+          ],
+          "inUse": null,
+          "removedByWorkspace": false,
+          "scope": "forge",
+          "profile": null
+        }
+      ],
+      "warnings": []
+    },
+    "stderr": ""
+  }
+}

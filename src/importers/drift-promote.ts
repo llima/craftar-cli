@@ -2,7 +2,8 @@
  * `craftar drift promote` (spec 30 §4.4–§4.7): carry a hand-edited file back to the Forge as a variant.
  * Writes nothing in a workspace, its lock, the registry or the Forge cache.
  */
-import { forgeFor, localCiters } from "../core/profile-local.js";
+import { familyOf } from "../core/profile-extends.js";
+import { forgeFor, localCiters, parentLocalsOf } from "../core/profile-local.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -67,13 +68,16 @@ import { providedRefs } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
 import { readsTargetSections } from "../core/sections.js";
 import { profileSectionFile } from "../core/section-files.js";
-import { paramsFor, sectionKey } from "../core/resolve.js";
+import { paramsFor, recipeOrder, sectionKey } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
+import { errorText } from "../core/schema-fault.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { registrationCitations } from "../core/mcp-server.js";
 import type { WriteJournal } from "../core/unify.js";
 import { stripForgeOnlyKeys, type Ingredient, type IngredientRef, type Lock } from "../schema/index.js";
+import { deepMerge } from "../core/merge.js";
+import type { Sections } from "../schema/index.js";
 
 // The scratch copy lives in core, where `forge promote` shares it (spec 29, slice D); it stays exported from here.
 export { copyForgeForProof };
@@ -186,6 +190,12 @@ const D10 = (ing: string, q: string) => `${ing} is also used by profile ${q} —
 const D20 = (p: string) => `${p} holds references agents-md.primary reworded — edit the Forge's ingredient`;
 /** D21 (spec 44 §4.5): the file holds the generated rules index — promoting it would carry sync-generated content into the Forge. */
 const D21 = (p: string) => `${p} holds the generated rules index — edit the Forge's rule, or the description of the rule it lists`;
+/** D17 under a family (spec 54 §5.9): the recipe to fork is listed by a parent only. */
+const D17_PARENT = (p: string, recipe: string, parent: string, profile: string) =>
+  `${p}: recipe ${recipe} reaches ${profile} through profile ${parent}, which it extends — forking it would edit ${parent}'s recipes, and no command writes a parent: edit the Forge by hand`;
+/** D24 (spec 54 §5.9): a hand edit of a file that comes from a parent's local. */
+const D24 = (p: string, ref: string, parent: string, profile: string, dir: string) =>
+  `${p} comes from ${ref}, local to ${parent}, which ${profile} extends (${dir}) — no command writes a parent: edit it there by hand, then sync every workspace of the family`;
 /** D23 (spec 50 §5.6): a hand edit of a metadata field the Forge renders from a parameter — promoting would freeze the value. */
 const D23 = (p: string, field: string) =>
   `${p} changes ${field}, which the Forge renders from a parameter — set the parameter's value in the profile, or edit the Forge's ingredient`;
@@ -610,7 +620,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Static checks (promotability) using driftList's row
   const indexedPaths = new Set(p0.indexed.map((x) => x.path));
   const metadataPaths = await metadataEdits(root, p0, [fileStatus]);
-  const rows = driftList([fileStatus], provided, new Set(p0.reworded), indexedPaths, metadataPaths);
+  const parentLocals = parentLocalsOf(forge, profile);
+  const rows = driftList([fileStatus], provided, new Set(p0.reworded), indexedPaths, metadataPaths, parentLocals);
   if (rows.length === 0) {
     throw new Error(D4_OTHER(normalized, fileStatus.state));
   }
@@ -628,6 +639,12 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     if (prov) {
       // D18: provided by the integrations block
       throw new Error(D18(normalized, prov.recipe, profile, prov.slot, fileStatus.ingredient!));
+    }
+    // D24 (spec 54 §5.9): a file from a parent's local — no command writes a parent, whatever the edit would become.
+    const parent = fileStatus.ingredient ? parentLocals.get(fileStatus.ingredient) : undefined;
+    if (parent !== undefined) {
+      const local = forge.locals.get(parent)!.ingredients.get(fileStatus.ingredient as IngredientRef)!;
+      throw new Error(D24(normalized, fileStatus.ingredient!, parent, profile, path.relative(forge.root, local.dir).split(path.sep).join("/")));
     }
     if (reason === REWORDED_REASON) throw new Error(D20(normalized));
     if (reason === INDEXED_REASON) throw new Error(D21(normalized));
@@ -787,7 +804,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     PS: structuredClone(profileObj.sections ?? {}),
     WS: await workspaceSections(root, readWs, "drift promote"),
     // The recipe layer as sync resolved it (spec 54 §4.3): a value it already gives is never written to the profile.
-    RS: p0.resolution.sectionLayers.recipes.sections,
+    RS: deepMerge(p0.resolution.sectionLayers.recipes.sections, p0.resolution.sectionLayers.parents.sections) as Sections,
     pinned: new Map(),
     forge,
     markedBase: false,
@@ -882,10 +899,15 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     flattenedSections = baseSectionNames;
   }
 
-  // Spec 51 §4.5: a new variant would leave a local recipe of this profile naming the base beside it.
+  // Spec 51 §4.5: a new variant would leave a local recipe of this profile naming the base beside it — and, spec 54
+  // §5.12, a local recipe of a profile it extends, which no command writes.
   if (outcome === "variant") {
     const citers = localCiters(forge, [X.ref], { profile, viaExtends: true });
     if (citers.length) throw new Error(`${normalized}: ${citers.map((c) => c.file).join(", ")} reaches ${X.ref}, local to this profile — promote does not edit a local recipe; edit the Forge by hand`);
+    for (const parent of familyOf(forge, profile).slice(1)) {
+      const up = localCiters(forge, [X.ref], { profile: parent, viaExtends: true });
+      if (up.length) throw new Error(`${normalized}: ${up.map((c) => c.file).join(", ")} reaches ${X.ref}, local to ${parent}, which ${profile} extends — no command writes a parent: edit the Forge by hand`);
+    }
   }
 
   // D12: check workspace overrides before variant outcomes (not for params/sections)
@@ -1162,6 +1184,22 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       const inProfileRecipes = profileRecipes.includes(R);
       // Check if any other resolved recipe extends R
       const extendedByOther = isExtendedByOtherResolved(forgeFor(forge, profile), p0.resolution.recipes, R);
+
+      // Spec 54 §5.9: a recipe a parent reaches — written in its list, selected by its integrations block, or extended from
+      // either — is the family's: every case would edit it or the parent's list, and no command writes a parent. The child
+      // listing it too, or a workspace adding it, changes nothing about what the parent brings. Decided before the cases, so
+      // a parent with one child is refused too; a parent whose recipes do not resolve fails closed.
+      {
+        const view = forgeFor(forge, profile);
+        const viaParent = familyOf(forge, profile).slice(1).find((q) => {
+          try {
+            return recipeOrder(view, effectiveProfile(forge, forge.profiles.get(q)!).recipes, `profile ${q}`).includes(R);
+          } catch (e) {
+            throw new Error(`${normalized}: the recipes of profile ${q}, which ${profile} extends, do not resolve (${errorText(e)}) — fix the Forge and re-run`);
+          }
+        });
+        if (viaParent !== undefined) throw new Error(D17_PARENT(normalized, R, viaParent, profile));
+      }
 
       if (profileOwns && !othersMay) {
         // Case 1: profile owns it alone — edit recipe in place
