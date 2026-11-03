@@ -200,6 +200,41 @@ describe("doctor skill-layout check (spec 44 §5)", () => {
     );
   });
 
+  it("3e. the fix names the folder that holds the ingredient, not its name (E32.2b)", async () => {
+    const s = await scenario(
+      {
+        ingredients: [{ meta: { type: "skill", name: "deploy", layout: "file" }, files: { "SKILL.md": "---\nname: deploy\ndescription: Deploy\n---\nRun it.\n" } }],
+        recipes: [recipe("base", ["skill/deploy"])],
+        profiles: [profile("acme", ["base"], ["claude-code"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await fs.rename(path.join(s.forgeRoot, "ingredients/skills/deploy"), path.join(s.forgeRoot, "ingredients/skills/deploy-folder"));
+    const r = await runDoc({ home, workspace: s.wsRoot });
+    expect(of(r.checks, "skill-layout").map((c) => c.fix)).toEqual([
+      "set layout: dir in ingredients/skills/deploy-folder/ingredient.yaml — sync then writes .claude/skills/deploy/SKILL.md",
+    ]);
+  });
+
+  it("3f. a profile-local skill's fix names its folder under the profile (E32.2b, schema 8)", async () => {
+    const s = await scenario(
+      { ingredients: [], recipes: [], profiles: [profile("acme", ["acme-local"], ["claude-code"])] },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await writeFiles(s.forgeRoot, {
+      "craftar.forge.yaml": "name: test-forge\nschema: 8\n",
+      "profiles/acme/ingredients/skills/deploy/ingredient.yaml": "type: skill\nname: deploy\nlayout: file\n",
+      "profiles/acme/ingredients/skills/deploy/SKILL.md": "---\nname: deploy\ndescription: Deploy\n---\nRun it.\n",
+      "profiles/acme/recipes/acme-local.yaml": "name: acme-local\ningredients:\n  - skill/deploy\n",
+    });
+    const r = await runDoc({ home, workspace: s.wsRoot });
+    expect(of(r.checks, "skill-layout").map((c) => c.fix)).toEqual([
+      "set layout: dir in profiles/acme/ingredients/skills/deploy/ingredient.yaml — sync then writes .claude/skills/deploy/SKILL.md",
+    ]);
+  });
+
   it("3b. skill-layout is NOT a plan finding", async () => {
     const s = await acmeIndex({ schema: 6, flatSkill: true });
     cleanups.push(s.cleanup);

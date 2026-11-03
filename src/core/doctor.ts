@@ -438,7 +438,7 @@ async function workspaceChecks(
       await hooksRegistered(root, p, opts, w, env);
 
       // skill-layout: present only when flatSkills is non-empty (spec 44 §5)
-      await skillLayout(p, w);
+      await skillLayout(p, ws.forge.root, w);
 
       // skill-trigger: present only when a planned skill's description says nothing about when to use it (spec 55 Part C)
       skillTrigger(p, w);
@@ -1009,19 +1009,26 @@ async function hooksRegistered(
  */
 async function skillLayout(
   p: Plan,
+  forgeRoot: string,
   w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void,
 ): Promise<void> {
   const flat = flatSkills(p.resolution, p.resolution.targets);
   if (flat.length === 0) return;
 
   for (const name of flat) {
-    // The fix names the folder of the ingredient the profile resolves — a variant's own, not its base's.
-    const folder = p.resolution.ingredients.find((i) => i.meta.type === "skill" && outName(i.meta) === name)?.meta.name ?? name;
+    // The fix names the folder the resolved ingredient was loaded from — a variant's own, a profile-local one's
+    // under profiles/<p>/ — Forge-relative with `/`; its name only when that folder is not under the Forge.
+    const ing = p.resolution.ingredients.find((i) => i.meta.type === "skill" && outName(i.meta) === name);
+    const rel = ing === undefined ? "" : path.relative(forgeRoot, ing.dir);
+    const dir =
+      rel === "" || path.isAbsolute(rel) || rel === ".." || rel.startsWith(`..${path.sep}`)
+        ? `ingredients/skills/${ing?.meta.name ?? name}`
+        : rel.split(path.sep).join("/");
     w(
       "skill-layout",
       "warn",
       `.claude/skills/${name}.md is a skill Claude Code does not list`,
-      `set layout: dir in ingredients/skills/${folder}/ingredient.yaml — sync then writes .claude/skills/${name}/SKILL.md`,
+      `set layout: dir in ${dir}/ingredient.yaml — sync then writes .claude/skills/${name}/SKILL.md`,
     );
   }
 }
