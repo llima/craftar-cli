@@ -202,4 +202,14 @@ describe("spec 54 Part B — the writers", () => {
       planPromote({ workspaceRoot: f0.ws.portal, forgeDir: null, path: ".claude/rules/house.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
     ).rejects.toThrow("D24 .claude/rules/house.md comes from rule/house, local to acme, which acme-portal extends (profiles/acme/ingredients/rules/house)");
   });
+
+  it("init --new-profile --like a child says the new profile gets nothing of the child's parent", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    const f = await loadForge(f0.forgeRoot);
+    expect(newProfile(f, { name: "acme-api", like: "acme-portal" }).notes).toContain(
+      "acme-portal extends acme — acme-api gets none of acme's recipes, values or locals; write extends: acme in it by hand for them",
+    );
+  });
 });
+

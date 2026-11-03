@@ -122,6 +122,10 @@ export function newProfile(forge: Forge, o: NewProfileOptions): NewProfileResult
 
   // 4. the edit, as init does (removes first, then adds)
   const notes: string[] = [];
+  // Spec 54 §5.9: --like copies the template's written lists only, so a template that extends a parent gives none of it.
+  if (template?.extends !== undefined) {
+    notes.push(`${like} extends ${template.extends} — ${name} gets none of ${template.extends}'s recipes, values or locals; write extends: ${template.extends} in it by hand for them`);
+  }
   let config = WorkspaceConfigSchema.parse({
     forge: ".",
     profile: name,
