@@ -168,7 +168,7 @@ describe("craftar doctor --json with a templates key", () => {
 
 const GJ_FIX = "remove sdk.paths from that global.json, or run dotnet new install by hand in a repository you trust";
 
-describe("doctor global.json warning (E35 §4.5)", () => {
+describe("doctor global.json warning (E35)", () => {
   it("dotnet ok followed by global.json warn when unsafe paths at root", async () => {
     const f = await fixture([TOOLS], { "global.json": '{"sdk":{"paths":["/custom"]}}' });
     const d = await doctor(f);
@@ -192,7 +192,7 @@ describe("doctor global.json warning (E35 §4.5)", () => {
     expect(d.of("dotnet")[0].level).toBe("ok");
   });
 
-  it("global.json warn follows missing-SDK warn (E35 §4.5)", async () => {
+  it("global.json warn follows missing-SDK warn (E35)", async () => {
     const f = await fixture([TOOLS], { "global.json": '{"sdk":{"paths":["/custom"]}}' });
     const d = await doctor(f, null); // null version = dotnet not found
     const dotnetChecks = d.of("dotnet");

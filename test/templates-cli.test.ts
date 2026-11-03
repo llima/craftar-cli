@@ -305,7 +305,7 @@ describe("a dotnet planted at the workspace root (spec 32 §7: dotnet is found o
 const GLOBAL_JSON_REFUSED_MSG = "craftar templates install does not run dotnet here";
 const GLOBAL_JSON_FIX_MSG = "remove sdk.paths from that global.json, or run dotnet new install by hand in a repository you trust";
 
-describe("templates install refuses when global.json sets sdk.paths (E35 §4)", () => {
+describe("templates install refuses when global.json sets sdk.paths (E35)", () => {
   it("with unsafe sdk.paths at root: exit 1 with refusal message before checking dotnet", async () => {
     const s = await fresh([TOOLS], { "global.json": '{"sdk":{"paths":["/custom"]}}' });
     const r = cli(["templates", "install"], s.wsRoot);

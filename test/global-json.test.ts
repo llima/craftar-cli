@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { sdkPathsUnsafe, globalJsonFault, globalJsonMessage, GLOBAL_JSON_FIX } from "../src/core/templates.js";
 import { tmpDir } from "./helpers/forge.js";
 
-// E35 §4.4 — unit tests for the global.json safety functions.
+// E35 — unit tests for the global.json safety functions.
 
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {

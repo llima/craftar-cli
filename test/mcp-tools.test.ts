@@ -675,7 +675,7 @@ describe("doctor — the checks 0.25–0.27 added, through injected runners", ()
     });
   });
 
-  it("runDoctor with dotnetProbe now always uses a temp directory (E35 §4.5)", async () => {
+  it("runDoctor with dotnetProbe now always uses a temp directory (E35)", async () => {
     const f = await fixtureWithServiceAndTemplates();
     let recordedCwd: string | undefined;
     const dotnetProbe: Probe = async (_file, _args, _env, cwd) => {
