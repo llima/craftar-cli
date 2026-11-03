@@ -214,6 +214,22 @@ describe("globalJsonFault", () => {
   });
 });
 
+describe("globalJsonFault walks the real path too", () => {
+  it("a workspace reached through a link: the real directory's parent holds an unsafe global.json, the link's does not", async () => {
+    const top = await tmpDir("craftar-global-json-link-");
+    cleanups.push(() => fs.rm(top, { recursive: true, force: true }));
+    const realParent = path.join(top, "real");
+    const real = path.join(realParent, "ws");
+    const linkParent = path.join(top, "via");
+    await fs.mkdir(real, { recursive: true });
+    await fs.mkdir(linkParent, { recursive: true });
+    await fs.writeFile(path.join(realParent, "global.json"), '{"sdk":{"paths":["x"]}}');
+    const link = path.join(linkParent, "ws");
+    await fs.symlink(real, link, "junction"); // a junction needs no privilege on Windows; "junction" is ignored elsewhere
+    expect(await globalJsonFault(link)).toEqual({ where: "above", kind: "paths" });
+  });
+});
+
 describe("globalJsonMessage", () => {
   it("paths at root", () => {
     expect(globalJsonMessage({ where: "root", kind: "paths" })).toBe("global.json sets sdk.paths: dotnet would load the SDK it names");
