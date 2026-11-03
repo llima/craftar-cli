@@ -68,7 +68,7 @@ import { providedRefs } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
 import { readsTargetSections } from "../core/sections.js";
 import { profileSectionFile } from "../core/section-files.js";
-import { paramsFor, sectionKey } from "../core/resolve.js";
+import { paramsFor, recipeOrder, sectionKey } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
@@ -1184,6 +1184,22 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       // Check if any other resolved recipe extends R
       const extendedByOther = isExtendedByOtherResolved(forgeFor(forge, profile), p0.resolution.recipes, R);
 
+      // Spec 54 §5.9: a recipe that reaches the profile only through a parent's list (listed there, or extended from it) — every
+      // case would edit the parent's recipe or its list, and no command writes a parent. Decided before the cases, so a
+      // parent with one child is refused too.
+      {
+        const wsAddsR = (ws.config.recipes?.add ?? []).includes(R);
+        const reach = (names: string[]): boolean => {
+          try {
+            return recipeOrder(forgeFor(forge, profile), names, `profile ${profile}`).includes(R);
+          } catch {
+            return false;
+          }
+        };
+        const viaParent = familyOf(forge, profile).slice(1).find((q) => reach(forge.profiles.get(q)!.recipes));
+        if (viaParent !== undefined && !wsAddsR && !reach(forge.profiles.get(profile)?.recipes ?? [])) throw new Error(D17_PARENT(normalized, R, viaParent, profile));
+      }
+
       if (profileOwns && !othersMay) {
         // Case 1: profile owns it alone — edit recipe in place
         const recipeOpts = { stage, dir: path.join(forgeDir, "recipes") };
@@ -1271,11 +1287,6 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         // Case 3: D17 — recipe reaches through extends or recipes.add, or case 2 applies but another resolved recipe extends R
         let chain: string;
         const wsAdds = ws.config.recipes?.add ?? [];
-        // Spec 54 §5.9: a recipe only a parent lists — the fork would edit the parent's list, and no command writes a parent.
-        const listedBy = familyOf(forge, profile).slice(1).find((q) => forge.profiles.get(q)!.recipes.includes(R));
-        if (listedBy !== undefined && !(forge.profiles.get(profile)?.recipes ?? []).includes(R) && !wsAdds.includes(R)) {
-          throw new Error(D17_PARENT(normalized, R, listedBy, profile));
-        }
         if (wsAdds.includes(R)) {
           chain = "recipes.add (craftar.yaml)";
         } else if (extendsChain) {

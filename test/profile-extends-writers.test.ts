@@ -224,5 +224,30 @@ describe("spec 54 Part B — the writers", () => {
       ".claude/rules/style.md: recipe base reaches acme-portal through profile acme, which it extends — forking it would edit acme's recipes, and no command writes a parent: edit the Forge by hand",
     );
   });
+
+  it("drift promote refuses a recipe only the parent lists when the parent has a single child, the Forge untouched", async () => {
+    const root = await tmpDir("craftar-extends-one-child-");
+    roots.push(root);
+    const forge = path.join(root, "forge");
+    await makeForge(forge, {
+      ingredients,
+      recipes: rootRecipes,
+      profiles: [
+        { name: "acme", abstract: true, recipes: ["base"] },
+        { name: "acme-portal", extends: "acme", recipes: ["stack-angular"], targets: ["claude-code"] },
+      ],
+    });
+    await writeFiles(forge, { "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: GATE }) });
+    gitInit(forge);
+    const ws = path.join(root, "ws");
+    await makeWorkspace(ws, forge, { config: { profile: "acme-portal" } });
+    expect(runCli(["sync", "--workspace", ws]).code).toBe(0);
+    await fs.writeFile(path.join(ws, ".claude/rules/style.md"), "# Style\nKeep it very short.\n");
+    const base = await fs.readFile(path.join(forge, "recipes/base.yaml"), "utf8");
+    await expect(
+      planPromote({ workspaceRoot: ws, forgeDir: null, path: ".claude/rules/style.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
+    ).rejects.toThrow("recipe base reaches acme-portal through profile acme, which it extends — forking it would edit acme's recipes, and no command writes a parent");
+    expect(await fs.readFile(path.join(forge, "recipes/base.yaml"), "utf8")).toBe(base);
+  });
 });
 
