@@ -750,6 +750,8 @@ export const FORGE_SCHEMA_METADATA_PARAMS = 9;
 export const FORGE_SCHEMA_RECIPE_SECTIONS = 10;
 /** Forge schema that reads a profile's section value held in a file, `{ file: sections/….md }` (spec 55 §5.1). */
 export const FORGE_SCHEMA_SECTION_FILES = 11;
+/** Forge schema at which a profile local may override a root base of the same ref (spec 56 §4.1). */
+export const FORGE_SCHEMA_LOCAL_OVERRIDE = 12;
 
 export const ForgeManifestSchema = z.object({
   name: z.string(),
@@ -766,6 +768,7 @@ export const ForgeManifestSchema = z.object({
       z.literal(FORGE_SCHEMA_METADATA_PARAMS),
       z.literal(FORGE_SCHEMA_RECIPE_SECTIONS),
       z.literal(FORGE_SCHEMA_SECTION_FILES),
+      z.literal(FORGE_SCHEMA_LOCAL_OVERRIDE),
     ])
     .default(1),
   description: z.string().optional(),

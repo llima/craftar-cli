@@ -11,7 +11,7 @@ import { countStates } from "./impact.js";
 import { FULL_SHA } from "./remote.js";
 import { resolve, type ParamLayer } from "./resolve.js";
 import { errorText } from "./schema-fault.js";
-import { loadForgeFor, unsetDeclared, unsetRefused, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
+import { loadForgeFor, overrideRefused, overrideSummary, unsetDeclared, unsetRefused, type OverrideConflict, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
 import { hashNormalized, stripBom, toLf } from "./text.js";
 import { readsProfileLocal } from "./profile-local.js";
 import { shellAtGate } from "./extract.js";
@@ -83,9 +83,11 @@ export interface StatusReport {
 }
 
 /** Spec 48 §4.3: the reason is built from the rows, since `plan()` does not see the lock. No key is added for it. */
-export function withEscapeLine(warnings: string[], statuses: ReadonlyArray<Pick<FileStatus, "path" | "escapes">>): string[] {
+export function withEscapeLine(warnings: string[], statuses: ReadonlyArray<Pick<FileStatus, "path" | "escapes">>, conflicts: readonly OverrideConflict[] = []): string[] {
   const rows = escapingRows(statuses);
-  return rows.length ? [...warnings, escapeSummary(rows)] : warnings;
+  // Spec 56 §4.3: an override beside a root variant of its output, in `warnings` — no new key.
+  const withConflicts = conflicts.length ? [...warnings, overrideSummary([...conflicts])] : warnings;
+  return rows.length ? [...withConflicts, escapeSummary(rows)] : withConflicts;
 }
 
 export function statusReport(ws: Workspace, p: Plan, lock: Lock | null, statuses: FileStatus[]): StatusReport {
@@ -103,7 +105,7 @@ export function statusReport(ws: Workspace, p: Plan, lock: Lock | null, statuses
     // The planned buffer never leaves the process: dropped here, once, for every reader of the document.
     // diskHash and changedSinceStatus are also internal fields that don't reach --json.
     statuses: statuses.map(({ planned, escapes, diskHash, changedSinceStatus, ...s }) => s),
-    warnings: withEscapeLine(p.warnings, statuses),
+    warnings: withEscapeLine(p.warnings, statuses, p.overrideConflicts),
     unsetParams: unsetDeclared(p),
   };
 }
@@ -286,8 +288,9 @@ export function forgeLine(ws: Workspace, lock: Lock | null): string | null {
  * placed in `FILE_STATE_ORDER_MAP` there. A plan with unset declared parameters has no next sync
  * to count: the line says it is refused (spec 29 §4.1).
  */
-export function nextSyncLine(st: FileStatus[], unset: UnsetParam[]): string {
+export function nextSyncLine(st: FileStatus[], unset: UnsetParam[], conflicts: readonly OverrideConflict[]): string {
   if (unset.length) return `next sync: ${unsetRefused(unset)}`;
+  if (conflicts.length) return `next sync: ${overrideRefused([...conflicts])}`;
   const escaping = escapingRows(st);
   if (escaping.length) return `next sync: refused — ${escapeSummary(escaping)}`;
   const counts = countStates(st).map(([k, n]) => `${n} ${k}`);

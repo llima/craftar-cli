@@ -8,7 +8,7 @@ import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, orphanDriftBody, statu
 import { statusDigest, syncToolResult, syncWorkspace } from "../core/write-actions.js";
 import { EXAMPLE_SETTINGS } from "../emitters/shared.js";
 import type { Lock } from "../schema/index.js";
-import { loadWorkspace, plan, readLock, status, unsetDeclared, unsetSummary, type FileStatus, type Plan, type Workspace } from "../core/sync.js";
+import { loadWorkspace, overrideSummary, plan, readLock, status, unsetDeclared, unsetSummary, type FileStatus, type Plan, type Workspace } from "../core/sync.js";
 import { hashNormalized } from "../core/text.js";
 
 /**
@@ -220,6 +220,9 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
     if (unset.length) {
       return { status: 409, body: { error: unsetSummary(unset), warnings: [] } };
     }
+    if (p.overrideConflicts.length) {
+      return { status: 409, body: { error: overrideSummary(p.overrideConflicts), warnings: [] } };
+    }
     const escaping = escapingRows(st);
     if (escaping.length) {
       return { status: 409, body: { error: escapeSummary(escaping), warnings: [] } };
@@ -243,7 +246,11 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
       recipes: p.resolution.recipes,
       targets: p.resolution.targets,
       ...report,
-      refused: report.unsetParams.length ? unsetSummary(report.unsetParams) : escapingRows(st).length ? escapeSummary(escapingRows(st)) : null,
+      refused: report.unsetParams.length
+        ? unsetSummary(report.unsetParams)
+        : p.overrideConflicts.length
+          ? overrideSummary(p.overrideConflicts)
+          : escapingRows(st).length ? escapeSummary(escapingRows(st)) : null,
     };
     if (deps.allowWrites) {
       return {

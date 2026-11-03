@@ -19,7 +19,7 @@ import { climbsOut } from "./text.js";
 import { CannotResolveError, shownByRealPath } from "./cache-label.js";
 import { containRoot, containSubRoot, readForgeText, type ContainRoot } from "./contain.js";
 import { readsSectionFiles, resolveSectionFiles, unnamedSectionFiles, type SectionFileMap } from "./section-files.js";
-import { checkLocals, ProfileLocalLoadError, readsProfileLocal, type IgnoredLocals, type LocalLayer, type LocalRecipe } from "./profile-local.js";
+import { checkLocals, ProfileLocalLoadError, readsLocalOverride, readsProfileLocal, type IgnoredLocals, type LocalLayer, type LocalRecipe } from "./profile-local.js";
 import { readsRecipeSections, recipeSectionsNearMiss } from "./recipe-sections.js";
 
 export interface LoadedIngredient {
@@ -235,7 +235,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
   }
 
   if (reads) {
-    const findings = checkLocals({ ingredients, ingredientPaths, recipes, recipeFiles }, locals, localPaths, early);
+    const findings = checkLocals({ ingredients, ingredientPaths, recipes, recipeFiles }, locals, localPaths, early, readsLocalOverride(manifest));
     if (findings.length) throw new ProfileLocalLoadError(findings);
   } else if (early.length) {
     // Below schema 8 only a section file's near miss (spec 55 §5.1) can be here: one error listing every finding, as above.

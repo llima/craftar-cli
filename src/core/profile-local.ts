@@ -3,13 +3,19 @@
  * Pure: no file system access here — `loadForge` reads the folders and hands their contents in.
  */
 import type { IngredientRef, Recipe } from "../schema/index.js";
-import { FORGE_SCHEMA_PROFILE_LOCAL } from "../schema/index.js";
+import { FORGE_SCHEMA_LOCAL_OVERRIDE, FORGE_SCHEMA_PROFILE_LOCAL } from "../schema/index.js";
 import { nameShaped } from "./integrations.js";
+import path from "node:path";
 import type { Forge, LoadedIngredient } from "./forge.js";
 
 /** Whether the Forge reads `profiles/<p>/ingredients` and `recipes` (spec 51 §4.1). The ONE comparison with that constant. */
 export function readsProfileLocal(manifest: { schema: number }): boolean {
   return manifest.schema >= FORGE_SCHEMA_PROFILE_LOCAL;
+}
+
+/** Whether a profile local may override a root base of the same ref (spec 56 §4.1). The ONE comparison with that constant. */
+export function readsLocalOverride(manifest: { schema: number }): boolean {
+  return manifest.schema >= FORGE_SCHEMA_LOCAL_OVERRIDE;
 }
 
 /** A local recipe: the schema's `Recipe` and its Forge-relative POSIX file. */
@@ -81,7 +87,13 @@ export interface FoundLocal {
  * L1–L6 and L9 (spec 51 §4.2) over a whole Forge: every finding, in a stable order. L7 and L8 are about folders and
  * are decided by `loadForge` while it walks them; it passes those findings in so one error names them all.
  */
-export function checkLocals(root: RootView, locals: ReadonlyMap<string, LocalLayer>, localPaths: ReadonlyMap<string, ReadonlyMap<IngredientRef, string>>, early: string[]): string[] {
+export function checkLocals(
+  root: RootView,
+  locals: ReadonlyMap<string, LocalLayer>,
+  localPaths: ReadonlyMap<string, ReadonlyMap<IngredientRef, string>>,
+  early: string[],
+  overrides = false,
+): string[] {
   const findings = [...early];
   const localRefsAnywhere = new Map<string, string[]>(); // ref → its paths in every profile
   const localRecipesAnywhere = new Map<string, string[]>(); // name → its files in every profile
@@ -101,12 +113,16 @@ export function checkLocals(root: RootView, locals: ReadonlyMap<string, LocalLay
     }
   }
 
-  // L1, L2: a local never shadows the root.
+  // L1, L2: a local never shadows the root — except, at spec 56's gate (`overrides`), a root base (no `as`) of the same
+  // ref, which the local overrides for its profile.
   for (const [p, layer] of locals) {
     for (const ref of layer.ingredients.keys()) {
       const at = localPaths.get(p)?.get(ref) ?? `profiles/${p}`;
       const rootAt = root.ingredientPaths.get(ref);
-      if (rootAt !== undefined) findings.push(`L1 ${at} and ${rootAt}: the same ingredient, local to profile ${shownLocalName(p, "profile")} and at the root`);
+      if (rootAt !== undefined && !overrides) findings.push(`L1 ${at} and ${rootAt}: the same ingredient, local to profile ${shownLocalName(p, "profile")} and at the root`);
+      if (rootAt !== undefined && overrides && root.ingredients.get(ref)?.meta.as !== undefined) {
+        findings.push(`L1 ${at} and ${rootAt}: a local ingredient and a root variant of the same ref — a local overrides a root base only`);
+      }
       const variant = `${ref}--${p}` as IngredientRef;
       const vAt = root.ingredients.has(variant) ? root.ingredientPaths.get(variant) : undefined;
       if (vAt !== undefined) findings.push(`L1 ${at} and ${vAt}: a local ingredient and the root variant of the same name for its own profile`);
@@ -177,8 +193,10 @@ export function checkLocals(root: RootView, locals: ReadonlyMap<string, LocalLay
 export type ProfileView = Forge & { readonly view: string };
 
 /**
- * The one answer to "what does this profile see": the root's maps with the profile's locals added. L1, L2 and L9 keep
- * them disjoint, so the order of the merge decides nothing. Without locals the maps are the root's own.
+ * The one answer to "what does this profile see": the root's maps with the profile's locals set after them, so a local
+ * replaces a root base of the same ref — an override (spec 56 §4.3; only at its gate, which L1 enforces at load). The
+ * order of the merge is the rule. L2 and L9 keep the recipes and the locals themselves disjoint. Without locals the maps
+ * are the root's own.
  */
 export function forgeFor(forge: Forge, profile: string): ProfileView {
   const seen = (forge as Partial<ProfileView>).view;
@@ -193,9 +211,43 @@ export function forgeFor(forge: Forge, profile: string): ProfileView {
   return { ...forge, ingredients, recipes, view: profile };
 }
 
+/**
+ * The one answer to "is a local of this ref an override" (spec 56 §4.4): at the gate, the root base of that ref — a root
+ * ingredient with no `as` — else `undefined`. It takes the Forge, never a profile's view, whose maps hold the locals.
+ */
+export function overriddenBase(forge: Forge, ref: string): LoadedIngredient | undefined {
+  if ((forge as Partial<ProfileView>).view !== undefined) throw new Error("internal: overriddenBase takes the Forge, not a profile's view");
+  if (!readsLocalOverride(forge.manifest)) return undefined;
+  const root = forge.ingredients.get(ref as IngredientRef);
+  return root !== undefined && root.meta.as === undefined ? root : undefined;
+}
+
+/** A folder of the Forge, Forge-relative and POSIX — what a message or a `--json` value names. */
+export function forgeRelative(forge: Pick<Forge, "root">, dir: string): string {
+  return path.relative(forge.root, dir).split(path.sep).join("/");
+}
+
+/**
+ * Whether a resolution holds that very ingredient — the same ref **and** the same folder (spec 56 §4.4). Since an override
+ * shares its root base's ref, a resolution of the overriding profile holds `rule/y` without holding the root `rule/y`;
+ * every comparison of a resolution with a Forge ingredient goes through this, never by ref alone.
+ */
+export function holdsIngredient(res: { ingredients: readonly LoadedIngredient[] }, ing: LoadedIngredient): boolean {
+  return res.ingredients.some((i) => i.ref === ing.ref && i.dir === ing.dir);
+}
+
 /** The profiles that hold `ref` as a local, sorted (spec 51 §4.5). */
 export function localOwners(forge: Forge, ref: string): string[] {
   return [...forge.locals].filter(([, l]) => l.ingredients.has(ref as IngredientRef)).map(([p]) => p).sort();
+}
+
+/**
+ * Spec 56 §6: what a Forge writer acting on a root base says of the profiles that override it — one line each, or none
+ * below the gate (where L1 refuses an override at load).
+ */
+export function overriddenWarnings(forge: Forge, ref: string): string[] {
+  if (!overriddenBase(forge, ref)) return [];
+  return localOwners(forge, ref).map((p) => `${shownIngredientRef(ref)} is overridden for profile ${shownLocalName(p, "profile")} — this run does not change what ${shownLocalName(p, "profile")} resolves`);
 }
 
 /** `<ref> is local to profile <p>` (or `to profiles <p>, <q>`): what a Forge-wide command says of a local (spec 51 §4.5). */
@@ -218,7 +270,8 @@ export function localCiters(forge: Forge, refs: readonly string[], opts: { profi
       seen.add(name);
       const r = view.recipes.get(name);
       if (!r) return false;
-      if (r.ingredients.some((i) => wanted.has(i))) return true;
+      // A citation of a ref this profile holds as a local reaches its local — an override (spec 56 §4.4) — never the root's.
+      if (r.ingredients.some((i) => wanted.has(i) && !layer.ingredients.has(i as IngredientRef))) return true;
       return opts.viaExtends === true && r.extends.some((parent) => reaches(parent, seen));
     };
     for (const [name, r] of layer.recipes) if (reaches(name, new Set())) out.push({ profile: p, recipe: name, file: r.file });

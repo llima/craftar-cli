@@ -1,0 +1,441 @@
+{
+  "acme.files": {
+    ".claude/rules/style.md": "# Style\n",
+    ".claude/rules/x.md": "# X\n",
+    ".claude/rules/y.md": "# Y for acme\n",
+    "craftar.yaml": "forge: ../forge\nprofile: acme\n"
+  },
+  "acme.check": {
+    "code": 0,
+    "stdout": "craftar status — profile acme · recipes base--acme → acme-extra\n  unchanged 3\n\nworkspace in sync\n",
+    "stderr": ""
+  },
+  "acme.status": {
+    "code": 0,
+    "json": {
+      "forge": {
+        "kind": "path",
+        "source": "../forge",
+        "ref": null,
+        "defaultBranch": null,
+        "commit": "<commit>",
+        "lockCommit": "<commit>",
+        "fetched": false
+      },
+      "statuses": [
+        {
+          "path": ".claude/rules/style.md",
+          "state": "unchanged",
+          "target": "claude-code",
+          "ingredient": "rule/style",
+          "lock": {
+            "path": ".claude/rules/style.md",
+            "hash": "sha256:3717c3c8027c526d5bc5af9adf27c8ecde05ce3cb7de2ad9058fcd54ca3212db",
+            "target": "claude-code",
+            "ingredient": "rule/style"
+          }
+        },
+        {
+          "path": ".claude/rules/x.md",
+          "state": "unchanged",
+          "target": "claude-code",
+          "ingredient": "rule/x",
+          "lock": {
+            "path": ".claude/rules/x.md",
+            "hash": "sha256:4605d4841be9e35e7f1dcea81f69d9d53ac11ad424e3015f90b7f54985ce27d9",
+            "target": "claude-code",
+            "ingredient": "rule/x"
+          }
+        },
+        {
+          "path": ".claude/rules/y.md",
+          "state": "unchanged",
+          "target": "claude-code",
+          "ingredient": "rule/y--acme",
+          "lock": {
+            "path": ".claude/rules/y.md",
+            "hash": "sha256:02c15835abfbb437d0a931c89968db91393a9a3a893f8b6e7c2f0691ff77fb41",
+            "target": "claude-code",
+            "ingredient": "rule/y--acme"
+          }
+        }
+      ],
+      "warnings": [],
+      "unsetParams": []
+    },
+    "stderr": ""
+  },
+  "acme.ingredients": {
+    "code": 0,
+    "json": {
+      "forge": {
+        "name": "test-forge",
+        "commit": "<commit>"
+      },
+      "context": {
+        "kind": "workspace",
+        "profile": "acme",
+        "recipes": [
+          "base--acme",
+          "acme-extra"
+        ]
+      },
+      "recipe": null,
+      "ingredients": [
+        {
+          "ref": "rule/style",
+          "type": "rule",
+          "name": "style",
+          "outputName": "style",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "base",
+            "base--acme"
+          ],
+          "inUse": true,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "rule/y",
+          "type": "rule",
+          "name": "y",
+          "outputName": "y",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "base"
+          ],
+          "inUse": false,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "rule/y--acme",
+          "type": "rule",
+          "name": "y--acme",
+          "outputName": "y",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "base--acme"
+          ],
+          "inUse": true,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "rule/x",
+          "type": "rule",
+          "name": "x",
+          "outputName": "x",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "acme-extra"
+          ],
+          "inUse": true,
+          "disabled": false,
+          "scope": "profile",
+          "profile": "acme"
+        }
+      ],
+      "missing": [],
+      "warnings": []
+    },
+    "stderr": ""
+  },
+  "globex.files": {
+    ".claude/rules/style.md": "# Style\n",
+    ".claude/rules/y.md": "# Y shared\n",
+    "craftar.yaml": "forge: ../forge\nprofile: globex\n"
+  },
+  "globex.check": {
+    "code": 0,
+    "stdout": "craftar status — profile globex · recipes base\n  unchanged 2\n\nworkspace in sync\n",
+    "stderr": ""
+  },
+  "globex.status": {
+    "code": 0,
+    "json": {
+      "forge": {
+        "kind": "path",
+        "source": "../forge",
+        "ref": null,
+        "defaultBranch": null,
+        "commit": "<commit>",
+        "lockCommit": "<commit>",
+        "fetched": false
+      },
+      "statuses": [
+        {
+          "path": ".claude/rules/style.md",
+          "state": "unchanged",
+          "target": "claude-code",
+          "ingredient": "rule/style",
+          "lock": {
+            "path": ".claude/rules/style.md",
+            "hash": "sha256:3717c3c8027c526d5bc5af9adf27c8ecde05ce3cb7de2ad9058fcd54ca3212db",
+            "target": "claude-code",
+            "ingredient": "rule/style"
+          }
+        },
+        {
+          "path": ".claude/rules/y.md",
+          "state": "unchanged",
+          "target": "claude-code",
+          "ingredient": "rule/y",
+          "lock": {
+            "path": ".claude/rules/y.md",
+            "hash": "sha256:087b42f0bbfc54bcc06ebf95b37f4497c0b2aa435010e17cbc4f25a51bca6042",
+            "target": "claude-code",
+            "ingredient": "rule/y"
+          }
+        }
+      ],
+      "warnings": [],
+      "unsetParams": []
+    },
+    "stderr": ""
+  },
+  "globex.ingredients": {
+    "code": 0,
+    "json": {
+      "forge": {
+        "name": "test-forge",
+        "commit": "<commit>"
+      },
+      "context": {
+        "kind": "workspace",
+        "profile": "globex",
+        "recipes": [
+          "base"
+        ]
+      },
+      "recipe": null,
+      "ingredients": [
+        {
+          "ref": "rule/style",
+          "type": "rule",
+          "name": "style",
+          "outputName": "style",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "base",
+            "base--acme"
+          ],
+          "inUse": true,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "rule/y",
+          "type": "rule",
+          "name": "y",
+          "outputName": "y",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "base"
+          ],
+          "inUse": true,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "rule/y--acme",
+          "type": "rule",
+          "name": "y--acme",
+          "outputName": "y",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "base--acme"
+          ],
+          "inUse": false,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        }
+      ],
+      "missing": [],
+      "warnings": []
+    },
+    "stderr": ""
+  },
+  "explainLocal": {
+    "code": 0,
+    "stdout": ".claude/rules/x.md\n  target      claude-code\n  ingredient  rule/x\n  source      profile acme (profiles/acme/ingredients/rules/x)\n  via recipes acme-extra\n  profile     acme  (recipes: base--acme, acme-extra)\n  hash        sha256:4605d4841be9e35e7f1dcea81f69d9d53ac11ad424e3015f90b7f54985ce27d9\n",
+    "stderr": ""
+  },
+  "explainRoot": {
+    "code": 0,
+    "stdout": ".claude/rules/y.md\n  target      claude-code\n  ingredient  rule/y--acme\n  source      forge (ingredients/rules/y--acme)\n  via recipes base--acme\n  profile     acme  (recipes: base--acme, acme-extra)\n  hash        sha256:02c15835abfbb437d0a931c89968db91393a9a3a893f8b6e7c2f0691ff77fb41\n",
+    "stderr": ""
+  },
+  "forgeIngredients": {
+    "code": 0,
+    "json": {
+      "forge": {
+        "name": "test-forge",
+        "commit": "<commit>"
+      },
+      "context": null,
+      "recipe": null,
+      "ingredients": [
+        {
+          "ref": "rule/style",
+          "type": "rule",
+          "name": "style",
+          "outputName": "style",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "base",
+            "base--acme"
+          ],
+          "inUse": null,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "rule/y",
+          "type": "rule",
+          "name": "y",
+          "outputName": "y",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "base"
+          ],
+          "inUse": null,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "rule/y--acme",
+          "type": "rule",
+          "name": "y--acme",
+          "outputName": "y",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "base--acme"
+          ],
+          "inUse": null,
+          "disabled": false,
+          "scope": "forge",
+          "profile": null
+        },
+        {
+          "ref": "rule/x",
+          "type": "rule",
+          "name": "x",
+          "outputName": "x",
+          "description": null,
+          "targets": "*",
+          "recipes": [
+            "acme-extra"
+          ],
+          "inUse": null,
+          "disabled": false,
+          "scope": "profile",
+          "profile": "acme"
+        }
+      ],
+      "missing": [],
+      "warnings": []
+    },
+    "stderr": ""
+  },
+  "forgeIngredientsText": {
+    "code": 0,
+    "stdout": "craftar ingredients — forge test-forge @ <commit>\nrule\n  style              targets *  in base, base--acme\n  y                  targets *  in base\n  y--acme → y        targets *  in base--acme\n  x (local to acme)  targets *  in acme-extra\n\n  4 ingredients, 0 in no recipe\n",
+    "stderr": ""
+  },
+  "localize": {
+    "code": 1,
+    "stdout": "",
+    "stderr": "error: forge localize: rule/y--acme is a variant of rule/y, which is at the root — a local and a root variant of its own profile cannot write one file (L1); promote or unify it first\n"
+  },
+  "share": {
+    "code": 0,
+    "json": {
+      "ref": "rule/x",
+      "profile": "acme",
+      "dryRun": true,
+      "moved": {
+        "from": "profiles/acme/ingredients/rules/x",
+        "to": "ingredients/rules/x"
+      },
+      "recipes": [],
+      "impact": [],
+      "warnings": []
+    },
+    "stderr": ""
+  },
+  "promote": {
+    "code": 0,
+    "json": {
+      "base": "rule/y",
+      "profile": "acme",
+      "dryRun": true,
+      "removed": "rule/y--acme",
+      "created": [
+        "rule/y--globex"
+      ],
+      "recipes": {
+        "edited": [
+          "base--acme"
+        ],
+        "created": [
+          {
+            "name": "base--globex",
+            "from": "base"
+          }
+        ]
+      },
+      "profiles": [
+        "globex"
+      ],
+      "impact": [],
+      "warnings": []
+    },
+    "stderr": ""
+  },
+  "promoteShared": {
+    "code": 1,
+    "stdout": "",
+    "stderr": "error: forge promote: rule/y has no variant for profile globex\n"
+  },
+  "importAcme": {
+    "code": 0,
+    "stdout": "Imported <root>/acme → <root>/forge as profile \"acme\"\n  0 created, 2 reused, 1 variants, 0 rejected\n  variant rule/y--acme — differs from rule/y already in the Forge\n  local to profile acme: rule/x (profiles/acme/ingredients/rules/x) — reused there\n  profile profiles/acme/profile.yaml unchanged\n  recipes: base--acme\n",
+    "stderr": ""
+  },
+  "forgeAfterImport": {
+    "craftar.forge.yaml": "name: test-forge\nschema: 9\n",
+    "ingredients/rules/style/ingredient.yaml": "type: rule\nname: style\n",
+    "ingredients/rules/style/rule.md": "# Style\n",
+    "ingredients/rules/y--acme/ingredient.yaml": "type: rule\nname: y--acme\ninclusion: always\nfile: rule.md\ntargets: \"*\"\ntags: []\norigin:\n  workspace: acme\n  path: .claude/rules/y.md\nas: y\n",
+    "ingredients/rules/y--acme/rule.md": "# Y for acme\n",
+    "ingredients/rules/y/ingredient.yaml": "type: rule\nname: y\n",
+    "ingredients/rules/y/rule.md": "# Y shared\n",
+    "profiles/acme/ingredients/rules/x/ingredient.yaml": "type: rule\nname: x\n",
+    "profiles/acme/ingredients/rules/x/rule.md": "# X\n",
+    "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\n  - acme-extra\ntargets:\n  - claude-code\n",
+    "profiles/acme/recipes/acme-extra.yaml": "name: acme-extra\ningredients:\n  - rule/x\n",
+    "profiles/globex/profile.yaml": "name: globex\nrecipes:\n  - base\ntargets:\n  - claude-code\n",
+    "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/style\n  - rule/y--acme\n",
+    "recipes/base.yaml": "name: base\ningredients:\n  - rule/style\n  - rule/y\n"
+  }
+}

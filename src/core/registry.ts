@@ -7,7 +7,7 @@ import { SchemaError, shownSchema } from "./schema-fault.js";
 import { exists } from "./forge.js";
 import { withLock, type LockTiming } from "./home-lock.js";
 import { cacheKey, credentialFault, CREDENTIAL_HIDDEN, UNVOUCHED_HIDDEN } from "./remote.js";
-import { loadWorkspace, plan, readLock, status, unsetDeclared, unsetSummary, WORKSPACE_FILE, type FileStatus, type Plan, type Workspace } from "./sync.js";
+import { loadWorkspace, plan, readLock, status, unsetDeclared, unsetSummary, overrideSummary, WORKSPACE_FILE, type FileStatus, type Plan, type Workspace } from "./sync.js";
 
 /*
  * The workspace registry (spec 21): `$CRAFTAR_HOME/registry.json`, one entry per workspace a
@@ -581,6 +581,12 @@ export async function listWorkspaces(home: string, opts: { fetch: boolean; reaso
         for (const w of p.warnings) say(w);
         planSaid = true;
         throw new Error(unsetSummary(unset));
+      }
+      // Spec 56 §4.3: refused as an unset parameter is.
+      if (p.overrideConflicts.length) {
+        for (const w of p.warnings) say(w);
+        planSaid = true;
+        throw new Error(overrideSummary(p.overrideConflicts));
       }
       const lock = await readLock(ws.root);
       const st = await status(ws, p, lock);

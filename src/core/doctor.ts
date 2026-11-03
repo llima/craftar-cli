@@ -14,7 +14,7 @@ import { FULL_SHA, cacheKey, classifyForge, CREDENTIAL_HIDDEN, inspectCache, UNV
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
-import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK, type FileStatus } from "./sync.js";
+import { LOCK_FILE, declaredWithoutValue, overrideConflictLine, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK, type FileStatus } from "./sync.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { outName, MCP_FILE, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
 import { plannedRegistrations, sameHandler, type PlannedRegistration } from "./settings-apply.js";
@@ -538,11 +538,18 @@ async function lockAndStatus(
   }
   if (lock === null) {
     w("lock", "warn", "absent — never synced", "craftar sync");
+    if (p !== null) overrideErrors(p, w);
     if (ws !== null && p !== null) workspaceLinks(await status(ws, p, null), w);
     return;
   }
   w("lock", "ok", `schema ${lock.schema}, generated ${lock.generatedAt.slice(0, 16).replace("T", " ")} UTC`);
   if (ws === null || p === null) return;
+  // Spec 56 §4.3: a refused sync is the status check's error, whatever the files say.
+  if (p.overrideConflicts.length) {
+    overrideErrors(p, w);
+    workspaceLinks(await status(ws, p, lock), w);
+    return;
+  }
   const all = await status(ws, p, lock);
   // `workspace-links` owns those rows, so the status check does not count them.
   const st = all.filter((s) => !s.escapes);
@@ -557,6 +564,11 @@ async function lockAndStatus(
   const detail = Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(", ");
   w("status", "warn", `${row} — ${detail}`, "craftar status, then craftar sync");
   workspaceLinks(all, w);
+}
+
+/** Spec 56 §4.3: a refused sync is the status check's error, one per pair, whatever the files say — with a lock or without. */
+function overrideErrors(p: Plan, w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void): void {
+  for (const c of p.overrideConflicts) w("status", "error", overrideConflictLine(c), "remove one of the two from the profile's recipes, then craftar sync");
 }
 
 /** Spec 48 §4.3: one `error` per path that escapes, present only with one. A refused sync, like `params`. */

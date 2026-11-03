@@ -13,7 +13,7 @@ import { readRegistry } from "./registry.js";
 import { classifyForge, credentialFault, CREDENTIAL_HIDDEN, refHoldsCredentials } from "./remote.js";
 import { profileNotFoundMessage, resolve } from "./resolve.js";
 import { profileRepos, type RepoEntry } from "./repos.js";
-import { loadForgeSource, mergeWorkspaceConfig, unsetDeclared, unsetRefused, type LoadedForge, type LoadOptions } from "./sync.js";
+import { loadForgeSource, mergeWorkspaceConfig, unsetDeclared, unsetRefused, overrideRefused, type LoadedForge, type LoadOptions } from "./sync.js";
 import type { LocalKey } from "./workspace-yaml.js";
 
 /**
@@ -120,7 +120,7 @@ export async function askClone(
 
   // a plan whose first sync would be refused → no list, no question, refused flag
   const unset = unsetDeclared(init.plan);
-  if (unset.length > 0 || escapingRows(init.statuses).length > 0) {
+  if (unset.length > 0 || init.plan.overrideConflicts.length > 0 || escapingRows(init.statuses).length > 0) {
     return { clone: false, entries: [], refused: true };
   }
 
@@ -192,6 +192,8 @@ export async function confirmInit(
   const counts = countStates(init.statuses);
   if (unset.length > 0) {
     io.say(`  first sync: ${unsetRefused(unset)}`);
+  } else if (init.plan.overrideConflicts.length > 0) {
+    io.say(`  first sync: ${overrideRefused(init.plan.overrideConflicts)}`);
   } else if (escapingRows(init.statuses).length > 0) {
     io.say(`  first sync: refused — ${escapeSummary(escapingRows(init.statuses))}`);
   } else if (counts.length === 0) {

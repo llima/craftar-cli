@@ -25,7 +25,7 @@ import {
   assertNoLinkOnPath,
   copyForgeForProof,
 } from "../core/forge.js";
-import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type UnsetParam, type Plan, type Workspace } from "../core/sync.js";
+import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type OverrideConflict, type UnsetParam, type Plan, type Workspace } from "../core/sync.js";
 import { driftList, metadataEdits, METADATA_PARAM_REASON, REWORDED_REASON, INDEXED_REASON, unmanaged } from "../core/drift.js";
 import { substituteMetadata, templatedMetadataEdit, withTemplatedFields } from "../core/metadata-params.js";
 import { readsRulesIndex, RULES_INDEX_KEY } from "../core/rules-index.js";
@@ -144,6 +144,8 @@ export interface PromotePlan {
   nextSync: FileStatus[];
   /** Declared parameters the plan after the promote leaves without a value: that next sync is refused (spec 29 §4.1). */
   nextUnset: UnsetParam[];
+  /** The override conflicts of that plan (spec 56 §4.3): the next sync is refused for them too. */
+  nextConflicts: OverrideConflict[];
   /** Impact on other workspaces. */
   impact: { registry: RegistryState; workspaces: ImpactWorkspaceRow[] };
   /** Warnings to print. */
@@ -1009,6 +1011,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         otherFilesUnchanged,
         nextSync: stScratch,
         nextUnset: unsetDeclared(p1),
+        nextConflicts: p1.overrideConflicts,
         impact: { registry: impactResult.state, workspaces: impactResult.rows },
         warnings: [...warnings, ...impactResult.warnings],
         stage,
@@ -1355,6 +1358,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       otherFilesUnchanged,
       nextSync: stScratch,
       nextUnset: unsetDeclared(p1),
+      nextConflicts: p1.overrideConflicts,
       impact: { registry: impactResult.state, workspaces: impactResult.rows },
       warnings: [...warnings, ...impactResult.warnings],
       stage,

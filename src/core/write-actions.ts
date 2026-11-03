@@ -23,10 +23,12 @@ import {
   status,
   unsetDeclared,
   unsetRefusal,
+  overrideRefusal,
   orphanReason,
   WORKSPACE_FILE,
   LOCAL_FILE,
   type ApplyOptions,
+  type OverrideConflict,
   type ApplyResult,
   type FileStatus,
   type LoadOptions,
@@ -91,7 +93,7 @@ export interface RecipeOutcome {
   before: RecipeLists;
   after: RecipeLists;
   /** When changed: the edited workspace's resolved recipes, its statuses and unset params, and the plan warnings past ws.warnings. */
-  next: { recipes: string[]; statuses: FileStatus[]; unset: UnsetParam[]; warnings: string[] } | null;
+  next: { recipes: string[]; statuses: FileStatus[]; unset: UnsetParam[]; conflicts: OverrideConflict[]; warnings: string[] } | null;
 }
 
 export interface EditRecipesOptions {
@@ -165,6 +167,7 @@ export async function editRecipes(
       recipes: [...p.resolution.recipes],
       statuses: st,
       unset,
+      conflicts: p.overrideConflicts,
       warnings: p.warnings.slice(ws.warnings.length),
     },
   };
@@ -363,6 +366,7 @@ export function mcpWriters(home: string, registryOff: boolean): McpWriters {
 
       const unset = unsetDeclared(p);
       if (unset.length) throw new Error(unsetRefusal(unset));
+      if (p.overrideConflicts.length) throw new Error(overrideRefusal(p.overrideConflicts));
 
       const lock = await readLock(root);
       const statuses = await status(ws, p, lock);
@@ -401,7 +405,7 @@ export function mcpWriters(home: string, registryOff: boolean): McpWriters {
         reasons: outcome.reasons,
         craftarYaml: recipeDiffLine(outcome.before, outcome.after),
         recipes: outcome.next?.recipes ?? null,
-        nextSync: outcome.next ? nextSyncLine(outcome.next.statuses, outcome.next.unset) : null,
+        nextSync: outcome.next ? nextSyncLine(outcome.next.statuses, outcome.next.unset, outcome.next.conflicts) : null,
         warnings: [...loadWarnings, ...(outcome.next?.warnings ?? [])],
       };
     },

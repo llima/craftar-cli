@@ -44,10 +44,10 @@ import { serve } from "./mcp.js";
 import { mcpWriters } from "./core/write-actions.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, loadForgeFor, readConfigFrom, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, loadForgeFor, readConfigFrom, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, overrideRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
-import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
+import { catalogueContext, listRecipes, listIngredients, checkType, overriddenRoot, withLoadWarnings, type CatalogueContext, type ContextSource, type IngredientEntry } from "./core/catalogue.js";
 import { canonicalValue } from "./core/sections.js";
 import { profileSectionFile } from "./core/section-files.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
@@ -59,7 +59,7 @@ import { assertNoLinkOnPath, exists, gitDirty, gitIgnored, gitIsRepo, gitTracked
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { applyMove, planLocalize, planShare, proveMove, type ForgeMove, type MoveCommand } from "./core/localize.js";
 import { applyExtract, DEFAULT_MIN_BYTES, EXTRACT_COMMAND, planExtract, proveExtract, type ExtractPlan } from "./core/sections-extract.js";
-import { forgeFor as profileView, isLocalMessage, localCiters, localOwners } from "./core/profile-local.js";
+import { forgeFor as profileView, forgeRelative, isLocalMessage, localCiters, localOwners, overriddenBase, overriddenWarnings } from "./core/profile-local.js";
 import type { Forge } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
@@ -108,7 +108,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.54.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.55.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -235,11 +235,12 @@ program
       console.log(JSON.stringify(report, null, 2));
       // exitCode, not process.exit: a piped object is not cut (spec 29 §4.1)
       // The object carries both reasons (unsetParams, the budget line in warnings): nothing on stderr
-      if (unset.length || agentsMdOverBudget(p) || kiroResourcesUnplanned(p)?.length || escapingRows(st).length) process.exitCode = 1;
+      if (unset.length || agentsMdOverBudget(p) || kiroResourcesUnplanned(p)?.length || escapingRows(st).length || p.overrideConflicts.length) process.exitCode = 1;
       return;
     }
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, false, forgeLine(ws, lock));
     if (refusalBlock(unset)) process.exitCode = 1;
+    if (overrideBlock(p)) process.exitCode = 1;
     if (escapeBlock(st)) process.exitCode = 1;
     if (budgetRefusalBlock(p)) process.exitCode = 1;
   });
@@ -251,6 +252,12 @@ program
 function refusalBlock(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): boolean {
   if (unset.length) errorLine(unsetRefusal(unset, opts));
   return unset.length > 0;
+}
+
+/** The refusal of spec 56 §4.3 for a command that goes on to print or exit by itself. Says whether there was one. */
+function overrideBlock(p: Plan, opts: { thenSync?: boolean } = {}): boolean {
+  if (p.overrideConflicts.length) errorLine(overrideRefusal(p.overrideConflicts, opts));
+  return p.overrideConflicts.length > 0;
 }
 
 /** The refusal of spec 48 §4.3 for a command that goes on to print or exit by itself. Says whether there was one. */
@@ -636,9 +643,9 @@ program
       const unset = unsetDeclared(p);
       const cloning = cloneEntries.length > 0;
       const escaping = escapingRows(init.statuses);
-      const refused = unset.length > 0 || escaping.length > 0;
+      const refused = unset.length > 0 || escaping.length > 0 || p.overrideConflicts.length > 0;
       if (!o.sync) {
-        console.log(nextSyncLine(init.statuses, unset));
+        console.log(nextSyncLine(init.statuses, unset, p.overrideConflicts));
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
         if (cloning && refused && answers === null) {
           console.log(NOT_CLONED_REFUSED);
@@ -658,6 +665,7 @@ program
           console.log(NOT_CLONED_REFUSED);
         }
         refusalBlock(unset, { thenSync: true });
+        overrideBlock(p, { thenSync: true });
         escapeBlock(init.statuses, { thenSync: true });
         again();
         process.exitCode = 1;
@@ -840,7 +848,7 @@ program
       // A refused sync is not "in sync", whatever the files say: the listing, then the block, and the exit is
       // exitCode's, so nothing queued is cut (spec 29 §4.1)
       // Both blocks are printed; either one, or a file out of sync, fails the check.
-      const refused = [refusalBlock(unset), escapeBlock(st), budgetRefusalBlock(p)].some(Boolean);
+      const refused = [refusalBlock(unset), overrideBlock(p), escapeBlock(st), budgetRefusalBlock(p)].some(Boolean);
       if (refused || bad.length) process.exitCode = 1;
       else console.log(pc.green("\nworkspace in sync"));
       return;
@@ -850,6 +858,10 @@ program
     if (unset.length) {
       for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
       fail(unsetRefusal(unset));
+    }
+    if (p.overrideConflicts.length) {
+      for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+      fail(overrideRefusal(p.overrideConflicts));
     }
     const escaping = escapingRows(st);
     if (escaping.length) {
@@ -886,6 +898,7 @@ program
     else if (o.exitCode) process.exitCode = 1;
     // Spec 29 §4.1: with no [path], --exit-code fails exactly when `sync --check` does — a refused sync included
     if (refusalBlock(unsetDeclared(p)) && o.exitCode && !only) process.exitCode = 1;
+    if (overrideBlock(p) && o.exitCode && !only) process.exitCode = 1;
     if (escapeBlock(st) && o.exitCode && !only) process.exitCode = 1;
     // The AGENTS.md budget, as the refusal above: always printed, failing only --exit-code with no [path]
     if (budgetRefusalBlock(p) && o.exitCode && !only) process.exitCode = 1;
@@ -933,7 +946,7 @@ async function checkGitSource(o: { workspace: string; check: boolean; committed?
     const bad = st.filter((s) => !["unchanged", "adopt"].includes(s.state));
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true, forgeLine(ws, lock));
     if (bad.length) console.log(pc.red(`\n${bad.length} file(s) out of sync`));
-    const refused = [refusalBlock(unsetDeclared(p)), budgetRefusalBlock(p)].some(Boolean);
+    const refused = [refusalBlock(unsetDeclared(p)), overrideBlock(p), budgetRefusalBlock(p)].some(Boolean);
     if (refused || bad.length) process.exitCode = 1;
     else console.log(pc.green(`\n${named} in sync`));
   } finally {
@@ -999,20 +1012,22 @@ drift
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
-      console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: withEscapeLine([...p.warnings, ...providedWarnings], st), unsetParams: unset }, null, 2));
-      if (unset.length || escapingRows(st).length) process.exitCode = 1;
+      console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: withEscapeLine([...p.warnings, ...providedWarnings], st, p.overrideConflicts), unsetParams: unset }, null, 2));
+      if (unset.length || escapingRows(st).length || p.overrideConflicts.length) process.exitCode = 1;
       return;
     }
     warnStderr(providedWarnings);
     if (named && !rows.length) {
       console.log(`${named.path} is not drifted (${named.state})`);
       if (refusalBlock(unset)) process.exitCode = 1;
+      if (overrideBlock(p)) process.exitCode = 1;
       if (escapeBlock(st)) process.exitCode = 1;
       return;
     }
     if (!rows.length) {
       console.log("no drift");
       if (refusalBlock(unset)) process.exitCode = 1;
+      if (overrideBlock(p)) process.exitCode = 1;
       if (escapeBlock(st)) process.exitCode = 1;
       return;
     }
@@ -1025,6 +1040,7 @@ drift
       );
     if (!named) {
       if (refusalBlock(unset)) process.exitCode = 1;
+      if (overrideBlock(p)) process.exitCode = 1;
       if (escapeBlock(st)) process.exitCode = 1;
       return;
     }
@@ -1040,6 +1056,7 @@ drift
       }
     } else await printFileDiff(ws.root, named);
     if (refusalBlock(unset)) process.exitCode = 1;
+    if (overrideBlock(p)) process.exitCode = 1;
     if (escapeBlock(st)) process.exitCode = 1;
   });
 
@@ -1066,6 +1083,10 @@ drift
     if (unset.length) {
       for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
       fail(unsetRefusal(unset));
+    }
+    if (p.overrideConflicts.length) {
+      for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+      fail(overrideRefusal(p.overrideConflicts));
     }
     const escaping = escapingRows(st);
     if (escaping.length) {
@@ -1221,7 +1242,7 @@ drift
     if (promotePlan.dependents.length > 0) {
       console.log(`  also changes ${promotePlan.dependents.join(", ")}`);
     }
-    console.log(`  ${nextSyncLine(promotePlan.nextSync, promotePlan.nextUnset)}`);
+    console.log(`  ${nextSyncLine(promotePlan.nextSync, promotePlan.nextUnset, promotePlan.nextConflicts)}`);
 
     // Impact: print other workspaces or registry warning
     const impact = promotePlan.impact;
@@ -1276,7 +1297,7 @@ function recipeCommand(op: RecipeOp) {
 
     console.log(`${WORKSPACE_FILE}: ${recipeDiffLine(outcome.before, outcome.after)}`);
     console.log(`recipes: ${outcome.next!.recipes.join(" → ")}`);
-    console.log(nextSyncLine(outcome.next!.statuses, outcome.next!.unset));
+    console.log(nextSyncLine(outcome.next!.statuses, outcome.next!.unset, outcome.next!.conflicts));
     // plan() already carries ws.warnings first, and they were printed on load.
     warnStderr(outcome.next!.warnings);
   };
@@ -1325,7 +1346,10 @@ program
     console.log(`  ingredient  ${f.ingredient}${f.origin ? pc.dim(`  (imported from ${f.origin.workspace}:${f.origin.path})`) : ""}`);
     // Spec 51 §4.4: at schema 8, where the file's ingredient lives.
     if (f.scope !== undefined) {
-      const where = f.scope === null ? "several ingredients" : f.scope === "profile" ? `profile ${f.profile} (${f.dir})` : `forge (${f.dir})`;
+      // Spec 56 §6: an override names the root base it stands over.
+      const root = f.scope === "profile" ? overriddenBase(ws.forge, f.ingredient) : undefined;
+      const over = root !== undefined ? `, over ${forgeRelative(ws.forge, root.dir)}` : "";
+      const where = f.scope === null ? "several ingredients" : f.scope === "profile" ? `profile ${f.profile} (${f.dir})${over}` : `forge (${f.dir})`;
       console.log(`  source      ${where}`);
     }
     if (f.via) console.log(`  via recipes ${f.via.join(" → ")}`);
@@ -1897,8 +1921,10 @@ program
   });
 
 /** A catalogue row local to a profile (spec 51 §4.4): marked in the text; empty below schema 8, where no row has a scope. */
-function localMark(row: { scope?: string; profile?: string | null }): string {
-  return row.scope === "profile" ? ` (local to ${row.profile})` : "";
+function localMark(row: IngredientEntry | { scope?: string; profile?: string | null }): string {
+  if (row.scope !== "profile") return "";
+  // Spec 56 §6: a local that overrides a root base says so, in every listing.
+  return "ref" in row && overriddenRoot(row as IngredientEntry) !== null ? ` (local to ${row.profile}, overrides the root)` : ` (local to ${row.profile})`;
 }
 
 /**
@@ -2637,6 +2663,8 @@ forge
     }
     // Spec 25 §4.2: push warnings from forgeWorkspaces (credential lines)
     warnings.push(...impactWarnings);
+    // Spec 56 §6: a profile that overrides the base is not reached by this run.
+    warnings.push(...overriddenWarnings(f, ref));
     warnings.push(...result.notes);
     // Spec 33 §4.4: push warnings from pruneCandidates (malformed blocks)
     warnings.push(...pruneWarnings);
@@ -2887,10 +2915,11 @@ forge
 forge
   .command("promote")
   .description(
-    "Make a profile's variant the base: the base takes the variant's files, every other profile that resolves the old base gets it back as its own variant through a recipe it owns, and every profile is proved to resolve the same ingredients before anything is written. Writes to the Forge",
+    "Make a profile's variant (--profile), or a variant several profiles share (--variant), the base: the base takes the variant's files, every other profile that resolves the old base gets it back as its own variant through a recipe it owns, and every profile is proved to resolve the same ingredients before anything is written. Writes to the Forge",
   )
   .argument("<type/name>", "base ingredient (rule/workflow)")
-  .requiredOption("--profile <p>", "the profile whose variant becomes the base")
+  .option("--profile <p>", "the profile whose variant <name>--<p> becomes the base")
+  .option("--variant <type/name>", "the variant that becomes the base, named itself — one several profiles share (as: <name>); instead of --profile")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--no-impact", "skip planning the registered workspaces of this Forge before and after the writes")
@@ -2911,7 +2940,9 @@ forge
     }
     if (await gitDirty(f.root)) fail(`${f.root} is not a clean git checkout — commit or stash your changes first`);
 
-    const promotion = await planBasePromotion(f, ref, o.profile);
+    if (o.profile !== undefined && o.variant !== undefined) fail("forge promote: give --profile or --variant, not both");
+    if (o.profile === undefined && o.variant === undefined) fail("forge promote: give --profile <p> or --variant <type/name>");
+    const promotion = await planBasePromotion(f, ref, o.variant !== undefined ? { variant: o.variant } : o.profile);
     const forgeRel = (abs: string) => path.relative(f.root, abs).split(path.sep).join("/");
     // Every path overwritten or deleted must be held by git; a path created must not be one git ignores, or `git clean` would not undo it.
     const unheld = await gitUnheld(f.root, promotion.mustHold);
@@ -3013,8 +3044,9 @@ forge
     }
 
     const n = (count: number) => `${count} workspace(s)`;
-    console.log(pc.bold(`craftar forge promote ${promotion.base} ← ${promotion.profile}${o.dryRun ? " (dry run — nothing written)" : ""}`));
-    console.log(`  base     ${promotion.base} ${o.dryRun ? "would hold" : "now holds"} ${promotion.profile}'s text (was ${promotion.removed})`);
+    const from = promotion.profile ?? promotion.removed;
+    console.log(pc.bold(`craftar forge promote ${promotion.base} ← ${from}${o.dryRun ? " (dry run — nothing written)" : ""}`));
+    console.log(`  base     ${promotion.base} ${o.dryRun ? "would hold" : "now holds"} ${promotion.profile !== null ? `${promotion.profile}'s text` : "its text"} (was ${promotion.removed})`);
     for (const c of promotion.created) console.log(`  variant  ${c} ${o.dryRun ? "would be created" : "created"} (the old base)`);
     if (promotion.discarded) console.log(`  the old base is resolved by no profile — ${o.dryRun ? "would be discarded" : "discarded"} (git holds it)`);
     const recipeLines = [...promotion.detail.recipes.filter((r) => r.from === null), ...promotion.detail.recipes.filter((r) => r.from !== null)];
@@ -3132,8 +3164,9 @@ async function runForgeMove(command: MoveCommand, ref: string, o: { profile: str
   }
   const where = command === "forge localize" ? `profile ${move.profile}` : "the root";
   console.log(pc.bold(`craftar ${command} ${move.ref} → ${where}${o.dryRun ? " (dry run — nothing written)" : ""}`));
-  console.log(`  moved    ${move.moved.from} → ${move.moved.to}${move.to !== move.ref ? ` (now ${move.to})` : ""}`);
+  console.log(`  moved    ${move.moved.from} → ${move.moved.to}${move.to !== move.ref ? ` (now ${move.to}${move.override ? ", overrides the root's" : ""})` : ""}`);
   for (const r of move.recipes) console.log(`  recipe   ${r.name}: ${r.from} → ${r.to}`);
+  for (const f of move.override ? move.rewired : []) console.log(`  rewired  ${f}: ${move.ref} → ${move.to}`);
   for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   const n = (count: number) => `${count} workspace(s)`;
   if (o.dryRun) console.log(`  impact   ${n(fw.workspaces.length)} proved on a scratch copy: not written, not compared`);
@@ -3144,9 +3177,9 @@ async function runForgeMove(command: MoveCommand, ref: string, o: { profile: str
 forge
   .command("localize")
   .description(
-    "Move a root ingredient only one profile resolves into that profile's folder (profiles/<p>/), with every root recipe that cites it and every one that extends those; a base-less variant becomes the local under its output name. Proved on a scratch copy against every profile and every registered workspace before anything is written. Needs a Forge at schema 8. Writes to the Forge, never commits",
+    "Move a root ingredient only one profile resolves into that profile's folder (profiles/<p>/), with every root recipe that cites it and every one that extends those; a base-less variant becomes the local under its output name, and — at schema 12 — the profile's own variant whose base is at the root becomes its override of that base, the recipes citing it rewired in place. Proved on a scratch copy against every profile and every registered workspace before anything is written. Needs a Forge at schema 8. Writes to the Forge, never commits",
   )
-  .argument("<type/name>", "root ingredient (rule/x, or the base-less variant rule/x--<p>)")
+  .argument("<type/name>", "root ingredient (rule/x, or the variant rule/x--<p>)")
   .requiredOption("--profile <p>", "the one profile that resolves it")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
@@ -3890,6 +3923,10 @@ async function settingsApplyCommand(o: {
   if (unset.length) {
     for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
     fail(unsetRefusal(unset));
+  }
+  if (p.overrideConflicts.length) {
+    for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+    fail(overrideRefusal(p.overrideConflicts));
   }
   const escaping = escapingRows(st);
   if (escaping.length) {
