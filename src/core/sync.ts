@@ -24,7 +24,7 @@ import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
 import { appliesTo, effectiveTargets } from "../emitters/shared.js";
-import { forgeFor, readsLocalOverride } from "./profile-local.js";
+import { forgeFor, overriddenBase, readsLocalOverride, shownIngredientRef, shownLocalName } from "./profile-local.js";
 import { RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
@@ -396,19 +396,19 @@ export function overrideConflictsOf(forge: Forge, resolution: Resolution): Overr
   if (!local) return [];
   const out: OverrideConflict[] = [];
   for (const ov of resolution.ingredients) {
-    const root = forge.ingredients.get(ov.ref);
-    if (root === undefined || local.get(ov.ref)?.dir !== ov.dir) continue; // not an override
+    if (overriddenBase(forge, ov.ref) === undefined || local.get(ov.ref)?.dir !== ov.dir) continue; // not an override
     for (const other of resolution.ingredients) {
       if (other === ov || other.meta.type !== ov.meta.type || other.meta.as !== ov.meta.name) continue;
       out.push({ profile: p, override: ov.ref, variant: other.ref });
     }
   }
-  return out.sort((a, b) => (a.override + a.variant < b.override + b.variant ? -1 : 1));
+  return out.sort((a, b) => a.override.localeCompare(b.override) || a.variant.localeCompare(b.variant));
 }
 
 /** The one line of the refusal, naming refs only (spec 56 §4.3). */
 export function overrideConflictLine(c: OverrideConflict): string {
-  return `profile ${c.profile} resolves its override ${c.override} and the root variant ${c.variant} (as: ${c.override.split("/")[1]}) — remove one from its recipes`;
+  const name = c.override.split("/")[1] ?? "";
+  return `profile ${shownLocalName(c.profile, "profile")} resolves its override ${shownIngredientRef(c.override)} and the root variant ${shownIngredientRef(c.variant)} (as: ${shownLocalName(name, "name")}) — remove one from its recipes`;
 }
 
 /** The refusal block, without the `error: ` prefix; `thenSync` is `init`'s form, as `unsetRefusal`'s. */

@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { forgeFor, ProfileLocalLoadError, readsLocalOverride, readsProfileLocal, type LocalLayer } from "../core/profile-local.js";
+import { forgeFor, overriddenBase, ProfileLocalLoadError, readsLocalOverride, readsProfileLocal, type LocalLayer } from "../core/profile-local.js";
 import { readsRecipeSections } from "../core/recipe-sections.js";
 import path from "node:path";
 import os from "node:os";
@@ -1970,7 +1970,7 @@ async function placeComputed(o: RecipeOptions, own: LocalLayer | undefined, name
   }
   // An override (spec 56 §7) stays in a computed root list: the root ingredient of that ref is there for other profiles.
   const forge = o.forge;
-  const isOverride = (r: string) => readsLocalOverride(forge.manifest) && forge.ingredients.get(r as IngredientRef)?.meta.as === undefined && forge.ingredients.has(r as IngredientRef);
+  const isOverride = (r: string) => overriddenBase(forge, r) !== undefined;
   const locals = new Set<string>([...(own?.ingredients.keys() ?? []), ...(o.runLocals ?? [])].filter((r) => !isOverride(r)));
   const citedLocally = new Set<string>([...(own?.recipes.values() ?? [])].flatMap((r) => r.recipe.ingredients));
   const rootListed = new Set(o.forge.recipes.get(name)?.ingredients ?? []);

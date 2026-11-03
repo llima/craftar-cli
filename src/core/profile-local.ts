@@ -5,6 +5,7 @@
 import type { IngredientRef, Recipe } from "../schema/index.js";
 import { FORGE_SCHEMA_LOCAL_OVERRIDE, FORGE_SCHEMA_PROFILE_LOCAL } from "../schema/index.js";
 import { nameShaped } from "./integrations.js";
+import path from "node:path";
 import type { Forge, LoadedIngredient } from "./forge.js";
 
 /** Whether the Forge reads `profiles/<p>/ingredients` and `recipes` (spec 51 §4.1). The ONE comparison with that constant. */
@@ -211,6 +212,22 @@ export function forgeFor(forge: Forge, profile: string): ProfileView {
 }
 
 /**
+ * The one answer to "is a local of this ref an override" (spec 56 §4.4): at the gate, the root base of that ref — a root
+ * ingredient with no `as` — else `undefined`. It takes the Forge, never a profile's view, whose maps hold the locals.
+ */
+export function overriddenBase(forge: Forge, ref: string): LoadedIngredient | undefined {
+  if ((forge as Partial<ProfileView>).view !== undefined) throw new Error("internal: overriddenBase takes the Forge, not a profile's view");
+  if (!readsLocalOverride(forge.manifest)) return undefined;
+  const root = forge.ingredients.get(ref as IngredientRef);
+  return root !== undefined && root.meta.as === undefined ? root : undefined;
+}
+
+/** A folder of the Forge, Forge-relative and POSIX — what a message or a `--json` value names. */
+export function forgeRelative(forge: Pick<Forge, "root">, dir: string): string {
+  return path.relative(forge.root, dir).split(path.sep).join("/");
+}
+
+/**
  * Whether a resolution holds that very ingredient — the same ref **and** the same folder (spec 56 §4.4). Since an override
  * shares its root base's ref, a resolution of the overriding profile holds `rule/y` without holding the root `rule/y`;
  * every comparison of a resolution with a Forge ingredient goes through this, never by ref alone.
@@ -229,7 +246,7 @@ export function localOwners(forge: Forge, ref: string): string[] {
  * below the gate (where L1 refuses an override at load).
  */
 export function overriddenWarnings(forge: Forge, ref: string): string[] {
-  if (!readsLocalOverride(forge.manifest) || !forge.ingredients.has(ref as IngredientRef)) return [];
+  if (!overriddenBase(forge, ref)) return [];
   return localOwners(forge, ref).map((p) => `${shownIngredientRef(ref)} is overridden for profile ${shownLocalName(p, "profile")} — this run does not change what ${shownLocalName(p, "profile")} resolves`);
 }
 

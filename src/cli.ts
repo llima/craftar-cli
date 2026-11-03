@@ -59,7 +59,7 @@ import { assertNoLinkOnPath, exists, gitDirty, gitIgnored, gitIsRepo, gitTracked
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { applyMove, planLocalize, planShare, proveMove, type ForgeMove, type MoveCommand } from "./core/localize.js";
 import { applyExtract, DEFAULT_MIN_BYTES, EXTRACT_COMMAND, planExtract, proveExtract, type ExtractPlan } from "./core/sections-extract.js";
-import { forgeFor as profileView, isLocalMessage, localCiters, localOwners, overriddenWarnings, readsLocalOverride } from "./core/profile-local.js";
+import { forgeFor as profileView, forgeRelative, isLocalMessage, localCiters, localOwners, overriddenBase, overriddenWarnings } from "./core/profile-local.js";
 import type { Forge } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
@@ -1346,8 +1346,8 @@ program
     // Spec 51 §4.4: at schema 8, where the file's ingredient lives.
     if (f.scope !== undefined) {
       // Spec 56 §6: an override names the root base it stands over.
-      const root = f.scope === "profile" && readsLocalOverride(ws.forge.manifest) ? ws.forge.ingredients.get(f.ingredient as IngredientRef) : undefined;
-      const over = root !== undefined && root.meta.as === undefined ? `, over ${path.relative(ws.forge.root, root.dir).split(path.sep).join("/")}` : "";
+      const root = f.scope === "profile" ? overriddenBase(ws.forge, f.ingredient) : undefined;
+      const over = root !== undefined ? `, over ${forgeRelative(ws.forge, root.dir)}` : "";
       const where = f.scope === null ? "several ingredients" : f.scope === "profile" ? `profile ${f.profile} (${f.dir})${over}` : `forge (${f.dir})`;
       console.log(`  source      ${where}`);
     }

@@ -2,12 +2,11 @@
  * The catalogue: every recipe and ingredient of a Forge, marked against a context (spec 16 §4.1–§4.3).
  * Pure data: no console, no process.exit, no picocolors, no file reads.
  */
-import path from "node:path";
 import type { Forge } from "./forge.js";
 import { effectiveProfile, recipesOrWritten } from "./integrations.js";
 import { recipeOrder, resolve, type Resolution } from "./resolve.js";
 import { outName } from "../emitters/shared.js";
-import { forgeFor, readsLocalOverride, readsProfileLocal } from "./profile-local.js";
+import { forgeFor, forgeRelative, overriddenBase, readsLocalOverride, readsProfileLocal } from "./profile-local.js";
 import { INGREDIENT_TYPES, WorkspaceConfigSchema, type IngredientRef, type IngredientType, type Target, type WorkspaceConfig } from "../schema/index.js";
 
 /* ------------------------------------------------------------------ */
@@ -403,8 +402,8 @@ export function listIngredients(
   const missingByRef = new Map<string, string[]>();
   const overrides = readsLocalOverride(forge.manifest);
   const rootPath = (ref: string) => {
-    const r = forge.ingredients.get(ref as IngredientRef);
-    return r !== undefined && r.meta.as === undefined ? path.relative(forge.root, r.dir).split(path.sep).join("/") : null;
+    const r = overriddenBase(forge, ref);
+    return r !== undefined ? forgeRelative(forge, r.dir) : null;
   };
   const contextLocals = context ? forge.locals.get(context.profile)?.ingredients : undefined;
   for (const scope of scopes) {
