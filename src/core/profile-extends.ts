@@ -7,6 +7,7 @@ import type { Profile, Sections } from "../schema/index.js";
 import { FORGE_SCHEMA_PROFILE_EXTENDS } from "../schema/index.js";
 import { deepMerge } from "./merge.js";
 import { shownLocalName } from "./profile-local.js";
+import { familyIntegrations } from "./integrations.js";
 
 /** Whether the Forge reads a profile's `extends` and `abstract` (spec 54 §5.2). The ONE comparison with that constant. */
 export function readsProfileExtends(manifest: { schema: number }): boolean {
@@ -61,6 +62,9 @@ export function abstractRefusal(forge: FamilySource, name: string): string {
   return `profile ${shownLocalName(name, "profile")} is abstract — a workspace uses ${which}`;
 }
 
+/** The keys a child replaces whole when it writes them (spec 54 §5.3, D6). */
+const REPLACED = ["targets", "repos", "templates", "docs"] as const;
+
 const written = (forge: FamilySource, p: Profile, key: string): boolean => {
   const keys = forge.writtenKeys?.get(p.name);
   return keys ? keys.has(key) : true;
@@ -84,23 +88,21 @@ export function mergedProfile(forge: FamilySource, name: string): Profile {
   const out: Profile = { ...self };
   let params: Record<string, unknown> = {};
   let sections: Sections = {};
-  let integrations: Record<string, unknown> = {};
   const recipes: string[] = [];
   const blocks = ["language", "identity", "scm", "naming", "frontend", "executor"] as const;
   const merged: Record<string, Record<string, unknown>> = Object.fromEntries(blocks.map((b) => [b, {}]));
   for (const l of layers) {
     params = { ...params, ...l.params };
     sections = deepMerge(sections, l.sections) as Sections;
-    integrations = { ...integrations, ...l.integrations };
     for (const r of l.recipes) if (!recipes.includes(r)) recipes.push(r);
     for (const b of blocks) merged[b] = { ...merged[b], ...(l[b] as Record<string, unknown>) };
-    if (written(forge, l, "targets")) out.targets = l.targets;
-    if (written(forge, l, "repos")) out.repos = l.repos;
-    if (written(forge, l, "templates")) out.templates = l.templates;
-    if (written(forge, l, "docs")) out.docs = l.docs;
+    // Taken whole from the nearest profile that writes them, as values this function never reads: each keeps its one
+    // reader (`declaredTemplates`, `declaredDocs`, `profileRepos`), which reads the merged profile.
+    for (const key of REPLACED) if (written(forge, l, key)) (out as Record<string, unknown>)[key] = (l as Record<string, unknown>)[key];
   }
   Object.assign(out, merged);
-  return { ...out, params, sections, integrations, recipes, name: self.name, description: self.description, abstract: self.abstract, extends: self.extends };
+  // `integrations` per slot, through its one reader's module (spec 33): a slot the child writes replaces the parent's whole.
+  return { ...out, params, sections, integrations: familyIntegrations(layers), recipes, name: self.name, description: self.description, abstract: self.abstract, extends: self.extends };
 }
 
 /** The sections `name`'s parents give (its family less itself), folded farthest first, and the parent that set each value. */

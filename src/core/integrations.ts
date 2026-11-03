@@ -123,6 +123,13 @@ export function effectiveProfile(
   return ownEffective(forge, profile);
 }
 
+/** A family's `integrations` (spec 54 §5.3, D6), farthest first: per slot, the nearest profile that writes it, whole. */
+export function familyIntegrations(layers: Profile[]): Record<string, unknown> {
+  let out: Record<string, unknown> = {};
+  for (const l of layers) out = { ...out, ...l.integrations };
+  return out;
+}
+
 /** The layered form of `effectiveProfile` over a family, farthest first. */
 function familyEffective(forge: Pick<Forge, "manifest">, layers: Profile[]): EffectiveProfile {
   const slotOwner = new Map<string, string>();
