@@ -19,7 +19,7 @@ import { parseFrontmatter } from "./frontmatter.js";
 import { outName, MCP_FILE, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
 import { plannedRegistrations, sameHandler, type PlannedRegistration } from "./settings-apply.js";
 import { stripBom } from "./text.js";
-import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_DOCTOR_FIX, DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX, dotnetVersionInOwnDir, feedMessage, globalJsonFault, globalJsonMessage, GLOBAL_JSON_FIX, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
+import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_DOCTOR_FIX, DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX, dotnetVersionInOwnDir, feedMessage, globalJsonFault, globalJsonMessage, GLOBAL_JSON_REFUSED, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
 import { capture, execProgram, type Probe } from "./proc.js";
 
 /*
@@ -506,13 +506,22 @@ async function workspaceChecks(
           const answer = opts.dotnetVersion
             ? { ran: true as const, version: await opts.dotnetVersion() }
             : await dotnetVersionInOwnDir(probe, env);
-          if (!answer.ran) w("dotnet", "warn", DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX);
-          else if (answer.version !== null) {
+          if (!answer.ran) {
+            w("dotnet", "warn", DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX);
+            // global.json warn after probe-dir warn (E35 §4.5)
+            const fault = await globalJsonFault(root);
+            if (fault !== null) w("dotnet", "warn", `${globalJsonMessage(fault)} — ${GLOBAL_JSON_REFUSED}`, null);
+          } else if (answer.version !== null) {
             w("dotnet", "ok", answer.version);
             // global.json warn after version line (E35 §4.5)
             const fault = await globalJsonFault(root);
-            if (fault !== null) w("dotnet", "warn", globalJsonMessage(fault), GLOBAL_JSON_FIX);
-          } else w("dotnet", "warn", DOTNET_MISSING, DOTNET_MISSING_DOCTOR_FIX);
+            if (fault !== null) w("dotnet", "warn", `${globalJsonMessage(fault)} — ${GLOBAL_JSON_REFUSED}`, null);
+          } else {
+            w("dotnet", "warn", DOTNET_MISSING, DOTNET_MISSING_DOCTOR_FIX);
+            // global.json warn after missing-SDK warn (E35 §4.5)
+            const fault = await globalJsonFault(root);
+            if (fault !== null) w("dotnet", "warn", `${globalJsonMessage(fault)} — ${GLOBAL_JSON_REFUSED}`, null);
+          }
         }
       }
     }

@@ -173,7 +173,7 @@ describe("doctor global.json warning (E35 §4.5)", () => {
     const dotnetChecks = d.of("dotnet");
     expect(dotnetChecks).toHaveLength(2);
     expect(dotnetChecks[0]).toEqual({ id: "dotnet", scope: "workspace", level: "ok", message: "10.0.401", fix: null });
-    expect(dotnetChecks[1]).toEqual({ id: "dotnet", scope: "workspace", level: "warn", message: "global.json sets sdk.paths: dotnet would load the SDK it names", fix: "remove sdk.paths from that global.json, or run dotnet new install by hand in a repository you trust" });
+    expect(dotnetChecks[1]).toEqual({ id: "dotnet", scope: "workspace", level: "warn", message: "global.json sets sdk.paths: dotnet would load the SDK it names — craftar templates install does not run dotnet here", fix: null });
   });
 
   it("no global.json warn when paths is safe", async () => {
@@ -190,11 +190,12 @@ describe("doctor global.json warning (E35 §4.5)", () => {
     expect(d.of("dotnet")[0].level).toBe("ok");
   });
 
-  it("no global.json warn when dotnet is not found (the sdk missing is enough)", async () => {
+  it("global.json warn follows missing-SDK warn (E35 §4.5)", async () => {
     const f = await fixture([TOOLS], { "global.json": '{"sdk":{"paths":["/custom"]}}' });
-    const d = await doctor(f, null);
-    expect(d.of("dotnet")).toHaveLength(1);
-    expect(d.of("dotnet")[0].level).toBe("warn");
-    expect(d.of("dotnet")[0].message).toBe("the .NET SDK is not available: dotnet --version gave no version");
+    const d = await doctor(f, null); // null version = dotnet not found
+    const dotnetChecks = d.of("dotnet");
+    expect(dotnetChecks).toHaveLength(2);
+    expect(dotnetChecks[0]).toEqual({ id: "dotnet", scope: "workspace", level: "warn", message: "the .NET SDK is not available: dotnet --version gave no version", fix: "install the .NET SDK and check PATH" });
+    expect(dotnetChecks[1]).toEqual({ id: "dotnet", scope: "workspace", level: "warn", message: "global.json sets sdk.paths: dotnet would load the SDK it names — craftar templates install does not run dotnet here", fix: null });
   });
 });
