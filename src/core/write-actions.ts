@@ -129,8 +129,8 @@ export async function editRecipes(
   // A link is fine to read, and is not written through when it escapes (spec 48 §4.3, case S).
   const configEscape = await escapeOf(await containRoot(ws.root), file);
   if (configEscape) throw new Error(escapeFileLine(WORKSPACE_FILE, configEscape));
-  const original = await fs.readFile(file, "utf8");
-  const content = editRecipesText(original, edit.recipes, `${op} recipe`);
+  const original = await fs.readFile(file);
+  const content = editRecipesText(original.toString("utf8"), edit.recipes, `${op} recipe`);
 
   // The report is computed before the write, so a plan that fails leaves craftar.yaml untouched (§5.2 step 4).
   const next: Workspace = { ...ws, config: { ...ws.config, recipes: edit.recipes } };
@@ -142,14 +142,15 @@ export async function editRecipes(
   if (opts.beforeWrite) await opts.beforeWrite();
 
   // Re-read the file before writing; if it changed since our read, refuse to overwrite a concurrent edit.
-  let current: string;
+  // Compare as bytes: a utf8 decode folds invalid bytes into U+FFFD, so different files could compare equal.
+  let current: Buffer;
   try {
-    current = await fs.readFile(file, "utf8");
+    current = await fs.readFile(file);
   } catch {
     // File was deleted (ENOENT) or unreadable — treat as changed.
     throw new Error(`${WORKSPACE_FILE} changed while craftar was reading it — run again`);
   }
-  if (current !== original) {
+  if (!current.equals(original)) {
     throw new Error(`${WORKSPACE_FILE} changed while craftar was reading it — run again`);
   }
 

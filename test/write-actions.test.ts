@@ -510,6 +510,55 @@ describe("editRecipes race condition", () => {
     const content = await fs.readFile(file, "utf8");
     expect(content).toContain("extra");
   });
+
+  it("d. editRecipes refuses a change confined to bytes that are not valid UTF-8", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(
+      await scenario(
+        {
+          ingredients: [rule("keep", "# Keep\n"), rule("extra-rule", "# Extra\n")],
+          recipes: [recipe("base", ["rule/keep"]), recipe("extra", ["rule/extra-rule"])],
+          profiles: [profile("acme", ["base"])],
+        },
+        { config: { profile: "acme" } },
+      ),
+    );
+
+    const file = path.join(s.wsRoot, "craftar.yaml");
+
+    // Write the file with an inline comment containing an invalid UTF-8 byte (0xff).
+    // An inline comment round-trips through YAML, but the byte doesn't.
+    const cleanText = await fs.readFile(file, "utf8");
+    // Insert invalid byte in an inline comment on the forge line
+    const lines = cleanText.split("\n");
+    const forgeIdx = lines.findIndex((l) => l.startsWith("forge:"));
+    lines[forgeIdx] = lines[forgeIdx] + " # \xff";
+    const withFf = Buffer.from(lines.join("\n"), "latin1");
+    await fs.writeFile(file, withFf);
+
+    // Load workspace — the invalid byte decodes to U+FFFD
+    const ws = await loadWorkspace(s.wsRoot, { home });
+
+    // In beforeWrite, change only the 0xff to 0xfe — both decode to U+FFFD, so utf8 strings match.
+    await expect(
+      editRecipes(ws, "add", ["extra"], {
+        beforeWrite: async () => {
+          const current = await fs.readFile(file);
+          const modified = Buffer.from(current);
+          for (let i = 0; i < modified.length; i++) {
+            if (modified[i] === 0xff) modified[i] = 0xfe;
+          }
+          await fs.writeFile(file, modified);
+        },
+      }),
+    ).rejects.toThrow("craftar.yaml changed while craftar was reading it — run again");
+
+    // The disk bytes equal what beforeWrite wrote (with 0xfe, not 0xff)
+    const final = await fs.readFile(file);
+    expect(final.includes(0xfe)).toBe(true);
+    expect(final.includes(0xff)).toBe(false);
+  });
 });
 
 describe("syncToolResult", () => {
