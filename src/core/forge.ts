@@ -90,13 +90,20 @@ async function readYaml<T>(root: ContainRoot, file: string, schema: { parse: (v:
 }
 
 /** `readYaml`, and the top-level keys the document holds (spec 54 §5.3: "written" is what the YAML holds, not a default). */
-async function readYamlKeyed<T>(root: ContainRoot, file: string, schema: { parse: (v: unknown) => T }): Promise<{ value: T; keys: Set<string> }> {
+async function readYamlKeyed<T>(
+  root: ContainRoot,
+  file: string,
+  schema: { parse: (v: unknown) => T },
+  /** Run on the document's keys before the schema: a near miss is named before the schema refuses its value (spec 54 §5.2). */
+  first?: (keys: ReadonlySet<string>) => void,
+): Promise<{ value: T; keys: Set<string> }> {
   // A profile's folder (spec 51 §4.2) labels its files Forge-relative, so a tree in the cache never prints its entry's name.
   const label = root.label ? `${root.label.rel}/${path.relative(root.given, file).split(path.sep).join("/")}` : undefined;
   const text = await readForgeText(root, file);
-  const value = parseYaml(file, text, schema, label);
   const raw = parseYamlText(label ?? path.relative(process.cwd(), file), text);
   const keys = new Set(raw !== null && typeof raw === "object" && !Array.isArray(raw) ? Object.keys(raw as object) : []);
+  first?.(keys);
+  const value = parseYaml(file, text, schema, label);
   return { value, keys };
 }
 
@@ -159,16 +166,16 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
       const folder = path.join(profRoot, d.name);
       const f = path.join(folder, "profile.yaml");
       const hasProfile = await present(f);
-      const read = hasProfile ? await readYamlKeyed(contain, f, ProfileWrittenSchema) : null;
+      // Spec 54 §5.2: below the gate `extends` and `abstract` are a near miss, where an older craftar dropped them — named
+      // before the schema, so a malformed value there still reads as the near miss.
+      const nearMiss = (keys: ReadonlySet<string>) => {
+        if (readsProfileExtends(manifest)) return;
+        for (const key of ["extends", "abstract"] as const) if (keys.has(key)) throw new Error(profileExtendsNearMiss(`profiles/${d.name}/profile.yaml`, key));
+      };
+      const read = hasProfile ? await readYamlKeyed(contain, f, ProfileWrittenSchema, nearMiss) : null;
       const written = read?.value ?? null;
       let p: Profile | null = null;
       if (written) {
-        // Spec 54 §5.2: below the gate `extends` and `abstract` are a near miss, where an older craftar dropped them.
-        if (!readsProfileExtends(manifest)) {
-          for (const key of ["extends", "abstract"] as const) {
-            if (read!.keys.has(key)) throw new Error(profileExtendsNearMiss(`profiles/${d.name}/profile.yaml`, key));
-          }
-        }
         // Spec 55 §5.4: every `{ file: }` value resolved here, once, against the folder that holds this profile.yaml.
         const declaring = `profiles/${d.name}/profile.yaml`;
         const folderRoot = await containSubRoot(contain, `profiles/${d.name}`, "the profile's folder");

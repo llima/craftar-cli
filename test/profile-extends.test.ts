@@ -277,3 +277,11 @@ describe("spec 54 §5.2 — extends follows init --new-profile's name grammar (P
   });
 });
 
+describe("spec 54 §5.2 — the near miss comes before the schema", () => {
+  it("below the gate a malformed extends value still reads as the near miss", async () => {
+    const f = kept(await acmeCopies(12));
+    await fs.writeFile(path.join(f.forgeRoot, "profiles/acme-portal/profile.yaml"), YAML.stringify({ name: "acme-portal", extends: 5, recipes: ["base"] }));
+    await expect(loadForge(f.forgeRoot)).rejects.toThrow("profiles/acme-portal/profile.yaml: extends in a profile needs schema: 13 in craftar.forge.yaml");
+  });
+});
+
