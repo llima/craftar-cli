@@ -65,27 +65,36 @@ describe("identity by scope (spec 56 §4.4)", () => {
 
 describe("one comparison by scope (spec 56 §4.4)", () => {
   /**
-   * A resolution compared with a Forge ingredient by ref alone reads an override as its root base. The files below may
-   * still test `.ingredients.some((i) => i.ref === …)`, each for a reason: `profile-local.ts` is `holdsIngredient` itself,
-   * and import's check of its run's locals (`claude-code.ts`) asks the importing profile's own resolution about refs of
-   * that profile's view. A new file with the pattern must be placed here, or go through `holdsIngredient`.
+   * Spec 56 §4.4's table. An override shares its root base's ref, so a resolution compared with a Forge ingredient by
+   * ref alone can read an override as its root base. Every file under src/ that compares a resolution's ingredients by
+   * ref — `.ingredients.some((i) => i.ref === …)`, `.ingredients.find((i) => i.ref === …)`, a ref set built with
+   * `.ingredients.map((i) => i.ref)`, or `resolvedBy(…)` — is placed here with the reason it is safe; a new one fails
+   * the scan until it is placed, or goes through `holdsIngredient`.
    */
-  const ALLOWED = new Set(["src/core/profile-local.ts", "src/importers/claude-code.ts"]);
-  it("no other file under src/ compares a resolution's ingredients by ref", async () => {
+  const TABLE: Record<string, string> = {
+    "src/core/profile-local.ts": "holdsIngredient itself: ref and folder",
+    "src/core/report.ts": "looks up a planned file's ingredient in the same plan's resolution (one view)",
+    "src/core/sync.ts": "looks up a status row's ingredient in the same plan's resolution (one view)",
+    "src/core/catalogue.ts": "inUse against the context's own resolution; with a context the overridden root row is left out",
+    "src/core/param-writes.ts": "resolvedBy is asked about a variant's ref (`<name>--<p>`), never a local's (L6)",
+    "src/core/promote.ts": "the proof compares a profile's refs before and after with itself (one view per profile)",
+    "src/importers/drift-promote.ts": "the promoting workspace's own plans (one view), and resolvedBy about a variant's ref (L6)",
+    "src/importers/claude-code.ts": "the importing profile's own view, and resolvedBy about a variant's ref (L6)",
+    "src/cli.ts": "rows of the catalogue's own result, not a resolution",
+  };
+  const PATTERN = /\.ingredients\.(some|find)\(\(\w+\) => \w+\.ref === |\.ingredients\.map\(\(\w+\) => \w+\.ref\)|resolvedBy\(/;
+  it("every file under src/ comparing a resolution's ingredients by ref is in the table", async () => {
     const root = path.resolve(__dirname, "..");
-    const offenders: string[] = [];
+    const found: string[] = [];
     const walk = async (dir: string): Promise<void> => {
       for (const e of await fs.readdir(dir, { withFileTypes: true })) {
         const abs = path.join(dir, e.name);
         if (e.isDirectory()) await walk(abs);
-        else if (e.name.endsWith(".ts")) {
-          const rel = path.relative(root, abs).split(path.sep).join("/");
-          const text = await fs.readFile(abs, "utf8");
-          if (/\.ingredients\.some\(\(\w+\) => \w+\.ref === /.test(text) && !ALLOWED.has(rel)) offenders.push(rel);
-        }
+        else if (e.name.endsWith(".ts") && PATTERN.test(await fs.readFile(abs, "utf8"))) found.push(path.relative(root, abs).split(path.sep).join("/"));
       }
     };
     await walk(path.join(root, "src"));
-    expect(offenders).toEqual([]);
+    expect(found.filter((f) => !(f in TABLE))).toEqual([]);
+    expect(Object.keys(TABLE).filter((f) => !found.includes(f))).toEqual([]); // no stale row
   });
 });
