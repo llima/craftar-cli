@@ -146,9 +146,8 @@ describe("craftar forge sections extract (spec 55 §5.6)", () => {
     const s = await setup();
     const outside = path.join(s.root, "outside");
     await fs.mkdir(outside);
+    // Left uncommitted: git on Windows does not record a junction, and the command refuses a link on its path either way.
     await fs.symlink(outside, path.join(s.forge, "profiles/acme/sections"), "junction");
-    git(s.forge, "add", "-A");
-    git(s.forge, "commit", "-q", "-m", "link");
     const r = runCli(["forge", "sections", "extract", "--profile", "acme", "--forge", s.forge]);
     expect(r.code).toBe(1);
     expect(await fs.readdir(outside)).toEqual([]);

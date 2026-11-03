@@ -90,7 +90,8 @@ describe("a section value held in a file (spec 55 §5)", () => {
   ])("refuses the path %s (%s), naming the file and the key, never content", async (p) => {
     const root = await forgeAt(GATE, file(p), { "profiles/acme/sections/rule/review/checklist.md": "SECRET-CONTENT\n" });
     const msg = await loadError(root);
-    expect(msg).toContain("profiles/acme/profile.yaml");
+    // A schema refusal names the file as readYaml labels it: native separators, so a backslash on Windows.
+    expect(msg).toMatch(/profiles[\\/]acme[\\/]profile\.yaml/);
     expect(msg).toContain("rule/review");
     expect(msg).not.toContain("SECRET-CONTENT");
   });
