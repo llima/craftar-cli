@@ -8,7 +8,7 @@ import { written } from "./capabilities.js";
 import { exists, realpathOfNearest } from "./forge.js";
 import { hookFindsCraftar, hooksStatus, HooksUnreadable } from "./git-hooks.js";
 import { generatedIgnored, IGNORED_FIX, staleLine, UNCHECKED_LINE } from "./generated-ignored.js";
-import { renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix } from "./mcp-server.js";
+import { renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix, type SubstitutedLeaf } from "./mcp-server.js";
 import { credentialKeys, hideCacheSegment, hideKeys, isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus, vouchedKeys } from "./registry.js";
 import { FULL_SHA, cacheKey, classifyForge, credentialFault, CREDENTIAL_HIDDEN, inspectCache, UNVOUCHED_HIDDEN, type CacheSnapshot } from "./remote.js";
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
@@ -600,28 +600,31 @@ export function oneLine(e: unknown): string {
 }
 
 /**
- * Every target's written MCP servers, rendered at schema 4 as mcp-env reads them: [outName, server, authEnv, file], in plan order.
+ * Every target's written MCP servers, rendered at schema 4 as mcp-env reads them: [outName, server, authEnv, file, substituted], in plan order.
  * A target with no entry in MCP_FILE (agents-md) is skipped.
  * At schema 4, the server is rendered first, so a `${NAME}` a value brings into `env` is checked (spec 34 §4.4).
+ * E24.4: substituted leaves are returned so mcpUnset can skip scanning values a param brought in.
  */
-function writtenServers(p: Plan, schema: ForgeSchema): Array<[string, unknown, string[] | undefined, string]> {
-  const servers: Array<[string, unknown, string[] | undefined, string]> = [];
+function writtenServers(p: Plan, schema: ForgeSchema): Array<[string, unknown, string[] | undefined, string, SubstitutedLeaf[]]> {
+  const servers: Array<[string, unknown, string[] | undefined, string, SubstitutedLeaf[]]> = [];
   for (const target of p.resolution.targets) {
     const file = MCP_FILE[target as keyof typeof MCP_FILE];
     // agents-md only: its mcp cell is `unsupported` in src/core/capabilities.ts
     if (file === undefined) continue;
     // `written()` yields only what the matrix says this target writes; the skip warnings were plan()'s.
     const walk = written(p.resolution, target, () => {});
-    const perTarget = new Map<string, { server: unknown; authEnv: string[] | undefined }>();
+    const perTarget = new Map<string, { server: unknown; authEnv: string[] | undefined; substituted: SubstitutedLeaf[] }>();
     for (const ing of walk) {
       if (ing.meta.type !== "mcp") continue;
       // At schema 4, render the server (spec 34 §4.4); below 4, read as written.
-      const serverDef = rendersServers({ schema })
-        ? renderServer(ing.meta, paramsFor(ing, p.resolution)).server
-        : ing.meta.server;
-      perTarget.set(outName(ing.meta), { server: serverDef, authEnv: ing.meta.authEnv });
+      if (rendersServers({ schema })) {
+        const rendered = renderServer(ing.meta, paramsFor(ing, p.resolution));
+        perTarget.set(outName(ing.meta), { server: rendered.server, authEnv: ing.meta.authEnv, substituted: rendered.substituted });
+      } else {
+        perTarget.set(outName(ing.meta), { server: ing.meta.server, authEnv: ing.meta.authEnv, substituted: [] });
+      }
     }
-    for (const [name, { server, authEnv }] of perTarget) servers.push([name, server, authEnv, file]);
+    for (const [name, { server, authEnv, substituted }] of perTarget) servers.push([name, server, authEnv, file, substituted]);
   }
   return servers;
 }
@@ -632,12 +635,15 @@ function writtenServers(p: Plan, schema: ForgeSchema): Array<[string, unknown, s
  * writing the same name from different ingredients are both checked. Names are the union of the
  * ingredient's `authEnv` and every `${NAME}` in a string value of its server's `env`.
  *
+ * E24.4: a `${NAME}` in a value a param brought in is NOT checked — the profile wrote the reference,
+ * so the profile author knows what to set. Only values authored in the Forge are scanned.
+ *
  * Reads the servers `writtenServers` returns.
  */
-function mcpUnset(servers: Array<[string, unknown, string[] | undefined, string]>, env: NodeJS.ProcessEnv): Array<{ server: string; name: string }> {
+function mcpUnset(servers: Array<[string, unknown, string[] | undefined, string, SubstitutedLeaf[]]>, env: NodeJS.ProcessEnv): Array<{ server: string; name: string }> {
   const out: Array<{ server: string; name: string }> = [];
   const seen = new Set<string>();
-  for (const [server, def, authEnv] of servers) {
+  for (const [server, def, authEnv, , substituted] of servers) {
     // Collect from authEnv first (spec 27 §4.3: union of authEnv and ${NAME} references).
     if (authEnv) {
       for (const name of authEnv) {
@@ -647,11 +653,21 @@ function mcpUnset(servers: Array<[string, unknown, string[] | undefined, string]
         out.push({ server, name });
       }
     }
-    // Then from ${NAME} references in env string values.
+    // E24.4: build a set of env keys whose values were substituted (came from a param)
+    const substitutedEnvKeys = new Set<string>();
+    for (const leaf of substituted) {
+      if (leaf.under === "env" && leaf.path.startsWith("env.")) {
+        // path is "env.KEY" — extract the key
+        substitutedEnvKeys.add(leaf.path.slice(4));
+      }
+    }
+    // Then from ${NAME} references in env string values — skip substituted ones.
     const envBlock = def !== null && typeof def === "object" ? (def as { env?: unknown }).env : undefined;
     if (envBlock === null || typeof envBlock !== "object") continue;
-    for (const value of Object.values(envBlock as Record<string, unknown>)) {
+    for (const [envKey, value] of Object.entries(envBlock as Record<string, unknown>)) {
       if (typeof value !== "string") continue;
+      // E24.4: skip scanning this value if it came from a param substitution
+      if (substitutedEnvKeys.has(envKey)) continue;
       for (const match of value.matchAll(NAME_REF)) {
         const name = match[1];
         const key = `${server}\u0000${name}`;

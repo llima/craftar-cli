@@ -31,18 +31,19 @@ const of = (checks: Check[], id: string) => checks.filter((c) => c.id === id);
 const EXAMPLE = forge({ type: "http", url: "{{integrations.idp.url}}" }, { declare: { "integrations.idp.url": {} }, block: { idp: { url: URL } } });
 
 describe("doctor reads the rendered server at schema 4", () => {
-  it("case 19: mcp-env sees a ${NAME} a value brings into env, at schema 4 and not at 3", async () => {
+  it("case 19: mcp-env does NOT see a ${NAME} a substituted value brings into env (E24.4)", async () => {
+    // E24.4: substituted values' ${NAME} refs are NOT checked — they came from profile params, not authored in the Forge
     const spec = forge({ command: "x", env: { TOKEN: "{{tok}}" } }, { declare: { tok: {} }, params: { tok: "${ACME_TOKEN}" } });
     
-    // At schema 4, env: {} — the variable is unset
+    // At schema 4, env: {} — the substituted variable is not checked, so ok
     const s4 = await forgeAt(4, spec);
     cleanups.push(s4.cleanup);
     const r4 = await run({ home: path.join(s4.root, "home"), workspace: s4.wsRoot, env: {} });
     expect(of(r4.checks, "mcp-env")).toEqual([
-      { id: "mcp-env", scope: "workspace", level: "warn", message: 'server "idp" expects ACME_TOKEN, not set', fix: "export ACME_TOKEN" },
+      { id: "mcp-env", scope: "workspace", level: "ok", message: "every variable a written MCP server expects is set", fix: null },
     ]);
 
-    // At schema 4, env: { ACME_TOKEN: "1" } — the variable is set
+    // At schema 4, env: { ACME_TOKEN: "1" } — still ok (was never checked)
     const s4set = await forgeAt(4, spec);
     cleanups.push(s4set.cleanup);
     const r4set = await run({ home: path.join(s4set.root, "home"), workspace: s4set.wsRoot, env: { ACME_TOKEN: "1" } });
@@ -50,7 +51,7 @@ describe("doctor reads the rendered server at schema 4", () => {
       { id: "mcp-env", scope: "workspace", level: "ok", message: "every variable a written MCP server expects is set", fix: null },
     ]);
 
-    // At schema 3 (control), env: {} — the ok line because the variable reference is not rendered
+    // At schema 3 (control), env: {} — ok because the variable reference is not rendered
     const s3 = await forgeAt(3, spec);
     cleanups.push(s3.cleanup);
     const r3 = await run({ home: path.join(s3.root, "home"), workspace: s3.wsRoot, env: {} });
@@ -150,5 +151,49 @@ describe("doctor reads the rendered server at schema 4", () => {
     const checks3 = of(r3.checks, "mcp-launcher");
     expect(checks3).toHaveLength(1);
     expect(checks3[0].level).toBe("ok");
+  });
+});
+
+describe("E24.4: mcp-env reads no ${NAME} a substituted value brought in", () => {
+  it("a substituted env value's ${NAME} is not checked, and the substituted value is not in the report", async () => {
+    // Assembled at runtime so the test itself doesn't contain the marker as a literal
+    const marker = "$" + "{" + "SUBST_" + "MARKER9" + "}";
+    const spec = forge({ command: "x", env: { TOKEN: "{{tok}}" } }, { declare: { tok: {} }, params: { tok: marker } });
+    const s = await forgeAt(4, spec);
+    cleanups.push(s.cleanup);
+    const r = await run({ home: path.join(s.root, "home"), workspace: s.wsRoot, env: {} });
+    // The substituted value's ${NAME} should NOT be checked — so no SUBST_MARKER9 warn
+    const mcpEnv = of(r.checks, "mcp-env");
+    expect(mcpEnv.map((c) => c.message)).not.toContain('server "idp" expects SUBST_MARKER9, not set');
+    // The ok line because no ${NAME} is found in authored values
+    expect(mcpEnv).toEqual([{ id: "mcp-env", scope: "workspace", level: "ok", message: "every variable a written MCP server expects is set", fix: null }]);
+    // The substituted marker value should not appear anywhere in the report
+    expect(JSON.stringify(r)).not.toContain("SUBST_MARKER9");
+  });
+
+  it("an authored env value's ${NAME} is still checked", async () => {
+    // A substituted value + an authored value with ${NAME}
+    const marker = "$" + "{" + "SUBST_" + "MARKER9" + "}";
+    const spec = forge({ command: "x", env: { TOKEN: "{{tok}}", OTHER: "${AUTHORED_VAR}" } }, { declare: { tok: {} }, params: { tok: marker } });
+    const s = await forgeAt(4, spec);
+    cleanups.push(s.cleanup);
+    const r = await run({ home: path.join(s.root, "home"), workspace: s.wsRoot, env: {} });
+    // Exactly one warn — the authored OTHER's ${AUTHORED_VAR}
+    expect(of(r.checks, "mcp-env")).toEqual([
+      { id: "mcp-env", scope: "workspace", level: "warn", message: 'server "idp" expects AUTHORED_VAR, not set', fix: "export AUTHORED_VAR" },
+    ]);
+    // No SUBST_MARKER9 warn
+    expect(of(r.checks, "mcp-env").map((c) => c.message)).not.toContain('server "idp" expects SUBST_MARKER9, not set');
+  });
+
+  it("a plain passthrough FOO: ${FOO} with FOO unset still warns (regression guard)", async () => {
+    // This is NOT a substituted value — it's authored in the Forge, so it must be checked
+    const spec = forge({ command: "x", env: { FOO: "${FOO}" } });
+    const s = await forgeAt(4, spec);
+    cleanups.push(s.cleanup);
+    const r = await run({ home: path.join(s.root, "home"), workspace: s.wsRoot, env: {} });
+    expect(of(r.checks, "mcp-env")).toEqual([
+      { id: "mcp-env", scope: "workspace", level: "warn", message: 'server "idp" expects FOO, not set', fix: "export FOO" },
+    ]);
   });
 });
