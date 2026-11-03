@@ -839,3 +839,23 @@ describe("Kiro resources check — spellings (spec 41 §4.5)", () => {
     expect(named).toEqual([]);
   });
 });
+
+describe("Plan.claudeMd (E27.3): plan() reads the CLAUDE.md files once, and doctor reads its answer", () => {
+  it("null with the mode off", async () => {
+    const s = kept(await acmePrimary({ schema: 5, wsFiles: { "CLAUDE.md": "# notes\n" } }));
+    const p = await plan(await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME }));
+    expect(p.claudeMd).toBeNull();
+  });
+
+  it("the blocking list with the mode on and a root CLAUDE.md with no import", async () => {
+    const s = kept(await acmePrimary({ schema: 5, params: { "agents-md.primary": true }, wsFiles: { "CLAUDE.md": "# notes\n" } }));
+    const p = await plan(await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME }));
+    expect(p.claudeMd).toEqual({ imports: false, importedBy: null, blocking: ["CLAUDE.md"] });
+  });
+
+  it("src/core/doctor.ts reads no CLAUDE.md file itself", async () => {
+    const { promises: fs } = await import("node:fs");
+    const source = await fs.readFile(path.resolve(__dirname, "../src/core/doctor.ts"), "utf8");
+    expect(source).not.toMatch(/claudeMdBlocks\(/);
+  });
+});

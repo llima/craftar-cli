@@ -14,7 +14,7 @@ import { FULL_SHA, cacheKey, classifyForge, credentialFault, CREDENTIAL_HIDDEN, 
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
-import { LOCK_FILE, declaredWithoutValue, overrideConflictLine, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK, type FileStatus } from "./sync.js";
+import { LOCK_FILE, declaredWithoutValue, overrideConflictLine, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK, type FileStatus } from "./sync.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { outName, MCP_FILE, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
 import { plannedRegistrations, sameHandler, type PlannedRegistration } from "./settings-apply.js";
@@ -299,21 +299,10 @@ async function workspaceChecks(
       if (p.agentsMd?.warning) owned.add(p.agentsMd.warning);
       // Also exclude the kiro resources warning — it is reported by kiro-resources
       if (p.kiroResources?.warning) owned.add(p.kiroResources.warning);
-      // Compute claudeMdBlocks early so we can add its warning to owned before the plan filter
-      let claudeMdBlocksResult: Awaited<ReturnType<typeof claudeMdBlocks>> | null = null;
-      if (p.resolution.primary && p.resolution.targets.includes("claude-code")) {
-        const readExisting = async (rel: string): Promise<Buffer | null> => {
-          try {
-            return await fs.readFile(path.join(root, rel));
-          } catch {
-            return null;
-          }
-        };
-        claudeMdBlocksResult = await claudeMdBlocks(readExisting);
-        // Also exclude the CLAUDE.md blocking warning — it is reported by agents-md-primary
-        if (claudeMdBlocksResult.blocking.length > 0) {
-          owned.add(claudeMdBlockedMessage(claudeMdBlocksResult.blocking[0]));
-        }
+      // agents-md-primary owns the plan's CLAUDE.md warning; plan() read the files once (Plan.claudeMd).
+      const claudeMdBlocksResult = p.claudeMd;
+      if (claudeMdBlocksResult !== null && claudeMdBlocksResult.blocking.length > 0) {
+        owned.add(claudeMdBlockedMessage(claudeMdBlocksResult.blocking[0]));
       }
       // Also exclude the flat skill warning — it is reported by skill-layout (spec 44 §5)
       const flat = flatSkills(p.resolution, p.resolution.targets);
