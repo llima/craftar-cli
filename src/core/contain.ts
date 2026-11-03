@@ -55,13 +55,24 @@ function identityUnder(root: ContainRoot, segment: string): Promise<Identity> {
 }
 
 /**
- * Whether the first segment under the root is the root's `.git`. By its name first (without case on win32), then by what
- * it is (E39.1): a spelling git's own directory also answers to — a case-folded `.GIT` on macOS, `GIT~1` or a trailing
- * dot on Windows, a `.git` that is a link to another folder of the tree — has its device and inode. A segment that does
- * not exist yet, or a root with no `.git`, falls back to the name.
+ * The names NTFS and git for Windows read as `.git` (git's own `is_ntfs_dotgit`, behind `core.protectNTFS`): `.git` or its
+ * short name `git~1`, without case, followed by nothing, by spaces and dots only (`.git.`, `.git `), or by a `:` and a
+ * stream name (`.git::$INDEX_ALLOCATION`). Node hands Windows a `\\?\` path, which keeps a trailing dot literal, so such a
+ * spelling may name no file `stat` can see, while git and any other program that goes through the Win32 normalisation
+ * reach `.git` through it: it is decided by its name (E39.1, measured on windows-latest).
+ */
+export function isNtfsDotGit(name: string): boolean {
+  return /^(?:\.git|git~1)(?:[ .]*|:.*)$/i.test(name);
+}
+
+/**
+ * Whether the first segment under the root is the root's `.git`. By its name first — on win32 every spelling
+ * `isNtfsDotGit` accepts — then by what it is (E39.1): a spelling git's own directory also answers to — a case-folded
+ * `.GIT` on macOS, a short name `GIT~2` on Windows, a `.git` that is a link to another folder of the tree — has its
+ * device and inode. A segment that does not exist yet, or a root with no `.git`, falls back to the name.
  */
 async function isRootGit(root: ContainRoot, first: string): Promise<boolean> {
-  if ((process.platform === "win32" ? first.toLowerCase() : first) === ".git") return true;
+  if (process.platform === "win32" ? isNtfsDotGit(first) : first === ".git") return true;
   const git = await identityUnder(root, ".git");
   if (git === null) return false;
   const seg = await identityUnder(root, first);

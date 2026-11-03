@@ -10,6 +10,7 @@ import {
   escapeSummary,
   escapingPaths,
   forgeReader,
+  isNtfsDotGit,
   readForgeFile,
   readForgeText,
 } from "../src/core/contain.js";
@@ -96,10 +97,34 @@ describe("escapeOf", () => {
     const { tree } = await scratch();
     await fs.mkdir(path.join(tree, ".git/hooks"), { recursive: true });
     const root = await containRoot(tree);
-    expect(await escapeOf(root, path.join(tree, ".git.", "hooks", "x"))).toBe("git");
-    // 8.3 names exist only on a volume that keeps them; measured where they do.
+    for (const spelling of [".git.", ".git ", ".GIT..", "git~1", "GIT~1", ".git::$INDEX_ALLOCATION"]) {
+      expect(await escapeOf(root, path.join(tree, spelling, "hooks", "x")), spelling).toBe("git");
+    }
+    // A short name the volume gives `.git` that is not GIT~1 is caught by identity, when the volume keeps short names.
     if (!(await fs.lstat(path.join(tree, "GIT~1")).then(() => true, () => false))) return ctx.skip();
     expect(await escapeOf(root, path.join(tree, "GIT~1", "hooks", "x"))).toBe("git");
+  });
+
+  // What made E39.1's identity check blind on Windows (measured on windows-latest): Node's fs keeps `.git.` literal.
+  it.runIf(process.platform === "win32")("measure: Node's fs does not reach .git through `.git.` on Windows", async () => {
+    const { tree } = await scratch();
+    await fs.mkdir(path.join(tree, ".git/hooks"), { recursive: true });
+    const code = await fs.stat(path.join(tree, ".git.")).then(() => "found", (e: NodeJS.ErrnoException) => e.code);
+    expect(code).toBe("ENOENT");
+  });
+
+  it("isNtfsDotGit: git's names for .git on NTFS, and nothing else", () => {
+    for (const n of [".git", ".GIT", ".git.", ".git ", ".git. .", "git~1", "GIT~1", "git~1.", ".git::$INDEX_ALLOCATION", ".git:x"]) expect(isNtfsDotGit(n), n).toBe(true);
+    for (const n of [".gitx", ".git_", "git", ".gi", "git~2", "x.git", ".git.x", ".gitignore", ".gitattributes"]) expect(isNtfsDotGit(n), n).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("off Windows a folder named .git. is only a folder", async () => {
+    const { tree } = await scratch();
+    await fs.mkdir(path.join(tree, ".git/hooks"), { recursive: true });
+    await fs.mkdir(path.join(tree, ".git."), { recursive: true });
+    const root = await containRoot(tree);
+    expect(await escapeOf(root, path.join(tree, ".git.", "x"))).toBeNull();
+    expect(await escapeOf(root, path.join(tree, "git~1", "x"))).toBeNull();
   });
 
   it("is null when the root has no .git, whatever a folder is named", async () => {
