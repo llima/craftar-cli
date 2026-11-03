@@ -50,7 +50,7 @@ import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, overriddenRoot, withLoadWarnings, type CatalogueContext, type ContextSource, type IngredientEntry } from "./core/catalogue.js";
 import { canonicalValue } from "./core/sections.js";
-import { profileSectionFile } from "./core/section-files.js";
+import { profileSectionFile, recipeSectionFile } from "./core/section-files.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, metadataEdits, unmanaged, type DriftRow } from "./core/drift.js";
@@ -1365,7 +1365,16 @@ program
       const layerProfile = (l: SectionLayer) => (l === "profile" ? p.resolution.profile.name : typeof l === "object" && "profile" in l ? l.profile : undefined);
       const shown = (x: { name: string; layer: SectionLayer }) => {
         const q = layerProfile(x.layer);
-        const file = ing && q !== undefined ? profileSectionFile(ws.forge, q, sectionKey(ing.meta), x.name) : undefined;
+        const r = typeof x.layer === "object" && "recipe" in x.layer ? x.layer.recipe : undefined;
+        const key = ing ? sectionKey(ing.meta) : undefined;
+        const file =
+          key === undefined
+            ? undefined
+            : q !== undefined
+              ? profileSectionFile(ws.forge, q, key, x.name)
+              : r !== undefined
+                ? recipeSectionFile(ws.forge, p.resolution.profile.name, r, key, x.name)
+                : undefined;
         return `${x.name} (${layer(x.layer)}${file ? `, ${file}` : ""})`;
       };
       console.log(`  sections    ${f.sections.map(shown).join(", ")}`);

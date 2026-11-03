@@ -103,6 +103,41 @@ export function profileSectionFile(
   return declaring === undefined ? undefined : forge.sectionFiles?.get(declaring)?.get(key)?.get(section);
 }
 
+/**
+ * The file a recipe's section value came from (spec 54 §4.4), as written relative to the recipe file's folder: the recipe the
+ * profile's view sees — its own local recipe of that name first, else the root's — or `undefined` for a string value.
+ */
+export function recipeSectionFile(
+  forge: {
+    sectionFiles?: Map<string, SectionFileMap>;
+    recipeFiles?: Map<string, string>;
+    locals?: Map<string, { recipes: Map<string, { file: string }> }>;
+  },
+  profile: string,
+  recipe: string,
+  key: string,
+  section: string,
+): string | undefined {
+  const declaring = forge.locals?.get(profile)?.recipes.get(recipe)?.file ?? forge.recipeFiles?.get(recipe);
+  return declaring === undefined ? undefined : forge.sectionFiles?.get(declaring)?.get(key)?.get(section);
+}
+
+/**
+ * Loaded section values put back as written (spec 54 §4.4): each value `files` names becomes its `{ file: }`, every other one
+ * stays its string. For a writer that copies a recipe's sections into another recipe of the same folder.
+ */
+export function writtenSections(sections: Sections, files: SectionFileMap | undefined): ProfileSections {
+  const out: ProfileSections = {};
+  for (const [key, values] of Object.entries(sections)) {
+    out[key] = {};
+    for (const [name, value] of Object.entries(values)) {
+      const file = files?.get(key)?.get(name);
+      out[key][name] = file === undefined ? value : { file };
+    }
+  }
+  return out;
+}
+
 /** Spec 55 §5.3: the warning for a file under the folder's `sections/` that no value names. */
 export function unnamedSectionFileWarning(rel: string): string {
   return `${rel}: no section value names this file`;
