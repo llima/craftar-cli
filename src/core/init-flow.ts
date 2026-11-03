@@ -667,7 +667,7 @@ export async function askInit(
           break templateLoop;
         }
         // Spec 54 §5.7: an abstract profile is no workspace's, so it is not offered.
-    const profiles = [...forge.profiles.values()].filter((p) => !isAbstract(forge, p.name)).sort((a, b) => a.name.localeCompare(b.name));
+        const profiles = [...forge.profiles.values()].filter((p) => !isAbstract(forge, p.name)).sort((a, b) => a.name.localeCompare(b.name));
         const picked = pickItem(profiles.map((p) => p.name), trimmed);
         if (picked !== null) {
           newProfileLike = picked;
