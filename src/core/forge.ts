@@ -16,6 +16,8 @@ import { SchemaError, schemaIssues } from "./schema-fault.js";
 import { execProgram, streamProgram } from "./proc.js";
 import { findSecrets } from "./secrets.js";
 import { climbsOut } from "./text.js";
+import { CannotResolveError, shownByRealPath } from "./cache-label.js";
+import { resolveHome } from "./home-lock.js";
 import { containRoot, containSubRoot, readForgeText, type ContainRoot } from "./contain.js";
 import { checkLocals, ProfileLocalLoadError, readsProfileLocal, type IgnoredLocals, type LocalLayer, type LocalRecipe } from "./profile-local.js";
 
@@ -73,10 +75,14 @@ async function readYaml<T>(root: ContainRoot, file: string, schema: { parse: (v:
 /** Anything at the path, a dangling link included: `exists` would read that as absent and skip the file (spec 48 §15 item 27). */
 const present = (p: string) => fs.lstat(p).then(() => true, () => false);
 
-export async function loadForge(root: string): Promise<Forge> {
+/**
+ * @param opts.home `$CRAFTAR_HOME` as given (`resolveHome`'s default when absent): a root under its Forge cache is named with
+ * the entry's name labelled, wherever the path was typed from.
+ */
+export async function loadForge(root: string, opts: { home?: string } = {}): Promise<Forge> {
   root = path.resolve(root);
   const manifestPath = path.join(root, FORGE_MANIFEST);
-  if (!(await exists(manifestPath))) throw new Error(`not a Forge: ${manifestPath} not found`);
+  if (!(await exists(manifestPath))) throw new Error(`not a Forge: ${await shownByRealPath(manifestPath, resolveHome(opts.home))} not found`);
   const contain = await containRoot(root);
   const manifest = await readYaml(contain, manifestPath, ForgeManifestSchema);
 
@@ -682,7 +688,8 @@ export async function realpathOfNearest(abs: string): Promise<string> {
  * "cannot be inspected" when `lstat` itself failed, so the path is not known to exist, and "exists but cannot be
  * resolved" when `lstat` succeeded and `realpath` did not.
  */
-export function cannotResolve(p: string, e: unknown, what: "cannot be inspected" | "exists but cannot be resolved"): Error {
+export function cannotResolve(p: string, e: unknown, what: "cannot be inspected" | "exists but cannot be resolved"): CannotResolveError {
   const code = (e as NodeJS.ErrnoException | null)?.code ?? (e instanceof Error ? e.message : String(e));
-  return new Error(`${p} ${what} (${code})`);
+  // Typed, so a refusal can show `p` by where it lands (`shownCannotResolve`); the message is unchanged.
+  return new CannotResolveError(p, what, code);
 }

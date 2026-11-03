@@ -7,7 +7,7 @@ import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forg
 import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
 import { climbsOut, hashNormalized, isUtf8, legacyHash, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
-import { classifyForge, credentialFault, ensureTree, refHoldsCredentials, shownRef, ForgeFetchError, ForgeUnavailableError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
+import { classifyForge, credentialFault, ensureTree, shownByRealPath, refHoldsCredentials, shownRef, ForgeFetchError, ForgeUnavailableError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
 import { diskSource, type WorkspaceSource } from "./workspace-source.js";
 import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
@@ -227,14 +227,14 @@ export async function loadForgeSource(
     if (opts.refuseRemote) throw new Error(opts.refuseRemote(source));
     const { tree, origin, warning } = await remoteTree(source, ref, opts, fromLocalFile);
     if (warning) warnings.push(warning);
-    return { forge: await loadForge(tree), origin, warnings };
+    return { forge: await loadForge(tree, { home: opts.home }), origin, warnings };
   }
   const forgeRoot = path.resolve(root, source);
-  if (!(await exists(forgeRoot))) throw new ForgeUnavailableError(`Forge not found at ${forgeRoot}`);
+  if (!(await exists(forgeRoot))) throw new ForgeUnavailableError(`Forge not found at ${await shownByRealPath(forgeRoot, resolveHome(opts.home))}`);
   // A path means the working tree as it is; a ref beside it is ignored, said out loud (Ruling 9).
   if (ref !== null) warnings.push(`${shownRef(ref)} is ignored: the Forge is a path (${source}), read as its working tree`);
   const origin: ForgeOrigin = { kind: "path", source, ref: null, defaultBranch: null, fetched: false, fromLocalFile };
-  return { forge: await loadForge(forgeRoot), origin, warnings };
+  return { forge: await loadForge(forgeRoot, { home: opts.home }), origin, warnings };
 }
 
 const short = (sha: string) => sha.slice(0, 8);
@@ -306,7 +306,7 @@ export async function resolveForgeSource(opts: { forge?: string; workspace?: str
   if (opts.forge !== undefined) {
     // A URL is not a directory to load: a remote Forge is read through a workspace that names it (spec 13 §4.4).
     if (classifyForge(opts.forge) === "url") throw new Error("--forge takes a directory; to read a remote Forge, run inside a workspace that names it");
-    return { forge: await loadForge(path.resolve(opts.forge)) };
+    return { forge: await loadForge(path.resolve(opts.forge), { home: opts.home }) };
   }
   const root = path.resolve(opts.workspace ?? ".");
   if (!(await exists(path.join(root, WORKSPACE_FILE)))) {

@@ -326,3 +326,76 @@ describe("the cause a gate refusal relays", () => {
     expect(asForge.stderr).not.toContain("entry-secret");
   });
 });
+
+// E22.2 / E21.3 — a home reached through a third spelling (a junction that is neither $CRAFTAR_HOME as given nor the real
+// path of its forges/), with a path that does not resolve inside an entry: the entry's name — token-shaped, assembled at
+// runtime — reaches neither the refusal line nor its cause. E21.2 — no forges/ under the home at all.
+describe("a home reached through a third spelling, on a path that does not resolve", () => {
+  const LABEL = "(a cache entry name — not shown)";
+
+  async function fixture() {
+    const entry = "https-user-" + "ghp_" + "Q".repeat(36) + "-host";
+    const parent = await fs.realpath(await tmpDir("craftar-gatecache-third-"));
+    cleanups.push(() => removeWithRetry(parent));
+    const home = path.join(parent, "home");
+    const abc = path.join(home, "forges", entry, "trees", "abc");
+    await fs.mkdir(abc, { recursive: true });
+    await fs.symlink(path.join(parent, "nowhere"), path.join(abc, "dangling"), "junction");
+    const link = path.join(parent, "link");
+    await fs.symlink(home, link, "junction");
+    const typed = path.join(link, "forges", entry, "trees", "abc", "dangling");
+    const forge = path.join(parent, "forge");
+    await makeForge(forge, FORGE_SPEC);
+    const ws = path.join(parent, "ws");
+    await fs.mkdir(path.join(ws, ".claude/rules"), { recursive: true });
+    return { entry, parent, home, typed, forge, ws };
+  }
+
+  it("import --forge through the link: no entry name, the label in its place", async () => {
+    const { entry, home, typed, ws } = await fixture();
+    const r = runCli(["import", "--from", "claude-code", "--forge", path.join(typed, "f"), "--profile", "acme", "--workspace", ws], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stdout + r.stderr).not.toContain(entry);
+    expect(r.stderr).toContain(LABEL);
+  });
+
+  it("import --report through the link: no entry name in the refusal line or its cause", async () => {
+    const { entry, home, typed, forge, ws } = await fixture();
+    const r = runCli(["import", "--from", "claude-code", "--forge", forge, "--profile", "acme", "--workspace", ws, "--report", path.join(typed, "r.md")], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("refusing to write the report");
+    expect(r.stdout + r.stderr).not.toContain(entry);
+    expect(r.stderr).toContain(LABEL);
+  });
+
+  it("forge unify --save-plan through the link: no entry name", async () => {
+    const { entry, home, typed, forge } = await fixture();
+    await writeFiles(forge, {
+      "ingredients/rules/hello--acme/ingredient.yaml": "type: rule\nname: hello--acme\nas: hello\n",
+      "ingredients/rules/hello--acme/rule.md": "variant text\n",
+      "recipes/base--acme.yaml": "name: base--acme\ningredients:\n  - rule/hello--acme\n",
+      "profiles/acme/profile.yaml": "name: acme\nrecipes:\n  - base--acme\ntargets:\n  - claude-code\n",
+    });
+    const r = runCli(["forge", "unify", "rule/hello", "--profile", "acme", "--forge", forge, "--save-plan", path.join(typed, "plan.yaml")], { env: { CRAFTAR_HOME: home } });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("refusing to write the plan");
+    expect(r.stdout + r.stderr).not.toContain(entry);
+    expect(r.stderr).toContain(LABEL);
+  });
+
+  it("no forges/ under the home: a target under it is still refused, the entry labelled, nothing created (E21.2)", async () => {
+    const { entry, parent, forge, ws } = await fixture();
+    const bare = path.join(parent, "bare-home");
+    await fs.mkdir(bare);
+    for (const home of [bare, path.join(parent, "bare-link")]) {
+      if (home !== bare) await fs.symlink(bare, home, "junction");
+      const target = path.join(home, "forges", entry, "trees", "abc", "r.md");
+      const r = runCli(["import", "--from", "claude-code", "--forge", forge, "--profile", "acme", "--workspace", ws, "--report", target], { env: { CRAFTAR_HOME: home } });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("inside craftar's Forge cache");
+      expect(r.stderr).toContain(LABEL);
+      expect(r.stdout + r.stderr).not.toContain(entry);
+      await expect(fs.lstat(path.join(bare, "forges"))).rejects.toThrow();
+    }
+  });
+});
