@@ -81,6 +81,29 @@ describe("withLock", () => {
     await fs.rm(file, { recursive: true, force: true });
   });
 
+  it("i. a release that fails twice then succeeds → lock file is gone, onReleaseError not called", async () => {
+    const dir = await tmpDir();
+    const file = path.join(dir, "registry.lock");
+    const onReleaseErrors: unknown[] = [];
+    const pollMs = 50;
+
+    const result = await withLock(file, "x", { pollMs, onReleaseError: (e) => onReleaseErrors.push(e) }, async () => {
+      // Make release fail by creating a non-empty directory at the lock file path
+      await makeReleaseFailSetup(file);
+      // Schedule the obstacle to disappear after the first failed attempt
+      setTimeout(async () => {
+        await fs.rm(file, { recursive: true, force: true });
+      }, pollMs / 2);
+      return 42;
+    });
+
+    expect(result).toBe(42);
+    // The lock file is gone (release eventually succeeded)
+    await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+    // onReleaseError was never called
+    expect(onReleaseErrors.length).toBe(0);
+  });
+
   it("a lock in a missing directory fails with ENOENT instead of waiting", async () => {
     const dir = await tmpDir();
     const file = path.join(dir, "absent", "registry.lock");

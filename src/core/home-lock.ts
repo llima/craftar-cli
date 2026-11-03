@@ -36,9 +36,9 @@ export interface LockOptions extends LockTiming {
   /** Test seam: the wait an EPERM gets on `win32`; `PENDING_DELETE_MS` otherwise. */
   pendingDeleteMs?: number;
   /**
-   * Called when removing the lock file fails, after the body has run; the body's result or error stands
-   * either way; the default ignores it, because a lock file left behind is taken over once it
-   * is stale (`staleMs`).
+   * Called once, with the last error, when removing the lock file still fails after a few tries;
+   * the body's result or error stands either way; the default ignores it, because a lock file left
+   * behind is taken over once it is stale (`staleMs`).
    */
   onReleaseError?: (e: unknown) => void;
 }
@@ -111,10 +111,19 @@ export async function withLock<T>(file: string, label: string, timing: LockOptio
   }
 
   const release = async () => {
-    try {
-      await fs.rm(file, { force: true });
-    } catch (e) {
-      if (timing.onReleaseError) timing.onReleaseError(e);
+    // Retry up to 3 times, waiting pollMs between attempts
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await fs.rm(file, { force: true });
+        return; // Success
+      } catch (e) {
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, pollMs));
+        } else {
+          // Last attempt failed: hand to onReleaseError
+          if (timing.onReleaseError) timing.onReleaseError(e);
+        }
+      }
     }
   };
 
