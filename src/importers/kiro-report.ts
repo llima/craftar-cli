@@ -42,8 +42,11 @@ function scalarLeaves(v: unknown, out: string[] = []): string[] {
  */
 export const STEERING_BIGGER = "steering bigger than the rule";
 
-/** The banner the kiro emitter puts on a generated steering file. */
-export const GENERATED_BANNER = /<!--\s*GENERATED from /;
+/**
+ * The banner the kiro emitter puts on a generated steering file, at the start of its line (E13.2): a line that only
+ * mentions the wording further along is the user's text. Tested against a single line or the start of a body.
+ */
+export const GENERATED_BANNER = /^\s*<!--\s*GENERATED from /;
 
 /** The places under `.kiro/` whose files are reported when nothing sources them — three directories and one file (spec 29 §13 item 18). */
 const SOURCED_DIRS = [".kiro/steering", ".kiro/agents", ".kiro/skills"];

@@ -254,6 +254,16 @@ describe("import --from claude-code", () => {
     expect(stored).toBe(withBom.toString("utf8").replace(/\r\n?/g, "\n"));
   });
 
+  it("imports a hand-written steering file that only mentions the generated banner's wording (E13.2)", async () => {
+    const t = await setup();
+    await writeFiles(t.ws("api"), {
+      ".claude/rules/plain.md": "# Plain\n",
+      ".kiro/steering/notes.md": "---\ninclusion: always\n---\n\n# Notes\n\nKiro marks a generated file with `<!-- GENERATED from <file> by craftar -->`.\n",
+    });
+    const r = await importInto(t.forge, t.ws("api"), "api");
+    expect(r.created).toContain("steering/notes");
+  });
+
   it("stores a clean UTF-16 file exactly as before (the decode is for scanning only)", async () => {
     const t = await setup();
     const script = utf16le("Write-Host 'hello'\r\n");

@@ -129,6 +129,12 @@ describe("import with report: the Kiro part", () => {
     expect(k.kind === "computed" && k.collisions.map((c) => c.path)).toEqual([".kiro/steering/deploy.md"]);
   });
 
+  it("a body line that only mentions the banner's wording is counted (E13.2)", async () => {
+    const said = "see <!-- GENERATED from x --> here\n";
+    const { r } = await imported({ ".claude/rules/style.md": "# Style\n" + said, ".kiro/steering/style.md": mirror("style", "# Style\n" + said + "kept by hand\n") });
+    expect(r.kiro?.kind === "computed" && r.kiro.collisions.map((c) => c.note)).toEqual(["steering bigger than the rule"]);
+  });
+
   it("a mirror that differs only by a BOM and its line endings is not a collision", async () => {
     const { r } = await imported({ ".claude/rules/style.md": "# Style\n", ".kiro/steering/style.md": "\uFEFF" + mirror("style", "# Style\n", "\n") });
     expect(r.kiro).toEqual({ kind: "computed", collisions: [], unsourced: [] });

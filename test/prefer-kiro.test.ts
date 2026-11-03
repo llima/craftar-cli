@@ -39,6 +39,10 @@ describe("steeringBody", () => {
     // Another rule's rendering of it is not this rule's banner: the line stays.
     expect(steeringBody(FM + "<!-- acme: built from .claude/rules/style.md -->\n\n" + BODY, "workflow", banner)).toBe("<!-- acme: built from .claude/rules/style.md -->\n\n" + BODY);
   });
+  it("keeps a first line that only mentions the banner's wording past its start (E13.2)", () => {
+    const line = "Note: Kiro marks its files <!-- GENERATED from .claude/rules/workflow.md by craftar -->";
+    expect(steeringBody(FM + line + "\n\n" + BODY, "workflow", null)).toBe(line + "\n\n" + BODY);
+  });
   it("leaves a body with no banner, and a file with no frontmatter, as they are", () => {
     expect(steeringBody(FM + BODY, "workflow", null)).toBe(BODY);
     expect(steeringBody(BODY, "workflow", null)).toBe(BODY);
