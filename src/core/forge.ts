@@ -41,6 +41,12 @@ export interface Forge {
   locals: Map<string, LocalLayer>;
   /** Below schema 8, the local folders a profile holds that nothing reads (spec 51 §4.1), by profile name. */
   ignoredLocals: IgnoredLocals;
+  /**
+   * The ingredient, ingredient-type and profile folders the loader skipped because each is a symbolic link (E39.2),
+   * Forge-relative POSIX paths, sorted — never what they point at. `resolve()` warns once per entry. Optional so a Forge
+   * built by hand in a test needs none.
+   */
+  skippedLinks?: string[];
 }
 
 export const FORGE_MANIFEST = "craftar.forge.yaml";
@@ -89,9 +95,11 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
 
   const posixRel = (abs: string) => path.relative(root, abs).split(path.sep).join("/");
 
+  const skippedLinks: string[] = [];
+  const skip = (abs: string) => skippedLinks.push(posixRel(abs));
   const ingredients = new Map<IngredientRef, LoadedIngredient>();
   const ingredientPaths = new Map<IngredientRef, string>();
-  for (const { ref, dir, meta } of await readIngredientTree(contain, path.join(root, "ingredients"))) {
+  for (const { ref, dir, meta } of await readIngredientTree(contain, path.join(root, "ingredients"), skip)) {
     if (ingredients.has(ref)) throw new Error(`duplicate ingredient ${ref} (${dir})`);
     ingredients.set(ref, { ref, dir, meta, forgeRoot: contain });
     ingredientPaths.set(ref, posixRel(dir));
@@ -119,6 +127,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
   const profRoot = path.join(root, "profiles");
   if (await exists(profRoot)) {
     for (const d of await fs.readdir(profRoot, { withFileTypes: true })) {
+      if (d.isSymbolicLink()) skip(path.join(profRoot, d.name));
       if (!d.isDirectory()) continue;
       const folder = path.join(profRoot, d.name);
       const f = path.join(folder, "profile.yaml");
@@ -163,7 +172,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
       const layer: LocalLayer = { ingredients: new Map(), recipes: new Map() };
       const pathsHere = new Map<IngredientRef, string>();
       const seenRefs = new Map<string, string>(); // lower-cased ref → path (L9)
-      for (const { ref, dir, meta } of await readIngredientTree(sub, path.join(folder, "ingredients"))) {
+      for (const { ref, dir, meta } of await readIngredientTree(sub, path.join(folder, "ingredients"), skip)) {
         const at = posixRel(dir);
         const prior = seenRefs.get(ref.toLowerCase());
         if (prior !== undefined) {
@@ -201,20 +210,25 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     if (findings.length) throw new ProfileLocalLoadError(findings);
   }
 
-  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals };
+  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals, skippedLinks: skippedLinks.sort() };
 }
 
 const isLink = (p: string) => fs.lstat(p).then((st) => st.isSymbolicLink(), () => false);
 const isDir = (p: string) => fs.stat(p).then((st) => st.isDirectory(), () => false);
 
-/** `ingredients/<type-plural>/<name>/ingredient.yaml` under `dir`, read against `contain`: the root's tree, or a profile's (spec 51 §4.2). */
-async function readIngredientTree(contain: ContainRoot, ingRoot: string): Promise<Array<{ ref: IngredientRef; dir: string; meta: Ingredient }>> {
+/**
+ * `ingredients/<type-plural>/<name>/ingredient.yaml` under `dir`, read against `contain`: the root's tree, or a profile's
+ * (spec 51 §4.2). A type or ingredient folder that is a symbolic link is not read through and is handed to `skipped`.
+ */
+async function readIngredientTree(contain: ContainRoot, ingRoot: string, skipped: (abs: string) => void): Promise<Array<{ ref: IngredientRef; dir: string; meta: Ingredient }>> {
   const out: Array<{ ref: IngredientRef; dir: string; meta: Ingredient }> = [];
   if (!(await exists(ingRoot))) return out;
   for (const typeDir of await fs.readdir(ingRoot, { withFileTypes: true })) {
+    if (typeDir.isSymbolicLink()) skipped(path.join(ingRoot, typeDir.name));
     if (!typeDir.isDirectory()) continue;
     const typeName = typeDir.name; // plural folder: rules, agents, …
     for (const ingDir of await fs.readdir(path.join(ingRoot, typeName), { withFileTypes: true })) {
+      if (ingDir.isSymbolicLink()) skipped(path.join(ingRoot, typeName, ingDir.name));
       if (!ingDir.isDirectory()) continue;
       const dir = path.join(ingRoot, typeName, ingDir.name);
       const metaFile = path.join(dir, "ingredient.yaml");
