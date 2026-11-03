@@ -3152,8 +3152,9 @@ async function runForgeMove(command: MoveCommand, ref: string, o: { profile: str
   }
   const where = command === "forge localize" ? `profile ${move.profile}` : "the root";
   console.log(pc.bold(`craftar ${command} ${move.ref} → ${where}${o.dryRun ? " (dry run — nothing written)" : ""}`));
-  console.log(`  moved    ${move.moved.from} → ${move.moved.to}${move.to !== move.ref ? ` (now ${move.to})` : ""}`);
+  console.log(`  moved    ${move.moved.from} → ${move.moved.to}${move.to !== move.ref ? ` (now ${move.to}${move.override ? ", overrides the root's" : ""})` : ""}`);
   for (const r of move.recipes) console.log(`  recipe   ${r.name}: ${r.from} → ${r.to}`);
+  for (const f of move.override ? move.rewired : []) console.log(`  rewired  ${f}: ${move.ref} → ${move.to}`);
   for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
   const n = (count: number) => `${count} workspace(s)`;
   if (o.dryRun) console.log(`  impact   ${n(fw.workspaces.length)} proved on a scratch copy: not written, not compared`);

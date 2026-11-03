@@ -2,13 +2,13 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { FORGE_SCHEMA_PROFILE_LOCAL, RecipeSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
+import { FORGE_SCHEMA_LOCAL_OVERRIDE, FORGE_SCHEMA_PROFILE_LOCAL, RecipeSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { readForgeFile, readForgeText } from "./contain.js";
 import { assertNoLinkIn, assertNoLinkOnPath, copyForgeForProof, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
 import { ingredientText, occupied, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
 import { impactOf, planAll, type ForgeWorkspace, type Planned } from "./impact.js";
 import { recipesOrWritten } from "./integrations.js";
-import { holdsIngredient, isLocalMessage, localOwners, readsProfileLocal } from "./profile-local.js";
+import { holdsIngredient, isLocalMessage, localOwners, readsLocalOverride, readsProfileLocal } from "./profile-local.js";
 import { plan, type Workspace } from "./sync.js";
 import type { WriteJournal } from "./unify.js";
 import { editYamlText } from "./yaml-edit.js";
@@ -33,6 +33,10 @@ export interface ForgeMove {
   moved: { from: string; to: string };
   /** The recipes that move with it (localize only), Forge-relative POSIX files. */
   recipes: Array<{ name: string; from: string; to: string }>;
+  /** The recipe files edited in place, the ref swapped for the new one (spec 56 §5.1: an override moves no recipe), Forge-relative POSIX, sorted. */
+  rewired: string[];
+  /** Whether the local becomes the profile's override of a root base of the same ref (spec 56 §5.1). */
+  override: boolean;
   /** In write order. */
   writes: ForgeWrite[];
   /** Files deleted after every write. */
@@ -81,11 +85,18 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
   const { type, name, as } = ing.meta;
   const warnings: string[] = [];
 
-  // A variant becomes a local only when it is this profile's own and has no base (L1, L6).
+  // A variant becomes a local only when it is this profile's own: with no base, its local; with the base at the root and
+  // at spec 56's gate, its override of that base (L1, L6).
   let localName = name;
+  let override = false;
   if (as !== undefined) {
     const baseRef = `${type}/${as}` as IngredientRef;
-    if (forge.ingredients.has(baseRef)) throw new Error(`${command}: ${ref} is a variant of ${baseRef}, which is at the root — a local and a root variant of its own profile cannot write one file (L1); promote or unify it first`);
+    const ownName = name === `${as}--${profile}`;
+    if (forge.ingredients.has(baseRef) && !(ownName && readsLocalOverride(forge.manifest))) {
+      const hint = ownName ? `; at schema ${FORGE_SCHEMA_LOCAL_OVERRIDE} in craftar.forge.yaml it becomes profile ${profile}'s override of ${baseRef}` : "";
+      throw new Error(`${command}: ${ref} is a variant of ${baseRef}, which is at the root — a local and a root variant of its own profile cannot write one file (L1); promote or unify it first${hint}`);
+    }
+    override = forge.ingredients.has(baseRef);
     if (name !== `${as}--${profile}`) throw new Error(`${command}: ${ref} is a variant (as: ${as}) not named ${as}--${profile} — only profile ${profile}'s own base-less variant becomes its local, under its output name`);
     localName = as;
   } else {
@@ -96,7 +107,9 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
   if (forge.locals.get(profile)?.ingredients.has(to)) throw new Error(`${command}: profile ${profile} already holds the local ${to}`);
 
   // The recipes that move: every root recipe citing the ref, and every root recipe extending one of those, transitively.
-  const moving = new Set([...forge.recipes.values()].filter((r) => r.ingredients.includes(ref)).map((r) => r.name));
+  // An override moves none: a root recipe reaches it (spec 56 §5.1), so each one citing the ref is rewired in place.
+  const citing = [...forge.recipes.values()].filter((r) => r.ingredients.includes(ref)).map((r) => r.name);
+  const moving = new Set(override ? [] : citing);
   for (let grew = true; grew; ) {
     grew = false;
     for (const r of forge.recipes.values()) {
@@ -111,6 +124,17 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
   const all = resolveAll(forge);
   const mine = all.get(profile)!;
   if (mine instanceof Error) throw new Error(`${command}: profile ${profile} does not resolve (${firstLine(mine)}) — fix it first`);
+  if (override && holdsIngredient(mine, forge.ingredients.get(`${type}/${localName}` as IngredientRef)!)) {
+    throw new Error(`${command}: profile ${profile} resolves both ${type}/${localName} and ${ref} — the Forge is inconsistent (both would write one file); remove one from its recipes by hand, commit, and re-run`);
+  }
+  if (override) {
+    // Another profile's local recipe citing the variant would be left naming a removed ref (L4): refused before the proof.
+    for (const [q, layer] of forge.locals) {
+      if (q === profile) continue;
+      const l = [...layer.recipes.values()].find((x) => x.recipe.ingredients.includes(ref));
+      if (l) throw new Error(`${command}: ${l.file} cites ${ref} — it would be left naming a removed ingredient (L4); edit it by hand, commit, and re-run`);
+    }
+  }
   if (!holdsIngredient(mine, ing)) throw new Error(`${command}: profile ${profile} does not resolve ${ref} — localize moves an ingredient its profile uses`);
   for (const [q, res] of all) {
     if (q === profile) continue;
@@ -164,14 +188,25 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
     removes.push(f.abs);
     recipes.push({ name: r, from, to: toRel });
   }
-  // This profile's own local recipes that cite the variant's old ref follow the rename, in place.
+  // An override: the root recipes that cite the variant follow the rename in place (spec 56 §5.1).
   const edited: string[] = [];
+  const rewired: string[] = [];
+  for (const r of override ? [...citing].sort() : []) {
+    const f = files.get(r);
+    if (!f) throw new Error(`${command}: recipe ${r} has no file under recipes/`);
+    const recipe = forge.recipes.get(r)!;
+    writes.push({ abs: f.abs, content: rewire(f.raw, posix(forge.root, f.abs), { ...recipe, ingredients: recipe.ingredients.map((i) => (i === ref ? to : i)) }), created: false });
+    edited.push(f.abs);
+    rewired.push(posix(forge.root, f.abs));
+  }
+  // This profile's own local recipes that cite the variant's old ref follow the rename, in place.
   if (renamed) {
     for (const l of forge.locals.get(profile)?.recipes.values() ?? []) {
       if (!l.recipe.ingredients.includes(ref)) continue;
       const abs = path.join(forge.root, ...l.file.split("/"));
       writes.push({ abs, content: rewire(await fs.readFile(abs, "utf8"), l.file, { ...l.recipe, ingredients: l.recipe.ingredients.map((i) => (i === ref ? to : i)) }), created: false });
       edited.push(abs);
+      rewired.push(l.file);
     }
   }
 
@@ -184,6 +219,8 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
     profile,
     moved: { from: posix(forge.root, ing.dir), to: toDirRel },
     recipes,
+    rewired: rewired.sort(),
+    override,
     writes,
     removes,
     mustHold: [...removes, ...edited].sort(),
@@ -227,6 +264,8 @@ export async function planShare(forge: Forge, ref: string, profile: string): Pro
     profile,
     moved: { from: posix(forge.root, ing.dir), to: toDirRel },
     recipes: [],
+    rewired: [],
+    override: false,
     writes,
     removes,
     mustHold: [...removes].sort(),

@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { listFiles } from "../src/core/forge.js";
+import { FORGE_SCHEMA_LOCAL_OVERRIDE } from "../src/schema/index.js";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 import { git } from "./helpers/remote.js";
@@ -107,6 +108,20 @@ async function observe() {
   return JSON.parse(JSON.stringify(normalize(out, s.roots)).split(commit).join("<commit>").split(commit.slice(0, 8)).join("<commit>")) as Record<string, unknown>;
 }
 
+/**
+ * What spec 56 changes below its gate on purpose (§5.1), taken out before the comparison and asserted present: the
+ * localize refusal of a profile's own variant whose base is at the root names the schema at which it becomes an
+ * override. Nothing else of the pin may move.
+ */
+const LOCALIZE_HINT = `; at schema ${FORGE_SCHEMA_LOCAL_OVERRIDE} in craftar.forge.yaml it becomes profile acme's override of rule/y`;
+function deliberate(observed: Record<string, unknown>): Record<string, unknown> {
+  const out = structuredClone(observed);
+  const o = out.localize as { stderr: string };
+  expect(o.stderr).toContain(LOCALIZE_HINT);
+  o.stderr = o.stderr.replace(LOCALIZE_HINT, "");
+  return out;
+}
+
 describe("local override off baseline pin (spec 56 §9)", () => {
   it("a schema 9 Forge with a profile's locals and a root variant of its own answers as before spec 56", { timeout: 180_000 }, async () => {
     const observed = await observe();
@@ -114,6 +129,6 @@ describe("local override off baseline pin (spec 56 §9)", () => {
       await fs.writeFile(PIN_FILE, JSON.stringify(observed, null, 2) + "\n");
       return;
     }
-    expect(observed).toEqual(JSON.parse(await fs.readFile(PIN_FILE, "utf8")));
+    expect(deliberate(observed)).toEqual(JSON.parse(await fs.readFile(PIN_FILE, "utf8")));
   });
 });
