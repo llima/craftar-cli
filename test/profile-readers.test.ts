@@ -26,7 +26,6 @@ const TABLE: Record<string, Decision[]> = {
   "core/new-profile.ts": ["written", "lookup"], // --like copies the written recipes and targets; an abstract one refused
   "core/param-writes.ts": ["written"],
   "core/profile-extends.ts": ["family"],
-  "core/profile-local.ts": ["family", "lookup"],
   "core/promote.ts": ["written"],
   "core/recipe-edit.ts": ["effective"],
   "core/resolve.ts": ["effective"],
