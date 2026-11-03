@@ -283,7 +283,7 @@ export function integrationOrigin(slot: string, profile: string): string {
  * warning. Used by the catalogue's `computeProfilesForRecipes` and the prune's search.
  */
 export function recipesOrWritten(
-  forge: Pick<Forge, "manifest">,
+  forge: Pick<Forge, "manifest"> & { profiles?: ReadonlyMap<string, Profile> },
   profile: Profile,
 ): { recipes: string[]; warning: string | null } {
   try {

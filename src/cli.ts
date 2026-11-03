@@ -1349,7 +1349,9 @@ program
       // Spec 56 §6: an override names the root base it stands over.
       const root = f.scope === "profile" ? overriddenBase(ws.forge, f.ingredient) : undefined;
       const over = root !== undefined ? `, over ${forgeRelative(ws.forge, root.dir)}` : "";
-      const where = f.scope === null ? "several ingredients" : f.scope === "profile" ? `profile ${f.profile} (${f.dir})${over}` : `forge (${f.dir})`;
+      // The owner of a local is the folder that holds it (spec 54 §5.8): the profile's own, or a parent's.
+      const owner = f.dir?.startsWith("profiles/") ? f.dir.split("/")[1] : f.profile;
+      const where = f.scope === null ? "several ingredients" : f.scope === "profile" ? `profile ${owner} (${f.dir})${over}` : `forge (${f.dir})`;
       console.log(`  source      ${where}`);
     }
     if (f.via) console.log(`  via recipes ${f.via.join(" → ")}`);

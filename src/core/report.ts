@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { familyOf } from "./profile-extends.js";
 import path from "node:path";
 import { escapeReason, escapeSummary, escapingRows } from "./contain.js";
 import { EXAMPLE_SETTINGS } from "../emitters/shared.js";
@@ -232,8 +233,9 @@ export function explainFile(ws: Workspace, p: Plan, file: string): ExplainedFile
 function sourceOf(ws: Workspace, ing: { ref: string; dir: string } | undefined): { scope: "forge" | "profile" | null; dir: string | null } {
   if (!ing) return { scope: null, dir: null };
   const dir = path.relative(ws.forge.root, ing.dir).split(path.sep).join("/");
-  const local = ws.forge.locals.get(ws.config.profile)?.ingredients.get(ing.ref as IngredientRef);
-  return { scope: local && local.dir === ing.dir ? "profile" : "forge", dir };
+  // Spec 54 §5.6: a local of the profile's family, its own or a parent's; `dir` names the owner's folder.
+  const local = familyOf(ws.forge, ws.config.profile).some((q) => ws.forge.locals.get(q)?.ingredients.get(ing.ref as IngredientRef)?.dir === ing.dir);
+  return { scope: local ? "profile" : "forge", dir };
 }
 
 /** The document `craftar targets --json` prints (spec 16 §4.4). */

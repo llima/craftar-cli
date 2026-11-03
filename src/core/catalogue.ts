@@ -2,6 +2,7 @@
  * The catalogue: every recipe and ingredient of a Forge, marked against a context (spec 16 §4.1–§4.3).
  * Pure data: no console, no process.exit, no picocolors, no file reads.
  */
+import { familyOf, isAbstract } from "./profile-extends.js";
 import type { Forge } from "./forge.js";
 import { effectiveProfile, recipesOrWritten } from "./integrations.js";
 import { recipeOrder, resolve, type Resolution } from "./resolve.js";
@@ -101,7 +102,8 @@ export type Scope = "forge" | "profile";
 function scopesOf(forge: Forge, context: CatalogueContext | null): Array<{ profile: string | null; view: Forge }> {
   const out: Array<{ profile: string | null; view: Forge }> = [{ profile: null, view: context ? forgeFor(forge, context.profile) : forge }];
   if (!readsProfileLocal(forge.manifest)) return out;
-  const owners = context ? [context.profile] : [...forge.locals.keys()].sort();
+  // Spec 54 §5.8: with a context, its family's locals (nearest first); without one, every profile's.
+  const owners = context ? familyOf(forge, context.profile) : [...forge.locals.keys()].sort();
   for (const p of owners) if (forge.locals.has(p)) out.push({ profile: p, view: forgeFor(forge, p) });
   return out;
 }
@@ -126,18 +128,23 @@ function computeProfilesForRecipes(forge: Forge): { map: Map<string, string[]>; 
 
   const warnings: { profile: string; text: string }[] = [];
   for (const [profileName, profile] of forge.profiles) {
+    // Spec 54 §5.7: an abstract profile resolves nothing by itself; its children count through their families.
+    if (isAbstract(forge, profileName)) continue;
     const { recipes, warning } = recipesOrWritten(forge, profile);
     if (warning !== null) warnings.push({ profile: profileName, text: warning });
     const visited = new Set<string>();
     const stack: string[] = [...recipes];
-    const local = forge.locals.get(profileName)?.recipes;
+    // The family's local recipes, nearest first (spec 54 §5.6): the owner keys the entry.
+    const family = familyOf(forge, profileName);
+    const ownerOf = (name: string) => family.find((q) => forge.locals.get(q)?.recipes.has(name));
     while (stack.length) {
       const name = stack.pop()!;
       if (visited.has(name)) continue;
       visited.add(name);
-      const rec = local?.get(name)?.recipe ?? forge.recipes.get(name);
+      const owner = ownerOf(name);
+      const rec = owner !== undefined ? forge.locals.get(owner)!.recipes.get(name)!.recipe : forge.recipes.get(name);
       if (!rec) continue; // unknown recipe: skip
-      result.get(local?.has(name) ? `${profileName}\0${name}` : name)!.push(profileName);
+      result.get(owner !== undefined ? `${owner}\0${name}` : name)!.push(profileName);
       for (const parent of rec.extends) stack.push(parent);
     }
   }
@@ -218,7 +225,7 @@ export function listRecipes(forge: Forge, context: CatalogueContext | null): Rec
   for (const scope of scopesOf(forge, context)) {
     const own = scope.profile === null ? [...forge.recipes.values()] : [...forge.locals.get(scope.profile)!.recipes.values()].map((r) => r.recipe);
     // A local recipe is in use only in its own profile's context, which is the only context that lists it with one.
-    const marks = scope.profile === null || scope.profile === context?.profile;
+    const marks = scope.profile === null || (context !== null && familyOf(forge, context.profile).includes(scope.profile));
     for (const rec of sortByName(own)) {
       const inUse: RecipeInUse | null = marks && resolvedSet.has(rec.name)
         ? {
@@ -405,16 +412,17 @@ export function listIngredients(
     const r = overriddenBase(forge, ref);
     return r !== undefined ? forgeRelative(forge, r.dir) : null;
   };
-  const contextLocals = context ? forge.locals.get(context.profile)?.ingredients : undefined;
+  // Spec 54 O6: a parent's local overrides the root base for the whole family.
+  const contextLocals = context ? familyOf(forge, context.profile).map((q) => forge.locals.get(q)?.ingredients) : [];
   for (const scope of scopes) {
     const own = scope.profile === null ? forge.ingredients : forge.locals.get(scope.profile)!.ingredients;
     // With --recipe, only the scopes of the chain's view, and only what the chain cites (rule 11)
-    if (chainRefs && scope.profile !== null && scope.profile !== chainOwner) continue;
+    if (chainRefs && scope.profile !== null && scope.profile !== chainOwner && !(chainOwner !== null && familyOf(forge, chainOwner).includes(scope.profile))) continue;
     const refToRecipes = citing(scope.view);
-    const marks = scope.profile === null || scope.profile === context?.profile;
-    // With a context the listing is the profile's view: a root row its local overrides is left out (spec 56 §6).
+    const marks = scope.profile === null || (context !== null && familyOf(forge, context.profile).includes(scope.profile));
+    // With a context the listing is the profile's view: a root row a local of its family overrides is left out (spec 56 §6, O6).
     const refsToInclude = (chainRefs ? [...chainRefs].filter((ref) => own.has(ref as IngredientRef)) : [...own.keys()]).filter(
-      (ref) => !(overrides && scope.profile === null && contextLocals?.has(ref as IngredientRef)),
+      (ref) => !(overrides && scope.profile === null && contextLocals.some((l) => l?.has(ref as IngredientRef))),
     );
     const entries = refsToInclude
       .map((ref) => own.get(ref as IngredientRef)!)
