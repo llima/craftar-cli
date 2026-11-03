@@ -288,7 +288,7 @@ export function forgeLine(ws: Workspace, lock: Lock | null): string | null {
  * placed in `FILE_STATE_ORDER_MAP` there. A plan with unset declared parameters has no next sync
  * to count: the line says it is refused (spec 29 §4.1).
  */
-export function nextSyncLine(st: FileStatus[], unset: UnsetParam[], conflicts: readonly OverrideConflict[] = []): string {
+export function nextSyncLine(st: FileStatus[], unset: UnsetParam[], conflicts: readonly OverrideConflict[]): string {
   if (unset.length) return `next sync: ${unsetRefused(unset)}`;
   if (conflicts.length) return `next sync: ${overrideRefused([...conflicts])}`;
   const escaping = escapingRows(st);
