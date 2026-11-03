@@ -1,8 +1,7 @@
 import { promises as fs } from "node:fs";
-import { abstractRefusal, isAbstract } from "../core/profile-extends.js";
 import { forgeFor, overriddenBase, ProfileLocalLoadError, readsLocalOverride, readsProfileLocal, type LocalLayer } from "../core/profile-local.js";
 import { readsRecipeSections } from "../core/recipe-sections.js";
-import { familyOf } from "../core/profile-extends.js";
+import { abstractRefusal, familyOf, isAbstract, mergedProfile } from "../core/profile-extends.js";
 import path from "node:path";
 import os from "node:os";
 import { readWorkspaceConfig } from "../core/sync.js";
@@ -2523,7 +2522,8 @@ function primaryFor(
   cachedResolution: { ok: true; resolution: Resolution; lookup: RuleLookup } | { ok: false; error: unknown } | null,
 ): { refs: NonNullable<RunContext["primaryRefs"]>; agentsMdOnly: Set<string> } | null {
   if (!loaded || !readsPrimary(loaded.manifest)) return null;
-  const own = loaded.profiles.get(profile)?.params ?? {};
+  // A parent's params are the child's too (spec 54 §5.4): the key set by a parent counts.
+  const own = loaded.profiles.has(profile) ? mergedProfile(loaded, profile).params : {};
   const setSomewhere =
     Object.hasOwn(own, AGENTS_MD_PRIMARY_KEY) ||
     Object.hasOwn(ctx.W, AGENTS_MD_PRIMARY_KEY) ||

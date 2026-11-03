@@ -349,3 +349,18 @@ describe("spec 54 §5.11 — a parent's sections/ file no value names is warned"
   });
 });
 
+describe("spec 41 §4.10 under a family — agents-md.primary a parent sets keeps import's fail-closed", () => {
+  it("a child that does not resolve on its own refuses the import when its parent sets the mode", async () => {
+    const f = kept(await acmeHoisted(GATE, { importShaped: true }));
+    expect(runCli(["sync", "--workspace", f.ws.portal]).code).toBe(0);
+    const parent = path.join(f.forgeRoot, "profiles/acme/profile.yaml");
+    const doc = YAML.parse(await fs.readFile(parent, "utf8"));
+    doc.params = { ...doc.params, "agents-md.primary": true };
+    await fs.writeFile(parent, YAML.stringify(doc));
+    await fs.writeFile(path.join(f.forgeRoot, "profiles/acme-portal/profile.yaml"), YAML.stringify({ name: "acme-portal", extends: "acme", recipes: ["stack-angular", "no-such-recipe"], targets: ["claude-code", "kiro"] }));
+    await expect(importClaudeCode({ workspaceRoot: f.ws.portal, forgeRoot: f.forgeRoot, profileName: "acme-portal" })).rejects.toThrow(
+      /^import: profile acme-portal does not resolve on its own \(.*\) — agents-md\.primary needs it to compare the bases; fix the Forge and re-run\n/,
+    );
+  });
+});
+
