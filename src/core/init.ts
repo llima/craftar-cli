@@ -1,4 +1,5 @@
 import path from "node:path";
+import { mergedProfile as familyProfile } from "./profile-extends.js";
 import YAML from "yaml";
 import { TARGETS, type Lock, type WorkspaceConfig } from "../schema/index.js";
 import { planClone } from "./clone.js";
@@ -229,7 +230,7 @@ export async function planInit(root: string, input: InitInput, opts: InitOptions
     // Clone planning (spec 37 §4.2)
     let repos: RepoEntry[] = [];
     if (input.clone === true) {
-      const profile = ws.forge.profiles.get(ws.config.profile)!;
+      const profile = familyProfile(ws.forge, ws.config.profile);
       const ctx = { planned: p.files.map((f) => f.path), lockPaths: lock?.files.map((f) => f.path) ?? [], forgeDir: ws.forge.root };
       const clonePlan = await planClone(root, profile, ctx, { present: "refuse", noEntries: "nothing to clone; drop --clone" });
       repos = clonePlan.entries;
@@ -313,7 +314,7 @@ export async function planInit(root: string, input: InitInput, opts: InitOptions
   // Clone planning (spec 37 §4.2): when input.clone is true, planClone errors propagate.
   let repos: RepoEntry[] = [];
   if (input.clone === true) {
-    const profile = ws.forge.profiles.get(ws.config.profile)!;
+    const profile = familyProfile(ws.forge, ws.config.profile);
     const ctx = { planned: p.files.map((f) => f.path), lockPaths: lock?.files.map((f) => f.path) ?? [], forgeDir: ws.forge.root };
     const clonePlan = await planClone(root, profile, ctx, { present: "refuse", noEntries: "nothing to clone; drop --clone" });
     repos = clonePlan.entries;

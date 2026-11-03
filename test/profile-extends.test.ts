@@ -198,4 +198,18 @@ describe("spec 54 Part B — a profile that extends a profile", () => {
     const base = j.recipes.find((r: { name: string }) => r.name === "base");
     expect(base.profiles).toEqual(["acme-portal", "acme-shop", "globex"]);
   });
+
+  it("a child that writes no repos or templates gets its parent's; craftar repos and templates list read them", async () => {
+    const f = kept(await acmeHoisted(GATE));
+    await editProfile(f, "acme", (d) => ({
+      ...d,
+      repos: [{ name: "portal-api", url: "https://git.example.com/acme/portal-api.git" }],
+      templates: [{ kind: "dotnet-new", packages: ["Acme.Templates"] }],
+    }));
+    const repos = JSON.parse(runCli(["repos", "--json", "--workspace", f.ws.portal]).stdout);
+    expect(repos.repos.map((r: { name: string }) => r.name)).toEqual(["portal-api"]);
+    const t = JSON.parse(runCli(["templates", "list", "--json", "--workspace", f.ws.shop]).stdout);
+    expect(t.templates.map((e: { package: string }) => e.package)).toEqual(["Acme.Templates"]);
+  });
 });
+

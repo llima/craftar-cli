@@ -1,4 +1,5 @@
 import { containRoot, escapeFileLine, escapeOf, escapeRefusal, escapingRows, forgeReader } from "./core/contain.js";
+import { mergedProfile as familyProfile } from "./core/profile-extends.js";
 import { Command } from "commander";
 import pc from "picocolors";
 import path from "node:path";
@@ -697,7 +698,7 @@ const reposCmd = program
     const ws = await loadWorkspace(o.workspace, load(o, "read"));
     const p = await plan(ws);
     const lock = await readLock(ws.root);
-    const profile = ws.forge.profiles.get(ws.config.profile)!;
+    const profile = familyProfile(ws.forge, ws.config.profile);
     // C4: profileRepos throws for a block that does not read
     const entries = profileRepos(profile);
     // No entry → one line, exit 0
@@ -773,7 +774,7 @@ reposCmd
     const ws = await loadWorkspace(workspace, { ...load({ offline: false }, "sync"), fetchHint: "fresh-copy" });
     const p = await plan(ws);
     const lock = await readLock(ws.root);
-    const profile = ws.forge.profiles.get(ws.config.profile)!;
+    const profile = familyProfile(ws.forge, ws.config.profile);
     // Build the destination context
     const ctx: DestinationContext = {
       planned: p.files.map((f) => f.path),
@@ -1589,7 +1590,7 @@ const templates = program.command("templates").description("Project templates th
 
 /** The profile's declared templates (spec 32 §5.2); a refused block is the command's error. */
 async function declaredFor(ws: Workspace): Promise<{ profile: string; declared: Declared }> {
-  const profile = ws.forge.profiles.get(ws.config.profile);
+  const profile = ws.forge.profiles.has(ws.config.profile) ? familyProfile(ws.forge, ws.config.profile) : undefined;
   if (!profile) fail(`profile "${ws.config.profile}" not found in Forge`);
   try {
     return { profile: profile.name, declared: declaredTemplates(profile, await profileLabel(ws.forge.root, profile.name)) };
