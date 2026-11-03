@@ -63,6 +63,15 @@ describe("loadForge: a linked ingredient or profile folder (E39.2)", () => {
     expect(f.skippedLinks).toEqual(["profiles/acme/ingredients/rules/linked"]);
   });
 
+  it("a link to a file, where a folder is expected, is not called a skipped folder; a dangling one is", async () => {
+    const s = await linkedForge();
+    await fs.writeFile(path.join(s.root, "notes.md"), "# notes\n");
+    await fs.symlink(path.join(s.root, "notes.md"), path.join(s.forgeRoot, "ingredients/rules/NOTES.md"));
+    await fs.symlink(path.join(s.root, "nowhere"), path.join(s.forgeRoot, "profiles/gone"), "junction");
+    const f = await loadForge(s.forgeRoot);
+    expect(f.skippedLinks).toEqual(["profiles/gone"]);
+  });
+
   it("a Forge with no link records none and warns nothing new", async () => {
     const s = await linkedForge();
     const f = await loadForge(s.forgeRoot);

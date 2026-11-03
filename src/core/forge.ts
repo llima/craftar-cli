@@ -42,8 +42,8 @@ export interface Forge {
   /** Below schema 8, the local folders a profile holds that nothing reads (spec 51 §4.1), by profile name. */
   ignoredLocals: IgnoredLocals;
   /**
-   * The ingredient, ingredient-type and profile folders the loader skipped because each is a symbolic link (E39.2),
-   * Forge-relative POSIX paths, sorted — never what they point at. `resolve()` warns once per entry. Optional so a Forge
+   * The ingredient, ingredient-type and profile folders the loader skipped because each is a symbolic link to a directory
+   * or leading nowhere (E39.2; a link to a file is not one), as Forge-relative POSIX paths, sorted — never what they point at. `resolve()` warns once per entry. Optional so a Forge
    * built by hand in a test needs none.
    */
   skippedLinks?: string[];
@@ -210,7 +210,13 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     if (findings.length) throw new ProfileLocalLoadError(findings);
   }
 
-  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals, skippedLinks: skippedLinks.sort() };
+  // A link that leads to a file is no folder skipped: only one to a directory, or leading nowhere, is said.
+  const folders: string[] = [];
+  for (const rel of skippedLinks) {
+    const target = await fs.stat(path.join(root, rel)).catch(() => null);
+    if (target === null || target.isDirectory()) folders.push(rel);
+  }
+  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals, skippedLinks: folders.sort() };
 }
 
 const isLink = (p: string) => fs.lstat(p).then((st) => st.isSymbolicLink(), () => false);
@@ -333,7 +339,8 @@ async function gateRead(dir: string): Promise<string[]> {
   const names = new Set<string>();
   // `--worktree` is read only where git keeps a worktree's own configuration: with a linked worktree and
   // `extensions.worktreeConfig` off, git refuses it (exit 128), and without the extension it reads the same file as `--local`.
-  const perWorktree = await execProgram("git", [...gitRead(dir), "config", "--bool", "--get", "extensions.worktreeConfig"]).then(
+  // `--local`: git honours an extension only from the repository's own `config`, never a global or system one.
+  const perWorktree = await execProgram("git", [...gitRead(dir), "config", "--local", "--bool", "--get", "extensions.worktreeConfig"]).then(
     ({ stdout }) => stdout.trim() === "true",
     (e: { code?: number }) => {
       if (e.code === 1) return false; // not set

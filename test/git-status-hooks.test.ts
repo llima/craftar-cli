@@ -261,6 +261,25 @@ describe.skipIf(process.platform === "win32")("the gate's git commands do not ru
     expect(await ran(marker)).toBe(false);
   });
 
+  it("extensions.worktreeConfig set outside the repository's own config does not count (git ignores it there)", async () => {
+    const { dir } = await filtered();
+    const linked = `${dir}-linked`;
+    cleanups.push(() => removeWithRetry(linked));
+    await execProgram("git", ["-C", dir, "worktree", "add", "-q", linked]);
+    const global = `${dir}-global.cfg`;
+    cleanups.push(() => fs.rm(global, { force: true }));
+    await fs.writeFile(global, "[extensions]\n\tworktreeConfig = true\n");
+    const before = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = global;
+    try {
+      expect(await gitDirty(dir)).toBe(false);
+      expect(await gitIgnored(dir, "file.txt")).toBe(false);
+    } finally {
+      if (before === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = before;
+    }
+  });
+
   it("a linked worktree's own filter, with extensions.worktreeConfig, is blanked in that worktree", async () => {
     const { dir, marker, script } = await filtered();
     const linked = `${dir}-linked`;
