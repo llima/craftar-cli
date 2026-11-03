@@ -25,6 +25,8 @@ const ALLOWED = [
   "src/core/registry.ts",
   "src/core/report.ts",
   "src/core/resolve.ts",
+  // recipeSectionFile (spec 54 §4.4) finds a recipe's declaring file as the profile's view would: its own local first, then the root.
+  "src/core/section-files.ts",
   "src/core/sync.ts",
   "src/core/unify.ts",
   "src/core/variants.ts",
