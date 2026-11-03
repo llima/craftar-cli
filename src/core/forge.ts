@@ -321,30 +321,31 @@ const FILTER_KEY = /^filter\.(.+)\.(clean|process|required)$/;
 
 /**
  * `gitRead`'s arguments for the gate's own commands (`gitDirty`, `gitUnheld`, `gitIgnored`), with every filter the
- * repository's own configuration names — local or worktree scope, an included file counting as the file that includes
- * it — blanked: `filter.<x>.clean=` and `filter.<x>.process=` keep git from running it, and `filter.<x>.required=false`
- * keeps git from dying on the blanked filter. A `git status` over a stale index otherwise re-reads a file through
- * `filter.<x>.clean`, a command the Forge directory names (E11.2). A filter set globally, by the system or on the
- * command line is not the Forge's and still runs (a global LFS setup keeps working). Throws when git cannot list the
+ * repository's own configuration names — its `config` and, with `extensions.worktreeConfig`, its worktree's, an included
+ * file counting as the file that includes it — blanked: `filter.<x>.clean=` and `filter.<x>.process=` keep git from
+ * running it, and `filter.<x>.required=false` keeps git from dying on the blanked filter. A `git status` over a stale
+ * index otherwise re-reads a file through `filter.<x>.clean`, a command the Forge directory names (E11.2). A filter
+ * whose name the repository's own configuration does not set — global, system or on the command line — still runs.
+ * Read with `--local` and `--worktree` rather than `--show-scope`, which needs git 2.26. Throws when git cannot list the
  * keys or a name cannot be passed as `-c name=` — the callers fail closed.
  */
 async function gateRead(dir: string): Promise<string[]> {
-  let listed = "";
-  try {
-    ({ stdout: listed } = await execProgram("git", [...gitRead(dir), "config", "--show-scope", "--includes", "--name-only", "--get-regexp", FILTER_KEY.source]));
-  } catch (e) {
-    // Exit 1: no such key.
-    if ((e as { code?: number }).code !== 1) throw e;
-  }
   const names = new Set<string>();
-  for (const line of listed.split("\n")) {
-    const tab = line.indexOf("\t");
-    if (tab === -1) continue;
-    const scope = line.slice(0, tab);
-    const m = FILTER_KEY.exec(line.slice(tab + 1));
-    if (!m || (scope !== "local" && scope !== "worktree")) continue;
-    if (/[=\u0000-\u001f]/.test(m[1])) throw new Error("a filter name git cannot be handed");
-    names.add(m[1]);
+  for (const scope of ["--local", "--worktree"]) {
+    let listed = "";
+    try {
+      ({ stdout: listed } = await execProgram("git", [...gitRead(dir), "config", scope, "--includes", "--name-only", "--get-regexp", FILTER_KEY.source]));
+    } catch (e) {
+      const code = (e as { code?: number }).code;
+      // Exit 1: no such key. Exit 129 for --worktree: a git before 2.20, which reads no worktree configuration.
+      if (code !== 1 && !(scope === "--worktree" && code === 129)) throw e;
+    }
+    for (const line of listed.split("\n")) {
+      const m = FILTER_KEY.exec(line.trim());
+      if (!m) continue;
+      if (/[=\u0000-\u001f]/.test(m[1])) throw new Error("a filter name git cannot be handed");
+      names.add(m[1]);
+    }
   }
   const args = gitRead(dir);
   for (const x of [...names].sort()) args.push("-c", `filter.${x}.clean=`, "-c", `filter.${x}.process=`, "-c", `filter.${x}.required=false`);

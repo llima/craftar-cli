@@ -237,6 +237,15 @@ describe.skipIf(process.platform === "win32")("the gate's git commands do not ru
     expect(await ran(marker)).toBe(false);
   });
 
+  it("a filter set in the worktree's own configuration is blanked too", async () => {
+    const { dir, marker, script } = await filtered();
+    await execProgram("git", ["-C", dir, "config", "extensions.worktreeConfig", "true"]);
+    await execProgram("git", ["-C", dir, "config", "--worktree", "filter.mark.clean", script]);
+    await stale(dir);
+    expect(await gitDirty(dir)).toBe(false);
+    expect(await ran(marker)).toBe(false);
+  });
+
   it("a filter from a file the repository's configuration includes is blanked too", async () => {
     const { dir, marker, script } = await filtered();
     const inc = path.join(dir, "..", `${path.basename(dir)}-inc.cfg`);
