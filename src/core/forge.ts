@@ -662,7 +662,12 @@ export async function assertNoDirLinkIn(forgeDir: string, dir: string, command: 
   }
   for (const rel of files) {
     const abs = path.join(dir, rel);
-    if (!(await fs.lstat(abs)).isSymbolicLink()) continue;
+    // A file listed and gone before this lstat (a narrow race) holds no link: skip it rather than throw a raw ENOENT (E34.2d).
+    const st = await fs.lstat(abs).catch((e: NodeJS.ErrnoException) => {
+      if (e.code === "ENOENT") return null;
+      throw e;
+    });
+    if (!st?.isSymbolicLink()) continue;
     const target = await fs.stat(abs).catch(() => null);
     if (target?.isDirectory()) {
       throw new Error(`${path.relative(forgeDir, abs).split(path.sep).join("/")} is a symbolic link to a directory in the Forge — ${command} does not read through it; replace it with the files and commit`);
