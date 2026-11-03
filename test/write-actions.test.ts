@@ -420,6 +420,98 @@ describe("confirmWrites", () => {
   });
 });
 
+describe("editRecipes race condition", () => {
+  it("a. editRecipes refuses when craftar.yaml changes between its read and its write", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(
+      await scenario(
+        {
+          ingredients: [rule("keep", "# Keep\n"), rule("extra-rule", "# Extra\n")],
+          recipes: [recipe("base", ["rule/keep"]), recipe("extra", ["rule/extra-rule"])],
+          profiles: [profile("acme", ["base"])],
+        },
+        { config: { profile: "acme" } },
+      ),
+    );
+
+    const file = path.join(s.wsRoot, "craftar.yaml");
+    const original = await fs.readFile(file, "utf8");
+    const HAND = original + "# hand edit\n";
+
+    const ws = await loadWorkspace(s.wsRoot, { home });
+    await expect(
+      editRecipes(ws, "add", ["extra"], {
+        beforeWrite: async () => {
+          await fs.writeFile(file, HAND);
+        },
+      }),
+    ).rejects.toThrow("craftar.yaml changed while craftar was reading it — run again");
+
+    // The hand edit survived
+    expect(await fs.readFile(file, "utf8")).toBe(HAND);
+  });
+
+  it("b. editRecipes refuses when craftar.yaml is removed before its write", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(
+      await scenario(
+        {
+          ingredients: [rule("keep", "# Keep\n"), rule("extra-rule", "# Extra\n")],
+          recipes: [recipe("base", ["rule/keep"]), recipe("extra", ["rule/extra-rule"])],
+          profiles: [profile("acme", ["base"])],
+        },
+        { config: { profile: "acme" } },
+      ),
+    );
+
+    const file = path.join(s.wsRoot, "craftar.yaml");
+
+    const ws = await loadWorkspace(s.wsRoot, { home });
+    await expect(
+      editRecipes(ws, "add", ["extra"], {
+        beforeWrite: async () => {
+          await fs.rm(file);
+        },
+      }),
+    ).rejects.toThrow("craftar.yaml changed while craftar was reading it — run again");
+
+    // The file was not recreated
+    await expect(fs.access(file)).rejects.toThrow();
+  });
+
+  it("c. editRecipes writes when craftar.yaml did not change", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(
+      await scenario(
+        {
+          ingredients: [rule("keep", "# Keep\n"), rule("extra-rule", "# Extra\n")],
+          recipes: [recipe("base", ["rule/keep"]), recipe("extra", ["rule/extra-rule"])],
+          profiles: [profile("acme", ["base"])],
+        },
+        { config: { profile: "acme" } },
+      ),
+    );
+
+    const file = path.join(s.wsRoot, "craftar.yaml");
+
+    const ws = await loadWorkspace(s.wsRoot, { home });
+    const outcome = await editRecipes(ws, "add", ["extra"], {
+      beforeWrite: async () => {
+        // Do nothing
+      },
+    });
+
+    expect(outcome.changed).toBe(true);
+
+    // The file on disk now holds the new recipe
+    const content = await fs.readFile(file, "utf8");
+    expect(content).toContain("extra");
+  });
+});
+
 describe("syncToolResult", () => {
   it("builds the sync tool result with skipped reasons and removed reasons", async () => {
     const home = await tmpDir("home-");
