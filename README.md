@@ -726,7 +726,7 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packagi
 
 ### to 0.0.0-write-window
 
-- **`sync` can skip a file with a new line**: a file edited between the moment `sync` (or `drift discard`, the `sync` tool of `craftar mcp`, Sync and Discard edit in `craftar ui`) read it and the moment it would write or remove it is kept and listed as `changed while craftar was writing — kept; run craftar sync again`; the `sync` tool's `skipped[].reason` can hold that text. No key or exit code changes; the next run reads such a file as `drift`, `collision` or `orphan-drift`.
+- **`sync` can skip a file with a new line**: a file edited between the moment `sync` (or `drift discard`, the `sync` tool of `craftar mcp`, Sync and Discard edit in `craftar ui`) read it and the moment it would write or remove it is kept and listed as `changed while craftar was writing — kept; run craftar sync again`; the `sync` tool's `skipped[].reason` can hold that text. No key or exit code changes; the next run reads such a file as `drift`, `collision` or `orphan-drift` — or as `new`, or not at all, when it was deleted.
 - **`craftar add recipe` / `remove recipe` and the `add_recipe` / `remove_recipe` tools refuse** with `craftar.yaml changed while craftar was reading it — run again` when the file changed while they planned, leaving it as it is.
 
 ### to 0.53.0
