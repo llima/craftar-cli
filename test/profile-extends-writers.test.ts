@@ -187,4 +187,19 @@ describe("spec 54 Part B — the writers", () => {
       ".claude/rules/style.md: profiles/acme/recipes/acme-extra.yaml reaches rule/style, local to acme, which acme-portal extends — no command writes a parent: edit the Forge by hand",
     );
   });
+
+  it("drift show gives a parent's local file promotable: false, and drift promote refuses even a value edit (D24, spec 54 §5.9)", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    gitInit(f0.forgeRoot);
+    expect(runCli(["sync", "--workspace", f0.ws.portal]).code).toBe(0);
+    const file = path.join(f0.ws.portal, ".claude/rules/house.md");
+    await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace("Tickets start with ACME.", "Tickets start with PORTAL."));
+    const show = runCli(["drift", "show", ".claude/rules/house.md", "--workspace", f0.ws.portal, "--json"]);
+    const row = JSON.parse(show.stdout).files[0];
+    expect([row.promotable, row.reason]).toEqual([false, "local to acme, which this profile extends"]);
+    await expect(
+      planPromote({ workspaceRoot: f0.ws.portal, forgeDir: null, path: ".claude/rules/house.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
+    ).rejects.toThrow("D24 .claude/rules/house.md comes from rule/house, local to acme, which acme-portal extends (profiles/acme/ingredients/rules/house)");
+  });
 });

@@ -3,7 +3,7 @@
  * Writes nothing in a workspace, its lock, the registry or the Forge cache.
  */
 import { familyOf } from "../core/profile-extends.js";
-import { forgeFor, localCiters } from "../core/profile-local.js";
+import { forgeFor, localCiters, parentLocalsOf } from "../core/profile-local.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -190,6 +190,9 @@ const D20 = (p: string) => `${p} holds references agents-md.primary reworded —
 /** D21 (spec 44 §4.5): the file holds the generated rules index — promoting it would carry sync-generated content into the Forge. */
 const D21 = (p: string) => `${p} holds the generated rules index — edit the Forge's rule, or the description of the rule it lists`;
 /** D23 (spec 50 §5.6): a hand edit of a metadata field the Forge renders from a parameter — promoting would freeze the value. */
+/** D24 (spec 54 §5.9): a hand edit of a file that comes from a parent's local. */
+const D24 = (p: string, ref: string, parent: string, profile: string, dir: string) =>
+  `D24 ${p} comes from ${ref}, local to ${parent}, which ${profile} extends (${dir}) — no command writes a parent: edit it there by hand, then sync every workspace of the family`;
 const D23 = (p: string, field: string) =>
   `${p} changes ${field}, which the Forge renders from a parameter — set the parameter's value in the profile, or edit the Forge's ingredient`;
 const D11 = (p: string, line: number) => `${p}:${line} holds a section marker — a variant body cannot hold one; remove it and promote again`;
@@ -613,7 +616,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Static checks (promotability) using driftList's row
   const indexedPaths = new Set(p0.indexed.map((x) => x.path));
   const metadataPaths = await metadataEdits(root, p0, [fileStatus]);
-  const rows = driftList([fileStatus], provided, new Set(p0.reworded), indexedPaths, metadataPaths);
+  const parentLocals = parentLocalsOf(forge, profile);
+  const rows = driftList([fileStatus], provided, new Set(p0.reworded), indexedPaths, metadataPaths, parentLocals);
   if (rows.length === 0) {
     throw new Error(D4_OTHER(normalized, fileStatus.state));
   }
@@ -631,6 +635,12 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     if (prov) {
       // D18: provided by the integrations block
       throw new Error(D18(normalized, prov.recipe, profile, prov.slot, fileStatus.ingredient!));
+    }
+    // D24 (spec 54 §5.9): a file from a parent's local — no command writes a parent, whatever the edit would become.
+    const parent = fileStatus.ingredient ? parentLocals.get(fileStatus.ingredient) : undefined;
+    if (parent !== undefined) {
+      const local = forge.locals.get(parent)!.ingredients.get(fileStatus.ingredient as IngredientRef)!;
+      throw new Error(D24(normalized, fileStatus.ingredient!, parent, profile, path.relative(forge.root, local.dir).split(path.sep).join("/")));
     }
     if (reason === REWORDED_REASON) throw new Error(D20(normalized));
     if (reason === INDEXED_REASON) throw new Error(D21(normalized));
@@ -812,8 +822,6 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Spec 51 §5.4: a local of this profile is edited in place — nothing else resolves it, so it has no variant.
   const isLocal = forge.locals.get(profile)?.ingredients.has(ingredientRef) === true;
 
-  // Spec 54 §5.9: a file from a parent's local is the family's; no writer writes a parent (D24).
-  const parentOwner = isLocal ? undefined : familyOf(forge, profile).slice(1).find((q) => forge.locals.get(q)?.ingredients.get(ingredientRef)?.dir === X.dir);
 
   // Determine if X is this profile's variant (name is `<N>--<p>` AND as is `<N>`)
   const isOwnVariant = X.meta.name === `${N}--${profile}` && X.meta.as === N;
@@ -886,11 +894,6 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     outcome = isLocal ? "local" : isOwnVariant ? "variant-updated" : "variant";
     flattenedParams = [...baseCitedKeys].sort();
     flattenedSections = baseSectionNames;
-  }
-  // D24 (spec 54 §5.9): a value the child can hold goes to the child; anything else would write the parent's local.
-  if (parentOwner !== undefined && (outcome === "variant" || outcome === "variant-updated")) {
-    const dir = path.relative(forge.root, X.dir).split(path.sep).join("/");
-    throw new Error(`D24 ${normalized} comes from ${ingredientRef}, local to ${parentOwner}, which ${profile} extends (${dir}) — no command writes a parent: edit it there by hand, then sync every workspace of the family`);
   }
 
   // Spec 51 §4.5: a new variant would leave a local recipe of this profile naming the base beside it — and, spec 54

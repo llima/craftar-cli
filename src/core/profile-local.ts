@@ -323,3 +323,16 @@ export function localCiters(forge: Forge, refs: readonly string[], opts: { profi
 export function localRecipeNamed(forge: Forge, name: string): boolean {
   return [...forge.locals.values()].some((l) => l.recipes.has(name));
 }
+
+/**
+ * The ingredients a profile resolves from a parent's local (spec 54 §5.9), ref → that parent, nearest first: the files
+ * `drift show` gives `promotable: false` and `drift promote` refuses (D24). Empty for a profile that extends nothing.
+ */
+export function parentLocalsOf(forge: Forge, profile: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const own = forge.locals.get(profile)?.ingredients;
+  for (const q of familyOf(forge, profile).slice(1)) {
+    for (const ref of forge.locals.get(q)?.ingredients.keys() ?? []) if (!own?.has(ref) && !out.has(ref)) out.set(ref, q);
+  }
+  return out;
+}

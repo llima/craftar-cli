@@ -60,7 +60,7 @@ import { assertNoLinkOnPath, exists, gitDirty, gitIgnored, gitIsRepo, gitTracked
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { applyMove, planLocalize, planShare, proveMove, type ForgeMove, type MoveCommand } from "./core/localize.js";
 import { applyExtract, DEFAULT_MIN_BYTES, EXTRACT_COMMAND, planExtract, proveExtract, type ExtractPlan } from "./core/sections-extract.js";
-import { forgeFor as profileView, forgeRelative, isLocalMessage, localCiters, localOwners, overriddenBase, overriddenWarnings } from "./core/profile-local.js";
+import { forgeFor as profileView, forgeRelative, isLocalMessage, localCiters, localOwners, overriddenBase, overriddenWarnings, parentLocalsOf } from "./core/profile-local.js";
 import type { Forge } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
@@ -1009,7 +1009,7 @@ drift
     }
     const indexedPaths = new Set(p.indexed.map((x) => x.path));
     const shown = named ? [named] : st;
-    const rows = driftList(shown, provided, new Set(p.reworded), indexedPaths, await metadataEdits(ws.root, p, shown));
+    const rows = driftList(shown, provided, new Set(p.reworded), indexedPaths, await metadataEdits(ws.root, p, shown), parentLocalsOf(ws.forge, ws.config.profile));
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
