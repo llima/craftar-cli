@@ -81,7 +81,7 @@ describe("withLock", () => {
     await fs.rm(file, { recursive: true, force: true });
   });
 
-  it("i. a release that fails twice then succeeds → lock file is gone, onReleaseError not called", async () => {
+  it("i. a release that fails, then succeeds on a retry → lock file is gone, onReleaseError not called", async () => {
     const dir = await tmpDir();
     const file = path.join(dir, "registry.lock");
     const onReleaseErrors: unknown[] = [];

@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { containRoot, escapeFileLine, escapeOf, escapeRefusal, escapingRows, readForgeFile, readForgeText, type ContainRoot, type Escape } from "./contain.js";
+import { containRoot, escapeFileLine, escapeOf, escapeRefusal, escapingRows, readForgeFile, readForgeText, type Escape } from "./contain.js";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
 import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
@@ -1328,7 +1328,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
         if (!opts.dryRun) {
           if (await changedSince(s)) {
             // File changed in the window: skip it
-            const kept: FileState = s.planned ? (s.lock ? "drift" : "collision") : "orphan-drift";
+            const kept: FileState = s.lock ? "drift" : "collision";
             skipped.push({ ...s, state: kept, changedSinceStatus: true });
             if (s.lock) entries.push(s.lock);
             break;

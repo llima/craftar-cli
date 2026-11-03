@@ -38,7 +38,7 @@ export const statusPath = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, 
 /** `explain`'s refusal: the Forge does not produce this path for the profile. */
 export const notProduced = (p: string, profile: string) => `${p} is not produced by the Forge for profile ${profile}`;
 
-/** The line for a row skipped because it changed after status() read it (spec 48 §4.3). */
+/** The line for a row `apply()` skipped because its file changed after `status()` read it (tech-debt E25, the status-to-apply window). */
 export const CHANGED_SINCE_STATUS = "changed while craftar was writing — kept; run craftar sync again";
 
 /** Why sync leaves a file alone, for the three states it skips. */
