@@ -8,7 +8,7 @@ import { assertNoLinkIn, assertNoLinkOnPath, copyForgeForProof, listFiles, loadF
 import { ingredientText, occupied, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
 import { impactOf, planAll, type ForgeWorkspace, type Planned } from "./impact.js";
 import { recipesOrWritten } from "./integrations.js";
-import { isLocalMessage, localOwners, readsProfileLocal } from "./profile-local.js";
+import { holdsIngredient, isLocalMessage, localOwners, readsProfileLocal } from "./profile-local.js";
 import { plan, type Workspace } from "./sync.js";
 import type { WriteJournal } from "./unify.js";
 import { editYamlText } from "./yaml-edit.js";
@@ -111,7 +111,7 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
   const all = resolveAll(forge);
   const mine = all.get(profile)!;
   if (mine instanceof Error) throw new Error(`${command}: profile ${profile} does not resolve (${firstLine(mine)}) — fix it first`);
-  if (!mine.ingredients.some((i) => i.ref === ref)) throw new Error(`${command}: profile ${profile} does not resolve ${ref} — localize moves an ingredient its profile uses`);
+  if (!holdsIngredient(mine, ing)) throw new Error(`${command}: profile ${profile} does not resolve ${ref} — localize moves an ingredient its profile uses`);
   for (const [q, res] of all) {
     if (q === profile) continue;
     if (res instanceof Error) {
@@ -123,7 +123,7 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
       warnings.push(`profile ${q} does not resolve (${firstLine(res)}) — not proved; its recipes name nothing this move touches`);
       continue;
     }
-    if (res.ingredients.some((i) => i.ref === ref)) throw new Error(`${command}: profile ${q} also resolves ${ref} — only an ingredient no other profile resolves becomes local`);
+    if (holdsIngredient(res, ing)) throw new Error(`${command}: profile ${q} also resolves ${ref} — only an ingredient no other profile resolves becomes local`);
     const shared = res.recipes.filter((r) => moving.has(r) && forge.recipes.has(r));
     if (shared.length) throw new Error(`${command}: profile ${q} resolves recipe ${shared[0]}, which would move with ${ref} — only recipes no other profile resolves move`);
   }

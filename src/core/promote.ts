@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { forgeFor, isLocalMessage, localCiters, localOwners, localRecipeNamed, skippedLinkWarning } from "./profile-local.js";
+import { forgeFor, holdsIngredient, isLocalMessage, localCiters, localOwners, localRecipeNamed, skippedLinkWarning } from "./profile-local.js";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -92,7 +92,8 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
   const before = resolveAll(forge);
   const holds = (q: string, r: string) => {
     const res = before.get(q);
-    return res !== undefined && !(res instanceof Error) && res.ingredients.some((i) => i.ref === r);
+    const ing = forge.ingredients.get(r as IngredientRef);
+    return res !== undefined && !(res instanceof Error) && ing !== undefined && holdsIngredient(res, ing);
   };
   for (const [q, res] of before) if (res instanceof Error) warnings.push(`profile ${q} does not resolve today (${firstLine(res)}) — promote could not check it`);
   if (holds(profile, X)) {

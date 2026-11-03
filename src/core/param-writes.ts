@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { IngredientSchema, ProfileWrittenSchema, WorkspaceConfigSchema, type ForgeManifest, type Ingredient } from "../schema/index.js";
+import { IngredientSchema, ProfileWrittenSchema, WorkspaceConfigSchema, type ForgeManifest, type Ingredient, type IngredientRef } from "../schema/index.js";
 import { readsRecipeSections } from "./recipe-sections.js";
 import { placeholders, bodyFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
@@ -15,6 +15,7 @@ import { metadataCitations, metadataFault, metadataFaultMessage, rendersMetadata
 import { editYamlText, readBackDifference } from "./yaml-edit.js";
 import { deepMerge } from "./merge.js";
 import { parseYamlText } from "./yaml-read.js";
+import { holdsIngredient } from "./profile-local.js";
 
 /**
  * The Forge-level half of a parameter extraction (spec 09 §6.3–§6.5): the rows only the whole
@@ -362,7 +363,8 @@ function proveMetadata(forge: Forge, base: LoadedIngredient, variantRef: string,
       continue;
     }
     // A profile that resolves the variant resolves the base after the cascade, with its own params.
-    if (q !== profile && !resolution.ingredients.some((i) => i.ref === base.ref || i.ref === variantRef)) continue;
+    const variant = forge.ingredients.get(variantRef as IngredientRef);
+    if (q !== profile && !holdsIngredient(resolution, base) && !(variant && holdsIngredient(resolution, variant))) continue;
     const params = paramsFor(ing, resolution);
     if (q === profile) for (const [k, v] of values) params[k] = v;
     const fault = metadataFault(meta, params);

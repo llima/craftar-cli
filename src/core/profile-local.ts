@@ -210,6 +210,15 @@ export function forgeFor(forge: Forge, profile: string): ProfileView {
   return { ...forge, ingredients, recipes, view: profile };
 }
 
+/**
+ * Whether a resolution holds that very ingredient — the same ref **and** the same folder (spec 56 §4.4). Since an override
+ * shares its root base's ref, a resolution of the overriding profile holds `rule/y` without holding the root `rule/y`;
+ * every comparison of a resolution with a Forge ingredient goes through this, never by ref alone.
+ */
+export function holdsIngredient(res: { ingredients: readonly LoadedIngredient[] }, ing: LoadedIngredient): boolean {
+  return res.ingredients.some((i) => i.ref === ing.ref && i.dir === ing.dir);
+}
+
 /** The profiles that hold `ref` as a local, sorted (spec 51 §4.5). */
 export function localOwners(forge: Forge, ref: string): string[] {
   return [...forge.locals].filter(([, l]) => l.ingredients.has(ref as IngredientRef)).map(([p]) => p).sort();
@@ -235,7 +244,8 @@ export function localCiters(forge: Forge, refs: readonly string[], opts: { profi
       seen.add(name);
       const r = view.recipes.get(name);
       if (!r) return false;
-      if (r.ingredients.some((i) => wanted.has(i))) return true;
+      // A citation of a ref this profile holds as a local reaches its local — an override (spec 56 §4.4) — never the root's.
+      if (r.ingredients.some((i) => wanted.has(i) && !layer.ingredients.has(i as IngredientRef))) return true;
       return opts.viaExtends === true && r.extends.some((parent) => reaches(parent, seen));
     };
     for (const [name, r] of layer.recipes) if (reaches(name, new Set())) out.push({ profile: p, recipe: name, file: r.file });
