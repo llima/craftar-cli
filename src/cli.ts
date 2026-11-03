@@ -9,7 +9,7 @@ import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
 import { holdsBaseCitations, rendersServers } from "./core/mcp-server.js";
-import { assertNotCacheTree, ForgeUnavailableError, classifyForge, CREDENTIAL_HIDDEN, hideUnderCaches, isUnderOrEqual, shownCachePath, refHoldsCredentials, shownRef, UNVOUCHED_HIDDEN } from "./core/remote.js";
+import { assertNotCacheTree, ForgeUnavailableError, classifyForge, CREDENTIAL_HIDDEN, hideUnderCaches, isUnderOrEqual, shownByRealPath, shownCannotResolve, refHoldsCredentials, shownRef, UNVOUCHED_HIDDEN } from "./core/remote.js";
 import { allowWrites, forget, listWorkspaces, prune, readRegistry, revokeWrites, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
@@ -106,7 +106,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.50.1");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.50.2");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -3616,10 +3616,12 @@ async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate
   } catch (e) {
     // realpathOfNearest already answers for a missing directory; any error here means the path
     // cannot be inspected or resolved, and without its real path the cache check cannot run.
-    cacheFault = e instanceof Error ? e.message : String(e);
+    cacheFault = await shownCannotResolve(e, home);
   }
   const caches = [path.resolve(forgesCacheDir), ...(forgesCacheReal === null ? [] : [forgesCacheReal])];
-  let refusing = `refusing to write the ${w.what} to ${shownCachePath(target, caches)}`;
+  // The target as typed, unless it lands under the cache by any spelling of the home — decided by real paths, so a part
+  // that does not resolve is still seen (E21.3).
+  let refusing = `refusing to write the ${w.what} to ${await shownByRealPath(target, home)}`;
   const abs = path.resolve(target);
   let targetReal: string;
   let rootReal: string;
@@ -3627,15 +3629,11 @@ async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate
     targetReal = await realpathOfNearest(abs);
     rootReal = await realpathOfNearest(path.resolve(forgeRoot));
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    fail(`${refusing}: ${hideUnderCaches(msg, caches)} — ${w.who} cannot prove the target lies outside the Forge`);
+    fail(`${refusing}: ${hideUnderCaches(await shownCannotResolve(e, home), caches)} — ${w.who} cannot prove the target lies outside the Forge`);
   }
-  // A path typed through a link to the cache is shown by where it lands.
-  if (shownCachePath(targetReal, caches) !== targetReal) refusing = `refusing to write the ${w.what} to ${shownCachePath(targetReal, caches)}`;
-  const rel = path.relative(rootReal, targetReal);
-  if (rel === "" || !(rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))) {
-    const shownRoot = shownCachePath(rootReal, caches) === rootReal ? shownCachePath(forgeRoot, caches) : shownCachePath(rootReal, caches);
-    fail(`${refusing}: it resolves inside the Forge (${shownRoot}) — ${w.outside}`);
+  // Without case on darwin as on win32: a report written into the Forge in another case is still inside it (E12.2).
+  if (isUnderOrEqual(targetReal, rootReal, process.platform)) {
+    fail(`${refusing}: it resolves inside the Forge (${await shownByRealPath(forgeRoot, home)}) — ${w.outside}`);
   }
   // Refuse a target whose real path is under (or equal to) the Forge cache.
   if (forgesCacheReal === null) {

@@ -700,6 +700,11 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packagi
 
 ## Upgrading
 
+### to 0.50.2
+
+- **A path under craftar's Forge cache is named by where it lands.** A refusal or an error that names such a path — a Forge writer's `… is a tree of craftar's Forge cache` and its cause when a part cannot be resolved, `--report` / `--save-plan`'s refusal and its cause, `not a Forge: …` and `Forge not found at …` — shows `$CRAFTAR_HOME` as given and `(a cache entry name — not shown)` in place of the entry, whatever spelling reached it: a link to the home, a relative path, a part that does not resolve. `not a Forge` and `Forge not found` printed such a path as typed, and a cause reached through a link to the home printed the home's real path; a path elsewhere, a folder named `forges` outside the cache included, is printed as before. No exit code, `--json` key or emitted byte changes.
+- **On macOS `--report` and `--save-plan` compare with the Forge without case**, as on Windows: a target in the Forge spelled in another case is refused as inside it.
+
 ### to 0.50.0
 
 - **`craftar settings apply`** (new) writes `.claude/settings.json` — only when a person types it — merging the generated `hooks` and the `env` names, keeping `env` values, `permissions`, every other key and local hooks. It is the one craftar writer of that file; it reverses, for this command only, 0.38.0's "craftar never writes `.claude/settings.json`".

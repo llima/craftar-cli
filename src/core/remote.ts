@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { exists, realpathOfNearest } from "./forge.js";
+import { isUnderOrEqual, shownCannotResolve, UNVOUCHED_HIDDEN } from "./cache-label.js";
 import { LockBusyError, withLock, type LockOptions, type LockTiming } from "./home-lock.js";
 import { hashNormalized } from "./text.js";
 import { execProgram } from "./proc.js";
@@ -23,11 +24,8 @@ const BACKSLASH_URL = /^([A-Za-z][A-Za-z0-9+.-]*):([/\\]+)/;
 /** What is printed in place of a value `credentialFault` flags, where one written or recorded earlier would be shown. */
 export const CREDENTIAL_HIDDEN = "(a URL with credentials — not shown)";
 
-/**
- * What is printed in place of a cache key no clean registry row vouches for — an orphan, every entry
- * when the registry is off or unreadable. Spec 39 §3.
- */
-export const UNVOUCHED_HIDDEN = "(a cache entry name — not shown)";
+// The label, the containment test and the real-path labeller live in a leaf module `forge.ts` can import too.
+export { CannotResolveError, isUnderOrEqual, shownByRealPath, shownCannotResolve, UNVOUCHED_HIDDEN } from "./cache-label.js";
 
 /** A `forge:` value is a git URL (a remote Forge) or a path resolved from the workspace root. */
 export function classifyForge(value: string): "url" | "path" {
@@ -580,28 +578,17 @@ export function hideAnyCacheSegment(text: string, homes: readonly string[], plat
 /**
  * `text` with the segment after each of `caches` (spellings of `<home>/forges`) replaced by `UNVOUCHED_HIDDEN`,
  * in one regex pass: the cause of a refusal that could not resolve a path. Only a path that starts at one
- * of them, so a folder named `forges` elsewhere keeps its name.
+ * of them, so a folder named `forges` elsewhere keeps its name. It reads text only: a path spelled through another link
+ * is `shownByRealPath`'s, which the callers run first. An empty `caches` throws.
  */
 export function hideUnderCaches(text: string, caches: readonly string[], platform: NodeJS.Platform = process.platform): string {
-  if (caches.length === 0) return text;
+  // Decision A2: no spelling of a cache is a caller's mistake; returning the text untouched would fail open.
+  if (caches.length === 0) throw new Error("hideUnderCaches needs at least one spelling of a cache");
   const escaped = [...new Set(caches)].sort((a, b) => b.length - a.length).map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const pattern = new RegExp(`(?<=^|[\\s"'(])((?:${escaped.join("|")})[/\\\\])([^/\\\\\\s"']+)`, platform === "win32" ? "gi" : "g");
+  // A segment that is already the label (`shownByRealPath` ran first) is not matched again: the label holds spaces.
+  const label = UNVOUCHED_HIDDEN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`(?<=^|[\\s"'(])((?:${escaped.join("|")})[/\\\\])(?!${label})([^/\\\\\\s"']+)`, platform === "win32" ? "gi" : "g");
   return text.replace(pattern, (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
-}
-
-/**
- * `p` as a refusal prints a path the user typed: untouched unless it lies under one of `caches`
- * (spellings of `<home>/forges`), then absolute with `UNVOUCHED_HIDDEN` in place of the entry. Decided
- * from the resolved path, so a folder named `forges` elsewhere keeps its name and a relative one is seen.
- */
-export function shownCachePath(p: string, caches: readonly string[]): string {
-  const abs = path.resolve(p);
-  for (const cache of caches) {
-    if (!isUnderOrEqual(abs, cache)) continue;
-    const rel = path.relative(cache, abs);
-    return rel === "" ? abs : path.join(cache, UNVOUCHED_HIDDEN, ...rel.split(path.sep).slice(1));
-  }
-  return p;
 }
 
 /**
@@ -623,17 +610,6 @@ export function hideCacheSegment(text: string, home: string | readonly string[],
   const homes = Array.isArray(home) ? home : [home];
   if (homes.length === 0) return hideAnyCacheSegment(text, [], platform);
   return text.replace(cacheSegmentPattern(homes, false, platform), (_, prefix: string) => prefix + UNVOUCHED_HIDDEN);
-}
-
-/**
- * Whether `child` is under `parent` (or equal), segment-wise — `path.relative` compares without case on win32, as `samePath` does.
- */
-export function isUnderOrEqual(child: string, parent: string): boolean {
-  const rel = path.relative(parent, child);
-  if (rel === "") return true;
-  if (rel === ".." || rel.startsWith(".." + path.sep)) return false;
-  if (path.isAbsolute(rel)) return false;
-  return true;
 }
 
 /**
@@ -660,9 +636,8 @@ export async function assertNotCacheTree(dir: string, home: string): Promise<voi
     try {
       rootReal = await realpathOfNearest(dir);
     } catch (e) {
-      // Fail closed: label the entry's name in the error and rethrow.
-      const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(hideUnderCaches(msg, [path.resolve(forgesDir), forgesReal]));
+      // Fail closed: the path it names shown by where it lands (a home reached through any link), then the text pass.
+      throw new Error(hideUnderCaches(await shownCannotResolve(e, home), [path.resolve(forgesDir), forgesReal]));
     }
     if (isUnderOrEqual(rootReal, forgesReal)) {
       const rel = path.relative(forgesReal, rootReal);

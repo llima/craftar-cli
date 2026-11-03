@@ -157,7 +157,74 @@ describe("assertNotCacheTree", () => {
     await fs.chmod(entry, 0o000);
     cleanups.push(async () => { await fs.chmod(entry, 0o755); await fs.rm(t, { recursive: true, force: true }); });
     const e = await assertNotCacheTree(path.join(entry, "trees", "c"), home).then(() => null, (x: Error) => x);
-    expect(e!.message).toBe(`${path.join(realHome, "forges", "(a cache entry name — not shown)", "trees", "c")} cannot be inspected (EACCES)`);
+    // Shown as the home is given — the form the refusal of a resolved tree prints too — since 0.50.2 (E22.2).
+    expect(e!.message).toBe(`${path.join(home, "forges", "(a cache entry name — not shown)", "trees", "c")} cannot be inspected (EACCES)`);
     expect(e!.message).not.toContain("secretkey");
+  });
+});
+
+// E22.2 — a third spelling of the home (a link that is neither the home as given nor the real path of its forges/), on the
+// fail-closed path: the entry's name — possibly a credential slug recorded before 0.27.1 — must reach no message. The slug is
+// token-shaped and assembled at runtime; directory links are junctions, so these run on Windows too.
+describe("assertNotCacheTree — a home reached through a third spelling, on the fail-closed path", () => {
+  const LABEL = "(a cache entry name — not shown)";
+  const slug = () => "https-user-" + "ghp_" + "Q".repeat(36) + "-host";
+
+  async function thirdSpelling(entry: string) {
+    const root = await fs.realpath(await tmpDir("craftar-checktree-third-"));
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    await fs.mkdir(path.join(home, "forges", entry, "trees", "abc"), { recursive: true });
+    const link = path.join(root, "link");
+    await fs.symlink(home, link, "junction");
+    return { root, home, link };
+  }
+
+  const refusal = (dir: string, home: string) => assertNotCacheTree(dir, home).then(() => null, (e: Error) => e);
+
+  it("a dangling link inside the entry: the entry's name is in no message", async () => {
+    const entry = slug();
+    const { root, home, link } = await thirdSpelling(entry);
+    await fs.symlink(path.join(root, "nowhere"), path.join(home, "forges", entry, "trees", "abc", "dangling"), "junction");
+    const err = await refusal(path.join(link, "forges", entry, "trees", "abc", "dangling", "x"), home);
+    expect(err).not.toBeNull();
+    expect(err!.message).not.toContain(entry);
+    expect(err!.message).toContain(LABEL);
+    expect(err!.message).toContain("exists but cannot be resolved");
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable component inside the entry: the entry's name is in no message", async () => {
+    const entry = slug();
+    const { home, link } = await thirdSpelling(entry);
+    const locked = path.join(home, "forges", entry, "trees", "abc", "locked");
+    await fs.mkdir(locked);
+    await fs.chmod(locked, 0o000);
+    cleanups.push(() => fs.chmod(locked, 0o755));
+    const err = await refusal(path.join(link, "forges", entry, "trees", "abc", "locked", "x"), home);
+    expect(err).not.toBeNull();
+    expect(err!.message).not.toContain(entry);
+    expect(err!.message).toContain(LABEL);
+    expect(err!.message).toContain("cannot be inspected");
+  });
+
+  it("the entry itself a dangling link: its name, in the part of the path that does not resolve, is in no message", async () => {
+    const entry = slug();
+    const { root, home, link } = await thirdSpelling("other");
+    await fs.symlink(path.join(root, "nowhere"), path.join(home, "forges", entry), "junction");
+    const err = await refusal(path.join(link, "forges", entry, "trees", "x"), home);
+    expect(err).not.toBeNull();
+    expect(err!.message).not.toContain(entry);
+    expect(err!.message).toContain(path.join(home, "forges", LABEL));
+  });
+
+  it("control: a dangling link in a folder named forges outside the cache keeps its name", async () => {
+    const { root, home } = await thirdSpelling("other");
+    const elsewhere = path.join(root, "work", "forges", "kept");
+    await fs.mkdir(elsewhere, { recursive: true });
+    await fs.symlink(path.join(root, "nowhere"), path.join(elsewhere, "dangling"), "junction");
+    const err = await refusal(path.join(elsewhere, "dangling", "x"), home);
+    expect(err).not.toBeNull();
+    expect(err!.message).toContain(path.join(elsewhere, "dangling"));
+    expect(err!.message).not.toContain(LABEL);
   });
 });

@@ -228,7 +228,15 @@ describe("hideCacheSegment edge cases", () => {
     expect(hideUnderCaches(`x '${path.join(cache, "e", "y")}' z`, [cache])).toBe(`x '${path.join(cache, UNVOUCHED_HIDDEN, "y")}' z`);
     const elsewhere = `${path.resolve("/q")}${cache}${path.sep}other${path.sep}y`;
     expect(hideUnderCaches(elsewhere, [cache])).toBe(elsewhere);
-    expect(hideUnderCaches("/a/b", [])).toBe("/a/b");
+    // Decision A2: an empty list of caches is a caller's mistake, and it fails closed rather than return the text untouched.
+    expect(() => hideUnderCaches("/a/b", [])).toThrow(/at least one/);
+  });
+
+  it("hideUnderCaches leaves a segment that is already the label: the label is never labelled again", () => {
+    const cache = path.resolve("/h/forges");
+    const shown = `${path.join(cache, UNVOUCHED_HIDDEN, "trees", "c")} cannot be inspected (EACCES)`;
+    expect(hideUnderCaches(shown, [cache])).toBe(shown);
+    expect(hideUnderCaches(`'${path.join(cache, UNVOUCHED_HIDDEN)}'`, [cache])).toBe(`'${path.join(cache, UNVOUCHED_HIDDEN)}'`);
   });
 
   it("a third spelling of the home: hidden by the any-forges alternative only", () => {
