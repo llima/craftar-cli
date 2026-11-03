@@ -63,10 +63,17 @@ describe("loadForge: a linked ingredient or profile folder (E39.2)", () => {
     expect(f.skippedLinks).toEqual(["profiles/acme/ingredients/rules/linked"]);
   });
 
-  it("a link to a file, where a folder is expected, is not called a skipped folder; a dangling one is", async () => {
+  // A file link needs a privilege on Windows (spec 48's rule for links in tests): this half runs off win32.
+  it.skipIf(process.platform === "win32")("a link to a file, where a folder is expected, is not called a skipped folder", async () => {
     const s = await linkedForge();
     await fs.writeFile(path.join(s.root, "notes.md"), "# notes\n");
     await fs.symlink(path.join(s.root, "notes.md"), path.join(s.forgeRoot, "ingredients/rules/NOTES.md"));
+    const f = await loadForge(s.forgeRoot);
+    expect(f.skippedLinks).toEqual([]);
+  });
+
+  it("a link leading nowhere is called a skipped folder", async () => {
+    const s = await linkedForge();
     await fs.symlink(path.join(s.root, "nowhere"), path.join(s.forgeRoot, "profiles/gone"), "junction");
     const f = await loadForge(s.forgeRoot);
     expect(f.skippedLinks).toEqual(["profiles/gone"]);
