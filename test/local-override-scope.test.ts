@@ -71,6 +71,8 @@ describe("one comparison by scope (spec 56 §4.4)", () => {
    * `.ingredients.map((i) => i.ref)`, or `resolvedBy(…)` — is placed here with the reason it is safe; a new one fails
    * the scan until it is placed, or goes through `holdsIngredient`.
    */
+  /** The number of matches each file holds today: a new comparison in a listed file fails too, until it is counted here. */
+  const COUNT: Record<string, number> = {};
   const TABLE: Record<string, string> = {
     "src/core/profile-local.ts": "holdsIngredient itself: ref and folder",
     "src/core/report.ts": "looks up a planned file's ingredient in the same plan's resolution (one view)",
@@ -82,6 +84,17 @@ describe("one comparison by scope (spec 56 §4.4)", () => {
     "src/importers/claude-code.ts": "the importing profile's own view, and resolvedBy about a variant's ref (L6)",
     "src/cli.ts": "rows of the catalogue's own result, not a resolution",
   };
+  const COUNTED: Record<string, number> = {
+    "src/cli.ts": 4,
+    "src/core/catalogue.ts": 2,
+    "src/core/param-writes.ts": 6,
+    "src/core/profile-local.ts": 2,
+    "src/core/promote.ts": 2,
+    "src/core/report.ts": 2,
+    "src/core/sync.ts": 2,
+    "src/importers/claude-code.ts": 8,
+    "src/importers/drift-promote.ts": 10,
+  };
   const PATTERN = /\.ingredients\.(some|find)\(\(\w+\) => \w+\.ref === |\.ingredients\.map\(\(\w+\) => \w+\.ref\)|resolvedBy\(/;
   it("every file under src/ comparing a resolution's ingredients by ref is in the table", async () => {
     const root = path.resolve(__dirname, "..");
@@ -90,11 +103,19 @@ describe("one comparison by scope (spec 56 §4.4)", () => {
       for (const e of await fs.readdir(dir, { withFileTypes: true })) {
         const abs = path.join(dir, e.name);
         if (e.isDirectory()) await walk(abs);
-        else if (e.name.endsWith(".ts") && PATTERN.test(await fs.readFile(abs, "utf8"))) found.push(path.relative(root, abs).split(path.sep).join("/"));
+        else if (e.name.endsWith(".ts")) {
+          const n = (await fs.readFile(abs, "utf8")).split(new RegExp(PATTERN.source, "g")).length - 1;
+          if (n > 0) {
+            const rel = path.relative(root, abs).split(path.sep).join("/");
+            found.push(rel);
+            COUNT[rel] = n;
+          }
+        }
       }
     };
     await walk(path.join(root, "src"));
     expect(found.filter((f) => !(f in TABLE))).toEqual([]);
     expect(Object.keys(TABLE).filter((f) => !found.includes(f))).toEqual([]); // no stale row
+    expect(COUNT).toEqual(COUNTED);
   });
 });
