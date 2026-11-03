@@ -3,7 +3,7 @@ import path from "node:path";
 import {
   ForgeManifestSchema,
   IngredientSchema,
-  ProfileSchema,
+  ProfileWrittenSchema,
   RecipeSchema,
   type ForgeManifest,
   type Ingredient,
@@ -18,6 +18,7 @@ import { findSecrets } from "./secrets.js";
 import { climbsOut } from "./text.js";
 import { CannotResolveError, shownByRealPath } from "./cache-label.js";
 import { containRoot, containSubRoot, readForgeText, type ContainRoot } from "./contain.js";
+import { readsSectionFiles, resolveSectionFiles, unnamedSectionFiles, type SectionFileMap } from "./section-files.js";
 import { checkLocals, ProfileLocalLoadError, readsProfileLocal, type IgnoredLocals, type LocalLayer, type LocalRecipe } from "./profile-local.js";
 import { readsRecipeSections, recipeSectionsNearMiss } from "./recipe-sections.js";
 
@@ -47,6 +48,13 @@ export interface Forge {
    * built by hand in a test needs none.
    */
   skippedLinks?: string[];
+  /**
+   * Spec 55 §5.4: which section values came from a file — declaring file (Forge-relative, POSIX) → key → section → path as written,
+   * relative to the declaring folder. Empty below the section-files gate.
+   */
+  sectionFiles: Map<string, SectionFileMap>;
+  /** Spec 55 §5.3: by profile name, the files under its folder's `sections/` that no value names (Forge-relative); empty below the gate. */
+  unnamedSectionFiles: Map<string, string[]>;
 }
 
 export const FORGE_MANIFEST = "craftar.forge.yaml";
@@ -124,6 +132,9 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
   const ignoredLocals: IgnoredLocals = new Map();
   const early: string[] = [];
   const reads = readsProfileLocal(manifest);
+  const sectionFiles = new Map<string, SectionFileMap>();
+  const unnamed = new Map<string, string[]>();
+  const sectionGate = readsSectionFiles(manifest);
   const profRoot = path.join(root, "profiles");
   if (await exists(profRoot)) {
     for (const d of await fs.readdir(profRoot, { withFileTypes: true })) {
@@ -132,8 +143,22 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
       const folder = path.join(profRoot, d.name);
       const f = path.join(folder, "profile.yaml");
       const hasProfile = await present(f);
-      const p = hasProfile ? await readYaml(contain, f, ProfileSchema) : null;
-      if (p) profiles.set(p.name, p);
+      const written = hasProfile ? await readYaml(contain, f, ProfileWrittenSchema) : null;
+      let p: Profile | null = null;
+      if (written) {
+        // Spec 55 §5.4: every `{ file: }` value resolved here, once, against the folder that holds this profile.yaml.
+        const declaring = `profiles/${d.name}/profile.yaml`;
+        const folderRoot = await containSubRoot(contain, `profiles/${d.name}`, "the profile's folder");
+        const r = await resolveSectionFiles(folderRoot, declaring, written.sections, sectionGate);
+        early.push(...r.findings);
+        p = { ...written, sections: r.sections };
+        if (r.files.size) sectionFiles.set(declaring, r.files);
+        if (sectionGate) {
+          const left = await unnamedSectionFiles(folder, `profiles/${d.name}`, r.files);
+          if (left.length) unnamed.set(p.name, left);
+        }
+        profiles.set(p.name, p);
+      }
       const present2 = [] as Array<"ingredients" | "recipes">;
       for (const sub of ["ingredients", "recipes"] as const) if (await present(path.join(folder, sub))) present2.push(sub);
       if (!reads) {
@@ -208,6 +233,9 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
   if (reads) {
     const findings = checkLocals({ ingredients, ingredientPaths, recipes, recipeFiles }, locals, localPaths, early);
     if (findings.length) throw new ProfileLocalLoadError(findings);
+  } else if (early.length) {
+    // Below schema 8 only a section file's near miss (spec 55 §5.1) can be here: one error listing every finding, as above.
+    throw new ProfileLocalLoadError(early);
   }
 
   // A link that leads to a file is no folder skipped: only one to a directory, or leading nowhere, is said.
@@ -216,7 +244,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     const target = await fs.stat(path.join(root, rel)).catch(() => null);
     if (target === null || target.isDirectory()) folders.push(rel);
   }
-  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals, skippedLinks: folders.sort() };
+  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals, skippedLinks: folders.sort(), sectionFiles, unnamedSectionFiles: unnamed };
 }
 
 const isLink = (p: string) => fs.lstat(p).then((st) => st.isSymbolicLink(), () => false);
