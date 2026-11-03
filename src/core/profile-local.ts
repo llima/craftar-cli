@@ -6,7 +6,7 @@ import type { IngredientRef, Recipe } from "../schema/index.js";
 import { FORGE_SCHEMA_LOCAL_OVERRIDE, FORGE_SCHEMA_PROFILE_LOCAL } from "../schema/index.js";
 import { nameShaped } from "./integrations.js";
 import path from "node:path";
-import { familyOf } from "./profile-extends.js";
+import { childrenOf, familyOf } from "./profile-extends.js";
 import type { Forge, LoadedIngredient } from "./forge.js";
 
 /** Whether the Forge reads `profiles/<p>/ingredients` and `recipes` (spec 51 §4.1). The ONE comparison with that constant. */
@@ -284,7 +284,7 @@ export function overriddenWarnings(forge: Forge, ref: string): string[] {
   // Spec 54 O6: a parent's override stands for every profile that extends it, so the warning names them.
   return localOwners(forge, ref).flatMap((p) => {
     // The concrete ones: an abstract profile between them resolves nothing.
-    const kids = [...forge.profiles.keys()].filter((q) => q !== p && forge.profiles.get(q)?.abstract !== true && familyOf(forge, q).includes(p)).sort();
+    const kids = childrenOf(forge, p);
     const who = kids.length ? `profile ${shownLocalName(p, "profile")} and every profile that extends it (${kids.map((k) => shownLocalName(k, "profile")).join(", ")})` : `profile ${shownLocalName(p, "profile")}`;
     return [`${shownIngredientRef(ref)} is overridden for ${who} — this run does not change what ${kids.length ? "they resolve" : `${shownLocalName(p, "profile")} resolves`}`];
   });
