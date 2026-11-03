@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { forgeFor, ProfileLocalLoadError, readsProfileLocal, type LocalLayer } from "../core/profile-local.js";
+import { forgeFor, ProfileLocalLoadError, readsLocalOverride, readsProfileLocal, type LocalLayer } from "../core/profile-local.js";
 import { readsRecipeSections } from "../core/recipe-sections.js";
 import path from "node:path";
 import os from "node:os";
@@ -1689,9 +1689,25 @@ async function writeIngredient(
     validateImported(meta); // the variant name must be slug-like too (a `--profile` with a space is not)
 
     // Spec 51 §5.3, --local=always: no ingredient is written at the root — a new variant is refused, and so is a rewrite.
-    if (mode === "always") {
+    // At spec 56's gate a new one is the profile's override of the base instead (§7, row 4).
+    const overrides = run?.ctx.forge !== undefined && run.ctx.forge !== null && readsLocalOverride(run.ctx.forge.manifest);
+    if (mode === "always" && !(await stage.exists(variantFile)) && overrides) {
+      report.variants.pop(); // the entry pushed above for this source: it becomes a local, not a variant
+      const { as: _as, ...rest } = meta as Ingredient & { as?: string };
+      void _as;
+      meta = validateImported({ ...rest, name: as } as Ingredient);
+      name = as;
+      dir = path.join(forge, "profiles", profile, "ingredients", folder, as);
+      const localRef = `${meta.type}/${as}`;
+      report.created.push(localRef);
+      (report.localCreated ??= []).push({ ref: localRef, dir: path.relative(forge, dir).split(path.sep).join("/") });
+      run?.runLocals?.push(localRef);
+    } else if (mode === "always") {
       if (!(await stage.exists(variantFile))) throw new Error(`import: ${source} differs from ${meta.type}/${as} at the root — --local=always writes no ingredient at the root; edit the base in the Forge, or re-run with --local=auto to make a variant`);
-      if ((await fingerprintDir(dir, stage.reader())) !== fingerprintOf(validateImported(meta), files)) throw new Error(alwaysVariantRefusal(source, `${meta.type}/${name}`, profile));
+      if ((await fingerprintDir(dir, stage.reader())) !== fingerprintOf(validateImported(meta), files)) {
+        const hint = overrides && name === `${as}--${profile}` ? `; or run craftar forge localize ${meta.type}/${name} --profile ${profile}` : "";
+        throw new Error(alwaysVariantRefusal(source, `${meta.type}/${name}`, profile) + hint);
+      }
     }
     // I8: rewriting an existing variant another profile resolves would change its files there.
     if (run?.ctx.forge && (await stage.exists(variantFile)) && (await fingerprintDir(dir, stage.reader())) !== fingerprintOf(validateImported(meta), files)) {
@@ -1952,7 +1968,10 @@ async function placeComputed(o: RecipeOptions, own: LocalLayer | undefined, name
     const dir = path.join(o.stage.root, "profiles", o.profile, "recipes");
     return writeOwnedRecipe({ ...o, dir, keepLocals: new Set([...own!.ingredients.keys(), ...(o.runLocals ?? [])]) }, inFolder, list, description);
   }
-  const locals = new Set<string>([...(own?.ingredients.keys() ?? []), ...(o.runLocals ?? [])]);
+  // An override (spec 56 §7) stays in a computed root list: the root ingredient of that ref is there for other profiles.
+  const forge = o.forge;
+  const isOverride = (r: string) => readsLocalOverride(forge.manifest) && forge.ingredients.get(r as IngredientRef)?.meta.as === undefined && forge.ingredients.has(r as IngredientRef);
+  const locals = new Set<string>([...(own?.ingredients.keys() ?? []), ...(o.runLocals ?? [])].filter((r) => !isOverride(r)));
   const citedLocally = new Set<string>([...(own?.recipes.values() ?? [])].flatMap((r) => r.recipe.ingredients));
   const rootListed = new Set(o.forge.recipes.get(name)?.ingredients ?? []);
   const kept = list.filter((r) => !locals.has(r) && !(citedLocally.has(r) && !rootListed.has(r)));
@@ -2230,14 +2249,18 @@ async function wireLocals(stage: ForgeStage, forge: string, profile: string, loa
     const r = parseYaml(abs, stripBom(await stage.readText(abs)), RecipeSchema);
     folder.set(r.name, { abs, ingredients: r.ingredients, extends: r.extends });
   }
+  // The profile's view: its folder's recipes over the root's. A root recipe cites no local-only ref (L3), so only an
+  // override (spec 56 §7) can be reached through one — and then it needs no wiring.
+  const recipeOf = (n: string) => folder.get(n) ?? loaded.recipes.get(n);
   const reached = new Set<string>();
   const walk = (n: string) => {
-    if (reached.has(n) || !folder.has(n)) return;
+    const r = recipeOf(n);
+    if (reached.has(n) || !r) return;
     reached.add(n);
-    for (const e of folder.get(n)!.extends) walk(e);
+    for (const e of r.extends) walk(e);
   };
   for (const n of listed) walk(n);
-  const cited = new Set([...reached].flatMap((n) => folder.get(n)!.ingredients));
+  const cited = new Set([...reached].flatMap((n) => recipeOf(n)!.ingredients));
   const toWire = [...new Set(runLocals)].filter((r) => !cited.has(r));
   if (!toWire.length) return null;
   if (loaded.recipes.has(name)) throw new Error(`import: recipe ${name} is at the root — import wires profile ${profile}'s locals into profiles/${profile}/recipes/${name}.yaml; rename the root recipe, then re-run`);
