@@ -79,6 +79,36 @@ describe("escapeOf", () => {
     expect(await escapeOf(root, path.join(tree, "a/under"))).toBe("unresolved");
   });
 
+  // E39.1: `.git` is known by what it is, not by how a path spells it.
+  it("is git for the directory the root's .git is, under another name (a .git that is a junction to it)", async () => {
+    const { tree } = await scratch();
+    await fs.mkdir(path.join(tree, "gitdir/hooks"), { recursive: true });
+    await fs.symlink(path.join(tree, "gitdir"), path.join(tree, ".git"), "junction");
+    const root = await containRoot(tree);
+    expect(await escapeOf(root, path.join(tree, "gitdir/hooks/x"))).toBe("git");
+    expect(await escapeOf(root, path.join(tree, "gitdir/new"))).toBe("git");
+    // A sibling that is not it stays inside.
+    await fs.mkdir(path.join(tree, "gitdirx"));
+    expect(await escapeOf(root, path.join(tree, "gitdirx/y"))).toBeNull();
+  });
+
+  it.runIf(process.platform === "win32")("is git for .git spelled with a trailing dot or by its short name (Windows)", async (ctx) => {
+    const { tree } = await scratch();
+    await fs.mkdir(path.join(tree, ".git/hooks"), { recursive: true });
+    const root = await containRoot(tree);
+    expect(await escapeOf(root, path.join(tree, ".git.", "hooks", "x"))).toBe("git");
+    // 8.3 names exist only on a volume that keeps them; measured where they do.
+    if (!(await fs.lstat(path.join(tree, "GIT~1")).then(() => true, () => false))) return ctx.skip();
+    expect(await escapeOf(root, path.join(tree, "GIT~1", "hooks", "x"))).toBe("git");
+  });
+
+  it("is null when the root has no .git, whatever a folder is named", async () => {
+    const { tree } = await scratch();
+    await fs.mkdir(path.join(tree, "gitdir"));
+    const root = await containRoot(tree);
+    expect(await escapeOf(root, path.join(tree, "gitdir/x"))).toBeNull();
+  });
+
   it("is git for a link into the top-level .git, and not for another .git", async () => {
     const { tree } = await scratch();
     await fs.mkdir(path.join(tree, ".git/hooks"), { recursive: true });

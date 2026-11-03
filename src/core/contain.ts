@@ -37,12 +37,43 @@ const posix = (p: string) => p.split(path.sep).join("/");
 const relOf = (root: ContainRoot, abs: string) => posix(path.relative(root.given, abs));
 const climbs = (rel: string) => rel === ".." || rel.startsWith(`..${path.sep}`) || rel.startsWith("../") || path.isAbsolute(rel);
 
+/** A file's identity: device and inode, or null when there is none to compare (no such file, or a file system with no inode). */
+type Identity = { dev: bigint; ino: bigint } | null;
+const identityOf = (abs: string): Promise<Identity> =>
+  fs.stat(abs, { bigint: true }).then(
+    (st) => (st.ino === 0n ? null : { dev: st.dev, ino: st.ino }),
+    () => null,
+  );
+/** The identity of each root's `<real>/.git` and of each first segment under it, each asked once per root. */
+const identities = new WeakMap<ContainRoot, Map<string, Promise<Identity>>>();
+function identityUnder(root: ContainRoot, segment: string): Promise<Identity> {
+  let known = identities.get(root);
+  if (!known) identities.set(root, (known = new Map()));
+  let id = known.get(segment);
+  if (!id) known.set(segment, (id = identityOf(path.join(root.real, segment))));
+  return id;
+}
+
+/**
+ * Whether the first segment under the root is the root's `.git`. By its name first (without case on win32), then by what
+ * it is (E39.1): a spelling git's own directory also answers to — a case-folded `.GIT` on macOS, `GIT~1` or a trailing
+ * dot on Windows, a `.git` that is a link to another folder of the tree — has its device and inode. A segment that does
+ * not exist yet, or a root with no `.git`, falls back to the name.
+ */
+async function isRootGit(root: ContainRoot, first: string): Promise<boolean> {
+  if ((process.platform === "win32" ? first.toLowerCase() : first) === ".git") return true;
+  const git = await identityUnder(root, ".git");
+  if (git === null) return false;
+  const seg = await identityUnder(root, first);
+  return seg !== null && seg.dev === git.dev && seg.ino === git.ino;
+}
+
 /** What a real path means against the root's real path. `path.relative` compares without case on win32. */
-function placed(root: ContainRoot, real: string): Escape | null {
+async function placed(root: ContainRoot, real: string): Promise<Escape | null> {
   const rel = path.relative(root.real, real);
   if (climbs(rel)) return "leaves";
   const first = rel.split(path.sep)[0];
-  if ((process.platform === "win32" ? first.toLowerCase() : first) === ".git") return "git";
+  if (first && (await isRootGit(root, first))) return "git";
   return null;
 }
 
@@ -72,7 +103,7 @@ async function probe(root: ContainRoot, abs: string, cache: KindCache): Promise<
   if (climbs(rel)) {
     // A path not built on the root as given: a spelling of it, or a path that climbs out.
     try {
-      return { escape: placed(root, await realpathOfNearest(abs)), viaLink: false };
+      return { escape: await placed(root, await realpathOfNearest(abs)), viaLink: false };
     } catch {
       return { escape: "unresolved", viaLink: false };
     }
@@ -85,13 +116,13 @@ async function probe(root: ContainRoot, abs: string, cache: KindCache): Promise<
     if (kind === "unreadable") return { escape: "unresolved", viaLink: false };
     if (kind === "link") {
       try {
-        return { escape: placed(root, await realpathOfNearest(abs)), viaLink: true };
+        return { escape: await placed(root, await realpathOfNearest(abs)), viaLink: true };
       } catch {
         return { escape: "unresolved", viaLink: true };
       }
     }
   }
-  return { escape: placed(root, path.join(root.real, rel)), viaLink: false };
+  return { escape: await placed(root, path.join(root.real, rel)), viaLink: false };
 }
 
 /** Whether `abs` escapes `root`; `null` when it stays inside, a new file under a linked directory inside included. */
