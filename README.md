@@ -152,7 +152,7 @@ An ingredient's `as` and a script's or hook's `files` entries become part of the
 
 ```yaml
 name: forge
-schema: 2          # 1 (the default), 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 or 12; 2 is required for section markers, 3 for integrations, 4 for params in an MCP server, 5 for agents-md.primary, 6 for target-scoped sections, 7 for the rules index, 8 for profile-local ingredients and recipes, 9 for params in metadata, 10 for sections in a recipe, 11 for section values held in files, 12 for a local that overrides a root base — each includes the ones below it
+schema: 2          # 1 (the default), 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 or 14; 2 is required for section markers, 3 for integrations, 4 for params in an MCP server, 5 for agents-md.primary, 6 for target-scoped sections, 7 for the rules index, 8 for profile-local ingredients and recipes, 9 for params in metadata, 10 for sections in a recipe, 11 for section values held in files, 12 for a local that overrides a root base, 13 for a profile that extends a profile, 14 for list params — each includes the ones below it
 description: Craftar Forge — shared harness ingredients, recipes and client profiles.
 ```
 
@@ -336,6 +336,19 @@ sections:
 ```
 
 A profile that does not resolve the recipe gets the body's default. A key that names no ingredient in the Forge is warned, naming the recipe. `craftar explain` names the layer (`execution (recipe executor-kiro)`), and at `schema: 10` the `explain` tool of `craftar mcp` gives a section's `layer` as `{"recipe": "<name>"}` or `{"profile": "<name>"}`. `import` and `drift promote` render a base with the recipes' sections, resolved as `sync` resolves them (the workspace's `recipes.add` and `recipes.remove` included), and do not write into the profile a value equal to what the recipes give where the profile sets none; a split of a shared recipe into an owned one (`<recipe>--<profile>`) keeps the shared recipe's `sections`. Where the importing profile does not resolve and a recipe it sees holds sections, `import` refuses with the Forge untouched. No command edits a recipe's `sections`, and `forge unify` refuses a `take: param` whose key a recipe's section value already cites (`unify: recipe <r> section <s> of <key> already uses {{k}}`, or `… also uses {{k}} under profile <p> — its text would change`). Below `schema: 10` a recipe that holds `sections` — at the root or in a profile's folder — fails the load: `<recipe file>: sections in a recipe needs schema: 10 in craftar.forge.yaml`.
+
+**List params.** In a Forge that declares `schema: 12` (which includes 11 and below), an ingredient's or a recipe's `params.<key>` may say `type: list`; its `default`, a profile's `params.<key>` and a workspace's `overrides.params.<key>` are then a YAML list of strings, the strongest layer's list replacing the others whole. A list key is cited with one filter, each writing a complete literal so an empty list stays valid:
+
+| Filter | Items `A`, `B` | Empty | Quoting |
+|---|---|---|---|
+| `{{ key \| py }}` | `["A", "B"]` | `[]` | `\` and `"` escaped |
+| `{{ key \| ps }}` | `@('A', 'B')` | `@()` | `'`, `‘`, `’`, `‚`, `‛` each doubled |
+| `{{ key \| sh }}` | `'A' 'B'` | *(nothing)* | `'` → `'\''` |
+| `{{ key \| json }}` | `["A","B"]` | `[]` | JSON |
+| `{{ key \| join: ", " }}` | `A, B` | *(nothing)* | none — the separator takes `\"`, `\\`, `\n`, `\t` and no brace |
+| `- {{ key \| yaml-items }}`, alone on its line | one `- "<item>"` line per item, each with the line's own ending | the line removed | JSON strings |
+
+An item holding a line break or another control character fails the plan with every filter but `json`, naming the ingredient, the file, the line, the key and the item's index — never the item. A list key cited with no filter (`{{ key }}`), with a filter craftar does not have, or with a malformed one, fails the plan the same way; a `{{ a | b }}` whose key is not a list key is left as written, so an Angular `{{ value | date: 'short' }}` keeps every byte. A value that is not a list, an item that is not a string, and a key one ingredient or recipe declares `type: list` and another declares without, fail the plan, naming the key, the layer and the index. A YAML list given to a key nothing declares a list renders as before (`a,b`) and is warned. In metadata (*Params in metadata*) only `join` (tested by spec 50's checks as one value) and `yaml-items` are accepted — `yaml-items` alone after `- ` in a raw block, never under `tools`, `allowed-tools` or `model`, refused when its list is empty under `paths:` (Claude Code may load such a rule always), or as a whole element of a list `fileMatchPattern`, which splices one element per item. A list key in an MCP `server` or a hook's `registration` fails the plan. `import` renders a base's list keys with the profile's lists and infers no list; `forge unify` refuses a `take: param` onto a list key (P21); `drift show` gives a file whose ingredient cites a list key `promote: no (cites a list param)`, and `drift promote` refuses it (D24). Below `schema: 12` a filtered placeholder is left as written, and a `type: list` declaration fails the load, naming the file and `schema: 12`. Every craftar before the one that reads it refuses a `schema: 12` Forge.
 
 **Section values held in files.** In a Forge that declares `schema: 11` (which includes 10 and below), a section value in a `profile.yaml` may be `{ file: <path> }` in place of a string — no other key — and the value is that file's text:
 
@@ -775,6 +788,10 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packagi
 
 - **`sync` can skip a file with a new line**: a file edited between the moment `sync` (or `drift discard`, the `sync` tool of `craftar mcp`, Sync and Discard edit in `craftar ui`) read it and the moment it would write or remove it is kept and listed as `changed while craftar was writing — kept; run craftar sync again`; the `sync` tool's `skipped[].reason` can hold that text. No key or exit code changes; the next run reads such a file as `drift`, `collision` or `orphan-drift` — or as `new`, or not at all, when it was deleted.
 - **`craftar add recipe` / `remove recipe` and the `add_recipe` / `remove_recipe` tools refuse** with `craftar.yaml changed while craftar was reading it — run again` when the file changed while they planned, leaving it as it is.
+
+### to 0.54.0
+
+- **A Forge can declare `schema: 12`**, which includes 11 and below, and there a param can be a list, `type: list`, cited through a filter — `py`, `ps`, `sh`, `json`, `yaml-items` or `join: "<sep>"` (*Forge layout*). Every craftar before 0.54.0 refuses a `schema: 12` Forge. No command raises the schema; below it no byte, warning, `--json` value or exit code changes, except that a `type: list` declaration, which failed the load before as an unknown key, now fails it naming `schema: 12`, and that the refusal of an unknown manifest schema lists 12 among the values it expected.
 
 ### to 0.53.0
 
