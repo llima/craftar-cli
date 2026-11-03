@@ -1,5 +1,5 @@
 import { containRoot, escapeFileLine, escapeOf, escapeRefusal, escapingRows, forgeReader } from "./core/contain.js";
-import { isAbstract, mergedProfile as familyProfile } from "./core/profile-extends.js";
+import { isAbstract, mergedProfile as familyProfile, writtenBy } from "./core/profile-extends.js";
 import { Command } from "commander";
 import pc from "picocolors";
 import path from "node:path";
@@ -1593,7 +1593,7 @@ async function declaredFor(ws: Workspace): Promise<{ profile: string; declared: 
   const profile = ws.forge.profiles.has(ws.config.profile) ? familyProfile(ws.forge, ws.config.profile) : undefined;
   if (!profile) fail(`profile "${ws.config.profile}" not found in Forge`);
   try {
-    return { profile: profile.name, declared: declaredTemplates(profile, await profileLabel(ws.forge.root, profile.name)) };
+    return { profile: profile.name, declared: declaredTemplates(profile, await profileLabel(ws.forge.root, writtenBy(ws.forge, profile.name, "templates"))) };
   } catch (e) {
     fail(errorText(e));
   }

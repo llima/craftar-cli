@@ -67,6 +67,14 @@ const written = (forge: FamilySource, p: Profile, key: string): boolean => {
   return keys ? keys.has(key) : true;
 };
 
+/**
+ * The profile of `name`'s family whose file gives a replaced key (spec 54 §5.3): the nearest that writes it, else `name`
+ * itself — so a refusal of an inherited block names the file that holds it.
+ */
+export function writtenBy(forge: FamilySource, name: string, key: "targets" | "repos" | "templates" | "docs"): string {
+  return familyOf(forge, name).find((q) => written(forge, forge.profiles.get(q)!, key) && (forge.profiles.get(q) as Record<string, unknown>)[key] !== undefined) ?? name;
+}
+
 /** The layers of `name`'s family, farthest first, each a written profile. */
 export function familyLayers(forge: FamilySource, name: string): Profile[] {
   return familyOf(forge, name).reverse().map((n) => forge.profiles.get(n)!);

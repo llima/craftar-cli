@@ -296,3 +296,15 @@ describe("spec 54 §5.8 — the catalogue with an abstract --profile", () => {
   });
 });
 
+describe("spec 54 §5.3 — an inherited block's refusal names the file that holds it", () => {
+  it("templates list refuses a parent's malformed templates naming the parent's profile.yaml", async () => {
+    const f = kept(await acmeHoisted(GATE));
+    const file = path.join(f.forgeRoot, "profiles/acme/profile.yaml");
+    await fs.writeFile(file, YAML.stringify({ ...YAML.parse(await fs.readFile(file, "utf8")), templates: "not a list" }));
+    const r = runCli(["templates", "list", "--workspace", f.ws.portal]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("profiles/acme/profile.yaml");
+    expect(r.stderr).not.toContain("profiles/acme-portal/profile.yaml");
+  });
+});
+
