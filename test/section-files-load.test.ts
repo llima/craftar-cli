@@ -95,11 +95,12 @@ describe("a section value held in a file (spec 55 §5)", () => {
     expect(msg).not.toContain("SECRET-CONTENT");
   });
 
-  it.skipIf(process.platform === "win32").each([
+  it.each([
     ["sections/con.md", "a Windows device name"],
     ["sections/rule./checklist.md", "a segment ending in a dot"],
   ])("refuses %s (%s) even when the file is there, a Forge a Windows checkout cannot hold", async (p) => {
-    const root = await forgeAt(GATE, file(p), { [`profiles/acme/${p}`]: "SECRET-CONTENT\n" });
+    // The schema refuses the path before any read; the file is planted where the file system can hold it.
+    const root = await forgeAt(GATE, file(p), process.platform === "win32" ? {} : { [`profiles/acme/${p}`]: "SECRET-CONTENT\n" });
     const msg = await loadError(root);
     expect(msg).toContain("rule/review");
     expect(msg).toContain("Windows cannot hold");

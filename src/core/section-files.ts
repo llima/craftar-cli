@@ -126,11 +126,13 @@ export async function unnamedSectionFiles(folderAbs: string, folderRel: string, 
     } catch {
       return;
     }
+    // The position is among this folder's files, sorted by name, so it reads the same on every machine.
+    const files = entries.filter((x) => !x.isDirectory()).map((x) => x.name).sort();
     for (const e of entries) {
       const r = `${rel}/${e.name}`;
       if (e.isDirectory()) await walk(path.join(dirAbs, e.name), r);
       // A name a terminal would not print as it is reads by position in its folder.
-      else if (!named.has(r.toLowerCase())) out.push(printable(e.name) ? `${folderRel}/${r}` : `${folderRel}/${rel}/#${entries.indexOf(e) + 1} (a name not shown)`);
+      else if (!named.has(r.toLowerCase())) out.push(printable(e.name) ? `${folderRel}/${r}` : `${folderRel}/${rel}/#${files.indexOf(e.name) + 1} (a name not shown)`);
     }
   }
   await walk(path.join(folderAbs, "sections"), "sections");
