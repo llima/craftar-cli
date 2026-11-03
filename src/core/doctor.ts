@@ -650,13 +650,10 @@ function mcpUnset(servers: Array<[string, unknown, string[] | undefined, string]
     // Then from ${NAME} references in env string values.
     const envBlock = def !== null && typeof def === "object" ? (def as { env?: unknown }).env : undefined;
     if (envBlock === null || typeof envBlock !== "object") continue;
-    for (const [envKey, value] of Object.entries(envBlock as Record<string, unknown>)) {
+    for (const value of Object.values(envBlock as Record<string, unknown>)) {
       if (typeof value !== "string") continue;
       for (const match of value.matchAll(NAME_REF)) {
         const name = match[1];
-        // E24.4: skip if the value is a pure passthrough — "${NAME}" where NAME matches the env key.
-        // A value like "FOO: ${FOO}" means "pass FOO through" — the MCP client substitutes it.
-        if (value.trim() === `\${${name}}` && envKey === name) continue;
         const key = `${server}\u0000${name}`;
         if (seen.has(key) || env[name] !== undefined) continue;
         seen.add(key);
