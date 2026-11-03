@@ -9,6 +9,7 @@ import YAML from "yaml";
 import { loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
 import { readRegistry, registryFile } from "../src/core/registry.js";
 import { syncWorkspace, editRecipes, statusDigest, confirmWrites, syncToolResult } from "../src/core/write-actions.js";
+import { CHANGED_SINCE_STATUS } from "../src/core/report.js";
 import { eightStates, type Scenario } from "./helpers/states.js";
 import { tmpDir, scenario, rule, recipe, profile, writeFiles } from "./helpers/forge.js";
 
@@ -420,6 +421,147 @@ describe("confirmWrites", () => {
   });
 });
 
+describe("editRecipes race condition", () => {
+  it("a. editRecipes refuses when craftar.yaml changes between its read and its write", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(
+      await scenario(
+        {
+          ingredients: [rule("keep", "# Keep\n"), rule("extra-rule", "# Extra\n")],
+          recipes: [recipe("base", ["rule/keep"]), recipe("extra", ["rule/extra-rule"])],
+          profiles: [profile("acme", ["base"])],
+        },
+        { config: { profile: "acme" } },
+      ),
+    );
+
+    const file = path.join(s.wsRoot, "craftar.yaml");
+    const original = await fs.readFile(file, "utf8");
+    const HAND = original + "# hand edit\n";
+
+    const ws = await loadWorkspace(s.wsRoot, { home });
+    await expect(
+      editRecipes(ws, "add", ["extra"], {
+        beforeWrite: async () => {
+          await fs.writeFile(file, HAND);
+        },
+      }),
+    ).rejects.toThrow("craftar.yaml changed while craftar was reading it — run again");
+
+    // The hand edit survived
+    expect(await fs.readFile(file, "utf8")).toBe(HAND);
+  });
+
+  it("b. editRecipes refuses when craftar.yaml is removed before its write", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(
+      await scenario(
+        {
+          ingredients: [rule("keep", "# Keep\n"), rule("extra-rule", "# Extra\n")],
+          recipes: [recipe("base", ["rule/keep"]), recipe("extra", ["rule/extra-rule"])],
+          profiles: [profile("acme", ["base"])],
+        },
+        { config: { profile: "acme" } },
+      ),
+    );
+
+    const file = path.join(s.wsRoot, "craftar.yaml");
+
+    const ws = await loadWorkspace(s.wsRoot, { home });
+    await expect(
+      editRecipes(ws, "add", ["extra"], {
+        beforeWrite: async () => {
+          await fs.rm(file);
+        },
+      }),
+    ).rejects.toThrow("craftar.yaml changed while craftar was reading it — run again");
+
+    // The file was not recreated
+    await expect(fs.access(file)).rejects.toThrow();
+  });
+
+  it("c. editRecipes writes when craftar.yaml did not change", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(
+      await scenario(
+        {
+          ingredients: [rule("keep", "# Keep\n"), rule("extra-rule", "# Extra\n")],
+          recipes: [recipe("base", ["rule/keep"]), recipe("extra", ["rule/extra-rule"])],
+          profiles: [profile("acme", ["base"])],
+        },
+        { config: { profile: "acme" } },
+      ),
+    );
+
+    const file = path.join(s.wsRoot, "craftar.yaml");
+
+    const ws = await loadWorkspace(s.wsRoot, { home });
+    const outcome = await editRecipes(ws, "add", ["extra"], {
+      beforeWrite: async () => {
+        // Do nothing
+      },
+    });
+
+    expect(outcome.changed).toBe(true);
+
+    // The file on disk now holds the new recipe
+    const content = await fs.readFile(file, "utf8");
+    expect(content).toContain("extra");
+  });
+
+  it("d. editRecipes refuses a change confined to bytes that are not valid UTF-8", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(
+      await scenario(
+        {
+          ingredients: [rule("keep", "# Keep\n"), rule("extra-rule", "# Extra\n")],
+          recipes: [recipe("base", ["rule/keep"]), recipe("extra", ["rule/extra-rule"])],
+          profiles: [profile("acme", ["base"])],
+        },
+        { config: { profile: "acme" } },
+      ),
+    );
+
+    const file = path.join(s.wsRoot, "craftar.yaml");
+
+    // Write the file with an inline comment containing an invalid UTF-8 byte (0xff).
+    // An inline comment round-trips through YAML, but the byte doesn't.
+    const cleanText = await fs.readFile(file, "utf8");
+    // Insert invalid byte in an inline comment on the forge line
+    const lines = cleanText.split("\n");
+    const forgeIdx = lines.findIndex((l) => l.startsWith("forge:"));
+    lines[forgeIdx] = lines[forgeIdx] + " # \xff";
+    const withFf = Buffer.from(lines.join("\n"), "latin1");
+    await fs.writeFile(file, withFf);
+
+    // Load workspace — the invalid byte decodes to U+FFFD
+    const ws = await loadWorkspace(s.wsRoot, { home });
+
+    // In beforeWrite, change only the 0xff to 0xfe — both decode to U+FFFD, so utf8 strings match.
+    await expect(
+      editRecipes(ws, "add", ["extra"], {
+        beforeWrite: async () => {
+          const current = await fs.readFile(file);
+          const modified = Buffer.from(current);
+          for (let i = 0; i < modified.length; i++) {
+            if (modified[i] === 0xff) modified[i] = 0xfe;
+          }
+          await fs.writeFile(file, modified);
+        },
+      }),
+    ).rejects.toThrow("craftar.yaml changed while craftar was reading it — run again");
+
+    // The disk bytes equal what beforeWrite wrote (with 0xfe, not 0xff)
+    const final = await fs.readFile(file);
+    expect(final.includes(0xfe)).toBe(true);
+    expect(final.includes(0xff)).toBe(false);
+  });
+});
+
 describe("syncToolResult", () => {
   it("builds the sync tool result with skipped reasons and removed reasons", async () => {
     const home = await tmpDir("home-");
@@ -481,5 +623,38 @@ describe("syncToolResult", () => {
 
     expect(result.removed).toContainEqual({ path: orphanDriftPath, reason: "hand-edited orphan: discarded" });
     expect(result.removed).toContainEqual({ path: ".claude/rules/gone.md", reason: "orphan: no longer produced by the Forge" });
+  });
+
+  it("maps a skipped row with changedSinceStatus: true to reason: CHANGED_SINCE_STATUS", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(await eightStates());
+
+    const ws = await loadWorkspace(s.wsRoot, { home });
+    const p = await plan(ws);
+    const lock = await readLock(ws.root);
+    const st = await status(ws, p, lock);
+
+    // Build a fake outcome with a skipped row having changedSinceStatus: true
+    const skippedRow = st.find((x) => x.state === "drift")!;
+    const fakeOutcome = {
+      result: {
+        written: [],
+        removed: [],
+        skipped: [{ ...skippedRow, changedSinceStatus: true as const }],
+        lock: lock!,
+      },
+      registry: null,
+      forgeLine: null,
+      ignored: [],
+    };
+
+    const result = syncToolResult(ws, p, st, fakeOutcome, true);
+
+    expect(result.skipped).toContainEqual({
+      path: skippedRow.path,
+      state: "drift",
+      reason: CHANGED_SINCE_STATUS,
+    });
   });
 });

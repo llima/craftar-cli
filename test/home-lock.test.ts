@@ -32,6 +32,78 @@ describe("withLock", () => {
     await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  // Cross-platform trick to make the release fail: inside the body, remove the lock file and create
+  // a NON-EMPTY directory at the lock file's path; `fs.rm(file, { force: true })` without `recursive`
+  // throws on every platform.
+  const makeReleaseFailSetup = async (file: string) => {
+    await fs.rm(file);
+    await fs.mkdir(file);
+    await fs.writeFile(path.join(file, "x"), "");
+  };
+
+  it("e. a release that fails does not replace the body's value", async () => {
+    const dir = await tmpDir();
+    const file = path.join(dir, "registry.lock");
+    const result = await withLock(file, "x", {}, async () => {
+      await makeReleaseFailSetup(file);
+      return 42;
+    });
+    expect(result).toBe(42);
+    // Clean up the directory
+    await fs.rm(file, { recursive: true, force: true });
+  });
+
+  it("f. a release that fails does not replace the body's error", async () => {
+    const dir = await tmpDir();
+    const file = path.join(dir, "registry.lock");
+    const err = await withLock(file, "x", {}, async () => {
+      await makeReleaseFailSetup(file);
+      throw new Error("body failed");
+    }).catch((e: Error) => e);
+    expect(err.message).toBe("body failed");
+    // Clean up the directory
+    await fs.rm(file, { recursive: true, force: true });
+  });
+
+  it("g. a release that fails is handed to onReleaseError", async () => {
+    const dir = await tmpDir();
+    const file = path.join(dir, "registry.lock");
+    const seen: unknown[] = [];
+    const result = await withLock(file, "x", { onReleaseError: (e) => seen.push(e) }, async () => {
+      await makeReleaseFailSetup(file);
+      return 42;
+    });
+    expect(result).toBe(42);
+    expect(seen.length).toBe(1);
+    expect(seen[0]).toBeInstanceOf(Error);
+    expect(typeof (seen[0] as NodeJS.ErrnoException).code).toBe("string");
+    // Clean up the directory
+    await fs.rm(file, { recursive: true, force: true });
+  });
+
+  it("i. a release that fails, then succeeds on a retry → lock file is gone, onReleaseError not called", async () => {
+    const dir = await tmpDir();
+    const file = path.join(dir, "registry.lock");
+    const onReleaseErrors: unknown[] = [];
+    const pollMs = 50;
+
+    const result = await withLock(file, "x", { pollMs, onReleaseError: (e) => onReleaseErrors.push(e) }, async () => {
+      // Make release fail by creating a non-empty directory at the lock file path
+      await makeReleaseFailSetup(file);
+      // Schedule the obstacle to disappear after the first failed attempt
+      setTimeout(async () => {
+        await fs.rm(file, { recursive: true, force: true });
+      }, pollMs / 2);
+      return 42;
+    });
+
+    expect(result).toBe(42);
+    // The lock file is gone (release eventually succeeded)
+    await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+    // onReleaseError was never called
+    expect(onReleaseErrors.length).toBe(0);
+  });
+
   it("a lock in a missing directory fails with ENOENT instead of waiting", async () => {
     const dir = await tmpDir();
     const file = path.join(dir, "absent", "registry.lock");

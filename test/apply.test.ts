@@ -155,8 +155,8 @@ describe("apply", () => {
     await fs.writeFile(victim, "keep\n");
     const planned = { path: "../victim.txt", content: Buffer.from("gone\n"), target: "claude-code" as const, ingredient: "rule/a" };
     const entry = { path: "../victim.txt", hash: hashNormalized("keep\n"), target: "claude-code" as const, ingredient: "rule/a" };
-    await expect(apply(w, p, [{ path: "../victim.txt", state: "update", target: "claude-code", planned, lock: entry }])).rejects.toThrow("../victim.txt is outside the workspace");
-    await expect(apply(w, p, [{ path: "../victim.txt", state: "orphan", target: "claude-code", lock: entry }])).rejects.toThrow("../victim.txt is outside the workspace");
+    await expect(apply(w, p, [{ path: "../victim.txt", state: "update", target: "claude-code", planned, lock: entry, diskHash: null }])).rejects.toThrow("../victim.txt is outside the workspace");
+    await expect(apply(w, p, [{ path: "../victim.txt", state: "orphan", target: "claude-code", lock: entry, diskHash: null }])).rejects.toThrow("../victim.txt is outside the workspace");
     expect(await fs.readFile(victim, "utf8")).toBe("keep\n");
     expect(await exists(path.join(s.wsRoot, "craftar.lock"))).toBe(false);
   });

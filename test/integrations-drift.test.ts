@@ -434,6 +434,7 @@ describe("drift × the integrations block", () => {
       ingredient,
       planned: planned(p, target, ingredient, planBody),
       lock: { path: p, hash: hashNormalized(Buffer.from(lockBody)), target, ingredient },
+      diskHash: null,
     });
     const orphanDrift = (p: string, target: "claude-code" | "kiro" | "agents-md", ingredient: string): FileStatus => ({
       path: p,
@@ -441,6 +442,7 @@ describe("drift × the integrations block", () => {
       target,
       ingredient,
       lock: { path: p, hash: hashNormalized(Buffer.from("was\n")), target, ingredient },
+      diskHash: null,
     });
     
     const provided = new Map([["rule/x", { slot: "pm", recipe: "pm-x" }]]);

@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { escapeFileLine, escapeRefusal, escapingRows, readForgeFile, readForgeText, type Escape } from "./contain.js";
+import { containRoot, escapeFileLine, escapeOf, escapeRefusal, escapingRows, readForgeFile, readForgeText, type Escape } from "./contain.js";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
 import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
@@ -1194,6 +1194,10 @@ export interface FileStatus {
   lock?: LockEntry | LockEntryV3;
   /** Set only on a row whose path escapes the workspace (spec 48 §4.3); `statusReport` drops it, so it reaches no `--json`. */
   escapes?: Escape;
+  /** `hashNormalized` of the bytes `status()` read at this path; null when nothing was read (absent, not a regular file, or a path that escapes). */
+  diskHash: string | null;
+  /** Set by `apply()` only, on a skipped row whose file changed after `status()` read it. */
+  changedSinceStatus?: true;
 }
 
 /** Does the disk content match the lock entry? Recognises both current and pre-0.17.4 hashes for non-UTF-8 files. */
@@ -1210,15 +1214,15 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
     // The first branch of the order below (spec 48 §4.3): such a path is never read, so nothing of the file behind it decides anything.
     const escapes = await source.escape(f.path);
     if (escapes) {
-      out.push({ path: f.path, state: entry ? "drift" : "collision", target: f.target, ingredient: f.ingredient, planned: f, lock: entry, escapes });
+      out.push({ path: f.path, state: entry ? "drift" : "collision", target: f.target, ingredient: f.ingredient, planned: f, lock: entry, escapes, diskHash: null });
       continue;
     }
     const disk = await source.read(f.path);
+    const diskHash = disk === null ? null : hashNormalized(disk);
     const planHash = hashNormalized(f.content);
     let state: FileState;
     if (disk === null) state = "new";
     else if (entry) {
-      const diskHash = hashNormalized(disk);
       if (diskHash === planHash) state = "unchanged";
       // The lock records this very plan — under the current hash (a valid UTF-8 plan hashes the same in both) or under
       // the pre-0.17.4 one, which did not record invalid bytes. The Forge did not change in any way the lock can show, so
@@ -1227,8 +1231,8 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
       else if (legacyHash(f.content) === entry.hash) state = "drift";
       else if (matchesLock(disk, entry)) state = "update";
       else state = "drift";
-    } else state = hashNormalized(disk) === planHash || sameJson(f.path, disk, f.content) ? "adopt" : "collision";
-    out.push({ path: f.path, state, target: f.target, ingredient: f.ingredient, planned: f, lock: entry });
+    } else state = diskHash === planHash || sameJson(f.path, disk, f.content) ? "adopt" : "collision";
+    out.push({ path: f.path, state, target: f.target, ingredient: f.ingredient, planned: f, lock: entry, diskHash });
   }
   const planned = new Set(p.files.map((f) => f.path));
   for (const e of lock?.files ?? []) {
@@ -1237,12 +1241,12 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
     if (!(await source.reaches(e.path))) continue;
     const escapes = await source.escape(e.path);
     if (escapes) {
-      out.push({ path: e.path, state: "orphan-drift", target: e.target, ingredient: e.ingredient, lock: e, escapes });
+      out.push({ path: e.path, state: "orphan-drift", target: e.target, ingredient: e.ingredient, lock: e, escapes, diskHash: null });
       continue;
     }
     const disk = await source.read(e.path);
     if (disk === null) continue; // already gone
-    out.push({ path: e.path, state: matchesLock(disk, e) ? "orphan" : "orphan-drift", target: e.target, ingredient: e.ingredient, lock: e });
+    out.push({ path: e.path, state: matchesLock(disk, e) ? "orphan" : "orphan-drift", target: e.target, ingredient: e.ingredient, lock: e, diskHash: hashNormalized(disk) });
   }
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
@@ -1293,12 +1297,44 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   const skipped: FileStatus[] = [];
   const entries: LockEntryV3[] = [];
 
+  // Compute once, used per row for escape checks with a fresh cache each time.
+  const root = await containRoot(ws.root);
+
+  /**
+   * Check if the file at s.path has changed since status() read it.
+   * Returns true if the file has changed or cannot be read, false otherwise.
+   */
+  const changedSince = async (s: FileStatus): Promise<boolean> => {
+    // Never read through a path that escapes — a fresh cache per row (spec 48 §4.3)
+    if (await escapeOf(root, path.join(root.given, s.path), new Map())) return true;
+    let bytes: Buffer | null;
+    try {
+      bytes = await fs.readFile(path.join(ws.root, s.path));
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      // ENOENT or ENOTDIR → null (file absent)
+      if (code === "ENOENT" || code === "ENOTDIR") bytes = null;
+      // Any other error (EBUSY, EPERM, EISDIR, …) → treat as changed
+      else return true;
+    }
+    return (bytes === null ? null : hashNormalized(bytes)) !== s.diskHash;
+  };
+
   for (const s of statuses) {
     switch (s.state) {
       case "new":
       case "update":
       case "adopt":
-        if (!opts.dryRun) await writeFile(ws.root, s.planned!);
+        if (!opts.dryRun) {
+          if (await changedSince(s)) {
+            // File changed in the window: skip it
+            const kept: FileState = s.lock ? "drift" : "collision";
+            skipped.push({ ...s, state: kept, changedSinceStatus: true });
+            if (s.lock) entries.push(s.lock);
+            break;
+          }
+          await writeFile(ws.root, s.planned!);
+        }
         written.push(s.path);
         entries.push(entry(s.planned!));
         break;
@@ -1307,7 +1343,15 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
         break;
       case "drift":
         if (opts.overwriteDrift || opts.overwritePaths?.has(s.path)) {
-          if (!opts.dryRun) await writeFile(ws.root, s.planned!);
+          if (!opts.dryRun) {
+            if (await changedSince(s)) {
+              // File changed in the window: skip it as drift
+              skipped.push({ ...s, state: "drift", changedSinceStatus: true });
+              entries.push(s.lock!);
+              break;
+            }
+            await writeFile(ws.root, s.planned!);
+          }
           written.push(s.path);
           entries.push(entry(s.planned!));
         } else {
@@ -1319,13 +1363,29 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
         skipped.push(s);
         break;
       case "orphan":
-        if (!opts.dryRun) await fs.rm(path.join(ws.root, s.path), { force: true });
+        if (!opts.dryRun) {
+          if (await changedSince(s)) {
+            // File changed in the window: skip it as orphan-drift
+            skipped.push({ ...s, state: "orphan-drift", changedSinceStatus: true });
+            if (s.lock) entries.push(s.lock);
+            break;
+          }
+          await fs.rm(path.join(ws.root, s.path), { force: true });
+        }
         removed.push(s.path);
         break;
       case "orphan-drift":
         // Only a path named one by one is discarded: `overwriteDrift` regenerates, and there is nothing to regenerate here.
         if (opts.overwritePaths?.has(s.path)) {
-          if (!opts.dryRun) await fs.rm(path.join(ws.root, s.path), { force: true });
+          if (!opts.dryRun) {
+            if (await changedSince(s)) {
+              // File changed in the window: skip it as orphan-drift
+              skipped.push({ ...s, state: "orphan-drift", changedSinceStatus: true });
+              if (s.lock) entries.push(s.lock);
+              break;
+            }
+            await fs.rm(path.join(ws.root, s.path), { force: true });
+          }
           removed.push(s.path);
         } else {
           skipped.push(s);
