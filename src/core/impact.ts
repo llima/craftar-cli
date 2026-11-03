@@ -16,6 +16,7 @@ import {
   status,
   unsetDeclared,
   unsetSummary,
+  overrideSummary,
   type FileState,
   type FileStatus,
   type MergedConfig,
@@ -393,6 +394,7 @@ export async function nextSync(p: Planned): Promise<NextSyncResult> {
     // Spec 29 §4.1: the next sync of such a plan writes nothing. `planAll` and `impactOf` do not ask — they compare bytes.
     const unset = unsetDeclared(planned);
     if (unset.length) return { state: "error", counts: {}, error: unsetSummary(unset) };
+    if (planned.overrideConflicts.length) return { state: "error", counts: {}, error: overrideSummary(planned.overrideConflicts) };
     lock = await readLock(ws.root);
     statuses = await status(ws, planned, lock);
     const escaping = escapingRows(statuses);

@@ -44,7 +44,7 @@ import { serve } from "./mcp.js";
 import { mcpWriters } from "./core/write-actions.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, loadForgeFor, readConfigFrom, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, loadForgeFor, readConfigFrom, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, overrideRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
@@ -235,11 +235,12 @@ program
       console.log(JSON.stringify(report, null, 2));
       // exitCode, not process.exit: a piped object is not cut (spec 29 §4.1)
       // The object carries both reasons (unsetParams, the budget line in warnings): nothing on stderr
-      if (unset.length || agentsMdOverBudget(p) || kiroResourcesUnplanned(p)?.length || escapingRows(st).length) process.exitCode = 1;
+      if (unset.length || agentsMdOverBudget(p) || kiroResourcesUnplanned(p)?.length || escapingRows(st).length || p.overrideConflicts.length) process.exitCode = 1;
       return;
     }
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, false, forgeLine(ws, lock));
     if (refusalBlock(unset)) process.exitCode = 1;
+    if (overrideBlock(p)) process.exitCode = 1;
     if (escapeBlock(st)) process.exitCode = 1;
     if (budgetRefusalBlock(p)) process.exitCode = 1;
   });
@@ -251,6 +252,12 @@ program
 function refusalBlock(unset: UnsetParam[], opts: { thenSync?: boolean } = {}): boolean {
   if (unset.length) errorLine(unsetRefusal(unset, opts));
   return unset.length > 0;
+}
+
+/** The refusal of spec 56 §4.3 for a command that goes on to print or exit by itself. Says whether there was one. */
+function overrideBlock(p: Plan, opts: { thenSync?: boolean } = {}): boolean {
+  if (p.overrideConflicts.length) errorLine(overrideRefusal(p.overrideConflicts, opts));
+  return p.overrideConflicts.length > 0;
 }
 
 /** The refusal of spec 48 §4.3 for a command that goes on to print or exit by itself. Says whether there was one. */
@@ -636,9 +643,9 @@ program
       const unset = unsetDeclared(p);
       const cloning = cloneEntries.length > 0;
       const escaping = escapingRows(init.statuses);
-      const refused = unset.length > 0 || escaping.length > 0;
+      const refused = unset.length > 0 || escaping.length > 0 || p.overrideConflicts.length > 0;
       if (!o.sync) {
-        console.log(nextSyncLine(init.statuses, unset));
+        console.log(nextSyncLine(init.statuses, unset, p.overrideConflicts));
         for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
         if (cloning && refused && answers === null) {
           console.log(NOT_CLONED_REFUSED);
@@ -658,6 +665,7 @@ program
           console.log(NOT_CLONED_REFUSED);
         }
         refusalBlock(unset, { thenSync: true });
+        overrideBlock(p, { thenSync: true });
         escapeBlock(init.statuses, { thenSync: true });
         again();
         process.exitCode = 1;
@@ -840,7 +848,7 @@ program
       // A refused sync is not "in sync", whatever the files say: the listing, then the block, and the exit is
       // exitCode's, so nothing queued is cut (spec 29 §4.1)
       // Both blocks are printed; either one, or a file out of sync, fails the check.
-      const refused = [refusalBlock(unset), escapeBlock(st), budgetRefusalBlock(p)].some(Boolean);
+      const refused = [refusalBlock(unset), overrideBlock(p), escapeBlock(st), budgetRefusalBlock(p)].some(Boolean);
       if (refused || bad.length) process.exitCode = 1;
       else console.log(pc.green("\nworkspace in sync"));
       return;
@@ -850,6 +858,10 @@ program
     if (unset.length) {
       for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
       fail(unsetRefusal(unset));
+    }
+    if (p.overrideConflicts.length) {
+      for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+      fail(overrideRefusal(p.overrideConflicts));
     }
     const escaping = escapingRows(st);
     if (escaping.length) {
@@ -886,6 +898,7 @@ program
     else if (o.exitCode) process.exitCode = 1;
     // Spec 29 §4.1: with no [path], --exit-code fails exactly when `sync --check` does — a refused sync included
     if (refusalBlock(unsetDeclared(p)) && o.exitCode && !only) process.exitCode = 1;
+    if (overrideBlock(p) && o.exitCode && !only) process.exitCode = 1;
     if (escapeBlock(st) && o.exitCode && !only) process.exitCode = 1;
     // The AGENTS.md budget, as the refusal above: always printed, failing only --exit-code with no [path]
     if (budgetRefusalBlock(p) && o.exitCode && !only) process.exitCode = 1;
@@ -933,7 +946,7 @@ async function checkGitSource(o: { workspace: string; check: boolean; committed?
     const bad = st.filter((s) => !["unchanged", "adopt"].includes(s.state));
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true, forgeLine(ws, lock));
     if (bad.length) console.log(pc.red(`\n${bad.length} file(s) out of sync`));
-    const refused = [refusalBlock(unsetDeclared(p)), budgetRefusalBlock(p)].some(Boolean);
+    const refused = [refusalBlock(unsetDeclared(p)), overrideBlock(p), budgetRefusalBlock(p)].some(Boolean);
     if (refused || bad.length) process.exitCode = 1;
     else console.log(pc.green(`\n${named} in sync`));
   } finally {
@@ -999,20 +1012,22 @@ drift
     // Spec 30r5: drift show decides a refused sync as status does — unsetParams in --json, the refusal block on stderr, exit 1.
     const unset = unsetDeclared(p);
     if (o.json) {
-      console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: withEscapeLine([...p.warnings, ...providedWarnings], st), unsetParams: unset }, null, 2));
-      if (unset.length || escapingRows(st).length) process.exitCode = 1;
+      console.log(JSON.stringify({ workspace: await fs.realpath(ws.root), profile: ws.config.profile, files: rows, warnings: withEscapeLine([...p.warnings, ...providedWarnings], st, p.overrideConflicts), unsetParams: unset }, null, 2));
+      if (unset.length || escapingRows(st).length || p.overrideConflicts.length) process.exitCode = 1;
       return;
     }
     warnStderr(providedWarnings);
     if (named && !rows.length) {
       console.log(`${named.path} is not drifted (${named.state})`);
       if (refusalBlock(unset)) process.exitCode = 1;
+      if (overrideBlock(p)) process.exitCode = 1;
       if (escapeBlock(st)) process.exitCode = 1;
       return;
     }
     if (!rows.length) {
       console.log("no drift");
       if (refusalBlock(unset)) process.exitCode = 1;
+      if (overrideBlock(p)) process.exitCode = 1;
       if (escapeBlock(st)) process.exitCode = 1;
       return;
     }
@@ -1025,6 +1040,7 @@ drift
       );
     if (!named) {
       if (refusalBlock(unset)) process.exitCode = 1;
+      if (overrideBlock(p)) process.exitCode = 1;
       if (escapeBlock(st)) process.exitCode = 1;
       return;
     }
@@ -1066,6 +1082,10 @@ drift
     if (unset.length) {
       for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
       fail(unsetRefusal(unset));
+    }
+    if (p.overrideConflicts.length) {
+      for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+      fail(overrideRefusal(p.overrideConflicts));
     }
     const escaping = escapingRows(st);
     if (escaping.length) {
@@ -1276,7 +1296,7 @@ function recipeCommand(op: RecipeOp) {
 
     console.log(`${WORKSPACE_FILE}: ${recipeDiffLine(outcome.before, outcome.after)}`);
     console.log(`recipes: ${outcome.next!.recipes.join(" → ")}`);
-    console.log(nextSyncLine(outcome.next!.statuses, outcome.next!.unset));
+    console.log(nextSyncLine(outcome.next!.statuses, outcome.next!.unset, outcome.next!.conflicts));
     // plan() already carries ws.warnings first, and they were printed on load.
     warnStderr(outcome.next!.warnings);
   };
@@ -3890,6 +3910,10 @@ async function settingsApplyCommand(o: {
   if (unset.length) {
     for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
     fail(unsetRefusal(unset));
+  }
+  if (p.overrideConflicts.length) {
+    for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+    fail(overrideRefusal(p.overrideConflicts));
   }
   const escaping = escapingRows(st);
   if (escaping.length) {

@@ -3,7 +3,7 @@ import path from "node:path";
 import { containRoot, escapeOf, escapeSummary, escapingRows } from "../core/contain.js";
 import { exists, listFiles } from "../core/forge.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
-import { loadWorkspaceConfig, plan, status, unsetDeclared, unsetSummary } from "../core/sync.js";
+import { loadWorkspaceConfig, overrideSummary, plan, status, unsetDeclared, unsetSummary } from "../core/sync.js";
 import { stripBom, toLf } from "../core/text.js";
 import type { Target } from "../schema/index.js";
 import { workspaceParams, workspaceSections } from "./decide.js";
@@ -112,6 +112,7 @@ export async function kiroReport(
     // A plan sync refuses (spec 29 §4.1) is compared with nothing: its files still hold the `{{key}}` and are never written.
     const unset = unsetDeclared(p);
     if (unset.length) return withValues({ kind: "not-computed", message: unsetSummary(unset) });
+    if (p.overrideConflicts.length) return withValues({ kind: "not-computed", message: overrideSummary(p.overrideConflicts) });
     const rows = await status(ws, p, null);
     const escaping = escapingRows(rows);
     if (escaping.length) return withValues({ kind: "not-computed", message: escapeSummary(escaping) });

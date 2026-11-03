@@ -24,7 +24,7 @@ import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
 import { appliesTo, effectiveTargets } from "../emitters/shared.js";
-import { forgeFor } from "./profile-local.js";
+import { forgeFor, readsLocalOverride } from "./profile-local.js";
 import { RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
 
 export const WORKSPACE_FILE = "craftar.yaml";
@@ -374,6 +374,59 @@ export interface Plan {
    * Files where `{{craftar.rules.index}}` was expanded, sorted by path (spec 44 §4.4). Empty below schema 7, and when no list was expanded.
    */
   indexed: Array<{ path: string; rules: number }>;
+  /**
+   * The profile's overrides it resolves beside a root variant of the same output name (spec 56 §4.3), sorted; `[]` below
+   * the gate and with no override. What refuses the sync, as an unset declared parameter does.
+   */
+  overrideConflicts: OverrideConflict[];
+}
+
+/** A profile resolving its override `override` and the root variant `variant` whose `as` names the same output (spec 56 §4.3). */
+export interface OverrideConflict {
+  profile: string;
+  override: string;
+  variant: string;
+}
+
+/** The pairs of spec 56 §4.3 in a resolution: an override of the profile beside a root variant of its output name. */
+export function overrideConflictsOf(forge: Forge, resolution: Resolution): OverrideConflict[] {
+  if (!readsLocalOverride(forge.manifest)) return [];
+  const p = resolution.profile.name;
+  const local = forge.locals.get(p)?.ingredients;
+  if (!local) return [];
+  const out: OverrideConflict[] = [];
+  for (const ov of resolution.ingredients) {
+    const root = forge.ingredients.get(ov.ref);
+    if (root === undefined || local.get(ov.ref)?.dir !== ov.dir) continue; // not an override
+    for (const other of resolution.ingredients) {
+      if (other === ov || other.meta.type !== ov.meta.type || other.meta.as !== ov.meta.name) continue;
+      out.push({ profile: p, override: ov.ref, variant: other.ref });
+    }
+  }
+  return out.sort((a, b) => (a.override + a.variant < b.override + b.variant ? -1 : 1));
+}
+
+/** The one line of the refusal, naming refs only (spec 56 §4.3). */
+export function overrideConflictLine(c: OverrideConflict): string {
+  return `profile ${c.profile} resolves its override ${c.override} and the root variant ${c.variant} (as: ${c.override.split("/")[1]}) — remove one from its recipes`;
+}
+
+/** The refusal block, without the `error: ` prefix; `thenSync` is `init`'s form, as `unsetRefusal`'s. */
+export function overrideRefusal(conflicts: OverrideConflict[], opts: { thenSync?: boolean } = {}): string {
+  return [
+    `${conflicts.length} override(s) beside a root variant of the same output — ${opts.thenSync ? "craftar.yaml written, sync not run" : "nothing written"}`,
+    ...conflicts.map((c) => `  ${overrideConflictLine(c)}`),
+  ].join("\n");
+}
+
+/** What stands where a sync's file counts would (`next sync:`, `first sync:`). */
+export function overrideRefused(conflicts: OverrideConflict[]): string {
+  return `refused — ${overrideConflictLine(conflicts[0])}${conflicts.length > 1 ? ` (and ${conflicts.length - 1} more)` : ""}`;
+}
+
+/** The refusal in one line (`workspaces`, `forge impact`, `craftar ui`, `kiroReport`). */
+export function overrideSummary(conflicts: OverrideConflict[]): string {
+  return `sync refused: ${overrideConflictLine(conflicts[0])}${conflicts.length > 1 ? ` (and ${conflicts.length - 1} more)` : ""}`;
 }
 
 /** Declared keys with no default that no layer fills, with the ingredients declaring them (spec 24 §4.2) — cited or not. */
@@ -920,7 +973,8 @@ export async function plan(ws: Workspace): Promise<Plan> {
     indexed.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   }
 
-  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed };
+  const overrideConflicts = overrideConflictsOf(ws.forge, resolution);
+  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed, overrideConflicts };
 }
 
 /**
@@ -1289,6 +1343,8 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   // asks first and prints the block itself; this is what no writer can go around.
   const unset = unsetDeclared(p);
   if (unset.length) throw new Error(unsetRefusal(unset));
+  // Spec 56 §4.3: an override beside a root variant of its output would be decided by recipe order.
+  if (p.overrideConflicts.length) throw new Error(overrideRefusal(p.overrideConflicts));
   // The whole run is refused: a path skipped on its own would leave a half-written plan and a lock that describes it (spec 48 §4.3).
   const escaping = escapingRows(statuses);
   if (escaping.length) throw new Error(escapeRefusal(escaping));

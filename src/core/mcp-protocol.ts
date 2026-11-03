@@ -391,7 +391,7 @@ async function call(name: ToolName, args: ToolArguments, ctx: McpContext): Promi
     diff: args.path !== undefined && row.note === null ? renderDiff(row.disk ?? "", row.forge ?? "") : null,
     note: row.note,
   }));
-  return { files, warnings: withEscapeLine(loadWarnings, statuses), unsetParams: report.unsetParams };
+  return { files, warnings: withEscapeLine(loadWarnings, statuses, p.overrideConflicts), unsetParams: report.unsetParams };
 }
 
 /** One writing tool call (spec 40 §5.5). */
