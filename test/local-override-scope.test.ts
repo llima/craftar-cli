@@ -60,7 +60,6 @@ describe("identity by scope (spec 56 §4.4)", () => {
     const s = await build(cleanups, spec, { extra: { ...localRule("acme", "y", "# Y for acme\n"), ...localRecipe("acme", "acme-local", ["rule/y"]) }, git: false });
     const move = await planLocalize(await loadForge(s.forge), "rule/y", "globex");
     expect(move.moved).toEqual({ from: "ingredients/rules/y", to: "profiles/globex/ingredients/rules/y" });
-    void path;
   });
 });
 

@@ -344,7 +344,7 @@ describe("forge promote — the command", () => {
     const help = runCli(["forge", "promote", "--help"]).stdout.replace(/\s+/g, " ");
     for (const part of [
       "Usage: craftar forge promote [options] <type/name>",
-      "Make a profile's variant the base",
+      "Make a profile's variant (--profile), or a variant several profiles share (--variant), the base",
       "every profile is proved to resolve the same ingredients before anything is written. Writes to the Forge",
       "--profile <p> the profile whose variant <name>--<p> becomes the base",
       "--variant <type/name> the variant that becomes the base, named itself",

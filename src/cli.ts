@@ -2914,7 +2914,7 @@ forge
 forge
   .command("promote")
   .description(
-    "Make a profile's variant the base: the base takes the variant's files, every other profile that resolves the old base gets it back as its own variant through a recipe it owns, and every profile is proved to resolve the same ingredients before anything is written. Writes to the Forge",
+    "Make a profile's variant (--profile), or a variant several profiles share (--variant), the base: the base takes the variant's files, every other profile that resolves the old base gets it back as its own variant through a recipe it owns, and every profile is proved to resolve the same ingredients before anything is written. Writes to the Forge",
   )
   .argument("<type/name>", "base ingredient (rule/workflow)")
   .option("--profile <p>", "the profile whose variant <name>--<p> becomes the base")
