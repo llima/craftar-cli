@@ -10,7 +10,7 @@ import { hookFindsCraftar, hooksStatus, HooksUnreadable } from "./git-hooks.js";
 import { generatedIgnored, IGNORED_FIX, staleLine, UNCHECKED_LINE } from "./generated-ignored.js";
 import { renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix } from "./mcp-server.js";
 import { credentialKeys, hideCacheSegment, hideKeys, isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus, vouchedKeys } from "./registry.js";
-import { FULL_SHA, cacheKey, classifyForge, CREDENTIAL_HIDDEN, inspectCache, UNVOUCHED_HIDDEN, type CacheSnapshot } from "./remote.js";
+import { FULL_SHA, cacheKey, classifyForge, credentialFault, CREDENTIAL_HIDDEN, inspectCache, UNVOUCHED_HIDDEN, type CacheSnapshot } from "./remote.js";
 import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, fragmentPaths, type DockerRunner } from "./services.js";
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
@@ -543,6 +543,13 @@ async function lockAndStatus(
     return;
   }
   w("lock", "ok", `schema ${lock.schema}, generated ${lock.generatedAt.slice(0, 16).replace("T", " ")} UTC`);
+
+  // lock-credential: check if the lock's forge.source holds credentials (E18.3)
+  // This is present only when the lock exists and is valid.
+  if (credentialFault(lock.forge.source)) {
+    w("lock-credential", "warn", "the lock names a Forge URL with credentials", "remove the credentials from craftar.yaml and sync again");
+  }
+
   if (ws === null || p === null) return;
   // Spec 56 §4.3: a refused sync is the status check's error, whatever the files say.
   if (p.overrideConflicts.length) {
