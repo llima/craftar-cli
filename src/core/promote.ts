@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { forgeReader, readForgeFile, readForgeText } from "./contain.js";
-import { ProfileWrittenSchema, RecipeSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
+import { ProfileWrittenSchema, RecipeWrittenSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { fingerprintDir } from "./fingerprint.js";
 import { ingredientText, occupied, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
 import { assertNoDirLinkIn, assertNoLinkOnPath, copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
@@ -179,9 +179,10 @@ export async function planBasePromotion(forge: Forge, ref: string, who: string |
       if (name !== source) doc.set("name", name);
       swapEntry(doc, "ingredients", old, value);
     });
-    const was = forge.recipes.get(source)!;
+    // As written against as written (spec 54 §4.4), so a `{ file: }` section value compares unchanged.
+    const was = parseYaml(where, raw, RecipeWrittenSchema);
     const expected = { ...was, name, ingredients: was.ingredients.map((i) => (i === old ? value : i)) };
-    if (!isDeepStrictEqual(parseYaml(where, text, RecipeSchema), expected)) throw unreadable(where, `${old} replaced by ${value}`, COMMAND);
+    if (!isDeepStrictEqual(parseYaml(where, text, RecipeWrittenSchema), expected)) throw unreadable(where, `${old} replaced by ${value}`, COMMAND);
     return text;
   };
   for (const name of [...forge.recipes.keys()].sort()) {

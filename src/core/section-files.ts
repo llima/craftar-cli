@@ -4,6 +4,7 @@ import { FORGE_SCHEMA_SECTION_FILES, type ForgeManifest, type ProfileSections, t
 import { readForgeFile, type ContainRoot } from "./contain.js";
 import { isUtf8 } from "./text.js";
 import { TERMINAL_UNSAFE } from "./forge.js";
+import { familyOf, type FamilySource } from "./profile-extends.js";
 
 /**
  * Spec 55 Part B: a section value held in a file, `{ file: sections/….md }`, in a `profile.yaml` (and, once spec 54 builds them,
@@ -101,6 +102,43 @@ export function profileSectionFile(
 ): string | undefined {
   const declaring = forge.profileFiles?.get(profile);
   return declaring === undefined ? undefined : forge.sectionFiles?.get(declaring)?.get(key)?.get(section);
+}
+
+/**
+ * The file a recipe's section value came from (spec 54 §4.4), as written relative to the recipe file's folder: the recipe the
+ * profile's view sees — the local recipe of that name nearest in its family (spec 54 Part B: itself, then each parent), else
+ * the root's — or `undefined` for a string value.
+ */
+export function recipeSectionFile(
+  forge: FamilySource & {
+    sectionFiles?: Map<string, SectionFileMap>;
+    recipeFiles?: Map<string, string>;
+    locals?: Map<string, { recipes: Map<string, { file: string }> }>;
+  },
+  profile: string,
+  recipe: string,
+  key: string,
+  section: string,
+): string | undefined {
+  const owner = familyOf(forge, profile).find((q) => forge.locals?.get(q)?.recipes.has(recipe)) ?? profile;
+  const declaring = forge.locals?.get(owner)?.recipes.get(recipe)?.file ?? forge.recipeFiles?.get(recipe);
+  return declaring === undefined ? undefined : forge.sectionFiles?.get(declaring)?.get(key)?.get(section);
+}
+
+/**
+ * Loaded section values put back as written (spec 54 §4.4): each value `files` names becomes its `{ file: }`, every other one
+ * stays its string. For a writer that copies a recipe's sections into another recipe of the same folder.
+ */
+export function writtenSections(sections: Sections, files: SectionFileMap | undefined): ProfileSections {
+  const out: ProfileSections = {};
+  for (const [key, values] of Object.entries(sections)) {
+    out[key] = {};
+    for (const [name, value] of Object.entries(values)) {
+      const file = files?.get(key)?.get(name);
+      out[key][name] = file === undefined ? value : { file };
+    }
+  }
+  return out;
 }
 
 /** Spec 55 §5.3: the warning for a file under the folder's `sections/` that no value names. */

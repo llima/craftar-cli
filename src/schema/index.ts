@@ -678,6 +678,13 @@ export const RecipeSchema = z.object({
   sections: SectionsSchema.optional(),
 });
 export type Recipe = z.infer<typeof RecipeSchema>;
+/**
+ * A recipe file as written (spec 54 §4.4 with spec 55 §5.3): `RecipeSchema` whose `sections` may hold `{ file: }`, relative to
+ * the folder that holds the recipe file. `loadForge` and every re-parse of a recipe file read it; `RecipeSchema` stays the shape
+ * of a loaded recipe, strings only.
+ */
+export const RecipeWrittenSchema = RecipeSchema.extend({ sections: ProfileSectionsSchema.optional() });
+export type RecipeWritten = z.infer<typeof RecipeWrittenSchema>;
 
 /* ------------------------------------------------------------------ */
 /* Profiles                                                             */

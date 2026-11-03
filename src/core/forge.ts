@@ -4,7 +4,7 @@ import {
   ForgeManifestSchema,
   IngredientSchema,
   ProfileWrittenSchema,
-  RecipeSchema,
+  RecipeWrittenSchema,
   type ForgeManifest,
   type Ingredient,
   type IngredientRef,
@@ -60,6 +60,8 @@ export interface Forge {
   profileFiles: Map<string, string>;
   /** The top-level keys each profile's `profile.yaml` holds (spec 54 §5.3); optional so a Forge built in memory needs none. */
   writtenKeys?: Map<string, ReadonlySet<string>>;
+  /** Each root recipe's file, Forge-relative and POSIX, by recipe name (a local recipe carries its own `file`). Optional so a Forge built by hand in a test needs none. */
+  recipeFiles?: Map<string, string>;
 }
 
 export const FORGE_MANIFEST = "craftar.forge.yaml";
@@ -134,14 +136,28 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     ingredientPaths.set(ref, posixRel(dir));
   }
 
+  // Spec 55 §5.4 and spec 54 §4.4: every `{ file: }` section value — a profile's or a recipe's — resolved here, once.
+  const sectionGate = readsSectionFiles(manifest);
+  const sectionFiles = new Map<string, SectionFileMap>();
+  const sectionFindings: string[] = [];
+  /** A recipe file read as written, its `{ file: }` values resolved against the folder that holds it (`folderRel`, Forge-relative). */
+  const readRecipe = async (within: ContainRoot, abs: string, declaring: string, folderRel: string): Promise<Recipe> => {
+    const r = await readYaml(within, abs, RecipeWrittenSchema);
+    if (r.sections !== undefined && !readsRecipeSections(manifest)) throw new Error(recipeSectionsNearMiss(declaring));
+    if (r.sections === undefined) return { ...r, sections: undefined };
+    const res = await resolveSectionFiles(await containSubRoot(contain, folderRel, "the recipe's folder"), declaring, r.sections, sectionGate);
+    sectionFindings.push(...res.findings);
+    if (res.files.size) sectionFiles.set(declaring, res.files);
+    return { ...r, sections: res.sections };
+  };
+
   const recipes = new Map<string, Recipe>();
   const recipeFiles = new Map<string, string>();
   const recRoot = path.join(root, "recipes");
   if (await exists(recRoot)) {
     for (const f of await fs.readdir(recRoot)) {
       if (!/\.ya?ml$/.test(f)) continue;
-      const r = await readYaml(contain, path.join(recRoot, f), RecipeSchema);
-      if (r.sections !== undefined && !readsRecipeSections(manifest)) throw new Error(recipeSectionsNearMiss(`recipes/${f}`));
+      const r = await readRecipe(contain, path.join(recRoot, f), `recipes/${f}`, "recipes");
       recipes.set(r.name, r);
       recipeFiles.set(r.name, `recipes/${f}`);
     }
@@ -153,11 +169,9 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
   const ignoredLocals: IgnoredLocals = new Map();
   const early: string[] = [];
   const reads = readsProfileLocal(manifest);
-  const sectionFiles = new Map<string, SectionFileMap>();
   const unnamed = new Map<string, string[]>();
   const profileFiles = new Map<string, string>();
   const writtenKeys = new Map<string, ReadonlySet<string>>();
-  const sectionGate = readsSectionFiles(manifest);
   const profRoot = path.join(root, "profiles");
   if (await exists(profRoot)) {
     for (const d of await fs.readdir(profRoot, { withFileTypes: true })) {
@@ -245,9 +259,8 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
         const seen = new Map<string, string>();
         for (const e of await fs.readdir(localRecRoot)) {
           if (!/\.ya?ml$/.test(e)) continue;
-          const r = await readYaml(sub, path.join(localRecRoot, e), RecipeSchema);
           const file = `${label}/recipes/${e}`;
-          if (r.sections !== undefined && !readsRecipeSections(manifest)) throw new Error(recipeSectionsNearMiss(file));
+          const r = await readRecipe(sub, path.join(localRecRoot, e), file, `${label}/recipes`);
           const prior = seen.get(r.name.toLowerCase());
           if (prior !== undefined) {
             early.push(`L9 ${prior} and ${file}: two local recipes of one profile with one name`);
@@ -264,6 +277,8 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
 
   // E1–E3 (spec 54 §5.2): a family's chain must be whole, abstract and acyclic, in the one load error.
   if (readsProfileExtends(manifest)) early.push(...checkFamilies({ profiles }, (n) => profileFiles.get(n) ?? `profiles/${n}/profile.yaml`));
+  // A recipe's section-file findings join the profiles' in the one load error (spec 54 §4.4).
+  early.push(...sectionFindings);
   if (reads) {
     const family = (p: string) => familyOf({ profiles }, p);
     const findings = checkLocals({ ingredients, ingredientPaths, recipes, recipeFiles }, locals, localPaths, early, readsLocalOverride(manifest), family);
@@ -279,7 +294,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     const target = await fs.stat(path.join(root, rel)).catch(() => null);
     if (target === null || target.isDirectory()) folders.push(rel);
   }
-  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals, skippedLinks: folders.sort(), sectionFiles, unnamedSectionFiles: unnamed, profileFiles, writtenKeys };
+  return { root, manifest, ingredients, recipes, profiles, commit: await gitHead(root), locals, ignoredLocals, skippedLinks: folders.sort(), sectionFiles, unnamedSectionFiles: unnamed, profileFiles, writtenKeys, recipeFiles };
 }
 
 const isLink = (p: string) => fs.lstat(p).then((st) => st.isSymbolicLink(), () => false);
