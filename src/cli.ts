@@ -1329,7 +1329,8 @@ program
     if (f.via) console.log(`  via recipes ${f.via.join(" → ")}`);
     // Spec 11 §4.2 (Ruling 15): which layer filled each section. AGENTS.md (rule/*) is not one ingredient.
     if (f.sections.length) {
-      const layer = (l: SectionLayer) => (l === "profile" ? `profile ${p.resolution.profile.name}` : l);
+      const layer = (l: SectionLayer) =>
+        l === "profile" ? `profile ${p.resolution.profile.name}` : typeof l === "string" ? l : "recipe" in l ? `recipe ${l.recipe}` : `profile ${l.profile}`;
       console.log(`  sections    ${f.sections.map((x) => `${x.name} (${layer(x.layer)})`).join(", ")}`);
     }
     // Spec 44 §4.5: if this file holds the rules index, name it and its rule count.

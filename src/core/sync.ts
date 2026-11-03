@@ -326,7 +326,11 @@ export async function resolveForge(opts: { forge?: string; workspace?: string } 
   return (await resolveForgeSource(opts)).forge;
 }
 
-export type SectionLayer = "default" | "profile" | "workspace";
+/**
+ * Which layer set a section value. Below Forge schema 10 the string union, byte for byte; at it (spec 54 §4.5) a
+ * profile's or a recipe's value names its owner, in `ParamLayer`'s shape.
+ */
+export type SectionLayer = "default" | "profile" | "workspace" | { recipe: string } | { profile: string };
 
 export interface Plan {
   resolution: Resolution;
@@ -463,16 +467,23 @@ function forgeRel(forge: Forge, abs: string): string {
   return path.relative(forge.root, abs).split(path.sep).join("/");
 }
 
-/** `profile <p>` or `the workspace`: the strongest layer that sets section `name` of `key` (Ruling 15). */
+/** The strongest layer that sets section `name` of `key` (Ruling 15); at schema 10 a profile or a recipe by name (spec 54 §4.5). */
 function layerOf(resolution: Resolution, key: string, name: string): SectionLayer {
   const has = (m: Record<string, Record<string, string>>) => Object.hasOwn(m, key) && Object.hasOwn(m[key], name);
-  if (has(resolution.sectionLayers.workspace)) return "workspace";
-  if (has(resolution.sectionLayers.profile)) return "profile";
+  const { recipes, profile, workspace } = resolution.sectionLayers;
+  if (has(workspace)) return "workspace";
+  if (has(profile)) return resolution.recipeSections ? { profile: resolution.profile.name } : "profile";
+  const recipe = recipes.setBy.get(`${key}\0${name}`);
+  if (recipe !== undefined) return { recipe };
   return "default";
 }
 
+/** A layer as a warning names it: `the workspace`, `profile <p>` or `recipe <r>`. */
 function layerLabel(resolution: Resolution, layer: SectionLayer): string {
-  return layer === "workspace" ? "the workspace" : `profile ${resolution.profile.name}`;
+  if (layer === "workspace") return "the workspace";
+  if (typeof layer === "object" && "recipe" in layer) return `recipe ${layer.recipe}`;
+  if (typeof layer === "object") return `profile ${layer.profile}`;
+  return `profile ${resolution.profile.name}`;
 }
 
 /**
