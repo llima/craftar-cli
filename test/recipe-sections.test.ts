@@ -165,4 +165,17 @@ describe("spec 54 Part A — a recipe layer of sections", () => {
     await applyPromote(result, []);
     expect((await yamlOf(path.join(s.forgeRoot, "profiles/acme-portal/profile.yaml"))).sections).toEqual({ "command/open-pr": { checklist: "- [ ] lint\n" } });
   });
+
+  it("import fails closed, the Forge untouched, when the profile does not resolve and a recipe holds sections", async () => {
+    const s = kept(await acmeRecipeSections({ schema: 10, kiroSections: ON(KIRO), importShaped: true }));
+    await sync(s.wsRoot);
+    const prof = path.join(s.forgeRoot, "profiles/acme-portal/profile.yaml");
+    const doc = await yamlOf(prof);
+    await fs.writeFile(prof, YAML.stringify({ ...doc, recipes: [...doc.recipes, "missing"] }));
+    const before = await fs.readFile(prof, "utf8");
+    await expect(importClaudeCode({ workspaceRoot: s.wsRoot, forgeRoot: s.forgeRoot, profileName: "acme-portal" })).rejects.toThrow(
+      /import: profile acme-portal does not resolve \(.*\), and its recipes hold sections import must render — fix the Forge and re-run/,
+    );
+    expect(await fs.readFile(prof, "utf8")).toBe(before);
+  });
 });
