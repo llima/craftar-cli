@@ -14,7 +14,7 @@ import { registrationCitations, rendersServers, serverCitations, serverSecret, w
 import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
-import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
+import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileWrittenSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, resolve, sectionKey, type Resolution } from "../core/resolve.js";
 import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE } from "../core/rules-index.js";
@@ -2168,7 +2168,7 @@ async function existingProfile(
     if (!d.isDirectory()) continue;
     const abs = path.join(dir, d.name, "profile.yaml");
     if (!(await exists(abs))) continue;
-    const name = parseYaml(abs, stripBom(await readForgeText(await containRoot(forge), abs)), ProfileSchema).name;
+    const name = parseYaml(abs, stripBom(await readForgeText(await containRoot(forge), abs)), ProfileWrittenSchema).name;
     if ((name === profile) !== (d.name === profile)) {
       throw new Error(`import: profile ${profile} is profiles/${d.name}/profile.yaml — import writes profiles/${profile}/profile.yaml`);
     }
@@ -2283,9 +2283,18 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
     return;
   }
   const raw = await stage.readText(file);
-  const before = parseYaml(file, stripBom(raw), ProfileSchema);
+  const before = parseYaml(file, stripBom(raw), ProfileWrittenSchema);
   const values = Object.fromEntries(report.params.map((x) => [x.key, String(ctx.P[x.key])]));
-  const sectionValues = sectionChange(report, ctx);
+  // Spec 55 §5.5: a value the profile holds in a file is written to that file, whole, LF with no BOM; profile.yaml keeps its
+  // `{ file: }`. Every other value is written into profile.yaml, as before.
+  const sectionValues: Record<string, Record<string, string>> = {};
+  for (const [key, byName] of Object.entries(sectionChange(report, ctx))) {
+    for (const [n, v] of Object.entries(byName)) {
+      const held = Object.hasOwn(before.sections, key) ? before.sections[key][n] : undefined;
+      if (held !== undefined && typeof held !== "string") stage.write(path.join(path.dirname(file), ...held.file.split("/")), v.replace(/\r\n?/g, "\n"));
+      else (sectionValues[key] ??= {})[n] = v;
+    }
+  }
   // Spec 51 §4.5: a recipe in the profile's folder keeps its slot, whether or not this run computed it.
   const folder = ctx.forge && readsProfileLocal(ctx.forge.manifest) ? new Set(ctx.forge.locals.get(name)?.recipes.keys() ?? []) : new Set<string>();
   const owned = (r: string) => importOwned(r, name) && !folder.has(r);
@@ -2299,7 +2308,7 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
   const targets = [...before.targets, ...computed.targets.filter((t) => !before.targets.includes(t))];
   const fields = [
     ...(Object.keys(values).length ? ["params"] : []),
-    ...(report.sections.length ? ["sections"] : []),
+    ...(Object.keys(sectionValues).length ? ["sections"] : []),
     ...(JSON.stringify(recipes) !== JSON.stringify(before.recipes) ? ["recipes"] : []),
     ...(targets.length !== before.targets.length ? ["targets"] : []),
   ];
@@ -2323,7 +2332,7 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
       else doc.set("targets", targets);
     }
   });
-  const after = ProfileSchema.safeParse(parseYamlText(label, content) ?? {});
+  const after = ProfileWrittenSchema.safeParse(parseYamlText(label, content) ?? {});
   const expected = { ...before, recipes, targets, params: { ...before.params, ...values }, sections: deepMerge(before.sections, sectionValues) };
   if (!after.success || !isDeepStrictEqual(after.data, expected)) {
     throw new Error(`import: cannot edit ${label} in place (the edit does not read back as exactly the intended change) — reformat it by hand, commit, and re-run`);

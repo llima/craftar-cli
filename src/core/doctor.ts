@@ -15,6 +15,7 @@ import { dockerVersion, dockerFinding, dockerRunner as defaultDockerRunner, frag
 import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlocks, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK, type FileStatus } from "./sync.js";
+import { parseFrontmatter } from "./frontmatter.js";
 import { outName, MCP_FILE, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
 import { plannedRegistrations, sameHandler, type PlannedRegistration } from "./settings-apply.js";
 import { stripBom } from "./text.js";
@@ -451,6 +452,9 @@ async function workspaceChecks(
 
       // skill-layout: present only when flatSkills is non-empty (spec 44 §5)
       await skillLayout(p, w);
+
+      // skill-trigger: present only when a planned skill's description says nothing about when to use it (spec 55 Part C)
+      skillTrigger(p, w);
 
       // generated-ignored: present only in a git repository (spec 49 §4.4)
       await generatedIgnoredCheck(ws, p, w);
@@ -995,6 +999,67 @@ async function skillLayout(
       "warn",
       `.claude/skills/${name}.md is a skill Claude Code does not list`,
       `set layout: dir in ingredients/skills/${folder}/ingredient.yaml — sync then writes .claude/skills/${name}/SKILL.md`,
+    );
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* skill-trigger check (spec 55 Part C)                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Spec 55 §6.2: the phrases a skill's description holds when it says when to use it — English and Portuguese, matched
+ * lower-cased as whole words. A heuristic, documented as one; no knob in v1.
+ */
+export const SKILL_TRIGGER_PHRASES = [
+  "use when",
+  "use whenever",
+  "use this when",
+  "use it when",
+  "use for",
+  "use to",
+  "use if",
+  "when to use",
+  "trigger",
+  "triggers",
+  "invoke when",
+  "use quando",
+  "quando usar",
+  "use para",
+  "acione quando",
+] as const;
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const TRIGGER_RE = new RegExp(`(?<![\\p{L}\\p{N}])(?:${SKILL_TRIGGER_PHRASES.map((p) => escapeRe(p).replace(/ /g, "\\s+")).join("|")})(?![\\p{L}\\p{N}])`, "u");
+
+/** Whether a skill's description says when to use it (spec 55 §6.2). */
+export function saysWhen(description: string): boolean {
+  return TRIGGER_RE.test(description.toLowerCase());
+}
+
+const SKILL_FILE = /^\.claude\/skills\/(?:([^/]+)\/SKILL\.md|([^/]+)\.md)$/;
+
+/**
+ * The skill-trigger check (spec 55 §6.1–§6.3): the `description` of the frontmatter of each `SKILL.md` (or a flat skill's
+ * `.md`) `claude-code` plans, as rendered — read from the plan, never from disk. One `warn` per skill whose description is
+ * missing or holds no phrase of §6.2, naming the skill, never the description. Kiro is not read.
+ */
+function skillTrigger(p: Plan, w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void): void {
+  const names: string[] = [];
+  for (const f of p.files) {
+    if (f.target !== "claude-code" || !f.ingredient.startsWith("skill/")) continue;
+    const m = SKILL_FILE.exec(f.path);
+    if (!m) continue;
+    const description = parseFrontmatter(f.content.toString("utf8"), { loose: true }).data.description;
+    if (typeof description === "string" && saysWhen(description)) continue;
+    names.push(m[1] ?? m[2]);
+  }
+  for (const name of names.sort()) {
+    w(
+      "skill-trigger",
+      "warn",
+      `skill ${name}: its description does not say when to use it, so the agent does not load it by itself`,
+      'add a "Use when …" sentence to its SKILL.md description',
     );
   }
 }

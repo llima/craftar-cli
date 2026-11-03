@@ -49,14 +49,16 @@ import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
 import { canonicalValue } from "./core/sections.js";
+import { profileSectionFile } from "./core/section-files.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, metadataEdits, unmanaged, type DriftRow } from "./core/drift.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
-import { exists, gitDirty, gitIgnored, gitIsRepo, gitTracked, gitUnheld, ignoredPaths, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
+import { assertNoLinkOnPath, exists, gitDirty, gitIgnored, gitIsRepo, gitTracked, gitUnheld, ignoredPaths, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { applyMove, planLocalize, planShare, proveMove, type ForgeMove, type MoveCommand } from "./core/localize.js";
+import { applyExtract, DEFAULT_MIN_BYTES, EXTRACT_COMMAND, planExtract, proveExtract, type ExtractPlan } from "./core/sections-extract.js";
 import { forgeFor as profileView, isLocalMessage, localCiters, localOwners } from "./core/profile-local.js";
 import type { Forge } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
@@ -106,7 +108,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.52.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.53.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -1331,7 +1333,15 @@ program
     if (f.sections.length) {
       const layer = (l: SectionLayer) =>
         l === "profile" ? `profile ${p.resolution.profile.name}` : typeof l === "string" ? l : "recipe" in l ? `recipe ${l.recipe}` : `profile ${l.profile}`;
-      console.log(`  sections    ${f.sections.map((x) => `${x.name} (${layer(x.layer)})`).join(", ")}`);
+      // Spec 55 §5.4: a profile value held in a file names it inside the layer's parenthesis; the explain tool gains no key.
+      const ing = p.resolution.ingredients.find((i) => i.ref === f.ingredient);
+      const layerProfile = (l: SectionLayer) => (l === "profile" ? p.resolution.profile.name : typeof l === "object" && "profile" in l ? l.profile : undefined);
+      const shown = (x: { name: string; layer: SectionLayer }) => {
+        const q = layerProfile(x.layer);
+        const file = ing && q !== undefined ? profileSectionFile(ws.forge, q, sectionKey(ing.meta), x.name) : undefined;
+        return `${x.name} (${layer(x.layer)}${file ? `, ${file}` : ""})`;
+      };
+      console.log(`  sections    ${f.sections.map(shown).join(", ")}`);
     }
     // Spec 44 §4.5: if this file holds the rules index, name it and its rule count.
     // AGENTS.md does not print the index line (it would always be the full list of always-on rules)
@@ -3156,6 +3166,129 @@ forge
   .option("--dry-run", "prove and show the move, write nothing in the Forge (the proof needs a writable temporary directory)", false)
   .option("--json", "machine-readable output", false)
   .action(async (ref: string, o) => runForgeMove("forge share", ref, o));
+
+/**
+ * Spec 55 §5.6: a gated Forge writer — remote and cache tree; then `planExtract`, which reads only (gate, profile, the created
+ * paths, the YAML round-trip); then git (a repository with a commit, profile.yaml held, nothing created ignored), links, the
+ * proof on a scratch copy; then the writes.
+ */
+async function runSectionsExtract(o: { profile: string; minBytes: string; forge?: string; workspace?: string; dryRun: boolean; json: boolean }): Promise<void> {
+  const command = EXTRACT_COMMAND;
+  const minBytes = /^\d+$/.test(o.minBytes) ? Number(o.minBytes) : NaN;
+  if (!Number.isSafeInteger(minBytes)) fail(`${command}: --min-bytes takes a whole number of bytes (0 moves every non-empty value)`);
+  const f = await resolveForge({
+    forge: o.forge,
+    workspace: o.workspace,
+    refuseRemote: (url) => `the Forge of this workspace is remote (${url}) — clone it and pass --forge <dir>`,
+  });
+  await assertNotCacheTree(f.root, craftarHome()).catch((e) => fail(e instanceof Error ? e.message : String(e)));
+  let x: ExtractPlan;
+  try {
+    x = await planExtract(f, o.profile, minBytes);
+  } catch (e) {
+    return fail(errorText(e));
+  }
+  if (f.commit === null) {
+    if (await gitIsRepo(f.root)) fail(`${f.root} has no commits yet — ${command} writes to the Forge and needs git as the undo`);
+    fail(`${f.root} is not a git repository — ${command} writes to the Forge and needs git as the undo`);
+  }
+  const forgeRel = (abs: string) => path.relative(f.root, abs).split(path.sep).join("/");
+  const unheld = x.moved.length ? await gitUnheld(f.root, [x.profileAbs]) : [];
+  // A directory pattern does not match a directory that does not exist yet, so each file is asked too.
+  for (const c of new Set([...x.creates, ...x.moved.map((m) => m.abs)])) if (await gitIgnored(f.root, forgeRel(c))) unheld.push({ path: forgeRel(c), reason: "ignored" });
+  if (unheld.length) fail(unheldMessage(command, f.root, unheld));
+  try {
+    await assertNoLinkOnPath(f.root, [...x.moved.map((m) => m.abs), x.profileAbs], command);
+  } catch (e) {
+    return fail(errorText(e));
+  }
+
+  // The proof plans every registered workspace of this Forge; a registry that is not read is a warning (spec 55 §5.6).
+  let fw: Awaited<ReturnType<typeof forgeWorkspaces>>;
+  try {
+    fw = await forgeWorkspaces(craftarHome(), f.root);
+  } catch (e) {
+    return fail(`${command}: the registry could not be read (${errorText(e)}) — the move is proved against every registered workspace of this Forge`);
+  }
+  const warnings = [...fw.warnings, ...x.warnings];
+  if (fw.state !== "read") warnings.push(`registry ${fw.state} — the move is proved on the Forge alone, no workspace planned`);
+  let before: Planned[];
+  try {
+    const proof = await proveExtract(f, x, fw.workspaces);
+    warnings.push(...proof.warnings);
+    before = proof.before;
+  } catch (e) {
+    return fail(errorText(e));
+  }
+
+  const journal: WriteJournal = [];
+  let impact: ImpactResult[] = fw.workspaces.map((_, i) => impactOf(before[i], before[i]));
+  if (!o.dryRun && x.moved.length) {
+    try {
+      await applyExtract(x, journal);
+    } catch (e) {
+      fail(lateFailure(e, f.root, journal, command));
+    }
+    let after: Planned[];
+    try {
+      after = await planAll(fw.workspaces, await loadForge(f.root));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      after = fw.workspaces.map(() => ({ kind: "error", stage: "plan", message }));
+    }
+    impact = fw.workspaces.map((_, i) => impactOf(before[i], after[i]));
+  }
+  if (o.json) {
+    return console.log(
+      JSON.stringify(
+        {
+          profile: x.profile,
+          minBytes: x.minBytes,
+          dryRun: o.dryRun,
+          moved: x.moved.map((m) => ({ key: m.key, section: m.section, bytes: m.bytes, file: m.file })),
+          profileBytes: x.profileBytes,
+          impact: impact.map((r, i) => ({
+            path: fw.workspaces[i].entry.path,
+            profile: fw.workspaces[i].entry.profile,
+            match: fw.workspaces[i].match,
+            via: fw.workspaces[i].via,
+            ref: fw.workspaces[i].ref,
+            state: r.state,
+            files: r.files,
+            error: r.error,
+          })),
+          warnings,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+  console.log(pc.bold(`craftar ${command} --profile ${x.profile}${o.dryRun ? " (dry run — nothing written)" : ""}`));
+  if (!x.moved.length) console.log(`  nothing to move — no string value of ${x.minBytes} bytes or more`);
+  for (const m of x.moved) console.log(`  moved    ${m.key}.${m.section} (${m.bytes} bytes) → ${m.file}`);
+  console.log(`  profile.yaml: ${x.profileBytes.before} → ${x.profileBytes.after} bytes`);
+  for (const w of warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+  const n = (count: number) => `${count} workspace(s)`;
+  if (o.dryRun) console.log(`  impact   ${n(fw.workspaces.length)} proved on a scratch copy: not written`);
+  else if (impact.every((r) => r.state === "no-effect")) console.log(`  impact   ${n(impact.length)} planned before and after: no effect`);
+  else for (let i = 0; i < impact.length; i++) console.log(`  ${impactLine(fw.workspaces[i], impact[i])}`);
+}
+
+forge
+  .command("sections")
+  .description("A profile's section values")
+  .command("extract")
+  .description(
+    "Move a profile's long string section values into files under its folder (profiles/<p>/sections/<type>/<name>/<section>.md) and write { file: … } in their place. Proved on a scratch copy against every registered workspace before anything is written. Needs a Forge at the section-files schema, which it never raises. Writes to the Forge, never commits",
+  )
+  .requiredOption("--profile <p>", "the profile whose values move")
+  .option("--min-bytes <n>", "move a value of at least this many bytes (0: every non-empty one)", String(DEFAULT_MIN_BYTES))
+  .option("--forge <dir>", "Forge directory (instead of --workspace)")
+  .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
+  .option("--dry-run", "prove and show the move, write nothing in the Forge (the proof needs a writable temporary directory)", false)
+  .option("--json", "machine-readable output", false)
+  .action(async (o) => runSectionsExtract(o));
 
 /* ---------------------------------------------------------------- services ---------------------------------------------------------------- */
 const services = program.command("services").description("Local services of this workspace: run Docker Compose on what craftar.lock records under .craftar/");

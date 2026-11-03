@@ -9,6 +9,7 @@ import { effectiveProfile, integrationOrigin } from "./integrations.js";
 import { readsRulesIndex, RULES_INDEX_KEY } from "./rules-index.js";
 import { rendersMetadata } from "./metadata-params.js";
 import { forgeFor, ignoredLocalWarning, skippedLinkWarning } from "./profile-local.js";
+import { unnamedSectionFileWarning } from "./section-files.js";
 
 /** Builds the "profile not found" message (spec 28 §5.2, N5). */
 export function profileNotFoundMessage(profile: string, profileNames: string[]): string {
@@ -97,6 +98,8 @@ export function resolve(root: Forge, ws: WorkspaceConfig): Resolution {
   const ignored = root.ignoredLocals.get(profile.name);
   for (const sub of ignored?.subs ?? []) warnings.push(ignoredLocalWarning(ignored!.folder, sub));
   for (const rel of root.skippedLinks ?? []) warnings.push(skippedLinkWarning(rel));
+  // Spec 55 §5.3: a file under this profile's sections/ that no value names — at the section-files gate only.
+  for (const rel of root.unnamedSectionFiles?.get(profile.name) ?? []) warnings.push(unnamedSectionFileWarning(rel));
 
   // Check unknown integration recipes before recipes.add (spec 33 §4.3, design.md item 4).
   for (const s of eff.selected) {

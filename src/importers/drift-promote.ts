@@ -66,6 +66,7 @@ import { decide, workspaceParams, workspaceSections, type RunContext } from "./d
 import { providedRefs } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
 import { readsTargetSections } from "../core/sections.js";
+import { profileSectionFile } from "../core/section-files.js";
 import { paramsFor, sectionKey } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { parseYamlText } from "../core/yaml-read.js";
@@ -931,21 +932,36 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     const raw = await fs.readFile(profileAbs, "utf8");
     const label = path.relative(forgeDir, profileAbs).split(path.sep).join("/");
     const editKeys = outcome === "params" ? ["params"] : ["sections"];
-    const content = editYamlText(raw, { command: "drift promote", label, keys: editKeys }, (doc) => {
-      if (outcome === "params") {
-        for (const p of paramsChanged) {
-          doc.setIn(["params", p.key], p.value);
-        }
-      } else {
-        for (const s of sectionsChanged) {
-          doc.setIn(["sections", s.key, s.name], s.value);
-        }
-      }
+    // Spec 55 §5.5: a section value the profile holds in a file is written to that file, whole, LF with no BOM, and
+    // profile.yaml is left as it is; the file joins mustHold as profile.yaml does.
+    const heldFiles: Array<{ abs: string; value: string }> = [];
+    const inYaml = sectionsChanged.filter((s) => {
+      const held = outcome === "sections" ? profileSectionFile(forge, profile, s.key, s.name) : undefined;
+      if (held === undefined) return true;
+      const abs = path.join(path.dirname(profileAbs), ...held.split("/"));
+      heldFiles.push({ abs, value: s.value.replace(/\r\n?/g, "\n") });
+      return false;
     });
-    stage.write(profileAbs, content);
+    const unheldFiles = heldFiles.length ? await gitUnheld(forgeDir, heldFiles.map((h) => h.abs)) : [];
+    if (unheldFiles.length > 0) throw new UnheldError(realForgeDir, unheldFiles);
+    for (const h of heldFiles) stage.write(h.abs, h.value);
 
     const editedKeys = new Map<string, string[]>();
-    editedKeys.set(label, editKeys);
+    if (outcome === "params" || inYaml.length) {
+      const content = editYamlText(raw, { command: "drift promote", label, keys: editKeys }, (doc) => {
+        if (outcome === "params") {
+          for (const p of paramsChanged) {
+            doc.setIn(["params", p.key], p.value);
+          }
+        } else {
+          for (const s of inYaml) {
+            doc.setIn(["sections", s.key, s.name], s.value);
+          }
+        }
+      });
+      stage.write(profileAbs, content);
+      editedKeys.set(label, editKeys);
+    }
 
     // Check for symlinks in staged paths before any write
     await checkStagedSymlinks(forgeDir, stage);
@@ -997,7 +1013,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         warnings: [...warnings, ...impactResult.warnings],
         stage,
         forgeRoot: realForgeDir,
-        mustHold: [profileAbs],
+        mustHold: [profileAbs, ...heldFiles.map((h) => h.abs)],
         creates: [],
         workspaceRealPath: thisWsRealPath,
         ingredientRef,
