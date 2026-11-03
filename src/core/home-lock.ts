@@ -36,7 +36,7 @@ export interface LockOptions extends LockTiming {
   /** Test seam: the wait an EPERM gets on `win32`; `PENDING_DELETE_MS` otherwise. */
   pendingDeleteMs?: number;
   /**
-   * Called when removing the lock file after the body fails; the body's result or error stands
+   * Called when removing the lock file fails, after the body has run; the body's result or error stands
    * either way; the default ignores it, because a lock file left behind is taken over once it
    * is stale (`staleMs`).
    */
