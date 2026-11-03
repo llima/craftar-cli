@@ -119,7 +119,7 @@ describe("spec 54 Part A — a recipe layer of sections", () => {
   });
 
   it("a re-import of a workspace holding the recipe's value reuses the base and writes no profile section", async () => {
-    const s = kept(await acmeRecipeSections({ schema: 10, kiroSections: ON(KIRO) }));
+    const s = kept(await acmeRecipeSections({ schema: 10, kiroSections: ON(KIRO), importShaped: true }));
     await sync(s.wsRoot);
     const before = await fs.readFile(path.join(s.forgeRoot, "profiles/acme-portal/profile.yaml"), "utf8");
     const r = await importClaudeCode({ workspaceRoot: s.wsRoot, forgeRoot: s.forgeRoot, profileName: "acme-portal" });
@@ -129,7 +129,7 @@ describe("spec 54 Part A — a recipe layer of sections", () => {
   });
 
   it("drift promote writes a different value into the profile, never into the recipe", async () => {
-    const s = kept(await acmeRecipeSections({ schema: 10, kiroSections: ON(KIRO) }));
+    const s = kept(await acmeRecipeSections({ schema: 10, kiroSections: ON(KIRO), importShaped: true }));
     gitInit(s.forgeRoot);
     await sync(s.wsRoot);
     const file = path.join(s.wsRoot, OPEN_PR);
@@ -146,5 +146,23 @@ describe("spec 54 Part A — a recipe layer of sections", () => {
     await applyPromote(result, []);
     expect((await yamlOf(path.join(s.forgeRoot, "profiles/acme-portal/profile.yaml"))).sections).toEqual(ON("Run it by hand.\n"));
     expect(await fs.readFile(path.join(s.forgeRoot, "recipes/executor-kiro.yaml"), "utf8")).toBe(recipeBefore);
+  });
+
+  it("drift promote of an edit to another section never copies the recipe's value into the profile", async () => {
+    const s = kept(await acmeRecipeSections({ schema: 10, kiroSections: ON(KIRO), importShaped: true }));
+    gitInit(s.forgeRoot);
+    await sync(s.wsRoot);
+    const file = path.join(s.wsRoot, OPEN_PR);
+    await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace(DEFAULT_CHECKLIST, "- [ ] lint\n"));
+    const result = await planPromote({
+      workspaceRoot: s.wsRoot,
+      forgeDir: null,
+      path: OPEN_PR,
+      home: path.join(s.root, ".craftar"),
+      env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" },
+    });
+    expect(result.outcome).toBe("sections");
+    await applyPromote(result, []);
+    expect((await yamlOf(path.join(s.forgeRoot, "profiles/acme-portal/profile.yaml"))).sections).toEqual({ "command/open-pr": { checklist: "- [ ] lint\n" } });
   });
 });

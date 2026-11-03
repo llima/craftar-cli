@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import { forgeFor, ProfileLocalLoadError, readsProfileLocal, type LocalLayer } from "../core/profile-local.js";
+import { readsRecipeSections } from "../core/recipe-sections.js";
 import path from "node:path";
 import os from "node:os";
 import { readWorkspaceConfig } from "../core/sync.js";
@@ -554,6 +555,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     W: await workspaceParams(ws, readWs),
     PS: structuredClone(existing.sections),
     WS: await workspaceSections(ws, readWs),
+    RS: {},
     pinned: new Map(),
     forge: loaded,
     view: loaded ? forgeFor(loaded, opts.profileName) : null,
@@ -575,6 +577,15 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
     } catch (e) {
       cachedResolution = { ok: false, error: e };
     }
+  }
+
+  // The recipe layer of sections (spec 54 §4.3), as sync resolves it for this workspace. Where the profile does not
+  // resolve and a recipe of what it sees holds sections, the comparison cannot be made as sync would: fail closed.
+  if (cachedResolution?.ok) ctx.RS = cachedResolution.resolution.sectionLayers.recipes.sections;
+  else if (cachedResolution && loaded && readsRecipeSections(loaded.manifest) && [...forgeFor(loaded, opts.profileName).recipes.values()].some((r) => r.sections !== undefined)) {
+    throw new Error(
+      `import: profile ${opts.profileName} does not resolve (${errorText(cachedResolution.error)}), and its recipes hold sections import must render — fix the Forge and re-run`,
+    );
   }
 
   const primary = primaryFor(loaded, opts.profileName, ctx, cachedResolution);
@@ -1545,7 +1556,7 @@ async function writeIngredient(
       const v = await readBase(variantDir, stage.reader(), forge, { targets: readsTargetSections(run.ctx.forge.manifest) }, run.ctx.forge.manifest.schema);
       if ([...v.texts.values()].some((t) => RULES_INDEX_LINE.test(t))) {
         const key = sectionKey(v.meta);
-        const S: Record<string, string> = { ...valuesAt(run.ctx.PS, key), ...valuesAt(run.ctx.WS, key) };
+        const S: Record<string, string> = { ...valuesAt(run.ctx.RS, key), ...valuesAt(run.ctx.PS, key), ...valuesAt(run.ctx.WS, key) };
         const map = renderMap(v.meta, run.ctx.P, run.ctx.W, readsRulesIndex(run.ctx.forge?.manifest ?? { schema: 1 }));
         const expand = run.indexExpand;
         // What the workspace cannot show is taken from the source, as import writes it: the `description`, the
