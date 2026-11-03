@@ -224,6 +224,15 @@ export function localOwners(forge: Forge, ref: string): string[] {
   return [...forge.locals].filter(([, l]) => l.ingredients.has(ref as IngredientRef)).map(([p]) => p).sort();
 }
 
+/**
+ * Spec 56 §6: what a Forge writer acting on a root base says of the profiles that override it — one line each, or none
+ * below the gate (where L1 refuses an override at load).
+ */
+export function overriddenWarnings(forge: Forge, ref: string): string[] {
+  if (!readsLocalOverride(forge.manifest) || !forge.ingredients.has(ref as IngredientRef)) return [];
+  return localOwners(forge, ref).map((p) => `${shownIngredientRef(ref)} is overridden for profile ${shownLocalName(p, "profile")} — this run does not change what ${shownLocalName(p, "profile")} resolves`);
+}
+
 /** `<ref> is local to profile <p>` (or `to profiles <p>, <q>`): what a Forge-wide command says of a local (spec 51 §4.5). */
 export function isLocalMessage(ref: string, owners: string[]): string {
   return `${shownIngredientRef(ref)} is local to ${owners.length === 1 ? "profile" : "profiles"} ${owners.map((p) => shownLocalName(p, "profile")).join(", ")}`;

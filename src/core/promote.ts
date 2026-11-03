@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { forgeFor, holdsIngredient, isLocalMessage, localCiters, localOwners, localRecipeNamed, shownIngredientRef, skippedLinkWarning } from "./profile-local.js";
+import { forgeFor, holdsIngredient, isLocalMessage, localCiters, localOwners, localRecipeNamed, overriddenWarnings, shownIngredientRef, skippedLinkWarning } from "./profile-local.js";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -101,7 +101,7 @@ export async function planBasePromotion(forge: Forge, ref: string, who: string |
   await assertNoDirLinkIn(forge.root, base.dir, COMMAND);
   await assertNoDirLinkIn(forge.root, variant.dir, COMMAND);
 
-  const warnings: string[] = [];
+  const warnings: string[] = [...overriddenWarnings(forge, X)];
   const before = resolveAll(forge);
   const holds = (q: string, r: string) => {
     const res = before.get(q);

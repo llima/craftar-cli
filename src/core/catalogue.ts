@@ -2,11 +2,12 @@
  * The catalogue: every recipe and ingredient of a Forge, marked against a context (spec 16 §4.1–§4.3).
  * Pure data: no console, no process.exit, no picocolors, no file reads.
  */
+import path from "node:path";
 import type { Forge } from "./forge.js";
 import { effectiveProfile, recipesOrWritten } from "./integrations.js";
 import { recipeOrder, resolve, type Resolution } from "./resolve.js";
 import { outName } from "../emitters/shared.js";
-import { forgeFor, readsProfileLocal } from "./profile-local.js";
+import { forgeFor, readsLocalOverride, readsProfileLocal } from "./profile-local.js";
 import { INGREDIENT_TYPES, WorkspaceConfigSchema, type IngredientRef, type IngredientType, type Target, type WorkspaceConfig } from "../schema/index.js";
 
 /* ------------------------------------------------------------------ */
@@ -262,7 +263,18 @@ export interface IngredientEntry {
   /** At Forge schema 8 and above only (spec 51 §4.4). */
   scope?: Scope;
   profile?: string | null;
+  /**
+   * At spec 56's gate, in a listing with no context only: the Forge-relative folder of the root base a local overrides,
+   * `null` on every other row (spec 56 §6). A listing with a context carries no such key; the text reads `overridden`.
+   */
+  overrides?: string | null;
 }
+
+/** The root folder a catalogue row's local overrides (spec 56 §6), for the text's mark; not part of any `--json`. */
+export function overriddenRoot(row: IngredientEntry): string | null {
+  return (row as IngredientEntry & { [OVERRIDDEN]?: string | null })[OVERRIDDEN] ?? null;
+}
+const OVERRIDDEN = Symbol("overridden");
 
 export interface MissingEntry {
   ref: string;
@@ -389,13 +401,22 @@ export function listIngredients(
 
   const ingredients: IngredientEntry[] = [];
   const missingByRef = new Map<string, string[]>();
+  const overrides = readsLocalOverride(forge.manifest);
+  const rootPath = (ref: string) => {
+    const r = forge.ingredients.get(ref as IngredientRef);
+    return r !== undefined && r.meta.as === undefined ? path.relative(forge.root, r.dir).split(path.sep).join("/") : null;
+  };
+  const contextLocals = context ? forge.locals.get(context.profile)?.ingredients : undefined;
   for (const scope of scopes) {
     const own = scope.profile === null ? forge.ingredients : forge.locals.get(scope.profile)!.ingredients;
     // With --recipe, only the scopes of the chain's view, and only what the chain cites (rule 11)
     if (chainRefs && scope.profile !== null && scope.profile !== chainOwner) continue;
     const refToRecipes = citing(scope.view);
     const marks = scope.profile === null || scope.profile === context?.profile;
-    const refsToInclude = chainRefs ? [...chainRefs].filter((ref) => own.has(ref as IngredientRef)) : [...own.keys()];
+    // With a context the listing is the profile's view: a root row its local overrides is left out (spec 56 §6).
+    const refsToInclude = (chainRefs ? [...chainRefs].filter((ref) => own.has(ref as IngredientRef)) : [...own.keys()]).filter(
+      (ref) => !(overrides && scope.profile === null && contextLocals?.has(ref as IngredientRef)),
+    );
     const entries = refsToInclude
       .map((ref) => own.get(ref as IngredientRef)!)
       .filter((ing) => !typeFilter || ing.meta.type === typeFilter)
@@ -420,6 +441,11 @@ export function listIngredients(
           disabled,
         };
         if (gated) Object.assign(entry, { scope: scope.profile === null ? "forge" : "profile", profile: scope.profile });
+        if (overrides) {
+          const over = scope.profile === null ? null : rootPath(ref);
+          if (!context) entry.overrides = over;
+          Object.defineProperty(entry, OVERRIDDEN, { value: over, enumerable: false });
+        }
         return entry;
       });
     ingredients.push(...entries);

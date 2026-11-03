@@ -47,7 +47,7 @@ import { resolveHome } from "./core/home-lock.js";
 import { loadWorkspace, loadForgeFor, readConfigFrom, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, overrideRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
-import { catalogueContext, listRecipes, listIngredients, checkType, withLoadWarnings, type CatalogueContext, type ContextSource } from "./core/catalogue.js";
+import { catalogueContext, listRecipes, listIngredients, checkType, overriddenRoot, withLoadWarnings, type CatalogueContext, type ContextSource, type IngredientEntry } from "./core/catalogue.js";
 import { canonicalValue } from "./core/sections.js";
 import { profileSectionFile } from "./core/section-files.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
@@ -59,7 +59,7 @@ import { assertNoLinkOnPath, exists, gitDirty, gitIgnored, gitIsRepo, gitTracked
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { applyMove, planLocalize, planShare, proveMove, type ForgeMove, type MoveCommand } from "./core/localize.js";
 import { applyExtract, DEFAULT_MIN_BYTES, EXTRACT_COMMAND, planExtract, proveExtract, type ExtractPlan } from "./core/sections-extract.js";
-import { forgeFor as profileView, isLocalMessage, localCiters, localOwners } from "./core/profile-local.js";
+import { forgeFor as profileView, isLocalMessage, localCiters, localOwners, overriddenWarnings, readsLocalOverride } from "./core/profile-local.js";
 import type { Forge } from "./core/forge.js";
 import { fingerprintDir } from "./core/fingerprint.js";
 import {
@@ -1345,7 +1345,10 @@ program
     console.log(`  ingredient  ${f.ingredient}${f.origin ? pc.dim(`  (imported from ${f.origin.workspace}:${f.origin.path})`) : ""}`);
     // Spec 51 §4.4: at schema 8, where the file's ingredient lives.
     if (f.scope !== undefined) {
-      const where = f.scope === null ? "several ingredients" : f.scope === "profile" ? `profile ${f.profile} (${f.dir})` : `forge (${f.dir})`;
+      // Spec 56 §6: an override names the root base it stands over.
+      const root = f.scope === "profile" && readsLocalOverride(ws.forge.manifest) ? ws.forge.ingredients.get(f.ingredient as IngredientRef) : undefined;
+      const over = root !== undefined && root.meta.as === undefined ? `, over ${path.relative(ws.forge.root, root.dir).split(path.sep).join("/")}` : "";
+      const where = f.scope === null ? "several ingredients" : f.scope === "profile" ? `profile ${f.profile} (${f.dir})${over}` : `forge (${f.dir})`;
       console.log(`  source      ${where}`);
     }
     if (f.via) console.log(`  via recipes ${f.via.join(" → ")}`);
@@ -1917,8 +1920,10 @@ program
   });
 
 /** A catalogue row local to a profile (spec 51 §4.4): marked in the text; empty below schema 8, where no row has a scope. */
-function localMark(row: { scope?: string; profile?: string | null }): string {
-  return row.scope === "profile" ? ` (local to ${row.profile})` : "";
+function localMark(row: IngredientEntry | { scope?: string; profile?: string | null }): string {
+  if (row.scope !== "profile") return "";
+  // Spec 56 §6: a local that overrides a root base says so, in every listing.
+  return "ref" in row && overriddenRoot(row as IngredientEntry) !== null ? ` (local to ${row.profile}, overrides the root)` : ` (local to ${row.profile})`;
 }
 
 /**
@@ -2657,6 +2662,8 @@ forge
     }
     // Spec 25 §4.2: push warnings from forgeWorkspaces (credential lines)
     warnings.push(...impactWarnings);
+    // Spec 56 §6: a profile that overrides the base is not reached by this run.
+    warnings.push(...overriddenWarnings(f, ref));
     warnings.push(...result.notes);
     // Spec 33 §4.4: push warnings from pruneCandidates (malformed blocks)
     warnings.push(...pruneWarnings);
