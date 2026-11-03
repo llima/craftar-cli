@@ -14,6 +14,7 @@ import { loadForge } from "../src/core/forge.js";
 import { explainFile } from "../src/core/report.js";
 import { importClaudeCode } from "../src/importers/claude-code.js";
 import { applyPromote, planPromote } from "../src/importers/drift-promote.js";
+import { recipesSame } from "../src/core/unify.js";
 
 type Scenario = Awaited<ReturnType<typeof acmeRecipeSections>>;
 const cleanups: Array<() => Promise<unknown>> = [];
@@ -178,4 +179,57 @@ describe("spec 54 Part A — a recipe layer of sections", () => {
     );
     expect(await fs.readFile(prof, "utf8")).toBe(before);
   });
+
+  it("import resolves the recipe layer with the workspace's recipes.remove, as sync does", async () => {
+    const s = kept(await acmeRecipeSections({ schema: 10, kiroSections: ON(KIRO), importShaped: true }));
+    const cfg = path.join(s.wsRoot, "craftar.yaml");
+    await fs.writeFile(cfg, YAML.stringify({ ...(await yamlOf(cfg)), recipes: { add: [], remove: ["executor-kiro"] } }));
+    await sync(s.wsRoot);
+    expect(await fs.readFile(path.join(s.wsRoot, OPEN_PR), "utf8")).toContain(DEFAULT_EXECUTION);
+    const before = await fs.readFile(path.join(s.forgeRoot, "profiles/acme-portal/profile.yaml"), "utf8");
+    const r = await importClaudeCode({ workspaceRoot: s.wsRoot, forgeRoot: s.forgeRoot, profileName: "acme-portal" });
+    expect(r.variants).toEqual([]);
+    expect(r.sections).toEqual([]);
+    expect(await fs.readFile(path.join(s.forgeRoot, "profiles/acme-portal/profile.yaml"), "utf8")).toBe(before);
+  });
+
+  it("a split of a shared recipe into an owned one carries the shared recipe's sections", async () => {
+    const s = kept(await acmeRecipeSections({ schema: 10, baseSections: ON(KIRO), importShaped: true }));
+    await sync(s.wsRoot);
+    await fs.writeFile(path.join(s.wsRoot, ".claude/commands/extra.md"), "---\ndescription: Extra\n---\nDo the extra thing.\n");
+    const r = await importClaudeCode({ workspaceRoot: s.wsRoot, forgeRoot: s.forgeRoot, profileName: "acme-portal" });
+    expect(r.recipeSplits.map((x) => x.owned)).toEqual(["base--acme-portal"]);
+    expect((await yamlOf(path.join(s.forgeRoot, "recipes/base--acme-portal.yaml"))).sections).toEqual(ON(KIRO));
+    const after = await planned(s);
+    expect(after.text).toContain(KIRO);
+  });
+
+  it("a profile-local recipe: sections below the gate fail the load naming its file; at the gate they apply", async () => {
+    for (const schema of [9, 10]) {
+      const s = kept(await acmeRecipeSections({ schema }));
+      await fs.mkdir(path.join(s.forgeRoot, "profiles/acme-portal/recipes"), { recursive: true });
+      await fs.writeFile(
+        path.join(s.forgeRoot, "profiles/acme-portal/recipes/acme-extra.yaml"),
+        YAML.stringify({ name: "acme-extra", ingredients: [], sections: ON(KIRO) }),
+      );
+      const prof = path.join(s.forgeRoot, "profiles/acme-portal/profile.yaml");
+      const doc = await yamlOf(prof);
+      await fs.writeFile(prof, YAML.stringify({ ...doc, recipes: [...doc.recipes, "acme-extra"] }));
+      if (schema === 9) {
+        await expect(loadForge(s.forgeRoot)).rejects.toThrow("profiles/acme-portal/recipes/acme-extra.yaml: sections in a recipe needs schema: 10 in craftar.forge.yaml");
+      } else {
+        expect((await planned(s)).text).toContain(KIRO);
+      }
+    }
+  });
+
+  it("forge unify's recipe identity counts sections", () => {
+    const r = (sections?: Record<string, Record<string, string>>) =>
+      ({ name: "x", extends: [], ingredients: ["command/open-pr"], params: {}, ...(sections ? { sections } : {}) }) as Parameters<typeof recipesSame>[0];
+    expect(recipesSame(r(), r({}))).toBe(true);
+    expect(recipesSame(r(ON("A\n")), r(ON("A\n")))).toBe(true);
+    expect(recipesSame(r(ON("A\n")), r())).toBe(false);
+    expect(recipesSame(r(ON("A\n")), r(ON("B\n")))).toBe(false);
+  });
 });
+

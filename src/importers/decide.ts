@@ -418,6 +418,29 @@ export async function workspaceParams(ws: string, read: (abs: string) => Promise
 }
 
 /** The workspace's `targets`: craftar.local.yaml's replaces craftar.yaml's, as loadWorkspace merges them; undefined when neither sets it. */
+/**
+ * The workspace's `recipes` (`add`, `remove`), craftar.local.yaml over craftar.yaml as loadWorkspace merges them, so a
+ * resolution import makes of the importing profile resolves the recipes sync resolves (spec 54 §4.3).
+ */
+export async function workspaceRecipes(ws: string, read: (abs: string) => Promise<string>, command = "import"): Promise<{ add: string[]; remove: string[] }> {
+  let out: unknown = undefined;
+  for (const f of ["craftar.yaml", "craftar.local.yaml"]) {
+    const abs = path.join(ws, f);
+    if (!(await exists(abs))) continue;
+    try {
+      const doc = (parseWorkspaceYaml(f, await read(abs)) ?? {}) as { recipes?: unknown };
+      if (doc?.recipes !== undefined) out = deepMerge(out, doc.recipes);
+    } catch (e) {
+      throw new Error(`${command}: ${f} does not load (${errorText(e)})`);
+    }
+  }
+  try {
+    return WorkspaceConfigSchema.shape.recipes.parse(out);
+  } catch (e) {
+    throw new Error(`${command}: craftar.yaml does not load (${errorText(e)})`);
+  }
+}
+
 export async function workspaceTargets(
   ws: string,
   read: (abs: string) => Promise<string>,

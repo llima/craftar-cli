@@ -23,8 +23,6 @@ export interface RecipeSectionLayer {
   setBy: Map<string, string>;
 }
 
-export const EMPTY_RECIPE_LAYER: RecipeSectionLayer = { sections: {}, setBy: new Map() };
-
 /** Fold `order` (resolve()'s application order) into one layer; `{}` when the Forge is below the gate. */
 export function recipeSectionLayer(order: string[], recipeOf: (name: string) => Recipe | undefined, reads: boolean): RecipeSectionLayer {
   if (!reads) return { sections: {}, setBy: new Map() };
