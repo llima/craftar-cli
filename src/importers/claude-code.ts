@@ -18,7 +18,7 @@ import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
 import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileWrittenSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
-import { readsPrimary, resolve, sectionKey, type Resolution } from "../core/resolve.js";
+import { readsPrimary, recipeOrder, resolve, sectionKey, type Resolution } from "../core/resolve.js";
 import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE } from "../core/rules-index.js";
 import { effectiveProfile } from "../core/integrations.js";
 import { classifyForge, credentialFault } from "../core/remote.js";
@@ -2004,7 +2004,16 @@ async function placeComputed(o: RecipeOptions, own: LocalLayer | undefined, name
   const locals = new Set<string>([...(own?.ingredients.keys() ?? []), ...(o.runLocals ?? []), ...parentLayers.flatMap((l) => [...l.ingredients.keys()])].filter((r) => !isOverride(r)));
   const citedLocally = new Set<string>([...(own?.recipes.values() ?? []), ...parentLayers.flatMap((l) => [...l.recipes.values()])].flatMap((r) => r.recipe.ingredients));
   const rootListed = new Set(o.forge.recipes.get(name)?.ingredients ?? []);
-  const kept = list.filter((r) => !locals.has(r) && !(citedLocally.has(r) && !rootListed.has(r)));
+  // Spec 54 §5.9: what the parents' recipes already bring is the family's — a child's computed list never copies it.
+  const parentRecipes = familyOf(forge, o.profile).slice(1).flatMap((q) => forge.profiles.get(q)?.recipes ?? []);
+  const view = forgeFor(forge, o.profile);
+  let fromParents = new Set<string>();
+  try {
+    fromParents = new Set(recipeOrder(view, parentRecipes, `the parents of profile ${o.profile}`).flatMap((r) => view.recipes.get(r)?.ingredients ?? []));
+  } catch {
+    // A parent's list that does not resolve leaves the list as computed; the proof on the scratch copy says the rest.
+  }
+  const kept = list.filter((r) => !locals.has(r) && !fromParents.has(r) && !(citedLocally.has(r) && !rootListed.has(r)));
   if (list.length > 0 && kept.length === 0) return null;
   const elsewhere = [...o.forge.locals.entries()].some(([q, l]) => q !== o.profile && l.recipes.has(name));
   if (elsewhere) return writeOwnedRecipe(o, `${name}--${o.profile}`, kept, description);

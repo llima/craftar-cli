@@ -323,3 +323,19 @@ describe("spec 54 §5.3 — what an integrations block alone provides, under a f
   });
 });
 
+describe("spec 54 §5.9 — a re-import of a child never copies what its parents' recipes bring", () => {
+  it("no recipe the import writes lists an ingredient a parent's recipe gives, and the child still plans the same", async () => {
+    const f = kept(await acmeHoisted(GATE, { importShaped: true }));
+    expect(runCli(["sync", "--workspace", f.ws.portal]).code).toBe(0);
+    await importClaudeCode({ workspaceRoot: f.ws.portal, forgeRoot: f.forgeRoot, profileName: "acme-portal" });
+    const child = YAML.parse(await fs.readFile(path.join(f.forgeRoot, "profiles/acme-portal/profile.yaml"), "utf8"));
+    const lists: string[][] = [];
+    for (const r of child.recipes as string[]) {
+      const file = path.join(f.forgeRoot, "recipes", `${r}.yaml`);
+      lists.push(YAML.parse(await fs.readFile(file, "utf8")).ingredients);
+    }
+    for (const parentGives of ["rule/style", "command/open-pr", "rule/house"]) expect(lists.flat()).not.toContain(parentGives);
+    expect(runCli(["sync", "--check", "--workspace", f.ws.portal]).code).toBe(0);
+  });
+});
+
