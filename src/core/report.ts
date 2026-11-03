@@ -39,8 +39,9 @@ export const statusPath = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, 
 export const notProduced = (p: string, profile: string) => `${p} is not produced by the Forge for profile ${profile}`;
 
 /** Why sync leaves a file alone, for the three states it skips. */
-export function explainSkip(s: Pick<FileStatus, "state" | "path" | "escapes">): string {
+export function explainSkip(s: Pick<FileStatus, "state" | "path" | "escapes" | "changedSinceStatus">): string {
   if (s.escapes) return escapeSummary([{ path: s.path, escapes: s.escapes }]);
+  if (s.changedSinceStatus) return "changed while craftar was writing — kept; run craftar sync again";
   switch (s.state) {
     case "drift":
       return "hand-edited since last sync — `craftar drift show <path>`, then `craftar drift discard` or `craftar drift promote`";
@@ -73,7 +74,7 @@ export interface StatusReport {
     lockCommit: string | null;
     fetched: boolean;
   };
-  statuses: Array<Omit<FileStatus, "planned">>;
+  statuses: Array<Omit<FileStatus, "planned" | "escapes" | "diskHash" | "changedSinceStatus">>;
   warnings: string[];
   unsetParams: UnsetParam[];
 }
@@ -97,7 +98,8 @@ export function statusReport(ws: Workspace, p: Plan, lock: Lock | null, statuses
       fetched: o.fetched,
     },
     // The planned buffer never leaves the process: dropped here, once, for every reader of the document.
-    statuses: statuses.map(({ planned, escapes, ...s }) => s),
+    // diskHash and changedSinceStatus are also internal fields that don't reach --json.
+    statuses: statuses.map(({ planned, escapes, diskHash, changedSinceStatus, ...s }) => s),
     warnings: withEscapeLine(p.warnings, statuses),
     unsetParams: unsetDeclared(p),
   };

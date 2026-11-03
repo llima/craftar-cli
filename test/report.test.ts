@@ -50,6 +50,22 @@ describe("statusReport", () => {
     expect(r.unsetParams).toEqual([]);
     expect(st[7].planned).toBeDefined(); // the caller's rows are not touched
   });
+
+  it("drops diskHash and changedSinceStatus from statuses", async () => {
+    const { ws, p, lock, st } = await loaded(kept(await eightStates()));
+    // Manually add the new fields to test they are dropped
+    const statusWithNewFields: FileStatus[] = st.map((s) => ({
+      ...s,
+      diskHash: "sha256:test",
+      changedSinceStatus: true,
+    } as FileStatus));
+    const r = statusReport(ws, p, lock, statusWithNewFields);
+    // Neither field should appear in any status
+    for (const s of r.statuses) {
+      expect(Object.hasOwn(s, "diskHash")).toBe(false);
+      expect(Object.hasOwn(s, "changedSinceStatus")).toBe(false);
+    }
+  });
 });
 
 describe("diffReport", () => {

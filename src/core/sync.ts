@@ -1194,6 +1194,10 @@ export interface FileStatus {
   lock?: LockEntry | LockEntryV3;
   /** Set only on a row whose path escapes the workspace (spec 48 §4.3); `statusReport` drops it, so it reaches no `--json`. */
   escapes?: Escape;
+  /** `hashNormalized` of the bytes `status()` read at this path; null when nothing was read (absent, not a regular file, or a path that escapes). */
+  diskHash: string | null;
+  /** Set by `apply()` only, on a skipped row whose file changed after `status()` read it. */
+  changedSinceStatus?: true;
 }
 
 /** Does the disk content match the lock entry? Recognises both current and pre-0.17.4 hashes for non-UTF-8 files. */
@@ -1210,7 +1214,7 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
     // The first branch of the order below (spec 48 §4.3): such a path is never read, so nothing of the file behind it decides anything.
     const escapes = await source.escape(f.path);
     if (escapes) {
-      out.push({ path: f.path, state: entry ? "drift" : "collision", target: f.target, ingredient: f.ingredient, planned: f, lock: entry, escapes });
+      out.push({ path: f.path, state: entry ? "drift" : "collision", target: f.target, ingredient: f.ingredient, planned: f, lock: entry, escapes, diskHash: null });
       continue;
     }
     const disk = await source.read(f.path);
@@ -1228,7 +1232,7 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
       else if (matchesLock(disk, entry)) state = "update";
       else state = "drift";
     } else state = hashNormalized(disk) === planHash || sameJson(f.path, disk, f.content) ? "adopt" : "collision";
-    out.push({ path: f.path, state, target: f.target, ingredient: f.ingredient, planned: f, lock: entry });
+    out.push({ path: f.path, state, target: f.target, ingredient: f.ingredient, planned: f, lock: entry, diskHash: disk === null ? null : hashNormalized(disk) });
   }
   const planned = new Set(p.files.map((f) => f.path));
   for (const e of lock?.files ?? []) {
@@ -1237,12 +1241,12 @@ export async function status(ws: Workspace, p: Plan, lock: Lock | null): Promise
     if (!(await source.reaches(e.path))) continue;
     const escapes = await source.escape(e.path);
     if (escapes) {
-      out.push({ path: e.path, state: "orphan-drift", target: e.target, ingredient: e.ingredient, lock: e, escapes });
+      out.push({ path: e.path, state: "orphan-drift", target: e.target, ingredient: e.ingredient, lock: e, escapes, diskHash: null });
       continue;
     }
     const disk = await source.read(e.path);
     if (disk === null) continue; // already gone
-    out.push({ path: e.path, state: matchesLock(disk, e) ? "orphan" : "orphan-drift", target: e.target, ingredient: e.ingredient, lock: e });
+    out.push({ path: e.path, state: matchesLock(disk, e) ? "orphan" : "orphan-drift", target: e.target, ingredient: e.ingredient, lock: e, diskHash: hashNormalized(disk) });
   }
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
@@ -1293,12 +1297,44 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   const skipped: FileStatus[] = [];
   const entries: LockEntryV3[] = [];
 
+  // Fresh source so no answer cached during status() is reused.
+  const fresh = diskSource(ws.root);
+
+  /**
+   * Check if the file at s.path has changed since status() read it.
+   * Returns true if the file has changed or cannot be read, false otherwise.
+   */
+  const changedSince = async (s: FileStatus): Promise<boolean> => {
+    // Never read through a path that escapes
+    if (await fresh.escape(s.path)) return true;
+    let bytes: Buffer | null;
+    try {
+      bytes = await fs.readFile(path.join(ws.root, s.path));
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      // ENOENT or ENOTDIR → null (file absent)
+      if (code === "ENOENT" || code === "ENOTDIR") bytes = null;
+      // Any other error (EBUSY, EPERM, EISDIR, …) → treat as changed
+      else return true;
+    }
+    return (bytes === null ? null : hashNormalized(bytes)) !== s.diskHash;
+  };
+
   for (const s of statuses) {
     switch (s.state) {
       case "new":
       case "update":
       case "adopt":
-        if (!opts.dryRun) await writeFile(ws.root, s.planned!);
+        if (!opts.dryRun) {
+          if (await changedSince(s)) {
+            // File changed in the window: skip it
+            const kept: FileState = s.planned ? (s.lock ? "drift" : "collision") : "orphan-drift";
+            skipped.push({ ...s, state: kept, changedSinceStatus: true });
+            if (s.lock) entries.push(s.lock);
+            break;
+          }
+          await writeFile(ws.root, s.planned!);
+        }
         written.push(s.path);
         entries.push(entry(s.planned!));
         break;
@@ -1307,7 +1343,15 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
         break;
       case "drift":
         if (opts.overwriteDrift || opts.overwritePaths?.has(s.path)) {
-          if (!opts.dryRun) await writeFile(ws.root, s.planned!);
+          if (!opts.dryRun) {
+            if (await changedSince(s)) {
+              // File changed in the window: skip it as drift
+              skipped.push({ ...s, state: "drift", changedSinceStatus: true });
+              entries.push(s.lock!);
+              break;
+            }
+            await writeFile(ws.root, s.planned!);
+          }
           written.push(s.path);
           entries.push(entry(s.planned!));
         } else {
@@ -1319,13 +1363,29 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
         skipped.push(s);
         break;
       case "orphan":
-        if (!opts.dryRun) await fs.rm(path.join(ws.root, s.path), { force: true });
+        if (!opts.dryRun) {
+          if (await changedSince(s)) {
+            // File changed in the window: skip it as orphan-drift
+            skipped.push({ ...s, state: "orphan-drift", changedSinceStatus: true });
+            if (s.lock) entries.push(s.lock);
+            break;
+          }
+          await fs.rm(path.join(ws.root, s.path), { force: true });
+        }
         removed.push(s.path);
         break;
       case "orphan-drift":
         // Only a path named one by one is discarded: `overwriteDrift` regenerates, and there is nothing to regenerate here.
         if (opts.overwritePaths?.has(s.path)) {
-          if (!opts.dryRun) await fs.rm(path.join(ws.root, s.path), { force: true });
+          if (!opts.dryRun) {
+            if (await changedSince(s)) {
+              // File changed in the window: skip it as orphan-drift
+              skipped.push({ ...s, state: "orphan-drift", changedSinceStatus: true });
+              if (s.lock) entries.push(s.lock);
+              break;
+            }
+            await fs.rm(path.join(ws.root, s.path), { force: true });
+          }
           removed.push(s.path);
         } else {
           skipped.push(s);
