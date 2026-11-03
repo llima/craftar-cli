@@ -209,11 +209,12 @@ export async function planBasePromotion(forge: Forge, ref: string, who: string |
       if (!res.recipes.includes(name)) continue;
       // The written list (the file promote would edit), never the family's merged one (spec 54 §5.10).
       const written = forge.profiles.get(q)!;
+      // A recipe a parent lists is the family's, the child listing it too or not (spec 54 §5.10).
+      const parent = familyOf(forge, q).slice(1).find((p) => forge.profiles.get(p)!.recipes.includes(name));
+      if (parent) {
+        throw new Error(`${COMMAND}: profile ${q} reaches recipe ${name} (which names ${X}) through ${parent}, which it extends — no command writes a parent: edit the Forge by hand`);
+      }
       if (!written.recipes.includes(name)) {
-        const parent = familyOf(forge, q).slice(1).find((p) => forge.profiles.get(p)!.recipes.includes(name));
-        if (parent) {
-          throw new Error(`${COMMAND}: profile ${q} reaches recipe ${name} (which names ${X}) through ${parent}, which it extends — no command writes a parent: edit the Forge by hand`);
-        }
         const eff = effectiveProfile(forge, written);
         const sel = eff.selected.find((s) => s.recipe === name);
         if (sel) {

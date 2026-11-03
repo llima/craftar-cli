@@ -249,5 +249,48 @@ describe("spec 54 Part B — the writers", () => {
     ).rejects.toThrow("recipe base reaches acme-portal through profile acme, which it extends — forking it would edit acme's recipes, and no command writes a parent");
     expect(await fs.readFile(path.join(forge, "recipes/base.yaml"), "utf8")).toBe(base);
   });
+
+  for (const how of ["the child lists it too", "the parent's integrations block selects it"] as const) {
+    it(`drift promote refuses a recipe a parent brings when ${how} (no command writes a parent)`, async () => {
+      const root = await tmpDir("craftar-extends-reach-");
+      roots.push(root);
+      const forge = path.join(root, "forge");
+      const viaBlock = how !== "the child lists it too";
+      await makeForge(forge, {
+        ingredients,
+        recipes: [...rootRecipes, recipe("pm-style", ["rule/style", "command/open-pr"])],
+        profiles: [
+          viaBlock ? { name: "acme", abstract: true, recipes: [], integrations: { pm: { kind: "style" } } } : { name: "acme", abstract: true, recipes: ["base"] },
+          { name: "acme-portal", extends: "acme", recipes: viaBlock ? ["stack-angular", "base"] : ["base", "stack-angular"], targets: ["claude-code"] },
+        ],
+      });
+      await writeFiles(forge, { "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: GATE }) });
+      gitInit(forge);
+      const ws = path.join(root, "ws");
+      await makeWorkspace(ws, forge, { config: { profile: "acme-portal" } });
+      expect(runCli(["sync", "--workspace", ws]).code).toBe(0);
+      await fs.writeFile(path.join(ws, ".claude/rules/style.md"), "# Style\nKeep it very short.\n");
+      await expect(
+        planPromote({ workspaceRoot: ws, forgeDir: null, path: ".claude/rules/style.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
+      ).rejects.toThrow(`reaches acme-portal through profile acme, which it extends — forking it would edit acme's recipes, and no command writes a parent`);
+    });
+  }
+
+  it("forge promote refuses a recipe a parent lists even when the child lists it too", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    const v = rule("style--globex", "# Style\nGlobex style.\n", { as: "style" });
+    await writeFiles(f0.forgeRoot, {
+      "ingredients/rules/style--globex/ingredient.yaml": YAML.stringify(v.meta),
+      "ingredients/rules/style--globex/rule.md": v.files!["rule.md"] as string,
+      "recipes/base--globex.yaml": YAML.stringify(recipe("base--globex", ["rule/style--globex", "command/open-pr"])),
+      "profiles/globex/profile.yaml": YAML.stringify({ name: "globex", recipes: ["base--globex"], targets: ["claude-code"] }),
+      "profiles/acme-portal/profile.yaml": YAML.stringify({ name: "acme-portal", extends: "acme", recipes: ["base", "stack-angular"], targets: ["claude-code", "kiro"] }),
+    });
+    const f = await loadForge(f0.forgeRoot);
+    await expect(planBasePromotion(f, "rule/style", "globex")).rejects.toThrow(
+      "forge promote: profile acme-portal reaches recipe base (which names rule/style) through acme, which it extends — no command writes a parent",
+    );
+  });
 });
 

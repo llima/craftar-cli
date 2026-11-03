@@ -70,6 +70,7 @@ import { readsTargetSections } from "../core/sections.js";
 import { profileSectionFile } from "../core/section-files.js";
 import { paramsFor, recipeOrder, sectionKey } from "../core/resolve.js";
 import { effectiveProfile } from "../core/integrations.js";
+import { errorText } from "../core/schema-fault.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { registrationCitations } from "../core/mcp-server.js";
@@ -1184,20 +1185,21 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       // Check if any other resolved recipe extends R
       const extendedByOther = isExtendedByOtherResolved(forgeFor(forge, profile), p0.resolution.recipes, R);
 
-      // Spec 54 §5.9: a recipe that reaches the profile only through a parent's list (listed there, or extended from it) — every
-      // case would edit the parent's recipe or its list, and no command writes a parent. Decided before the cases, so a
-      // parent with one child is refused too.
+      // Spec 54 §5.9: a recipe a parent reaches — written in its list, selected by its integrations block, or extended from
+      // either — is the family's: every case would edit it or the parent's list, and no command writes a parent. The child
+      // listing it too, or a workspace adding it, changes nothing about what the parent brings. Decided before the cases, so
+      // a parent with one child is refused too; a parent whose recipes do not resolve fails closed.
       {
-        const wsAddsR = (ws.config.recipes?.add ?? []).includes(R);
-        const reach = (names: string[]): boolean => {
+        const view = forgeFor(forge, profile);
+        const viaParent = familyOf(forge, profile).slice(1).find((q) => {
+          const names = effectiveProfile(forge, forge.profiles.get(q)!).recipes;
           try {
-            return recipeOrder(forgeFor(forge, profile), names, `profile ${profile}`).includes(R);
-          } catch {
-            return false;
+            return recipeOrder(view, names, `profile ${q}`).includes(R);
+          } catch (e) {
+            throw new Error(`${normalized}: the recipes of profile ${q}, which ${profile} extends, do not resolve (${errorText(e)}) — fix the Forge and re-run`);
           }
-        };
-        const viaParent = familyOf(forge, profile).slice(1).find((q) => reach(forge.profiles.get(q)!.recipes));
-        if (viaParent !== undefined && !wsAddsR && !reach(forge.profiles.get(profile)?.recipes ?? [])) throw new Error(D17_PARENT(normalized, R, viaParent, profile));
+        });
+        if (viaParent !== undefined) throw new Error(D17_PARENT(normalized, R, viaParent, profile));
       }
 
       if (profileOwns && !othersMay) {
