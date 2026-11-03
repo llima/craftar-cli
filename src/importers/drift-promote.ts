@@ -2,6 +2,7 @@
  * `craftar drift promote` (spec 30 §4.4–§4.7): carry a hand-edited file back to the Forge as a variant.
  * Writes nothing in a workspace, its lock, the registry or the Forge cache.
  */
+import { familyOf } from "../core/profile-extends.js";
 import { forgeFor, localCiters } from "../core/profile-local.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -811,6 +812,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Spec 51 §5.4: a local of this profile is edited in place — nothing else resolves it, so it has no variant.
   const isLocal = forge.locals.get(profile)?.ingredients.has(ingredientRef) === true;
 
+  // Spec 54 §5.9: a file from a parent's local is the family's; no writer writes a parent (D24).
+  const parentOwner = isLocal ? undefined : familyOf(forge, profile).slice(1).find((q) => forge.locals.get(q)?.ingredients.get(ingredientRef)?.dir === X.dir);
+
   // Determine if X is this profile's variant (name is `<N>--<p>` AND as is `<N>`)
   const isOwnVariant = X.meta.name === `${N}--${profile}` && X.meta.as === N;
 
@@ -882,6 +886,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     outcome = isLocal ? "local" : isOwnVariant ? "variant-updated" : "variant";
     flattenedParams = [...baseCitedKeys].sort();
     flattenedSections = baseSectionNames;
+  }
+  // D24 (spec 54 §5.9): a value the child can hold goes to the child; anything else would write the parent's local.
+  if (parentOwner !== undefined && (outcome === "variant" || outcome === "variant-updated")) {
+    const dir = path.relative(forge.root, X.dir).split(path.sep).join("/");
+    throw new Error(`D24 ${normalized} comes from ${ingredientRef}, local to ${parentOwner}, which ${profile} extends (${dir}) — no command writes a parent: edit it there by hand, then sync every workspace of the family`);
   }
 
   // Spec 51 §4.5: a new variant would leave a local recipe of this profile naming the base beside it.

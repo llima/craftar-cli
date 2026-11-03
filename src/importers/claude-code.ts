@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { abstractRefusal, isAbstract } from "../core/profile-extends.js";
 import { forgeFor, overriddenBase, ProfileLocalLoadError, readsLocalOverride, readsProfileLocal, type LocalLayer } from "../core/profile-local.js";
 import { readsRecipeSections } from "../core/recipe-sections.js";
 import { familyOf } from "../core/profile-extends.js";
@@ -519,6 +520,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   }
   /** The refs this run holds as the profile's locals, reused, rewritten or created, in run order. */
   const runLocals: string[] = [];
+  // Spec 54 §5.7: an abstract profile is no workspace's, so no workspace is imported into it.
+  if (loaded && isAbstract(loaded, opts.profileName)) throw new Error(`import: ${abstractRefusal(loaded, opts.profileName)}`);
   const existing = await existingProfile(forge, opts.profileName, loaded);
   for (const w of existing.warnings) report.warnings.push(w);
   const readWs = (abs: string) => fs.readFile(abs, "utf8");
@@ -2185,6 +2188,8 @@ function resolvedParam(forge: import("../core/forge.js").Forge | null, profile: 
 
 /** The recipes a profile resolves inside the Forge, or null when `resolve` throws — the profile does not resolve. */
 export function resolvedRecipes(forge: import("../core/forge.js").Forge, profile: string): Set<string> | null {
+  // Spec 54 §5.7: an abstract profile resolves nothing by itself — its children are asked in its place.
+  if (isAbstract(forge, profile)) return new Set();
   try {
     return new Set(resolve(forge, WorkspaceConfigSchema.parse({ forge: ".", profile })).recipes);
   } catch {

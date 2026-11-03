@@ -3,6 +3,7 @@
  * No fs, no process, no console — all validation and generation is deterministic.
  */
 
+import { isAbstract } from "./profile-extends.js";
 import YAML from "yaml";
 import { ProfileSchema, WorkspaceConfigSchema, type Profile } from "../schema/index.js";
 import type { Forge } from "./forge.js";
@@ -110,6 +111,8 @@ export function newProfile(forge: Forge, o: NewProfileOptions): NewProfileResult
   if (like && !template) {
     throw new Error("--like: " + profileNotFoundMessage(like, [...forge.profiles.keys()]));
   }
+  // Spec 54 §5.7: an abstract profile's recipes are half a profile; a child extends it instead.
+  if (like && isAbstract(forge, like)) throw new Error(`--like: profile ${like} is abstract — start from a profile that extends it, or write extends: ${like} in the new profile by hand`);
 
   // 2. targets = o.targets ?? template's ?? ["claude-code"]
   const targets = targetOverride ?? template?.targets ?? ["claude-code"];

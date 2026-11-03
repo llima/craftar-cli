@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { isAbstract } from "./profile-extends.js";
 import { forgeFor } from "./profile-local.js";
 import { escapeSummary, escapingRows } from "./contain.js";
 import { ProfileSchema, TARGETS, type Registry, type RegistryEntry, type WorkspaceConfig } from "../schema/index.js";
@@ -521,7 +522,8 @@ export async function askInit(
   // Helper to show the profile list
   const showProfileList = () => {
     if (profileListShown) return;
-    const profiles = [...forge.profiles.values()].sort((a, b) => a.name.localeCompare(b.name));
+    // Spec 54 §5.7: an abstract profile is no workspace's, so it is not offered.
+    const profiles = [...forge.profiles.values()].filter((p) => !isAbstract(forge, p.name)).sort((a, b) => a.name.localeCompare(b.name));
     io.say(`Profiles in ${answeredForge}:`);
     const maxLen = Math.max(...profiles.map((p) => p.name.length));
     for (let i = 0; i < profiles.length; i++) {
@@ -579,7 +581,8 @@ export async function askInit(
     isNewProfile = true;
   } else {
     // Show the profile list with the new profile entry if applicable
-    const profiles = [...forge.profiles.values()].sort((a, b) => a.name.localeCompare(b.name));
+    // Spec 54 §5.7: an abstract profile is no workspace's, so it is not offered.
+    const profiles = [...forge.profiles.values()].filter((p) => !isAbstract(forge, p.name)).sort((a, b) => a.name.localeCompare(b.name));
     showProfileList();
     
     // Show the 0) a new profile entry ONLY when the Forge can take a new profile
@@ -663,7 +666,8 @@ export async function askInit(
           // Enter or 0 → none
           break templateLoop;
         }
-        const profiles = [...forge.profiles.values()].sort((a, b) => a.name.localeCompare(b.name));
+        // Spec 54 §5.7: an abstract profile is no workspace's, so it is not offered.
+    const profiles = [...forge.profiles.values()].filter((p) => !isAbstract(forge, p.name)).sort((a, b) => a.name.localeCompare(b.name));
         const picked = pickItem(profiles.map((p) => p.name), trimmed);
         if (picked !== null) {
           newProfileLike = picked;
