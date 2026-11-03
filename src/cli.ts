@@ -2910,7 +2910,8 @@ forge
     "Make a profile's variant the base: the base takes the variant's files, every other profile that resolves the old base gets it back as its own variant through a recipe it owns, and every profile is proved to resolve the same ingredients before anything is written. Writes to the Forge",
   )
   .argument("<type/name>", "base ingredient (rule/workflow)")
-  .requiredOption("--profile <p>", "the profile whose variant becomes the base")
+  .option("--profile <p>", "the profile whose variant <name>--<p> becomes the base")
+  .option("--variant <type/name>", "the variant that becomes the base, named itself — one several profiles share (as: <name>); instead of --profile")
   .option("--forge <dir>", "Forge directory (instead of --workspace)")
   .option("--workspace <dir>", "workspace whose craftar.yaml names the Forge (default: .)")
   .option("--no-impact", "skip planning the registered workspaces of this Forge before and after the writes")
@@ -2931,7 +2932,9 @@ forge
     }
     if (await gitDirty(f.root)) fail(`${f.root} is not a clean git checkout — commit or stash your changes first`);
 
-    const promotion = await planBasePromotion(f, ref, o.profile);
+    if (o.profile !== undefined && o.variant !== undefined) fail("forge promote: give --profile or --variant, not both");
+    if (o.profile === undefined && o.variant === undefined) fail("forge promote: give --profile <p> or --variant <type/name>");
+    const promotion = await planBasePromotion(f, ref, o.variant !== undefined ? { variant: o.variant } : o.profile);
     const forgeRel = (abs: string) => path.relative(f.root, abs).split(path.sep).join("/");
     // Every path overwritten or deleted must be held by git; a path created must not be one git ignores, or `git clean` would not undo it.
     const unheld = await gitUnheld(f.root, promotion.mustHold);
@@ -3033,8 +3036,9 @@ forge
     }
 
     const n = (count: number) => `${count} workspace(s)`;
-    console.log(pc.bold(`craftar forge promote ${promotion.base} ← ${promotion.profile}${o.dryRun ? " (dry run — nothing written)" : ""}`));
-    console.log(`  base     ${promotion.base} ${o.dryRun ? "would hold" : "now holds"} ${promotion.profile}'s text (was ${promotion.removed})`);
+    const from = promotion.profile ?? promotion.removed;
+    console.log(pc.bold(`craftar forge promote ${promotion.base} ← ${from}${o.dryRun ? " (dry run — nothing written)" : ""}`));
+    console.log(`  base     ${promotion.base} ${o.dryRun ? "would hold" : "now holds"} ${promotion.profile !== null ? `${promotion.profile}'s text` : "its text"} (was ${promotion.removed})`);
     for (const c of promotion.created) console.log(`  variant  ${c} ${o.dryRun ? "would be created" : "created"} (the old base)`);
     if (promotion.discarded) console.log(`  the old base is resolved by no profile — ${o.dryRun ? "would be discarded" : "discarded"} (git holds it)`);
     const recipeLines = [...promotion.detail.recipes.filter((r) => r.from === null), ...promotion.detail.recipes.filter((r) => r.from !== null)];

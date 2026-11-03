@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { forgeFor, holdsIngredient, isLocalMessage, localCiters, localOwners, localRecipeNamed, skippedLinkWarning } from "./profile-local.js";
+import { forgeFor, holdsIngredient, isLocalMessage, localCiters, localOwners, localRecipeNamed, shownIngredientRef, skippedLinkWarning } from "./profile-local.js";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -36,7 +36,8 @@ export interface BasePromotion {
   root: string;
   /** `X`, `p` and `X--p`. */
   base: IngredientRef;
-  profile: string;
+  /** The profile named by `--profile`, or `null` when the variant was named by `--variant` (spec 56 §5.2). */
+  profile: string | null;
   removed: IngredientRef;
   /** The `X--q` created from the old base, sorted. */
   created: IngredientRef[];
@@ -67,7 +68,7 @@ const byPath = (a: { abs: string }, b: { abs: string }) => (a.abs < b.abs ? -1 :
  * The edit set of a promotion (design of spec 29 §4.4): what would be written and removed, and the refusals that need
  * no proof — P1, P3–P6. Reads the Forge only; writes nothing and creates no directory.
  */
-export async function planBasePromotion(forge: Forge, ref: string, profile: string): Promise<BasePromotion> {
+export async function planBasePromotion(forge: Forge, ref: string, who: string | { variant: string }): Promise<BasePromotion> {
   const base = forge.ingredients.get(ref as IngredientRef);
   const owners = localOwners(forge, ref);
   if (!base && owners.length) throw new Error(`${COMMAND}: ${isLocalMessage(ref, owners)} — promote works on the root's ingredients`);
@@ -77,8 +78,20 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
   const X = base.ref;
   const variantOf = (q: string): LoadedIngredient | undefined =>
     [...forge.ingredients.values()].find((i) => i.meta.type === type && i.meta.as === base.meta.name && profileOf(i.meta) === q);
-  const variant = variantOf(profile);
-  if (!variant) throw new Error(`${COMMAND}: ${ref} has no variant for profile ${profile}`);
+  // `--variant <ref>` names the variant itself (spec 56 §5.2); `<base>--<p>` is the same run as `--profile <p>`.
+  let profile: string | null;
+  let variant: LoadedIngredient | undefined;
+  if (typeof who === "string") {
+    profile = who;
+    variant = variantOf(profile);
+    if (!variant) throw new Error(`${COMMAND}: ${ref} has no variant for profile ${profile}`);
+  } else {
+    const named = forge.ingredients.get(who.variant as IngredientRef);
+    if (!named || named.meta.type !== type || named.meta.as !== base.meta.name) throw new Error(`${COMMAND}: ${shownIngredientRef(who.variant)} is not a variant of ${X}`);
+    variant = named;
+    const owner = profileOf(named.meta);
+    profile = owner !== null && named === variantOf(owner) ? owner : null;
+  }
 
   // Spec 51 §4.5: a local recipe that cites the base or the variant would be left naming what promote renames.
   const citers = localCiters(forge, [X, variant.ref]);
@@ -96,12 +109,16 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
     return res !== undefined && !(res instanceof Error) && ing !== undefined && holdsIngredient(res, ing);
   };
   for (const [q, res] of before) if (res instanceof Error) warnings.push(`profile ${q} does not resolve today (${firstLine(res)}) — promote could not check it`);
-  if (holds(profile, X)) {
-    throw new Error(
-      `${COMMAND}: profile ${profile} resolves ${X} itself — the Forge is inconsistent (it would write one file from two ingredients); remove one from its recipes by hand, commit, and re-run`,
-    );
+  // The profiles on the variant: the named one, or — under `--variant` — every one that resolves it (by scope).
+  const onVariant = profile !== null ? [profile] : [...before.keys()].filter((q) => holds(q, variant.ref));
+  for (const q of onVariant) {
+    if (holds(q, X)) {
+      throw new Error(
+        `${COMMAND}: profile ${q} resolves ${X} itself — the Forge is inconsistent (it would write one file from two ingredients); remove one from its recipes by hand, commit, and re-run`,
+      );
+    }
   }
-  const Q = [...before.keys()].filter((q) => q !== profile && holds(q, X));
+  const Q = [...before.keys()].filter((q) => !onVariant.includes(q) && holds(q, X));
   const variantRef = (q: string) => `${type}/${base.meta.name}--${q}` as IngredientRef;
 
   const folder = path.join(forge.root, "ingredients", typeFolder(type));
