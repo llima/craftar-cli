@@ -2,7 +2,7 @@ import type { Forge, LoadedIngredient } from "./forge.js";
 import type { IngredientRef, Profile, Sections, Target, WorkspaceConfig } from "../schema/index.js";
 import { FORGE_SCHEMA_AGENTS_MD_PRIMARY } from "../schema/index.js";
 import { deepMerge } from "./merge.js";
-import { abstractRefusal, isAbstract, mergedProfile, parentSections } from "./profile-extends.js";
+import { abstractRefusal, familyOf, isAbstract, mergedProfile, parentSections } from "./profile-extends.js";
 import { readsRecipeSections, recipeSectionLayer, type RecipeSectionLayer } from "./recipe-sections.js";
 import { outName } from "../emitters/shared.js";
 import { AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
@@ -103,8 +103,9 @@ export function resolve(root: Forge, ws: WorkspaceConfig): Resolution {
   const ignored = root.ignoredLocals.get(profile.name);
   for (const sub of ignored?.subs ?? []) warnings.push(ignoredLocalWarning(ignored!.folder, sub));
   for (const rel of root.skippedLinks ?? []) warnings.push(skippedLinkWarning(rel));
-  // Spec 55 §5.3: a file under this profile's sections/ that no value names — at the section-files gate only.
-  for (const rel of root.unnamedSectionFiles?.get(profile.name) ?? []) warnings.push(unnamedSectionFileWarning(rel));
+  // Spec 55 §5.3: a file under this profile's sections/ that no value names — at the section-files gate only; and under
+  // its parents' (spec 54 §5.11), which no workspace resolves on its own, so a child is where it is said.
+  for (const q of familyOf(root, profile.name)) for (const rel of root.unnamedSectionFiles?.get(q) ?? []) warnings.push(unnamedSectionFileWarning(rel));
 
   // Check unknown integration recipes before recipes.add (spec 33 §4.3, design.md item 4).
   for (const s of eff.selected) {

@@ -339,3 +339,13 @@ describe("spec 54 §5.9 — a re-import of a child never copies what its parents
   });
 });
 
+describe("spec 54 §5.11 — a parent's sections/ file no value names is warned", () => {
+  it("in its children's plans, since an abstract profile is never resolved itself", async () => {
+    const f = kept(await acmeHoisted(GATE));
+    await fs.mkdir(path.join(f.forgeRoot, "profiles/acme/sections"), { recursive: true });
+    await fs.writeFile(path.join(f.forgeRoot, "profiles/acme/sections/stray.md"), "Nobody names this.\n");
+    const { p } = await planOf(f.ws.portal);
+    expect(p.warnings).toContain("profiles/acme/sections/stray.md: no section value names this file");
+  });
+});
+
