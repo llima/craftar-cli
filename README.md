@@ -759,6 +759,10 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packagi
 
 ## Upgrading
 
+### to 0.59.0
+
+- **A Forge can declare `schema: 14`**, which includes 13 and below, and there a param can be a list, `type: list`, cited through a filter — `py`, `ps`, `sh`, `json`, `yaml-items` or `join: "<sep>"` (*Forge layout*). Every craftar before 0.59.0 refuses a `schema: 14` Forge. No command raises the schema; below it no byte, warning, `--json` value or exit code changes, except that a `type: list` declaration, which failed the load before as an unknown key, now fails it naming `schema: 14`, and that the refusal of an unknown manifest schema lists 14 among the values it expected.
+
 ### to 0.58.0
 
 - **A recipe's section value can be held in a file** too, `{ file: sections/….md }` relative to the recipe file's folder, at Forge `schema: 11` (*Forge layout*); at `schema: 10` such a value fails the load naming `schema: 11`, and below 10 a recipe's `sections` fail it naming `schema: 10`, as before. `craftar forge localize` now refuses to move a recipe that holds one. Every craftar before 0.58.0 refuses a Forge whose recipe holds such a value. No byte changes for a Forge that holds none.
@@ -788,10 +792,6 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packagi
 
 - **`sync` can skip a file with a new line**: a file edited between the moment `sync` (or `drift discard`, the `sync` tool of `craftar mcp`, Sync and Discard edit in `craftar ui`) read it and the moment it would write or remove it is kept and listed as `changed while craftar was writing — kept; run craftar sync again`; the `sync` tool's `skipped[].reason` can hold that text. No key or exit code changes; the next run reads such a file as `drift`, `collision` or `orphan-drift` — or as `new`, or not at all, when it was deleted.
 - **`craftar add recipe` / `remove recipe` and the `add_recipe` / `remove_recipe` tools refuse** with `craftar.yaml changed while craftar was reading it — run again` when the file changed while they planned, leaving it as it is.
-
-### to 0.54.0
-
-- **A Forge can declare `schema: 12`**, which includes 11 and below, and there a param can be a list, `type: list`, cited through a filter — `py`, `ps`, `sh`, `json`, `yaml-items` or `join: "<sep>"` (*Forge layout*). Every craftar before 0.54.0 refuses a `schema: 12` Forge. No command raises the schema; below it no byte, warning, `--json` value or exit code changes, except that a `type: list` declaration, which failed the load before as an unknown key, now fails it naming `schema: 12`, and that the refusal of an unknown manifest schema lists 12 among the values it expected.
 
 ### to 0.53.0
 
