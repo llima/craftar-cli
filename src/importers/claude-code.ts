@@ -2235,9 +2235,9 @@ function sectionChange(report: ImportReport, ctx: RunContext): Sections {
 }
 
 /**
- * Spec 51 §5.3: the run's locals that no recipe in the profile's folder the profile reaches cites go into `<p>-local`,
- * edited in place or created. The folder is read as staged, so a recipe this run computed there counts. Returns the
- * recipe's name when something was wired, else null.
+ * Spec 51 §5.3: the run's locals that no recipe the profile reaches cites go into `<p>-local`, edited in place or
+ * created. Its folder's recipes and the root's are read as staged, so a recipe this run computed counts; only an
+ * override (spec 56 §7) is ever reached through a root one. Returns the recipe's name when something was wired, else null.
  */
 async function wireLocals(stage: ForgeStage, forge: string, profile: string, loaded: Forge, listed: string[], runLocals: string[], report: ImportReport): Promise<string | null> {
   const name = `${profile}-local`;
@@ -2249,9 +2249,18 @@ async function wireLocals(stage: ForgeStage, forge: string, profile: string, loa
     const r = parseYaml(abs, stripBom(await stage.readText(abs)), RecipeSchema);
     folder.set(r.name, { abs, ingredients: r.ingredients, extends: r.extends });
   }
-  // The profile's view: its folder's recipes over the root's. A root recipe cites no local-only ref (L3), so only an
-  // override (spec 56 §7) can be reached through one — and then it needs no wiring.
-  const recipeOf = (n: string) => folder.get(n) ?? loaded.recipes.get(n);
+  // The profile's view: its folder's recipes over the root's, the root's read as this run stages them (a recipe it
+  // creates or recomputes included). A root recipe cites no local-only ref (L3), so only an override (spec 56 §7) can be
+  // reached through one — and then it needs no wiring.
+  const rootDir = path.join(forge, "recipes");
+  const root = new Map<string, { ingredients: string[]; extends: string[] }>();
+  for (const rel of await stage.reader().list(rootDir)) {
+    if (rel.includes("/") || !/\.ya?ml$/.test(rel)) continue;
+    const abs = path.join(rootDir, rel);
+    const r = parseYaml(abs, stripBom(await stage.readText(abs)), RecipeSchema);
+    root.set(r.name, { ingredients: r.ingredients, extends: r.extends });
+  }
+  const recipeOf = (n: string) => folder.get(n) ?? root.get(n) ?? loaded.recipes.get(n);
   const reached = new Set<string>();
   const walk = (n: string) => {
     const r = recipeOf(n);

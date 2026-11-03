@@ -71,3 +71,25 @@ describe("import and an override (spec 56 §7)", () => {
     }
   });
 });
+
+describe("wiring reads the root recipes as staged (spec 56 §7)", () => {
+  it("an override reached only through a root recipe this run creates is not wired into acme-local", async () => {
+    const { profile, recipe, rule } = await import("./helpers/forge.js");
+    const spec = {
+      ingredients: [rule("style", "# Style\n"), rule("y", "# Y shared\n")],
+      recipes: [recipe("base", ["rule/style"]), recipe("stack-y", ["rule/y"])],
+      profiles: [profile("acme", ["base"]), profile("globex", ["base", "stack-y"])],
+    };
+    const s = await build(cleanups, spec, { workspaces: [{ name: "acme", config: { profile: "acme" } }] });
+    await fs.writeFile(path.join(s.ws.acme, ".claude/rules/y.md"), "# Y, acme's own\n");
+    const r = importAs(s.ws.acme, s.forge, "always");
+    expect(r.code, r.stderr).toBe(0);
+    const after = await tree(s.forge);
+    expect(after["profiles/acme/ingredients/rules/y/rule.md"]).toBe("# Y, acme's own\n");
+    const citing = Object.entries(after).filter(([k, v]) => k.endsWith(".yaml") && k.includes("recipes/") && (YAML.parse(v) as { ingredients?: string[] }).ingredients?.includes("rule/y"));
+    expect(citing.map(([k]) => k).filter((k) => k.startsWith("recipes/")).length).toBeGreaterThan(0);
+    expect(await exists(path.join(s.forge, "profiles/acme/recipes/acme-local.yaml"))).toBe(false);
+    // The workspace already holds the override's text: the Forge now plans it, and nothing else moves.
+    expect(runCli(["sync", "--check", "--workspace", s.ws.acme]).code).toBe(0);
+  });
+});
