@@ -893,10 +893,15 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     throw new Error(`D24 ${normalized} comes from ${ingredientRef}, local to ${parentOwner}, which ${profile} extends (${dir}) — no command writes a parent: edit it there by hand, then sync every workspace of the family`);
   }
 
-  // Spec 51 §4.5: a new variant would leave a local recipe of this profile naming the base beside it.
+  // Spec 51 §4.5: a new variant would leave a local recipe of this profile naming the base beside it — and, spec 54
+  // §5.12, a local recipe of a profile it extends, which no command writes.
   if (outcome === "variant") {
     const citers = localCiters(forge, [X.ref], { profile, viaExtends: true });
     if (citers.length) throw new Error(`${normalized}: ${citers.map((c) => c.file).join(", ")} reaches ${X.ref}, local to this profile — promote does not edit a local recipe; edit the Forge by hand`);
+    for (const parent of familyOf(forge, profile).slice(1)) {
+      const up = localCiters(forge, [X.ref], { profile: parent, viaExtends: true });
+      if (up.length) throw new Error(`${normalized}: ${up.map((c) => c.file).join(", ")} reaches ${X.ref}, local to ${parent}, which ${profile} extends — no command writes a parent: edit the Forge by hand`);
+    }
   }
 
   // D12: check workspace overrides before variant outcomes (not for params/sections)

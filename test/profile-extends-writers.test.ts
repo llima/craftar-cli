@@ -169,4 +169,22 @@ describe("spec 54 Part B — the writers", () => {
       "forge promote: profile acme-portal reaches recipe base (which names rule/style) through acme, which it extends — no command writes a parent: edit the Forge by hand",
     );
   });
+
+  it("drift promote refuses a variant that a parent's local recipe would leave naming the base (spec 54 §5.12)", async () => {
+    const f0 = await acmeHoisted(GATE);
+    roots.push(f0.root);
+    await writeFiles(f0.forgeRoot, {
+      "profiles/acme/recipes/acme-extra.yaml": YAML.stringify(recipe("acme-extra", ["rule/style"])),
+      "profiles/acme/profile.yaml": YAML.stringify({ name: "acme", abstract: true, recipes: ["acme-extra", "base", "acme-base"], params: { "ticket.prefix": "ACME" }, integrations: { executor: { kind: "kiro" } }, sections: { "rule/house": { tone: "Short paragraphs.\n" } } }),
+    });
+    gitInit(f0.forgeRoot);
+    expect(runCli(["sync", "--workspace", f0.ws.portal]).code).toBe(0);
+    const file = path.join(f0.ws.portal, ".claude/rules/style.md");
+    await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace("Keep it short.", "Keep it short, portal."));
+    await expect(
+      planPromote({ workspaceRoot: f0.ws.portal, forgeDir: null, path: ".claude/rules/style.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
+    ).rejects.toThrow(
+      ".claude/rules/style.md: profiles/acme/recipes/acme-extra.yaml reaches rule/style, local to acme, which acme-portal extends — no command writes a parent: edit the Forge by hand",
+    );
+  });
 });
