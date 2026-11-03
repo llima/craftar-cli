@@ -257,4 +257,27 @@ describe("a recipe's section value held in a file (spec 54 §4.4)", () => {
     expect(base.sections).toEqual(yHeld);
     expect((await plan(await loadWorkspace(s.ws.wa))).files.find((f) => f.path === ".claude/rules/y.md")!.content.toString("utf8")).toContain("From the file.");
   });
+
+  it("explain names the file of a parent's local recipe a child reaches (spec 54 Part B)", async () => {
+    const { FORGE_SCHEMA_PROFILE_EXTENDS } = await import("../src/schema/index.js");
+    const root = await tmpDir("craftar-recipe-section-files-");
+    roots.push(root);
+    const forge = path.join(root, "forge");
+    await makeForge(forge, {
+      ingredients: [rule("review", BODY), rule("style", "# Style\n")],
+      recipes: [recipe("core", ["rule/style"])],
+      profiles: [profile("acme-base", ["core", "kit"], ["claude-code"], { abstract: true }), profile("acme-web", [], ["claude-code"], { extends: "acme-base" })],
+    });
+    await writeFiles(forge, {
+      "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: FORGE_SCHEMA_PROFILE_EXTENDS }),
+      "profiles/acme-base/recipes/kit.yaml": YAML.stringify({ name: "kit", ingredients: ["rule/review"], sections: held }),
+      "profiles/acme-base/recipes/sections/rule/review/checklist.md": "- from the parent\n",
+    });
+    const ws = path.join(root, "ws");
+    await makeWorkspace(ws, forge, { config: { profile: "acme-web" } });
+    expect(await rendered(ws)).toContain("- from the parent\n");
+    const r = runCli(["explain", ".claude/rules/review.md", "--workspace", ws]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("  sections    checklist (recipe kit, sections/rule/review/checklist.md)\n");
+  });
 });

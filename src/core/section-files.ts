@@ -4,6 +4,7 @@ import { FORGE_SCHEMA_SECTION_FILES, type ForgeManifest, type ProfileSections, t
 import { readForgeFile, type ContainRoot } from "./contain.js";
 import { isUtf8 } from "./text.js";
 import { TERMINAL_UNSAFE } from "./forge.js";
+import { familyOf, type FamilySource } from "./profile-extends.js";
 
 /**
  * Spec 55 Part B: a section value held in a file, `{ file: sections/….md }`, in a `profile.yaml` (and, once spec 54 builds them,
@@ -105,10 +106,11 @@ export function profileSectionFile(
 
 /**
  * The file a recipe's section value came from (spec 54 §4.4), as written relative to the recipe file's folder: the recipe the
- * profile's view sees — its own local recipe of that name first, else the root's — or `undefined` for a string value.
+ * profile's view sees — the local recipe of that name nearest in its family (spec 54 Part B: itself, then each parent), else
+ * the root's — or `undefined` for a string value.
  */
 export function recipeSectionFile(
-  forge: {
+  forge: FamilySource & {
     sectionFiles?: Map<string, SectionFileMap>;
     recipeFiles?: Map<string, string>;
     locals?: Map<string, { recipes: Map<string, { file: string }> }>;
@@ -118,7 +120,8 @@ export function recipeSectionFile(
   key: string,
   section: string,
 ): string | undefined {
-  const declaring = forge.locals?.get(profile)?.recipes.get(recipe)?.file ?? forge.recipeFiles?.get(recipe);
+  const owner = familyOf(forge, profile).find((q) => forge.locals?.get(q)?.recipes.has(recipe)) ?? profile;
+  const declaring = forge.locals?.get(owner)?.recipes.get(recipe)?.file ?? forge.recipeFiles?.get(recipe);
   return declaring === undefined ? undefined : forge.sectionFiles?.get(declaring)?.get(key)?.get(section);
 }
 
