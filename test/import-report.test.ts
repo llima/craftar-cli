@@ -181,6 +181,34 @@ describe("renderImportReport", () => {
     expect(text).not.toContain("NEW-WORKSPACE-TEXT");
   });
 
+  // E12.1: a workspace override the report's plan read is redacted too, quoted or bare (bare only from 8 characters).
+  it("a value of the workspace's overrides is written without it, quoted or bare; a short bare value is left", () => {
+    const text = render(
+      base({
+        kiro: { kind: "not-computed", message: "boom near OVERRIDE-WORKSPACE-TEXT", values: ["OVERRIDE-WORKSPACE-TEXT", "abc"] },
+        warnings: ['import report: Kiro sections not computed: boom near "OVERRIDE-WORKSPACE-TEXT" and abc'],
+      }),
+    );
+    expect(text).toContain("\n## Kiro collisions\nnot computed: boom near …\n");
+    expect(text).toContain('- import report: Kiro sections not computed: boom near "…" and abc\n');
+    expect(text).not.toContain("OVERRIDE-WORKSPACE-TEXT");
+  });
+
+  it("a bare value is replaced only where it stands alone, not inside a longer word", () => {
+    const text = render(base({ params: [{ key: "k", old: null, value: "WORKSPACE1", from: "rule/a" }], warnings: ["x WORKSPACE1 y XWORKSPACE1Z"] }));
+    expect(text).toContain("- x … y XWORKSPACE1Z\n");
+  });
+
+  // E12.5: the plan's own warnings reach the report, through the same redaction.
+  it("the Kiro plan's warnings are listed, without the values; no section when there are none", () => {
+    const text = body(
+      render(base({ kiro: { kind: "computed", collisions: [], unsourced: [], values: ["OVERRIDE-WORKSPACE-TEXT"], warnings: ["two ingredients write .kiro/steering/x.md (last wins)", 'cites "OVERRIDE-WORKSPACE-TEXT"'] } })),
+    );
+    expect(text).toContain('\n## Unsourced Kiro files (0)\n\n## Kiro plan warnings (2)\n- two ingredients write .kiro/steering/x.md (last wins)\n- cites "…"\n\n## Warnings (0)\n');
+    expect(text).not.toContain("OVERRIDE-WORKSPACE-TEXT");
+    expect(body(render(base({ kiro: { kind: "computed", collisions: [], unsourced: [] } })))).not.toContain("Kiro plan warnings");
+  });
+
   it("a reuse that used no key and no section says only that it was rendered", () => {
     expect(render(base({ reused: ["rule/bare"], rendered: [{ name: "rule/bare", keys: [] }] }))).toContain("\n## Reused (1)\n- rule/bare — rendered\n");
   });

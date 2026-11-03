@@ -22,8 +22,19 @@ export interface KiroCollision {
 /** The Kiro part of an import report (spec 29 §4.2): line counts and paths, never content. */
 export type KiroReport =
   | { kind: "none" } // the workspace has no .kiro/
-  | { kind: "not-computed"; message: string } // the plan could not be computed after the flush
-  | { kind: "computed"; collisions: KiroCollision[]; unsourced: string[] };
+  // `values` (only when there are some): the scalars of the workspace's `overrides.params` and `overrides.sections` this report
+  // read, which a message or a warning may quote — the report file redacts them (E12.1). `warnings` (only when there are some):
+  // the plan's own warnings, what `sync` will print for the same workspace (E12.5).
+  | { kind: "not-computed"; message: string; values?: string[] } // the plan could not be computed after the flush
+  | { kind: "computed"; collisions: KiroCollision[]; unsourced: string[]; values?: string[]; warnings?: string[] };
+
+/** Every scalar leaf of a parsed overrides block, as text, in the order it was written. */
+function scalarLeaves(v: unknown, out: string[] = []): string[] {
+  if (typeof v === "string" || typeof v === "number" || typeof v === "boolean" || typeof v === "bigint") out.push(String(v));
+  else if (Array.isArray(v)) for (const x of v) scalarLeaves(x, out);
+  else if (v !== null && typeof v === "object") for (const x of Object.values(v)) scalarLeaves(x, out);
+  return out;
+}
 
 /**
  * The note of a steering mirror that grew past its rule — the hint that `--prefer-kiro` may apply (not given to a rule
@@ -87,17 +98,20 @@ export async function kiroReport(
   if (!(await exists(path.join(root, ".kiro")))) return { kind: "none" };
   // The rules this run took from their steering file (`report.preferKiro`).
   const preferred = o.preferred ?? [];
+  let values: string[] = [];
+  const withValues = <T extends object>(r: T): T => (values.length ? { ...r, values } : r);
   try {
     const read = (abs: string) => fs.readFile(abs, "utf8");
     const overrides = { params: await workspaceParams(root, read), sections: await workspaceSections(root, read) };
+    values = [...new Set([...scalarLeaves(overrides.params), ...scalarLeaves(overrides.sections)])];
     const ws = await loadWorkspaceConfig(root, { forge: path.resolve(o.forgeRoot), profile: o.profile, targets: o.targets, overrides }, null);
     const p = await deps.plan(ws);
     // A plan sync refuses (spec 29 §4.1) is compared with nothing: its files still hold the `{{key}}` and are never written.
     const unset = unsetDeclared(p);
-    if (unset.length) return { kind: "not-computed", message: unsetSummary(unset) };
+    if (unset.length) return withValues({ kind: "not-computed", message: unsetSummary(unset) });
     const rows = await status(ws, p, null);
     const escaping = escapingRows(rows);
-    if (escaping.length) return { kind: "not-computed", message: escapeSummary(escaping) };
+    if (escaping.length) return withValues({ kind: "not-computed", message: escapeSummary(escaping) });
     const collisions: KiroCollision[] = [];
     for (const s of rows) {
       if (s.state !== "collision" || !s.path.startsWith(".kiro/")) continue;
@@ -120,12 +134,13 @@ export async function kiroReport(
       if ((await fs.lstat(abs).catch(() => null))?.isDirectory() && !(await escapeOf(await containRoot(root), abs))) for (const rel of await listFiles(abs)) found.push(`${dir}/${rel}`);
     }
     if ((await fs.stat(path.join(root, SOURCED_FILE)).catch(() => null))?.isFile()) found.push(SOURCED_FILE);
-    return {
+    return withValues({
       kind: "computed",
       collisions: collisions.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
       unsourced: found.filter((f) => !planned.has(f)).sort(),
-    };
+      ...(p.warnings.length ? { warnings: [...p.warnings] } : {}),
+    });
   } catch (e) {
-    return { kind: "not-computed", message: (e instanceof Error ? e.message : String(e)).split("\n")[0] };
+    return withValues({ kind: "not-computed", message: (e instanceof Error ? e.message : String(e)).split("\n")[0] });
   }
 }
