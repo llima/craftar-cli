@@ -9,7 +9,7 @@ import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
 import { holdsBaseCitations, rendersServers } from "./core/mcp-server.js";
-import { assertNotCacheTree, ForgeUnavailableError, classifyForge, CREDENTIAL_HIDDEN, hideUnderCaches, isUnderOrEqual, shownByRealPath, shownCachePath, shownCannotResolve, refHoldsCredentials, shownRef, UNVOUCHED_HIDDEN } from "./core/remote.js";
+import { assertNotCacheTree, ForgeUnavailableError, classifyForge, CREDENTIAL_HIDDEN, hideUnderCaches, isUnderOrEqual, shownByRealPath, shownCannotResolve, refHoldsCredentials, shownRef, UNVOUCHED_HIDDEN } from "./core/remote.js";
 import { allowWrites, forget, listWorkspaces, prune, readRegistry, revokeWrites, type WorkspaceRow } from "./core/registry.js";
 import { forgeWorkspaces, planAll, nextSync, impactOf, concerned, refineRegistryState, countStatesObject, NEXT_SYNC_STATES, type ForgeWorkspace, type RegistryState, type Planned, type ImpactResult } from "./core/impact.js";
 import { runDoctor, type DoctorReport } from "./core/doctor.js";
@@ -3631,12 +3631,9 @@ async function gateOutsideForge(target: string, forgeRoot: string, w: OutputGate
   } catch (e) {
     fail(`${refusing}: ${hideUnderCaches(await shownCannotResolve(e, home), caches)} — ${w.who} cannot prove the target lies outside the Forge`);
   }
-  // A path typed through a link to the cache is shown by where it lands.
-  if (shownCachePath(targetReal, caches) !== targetReal) refusing = `refusing to write the ${w.what} to ${shownCachePath(targetReal, caches)}`;
   // Without case on darwin as on win32: a report written into the Forge in another case is still inside it (E12.2).
   if (isUnderOrEqual(targetReal, rootReal, process.platform)) {
-    const shownRoot = shownCachePath(rootReal, caches) === rootReal ? shownCachePath(forgeRoot, caches) : shownCachePath(rootReal, caches);
-    fail(`${refusing}: it resolves inside the Forge (${shownRoot}) — ${w.outside}`);
+    fail(`${refusing}: it resolves inside the Forge (${await shownByRealPath(forgeRoot, home)}) — ${w.outside}`);
   }
   // Refuse a target whose real path is under (or equal to) the Forge cache.
   if (forgesCacheReal === null) {

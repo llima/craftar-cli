@@ -383,6 +383,7 @@ describe("a home reached through a third spelling, on a path that does not resol
     expect(r.stderr).toContain(LABEL);
   });
 
+  // Pins 0.40.1's behaviour (E21.2 had no test): it passes on 0.50.1 too, and is coverage, not evidence for the fix above.
   it("no forges/ under the home: a target under it is still refused, the entry labelled, nothing created (E21.2)", async () => {
     const { entry, parent, forge, ws } = await fixture();
     const bare = path.join(parent, "bare-home");

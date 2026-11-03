@@ -592,21 +592,6 @@ export function hideUnderCaches(text: string, caches: readonly string[], platfor
 }
 
 /**
- * `p` as a refusal prints a path the user typed: untouched unless it lies under one of `caches`
- * (spellings of `<home>/forges`), then absolute with `UNVOUCHED_HIDDEN` in place of the entry. Decided
- * from the resolved path, so a folder named `forges` elsewhere keeps its name and a relative one is seen.
- */
-export function shownCachePath(p: string, caches: readonly string[]): string {
-  const abs = path.resolve(p);
-  for (const cache of caches) {
-    if (!isUnderOrEqual(abs, cache)) continue;
-    const rel = path.relative(cache, abs);
-    return rel === "" ? abs : path.join(cache, UNVOUCHED_HIDDEN, ...rel.split(path.sep).slice(1));
-  }
-  return p;
-}
-
-/**
  * `text` with every path segment that follows `<path.resolve(home)>/forges/` or `<home>\forges\`
  * (either separator after `forges`) up to the next `/`, `\`, white space or quote replaced by
  * `UNVOUCHED_HIDDEN`. The no-snapshot rule, spec 39 §5.1 — vouched or not. Any first segment under
