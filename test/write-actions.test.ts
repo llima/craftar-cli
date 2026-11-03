@@ -9,6 +9,7 @@ import YAML from "yaml";
 import { loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
 import { readRegistry, registryFile } from "../src/core/registry.js";
 import { syncWorkspace, editRecipes, statusDigest, confirmWrites, syncToolResult } from "../src/core/write-actions.js";
+import { CHANGED_SINCE_STATUS } from "../src/core/report.js";
 import { eightStates, type Scenario } from "./helpers/states.js";
 import { tmpDir, scenario, rule, recipe, profile, writeFiles } from "./helpers/forge.js";
 
@@ -622,5 +623,38 @@ describe("syncToolResult", () => {
 
     expect(result.removed).toContainEqual({ path: orphanDriftPath, reason: "hand-edited orphan: discarded" });
     expect(result.removed).toContainEqual({ path: ".claude/rules/gone.md", reason: "orphan: no longer produced by the Forge" });
+  });
+
+  it("maps a skipped row with changedSinceStatus: true to reason: CHANGED_SINCE_STATUS", async () => {
+    const home = await tmpDir("home-");
+    cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const s = kept(await eightStates());
+
+    const ws = await loadWorkspace(s.wsRoot, { home });
+    const p = await plan(ws);
+    const lock = await readLock(ws.root);
+    const st = await status(ws, p, lock);
+
+    // Build a fake outcome with a skipped row having changedSinceStatus: true
+    const skippedRow = st.find((x) => x.state === "drift")!;
+    const fakeOutcome = {
+      result: {
+        written: [],
+        removed: [],
+        skipped: [{ ...skippedRow, changedSinceStatus: true as const }],
+        lock: lock!,
+      },
+      registry: null,
+      forgeLine: null,
+      ignored: [],
+    };
+
+    const result = syncToolResult(ws, p, st, fakeOutcome, true);
+
+    expect(result.skipped).toContainEqual({
+      path: skippedRow.path,
+      state: "drift",
+      reason: CHANGED_SINCE_STATUS,
+    });
   });
 });

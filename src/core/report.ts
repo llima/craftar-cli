@@ -38,10 +38,13 @@ export const statusPath = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, 
 /** `explain`'s refusal: the Forge does not produce this path for the profile. */
 export const notProduced = (p: string, profile: string) => `${p} is not produced by the Forge for profile ${profile}`;
 
+/** The line for a row skipped because it changed after status() read it (spec 48 §4.3). */
+export const CHANGED_SINCE_STATUS = "changed while craftar was writing — kept; run craftar sync again";
+
 /** Why sync leaves a file alone, for the three states it skips. */
 export function explainSkip(s: Pick<FileStatus, "state" | "path" | "escapes" | "changedSinceStatus">): string {
   if (s.escapes) return escapeSummary([{ path: s.path, escapes: s.escapes }]);
-  if (s.changedSinceStatus) return "changed while craftar was writing — kept; run craftar sync again";
+  if (s.changedSinceStatus) return CHANGED_SINCE_STATUS;
   switch (s.state) {
     case "drift":
       return "hand-edited since last sync — `craftar drift show <path>`, then `craftar drift discard` or `craftar drift promote`";

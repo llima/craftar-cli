@@ -6,7 +6,7 @@ import YAML from "yaml";
 import { apply, loadWorkspace, plan, readLock, status, type ApplyOptions, type FileStatus } from "../src/core/sync.js";
 import { exists } from "../src/core/forge.js";
 import { hashNormalized } from "../src/core/text.js";
-import { explainSkip } from "../src/core/report.js";
+import { explainSkip, CHANGED_SINCE_STATUS } from "../src/core/report.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir } from "./helpers/forge.js";
 
 const A = ".claude/rules/a.md";
@@ -55,8 +55,6 @@ const readText = (wsRoot: string, rel: string) => fs.readFile(path.join(wsRoot, 
 const dropFromRecipe = (forgeRoot: string) =>
   fs.writeFile(path.join(forgeRoot, "recipes/base.yaml"), YAML.stringify(recipe("base", [])));
 
-const CHANGED_SKIP_TEXT = "changed while craftar was writing — kept; run craftar sync again";
-
 describe("apply window: file edited between status() and apply()", () => {
   it("1. update edited in the window → kept as drift, old lock entry kept; second status() reads drift", async () => {
     const s = await oneRule();
@@ -91,7 +89,7 @@ describe("apply window: file edited between status() and apply()", () => {
     expect(skipped!.changedSinceStatus).toBe(true);
     expect(skipped!.state).toBe("drift");
     // explainSkip returns the new line
-    expect(explainSkip(skipped!)).toBe(CHANGED_SKIP_TEXT);
+    expect(explainSkip(skipped!)).toBe(CHANGED_SINCE_STATUS);
     // The lock written to disk has the OLD entry kept
     const newLock = await readLock(s.wsRoot);
     const entry = newLock!.files.find((x) => x.path === A);
@@ -130,7 +128,7 @@ describe("apply window: file edited between status() and apply()", () => {
     expect(skipped!.changedSinceStatus).toBe(true);
     expect(skipped!.state).toBe("collision");
     // explainSkip returns the new line
-    expect(explainSkip(skipped!)).toBe(CHANGED_SKIP_TEXT);
+    expect(explainSkip(skipped!)).toBe(CHANGED_SINCE_STATUS);
     // The lock has NO entry for this path
     const newLock = await readLock(s.wsRoot);
     expect(newLock!.files.find((x) => x.path === A)).toBeUndefined();
@@ -170,7 +168,7 @@ describe("apply window: file edited between status() and apply()", () => {
     expect(skipped!.changedSinceStatus).toBe(true);
     expect(skipped!.state).toBe("collision");
     // explainSkip returns the new line
-    expect(explainSkip(skipped!)).toBe(CHANGED_SKIP_TEXT);
+    expect(explainSkip(skipped!)).toBe(CHANGED_SINCE_STATUS);
     // No lock entry
     const newLock = await readLock(s.wsRoot);
     expect(newLock!.files.find((x) => x.path === A)).toBeUndefined();
@@ -210,7 +208,7 @@ describe("apply window: file edited between status() and apply()", () => {
     expect(skipped!.changedSinceStatus).toBe(true);
     expect(skipped!.state).toBe("orphan-drift");
     // explainSkip returns the new line
-    expect(explainSkip(skipped!)).toBe(CHANGED_SKIP_TEXT);
+    expect(explainSkip(skipped!)).toBe(CHANGED_SINCE_STATUS);
     // The lock entry is kept
     const newLock = await readLock(s.wsRoot);
     const entry = newLock!.files.find((x) => x.path === A);
@@ -250,7 +248,7 @@ describe("apply window: file edited between status() and apply()", () => {
     expect(skipped!.changedSinceStatus).toBe(true);
     expect(skipped!.state).toBe("drift");
     // explainSkip returns the new line
-    expect(explainSkip(skipped!)).toBe(CHANGED_SKIP_TEXT);
+    expect(explainSkip(skipped!)).toBe(CHANGED_SINCE_STATUS);
     // Old lock entry kept
     const newLock = await readLock(s.wsRoot);
     const entry = newLock!.files.find((x) => x.path === A);
@@ -290,7 +288,7 @@ describe("apply window: file edited between status() and apply()", () => {
     expect(skipped!.changedSinceStatus).toBe(true);
     expect(skipped!.state).toBe("drift");
     // explainSkip returns the new line
-    expect(explainSkip(skipped!)).toBe(CHANGED_SKIP_TEXT);
+    expect(explainSkip(skipped!)).toBe(CHANGED_SINCE_STATUS);
     // Old lock entry kept
     const newLock = await readLock(s.wsRoot);
     const entry = newLock!.files.find((x) => x.path === A);
@@ -332,7 +330,7 @@ describe("apply window: file edited between status() and apply()", () => {
     expect(skipped!.changedSinceStatus).toBe(true);
     expect(skipped!.state).toBe("orphan-drift");
     // explainSkip returns the new line
-    expect(explainSkip(skipped!)).toBe(CHANGED_SKIP_TEXT);
+    expect(explainSkip(skipped!)).toBe(CHANGED_SINCE_STATUS);
     // Old lock entry kept
     const newLock = await readLock(s.wsRoot);
     const entry = newLock!.files.find((x) => x.path === A);
@@ -456,7 +454,7 @@ describe("apply window: file edited between status() and apply()", () => {
         expect(skipped!.changedSinceStatus).toBe(true);
         expect(skipped!.state).toBe("drift");
         // explainSkip returns the new line
-        expect(explainSkip(skipped!)).toBe(CHANGED_SKIP_TEXT);
+        expect(explainSkip(skipped!)).toBe(CHANGED_SINCE_STATUS);
         // Old lock entry kept
         const newLock = await readLock(s.wsRoot);
         const entry = newLock!.files.find((x) => x.path === A);
