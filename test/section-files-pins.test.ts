@@ -4,7 +4,7 @@ import path from "node:path";
 import { runCli } from "./helpers/cli.js";
 import { acmeSections, type Scenario } from "./helpers/section-files.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
-import { FORGE_SCHEMA_METADATA_PARAMS } from "../src/schema/index.js";
+import { FORGE_SCHEMA_METADATA_PARAMS, FORGE_SCHEMA_RECIPE_SECTIONS } from "../src/schema/index.js";
 
 /**
  * Spec 55 §9: pin what a Forge that holds no `{ file: }` section value and no skill without a trigger gets today, BEFORE any
@@ -162,5 +162,12 @@ describe("section-files=off baseline pin (spec 55 §9)", () => {
       return;
     }
     expect(observed).toEqual(await loadPin());
+  });
+
+  it("the same Forge at schema 10, the highest below the section-files gate, is unchanged too", async () => {
+    const s = kept(
+      await acmeSections({ schema: FORGE_SCHEMA_RECIPE_SECTIONS, files: { "profiles/acme/sections/notes.md": "nobody names me\n" } }),
+    );
+    expect(await buildObserved(s)).toEqual(await loadPin());
   });
 });

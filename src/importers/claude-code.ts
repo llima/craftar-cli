@@ -14,7 +14,7 @@ import { registrationCitations, rendersServers, serverCitations, serverSecret, w
 import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
-import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileSchema, ProfileWrittenSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
+import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileWrittenSchema, RecipeSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, resolve, sectionKey, type Resolution } from "../core/resolve.js";
 import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE } from "../core/rules-index.js";
