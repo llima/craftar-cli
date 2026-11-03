@@ -266,7 +266,7 @@ describe("templates --help", () => {
     expect(flat(list.stdout)).toContain("Runs no program and does not know what is installed");
     for (const flag of ["--json", "--workspace <dir>", "--offline"]) expect(list.stdout).toContain(flag);
     const install = runCli(["templates", "install", "--help"], { env: NO_DOTNET });
-    expect(flat(install.stdout)).toContain("the packages land in this user's dotnet template store, shared by every workspace. Nothing else runs it. Exits 1 when an entry failed or was skipped");
+    expect(flat(install.stdout)).toContain("the packages land in this user's dotnet template store, shared by every workspace. Nothing else runs it. Refuses, before any dotnet starts and under --dry-run too, when the first global.json going up from the workspace root sets sdk.paths or does not read as JSON. Exits 1 when an entry failed or was skipped");
     expect(flat(install.stdout)).toContain("print each dotnet new install line; run nothing (needs no dotnet)");
     for (const flag of ["--dry-run", "--force", "--interactive", "--workspace <dir>", "--offline"]) expect(install.stdout).toContain(flag);
   });

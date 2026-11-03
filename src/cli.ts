@@ -1513,7 +1513,7 @@ program
 program
   .command("doctor")
   .description(
-    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, generated files git ignores, the profile's templates block and dotnet when it has one, hooks-registered when the plan writes a registration, lock, status, registry entry): one line per finding — ok, warn or error — each with its fix; a path that leaves the workspace through a symbolic link is an error (workspace-links). Reports only; reads without the network unless --fetch",
+    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, generated files git ignores, the profile's templates block and dotnet when it has one, hooks-registered when the plan writes a registration, lock — and lock-credential when it records a Forge URL with credentials —, status, registry entry): one line per finding — ok, warn or error — each with its fix; a path that leaves the workspace through a symbolic link is an error (workspace-links). Reports only; reads without the network unless --fetch",
   )
   // No commander default: an explicit --workspace without craftar.yaml exits 1, the current directory without one runs the machine checks (spec 24 §4.1).
   .option("--workspace <dir>", "the workspace to check (default: the current directory, when it holds craftar.yaml)")
@@ -1644,7 +1644,7 @@ templates
 templates
   .command("install")
   .description(
-    "Run dotnet new install once per dotnet-new entry, in the profile's order, at the workspace root; the packages land in this user's dotnet template store, shared by every workspace. Nothing else runs it. Exits 1 when an entry failed or was skipped (--dry-run exits 0 over an accepted block)",
+    "Run dotnet new install once per dotnet-new entry, in the profile's order, at the workspace root; the packages land in this user's dotnet template store, shared by every workspace. Nothing else runs it. Refuses, before any dotnet starts and under --dry-run too, when the first global.json going up from the workspace root sets sdk.paths or does not read as JSON. Exits 1 when an entry failed or was skipped (--dry-run exits 0 over an accepted block)",
   )
   .option("--dry-run", "print each dotnet new install line; run nothing (needs no dotnet)", false)
   .option("--force", "pass --force to dotnet new install", false)
