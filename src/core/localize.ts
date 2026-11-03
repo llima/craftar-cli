@@ -170,6 +170,13 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
   }
   for (const r of [...moving].sort()) {
     if (!used.has(r)) throw new Error(`${command}: recipe ${r} cites ${ref} and would have to move, but no profile resolves it — a root recipe cannot cite a local (L3); remove ${ref} from it, or delete it, commit, and re-run`);
+    // A section value the recipe holds in a file is relative to recipes/; moved unchanged, it would name a file the profile's
+    // folder does not hold (spec 54 §4.4).
+    const held = forge.recipeFiles ? forge.sectionFiles.get(forge.recipeFiles.get(r) ?? "") : undefined;
+    if (held?.size) {
+      const first = [...held.values()][0].values().next().value as string;
+      throw new Error(`${command}: recipe ${r} holds a section value in a file (recipes/${first}), which would not move with it — write the value as a string, or move the recipe and its file by hand, commit, and re-run`);
+    }
   }
 
   await assertNoLinkIn(forge.root, ing.dir, command);
@@ -202,13 +209,6 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
     const toRel = `profiles/${profile}/recipes/${path.basename(f.abs)}`;
     const toAbs = path.join(forge.root, ...toRel.split("/"));
     if (await occupied(toAbs, toRel, command)) throw new Error(`${command}: ${toRel} already exists — remove it by hand, commit, and re-run`);
-    // A section value the recipe holds in a file is relative to recipes/; moved unchanged, it would name a file the profile's
-    // folder does not hold (spec 54 §4.4).
-    const held = forge.sectionFiles.get(from);
-    if (held?.size) {
-      const first = [...held.values()][0].values().next().value as string;
-      throw new Error(`${command}: recipe ${r} holds a section value in a file (recipes/${first}), which would not move with it — write the value as a string, or move the recipe and its file by hand, commit, and re-run`);
-    }
     const recipe = forge.recipes.get(r)!;
     const content = renamed && recipe.ingredients.includes(ref) ? rewire(f.raw, from) : await fs.readFile(f.abs);
     writes.push({ abs: toAbs, content, created: true });

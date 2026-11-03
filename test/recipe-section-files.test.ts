@@ -128,7 +128,10 @@ describe("a recipe's section value held in a file (spec 54 §4.4)", () => {
     git(forge, "commit", "-q", "-m", "forge");
     const r = runCli(["forge", "promote", "rule/workflow", "--profile", "acme", "--forge", forge, "--no-impact"], { env: { CRAFTAR_HOME: path.join(root, "home") } });
     expect(r.code, r.stderr).toBe(0);
-    expect(await fs.readFile(path.join(forge, "recipes/base.yaml"), "utf8")).toContain("file: sections/s.md");
+    // promote copies the base's recipe for globex: the copy carries the { file: }, beside the original, in the same folder.
+    expect(await fs.readFile(path.join(forge, "recipes/base--globex.yaml"), "utf8")).toContain("file: sections/s.md");
+    const f = await loadForge(forge);
+    expect(f.recipes.get("base--globex")!.sections).toEqual({ "rule/style": { s: "held\n" } });
   });
 
   it("forge localize refuses to move a recipe holding { file: }, with the Forge untouched", async () => {
@@ -175,5 +178,45 @@ describe("a recipe's section value held in a file (spec 54 §4.4)", () => {
     const owned = YAML.parse(await fs.readFile(path.join(s.forgeRoot, "recipes/base--acme-portal.yaml"), "utf8"));
     expect(owned.sections).toEqual({ "command/open-pr": { execution: { file: "sections/command/open-pr/execution.md" } } });
     expect((await plan(await loadWorkspace(s.wsRoot))).files.find((f) => f.path === ".claude/commands/open-pr.md")!.content.toString("utf8")).toContain(KIRO);
+  });
+
+  it("below the recipe-sections gate, a recipe's { file: } value is that gate's near miss, not the section-files one", async () => {
+    const root = await forgeAt(FORGE_SCHEMA_RECIPE_SECTIONS - 1, { rootSections: held, files: { "recipes/sections/rule/review/checklist.md": "x\n" } });
+    const msg = await loadError(root.forge);
+    expect(msg).toContain(`recipes/core.yaml: sections in a recipe needs schema: ${FORGE_SCHEMA_RECIPE_SECTIONS} in craftar.forge.yaml`);
+    expect(msg).not.toContain(`schema: ${GATE}`);
+  });
+
+  it("a profile-local recipe's { file: } at the recipe-sections gate names the section-files schema and the local file", async () => {
+    const s = await forgeAt(FORGE_SCHEMA_RECIPE_SECTIONS, { localSections: held, files: { "profiles/acme/recipes/sections/rule/review/checklist.md": "x\n" } });
+    const msg = await loadError(s.forge);
+    expect(msg).toContain(`profiles/acme/recipes/acme-extra.yaml: sections.rule/review.checklist: a section value held in a file needs schema: ${GATE}`);
+  });
+
+  it("import's split of a shared recipe for a profile that holds a variant carries a file-held value as its { file: }", async () => {
+    const { acmeRecipeSections } = await import("./helpers/recipe-sections.js");
+    const { importClaudeCode } = await import("../src/importers/claude-code.js");
+    const { apply, readLock, status } = await import("../src/core/sync.js");
+    const KIRO = "Run it through Kiro.\n";
+    const s = await acmeRecipeSections({
+      schema: GATE,
+      baseSections: { "command/open-pr": { execution: { file: "sections/command/open-pr/execution.md" } } } as never,
+      importShaped: true,
+    });
+    roots.push(s.root);
+    await writeFiles(s.forgeRoot, { "recipes/sections/command/open-pr/execution.md": KIRO });
+    const ws = await loadWorkspace(s.wsRoot);
+    const p = await plan(ws);
+    await apply(ws, p, await status(ws, p, await readLock(ws.root)), {});
+    const cmd = path.join(s.wsRoot, ".claude/commands/open-pr.md");
+    const text = await fs.readFile(cmd, "utf8");
+    expect(text).toContain("Then:\n");
+    await fs.writeFile(cmd, text.replace("Then:\n", "Then, for acme only:\n"));
+    const r = await importClaudeCode({ workspaceRoot: s.wsRoot, forgeRoot: s.forgeRoot, profileName: "acme-portal" });
+    expect(r.variants.map((v) => v.name)).toContain("command/open-pr--acme-portal");
+    // The variant path writes the owned recipe without reporting a split.
+    expect(r.recipes).toEqual(["base--acme-portal"]);
+    const owned = YAML.parse(await fs.readFile(path.join(s.forgeRoot, "recipes/base--acme-portal.yaml"), "utf8"));
+    expect(owned.sections).toEqual({ "command/open-pr": { execution: { file: "sections/command/open-pr/execution.md" } } });
   });
 });

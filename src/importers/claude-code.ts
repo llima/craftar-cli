@@ -2094,7 +2094,9 @@ async function placeRecipe(o: RecipeOptions, name: string, list: string[], descr
     }
     // The shared recipe's sections from the Forge as loaded, at the gate only: this path never reads the shared file (spec 41 §1).
     // A value the shared recipe holds in a file is carried as its `{ file: }` when the owned recipe lands in the same folder,
-    // so the file is not copied into text (spec 54 §4.4); elsewhere the path would not resolve, and the text is carried.
+    // so the file is not copied into text (spec 54 §4.4); elsewhere the path would not resolve, and the text is carried. Today
+    // an owned recipe is always written under the root's recipes/, so this keeps the file exactly when the shared one is a root
+    // recipe; the text fallback covers a profile's local shared recipe.
     const shared = o.forge && readsRecipeSections(o.forge.manifest) ? forgeFor(o.forge, o.profile).recipes.get(name)?.sections : undefined;
     const sharedFile = o.forge ? (o.forge.locals.get(o.profile)?.recipes.get(name)?.file ?? o.forge.recipeFiles?.get(name)) : undefined;
     const sameFolder = sharedFile !== undefined && path.posix.dirname(sharedFile) === path.relative(o.stage.root, o.dir).split(path.sep).join("/");

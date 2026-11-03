@@ -748,7 +748,7 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packagi
 
 ### to 0.58.0
 
-- **A recipe's section value can be held in a file** too, `{ file: sections/….md }` relative to the recipe file's folder, at Forge `schema: 11` (*Forge layout*); below 11 such a value fails the load naming `schema: 11`. `craftar forge localize` now refuses to move a recipe that holds one. No byte changes for a Forge that holds none.
+- **A recipe's section value can be held in a file** too, `{ file: sections/….md }` relative to the recipe file's folder, at Forge `schema: 11` (*Forge layout*); at `schema: 10` such a value fails the load naming `schema: 11`, and below 10 a recipe's `sections` fail it naming `schema: 10`, as before. `craftar forge localize` now refuses to move a recipe that holds one. No byte changes for a Forge that holds none.
 
 ### to 0.57.0
 
