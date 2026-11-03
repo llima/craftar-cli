@@ -1,8 +1,8 @@
 import { promises as fs } from "node:fs";
-import { readsRecipeSections } from "./recipe-sections.js";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema, type ForgeManifest, type Ingredient } from "../schema/index.js";
+import { readsRecipeSections } from "./recipe-sections.js";
 import { placeholders, bodyFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
 import { manifestWithSections } from "./manifest-edit.js";
