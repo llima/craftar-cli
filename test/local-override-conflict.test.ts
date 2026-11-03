@@ -68,6 +68,15 @@ describe("the override conflict (spec 56 §4.3)", () => {
     expect(await exists(path.join(s.wsDir, ".claude/rules/style.md"))).toBe(false);
   });
 
+  it("drift show <path> of a hand-edited file prints its diff, then exits 1 naming the pair", async () => {
+    const s = await conflicted();
+    await fs.writeFile(path.join(s.wsDir, ".claude/rules/y.md"), "# edited\n");
+    const r = runCli(["drift", "show", ".claude/rules/y.md", "--workspace", s.wsDir]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toContain("# edited");
+    expect(r.stderr).toContain(LINE);
+  });
+
   it("drift discard refuses before writing, naming the pair", async () => {
     const s = await conflicted();
     await fs.writeFile(path.join(s.wsDir, ".claude/rules/y.md"), "# edited\n");
