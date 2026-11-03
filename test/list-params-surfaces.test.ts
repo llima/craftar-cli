@@ -70,16 +70,18 @@ describe("list params in metadata (spec 55 §4.6)", () => {
   it("one pass in metadata: an item holding {{env}} is written as it is, in paths: and in fileMatchPattern", async () => {
     const rule: IngredientSpec = { meta: { type: "rule", name: "scoped", inclusion: "fileMatch", fileMatchPattern: ["{{ env | yaml-items }}"], params: LIST, frontmatterRaw: "paths:\n  - {{ env | yaml-items }}" }, files: { "rule.md": "# Scoped\n" } };
     const s = await forgeWith(rule, ["{{env}}/**"]);
-    expect(await fileOf(s, ".claude/rules/scoped.md")).toMatch(/^---\npaths:\n {2}- "\\u007b\\u007benv}}\/\*\*"\n---\n/);
+    expect(await fileOf(s, ".claude/rules/scoped.md")).toMatch(/^---\npaths:\n {2}- "\\u007b\{env}}\/\*\*"\n---\n/);
     expect(await fileOf(s, ".kiro/steering/scoped.md")).toContain("{{env}}/**");
   });
 
   it("a paths: item holding a quote, a backslash or \": \" is written, escaped, not refused", async () => {
     const rule: IngredientSpec = { meta: { type: "rule", name: "scoped", inclusion: "fileMatch", fileMatchPattern: "x/**", params: LIST, frontmatterRaw: "paths:\n  - {{ env | yaml-items }}" }, files: { "rule.md": "# Scoped\n" } };
-    const s = await forgeWith(rule, ['a"b', "a\\b", "a: b"]);
+    const s = await forgeWith(rule, ['a"b', "a\\b", "a: b", "src/**/*.{ts,tsx}"]);
     const text = await fileOf(s, ".claude/rules/scoped.md");
+    // A glob's single braces are written as they are; only a `{` opening `{{` is escaped.
+    expect(text).toContain('- "src/**/*.{ts,tsx}"');
     const fm = YAML.parse(text.split("---\n")[1]);
-    expect(fm.paths).toEqual(['a"b', "a\\b", "a: b"]);
+    expect(fm.paths).toEqual(['a"b', "a\\b", "a: b", "src/**/*.{ts,tsx}"]);
   });
 
   it("a key holding .__ is refused at the gate", async () => {

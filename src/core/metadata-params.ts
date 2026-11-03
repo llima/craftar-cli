@@ -114,9 +114,10 @@ export function listMetadata<M extends Ingredient>(
           items.forEach((item, i) => {
             if (holdsControl(item)) refuse(field, y[2], `item ${i} holds a line break or a control character`);
           });
-          // Each item written here, a JSON string (a valid YAML double-quoted scalar) with `{` as `\u007b`, so no placeholder is
-          // left for the pass that follows (E2) and craftar's own quotes and escapes are never tested as a value's (§4.6).
-          for (const item of items) kept.push(`${y[1]}- ${JSON.stringify(item).replace(/\{/g, "\\u007b")}`);
+          // Each item written here, a JSON string (a valid YAML double-quoted scalar) whose `{` that opens a `{{` is `\u007b`, so
+          // no placeholder is left for the pass that follows (E2), a glob's single braces stay readable, and craftar's own quotes
+          // and escapes are never tested as a value's (§4.6).
+          for (const item of items) kept.push(`${y[1]}- ${JSON.stringify(item).replace(/\{(?=\{)/g, "\\u007b")}`);
           continue;
         }
         kept.push(joins(field, line));
