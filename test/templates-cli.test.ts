@@ -301,3 +301,44 @@ describe("a dotnet planted at the workspace root (spec 32 §7: dotnet is found o
     expect(await exists(path.join(s.wsRoot, "planted-ran.txt"))).toBe(false);
   });
 });
+
+const GLOBAL_JSON_REFUSED_MSG = "craftar templates install does not run dotnet here";
+const GLOBAL_JSON_FIX_MSG = "remove sdk.paths from that global.json, or run dotnet new install by hand in a repository you trust";
+
+describe("templates install refuses when global.json sets sdk.paths (E35 §4)", () => {
+  it("with unsafe sdk.paths at root: exit 1 with refusal message before checking dotnet", async () => {
+    const s = await fresh([TOOLS], { "global.json": '{"sdk":{"paths":["/custom"]}}' });
+    const r = cli(["templates", "install"], s.wsRoot);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("global.json sets sdk.paths: dotnet would load the SDK it names");
+    expect(r.stderr).toContain(GLOBAL_JSON_REFUSED_MSG);
+    expect(r.stderr).toContain(GLOBAL_JSON_FIX_MSG);
+  });
+
+  it("with unsafe sdk.paths: --dry-run also refuses", async () => {
+    const s = await fresh([TOOLS], { "global.json": '{"sdk":{"paths":["/custom"]}}' });
+    const r = cli(["templates", "install", "--dry-run"], s.wsRoot);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("global.json sets sdk.paths: dotnet would load the SDK it names");
+    expect(r.stderr).toContain(GLOBAL_JSON_REFUSED_MSG);
+  });
+
+  it("with safe sdk.paths ($host$): proceeds normally", async () => {
+    const s = await fresh([TOOLS], { "global.json": '{"sdk":{"paths":["$host$"]}}' });
+    // Will fail for missing dotnet, but NOT for global.json — the global.json is safe
+    const r = cli(["templates", "install"], s.wsRoot);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe(DOTNET_MISSING);
+    expect(r.stderr).not.toContain("global.json sets sdk.paths");
+  });
+
+  it("templates list proceeds regardless of global.json (it does not run dotnet)", async () => {
+    const s = await fresh([TOOLS], { "global.json": '{"sdk":{"paths":["/custom"]}}' });
+    const r = cli(["templates", "list"], s.wsRoot);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("dotnet-new  Acme.Tools");
+    expect(r.stderr).not.toContain("global.json");
+  });
+});
