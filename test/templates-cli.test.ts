@@ -325,6 +325,31 @@ describe("templates install refuses when global.json sets sdk.paths (E35 §4)", 
     expect(r.stderr).toContain(GLOBAL_JSON_REFUSED_MSG);
   });
 
+  it("a global.json above the workspace with sdk.paths: refused, its paths element never printed", async () => {
+    const s = await fresh([TOOLS]);
+    const mark = ["ABOVE", "MARK"].join("_");
+    await fs.writeFile(path.join(s.root, "global.json"), `{"sdk":{"paths":["${mark}"]}}`);
+    const r = cli(["templates", "install", "--dry-run"], s.wsRoot);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("a global.json above the workspace sets sdk.paths: dotnet would load the SDK it names");
+    expect(r.stdout + r.stderr).not.toContain(mark);
+  });
+
+  it("a safe global.json at the root stops the walk before an unsafe one above it, as the dotnet host does", async () => {
+    const s = await fresh([TOOLS], { "global.json": "{}" });
+    await fs.writeFile(path.join(s.root, "global.json"), '{"sdk":{"paths":["/custom"]}}');
+    const r = cli(["templates", "install", "--dry-run"], s.wsRoot);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("dotnet new install Acme.Tools");
+  });
+
+  it("with safe sdk.paths ($host$) and --dry-run: the install lines are printed as before", async () => {
+    const s = await fresh([TOOLS], { "global.json": '{"sdk":{"paths":["$host$"]}}' });
+    const r = cli(["templates", "install", "--dry-run"], s.wsRoot);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("dotnet new install Acme.Tools");
+  });
+
   it("with safe sdk.paths ($host$): proceeds normally", async () => {
     const s = await fresh([TOOLS], { "global.json": '{"sdk":{"paths":["$host$"]}}' });
     // Will fail for missing dotnet, but NOT for global.json — the global.json is safe

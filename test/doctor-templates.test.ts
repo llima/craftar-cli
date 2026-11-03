@@ -166,6 +166,8 @@ describe("craftar doctor --json with a templates key", () => {
   });
 });
 
+const GJ_FIX = "remove sdk.paths from that global.json, or run dotnet new install by hand in a repository you trust";
+
 describe("doctor global.json warning (E35 §4.5)", () => {
   it("dotnet ok followed by global.json warn when unsafe paths at root", async () => {
     const f = await fixture([TOOLS], { "global.json": '{"sdk":{"paths":["/custom"]}}' });
@@ -173,7 +175,7 @@ describe("doctor global.json warning (E35 §4.5)", () => {
     const dotnetChecks = d.of("dotnet");
     expect(dotnetChecks).toHaveLength(2);
     expect(dotnetChecks[0]).toEqual({ id: "dotnet", scope: "workspace", level: "ok", message: "10.0.401", fix: null });
-    expect(dotnetChecks[1]).toEqual({ id: "dotnet", scope: "workspace", level: "warn", message: "global.json sets sdk.paths: dotnet would load the SDK it names — craftar templates install does not run dotnet here", fix: null });
+    expect(dotnetChecks[1]).toEqual({ id: "dotnet", scope: "workspace", level: "warn", message: "global.json sets sdk.paths: dotnet would load the SDK it names — craftar templates install does not run dotnet here", fix: GJ_FIX });
   });
 
   it("no global.json warn when paths is safe", async () => {
@@ -196,6 +198,18 @@ describe("doctor global.json warning (E35 §4.5)", () => {
     const dotnetChecks = d.of("dotnet");
     expect(dotnetChecks).toHaveLength(2);
     expect(dotnetChecks[0]).toEqual({ id: "dotnet", scope: "workspace", level: "warn", message: "the .NET SDK is not available: dotnet --version gave no version", fix: "install the .NET SDK and check PATH" });
-    expect(dotnetChecks[1]).toEqual({ id: "dotnet", scope: "workspace", level: "warn", message: "global.json sets sdk.paths: dotnet would load the SDK it names — craftar templates install does not run dotnet here", fix: null });
+    expect(dotnetChecks[1]).toEqual({ id: "dotnet", scope: "workspace", level: "warn", message: "global.json sets sdk.paths: dotnet would load the SDK it names — craftar templates install does not run dotnet here", fix: GJ_FIX });
+  });
+  it("a global.json that does not read as JSON is a warn too", async () => {
+    const d = await doctor(await fixture([TOOLS], { "global.json": "not json" }));
+    expect(d.of("dotnet")[1]).toEqual({ id: "dotnet", scope: "workspace", level: "warn", message: "global.json does not read as JSON: craftar cannot tell which SDK dotnet would load — craftar templates install does not run dotnet here", fix: GJ_FIX });
+  });
+
+  it("CRLF, a BOM, a comment and a trailing comma: still read, and the paths element is never printed", async () => {
+    const mark = ["PATHS", "MARK"].join("_");
+    const text = `\uFEFF{\r\n  // pinned\r\n  "sdk": { "paths": ["${mark}"], },\r\n}\r\n`;
+    const d = await doctor(await fixture([TOOLS], { "global.json": text }));
+    expect(d.of("dotnet")[1].message).toBe("global.json sets sdk.paths: dotnet would load the SDK it names — craftar templates install does not run dotnet here");
+    expect(JSON.stringify(d.report)).not.toContain(mark);
   });
 });
