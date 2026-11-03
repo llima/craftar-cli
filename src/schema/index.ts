@@ -459,6 +459,24 @@ const SectionKey = z.string().regex(new RegExp(`^(${INGREDIENT_TYPES.join("|")})
 export const SectionsSchema = z.record(SectionKey, z.record(z.string().regex(SECTION_NAME, "a section name is slug-like"), z.string())).default({});
 export type Sections = z.infer<typeof SectionsSchema>;
 
+/**
+ * A section file's path (spec 55 §5.3): under `sections/`, ending in `.md`, every segment letters, digits, `.`, `_` and `-`, not
+ * starting with `.` — so no backslash, no `..`, no absolute path, no empty segment, never `profile.yaml` or a body file.
+ */
+export const SECTION_FILE_PATH = /^sections\/(?:[A-Za-z0-9_-][A-Za-z0-9._-]*\/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\.md$/;
+/** A section value held in a file (spec 55 §5.2): `{ file: <path> }`, no other key. */
+export const SectionFileValue = z
+  .object({ file: z.string().regex(SECTION_FILE_PATH, "a section file is sections/….md: segments of letters, digits, '.', '_' and '-', not starting with '.'") })
+  .strict();
+/**
+ * A profile's section values as its `profile.yaml` writes them (spec 55 §5.2): a string, or `{ file: }`. `loadForge` resolves
+ * every file, so a loaded `Profile` holds `Sections`; a workspace's `overrides.sections` stays `SectionsSchema`, strings only.
+ */
+export const ProfileSectionsSchema = z
+  .record(SectionKey, z.record(z.string().regex(SECTION_NAME, "a section name is slug-like"), z.union([z.string(), SectionFileValue])))
+  .default({});
+export type ProfileSections = z.infer<typeof ProfileSectionsSchema>;
+
 /* ------------------------------------------------------------------ */
 /* Templates (spec 32)                                                  */
 /* ------------------------------------------------------------------ */
@@ -691,6 +709,12 @@ export const ProfileSchema = z.object({
   docs: z.unknown().optional(),
 });
 export type Profile = z.infer<typeof ProfileSchema>;
+/**
+ * A `profile.yaml` as written (spec 55 §5.2): `ProfileSchema` whose `sections` may hold `{ file: }`. `loadForge` and every
+ * re-parse of a profile file read it; `ProfileSchema` stays the shape of a loaded profile and of one built in memory.
+ */
+export const ProfileWrittenSchema = ProfileSchema.extend({ sections: ProfileSectionsSchema });
+export type ProfileWritten = z.infer<typeof ProfileWrittenSchema>;
 
 /* ------------------------------------------------------------------ */
 /* Forge                                                                */
@@ -714,6 +738,8 @@ export const FORGE_SCHEMA_PROFILE_LOCAL = 8;
 export const FORGE_SCHEMA_METADATA_PARAMS = 9;
 /** Forge schema that reads a recipe's `sections` (spec 54 Part A). */
 export const FORGE_SCHEMA_RECIPE_SECTIONS = 10;
+/** Forge schema that reads a profile's section value held in a file, `{ file: sections/….md }` (spec 55 §5.1). */
+export const FORGE_SCHEMA_SECTION_FILES = 11;
 
 export const ForgeManifestSchema = z.object({
   name: z.string(),
@@ -729,6 +755,7 @@ export const ForgeManifestSchema = z.object({
       z.literal(FORGE_SCHEMA_PROFILE_LOCAL),
       z.literal(FORGE_SCHEMA_METADATA_PARAMS),
       z.literal(FORGE_SCHEMA_RECIPE_SECTIONS),
+      z.literal(FORGE_SCHEMA_SECTION_FILES),
     ])
     .default(1),
   description: z.string().optional(),
