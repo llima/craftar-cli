@@ -491,6 +491,12 @@
       "fix": "set layout: dir in ingredients/skills/docs/ingredient.yaml — sync then writes .claude/skills/docs/SKILL.md"
     },
     {
+      "id": "skill-trigger",
+      "level": "warn",
+      "message": "skill docs: its description does not say when to use it, so the agent does not load it by itself",
+      "fix": "add a \"Use when …\" sentence to its SKILL.md description"
+    },
+    {
       "id": "docker",
       "level": "ok",
       "message": "Docker Compose 5.6.1",

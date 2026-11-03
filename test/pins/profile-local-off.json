@@ -379,6 +379,12 @@
           "fix": null
         },
         {
+          "id": "skill-trigger",
+          "level": "warn",
+          "message": "skill sk: its description does not say when to use it, so the agent does not load it by itself",
+          "fix": "add a \"Use when …\" sentence to its SKILL.md description"
+        },
+        {
           "id": "lock",
           "level": "ok",
           "message": "schema 2, generated <timestamp>",
@@ -444,6 +450,12 @@
           "level": "ok",
           "message": "every variable a written MCP server expects is set",
           "fix": null
+        },
+        {
+          "id": "skill-trigger",
+          "level": "warn",
+          "message": "skill sk: its description does not say when to use it, so the agent does not load it by itself",
+          "fix": "add a \"Use when …\" sentence to its SKILL.md description"
         },
         {
           "id": "lock",
