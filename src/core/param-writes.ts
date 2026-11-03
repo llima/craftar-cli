@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { IngredientSchema, ProfileSchema, WorkspaceConfigSchema, type ForgeManifest, type Ingredient } from "../schema/index.js";
+import { IngredientSchema, ProfileWrittenSchema, WorkspaceConfigSchema, type ForgeManifest, type Ingredient } from "../schema/index.js";
 import { readsRecipeSections } from "./recipe-sections.js";
 import { placeholders, bodyFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
@@ -253,8 +253,10 @@ export async function checkParamWrites(
       for (const e of assign) doc.setIn(["params", e.key], e.value);
       for (const s of sectionAssign) doc.setIn(["sections", s.key, s.name], s.value);
     });
-    const before = ProfileSchema.parse(parseYamlText(label, await fs.readFile(profileAbs, "utf8")));
-    const after = parseOr(label, () => ProfileSchema.parse(parseYamlText(label, content)));
+    // Spec 55 §5.2: as written against as written — a `{ file: }` value reads back unchanged. A value the profile already sets is
+    // never rewritten here (S14 refuses a different one), so take: section never writes a section file.
+    const before = ProfileWrittenSchema.parse(parseYamlText(label, await fs.readFile(profileAbs, "utf8")));
+    const after = parseOr(label, () => ProfileWrittenSchema.parse(parseYamlText(label, content)));
     // Build expected sections: deep-merge the before sections with the new ones
     const expectedSections = deepMerge(
       before.sections,

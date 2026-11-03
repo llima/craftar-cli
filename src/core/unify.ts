@@ -9,7 +9,7 @@ import { splitLines, type Hunk } from "./diff.js";
 import { detectEol, isUtf8, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
 import type { HunkTake, Ingredient, IngredientRef, Recipe, UnifyPlan, PlanFile, PlanHunk } from "../schema/index.js";
-import { ProfileSchema, RecipeSchema } from "../schema/index.js";
+import { ProfileWrittenSchema, RecipeSchema } from "../schema/index.js";
 import { metadataEntryField, metadataFields, metadataText, metadataValue, rendersMetadata, type MetadataField } from "./metadata-params.js";
 import { collect, deriveHunk, prove, substitutedFile, bodyFile, emittedFile, shellAtGate, type Extraction } from "./extract.js";
 import { firstMarkerLine, parseSections, readsTargetSections, SectionMarkerError, type ParseSectionsOptions } from "./sections.js";
@@ -1243,8 +1243,8 @@ export function profileRecipesEdit(raw: string, label: string, suffixed: string,
   });
 
   // Re-parse and verify
-  const parsed = ProfileSchema.parse(parseYamlText(label, content));
-  const original = ProfileSchema.parse(parseYamlText(label, raw));
+  const parsed = ProfileWrittenSchema.parse(parseYamlText(label, content));
+  const original = ProfileWrittenSchema.parse(parseYamlText(label, raw));
 
   // Build expected recipes list
   const origRecipes = [...original.recipes];
@@ -1494,8 +1494,9 @@ export async function pruneRecipes(
     for (const pw of profileWrites) {
       for (const prof of candidate.profiles) {
         if (prof.abs === pw.abs) {
-          const newProf = ProfileSchema.parse(parseYamlText(path.relative(process.cwd(), pw.abs), pw.content));
-          editedProfiles.set(prof.name, newProf);
+          // Spec 55 §5.2: the edit touches recipes only, so the loaded sections — every `{ file: }` already resolved — stand.
+          const newProf = ProfileWrittenSchema.parse(parseYamlText(path.relative(process.cwd(), pw.abs), pw.content));
+          editedProfiles.set(prof.name, { ...newProf, sections: current.profiles.get(prof.name)!.sections });
         }
       }
     }

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { forgeReader, readForgeFile, readForgeText } from "./contain.js";
-import { ProfileSchema, RecipeSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
+import { ProfileWrittenSchema, RecipeSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { fingerprintDir } from "./fingerprint.js";
 import { ingredientText, occupied, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
 import { assertNoDirLinkIn, assertNoLinkOnPath, copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
@@ -218,9 +218,10 @@ export async function planBasePromotion(forge: Forge, ref: string, profile: stri
     const text = editYamlText(await fs.readFile(abs, "utf8"), { command: COMMAND, label: where, keys: ["recipes"] }, (doc) => {
       for (const s of list) swapEntry(doc, "recipes", s.old, s.new);
     });
-    const was = forge.profiles.get(q)!;
+    // Spec 55 §5.2: as written against as written, so a `{ file: }` section value compares unchanged.
+    const was = parseYaml(where, await fs.readFile(abs, "utf8"), ProfileWrittenSchema);
     const expected = { ...was, recipes: was.recipes.map((r) => list.find((s) => s.old === r)?.new ?? r) };
-    if (!isDeepStrictEqual(parseYaml(where, text, ProfileSchema), expected)) throw unreadable(where, `recipes ${list.map((s) => `${s.old} replaced by ${s.new}`).join(", ")}`, COMMAND);
+    if (!isDeepStrictEqual(parseYaml(where, text, ProfileWrittenSchema), expected)) throw unreadable(where, `recipes ${list.map((s) => `${s.old} replaced by ${s.new}`).join(", ")}`, COMMAND);
     profileWrites.push({ abs, content: text, created: false });
     detail.profiles.push({ profile: q, file: where, swaps: list });
   }

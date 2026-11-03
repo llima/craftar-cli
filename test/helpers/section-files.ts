@@ -20,9 +20,14 @@ export async function acmeSections(opts: {
   sections?: Record<string, Record<string, unknown>>;
   files?: Record<string, string | Buffer>;
   skillDescription?: string;
+  /** `null` writes the rule with no `description`, which `import` cannot read back from `.claude/rules/` (a re-import test). */
+  ruleDescription?: string | null;
 }): Promise<Scenario> {
   const ingredients: IngredientSpec[] = [
-    { meta: { type: "rule", name: "review", description: "How a review is written" }, files: { "rule.md": REVIEW_BODY } },
+    {
+      meta: { type: "rule", name: "review", ...(opts.ruleDescription === null ? {} : { description: opts.ruleDescription ?? "How a review is written" }) },
+      files: { "rule.md": REVIEW_BODY },
+    },
     {
       meta: { type: "skill", name: "sqlfmt", layout: "dir" },
       files: {
