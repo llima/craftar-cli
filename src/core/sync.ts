@@ -1,10 +1,11 @@
+import { filteredCitations, listParamFault, rendersListParams, undeclaredListWarning, undeclaredLists } from "./list-params.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { containRoot, escapeFileLine, escapeOf, escapeRefusal, escapingRows, readForgeFile, readForgeText, type Escape } from "./contain.js";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
-import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor } from "./resolve.js";
+import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor, listsOf } from "./resolve.js";
 import { climbsOut, hashNormalized, isUtf8, legacyHash, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
 import { classifyForge, credentialFault, ensureTree, shownByRealPath, refHoldsCredentials, shownRef, ForgeFetchError, ForgeUnavailableError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
@@ -665,7 +666,7 @@ function guardOutput(ing: ResolvedIngredient, file: string, out: string, p: Pars
   const values = sectionsFor(ing, resolution);
   let from = "a section or param value";
   const q = projectSections(p, owner);
-  const section = q.sections.find((s) => Object.hasOwn(values, s.name) && firstMarkerLine(substitute(canonicalValue(values[s.name]), params)) !== null);
+  const section = q.sections.find((s) => Object.hasOwn(values, s.name) && firstMarkerLine(substitute(canonicalValue(values[s.name]), params, listsOf(resolution))) !== null);
   if (section) from = `${layerLabel(resolution, layerOf(resolution, key, section.name))}, section ${section.name}`;
   else {
     const k = placeholders(expandSections(q, values)).find((x) => Object.hasOwn(params, x) && /<!--[ \t]*\/?[ \t]*craftar:section/.test(String(params[x])));
@@ -697,6 +698,19 @@ export async function plan(ws: Workspace): Promise<Plan> {
         : "no targets resolved — nothing will be emitted and every file in craftar.lock becomes an orphan (an empty list in craftar.local.yaml replaces the workspace's)",
     );
   }
+  // Spec 55 §4.2: a list key's declarations and values fail the plan before anything renders; a YAML list for a key nobody
+  // declares a list renders as before and warns, at the gate only.
+  const listFault = listParamFault(
+    resolution.listKeys,
+    resolution.ingredients,
+    resolution.recipes.map((n) => forgeFor(ws.forge, ws.config.profile).recipes.get(n)!).filter(Boolean),
+    [
+      { name: `profile ${resolution.profile.name}`, values: resolution.paramLayers.profile },
+      { name: "the workspace", values: resolution.paramLayers.workspace },
+    ],
+  );
+  if (listFault) throw new Error(listFault);
+  if (rendersListParams(ws.forge.manifest)) for (const k of undeclaredLists(resolution.listKeys, resolution.params)) warnings.push(undeclaredListWarning(k));
   const sections = await sectionPass(ws.forge, resolution, warnings);
   /** Unresolved placeholder → refs of the ingredients citing it. */
   const missingParams = new Map<string, Set<string>>();
@@ -742,11 +756,11 @@ export async function plan(ws: Workspace): Promise<Plan> {
         );
       const raw = await readForgeText(ing.forgeRoot, abs);
       const expanded = parsed ? expandSections(parsed, sectionsFor(ing, resolution), owner) : toLf(stripBom(raw));
-      const out = substitute(expanded, params, missing);
+      const out = substitute(expanded, params, listsOf(resolution, `${ing.ref} ${file}`), missing);
       if (parsed) guardOutput(ing, file, out, parsed, resolution, params, owner);
       // Every file rendered here, body file or not: `explain` names each key the refusal can name (spec 29 §4.1).
       const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
-      for (const key of placeholders(expanded)) {
+      for (const key of [...placeholders(expanded), ...filteredCitations(expanded, listsOf(resolution))]) {
         // At the gate, drop the key from cited (spec 44 §4.2)
         if (resolution.rulesIndex && key === RULES_INDEX_KEY) continue;
         c.keys.add(key);
@@ -766,10 +780,10 @@ export async function plan(ws: Workspace): Promise<Plan> {
     meta<I extends ResolvedIngredient>(ing: I): I["meta"] {
       if (!resolution.metadataParams) return ing.meta;
       const missing = new Set<string>();
-      const out = renderedMeta(ing.meta, paramsFor(ing, resolution), ing.ref, missing);
+      const out = renderedMeta(ing.meta, paramsFor(ing, resolution), ing.ref, listsOf(resolution), missing);
       // Counted wherever a body's citation is (spec 50 §5.3); the rules index's token is never a parameter.
       const c = cited.get(ing.ref) ?? { ing, keys: new Set<string>() };
-      for (const key of metadataCitations(ing.meta)) if (key !== RULES_INDEX_KEY) c.keys.add(key);
+      for (const key of metadataCitations(ing.meta, listsOf(resolution))) if (key !== RULES_INDEX_KEY) c.keys.add(key);
       if (c.keys.size) cited.set(ing.ref, c);
       for (const key of missing) {
         if (key === RULES_INDEX_KEY) continue;

@@ -18,6 +18,7 @@ import { findSecrets } from "./secrets.js";
 import { climbsOut } from "./text.js";
 import { CannotResolveError, shownByRealPath } from "./cache-label.js";
 import { containRoot, containSubRoot, readForgeText, type ContainRoot } from "./contain.js";
+import { listDeclarationNearMiss, rendersListParams } from "./list-params.js";
 import { readsSectionFiles, resolveSectionFiles, unnamedSectionFiles, type SectionFileMap } from "./section-files.js";
 import { checkLocals, ProfileLocalLoadError, readsLocalOverride, readsProfileLocal, type IgnoredLocals, type LocalLayer, type LocalRecipe } from "./profile-local.js";
 import { readsRecipeSections, recipeSectionsNearMiss } from "./recipe-sections.js";
@@ -130,7 +131,14 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
   const skip = (abs: string) => skippedLinks.push(posixRel(abs));
   const ingredients = new Map<IngredientRef, LoadedIngredient>();
   const ingredientPaths = new Map<IngredientRef, string>();
+  // Spec 55 §4.1: below the list-params gate a `type: list` declaration is a near miss, naming its file.
+  const lists = rendersListParams(manifest);
+  const listNearMiss = (file: string, params: Record<string, { type?: string }> | undefined) => {
+    const m = lists ? null : listDeclarationNearMiss(file, params);
+    if (m) throw new Error(m);
+  };
   for (const { ref, dir, meta } of await readIngredientTree(contain, path.join(root, "ingredients"), skip)) {
+    listNearMiss(`${posixRel(dir)}/ingredient.yaml`, meta.params);
     if (ingredients.has(ref)) throw new Error(`duplicate ingredient ${ref} (${dir})`);
     ingredients.set(ref, { ref, dir, meta, forgeRoot: contain });
     ingredientPaths.set(ref, posixRel(dir));
@@ -158,6 +166,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     for (const f of await fs.readdir(recRoot)) {
       if (!/\.ya?ml$/.test(f)) continue;
       const r = await readRecipe(contain, path.join(recRoot, f), `recipes/${f}`, "recipes");
+      listNearMiss(`recipes/${f}`, r.params);
       recipes.set(r.name, r);
       recipeFiles.set(r.name, `recipes/${f}`);
     }
@@ -244,6 +253,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
       const pathsHere = new Map<IngredientRef, string>();
       const seenRefs = new Map<string, string>(); // lower-cased ref → path (L9)
       for (const { ref, dir, meta } of await readIngredientTree(sub, path.join(folder, "ingredients"), skip)) {
+        listNearMiss(`${posixRel(dir)}/ingredient.yaml`, meta.params);
         const at = posixRel(dir);
         const prior = seenRefs.get(ref.toLowerCase());
         if (prior !== undefined) {
@@ -261,6 +271,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
           if (!/\.ya?ml$/.test(e)) continue;
           const file = `${label}/recipes/${e}`;
           const r = await readRecipe(sub, path.join(localRecRoot, e), file, `${label}/recipes`);
+          listNearMiss(file, r.params);
           const prior = seen.get(r.name.toLowerCase());
           if (prior !== undefined) {
             early.push(`L9 ${prior} and ${file}: two local recipes of one profile with one name`);

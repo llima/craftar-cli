@@ -1,3 +1,4 @@
+import { NO_LISTS } from "./list-params.js";
 import { FORGE_SCHEMA_TARGET_SECTIONS, SECTION_NAME, TARGETS, type Owner, type Target } from "../schema/index.js";
 import { FORGE_MANIFEST } from "./forge.js";
 import { substitute } from "./resolve.js";
@@ -267,8 +268,8 @@ export function inferSections(parsed: ParsedSections, source: string, fixed: Rec
   const src = toLf(stripBom(source));
   const pieces: Piece[] = [];
   for (const s of parsed.segments) {
-    if ("text" in s) pieces.push({ fixed: substitute(s.text, map) });
-    else if (Object.hasOwn(fixed, s.name)) pieces.push({ fixed: substitute(canonicalValue(fixed[s.name]), map), ws: s.name });
+    if ("text" in s) pieces.push({ fixed: substitute(s.text, map, NO_LISTS) });
+    else if (Object.hasOwn(fixed, s.name)) pieces.push({ fixed: substitute(canonicalValue(fixed[s.name]), map, NO_LISTS), ws: s.name });
     else pieces.push({ gap: s.name });
   }
   const atLineStart = (pos: number) => pos === 0 || src[pos - 1] === "\n";

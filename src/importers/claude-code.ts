@@ -1,3 +1,4 @@
+import { importLists } from "../core/list-params.js";
 import { promises as fs } from "node:fs";
 import { forgeFor, overriddenBase, ProfileLocalLoadError, readsLocalOverride, readsProfileLocal, type LocalLayer } from "../core/profile-local.js";
 import { readsRecipeSections } from "../core/recipe-sections.js";
@@ -1592,7 +1593,7 @@ async function writeIngredient(
           parsed: rekey(v.parsed),
         };
         for (const k of ["description", "targets", "tags"] as const) if ((seen.meta as Record<string, unknown>)[k] === undefined) delete (seen.meta as Record<string, unknown>)[k];
-        const rendered = renderedFingerprint(seen, map, S, run.ctx.forge.manifest.schema, run.ctx.primaryRefs ?? undefined, run.ctx.sourceTarget, (t) => expand(t, indexTarget));
+        const rendered = renderedFingerprint(seen, map, S, run.ctx.forge.manifest.schema, importLists(run.ctx.forge, seen.meta), run.ctx.primaryRefs ?? undefined, run.ctx.sourceTarget, (t) => expand(t, indexTarget));
         if (rendered !== fingerprint) {
           throw new Error(`import: ${meta.type}/${name} holds {{${RULES_INDEX_KEY}}} and the workspace's ${source} differs from what sync writes from it — edit the variant in the Forge, then re-run`);
         }

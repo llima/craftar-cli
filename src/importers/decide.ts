@@ -1,3 +1,4 @@
+import { importLists } from "../core/list-params.js";
 import path from "node:path";
 import { metadataCitations, rendersMetadata } from "../core/metadata-params.js";
 import { placeholders, reservedKey, bodyFile } from "../core/extract.js";
@@ -214,7 +215,7 @@ export async function decide(
   // Rules use claude-code form; steering uses kiro form.
   const indexTarget = base.meta.type === "rule" ? "claude-code" : base.meta.type === "steering" ? "kiro" : undefined;
   const ruleIndex = indexTarget && indexExpand ? (text: string) => indexExpand(text, indexTarget) : undefined;
-  const computedFp = renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined, owner, ruleIndex);
+  const computedFp = renderedFingerprint(base, map, S, schema, importLists(ctx.forge, base.meta), ctx.primaryRefs ?? undefined, owner, ruleIndex);
   if (computedFp === fingerprint) {
     pin(ctx, [...citedAll, ...serverKeys], map);
     const changed = [...cited].filter((k) => Object.hasOwn(map, k));
@@ -300,7 +301,7 @@ async function inferParams(
     .map(([key, value]) => ({ key, old: valueOf(ctx.P, key) ?? null, value }));
 
   // F10: the proof, through the same expansion and substitution ctx.text uses.
-  if (renderedFingerprint(base, { ...map, ...sigma }, S, schema, ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
+  if (renderedFingerprint(base, { ...map, ...sigma }, S, schema, importLists(ctx.forge, base.meta), ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `inference not proved for ${ref}` };
 
   // F9: a profile change must not move anything else the profile renders — its files, or a section value
   // that applies to it under this profile or workspace (spec 11 §6.11).
@@ -375,7 +376,7 @@ function inferSectionValues(
   const RSk = valuesAt(ctx.RS, key);
   const S = { ...RSk, ...PSk, ...WSk, ...sigma };
   // F14: the proof, through the same expansion and substitution ctx.text uses.
-  if (renderedFingerprint(base, map, S, schema, ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
+  if (renderedFingerprint(base, map, S, schema, importLists(ctx.forge, base.meta), ctx.primaryRefs ?? undefined, owner, ruleIndex) !== fingerprint) return { kind: "variant", why: `section inference not proved for ${ref}` };
 
   const assigned = sectionNames(base).filter((n) => Object.hasOwn(sigma, n));
   const sectionDelta: SectionChange[] = [];
