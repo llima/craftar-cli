@@ -77,6 +77,14 @@ describe("the override conflict (spec 56 §4.3)", () => {
     expect(r.stderr).toContain(LINE);
   });
 
+  it("drift promote --dry-run of another file's hand edit says the next sync is refused, naming the pair", async () => {
+    const s = await conflicted();
+    await fs.writeFile(path.join(s.wsDir, ".claude/rules/style.md"), "# Style, edited\n");
+    const r = runCli(["drift", "promote", ".claude/rules/style.md", "--dry-run", "--workspace", s.wsDir]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain(`next sync: refused — ${LINE}`);
+  });
+
   it("drift discard refuses before writing, naming the pair", async () => {
     const s = await conflicted();
     await fs.writeFile(path.join(s.wsDir, ".claude/rules/y.md"), "# edited\n");
