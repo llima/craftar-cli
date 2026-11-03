@@ -221,8 +221,7 @@ export async function planLocalize(forge: Forge, ref: string, profile: string): 
   for (const r of override ? [...citing].sort() : []) {
     const f = files.get(r);
     if (!f) throw new Error(`${command}: recipe ${r} has no file under recipes/`);
-    const recipe = forge.recipes.get(r)!;
-    writes.push({ abs: f.abs, content: rewire(f.raw, posix(forge.root, f.abs), { ...recipe, ingredients: recipe.ingredients.map((i) => (i === ref ? to : i)) }), created: false });
+    writes.push({ abs: f.abs, content: rewire(f.raw, posix(forge.root, f.abs)), created: false });
     edited.push(f.abs);
     rewired.push(posix(forge.root, f.abs));
   }
