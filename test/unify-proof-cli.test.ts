@@ -77,6 +77,29 @@ describe("forge unify proves the Forge still loads before it writes (E38.1)", ()
     expect((await fs.readdir(s.tmp)).filter((n) => n.startsWith("craftar-"))).toEqual([]);
   });
 
+  it("refuses, with the Forge untouched, a Forge whose recipes folder is a directory link (through the proof copy)", async () => {
+    // Until E38.1 unify did not copy the Forge, followed the link and wrote; the copy refuses a linked root tree.
+    const s = await scenario({});
+    // Inside the Forge, so the load reads through it (a link out of the Forge is refused at load, spec 48).
+    const moved = path.join(s.forge, "store", "recipes");
+    await fs.mkdir(path.dirname(moved));
+    await fs.rename(path.join(s.forge, "recipes"), moved);
+    // A junction on Windows needs no privilege; elsewhere the type is ignored.
+    await fs.symlink(moved, path.join(s.forge, "recipes"), "junction");
+    git(s.forge, "add", "-A");
+    git(s.forge, "commit", "-q", "-m", "link");
+    const ingredients = path.join(s.forge, "ingredients");
+    const before = await snapshot(ingredients);
+    const beforeLinked = await snapshot(moved);
+    const r = s.unify();
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.stderr).toBe("error: recipes is a symbolic link in the Forge — unify does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit\n");
+    expect(await snapshot(ingredients)).toEqual(before);
+    expect(await snapshot(moved)).toEqual(beforeLinked);
+    expect(git(s.forge, "status", "--porcelain")).toBe("");
+    expect((await fs.readdir(s.tmp)).filter((n) => n.startsWith("craftar-"))).toEqual([]);
+  });
+
   it("(control) a profile's local recipe naming the variant is still refused by its own check, in its own words", async () => {
     const s = await scenario({
       "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 8 }),

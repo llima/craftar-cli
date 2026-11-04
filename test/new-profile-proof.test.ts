@@ -64,6 +64,29 @@ describe("proveNewProfileLoads (E38.1)", () => {
     expect((await fs.readdir(s.tmp)).filter((n) => n.startsWith("craftar-"))).toEqual([]);
   });
 
+  it("init --new-profile refuses, with nothing written, a Forge whose recipes folder is a directory link (through the proof copy)", async () => {
+    // Until E38.1 init did not copy the Forge, followed the link and wrote the profile.
+    const s = await setup();
+    // Inside the Forge, so the load reads through it (a link out of the Forge is refused at load, spec 48).
+    const moved = path.join(s.forge, "store", "recipes");
+    await fs.mkdir(path.dirname(moved));
+    await fs.rename(path.join(s.forge, "recipes"), moved);
+    // A junction on Windows needs no privilege; elsewhere the type is ignored.
+    await fs.symlink(moved, path.join(s.forge, "recipes"), "junction");
+    git(s.forge, "add", "-A");
+    git(s.forge, "commit", "-q", "-m", "link");
+    const ws = path.join(s.parent, "ws");
+    const r = runCli(["init", "--forge", s.forge, "--new-profile", "initech", "--like", "acme", "--workspace", ws], {
+      env: { CRAFTAR_HOME: path.join(s.parent, "home"), TMPDIR: s.tmp, TEMP: s.tmp, TMP: s.tmp },
+    });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe("error: recipes is a symbolic link in the Forge — init does not read a linked recipes, ingredients or profiles directory; replace it with the directory and commit\n");
+    expect(await fs.lstat(path.join(s.forge, "profiles/initech")).then(() => true, () => false)).toBe(false);
+    expect(await fs.lstat(path.join(ws, "craftar.yaml")).then(() => true, () => false)).toBe(false);
+    expect(git(s.forge, "status", "--porcelain")).toBe("");
+    expect((await fs.readdir(s.tmp)).filter((n) => n.startsWith("craftar-"))).toEqual([]);
+  });
+
   it("(control) init --new-profile still writes the profile and leaves no scratch copy", async () => {
     const s = await setup();
     const ws = path.join(s.parent, "ws");
