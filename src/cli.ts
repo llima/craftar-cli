@@ -3375,7 +3375,7 @@ async function runCompose(argv: string[], real: string): Promise<number> {
 
 services
   .command("up")
-  .description("Start the services (docker compose up -d) — refused when a recorded file is missing or edited")
+  .description("Start the services (docker compose up -d) — refused when a recorded file is missing or edited, or when .craftar/.env exists with no .env at the workspace root")
   .argument("[service...]", "Compose service names to start (default: all)")
   .option("--wait", "wait until the services are running or healthy", false)
   .option("--workspace <dir>", "workspace root", ".")
