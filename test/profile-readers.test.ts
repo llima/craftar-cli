@@ -23,6 +23,7 @@ const TABLE: Record<string, Decision[]> = {
   "core/integrations.ts": ["family"], // the chain walk of effectiveProfile
   "core/localize.ts": ["concrete", "written", "lookup"],
   "core/new-profile-gate.ts": ["lookup"],
+  "core/new-profile-write.ts": ["lookup"], // E38.1: the scratch copy's load holds the new profile, no value read
   "core/new-profile.ts": ["written", "lookup"], // --like copies the written recipes and targets; an abstract one refused
   "core/param-writes.ts": ["written"],
   "core/profile-extends.ts": ["family"],

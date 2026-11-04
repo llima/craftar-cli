@@ -1072,11 +1072,12 @@ describe("cli — forge unify cascade refusals write nothing (Ruling 33)", () =>
     expect(await fs.readFile(path.join(root, "ingredients/rules/wf/rule.md"), "utf8")).toBe("a\n");
   });
 
-  // A write that fails after writing began (a read-only recipe here; an I/O error or a locked file
-  // on Windows in the wild) cannot be prevented by the dry pass — it must name what was written.
+  // A read-only recipe failed this run midway until E38.1 / E10.6b: the scratch copy now carries the file's mode, so
+  // the write is refused there, before the first write. (An I/O error or a locked file on Windows can still fail after
+  // writing began; lateFailure names what was written then — covered for init --new-profile.)
   // Root ignores the read-only bit on POSIX, so the scenario cannot fail there.
-  it.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
-    "names the paths already written and the git recovery when a write fails midway",
+  it.skipIf(process.platform === "win32" || (typeof process.getuid === "function" && process.getuid() === 0))(
+    "a recipe it cannot write is refused on the scratch copy, the Forge untouched",
     async () => {
       const root = await tmpDir("craftar-cli-forge-");
       const recipeFile = path.join(root, "recipes/base.yaml");
@@ -1094,11 +1095,10 @@ describe("cli — forge unify cascade refusals write nothing (Ruling 33)", () =>
 
       const r = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "variant", "--forge", root]);
       expect(r.code).toBe(1);
-      expect(r.stderr).toContain("ingredients/rules/wf/rule.md");
-      expect(r.stderr).toContain("git -C");
-      expect(r.stderr).toContain("checkout --");
-      // The variant is still there: removal comes last.
-      expect(await exists(path.join(root, "ingredients/rules/wf--acme"))).toBe(true);
+      expect(r.stderr).toBe("error: unify: recipes/base.yaml could not be written on the scratch copy the edit is proved on (EACCES) — it cannot be written in the Forge either; nothing written\n");
+      expect(r.stderr).not.toContain("checkout --");
+      await fs.chmod(recipeFile, 0o644);
+      expect(execFileSync("git", ["-C", root, "status", "--porcelain"]).toString()).toBe("");
     },
   );
 });
@@ -1790,14 +1790,19 @@ describe("cli — forge unify take: param, review follow-ups (spec 09)", () => {
     expect(r2.stderr).toContain("profiles/acme/profile.yaml is not held by git");
   });
 
-  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a late failure names the profile it already wrote (AC 11)", async () => {
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a read-only ingredients folder is refused on the scratch copy, before the profile is written (AC 11, E38.1)", async () => {
+    // Until E38.1 the variant's removal, the last step, failed here after the profile was written.
     const root = await committedCopy(path.resolve(__dirname, "golden/forge-param"));
     const plan = await planFor(root, "ports", "acme", (p) => Object.assign(p.files[0].hunks[0], { take: "param", params: [{ token: "8080", key: "ports.api" }] }));
-    // Removing the variant's directory is the last step; a read-only parent makes it fail after every other write.
-    await fs.chmod(path.join(root, "ingredients/rules"), 0o555);
+    const rules = path.join(root, "ingredients/rules");
+    await fs.chmod(rules, 0o555);
+    cleanups.push(() => fs.chmod(rules, 0o755).catch(() => undefined));
     const r = runCli(["forge", "unify", "rule/ports", "--profile", "acme", "--plan", plan, "--forge", root]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain("profiles/acme/profile.yaml");
+    expect(r.stderr.startsWith("error: unify: ingredients/rules/")).toBe(true);
+    expect(r.stderr).toContain(" could not be written on the scratch copy the edit is proved on (EACCES) — it cannot be written in the Forge either; nothing written\n");
+    await fs.chmod(rules, 0o755);
+    expect(execFileSync("git", ["-C", root, "status", "--porcelain"]).toString()).toBe("");
   });
 
   it("a mixed plan: a workspace on the base sees update only where the evolution hunk moved it", async () => {
@@ -2197,7 +2202,7 @@ describe("forge unify take: section (spec 12)", () => {
     expect(await snapshot(root)).toEqual(before);
   });
 
-  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a late failure after the manifest write names craftar.forge.yaml in the recovery commands", async () => {
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a read-only ingredients folder is refused on the scratch copy, before the manifest is bumped (E38.1)", async () => {
     // Use a helper that restores the permission in cleanup so the temp dir can be removed
     const root = await tmpDir("craftar-cli-forge-");
     cleanups.push(async () => {
@@ -2229,20 +2234,18 @@ describe("forge unify take: section (spec 12)", () => {
     const edited = path.join(dir, "edited.yaml");
     await fs.writeFile(edited, YAML.stringify(plan));
 
-    // Make ingredients/rules read-only: the variant removal (last write) will fail
-    await fs.chmod(path.join(root, "ingredients/rules"), 0o555);
+    // A read-only ingredients/rules: until E38.1 the variant's removal (the last write) failed after the manifest,
+    // the profile and the body were written; the scratch copy now refuses it before any write.
+    const rules = path.join(root, "ingredients/rules");
+    await fs.chmod(rules, 0o555);
+    cleanups.push(() => fs.chmod(rules, 0o755).catch(() => undefined));
 
     const r = runCli(["forge", "unify", "rule/review-posture", "--profile", "acme", "--plan", edited, "--forge", root]);
     expect(r.code).toBe(1);
-    // stderr names craftar.forge.yaml (the manifest was touched)
-    expect(r.stderr).toContain("craftar.forge.yaml");
-    // stderr names the profile (it was edited)
-    expect(r.stderr).toContain("profiles/acme/profile.yaml");
-    // stderr names the body file (it was written with markers)
-    expect(r.stderr).toContain("ingredients/rules/review-posture/rule.md");
-    // The recovery line shows git checkout for those paths
-    expect(r.stderr).toContain("git -C");
-    expect(r.stderr).toContain("checkout --");
+    expect(r.stderr.startsWith("error: unify: ingredients/rules/")).toBe(true);
+    expect(r.stderr).toContain(" could not be written on the scratch copy the edit is proved on (EACCES) — it cannot be written in the Forge either; nothing written\n");
+    await fs.chmod(rules, 0o755);
+    expect(execFileSync("git", ["-C", root, "status", "--porcelain"]).toString()).toBe("");
   });
 
   // Table-driven refusal tests: each scenario exits 1, emits the fragment, and leaves the Forge untouched.
