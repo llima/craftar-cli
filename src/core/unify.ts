@@ -1143,7 +1143,12 @@ export async function proveUnifyLoads(forge: Forge, edits: UnifyEdits): Promise<
   }
   try {
     await copyForgeForProof(forge.root, scratch, "unify");
-    const onCopy = (abs: string) => path.join(scratch, path.relative(forge.root, abs));
+    const onCopy = (abs: string) => {
+      const rel = path.relative(forge.root, abs);
+      // Every path of the edit set is under the Forge; one that is not would be written outside the copy.
+      if (rel === "" || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) throw new Error("unify: an edit outside the Forge reached the proof — nothing written");
+      return path.join(scratch, rel);
+    };
     try {
       for (const w of edits.files) await writeForgeFile(onCopy(w.abs), w.content);
       await writeUnified({ ...edits.base, dir: onCopy(edits.base.dir) }, edits.result);

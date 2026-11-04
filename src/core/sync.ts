@@ -705,6 +705,7 @@ export function assertInsideWorkspace(files: PlannedFile[]): void {
 
 export async function plan(ws: Workspace): Promise<Plan> {
   const resolution = resolve(ws.forge, ws.config);
+  // The workspace's own warnings first, always: drift show prints the plan's own by slicing them off (E9.14).
   const warnings = [...ws.warnings, ...resolution.warnings];
   const hasService = resolution.ingredients.some((ing) => ing.meta.type === "service");
   if (resolution.targets.length === 0) {
