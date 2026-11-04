@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
@@ -171,5 +172,18 @@ describe("ForgeStage.overwritten", () => {
     stage.write(path.join(dir, "guard.ps1"), "created\n");
     stage.write(path.join(root, "profiles/acme/profile.yaml"), "name: acme\nrecipes: []\n");
     expect(await stage.overwritten()).toEqual([path.join(dir, "guard.sh")]);
+  });
+
+  it.skipIf(process.platform === "win32")("does not read a staged path that is not a regular file (a FIFO would hang): it names it, so git decides", async () => {
+    const root = await tmpDir("craftar-import-gate-");
+    roots.push(root);
+    const dir = path.join(root, "ingredients/rules/x");
+    await writeFiles(dir, { "ingredient.yaml": "x\n" });
+    execFileSync("mkfifo", [path.join(dir, "rule.md")]);
+    const stage = new ForgeStage(root);
+    stage.rewritesWhole(dir);
+    stage.write(path.join(dir, "rule.md"), "new\n");
+    const named = await Promise.race([stage.overwritten(), new Promise<string>((r) => setTimeout(() => r("hung"), 2_000))]);
+    expect(named).toEqual([path.join(dir, "rule.md")]);
   });
 });

@@ -973,9 +973,11 @@ export class ForgeStage {
       const staged = Buffer.isBuffer(content) ? content : Buffer.from(content, "utf8");
       let disk: Buffer | null = null;
       try {
-        disk = await fs.readFile(abs);
+        // Through the Forge's reader (spec 48): a path that leaves the Forge or is not a regular file is not read here,
+        // and is named, so git decides — `flush()` refuses an escape afterwards anyway.
+        disk = await readForgeFile(await this.forgeRoot(), abs);
       } catch {
-        disk = null; // unreadable: named, so git decides
+        disk = null;
       }
       if (disk === null || !disk.equals(staged)) out.push(abs);
     }
