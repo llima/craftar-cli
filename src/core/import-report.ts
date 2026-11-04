@@ -1,4 +1,5 @@
 import YAML from "yaml";
+import { slotLabel } from "./integrations.js";
 import type { ImportReport } from "../importers/claude-code.js";
 
 export interface ImportReportInput {
@@ -112,7 +113,7 @@ export function renderImportReport(i: ImportReportInput): string {
     ...(report.preferKiro?.length ? [[`## Preferred from Kiro (${report.preferKiro.length})`, ...report.preferKiro.map((x) => `- ${oneLine(preferredLine(x))}`)]] : []),
     // Spec 33 §4.2 / A4: only when something was left, so reports below schema 3 keep their bytes.
     ...(report.leftToRecipes.length
-      ? [[`## Left to an integration recipe (${report.leftToRecipes.length})`, ...report.leftToRecipes.map((x) => `- ${oneLine(`${x.recipe} (integrations.${x.slot}): ${x.refs.join(", ")}`)}`)] as string[]]
+      ? [[`## Left to an integration recipe (${report.leftToRecipes.length})`, ...report.leftToRecipes.map((x) => `- ${oneLine(`${x.recipe} (${slotLabel(x.slot)}): ${x.refs.join(", ")}`)}`)] as string[]]
       : []),
     // Spec 51 §4.5: only when a local was reused, so a report without one keeps its bytes.
     ...(report.localReused?.length ? [[`## Reused as a local of profile ${report.profile} (${report.localReused.length})`, ...report.localReused.map((x) => `- ${oneLine(`${x.ref} (${x.dir})`)}`)] as string[]] : []),

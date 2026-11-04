@@ -54,6 +54,7 @@ import { profileSectionFile, recipeSectionFile } from "./core/section-files.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, metadataEdits, unmanaged, type DriftRow } from "./core/drift.js";
+import { slotLabel } from "./core/integrations.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { assertNoLinkOnPath, exists, gitDirty, gitIgnored, gitIsRepo, gitTracked, gitUnheld, ignoredPaths, loadForge, realpathOfNearest, cannotResolve, unheldMessage, type UnheldPath } from "./core/forge.js";
@@ -173,7 +174,7 @@ program
     for (const x of r.localCreated ?? []) console.log(`  local to profile ${r.profile}: ${x.ref} (${x.dir}) — created there`);
     for (const x of r.localRewritten ?? []) console.log(`  local to profile ${r.profile}: ${x.ref} (${x.dir}) — rewritten from ${x.source}`);
     if (r.localRecipe) console.log(`  local recipe ${r.localRecipe.name} (${r.localRecipe.file}): ${r.localRecipe.refs.join(", ")} — wired, last in profile ${r.profile}'s recipes`);
-    for (const x of r.leftToRecipes) console.log(`  left to recipe ${x.recipe} (integrations.${x.slot}): ${x.refs.join(", ")} — not compared; when this workspace resolves that recipe, craftar status shows whether its copies differ`);
+    for (const x of r.leftToRecipes) console.log(`  left to recipe ${x.recipe} (${slotLabel(x.slot)}): ${x.refs.join(", ")} — not compared; when this workspace resolves that recipe, craftar status shows whether its copies differ`);
     // Spec 10 §4.2: how a templated base was reused, and what the profile gained.
     // Spec 11 §4.3: `; sections …` when a section value filled the render.
     for (const x of r.rendered) {

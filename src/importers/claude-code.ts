@@ -22,7 +22,7 @@ import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileWr
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, recipeOrder, resolve, sectionKey, type Resolution } from "../core/resolve.js";
 import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE } from "../core/rules-index.js";
-import { effectiveProfile } from "../core/integrations.js";
+import { effectiveProfile, slotLabel } from "../core/integrations.js";
 import { classifyForge, credentialFault } from "../core/remote.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { editYamlText } from "../core/yaml-edit.js";
@@ -660,7 +660,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
         const p = provided.get(providedKey)!;
         // `ref` is the Forge ref — the first entry of the provided entry's `refs` whose type is `rule`.
         const ref = p.refs.find((r) => r.startsWith("rule/")) ?? providedKey;
-        report.warnings.push(`--prefer-kiro ${name}: ${ref} is left to recipe ${p.recipe} (integrations.${p.slot}) — nothing to prefer; its steering file was not used`);
+        report.warnings.push(`--prefer-kiro ${name}: ${ref} is left to recipe ${p.recipe} (${slotLabel(p.slot)}) — nothing to prefer; its steering file was not used`);
         continue;
       }
 

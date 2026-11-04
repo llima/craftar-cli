@@ -8,7 +8,7 @@ import { ProfileWrittenSchema, RecipeWrittenSchema, WorkspaceConfigSchema, type 
 import { fingerprintDir } from "./fingerprint.js";
 import { ingredientText, occupied, sourceMode, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
 import { assertNoDirLinkIn, assertNoLinkOnPath, copyForgeForProof, removeProofCopy, scratchWriteRefusal, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
-import { effectiveProfile } from "./integrations.js";
+import { effectiveProfile, slotLabel } from "./integrations.js";
 import { familyOf } from "./profile-extends.js";
 import { findProfileFile } from "./param-writes.js";
 import { recipeOrder, resolve, type Resolution } from "./resolve.js";
@@ -228,7 +228,7 @@ export async function planBasePromotion(forge: Forge, ref: string, who: string |
         const eff = effectiveProfile(forge, written);
         const sel = eff.selected.find((s) => s.recipe === name);
         if (sel) {
-          throw new Error(`${COMMAND}: profile ${q} selects recipe ${name} (which names ${X}) through integrations.${sel.slot} — promote cannot repoint a recipe a block selects by editing a recipes list; edit the Forge by hand`);
+          throw new Error(`${COMMAND}: profile ${q} selects recipe ${name} (which names ${X}) through ${slotLabel(sel.slot)} — promote cannot repoint a recipe a block selects by editing a recipes list; edit the Forge by hand`);
         }
         throw new Error(`${COMMAND}: profile ${q} reaches recipe ${name} (which names ${X}) through ${chainTo(forgeFor(forge, q), eff.recipes, name)} — promote would have to copy that chain; edit the Forge by hand`);
       }
