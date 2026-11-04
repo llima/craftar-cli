@@ -104,30 +104,6 @@ export function pin(ctx: RunContext, keys: Iterable<string>, map: Record<string,
   for (const k of keys) if (!ctx.pinned.has(k)) ctx.pinned.set(k, valueOf(map, k));
 }
 
-/**
- * Compute the registration and params to carry from a hook base into a variant.
- * Returns the base's registration and only the params entries the registration cites (spec 43 §7.2 row 10).
- * For a non-hook or a hook without registration, returns empty result.
- */
-export function registrationCarry(meta: Ingredient): {
-  registration?: unknown[];
-  registrationParams?: Record<string, IngredientParamDecl>;
-} {
-  if (meta.type !== "hook") return {};
-  const registration = meta.registration;
-  if (!registration) return {};
-  const citations = registrationCitations(meta);
-  if (!citations.length) return { registration };
-  const citedDeclared = citations.filter((c) => c.declared).map((c) => c.key);
-  if (!citedDeclared.length) return { registration };
-  const declared = meta.params ?? {};
-  const registrationParams: Record<string, IngredientParamDecl> = {};
-  for (const k of citedDeclared) {
-    if (Object.hasOwn(declared, k)) registrationParams[k] = declared[k];
-  }
-  return { registration, registrationParams: Object.keys(registrationParams).length ? registrationParams : undefined };
-}
-
 /** True for script and hook types (E34.2f). */
 export function isScriptOrHook(meta: { type: string }): boolean {
   return meta.type === "script" || meta.type === "hook";

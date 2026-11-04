@@ -13,12 +13,12 @@ import { copyForgeForProof, removeProofCopy, scratchWriteRefusal, exists, gitUnh
 import { writeForgeFile } from "../core/forge-write.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, isUtf16Text } from "../core/secrets.js";
-import { registrationCitations, rendersServers, serverCitations, serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
+import { rendersServers, serverCitations, serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
 import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
 import { writtenSections } from "../core/section-files.js";
-import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileWrittenSchema, RecipeWrittenSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type ProfileSections, type Sections, type Target, type IngredientParamDecl } from "../schema/index.js";
+import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileWrittenSchema, RecipeWrittenSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type ProfileSections, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, recipeOrder, resolve, sectionKey, type Resolution } from "../core/resolve.js";
 import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE } from "../core/rules-index.js";
@@ -1574,7 +1574,6 @@ async function writeIngredient(
       return ref;
     } else {
       why = d.why;
-      // authEnv/registration/registrationParams are now read directly in the variant creation section via carryInto()
     }
     const as = meta.name;
     name = `${meta.name}--${profile}`;

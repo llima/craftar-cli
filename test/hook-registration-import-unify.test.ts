@@ -843,7 +843,7 @@ describe("import — literal path carries base registration (Task 13)", () => {
     // Result: decide() returns { kind: "literal", warn: "... compared literally" },
     //         fingerprint differs, so a new variant is created.
     // BUG: the variant was created without registration or params.
-    // FIX: read base's ingredient.yaml and call registrationCarry().
+    // FIX: read base's ingredient.yaml and carry from it (carryInto).
 
     const root = await tmpDir("craftar-import-literal-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
