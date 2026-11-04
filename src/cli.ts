@@ -138,7 +138,9 @@ program
   )
   .option(
     "--prefer-kiro <rule,…>",
-    "take the named rules from .kiro/steering/<name>.md instead of .claude/rules/<name>.md — each proved to render back to that steering file's body; refused for a name that is not a rule, has no steering file, or whose steering does not render back",
+    "take the named rules from .kiro/steering/<name>.md instead of .claude/rules/<name>.md — each proved to render back to that steering file's body; refused for a name that is not a rule, has no steering file, or whose steering does not render back (repeatable)",
+    collect,
+    [],
   )
   .option(
     "--local <mode>",
@@ -154,7 +156,8 @@ program
     await assertNotCacheTree(path.resolve(o.forge), craftarHome()).catch((e) => fail(e instanceof Error ? e.message : String(e)));
     // Spec 29 §4.2: the report's path is refused before the import reads anything, so a refusal leaves the Forge untouched.
     // Spec 29 §4.3: PK5, before the workspace is read.
-    const preferKiro = o.preferKiro === undefined ? undefined : parsePreferKiro(o.preferKiro);
+    // E17.1: every --prefer-kiro given, joined, so a name in two flags is PK5's as within one.
+    const preferKiro = o.preferKiro === undefined || o.preferKiro.length === 0 ? undefined : parsePreferKiro((o.preferKiro as string[]).join(","));
     const reportAbs = o.report === undefined ? null : await gateOutsideForge(o.report, o.forge, REPORT_GATE);
     const r = await importClaudeCode({ workspaceRoot: o.workspace, forgeRoot: o.forge, profileName: o.profile, writeWorkspaceConfig: o.writeConfig, report: reportAbs !== null, preferKiro, local: o.local });
     console.log(pc.bold(`Imported ${path.resolve(o.workspace)} → ${path.resolve(o.forge)} as profile "${r.profile}"`));

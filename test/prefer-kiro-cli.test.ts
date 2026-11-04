@@ -81,6 +81,31 @@ describe("import --prefer-kiro — the command", () => {
     expect(await exists(path.dirname(s.out))).toBe(false);
   });
 
+  it("4b. (E17.1) a repeated --prefer-kiro takes every value", async () => {
+    const s = await setup();
+    const r = run(s, ["--prefer-kiro", "workflow", "--prefer-kiro", "style"]);
+    expect(r.code, r.stderr).toBe(0);
+    const out = plain(s, r.stdout);
+    expect(out).toContain(PREFERRED);
+    expect(out).toContain("  prefer-kiro rule/style — source .kiro/steering/style.md");
+  });
+
+  it("4c. (E17.1) a name given in two --prefer-kiro flags is refused as within one, before anything is read", async () => {
+    const s = await setup();
+    const r = run(s, ["--prefer-kiro", "workflow", "--prefer-kiro", "workflow"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe("error: --prefer-kiro: workflow is named twice\n");
+    expect(await exists(s.forge)).toBe(false);
+  });
+
+  it("4d. (control) one quoted value with a space after the comma takes both names", async () => {
+    const s = await setup();
+    const r = run(s, ["--prefer-kiro", "workflow, style"]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(plain(s, r.stdout)).toContain("  prefer-kiro rule/style — source .kiro/steering/style.md");
+    expect(plain(s, r.stdout)).toContain(PREFERRED);
+  });
+
   it("5. PK1 through the command: the message, exit 1, the Forge absent", async () => {
     const s = await setup();
     const r = run(s, ["--prefer-kiro", "team"]);
@@ -103,6 +128,7 @@ describe("import --prefer-kiro — the command", () => {
     const help = runCli(["import", "--help"]).stdout.replace(/\s+/g, " ");
     expect(help).toContain("--prefer-kiro <rule,…>");
     expect(help).toContain("each proved to render back to that steering file");
+    expect(help).toContain("(repeatable)");
   });
 
   it("8. --report: a rule just taken from Kiro whose steering file still collides keeps its row, without the `steering bigger than the rule` note (spec 29 §19.6)", async () => {
