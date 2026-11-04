@@ -30,9 +30,9 @@ import { forgeFor, overriddenBase, readsLocalOverride, shownIngredientRef, shown
 import { familyOf } from "./profile-extends.js";
 import { RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
 
-export const WORKSPACE_FILE = "craftar.yaml";
+import { LOCK_FILE, WORKSPACE_FILE } from "./workspace-files.js";
+export { LOCK_FILE, WORKSPACE_FILE };
 export const LOCAL_FILE = "craftar.local.yaml";
-export const LOCK_FILE = "craftar.lock";
 
 export { AGENTS_MD_BUDGET_KEY };
 /** The default AGENTS.md size budget in bytes. */

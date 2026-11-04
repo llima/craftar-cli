@@ -10,6 +10,7 @@ import { gitIsRepo, gitRead } from "./forge.js";
 import { execProgram, openProgram, streamProgram, type OpenedProgram } from "./proc.js";
 import { findSecrets } from "./secrets.js";
 import { climbsOut } from "./text.js";
+import { LOCK_FILE, WORKSPACE_FILE } from "./workspace-files.js";
 
 export interface WorkspaceSource {
   kind: "disk" | "git";
@@ -168,8 +169,8 @@ export async function gitSource(root: string, spec: GitSourceSpec): Promise<GitS
   };
 }
 
-/** `craftar.yaml` and `craftar.lock` (sync.ts's `WORKSPACE_FILE` and `LOCK_FILE`, spelled here: sync.ts imports this module). */
-const HELD_AS_FILES = new Set(["craftar.yaml", "craftar.lock"]);
+/** The configuration and the lock, which a git source reads only as files (E36.13). */
+const HELD_AS_FILES = new Set([WORKSPACE_FILE, LOCK_FILE]);
 
 async function resolveCommit(base: string[], rev: string, endOfOptions: boolean): Promise<string> {
   const shown = shownRevision(rev);
