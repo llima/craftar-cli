@@ -1808,25 +1808,9 @@ async function writeIngredient(
     run.literal.push({ ref: `${meta.type}/${name}`, source, meta: sourceMeta, files, lineOffset: run.lineOffset });
   }
 
-  // Build the YAML preserving key order. For MCP, authEnv sits immediately before server.
-  // For hooks, registration sits after files (spec 43 §7.2 row 10).
-  const yamlMeta: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(meta)) {
-    if (k === "authEnv") continue;
-    if (k === "registration") continue;
-    // authEnv is emitted with server because only an mcp metadata can hold it (the schema refuses it elsewhere).
-    if (k === "server" && "authEnv" in meta) yamlMeta.authEnv = meta.authEnv;
-    // registration is emitted after files for hooks (spec 43 §7.2 row 10).
-    if (k === "files" && meta.type === "hook" && "registration" in meta) {
-      yamlMeta[k] = v;
-      yamlMeta.registration = meta.registration;
-      continue;
-    }
-    yamlMeta[k] = v;
-  }
   // Every path that reuses an ingredient has returned: what reaches here is created, or rewrites a variant or a local whole.
   stage.rewritesWhole(dir);
-  stage.write(path.join(dir, "ingredient.yaml"), YAML.stringify(yamlMeta, { lineWidth: 0 }));
+  stage.write(path.join(dir, "ingredient.yaml"), ingredientYamlText(meta));
   for (const [rel, content] of Object.entries(files)) stage.write(path.join(dir, rel), content);
 
   // For script and hook, warn about leftover files in the directory
@@ -2652,3 +2636,25 @@ async function indexHolderInQueue(
   return null;
 }
 
+/**
+ * The one serialization of an `ingredient.yaml` a Forge writer writes whole (E9.9: import and drift promote): the
+ * metadata's own key order, except that an MCP ingredient's `authEnv` sits immediately before `server` and a hook's
+ * `registration` right after `files` (spec 43 §7.2 row 10).
+ */
+export function ingredientYamlText(meta: Ingredient): string {
+  const yamlMeta: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(meta)) {
+    if (k === "authEnv") continue;
+    if (k === "registration") continue;
+    // authEnv is emitted with server because only an mcp metadata can hold it (the schema refuses it elsewhere).
+    if (k === "server" && "authEnv" in meta) yamlMeta.authEnv = meta.authEnv;
+    // registration is emitted after files for hooks (spec 43 §7.2 row 10).
+    if (k === "files" && meta.type === "hook" && "registration" in meta) {
+      yamlMeta[k] = v;
+      yamlMeta.registration = meta.registration;
+      continue;
+    }
+    yamlMeta[k] = v;
+  }
+  return YAML.stringify(yamlMeta, { lineWidth: 0 });
+}

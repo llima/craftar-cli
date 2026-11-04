@@ -64,6 +64,7 @@ import {
   ForgeStage,
   mergeEmitted,
   type EmittedSource,
+  ingredientYamlText,
 } from "./claude-code.js";
 import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
 import { providedRefs } from "./provided.js";
@@ -1121,7 +1122,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     }
   }
 
-  const ingredientYaml = YAML.stringify(variantMeta, { lineWidth: 0 });
+  const ingredientYaml = ingredientYamlText(variantMeta as Ingredient);
   const ingredientYamlPath = path.join(variantDir, "ingredient.yaml");
 
   // For variant-updated, only stage ingredient.yaml if it changed
