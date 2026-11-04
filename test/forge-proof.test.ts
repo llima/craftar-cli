@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertNoLinkOnPath, copyForgeForProof, listFiles, removeProofCopy } from "../src/core/forge.js";
+import { assertNoLinkOnPath, copyForgeForProof, listFiles, removeProofCopy, scratchWriteRefusal } from "../src/core/forge.js";
 import { tmpDir, writeFiles } from "./helpers/forge.js";
 
 // The scratch copy a Forge proof runs on, and the link check its writes share — `drift promote` (spec 30) and
@@ -123,5 +123,31 @@ describe("copyForgeForProof reads the root's names as loadForge finds them (E9.2
     const run = copyForgeForProof(s.forge, path.join(s.root, "scratch"));
     if (folds) await expect(run).rejects.toThrow("Recipes is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory");
     else await expect(run).resolves.toBeUndefined();
+  });
+});
+
+describe("scratchWriteRefusal speaks of the Forge only for a mode refusal", () => {
+  it("says the Forge cannot be written for EACCES or EPERM, and the temporary directory for anything else", () => {
+    const scratch = path.join(path.sep, "tmp", "craftar-x");
+    const at = path.join(scratch, "recipes", "base.yaml");
+    const err = (code: string) => scratchWriteRefusal("unify", scratch, Object.assign(new Error("x"), { code, path: at })).message;
+    expect(err("EACCES")).toBe("unify: recipes/base.yaml could not be written on the scratch copy the edit is proved on (EACCES) — it cannot be written in the Forge either; nothing written");
+    expect(err("EPERM")).toContain("it cannot be written in the Forge either");
+    for (const code of ["ENOSPC", "EROFS", "EBUSY"]) {
+      expect(err(code)).toBe(`unify: the scratch copy in the temporary directory refused a write (${code}) — nothing written; free or fix the temporary directory and run again`);
+    }
+  });
+});
+
+describe.skipIf(process.platform === "win32" || rootUser)("copyForgeForProof gives the copy's root the Forge root's owner permissions", () => {
+  it("a Forge root its owner cannot write into gives a copy root that refuses a write too, still private", async () => {
+    const s = await scenario();
+    await fs.chmod(s.forge, 0o555);
+    cleanups.push(() => fs.chmod(s.forge, 0o755));
+    const scratch = path.join(s.root, "scratch");
+    await copyForgeForProof(s.forge, scratch);
+    expect((await fs.stat(scratch)).mode & 0o777).toBe(0o500);
+    await removeProofCopy(scratch);
+    await expect(fs.lstat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

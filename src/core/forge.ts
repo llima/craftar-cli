@@ -741,6 +741,9 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
   // Create the scratch root
   await fs.mkdir(scratchDir, { recursive: true });
   await walk("");
+  // The root too carries the Forge root's owner permissions (a Forge root it cannot write into, say), never more than
+  // the owner's: the copy stays private to this user.
+  if (process.platform !== "win32") await fs.chmod(scratchDir, (await fs.stat(forgeDir)).mode & 0o700);
 }
 
 /**
@@ -753,8 +756,13 @@ export function scratchWriteRefusal(command: string, scratch: string, e: unknown
   const at = raw ? path.join(path.dirname(raw), path.basename(raw).replace(/^\.(.+)\.craftar-\d+-[0-9a-f]+\.tmp$/, "$1")) : raw;
   const code = (e as NodeJS.ErrnoException).code ?? "the write failed";
   const shown = at ? path.relative(scratch, at).split(path.sep).join("/") : "a file";
+  // Only a refusal the copied modes explain says anything of the Forge; a full or read-only temporary directory, or a
+  // scanner holding a file there, is the temporary directory's.
+  if (!MODE_REFUSALS.has(code)) return new Error(`${command}: the scratch copy in the temporary directory refused a write (${code}) — nothing written; free or fix the temporary directory and run again`);
   return new Error(`${command}: ${shown} could not be written on the scratch copy the ${proved} is proved on (${code}) — it cannot be written in the Forge either; nothing written`);
 }
+/** The codes a write gets from a file's or a directory's mode — what the copy carries from the Forge. */
+const MODE_REFUSALS = new Set(["EACCES", "EPERM"]);
 
 /**
  * A message from a load or a plan of the scratch copy names the copy; this puts the Forge's root in its place, whichever
@@ -791,7 +799,8 @@ export async function removeProofCopy(dir: string): Promise<void> {
     }
     await writable(dir);
   }
-  await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
+  // Windows can hold a file a git child just read (EBUSY): retry as the suite's removeWithRetry does.
+  await fs.rm(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 200 });
 }
 
 /**
