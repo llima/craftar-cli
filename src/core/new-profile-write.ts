@@ -9,6 +9,7 @@ import path from "node:path";
 import { copyForgeForProof, loadForge, proofPathsBack, removeProofCopy, scratchWriteRefusal } from "./forge.js";
 import { planInit, type InitOptions, type InitPlan } from "./init.js";
 import { errorText } from "./schema-fault.js";
+import { p7Exists } from "./new-profile-gate.js";
 import { note, type WriteJournal } from "./unify.js";
 
 export { type WriteJournal };
@@ -67,7 +68,7 @@ export async function proveNewProfileLoads(forgeRoot: string, init: InitPlan): P
       await fs.writeFile(path.join(scratch, "profiles", name, "profile.yaml"), init.newProfile.text, { flag: "wx" });
     } catch (e) {
       // The profile appeared between the gate and the copy: P7's words, as writeNewProfile says it.
-      if ((e as NodeJS.ErrnoException).code === "EEXIST") throw new NewProfileRaceLost(`profile ${name} already exists in the Forge — use --profile ${name}`);
+      if ((e as NodeJS.ErrnoException).code === "EEXIST") throw new NewProfileRaceLost(p7Exists(name));
       throw scratchWriteRefusal("init", scratch, e);
     }
     const back = await proofPathsBack(scratch, forgeRoot);
@@ -125,7 +126,7 @@ export async function writeNewProfile(
       await fs.mkdir(profileDir);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new NewProfileRaceLost(`profile ${name} already exists in the Forge — use --profile ${name}`);
+        throw new NewProfileRaceLost(p7Exists(name));
       }
       throw e;
     }
@@ -137,7 +138,7 @@ export async function writeNewProfile(
       await fs.writeFile(profileFile, init.newProfile.text, { flag: "wx" });
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new NewProfileRaceLost(`profile ${name} already exists in the Forge — use --profile ${name}`);
+        throw new NewProfileRaceLost(p7Exists(name));
       }
       throw e;
     }
