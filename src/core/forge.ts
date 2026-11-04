@@ -648,9 +648,12 @@ const NON_REGULAR_FILE_REFUSAL = (rel: string, command: string) =>
 const ROOT_DIRS = new Set(["ingredients", "recipes", "profiles"]);
 
 /**
- * Copy the Forge to a scratch directory without `.git`, for the proof.
- * - A regular file: copied.
- * - A directory: recursed.
+ * Copy what `loadForge` reads to a scratch directory, for the proof: `craftar.forge.yaml` and the `ingredients`,
+ * `recipes` and `profiles` trees — nothing else at the root (`.git`, `node_modules`, loose files), since nothing the
+ * proof plans reads it. A file git ignores inside those trees is copied: the real Forge's load reads it too.
+ * - A regular file: copied (its mode with it).
+ * - A directory: recursed, then given the source directory's mode (off win32), so a write the real Forge would refuse
+ *   for a directory's permissions is refused on the copy first; `removeProofCopy` gives the write permission back.
  * - A symbolic link to a FILE whose real path is inside the Forge: copied as a regular file (dereferenced).
  * - A symbolic link to a DIRECTORY (inside or outside): skipped — except a root directory link
  *   (ingredients, recipes, profiles), which is refused because loadForge follows it and the scratch would not.
@@ -671,8 +674,8 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
       const entSrc = path.join(src, ent.name);
       const entDest = path.join(dest, ent.name);
 
-      // Skip .git at the top level
-      if (rel === "" && ent.name === ".git") continue;
+      // At the root, only what loadForge reads.
+      if (rel === "" && ent.name !== FORGE_MANIFEST && !ROOT_DIRS.has(ent.name)) continue;
 
       if (ent.isSymbolicLink()) {
         // First, check if we can resolve the symlink at all
@@ -717,6 +720,8 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
       } else if (ent.isDirectory()) {
         await fs.mkdir(entDest, { recursive: true });
         await walk(entRel);
+        // After the children, so the copy itself is not refused by a directory the Forge cannot write.
+        if (process.platform !== "win32") await fs.chmod(entDest, (await fs.stat(entSrc)).mode & 0o7777);
       } else if (ent.isFile()) {
         // Regular file
         await fs.copyFile(entSrc, entDest);
@@ -730,6 +735,46 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
   // Create the scratch root
   await fs.mkdir(scratchDir, { recursive: true });
   await walk("");
+}
+
+/**
+ * The refusal for a write the scratch copy refused: the copy carries the Forge's file and directory modes, so what
+ * cannot be written there cannot be written in the Forge either. Names the path relative to the copy, never the copy.
+ */
+export function scratchWriteRefusal(command: string, scratch: string, e: unknown): Error {
+  const at = (e as NodeJS.ErrnoException).path;
+  const code = (e as NodeJS.ErrnoException).code ?? "the write failed";
+  const shown = at ? path.relative(scratch, at).split(path.sep).join("/") : "a file";
+  return new Error(`${command}: ${shown} could not be written on the scratch copy the edit is proved on (${code}) — it cannot be written in the Forge either; nothing written`);
+}
+
+/**
+ * Remove a scratch directory `copyForgeForProof` filled. The copy carries the Forge's directory modes, so a directory
+ * without the write permission is given it back first (off win32) — otherwise its entries could not be removed and the
+ * copy would be left behind. Never throws for a directory already gone.
+ */
+export async function removeProofCopy(dir: string): Promise<void> {
+  if (process.platform !== "win32") {
+    async function writable(d: string): Promise<void> {
+      let st;
+      try {
+        st = await fs.lstat(d);
+      } catch {
+        return;
+      }
+      if (!st.isDirectory()) return;
+      if ((st.mode & 0o700) !== 0o700) await fs.chmod(d, (st.mode & 0o7777) | 0o700).catch(() => undefined);
+      let ents;
+      try {
+        ents = await fs.readdir(d, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const ent of ents) if (ent.isDirectory()) await writable(path.join(d, ent.name));
+    }
+    await writable(dir);
+  }
+  await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
 }
 
 /**

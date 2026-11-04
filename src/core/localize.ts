@@ -5,7 +5,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { FORGE_SCHEMA_LOCAL_OVERRIDE, FORGE_SCHEMA_PROFILE_LOCAL, RecipeWrittenSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { readForgeFile, readForgeText } from "./contain.js";
-import { assertNoLinkIn, assertNoLinkOnPath, copyForgeForProof, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
+import { assertNoLinkIn, assertNoLinkOnPath, copyForgeForProof, removeProofCopy, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
 import { ingredientText, occupied, sourceMode, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
 import { impactOf, planAll, type ForgeWorkspace, type Planned } from "./impact.js";
 import { recipesOrWritten } from "./integrations.js";
@@ -409,7 +409,7 @@ export async function proveMove(forge: Forge, move: ForgeMove, registered: Forge
       if (r.state !== "no-effect") throw notSame(command, where, r.files.join(", "));
     }
   } finally {
-    await fs.rm(scratch, { recursive: true, force: true });
+    await removeProofCopy(scratch);
   }
   return warnings;
 }

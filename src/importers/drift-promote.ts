@@ -25,6 +25,8 @@ import {
   type UnheldPath,
   assertNoLinkOnPath,
   copyForgeForProof,
+  removeProofCopy,
+  scratchWriteRefusal,
 } from "../core/forge.js";
 import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type OverrideConflict, type UnsetParam, type Plan, type Workspace } from "../core/sync.js";
 import { driftList, metadataEdits, METADATA_PARAM_REASON, REWORDED_REASON, INDEXED_REASON, LIST_PARAM_REASON, unmanaged } from "../core/drift.js";
@@ -274,7 +276,11 @@ async function provePromote(opts: {
 
   // Copy Forge without .git, with file symlinks dereferenced and non-regular files refused
   await copyForgeForProof(forgeDir, scratchDir);
-  await stage.flushTo(scratchDir);
+  try {
+    await stage.flushTo(scratchDir);
+  } catch (e) {
+    throw scratchWriteRefusal("drift promote", scratchDir, e);
+  }
 
   const scratchForge = await loadForge(scratchDir);
   const wsScratch = await workspaceAgainst(root, scratchForge);
@@ -1050,7 +1056,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         isUrlForge: forgeKind === "url",
       };
     } finally {
-      await fs.rm(scratchDir, { recursive: true, force: true });
+      await removeProofCopy(scratchDir);
     }
   }
 
@@ -1413,7 +1419,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       isUrlForge: forgeKind === "url",
     };
   } finally {
-    await fs.rm(scratchDir, { recursive: true, force: true });
+    await removeProofCopy(scratchDir);
   }
 }
 

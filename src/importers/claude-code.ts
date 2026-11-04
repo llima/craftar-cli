@@ -9,7 +9,7 @@ import { readWorkspaceConfig } from "../core/sync.js";
 import { containRoot, escapeDestinationLine, escapeFileLine, escapeOf, escapeSourceLine, escapingPaths, readForgeFile, readForgeText, type ContainRoot, type Escape, type EscapingPath } from "../core/contain.js";
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
-import { copyForgeForProof, exists, gitUnheld, listFiles, loadForge, parseYaml, typeFolder, unheldMessage, FORGE_MANIFEST, readIngredientText, type Forge } from "../core/forge.js";
+import { copyForgeForProof, removeProofCopy, scratchWriteRefusal, exists, gitUnheld, listFiles, loadForge, parseYaml, typeFolder, unheldMessage, FORGE_MANIFEST, readIngredientText, type Forge } from "../core/forge.js";
 import { writeForgeFile } from "../core/forge-write.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, isUtf16Text } from "../core/secrets.js";
@@ -196,7 +196,11 @@ async function checkStagedLocals(opts: ImportOptions, stage: ForgeStage, report:
   const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-import-proof-"));
   try {
     await copyForgeForProof(root, scratch, "import");
-    await stage.flushTo(scratch);
+    try {
+      await stage.flushTo(scratch);
+    } catch (e) {
+      throw scratchWriteRefusal("import", scratch, e);
+    }
     let staged: Forge;
     try {
       staged = await loadForge(scratch);
@@ -243,7 +247,7 @@ async function checkStagedLocals(opts: ImportOptions, stage: ForgeStage, report:
       }
     }
   } finally {
-    await fs.rm(scratch, { recursive: true, force: true });
+    await removeProofCopy(scratch);
   }
 }
 

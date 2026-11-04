@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { FORGE_SCHEMA_SECTION_FILES, ProfileWrittenSchema, windowsShaped, type ProfileWritten } from "../schema/index.js";
-import { assertNoLinkOnPath, copyForgeForProof, loadForge, parseYaml, type Forge } from "./forge.js";
+import { assertNoLinkOnPath, copyForgeForProof, removeProofCopy, loadForge, parseYaml, type Forge } from "./forge.js";
 import { writeForgeFile } from "./forge-write.js";
 import { impactOf, planAll, type ForgeWorkspace, type Planned } from "./impact.js";
 import { readsSectionFiles } from "./section-files.js";
@@ -206,7 +206,7 @@ export async function proveExtract(forge: Forge, plan: ExtractPlan, registered: 
     }
     return { warnings, before };
   } finally {
-    await fs.rm(scratch, { recursive: true, force: true, maxRetries: 3 });
+    await removeProofCopy(scratch);
   }
 }
 

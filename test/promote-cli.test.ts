@@ -317,27 +317,23 @@ describe("forge promote — the command", () => {
   });
 
   // A directory's mode does not stop a write on Windows, and root ignores it: the scenario cannot fail there.
-  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("24. a write that fails midway names the paths already written and the git recovery", async () => {
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("24. a directory the Forge cannot write is refused on the scratch copy, before any write (E10.6b)", async () => {
+    // Until E10.6b the copy did not carry a directory's mode, so this run wrote half the edit and failed late; the
+    // copy now carries it, the write is refused there, and the Forge is untouched.
     const s = await scenario();
-    // A directory nothing can be created in: the proof's scratch copy does not carry the mode, the Forge does.
+    const tmp = path.join(s.root, "tmp");
+    await fs.mkdir(tmp);
     const locked = path.join(s.forge, "recipes");
     cleanups.push(() => fs.chmod(locked, 0o755).catch(() => undefined));
     await fs.chmod(locked, 0o555);
-    const r = s.promote(["--no-impact"]);
-    expect(r.code).toBe(1);
-    expect(r.stdout).toBe("");
-    expect(r.stderr).toContain(`forge promote had already started changing the Forge (${s.forge}) when this failed:`);
-    expect(r.stderr).toMatch(/git -C \S+ checkout -- ingredients\/rules\/workflow\/rule\.md ingredients\/rules\/workflow\/ingredient\.yaml\n/);
-    expect(r.stderr).toMatch(/git -C \S+ clean -f -- ingredients\/rules\/workflow--globex\/rule\.md .*ingredients\/rules\/workflow--initech\/ingredient\.yaml recipes\/base--globex\.yaml\n/);
-    // Nothing after the failed write was touched: no recipe, no profile — and the removals come last, so the variant is still there.
+    const before = await snapshot(s.forge);
+    const err = await refused(s, s.promote(["--no-impact"], { TMPDIR: tmp }), before);
+    expect(err.trim()).toMatch(/^error: forge promote: recipes\/[^ ]+ could not be written on the scratch copy the edit is proved on \((EACCES|EPERM)\) — it cannot be written in the Forge either; nothing written$/);
+    expect(err).not.toContain(tmp);
+    // The copy is removed, its read-only directory included.
+    expect((await fs.readdir(tmp)).filter((n) => n.startsWith("craftar-"))).toEqual([]);
     await fs.chmod(locked, 0o755);
-    expect(git(s.forge, "status", "--porcelain", "recipes", "profiles", "ingredients/rules/workflow--acme")).toBe("");
-    // The recovery, run as printed, gives back a Forge the same command accepts — and then writes.
-    for (const line of r.stderr.split("\n").filter((l) => l.startsWith("  git -C "))) execSync(line.trim(), { env: gitEnv() });
     expect(git(s.forge, "status", "--porcelain")).toBe("");
-    const again = s.promote(["--no-impact"]);
-    expect(again.code, again.stderr).toBe(0);
-    expect(again.stdout).toBe(["craftar forge promote rule/workflow ← acme", ...LINES, NEXT, ""].join("\n"));
   });
 
   it("25. --help names the argument, every option and that it writes to the Forge", () => {
@@ -528,3 +524,4 @@ describe("forge promote — the command", () => {
     });
   });
 });
+

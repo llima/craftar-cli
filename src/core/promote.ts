@@ -7,7 +7,7 @@ import { forgeReader, readForgeFile, readForgeText } from "./contain.js";
 import { ProfileWrittenSchema, RecipeWrittenSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { fingerprintDir } from "./fingerprint.js";
 import { ingredientText, occupied, sourceMode, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
-import { assertNoDirLinkIn, assertNoLinkOnPath, copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
+import { assertNoDirLinkIn, assertNoLinkOnPath, copyForgeForProof, removeProofCopy, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
 import { effectiveProfile } from "./integrations.js";
 import { familyOf } from "./profile-extends.js";
 import { findProfileFile } from "./param-writes.js";
@@ -372,7 +372,7 @@ export async function proveBasePromotion(forge: Forge, promotion: BasePromotion)
       }
     }
   } finally {
-    await fs.rm(scratch, { recursive: true, force: true });
+    await removeProofCopy(scratch);
   }
 }
 
