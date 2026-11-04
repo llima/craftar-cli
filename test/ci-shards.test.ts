@@ -66,8 +66,11 @@ describe("vitest limits", () => {
 
   it("keeps the per-test limit and the worker cap", () => {
     expect(config.test?.testTimeout).toBe(win ? 180000 : 30000);
-    expect(config.test?.maxWorkers).toBe(6);
+    expect(config.test?.maxWorkers).toBe(win ? 4 : 6);
     expect(WIN32_TEST_TIMEOUT).toBe(180000);
+    // Verify the config source has the platform-aware maxWorkers
+    const vitestConfig = readFileSync(path.join(REPO, "vitest.config.ts"), "utf8");
+    expect(vitestConfig).toContain('maxWorkers: process.platform === "win32" ? 4 : 6');
   });
 
   it("keeps runCli's spawn limit under the per-test limit on each platform", () => {
