@@ -9,7 +9,8 @@ import { readWorkspaceConfig } from "../core/sync.js";
 import { containRoot, escapeDestinationLine, escapeFileLine, escapeOf, escapeSourceLine, escapingPaths, readForgeFile, readForgeText, type ContainRoot, type Escape, type EscapingPath } from "../core/contain.js";
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
-import { copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, FORGE_MANIFEST, readIngredientText, type Forge } from "../core/forge.js";
+import { copyForgeForProof, exists, gitUnheld, listFiles, loadForge, parseYaml, typeFolder, unheldMessage, FORGE_MANIFEST, readIngredientText, type Forge } from "../core/forge.js";
+import { writeForgeFile } from "../core/forge-write.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, isUtf16Text } from "../core/secrets.js";
 import { registrationCitations, rendersServers, serverCitations, serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
@@ -135,6 +136,14 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
   try {
     planned = await planImport(opts, stage);
     await checkStagedLocals(opts, stage, planned.report, planned.mcpOrder);
+    // Decision 12 (tech-debt L2a, E1.2): a variant, a local or a section value file rewritten whole must be held by git,
+    // since git is the only undo of an uncommitted edit there. A path the import only creates needs nothing, so a first
+    // import into a new Forge — a repository or not — is not gated.
+    const overwritten = await stage.overwritten();
+    if (overwritten.length) {
+      const unheld = await gitUnheld(stage.root, overwritten);
+      if (unheld.length) throw new Error(unheldMessage("import", stage.root, unheld));
+    }
   } catch (e) {
     throw new Error(`${e instanceof Error ? e.message : String(e)}\nThe Forge was left untouched.`, { cause: e });
   }
@@ -941,6 +950,40 @@ export class ForgeStage {
     this.files.set(abs, content);
   }
 
+  /** Paths (a file, or a directory and everything under it) this run rewrites whole (tech-debt L2a, E1.2, decision 12). */
+  private readonly whole = new Set<string>();
+
+  /**
+   * Mark `abs` — an ingredient's directory a variant or a local is rewritten into, or a file written whole — so that
+   * every staged path under it that exists on disk must be held by git before the first write (`overwritten`).
+   */
+  rewritesWhole(abs: string): void {
+    this.whole.add(abs);
+  }
+
+  /**
+   * The staged paths under a path marked by `rewritesWhole` whose file on disk holds other bytes than the staged ones,
+   * sorted: what the import overwrites whole. A file it would write back unchanged loses nothing and is not named.
+   */
+  async overwritten(): Promise<string[]> {
+    const under = (abs: string) => [...this.whole].some((w) => abs === w || abs.startsWith(w + path.sep));
+    const out: string[] = [];
+    for (const [abs, content] of this.files) {
+      if (!under(abs) || !(await exists(abs))) continue;
+      const staged = Buffer.isBuffer(content) ? content : Buffer.from(content, "utf8");
+      let disk: Buffer | null = null;
+      try {
+        // Through the Forge's reader (spec 48): a path that leaves the Forge or is not a regular file is not read here,
+        // and is named, so git decides — `flush()` refuses an escape afterwards anyway.
+        disk = await readForgeFile(await this.forgeRoot(), abs);
+      } catch {
+        disk = null;
+      }
+      if (disk === null || !disk.equals(staged)) out.push(abs);
+    }
+    return out.sort();
+  }
+
   async exists(abs: string): Promise<boolean> {
     return this.files.has(abs) || (await exists(abs));
   }
@@ -980,8 +1023,7 @@ export class ForgeStage {
     try {
       await fs.mkdir(this.root, { recursive: true });
       for (const [abs, content] of this.files) {
-        await fs.mkdir(path.dirname(abs), { recursive: true });
-        await fs.writeFile(abs, content);
+        await writeForgeFile(abs, content);
         written.push(path.relative(this.root, abs).split(path.sep).join("/"));
       }
     } catch (e) {
@@ -1017,8 +1059,7 @@ export class ForgeStage {
     for (const { rel, content } of entries) {
       const targetAbs = path.join(root, rel);
       await note(opts?.journal, targetAbs);
-      await fs.mkdir(path.dirname(targetAbs), { recursive: true });
-      await fs.writeFile(targetAbs, content);
+      await writeForgeFile(targetAbs, content);
     }
   }
 }
@@ -1779,6 +1820,8 @@ async function writeIngredient(
     }
     yamlMeta[k] = v;
   }
+  // Every path that reuses an ingredient has returned: what reaches here is created, or rewrites a variant or a local whole.
+  stage.rewritesWhole(dir);
   stage.write(path.join(dir, "ingredient.yaml"), YAML.stringify(yamlMeta, { lineWidth: 0 }));
   for (const [rel, content] of Object.entries(files)) stage.write(path.join(dir, rel), content);
 
@@ -2400,7 +2443,11 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
   for (const [key, byName] of Object.entries(sectionChange(report, ctx))) {
     for (const [n, v] of Object.entries(byName)) {
       const held = Object.hasOwn(before.sections, key) ? before.sections[key][n] : undefined;
-      if (held !== undefined && typeof held !== "string") stage.write(path.join(path.dirname(file), ...held.file.split("/")), v.replace(/\r\n?/g, "\n"));
+      if (held !== undefined && typeof held !== "string") {
+        const valueFile = path.join(path.dirname(file), ...held.file.split("/"));
+        stage.rewritesWhole(valueFile);
+        stage.write(valueFile, v.replace(/\r\n?/g, "\n"));
+      }
       else (sectionValues[key] ??= {})[n] = v;
     }
   }

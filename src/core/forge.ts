@@ -607,6 +607,14 @@ export async function gitUnheld(root: string, paths: string[]): Promise<UnheldPa
   }
 }
 
+/** The refusal of a gated Forge writer when `gitUnheld` names paths: at most ten of them, then a count. */
+export function unheldMessage(command: string, root: string, unheld: UnheldPath[]): string {
+  const SHOWN = 10;
+  const lines = unheld.slice(0, SHOWN).map((u) => `  ${u.path} is not held by git (${u.reason})`);
+  if (unheld.length > SHOWN) lines.push(`  … and ${unheld.length - SHOWN} more`);
+  return `${command} can only change files git can restore — ${unheld.length} path(s) under ${root} are not:\n${lines.join("\n")}`;
+}
+
 /** Plural folder name for an ingredient type (rules/, agents/, …). */
 export function typeFolder(type: Ingredient["type"]): string {
   return type === "mcp" ? "mcp" : `${type}s`;

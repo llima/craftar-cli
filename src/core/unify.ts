@@ -5,6 +5,7 @@ import { forgeReader, readForgeFile, readForgeText } from "./contain.js";
 import YAML from "yaml";
 import { fingerprintDir } from "./fingerprint.js";
 import { exists, listFiles, loadForge, readIngredientText, type Forge, type LoadedIngredient } from "./forge.js";
+import { writeForgeFile } from "./forge-write.js";
 import { splitLines, type Hunk } from "./diff.js";
 import { detectEol, isUtf8, withEol, type Eol } from "./text.js";
 import type { IngredientDiff } from "./variants.js";
@@ -874,8 +875,7 @@ export async function writeUnified(base: LoadedIngredient, result: UnifyResult, 
   for (const [rel, content] of Object.entries(result.write)) {
     const abs = path.join(base.dir, rel);
     await note(journal, abs);
-    await fs.mkdir(path.dirname(abs), { recursive: true });
-    await fs.writeFile(abs, content);
+    await writeForgeFile(abs, content);
   }
   for (const rel of result.remove) {
     const abs = path.join(base.dir, rel);
@@ -1092,7 +1092,7 @@ export async function rewriteRecipes(
   for (const edit of await ingredientEdits(forge, baseRef, variantRef)) {
     const content = await renderIngredientEdit(edit);
     await note(journal, edit.file);
-    await fs.writeFile(edit.file, content);
+    await writeForgeFile(edit.file, content);
     rewritten.push(edit.name);
   }
   if (rewritten.length === 0) return { rewritten, identicalToSibling: [] };

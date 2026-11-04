@@ -12,6 +12,7 @@ import { checkParamWrites } from "../src/core/param-writes.js";
 import type { Extraction } from "../src/core/extract.js";
 import { makeForge, makeWorkspace, profile, recipe, scenario, tmpDir, writeFiles, type IngredientSpec, type ForgeSpec } from "./helpers/forge.js";
 import { runCli } from "./helpers/cli.js";
+import { holdForge } from "./helpers/remote.js";
 
 // Spec 43 §7.2 rows 7–11, §8: import, unify, promote carry the registration.
 
@@ -202,6 +203,7 @@ describe("import — hook with registration (spec 43 §7.2 rows 7–11)", () => 
     });
 
     // Import
+    holdForge(forgeDir); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const r = await importInto(forgeDir, wsDir, "acme");
 
     // Should still be a variant
@@ -262,6 +264,7 @@ describe("import — hook with registration (spec 43 §7.2 rows 7–11)", () => 
     });
 
     // Import (rewrites the existing variant)
+    holdForge(forgeDir); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const r = await importInto(forgeDir, wsDir, "acme");
 
     // Should still be a variant
@@ -343,6 +346,7 @@ describe("import — hook with registration (spec 43 §7.2 rows 7–11)", () => 
     });
 
     // Import (rewrites the existing variant)
+    holdForge(forgeDir); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const r = await importInto(forgeDir, wsDir, "acme");
 
     // Should still be a variant

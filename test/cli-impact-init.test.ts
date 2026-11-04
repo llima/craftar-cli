@@ -969,6 +969,24 @@ describe("cli — forge unify --prune-recipes (spec 25 §4.4)", () => {
     expect(fileUpdate.state).toBe("update");
   });
 
+  it("tech-debt L2a (E9.1): the prune's profile write replaces profile.yaml, never writing through a hard link", async () => {
+    const { root, forge, home } = await pruneFixture();
+    const ws = path.join(root, "ws");
+    await writeFiles(ws, { "craftar.yaml": `forge: ../forge\nprofile: acme\n` });
+    const env = { CRAFTAR_HOME: home };
+    expect(runCli(["sync", "--workspace", ws], { env }).code).toBe(0);
+    const profileAbs = path.join(forge, "profiles/acme/profile.yaml");
+    const outside = path.join(root, "outside-profile.yaml");
+    const original = await fs.readFile(profileAbs, "utf8");
+    await fs.writeFile(outside, original);
+    await fs.rm(profileAbs);
+    await fs.link(outside, profileAbs);
+    const j = runCli(["forge", "unify", "rule/wf", "--profile", "acme", "--take", "base", "--prune-recipes", "--forge", forge, "--json"], { env });
+    expect(j.code, j.stderr).toBe(0);
+    expect(await fs.readFile(profileAbs, "utf8")).toBe("name: acme\nrecipes:\n  - base\ntargets:\n  - claude-code\n");
+    expect(await fs.readFile(outside, "utf8")).toBe(original);
+  });
+
   it("spec 29: a registered workspace whose sync is refused does not stop the proof — it compares planned bytes", async () => {
     const root = await tmpDir("craftar-prune-refused-");
     cleanups.push(() => fs.rm(root, { recursive: true, force: true }));

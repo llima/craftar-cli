@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { IngredientSchema, RecipeWrittenSchema, WorkspaceConfigSchema, type Ingredient } from "../schema/index.js";
 import { exists, listFiles, parseYaml, type Forge } from "./forge.js";
+import { writeForgeFile } from "./forge-write.js";
 import { resolve, type Resolution } from "./resolve.js";
 import { note, type WriteJournal } from "./unify.js";
 import { editYamlText } from "./yaml-edit.js";
@@ -95,11 +96,18 @@ export function ingredientText(raw: string, label: string, meta: Ingredient, nam
   return text;
 }
 
+/** The mode a file moved or copied from `abs` takes (tech-debt L2a, E10.3): its own, read once the reader has vouched for it. */
+export async function sourceMode(abs: string): Promise<number> {
+  return (await fs.stat(abs)).mode & 0o7777;
+}
+
 /** One file a Forge edit writes; `created` when nothing is there today. */
 export interface ForgeWrite {
   abs: string;
   content: string | Buffer;
   created: boolean;
+  /** The mode the file takes (a file moved or copied takes its source's); absent, it keeps the mode of the file it replaces. */
+  mode?: number;
 }
 
 /**
@@ -110,9 +118,8 @@ export async function writeEdits(from: string, root: string, edit: { writes: For
   const at = (abs: string) => path.join(root, path.relative(from, abs));
   for (const w of edit.writes) {
     const abs = at(w.abs);
-    await fs.mkdir(path.dirname(abs), { recursive: true });
     await note(journal, abs);
-    await fs.writeFile(abs, w.content);
+    await writeForgeFile(abs, w.content, { mode: w.mode });
   }
   for (const r of edit.removes) {
     const abs = at(r);

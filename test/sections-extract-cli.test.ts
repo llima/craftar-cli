@@ -83,6 +83,20 @@ describe("craftar forge sections extract (spec 55 §5.6)", () => {
     expect(r.stdout).not.toContain("v0 v0");
   });
 
+  it("tech-debt L2a (E9.1): the profile.yaml write replaces the file, never writing through a hard link", async () => {
+    const s = await setup();
+    const profileAbs = path.join(s.forge, "profiles/acme/profile.yaml");
+    const outside = path.join(s.root, "outside-profile.yaml");
+    const original = await fs.readFile(profileAbs, "utf8");
+    await fs.writeFile(outside, original);
+    await fs.rm(profileAbs);
+    await fs.link(outside, profileAbs);
+    const r = runCli(["forge", "sections", "extract", "--profile", "acme", "--forge", s.forge, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(await fs.readFile(profileAbs, "utf8")).not.toBe(original);
+    expect(await fs.readFile(outside, "utf8")).toBe(original);
+  });
+
   it("test 18: --dry-run writes nothing, leaves no scratch copy, and fills impact", async () => {
     const s = await setup();
     const tmp = path.dirname(s.root);

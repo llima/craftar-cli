@@ -56,7 +56,8 @@ import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, metadataEdits, unmanaged, type DriftRow } from "./core/drift.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
-import { assertNoLinkOnPath, exists, gitDirty, gitIgnored, gitIsRepo, gitTracked, gitUnheld, ignoredPaths, loadForge, realpathOfNearest, cannotResolve, type UnheldPath } from "./core/forge.js";
+import { assertNoLinkOnPath, exists, gitDirty, gitIgnored, gitIsRepo, gitTracked, gitUnheld, ignoredPaths, loadForge, realpathOfNearest, cannotResolve, unheldMessage, type UnheldPath } from "./core/forge.js";
+import { writeForgeFile } from "./core/forge-write.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { applyMove, planLocalize, planShare, proveMove, type ForgeMove, type MoveCommand } from "./core/localize.js";
 import { applyExtract, DEFAULT_MIN_BYTES, EXTRACT_COMMAND, planExtract, proveExtract, type ExtractPlan } from "./core/sections-extract.js";
@@ -109,7 +110,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.59.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.60.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -124,7 +125,7 @@ const REPORT_GATE: OutputGate = { what: "report", who: "import", outside: "write
 
 program
   .command("import")
-  .description("Import an existing workspace harness into a Forge: creates or updates ingredients, recipes and a profile, reusing a templated base when it renders the workspace text or infers it into params or sections; in a Forge at schema 3 or above, what the profile's integrations block provides is left to its recipe and reported")
+  .description("Import an existing workspace harness into a Forge: creates or updates ingredients, recipes and a profile, reusing a templated base when it renders the workspace text or infers it into params or sections; in a Forge at schema 3 or above, what the profile's integrations block provides is left to its recipe and reported; a variant, a local or a section value file it rewrites must be held by git")
   .requiredOption("--from <tool>", "source tool: claude-code")
   .requiredOption("--forge <dir>", "Forge directory (created if missing)")
   .requiredOption("--profile <name>", "client profile to create or update")
@@ -2663,7 +2664,7 @@ forge
           for (const w of p.writes) {
             if (w.content !== null) {
               await note(journal, w.abs);
-              await fs.writeFile(w.abs, w.content);
+              await writeForgeFile(w.abs, w.content);
             } else {
               journal.push({ abs: w.abs, created: false });
               await fs.rm(w.abs, { force: true });
@@ -3848,13 +3849,6 @@ async function pathTaken(p: string): Promise<boolean> {
 }
 
 /** The refusal message for paths git cannot restore (Ruling 37): the command name and every unheld path. */
-function unheldMessage(command: string, root: string, unheld: UnheldPath[]): string {
-  const SHOWN = 10;
-  const lines = unheld.slice(0, SHOWN).map((u) => `  ${u.path} is not held by git (${u.reason})`);
-  if (unheld.length > SHOWN) lines.push(`  … and ${unheld.length - SHOWN} more`);
-  return `${command} can only change files git can restore — ${unheld.length} path(s) under ${root} are not:\n${lines.join("\n")}`;
-}
-
 /**
  * The message for a `forge unify` failure after writing began (Ruling 33): the original error, the
  * Forge-relative paths already touched, and the git commands that undo them — `checkout` for what

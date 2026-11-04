@@ -4,6 +4,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { FORGE_SCHEMA_SECTION_FILES, ProfileWrittenSchema, windowsShaped, type ProfileWritten } from "../schema/index.js";
 import { assertNoLinkOnPath, copyForgeForProof, loadForge, parseYaml, type Forge } from "./forge.js";
+import { writeForgeFile } from "./forge-write.js";
 import { impactOf, planAll, type ForgeWorkspace, type Planned } from "./impact.js";
 import { readsSectionFiles } from "./section-files.js";
 import { canonicalValue } from "./sections.js";
@@ -149,7 +150,7 @@ async function writeExtract(plan: ExtractPlan, root: string, journal?: WriteJour
   }
   const profileAbs = at(plan.profileAbs);
   journal?.push({ abs: profileAbs, created: false });
-  await fs.writeFile(profileAbs, plan.profileText);
+  await writeForgeFile(profileAbs, plan.profileText);
 }
 
 /**
