@@ -66,7 +66,7 @@ import {
   type EmittedSource,
   ingredientYamlText,
 } from "./claude-code.js";
-import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
+import { decide, workspaceParams, workspaceSections, carryInto, type RunContext } from "./decide.js";
 import { providedRefs } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
 import { RULE_MARKER_LINE, ruleMarker } from "../emitters/agents-md.js";
@@ -77,9 +77,8 @@ import { effectiveProfile } from "../core/integrations.js";
 import { errorText } from "../core/schema-fault.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
-import { registrationCitations } from "../core/mcp-server.js";
 import type { WriteJournal } from "../core/unify.js";
-import { stripForgeOnlyKeys, type Ingredient, type IngredientRef, type Lock, type IngredientParamDecl } from "../schema/index.js";
+import { stripForgeOnlyKeys, type Ingredient, type IngredientRef, type Lock } from "../schema/index.js";
 import { deepMerge } from "../core/merge.js";
 import type { Sections } from "../schema/index.js";
 
@@ -1077,7 +1076,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   }
 
   // Build the variant ingredient — strip params for flattened variants
-  const variantMeta: Ingredient = {
+  let variantMeta: Ingredient = {
     ...validateImported(sourceMeta),
     name: isLocal ? X.meta.name : variantName,
     ...(isLocal ? {} : { as: N }),
@@ -1087,26 +1086,13 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     },
   } as Ingredient;
   // Remove params from variant (they are flattened into the body), but for hooks keep the entries the registration cites (spec 43 §7.2 row 10).
-  // Note: sourceMeta had params removed, so we check the BASE (X.meta) for registration-cited params.
-  if (meta.type === "hook" && X.meta.type === "hook" && X.meta.registration && X.meta.params) {
-    // Keep only the params entries the base's registration cites
-    const citedDeclared = registrationCitations(X.meta).filter((c) => c.declared).map((c) => c.key);
-    if (citedDeclared.length > 0) {
-      const declared = X.meta.params;
-      const keptParams: Record<string, IngredientParamDecl> = {};
-      for (const k of citedDeclared) {
-        if (Object.hasOwn(declared, k)) keptParams[k] = declared[k];
-      }
-      (variantMeta as Record<string, unknown>).params = keptParams;
-    }
-  } else if ("params" in variantMeta) {
-    // For non-hooks, remove params (they are flattened)
+  // Use carryInto to carry registration and cited params from the base.
+  if ("params" in variantMeta) {
+    // For all types, params are either flattened (non-hooks) or handled by carryInto (hooks)
     delete (variantMeta as Record<string, unknown>).params;
   }
-  // Copy the base's registration to the variant (spec 43 §7.2 row 10)
-  if (meta.type === "hook" && X.meta.type === "hook" && X.meta.registration && !("registration" in variantMeta)) {
-    (variantMeta as Record<string, unknown>).registration = X.meta.registration;
-  }
+  // carryInto brings in the base's registration and only the params entries the registration cites
+  variantMeta = carryInto(variantMeta, X.meta, null);
 
   // Stage the variant files using typeFolder
   const folder = typeFolder(meta.type);
