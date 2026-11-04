@@ -1599,6 +1599,21 @@ describe("cli — drift promote (step 30g: params/sections)", () => {
     expect(porcelain(f.forgeRoot)).toBe("");
   });
 
+  it("47b. D12 is not raised for a section the base does not mark (E9.6)", async () => {
+    const f = await S();
+    gitInit(f.forgeRoot);
+    const cfg = YAML.parse(await fs.readFile(path.join(f.ws, "craftar.yaml"), "utf8"));
+    cfg.overrides = { sections: { "rule/a": { elsewhere: "applies nowhere\n" } } };
+    await fs.writeFile(path.join(f.ws, "craftar.yaml"), YAML.stringify(cfg));
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await fs.appendFile(path.join(f.ws, A), "hand\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.stderr).not.toContain("takes section");
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split("\n")[0]).toBe(`promote ${A} → rule/a--acme (variant, profile acme)`);
+  });
+
   it("48. G1: a key only a recipe defaults is compared literally → variant", async () => {
     // Rule a with {{scm.org}} but NO ingredient params, recipe base with params: { "scm.org": { default: "acme-org" } }
     const s = await scenario(

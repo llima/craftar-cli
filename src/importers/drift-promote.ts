@@ -923,10 +923,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
   // D12: check workspace overrides before variant outcomes (not for params/sections)
   if (outcome === "variant" || outcome === "variant-updated" || outcome === "local") {
-    // Check if the workspace sets a section of this ingredient
+    // Check if the workspace sets a section of this ingredient — one the base has (E9.6): a value for a section the base
+    // does not mark applies nowhere today, so a variant stops applying nothing.
     const wsIngSections = ctx.WS[ingKey];
     if (wsIngSections) {
-      const firstName = Object.keys(wsIngSections).sort()[0];
+      const firstName = Object.keys(wsIngSections).sort().find((n) => baseSectionNames.includes(n));
       if (firstName) {
         throw new Error(D12_SECTION(ingredientRef, firstName));
       }
