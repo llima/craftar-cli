@@ -2276,11 +2276,6 @@ function sectionChange(report: ImportReport, ctx: RunContext): Sections {
   return out;
 }
 
-/**
- * Spec 51 §5.3: the run's locals that no recipe the profile reaches cites go into `<p>-local`, edited in place or
- * created. Its folder's recipes and the root's are read as staged, so a recipe this run computed counts; only an
- * override (spec 56 §7) is ever reached through a root one. Returns the recipe's name when something was wired, else null.
- */
 /** The recipes of one recipes folder as this run stages them, by name: the file, its ingredients and its `extends`. */
 async function stagedRecipes(stage: ForgeStage, dir: string): Promise<Map<string, { abs: string; ingredients: string[]; extends: string[] }>> {
   const out = new Map<string, { abs: string; ingredients: string[]; extends: string[] }>();
@@ -2330,6 +2325,11 @@ async function warnKeptLocals(stage: ForgeStage, forge: string, profile: string,
   }
 }
 
+/**
+ * Spec 51 §5.3: the run's locals that no recipe the profile reaches cites go into `<p>-local`, edited in place or
+ * created. Its folder's recipes and the root's are read as staged, so a recipe this run computed counts; only an
+ * override (spec 56 §7) is ever reached through a root one. Returns the recipe's name when something was wired, else null.
+ */
 async function wireLocals(stage: ForgeStage, forge: string, profile: string, loaded: Forge, listed: string[], runLocals: string[], report: ImportReport): Promise<string | null> {
   const name = `${profile}-local`;
   const dir = path.join(forge, "profiles", profile, "recipes");
