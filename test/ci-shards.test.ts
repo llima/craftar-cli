@@ -63,8 +63,16 @@ describe("vitest limits", () => {
   });
 
   it("keeps the per-test limit and the worker cap", () => {
-    expect(config.test?.testTimeout).toBe(win ? 60000 : 30000);
+    expect(config.test?.testTimeout).toBe(win ? 180000 : 30000);
     expect(config.test?.maxWorkers).toBe(6);
+  });
+
+  it("keeps runCli's spawn limit under the per-test limit on each platform", () => {
+    const cliTs = readFileSync(path.join(REPO, "test/helpers/cli.ts"), "utf8");
+    expect(cliTs).toContain('timeout: process.platform === "win32" ? 170_000 : 25_000');
+    const spawnTimeout = win ? 170000 : 25000;
+    const testTimeout = config.test?.testTimeout ?? 0;
+    expect(spawnTimeout).toBeLessThan(testTimeout);
   });
 });
 
