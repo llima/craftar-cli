@@ -63,7 +63,7 @@ export interface BasePromotion {
 }
 
 const posix = (root: string, abs: string) => path.relative(root, abs).split(path.sep).join("/");
-const firstLine = (e: unknown) => (e instanceof Error ? e.message : String(e)).split("\n")[0];
+const firstLine = (e: unknown) => errorText(e).split("\n")[0];
 const byPath = (a: { abs: string }, b: { abs: string }) => (a.abs < b.abs ? -1 : a.abs > b.abs ? 1 : 0);
 
 /**

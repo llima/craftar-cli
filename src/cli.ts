@@ -2961,7 +2961,7 @@ forge
       workspace: o.workspace,
       refuseRemote: (url) => `the Forge of this workspace is remote (${url}) — clone it and pass --forge <dir>`,
     });
-    await assertNotCacheTree(f.root, craftarHome()).catch((e) => fail(e instanceof Error ? e.message : String(e)));
+    await assertNotCacheTree(f.root, craftarHome()).catch((e) => fail(errorText(e)));
     // P2 (spec 29 §4.4): git is the undo, so it must be there, hold a commit and be clean — before anything is planned.
     if (f.commit === null) {
       if (await gitIsRepo(f.root)) fail(`${f.root} has no commits yet — forge promote writes to the Forge and needs git as the undo`);
@@ -2996,7 +2996,7 @@ forge
         impactState = refineRegistryState(fw.state, impactBefore);
       } catch (e) {
         impactState = "unreadable";
-        warnings.push(`the registry could not be read (${e instanceof Error ? e.message : String(e)}) — no workspace was checked`);
+        warnings.push(`the registry could not be read (${errorText(e)}) — no workspace was checked`);
       }
       if (impactState === "off") warnings.push("the registry is off — no workspace was checked");
     }
@@ -3036,7 +3036,7 @@ forge
       try {
         impactAfter = await planAll(impactEntries, await loadForge(f.root));
       } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
+        const message = errorText(e);
         impactAfter = impactEntries.map(() => ({ kind: "error", stage: "plan", message }));
       }
       impactResults = impactEntries.map((_, i) => impactOf(impactBefore[i], impactAfter[i]));
