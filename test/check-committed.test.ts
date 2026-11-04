@@ -717,6 +717,15 @@ describe("a revision git cannot read, and the files read as links (E36.9, E36.10
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("unknown revision ^HEAD");
   });
+  it("the index holding craftar.yaml as a symbolic link is refused, and the fix says to stage the file", async () => {
+    const { ws, repo } = await committed();
+    const target = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: repo, input: "elsewhere.yaml", encoding: "utf8" }).trim();
+    const prefix = path.relative(repo, ws).split(path.sep).join("/");
+    git(repo, "update-index", "--cacheinfo", `120000,${target},${prefix === "" ? "craftar.yaml" : `${prefix}/craftar.yaml`}`);
+    const r = check(ws, "--index", "--unavailable-ok");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe("error: craftar.yaml is a symbolic link in the index — craftar reads it only as a file; stage the file itself\n");
+  });
   for (const file of ["craftar.yaml", "craftar.lock"]) {
     it(`a commit holding ${file} as a symbolic link is refused, also with --unavailable-ok`, async () => {
       const { ws, repo } = await committed();

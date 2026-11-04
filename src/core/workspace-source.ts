@@ -152,7 +152,7 @@ export async function gitSource(root: string, spec: GitSourceSpec): Promise<GitS
       // E36.13: the configuration or the lock held as a link would read as absent, and `--unavailable-ok` would pass a
       // workspace it never checked; craftar reads either only as a file.
       if (entry?.mode === "120000" && HELD_AS_FILES.has(path.posix.normalize(rel))) {
-        throw new GitSourceRefusal(`${path.posix.normalize(rel)} is a symbolic link in the ${where} — craftar reads it only as a file; commit the file itself`);
+        throw new GitSourceRefusal(`${path.posix.normalize(rel)} is a symbolic link in the ${where} — craftar reads it only as a file; ${label.name === "commit" ? "commit" : "stage"} the file itself`);
       }
       // A symbolic link's blob holds its target and a gitlink has no blob: craftar writes neither.
       if (!entry || entry.mode === "120000" || entry.mode === "160000") return null;
