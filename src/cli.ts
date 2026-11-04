@@ -1717,7 +1717,7 @@ templates
 const mcpCmd = program
   .command("mcp")
   .description(
-    "Serve this workspace to an AI coder over the Model Context Protocol, on stdin and stdout: seven reading tools — status, diff, explain, recipes, ingredients, targets, doctor — with the data those commands print. Started by the AI coder, not typed. Reads only unless --allow-writes; reads without the network unless --fetch",
+    "Serve this workspace to an AI coder over the Model Context Protocol, on stdin and stdout: seven reading tools — status, diff, explain, recipes, ingredients, targets, doctor — with the data those commands print. Started by the AI coder, not typed. Reads only unless --allow-writes (doctor's dotnet probe aside, in a temporary directory it removes); reads without the network unless --fetch",
   )
   .option("--workspace <dir>", "the workspace to serve", ".")
   .option("--fetch", "let a tool call fetch a remote Forge instead of reading the cached copy", false)
