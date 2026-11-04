@@ -3384,11 +3384,12 @@ services
       const { root, real, recorded } = await servicesContext(o.workspace);
       const refusal = upRefusal(recorded, names);
       if (refusal.length) fail(refusal.join("\n"));
-      const stray = await strayEnvRefusal(root);
+      const envFile = await envFileOrNull(root);
+      const stray = await strayEnvRefusal(root, envFile);
       if (stray !== null) fail(stray);
       const fault = dockerFault(await dockerVersion(dockerRunner), true);
       if (fault !== null) fail(fault);
-      const argv = composeArgv("up", { project: projectName(real), stack: path.join(root, ".craftar", "compose.yaml"), envFile: await envFileOrNull(root), wait: o.wait, services: names });
+      const argv = composeArgv("up", { project: projectName(real), stack: path.join(root, ".craftar", "compose.yaml"), envFile, wait: o.wait, services: names });
       process.exitCode = await runCompose(argv, real);
     } catch (e) {
       fail(e instanceof Error ? e.message : String(e));

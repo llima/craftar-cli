@@ -81,6 +81,16 @@ describe("services up: an unrecorded .craftar/.env with no root .env (E15.1, dec
     expect(await readDockerLog(d.log)).toEqual([]);
   });
 
+  it.skipIf(process.platform === "win32")("is refused when the root .env is a link that leads nowhere: no --env-file would be passed", async () => {
+    const s = await synced();
+    await fs.writeFile(path.join(s.wsRoot, ".craftar", ".env"), "B=2\n");
+    await fs.symlink(path.join(s.wsRoot, "no-such-file"), path.join(s.wsRoot, ".env"));
+    const d = await docker();
+    const r = runCli(["services", "up", "--workspace", s.wsRoot], { env: d.env() });
+    expect([r.code, r.stderr.trimEnd()]).toEqual([1, STRAY_ENV]);
+    expect(await readDockerLog(d.log)).toEqual([]);
+  });
+
   it("goes on with a root .env, which is passed as --env-file", async () => {
     const s = await synced({ ".env": "A=1\n" });
     await fs.writeFile(path.join(s.wsRoot, ".craftar", ".env"), "B=2\n");

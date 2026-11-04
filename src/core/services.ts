@@ -479,13 +479,14 @@ export function upRefusal(r: Recorded, names: string[]): string[] {
 
 /**
  * Why `services up` will not run on an unrecorded `.craftar/.env` (tech-debt E15.1, decision 17); null when it may.
- * With no `.env` at the workspace root `up` passes no `--env-file`, and Compose reads `.env` in the directory of the first
- * `-f` file — `.craftar/`, which the lock does not record there. Any kind of entry counts (`lstat`); its content is never read.
+ * `envFile` is what `up` hands Compose as `--env-file` — the same answer decides both, so a root `.env` that does not
+ * resolve (a dangling link) counts as none. With none, Compose reads `.env` in the directory of the first `-f` file —
+ * `.craftar/`, which the lock does not record there. Any kind of entry counts (`lstat`); its content is never read.
  */
-export async function strayEnvRefusal(root: string): Promise<string | null> {
-  const present = (p: string) => fs.lstat(p).then(() => true, (e: NodeJS.ErrnoException) => (e.code === "ENOENT" ? false : Promise.reject(e)));
-  if (await present(path.join(root, ".env"))) return null;
-  if (!(await present(path.join(root, ".craftar", ".env")))) return null;
+export async function strayEnvRefusal(root: string, envFile: string | null): Promise<string | null> {
+  if (envFile !== null) return null;
+  const present = await fs.lstat(path.join(root, ".craftar", ".env")).then(() => true, (e: NodeJS.ErrnoException) => (e.code === "ENOENT" ? false : Promise.reject(e)));
+  if (!present) return null;
   return ".craftar/.env exists and the workspace has no .env — Compose would read it, and craftar.lock does not record it; move it to .env at the workspace root, or remove it";
 }
 
