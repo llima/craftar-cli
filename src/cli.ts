@@ -913,7 +913,7 @@ program
     if (refusalBlock(unsetDeclared(p)) && o.exitCode && !only) process.exitCode = 1;
     if (overrideBlock(p) && o.exitCode && !only) process.exitCode = 1;
     if (escapeBlock(st) && o.exitCode && !only) process.exitCode = 1;
-    // The AGENTS.md budget, as the refusal above: always printed, failing only --exit-code with no [path]
+    // The AGENTS.md budget and Kiro resources refusals, as the refusal above: always printed, failing only --exit-code with no [path]
     if (checkRefusalBlock(p) && o.exitCode && !only) process.exitCode = 1;
   });
 
