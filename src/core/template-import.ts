@@ -111,6 +111,18 @@ export function citedKeys(texts: Map<string, string>): Set<string> {
   return out;
 }
 
+/**
+ * E32.1 (decision 14): what import compares of a base or a source. No target writes a rule's `description` into a file —
+ * it reaches only the generated rules index — so a workspace never shows it, and import leaves it out on both sides: an
+ * otherwise equal source reuses the base, which keeps its description. Every other type, and every other field, as given.
+ */
+export function comparedMeta<T extends Ingredient>(meta: T): T {
+  if (meta.type !== "rule" || meta.description === undefined) return meta;
+  const { description: _description, ...rest } = meta;
+  void _description;
+  return rest as T;
+}
+
 /** import builds a script or hook source at ["claude-code"], the one target that writes them. */
 export function asImportTargets<T extends Ingredient>(meta: T): T {
   return (meta.type === "script" || meta.type === "hook") && meta.targets === "*" ? { ...meta, targets: ["claude-code"] } : meta;
@@ -147,7 +159,7 @@ export function renderedFingerprint(
   } else {
     meta = stripForgeOnlyKeys({ ...base.meta }) as Ingredient;
   }
-  meta = asImportTargets(meta);
+  meta = comparedMeta(asImportTargets(meta));
   // Spec 50 §5.6: at the metadata gate the fields of §5.2 are compared as sync renders them, before reference resolution.
   if (rendersMetadata({ schema })) meta = substituteImportedMetadata(meta, map, lists);
   const citing = `${base.meta.type}/${base.meta.name}`;

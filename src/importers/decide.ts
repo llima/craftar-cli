@@ -7,7 +7,7 @@ import { fingerprintOf } from "../core/fingerprint.js";
 import { exists, listFiles, loadForge, readIngredientText, type Forge } from "../core/forge.js";
 import { hashNormalized, stripBom, toLf } from "../core/text.js";
 import { deepMerge } from "../core/merge.js";
-import { asImportTargets, citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
+import { asImportTargets, citedKeys, comparedMeta, expandedTexts, infer, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
 import { canonicalValue, inferSections, projectSections, readsTargetSections } from "../core/sections.js";
 import { errorText } from "../core/schema-fault.js";
 import { sectionKey } from "../core/resolve.js";
@@ -202,6 +202,12 @@ export async function decide(
   const parseOpts = { targets: readsTargetSections({ schema }) };
   const owner = ctx.sourceTarget;
   const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."), parseOpts, schema);
+  // E32.1: a rule's description is left out of the comparison on the source's side too (drift promote's source carries the
+  // base's); `renderedFingerprint` and `shapeDiffers` leave it out on the base's.
+  if (meta.type === "rule" && meta.description !== undefined) {
+    meta = comparedMeta(meta);
+    fingerprint = fingerprintOf(meta, files);
+  }
 
   // Spec 34 §5.2: the declared server citations (at the gate, else []).
   const serverKeys = rendersServers({ schema }) ? serverCitations(base.meta).filter((c) => c.declared).map((c) => c.key) : [];
@@ -271,7 +277,7 @@ export const valuesAt = (layer: Sections, key: string): Record<string, string> =
 
 /** F1, F2 (spec 10 §6.3): what no value can explain — metadata, the file set, a file compared as bytes. */
 function shapeDiffers(base: ImportBase, meta: Ingredient, files: Record<string, string | Buffer>): string | null {
-  const metaOnly = stripForgeOnlyKeys({ ...asImportTargets(base.meta) });
+  const metaOnly = stripForgeOnlyKeys({ ...comparedMeta(asImportTargets(base.meta)) });
   if (fingerprintOf(metaOnly as Ingredient, {}) !== fingerprintOf(meta, {})) return "metadata differs";
   const baseFiles = [...base.texts.keys(), ...base.bytes.keys()].sort();
   const srcFiles = Object.keys(files).sort();
