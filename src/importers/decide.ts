@@ -173,11 +173,11 @@ export function carryInto(meta: Ingredient, base: Ingredient | null, existing: I
 
     // src is a hook with registration: carry registration
     // For params: for each key the registration cites (and is declared somewhere), take base's entry when base declares it, else src's own
-    const citations = registrationCitations(src);
-    const citedDeclared = citations.filter((c) => c.declared).map((c) => c.key);
-
     const baseParams = base?.type === "hook" ? base.params : undefined;
     const srcParams = src.params;
+    // A key is declared when either side declares it (as the rewrite of an existing variant always counted it).
+    const citations = registrationCitations({ ...src, params: { ...(srcParams ?? {}), ...(baseParams ?? {}) } });
+    const citedDeclared = citations.filter((c) => c.declared).map((c) => c.key);
 
     // Build params map: for each cited key that base or src declares, prefer base's entry, else src's
     const params: Record<string, IngredientParamDecl> = {};

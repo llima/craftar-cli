@@ -120,6 +120,21 @@ describe("carryInto — unified carry for variants and locals", () => {
     });
   });
 
+  it("C2b: a key the existing registration cites and only the base declares is carried with the base's entry", () => {
+    const base = hookWithRegistration("h", { b: { default: "2" } }, ["b"]);
+    const existing = IngredientSchema.parse({
+      type: "hook",
+      name: "h--acme",
+      files: ["h.sh"],
+      as: "h",
+      registration: [{ event: "Stop", command: ".claude/hooks/h.sh", args: ["{{b}}", "{{d}}"] }],
+    });
+    const meta = IngredientSchema.parse({ type: "hook", name: "h--acme", files: ["h.sh"], as: "h" });
+    const result = carryInto(meta, base, existing);
+    expect((result as { registration?: unknown[] }).registration).toEqual(existing.registration);
+    expect((result as { params?: Record<string, unknown> }).params).toEqual({ b: { default: "2" } });
+  });
+
   it("C3: existing hook without registration — result has no registration, params as meta's", () => {
     const base = hookWithRegistration("h", { a: { default: "1" } }, ["a"]);
     const existing = hookNoRegistration("h--acme", { x: { default: "existing-x" } });
