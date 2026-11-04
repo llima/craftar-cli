@@ -5,7 +5,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { FORGE_SCHEMA_LOCAL_OVERRIDE, FORGE_SCHEMA_PROFILE_LOCAL, RecipeWrittenSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { readForgeFile, readForgeText } from "./contain.js";
-import { assertNoLinkIn, assertNoLinkOnPath, copyForgeForProof, removeProofCopy, scratchWriteRefusal, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
+import { assertNoLinkIn, assertNoLinkOnPath, copyForgeForProof, proofPathsBack, removeProofCopy, scratchWriteRefusal, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
 import { ingredientText, occupied, sourceMode, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
 import { impactOf, planAll, type ForgeWorkspace, type Planned } from "./impact.js";
 import { recipesOrWritten } from "./integrations.js";
@@ -355,11 +355,13 @@ export async function proveMove(forge: Forge, move: ForgeMove, registered: Forge
     } catch (e) {
       throw scratchWriteRefusal(command, copy, e, "move");
     }
+    // A message from the copy names the Forge, whichever spelling of the copy's path it holds.
+    const back = await proofPathsBack(copy, forge.root);
     let edited: Forge;
     try {
       edited = await loadForge(copy);
     } catch (e) {
-      throw new Error(`${command}: the Forge would not load after the move:\n${(e instanceof Error ? e.message : String(e)).split(copy).join(forge.root)}\nnothing written`);
+      throw new Error(`${command}: the Forge would not load after the move:\n${back(e instanceof Error ? e.message : String(e))}\nnothing written`);
     }
 
     const resolvedBefore = resolveAll(forge);
@@ -370,14 +372,14 @@ export async function proveMove(forge: Forge, move: ForgeMove, registered: Forge
       } catch (e) {
         // A profile that does not resolve was warned about, or refused, by planLocalize / planShare; one that resolves
         // and does not plan is said here, never skipped silently.
-        if (!(resolvedBefore.get(q) instanceof Error)) warnings.push(`profile ${q} does not plan today (${firstLine(e).split(copy).join(forge.root)}) — not proved`);
+        if (!(resolvedBefore.get(q) instanceof Error)) warnings.push(`profile ${q} does not plan today (${back(firstLine(e))}) — not proved`);
         continue;
       }
       let after: Map<string, Buffer>;
       try {
         after = await planProfile(edited, q, wsRoot);
       } catch (e) {
-        throw notSame(command, `profile ${q}`, firstLine(e).split(copy).join(forge.root));
+        throw notSame(command, `profile ${q}`, back(firstLine(e)));
       }
       const changed = differs(before, after);
       if (changed.length) throw notSame(command, `profile ${q}`, changed.join(", "));
@@ -404,7 +406,7 @@ export async function proveMove(forge: Forge, move: ForgeMove, registered: Forge
         continue;
       }
       const r = impactOf(beforeWs[i], afterWs[i]);
-      if (r.state === "error") throw notSame(command, where, (r.error ?? "it fails").split("\n")[0].split(copy).join(forge.root));
+      if (r.state === "error") throw notSame(command, where, back((r.error ?? "it fails").split("\n")[0]));
       if (r.state !== "no-effect") throw notSame(command, where, r.files.join(", "));
     }
   } finally {

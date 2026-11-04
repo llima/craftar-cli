@@ -728,7 +728,8 @@ describe("a revision git cannot read, and the files read as links (E36.9, E36.10
       git(repo, "commit", "-qm", "link");
       const r = check(ws, "--committed", "--unavailable-ok");
       expect(r.code).toBe(1);
-      expect(r.stderr).toMatch(new RegExp(`${file.replace(".", "\\.")} is a symbolic link in the commit [0-9a-f]{8} — craftar reads it only as a file; commit the file itself`));
+      const short = git(repo, "rev-parse", "--short=8", "HEAD").trim();
+      expect(r.stderr).toBe(`error: ${file} is a symbolic link in the commit ${short} — craftar reads it only as a file; commit the file itself\n`);
     });
   }
 });

@@ -1025,7 +1025,8 @@ drift
       if (unset.length || escapingRows(st).length || p.overrideConflicts.length) process.exitCode = 1;
       return;
     }
-    // E9.14: the plan's own warnings, as status prints them — the load's are already out, and the plan's list opens with them.
+    // E9.14: the plan's own warnings, which --json carries (status prints the whole list, on stdout) — the load's are
+    // already out, and plan() opens its list with them.
     warnStderr(p.warnings.slice(ws.warnings.length));
     warnStderr(providedWarnings);
     if (named && !rows.length) {
