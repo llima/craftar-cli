@@ -67,3 +67,56 @@ describe("vitest limits", () => {
     expect(config.test?.maxWorkers).toBe(6);
   });
 });
+
+
+describe("Windows runner sampler", () => {
+  it("starts the sampler right before the suite and reports right after it, on Windows only", () => {
+    const steps = job.steps as { name?: string; shell?: string; if?: string; run?: string }[];
+    const npmTestIdx = steps.findIndex((s) => s.run?.startsWith("npm test"));
+    const startIdx = steps.findIndex((s) => s.name === "Start the runner sampler (Windows)");
+    const reportIdx = steps.findIndex((s) => s.name === "Runner samples (Windows)");
+
+    expect(startIdx).toBe(npmTestIdx - 1);
+    expect(reportIdx).toBe(npmTestIdx + 1);
+
+    const start = steps[startIdx];
+    const report = steps[reportIdx];
+
+    expect(start.shell).toBe("pwsh");
+    expect(start.if).toBe("runner.os == 'Windows'");
+    expect(start.run).toBe("./.github/scripts/ci-sampler.ps1 -Mode start");
+
+    expect(report.shell).toBe("pwsh");
+    expect(report.if).toBe("always() && runner.os == 'Windows'");
+    expect(report.run).toBe("./.github/scripts/ci-sampler.ps1 -Mode report");
+  });
+
+  it("adds no action and reads no secret", () => {
+    const steps = job.steps as { uses?: string }[];
+    const allowed = ["actions/checkout@v4", "actions/setup-node@v4"];
+    for (const step of steps) {
+      if (step.uses) expect(allowed).toContain(step.uses);
+    }
+    const raw = readFileSync(path.join(REPO, ".github/workflows/ci.yml"), "utf8");
+    expect(raw).not.toContain("secrets.");
+  });
+
+  it("the sampler script exists, is ASCII, and has the three modes", () => {
+    const script = readFileSync(path.join(REPO, ".github/scripts/ci-sampler.ps1"), "utf8");
+    for (let i = 0; i < script.length; i++) {
+      expect(script.charCodeAt(i)).toBeLessThan(128);
+    }
+    expect(script).toContain("'start'");
+    expect(script).toContain("'sample'");
+    expect(script).toContain("'report'");
+    expect(script).toContain("Start-Process");
+    expect(script).toContain("Stop-Process");
+    expect(script).toContain("time,cpu_pct,proc_queue,avail_mb,commit_pct,pagefile_mb,pages_per_s,disk_queue,disk_busy_pct,node,git,msmpeng_cpu_s");
+    expect(script).toContain("sampler: rows=");
+  });
+
+  it("never cancels or shortens the release gate", () => {
+    expect(ci.concurrency["cancel-in-progress"]).toBe("${{ github.ref != 'refs/heads/main' }}");
+    expect(job["timeout-minutes"]).toBe(35);
+  });
+});
