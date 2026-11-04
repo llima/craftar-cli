@@ -24,7 +24,7 @@ import { editYamlText } from "./yaml-edit.js";
 import { concerned, workspaceAgainst, type ForgeWorkspace, type Planned, type RegistryState } from "./impact.js";
 import { plan, type MergedConfig } from "./sync.js";
 import { parseYamlText } from "./yaml-read.js";
-import { effectiveProfile, recipesOrWritten } from "./integrations.js";
+import { effectiveProfile, writtenWarning } from "./integrations.js";
 import { registrationCitations, rendersServers } from "./mcp-server.js";
 
 // Spelled out rather than embedded as a raw character: in the one function whose job is byte
@@ -1215,10 +1215,9 @@ export async function pruneCandidates(
         if (arr) arr.push(pName);
         else selectedBy.set(s.recipe, [pName]);
       }
-    } catch {
-      // effectiveProfile threw on a malformed block — warn via recipesOrWritten's message.
-      const row = recipesOrWritten(forge, prof);
-      if (row.warning) warn?.(row.warning);
+    } catch (e) {
+      // effectiveProfile threw on a malformed block — warn without a second effectiveProfile call.
+      warn?.(writtenWarning(e));
     }
   }
 

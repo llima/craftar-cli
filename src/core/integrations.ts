@@ -290,6 +290,12 @@ export function integrationOrigin(slot: string, profile: string): string {
 /* recipesOrWritten                                                     */
 /* ------------------------------------------------------------------ */
 
+/** The warning for a profile whose block does not read: its recipes are read as written (§4.3). */
+export function writtenWarning(e: unknown): string {
+  const message = e instanceof Error ? e.message : String(e);
+  return `${message} — its recipes are read as written`;
+}
+
 /**
  * For the two whole-Forge walks (§4.3): the effective recipes, or the written ones plus the one
  * warning. Used by the catalogue's `computeProfilesForRecipes` and the prune's search.
@@ -301,10 +307,9 @@ export function recipesOrWritten(
   try {
     return { recipes: effectiveProfile(forge, profile).recipes, warning: null };
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
     return {
       recipes: profile.recipes,
-      warning: `${message} — its recipes are read as written`,
+      warning: writtenWarning(e),
     };
   }
 }
