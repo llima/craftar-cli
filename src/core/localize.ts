@@ -5,7 +5,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { FORGE_SCHEMA_LOCAL_OVERRIDE, FORGE_SCHEMA_PROFILE_LOCAL, RecipeWrittenSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { readForgeFile, readForgeText } from "./contain.js";
-import { assertNoLinkIn, assertNoLinkOnPath, copyForgeForProof, removeProofCopy, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
+import { assertNoLinkIn, assertNoLinkOnPath, copyForgeForProof, removeProofCopy, scratchWriteRefusal, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
 import { ingredientText, occupied, sourceMode, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
 import { impactOf, planAll, type ForgeWorkspace, type Planned } from "./impact.js";
 import { recipesOrWritten } from "./integrations.js";
@@ -353,8 +353,7 @@ export async function proveMove(forge: Forge, move: ForgeMove, registered: Forge
     try {
       await writeEdits(forge.root, copy, move);
     } catch (e) {
-      const at = (e as NodeJS.ErrnoException).path;
-      throw new Error(`${command}: ${at ? posix(copy, at) : "a file"} could not be written on the scratch copy the move is proved on (${(e as NodeJS.ErrnoException).code ?? "the write failed"}) — it cannot be written in the Forge either; nothing written`);
+      throw scratchWriteRefusal(command, copy, e, "move");
     }
     let edited: Forge;
     try {

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { FORGE_SCHEMA_SECTION_FILES, ProfileWrittenSchema, windowsShaped, type ProfileWritten } from "../schema/index.js";
-import { assertNoLinkOnPath, copyForgeForProof, proofPathsBack, removeProofCopy, loadForge, parseYaml, type Forge } from "./forge.js";
+import { assertNoLinkOnPath, copyForgeForProof, proofPathsBack, removeProofCopy, scratchWriteRefusal, loadForge, parseYaml, type Forge } from "./forge.js";
 import { writeForgeFile } from "./forge-write.js";
 import { impactOf, planAll, type ForgeWorkspace, type Planned } from "./impact.js";
 import { readsSectionFiles } from "./section-files.js";
@@ -174,9 +174,7 @@ export async function proveExtract(forge: Forge, plan: ExtractPlan, registered: 
     try {
       await writeExtract(plan, copy);
     } catch (e) {
-      const at = (e as NodeJS.ErrnoException).path;
-      const shown = at ? posix(path.relative(copy, at)) : "a file";
-      throw new Error(`${EXTRACT_COMMAND}: ${shown} could not be written on the scratch copy the move is proved on (${(e as NodeJS.ErrnoException).code ?? "the write failed"}) — it cannot be written in the Forge either; nothing written`);
+      throw scratchWriteRefusal(EXTRACT_COMMAND, copy, e, "move");
     }
     let edited: Forge;
     try {
