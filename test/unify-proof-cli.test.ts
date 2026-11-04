@@ -6,6 +6,7 @@ import { listFiles, loadForge } from "../src/core/forge.js";
 import { proveUnifyLoads } from "../src/core/unify.js";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
+import { removeWithRetry } from "./helpers/fs.js";
 import { git } from "./helpers/remote.js";
 
 // E38.1: `forge unify` proves, on a scratch copy, that the Forge its edits leave still loads — before the first write.
@@ -29,7 +30,7 @@ async function snapshot(dir: string): Promise<Record<string, string>> {
 
 async function scenario(extra: Record<string, string>) {
   const root = await fs.realpath(await tmpDir("craftar-unify-proof-"));
-  cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanups.push(() => removeWithRetry(root));
   const forge = path.join(root, "forge");
   const tmp = path.join(root, "tmp");
   await fs.mkdir(tmp);
