@@ -88,7 +88,7 @@ describe("pins — a workspace holding one file in each state", () => {
     // runCli forces NO_COLOR=1; this sibling removes it and forces colour, so the lift cannot lose DIFF_PAINT unseen.
     const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: "1" };
     delete env.NO_COLOR;
-    const r = spawnSync(process.execPath, ["--import", TSX_LOADER, path.resolve(__dirname, "../src/cli.ts"), "diff", `${R}/edited.md`, "--workspace", s.wsRoot], { encoding: "utf8", env, timeout: 25_000 });
+    const r = spawnSync(process.execPath, ["--import", TSX_LOADER, path.resolve(__dirname, "../src/cli.ts"), "diff", `${R}/edited.md`, "--workspace", s.wsRoot], { encoding: "utf8", env, timeout: process.platform === "win32" ? 170_000 : 25_000 });
     expect(r.stdout).toBe(
       `\u001b[1m--- ${R}/edited.md (disk, drift)\u001b[22m\n\u001b[1m+++ ${R}/edited.md (forge)\u001b[22m\n\u001b[2m  # Edited\u001b[22m\n\u001b[31m- by hand\u001b[39m\n\u001b[32m+ by the forge\u001b[39m\n`,
     );

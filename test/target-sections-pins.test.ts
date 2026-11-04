@@ -6,6 +6,7 @@ import { runCli } from "./helpers/cli.js";
 import { acmeSections } from "./helpers/target-sections.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import type { Scenario } from "./helpers/forge.js";
+import { atLeastWin32 } from "./helpers/timeouts.js";
 
 // No test here runs Docker: doctor's child gets a PATH that holds only an empty temp dir, so `docker` is never found.
 let EMPTY_DIR: string;
@@ -210,7 +211,7 @@ function withoutMachine(o: Observed): Observed {
 const EXPLAIN_PIN_FILE = path.resolve(__dirname, "pins/explain-schema-6.txt");
 
 describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
-  it("matches the pinned snapshot (schema 5, no targets= in markers)", { timeout: 120_000 }, async () => {
+  it("matches the pinned snapshot (schema 5, no targets= in markers)", { timeout: atLeastWin32(120_000) }, async () => {
     const s = kept(await acmeSections({ schema: 5 }));
     const observed = await buildObserved(s);
 
@@ -227,7 +228,7 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
     expect(withoutMachine(observed)).toEqual(withoutMachine(expected));
   });
 
-  it("the pin is not vacuous: holds section defaults, profile values, services, and CRLF in kiro files", { timeout: 120_000 }, async () => {
+  it("the pin is not vacuous: holds section defaults, profile values, services, and CRLF in kiro files", { timeout: atLeastWin32(120_000) }, async () => {
     const s = kept(await acmeSections({ schema: 5 }));
     const observed = await buildObserved(s);
 
@@ -264,11 +265,11 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
     expect(observed.doctorWorkspace.find((c) => c.id === "docker")?.level).toBe("warn");
   });
 
-  it("import round trip: importing the synced workspace into a copy of the Forge with markers changes nothing", { timeout: 120_000 }, async () => {
+  it("import round trip: importing the synced workspace into a copy of the Forge with markers changes nothing", { timeout: atLeastWin32(120_000) }, async () => {
     await importRoundTrip(5, process.env.CRAFTAR_WRITE_PINS === "1");
   });
 
-  it("import round trip at schema 6, no targets= — the same stdout pin, the Forge copy unchanged", { timeout: 120_000 }, async () => {
+  it("import round trip at schema 6, no targets= — the same stdout pin, the Forge copy unchanged", { timeout: atLeastWin32(120_000) }, async () => {
     await importRoundTrip(6, false);
   });
 
@@ -332,7 +333,7 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
     sameTree(beforeImport, afterImport);
   }
 
-  it("schema 6, no targets= — equals the schema 5 pin", { timeout: 120_000 }, async () => {
+  it("schema 6, no targets= — equals the schema 5 pin", { timeout: atLeastWin32(120_000) }, async () => {
     const s = kept(await acmeSections({ schema: 6 }));
     const observed = await buildObserved(s);
 
@@ -341,7 +342,7 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
     expect(withoutMachine(observed)).toEqual(withoutMachine(expected));
   });
 
-  it("explain TEXT output at schema 6 with no targets= — pin for a rule's file and AGENTS.md", { timeout: 120_000 }, async () => {
+  it("explain TEXT output at schema 6 with no targets= — pin for a rule's file and AGENTS.md", { timeout: atLeastWin32(120_000) }, async () => {
     const s = kept(await acmeSections({ schema: 6 }));
     const W = ["--workspace", s.wsRoot];
 

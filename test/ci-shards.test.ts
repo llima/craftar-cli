@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import config from "../vitest.config.js";
+import { WIN32_TEST_TIMEOUT } from "./helpers/timeouts.js";
 
 // The Windows half of the CI matrix runs the suite in two shards per Node version (tech-debt E23.2, E23.3): the suite
 // there took 18–30 min of a 35 min limit. Ubuntu runs it whole. This file only reads files, so it can run by hand,
@@ -65,6 +66,7 @@ describe("vitest limits", () => {
   it("keeps the per-test limit and the worker cap", () => {
     expect(config.test?.testTimeout).toBe(win ? 180000 : 30000);
     expect(config.test?.maxWorkers).toBe(6);
+    expect(WIN32_TEST_TIMEOUT).toBe(180000);
   });
 
   it("keeps runCli's spawn limit under the per-test limit on each platform", () => {
@@ -159,5 +161,38 @@ describe("Windows runner sampler", () => {
   it("never cancels or shortens the release gate", () => {
     expect(ci.concurrency["cancel-in-progress"]).toBe("${{ github.ref != 'refs/heads/main' }}");
     expect(job["timeout-minutes"]).toBe(35);
+  });
+});
+
+describe("per-test limits", () => {
+  it("no explicit timeout cuts a test below 180 s on Windows", () => {
+    const testDir = path.join(REPO, "test");
+    const testFiles: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith(".test.ts")) testFiles.push(full);
+      }
+    };
+    walk(testDir);
+
+    const bad: string[] = [];
+    for (const file of testFiles) {
+      const content = readFileSync(file, "utf8");
+      const rel = path.relative(REPO, file);
+      const pattern1 = /\btimeout:\s*([\d_]+)\s*\}/g;
+      const pattern2 = /\}\s*,\s*([\d_]+)\s*\)/g;
+      let m;
+      while ((m = pattern1.exec(content)) !== null) {
+        const v = Number(m[1].replace(/_/g, ""));
+        if (v >= 30000 && v < 180000) bad.push(`${rel}:${v}`);
+      }
+      while ((m = pattern2.exec(content)) !== null) {
+        const v = Number(m[1].replace(/_/g, ""));
+        if (v >= 30000 && v < 180000) bad.push(`${rel}:${v}`);
+      }
+    }
+    expect(bad).toEqual([]);
   });
 });

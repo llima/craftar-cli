@@ -11,6 +11,7 @@ import { TSX_LOADER } from "./helpers/tsx-loader.js";
 import { exists, listFiles } from "../src/core/forge.js";
 import { UnifyPlanSchema } from "../src/schema/index.js";
 import { cacheKey, ensureTree, UNVOUCHED_HIDDEN } from "../src/core/remote.js";
+import { atLeastWin32 } from "./helpers/timeouts.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -942,7 +943,7 @@ describe("cli — diff --exit-code (spec 19)", () => {
     expect(got[0]).toBe("--- .claude/rules/big.md (disk, orphan)");
     expect(got[20001]).toBe("- line 19999 " + "x".repeat(40));
     expect(got[20002]).toBe("");
-  }, 30_000);
+  }, atLeastWin32(30_000));
 });
 
 describe("cli — forge values: credentials refused, path-Forge warnings (spec 13 §4.2, §4.3)", () => {

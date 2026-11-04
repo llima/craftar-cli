@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { listWorkspaces } from "../src/core/registry.js";
 import { runCli } from "./helpers/cli.js";
 import { makeWorkspace, profile, recipe, rule, scenario } from "./helpers/forge.js";
+import { atLeastWin32 } from "./helpers/timeouts.js";
 
 /**
  * Spec 36 §10.1: what `craftar workspaces` and `craftar doctor` print for a workspace that does not load, pinned
@@ -57,7 +58,7 @@ beforeAll(async () => {
   const future = await lockOf("ws-futurelock");
   future.schema = "SENTINEL-SCHEMA";
   await fs.writeFile(path.join(root, "ws-futurelock", "craftar.lock"), JSON.stringify(future, null, 2));
-}, 120_000);
+}, atLeastWin32(120_000));
 
 afterAll(() => cleanup());
 

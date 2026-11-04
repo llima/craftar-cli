@@ -5,6 +5,7 @@ import path from "node:path";
 import { runCli } from "./helpers/cli.js";
 import { profile, recipe, rule, scenario, writeFiles } from "./helpers/forge.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
+import { atLeastWin32 } from "./helpers/timeouts.js";
 
 /**
  * Spec 48 §7: pin what a Forge and a workspace whose links stay inside their trees get today (cases D and K),
@@ -167,7 +168,7 @@ async function canLinkFiles(): Promise<boolean> {
 }
 
 describe("links that stay inside are unchanged (spec 48 §7)", () => {
-  it("matches the pinned snapshot", { timeout: 120_000 }, async (ctx) => {
+  it("matches the pinned snapshot", { timeout: atLeastWin32(120_000) }, async (ctx) => {
     if (!(await canLinkFiles())) return ctx.skip();
     const observed = await observe(await linkedInside());
     if (process.env.CRAFTAR_WRITE_PINS === "1") {
