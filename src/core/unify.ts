@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { forgeReader, readForgeFile, readForgeText } from "./contain.js";
 import YAML from "yaml";
 import { fingerprintDir } from "./fingerprint.js";
-import { copyForgeForProof, exists, listFiles, loadForge, proofPathsBack, readIngredientText, removeProofCopy, scratchWriteRefusal, type Forge, type LoadedIngredient } from "./forge.js";
+import { copyForProof, exists, listFiles, loadForge, proofPathsBack, readIngredientText, removeProofCopy, scratchWriteRefusal, type Forge, type LoadedIngredient } from "./forge.js";
 import { writeForgeFile } from "./forge-write.js";
 import { splitLines, type Hunk } from "./diff.js";
 import { detectEol, isUtf8, withEol, type Eol } from "./text.js";
@@ -1142,7 +1142,7 @@ export async function proveUnifyLoads(forge: Forge, edits: UnifyEdits): Promise<
     throw new Error(`unify: cannot make the scratch copy in the temporary directory (${(e as NodeJS.ErrnoException).code ?? "it failed"}) — nothing was written`);
   }
   try {
-    await copyForgeForProof(forge.root, scratch, "unify");
+    await copyForProof(forge.root, scratch, "unify");
     const onCopy = (abs: string) => {
       const rel = path.relative(forge.root, abs);
       // Every path of the edit set is under the Forge; one that is not would be written outside the copy.

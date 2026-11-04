@@ -6,7 +6,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { copyForgeForProof, loadForge, proofPathsBack, removeProofCopy, scratchWriteRefusal } from "./forge.js";
+import { copyForProof, loadForge, proofPathsBack, removeProofCopy, scratchWriteRefusal } from "./forge.js";
 import { planInit, type InitOptions, type InitPlan } from "./init.js";
 import { errorText } from "./schema-fault.js";
 import { p7Exists } from "./new-profile-gate.js";
@@ -62,7 +62,7 @@ export async function proveNewProfileLoads(forgeRoot: string, init: InitPlan): P
     throw new Error(`init: cannot make the scratch copy in the temporary directory (${(e as NodeJS.ErrnoException).code ?? "it failed"}) — nothing was written`);
   }
   try {
-    await copyForgeForProof(forgeRoot, scratch, "init");
+    await copyForProof(forgeRoot, scratch, "init");
     try {
       await fs.mkdir(path.join(scratch, "profiles", name), { recursive: true });
       await fs.writeFile(path.join(scratch, "profiles", name, "profile.yaml"), init.newProfile.text, { flag: "wx" });

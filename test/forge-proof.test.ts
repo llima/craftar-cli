@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertNoLinkOnPath, copyForgeForProof, listFiles, removeProofCopy, scratchWriteRefusal } from "../src/core/forge.js";
+import { assertNoLinkOnPath, copyForgeForProof, copyForProof, listFiles, removeProofCopy, scratchWriteRefusal } from "../src/core/forge.js";
 import { tmpDir, writeFiles } from "./helpers/forge.js";
 
 // The scratch copy a Forge proof runs on, and the link check its writes share — `drift promote` (spec 30) and
@@ -156,5 +156,38 @@ describe.skipIf(process.platform === "win32" || rootUser)("copyForgeForProof giv
     expect((await fs.stat(scratch)).mode & 0o777).toBe(0o500);
     await removeProofCopy(scratch);
     await expect(fs.lstat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("scratchWriteRefusal on win32 and for the tree's shape", () => {
+  it("on win32, blames the Forge for a read-only file the copy kept, and the temporary directory otherwise", async () => {
+    const s = await scenario();
+    const scratch = path.join(s.root, "scratch");
+    await copyForgeForProof(s.forge, scratch);
+    const file = path.join(scratch, "ingredients/rules/workflow/rule.md");
+    const refuse = (code: string) => scratchWriteRefusal("unify", scratch, Object.assign(new Error("x"), { code, path: file }), "edit", "win32").message;
+    expect(refuse("EPERM")).toContain("the scratch copy in the temporary directory refused a write (EPERM)");
+    await fs.chmod(file, 0o444);
+    cleanups.push(() => fs.chmod(file, 0o644).catch(() => undefined));
+    expect(refuse("EPERM")).toBe("unify: ingredients/rules/workflow/rule.md could not be written on the scratch copy the edit is proved on (EPERM) — it cannot be written in the Forge either; nothing written");
+  });
+  it("blames the Forge's tree for ENOTDIR, EISDIR and ENOENT, on every platform", () => {
+    const scratch = path.join(path.sep, "tmp", "craftar-x");
+    for (const code of ["ENOTDIR", "EISDIR", "ENOENT"]) {
+      const e = Object.assign(new Error("x"), { code, path: path.join(scratch, "recipes", "base.yaml") });
+      for (const platform of ["linux", "win32"] as const) expect(scratchWriteRefusal("unify", scratch, e, "edit", platform).message).toContain("it cannot be written in the Forge either");
+    }
+  });
+});
+
+describe.skipIf(process.platform === "win32" || rootUser)("copyForProof", () => {
+  it("words an I/O error of the copy without naming the copy", async () => {
+    const s = await scenario();
+    const scratch = path.join(s.root, "scratch");
+    const unreadable = path.join(s.forge, "ingredients/rules/workflow/rule.md");
+    await fs.chmod(unreadable, 0o000);
+    cleanups.push(() => fs.chmod(unreadable, 0o644));
+    const err = await copyForProof(s.forge, scratch, "unify").then(() => null, (e: Error) => e.message);
+    expect(err).toBe("unify: the Forge could not be copied to the temporary directory to prove the edit (EACCES) — nothing written");
   });
 });

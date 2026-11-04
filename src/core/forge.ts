@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { promises as fs, statSync } from "node:fs";
 import path from "node:path";
 import {
   ForgeManifestSchema,
@@ -767,12 +767,40 @@ export function scratchWriteRefusal(
   const shown = at ? path.relative(scratch, at).split(path.sep).join("/") : "a file";
   // Only a refusal the copied modes explain says anything of the Forge; a full or read-only temporary directory, or a
   // scanner holding a file there, is the temporary directory's.
-  // On win32 the copy carries no mode (no chmod there), so EACCES / EPERM is a file held in the temporary directory.
-  if (platform === "win32" || !MODE_REFUSALS.has(code)) return new Error(`${command}: the scratch copy in the temporary directory refused a write (${code}) — nothing written; free or fix the temporary directory and run again`);
+  // On win32 the copy carries no directory mode (no chmod there) but does carry a file's read-only attribute, which
+  // copyFile keeps: EACCES / EPERM there is the Forge's only for a read-only file, else a file held in the temporary
+  // directory. A tree-shape code (ENOTDIR, EISDIR, ENOENT) comes from the tree the copy mirrors, as a mode does.
+  const forgeCaused = TREE_REFUSALS.has(code) || (MODE_REFUSALS.has(code) && (platform !== "win32" || readOnlyFile(at)));
+  if (!forgeCaused) return new Error(`${command}: the scratch copy in the temporary directory refused a write (${code}) — nothing written; free or fix the temporary directory and run again`);
   return new Error(`${command}: ${shown} could not be written on the scratch copy the ${proved} is proved on (${code}) — it cannot be written in the Forge either; nothing written`);
 }
 /** The codes a write gets from a file's or a directory's mode — what the copy carries from the Forge. */
 const MODE_REFUSALS = new Set(["EACCES", "EPERM"]);
+/** The codes a write gets from the tree's shape — which the copy mirrors from the Forge too. */
+const TREE_REFUSALS = new Set(["ENOTDIR", "EISDIR", "ENOENT"]);
+const readOnlyFile = (abs: string | undefined): boolean => {
+  if (!abs) return false;
+  try {
+    const st = statSync(abs);
+    return st.isFile() && (st.mode & 0o200) === 0;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * `copyForgeForProof` for a proof whose messages never name the copy (E38.1: unify, init): a copy refusal in words is
+ * its own message; an I/O error (a full temporary directory, a file it cannot read) says the copy could not be made.
+ */
+export async function copyForProof(forgeDir: string, scratchDir: string, command: string): Promise<void> {
+  try {
+    await copyForgeForProof(forgeDir, scratchDir, command);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (typeof code !== "string") throw e;
+    throw new Error(`${command}: the Forge could not be copied to the temporary directory to prove the edit (${code}) — nothing written`);
+  }
+}
 
 /**
  * A message from a load or a plan of the scratch copy names the copy; this puts the Forge's root in its place, whichever
