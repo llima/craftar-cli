@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { escapeReason } from "./contain.js";
+import { slotLabel } from "./integrations.js";
 import { templatedMetadataEdit } from "./metadata-params.js";
 import type { Owner } from "../schema/index.js";
 import type { FileStatus, Plan } from "./sync.js";
@@ -54,7 +55,7 @@ function staticReason(s: FileStatus, provided: Map<string, { slot: string; recip
   if (s.target === "services") return "service file";
   // Provided by integrations block — after "no longer produced" and "service file", before "kiro file"
   const prov = s.ingredient ? provided.get(s.ingredient) : undefined;
-  if (prov) return `provided by integrations.${prov.slot}`;
+  if (prov) return `provided by ${slotLabel(prov.slot)}`;
   const parent = s.ingredient ? parentLocals.get(s.ingredient) : undefined;
   if (parent !== undefined) return parentLocalReason(parent);
   if (reworded.has(s.path)) return REWORDED_REASON;

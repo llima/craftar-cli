@@ -5,7 +5,7 @@ import { placeholders, bodyFile } from "./extract.js";
 import { fingerprintOf, type DirReader } from "./fingerprint.js";
 import { parseYaml } from "./forge.js";
 import { renderServer, rendersServers } from "./mcp-server.js";
-import { substitute } from "./resolve.js";
+import { substitute, PLACEHOLDER_RE } from "./resolve.js";
 import type { ListContext } from "./list-params.js";
 import { RULES_INDEX_KEY } from "./rules-index.js";
 import { checkDeclaredOnce, expandSections, parseSections, projectSections, SectionMarkerError, type ParsedSections, type ParseSectionsOptions } from "./sections.js";
@@ -18,7 +18,6 @@ import { claudeResolves } from "../emitters/claude-code.js";
  * declared keys from the source. Pure but for the `DirReader` the importer hands in.
  */
 
-const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 const norm = (s: string) => toLf(stripBom(s));
 
 /**
@@ -195,7 +194,7 @@ function segments(line: string, holes: Set<string>, map: Record<string, unknown>
   const out: Segment[] = [];
   let last = 0;
   let lit = "";
-  for (const m of line.matchAll(PLACEHOLDER)) {
+  for (const m of line.matchAll(PLACEHOLDER_RE)) {
     lit += line.slice(last, m.index);
     last = m.index! + m[0].length;
     const key = m[1];

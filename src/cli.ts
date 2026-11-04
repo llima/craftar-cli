@@ -54,6 +54,7 @@ import { profileSectionFile, recipeSectionFile } from "./core/section-files.js";
 import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, metadataEdits, unmanaged, type DriftRow } from "./core/drift.js";
+import { slotLabel } from "./core/integrations.js";
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { assertNoLinkOnPath, exists, gitDirty, gitIgnored, gitIsRepo, gitTracked, gitUnheld, ignoredPaths, loadForge, realpathOfNearest, cannotResolve, unheldMessage, type UnheldPath } from "./core/forge.js";
@@ -111,7 +112,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.62.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.62.1");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -173,7 +174,7 @@ program
     for (const x of r.localCreated ?? []) console.log(`  local to profile ${r.profile}: ${x.ref} (${x.dir}) — created there`);
     for (const x of r.localRewritten ?? []) console.log(`  local to profile ${r.profile}: ${x.ref} (${x.dir}) — rewritten from ${x.source}`);
     if (r.localRecipe) console.log(`  local recipe ${r.localRecipe.name} (${r.localRecipe.file}): ${r.localRecipe.refs.join(", ")} — wired, last in profile ${r.profile}'s recipes`);
-    for (const x of r.leftToRecipes) console.log(`  left to recipe ${x.recipe} (integrations.${x.slot}): ${x.refs.join(", ")} — not compared; when this workspace resolves that recipe, craftar status shows whether its copies differ`);
+    for (const x of r.leftToRecipes) console.log(`  left to recipe ${x.recipe} (${slotLabel(x.slot)}): ${x.refs.join(", ")} — not compared; when this workspace resolves that recipe, craftar status shows whether its copies differ`);
     // Spec 10 §4.2: how a templated base was reused, and what the profile gained.
     // Spec 11 §4.3: `; sections …` when a section value filled the render.
     for (const x of r.rendered) {
@@ -248,7 +249,7 @@ program
     if (refusalBlock(unset)) process.exitCode = 1;
     if (overrideBlock(p)) process.exitCode = 1;
     if (escapeBlock(st)) process.exitCode = 1;
-    if (budgetRefusalBlock(p)) process.exitCode = 1;
+    if (checkRefusalBlock(p)) process.exitCode = 1;
   });
 
 /**
@@ -274,10 +275,10 @@ function escapeBlock(st: FileStatus[], opts: { thenSync?: boolean } = {}): boole
 }
 
 /**
- * The AGENTS.md budget refusal for a command that goes on to print or exit by itself: the block on stderr,
- * without exiting. Says whether there was one.
+ * The AGENTS.md budget refusal and the Kiro resources refusal for a command that goes on to print
+ * or exit by itself: the block on stderr, without exiting. Says whether there was one.
  */
-function budgetRefusalBlock(p: Plan): boolean {
+function checkRefusalBlock(p: Plan): boolean {
   const over = agentsMdOverBudget(p);
   if (over) errorLine(agentsMdRefusal(over));
   const kiroUnplanned = kiroResourcesUnplanned(p);
@@ -860,7 +861,7 @@ program
       // A refused sync is not "in sync", whatever the files say: the listing, then the block, and the exit is
       // exitCode's, so nothing queued is cut (spec 29 §4.1)
       // Both blocks are printed; either one, or a file out of sync, fails the check.
-      const refused = [refusalBlock(unset), overrideBlock(p), escapeBlock(st), budgetRefusalBlock(p)].some(Boolean);
+      const refused = [refusalBlock(unset), overrideBlock(p), escapeBlock(st), checkRefusalBlock(p)].some(Boolean);
       if (refused || bad.length) process.exitCode = 1;
       else console.log(pc.green("\nworkspace in sync"));
       return;
@@ -912,8 +913,8 @@ program
     if (refusalBlock(unsetDeclared(p)) && o.exitCode && !only) process.exitCode = 1;
     if (overrideBlock(p) && o.exitCode && !only) process.exitCode = 1;
     if (escapeBlock(st) && o.exitCode && !only) process.exitCode = 1;
-    // The AGENTS.md budget, as the refusal above: always printed, failing only --exit-code with no [path]
-    if (budgetRefusalBlock(p) && o.exitCode && !only) process.exitCode = 1;
+    // The AGENTS.md budget and Kiro resources refusals, as the refusal above: always printed, failing only --exit-code with no [path]
+    if (checkRefusalBlock(p) && o.exitCode && !only) process.exitCode = 1;
   });
 
 const DIFF_PAINT = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
@@ -958,7 +959,7 @@ async function checkGitSource(o: { workspace: string; check: boolean; committed?
     const bad = st.filter((s) => !["unchanged", "adopt"].includes(s.state));
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true, forgeLine(ws, lock));
     if (bad.length) console.log(pc.red(`\n${bad.length} file(s) out of sync`));
-    const refused = [refusalBlock(unsetDeclared(p)), overrideBlock(p), budgetRefusalBlock(p)].some(Boolean);
+    const refused = [refusalBlock(unsetDeclared(p)), overrideBlock(p), checkRefusalBlock(p)].some(Boolean);
     if (refused || bad.length) process.exitCode = 1;
     else console.log(pc.green(`\n${named} in sync`));
   } finally {
@@ -1716,7 +1717,7 @@ templates
 const mcpCmd = program
   .command("mcp")
   .description(
-    "Serve this workspace to an AI coder over the Model Context Protocol, on stdin and stdout: seven reading tools — status, diff, explain, recipes, ingredients, targets, doctor — with the data those commands print. Started by the AI coder, not typed. Reads only unless --allow-writes; reads without the network unless --fetch",
+    "Serve this workspace to an AI coder over the Model Context Protocol, on stdin and stdout: seven reading tools — status, diff, explain, recipes, ingredients, targets, doctor — with the data those commands print. Started by the AI coder, not typed. Reads only unless --allow-writes (doctor's dotnet probe aside, in a temporary directory it removes); reads without the network unless --fetch",
   )
   .option("--workspace <dir>", "the workspace to serve", ".")
   .option("--fetch", "let a tool call fetch a remote Forge instead of reading the cached copy", false)

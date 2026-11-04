@@ -8,6 +8,7 @@ import { KIRO_TEXT_EXT } from "../emitters/kiro.js";
 import { AGENTS_MD_BUDGET_KEY, AGENTS_MD_PRIMARY_KEY } from "../emitters/agents-md.js";
 import type { Hunk } from "./diff.js";
 import { stripBom, toLf } from "./text.js";
+import { PLACEHOLDER_RE } from "./resolve.js";
 
 /**
  * Parameter extraction (spec 09): turn a `take: param` hunk into a template whose `{{key}}`
@@ -24,8 +25,6 @@ export interface Extraction {
   /** The base already declared this key and cited `{{key}}` there (spec 09 §6.1, the reuse case). */
   reused: boolean;
 }
-
-const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 
 /**
  * Keys `unify` never extracts: a global param an emitter reads directly, or a name `substitute`
@@ -126,12 +125,12 @@ export function shellAtGate(meta: Ingredient, file: string, schema: number): boo
 
 /** `substitute` restricted to `keys`: every other placeholder is left as it is. */
 export function substituteKeys(text: string, values: Map<string, string>): string {
-  return text.replace(PLACEHOLDER, (m, key: string) => (values.has(key) ? values.get(key)! : m));
+  return text.replace(PLACEHOLDER_RE, (m, key: string) => (values.has(key) ? values.get(key)! : m));
 }
 
 /** The keys of every `{{…}}` in `text`, in order. */
 export function placeholders(text: string): string[] {
-  return [...text.matchAll(PLACEHOLDER)].map((m) => m[1]);
+  return [...text.matchAll(PLACEHOLDER_RE)].map((m) => m[1]);
 }
 
 const normalize = (tokens: string[]) => tokens.join("").replace(/\s+/g, " ").trim();

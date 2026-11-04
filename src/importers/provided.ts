@@ -9,7 +9,7 @@
 import { mergedProfile } from "../core/profile-extends.js";
 import { forgeFor } from "../core/profile-local.js";
 import { WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
-import { effectiveProfile } from "../core/integrations.js";
+import { effectiveProfile, integrationOrigin } from "../core/integrations.js";
 import { recipeOrder, resolve } from "../core/resolve.js";
 import type { Forge } from "../core/forge.js";
 import { outName } from "../emitters/shared.js";
@@ -50,7 +50,7 @@ export function providedByBlock(forge: Forge, profileName: string): Map<string, 
   const recipeToSlot = new Map<string, string>(); // recipe → the slot whose closure holds it first
   for (const s of eff.selected) {
     // A recipe two slots reach belongs to the first.
-    const walk = recipeOrder(forgeFor(forge, profileName), [s.recipe], `integrations.${s.slot} of profile ${profileName}`);
+    const walk = recipeOrder(forgeFor(forge, profileName), [s.recipe], integrationOrigin(s.slot, profileName));
     for (const r of walk) {
       if (!writtenRecipes.has(r) && !integrationSet.has(r)) {
         integrationSet.add(r);

@@ -73,7 +73,7 @@ import { RULE_MARKER_LINE, ruleMarker } from "../emitters/agents-md.js";
 import { readsTargetSections } from "../core/sections.js";
 import { profileSectionFile } from "../core/section-files.js";
 import { paramsFor, recipeOrder, sectionKey } from "../core/resolve.js";
-import { effectiveProfile } from "../core/integrations.js";
+import { effectiveProfile, slotLabel } from "../core/integrations.js";
 import { errorText } from "../core/schema-fault.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
@@ -231,11 +231,11 @@ const D16_BREAK = (wsPath: string, profile: string, errMsg: string) =>
 const D17 = (recipe: string, chain: string) =>
   `recipe ${recipe} reaches this workspace through ${chain} — promote does not fork a recipe chain; re-import the workspace or edit the recipes by hand`;
 const D18 = (p: string, recipe: string, profile: string, slot: string, ref: string) =>
-  `${p} comes from recipe ${recipe}, which profile ${profile} selects through integrations.${slot} — edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
+  `${p} comes from recipe ${recipe}, which profile ${profile} selects through ${slotLabel(slot)} — edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
 const D19 = (p: string, recipe: string, profile: string, slot: string, ref: string) =>
-  `${p} reaches this workspace through recipe ${recipe}, which profile ${profile} selects through integrations.${slot} and another profile also resolves — promote cannot fork a recipe a block selects; edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
+  `${p} reaches this workspace through recipe ${recipe}, which profile ${profile} selects through ${slotLabel(slot)} and another profile also resolves — promote cannot fork a recipe a block selects; edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
 const D19_UNRESOLVED = (p: string, recipe: string, profile: string, slot: string, ref: string, other: string) =>
-  `${p} reaches this workspace through recipe ${recipe}, which profile ${profile} selects through integrations.${slot}, and profile ${other} does not resolve, so promote cannot tell whether it also uses it — promote cannot fork a recipe a block selects; fix profile ${other}, edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
+  `${p} reaches this workspace through recipe ${recipe}, which profile ${profile} selects through ${slotLabel(slot)}, and profile ${other} does not resolve, so promote cannot tell whether it also uses it — promote cannot fork a recipe a block selects; fix profile ${other}, edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
 const INTERNAL_REUSE = (p: string) => `internal: ${p} is drift but the Forge already renders it — please report this`;
 interface OtherWorkspaceCheck {
   entries: ForgeWorkspace[];

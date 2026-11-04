@@ -22,7 +22,7 @@ import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileWr
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, recipeOrder, resolve, sectionKey, type Resolution } from "../core/resolve.js";
 import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE } from "../core/rules-index.js";
-import { effectiveProfile } from "../core/integrations.js";
+import { effectiveProfile, slotLabel } from "../core/integrations.js";
 import { classifyForge, credentialFault } from "../core/remote.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { editYamlText } from "../core/yaml-edit.js";
@@ -619,7 +619,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   try {
     provided = loaded?.profiles.has(opts.profileName) ? providedByBlock(loaded, opts.profileName) : new Map();
   } catch (e) {
-    throw new Error(`import: profile ${opts.profileName} does not resolve (${errorText(e)}) — fix the Forge and re-run`);
+    throw importUnresolved(opts.profileName, e);
   }
 
   /* ---- --prefer-kiro: the named rules take their text from the steering mirror (spec 29 §4.3) ---- */
@@ -660,7 +660,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
         const p = provided.get(providedKey)!;
         // `ref` is the Forge ref — the first entry of the provided entry's `refs` whose type is `rule`.
         const ref = p.refs.find((r) => r.startsWith("rule/")) ?? providedKey;
-        report.warnings.push(`--prefer-kiro ${name}: ${ref} is left to recipe ${p.recipe} (integrations.${p.slot}) — nothing to prefer; its steering file was not used`);
+        report.warnings.push(`--prefer-kiro ${name}: ${ref} is left to recipe ${p.recipe} (${slotLabel(p.slot)}) — nothing to prefer; its steering file was not used`);
         continue;
       }
 
@@ -1387,6 +1387,11 @@ export async function readEmitted(
   }
 
   return null;
+}
+
+/** The refusal when the importing profile does not resolve — one wording for both call sites. */
+function importUnresolved(profile: string, e: unknown): Error {
+  return new Error(`import: profile ${profile} does not resolve (${errorText(e)}) — fix the Forge and re-run`);
 }
 
 /**
@@ -2240,7 +2245,7 @@ async function existingProfile(
     const eff = effectiveProfile(loaded, p);
     return { params: { ...eff.params }, sections: p.sections, blockKeys: eff.blockKeys, warnings: eff.warnings };
   } catch (e) {
-    throw new Error(`import: profile ${profile} does not resolve (${errorText(e)}) — fix the Forge and re-run`);
+    throw importUnresolved(profile, e);
   }
 }
 

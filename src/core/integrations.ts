@@ -195,7 +195,7 @@ function ownEffective(forge: Pick<Forge, "manifest">, profile: Profile): Effecti
 
     // 2. Validate slot value is a mapping.
     if (slotValue === null || typeof slotValue !== "object" || Array.isArray(slotValue)) {
-      throw new Error(`profile ${pName}: integrations.${slot} is not a mapping`);
+      throw new Error(`profile ${pName}: ${slotLabel(slot)} is not a mapping`);
     }
 
     // Now we know slotValue is a plain object.
@@ -209,7 +209,7 @@ function ownEffective(forge: Pick<Forge, "manifest">, profile: Profile): Effecti
       if (!KEY_RE.test(key)) {
         const { shown, suffix } = shownName(key, j);
         throw new Error(
-          `profile ${pName}: integrations.${slot} key ${shown} is not a key name — letters, digits and _ only${suffix}`,
+          `profile ${pName}: ${slotLabel(slot)} key ${shown} is not a key name — letters, digits and _ only${suffix}`,
         );
       }
 
@@ -224,7 +224,7 @@ function ownEffective(forge: Pick<Forge, "manifest">, profile: Profile): Effecti
       if (key === "kind") {
         if (typeof val !== "string" || !KIND_RE.test(val)) {
           throw new Error(
-            `profile ${pName}: integrations.${slot}.kind is not a kind name — a string of lowercase letters, digits, ".", "_" and "-", starting with a letter or a digit`,
+            `profile ${pName}: ${slotLabel(slot)}.kind is not a kind name — a string of lowercase letters, digits, ".", "_" and "-", starting with a letter or a digit`,
           );
         }
         // kind is a param like any other scalar, and also selects a recipe.
@@ -248,7 +248,7 @@ function ownEffective(forge: Pick<Forge, "manifest">, profile: Profile): Effecti
       } else {
         // A mapping or list: warn and skip.
         warnings.push(
-          `profile ${pName}: integrations.${slot}.${key} is not a scalar — not available as a param`,
+          `profile ${pName}: ${slotLabel(slot)}.${key} is not a scalar — not available as a param`,
         );
       }
     }
@@ -270,20 +270,31 @@ function ownEffective(forge: Pick<Forge, "manifest">, profile: Profile): Effecti
 }
 
 /* ------------------------------------------------------------------ */
-/* integrationOrigin                                                    */
+/* slotLabel, integrationOrigin                                         */
 /* ------------------------------------------------------------------ */
+
+/** `integrations.<slot>` — the one spelling of a slot's label in a message. */
+export function slotLabel(slot: string): string {
+  return `integrations.${slot}`;
+}
 
 /**
  * `integrations.<slot> of profile <name>` — the origin an unknown integration recipe is
  * reported with.
  */
 export function integrationOrigin(slot: string, profile: string): string {
-  return `integrations.${slot} of profile ${profile}`;
+  return `${slotLabel(slot)} of profile ${profile}`;
 }
 
 /* ------------------------------------------------------------------ */
 /* recipesOrWritten                                                     */
 /* ------------------------------------------------------------------ */
+
+/** The warning for a profile whose block does not read: its recipes are read as written (§4.3). */
+export function writtenWarning(e: unknown): string {
+  const message = e instanceof Error ? e.message : String(e);
+  return `${message} — its recipes are read as written`;
+}
 
 /**
  * For the two whole-Forge walks (§4.3): the effective recipes, or the written ones plus the one
@@ -296,10 +307,9 @@ export function recipesOrWritten(
   try {
     return { recipes: effectiveProfile(forge, profile).recipes, warning: null };
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
     return {
       recipes: profile.recipes,
-      warning: `${message} — its recipes are read as written`,
+      warning: writtenWarning(e),
     };
   }
 }
