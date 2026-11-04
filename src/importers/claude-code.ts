@@ -9,7 +9,7 @@ import { readWorkspaceConfig } from "../core/sync.js";
 import { containRoot, escapeDestinationLine, escapeFileLine, escapeOf, escapeSourceLine, escapingPaths, readForgeFile, readForgeText, type ContainRoot, type Escape, type EscapingPath } from "../core/contain.js";
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
-import { copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, FORGE_MANIFEST, readIngredientText, type Forge } from "../core/forge.js";
+import { copyForgeForProof, exists, gitUnheld, listFiles, loadForge, parseYaml, typeFolder, unheldMessage, FORGE_MANIFEST, readIngredientText, type Forge } from "../core/forge.js";
 import { writeForgeFile } from "../core/forge-write.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, isUtf16Text } from "../core/secrets.js";
@@ -136,6 +136,14 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
   try {
     planned = await planImport(opts, stage);
     await checkStagedLocals(opts, stage, planned.report, planned.mcpOrder);
+    // Decision 12 (tech-debt L2a, E1.2): a variant, a local or a section value file rewritten whole must be held by git,
+    // since git is the only undo of an uncommitted edit there. A path the import only creates needs nothing, so a first
+    // import into a new Forge — a repository or not — is not gated.
+    const overwritten = await stage.overwritten();
+    if (overwritten.length) {
+      const unheld = await gitUnheld(stage.root, overwritten);
+      if (unheld.length) throw new Error(unheldMessage("import", stage.root, unheld));
+    }
   } catch (e) {
     throw new Error(`${e instanceof Error ? e.message : String(e)}\nThe Forge was left untouched.`, { cause: e });
   }
@@ -940,6 +948,25 @@ export class ForgeStage {
 
   write(abs: string, content: string | Buffer): void {
     this.files.set(abs, content);
+  }
+
+  /** Paths (a file, or a directory and everything under it) this run rewrites whole (tech-debt L2a, E1.2, decision 12). */
+  private readonly whole = new Set<string>();
+
+  /**
+   * Mark `abs` — an ingredient's directory a variant or a local is rewritten into, or a file written whole — so that
+   * every staged path under it that exists on disk must be held by git before the first write (`overwritten`).
+   */
+  rewritesWhole(abs: string): void {
+    this.whole.add(abs);
+  }
+
+  /** The staged paths that exist on disk under a path marked by `rewritesWhole`, sorted: what the import overwrites whole. */
+  async overwritten(): Promise<string[]> {
+    const under = (abs: string) => [...this.whole].some((w) => abs === w || abs.startsWith(w + path.sep));
+    const out: string[] = [];
+    for (const abs of this.files.keys()) if (under(abs) && (await exists(abs))) out.push(abs);
+    return out.sort();
   }
 
   async exists(abs: string): Promise<boolean> {
@@ -1778,6 +1805,8 @@ async function writeIngredient(
     }
     yamlMeta[k] = v;
   }
+  // Every path that reuses an ingredient has returned: what reaches here is created, or rewrites a variant or a local whole.
+  stage.rewritesWhole(dir);
   stage.write(path.join(dir, "ingredient.yaml"), YAML.stringify(yamlMeta, { lineWidth: 0 }));
   for (const [rel, content] of Object.entries(files)) stage.write(path.join(dir, rel), content);
 
@@ -2399,7 +2428,11 @@ async function writeProfile(stage: ForgeStage, forge: string, name: string, comp
   for (const [key, byName] of Object.entries(sectionChange(report, ctx))) {
     for (const [n, v] of Object.entries(byName)) {
       const held = Object.hasOwn(before.sections, key) ? before.sections[key][n] : undefined;
-      if (held !== undefined && typeof held !== "string") stage.write(path.join(path.dirname(file), ...held.file.split("/")), v.replace(/\r\n?/g, "\n"));
+      if (held !== undefined && typeof held !== "string") {
+        const valueFile = path.join(path.dirname(file), ...held.file.split("/"));
+        stage.rewritesWhole(valueFile);
+        stage.write(valueFile, v.replace(/\r\n?/g, "\n"));
+      }
       else (sectionValues[key] ??= {})[n] = v;
     }
   }
