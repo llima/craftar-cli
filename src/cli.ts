@@ -57,6 +57,7 @@ import { driftList, metadataEdits, unmanaged, type DriftRow } from "./core/drift
 import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { assertNoLinkOnPath, exists, gitDirty, gitIgnored, gitIsRepo, gitTracked, gitUnheld, ignoredPaths, loadForge, realpathOfNearest, cannotResolve, unheldMessage, type UnheldPath } from "./core/forge.js";
+import { writeForgeFile } from "./core/forge-write.js";
 import { applyBasePromotion, planBasePromotion, proveBasePromotion } from "./core/promote.js";
 import { applyMove, planLocalize, planShare, proveMove, type ForgeMove, type MoveCommand } from "./core/localize.js";
 import { applyExtract, DEFAULT_MIN_BYTES, EXTRACT_COMMAND, planExtract, proveExtract, type ExtractPlan } from "./core/sections-extract.js";
@@ -2663,7 +2664,7 @@ forge
           for (const w of p.writes) {
             if (w.content !== null) {
               await note(journal, w.abs);
-              await fs.writeFile(w.abs, w.content);
+              await writeForgeFile(w.abs, w.content);
             } else {
               journal.push({ abs: w.abs, created: false });
               await fs.rm(w.abs, { force: true });
