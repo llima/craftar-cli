@@ -961,11 +961,24 @@ export class ForgeStage {
     this.whole.add(abs);
   }
 
-  /** The staged paths that exist on disk under a path marked by `rewritesWhole`, sorted: what the import overwrites whole. */
+  /**
+   * The staged paths under a path marked by `rewritesWhole` whose file on disk holds other bytes than the staged ones,
+   * sorted: what the import overwrites whole. A file it would write back unchanged loses nothing and is not named.
+   */
   async overwritten(): Promise<string[]> {
     const under = (abs: string) => [...this.whole].some((w) => abs === w || abs.startsWith(w + path.sep));
     const out: string[] = [];
-    for (const abs of this.files.keys()) if (under(abs) && (await exists(abs))) out.push(abs);
+    for (const [abs, content] of this.files) {
+      if (!under(abs) || !(await exists(abs))) continue;
+      const staged = Buffer.isBuffer(content) ? content : Buffer.from(content, "utf8");
+      let disk: Buffer | null = null;
+      try {
+        disk = await fs.readFile(abs);
+      } catch {
+        disk = null; // unreadable: named, so git decides
+      }
+      if (disk === null || !disk.equals(staged)) out.push(abs);
+    }
     return out.sort();
   }
 

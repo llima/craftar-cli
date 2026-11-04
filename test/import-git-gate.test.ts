@@ -158,7 +158,7 @@ describe("import refuses to rewrite whole what git does not hold (E1.2)", () => 
 });
 
 describe("ForgeStage.overwritten", () => {
-  it("names only staged paths that exist under a path marked rewritten whole", async () => {
+  it("names only staged paths that exist, with other bytes, under a path marked rewritten whole", async () => {
     const root = await tmpDir("craftar-import-gate-");
     roots.push(root);
     const dir = path.join(root, "ingredients/hooks/guard");
@@ -167,6 +167,7 @@ describe("ForgeStage.overwritten", () => {
     const stage = new ForgeStage(root);
     stage.rewritesWhole(dir);
     stage.write(path.join(dir, "guard.sh"), "new\n");
+    stage.write(path.join(dir, "ingredient.yaml"), "x\n");
     stage.write(path.join(dir, "guard.ps1"), "created\n");
     stage.write(path.join(root, "profiles/acme/profile.yaml"), "name: acme\nrecipes: []\n");
     expect(await stage.overwritten()).toEqual([path.join(dir, "guard.sh")]);
