@@ -674,8 +674,9 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
       const entSrc = path.join(src, ent.name);
       const entDest = path.join(dest, ent.name);
 
-      // At the root, only what loadForge reads.
-      if (rel === "" && ent.name !== FORGE_MANIFEST && !ROOT_DIRS.has(ent.name)) continue;
+      // At the root, only what loadForge reads — compared without case: on a disk that folds case (Windows, macOS)
+      // loadForge's `recipes` opens a `Recipes` folder, so the copy keeps it too, under the name it has.
+      if (rel === "" && ent.name.toLowerCase() !== FORGE_MANIFEST && !ROOT_DIRS.has(ent.name.toLowerCase())) continue;
 
       if (ent.isSymbolicLink()) {
         // First, check if we can resolve the symlink at all

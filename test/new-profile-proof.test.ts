@@ -37,13 +37,15 @@ async function tree(dir: string): Promise<Record<string, string>> {
   return out;
 }
 async function withTmp<T>(tmp: string, f: () => Promise<T>): Promise<T> {
-  const prev = process.env.TMPDIR;
-  process.env.TMPDIR = tmp;
+  const prev = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
+  for (const k of Object.keys(prev)) process.env[k] = tmp;
   try {
     return await f();
   } finally {
-    if (prev === undefined) delete process.env.TMPDIR;
-    else process.env.TMPDIR = prev;
+    for (const [k, v] of Object.entries(prev)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
   }
 }
 
@@ -66,7 +68,7 @@ describe("proveNewProfileLoads (E38.1)", () => {
     const s = await setup();
     const ws = path.join(s.parent, "ws");
     const r = runCli(["init", "--forge", s.forge, "--new-profile", "initech", "--like", "acme", "--workspace", ws], {
-      env: { CRAFTAR_HOME: path.join(s.parent, "home"), TMPDIR: s.tmp },
+      env: { CRAFTAR_HOME: path.join(s.parent, "home"), TMPDIR: s.tmp, TEMP: s.tmp, TMP: s.tmp },
     });
     expect(r.code, r.stderr).toBe(0);
     expect(await fs.readFile(path.join(s.forge, "profiles/initech/profile.yaml"), "utf8")).toContain("name: initech");

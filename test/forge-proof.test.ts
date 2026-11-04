@@ -104,3 +104,13 @@ describe.skipIf(process.platform === "win32" || rootUser)("copyForgeForProof kee
     await expect(fs.lstat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
+
+describe("copyForgeForProof compares the root's names without case (E9.2)", () => {
+  it("keeps a root tree spelled with capitals, as a disk that folds case reads it", async () => {
+    const s = await scenario();
+    await writeFiles(s.forge, { "Recipes/base.yaml": "name: base\ningredients: []\n" });
+    const scratch = path.join(s.root, "scratch");
+    await copyForgeForProof(s.forge, scratch);
+    expect(await listFiles(scratch)).toContain("Recipes/base.yaml");
+  });
+});

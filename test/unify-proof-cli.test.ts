@@ -39,7 +39,7 @@ async function scenario(extra: Record<string, string>) {
   git(forge, "add", "-A");
   git(forge, "commit", "-q", "-m", "forge");
   const unify = () =>
-    runCli(["forge", "unify", "rule/workflow", "--profile", "acme", "--take", "variant", "--forge", forge, "--no-impact"], { env: { CRAFTAR_HOME: path.join(root, "home"), TMPDIR: tmp } });
+    runCli(["forge", "unify", "rule/workflow", "--profile", "acme", "--take", "variant", "--forge", forge, "--no-impact"], { env: { CRAFTAR_HOME: path.join(root, "home"), TMPDIR: tmp, TEMP: tmp, TMP: tmp } });
   return { root, forge, tmp, unify };
 }
 
@@ -51,8 +51,8 @@ describe("forge unify proves the Forge still loads before it writes (E38.1)", ()
     const s = await scenario({ "craftar.forge.yaml": YAML.stringify({ name: "test-forge", schema: 8 }) });
     const f = await loadForge(s.forge);
     const before = await snapshot(s.forge);
-    const prevTmp = process.env.TMPDIR;
-    process.env.TMPDIR = s.tmp;
+    const prevTmp = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
+    for (const k of Object.keys(prevTmp)) process.env[k] = s.tmp;
     try {
       const run = proveUnifyLoads(f, {
         files: [],
@@ -67,8 +67,10 @@ describe("forge unify proves the Forge still loads before it writes (E38.1)", ()
       expect(err).toMatch(/\nnothing written$/);
       expect(err).not.toContain(s.tmp);
     } finally {
-      if (prevTmp === undefined) delete process.env.TMPDIR;
-      else process.env.TMPDIR = prevTmp;
+      for (const [k, v] of Object.entries(prevTmp)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
     }
     expect(await snapshot(s.forge)).toEqual(before);
     expect((await fs.readdir(s.tmp)).filter((n) => n.startsWith("craftar-"))).toEqual([]);
