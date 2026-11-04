@@ -10,7 +10,7 @@ export function runCli(args: string[], opts: { cwd?: string; env?: NodeJS.Proces
     cwd: opts.cwd ?? REPO,
     encoding: "utf8",
     env: { ...process.env, ...opts.env, NO_COLOR: "1" },
-    // Under vitest's per-test limit (180 s on win32, 30 s elsewhere), so a child slowed by a burst is cut by vitest's limit's margin, not first.
+    // 10 s under vitest's per-test limit (180 s on win32, 30 s elsewhere): a child slowed by a CPU burst on windows-latest fails with its own ETIMEDOUT before vitest's timeout, and spawnSync blocks the event loop, so vitest cannot cut it sooner.
     timeout: process.platform === "win32" ? 170_000 : 25_000,
   });
   if (r.error) throw r.error;

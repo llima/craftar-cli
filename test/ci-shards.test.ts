@@ -71,8 +71,13 @@ describe("vitest limits", () => {
 
   it("keeps runCli's spawn limit under the per-test limit on each platform", () => {
     const cliTs = readFileSync(path.join(REPO, "test/helpers/cli.ts"), "utf8");
-    expect(cliTs).toContain('timeout: process.platform === "win32" ? 170_000 : 25_000');
-    const spawnTimeout = win ? 170000 : 25000;
+    const match = cliTs.match(/timeout: process\.platform === "win32" \? (\d+)_000 : (\d+)_000/);
+    expect(match).not.toBeNull();
+    const winTimeout = Number(match![1]) * 1000;
+    const otherTimeout = Number(match![2]) * 1000;
+    expect(winTimeout).toBe(170000);
+    expect(otherTimeout).toBe(25000);
+    const spawnTimeout = win ? winTimeout : otherTimeout;
     const testTimeout = config.test?.testTimeout ?? 0;
     expect(spawnTimeout).toBeLessThan(testTimeout);
   });
