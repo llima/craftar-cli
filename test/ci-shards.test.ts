@@ -85,6 +85,20 @@ describe("vitest limits", () => {
 
 
 describe("Windows runner sampler", () => {
+  /** Returns lines in Invoke-Sample that match `$row += (not '')` but lack `# col:`. */
+  function unlabelled(script: string): string[] {
+    const invokeSampleMatch = script.match(/function Invoke-Sample \{[\s\S]*?^\}/m);
+    if (!invokeSampleMatch) return [];
+    const body = invokeSampleMatch[0];
+    const lines: string[] = [];
+    for (const line of body.split("\n")) {
+      if (/\$row \+= (?!'')/.test(line) && !line.includes("# col:")) {
+        lines.push(line.trim());
+      }
+    }
+    return lines;
+  }
+
   it("writes each column in the header's order", () => {
     const script = readFileSync(path.join(REPO, ".github/scripts/ci-sampler.ps1"), "utf8");
     const invokeSampleMatch = script.match(/function Invoke-Sample \{[\s\S]*?^\}/m);
@@ -100,6 +114,15 @@ describe("Windows runner sampler", () => {
     expect(headerLine).toBeDefined();
     const header = headerLine!.match(/'([^']+)'/)?.[1].split(",") ?? [];
     expect(colComments).toEqual(header);
+  });
+
+  it("labels every $row += line with # col:", () => {
+    const script = readFileSync(path.join(REPO, ".github/scripts/ci-sampler.ps1"), "utf8");
+    // Real script: every line should be labelled
+    expect(unlabelled(script)).toEqual([]);
+    // Mutated copy: removing one comment should show the offending line
+    const mutated = script.replace("# col: node", "");
+    expect(unlabelled(mutated)).toEqual(["try { $row += @(Get-Process -Name 'node' -ErrorAction SilentlyContinue).Count } catch { $row += '' }"]);
   });
 
   it("never assigns PowerShell's automatic $PID", () => {
@@ -169,7 +192,50 @@ describe("Windows runner sampler", () => {
   });
 });
 
+// Values under 30 s are deliberate hang guards and are allowed; the floor is deliberate.
+// A named constant, an exponent literal, or vi.setConfig is not scanned.
+function shortLimits(text: string): number[] {
+  const out: number[] = [];
+  // Pattern 1: timeout option objects, inline or multi-line, with or without other keys
+  const pattern1 = /\btimeout:\s*([\d_]+)\s*[,}]/g;
+  // Pattern 2: a numeric last argument closing a call at the end of a line
+  const pattern2 = /,\s*([\d_]+)\s*\)\s*;?\s*$/gm;
+  let m;
+  while ((m = pattern1.exec(text)) !== null) {
+    const v = Number(m[1].replace(/_/g, ""));
+    if (v >= 30000 && v < 180000) out.push(v);
+  }
+  while ((m = pattern2.exec(text)) !== null) {
+    const v = Number(m[1].replace(/_/g, ""));
+    if (v >= 30000 && v < 180000) out.push(v);
+  }
+  return out;
+}
+
 describe("per-test limits", () => {
+  it("the limit scan catches each form it claims", () => {
+    // Use string concatenation to prevent the scanner from matching these test strings
+    const T = "timeout";
+    const cases: [string, number[]][] = [
+      [`it("a", { ${T}: 60000 }, async () => {`, [60000]],
+      [`it("a", { ${T}: 60_000, retry: 1 }, async () => {`, [60000]],
+      [`it("a", {\n  ${T}: 60_000,\n}, async () => {`, [60000]],
+      [`it("a", { retry: 1, ${T}: 60_000 }, async () => {`, [60000]],
+      ['it("a", () => run(), 90_000)', [90000]],
+      ['it("a", body, 90_000);', [90000]],
+      ['  }, 120_000);', [120000]],
+      ['}, 120_000)', [120000]],
+      [`describe("a", { ${T}: 100000 }, () => {`, [100000]],
+      [`it("a", { ${T}: 5000 }, async () => {`, []],
+      [`it("a", { ${T}: atLeastWin32(60_000) }, async () => {`, []],
+      [`it("a", { ${T}: 180_000 }, async () => {`, []],
+      ['const x = { size: 60000 };', []],
+    ];
+    for (const [input, expected] of cases) {
+      expect(shortLimits(input), `input: ${JSON.stringify(input)}`).toEqual(expected);
+    }
+  });
+
   it("no explicit timeout cuts a test below 180 s on Windows", () => {
     const testDir = path.join(REPO, "test");
     const testFiles: string[] = [];
@@ -186,16 +252,8 @@ describe("per-test limits", () => {
     for (const file of testFiles) {
       const content = readFileSync(file, "utf8");
       const rel = path.relative(REPO, file);
-      const pattern1 = /\btimeout:\s*([\d_]+)\s*\}/g;
-      const pattern2 = /\}\s*,\s*([\d_]+)\s*\)/g;
-      let m;
-      while ((m = pattern1.exec(content)) !== null) {
-        const v = Number(m[1].replace(/_/g, ""));
-        if (v >= 30000 && v < 180000) bad.push(`${rel}:${v}`);
-      }
-      while ((m = pattern2.exec(content)) !== null) {
-        const v = Number(m[1].replace(/_/g, ""));
-        if (v >= 30000 && v < 180000) bad.push(`${rel}:${v}`);
+      for (const v of shortLimits(content)) {
+        bad.push(`${rel}:${v}`);
       }
     }
     expect(bad).toEqual([]);
