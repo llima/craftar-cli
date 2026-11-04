@@ -330,6 +330,8 @@ describe("forge promote — the command", () => {
     const err = await refused(s, s.promote(["--no-impact"], { TMPDIR: tmp }), before);
     expect(err.trim()).toMatch(/^error: forge promote: recipes\/[^ ]+ could not be written on the scratch copy the edit is proved on \((EACCES|EPERM)\) — it cannot be written in the Forge either; nothing written$/);
     expect(err).not.toContain(tmp);
+    // The file it was writing, never writeForgeFile's temporary sibling.
+    expect(err).not.toContain(".tmp");
     // The copy is removed, its read-only directory included.
     expect((await fs.readdir(tmp)).filter((n) => n.startsWith("craftar-"))).toEqual([]);
     await fs.chmod(locked, 0o755);

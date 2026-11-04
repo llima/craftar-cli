@@ -105,22 +105,23 @@ describe.skipIf(process.platform === "win32" || rootUser)("copyForgeForProof kee
   });
 });
 
-describe("copyForgeForProof compares the root's names without case (E9.2)", () => {
-  it("keeps a root tree spelled with capitals, as a disk that folds case reads it", async () => {
+const folds = process.platform === "win32" || process.platform === "darwin";
+describe("copyForgeForProof reads the root's names as loadForge finds them (E9.2)", () => {
+  it("keeps a root tree spelled with capitals where the disk folds case, and leaves it out elsewhere", async () => {
     const s = await scenario();
     await writeFiles(s.forge, { "Recipes/base.yaml": "name: base\ningredients: []\n" });
     const scratch = path.join(s.root, "scratch");
     await copyForgeForProof(s.forge, scratch);
-    expect(await listFiles(scratch)).toContain("Recipes/base.yaml");
+    expect((await listFiles(scratch)).includes("Recipes/base.yaml")).toBe(folds);
   });
-  it("refuses a root tree spelled with capitals that is a directory link, as it refuses recipes", async () => {
+  it("refuses a root tree link spelled with capitals where the disk folds case, and skips it elsewhere", async () => {
     const s = await scenario();
     const outside = path.join(s.root, "recipes-elsewhere");
     await fs.mkdir(outside);
     // A junction on Windows needs no privilege; elsewhere the type is ignored.
     await fs.symlink(outside, path.join(s.forge, "Recipes"), "junction");
-    await expect(copyForgeForProof(s.forge, path.join(s.root, "scratch"))).rejects.toThrow(
-      "Recipes is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory",
-    );
+    const run = copyForgeForProof(s.forge, path.join(s.root, "scratch"));
+    if (folds) await expect(run).rejects.toThrow("Recipes is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory");
+    else await expect(run).resolves.toBeUndefined();
   });
 });

@@ -646,6 +646,11 @@ const NON_REGULAR_FILE_REFUSAL = (rel: string, command: string) =>
 
 /** The root directories loadForge reads; a link there causes the scratch to differ from the real Forge. */
 const ROOT_DIRS = new Set(["ingredients", "recipes", "profiles"]);
+/**
+ * A root name as loadForge's `path.join(root, "recipes")` finds it: without case where the disk folds case by default
+ * (Windows, macOS), as written elsewhere — so a `Recipes` on Linux, which loadForge never opens, is neither copied nor refused.
+ */
+const rootName = (name: string): string => (process.platform === "win32" || process.platform === "darwin" ? name.toLowerCase() : name);
 
 /**
  * Copy what `loadForge` reads to a scratch directory, for the proof: `craftar.forge.yaml` and the `ingredients`,
@@ -674,9 +679,9 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
       const entSrc = path.join(src, ent.name);
       const entDest = path.join(dest, ent.name);
 
-      // At the root, only what loadForge reads — compared without case: on a disk that folds case (Windows, macOS)
-      // loadForge's `recipes` opens a `Recipes` folder, so the copy keeps it too, under the name it has.
-      if (rel === "" && ent.name.toLowerCase() !== FORGE_MANIFEST && !ROOT_DIRS.has(ent.name.toLowerCase())) continue;
+      // At the root, only what loadForge reads — on a disk that folds case (Windows, macOS) loadForge's `recipes` opens a
+      // `Recipes` folder, so the copy keeps it too, under the name it has.
+      if (rel === "" && rootName(ent.name) !== FORGE_MANIFEST && !ROOT_DIRS.has(rootName(ent.name))) continue;
 
       if (ent.isSymbolicLink()) {
         // First, check if we can resolve the symlink at all
@@ -694,7 +699,7 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
         if (targetStat.isDirectory()) {
           // A root directory link (ingredients, recipes, profiles) is refused: loadForge follows it
           // but the scratch would skip it, so the scratch would not load the same as the real Forge.
-          if (rel === "" && ROOT_DIRS.has(ent.name.toLowerCase())) {
+          if (rel === "" && ROOT_DIRS.has(rootName(ent.name))) {
             throw new Error(SYMLINK_DIR_REFUSAL(ent.name, command));
           }
           // Other directory links are skipped entirely — loadForge doesn't traverse them
@@ -743,7 +748,9 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
  * cannot be written there cannot be written in the Forge either. Names the path relative to the copy, never the copy.
  */
 export function scratchWriteRefusal(command: string, scratch: string, e: unknown, proved: "edit" | "move" = "edit"): Error {
-  const at = (e as NodeJS.ErrnoException).path;
+  const raw = (e as NodeJS.ErrnoException).path;
+  // writeForgeFile's temporary sibling is an implementation detail: name the file it was writing.
+  const at = raw ? path.join(path.dirname(raw), path.basename(raw).replace(/^\.(.+)\.craftar-\d+-[0-9a-f]+\.tmp$/, "$1")) : raw;
   const code = (e as NodeJS.ErrnoException).code ?? "the write failed";
   const shown = at ? path.relative(scratch, at).split(path.sep).join("/") : "a file";
   return new Error(`${command}: ${shown} could not be written on the scratch copy the ${proved} is proved on (${code}) — it cannot be written in the Forge either; nothing written`);
