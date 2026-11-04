@@ -8,6 +8,7 @@ import { fingerprintDir } from "../src/core/fingerprint.js";
 import { exists, loadForge } from "../src/core/forge.js";
 import { apply, loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
 import { tmpDir, writeFiles, fsRoot } from "./helpers/forge.js";
+import { holdForge } from "./helpers/remote.js";
 
 const TOKEN = "ghp_" + "x".repeat(36); // assembled at runtime on purpose
 const cleanups: Array<() => Promise<void>> = [];
@@ -1632,6 +1633,7 @@ describe("import — authEnv (spec 27)", () => {
     mcpContent.mcpServers.tracker.args = ["-y", "acme2"];
     await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
     // Import
+    holdForge(t.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     await importInto(t.forge, ws, "acme");
     // Check authEnv kept
     const variantMeta = await yaml(path.join(t.forge, "ingredients/mcp/tracker--acme/ingredient.yaml"));
@@ -1677,6 +1679,7 @@ describe("import — authEnv (spec 27)", () => {
     mcpContent.mcpServers.tracker.args = ["-y", "acme2"];
     await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
     // Import
+    holdForge(t.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     await importInto(t.forge, ws, "acme");
     // Variant should have NO authEnv
     const variantMeta = await yaml(path.join(t.forge, "ingredients/mcp/tracker--acme/ingredient.yaml"));
@@ -1734,6 +1737,7 @@ describe("import — authEnv (spec 27)", () => {
     const variantDir = path.join(t.forge, "ingredients/mcp/tracker--acme");
     const fpBefore = await fingerprintDir(variantDir, forgeReader(fsRoot(variantDir)));
     // Import unchanged — should NOT throw I8 (the variant fingerprint matches after authEnv is applied)
+    holdForge(t.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const r = await importInto(t.forge, ws, "acme");
     // The variant is reported (not reused) as 0.17.4 behavior.
     expect(r.variants.map((v) => v.name)).toEqual(["mcp/tracker--acme"]);
@@ -1820,6 +1824,7 @@ describe("import — authEnv (spec 27)", () => {
       const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
       mcpContent.mcpServers.tracker.args = ["-y", "acme2"];
       await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
+      holdForge(t2.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
       expect((await importInto(t2.forge, ws2, "acme")).warnings).toEqual([]);
       await syncWs(ws2);
       const beforeSecond = await snapshot(t2.forge);
@@ -1908,6 +1913,7 @@ describe("import — authEnv (spec 27)", () => {
       const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
       mcpContent.mcpServers.tracker.args = ["-y", "acme-custom"];
       await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
+      holdForge(t6.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
       const first = await importInto(t6.forge, ws6, "acme");
       expect(first.warnings).toEqual(["mcp/tracker: ACME_TRACKER_TOKEN declared by mcp/tracker is not declared by mcp/tracker--acme"]);
       await syncWs(ws6);
@@ -1940,6 +1946,7 @@ describe("import — authEnv (spec 27)", () => {
       const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
       mcpContent.mcpServers.tracker.args = ["-y", "acme2"];
       await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
+      holdForge(t7.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
       expect((await importInto(t7.forge, ws7, "acme")).warnings).toEqual([]);
       await syncWs(ws7);
       const beforeSecond = await snapshot(t7.forge);
@@ -2127,6 +2134,7 @@ describe("import — authEnv (spec 27)", () => {
     await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2) + "\n");
 
     // Import — the existing stale variant (without authEnv) is rewritten (it decides)
+    holdForge(t.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const r = await importInto(t.forge, ws, "acme");
 
     // Check: the stale variant is rewritten with none (it decides)

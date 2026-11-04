@@ -7,6 +7,7 @@ import { loadWorkspace, plan, status, apply, readLock } from "../src/core/sync.j
 import { listVariants } from "../src/core/variants.js";
 import { loadForge } from "../src/core/forge.js";
 import { tmpDir, writeFiles, profile, recipe } from "./helpers/forge.js";
+import { holdForge } from "./helpers/remote.js";
 
 /**
  * Import reuse tests for 0.40.1 tech debt fixes.
@@ -462,6 +463,7 @@ describe("a new MCP variant keeps the base's authEnv", () => {
       });
 
       // Import — should update the existing variant
+      holdForge(forgeRoot); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
       const result = await importClaudeCode({
         workspaceRoot: wsRoot,
         forgeRoot,

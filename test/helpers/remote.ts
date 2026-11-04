@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { removeWithRetry } from "./fs.js";
@@ -58,4 +59,15 @@ export async function remoteForge(spec: ForgeSpec): Promise<RemoteForge> {
     },
     cleanup: () => removeWithRetry(root),
   };
+}
+
+/**
+ * Commit a Forge directory as it is — `git init` first when it is not a repository — so that a re-import that rewrites
+ * a variant, a local or a section value file passes import's git gate (tech-debt L2a, E1.2), as it does for a user
+ * who committed the Forge after the last import.
+ */
+export function holdForge(dir: string): void {
+  if (!existsSync(path.join(dir, ".git"))) git(dir, "init", "-q", "-b", "main");
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "--allow-empty", "-m", "held");
 }

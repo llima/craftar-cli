@@ -7,6 +7,7 @@ import { importClaudeCode, mergeEmitted, type EmittedSource } from "../src/impor
 import { exists } from "../src/core/forge.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import { tmpDir, writeFiles } from "./helpers/forge.js";
+import { holdForge } from "./helpers/remote.js";
 
 // Synchronous probe at module load: case-insensitive on NTFS/APFS, case-sensitive on most Linux.
 const caseInsensitiveFs = (() => {
@@ -208,6 +209,7 @@ describe("import groups scripts/hooks by base name", () => {
       ".claude/scripts/run-x.ps1": "Write-Host hi\n",
       ".claude/scripts/run-x.sh": "echo hi\n",
     });
+    holdForge(t.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const r = await importInto(t.forge, t.ws("a"), "acme");
 
     // The re-import produces a variant (old shape differs from new)
@@ -275,6 +277,7 @@ describe("import groups scripts/hooks by base name", () => {
     await writeFiles(t.ws("a"), {
       ".claude/scripts/run-x.ps1": "Write-Host hi\n",
     });
+    holdForge(t.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const r = await importInto(t.forge, t.ws("a"), "acme");
 
     // Should warn about the leftover file

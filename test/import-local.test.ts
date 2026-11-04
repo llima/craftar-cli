@@ -7,7 +7,7 @@ import { resolve } from "../src/core/resolve.js";
 import { WorkspaceConfigSchema } from "../src/schema/index.js";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
-import { git } from "./helpers/remote.js";
+import { git, holdForge } from "./helpers/remote.js";
 
 /** Spec 51 §5.3 and acceptance 8: `craftar import --local=never|auto|always`. */
 
@@ -98,6 +98,7 @@ describe("import --local (spec 51 §5.3)", () => {
   it("--local=always refuses a differing root variant of the profile, and reuses an equal one", async () => {
     const withVariant: ForgeSpec = { ...spec, ingredients: [...spec.ingredients!, rule("style--acme", "# Style, acme\n", { as: "style" })], recipes: [...spec.recipes!, recipe("base--acme", ["rule/style--acme"])], profiles: [profile("acme", ["base--acme"]), profile("globex", ["base"])] };
     const same = await setup(withVariant);
+    holdForge(same.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const ok = importInto(same, "always");
     expect(ok.code, ok.stderr).toBe(0);
     const differs = await setup(withVariant, { ws: { ".claude/rules/style.md": "# Style, acme again\n" } });
@@ -134,6 +135,7 @@ describe("import --local (spec 51 §5.3)", () => {
       { schema: 8, files: { ...localRule("acme", "x", "Use {{tool}}.\n<!-- craftar:section tips -->\nTip.\n<!-- /craftar:section -->\n"), ...localRecipe("acme", "acme-extra", ["rule/x"]) } },
     );
     await fs.writeFile(path.join(s.ws, ".claude/rules/x.md"), "Use npm, always.\n");
+    holdForge(s.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const r = importInto(s, "auto");
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toContain("local to profile acme: rule/x (profiles/acme/ingredients/rules/x) — rewritten from .claude/rules/x.md");
@@ -264,6 +266,7 @@ describe("import --local (spec 51 §5.3)", () => {
     );
     const example = await fs.readFile(path.join(s.ws, ".claude/settings.craftar.example.json"), "utf8");
     await fs.writeFile(path.join(s.ws, ".claude/hooks/guard.py"), 'print("ok, edited")\n');
+    holdForge(s.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const r = importInto(s, "auto");
     expect(r.code, r.stderr).toBe(0);
     const meta = YAML.parse(await fs.readFile(path.join(s.forge, "profiles/acme/ingredients/hooks/guard/ingredient.yaml"), "utf8"));
@@ -277,6 +280,7 @@ describe("import --local (spec 51 §5.3)", () => {
     const v = { meta: hookMeta("guard--acme", { as: "guard" }), files: { "guard.py": 'print("ok")\n' } };
     const s = await setup({ ingredients: [rule("style", "# S\n"), v], recipes: [recipe("base", ["rule/style", "hook/guard--acme"])], profiles: [profile("acme", ["base"])] });
     await fs.writeFile(path.join(s.ws, ".claude/hooks/guard.py"), 'print("ok, edited")\n');
+    holdForge(s.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const r = importInto(s, "auto");
     expect(r.code, r.stderr).toBe(0);
     const meta = YAML.parse(await fs.readFile(path.join(s.forge, "ingredients/hooks/guard--acme/ingredient.yaml"), "utf8"));
@@ -307,6 +311,7 @@ describe("import --local (spec 51 §5.3)", () => {
       { files: { "profiles/acme/ingredients/mcp/idp/ingredient.yaml": YAML.stringify(mcpMeta("idp")), ...localRecipe("acme", "acme-extra", ["mcp/idp"]) } },
     );
     await editServer(s.ws, ["idp", "--v2"]);
+    holdForge(s.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const r = importInto(s, "auto");
     expect(r.code, r.stderr).toBe(0);
     const meta = YAML.parse(await fs.readFile(path.join(s.forge, "profiles/acme/ingredients/mcp/idp/ingredient.yaml"), "utf8"));
@@ -317,6 +322,7 @@ describe("import --local (spec 51 §5.3)", () => {
   it("under auto, a rewritten base-less root variant MCP server keeps its authEnv", async () => {
     const s = await setup({ ingredients: [rule("style", "# S\n"), { meta: mcpMeta("idp--acme", { as: "idp" }) }], recipes: [recipe("base", ["rule/style", "mcp/idp--acme"])], profiles: [profile("acme", ["base"])] });
     await editServer(s.ws, ["idp", "--v2"]);
+    holdForge(s.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const r = importInto(s, "auto");
     expect(r.code, r.stderr).toBe(0);
     const meta = YAML.parse(await fs.readFile(path.join(s.forge, "ingredients/mcp/idp--acme/ingredient.yaml"), "utf8"));
@@ -351,6 +357,7 @@ describe("import --local (spec 51 §5.3)", () => {
     const file = path.join(s.ws, ".claude/commands/ship.md");
     expect(await fs.readFile(file, "utf8")).toContain("Ship acme-org");
     await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace("Ship it.", "Ship it now."));
+    holdForge(s.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const r = importInto(s, "auto");
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toContain("command/ship: local rewritten from .claude/commands/ship.md — {{org}} is no longer in it");
@@ -362,6 +369,7 @@ describe("import --local (spec 51 §5.3)", () => {
       { files: { "profiles/acme/ingredients/mcp/idp/ingredient.yaml": YAML.stringify({ type: "mcp", name: "idp", params: { host: {} }, server: { command: "npx", args: ["idp", "--host", "{{host}}"] } }), ...localRecipe("acme", "acme-extra", ["mcp/idp"]) } },
     );
     await editServer(s.ws, ["idp", "--other"]);
+    holdForge(s.forge); // import gates a whole rewrite on git (tech-debt L2a, E1.2)
     const r = importInto(s, "auto");
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toContain("mcp/idp: local rewritten from .mcp.json — {{host}} is no longer in it");
