@@ -2,7 +2,6 @@ import path from "node:path";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
 import { decodeForScan } from "../core/secrets.js";
-import { RULES_INDEX_TOKEN } from "../core/rules-index.js";
 import {
   authEnvNames,
   buildRuleLookup,
@@ -117,10 +116,6 @@ export const claudeCode: Emitter<"claude-code"> = {
         case "agent": {
           const path = `.claude/agents/${outName(m)}.md`;
           const { raw, description, body } = resolveDoc(path, ing.ref, m, await ctx.text(ing, m.file, "claude-code"));
-          // At the gate, report if the placeholder is in an agent body (spec 44 §4.5)
-          if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(body)) {
-            ctx.reportIndexLeft(path);
-          }
           const doc = serializeFrontmatter({ name: outName(m), description, tools: m.tools, model: m.model }, body, { raw });
           out.push(await textFile(ctx, path, doc, t, ing.ref));
           break;
@@ -128,10 +123,6 @@ export const claudeCode: Emitter<"claude-code"> = {
         case "command": {
           const path = `.claude/commands/${outName(m)}.md`;
           const { raw, description, body } = resolveDoc(path, ing.ref, m, await ctx.text(ing, m.file, "claude-code"));
-          // At the gate, report if the placeholder is in a command body (spec 44 §4.5)
-          if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(body)) {
-            ctx.reportIndexLeft(path);
-          }
           const doc = serializeFrontmatter(
             { description, "argument-hint": m.argumentHint, "allowed-tools": m.allowedTools },
             body,
@@ -146,10 +137,6 @@ export const claudeCode: Emitter<"claude-code"> = {
             const rawText = await ctx.text(ing, "SKILL.md", "claude-code");
             const text = resolve(rawText, ing.ref);
             checkReworded(path, [rawText, text]);
-            // At the gate, report if the placeholder is in a skill body (spec 44 §4.5)
-            if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(text)) {
-              ctx.reportIndexLeft(path);
-            }
             out.push(await textFile(ctx, path, text, t, ing.ref));
           } else {
             // Directory skill: resolve .md files, scan others
@@ -160,10 +147,6 @@ export const claudeCode: Emitter<"claude-code"> = {
                 const rawText = await ctx.text(ing, f, "claude-code");
                 const text = resolve(rawText, ing.ref);
                 checkReworded(path, [rawText, text]);
-                // At the gate, report if the placeholder is in a skill body (spec 44 §4.5)
-                if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(text)) {
-                  ctx.reportIndexLeft(path);
-                }
                 out.push(await textFile(ctx, path, text, t, ing.ref));
               } else if (TEXT_EXT.test(f)) {
                 // Other text files: not resolved, but scanned

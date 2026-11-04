@@ -3,7 +3,6 @@ import { climbsOut, toCrlf } from "../core/text.js";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
 import { decodeForScan } from "../core/secrets.js";
-import { RULES_INDEX_TOKEN } from "../core/rules-index.js";
 import {
   appliesTo,
   buildRuleLookup,
@@ -141,10 +140,6 @@ export const kiro: Emitter<"kiro"> = {
           const rawBody = await ctx.text(ing, m.file, "kiro");
           const body = resolve(rawBody, ing.ref);
           checkReworded(path, [rawDesc, rawBody], ing.ref);
-          // At the gate, report if the placeholder is in an agent body (spec 44 §4.5)
-          if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(body)) {
-            ctx.reportIndexLeft(path);
-          }
           const tools = mapTools(m.tools, ctx);
           // agentResources reads the blanket-rewritten text, not the resolved text (spec 17 §4.6)
           const resources = m.resources ?? agentResources(outName(m), rewrite(rawDesc) + "\n" + rewrite(rawBody), ruleNames, scopedRules);
@@ -181,10 +176,6 @@ export const kiro: Emitter<"kiro"> = {
           const resolvedFm = m.frontmatterRaw ? resolve(m.frontmatterRaw, ing.ref) : null;
           const body = resolve(rawBody, ing.ref);
           checkReworded(path, [m.frontmatterRaw ? m.frontmatterRaw : (m.description ?? ""), rawBody], ing.ref);
-          // At the gate, report if the placeholder is in a command body (spec 44 §4.5)
-          if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(body)) {
-            ctx.reportIndexLeft(path);
-          }
           const doc = serializeFrontmatter(
             { description: resolvedDescription, "argument-hint": m.argumentHint, "allowed-tools": m.allowedTools },
             body,
@@ -199,10 +190,6 @@ export const kiro: Emitter<"kiro"> = {
             const rawText = await ctx.text(ing, "SKILL.md", "kiro");
             const text = resolve(rawText, ing.ref);
             checkReworded(path, [rawText], ing.ref);
-            // At the gate, report if the placeholder is in a skill body (spec 44 §4.5)
-            if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(text)) {
-              ctx.reportIndexLeft(path);
-            }
             out.push(crlf(path, text, ing.ref));
           } else {
             for (const f of await listFiles(ing.dir)) {
@@ -212,10 +199,6 @@ export const kiro: Emitter<"kiro"> = {
                 const rawText = await ctx.text(ing, f, "kiro");
                 const text = resolve(rawText, ing.ref);
                 checkReworded(path, [rawText], ing.ref);
-                // At the gate, report if the placeholder is in a skill body (spec 44 §4.5)
-                if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(text)) {
-                  ctx.reportIndexLeft(path);
-                }
                 out.push(crlf(path, text, ing.ref));
               } else {
                 // Binary file: scan but don't rewrite (spec 41 §4.4)
