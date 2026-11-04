@@ -256,7 +256,8 @@ const HOSTILE = [
   "\u0085::add-mask::nel",
   "\u2028::add-mask::ls",
   "\u2029::add-mask::ps",
-  "mid\u2028::add-mask::m",
+  "mid\u2028::add-mask::lsm",
+  "mid\u2029::add-mask::psm",
   "mid\u0085::add-mask::mnel",
 ].join("\n");
 const HOSTILE_PATH = "a%b:c,d;e]f\ng.md";
@@ -271,10 +272,10 @@ function hostileFaults(source: string, vendor: Vendor): string[] {
   if (/^\s*::add-mask::x/m.test(r.stdout)) faults.push("intact: add-mask");
   if (/^\s*::error::x/m.test(r.stdout)) faults.push("intact: error");
   if (/^[\s\u0085]*::add-mask::nel/m.test(r.stdout)) faults.push("intact: a line behind a next-line character");
-  // U+2028 and U+2029 are line terminators to a JavaScript regex, so `^` under `m` matches after them (measured, E37.3)
   // a runner may read a next-line character as a line start, where JavaScript's `^` does not (E37.3)
   if (r.stdout.includes("::add-mask::mnel")) faults.push("intact: add-mask behind a next-line character in mid-line");
-  for (const tail of ["ls", "ps", "m"]) if (r.stdout.includes(`::add-mask::${tail}`)) faults.push(`intact: add-mask behind a line or paragraph separator (${tail})`);
+  // U+2028 and U+2029: leading ones are whitespace to `\s`, and in mid-line `^` under `m` matches after them (E37.3)
+  for (const tail of ["ls", "ps", "lsm", "psm"]) if (r.stdout.includes(`::add-mask::${tail}`)) faults.push(`intact: add-mask behind a line or paragraph separator (${tail})`);
   const annotation = vendor === "azure" ? "##vso[task.logissue type=error;sourcepath=a%25b:c,d%3Be%5Df%0Ag.md]craftar: drift" : "::error file=a%25b%3Ac%2Cd;e]f%0Ag.md::craftar: drift";
   if (!r.stdout.split("\n").includes(annotation)) faults.push("path not escaped");
   return faults;
