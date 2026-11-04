@@ -66,7 +66,7 @@ import {
   type EmittedSource,
   ingredientYamlText,
 } from "./claude-code.js";
-import { decide, workspaceParams, workspaceSections, carryInto, type RunContext } from "./decide.js";
+import { decide, workspaceParams, workspaceSections, carryInto, isScriptOrHook, type RunContext } from "./decide.js";
 import { providedRefs } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
 import { RULE_MARKER_LINE, ruleMarker } from "../emitters/agents-md.js";
@@ -759,7 +759,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   }
 
   // For scripts/hooks with multiple files, read each file and merge using mergeEmitted
-  const scriptHookFiles = (meta.type === "script" || meta.type === "hook") ? (meta.files ?? [rel]) : null;
+  const scriptHookFiles = isScriptOrHook(meta) ? (meta.files ?? [rel]) : null;
   // Case U: a file of what would be promoted that escapes, before anything is read. Promote has no per-ingredient rejection.
   for (const part of scriptHookFiles ?? [rel]) {
     const [out] = await escapingSource(root, readType, part);

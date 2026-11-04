@@ -105,7 +105,7 @@ export function pin(ctx: RunContext, keys: Iterable<string>, map: Record<string,
 }
 
 /** True for script and hook types (E34.2f). */
-export function isScriptOrHook(meta: { type: string }): boolean {
+export function isScriptOrHook<T extends { type: string }>(meta: T): meta is Extract<T, { type: "script" | "hook" }> {
   return meta.type === "script" || meta.type === "hook";
 }
 

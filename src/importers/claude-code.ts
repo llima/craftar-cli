@@ -1420,7 +1420,7 @@ function bodyFromSteering(meta: Ingredient): boolean {
  */
 function fileWhere(meta: Ingredient, base: string, rel: string): string {
   if (meta.type === "skill" && meta.layout === "dir") return `${base}${rel}`;
-  if ((meta.type === "script" || meta.type === "hook") && meta.files && meta.files.length > 1) {
+  if (isScriptOrHook(meta) && meta.files && meta.files.length > 1) {
     return `${path.posix.dirname(base)}/${rel}`;
   }
   return base;
