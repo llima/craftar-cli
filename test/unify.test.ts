@@ -103,6 +103,7 @@ describe("planFrom", () => {
       { ref: "rule/workflow--acme", dir: VARIANT_DIR, forgeRoot: fsRoot(VARIANT_DIR), meta: { type: "rule", name: "workflow--acme", as: "workflow" } } as never,
       fakeDiff() as never,
       "acme",
+      1,
     );
     expect(plan.schema).toBe(1);
     expect(plan.base).toBe("rule/workflow");
@@ -140,7 +141,7 @@ describe("planFrom", () => {
     const variant = { ref: "rule/review-posture--acme", dir: variantDir, forgeRoot: fsRoot(variantDir), meta: { type: "rule", name: "review-posture--acme", as: "review-posture" } } as never;
     const diff = await diffIngredients(base, variant);
 
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     const paired = plan.files.find((f) => f.file === "rule.md")!;
 
     // The hunk should be classified as "block" (only in variant)
@@ -178,7 +179,7 @@ describe("planFrom", () => {
     const variant = { ref: "rule/review-posture--acme", dir: variantDir, forgeRoot: fsRoot(variantDir), meta: { type: "rule", name: "review-posture--acme", as: "review-posture", file: "./rule.md" } } as never;
     const diff = await diffIngredients(base, variant);
 
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     // The only hunk should be the block hunk for "| b |" below the "## Reviewer Table" heading
     const paired = plan.files.find((f) => f.file === "rule.md")!;
     expect(paired.hunks).toHaveLength(1);
@@ -207,15 +208,15 @@ async function scenario(baseFiles: Record<string, string>, variantFiles: Record<
 describe("applyPlan ignores the suggestion (spec 08 §4.3)", () => {
   it("gives the same result with the suggestions, without them, and with a mangled one", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "a\nuse acme-api\nc\n" }, { "rule.md": "a\nuse globex-api\nc\n" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files[0].hunks![0].take = "variant";
     expect(plan.files[0].hunks![0].suggestion?.class).toBe("value");
     const stripped = structuredClone(plan);
     delete stripped.files[0].hunks![0].suggestion;
     const mangled = UnifyPlanSchema.parse({ ...structuredClone(plan), files: [{ ...plan.files[0], hunks: [{ ...plan.files[0].hunks![0], suggestion: { class: "bogus" } }] }] });
-    const r = await applyPlan(base, variant, diff, plan);
-    expect(await applyPlan(base, variant, diff, stripped)).toEqual(r);
-    expect(await applyPlan(base, variant, diff, mangled)).toEqual(r);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
+    expect(await applyPlan(base, variant, diff, stripped, { forgeSchema: 1 })).toEqual(r);
+    expect(await applyPlan(base, variant, diff, mangled, { forgeSchema: 1 })).toEqual(r);
   });
 });
 
@@ -224,9 +225,9 @@ describe("applyPlan — paired files", () => {
     // base   rule.md: "a\nold\nc\n"
     // variant rule.md: "a\nnew\nc\n"
     const { base, variant, diff } = await scenario({ "rule.md": "a\nold\nc\n" }, { "rule.md": "a\nnew\nc\n" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files[0].hunks![0].take = "variant";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write["rule.md"]).toBe("a\nnew\nc\n");
     expect(r.unresolved).toBe(0);
     expect(r.resolved).toBe(true);
@@ -234,8 +235,8 @@ describe("applyPlan — paired files", () => {
 
   it("writes nothing for a hunk left at keep, and stays unresolved", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "a\nold\nc\n" }, { "rule.md": "a\nnew\nc\n" });
-    const plan = await planFrom(base, variant, diff, "acme");
-    const r = await applyPlan(base, variant, diff, plan);
+    const plan = await planFrom(base, variant, diff, "acme", 1);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write).toEqual({});
     expect(r.unresolved).toBe(1);
     expect(r.resolved).toBe(false);
@@ -243,42 +244,42 @@ describe("applyPlan — paired files", () => {
 
   it("keeps the base's line endings even when the variant's differ", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "a\r\nold\r\n" }, { "rule.md": "a\nnew\n" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files[0].hunks![0].take = "variant";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write["rule.md"]).toBe("a\r\nnew\r\n");
   });
 
   it("takes the final-newline state from whichever side won the last hunk", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "a\nb\n" }, { "rule.md": "a\nb" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files[0].hunks![0].take = "variant";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write["rule.md"]).toBe("a\nb");
   });
 
   it("keeps the base's final newline when the base wins the last hunk", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "a\nb\n" }, { "rule.md": "a\nb" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files[0].hunks![0].take = "base";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write).toEqual({}); // taking the base changes nothing
     expect(r.resolved).toBe(true);
   });
 
   it("applies a pure addition at a.start without dropping a base line", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "a\nb\n" }, { "rule.md": "a\nb\nc\n" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files[0].hunks![0].take = "variant";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write["rule.md"]).toBe("a\nb\nc\n");
   });
 
   it("keeps the base's BOM", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": `${BOM}a\nold\n` }, { "rule.md": "a\nnew\n" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files[0].hunks![0].take = "variant";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write["rule.md"]).toBe(`${BOM}a\nnew\n`);
   });
 
@@ -288,9 +289,9 @@ describe("applyPlan — paired files", () => {
     // 3, so the merge must fall back to the base's own eofNewline instead of treating "the last
     // hunk in the array" as "the hunk that reaches the end of the file".
     const { base, variant, diff } = await scenario({ "rule.md": "a\nb\nc" }, { "rule.md": "a\nX\nc" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files[0].hunks![0].take = "variant";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write["rule.md"]).toBe("a\nX\nc");
   });
 
@@ -299,18 +300,18 @@ describe("applyPlan — paired files", () => {
   // winning side contributes no lines, as here: a pure removal taken as `variant`.
   it("takes the final newline from the winning side's own text when that side contributes no lines", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "a\nb\nc" }, { "rule.md": "a\nb\n" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files[0].hunks![0].take = "variant";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write["rule.md"]).toBe("a\nb\n");
   });
 
   // Fix round 1, Finding 2: an all-lines-removed merge is the empty string, not a lone "\n".
   it("leaves an emptied file empty, not a lone newline", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "x\n" }, { "rule.md": "" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files[0].hunks![0].take = "variant";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write["rule.md"]).toBe("");
   });
 
@@ -321,21 +322,21 @@ describe("applyPlan — paired files", () => {
 
   it("refuses a plan whose hunk decisions no longer match the diff's hunk count", async () => {
     const { base, variant, diff } = await twoHunkScenario();
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     // Hand-edited down to one decision for a file the diff still says has two hunks.
     plan.files[0].hunks = [{ hunk: 2, at: plan.files[0].hunks![1].at, take: "variant" }];
-    await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow();
+    await expect(applyPlan(base, variant, diff, plan, { forgeSchema: 1 })).rejects.toThrow();
   });
 
   it("binds each decision to the hunk index it names, even listed out of order", async () => {
     const { base, variant, diff } = await twoHunkScenario();
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     // Reordered in the array: hunk 2's decision comes first, hunk 1's second.
     plan.files[0].hunks = [
       { hunk: 2, at: plan.files[0].hunks![1].at, take: "variant" },
       { hunk: 1, at: plan.files[0].hunks![0].at, take: "base" },
     ];
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write["rule.md"]).toBe("a\nold1\nb\nnew2\nc\n");
     expect(r.resolved).toBe(true);
     expect(r.unresolved).toBe(0);
@@ -345,8 +346,8 @@ describe("applyPlan — paired files", () => {
   // splitLines/withEol — that silently re-terminates a base with mixed line endings.
   it("leaves a mixed-EOL base untouched when every hunk is left at keep", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "a\r\nold\nc\n" }, { "rule.md": "a\nnew\nc\n" });
-    const plan = await planFrom(base, variant, diff, "acme"); // every decision defaults to keep
-    const r = await applyPlan(base, variant, diff, plan);
+    const plan = await planFrom(base, variant, diff, "acme", 1); // every decision defaults to keep
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write).toEqual({});
   });
 
@@ -356,8 +357,8 @@ describe("applyPlan — paired files", () => {
   // `resolved` is what gates deleting the variant's directory.
   it("reports unresolved equal to the hunk count, and resolved: false, when a paired file is left entirely at keep", async () => {
     const { base, variant, diff } = await twoHunkScenario();
-    const plan = await planFrom(base, variant, diff, "acme"); // every decision defaults to keep
-    const r = await applyPlan(base, variant, diff, plan);
+    const plan = await planFrom(base, variant, diff, "acme", 1); // every decision defaults to keep
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write).toEqual({});
     expect(r.unresolved).toBe(2);
     expect(r.resolved).toBe(false);
@@ -368,27 +369,27 @@ describe("applyPlan — paired files", () => {
   // throw rather than silently doing nothing (no write, no remove, not even counted unresolved).
   it("throws on a plan entry with neither hunk decisions nor a side", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "a\nold\nc\n" }, { "rule.md": "a\nnew\nc\n" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files.push({ file: "mystery.md", take: "variant" });
-    await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow(/mystery\.md/);
+    await expect(applyPlan(base, variant, diff, plan, { forgeSchema: 1 })).rejects.toThrow(/mystery\.md/);
   });
 });
 
 describe("applyPlan — one-sided files", () => {
   it("copies a variant-only file into the base when taken", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "x\n" }, { "rule.md": "x\n", "extra.md": "hello\n" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files.find((f) => f.file === "extra.md")!.take = "variant";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write["extra.md"]).toBe("hello\n");
     expect(r.remove).toEqual([]);
   });
 
   it("discards a variant-only file when the base is taken", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "x\n" }, { "rule.md": "x\n", "extra.md": "hello\n" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files.find((f) => f.file === "extra.md")!.take = "base";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write).toEqual({});
     expect(r.remove).toEqual([]);
     expect(r.resolved).toBe(true);
@@ -396,26 +397,26 @@ describe("applyPlan — one-sided files", () => {
 
   it("removes a base-only file when the variant is taken", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "x\n", "gone.md": "bye\n" }, { "rule.md": "x\n" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files.find((f) => f.file === "gone.md")!.take = "variant";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.remove).toEqual(["gone.md"]);
     expect(r.write).toEqual({});
   });
 
   it("leaves a base-only file alone when the base is taken", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "x\n", "gone.md": "bye\n" }, { "rule.md": "x\n" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files.find((f) => f.file === "gone.md")!.take = "base";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.remove).toEqual([]);
     expect(r.write).toEqual({});
   });
 
   it("stays unresolved while any one-sided file is still keep", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "x\n" }, { "rule.md": "x\n", "extra.md": "hello\n" });
-    const plan = await planFrom(base, variant, diff, "acme");
-    const r = await applyPlan(base, variant, diff, plan);
+    const plan = await planFrom(base, variant, diff, "acme", 1);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.unresolved).toBe(1);
     expect(r.resolved).toBe(false);
   });
@@ -569,36 +570,36 @@ describe("applyPlan — the plan covers the diff exactly once (Ruling 29)", () =
 
   it("refuses a plan with no entries at all, naming a file the diff has", async () => {
     const { base, variant, diff } = await coverageScenario();
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files = [];
-    await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow(/rule\.md|extra\.md/);
+    await expect(applyPlan(base, variant, diff, plan, { forgeSchema: 1 })).rejects.toThrow(/rule\.md|extra\.md/);
   });
 
   it("refuses a plan missing the entry for one file, and names it", async () => {
     const { base, variant, diff } = await coverageScenario();
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files[0].hunks![0].take = "variant";
     plan.files = plan.files.filter((f) => f.file !== "extra.md");
-    await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow(/extra\.md/);
+    await expect(applyPlan(base, variant, diff, plan, { forgeSchema: 1 })).rejects.toThrow(/extra\.md/);
   });
 
   it("refuses a plan with two entries for the same file, instead of letting the last one win", async () => {
     const { base, variant, diff } = await coverageScenario();
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     const extra = plan.files.find((f) => f.file === "extra.md")!;
     extra.take = "base";
     plan.files.push({ ...extra, take: "variant" });
     plan.files[0].hunks![0].take = "variant";
-    await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow(/extra\.md/);
+    await expect(applyPlan(base, variant, diff, plan, { forgeSchema: 1 })).rejects.toThrow(/extra\.md/);
   });
 
   it("refuses an entry carrying both hunk decisions and a side", async () => {
     const { base, variant, diff } = await coverageScenario();
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files[0].hunks![0].take = "variant";
     plan.files[0].onlyIn = "base";
     plan.files.find((f) => f.file === "extra.md")!.take = "variant";
-    await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow(/rule\.md/);
+    await expect(applyPlan(base, variant, diff, plan, { forgeSchema: 1 })).rejects.toThrow(/rule\.md/);
   });
 });
 
@@ -616,9 +617,9 @@ describe("unify — non-UTF-8 content (Ruling 31)", () => {
 
   it("copies a variant-only binary file into the base byte for byte", async () => {
     const { base, variant, diff } = await rawScenario({ "rule.md": "x\n" }, { "rule.md": "x\n", "logo.png": PNG });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files.find((f) => f.file === "logo.png")!.take = "variant";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     await writeUnified(base, r);
     const written = await fs.readFile(path.join((base as { dir: string }).dir, "logo.png"));
     expect(written.equals(PNG)).toBe(true);
@@ -636,16 +637,16 @@ describe("unify — non-UTF-8 content (Ruling 31)", () => {
       { file: "latin.txt", hunks: [{ kind: "binary", a: { start: 1, lines: [] }, b: { start: 1, lines: [] }, suggestion: { class: "block", reason: "[binary] latin.txt differs" } }] },
     ]);
     // planFrom and applyPlan still refuse via assertTextMergeable (the merge engine cannot merge it).
-    await expect(planFrom(base, variant, diff, "acme")).rejects.toThrow(/latin\.txt/);
+    await expect(planFrom(base, variant, diff, "acme", 1)).rejects.toThrow(/latin\.txt/);
     const plan = { schema: 1 as const, base: "rule/workflow", profile: "acme", variant: "rule/workflow--acme", baseFingerprint: "", variantFingerprint: "", files: [] };
-    await expect(applyPlan(base, variant, diff, plan as never)).rejects.toThrow(/latin\.txt/);
+    await expect(applyPlan(base, variant, diff, plan as never, { forgeSchema: 1 })).rejects.toThrow(/latin\.txt/);
   });
 
   it("accepts a pair that differs only in text when one side carries a UTF-8 BOM", async () => {
     const { base, variant, diff } = await rawScenario({ "rule.md": `${BOM}a\nold\n` }, { "rule.md": "a\nnew\n" });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files[0].hunks![0].take = "variant";
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write["rule.md"]).toBe(`${BOM}a\nnew\n`);
   });
 });
@@ -691,13 +692,13 @@ describe("the hunk suggestion in a plan (spec 08 §5.1)", () => {
 describe("take: param — the engine (spec 09 §6.1, §6.2)", () => {
   async function paramPlan(baseRule: string, variantRule: string, edit: (hunks: NonNullable<UnifyPlan["files"][number]["hunks"]>) => void) {
     const { base, variant, diff } = await scenario({ "rule.md": baseRule }, { "rule.md": variantRule });
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     edit(plan.files[0].hunks!);
     return { base, variant, diff, plan };
   }
   const run = async (b: string, v: string, edit: Parameters<typeof paramPlan>[2]) => {
     const { base, variant, diff, plan } = await paramPlan(b, v, edit);
-    return applyPlan(base, variant, diff, plan);
+    return applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
   };
   const err = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => e.message);
 
@@ -787,9 +788,9 @@ describe("take: param — the engine (spec 09 §6.1, §6.2)", () => {
     const base = { ref: "rule/workflow", dir: baseDir, forgeRoot: fsRoot(baseDir), meta: { type: "rule", name: "workflow", file: "./rule.md" } } as never;
     const variant = { ref: "rule/workflow--acme", dir: variantDir, forgeRoot: fsRoot(variantDir), meta: { type: "rule", name: "workflow--acme", as: "workflow", file: "./rule.md" } } as never;
     const diff = await diffIngredients(base, variant);
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     Object.assign(plan.files[0].hunks![0], { take: "param", params: [{ token: "globex-api", key: "deploy.api" }] });
-    const r = await applyPlan(base, variant, diff, plan);
+    const r = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(r.write["rule.md"]).toBe("use {{deploy.api}}\n");
     expect(r.params).toEqual([
       { key: "deploy.api", default: "globex-api", value: "acme-api", reused: false, sites: [{ file: "rule.md", hunk: 1 }] },
@@ -810,17 +811,17 @@ describe("take: param — the remaining engine rows (spec 09 AC 9)", () => {
     const base = { ref: "skill/run", dir: baseDir, forgeRoot: fsRoot(baseDir), meta: { type: "skill", name: "run", layout: "dir" } } as never;
     const variant = { ref: "skill/run--acme", dir: variantDir, forgeRoot: fsRoot(variantDir), meta: { type: "skill", name: "run--acme", as: "run", layout: "dir" } } as never;
     const diff = await diffIngredients(base, variant);
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     Object.assign(plan.files[0].hunks![0], { take: "param", params: [{ token: "globex-api", key: "k" }] });
-    expect(await err(applyPlan(base, variant, diff, plan))).toContain("is copied without substitution");
+    expect(await err(applyPlan(base, variant, diff, plan, { forgeSchema: 1 }))).toContain("is copied without substitution");
   });
 
   it("P10: a param plan refuses a variant held back by a metadata difference", async () => {
     const { base, variant, diff } = await scenario({ "rule.md": "x globex-api\n" }, { "rule.md": "x acme-api\n" });
     (variant as any).meta = { ...(variant as any).meta, targets: ["kiro"] };
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     Object.assign(plan.files[0].hunks![0], { take: "param", params: [{ token: "globex-api", key: "k" }] });
-    expect(await err(applyPlan(base, variant, diff, plan))).toContain("ingredient.yaml differs in targets");
+    expect(await err(applyPlan(base, variant, diff, plan, { forgeSchema: 1 }))).toContain("ingredient.yaml differs in targets");
   });
 
   it("P20: the proof refuses a template that does not render a side back", () => {
@@ -925,12 +926,12 @@ describe("U1 — a merge never changes section markers (spec 11 §6.12, Ruling 8
     const addBase = addForge.ingredients.get("skill/tool")!;
     const addVariant = addForge.ingredients.get("skill/tool--acme")!;
     const addDiff = await diffIngredients(addBase, addVariant);
-    const addPlan = await planFrom(addBase, addVariant, addDiff, "acme");
+    const addPlan = await planFrom(addBase, addVariant, addDiff, "acme", 1);
     // notes.md is one-sided in variant
     const notesPlan = addPlan.files.find((f) => f.file === "notes.md");
     expect(notesPlan).toBeDefined();
     notesPlan!.take = "variant";
-    expect(await e(applyPlan(addBase, addVariant, addDiff, addPlan))).toContain("sections none would become n");
+    expect(await e(applyPlan(addBase, addVariant, addDiff, addPlan, { forgeSchema: 1 }))).toContain("sections none would become n");
 
     const rmRoot = await tmpDir("craftar-u1-rm-");
     cleanups.push(() => fs.rm(rmRoot, { recursive: true, force: true }));
@@ -946,12 +947,12 @@ describe("U1 — a merge never changes section markers (spec 11 §6.12, Ruling 8
     const rmBase = rmForge.ingredients.get("skill/tool")!;
     const rmVariant = rmForge.ingredients.get("skill/tool--acme")!;
     const rmDiff = await diffIngredients(rmBase, rmVariant);
-    const rmPlan = await planFrom(rmBase, rmVariant, rmDiff, "acme");
+    const rmPlan = await planFrom(rmBase, rmVariant, rmDiff, "acme", 1);
     // notes.md is one-sided in base
     const rmNotesPlan = rmPlan.files.find((f) => f.file === "notes.md");
     expect(rmNotesPlan).toBeDefined();
     rmNotesPlan!.take = "variant";
-    expect(await e(applyPlan(rmBase, rmVariant, rmDiff, rmPlan))).toContain("the file would be removed with sections n");
+    expect(await e(applyPlan(rmBase, rmVariant, rmDiff, rmPlan, { forgeSchema: 1 }))).toContain("the file would be removed with sections n");
   });
 
   it("carries a rule's notes.md with markers over by take: variant — no target emits it (0.8.2)", async () => {
@@ -970,11 +971,11 @@ describe("U1 — a merge never changes section markers (spec 11 §6.12, Ruling 8
     const base = forge.ingredients.get("rule/w")!;
     const variant = forge.ingredients.get("rule/w--acme")!;
     const diff = await diffIngredients(base, variant);
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     const entry = plan.files.find((f) => f.file === "notes.md");
     expect(entry).toBeDefined();
     entry!.take = "variant";
-    const result = await applyPlan(base, variant, diff, plan);
+    const result = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(result.write["notes.md"]).toBe(notes);
   });
 });
@@ -1004,12 +1005,12 @@ describe("take: section (spec 12)", () => {
     const variantBody = "# Review\n\nDispatch reviewers.\n\n| Repo | Reviewer |\n|---|---|\n| `api` | bob |\n| `web` | alice |\n\nDone.\n";
     const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
     // variant has extra row; the hunk is a block hunk (lines only in variant)
-    const planObj = await planFrom(base, variant, diff, "acme");
+    const planObj = await planFrom(base, variant, diff, "acme", 1);
     // Set take: section with lines covering the whole table (lines 5-7)
     planObj.files[0].hunks![0].take = "section";
     (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "flavors", lines: "5-7" };
 
-    const result = await applyPlan(base, variant, diff, planObj);
+    const result = await applyPlan(base, variant, diff, planObj, { forgeSchema: 1 });
     expect(result.resolved).toBe(true);
 
     const merged = result.write["rule.md"] as string;
@@ -1043,11 +1044,11 @@ Done.
     const baseBody = BOM + "# Review\r\n\r\nTable:\r\n\r\n| a |\r\n\r\nDone.\r\n";
     const variantBody = BOM + "# Review\r\n\r\nTable:\r\n\r\n| b |\r\n\r\nDone.\r\n";
     const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
-    const planObj = await planFrom(base, variant, diff, "acme");
+    const planObj = await planFrom(base, variant, diff, "acme", 1);
     planObj.files[0].hunks![0].take = "section";
     (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "t" };
 
-    const result = await applyPlan(base, variant, diff, planObj);
+    const result = await applyPlan(base, variant, diff, planObj, { forgeSchema: 1 });
     const merged = result.write["rule.md"] as string;
 
     // Check BOM is kept
@@ -1064,14 +1065,14 @@ Done.
     const variantBody = "# Review\n\n| a |\n| b |\n| c |\n\nDone.\n";
     const { root, base, variant, diff } = await sectionScenario(baseBody, variantBody);
     // The variant's text differs from the base in the rows, resulting in hunks touching the section
-    const planObj = await planFrom(base, variant, diff, "acme");
+    const planObj = await planFrom(base, variant, diff, "acme", 1);
     // Both hunks touch the existing section, set them to take: section
     for (const h of planObj.files[0].hunks!) {
       h.take = "section";
       (h as Record<string, unknown>).section = { name: "flavors" };
     }
 
-    const result = await applyPlan(base, variant, diff, planObj);
+    const result = await applyPlan(base, variant, diff, planObj, { forgeSchema: 1 });
 
     // Body unchanged (only value is written to profile, not the file)
     expect(result.write["rule.md"]).toBeUndefined();
@@ -1088,14 +1089,14 @@ Done.
     // Variant has no markers, different content
     const variantBody = "# T\r\n\n| b |\n\nEnd.\n";
     const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
-    const planObj = await planFrom(base, variant, diff, "acme");
+    const planObj = await planFrom(base, variant, diff, "acme", 1);
     // Set take: section on all hunks (reuse, no new section)
     for (const h of planObj.files[0].hunks!) {
       h.take = "section";
       (h as Record<string, unknown>).section = { name: "flavors" };
     }
 
-    const result = await applyPlan(base, variant, diff, planObj);
+    const result = await applyPlan(base, variant, diff, planObj, { forgeSchema: 1 });
 
     // Body unchanged: write has no rule.md (spec 12 §6.7 step 3)
     expect(result.write["rule.md"]).toBeUndefined();
@@ -1107,7 +1108,7 @@ Done.
     const baseBody = "# Review\n\nDeploy to acme-api.\n\n| Repo |\n|---|\n| x |\n\nEnd.\n";
     const variantBody = "# Review\n\nDeploy to globex-api.\n\n| Repo |\n|---|\n| y |\n\nEnd.\n";
     const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
-    const planObj = await planFrom(base, variant, diff, "acme");
+    const planObj = await planFrom(base, variant, diff, "acme", 1);
 
     // First hunk is "acme-api" -> "globex-api" (param)
     planObj.files[0].hunks![0].take = "param";
@@ -1117,7 +1118,7 @@ Done.
     planObj.files[0].hunks![1].take = "section";
     (planObj.files[0].hunks![1] as Record<string, unknown>).section = { name: "repos" };
 
-    const result = await applyPlan(base, variant, diff, planObj);
+    const result = await applyPlan(base, variant, diff, planObj, { forgeSchema: 1 });
     expect(result.resolved).toBe(true);
     expect(result.params).toHaveLength(1);
     expect(result.params[0].key).toBe("deploy.api");
@@ -1154,11 +1155,11 @@ Done.
     const base = forge.ingredients.get("script/deploy")!;
     const variant = forge.ingredients.get("script/deploy--acme")!;
     const diffResult = await diffIngredients(base, variant);
-    const planObj = await planFrom(base, variant, diffResult, "acme");
+    const planObj = await planFrom(base, variant, diffResult, "acme", 1);
     planObj.files[0].hunks![0].take = "section";
     (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "s" };
 
-    await expect(applyPlan(base, variant, diffResult, planObj)).rejects.toThrow(
+    await expect(applyPlan(base, variant, diffResult, planObj, { forgeSchema: 1 })).rejects.toThrow(
       'unify plan: "run.bin" is copied without expansion by a target that emits it — a section marker there would be emitted literally',
     );
   });
@@ -1185,7 +1186,7 @@ Done.
     const base = forge.ingredients.get("skill/analyze")!;
     const variant = forge.ingredients.get("skill/analyze--acme")!;
     const diffResult = await diffIngredients(base, variant);
-    const planObj = await planFrom(base, variant, diffResult, "acme");
+    const planObj = await planFrom(base, variant, diffResult, "acme", 1);
 
     // Set both files to use section with the same name
     for (const pf of planObj.files) {
@@ -1195,7 +1196,7 @@ Done.
       }
     }
 
-    await expect(applyPlan(base, variant, diffResult, planObj)).rejects.toThrow(
+    await expect(applyPlan(base, variant, diffResult, planObj, { forgeSchema: 1 })).rejects.toThrow(
       /section same-name is named in ".*" and ".*"/,
     );
   });
@@ -1205,7 +1206,7 @@ Done.
     const baseBody = "# Review\n\na\nb\nc\nd\n";
     const variantBody = "# Review\n\nx\nb\nc\ny\n";
     const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
-    const planObj = await planFrom(base, variant, diff, "acme");
+    const planObj = await planFrom(base, variant, diff, "acme", 1);
 
     // Ensure we have at least 2 hunks
     expect(planObj.files[0].hunks!.length).toBeGreaterThanOrEqual(2);
@@ -1215,7 +1216,7 @@ Done.
     (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "s" };
     planObj.files[0].hunks![1].take = "keep";
 
-    await expect(applyPlan(base, variant, diff, planObj)).rejects.toThrow(
+    await expect(applyPlan(base, variant, diff, planObj, { forgeSchema: 1 })).rejects.toThrow(
       "unify plan: take: section needs the variant resolved in the same plan — 1 decision(s) still keep",
     );
   });
@@ -1235,11 +1236,11 @@ Done.
     const base = forge.ingredients.get("rule/review-posture")!;
     const variant = forge.ingredients.get("rule/review-posture--acme")!;
     const diffResult = await diffIngredients(base, variant);
-    const planObj = await planFrom(base, variant, diffResult, "acme");
+    const planObj = await planFrom(base, variant, diffResult, "acme", 1);
     planObj.files[0].hunks![0].take = "section";
     (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "s" };
 
-    await expect(applyPlan(base, variant, diffResult, planObj)).rejects.toThrow(
+    await expect(applyPlan(base, variant, diffResult, planObj, { forgeSchema: 1 })).rejects.toThrow(
       /unify plan: take: section needs the variant resolved in the same plan — ingredient.yaml differs in/,
     );
   });
@@ -1269,7 +1270,7 @@ Done.
     const base = forge.ingredients.get("skill/analyze")!;
     const variant = forge.ingredients.get("skill/analyze--acme")!;
     const diffResult = await diffIngredients(base, variant);
-    const planObj = await planFrom(base, variant, diffResult, "acme");
+    const planObj = await planFrom(base, variant, diffResult, "acme", 1);
     // Set section on SKILL.md only
     for (const pf of planObj.files) {
       if (pf.file === "SKILL.md" && pf.hunks) {
@@ -1280,7 +1281,7 @@ Done.
       }
     }
 
-    await expect(applyPlan(base, variant, diffResult, planObj)).rejects.toThrow(
+    await expect(applyPlan(base, variant, diffResult, planObj, { forgeSchema: 1 })).rejects.toThrow(
       /skill\/analyze--acme holds a section marker on notes.md:1/,
     );
   });
@@ -1301,10 +1302,10 @@ Done.
     const base = forge.ingredients.get("rule/review-posture")!;
     const variant = forge.ingredients.get("rule/review-posture--acme")!;
     const diff = await diffIngredients(base, variant);
-    const planObj = await planFrom(base, variant, diff, "acme");
+    const planObj = await planFrom(base, variant, diff, "acme", 1);
     planObj.files[0].hunks![0].take = "section";
     (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "flavors" };
-    const result = await applyPlan(base, variant, diff, planObj);
+    const result = await applyPlan(base, variant, diff, planObj, { forgeSchema: 1 });
     expect(result.resolved).toBe(true);
     expect(result.sections.map((s) => s.name)).toEqual(["flavors"]);
   });
@@ -1325,12 +1326,12 @@ Done.
     const variant = forge.ingredients.get("rule/w--acme")!;
     const diff = await diffIngredients(base, variant);
     const err = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => e.message);
-    const asParam = await planFrom(base, variant, diff, "acme");
+    const asParam = await planFrom(base, variant, diff, "acme", 1);
     Object.assign(asParam.files[0].hunks![0], { take: "param", params: [{ token: "globex-api", key: "k" }] });
-    expect(await err(applyPlan(base, variant, diff, asParam))).toContain('unify plan: "notes.md" is not emitted by any target');
-    const asSection = await planFrom(base, variant, diff, "acme");
+    expect(await err(applyPlan(base, variant, diff, asParam, { forgeSchema: 1 }))).toContain('unify plan: "notes.md" is not emitted by any target');
+    const asSection = await planFrom(base, variant, diff, "acme", 1);
     Object.assign(asSection.files[0].hunks![0], { take: "section", section: { name: "s" } });
-    expect(await err(applyPlan(base, variant, diff, asSection))).toContain('unify plan: "notes.md" is not emitted by any target');
+    expect(await err(applyPlan(base, variant, diff, asSection, { forgeSchema: 1 }))).toContain('unify plan: "notes.md" is not emitted by any target');
   });
 
   it("U1: --take variant over a marked base is still refused", async () => {
@@ -1338,13 +1339,13 @@ Done.
     const baseBody = "# Review\n\n<!-- craftar:section flavors -->\n| a |\n<!-- /craftar:section -->\n\nDone.\n";
     const variantBody = "# Review\n\n| b |\n\nDone.\n";
     const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
-    const planObj = await planFrom(base, variant, diff, "acme");
+    const planObj = await planFrom(base, variant, diff, "acme", 1);
     // Take variant on all hunks (no section declaration)
     for (const h of planObj.files[0].hunks!) {
       h.take = "variant";
     }
 
-    await expect(applyPlan(base, variant, diff, planObj)).rejects.toThrow(
+    await expect(applyPlan(base, variant, diff, planObj, { forgeSchema: 1 })).rejects.toThrow(
       /would lose or change section markers.*take base for the marker lines, or take: section to fill the section/,
     );
   });
@@ -1369,13 +1370,13 @@ Done.
     const base = forge.ingredients.get("rule/review-posture")!;
     const variant = forge.ingredients.get("rule/review-posture--acme")!;
     const diffResult = await diffIngredients(base, variant);
-    const planObj = await planFrom(base, variant, diffResult, "acme");
+    const planObj = await planFrom(base, variant, diffResult, "acme", 1);
     // Take variant on all hunks (no section declaration)
     for (const h of planObj.files[0].hunks!) {
       h.take = "variant";
     }
 
-    await expect(applyPlan(base, variant, diffResult, planObj)).rejects.toThrow(
+    await expect(applyPlan(base, variant, diffResult, planObj, { forgeSchema: 1 })).rejects.toThrow(
       /would lose or change section markers.*take base for the marker lines, or take: section to fill the section/,
     );
   });
@@ -1386,7 +1387,7 @@ Done.
     // Variant has neither marker
     const variantBody = "# Review\n\nc\n\nd\n";
     const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
-    const planObj = await planFrom(base, variant, diff, "acme");
+    const planObj = await planFrom(base, variant, diff, "acme", 1);
     // There should be hunks touching both sections
     // Take section on one, take variant on the other (dropping its markers)
     if (planObj.files[0].hunks!.length >= 2) {
@@ -1395,7 +1396,7 @@ Done.
       planObj.files[0].hunks![1].take = "variant";
     }
 
-    await expect(applyPlan(base, variant, diff, planObj)).rejects.toThrow(
+    await expect(applyPlan(base, variant, diff, planObj, { forgeSchema: 1 })).rejects.toThrow(
       /would lose or change section markers/,
     );
   });
@@ -1405,10 +1406,10 @@ Done.
     const baseBody = "a\nb\nc\n";
     const variantBody = "a\nx\nc\n";
     const { base, variant, diff } = await sectionScenario(baseBody, variantBody);
-    const planObj = await planFrom(base, variant, diff, "acme");
+    const planObj = await planFrom(base, variant, diff, "acme", 1);
     planObj.files[0].hunks![0].take = "base";
 
-    const result = await applyPlan(base, variant, diff, planObj);
+    const result = await applyPlan(base, variant, diff, planObj, { forgeSchema: 1 });
     expect(result.resolved).toBe(true);
     expect(result.sections).toEqual([]);
     // No changes when taking base on a simple diff
@@ -1425,7 +1426,7 @@ Done.
     const variantBody = "Hello {{y}}.\n\n| b |\n\nEnd.\n";
     const { root, base, variant, diff } = await sectionScenario(baseBody, variantBody);
 
-    const planObj = await planFrom(base, variant, diff, "acme");
+    const planObj = await planFrom(base, variant, diff, "acme", 1);
 
     // Hunk 1: param extraction for {{k}} → {{y}}
     planObj.files[0].hunks![0].take = "param";
@@ -1436,7 +1437,7 @@ Done.
     (planObj.files[0].hunks![1] as Record<string, unknown>).section = { name: "t" };
 
     // This should fail at step 5 of proveSections: placeholders differ
-    await expect(applyPlan(base, variant, diff, planObj)).rejects.toThrow(
+    await expect(applyPlan(base, variant, diff, planObj, { forgeSchema: 1 })).rejects.toThrow(
       /would change which \{\{…\}\} placeholders the text holds/,
     );
 
@@ -1457,14 +1458,14 @@ Done.
     // Should have 2 hunks: hunk 1 = insertion after line 1, hunk 2 = line 5 changed
     expect(diff.files[0].hunks.length).toBe(2);
 
-    const planObj = await planFrom(base, variant, diff, "acme");
+    const planObj = await planFrom(base, variant, diff, "acme", 1);
     // Set both hunks to section with same name
     planObj.files[0].hunks![0].take = "section";
     (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "t" };
     planObj.files[0].hunks![1].take = "section";
     (planObj.files[0].hunks![1] as Record<string, unknown>).section = { name: "t" };
 
-    const result = await applyPlan(base, variant, diff, planObj);
+    const result = await applyPlan(base, variant, diff, planObj, { forgeSchema: 1 });
     expect(result.resolved).toBe(true);
     expect(result.sections).toHaveLength(1);
     expect(result.sections[0].name).toBe("t");
@@ -1499,7 +1500,7 @@ f
     // Should have 2 hunks: insertion after line 1, insertion after line 2
     expect(diff.files[0].hunks.length).toBe(2);
 
-    const planObj = await planFrom(base, variant, diff, "acme");
+    const planObj = await planFrom(base, variant, diff, "acme", 1);
     // First hunk: section x
     planObj.files[0].hunks![0].take = "section";
     (planObj.files[0].hunks![0] as Record<string, unknown>).section = { name: "x" };
@@ -1507,7 +1508,7 @@ f
     planObj.files[0].hunks![1].take = "section";
     (planObj.files[0].hunks![1] as Record<string, unknown>).section = { name: "y" };
 
-    const result = await applyPlan(base, variant, diff, planObj);
+    const result = await applyPlan(base, variant, diff, planObj, { forgeSchema: 1 });
     expect(result.resolved).toBe(true);
     expect(result.sections).toHaveLength(2);
 
@@ -1550,7 +1551,7 @@ d
     const forge = await loadForge(root);
     const base = forge.ingredients.get("rule/w")!;
     const variant = forge.ingredients.get("rule/w--acme")!;
-    const plan = await planFrom(base, variant, await diffIngredients(base, variant), "acme");
+    const plan = await planFrom(base, variant, await diffIngredients(base, variant), "acme", 1);
     const notes = plan.files.find((f) => f.file === "notes.md");
     const rule = plan.files.find((f) => f.file === "rule.md");
     expect(notes).toBeDefined();
@@ -1581,13 +1582,13 @@ d
     const diff = await diffIngredients(base, variant);
 
     // planFrom: section name pre-fill should work (checks :87, :102)
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     expect(plan.files[0].hunks![0].section).toEqual({ name: "review" });
 
     // applyPlan with take: section should work (checks :430, :445, :692)
     plan.files[0].hunks![0].take = "section";
     (plan.files[0].hunks![0] as Record<string, unknown>).section = { name: "flavors", lines: "3-5" };
-    const result = await applyPlan(base, variant, diff, plan);
+    const result = await applyPlan(base, variant, diff, plan, { forgeSchema: 1 });
     expect(result.resolved).toBe(true);
     expect(result.sections).toHaveLength(1);
     expect(result.sections[0].name).toBe("flavors");
@@ -1614,11 +1615,11 @@ d
     const base = forge.ingredients.get("rule/w")!;
     const variant = forge.ingredients.get("rule/w--acme")!;
     const diff = await diffIngredients(base, variant);
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
     plan.files[0].hunks![0].take = "section";
     (plan.files[0].hunks![0] as Record<string, unknown>).section = { name: "s" };
 
-    await expect(applyPlan(base, variant, diff, plan)).rejects.toThrow(
+    await expect(applyPlan(base, variant, diff, plan, { forgeSchema: 1 })).rejects.toThrow(
       /rule\/w--acme holds a section marker on rule.md:3/,
     );
   });
@@ -1658,7 +1659,7 @@ d
     const base = forge.ingredients.get("script/tool")!;
     const variant = forge.ingredients.get("script/tool--acme")!;
     const diffResult = await diffIngredients(base, variant);
-    const planObj = await planFrom(base, variant, diffResult, "acme");
+    const planObj = await planFrom(base, variant, diffResult, "acme", 1);
 
     // Take base on b.sh hunks
     const bshFile = planObj.files.find((f) => f.file === "b.sh");
@@ -1669,7 +1670,7 @@ d
     ashFile!.hunks![0].take = "section";
     (ashFile!.hunks![0] as Record<string, unknown>).section = { name: "flavors" };
 
-    await expect(applyPlan(base, variant, diffResult, planObj)).rejects.toThrow(
+    await expect(applyPlan(base, variant, diffResult, planObj, { forgeSchema: 1 })).rejects.toThrow(
       /already declared in script\/tool \(b\.sh:2\)/,
     );
   });

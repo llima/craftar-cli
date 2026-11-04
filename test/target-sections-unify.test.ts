@@ -128,7 +128,7 @@ describe("unify with target-scoped sections (spec 41 Part B Task 05)", () => {
     const base = await loadIngredient(t.forge, "rule/style");
     const variant = await loadIngredient(t.forge, "rule/style--acme");
     const diff = await diffIngredients(base, variant);
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
 
     // Set all hunks to take variant
     for (const f of plan.files) {
@@ -222,7 +222,7 @@ describe("unify with target-scoped sections (spec 41 Part B Task 05)", () => {
     const base = await loadIngredient(t.forge, "rule/style");
     const variant = await loadIngredient(t.forge, "rule/style--acme");
     const diff = await diffIngredients(base, variant);
-    const plan = await planFrom(base, variant, diff, "acme");
+    const plan = await planFrom(base, variant, diff, "acme", 1);
 
     // Set all hunks to take variant
     for (const f of plan.files) {

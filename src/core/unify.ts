@@ -75,7 +75,7 @@ export async function planFrom(
   variant: LoadedIngredient,
   diff: IngredientDiff,
   profile: string,
-  forgeSchema: number = 1,
+  forgeSchema: number,
 ): Promise<UnifyPlan> {
   await assertTextMergeable(base, variant);
 
@@ -218,10 +218,10 @@ export interface ApplyOptions {
    */
   profileSections?: Record<string, string>;
   /**
-   * The Forge's `schema` (spec 33 §5.2): gates `reservedKey` for the `integrations.*` prefix.
-   * Default `1` (below every gate).
+   * The Forge's `schema` (spec 33 §5.2): gates `reservedKey` for the `integrations.*` prefix and
+   * every other schema gate of the merge. Required, so a call cannot fall below every gate by omission.
    */
-  forgeSchema?: number;
+  forgeSchema: number;
 }
 
 /** One section a plan run creates or fills (spec 12 §4.5, §5.5). */
@@ -368,7 +368,7 @@ export async function applyPlan(
   variant: LoadedIngredient,
   diff: IngredientDiff,
   plan: UnifyPlan,
-  opts: ApplyOptions = {},
+  opts: ApplyOptions,
 ): Promise<UnifyResult> {
   await assertTextMergeable(base, variant);
   const notes: string[] = [];
@@ -402,7 +402,7 @@ export async function applyPlan(
   const onlyInVariant = new Set(diff.onlyInVariant);
 
   const profileSections = opts.profileSections ?? {};
-  const forgeSchema = opts.forgeSchema ?? 1;
+  const forgeSchema = opts.forgeSchema;
   // Build parseOpts for this Forge schema (Spec 41 Part B §5.2).
   const parseOpts: ParseSectionsOptions = { targets: readsTargetSections({ schema: forgeSchema }) };
 
@@ -798,9 +798,9 @@ async function checkMarkers(
   base: LoadedIngredient,
   write: Record<string, string | Buffer>,
   remove: string[],
-  newNames: Map<string, string[]> = new Map(),
-  opts?: ParseSectionsOptions,
-  schema = 1,
+  newNames: Map<string, string[]>,
+  opts: ParseSectionsOptions,
+  schema: number,
 ): Promise<void> {
   const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
   const touched = [...Object.keys(write), ...remove].filter((rel) => bodyFile(base.meta, rel, base.dir, schema)).sort();

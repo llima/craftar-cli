@@ -49,9 +49,9 @@ async function extract(schema: number, key: string, pass = true) {
   const base = f.ingredients.get("rule/w")!;
   const variant = f.ingredients.get("rule/w--acme")!;
   const diff = await diffIngredients(base, variant);
-  const plan = await planFrom(base, variant, diff, "acme");
+  const plan = await planFrom(base, variant, diff, "acme", 1);
   Object.assign(plan.files[0].hunks![0], { take: "param", params: [{ token: "globex-api", key }] });
-  return applyPlan(base, variant, diff, plan, pass ? { forgeSchema: f.manifest.schema } : {});
+  return applyPlan(base, variant, diff, plan, { forgeSchema: pass ? f.manifest.schema : 1 });
 }
 const message = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => e.message);
 
