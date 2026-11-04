@@ -237,3 +237,24 @@ describe("loadForgeSource (spec 28 §5.2)", () => {
     expect(result.warnings[0].startsWith(`Forge ${r.url} not fetched (--offline) — using the cached copy at `)).toBe(true);
   });
 });
+
+describe("the fetch-failure line is marked, not read by its words (E40.1)", () => {
+  it("marks the line of a failed fetch that fell back to the cached copy, and not the --offline line", async () => {
+    const r = await remoteForge(SPEC);
+    const ws = await tmpDir("craftar-lfs-ws-");
+    const home = await tmpDir("craftar-lfs-home-");
+    cleanups.push(r.cleanup, () => fs.rm(ws, { recursive: true, force: true }), () => removeWithRetry(home));
+    const { loadForgeSource } = await import("../src/core/sync.js");
+    await loadForgeSource(ws, r.url, null, { home, mode: "sync" });
+    const failing: GitRunner = async (args, opts) => {
+      if (args.includes("fetch")) throw Object.assign(new Error("fetch failed"), { stderr: "fatal: could not read from remote repository\n", code: 128 });
+      return defaultGit(args, opts);
+    };
+    const read = await loadForgeSource(ws, r.url, null, { home, mode: "read", git: failing });
+    expect(read.warnings).toHaveLength(1);
+    expect(read.fetchFallback).toBe(read.warnings[0]);
+    const offline = await loadForgeSource(ws, r.url, null, { home, offline: true });
+    expect(offline.warnings).toHaveLength(1);
+    expect(offline.fetchFallback).toBeUndefined();
+  });
+});

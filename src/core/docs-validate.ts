@@ -850,7 +850,7 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
       if (ws && !profile) add({ id: "policy", level: "error", message: POLICY.notRead("profile"), fix: opts.fetch ? doctor(" --fetch") : doctor() });
       if (ws && profile) {
         const o = ws.origin;
-        const failedFetch = o.kind === "remote" && opts.fetch && !o.fetched && ws.warnings.some((x) => x.startsWith(`Forge ${o.source} not fetched (`));
+        const failedFetch = o.kind === "remote" && opts.fetch && !o.fetched && ws.fetchFallback !== undefined;
         if (ws.warnings.length > 0) add({ id: "policy", level: "warn", message: POLICY.warned, fix: failedFetch ? doctor(" --fetch") : doctor() });
         try {
           skipDirs = profileRepos(profile).map((r) => r.path.replace(/\/+$/, ""));

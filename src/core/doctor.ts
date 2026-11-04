@@ -262,7 +262,7 @@ async function workspaceChecks(
 
   if (ws !== null) {
     const o = ws.origin;
-    const fallback = o.kind === "remote" && opts.fetch && !o.fetched ? ws.warnings.find((x) => x.startsWith(`Forge ${o.source} not fetched (`)) ?? null : null;
+    const fallback = o.kind === "remote" && opts.fetch && !o.fetched ? (ws.fetchFallback ?? null) : null;
     const configWarnings = ws.warnings.filter((x) => x !== fallback);
     // One `ok` line only when the check has nothing to report (§4.2, §4.5).
     if (configWarnings.length === 0) w("config", "ok", `craftar.yaml loads (forge ${ws.config.forge}, profile ${ws.config.profile})`);
