@@ -757,7 +757,6 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const indexRecords: Array<{ path: string; rules: number; undescribed: string[]; misplaced?: number[]; expanded?: boolean }> = [];
   /** Ingredients whose body or metadata cites a list key (spec 55 §4.8). */
   const listCiting = new Set<string>();
-  /** Paths where the index placeholder was left as written (spec 44 §4.5). */
   /** Below-gate literals: `ref (file)` for each rendered text that holds `{{craftar.rules.index}}` alone on a line (spec 44 §4.2). */
   const belowGateLiterals = new Set<string>();
   const source = sourceOf(ws);
@@ -1011,13 +1010,13 @@ export async function plan(ws: Workspace): Promise<Plan> {
     // E32.4): an agent's, a command's or a skill's text, a description or raw frontmatter, a script, a hook, a service, a
     // file copied as bytes. A rule or steering body was expanded, so a line holding it alone there is in its frontmatter.
     // An MCP file is left out by design (spec 44 §7 item 16), and with it the example settings a hook's registration
-    // reaches (open, spec 43 §8). Binary content is not scanned.
+    // reaches (open, spec 43 §8). Binary content is not scanned. A CRLF line needs no fold: `$` under `m` matches before `\r`.
     const leftPaths: string[] = [];
     for (const f of planned) {
       if (f.ingredient === "mcp/*") continue;
       const text = decodeForScan(f.content);
       if (text === null || !RULES_INDEX_TOKEN.test(text)) continue;
-      if (isRuleOrSteeringOrAgentsMd(f.path) && !RULES_INDEX_LINE.test(text.replace(/\r$/gm, ""))) continue;
+      if (isRuleOrSteeringOrAgentsMd(f.path) && !RULES_INDEX_LINE.test(text)) continue;
       leftPaths.push(f.path);
     }
     if (leftPaths.length > 0) {

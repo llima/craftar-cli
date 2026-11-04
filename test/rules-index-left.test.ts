@@ -37,11 +37,11 @@ afterEach(async () => {
   while (cleanups.length) await cleanups.pop()!();
 });
 
-async function planned(schema: number) {
+async function planned(schema: number, files: Record<string, string> = {}) {
   const refs = ingredients.map((i) => `${(i.meta as { type: string }).type}/${(i.meta as { name: string }).name}`);
   const s = await scenario(
     { ingredients, recipes: [recipe("base", refs)], profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"])] },
-    { config: { profile: "acme" } },
+    { config: { profile: "acme" }, files },
   );
   cleanups.push(s.cleanup);
   await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema }));
@@ -79,6 +79,14 @@ describe("rules index: a placeholder left outside a body is warned (E32.4)", () 
     const p = await planned(7);
     const run = p.files.find((f) => f.path === ".claude/scripts/run.sh")!;
     expect(run.content.toString("utf8")).toContain(T);
+  });
+
+  it("a rule planned over a CRLF file (claude-code keeps its line endings) is still named for the token in its frontmatter", async () => {
+    const p = await planned(7, { ".claude/rules/scoped.md": "---\r\nold\r\n---\r\n# Old\r\n" });
+    const scoped = p.files.find((f) => f.path === ".claude/rules/scoped.md")!;
+    expect(scoped.content.toString("utf8")).toContain("\r\n");
+    const left = p.warnings.find((w) => w.includes(LEFT))!;
+    expect(left.slice(left.indexOf(LEFT) + LEFT.length).split(", ")).toContain(".claude/rules/scoped.md");
   });
 
   it("below the gate the warning is not raised (the literal warning of spec 44 §4.2 is unchanged)", async () => {
