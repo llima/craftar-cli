@@ -138,6 +138,7 @@ export async function gitSource(root: string, spec: GitSourceSpec): Promise<GitS
   // Git answers `missing` for `sub/./x`, and such a spelling keeps its output path; a lock path with a line feed must
   // not shift the batch. So a path is looked up in the listing and asked for by the id it gave, never by itself.
   const full = (rel: string) => path.posix.normalize(`${prefix}${rel}`).replace(/^\/+/, "");
+  const where = label.name === "commit" ? `commit ${label.short}` : "index";
   const batch = new CatFile([...base, "cat-file", "--batch"], "rev" in spec ? {} : { keepIndexFile: true });
   return {
     kind: "git",
@@ -147,6 +148,11 @@ export async function gitSource(root: string, spec: GitSourceSpec): Promise<GitS
     async read(rel) {
       if (climbsOut(rel)) return null;
       const entry = entries.get(full(rel));
+      // E36.13: the configuration or the lock held as a link would read as absent, and `--unavailable-ok` would pass a
+      // workspace it never checked; craftar reads either only as a file.
+      if (entry?.mode === "120000" && HELD_AS_FILES.has(path.posix.normalize(rel))) {
+        throw new GitSourceRefusal(`${path.posix.normalize(rel)} is a symbolic link in the ${where} — craftar reads it only as a file; commit the file itself`);
+      }
       // A symbolic link's blob holds its target and a gitlink has no blob: craftar writes neither.
       if (!entry || entry.mode === "120000" || entry.mode === "160000") return null;
       return batch.read(entry.oid);
@@ -162,9 +168,13 @@ export async function gitSource(root: string, spec: GitSourceSpec): Promise<GitS
   };
 }
 
+/** `craftar.yaml` and `craftar.lock` (sync.ts's `WORKSPACE_FILE` and `LOCK_FILE`, spelled here: sync.ts imports this module). */
+const HELD_AS_FILES = new Set(["craftar.yaml", "craftar.lock"]);
+
 async function resolveCommit(base: string[], rev: string, endOfOptions: boolean): Promise<string> {
   const shown = shownRevision(rev);
-  if (rev.startsWith("-")) throw new GitSourceRefusal(`unknown revision ${shown}`);
+  // A leading `-` would be an option; a leading `^` is git's negation, which `rev-parse --verify` answers as `^<hash>` (E36.10).
+  if (rev.startsWith("-") || rev.startsWith("^")) throw new GitSourceRefusal(`unknown revision ${shown}`);
   const verify = async (spelled: string): Promise<string | null> => {
     try {
       const args = [...base, "rev-parse", "--verify", "-q", ...(endOfOptions ? ["--end-of-options"] : []), spelled];
@@ -179,8 +189,11 @@ async function resolveCommit(base: string[], rev: string, endOfOptions: boolean)
   const exists = oid === null ? null : await verify(`${oid}^{object}`);
   if (exists === null) throw new GitSourceRefusal(`unknown revision ${shown}`);
   const commit = await verify(`${oid}^{commit}`);
-  if (commit === null) throw new NotACommitError(exists.slice(0, 8));
-  return commit;
+  if (commit !== null) return commit;
+  // E36.9: an annotated tag whose target git does not hold peels to nothing — that is no "not a commit" for
+  // `--unavailable-ok` to pass, but an object git cannot read. Only what peels to a blob or a tree is not a commit.
+  if ((await verify(`${oid}^{}`)) === null) throw new GitSourceRefusal(`cannot read revision ${shown}: it points at an object git does not hold`);
+  throw new NotACommitError(exists.slice(0, 8));
 }
 
 /** One `cat-file --batch` child, opened on the first read, answering one request at a time. */
