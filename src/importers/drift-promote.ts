@@ -557,6 +557,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const forgeKind = classifyForge(forgeValue);
 
   let forgeDir: string;
+  // E9.15: a remote whose URL holds credentials is said whether or not another remote matched — its line names the
+  // remote and the directory, never the URL.
+  const remoteWarnings: string[] = [];
   if (input.forgeDir !== null) {
     // --forge given: verify it's this workspace's Forge
     forgeDir = path.resolve(input.forgeDir);
@@ -570,7 +573,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       if (realWorkspaceForge !== realGiven) throw new Error(D2_PATH(input.forgeDir, realWorkspaceForge));
     } else {
       // D2: URL Forge — the clone must have a remote that matches
-      const warnings: string[] = [];
+      const warnings = remoteWarnings;
       const cloneRemotes = await remoteUrls(forgeDir, warnings, forgeDir);
       const wsKey = computeCacheKey(forgeValue);
       let found = false;
@@ -794,7 +797,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   if (secret) throw new Error(D9(ingredientRef, secret));
 
   // What reading the source warned (a rule's unusable `paths:`), then hand-added files in a skill directory
-  const warnings: string[] = [...(emitted.warnings ?? [])];
+  const warnings: string[] = [...remoteWarnings, ...(emitted.warnings ?? [])];
   if (meta.type === "skill" && meta.layout === "dir") {
     const skillDir = path.join(claudeDir, "skills", outputName);
     const diskFiles = await listFiles(skillDir).catch(() => [] as string[]);
