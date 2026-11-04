@@ -704,7 +704,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       // The Claude file as written: a split rule's fence counts toward its lines
       const ruleRaw = "frontmatterRaw" in q.meta ? q.meta.frontmatterRaw : undefined;
       const ruleFileText = ruleRaw !== undefined ? `---\n${ruleRaw}\n---\n${ruleText}` : ruleText;
-      const { text, offset } = preferKiro({ name, steering: sm.text, rules: new Set(rules.keys()), handSteering, banner });
+      const { text, offset, keptBanner } = preferKiro({ name, steering: sm.text, rules: new Set(rules.keys()), handSteering, banner });
+      if (keptBanner !== undefined) report.warnings.push(`--prefer-kiro ${name}: .kiro/steering/${name}.md line ${keptBanner} looks like a banner, but not one sync writes here — it is kept as the rule's text; set kiro.banner in the profile, or remove the line from the steering file`);
       const source = `.kiro/steering/${name}.md`;
       q.files = { "rule.md": text };
       q.scan = scanOf("rule.md", sm);

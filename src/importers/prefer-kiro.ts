@@ -33,6 +33,9 @@ export function steeringBody(steering: string, name: string, banner: string | nu
   return (nl === -1 ? "" : body.slice(nl + 1)).replace(/^\n/, "");
 }
 
+/** An HTML comment alone on its line: what a banner looks like (E13.3). */
+const BANNER_SHAPED = /^<!--.*-->\s*$/;
+
 // `.kiro/steering/`, then `commands/`, or a name and `.md` at the right boundary `resolveRuleRefs` uses for a reference.
 const STEERING_PATH = new RegExp(`\\.kiro/steering/(commands/)?(?:([${RULE_NAME_CHARS}]+?)\\.md(?![A-Za-z0-9_-]|\\.[A-Za-z0-9_-]))?`, "g");
 
@@ -86,8 +89,9 @@ export interface PreferKiroInput {
  * the workspace's own rules, the text gives that body back — and `offset`, the lines of the file above that body.
  * Throws PK3 for a form with no certain source and PK4 for a body that does not come back; both name a line of the
  * steering file and quote none of it. The proof is over the body: the frontmatter and the banner are sync's to write.
+ * `keptBanner`, when present, is the file line of a first body line shaped like a banner that no layer's banner matched.
  */
-export function preferKiro(i: PreferKiroInput): { text: string; body: string; offset: number } {
+export function preferKiro(i: PreferKiroInput): { text: string; body: string; offset: number; keptBanner?: number } {
   const body = steeringBody(i.steering, i.name, i.banner);
   // The lines the frontmatter and the banner took, so a line of `body` is named as the file has it.
   const offset = i.steering.split("\n").length - body.split("\n").length;
@@ -116,5 +120,8 @@ export function preferKiro(i: PreferKiroInput): { text: string; body: string; of
     while (n < a.length && n < b.length && a[n] === b[n]) n++;
     throw new Error(`${where} ${n + 1 + offset} would not come back from the rule built from it — it names .claude/rules/ where sync writes .kiro/steering/; ${drop}`);
   }
-  return { text, body, offset };
+  // E13.3: a first line shaped like a banner that is neither the default nor this profile's stays as text — its line in the
+  // file, for the importer to say so; never the line itself.
+  const first = body.split("\n", 1)[0];
+  return { text, body, offset, ...(BANNER_SHAPED.test(first) ? { keptBanner: offset + 1 } : {}) };
 }
