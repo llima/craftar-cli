@@ -19,6 +19,8 @@ export interface GeneratedIgnored {
 }
 
 export const UNCHECKED_LINE = "some generated paths could not be checked against git's ignore rules";
+/** E36.2: the check fails for more than one reason, so the fix names how to find it, a linked folder as one cause. */
+export const UNCHECKED_FIX = "run git check-ignore -v on the generated paths to see what git refuses; a generated folder that is a symbolic link is one cause";
 export const IGNORED_FIX = "fix the rule, or git add -f, or list the path under mayBeIgnored in craftar.yaml";
 export const staleLine = (entries: string[]): string => `mayBeIgnored names a path craftar does not generate: ${entries.join(", ")}`;
 

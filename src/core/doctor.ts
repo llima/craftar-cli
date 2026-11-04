@@ -8,7 +8,7 @@ import { ENV_NAME, type ForgeSchema, type Lock, type Registry } from "../schema/
 import { written } from "./capabilities.js";
 import { exists, realpathOfNearest } from "./forge.js";
 import { hookFindsCraftar, hooksStatus, HooksUnreadable } from "./git-hooks.js";
-import { generatedIgnored, IGNORED_FIX, staleLine, UNCHECKED_LINE } from "./generated-ignored.js";
+import { generatedIgnored, IGNORED_FIX, staleLine, UNCHECKED_FIX, UNCHECKED_LINE } from "./generated-ignored.js";
 import { renderServer, rendersServers, windowsOnlyLauncher, LAUNCHER_OK, launcherWarning, launcherFix, type SubstitutedLeaf } from "./mcp-server.js";
 import { credentialKeys, hideCacheSegment, hideKeys, isMissing, isRegistered, namedCacheKeys, readRegistry, registryFile, rowStatus, vouchedKeys } from "./registry.js";
 import { FULL_SHA, cacheKey, classifyForge, credentialFault, CREDENTIAL_HIDDEN, inspectCache, UNVOUCHED_HIDDEN, type CacheSnapshot } from "./remote.js";
@@ -1128,7 +1128,7 @@ async function generatedIgnoredCheck(
     return;
   }
   for (const line of r.lines) w("generated-ignored", "warn", line, IGNORED_FIX);
-  if (r.unchecked) w("generated-ignored", "warn", UNCHECKED_LINE, "a generated folder that is a symbolic link is the usual cause: make it a real directory, or run git check-ignore on the path");
+  if (r.unchecked) w("generated-ignored", "warn", UNCHECKED_LINE, UNCHECKED_FIX);
   if (r.stale.length > 0) w("generated-ignored", "warn", staleLine(r.stale), "remove the entry from mayBeIgnored in craftar.yaml");
   if (r.lines.length === 0 && !r.unchecked && r.stale.length === 0) w("generated-ignored", "ok", "git ignores no generated file");
 }
