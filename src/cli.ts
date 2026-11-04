@@ -69,7 +69,8 @@ import {
   planFrom,
   applyPlan,
   writeUnified,
-  checkRecipeCascade,
+  proveUnifyLoads,
+  renderRecipeCascade,
   rewriteRecipes,
   pruneCandidates,
   pruneRecipes,
@@ -2543,7 +2544,8 @@ forge
     const result = await applyPlan(base, variant, diff, toApply, { discardVariantMeta: o.take === "base", profileSections, forgeSchema: f.manifest.schema });
     // Ruling 33, dry pass: every recipe `ingredients` rewrite the cascade will make is checked before
     // the first byte is written, so a refusal (an aliased reference) leaves the Forge untouched.
-    const cascadeFiles = result.resolved ? await checkRecipeCascade(f, base.ref, variant.ref) : [];
+    const cascadeEdits = result.resolved ? await renderRecipeCascade(f, base.ref, variant.ref) : [];
+    const cascadeFiles = cascadeEdits.map((e) => e.file);
     // Spec 25 §4.4: prune candidates, computed in the dry pass
     // Spec 33 §4.4: pruneCandidates warns once per profile whose block cannot be read
     const pruneWarnings: string[] = [];
@@ -2592,6 +2594,15 @@ forge
       }
     }
 
+    // E38.1: the same edit set on a scratch copy, which must load, before the first write.
+    await proveUnifyLoads(f, {
+      files: [paramWrites?.manifest, paramWrites?.ingredientYaml, paramWrites?.profile].filter((w): w is { abs: string; content: string } => !!w),
+      base,
+      result,
+      cascade: cascadeEdits,
+      removeDir: result.resolved ? variant.dir : null,
+    });
+
     // Order: merged files, then the recipe cascade, then removal of the variant directory
     // (Ruling 21) — a late failure leaves the variant in place, never a recipe naming a removed ingredient.
     // Spec 12 §6.7: the manifest is first when it moves to schema: 2; each prefix is emission-neutral.
@@ -2608,7 +2619,7 @@ forge
       if (paramWrites?.ingredientYaml) touched = [...touched, "ingredient.yaml"].sort();
       if (paramWrites?.profile) await writeParamFile(paramWrites.profile, journal);
       if (result.resolved) {
-        cascade = await rewriteRecipes(f, base.ref, variant.ref, o.profile, journal);
+        cascade = await rewriteRecipes(f, base.ref, variant.ref, o.profile, journal, cascadeEdits);
         journal.push({ abs: variant.dir, created: false });
         await fs.rm(variant.dir, { recursive: true, force: true });
         variantRemoved = variant.ref;

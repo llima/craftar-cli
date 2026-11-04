@@ -1,10 +1,11 @@
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { forgeReader, readForgeFile, readForgeText } from "./contain.js";
 import YAML from "yaml";
 import { fingerprintDir } from "./fingerprint.js";
-import { exists, listFiles, loadForge, readIngredientText, type Forge, type LoadedIngredient } from "./forge.js";
+import { copyForgeForProof, exists, listFiles, loadForge, proofPathsBack, readIngredientText, removeProofCopy, scratchWriteRefusal, type Forge, type LoadedIngredient } from "./forge.js";
 import { writeForgeFile } from "./forge-write.js";
 import { splitLines, type Hunk } from "./diff.js";
 import { detectEol, isUtf8, withEol, type Eol } from "./text.js";
@@ -1049,12 +1050,24 @@ function identicalToSibling(recipes: Map<string, Recipe>, rewritten: string[], p
  * it deletes no recipe and edits no profile or `extends`.
  */
 export async function checkRecipeCascade(forge: Forge, baseRef: IngredientRef, variantRef: IngredientRef): Promise<string[]> {
-  const files: string[] = [];
-  for (const edit of await ingredientEdits(forge, baseRef, variantRef)) {
-    await renderIngredientEdit(edit);
-    files.push(edit.file);
-  }
-  return files;
+  return (await renderRecipeCascade(forge, baseRef, variantRef)).map((e) => e.file);
+}
+
+/** One recipe rewrite of the cascade, rendered: the file it lands in and its whole new text. */
+export interface RenderedRecipeEdit {
+  name: string;
+  file: string;
+  content: string;
+}
+
+/**
+ * The dry pass, rendered once: every recipe rewrite the cascade will make, with its text, so the proof on the scratch
+ * copy and the write in the Forge write the same bytes. Throws, with nothing written, as `checkRecipeCascade` does.
+ */
+export async function renderRecipeCascade(forge: Forge, baseRef: IngredientRef, variantRef: IngredientRef): Promise<RenderedRecipeEdit[]> {
+  const out: RenderedRecipeEdit[] = [];
+  for (const edit of await ingredientEdits(forge, baseRef, variantRef)) out.push({ name: edit.name, file: edit.file, content: await renderIngredientEdit(edit) });
+  return out;
 }
 
 /**
@@ -1085,20 +1098,69 @@ export async function rewriteRecipes(
   variantRef: IngredientRef,
   profile: string,
   journal?: WriteJournal,
+  rendered?: RenderedRecipeEdit[],
 ): Promise<RecipeCascadeResult> {
-  await checkRecipeCascade(forge, baseRef, variantRef);
+  // The caller's dry pass, when it rendered one (`forge unify`, whose proof wrote these bytes on the scratch copy).
+  const edits = rendered ?? (await renderRecipeCascade(forge, baseRef, variantRef));
 
   const rewritten: string[] = [];
-  for (const edit of await ingredientEdits(forge, baseRef, variantRef)) {
-    const content = await renderIngredientEdit(edit);
+  for (const edit of edits) {
     await note(journal, edit.file);
-    await writeForgeFile(edit.file, content);
+    await writeForgeFile(edit.file, edit.content);
     rewritten.push(edit.name);
   }
   if (rewritten.length === 0) return { rewritten, identicalToSibling: [] };
 
   const reloaded = await loadForge(forge.root);
   return { rewritten, identicalToSibling: identicalToSibling(reloaded.recipes, rewritten, profile) };
+}
+
+/** Every edit `forge unify` makes before `--prune-recipes`, as the CLI writes them (E38.1). */
+export interface UnifyEdits {
+  /** Whole-file YAML writes, in write order: the manifest, the base's `ingredient.yaml`, the profile — each when made. */
+  files: Array<{ abs: string; content: string }>;
+  /** The base the merge writes into, and what it writes and removes there. */
+  base: LoadedIngredient;
+  result: UnifyResult;
+  /** The rendered recipe cascade. */
+  cascade: RenderedRecipeEdit[];
+  /** The variant's directory, removed when the merge resolved it; `null` otherwise. */
+  removeDir: string | null;
+}
+
+/**
+ * The proof before `forge unify`'s first write (E38.1): the same edit set applied to a scratch copy,
+ * `os.tmpdir()/craftar-forge-unify-*`, and the copy loaded (`loadForge`, so L1–L9 and every schema). A refusal leaves the
+ * Forge untouched and names it, never the copy; the copy is removed in a `finally`. `--prune-recipes` is not proved here
+ * (it needs the Forge `unify` wrote, spec 25 §7).
+ */
+export async function proveUnifyLoads(forge: Forge, edits: UnifyEdits): Promise<void> {
+  let scratch: string;
+  try {
+    scratch = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-forge-unify-"));
+  } catch (e) {
+    throw new Error(`unify: cannot make the scratch copy in the temporary directory (${(e as NodeJS.ErrnoException).code ?? "it failed"}) — nothing was written`);
+  }
+  try {
+    await copyForgeForProof(forge.root, scratch, "unify");
+    const onCopy = (abs: string) => path.join(scratch, path.relative(forge.root, abs));
+    try {
+      for (const w of edits.files) await writeForgeFile(onCopy(w.abs), w.content);
+      await writeUnified({ ...edits.base, dir: onCopy(edits.base.dir) }, edits.result);
+      for (const c of edits.cascade) await writeForgeFile(onCopy(c.file), c.content);
+      if (edits.removeDir !== null) await fs.rm(onCopy(edits.removeDir), { recursive: true, force: true });
+    } catch (e) {
+      throw scratchWriteRefusal("unify", scratch, e);
+    }
+    const back = await proofPathsBack(scratch, forge.root);
+    try {
+      await loadForge(scratch);
+    } catch (e) {
+      throw new Error(`unify: the Forge would not load after this merge:\n${back(errorText(e))}\nnothing written`);
+    }
+  } finally {
+    await removeProofCopy(scratch);
+  }
 }
 
 /* ---------------------------------------------------------------- prune-recipes (spec 25 §4.4) */

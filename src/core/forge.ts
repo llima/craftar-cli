@@ -749,6 +749,15 @@ export function scratchWriteRefusal(command: string, scratch: string, e: unknown
 }
 
 /**
+ * A message from a load or a plan of the scratch copy names the copy; this puts the Forge's root in its place, whichever
+ * spelling of the copy's path (as made, or its real path) the message holds.
+ */
+export async function proofPathsBack(copy: string, root: string): Promise<(text: string) => string> {
+  const real = await fs.realpath(copy).catch(() => copy);
+  return (t: string) => t.split(real).join(root).split(copy).join(root);
+}
+
+/**
  * Remove a scratch directory `copyForgeForProof` filled. The copy carries the Forge's directory modes, so a directory
  * without the write permission is given it back first (off win32) — otherwise its entries could not be removed and the
  * copy would be left behind. Never throws for a directory already gone.
