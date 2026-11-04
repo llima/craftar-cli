@@ -14,7 +14,7 @@ describe("forge promote's relays", () => {
     const promote = await src("src/core/promote.ts");
     expect(promote).toContain('const firstLine = (e: unknown) => errorText(e).split("\\n")[0];');
     expect(cli).toContain("warnings.push(`the registry could not be read (${errorText(e)}) — no workspace was checked`);");
-    expect(cli).toMatch(/impactAfter = await planAll\(impactEntries, await loadForge\(f\.root\)\);\n\s+\} catch \(e\) \{\n\s+const message = errorText\(e\);/);
+    expect(cli).toMatch(/impactAfter = await planAll\(impactEntries, await loadForge\(f\.root\)\);\r?\n\s+\} catch \(e\) \{\r?\n\s+const message = errorText\(e\);/);
     expect(cli).not.toContain("warnings.push(`the registry could not be read (${e instanceof Error ? e.message : String(e)})");
   });
 });
