@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -98,6 +99,33 @@ describe("forge unify proves the Forge still loads before it writes (E38.1)", ()
     expect(await snapshot(moved)).toEqual(beforeLinked);
     expect(git(s.forge, "status", "--porcelain")).toBe("");
     expect((await fs.readdir(s.tmp)).filter((n) => n.startsWith("craftar-"))).toEqual([]);
+  });
+
+  // A file link inside the Forge is copied as a file and written through for real (spec 48): its target's folder can
+  // refuse a write the proof never met. Off win32 (file link, chmod) and as non-root (root ignores the mode).
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a write that fails after the proof names what was written and the git recovery (lateFailure)", async () => {
+    const s = await scenario({});
+    const store = path.join(s.forge, "store");
+    await fs.mkdir(store);
+    await fs.rename(path.join(s.forge, "recipes/base--acme.yaml"), path.join(store, "base--acme.yaml"));
+    await fs.symlink(path.join("..", "store", "base--acme.yaml"), path.join(s.forge, "recipes/base--acme.yaml"));
+    git(s.forge, "add", "-A");
+    git(s.forge, "commit", "-q", "-m", "link");
+    await fs.chmod(store, 0o555);
+    cleanups.push(() => fs.chmod(store, 0o755).catch(() => undefined));
+    const r = s.unify();
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("unify had already started changing the Forge");
+    expect(r.stderr).toContain("ingredients/rules/workflow/rule.md");
+    expect(r.stderr).toContain("recover with:");
+    expect(r.stderr).toMatch(/git -C \S+ checkout -- /);
+    // The removal comes last: the variant is still there.
+    expect(await fs.lstat(path.join(s.forge, "ingredients/rules/workflow--acme")).then(() => true, () => false)).toBe(true);
+    // The recovery, run as printed, gives the Forge back.
+    await fs.chmod(store, 0o755);
+    for (const line of r.stderr.split("\n").filter((l) => l.startsWith("  git -C "))) execSync(line.trim());
+    expect(git(s.forge, "status", "--porcelain")).toBe("");
   });
 
   it("(control) a profile's local recipe naming the variant is still refused by its own check, in its own words", async () => {
