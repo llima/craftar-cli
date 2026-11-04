@@ -66,6 +66,8 @@ export async function proveNewProfileLoads(forgeRoot: string, init: InitPlan): P
       await fs.mkdir(path.join(scratch, "profiles", name), { recursive: true });
       await fs.writeFile(path.join(scratch, "profiles", name, "profile.yaml"), init.newProfile.text, { flag: "wx" });
     } catch (e) {
+      // The profile appeared between the gate and the copy: P7's words, as writeNewProfile says it.
+      if ((e as NodeJS.ErrnoException).code === "EEXIST") throw new NewProfileRaceLost(`profile ${name} already exists in the Forge — use --profile ${name}`);
       throw scratchWriteRefusal("init", scratch, e);
     }
     const back = await proofPathsBack(scratch, forgeRoot);

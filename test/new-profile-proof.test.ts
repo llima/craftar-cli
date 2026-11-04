@@ -64,6 +64,15 @@ describe("proveNewProfileLoads (E38.1)", () => {
     expect((await fs.readdir(s.tmp)).filter((n) => n.startsWith("craftar-"))).toEqual([]);
   });
 
+  it("a profile that appeared since the gate reads as P7's refusal, not as a scratch-copy failure", async () => {
+    const s = await setup();
+    const init = { newProfile: { path: "profiles/acme/profile.yaml", text: "name: acme\nrecipes: [base]\n" } } as never;
+    const err = await withTmp(s.tmp, () => proveNewProfileLoads(s.forge, init).then(() => null, (e: Error) => e));
+    expect(err?.name).toBe("NewProfileRaceLost");
+    expect(err?.message).toBe("profile acme already exists in the Forge — use --profile acme");
+    expect((await fs.readdir(s.tmp)).filter((n) => n.startsWith("craftar-"))).toEqual([]);
+  });
+
   it("init --new-profile refuses, with nothing written, a Forge whose recipes folder is a directory link (through the proof copy)", async () => {
     // Until E38.1 init did not copy the Forge, followed the link and wrote the profile.
     const s = await setup();
