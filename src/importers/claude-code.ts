@@ -619,7 +619,7 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   try {
     provided = loaded?.profiles.has(opts.profileName) ? providedByBlock(loaded, opts.profileName) : new Map();
   } catch (e) {
-    throw new Error(`import: profile ${opts.profileName} does not resolve (${errorText(e)}) — fix the Forge and re-run`);
+    throw importUnresolved(opts.profileName, e);
   }
 
   /* ---- --prefer-kiro: the named rules take their text from the steering mirror (spec 29 §4.3) ---- */
@@ -1387,6 +1387,11 @@ export async function readEmitted(
   }
 
   return null;
+}
+
+/** The refusal when the importing profile does not resolve — one wording for both call sites. */
+function importUnresolved(profile: string, e: unknown): Error {
+  return new Error(`import: profile ${profile} does not resolve (${errorText(e)}) — fix the Forge and re-run`);
 }
 
 /**
@@ -2240,7 +2245,7 @@ async function existingProfile(
     const eff = effectiveProfile(loaded, p);
     return { params: { ...eff.params }, sections: p.sections, blockKeys: eff.blockKeys, warnings: eff.warnings };
   } catch (e) {
-    throw new Error(`import: profile ${profile} does not resolve (${errorText(e)}) — fix the Forge and re-run`);
+    throw importUnresolved(profile, e);
   }
 }
 
