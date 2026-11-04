@@ -155,8 +155,14 @@ export interface PromotePlan {
   nextConflicts: OverrideConflict[];
   /** Impact on other workspaces. */
   impact: { registry: RegistryState; workspaces: ImpactWorkspaceRow[] };
-  /** Warnings to print. */
+  /** Warnings, in the order `--json` carries them: the plan's, then the impact pass's. */
   warnings: string[];
+  /**
+   * E9.11: the plan's warnings, classified where they are made, for the text report: `early` print before the edited
+   * keys, `late` (a profile section value the variant stops holding) after `flattened`. The impact pass's warnings are
+   * in neither: the report prints its rows instead.
+   */
+  warningGroups: { early: string[]; late: string[] };
 
   // For the apply step:
   stage: ForgeStage;
@@ -798,6 +804,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
   // What reading the source warned (a rule's unusable `paths:`), then hand-added files in a skill directory
   const warnings: string[] = [...remoteWarnings, ...(emitted.warnings ?? [])];
+  // E9.11: which of `warnings` the report prints after `flattened`, recorded as they are pushed.
+  const lateAt = new Set<number>();
+  const warningGroups = () => ({ early: warnings.filter((_, i) => !lateAt.has(i)), late: warnings.filter((_, i) => lateAt.has(i)) });
   if (meta.type === "skill" && meta.layout === "dir") {
     const skillDir = path.join(claudeDir, "skills", outputName);
     const diskFiles = await listFiles(skillDir).catch(() => [] as string[]);
@@ -1052,6 +1061,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         nextConflicts: p1.overrideConflicts,
         impact: { registry: impactResult.state, workspaces: impactResult.rows },
         warnings: [...warnings, ...impactResult.warnings],
+        warningGroups: warningGroups(),
         stage,
         forgeRoot: realForgeDir,
         mustHold: [profileAbs, ...heldFiles.map((h) => h.abs)],
@@ -1393,6 +1403,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       const profileIngSections = profileSections[ingKey] ?? {};
       for (const name of flattenedSections) {
         if (Object.hasOwn(profileIngSections, name)) {
+          lateAt.add(warnings.length);
           warnings.push(`profile ${profile} still sets section ${ingKey} ${name}, which ${isLocal ? ingredientRef : variantRef} no longer holds — every plan will warn until it is removed`);
         }
       }
@@ -1415,6 +1426,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       nextConflicts: p1.overrideConflicts,
       impact: { registry: impactResult.state, workspaces: impactResult.rows },
       warnings: [...warnings, ...impactResult.warnings],
+      warningGroups: warningGroups(),
       stage,
       forgeRoot: realForgeDir,
       mustHold,

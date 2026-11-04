@@ -1210,16 +1210,8 @@ drift
         console.log(`  ${editVerb} ${e.rel}`);
       }
     }
-    // Print early warnings (e.g., unmanaged skill files) — pinned by test 10
-    const unusedSectionPrefix = "profile ";
-    for (const w of promotePlan.warnings) {
-      if (!w.startsWith(unusedSectionPrefix) || !w.includes(" still sets section ")) {
-        // Skip registry warnings here — they come later
-        if (!w.includes(": missing") && !w.includes(": error:")) {
-          console.log(`  ${pc.yellow("warn")} ${w}`);
-        }
-      }
-    }
+    // Print early warnings (e.g., unmanaged skill files) — pinned by test 10; classified by the plan (E9.11)
+    for (const w of promotePlan.warningGroups.early) console.log(`  ${pc.yellow("warn")} ${w}`);
     for (const [file, keys] of promotePlan.editedKeys) {
       console.log(`  ${editVerb} ${file} (${keys.join(", ")})`);
     }
@@ -1243,11 +1235,7 @@ drift
       console.log(`  flattened: ${flatParts.join(", ")}`);
     }
     // Print late warnings (unused section value) after flattened — step 30g
-    for (const w of promotePlan.warnings) {
-      if (w.startsWith(unusedSectionPrefix) && w.includes(" still sets section ")) {
-        console.log(`  ${pc.yellow("warn")} ${w}`);
-      }
-    }
+    for (const w of promotePlan.warningGroups.late) console.log(`  ${pc.yellow("warn")} ${w}`);
     const otherCount = promotePlan.otherFilesUnchanged;
     console.log(`  proved: this workspace plans the file on disk; ${otherCount} other file(s) unchanged`);
     if (promotePlan.dependents.length > 0) {

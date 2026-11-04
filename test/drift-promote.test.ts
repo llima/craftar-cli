@@ -3704,6 +3704,34 @@ describe("D16_BREAK — sibling that planned before but fails after (commit 2)",
     expect(r.stdout + r.stderr).not.toContain(password);
   });
 
+  // A ":" cannot be in a Windows file name; the classification is the same code on every platform.
+  it.skipIf(process.platform === "win32")("R11c. a warning whose words hold \": missing\" is printed, classified by the plan, not by its text (E9.11)", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => removeWithRetry(home));
+    const { remoteForge } = await import("./helpers/remote.js");
+    const rf = await remoteForge({
+      ingredients: [rule("a", "A one\n")],
+      recipes: [recipe("base", ["rule/a"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    cleanups.push(rf.cleanup);
+    const root = await tmpDir("craftar-ws-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.writeFile(path.join(root, "craftar.yaml"), `forge: ${rf.url}\nprofile: acme\n`);
+    expect(runCli(["sync", "--workspace", root], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+    const parent = await tmpDir("craftar-clone-");
+    cleanups.push(() => removeWithRetry(parent));
+    const cloneDir = path.join(parent, "forge: missing");
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("git", ["clone", "-q", rf.url, cloneDir], { env: gitEnv() });
+    execFileSync("git", ["-C", cloneDir, "remote", "add", "mirror", `https://user:${"x".repeat(8)}@example.com/acme/forge.git`]);
+    await fs.appendFile(path.join(root, A), "hand a\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", root, "--forge", cloneDir], { env: { CRAFTAR_HOME: home } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain(`  warn remote mirror of ${cloneDir} holds credentials in its URL — not matched\n`);
+  });
+
   it("R11. D2 for URL Forge — clone's only remote URL has credentials → D2 with the credential warning", async () => {
     const home = await tmpDir("craftar-home-");
     cleanups.push(() => removeWithRetry(home));
