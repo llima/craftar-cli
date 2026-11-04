@@ -694,7 +694,7 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
         if (targetStat.isDirectory()) {
           // A root directory link (ingredients, recipes, profiles) is refused: loadForge follows it
           // but the scratch would skip it, so the scratch would not load the same as the real Forge.
-          if (rel === "" && ROOT_DIRS.has(ent.name)) {
+          if (rel === "" && ROOT_DIRS.has(ent.name.toLowerCase())) {
             throw new Error(SYMLINK_DIR_REFUSAL(ent.name, command));
           }
           // Other directory links are skipped entirely — loadForge doesn't traverse them
@@ -742,11 +742,11 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
  * The refusal for a write the scratch copy refused: the copy carries the Forge's file and directory modes, so what
  * cannot be written there cannot be written in the Forge either. Names the path relative to the copy, never the copy.
  */
-export function scratchWriteRefusal(command: string, scratch: string, e: unknown): Error {
+export function scratchWriteRefusal(command: string, scratch: string, e: unknown, proved: "edit" | "move" = "edit"): Error {
   const at = (e as NodeJS.ErrnoException).path;
   const code = (e as NodeJS.ErrnoException).code ?? "the write failed";
   const shown = at ? path.relative(scratch, at).split(path.sep).join("/") : "a file";
-  return new Error(`${command}: ${shown} could not be written on the scratch copy the edit is proved on (${code}) — it cannot be written in the Forge either; nothing written`);
+  return new Error(`${command}: ${shown} could not be written on the scratch copy the ${proved} is proved on (${code}) — it cannot be written in the Forge either; nothing written`);
 }
 
 /**

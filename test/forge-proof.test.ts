@@ -113,4 +113,14 @@ describe("copyForgeForProof compares the root's names without case (E9.2)", () =
     await copyForgeForProof(s.forge, scratch);
     expect(await listFiles(scratch)).toContain("Recipes/base.yaml");
   });
+  it("refuses a root tree spelled with capitals that is a directory link, as it refuses recipes", async () => {
+    const s = await scenario();
+    const outside = path.join(s.root, "recipes-elsewhere");
+    await fs.mkdir(outside);
+    // A junction on Windows needs no privilege; elsewhere the type is ignored.
+    await fs.symlink(outside, path.join(s.forge, "Recipes"), "junction");
+    await expect(copyForgeForProof(s.forge, path.join(s.root, "scratch"))).rejects.toThrow(
+      "Recipes is a symbolic link in the Forge — promote does not read a linked recipes, ingredients or profiles directory",
+    );
+  });
 });
