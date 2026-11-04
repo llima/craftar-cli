@@ -57,43 +57,46 @@ function Start-Sampler {
 }
 
 function Invoke-Sample {
-    $header = 'time,cpu_pct,proc_queue,avail_mb,commit_pct,pagefile_mb,pages_per_s,disk_queue,disk_busy_pct,node,git,msmpeng_cpu_s'
+    $header = 'time,cpu_pct,proc_queue,avail_mb,commit_pct,pages_per_s,pagefile_mb,disk_queue,disk_busy_pct,node,git,msmpeng_cpu_s'
     Set-Content -Path $Out -Value $header
     while ($true) {
         $row = @()
-        try { $row += (Get-Date).ToUniversalTime().ToString('HH:mm:ss') } catch { $row += '' }
+        try { $row += (Get-Date).ToUniversalTime().ToString('HH:mm:ss') } catch { $row += '' } # col: time
         try {
             $cpu = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'"
-            $row += $cpu.PercentProcessorTime
+            $row += $cpu.PercentProcessorTime # col: cpu_pct
         } catch { $row += '' }
         try {
             $sys = Get-CimInstance Win32_PerfFormattedData_PerfOS_System
-            $row += $sys.ProcessorQueueLength
+            $row += $sys.ProcessorQueueLength # col: proc_queue
         } catch { $row += '' }
         try {
             $mem = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory
-            $row += $mem.AvailableMBytes
-            $row += $mem.PercentCommittedBytesInUse
-            $row += $mem.PagesPerSec
+            $row += $mem.AvailableMBytes # col: avail_mb
+            $row += $mem.PercentCommittedBytesInUse # col: commit_pct
+            $row += $mem.PagesPerSec # col: pages_per_s
         } catch { $row += ''; $row += ''; $row += '' }
         try {
             $pf = Get-CimInstance Win32_PageFileUsage
-            $row += ($pf | Measure-Object -Property CurrentUsage -Sum).Sum
+            $row += ($pf | Measure-Object -Property CurrentUsage -Sum).Sum # col: pagefile_mb
         } catch { $row += '' }
         try {
             $disk = Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk -Filter "Name='_Total'"
-            $row += $disk.CurrentDiskQueueLength
-            $busy = [math]::Min($disk.PercentDiskTime, 100)
-            $row += $busy
+            $row += $disk.CurrentDiskQueueLength # col: disk_queue
+            if ($disk) {
+                $row += [math]::Min($disk.PercentDiskTime, 100) # col: disk_busy_pct
+            } else {
+                $row += '' # col: disk_busy_pct
+            }
         } catch { $row += ''; $row += '' }
-        try { $row += @(Get-Process -Name 'node' -ErrorAction SilentlyContinue).Count } catch { $row += '' }
-        try { $row += @(Get-Process -Name 'git' -ErrorAction SilentlyContinue).Count } catch { $row += '' }
+        try { $row += @(Get-Process -Name 'node' -ErrorAction SilentlyContinue).Count } catch { $row += '' } # col: node
+        try { $row += @(Get-Process -Name 'git' -ErrorAction SilentlyContinue).Count } catch { $row += '' } # col: git
         try {
             $msmpeng = Get-Process -Name 'MsMpEng' -ErrorAction SilentlyContinue
             if ($msmpeng) {
-                $row += [math]::Round($msmpeng.CPU, 0)
+                $row += [math]::Round($msmpeng.CPU, 0) # col: msmpeng_cpu_s
             } else {
-                $row += ''
+                $row += '' # col: msmpeng_cpu_s
             }
         } catch { $row += '' }
         Add-Content -Path $Out -Value ($row -join ',')
@@ -106,7 +109,9 @@ function Write-Report {
     if (Test-Path $pidFile) {
         try {
             $samplerPid = [int](Get-Content $pidFile)
-            Stop-Process -Id $samplerPid -Force -ErrorAction SilentlyContinue
+            if ($samplerPid -gt 0) {
+                Stop-Process -Id $samplerPid -Force -ErrorAction SilentlyContinue
+            }
         } catch {}
     }
     if (Test-Path $Out) {
@@ -123,8 +128,8 @@ function Write-Report {
                 proc_queue = if ($cols[2]) { [double]$cols[2] } else { $null }
                 avail_mb = if ($cols[3]) { [double]$cols[3] } else { $null }
                 commit_pct = if ($cols[4]) { [double]$cols[4] } else { $null }
-                pagefile_mb = if ($cols[5]) { [double]$cols[5] } else { $null }
-                pages_per_s = if ($cols[6]) { [double]$cols[6] } else { $null }
+                pages_per_s = if ($cols[5]) { [double]$cols[5] } else { $null }
+                pagefile_mb = if ($cols[6]) { [double]$cols[6] } else { $null }
                 disk_queue = if ($cols[7]) { [double]$cols[7] } else { $null }
                 disk_busy_pct = if ($cols[8]) { [double]$cols[8] } else { $null }
                 node = if ($cols[9]) { [int]$cols[9] } else { $null }

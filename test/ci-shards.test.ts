@@ -78,6 +78,23 @@ describe("vitest limits", () => {
 
 
 describe("Windows runner sampler", () => {
+  it("writes each column in the header's order", () => {
+    const script = readFileSync(path.join(REPO, ".github/scripts/ci-sampler.ps1"), "utf8");
+    const invokeSampleMatch = script.match(/function Invoke-Sample \{[\s\S]*?^\}/m);
+    expect(invokeSampleMatch).not.toBeNull();
+    const invokeSampleBody = invokeSampleMatch![0];
+    const colComments: string[] = [];
+    const regex = /\$row \+= (?!'')[^\n]*# col: (\w+)/g;
+    let match;
+    while ((match = regex.exec(invokeSampleBody)) !== null) {
+      colComments.push(match[1]);
+    }
+    const headerLine = script.split("\n").find((l) => l.includes("$header = 'time,"));
+    expect(headerLine).toBeDefined();
+    const header = headerLine!.match(/'([^']+)'/)?.[1].split(",") ?? [];
+    expect(colComments).toEqual(header);
+  });
+
   it("never assigns PowerShell's automatic $PID", () => {
     const script = readFileSync(path.join(REPO, ".github/scripts/ci-sampler.ps1"), "utf8");
     expect(script).not.toMatch(/\$pid\s*=/i);
@@ -85,10 +102,10 @@ describe("Windows runner sampler", () => {
 
   it("reads each summary column at its header index", () => {
     const script = readFileSync(path.join(REPO, ".github/scripts/ci-sampler.ps1"), "utf8");
-    const headerLine = script.split("\n").find((l) => l.includes("'time,cpu_pct"));
+    const headerLine = script.split("\n").find((l) => l.includes("$header = 'time,"));
     expect(headerLine).toBeDefined();
     const header = headerLine!.match(/'([^']+)'/)?.[1].split(",") ?? [];
-    const cols = ["cpu_pct", "proc_queue", "avail_mb", "commit_pct", "pagefile_mb", "pages_per_s", "disk_queue", "disk_busy_pct", "node", "git"];
+    const cols = ["cpu_pct", "proc_queue", "avail_mb", "commit_pct", "pages_per_s", "pagefile_mb", "disk_queue", "disk_busy_pct", "node", "git"];
     for (const name of cols) {
       const idx = header.indexOf(name);
       const pattern = new RegExp(`^\\s*${name} = if \\(\\$cols\\[${idx}\\]\\)`, "m");
@@ -129,15 +146,13 @@ describe("Windows runner sampler", () => {
 
   it("the sampler script exists, is ASCII, and has the three modes", () => {
     const script = readFileSync(path.join(REPO, ".github/scripts/ci-sampler.ps1"), "utf8");
-    for (let i = 0; i < script.length; i++) {
-      expect(script.charCodeAt(i)).toBeLessThan(128);
-    }
+    expect(script).toMatch(/^[\x00-\x7f]*$/);
     expect(script).toContain("'start'");
     expect(script).toContain("'sample'");
     expect(script).toContain("'report'");
     expect(script).toContain("Start-Process");
     expect(script).toContain("Stop-Process");
-    expect(script).toContain("time,cpu_pct,proc_queue,avail_mb,commit_pct,pagefile_mb,pages_per_s,disk_queue,disk_busy_pct,node,git,msmpeng_cpu_s");
+    expect(script).toContain("time,cpu_pct,proc_queue,avail_mb,commit_pct,pages_per_s,pagefile_mb,disk_queue,disk_busy_pct,node,git,msmpeng_cpu_s");
     expect(script).toContain("sampler: rows=");
   });
 
