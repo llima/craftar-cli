@@ -1025,6 +1025,8 @@ drift
       if (unset.length || escapingRows(st).length || p.overrideConflicts.length) process.exitCode = 1;
       return;
     }
+    // E9.14: the plan's own warnings, as status prints them — the load's are already out, and the plan's list opens with them.
+    warnStderr(p.warnings.slice(ws.warnings.length));
     warnStderr(providedWarnings);
     if (named && !rows.length) {
       console.log(`${named.path} is not drifted (${named.state})`);

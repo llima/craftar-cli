@@ -25,6 +25,12 @@ const HASH = {
 };
 
 /** Three rules, one profile, claude-code only, synced once. */
+/** The plan's warnings as drift show prints them on stderr (E9.14), read off status --json. */
+function planWarningLines(ws: string): string {
+  const w = JSON.parse(runCli(["status", "--json", "--workspace", ws]).stdout).warnings as string[];
+  return w.map((x) => `warn ${x}\n`).join("");
+}
+
 async function F() {
   const s = await scenario(
     {
@@ -175,6 +181,24 @@ describe("cli — drift show", () => {
     const f = await F();
     const r = runCli(["drift", "show", "--workspace", f.ws]);
     expect([r.code, r.stderr, r.stdout]).toEqual([0, "", "no drift\n"]);
+  });
+
+  it("prints the plan's warnings on stderr, as status does, the listing unchanged (E9.14)", async () => {
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A one\n"), { meta: { type: "steering", name: "s", file: "steering.md", targets: ["claude-code"] }, files: { "steering.md": "S\n" } }],
+        recipes: [recipe("base", ["rule/a", "steering/s"])],
+        profiles: [profile("acme", ["base"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    const planWarnings = JSON.parse(runCli(["status", "--json", "--workspace", s.wsRoot]).stdout).warnings as string[];
+    expect(planWarnings.length).toBeGreaterThan(0);
+    const r = runCli(["drift", "show", "--workspace", s.wsRoot]);
+    expect([r.code, r.stdout]).toEqual([0, "no drift\n"]);
+    expect(r.stderr).toBe(planWarnings.map((w) => `warn ${w}\n`).join(""));
   });
 
   it("a drifted path: its row, then what craftar diff prints for it", async () => {
@@ -508,7 +532,8 @@ describe("cli — drift show on refused workspaces (spec 30r5)", () => {
     // Now run drift show
     const r = runCli(["drift", "show", "--workspace", s.wsRoot]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toBe(expectedStderr);
+    // E9.14: the plan's warnings come first on stderr, then the refusal block status prints.
+    expect(r.stderr).toBe(planWarningLines(s.wsRoot) + expectedStderr);
     expect(r.stdout).toBe("drift         .claude/rules/a.md  rule/a  forge: same  promote: yes\n");
   });
 
@@ -538,7 +563,8 @@ describe("cli — drift show on refused workspaces (spec 30r5)", () => {
 
     const r = runCli(["drift", "show", ".claude/rules/a.md", "--workspace", s.wsRoot]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toBe(expectedStderr);
+    // E9.14: the plan's warnings come first on stderr, then the refusal block status prints.
+    expect(r.stderr).toBe(planWarningLines(s.wsRoot) + expectedStderr);
     // The stdout should have the row and the diff
     expect(r.stdout).toBe(
       "drift         .claude/rules/a.md  rule/a  forge: same  promote: yes\n" +
@@ -590,7 +616,8 @@ describe("cli — drift show on refused workspaces (spec 30r5)", () => {
 
     const r = runCli(["drift", "show", "--workspace", s.wsRoot]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toBe(expectedStderr);
+    // E9.14: the plan's warnings come first on stderr, then the refusal block status prints.
+    expect(r.stderr).toBe(planWarningLines(s.wsRoot) + expectedStderr);
     expect(r.stdout).toBe("no drift\n");
   });
 });
