@@ -254,6 +254,9 @@ const HOSTILE = [
   "::add-mask::x",
   "  ::error::x",
   "\u0085::add-mask::nel",
+  "\u2028::add-mask::ls",
+  "\u2029::add-mask::ps",
+  "mid\u2028::add-mask::m",
 ].join("\n");
 const HOSTILE_PATH = "a%b:c,d;e]f\ng.md";
 
@@ -267,6 +270,8 @@ function hostileFaults(source: string, vendor: Vendor): string[] {
   if (/^\s*::add-mask::x/m.test(r.stdout)) faults.push("intact: add-mask");
   if (/^\s*::error::x/m.test(r.stdout)) faults.push("intact: error");
   if (/^[\s\u0085]*::add-mask::nel/m.test(r.stdout)) faults.push("intact: a line behind a next-line character");
+  // U+2028 and U+2029 are line terminators to a JavaScript regex, so `^` under `m` matches after them (measured, E37.3)
+  for (const tail of ["ls", "ps", "m"]) if (r.stdout.includes(`::add-mask::${tail}`)) faults.push(`intact: add-mask behind a line or paragraph separator (${tail})`);
   const annotation = vendor === "azure" ? "##vso[task.logissue type=error;sourcepath=a%25b:c,d%3Be%5Df%0Ag.md]craftar: drift" : "::error file=a%25b%3Ac%2Cd;e]f%0Ag.md::craftar: drift";
   if (!r.stdout.split("\n").includes(annotation)) faults.push("path not escaped");
   return faults;
@@ -472,6 +477,7 @@ describe.each(VENDORS)("the token and hostile text under %s (spec 46 §10, 6 and
     ["the status given the check's environment", 'craftar(["status", "--json", "--offline"], childEnv)', 'craftar(["status", "--json", "--offline"], checkEnv)', tokenFaults],
     ["neuter as identity", 'const neuter = (t) => t.replace(/##(vso)?\\[/gi, (m) => m.slice(0, -1) + " [").replace(/^([\\s\\u0085]*)::/gm, "$1: :");', "const neuter = (t) => t;", hostileFaults],
     ["neuter blind to a next-line character", "/^([\\s\\u0085]*)::/gm", "/^(\\s*)::/gm", hostileFaults],
+    ["neuter whose lines start after \\n only", "/^([\\s\\u0085]*)::/gm", "/(?<![^\\n])([\\s\\u0085]*)::/g", hostileFaults],
     ["prop as identity", 'const prop = (s) => azure ? esc(s).replace(/;/g, "%3B").replace(/\\]/g, "%5D").replace(/\\[/g, "%5B") : esc(s).replace(/:/g, "%3A").replace(/,/g, "%2C");', "const prop = (s) => s;", hostileFaults],
   ];
   it.each(removedSafety)("catches %s", (_name, from, to, faults) => {
