@@ -143,7 +143,7 @@ export const claudeCode: Emitter<"claude-code"> = {
             for (const f of await listFiles(ing.dir)) {
               if (f === "ingredient.yaml") continue;
               const path = `.claude/skills/${outName(m)}/${f}`;
-              if (claudeResolves(m, f)) {
+              if (claudeResolves(m, f, ing.dir)) {
                 const rawText = await ctx.text(ing, f, "claude-code");
                 const text = resolve(rawText, ing.ref);
                 checkReworded(path, [rawText, text]);
@@ -232,9 +232,10 @@ export const claudeCode: Emitter<"claude-code"> = {
  * directory skill. Every other file is copied as written and scanned. An agent's and a command's metadata are resolved
  * too (`frontmatterRaw` when present, else `description`). The one answer, read by the emitter and by import (§4.10).
  */
-export function claudeResolves(meta: Ingredient, file: string): boolean {
-  // Compared as the emitters read them (`emittedFile`): `./rule.md` and `/rule.md` name the file listed as `rule.md`.
-  const eq = (a: string, b: string) => path.posix.join(".", a) === path.posix.join(".", b);
+export function claudeResolves(meta: Ingredient, file: string, dir: string | null): boolean {
+  // Compared as the emitters read them (`emittedFile`): against the ingredient's directory when it is known, so
+  // `../<dir>/rule.md` names `rule.md` too (tech-debt E27.1); without it `./rule.md` and `/rule.md` name `rule.md`.
+  const eq = (a: string, b: string) => (dir !== null ? path.join(dir, a) === path.join(dir, b) : path.posix.join(".", a) === path.posix.join(".", b));
   switch (meta.type) {
     case "rule":
     case "agent":
