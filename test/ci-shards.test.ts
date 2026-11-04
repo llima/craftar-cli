@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import config from "../vitest.config.js";
+import { CLI_SPAWN_TIMEOUT } from "./helpers/cli.js";
 import { WIN32_TEST_TIMEOUT } from "./helpers/timeouts.js";
 
 // The Windows half of the CI matrix runs the suite in two shards per Node version (tech-debt E23.2, E23.3): the suite
@@ -71,20 +72,12 @@ describe("vitest limits", () => {
 
   it("keeps runCli's spawn limit under the per-test limit on each platform", () => {
     const cliTs = readFileSync(path.join(REPO, "test/helpers/cli.ts"), "utf8");
-    // Parse the two numbers from CLI_SPAWN_TIMEOUT constant
-    const match = cliTs.match(/export const CLI_SPAWN_TIMEOUT = process\.platform === "win32" \? (\d+)_000 : (\d+)_000/);
-    expect(match).not.toBeNull();
-    const winTimeout = Number(match![1]) * 1000;
-    const otherTimeout = Number(match![2]) * 1000;
-    expect(winTimeout).toBe(170000);
-    expect(otherTimeout).toBe(25000);
-    const spawnTimeout = win ? winTimeout : otherTimeout;
-    const testTimeout = config.test?.testTimeout ?? 0;
-    expect(spawnTimeout).toBeLessThan(testTimeout);
-    // Verify cli.ts uses the constant
-    expect(cliTs).toContain("timeout: CLI_SPAWN_TIMEOUT");
-    // Verify report-pins.test.ts uses the constant
     const reportPins = readFileSync(path.join(REPO, "test/report-pins.test.ts"), "utf8");
+    // Verify constant value and that it is below the test timeout
+    expect(CLI_SPAWN_TIMEOUT).toBe(win ? 170000 : 25000);
+    expect(CLI_SPAWN_TIMEOUT).toBeLessThan(config.test?.testTimeout ?? 0);
+    // Verify both files use the constant
+    expect(cliTs).toContain("timeout: CLI_SPAWN_TIMEOUT");
     expect(reportPins).toContain("timeout: CLI_SPAWN_TIMEOUT");
   });
 });
@@ -199,24 +192,21 @@ describe("Windows runner sampler", () => {
 });
 
 // Values under 30 s are deliberate hang guards and are allowed; the floor is deliberate.
-// A named constant, an exponent literal, and vi.setConfig is not scanned.
+// A named constant, an exponent literal, arithmetic (60 * 1000), vi.setConfig, and a call closed mid-line (}, 60_000); }); is not scanned.
 function shortLimits(text: string): number[] {
   const out: number[] = [];
 
-  // Pattern 1: For each `timeout:` occurrence, extract the value up to `,` or `}` at paren depth 0,
-  // strip block comments, skip if it contains `atLeastWin32(` or looks like a regex, then collect literals.
-  // For `process.platform === "win32" ? A : B` ternaries, only read A (the win32 branch).
+  // Strip comments once before scanning (preserve https:// by requiring // not preceded by :)
+  text = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/[^\n]*/g, "");
+
+  // Pattern 1: For each `timeout:` occurrence, extract the value up to `,` or `}` at paren depth 0.
+  // For `process.platform === "win32" ? A : B` or `'win32'` ternaries, only read A (the win32 branch).
   const timeoutRegex = /\btimeout:\s*/g;
   let tm;
   while ((tm = timeoutRegex.exec(text)) !== null) {
-    // Skip if inside a regex literal (preceded by / after removing whitespace)
-    let beforeIdx = tm.index - 1;
-    while (beforeIdx >= 0 && /\s/.test(text[beforeIdx])) beforeIdx--;
-    if (beforeIdx >= 0 && text[beforeIdx] === "/") continue;
-
     let start = tm.index + tm[0].length;
     let depth = 0;
-    let end = start;
+    let end = text.length;
     for (let i = start; i < text.length; i++) {
       const ch = text[i];
       if (ch === "(") depth++;
@@ -226,13 +216,11 @@ function shortLimits(text: string): number[] {
         break;
       }
     }
-    let valueText = text.slice(start, end);
-    // Strip block comments
-    valueText = valueText.replace(/\/\*.*?\*\//g, "");
-    // Skip if contains atLeastWin32( or looks like regex patterns
-    if (valueText.includes("atLeastWin32(") || /\\[dD?+*]/.test(valueText)) continue;
-    // For `process.platform === "win32" ? A : B`, only read A (win32 branch)
-    const win32Ternary = valueText.match(/process\.platform\s*===\s*"win32"\s*\?\s*([\d_]+)\s*:\s*[\d_]+/);
+    const valueText = text.slice(start, end);
+    // Skip if contains atLeastWin32(
+    if (valueText.includes("atLeastWin32(")) continue;
+    // For `process.platform === "win32" ? A : B` or 'win32', only read A (win32 branch)
+    const win32Ternary = valueText.match(/process\.platform\s*===\s*["']win32["']\s*\?\s*([\d_]+)\s*:\s*[\d_]+/);
     if (win32Ternary) {
       const v = Number(win32Ternary[1].replace(/_/g, ""));
       if (v >= 30000 && v < WIN32_TEST_TIMEOUT) out.push(v);
@@ -251,8 +239,7 @@ function shortLimits(text: string): number[] {
   // - optional trailing comma before )
   // - number on its own line
   // - ) followed by ; or ,
-  // - trailing // or /* */ comment
-  const pattern2 = /,\s*([\d_]+)\s*,?\s*\)\s*[;,]?\s*(?:\/\/[^\n]*|\/\*.*?\*\/)?\s*$/gm;
+  const pattern2 = /,\s*([\d_]+)\s*,?\s*\)\s*[;,]?\s*$/gm;
   let m;
   while ((m = pattern2.exec(text)) !== null) {
     const v = Number(m[1].replace(/_/g, ""));
@@ -289,6 +276,15 @@ describe("per-test limits", () => {
       ['},\n  60_000' + ',\n);', [60000]],
       ['}, 60_000)' + ',', [60000]],
       [`{ ${T}: 60_000 /* win */ }`, [60000]],
+      // Comments before/around timeout (strip first)
+      [`{ /* slow */ ${T}: 60_000 }`, [60000]],
+      [`// see a/b/\n{ ${T}: 60_000 }`, [60000]],
+      [`{ ${T}: 60_000 // matches \\d+\n}`, [60000]],
+      [`{ ${T}: 60_000 // see (spec\n}`, [60000]],
+      // No terminator (end of text)
+      [`{ ${T}: 60_000`, [60000]],
+      // Single quotes in platform ternary
+      [`{ ${T}: process.platform === 'win32' ? 60_000 : 30_000 }`, [60000]],
     ];
     for (const [input, expected] of cases) {
       expect(shortLimits(input), `input: ${JSON.stringify(input)}`).toEqual(expected);
