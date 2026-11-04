@@ -1122,7 +1122,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     }
   }
 
-  const ingredientYaml = ingredientYamlText(variantMeta as Ingredient);
+  const ingredientYaml = ingredientYamlText(variantMeta);
   const ingredientYamlPath = path.join(variantDir, "ingredient.yaml");
 
   // For variant-updated, only stage ingredient.yaml if it changed

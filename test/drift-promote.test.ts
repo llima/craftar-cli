@@ -575,7 +575,7 @@ describe("cli — drift promote", () => {
     const home = await tmpDir("craftar-home-");
     cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
     const tmp = await tmpDir("craftar-tmp-");
-    cleanups.push(() => fs.rm(tmp, { recursive: true, force: true }));
+    cleanups.push(() => removeWithRetry(tmp));
     expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
     await f.driftA();
     const rulesDir = path.join(f.forgeRoot, "ingredients/rules");

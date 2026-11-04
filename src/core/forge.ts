@@ -763,7 +763,7 @@ export function scratchWriteRefusal(
   const raw = (e as NodeJS.ErrnoException).path;
   // writeForgeFile's temporary sibling is an implementation detail: name the file it was writing.
   const at = raw ? path.join(path.dirname(raw), tempTarget(path.basename(raw))) : raw;
-  const code = (e as NodeJS.ErrnoException).code ?? "the write failed";
+  const code = (e as NodeJS.ErrnoException).code as string;
   const shown = at ? path.relative(scratch, at).split(path.sep).join("/") : "a file";
   // Only a refusal the copied modes explain says anything of the Forge; a full or read-only temporary directory, or a
   // scanner holding a file there, is the temporary directory's.
