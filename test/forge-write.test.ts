@@ -62,6 +62,29 @@ describe("writeForgeFile (tech-debt L2a: E9.1, E1.1)", () => {
     expect((await fs.stat(existing)).mode & 0o777).toBe(0o750);
   });
 
+  it.skipIf(win || asRoot)("refuses to replace a file it could not write in place, as writing it did", async () => {
+    const abs = path.join(tmp, "locked.md");
+    await fs.writeFile(abs, "before\n");
+    await fs.chmod(abs, 0o444);
+    await expect(writeForgeFile(abs, "after\n")).rejects.toMatchObject({ code: "EACCES", path: abs });
+    expect(await fs.readFile(abs, "utf8")).toBe("before\n");
+    expect(await leftovers(tmp)).toEqual([]);
+  });
+
+  it.skipIf(win)("writes through a symbolic link, as writeFile did: the link stays a link", async () => {
+    const real = path.join(tmp, "b", "rule.md");
+    await fs.mkdir(path.dirname(real), { recursive: true });
+    await fs.writeFile(real, "before\n");
+    const link = path.join(tmp, "a", "rule.md");
+    await fs.mkdir(path.dirname(link), { recursive: true });
+    await fs.symlink("../b/rule.md", link);
+    await writeForgeFile(link, "after\n");
+    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await fs.readFile(real, "utf8")).toBe("after\n");
+    expect(await leftovers(path.dirname(link))).toEqual([]);
+    expect(await leftovers(path.dirname(real))).toEqual([]);
+  });
+
   it("a failed rename leaves the target as it was and removes the temporary file", async () => {
     const abs = path.join(tmp, "f.md");
     await fs.writeFile(abs, "before\n");

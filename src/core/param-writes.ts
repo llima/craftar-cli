@@ -7,6 +7,7 @@ import { IngredientSchema, ProfileWrittenSchema, WorkspaceConfigSchema, type For
 import { readsRecipeSections } from "./recipe-sections.js";
 import { placeholders, bodyFile, type Extraction } from "./extract.js";
 import { exists, listFiles, readIngredientText, FORGE_MANIFEST, type Forge, type LoadedIngredient } from "./forge.js";
+import { writeForgeFile } from "./forge-write.js";
 import { manifestWithSections } from "./manifest-edit.js";
 import { registrationCitations, rendersServers, serverCitations } from "./mcp-server.js";
 import { paramsFor, resolve, sectionKey } from "./resolve.js";
@@ -414,5 +415,5 @@ function parseOr<T>(label: string, parse: () => T): T {
 /** Put one rendered file on disk, journaled first so a late failure can name it. */
 export async function writeParamFile(w: { abs: string; content: string }, journal?: WriteJournal): Promise<void> {
   if (journal) journal.push({ abs: w.abs, created: !(await exists(w.abs)) });
-  await fs.writeFile(w.abs, w.content);
+  await writeForgeFile(w.abs, w.content);
 }

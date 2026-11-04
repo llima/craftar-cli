@@ -10,6 +10,7 @@ import { containRoot, escapeDestinationLine, escapeFileLine, escapeOf, escapeSou
 import YAML from "yaml";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, FORGE_MANIFEST, readIngredientText, type Forge } from "../core/forge.js";
+import { writeForgeFile } from "../core/forge-write.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, isUtf16Text } from "../core/secrets.js";
 import { registrationCitations, rendersServers, serverCitations, serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
@@ -980,8 +981,7 @@ export class ForgeStage {
     try {
       await fs.mkdir(this.root, { recursive: true });
       for (const [abs, content] of this.files) {
-        await fs.mkdir(path.dirname(abs), { recursive: true });
-        await fs.writeFile(abs, content);
+        await writeForgeFile(abs, content);
         written.push(path.relative(this.root, abs).split(path.sep).join("/"));
       }
     } catch (e) {
@@ -1017,8 +1017,7 @@ export class ForgeStage {
     for (const { rel, content } of entries) {
       const targetAbs = path.join(root, rel);
       await note(opts?.journal, targetAbs);
-      await fs.mkdir(path.dirname(targetAbs), { recursive: true });
-      await fs.writeFile(targetAbs, content);
+      await writeForgeFile(targetAbs, content);
     }
   }
 }
