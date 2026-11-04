@@ -489,7 +489,7 @@ Always on:
       // Rules with description in the Forge don't round-trip (import loses description).
       // The body-equality path would reuse them anyway at schema 7 when the expanded body matches,
       // ignoring the metadata difference.
-      // After removing the body-equality path, such rules become variants at both schemas.
+      // After removing the body-equality path, schema 6 and 7 agree; since E32.1 the description is not compared at all.
       const root = await tmpDir("craftar-body-equality-");
       cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
       const forgeRoot = path.join(root, "forge");
@@ -556,9 +556,10 @@ Always on:
       const style6Reused = result6.reused.includes("rule/style");
       expect(style7Reused, "rule/style: reused status should agree between schema 7 and 6").toBe(style6Reused);
 
-      // Both should be variants (metadata differs due to description)
-      expect(style7Reused, "rule/style should be variant at schema 7 (description missing)").toBe(false);
-      expect(style6Reused, "rule/style should be variant at schema 6 (description missing)").toBe(false);
+      // Since E32.1 (decision 14) a rule's description, which no target writes, is left out of the comparison on both
+      // sides: rule/style, equal otherwise, is reused at both schemas.
+      expect(style7Reused, "rule/style should be reused at schema 7 (description not compared)").toBe(true);
+      expect(style6Reused, "rule/style should be reused at schema 6 (description not compared)").toBe(true);
     });
 
     it("11. round-tripping Forge: sync then import back → readme reused at 7, variant at 6", async () => {
@@ -1127,7 +1128,7 @@ describe("Review round 3 item 2: steering base holding placeholder compared with
 });
 
 describe("Review round 3 item 3: described index rule creates variant with frozen-list warning", () => {
-  it("3a. acmeIndex({ schema: 7, literal: true }) → sync then import produces frozen-list warning", async () => {
+  it("3a. acmeIndex({ schema: 7, literal: true }) → sync, a hand edit, then import produces frozen-list warning", async () => {
     // spec §4.4's example: a rule with description holding the placeholder
     // sync expands, import back creates variant, warns about frozen list
     const s = await acmeIndex({ schema: 7, literal: true });
@@ -1139,6 +1140,8 @@ describe("Review round 3 item 3: described index rule creates variant with froze
     const lock = await readLock(s.wsRoot);
     const st = await status(ws, p, lock);
     await apply(ws, p, st);
+    // Since E32.1 a description alone no longer makes a variant: a hand edit of the body does.
+    await fs.appendFile(path.join(s.wsRoot, ".claude/rules/readme.md"), "A line added by hand.\n");
 
     // Import back
     const result = await importClaudeCode({
@@ -1147,7 +1150,7 @@ describe("Review round 3 item 3: described index rule creates variant with froze
       profileName: "acme",
     });
 
-    // rule/readme becomes a variant because it has a description (import loses description)
+    // rule/readme becomes a variant because its body differs
     expect(result.variants.map((v) => v.name)).toContain("rule/readme--acme");
 
     // The warning about frozen list should be present

@@ -262,3 +262,26 @@ describe("import with preferKiro", () => {
     await expect(fs.stat(s.forge)).rejects.toThrow();
   });
 });
+
+describe("import with preferKiro — a first line that looks like a banner (E13.3)", () => {
+  const NOTE = "<!-- hand-kept note -->";
+  const steering = `---\ninclusion: always\n---\n\n${NOTE}\n\n# Workflow\n\nSee .kiro/steering/style.md.\n`;
+  const WARN =
+    "--prefer-kiro workflow: .kiro/steering/workflow.md line 5 looks like a banner, but not one sync writes here — it is kept as the rule's text; set kiro.banner in the profile, or remove the line from the steering file";
+
+  for (const eol of ["\n", "\r\n"]) {
+    it(`B1/B2: kept, and warned by file and line, never by text — ${eol === "\n" ? "LF" : "CRLF"}`, async () => {
+      const s = await setup({ ...WORKSPACE, ".kiro/steering/workflow.md": steering.replace(/\n/g, eol) });
+      const r = await run(s, ["workflow"]);
+      expect(r.warnings.filter((w) => w.includes("looks like a banner"))).toEqual([WARN]);
+      expect((await forgeFile(s, "ingredients/rules/workflow/rule.md")).startsWith(NOTE + "\n")).toBe(true);
+    });
+  }
+
+  it("B3 (controls): the default banner, and a comment lower in the body, are not warned", async () => {
+    const s = await setup();
+    expect((await run(s, ["workflow"])).warnings.some((w) => w.includes("looks like a banner"))).toBe(false);
+    const lower = await setup({ ...WORKSPACE, ".kiro/steering/workflow.md": `---\ninclusion: always\n---\n\n# Workflow\n\n${NOTE}\nSee .kiro/steering/style.md.\n` });
+    expect((await run(lower, ["workflow"])).warnings.some((w) => w.includes("looks like a banner"))).toBe(false);
+  });
+});

@@ -93,6 +93,11 @@ describe("preferKiro", () => {
     const generated = "# Workflow\n\nSee .kiro/steering/style.md.\n";
     expect(preferKiro(input(FM + DEFAULT_BANNER + "\n\n" + generated)).text).toBe("# Workflow\n\nSee .claude/rules/style.md.\n");
   });
+  it("E13.3: a first body line that looks like a banner and was kept is named by its line in the file; none otherwise", () => {
+    expect(preferKiro(input(FM + "<!-- x -->\n\n" + BODY)).keptBanner).toBe(5);
+    expect(preferKiro(input(FM + DEFAULT_BANNER + "\n\n" + BODY)).keptBanner).toBeUndefined();
+    expect(preferKiro(input(BODY)).keptBanner).toBeUndefined();
+  });
   it("PK3 names the line of the steering file and the form", () => {
     const steering = FM + DEFAULT_BANNER + "\n\n# Workflow\n\nSee AGENTS.md (rule: style).\n";
     expect(() => preferKiro(input(steering))).toThrow(

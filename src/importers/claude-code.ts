@@ -13,12 +13,12 @@ import { copyForgeForProof, removeProofCopy, scratchWriteRefusal, exists, gitUnh
 import { writeForgeFile } from "../core/forge-write.js";
 import { manifestWithSections } from "../core/manifest-edit.js";
 import { decodeForScan, findSecrets, isUtf16Text } from "../core/secrets.js";
-import { registrationCitations, rendersServers, serverCitations, serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
+import { rendersServers, serverCitations, serverSecret, windowsOnlyLauncher, launcherImportWarning } from "../core/mcp-server.js";
 import { errorText, schemaFault } from "../core/schema-fault.js";
 import { stripBom, toLf } from "../core/text.js";
 import { fingerprintDir, fingerprintOf, type DirReader } from "../core/fingerprint.js";
 import { writtenSections } from "../core/section-files.js";
-import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileWrittenSchema, RecipeWrittenSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type ProfileSections, type Sections, type Target, type IngredientParamDecl } from "../schema/index.js";
+import { FORGE_SCHEMA_SECTIONS, ForgeManifestSchema, IngredientSchema, ProfileWrittenSchema, RecipeWrittenSchema, TARGETS, WorkspaceConfigSchema, type Ingredient, type IngredientRef, type McpServer, type Profile, type ProfileSections, type Sections, type Target } from "../schema/index.js";
 import { isDeepStrictEqual } from "node:util";
 import { readsPrimary, recipeOrder, resolve, sectionKey, type Resolution } from "../core/resolve.js";
 import { readsRulesIndex, RULES_INDEX_KEY, RULES_INDEX_LINE } from "../core/rules-index.js";
@@ -27,9 +27,9 @@ import { classifyForge, credentialFault } from "../core/remote.js";
 import { parseWorkspaceYaml } from "../core/workspace-yaml.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
-import { decide, forgeBefore, pin, registrationCarry, sourceKeys, valuesAt, workspaceParams, workspaceSections, workspaceRecipes, workspaceTargets, type RunContext } from "./decide.js";
+import { decide, forgeBefore, pin, sourceKeys, valuesAt, workspaceParams, workspaceSections, workspaceRecipes, workspaceTargets, carryInto, isScriptOrHook, type RunContext } from "./decide.js";
 import { providedByBlock } from "./provided.js";
-import { citedKeys, expandedTexts, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
+import { citedKeys, comparedMeta, expandedTexts, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
 import { firstMarkerLine, readsTargetSections } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
 import { GENERATED_BANNER, kiroReport, textLines, type KiroReport } from "./kiro-report.js";
@@ -704,7 +704,8 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
       // The Claude file as written: a split rule's fence counts toward its lines
       const ruleRaw = "frontmatterRaw" in q.meta ? q.meta.frontmatterRaw : undefined;
       const ruleFileText = ruleRaw !== undefined ? `---\n${ruleRaw}\n---\n${ruleText}` : ruleText;
-      const { text, offset } = preferKiro({ name, steering: sm.text, rules: new Set(rules.keys()), handSteering, banner });
+      const { text, offset, keptBanner } = preferKiro({ name, steering: sm.text, rules: new Set(rules.keys()), handSteering, banner });
+      if (keptBanner !== undefined) report.warnings.push(`--prefer-kiro ${name}: .kiro/steering/${name}.md line ${keptBanner} looks like a banner, but not one sync writes here — it is kept as the rule's text; set kiro.banner in the profile, or remove the line from the steering file`);
       const source = `.kiro/steering/${name}.md`;
       q.files = { "rule.md": text };
       q.scan = scanOf("rule.md", sm);
@@ -903,6 +904,11 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // Spec 51 §5.3: under --local=auto|always, a local of this run no recipe of the profile's folder it resolves cites is
   // wired into `<p>-local`, created when absent and written last in the profile's recipes.
   const appendLast = localMode !== "never" && runLocals.length ? await wireLocals(stage, forge, opts.profileName, loaded!, [...(loaded!.profiles.get(opts.profileName)?.recipes ?? []), ...profileRecipes], runLocals, report) : null;
+  // Spec 51 §4.5 (E42.4): a local kept in a recipe of the folder this run did not compute, its source gone, is said too.
+  if (loaded && readsProfileLocal(loaded.manifest)) {
+    const listed = [...(loaded.profiles.get(opts.profileName)?.recipes ?? []), ...profileRecipes, ...(appendLast ? [appendLast] : [])];
+    await warnKeptLocals(stage, forge, opts.profileName, loaded, listed, runLocals, report);
+  }
 
   /* ---- profile ---- */
   const targets = detected; // Computed earlier for writtenTargets.
@@ -1360,7 +1366,7 @@ export async function readEmitted(
     return null;
   }
 
-  if (type === "script" || type === "hook") {
+  if (isScriptOrHook({ type })) {
     const kind = type === "script" ? "scripts" : "hooks";
     const abs = path.join(claudeDir, kind, rel);
     // fs.stat throws on a dangling link (ENOENT) — spec 30r1 §3.4 says we must let it throw
@@ -1420,7 +1426,7 @@ function bodyFromSteering(meta: Ingredient): boolean {
  */
 function fileWhere(meta: Ingredient, base: string, rel: string): string {
   if (meta.type === "skill" && meta.layout === "dir") return `${base}${rel}`;
-  if ((meta.type === "script" || meta.type === "hook") && meta.files && meta.files.length > 1) {
+  if (isScriptOrHook(meta) && meta.files && meta.files.length > 1) {
     return `${path.posix.dirname(base)}/${rel}`;
   }
   return base;
@@ -1543,11 +1549,6 @@ async function writeIngredient(
   const ref = `${meta.type}/${name}`;
   const source = meta.origin?.path ?? ref;
   const sourceMeta = validateImported(meta);
-  // The authEnv to carry into a variant — from the decision (spec 27 §5.3).
-  let variantAuthEnv: string[] | undefined;
-  // The registration and cited params to carry into a hook variant — from the decision (spec 43 §7.2 row 10).
-  let variantRegistration: unknown[] | undefined;
-  let variantRegistrationParams: Record<string, IngredientParamDecl> | undefined;
   // Spec 51 §4.5: a local of the importing profile is compared first, and never shadowed at the root.
   const localDecision = run ? await decideLocal(stage, run, ref, sourceMeta, files, fingerprint, profile, source, report) : null;
   if (typeof localDecision === "string") return localDecision;
@@ -1562,9 +1563,10 @@ async function writeIngredient(
     const d = run ? await decide(run.ctx, dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases, run.indexExpand) : { kind: "literal" as const, warn: "" };
     if (d.kind === "literal") {
       if (d.warn) report.warnings.push(d.warn);
-      const baseFingerprint = await fingerprintDir(dir, stage.reader());
+      // E32.1: a rule's description is not compared here either (the source never has one).
+      const baseFingerprint = await fingerprintDir(dir, stage.reader(), comparedMeta);
       // A script or hook base at the default targets compares as `asImportTargets` reads it.
-      const atDefault = meta.type === "script" || meta.type === "hook" ? fingerprintOf(validateImported({ ...meta, targets: "*" }), files) : fingerprint;
+      const atDefault = isScriptOrHook(meta) ? fingerprintOf(validateImported({ ...meta, targets: "*" }), files) : fingerprint;
       if (baseFingerprint === fingerprint || baseFingerprint === atDefault) {
         report.reused.push(ref);
         return ref;
@@ -1579,11 +1581,6 @@ async function writeIngredient(
       return ref;
     } else {
       why = d.why;
-      // Capture the base's authEnv for a new variant (spec 27 §5.3).
-      variantAuthEnv = d.authEnv;
-      // Capture the base's registration and cited params for a new hook variant (spec 43 §7.2 row 10).
-      variantRegistration = d.registration;
-      variantRegistrationParams = d.registrationParams;
     }
     const as = meta.name;
     name = `${meta.name}--${profile}`;
@@ -1670,75 +1667,16 @@ async function writeIngredient(
       }
     }
 
-    // Spec 27 §5.3: an existing variant's authEnv decides; a new one inherits the base's.
+    // Spec 27 §5.3, spec 43 §7.2 row 10: carry authEnv (mcp) or registration/params (hook) from base and/or existing variant.
     const variantFile = path.join(dir, "ingredient.yaml");
-    if (meta.type === "mcp") {
-      if (await stage.exists(variantFile)) {
-        const existingMeta = parseYaml(variantFile, await stage.readText(variantFile), IngredientSchema);
-        if (existingMeta.type === "mcp" && existingMeta.authEnv) {
-          meta = { ...meta, authEnv: existingMeta.authEnv } as Ingredient;
-        }
-      } else if (variantAuthEnv) {
-        meta = { ...meta, authEnv: variantAuthEnv } as Ingredient;
-      }
-    }
-    // Spec 43 §7.2 row 10: an existing hook variant's registration decides; a new one inherits the base's.
-    // Also carry params entries the registration cites: base's when base declares, else variant's own when variant declares.
-    if (meta.type === "hook") {
-      if (await stage.exists(variantFile)) {
-        const existingMeta = parseYaml(variantFile, await stage.readText(variantFile), IngredientSchema);
-        if (existingMeta.type === "hook" && existingMeta.registration) {
-          meta = { ...meta, registration: existingMeta.registration } as Ingredient;
-          // For params: for each key the variant's registration cites, take the base's entry when base declares it;
-          // otherwise take the existing variant's own entry when the variant declares it; otherwise nothing.
-          const baseDir = path.join(forge, "ingredients", folder, meta.name);
-          const baseFile = path.join(baseDir, "ingredient.yaml");
-          const baseMeta = (await stage.exists(baseFile)) ? parseYaml(baseFile, await stage.readText(baseFile), IngredientSchema) : null;
-          const baseParams = baseMeta?.type === "hook" ? baseMeta.params : undefined;
-          const variantParams = existingMeta.params;
-          // Merge base and variant params for citations: a key is "declared" if either side declares it.
-          // Use the type expected by registrationCitations (it only checks key existence).
-          type ParamDecl = IngredientParamDecl;
-          const mergedParams: Record<string, ParamDecl> = { ...variantParams, ...baseParams };
-          const variantMetaForCitations = { ...existingMeta, params: mergedParams };
-          const citedDeclared = registrationCitations(variantMetaForCitations).filter((c) => c.declared).map((c) => c.key);
-          if (citedDeclared.length > 0) {
-            const keptParams: Record<string, IngredientParamDecl> = {};
-            for (const k of citedDeclared) {
-              // Prefer base's entry; fall back to variant's own entry
-              if (baseParams && Object.hasOwn(baseParams, k)) keptParams[k] = baseParams[k];
-              else if (variantParams && Object.hasOwn(variantParams, k)) keptParams[k] = variantParams[k];
-            }
-            if (Object.keys(keptParams).length > 0) {
-              meta = { ...meta, params: keptParams } as Ingredient;
-            }
-          }
-        }
-      } else {
-        // NEW hook variant: inherit registration from base.
-        // variantRegistration/variantRegistrationParams come from decide()'s "variant" answer;
-        // when undefined (literal path), read the base's ingredient.yaml and call registrationCarry().
-        let regToApply = variantRegistration;
-        let paramsToApply = variantRegistrationParams;
-        if (regToApply === undefined) {
-          // Literal path: decide() answered "literal", so we didn't get registration from it.
-          // Read the base's ingredient.yaml and compute registration carry (spec 43 §7.2 row 10).
-          const baseDir = path.join(forge, "ingredients", folder, meta.name);
-          const baseFile = path.join(baseDir, "ingredient.yaml");
-          if (await stage.exists(baseFile)) {
-            const baseMeta = parseYaml(baseFile, await stage.readText(baseFile), IngredientSchema);
-            const carry = registrationCarry(baseMeta);
-            regToApply = carry.registration;
-            paramsToApply = carry.registrationParams;
-          }
-        }
-        if (regToApply) {
-          meta = { ...meta, registration: regToApply } as Ingredient;
-        }
-        if (paramsToApply) {
-          meta = { ...meta, params: paramsToApply } as Ingredient;
-        }
-      }
+    {
+      // Read the base's ingredient.yaml (the ingredient this variant derives from)
+      const baseDir = path.join(forge, "ingredients", folder, meta.name);
+      const baseFile = path.join(baseDir, "ingredient.yaml");
+      const baseMeta = (await stage.exists(baseFile)) ? parseYaml(baseFile, await stage.readText(baseFile), IngredientSchema) : null;
+      // Read the existing variant's ingredient.yaml (if this variant already exists)
+      const existingMeta = (await stage.exists(variantFile)) ? parseYaml(variantFile, await stage.readText(variantFile), IngredientSchema) : null;
+      meta = carryInto(meta, baseMeta, existingMeta);
     }
     meta = { ...meta, name, as } as Ingredient;
     validateImported(meta); // the variant name must be slug-like too (a `--profile` with a space is not)
@@ -1814,7 +1752,7 @@ async function writeIngredient(
   for (const [rel, content] of Object.entries(files)) stage.write(path.join(dir, rel), content);
 
   // For script and hook, warn about leftover files in the directory
-  if (meta.type === "script" || meta.type === "hook") {
+  if (isScriptOrHook(meta)) {
     const diskFiles = await stage.reader().list(dir);
     const plannedFiles = new Set(["ingredient.yaml", ...Object.keys(files)]);
     for (const diskRel of diskFiles) {
@@ -1862,10 +1800,10 @@ async function decideLocal(
     if (d.kind === "literal") {
       if (d.warn) report.warnings.push(d.warn);
       const carried = await carryFromExisting(stage, path.join(local.dir, "ingredient.yaml"), sourceMeta);
-      const localFingerprint = await fingerprintDir(local.dir, stage.reader());
+      const localFingerprint = await fingerprintDir(local.dir, stage.reader(), comparedMeta);
       equal =
         localFingerprint === fingerprintOf(validateImported(carried), files) ||
-        ((carried.type === "script" || carried.type === "hook") && localFingerprint === fingerprintOf(validateImported({ ...carried, targets: "*" } as Ingredient), files));
+        (isScriptOrHook(carried) && localFingerprint === fingerprintOf(validateImported({ ...carried, targets: "*" } as Ingredient), files));
     }
     const dir = path.relative(forge.root, local.dir).split(path.sep).join("/");
     if (!equal && mode === "never") throw new Error(`import: ${source} differs from ${ref}, local to profile ${profile} (${dir}) — edit the local in the Forge and re-run, or re-run with --local=auto to rewrite it`);
@@ -1890,6 +1828,7 @@ async function decideLocal(
       return { rewrite: local.dir };
     }
     if (d.kind === "reuse") {
+      if (d.rendered || d.renderedSections) report.rendered.push({ name: ref, keys: d.rendered ?? [], ...(d.renderedSections ? { sections: d.renderedSections } : {}) });
       if (d.inferred) report.inferred.push({ name: ref, values: d.inferred });
       for (const x of d.delta ?? []) report.params.push({ ...x, from: ref });
       if (d.sectioned) report.sectioned.push({ name: ref, sections: d.sectioned });
@@ -1909,11 +1848,12 @@ async function decideLocal(
     let equal = d.kind === "reuse" && !(d.delta?.length || d.sectionDelta?.length);
     if (d.kind === "literal") {
       const carried = await carryFromExisting(stage, path.join(held.dir, "ingredient.yaml"), sourceMeta);
-      equal = (await fingerprintDir(held.dir, stage.reader())) === fingerprintOf(validateImported(carried), files);
+      equal = (await fingerprintDir(held.dir, stage.reader(), comparedMeta)) === fingerprintOf(validateImported(carried), files);
     }
     const dir = path.relative(forge.root, held.dir).split(path.sep).join("/");
     if (!equal) throw new Error(`import: ${source}: ${ref} differs from the local of ${anc}, which ${profile} extends (${dir}) — edit the parent's local in the Forge by hand, then re-run`);
     report.reused.push(ref);
+    if (d.kind === "reuse" && (d.rendered || d.renderedSections)) report.rendered.push({ name: ref, keys: d.rendered ?? [], ...(d.renderedSections ? { sections: d.renderedSections } : {}) });
     (report.localReused ??= []).push({ ref, dir });
     return ref;
   }
@@ -1932,13 +1872,7 @@ async function decideLocal(
 async function carryFromExisting(stage: ForgeStage, file: string, meta: Ingredient): Promise<Ingredient> {
   if (!(await stage.exists(file))) return meta;
   const existing = parseYaml(file, stripBom(await stage.readText(file)), IngredientSchema);
-  if (meta.type === "mcp" && existing.type === "mcp" && existing.authEnv) return { ...meta, authEnv: existing.authEnv } as Ingredient;
-  if (meta.type === "hook" && existing.type === "hook" && existing.registration) {
-    const cited = registrationCitations(existing).filter((c) => c.declared).map((c) => c.key);
-    const params = Object.fromEntries(cited.filter((k) => existing.params && Object.hasOwn(existing.params, k)).map((k) => [k, existing.params![k]]));
-    return { ...meta, registration: existing.registration, ...(Object.keys(params).length ? { params } : {}) } as Ingredient;
-  }
-  return meta;
+  return carryInto(meta, null, existing);
 }
 
 const alwaysVariantRefusal = (source: string, variant: string, profile: string) =>
@@ -2342,6 +2276,55 @@ function sectionChange(report: ImportReport, ctx: RunContext): Sections {
   return out;
 }
 
+/** The recipes of one recipes folder as this run stages them, by name: the file, its ingredients and its `extends`. */
+async function stagedRecipes(stage: ForgeStage, dir: string): Promise<Map<string, { abs: string; ingredients: string[]; extends: string[] }>> {
+  const out = new Map<string, { abs: string; ingredients: string[]; extends: string[] }>();
+  for (const rel of await stage.reader().list(dir)) {
+    if (rel.includes("/") || !/\.ya?ml$/.test(rel)) continue;
+    const abs = path.join(dir, rel);
+    const r = parseYaml(abs, stripBom(await stage.readText(abs)), RecipeWrittenSchema);
+    out.set(r.name, { abs, ingredients: r.ingredients, extends: r.extends });
+  }
+  return out;
+}
+
+/**
+ * Spec 51 §4.5 (E42.4): a local of the profile that this run neither reused, rewrote nor created — its source is gone or
+ * rejected — is kept in every recipe of the profile's folder that cites it; `writeOwnedRecipe` warns for the recipes it
+ * computes, and this pass for the others the profile reaches (its folder over the root, through `extends`), in the same
+ * words. Each pair is said once.
+ */
+async function warnKeptLocals(stage: ForgeStage, forge: string, profile: string, loaded: Forge, listed: string[], runLocals: string[], report: ImportReport): Promise<void> {
+  const own = loaded.locals.get(profile);
+  if (!own) return;
+  const gone = new Set<string>([...own.ingredients.keys()].filter((r) => !runLocals.includes(r)));
+  if (!gone.size) return;
+  const dir = path.join(forge, "profiles", profile, "recipes");
+  const folder = await stagedRecipes(stage, dir);
+  const root = await stagedRecipes(stage, path.join(forge, "recipes"));
+  const recipeOf = (n: string) => folder.get(n) ?? root.get(n) ?? loaded.recipes.get(n);
+  const reached = new Set<string>();
+  const walk = (n: string) => {
+    const r = recipeOf(n);
+    if (reached.has(n) || !r) return;
+    reached.add(n);
+    for (const e of r.extends) walk(e);
+  };
+  for (const n of listed) walk(n);
+  const lines: Array<{ label: string; ref: string }> = [];
+  for (const n of reached) {
+    const held = folder.get(n);
+    if (!held) continue;
+    const label = `profiles/${profile}/recipes/${path.basename(held.abs)}`;
+    for (const ref of new Set(held.ingredients)) if (gone.has(ref)) lines.push({ label, ref });
+  }
+  lines.sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0));
+  for (const { label, ref } of lines) {
+    const w = `${ref}: local to profile ${profile}, kept in ${label} though the workspace no longer holds its source — the next sync writes its file back`;
+    if (!report.warnings.includes(w)) report.warnings.push(w);
+  }
+}
+
 /**
  * Spec 51 §5.3: the run's locals that no recipe the profile reaches cites go into `<p>-local`, edited in place or
  * created. Its folder's recipes and the root's are read as staged, so a recipe this run computed counts; only an
@@ -2350,24 +2333,12 @@ function sectionChange(report: ImportReport, ctx: RunContext): Sections {
 async function wireLocals(stage: ForgeStage, forge: string, profile: string, loaded: Forge, listed: string[], runLocals: string[], report: ImportReport): Promise<string | null> {
   const name = `${profile}-local`;
   const dir = path.join(forge, "profiles", profile, "recipes");
-  const folder = new Map<string, { abs: string; ingredients: string[]; extends: string[] }>();
-  for (const rel of await stage.reader().list(dir)) {
-    if (rel.includes("/") || !/\.ya?ml$/.test(rel)) continue;
-    const abs = path.join(dir, rel);
-    const r = parseYaml(abs, stripBom(await stage.readText(abs)), RecipeWrittenSchema);
-    folder.set(r.name, { abs, ingredients: r.ingredients, extends: r.extends });
-  }
+  const folder = await stagedRecipes(stage, dir);
   // The profile's view: its folder's recipes over the root's, the root's read as this run stages them (a recipe it
   // creates or recomputes included). A root recipe cites no local-only ref (L3), so only an override (spec 56 §7) can be
   // reached through one — and then it needs no wiring.
   const rootDir = path.join(forge, "recipes");
-  const root = new Map<string, { ingredients: string[]; extends: string[] }>();
-  for (const rel of await stage.reader().list(rootDir)) {
-    if (rel.includes("/") || !/\.ya?ml$/.test(rel)) continue;
-    const abs = path.join(rootDir, rel);
-    const r = parseYaml(abs, stripBom(await stage.readText(abs)), RecipeWrittenSchema);
-    root.set(r.name, { ingredients: r.ingredients, extends: r.extends });
-  }
+  const root = await stagedRecipes(stage, rootDir);
   const recipeOf = (n: string) => folder.get(n) ?? root.get(n) ?? loaded.recipes.get(n);
   const reached = new Set<string>();
   const walk = (n: string) => {

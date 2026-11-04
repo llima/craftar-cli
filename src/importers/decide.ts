@@ -7,7 +7,7 @@ import { fingerprintOf } from "../core/fingerprint.js";
 import { exists, listFiles, loadForge, readIngredientText, type Forge } from "../core/forge.js";
 import { hashNormalized, stripBom, toLf } from "../core/text.js";
 import { deepMerge } from "../core/merge.js";
-import { asImportTargets, citedKeys, expandedTexts, infer, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
+import { asImportTargets, citedKeys, comparedMeta, expandedTexts, infer, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
 import { canonicalValue, inferSections, projectSections, readsTargetSections } from "../core/sections.js";
 import { errorText } from "../core/schema-fault.js";
 import { sectionKey } from "../core/resolve.js";
@@ -84,7 +84,7 @@ export type Decision =
       sectioned?: string[];
       sectionDelta?: SectionChange[];
     }
-  | { kind: "variant"; why?: string; authEnv?: string[]; registration?: unknown[]; registrationParams?: Record<string, IngredientParamDecl> }
+  | { kind: "variant"; why?: string }
   | { kind: "literal"; warn: string };
 
 const norm = (s: string) => toLf(stripBom(s));
@@ -104,28 +104,76 @@ export function pin(ctx: RunContext, keys: Iterable<string>, map: Record<string,
   for (const k of keys) if (!ctx.pinned.has(k)) ctx.pinned.set(k, valueOf(map, k));
 }
 
+/** True for script and hook types (E34.2f). */
+export function isScriptOrHook<T extends { type: string }>(meta: T): meta is Extract<T, { type: "script" | "hook" }> {
+  return meta.type === "script" || meta.type === "hook";
+}
+
 /**
- * Compute the registration and params to carry from a hook base into a variant.
- * Returns the base's registration and only the params entries the registration cites (spec 43 §7.2 row 10).
- * For a non-hook or a hook without registration, returns empty result.
+ * Carry what the workspace cannot express from a base or existing ingredient into a variant or local rewrite.
+ *
+ * Rules (the union of the four carry sites):
+ * - MCP (`meta.type === "mcp"`): if `existing` is given → `existing.authEnv` when it is an mcp with `authEnv`, else none;
+ *   if no `existing` → `base.authEnv` when base is an mcp with one.
+ * - Hook: let `src = existing ?? base`. If `src` is a hook with a `registration`: carry `registration`; for each key
+ *   `registrationCitations(src)` cites that `base?.params` or `src.params` declares (own properties), take `base.params[k]`
+ *   when base is a hook declaring it, else `src.params[k]`; set `params` to that map when non-empty, otherwise leave
+ *   `meta.params` as given. Otherwise carry nothing.
+ * - Any other type: `meta` unchanged. Never mutates inputs.
  */
-export function registrationCarry(meta: Ingredient): {
-  registration?: unknown[];
-  registrationParams?: Record<string, IngredientParamDecl>;
-} {
-  if (meta.type !== "hook") return {};
-  const registration = meta.registration;
-  if (!registration) return {};
-  const citations = registrationCitations(meta);
-  if (!citations.length) return { registration };
-  const citedDeclared = citations.filter((c) => c.declared).map((c) => c.key);
-  if (!citedDeclared.length) return { registration };
-  const declared = meta.params ?? {};
-  const registrationParams: Record<string, IngredientParamDecl> = {};
-  for (const k of citedDeclared) {
-    if (Object.hasOwn(declared, k)) registrationParams[k] = declared[k];
+export function carryInto(meta: Ingredient, base: Ingredient | null, existing: Ingredient | null): Ingredient {
+  // MCP: authEnv carry
+  if (meta.type === "mcp") {
+    // existing decides: if given and is an mcp with authEnv, use it; else inherit from base
+    if (existing !== null) {
+      if (existing.type === "mcp" && existing.authEnv) {
+        return { ...meta, authEnv: existing.authEnv } as Ingredient;
+      }
+      // existing is given but has no authEnv → no authEnv on result
+      return meta;
+    }
+    // no existing → inherit from base
+    if (base !== null && base.type === "mcp" && base.authEnv) {
+      return { ...meta, authEnv: base.authEnv } as Ingredient;
+    }
+    return meta;
   }
-  return { registration, registrationParams: Object.keys(registrationParams).length ? registrationParams : undefined };
+
+  // Hook: registration and params carry
+  if (meta.type === "hook") {
+    const src = existing ?? base;
+    if (src === null || src.type !== "hook" || !src.registration) {
+      // No source or source is not a hook with registration → carry nothing
+      return meta;
+    }
+
+    // src is a hook with registration: carry registration
+    // For params: for each key the registration cites (and is declared somewhere), take base's entry when base declares it, else src's own
+    const baseParams = base?.type === "hook" ? base.params : undefined;
+    const srcParams = src.params;
+    // A key is declared when either side declares it (as the rewrite of an existing variant always counted it).
+    const citations = registrationCitations({ ...src, params: { ...(srcParams ?? {}), ...(baseParams ?? {}) } });
+    const citedDeclared = citations.filter((c) => c.declared).map((c) => c.key);
+
+    // Build params map: for each cited key that base or src declares, prefer base's entry, else src's
+    const params: Record<string, IngredientParamDecl> = {};
+    for (const k of citedDeclared) {
+      if (baseParams && Object.hasOwn(baseParams, k)) {
+        params[k] = baseParams[k];
+      } else if (srcParams && Object.hasOwn(srcParams, k)) {
+        params[k] = srcParams[k];
+      }
+    }
+
+    return {
+      ...meta,
+      registration: src.registration,
+      ...(Object.keys(params).length ? { params } : {}),
+    } as Ingredient;
+  }
+
+  // Any other type: unchanged
+  return meta;
 }
 
 /**
@@ -154,20 +202,12 @@ export async function decide(
   const parseOpts = { targets: readsTargetSections({ schema }) };
   const owner = ctx.sourceTarget;
   const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."), parseOpts, schema);
-  // The base's authEnv, to carry into the variant answer (spec 27 §5.3).
-  const baseAuthEnv = base.meta.type === "mcp" ? base.meta.authEnv : undefined;
-  // The base's registration and cited params, to carry into the variant answer (spec 43 §7.2 row 10).
-  const { registration: baseRegistration, registrationParams: baseRegistrationParams } = registrationCarry(base.meta);
-  // Augment a variant decision with the base's authEnv for the importer to carry (spec 27 §5.3).
-  // Also augment with registration and registrationParams for hooks (spec 43 §7.2 row 10).
-  const withAuthEnv = (d: Decision): Decision => {
-    if (d.kind !== "variant") return d;
-    let result = d;
-    if (baseAuthEnv) result = { ...result, authEnv: baseAuthEnv };
-    if (baseRegistration) result = { ...result, registration: baseRegistration };
-    if (baseRegistrationParams) result = { ...result, registrationParams: baseRegistrationParams };
-    return result;
-  };
+  // E32.1: a rule's description is left out of the comparison on the source's side too (drift promote's source carries the
+  // base's); `renderedFingerprint` and `shapeDiffers` leave it out on the base's.
+  if (meta.type === "rule" && meta.description !== undefined) {
+    meta = comparedMeta(meta);
+    fingerprint = fingerprintOf(meta, files);
+  }
 
   // Spec 34 §5.2: the declared server citations (at the gate, else []).
   const serverKeys = rendersServers({ schema }) ? serverCitations(base.meta).filter((c) => c.declared).map((c) => c.key) : [];
@@ -207,7 +247,7 @@ export async function decide(
       if (atRulesIndexGate && k === RULES_INDEX_KEY) continue;
       if (Object.hasOwn(ctx.P, k) || Object.hasOwn(ctx.W, k)) continue;
       for (const [name, r] of (ctx.view ?? ctx.forge).recipes) {
-        if (r.params[k]?.default !== undefined) return withAuthEnv({ kind: "variant", why: `recipe ${name} defaults ${k}, which the server cites` });
+        if (r.params[k]?.default !== undefined) return { kind: "variant", why: `recipe ${name} defaults ${k}, which the server cites` };
       }
     }
   }
@@ -228,8 +268,8 @@ export async function decide(
   // Param inference first (Ruling 16): the narrower claim. A base with no open section stops there, as in 0.6.2.
   const param = await inferParams(ctx, base, S, map, cited, citedAll, ref, meta, files, fingerprint, others, runBases, schema, owner, ruleIndex);
   const open = projectedNames.filter((n) => !Object.hasOwn(WSk, n));
-  if (param.kind === "reuse" || !open.length) return withAuthEnv(param);
-  return withAuthEnv(inferSectionValues(ctx, base, key, PSk, WSk, map, ref, meta, files, fingerprint, schema, owner, ruleIndex));
+  if (param.kind === "reuse" || !open.length) return param;
+  return inferSectionValues(ctx, base, key, PSk, WSk, map, ref, meta, files, fingerprint, schema, owner, ruleIndex);
 }
 
 /** A key's section values in a layer, or none. */
@@ -237,7 +277,7 @@ export const valuesAt = (layer: Sections, key: string): Record<string, string> =
 
 /** F1, F2 (spec 10 §6.3): what no value can explain — metadata, the file set, a file compared as bytes. */
 function shapeDiffers(base: ImportBase, meta: Ingredient, files: Record<string, string | Buffer>): string | null {
-  const metaOnly = stripForgeOnlyKeys({ ...asImportTargets(base.meta) });
+  const metaOnly = stripForgeOnlyKeys({ ...comparedMeta(asImportTargets(base.meta)) });
   if (fingerprintOf(metaOnly as Ingredient, {}) !== fingerprintOf(meta, {})) return "metadata differs";
   const baseFiles = [...base.texts.keys(), ...base.bytes.keys()].sort();
   const srcFiles = Object.keys(files).sort();
