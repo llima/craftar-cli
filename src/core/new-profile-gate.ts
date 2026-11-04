@@ -11,6 +11,9 @@ import path from "node:path";
 import { assertNoLinkOnPath, gitHasCommit, gitIgnored, gitIsRepo, type Forge } from "./forge.js";
 import { assertNotCacheTree } from "./remote.js";
 
+/** P7's first message: the one spelling, for the gate, the proof's race and the write's. */
+export const p7Exists = (name: string): string => `profile ${name} already exists in the Forge — use --profile ${name}`;
+
 /**
  * The gate of the one path `init --new-profile` creates.
  * @param forge The loaded Forge.
@@ -41,7 +44,7 @@ export async function newProfileGate(forge: Forge, home: string, name?: string):
 
   // P7 by name: forge.profiles.has(name)
   if (forge.profiles.has(name)) {
-    throw new Error(`profile ${name} already exists in the Forge — use --profile ${name}`);
+    throw new Error(p7Exists(name));
   }
 
   // P7 by directory: list profiles/ (ENOENT → nothing there); an entry whose name lower-cased

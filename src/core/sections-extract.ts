@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { FORGE_SCHEMA_SECTION_FILES, ProfileWrittenSchema, windowsShaped, type ProfileWritten } from "../schema/index.js";
-import { assertNoLinkOnPath, copyForgeForProof, loadForge, parseYaml, type Forge } from "./forge.js";
+import { assertNoLinkOnPath, copyForgeForProof, proofPathsBack, removeProofCopy, scratchWriteRefusal, loadForge, parseYaml, type Forge } from "./forge.js";
 import { writeForgeFile } from "./forge-write.js";
 import { impactOf, planAll, type ForgeWorkspace, type Planned } from "./impact.js";
 import { readsSectionFiles } from "./section-files.js";
@@ -170,14 +170,11 @@ export async function proveExtract(forge: Forge, plan: ExtractPlan, registered: 
     const copy = path.join(scratch, "forge");
     await copyForgeForProof(forge.root, copy, EXTRACT_COMMAND);
     // A message from the copy names the Forge, whichever spelling of the scratch path it holds.
-    const realCopy = await fs.realpath(copy);
-    const unscratch = (t: string) => t.split(realCopy).join(forge.root).split(copy).join(forge.root);
+    const unscratch = await proofPathsBack(copy, forge.root);
     try {
       await writeExtract(plan, copy);
     } catch (e) {
-      const at = (e as NodeJS.ErrnoException).path;
-      const shown = at ? posix(path.relative(copy, at)) : "a file";
-      throw new Error(`${EXTRACT_COMMAND}: ${shown} could not be written on the scratch copy the move is proved on (${(e as NodeJS.ErrnoException).code ?? "the write failed"}) — it cannot be written in the Forge either; nothing written`);
+      throw scratchWriteRefusal(EXTRACT_COMMAND, copy, e, "move");
     }
     let edited: Forge;
     try {
@@ -206,7 +203,7 @@ export async function proveExtract(forge: Forge, plan: ExtractPlan, registered: 
     }
     return { warnings, before };
   } finally {
-    await fs.rm(scratch, { recursive: true, force: true, maxRetries: 3 });
+    await removeProofCopy(scratch);
   }
 }
 

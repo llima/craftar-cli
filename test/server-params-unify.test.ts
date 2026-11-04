@@ -60,7 +60,7 @@ async function writes(schema: number, spec: ForgeSpec, key: string) {
   const base = f.ingredients.get("rule/w")!;
   const variant = f.ingredients.get("rule/w--acme")!;
   const diff = await diffIngredients(base, variant);
-  const plan = await planFrom(base, variant, diff, "acme");
+  const plan = await planFrom(base, variant, diff, "acme", 1);
   Object.assign(plan.files[0].hunks![0], { take: "param", params: [{ token: "globex-api", key }] });
   const r = await applyPlan(base, variant, diff, plan, { forgeSchema: f.manifest.schema });
   return checkParamWrites(f, base, variant, "acme", r.params, r.sections);

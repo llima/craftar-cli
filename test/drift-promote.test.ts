@@ -568,36 +568,28 @@ describe("cli — drift promote", () => {
     );
   });
 
-  it("17b. CLI late-failure: stdout is empty, stderr shows lateFailure message", async () => {
-    // This test produces a late failure by making the variant directory writable but the file inside read-only
-    // Only works on Linux/macOS; skip on Windows
-    if (process.platform === "win32") return;
-
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("17b. a folder the Forge cannot write is refused on the scratch copy, before any write (E10.6b)", async () => {
+    // Until E10.6b the copy did not carry a directory's mode, so this run failed late with the git recovery lines.
     const f = await F();
     gitInit(f.forgeRoot);
     const home = await tmpDir("craftar-home-");
     cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
+    const tmp = await tmpDir("craftar-tmp-");
+    cleanups.push(() => removeWithRetry(tmp));
     expect(runCli(["sync", "--workspace", f.ws], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
     await f.driftA();
-
-    // Create a read-only rules folder so that mkdir fails during apply
     const rulesDir = path.join(f.forgeRoot, "ingredients/rules");
     await fs.chmod(rulesDir, 0o555);
-    cleanups.push(async () => {
-      try {
-        await fs.chmod(rulesDir, 0o755);
-      } catch { /* ignore */ }
-    });
-
-    const r = runCli(["drift", "promote", A, "--workspace", f.ws], { env: { CRAFTAR_HOME: home } });
+    cleanups.push(() => fs.chmod(rulesDir, 0o755).catch(() => undefined));
+    const before = execFileSync("git", ["status", "--porcelain"], { cwd: f.forgeRoot }).toString();
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws], { env: { CRAFTAR_HOME: home, TMPDIR: tmp } });
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    // stderr should contain lateFailure message
-    const forgeReal = await fs.realpath(f.forgeRoot);
-    expect(r.stderr).toContain(`drift promote had already started changing the Forge (${forgeReal}) when this failed:`);
-    expect(r.stderr).toContain("ingredients/rules/a--acme");
-    expect(r.stderr).toContain("recover with:");
-    expect(r.stderr).toContain("git -C");
+    expect(r.stderr.trim()).toMatch(/^error: drift promote: ingredients\/rules\/[^ ]+ could not be written on the scratch copy the edit is proved on \((EACCES|EPERM)\) — it cannot be written in the Forge either; nothing written$/);
+    expect(r.stderr).not.toContain("had already started");
+    expect((await fs.readdir(tmp)).filter((n) => n.startsWith("craftar-"))).toEqual([]);
+    await fs.chmod(rulesDir, 0o755);
+    expect(execFileSync("git", ["status", "--porcelain"], { cwd: f.forgeRoot }).toString()).toBe(before);
   });
 
   it("18. promote never registers and never touches the lock", async () => {
@@ -1607,6 +1599,21 @@ describe("cli — drift promote (step 30g: params/sections)", () => {
     expect(porcelain(f.forgeRoot)).toBe("");
   });
 
+  it("47b. D12 is not raised for a section the base does not mark (E9.6)", async () => {
+    const f = await S();
+    gitInit(f.forgeRoot);
+    const cfg = YAML.parse(await fs.readFile(path.join(f.ws, "craftar.yaml"), "utf8"));
+    cfg.overrides = { sections: { "rule/a": { elsewhere: "applies nowhere\n" } } };
+    await fs.writeFile(path.join(f.ws, "craftar.yaml"), YAML.stringify(cfg));
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await fs.appendFile(path.join(f.ws, A), "hand\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", f.ws]);
+    expect(r.stderr).not.toContain("takes section");
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split("\n")[0]).toBe(`promote ${A} → rule/a--acme (variant, profile acme)`);
+  });
+
   it("48. G1: a key only a recipe defaults is compared literally → variant", async () => {
     // Rule a with {{scm.org}} but NO ingredient params, recipe base with params: { "scm.org": { default: "acme-org" } }
     const s = await scenario(
@@ -2391,7 +2398,7 @@ describe("cli — drift promote (step 30h: impact check)", () => {
 
     // Create a harmless file link inside the Forge (pointing inside the Forge)
     const linkTarget = path.join(f.forgeRoot, "ingredients/rules/a/rule.md");
-    const linkPath = path.join(f.forgeRoot, "inside-link.md");
+    const linkPath = path.join(f.forgeRoot, "ingredients/inside-link.md");
     try {
       await fs.symlink(linkTarget, linkPath);
     } catch (e) {
@@ -2415,7 +2422,7 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     await expect(fs.stat(path.join(scratchDir, ".git"))).rejects.toMatchObject({ code: "ENOENT" });
 
     // inside-link.md in scratch should be a regular file (dereferenced), not a link
-    const stat = await fs.lstat(path.join(scratchDir, "inside-link.md"));
+    const stat = await fs.lstat(path.join(scratchDir, "ingredients/inside-link.md"));
     expect(stat.isFile()).toBe(true);
     expect(stat.isSymbolicLink()).toBe(false);
   });
@@ -2602,7 +2609,7 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     cleanups.push(() => fs.rm(outsideDir, { recursive: true, force: true }));
     await fs.writeFile(path.join(outsideDir, "secret.txt"), "secret data");
 
-    const linkPath = path.join(f.forgeRoot, "outside-link");
+    const linkPath = path.join(f.forgeRoot, "ingredients/outside-link");
     try {
       await fs.symlink(outsideDir, linkPath);
     } catch (e) {
@@ -2620,7 +2627,7 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     await copyForgeForProof(f.forgeRoot, scratchDir);
 
     // The link should not be in the scratch
-    await expect(fs.access(path.join(scratchDir, "outside-link"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(path.join(scratchDir, "ingredients/outside-link"))).rejects.toMatchObject({ code: "ENOENT" });
     // Forge manifest should still be copied
     await expect(fs.access(path.join(scratchDir, "craftar.forge.yaml"))).resolves.toBeUndefined();
   });
@@ -2630,9 +2637,9 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     const f = await F();
     gitInit(f.forgeRoot);
 
-    const linkPath = path.join(f.forgeRoot, "dangling-link.md");
+    const linkPath = path.join(f.forgeRoot, "ingredients/dangling-link.md");
     try {
-      await fs.symlink(path.join(f.forgeRoot, "does-not-exist.md"), linkPath);
+      await fs.symlink(path.join(f.forgeRoot, "ingredients/does-not-exist.md"), linkPath);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "EPERM") {
         // Windows without privilege — skip
@@ -2645,7 +2652,7 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     cleanups.push(() => fs.rm(scratchDir, { recursive: true, force: true }));
 
     await copyForgeForProof(f.forgeRoot, scratchDir);
-    await expect(fs.lstat(path.join(scratchDir, "dangling-link.md"))).rejects.toThrow();
+    await expect(fs.lstat(path.join(scratchDir, "ingredients/dangling-link.md"))).rejects.toThrow();
   });
 
   it("R4c. copyForgeForProof — link to '.' (directory link) is skipped, not ELOOP", async () => {
@@ -2653,7 +2660,7 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     const f = await F();
     gitInit(f.forgeRoot);
 
-    const linkPath = path.join(f.forgeRoot, "self-link");
+    const linkPath = path.join(f.forgeRoot, "ingredients/self-link");
     try {
       await fs.symlink(".", linkPath);
     } catch (e) {
@@ -2671,7 +2678,7 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     await copyForgeForProof(f.forgeRoot, scratchDir);
 
     // The self-link should not be in the scratch (directory links are skipped)
-    await expect(fs.access(path.join(scratchDir, "self-link"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(path.join(scratchDir, "ingredients/self-link"))).rejects.toMatchObject({ code: "ENOENT" });
     // Forge manifest should still be copied
     await expect(fs.access(path.join(scratchDir, "craftar.forge.yaml"))).resolves.toBeUndefined();
   });
@@ -2686,7 +2693,7 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     await fs.writeFile(outsideFile, "outside content");
     cleanups.push(() => fs.rm(outsideFile, { force: true }));
 
-    const linkPath = path.join(f.forgeRoot, "outside-file-link.md");
+    const linkPath = path.join(f.forgeRoot, "ingredients/outside-file-link.md");
     try {
       await fs.symlink(outsideFile, linkPath);
     } catch (e) {
@@ -2701,7 +2708,7 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     cleanups.push(() => fs.rm(scratchDir, { recursive: true, force: true }));
 
     await copyForgeForProof(f.forgeRoot, scratchDir);
-    await expect(fs.lstat(path.join(scratchDir, "outside-file-link.md"))).rejects.toThrow();
+    await expect(fs.lstat(path.join(scratchDir, "ingredients/outside-file-link.md"))).rejects.toThrow();
   });
 
   it("63. CLI: outside directory link → promote succeeds, nothing copied", async () => {
@@ -2713,7 +2720,7 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     cleanups.push(() => fs.rm(outsideDir, { recursive: true, force: true }));
     await fs.writeFile(path.join(outsideDir, "big-file.txt"), "big data ".repeat(1000));
 
-    const linkPath = path.join(f.forgeRoot, "outside-dir-link");
+    const linkPath = path.join(f.forgeRoot, "ingredients/outside-dir-link");
     try {
       await fs.symlink(outsideDir, linkPath);
     } catch (e) {
@@ -2774,7 +2781,7 @@ describe("cli — drift promote (commit 1: params with dependents)", () => {
     const f = await F();
     gitInit(f.forgeRoot);
 
-    const linkPath = path.join(f.forgeRoot, "loop-link");
+    const linkPath = path.join(f.forgeRoot, "ingredients/loop-link");
     try {
       await fs.symlink(".", linkPath);
     } catch (e) {
@@ -3217,7 +3224,7 @@ describe("copyForgeForProof — non-regular files and root directory links (comm
     gitInit(f.forgeRoot);
 
     // Create a FIFO at the Forge root
-    const fifoPath = path.join(f.forgeRoot, "fifo");
+    const fifoPath = path.join(f.forgeRoot, "ingredients/fifo");
     execFileSync("mkfifo", [fifoPath]);
     cleanups.push(() => fs.rm(fifoPath, { force: true }));
 
@@ -3247,7 +3254,7 @@ describe("copyForgeForProof — non-regular files and root directory links (comm
     cleanups.push(() => fs.rm(outsideFifo, { recursive: true, force: true }));
 
     // Create a symlink inside the Forge pointing to the FIFO
-    const linkPath = path.join(f.forgeRoot, "alink");
+    const linkPath = path.join(f.forgeRoot, "ingredients/alink");
     await fs.symlink(fifoPath, linkPath);
     cleanups.push(() => fs.rm(linkPath, { force: true }));
 
@@ -3265,12 +3272,12 @@ describe("copyForgeForProof — non-regular files and root directory links (comm
     const f = await F();
 
     // Create a file named '..notes' inside the Forge
-    const notesPath = path.join(f.forgeRoot, "..notes");
+    const notesPath = path.join(f.forgeRoot, "ingredients/..notes");
     await fs.writeFile(notesPath, "notes content\n");
     cleanups.push(() => fs.rm(notesPath, { force: true }));
 
     // Create a symlink to that file
-    const linkPath = path.join(f.forgeRoot, "noteslink");
+    const linkPath = path.join(f.forgeRoot, "ingredients/noteslink");
     try {
       await fs.symlink(notesPath, linkPath);
     } catch (e) {
@@ -3291,10 +3298,10 @@ describe("copyForgeForProof — non-regular files and root directory links (comm
     await copyForgeForProof(f.forgeRoot, scratchDir);
 
     // The noteslink should be a regular file in the scratch, containing the original content
-    const stat = await fs.lstat(path.join(scratchDir, "noteslink"));
+    const stat = await fs.lstat(path.join(scratchDir, "ingredients/noteslink"));
     expect(stat.isFile()).toBe(true);
     expect(stat.isSymbolicLink()).toBe(false);
-    expect(await fs.readFile(path.join(scratchDir, "noteslink"), "utf8")).toBe("notes content\n");
+    expect(await fs.readFile(path.join(scratchDir, "ingredients/noteslink"), "utf8")).toBe("notes content\n");
   });
 
   it("R6a. copyForgeForProof refuses root directory link: ingredients", async () => {
@@ -3666,6 +3673,63 @@ describe("D16_BREAK — sibling that planned before but fails after (commit 2)",
     expect(r.stderr).toBe(
       `error: promote would break ${ws2Real} (profile acme): recipes "shared--acme" and "shared" both occupy slot "core" — the Forge was left untouched\n`,
     );
+  });
+
+  it("R11b. a remote with credentials beside the one that matches is still warned about, never by its URL (E9.15)", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => removeWithRetry(home));
+    const { remoteForge } = await import("./helpers/remote.js");
+    const rf = await remoteForge({
+      ingredients: [rule("a", "A one\n")],
+      recipes: [recipe("base", ["rule/a"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    cleanups.push(rf.cleanup);
+    const root = await tmpDir("craftar-ws-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.writeFile(path.join(root, "craftar.yaml"), `forge: ${rf.url}\nprofile: acme\n`);
+    expect(runCli(["sync", "--workspace", root], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+    const parent = await tmpDir("craftar-clone-");
+    cleanups.push(() => removeWithRetry(parent));
+    const cloneDir = path.join(parent, "forge");
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("git", ["clone", "-q", rf.url, cloneDir], { env: gitEnv() });
+    const password = "x".repeat(8);
+    execFileSync("git", ["-C", cloneDir, "remote", "add", "mirror", `https://user:${password}@example.com/acme/forge.git`]);
+    await fs.appendFile(path.join(root, A), "hand a\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", root, "--forge", cloneDir], { env: { CRAFTAR_HOME: home } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain(`  warn remote mirror of ${cloneDir} holds credentials in its URL — not matched\n`);
+    expect(r.stdout + r.stderr).not.toContain(password);
+  });
+
+  // A ":" cannot be in a Windows file name; the classification is the same code on every platform.
+  it.skipIf(process.platform === "win32")("R11c. a warning whose words hold \": missing\" is printed, classified by the plan, not by its text (E9.11)", async () => {
+    const home = await tmpDir("craftar-home-");
+    cleanups.push(() => removeWithRetry(home));
+    const { remoteForge } = await import("./helpers/remote.js");
+    const rf = await remoteForge({
+      ingredients: [rule("a", "A one\n")],
+      recipes: [recipe("base", ["rule/a"])],
+      profiles: [profile("acme", ["base"])],
+    });
+    cleanups.push(rf.cleanup);
+    const root = await tmpDir("craftar-ws-");
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.writeFile(path.join(root, "craftar.yaml"), `forge: ${rf.url}\nprofile: acme\n`);
+    expect(runCli(["sync", "--workspace", root], { env: { CRAFTAR_HOME: home } }).code).toBe(0);
+    const parent = await tmpDir("craftar-clone-");
+    cleanups.push(() => removeWithRetry(parent));
+    const cloneDir = path.join(parent, "forge: missing");
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("git", ["clone", "-q", rf.url, cloneDir], { env: gitEnv() });
+    execFileSync("git", ["-C", cloneDir, "remote", "add", "mirror", `https://user:${"x".repeat(8)}@example.com/acme/forge.git`]);
+    await fs.appendFile(path.join(root, A), "hand a\n");
+
+    const r = runCli(["drift", "promote", A, "--workspace", root, "--forge", cloneDir], { env: { CRAFTAR_HOME: home } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain(`  warn remote mirror of ${cloneDir} holds credentials in its URL — not matched\n`);
   });
 
   it("R11. D2 for URL Forge — clone's only remote URL has credentials → D2 with the credential warning", async () => {

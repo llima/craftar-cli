@@ -69,7 +69,8 @@ import {
   planFrom,
   applyPlan,
   writeUnified,
-  checkRecipeCascade,
+  proveUnifyLoads,
+  renderRecipeCascade,
   rewriteRecipes,
   pruneCandidates,
   pruneRecipes,
@@ -83,7 +84,7 @@ import { checkParamWrites, metadataWrites, writeParamFile } from "./core/param-w
 import { checkInitFlags, checkLocalKeys, initLine, planInit, forgeSource, type InitInput } from "./core/init.js";
 import { profileName } from "./core/new-profile.js";
 import { newProfileGate } from "./core/new-profile-gate.js";
-import { writeNewProfile, reproveFromDisk, NewProfileRaceLost, NewProfileLateFailure } from "./core/new-profile-write.js";
+import { proveNewProfileLoads, writeNewProfile, reproveFromDisk, NewProfileRaceLost, NewProfileLateFailure } from "./core/new-profile-write.js";
 import { askInit, askClone, confirmInit, againLine, NOT_CLONED_REFUSED, type InitAnswers } from "./core/init-flow.js";
 import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type DestinationContext, type RepoState } from "./core/clone.js";
 import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
@@ -110,7 +111,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.61.1");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.61.2");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -584,6 +585,12 @@ program
       // Step 1's notes are printed after the initLine line (spec 38), so keep them before reprove
       const step1Notes = init.notes;
       if (init.newProfile) {
+        // E38.1: the profile on a scratch copy of the Forge, which must load, before the write.
+        try {
+          await proveNewProfileLoads(forgeRoot, init);
+        } catch (e) {
+          fail(errorText(e));
+        }
         try {
           journal = await writeNewProfile(forgeRoot, init);
         } catch (e) {
@@ -1018,6 +1025,9 @@ drift
       if (unset.length || escapingRows(st).length || p.overrideConflicts.length) process.exitCode = 1;
       return;
     }
+    // E9.14: the plan's own warnings, which --json carries (status prints the whole list, on stdout) — the load's are
+    // already out, and plan() opens its list with them.
+    warnStderr(p.warnings.slice(ws.warnings.length));
     warnStderr(providedWarnings);
     if (named && !rows.length) {
       console.log(`${named.path} is not drifted (${named.state})`);
@@ -1201,16 +1211,8 @@ drift
         console.log(`  ${editVerb} ${e.rel}`);
       }
     }
-    // Print early warnings (e.g., unmanaged skill files) — pinned by test 10
-    const unusedSectionPrefix = "profile ";
-    for (const w of promotePlan.warnings) {
-      if (!w.startsWith(unusedSectionPrefix) || !w.includes(" still sets section ")) {
-        // Skip registry warnings here — they come later
-        if (!w.includes(": missing") && !w.includes(": error:")) {
-          console.log(`  ${pc.yellow("warn")} ${w}`);
-        }
-      }
-    }
+    // Print early warnings (e.g., unmanaged skill files) — pinned by test 10; classified by the plan (E9.11)
+    for (const w of promotePlan.warningGroups.early) console.log(`  ${pc.yellow("warn")} ${w}`);
     for (const [file, keys] of promotePlan.editedKeys) {
       console.log(`  ${editVerb} ${file} (${keys.join(", ")})`);
     }
@@ -1234,11 +1236,7 @@ drift
       console.log(`  flattened: ${flatParts.join(", ")}`);
     }
     // Print late warnings (unused section value) after flattened — step 30g
-    for (const w of promotePlan.warnings) {
-      if (w.startsWith(unusedSectionPrefix) && w.includes(" still sets section ")) {
-        console.log(`  ${pc.yellow("warn")} ${w}`);
-      }
-    }
+    for (const w of promotePlan.warningGroups.late) console.log(`  ${pc.yellow("warn")} ${w}`);
     const otherCount = promotePlan.otherFilesUnchanged;
     console.log(`  proved: this workspace plans the file on disk; ${otherCount} other file(s) unchanged`);
     if (promotePlan.dependents.length > 0) {
@@ -2543,7 +2541,8 @@ forge
     const result = await applyPlan(base, variant, diff, toApply, { discardVariantMeta: o.take === "base", profileSections, forgeSchema: f.manifest.schema });
     // Ruling 33, dry pass: every recipe `ingredients` rewrite the cascade will make is checked before
     // the first byte is written, so a refusal (an aliased reference) leaves the Forge untouched.
-    const cascadeFiles = result.resolved ? await checkRecipeCascade(f, base.ref, variant.ref) : [];
+    const cascadeEdits = result.resolved ? await renderRecipeCascade(f, base.ref, variant.ref) : [];
+    const cascadeFiles = cascadeEdits.map((e) => e.file);
     // Spec 25 §4.4: prune candidates, computed in the dry pass
     // Spec 33 §4.4: pruneCandidates warns once per profile whose block cannot be read
     const pruneWarnings: string[] = [];
@@ -2592,6 +2591,15 @@ forge
       }
     }
 
+    // E38.1: the same edit set on a scratch copy, which must load, before the first write.
+    await proveUnifyLoads(f, {
+      files: [paramWrites?.manifest, paramWrites?.ingredientYaml, paramWrites?.profile].filter((w): w is { abs: string; content: string } => !!w),
+      base,
+      result,
+      cascade: cascadeEdits,
+      removeDir: result.resolved ? variant.dir : null,
+    });
+
     // Order: merged files, then the recipe cascade, then removal of the variant directory
     // (Ruling 21) — a late failure leaves the variant in place, never a recipe naming a removed ingredient.
     // Spec 12 §6.7: the manifest is first when it moves to schema: 2; each prefix is emission-neutral.
@@ -2608,7 +2616,7 @@ forge
       if (paramWrites?.ingredientYaml) touched = [...touched, "ingredient.yaml"].sort();
       if (paramWrites?.profile) await writeParamFile(paramWrites.profile, journal);
       if (result.resolved) {
-        cascade = await rewriteRecipes(f, base.ref, variant.ref, o.profile, journal);
+        cascade = await rewriteRecipes(f, base.ref, variant.ref, o.profile, journal, cascadeEdits);
         journal.push({ abs: variant.dir, created: false });
         await fs.rm(variant.dir, { recursive: true, force: true });
         variantRemoved = variant.ref;
@@ -2954,7 +2962,7 @@ forge
       workspace: o.workspace,
       refuseRemote: (url) => `the Forge of this workspace is remote (${url}) — clone it and pass --forge <dir>`,
     });
-    await assertNotCacheTree(f.root, craftarHome()).catch((e) => fail(e instanceof Error ? e.message : String(e)));
+    await assertNotCacheTree(f.root, craftarHome()).catch((e) => fail(errorText(e)));
     // P2 (spec 29 §4.4): git is the undo, so it must be there, hold a commit and be clean — before anything is planned.
     if (f.commit === null) {
       if (await gitIsRepo(f.root)) fail(`${f.root} has no commits yet — forge promote writes to the Forge and needs git as the undo`);
@@ -2989,7 +2997,7 @@ forge
         impactState = refineRegistryState(fw.state, impactBefore);
       } catch (e) {
         impactState = "unreadable";
-        warnings.push(`the registry could not be read (${e instanceof Error ? e.message : String(e)}) — no workspace was checked`);
+        warnings.push(`the registry could not be read (${errorText(e)}) — no workspace was checked`);
       }
       if (impactState === "off") warnings.push("the registry is off — no workspace was checked");
     }
@@ -3029,7 +3037,7 @@ forge
       try {
         impactAfter = await planAll(impactEntries, await loadForge(f.root));
       } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
+        const message = errorText(e);
         impactAfter = impactEntries.map(() => ({ kind: "error", stage: "plan", message }));
       }
       impactResults = impactEntries.map((_, i) => impactOf(impactBefore[i], impactAfter[i]));
@@ -4012,7 +4020,7 @@ async function settingsApplyCommand(o: {
     }
 
     // Check if ignored (G1: use ignoredPaths which fails open)
-    const ignoredResult = await ignoredPaths(ws.root, [".claude/settings.json"]);
+    const ignoredResult = await ignoredPaths(ws.root, [".claude/settings.json"], { knownRepo: true });
     gitWarning = ignoreWarning(ignoredResult);
   }
 

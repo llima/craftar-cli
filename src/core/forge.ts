@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { promises as fs, statSync } from "node:fs";
 import path from "node:path";
 import {
   ForgeManifestSchema,
@@ -16,6 +16,7 @@ import { SchemaError, schemaIssues } from "./schema-fault.js";
 import { execProgram, streamProgram } from "./proc.js";
 import { findSecrets } from "./secrets.js";
 import { climbsOut } from "./text.js";
+import { tempTarget } from "./forge-write.js";
 import { CannotResolveError, shownByRealPath } from "./cache-label.js";
 import { containRoot, containSubRoot, readForgeText, type ContainRoot } from "./contain.js";
 import { listDeclarationNearMiss, rendersListParams } from "./list-params.js";
@@ -506,9 +507,10 @@ export interface IgnoredPath {
  * write, this one only informs. `-v` lists a negated rule too and exits 0 for it, so a path is ignored when its pattern is
  * not empty and does not start with `!`; the exit code decides nothing. A tracked file is never listed.
  */
-export async function ignoredPaths(root: string, paths: string[], env?: NodeJS.ProcessEnv): Promise<{ ignored: IgnoredPath[]; unchecked: boolean }> {
-  // First: a directory that is no repository and a path beyond a symbolic link both exit 128.
-  if (!(await gitIsRepo(root))) return { ignored: [], unchecked: false };
+export async function ignoredPaths(root: string, paths: string[], opts: { knownRepo?: boolean } = {}): Promise<{ ignored: IgnoredPath[]; unchecked: boolean }> {
+  // First: a directory that is no repository and a path beyond a symbolic link both exit 128. A caller that has just
+  // asked `gitIsRepo` itself passes `knownRepo` (E36.3, E36.4) — `docs validate` asks once per walk, not per level.
+  if (!opts.knownRepo && !(await gitIsRepo(root))) return { ignored: [], unchecked: false };
   // Git refuses `/x` and answers for the spelling it is given: one query per normalized path, each named as the caller spells it.
   const spelled = new Map<string, string[]>();
   for (const p of paths) {
@@ -519,7 +521,6 @@ export async function ignoredPaths(root: string, paths: string[], env?: NodeJS.P
   try {
     run = await streamProgram("git", [...gitRead(root), "check-ignore", "--stdin", "-z", "-v", "-n"], {
       input: [...spelled.keys()].map((q) => `${q}\0`).join(""),
-      env,
     });
   } catch (e) {
     if ((e as { code?: unknown }).code === "ENOENT") return { ignored: [], unchecked: false };
@@ -535,7 +536,7 @@ export async function ignoredPaths(root: string, paths: string[], env?: NodeJS.P
   let commonDir: string | null = null;
   if (records.some((r) => path.isAbsolute(r.source) || /^[A-Za-z]:[\\/]/.test(r.source))) {
     try {
-      const { stdout } = await execProgram("git", [...gitRead(root), "rev-parse", "--path-format=absolute", "--git-common-dir"], env ? { env } : {});
+      const { stdout } = await execProgram("git", [...gitRead(root), "rev-parse", "--path-format=absolute", "--git-common-dir"]);
       commonDir = stdout.trim() || null;
     } catch {
       commonDir = null;
@@ -646,11 +647,19 @@ const NON_REGULAR_FILE_REFUSAL = (rel: string, command: string) =>
 
 /** The root directories loadForge reads; a link there causes the scratch to differ from the real Forge. */
 const ROOT_DIRS = new Set(["ingredients", "recipes", "profiles"]);
+/**
+ * A root name as loadForge's `path.join(root, "recipes")` finds it: without case where the disk folds case by default
+ * (Windows, macOS), as written elsewhere — so a `Recipes` on Linux, which loadForge never opens, is neither copied nor refused.
+ */
+const rootName = (name: string): string => (process.platform === "win32" || process.platform === "darwin" ? name.toLowerCase() : name);
 
 /**
- * Copy the Forge to a scratch directory without `.git`, for the proof.
- * - A regular file: copied.
- * - A directory: recursed.
+ * Copy what `loadForge` reads to a scratch directory, for the proof: `craftar.forge.yaml` and the `ingredients`,
+ * `recipes` and `profiles` trees — nothing else at the root (`.git`, `node_modules`, loose files), since nothing the
+ * proof plans reads it. A file git ignores inside those trees is copied: the real Forge's load reads it too.
+ * - A regular file: copied (its mode with it).
+ * - A directory: recursed, then given the source directory's mode (off win32), so a write the real Forge would refuse
+ *   for a directory's permissions is refused on the copy first; `removeProofCopy` gives the write permission back.
  * - A symbolic link to a FILE whose real path is inside the Forge: copied as a regular file (dereferenced).
  * - A symbolic link to a DIRECTORY (inside or outside): skipped — except a root directory link
  *   (ingredients, recipes, profiles), which is refused because loadForge follows it and the scratch would not.
@@ -671,8 +680,9 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
       const entSrc = path.join(src, ent.name);
       const entDest = path.join(dest, ent.name);
 
-      // Skip .git at the top level
-      if (rel === "" && ent.name === ".git") continue;
+      // At the root, only what loadForge reads — on a disk that folds case (Windows, macOS) loadForge's `recipes` opens a
+      // `Recipes` folder, so the copy keeps it too, under the name it has.
+      if (rel === "" && rootName(ent.name) !== FORGE_MANIFEST && !ROOT_DIRS.has(rootName(ent.name))) continue;
 
       if (ent.isSymbolicLink()) {
         // First, check if we can resolve the symlink at all
@@ -690,7 +700,7 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
         if (targetStat.isDirectory()) {
           // A root directory link (ingredients, recipes, profiles) is refused: loadForge follows it
           // but the scratch would skip it, so the scratch would not load the same as the real Forge.
-          if (rel === "" && ROOT_DIRS.has(ent.name)) {
+          if (rel === "" && ROOT_DIRS.has(rootName(ent.name))) {
             throw new Error(SYMLINK_DIR_REFUSAL(ent.name, command));
           }
           // Other directory links are skipped entirely — loadForge doesn't traverse them
@@ -717,6 +727,8 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
       } else if (ent.isDirectory()) {
         await fs.mkdir(entDest, { recursive: true });
         await walk(entRel);
+        // After the children, so the copy itself is not refused by a directory the Forge cannot write.
+        if (process.platform !== "win32") await fs.chmod(entDest, (await fs.stat(entSrc)).mode & 0o7777);
       } else if (ent.isFile()) {
         // Regular file
         await fs.copyFile(entSrc, entDest);
@@ -730,6 +742,103 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
   // Create the scratch root
   await fs.mkdir(scratchDir, { recursive: true });
   await walk("");
+  // The root too carries the Forge root's owner permissions (a Forge root it cannot write into, say), never more than
+  // the owner's: the copy stays private to this user.
+  if (process.platform !== "win32") await fs.chmod(scratchDir, (await fs.stat(forgeDir)).mode & 0o700);
+}
+
+/**
+ * The refusal for a write the scratch copy refused: the copy carries the Forge's file and directory modes, so what
+ * cannot be written there cannot be written in the Forge either. Names the path relative to the copy, never the copy.
+ */
+export function scratchWriteRefusal(
+  command: string,
+  scratch: string,
+  e: unknown,
+  proved: "edit" | "move" = "edit",
+  platform: NodeJS.Platform = process.platform,
+): Error {
+  // Not a write's refusal at all (a guard of the caller's): it is its own message.
+  if (typeof (e as NodeJS.ErrnoException).code !== "string") return e instanceof Error ? e : new Error(String(e));
+  const raw = (e as NodeJS.ErrnoException).path;
+  // writeForgeFile's temporary sibling is an implementation detail: name the file it was writing.
+  const at = raw ? path.join(path.dirname(raw), tempTarget(path.basename(raw))) : raw;
+  const code = (e as NodeJS.ErrnoException).code as string;
+  const shown = at ? path.relative(scratch, at).split(path.sep).join("/") : "a file";
+  // Only a refusal the copied modes explain says anything of the Forge; a full or read-only temporary directory, or a
+  // scanner holding a file there, is the temporary directory's.
+  // On win32 the copy carries no directory mode (no chmod there) but does carry a file's read-only attribute, which
+  // copyFile keeps: EACCES / EPERM there is the Forge's only for a read-only file, else a file held in the temporary
+  // directory. A tree-shape code (ENOTDIR, EISDIR, ENOENT) comes from the tree the copy mirrors, as a mode does.
+  const forgeCaused = TREE_REFUSALS.has(code) || (MODE_REFUSALS.has(code) && (platform !== "win32" || readOnlyFile(at)));
+  if (!forgeCaused) return new Error(`${command}: the scratch copy in the temporary directory refused a write (${code}) — nothing written; free or fix the temporary directory and run again`);
+  return new Error(`${command}: ${shown} could not be written on the scratch copy the ${proved} is proved on (${code}) — it cannot be written in the Forge either; nothing written`);
+}
+/** The codes a write gets from a file's or a directory's mode — what the copy carries from the Forge. */
+const MODE_REFUSALS = new Set(["EACCES", "EPERM"]);
+/** The codes a write gets from the tree's shape — which the copy mirrors from the Forge too. */
+const TREE_REFUSALS = new Set(["ENOTDIR", "EISDIR", "ENOENT"]);
+const readOnlyFile = (abs: string | undefined): boolean => {
+  if (!abs) return false;
+  try {
+    const st = statSync(abs);
+    return st.isFile() && (st.mode & 0o200) === 0;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * `copyForgeForProof` for a proof whose messages never name the copy (E38.1: unify, init): a copy refusal in words is
+ * its own message; an I/O error (a full temporary directory, a file it cannot read) says the copy could not be made.
+ */
+export async function copyForProof(forgeDir: string, scratchDir: string, command: string): Promise<void> {
+  try {
+    await copyForgeForProof(forgeDir, scratchDir, command);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (typeof code !== "string") throw e;
+    throw new Error(`${command}: the Forge could not be copied to the temporary directory to prove the edit (${code}) — nothing written`);
+  }
+}
+
+/**
+ * A message from a load or a plan of the scratch copy names the copy; this puts the Forge's root in its place, whichever
+ * spelling of the copy's path (as made, or its real path) the message holds.
+ */
+export async function proofPathsBack(copy: string, root: string): Promise<(text: string) => string> {
+  const real = await fs.realpath(copy).catch(() => copy);
+  return (t: string) => t.split(real).join(root).split(copy).join(root);
+}
+
+/**
+ * Remove a scratch directory `copyForgeForProof` filled. The copy carries the Forge's directory modes, so a directory
+ * without the write permission is given it back first (off win32) — otherwise its entries could not be removed and the
+ * copy would be left behind. Never throws for a directory already gone.
+ */
+export async function removeProofCopy(dir: string): Promise<void> {
+  if (process.platform !== "win32") {
+    async function writable(d: string): Promise<void> {
+      let st;
+      try {
+        st = await fs.lstat(d);
+      } catch {
+        return;
+      }
+      if (!st.isDirectory()) return;
+      if ((st.mode & 0o700) !== 0o700) await fs.chmod(d, (st.mode & 0o7777) | 0o700).catch(() => undefined);
+      let ents;
+      try {
+        ents = await fs.readdir(d, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const ent of ents) if (ent.isDirectory()) await writable(path.join(d, ent.name));
+    }
+    await writable(dir);
+  }
+  // Windows can hold a file a git child just read (EBUSY): retry as the suite's removeWithRetry does.
+  await fs.rm(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 200 });
 }
 
 /**

@@ -4,9 +4,12 @@
  */
 
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { copyForProof, loadForge, proofPathsBack, removeProofCopy, scratchWriteRefusal } from "./forge.js";
 import { planInit, type InitOptions, type InitPlan } from "./init.js";
 import { errorText } from "./schema-fault.js";
+import { p7Exists } from "./new-profile-gate.js";
 import { note, type WriteJournal } from "./unify.js";
 
 export { type WriteJournal };
@@ -41,6 +44,44 @@ export interface WriteHooks {
   beforeMkdir?: () => Promise<void>;
   /** Called after the mkdirs and before the writeFile. */
   beforeWrite?: () => Promise<void>;
+}
+
+/**
+ * The proof before the profile write (E38.1): the profile written on a scratch copy of the Forge,
+ * `os.tmpdir()/craftar-new-profile-*`, which must load (`loadForge`, so L1–L9 and every schema) and hold the profile.
+ * This is no load of the Forge by its source: it reads the copy, so `reproveFromDisk` stays the one second load-by-source.
+ * A refusal leaves the Forge untouched and names it, never the copy; the copy is removed in a `finally`.
+ */
+export async function proveNewProfileLoads(forgeRoot: string, init: InitPlan): Promise<void> {
+  if (!init.newProfile) throw new Error("proveNewProfileLoads: init.newProfile is required");
+  const name = path.basename(path.dirname(init.newProfile.path));
+  let scratch: string;
+  try {
+    scratch = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-new-profile-"));
+  } catch (e) {
+    throw new Error(`init: cannot make the scratch copy in the temporary directory (${(e as NodeJS.ErrnoException).code ?? "it failed"}) — nothing was written`);
+  }
+  try {
+    await copyForProof(forgeRoot, scratch, "init");
+    try {
+      await fs.mkdir(path.join(scratch, "profiles", name), { recursive: true });
+      await fs.writeFile(path.join(scratch, "profiles", name, "profile.yaml"), init.newProfile.text, { flag: "wx" });
+    } catch (e) {
+      // The profile appeared between the gate and the copy: P7's words, as writeNewProfile says it.
+      if ((e as NodeJS.ErrnoException).code === "EEXIST") throw new NewProfileRaceLost(p7Exists(name));
+      throw scratchWriteRefusal("init", scratch, e);
+    }
+    const back = await proofPathsBack(scratch, forgeRoot);
+    let loaded;
+    try {
+      loaded = await loadForge(scratch);
+    } catch (e) {
+      throw new Error(`init: the Forge would not load with profile ${name}:\n${back(errorText(e))}\nnothing written`);
+    }
+    if (!loaded.profiles.has(name)) throw new Error(`init: the Forge would not hold profile ${name} once written; nothing written`);
+  } finally {
+    await removeProofCopy(scratch);
+  }
 }
 
 /**
@@ -85,7 +126,7 @@ export async function writeNewProfile(
       await fs.mkdir(profileDir);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new NewProfileRaceLost(`profile ${name} already exists in the Forge — use --profile ${name}`);
+        throw new NewProfileRaceLost(p7Exists(name));
       }
       throw e;
     }
@@ -97,7 +138,7 @@ export async function writeNewProfile(
       await fs.writeFile(profileFile, init.newProfile.text, { flag: "wx" });
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new NewProfileRaceLost(`profile ${name} already exists in the Forge — use --profile ${name}`);
+        throw new NewProfileRaceLost(p7Exists(name));
       }
       throw e;
     }

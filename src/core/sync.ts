@@ -30,9 +30,9 @@ import { forgeFor, overriddenBase, readsLocalOverride, shownIngredientRef, shown
 import { familyOf } from "./profile-extends.js";
 import { RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
 
-export const WORKSPACE_FILE = "craftar.yaml";
+import { LOCK_FILE, WORKSPACE_FILE } from "./workspace-files.js";
+export { LOCK_FILE, WORKSPACE_FILE };
 export const LOCAL_FILE = "craftar.local.yaml";
-export const LOCK_FILE = "craftar.lock";
 
 export { AGENTS_MD_BUDGET_KEY };
 /** The default AGENTS.md size budget in bytes. */
@@ -76,6 +76,11 @@ export interface Workspace {
   origin: ForgeOrigin;
   /** Warnings from loading the workspace itself (spec 13 §4.2); `plan()` puts them first. */
   warnings: string[];
+  /**
+   * E40.1: the one warning of `warnings` that says a fetch failed and the cached copy was read, when it did — so a reader
+   * asks this, never the warning's words. Present only then; no output carries the key.
+   */
+  fetchFallback?: string;
   /** Where its files are read; the disk when absent. A git source is for a check: `apply()` refuses it (spec 49 §5.2). */
   source?: WorkspaceSource;
 }
@@ -113,6 +118,8 @@ export interface LoadedForge {
   origin: ForgeOrigin;
   /** Warnings of the load itself: the path Forge's ignored ref, the --offline / fetch-failure line. */
   warnings: string[];
+  /** E40.1: the fetch-failure line of `warnings`, when a fetch failed and the cached copy was read. */
+  fetchFallback?: string;
 }
 
 
@@ -213,7 +220,7 @@ export function workspaceOf(root: string, merged: MergedConfig, loaded: LoadedFo
     loaded.origin.kind === "path"
       ? [...loaded.warnings, ...merged.warnings]
       : [...merged.warnings, ...loaded.warnings];
-  return { root, config: merged.config, forge: loaded.forge, origin: loaded.origin, warnings };
+  return { root, config: merged.config, forge: loaded.forge, origin: loaded.origin, warnings, ...(loaded.fetchFallback !== undefined ? { fetchFallback: loaded.fetchFallback } : {}) };
 }
 
 /** `source` is the value `craftar.yaml › forge` holds: a URL, or a path relative to `root`. */
@@ -228,9 +235,9 @@ export async function loadForgeSource(
   const warnings: string[] = [];
   if (classifyForge(source) === "url") {
     if (opts.refuseRemote) throw new Error(opts.refuseRemote(source));
-    const { tree, origin, warning } = await remoteTree(source, ref, opts, fromLocalFile);
+    const { tree, origin, warning, fetchFailed } = await remoteTree(source, ref, opts, fromLocalFile);
     if (warning) warnings.push(warning);
-    return { forge: await loadForge(tree, { home: resolveHome(opts.home) }), origin, warnings };
+    return { forge: await loadForge(tree, { home: resolveHome(opts.home) }), origin, warnings, ...(fetchFailed && warning ? { fetchFallback: warning } : {}) };
   }
   const forgeRoot = path.resolve(root, source);
   if (!(await exists(forgeRoot))) throw new ForgeUnavailableError(`Forge not found at ${await shownByRealPath(forgeRoot, resolveHome(opts.home))}`);
@@ -248,7 +255,7 @@ async function remoteTree(
   ref: string | null,
   opts: LoadOptions,
   fromLocalFile: boolean,
-): Promise<{ tree: string; origin: ForgeOrigin; warning: string | null }> {
+): Promise<{ tree: string; origin: ForgeOrigin; warning: string | null; fetchFailed?: boolean }> {
   const home = resolveHome(opts.home);
   const mode = opts.mode ?? "read";
   const offline = opts.offline || mode === "no-fetch";
@@ -293,7 +300,7 @@ async function remoteTree(
       throw new Error(`cannot fetch the Forge ${url}: ${e.gitMessage} — ${tail}`);
     }
     const t = await ensureTree(url, ref, { home, offline: true, git });
-    return { tree: t.dir, origin: origin(t), warning: `Forge ${url} not fetched (${e.gitMessage}) — using ${used(t)}` };
+    return { tree: t.dir, origin: origin(t), warning: `Forge ${url} not fetched (${e.gitMessage}) — using ${used(t)}`, fetchFailed: true };
   }
 }
 
@@ -698,6 +705,7 @@ export function assertInsideWorkspace(files: PlannedFile[]): void {
 
 export async function plan(ws: Workspace): Promise<Plan> {
   const resolution = resolve(ws.forge, ws.config);
+  // The workspace's own warnings first, always: drift show prints the plan's own by slicing them off (E9.14).
   const warnings = [...ws.warnings, ...resolution.warnings];
   const hasService = resolution.ingredients.some((ing) => ing.meta.type === "service");
   if (resolution.targets.length === 0) {

@@ -694,3 +694,51 @@ describe("--committed and links that leave (spec 48)", () => {
     }
   });
 });
+
+describe("a revision git cannot read, and the files read as links (E36.9, E36.10, E36.13)", () => {
+  it("an annotated tag whose target git does not hold is refused, also with --unavailable-ok; a tag of a blob still passes", async () => {
+    const { ws, repo } = await committed();
+    const missing = "1234567890abcdef1234567890abcdef12345678";
+    const tagText = `object ${missing}\ntype commit\ntag broken\ntagger t <t@example.invalid> 0 +0000\n\nbroken\n`;
+    const broken = execFileSync("git", ["hash-object", "-t", "tag", "--literally", "-w", "--stdin"], { cwd: repo, input: tagText, encoding: "utf8" }).trim();
+    const r = check(ws, `--committed=${broken}`, "--unavailable-ok");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`cannot read revision ${broken}: it points at an object git does not hold`);
+    expect(r.stderr).not.toContain("not checked");
+    const blob = git(repo, "rev-parse", "HEAD:craftar.yaml").trim();
+    git(repo, "tag", "-a", "-m", "on a blob", "blobtag", blob);
+    const ok = check(ws, "--committed=blobtag", "--unavailable-ok");
+    expect(ok.code).toBe(0);
+    expect(ok.stderr).toContain("is not a commit");
+  });
+  it("a revision starting with ^ is an unknown revision, also with --unavailable-ok", async () => {
+    const { ws } = await committed();
+    const r = check(ws, "--committed=^HEAD", "--unavailable-ok");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("unknown revision ^HEAD");
+  });
+  it("the index holding craftar.yaml as a symbolic link is refused, and the fix says to stage the file", async () => {
+    const { ws, repo } = await committed();
+    const target = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: repo, input: "elsewhere.yaml", encoding: "utf8" }).trim();
+    const prefix = path.relative(repo, ws).split(path.sep).join("/");
+    git(repo, "update-index", "--cacheinfo", `120000,${target},${prefix === "" ? "craftar.yaml" : `${prefix}/craftar.yaml`}`);
+    const r = check(ws, "--index", "--unavailable-ok");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe("error: craftar.yaml is a symbolic link in the index — craftar reads it only as a file; stage the file itself\n");
+  });
+  for (const file of ["craftar.yaml", "craftar.lock"]) {
+    it(`a commit holding ${file} as a symbolic link is refused, also with --unavailable-ok`, async () => {
+      const { ws, repo } = await committed();
+      // Recorded straight into the index, so no file-system link is needed (Windows included).
+      const target = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: repo, input: "elsewhere.yaml", encoding: "utf8" }).trim();
+      const prefix = path.relative(repo, ws).split(path.sep).join("/");
+      const at = prefix === "" ? file : `${prefix}/${file}`;
+      git(repo, "update-index", "--cacheinfo", `120000,${target},${at}`);
+      git(repo, "commit", "-qm", "link");
+      const r = check(ws, "--committed", "--unavailable-ok");
+      expect(r.code).toBe(1);
+      const short = git(repo, "rev-parse", "--short=8", "HEAD").trim();
+      expect(r.stderr).toBe(`error: ${file} is a symbolic link in the commit ${short} — craftar reads it only as a file; commit the file itself\n`);
+    });
+  }
+});

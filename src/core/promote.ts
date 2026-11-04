@@ -7,7 +7,7 @@ import { forgeReader, readForgeFile, readForgeText } from "./contain.js";
 import { ProfileWrittenSchema, RecipeWrittenSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { fingerprintDir } from "./fingerprint.js";
 import { ingredientText, occupied, sourceMode, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
-import { assertNoDirLinkIn, assertNoLinkOnPath, copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
+import { assertNoDirLinkIn, assertNoLinkOnPath, copyForgeForProof, removeProofCopy, scratchWriteRefusal, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
 import { effectiveProfile } from "./integrations.js";
 import { familyOf } from "./profile-extends.js";
 import { findProfileFile } from "./param-writes.js";
@@ -63,7 +63,7 @@ export interface BasePromotion {
 }
 
 const posix = (root: string, abs: string) => path.relative(root, abs).split(path.sep).join("/");
-const firstLine = (e: unknown) => (e instanceof Error ? e.message : String(e)).split("\n")[0];
+const firstLine = (e: unknown) => errorText(e).split("\n")[0];
 const byPath = (a: { abs: string }, b: { abs: string }) => (a.abs < b.abs ? -1 : a.abs > b.abs ? 1 : 0);
 
 /**
@@ -326,9 +326,7 @@ export async function proveBasePromotion(forge: Forge, promotion: BasePromotion)
       await writeEdits(promotion.root, scratch, promotion);
     } catch (e) {
       // The copy carries each file's mode, so what cannot be written there cannot be written in the Forge either.
-      const at = (e as NodeJS.ErrnoException).path;
-      const code = (e as NodeJS.ErrnoException).code ?? "the write failed";
-      throw new Error(`${COMMAND}: ${at ? posix(scratch, at) : "a file"} could not be written on the scratch copy the edit is proved on (${code}) — it cannot be written in the Forge either; nothing written`);
+      throw scratchWriteRefusal(COMMAND, scratch, e);
     }
     const edited = await loadForge(scratch);
     const mine = (q: string) => promotion.created.find((c) => c === `${promotion.base}--${q}`);
@@ -372,7 +370,7 @@ export async function proveBasePromotion(forge: Forge, promotion: BasePromotion)
       }
     }
   } finally {
-    await fs.rm(scratch, { recursive: true, force: true });
+    await removeProofCopy(scratch);
   }
 }
 

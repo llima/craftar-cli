@@ -426,6 +426,10 @@ describe("drift promote — hook with registration (spec 43 §7.2 row 10)", () =
     // Should have hooks.python in params (cited by registration)
     expect(variantMeta.params).toEqual({ "hooks.python": { default: "python3" } });
 
+    // E9.9: written by the serializer import uses — registration right after files.
+    const keys = Object.keys(YAML.parse(await fs.readFile(path.join(forgeDir, "ingredients/hooks/guard-path--acme/ingredient.yaml"), "utf8")));
+    expect(keys.indexOf("registration")).toBe(keys.indexOf("files") + 1);
+
     // Proof should pass - the example file should have the same bytes
     expect(r.stdout).toContain("proved");
 

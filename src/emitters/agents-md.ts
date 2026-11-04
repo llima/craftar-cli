@@ -2,6 +2,11 @@ import { buildRuleLookup, effectiveTargets, expandRulesIndex, outName, resolveRu
 import type { Emitter } from "./types.js";
 import type { WrittenIngredient } from "../core/capabilities.js";
 
+/** The line that opens a rule's body in `AGENTS.md` (E9.10): one spelling, which `drift promote` reads back too. */
+export const ruleMarker = (name: string): string => `<!-- rule: ${name} -->`;
+/** A whole line that is a rule marker, the rule's name captured. */
+export const RULE_MARKER_LINE = /^<!-- rule: (.+) -->$/;
+
 /** The param that sets the AGENTS.md size budget, read by `plan()` (and reserved from extraction, like `kiro.banner`). */
 export const AGENTS_MD_BUDGET_KEY = "agents-md.maxBytes";
 
@@ -85,7 +90,7 @@ export const agentsMd: Emitter<"agents-md"> = {
         }
         // Report the byte size of this always-on rule's body as it appears in AGENTS.md
         ctx.reportAgentsMdRule(outName(ing.meta), Buffer.byteLength(body, "utf8"), false);
-        parts.push(`<!-- rule: ${outName(ing.meta)} -->`, body, "");
+        parts.push(ruleMarker(outName(ing.meta)), body, "");
       } else {
         // Spec 14 §4.1: decide which target writes this rule file
         const writer = ruleWriter(ctx.resolution.targets, effectiveTargets(ing.meta, ctx.resolution));
@@ -119,7 +124,7 @@ export const agentsMd: Emitter<"agents-md"> = {
           }
           // Report the byte size of this embedded scoped rule
           ctx.reportAgentsMdRule(outName(ing.meta), Buffer.byteLength(body, "utf8"), true);
-          embedded.push(`<!-- rule: ${outName(ing.meta)} -->`, `> Scoped rule — ${scopeText}`, "", body, "");
+          embedded.push(ruleMarker(outName(ing.meta)), `> Scoped rule — ${scopeText}`, "", body, "");
         }
       }
     }

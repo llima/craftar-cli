@@ -1,10 +1,11 @@
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { forgeReader, readForgeFile, readForgeText } from "./contain.js";
 import YAML from "yaml";
 import { fingerprintDir } from "./fingerprint.js";
-import { exists, listFiles, loadForge, readIngredientText, type Forge, type LoadedIngredient } from "./forge.js";
+import { copyForProof, exists, listFiles, loadForge, proofPathsBack, readIngredientText, removeProofCopy, scratchWriteRefusal, type Forge, type LoadedIngredient } from "./forge.js";
 import { writeForgeFile } from "./forge-write.js";
 import { splitLines, type Hunk } from "./diff.js";
 import { detectEol, isUtf8, withEol, type Eol } from "./text.js";
@@ -75,7 +76,7 @@ export async function planFrom(
   variant: LoadedIngredient,
   diff: IngredientDiff,
   profile: string,
-  forgeSchema: number = 1,
+  forgeSchema: number,
 ): Promise<UnifyPlan> {
   await assertTextMergeable(base, variant);
 
@@ -218,10 +219,10 @@ export interface ApplyOptions {
    */
   profileSections?: Record<string, string>;
   /**
-   * The Forge's `schema` (spec 33 §5.2): gates `reservedKey` for the `integrations.*` prefix.
-   * Default `1` (below every gate).
+   * The Forge's `schema` (spec 33 §5.2): gates `reservedKey` for the `integrations.*` prefix and
+   * every other schema gate of the merge. Required, so a call cannot fall below every gate by omission.
    */
-  forgeSchema?: number;
+  forgeSchema: number;
 }
 
 /** One section a plan run creates or fills (spec 12 §4.5, §5.5). */
@@ -368,7 +369,7 @@ export async function applyPlan(
   variant: LoadedIngredient,
   diff: IngredientDiff,
   plan: UnifyPlan,
-  opts: ApplyOptions = {},
+  opts: ApplyOptions,
 ): Promise<UnifyResult> {
   await assertTextMergeable(base, variant);
   const notes: string[] = [];
@@ -402,7 +403,7 @@ export async function applyPlan(
   const onlyInVariant = new Set(diff.onlyInVariant);
 
   const profileSections = opts.profileSections ?? {};
-  const forgeSchema = opts.forgeSchema ?? 1;
+  const forgeSchema = opts.forgeSchema;
   // Build parseOpts for this Forge schema (Spec 41 Part B §5.2).
   const parseOpts: ParseSectionsOptions = { targets: readsTargetSections({ schema: forgeSchema }) };
 
@@ -798,9 +799,9 @@ async function checkMarkers(
   base: LoadedIngredient,
   write: Record<string, string | Buffer>,
   remove: string[],
-  newNames: Map<string, string[]> = new Map(),
-  opts?: ParseSectionsOptions,
-  schema = 1,
+  newNames: Map<string, string[]>,
+  opts: ParseSectionsOptions,
+  schema: number,
 ): Promise<void> {
   const label = (rel: string) => ["ingredients", path.basename(path.dirname(base.dir)), path.basename(base.dir), rel].join("/");
   const touched = [...Object.keys(write), ...remove].filter((rel) => bodyFile(base.meta, rel, base.dir, schema)).sort();
@@ -1049,12 +1050,24 @@ function identicalToSibling(recipes: Map<string, Recipe>, rewritten: string[], p
  * it deletes no recipe and edits no profile or `extends`.
  */
 export async function checkRecipeCascade(forge: Forge, baseRef: IngredientRef, variantRef: IngredientRef): Promise<string[]> {
-  const files: string[] = [];
-  for (const edit of await ingredientEdits(forge, baseRef, variantRef)) {
-    await renderIngredientEdit(edit);
-    files.push(edit.file);
-  }
-  return files;
+  return (await renderRecipeCascade(forge, baseRef, variantRef)).map((e) => e.file);
+}
+
+/** One recipe rewrite of the cascade, rendered: the file it lands in and its whole new text. */
+export interface RenderedRecipeEdit {
+  name: string;
+  file: string;
+  content: string;
+}
+
+/**
+ * The dry pass, rendered once: every recipe rewrite the cascade will make, with its text, so the proof on the scratch
+ * copy and the write in the Forge write the same bytes. Throws, with nothing written, as `checkRecipeCascade` does.
+ */
+export async function renderRecipeCascade(forge: Forge, baseRef: IngredientRef, variantRef: IngredientRef): Promise<RenderedRecipeEdit[]> {
+  const out: RenderedRecipeEdit[] = [];
+  for (const edit of await ingredientEdits(forge, baseRef, variantRef)) out.push({ name: edit.name, file: edit.file, content: await renderIngredientEdit(edit) });
+  return out;
 }
 
 /**
@@ -1085,20 +1098,74 @@ export async function rewriteRecipes(
   variantRef: IngredientRef,
   profile: string,
   journal?: WriteJournal,
+  rendered?: RenderedRecipeEdit[],
 ): Promise<RecipeCascadeResult> {
-  await checkRecipeCascade(forge, baseRef, variantRef);
+  // The caller's dry pass, when it rendered one (`forge unify`, whose proof wrote these bytes on the scratch copy).
+  const edits = rendered ?? (await renderRecipeCascade(forge, baseRef, variantRef));
 
   const rewritten: string[] = [];
-  for (const edit of await ingredientEdits(forge, baseRef, variantRef)) {
-    const content = await renderIngredientEdit(edit);
+  for (const edit of edits) {
     await note(journal, edit.file);
-    await writeForgeFile(edit.file, content);
+    await writeForgeFile(edit.file, edit.content);
     rewritten.push(edit.name);
   }
   if (rewritten.length === 0) return { rewritten, identicalToSibling: [] };
 
   const reloaded = await loadForge(forge.root);
   return { rewritten, identicalToSibling: identicalToSibling(reloaded.recipes, rewritten, profile) };
+}
+
+/** Every edit `forge unify` makes before `--prune-recipes`, as the CLI writes them (E38.1). */
+export interface UnifyEdits {
+  /** Whole-file YAML writes, in write order: the manifest, the base's `ingredient.yaml`, the profile — each when made. */
+  files: Array<{ abs: string; content: string }>;
+  /** The base the merge writes into, and what it writes and removes there. */
+  base: LoadedIngredient;
+  result: UnifyResult;
+  /** The rendered recipe cascade. */
+  cascade: RenderedRecipeEdit[];
+  /** The variant's directory, removed when the merge resolved it; `null` otherwise. */
+  removeDir: string | null;
+}
+
+/**
+ * The proof before `forge unify`'s first write (E38.1): the same edit set applied to a scratch copy,
+ * `os.tmpdir()/craftar-forge-unify-*`, and the copy loaded (`loadForge`, so L1–L9 and every schema). A refusal leaves the
+ * Forge untouched and names it, never the copy; the copy is removed in a `finally`. `--prune-recipes` is not proved here
+ * (it needs the Forge `unify` wrote, spec 25 §7).
+ */
+export async function proveUnifyLoads(forge: Forge, edits: UnifyEdits): Promise<void> {
+  let scratch: string;
+  try {
+    scratch = await fs.mkdtemp(path.join(os.tmpdir(), "craftar-forge-unify-"));
+  } catch (e) {
+    throw new Error(`unify: cannot make the scratch copy in the temporary directory (${(e as NodeJS.ErrnoException).code ?? "it failed"}) — nothing was written`);
+  }
+  try {
+    await copyForProof(forge.root, scratch, "unify");
+    const onCopy = (abs: string) => {
+      const rel = path.relative(forge.root, abs);
+      // Every path of the edit set is under the Forge; one that is not would be written outside the copy.
+      if (rel === "" || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) throw new Error("unify: an edit outside the Forge reached the proof — nothing written");
+      return path.join(scratch, rel);
+    };
+    try {
+      for (const w of edits.files) await writeForgeFile(onCopy(w.abs), w.content);
+      await writeUnified({ ...edits.base, dir: onCopy(edits.base.dir) }, edits.result);
+      for (const c of edits.cascade) await writeForgeFile(onCopy(c.file), c.content);
+      if (edits.removeDir !== null) await fs.rm(onCopy(edits.removeDir), { recursive: true, force: true });
+    } catch (e) {
+      throw scratchWriteRefusal("unify", scratch, e);
+    }
+    const back = await proofPathsBack(scratch, forge.root);
+    try {
+      await loadForge(scratch);
+    } catch (e) {
+      throw new Error(`unify: the Forge would not load after this merge:\n${back(errorText(e))}\nnothing written`);
+    }
+  } finally {
+    await removeProofCopy(scratch);
+  }
 }
 
 /* ---------------------------------------------------------------- prune-recipes (spec 25 §4.4) */

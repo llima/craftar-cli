@@ -210,11 +210,12 @@ describe("import and the profile's locals (spec 51 §4.5)", () => {
   });
   it.skipIf(process.platform === "win32")("a file that is not regular in the Forge stops the proof's copy in import's words, the Forge untouched", async () => {
     const s = await setup(spec, files);
-    execFileSync("mkfifo", [path.join(s.forge, "fifo")]);
+    // Under a tree loadForge reads: the copy holds only those trees and the manifest (E9.2).
+    execFileSync("mkfifo", [path.join(s.forge, "ingredients", "fifo")]);
     const before = await snapshot(s.forge);
     const r = importInto(s);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain("fifo is not a regular file — import cannot copy the Forge to prove its edit; remove it");
+    expect(r.stderr).toContain("ingredients/fifo is not a regular file — import cannot copy the Forge to prove its edit; remove it");
     expect(r.stderr).toContain("The Forge was left untouched.");
     expect(await snapshot(s.forge)).toEqual(before);
   });

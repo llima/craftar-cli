@@ -25,6 +25,8 @@ import {
   type UnheldPath,
   assertNoLinkOnPath,
   copyForgeForProof,
+  removeProofCopy,
+  scratchWriteRefusal,
 } from "../core/forge.js";
 import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type OverrideConflict, type UnsetParam, type Plan, type Workspace } from "../core/sync.js";
 import { driftList, metadataEdits, METADATA_PARAM_REASON, REWORDED_REASON, INDEXED_REASON, LIST_PARAM_REASON, unmanaged } from "../core/drift.js";
@@ -62,10 +64,12 @@ import {
   ForgeStage,
   mergeEmitted,
   type EmittedSource,
+  ingredientYamlText,
 } from "./claude-code.js";
 import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
 import { providedRefs } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
+import { RULE_MARKER_LINE, ruleMarker } from "../emitters/agents-md.js";
 import { readsTargetSections } from "../core/sections.js";
 import { profileSectionFile } from "../core/section-files.js";
 import { paramsFor, recipeOrder, sectionKey } from "../core/resolve.js";
@@ -152,8 +156,14 @@ export interface PromotePlan {
   nextConflicts: OverrideConflict[];
   /** Impact on other workspaces. */
   impact: { registry: RegistryState; workspaces: ImpactWorkspaceRow[] };
-  /** Warnings to print. */
+  /** Warnings, in the order `--json` carries them: the plan's, then the impact pass's. */
   warnings: string[];
+  /**
+   * E9.11: the plan's warnings, classified where they are made, for the text report: `early` print before the edited
+   * keys, `late` (a profile section value the variant stops holding) after `flattened`. The impact pass's warnings are
+   * in neither: the report prints its rows instead.
+   */
+  warningGroups: { early: string[]; late: string[] };
 
   // For the apply step:
   stage: ForgeStage;
@@ -274,7 +284,11 @@ async function provePromote(opts: {
 
   // Copy Forge without .git, with file symlinks dereferenced and non-regular files refused
   await copyForgeForProof(forgeDir, scratchDir);
-  await stage.flushTo(scratchDir);
+  try {
+    await stage.flushTo(scratchDir);
+  } catch (e) {
+    throw scratchWriteRefusal("drift promote", scratchDir, e);
+  }
 
   const scratchForge = await loadForge(scratchDir);
   const wsScratch = await workspaceAgainst(root, scratchForge);
@@ -313,7 +327,7 @@ async function provePromote(opts: {
     const agentsMd = p0.files.find((f) => f.ingredient === ("rule/*" as IngredientRef) || f.path === "AGENTS.md");
     if (agentsMd) {
       const p0AgentsContent = agentsMd.content.toString("utf8");
-      const markerLine = `<!-- rule: ${N} -->`;
+      const markerLine = ruleMarker(N);
       if (p0AgentsContent.includes(markerLine)) {
         // This rule is embedded in AGENTS.md — it's a dependent path with bound
         dependentPaths.add(agentsMd.path);
@@ -550,6 +564,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   const forgeKind = classifyForge(forgeValue);
 
   let forgeDir: string;
+  // E9.15: a remote whose URL holds credentials is said whether or not another remote matched — its line names the
+  // remote and the directory, never the URL.
+  const remoteWarnings: string[] = [];
   if (input.forgeDir !== null) {
     // --forge given: verify it's this workspace's Forge
     forgeDir = path.resolve(input.forgeDir);
@@ -563,7 +580,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       if (realWorkspaceForge !== realGiven) throw new Error(D2_PATH(input.forgeDir, realWorkspaceForge));
     } else {
       // D2: URL Forge — the clone must have a remote that matches
-      const warnings: string[] = [];
+      const warnings = remoteWarnings;
       const cloneRemotes = await remoteUrls(forgeDir, warnings, forgeDir);
       const wsKey = computeCacheKey(forgeValue);
       let found = false;
@@ -787,7 +804,10 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   if (secret) throw new Error(D9(ingredientRef, secret));
 
   // What reading the source warned (a rule's unusable `paths:`), then hand-added files in a skill directory
-  const warnings: string[] = [...(emitted.warnings ?? [])];
+  const warnings: string[] = [...remoteWarnings, ...(emitted.warnings ?? [])];
+  // E9.11: which of `warnings` the report prints after `flattened`, recorded as they are pushed.
+  const lateAt = new Set<number>();
+  const warningGroups = () => ({ early: warnings.filter((_, i) => !lateAt.has(i)), late: warnings.filter((_, i) => lateAt.has(i)) });
   if (meta.type === "skill" && meta.layout === "dir") {
     const skillDir = path.join(claudeDir, "skills", outputName);
     const diskFiles = await listFiles(skillDir).catch(() => [] as string[]);
@@ -917,10 +937,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
 
   // D12: check workspace overrides before variant outcomes (not for params/sections)
   if (outcome === "variant" || outcome === "variant-updated" || outcome === "local") {
-    // Check if the workspace sets a section of this ingredient
+    // Check if the workspace sets a section of this ingredient — one the base has (E9.6): a value for a section the base
+    // does not mark applies nowhere today, so a variant stops applying nothing.
     const wsIngSections = ctx.WS[ingKey];
     if (wsIngSections) {
-      const firstName = Object.keys(wsIngSections).sort()[0];
+      const firstName = Object.keys(wsIngSections).sort().find((n) => baseSectionNames.includes(n));
       if (firstName) {
         throw new Error(D12_SECTION(ingredientRef, firstName));
       }
@@ -1041,6 +1062,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         nextConflicts: p1.overrideConflicts,
         impact: { registry: impactResult.state, workspaces: impactResult.rows },
         warnings: [...warnings, ...impactResult.warnings],
+        warningGroups: warningGroups(),
         stage,
         forgeRoot: realForgeDir,
         mustHold: [profileAbs, ...heldFiles.map((h) => h.abs)],
@@ -1050,7 +1072,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         isUrlForge: forgeKind === "url",
       };
     } finally {
-      await fs.rm(scratchDir, { recursive: true, force: true });
+      await removeProofCopy(scratchDir);
     }
   }
 
@@ -1100,7 +1122,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     }
   }
 
-  const ingredientYaml = YAML.stringify(variantMeta, { lineWidth: 0 });
+  const ingredientYaml = ingredientYamlText(variantMeta);
   const ingredientYamlPath = path.join(variantDir, "ingredient.yaml");
 
   // For variant-updated, only stage ingredient.yaml if it changed
@@ -1382,6 +1404,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       const profileIngSections = profileSections[ingKey] ?? {};
       for (const name of flattenedSections) {
         if (Object.hasOwn(profileIngSections, name)) {
+          lateAt.add(warnings.length);
           warnings.push(`profile ${profile} still sets section ${ingKey} ${name}, which ${isLocal ? ingredientRef : variantRef} no longer holds — every plan will warn until it is removed`);
         }
       }
@@ -1404,6 +1427,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       nextConflicts: p1.overrideConflicts,
       impact: { registry: impactResult.state, workspaces: impactResult.rows },
       warnings: [...warnings, ...impactResult.warnings],
+      warningGroups: warningGroups(),
       stage,
       forgeRoot: realForgeDir,
       mustHold,
@@ -1413,7 +1437,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       isUrlForge: forgeKind === "url",
     };
   } finally {
-    await fs.rm(scratchDir, { recursive: true, force: true });
+    await removeProofCopy(scratchDir);
   }
 }
 
@@ -1511,10 +1535,10 @@ export function agentsBound(p0Text: string, p1Text: string, N: string): boolean 
   const p0 = toLf(p0Text);
   const p1 = toLf(p1Text);
   
-  const markerRe = /^<!-- rule: (.+) -->$/;
+  const markerRe = RULE_MARKER_LINE;
 
   // If p0 has no marker for N, p1 must be byte-equal
-  const markerLine = `<!-- rule: ${N} -->`;
+  const markerLine = ruleMarker(N);
   if (!p0.includes(markerLine)) {
     return p0 === p1;
   }
