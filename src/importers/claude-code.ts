@@ -29,7 +29,7 @@ import { editYamlText } from "../core/yaml-edit.js";
 import { resolvedBy } from "../core/param-writes.js";
 import { decide, forgeBefore, pin, sourceKeys, valuesAt, workspaceParams, workspaceSections, workspaceRecipes, workspaceTargets, carryInto, isScriptOrHook, type RunContext } from "./decide.js";
 import { providedByBlock } from "./provided.js";
-import { citedKeys, expandedTexts, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
+import { citedKeys, comparedMeta, expandedTexts, readBase, renderMap, renderedFingerprint, sectionNames, type ImportBase } from "../core/template-import.js";
 import { firstMarkerLine, readsTargetSections } from "../core/sections.js";
 import { bodyFile } from "../core/extract.js";
 import { GENERATED_BANNER, kiroReport, textLines, type KiroReport } from "./kiro-report.js";
@@ -1563,7 +1563,8 @@ async function writeIngredient(
     const d = run ? await decide(run.ctx, dir, stage.reader(), ref, sourceMeta, files, fingerprint, run.others, run.runBases, run.indexExpand) : { kind: "literal" as const, warn: "" };
     if (d.kind === "literal") {
       if (d.warn) report.warnings.push(d.warn);
-      const baseFingerprint = await fingerprintDir(dir, stage.reader());
+      // E32.1: a rule's description is not compared here either (the source never has one).
+      const baseFingerprint = await fingerprintDir(dir, stage.reader(), comparedMeta);
       // A script or hook base at the default targets compares as `asImportTargets` reads it.
       const atDefault = isScriptOrHook(meta) ? fingerprintOf(validateImported({ ...meta, targets: "*" }), files) : fingerprint;
       if (baseFingerprint === fingerprint || baseFingerprint === atDefault) {
@@ -1799,7 +1800,7 @@ async function decideLocal(
     if (d.kind === "literal") {
       if (d.warn) report.warnings.push(d.warn);
       const carried = await carryFromExisting(stage, path.join(local.dir, "ingredient.yaml"), sourceMeta);
-      const localFingerprint = await fingerprintDir(local.dir, stage.reader());
+      const localFingerprint = await fingerprintDir(local.dir, stage.reader(), comparedMeta);
       equal =
         localFingerprint === fingerprintOf(validateImported(carried), files) ||
         (isScriptOrHook(carried) && localFingerprint === fingerprintOf(validateImported({ ...carried, targets: "*" } as Ingredient), files));
@@ -1847,7 +1848,7 @@ async function decideLocal(
     let equal = d.kind === "reuse" && !(d.delta?.length || d.sectionDelta?.length);
     if (d.kind === "literal") {
       const carried = await carryFromExisting(stage, path.join(held.dir, "ingredient.yaml"), sourceMeta);
-      equal = (await fingerprintDir(held.dir, stage.reader())) === fingerprintOf(validateImported(carried), files);
+      equal = (await fingerprintDir(held.dir, stage.reader(), comparedMeta)) === fingerprintOf(validateImported(carried), files);
     }
     const dir = path.relative(forge.root, held.dir).split(path.sep).join("/");
     if (!equal) throw new Error(`import: ${source}: ${ref} differs from the local of ${anc}, which ${profile} extends (${dir}) — edit the parent's local in the Forge by hand, then re-run`);

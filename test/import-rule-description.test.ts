@@ -123,4 +123,16 @@ describe("import and a rule's description", () => {
     expect(r.stdout).toContain("rule/readme--acme");
     expect(YAML.parse(await fs.readFile(path.join(s.forge, "ingredients/rules/readme/ingredient.yaml"), "utf8")).description).toBe("How to read");
   });
+
+  it("D8: the literal comparison (G1) leaves the description out too — a description citing a key only a recipe defaults", async () => {
+    const base = recipe("base", ["rule/readme"], { params: { team: { default: "core" } } });
+    const s = await setup(
+      { ingredients: [rule("readme", "# Readme\n", { description: "How {{team}} reads" })], recipes: [base], profiles: [profile("acme", ["base"])] },
+      9,
+    );
+    const r = importInto(s);
+    expect(r.code, r.stderr).toBe(0);
+    expect(counts(r.stdout)).toBe("  0 created, 1 reused, 0 variants, 0 rejected");
+    expect(await exists(path.join(s.forge, "recipes/base--acme.yaml"))).toBe(false);
+  });
 });

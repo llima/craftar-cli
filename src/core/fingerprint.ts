@@ -59,9 +59,10 @@ export interface DirReader {
  * Fingerprint of an ingredient directory. Its `ingredient.yaml` goes through `IngredientSchema`,
  * like every other side a fingerprint is compared with, so defaults and refusals are the same on both.
  */
-export async function fingerprintDir(dir: string, io: DirReader): Promise<string> {
+export async function fingerprintDir(dir: string, io: DirReader, shape: (meta: Ingredient) => Ingredient = (m) => m): Promise<string> {
   const metaFile = path.join(dir, "ingredient.yaml");
-  const meta = parseYaml(metaFile, await io.readText(metaFile), IngredientSchema);
+  // `shape`: what a caller leaves out of the comparison (import passes `comparedMeta`, E32.1); `forge variants` passes none.
+  const meta = shape(parseYaml(metaFile, await io.readText(metaFile), IngredientSchema));
   const files: Record<string, Buffer> = {};
   for (const rel of await io.list(dir)) if (rel !== "ingredient.yaml") files[rel] = await io.readBytes(path.join(dir, rel));
   try {
