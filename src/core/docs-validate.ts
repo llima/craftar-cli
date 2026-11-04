@@ -101,14 +101,109 @@ function withoutClosingRun(text: string): string {
   return t[k - 1] === " " || t[k - 1] === "\t" ? t.slice(0, k).trimEnd() : t;
 }
 
-/** GitHub's heading slug (github-slugger's rule): lower case, characters other than letters, marks, numbers, `_`, space and `-` dropped, spaces to `-`. */
+/** Positions after an unescaped backslash that escapes ASCII punctuation. */
+function escapes(s: string): Uint8Array {
+  const out = new Uint8Array(s.length + 1);
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "\\" && !out[i] && i + 1 < s.length && ASCII_PUNCT.test(s[i + 1])) out[i + 1] = 1;
+  }
+  return out;
+}
+
+/** A code span's range: start/end is the range `blankCode` blanks; contentStart/contentEnd is between the backtick runs. */
+export interface CodeSpanRange {
+  start: number;
+  end: number;
+  contentStart: number;
+  contentEnd: number;
+}
+
+/**
+ * Extracts the ranges of code spans from a string using the same backtick-run pairing logic as `blankCode`:
+ * escape-aware, equal-length runs, forward-only pointer per length — linear time.
+ */
+export function codeSpanRanges(s: string): CodeSpanRange[] {
+  const esc = escapes(s);
+  const runs: Array<{ start: number; len: number; escaped: boolean }> = [];
+  for (let i = 0; i < s.length; ) {
+    if (s[i] !== "`") {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < s.length && s[j] === "`") j++;
+    runs.push({ start: i, len: j - i, escaped: esc[i] === 1 });
+    i = j;
+  }
+  const byLen = new Map<number, number[]>();
+  runs.forEach((r, idx) => (byLen.get(r.len) ?? byLen.set(r.len, []).get(r.len)!).push(idx));
+  const pointer = new Map<number, number>();
+  const ranges: CodeSpanRange[] = [];
+  for (let idx = 0; idx < runs.length; idx++) {
+    const r = runs[idx];
+    const len = r.escaped ? r.len - 1 : r.len;
+    const start = r.escaped ? r.start + 1 : r.start;
+    const list = byLen.get(len);
+    if (len === 0 || !list) continue;
+    let p = pointer.get(len) ?? 0;
+    while (p < list.length && list[p] <= idx) p++;
+    pointer.set(len, p);
+    if (p >= list.length) continue;
+    const close = runs[list[p]];
+    ranges.push({ start, end: close.start + close.len, contentStart: start + len, contentEnd: close.start });
+    idx = list[p];
+  }
+  return ranges;
+}
+
+/**
+ * GitHub's heading slug (github-slugger's rule): lower case, characters other than letters, marks, numbers, `_`, space
+ * and `-` dropped, spaces to `-`. A code span's content enters literally (newlines as spaces, CommonMark edge-space
+ * stripping applied); link and HTML stripping is applied only outside code spans.
+ */
 export function githubSlug(text: string): string {
-  const visible = text
-    // Each class excludes its own opener, so a failed attempt stops at the next one: linear on a run of openers.
-    .replace(/\[([^[\]]*)\]\([^()]*\)/g, "$1")
-    .replace(/<[^<>]*>/g, "")
-    .trim()
-    .toLowerCase();
+  const ranges = codeSpanRanges(text);
+  const parts: string[] = [];
+  let at = 0;
+
+  /** Process an outside-code segment: drop backslash-escaped <>[](), then strip links and HTML. */
+  const processOutside = (segment: string): string => {
+    const esc = escapes(segment);
+    let cleaned = "";
+    for (let i = 0; i < segment.length; i++) {
+      // If next position is escaped and is one of <>[](), skip backslash and the escaped char (both drop).
+      if (esc[i + 1] && "<>[]()".includes(segment[i + 1])) {
+        i++; // skip both the backslash (current) and the escaped char (next)
+        continue;
+      }
+      // If current position is escaped (it would be by a prior backslash), skip it too.
+      // (This handles the case when escape check above didn't catch it.)
+      if (esc[i] && segment[i - 1] === "\\") {
+        continue;
+      }
+      cleaned += segment[i];
+    }
+    return cleaned
+      .replace(/\[([^[\]]*)\]\([^()]*\)/g, "$1")
+      .replace(/<[^<>]*>/g, "");
+  };
+
+  for (const r of ranges) {
+    // Outside code: process the segment before this code span.
+    parts.push(processOutside(text.slice(at, r.start)));
+    // Code span content: literal, newlines as spaces, CommonMark edge-space stripping.
+    let content = text.slice(r.contentStart, r.contentEnd).replace(/\n/g, " ");
+    // CommonMark: if content both begins and ends with a space, and is not all spaces, strip one space from each end.
+    if (content.length >= 2 && content[0] === " " && content[content.length - 1] === " " && content.trim() !== "") {
+      content = content.slice(1, -1);
+    }
+    parts.push(content);
+    at = r.end;
+  }
+  // Remainder outside code spans
+  parts.push(processOutside(text.slice(at)));
+
+  const visible = parts.join("").trim().toLowerCase();
   return visible.replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "").replace(/ /g, "-");
 }
 
@@ -129,60 +224,20 @@ class Slugger {
   }
 }
 
-/** Positions after an unescaped backslash that escapes ASCII punctuation. */
-function escapes(s: string): Uint8Array {
-  const out = new Uint8Array(s.length + 1);
-  for (let i = 0; i < s.length; i++) {
-    if (s[i] === "\\" && !out[i] && i + 1 < s.length && ASCII_PUNCT.test(s[i + 1])) out[i + 1] = 1;
-  }
-  return out;
-}
-
 /**
  * The paragraph with its code spans, inline HTML comments and inline `<code>` elements blanked (newlines kept), so that
  * no later pass sees them. Code spans pair backtick runs of equal length (CommonMark): each length keeps a forward-only
  * pointer into its runs, so a paragraph of unmatched runs is read once — linear time (§6.2).
  */
 export function blankCode(s: string): string {
-  const esc = escapes(s);
-  // A backslash escapes only an opening backtick: inside a span it is literal, so a run keeps its full length as a closer.
-  const runs: Array<{ start: number; len: number; escaped: boolean }> = [];
-  for (let i = 0; i < s.length; ) {
-    if (s[i] !== "`") {
-      i++;
-      continue;
-    }
-    let j = i;
-    while (j < s.length && s[j] === "`") j++;
-    runs.push({ start: i, len: j - i, escaped: esc[i] === 1 });
-    i = j;
-  }
-  const byLen = new Map<number, number[]>();
-  runs.forEach((r, idx) => (byLen.get(r.len) ?? byLen.set(r.len, []).get(r.len)!).push(idx));
-  const pointer = new Map<number, number>();
-  const ranges: Array<[number, number]> = [];
-  for (let idx = 0; idx < runs.length; idx++) {
-    const r = runs[idx];
-    // An escaped first backtick is literal; the rest of the run can still open.
-    const len = r.escaped ? r.len - 1 : r.len;
-    const start = r.escaped ? r.start + 1 : r.start;
-    const list = byLen.get(len);
-    if (len === 0 || !list) continue;
-    let p = pointer.get(len) ?? 0;
-    while (p < list.length && list[p] <= idx) p++;
-    pointer.set(len, p);
-    if (p >= list.length) continue;
-    const close = runs[list[p]];
-    ranges.push([start, close.start + close.len]);
-    idx = list[p];
-  }
+  const ranges = codeSpanRanges(s);
   const blank = (from: number, to: number, out: string[]) => out.push(s.slice(from, to).replace(/[^\n]/g, " "));
   const parts: string[] = [];
   let at = 0;
-  for (const [a, b] of ranges) {
-    parts.push(s.slice(at, a));
-    blank(a, b, parts);
-    at = b;
+  for (const r of ranges) {
+    parts.push(s.slice(at, r.start));
+    blank(r.start, r.end, parts);
+    at = r.end;
   }
   parts.push(s.slice(at));
   let out = parts.join("");

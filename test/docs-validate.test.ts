@@ -537,3 +537,20 @@ describe("§11 item 13 — writes nothing", () => {
     expect(await snapshot(s.root)).toEqual(before);
   });
 });
+
+describe("request 10 — a code span's text enters the slug (links)", () => {
+  it("a link to #returns-resultt finds the heading with code span", async () => {
+    const s = await ws({ "docs/a.md": "# A\n\n## Returns `Result<T>`\n", "docs/b.md": "[x](a.md#returns-resultt)\n" });
+    expect(findings(await run(s.wsRoot), "links")).toEqual([]);
+  });
+  it("a link to #returns-result (wrong) does not find the heading", async () => {
+    const s = await ws({ "docs/a.md": "# A\n\n## Returns `Result<T>`\n", "docs/b.md": "[x](a.md#returns-result)\n" });
+    const f = findings(await run(s.wsRoot), "links");
+    expect(f).toHaveLength(1);
+    expect(brief(f[0])).toBe("warn links docs/b.md:1:5 fragment not found in the target");
+  });
+  it("CRLF line endings: a link to #returns-resultt finds the heading", async () => {
+    const s = await ws({ "docs/a.md": "# A\r\n\r\n## Returns `Result<T>`\r\n", "docs/b.md": "[x](a.md#returns-resultt)\r\n" });
+    expect(findings(await run(s.wsRoot), "links")).toEqual([]);
+  });
+});

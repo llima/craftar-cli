@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LEAKED_TAGS, blankCode, githubSlug, readTarget, scanMarkdown } from "../src/core/docs-validate.js";
+import { LEAKED_TAGS, blankCode, codeSpanRanges, githubSlug, readTarget, scanMarkdown } from "../src/core/docs-validate.js";
 
 // Spec 47 §6 — the scanner: what it reads as a link, what it leaves as code, and in what time.
 
@@ -302,5 +302,41 @@ describe("§6.2 — a pathological heading finishes in linear time (review round
     const t0 = Date.now();
     scanMarkdown(text);
     expect(Date.now() - t0).toBeLessThan(10_000);
+  });
+});
+
+describe("request 10 — a code span's text enters the slug", () => {
+  it("Returns `Result<T>` gives returns-resultt", () => {
+    expect(githubSlug("2026-06-23 — Core no longer returns `Result<T>` (PR #15)")).toBe("2026-06-23--core-no-longer-returns-resultt-pr-15");
+  });
+  it("Camada MCP (opcional) — `Acme.<Module>.Mcp` gives the module literal", () => {
+    expect(githubSlug("Camada MCP (opcional) — `Acme.<Module>.Mcp`")).toBe("camada-mcp-opcional--acmemodulemcp");
+  });
+  it("Foo <b>bar</b> gives foo-bar — HTML outside code still dropped (guard, passes on HEAD)", () => {
+    expect(githubSlug("Foo <b>bar</b>")).toBe("foo-bar");
+  });
+  it("Use `[a](b)` here gives use-ab-here — link syntax in code span is literal", () => {
+    expect(githubSlug("Use `[a](b)` here")).toBe("use-ab-here");
+  });
+  it("Odd `Result<T> here gives odd-result-here — unclosed backtick is no span (guard, passes on HEAD)", () => {
+    expect(githubSlug("Odd `Result<T> here")).toBe("odd-result-here");
+  });
+  it("Escaped \\<T\\> type gives escaped-t-type — backslash-escaped brackets outside code drop", () => {
+    expect(githubSlug("Escaped \\<T\\> type")).toBe("escaped-t-type");
+  });
+  it("Pad `` `x` `` end gives pad-x-end — double-backtick span with padding spaces", () => {
+    expect(githubSlug("Pad `` `x` `` end")).toBe("pad-x-end");
+  });
+  it("scanMarkdown returns-resultt anchors for duplicate headings", () => {
+    const s = scanMarkdown("## Returns `Result<T>`\n\n## Returns `Result<T>`\n");
+    expect([...s.anchors]).toContain("returns-resultt");
+    expect([...s.anchors]).toContain("returns-resultt-1");
+    expect([...s.anchors]).not.toContain("returns-result");
+  });
+  it("codeSpanRanges extracts ranges correctly", () => {
+    expect(codeSpanRanges("a `b` c ``d`` e")).toEqual([
+      { start: 2, end: 5, contentStart: 3, contentEnd: 4 },
+      { start: 8, end: 13, contentStart: 10, contentEnd: 11 },
+    ]);
   });
 });
