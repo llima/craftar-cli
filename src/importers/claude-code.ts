@@ -903,6 +903,11 @@ async function planImport(opts: ImportOptions, stage: ForgeStage): Promise<{ rep
   // Spec 51 §5.3: under --local=auto|always, a local of this run no recipe of the profile's folder it resolves cites is
   // wired into `<p>-local`, created when absent and written last in the profile's recipes.
   const appendLast = localMode !== "never" && runLocals.length ? await wireLocals(stage, forge, opts.profileName, loaded!, [...(loaded!.profiles.get(opts.profileName)?.recipes ?? []), ...profileRecipes], runLocals, report) : null;
+  // Spec 51 §4.5 (E42.4): a local kept in a recipe of the folder this run did not compute, its source gone, is said too.
+  if (loaded && readsProfileLocal(loaded.manifest)) {
+    const listed = [...(loaded.profiles.get(opts.profileName)?.recipes ?? []), ...profileRecipes, ...(appendLast ? [appendLast] : [])];
+    await warnKeptLocals(stage, forge, opts.profileName, loaded, listed, runLocals, report);
+  }
 
   /* ---- profile ---- */
   const targets = detected; // Computed earlier for writtenTargets.
@@ -2272,27 +2277,64 @@ function sectionChange(report: ImportReport, ctx: RunContext): Sections {
  * created. Its folder's recipes and the root's are read as staged, so a recipe this run computed counts; only an
  * override (spec 56 §7) is ever reached through a root one. Returns the recipe's name when something was wired, else null.
  */
-async function wireLocals(stage: ForgeStage, forge: string, profile: string, loaded: Forge, listed: string[], runLocals: string[], report: ImportReport): Promise<string | null> {
-  const name = `${profile}-local`;
-  const dir = path.join(forge, "profiles", profile, "recipes");
-  const folder = new Map<string, { abs: string; ingredients: string[]; extends: string[] }>();
+/** The recipes of one recipes folder as this run stages them, by name: the file, its ingredients and its `extends`. */
+async function stagedRecipes(stage: ForgeStage, dir: string): Promise<Map<string, { abs: string; ingredients: string[]; extends: string[] }>> {
+  const out = new Map<string, { abs: string; ingredients: string[]; extends: string[] }>();
   for (const rel of await stage.reader().list(dir)) {
     if (rel.includes("/") || !/\.ya?ml$/.test(rel)) continue;
     const abs = path.join(dir, rel);
     const r = parseYaml(abs, stripBom(await stage.readText(abs)), RecipeWrittenSchema);
-    folder.set(r.name, { abs, ingredients: r.ingredients, extends: r.extends });
+    out.set(r.name, { abs, ingredients: r.ingredients, extends: r.extends });
   }
+  return out;
+}
+
+/**
+ * Spec 51 §4.5 (E42.4): a local of the profile that this run neither reused, rewrote nor created — its source is gone or
+ * rejected — is kept in every recipe of the profile's folder that cites it; `writeOwnedRecipe` warns for the recipes it
+ * computes, and this pass for the others the profile reaches (its folder over the root, through `extends`), in the same
+ * words. Each pair is said once.
+ */
+async function warnKeptLocals(stage: ForgeStage, forge: string, profile: string, loaded: Forge, listed: string[], runLocals: string[], report: ImportReport): Promise<void> {
+  const own = loaded.locals.get(profile);
+  if (!own) return;
+  const gone = new Set<string>([...own.ingredients.keys()].filter((r) => !runLocals.includes(r)));
+  if (!gone.size) return;
+  const dir = path.join(forge, "profiles", profile, "recipes");
+  const folder = await stagedRecipes(stage, dir);
+  const root = await stagedRecipes(stage, path.join(forge, "recipes"));
+  const recipeOf = (n: string) => folder.get(n) ?? root.get(n) ?? loaded.recipes.get(n);
+  const reached = new Set<string>();
+  const walk = (n: string) => {
+    const r = recipeOf(n);
+    if (reached.has(n) || !r) return;
+    reached.add(n);
+    for (const e of r.extends) walk(e);
+  };
+  for (const n of listed) walk(n);
+  const lines: Array<{ label: string; ref: string }> = [];
+  for (const n of reached) {
+    const held = folder.get(n);
+    if (!held) continue;
+    const label = `profiles/${profile}/recipes/${path.basename(held.abs)}`;
+    for (const ref of new Set(held.ingredients)) if (gone.has(ref)) lines.push({ label, ref });
+  }
+  lines.sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0));
+  for (const { label, ref } of lines) {
+    const w = `${ref}: local to profile ${profile}, kept in ${label} though the workspace no longer holds its source — the next sync writes its file back`;
+    if (!report.warnings.includes(w)) report.warnings.push(w);
+  }
+}
+
+async function wireLocals(stage: ForgeStage, forge: string, profile: string, loaded: Forge, listed: string[], runLocals: string[], report: ImportReport): Promise<string | null> {
+  const name = `${profile}-local`;
+  const dir = path.join(forge, "profiles", profile, "recipes");
+  const folder = await stagedRecipes(stage, dir);
   // The profile's view: its folder's recipes over the root's, the root's read as this run stages them (a recipe it
   // creates or recomputes included). A root recipe cites no local-only ref (L3), so only an override (spec 56 §7) can be
   // reached through one — and then it needs no wiring.
   const rootDir = path.join(forge, "recipes");
-  const root = new Map<string, { ingredients: string[]; extends: string[] }>();
-  for (const rel of await stage.reader().list(rootDir)) {
-    if (rel.includes("/") || !/\.ya?ml$/.test(rel)) continue;
-    const abs = path.join(rootDir, rel);
-    const r = parseYaml(abs, stripBom(await stage.readText(abs)), RecipeWrittenSchema);
-    root.set(r.name, { ingredients: r.ingredients, extends: r.extends });
-  }
+  const root = await stagedRecipes(stage, rootDir);
   const recipeOf = (n: string) => folder.get(n) ?? root.get(n) ?? loaded.recipes.get(n);
   const reached = new Set<string>();
   const walk = (n: string) => {
