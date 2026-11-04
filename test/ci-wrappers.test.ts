@@ -254,6 +254,11 @@ const HOSTILE = [
   "::add-mask::x",
   "  ::error::x",
   "\u0085::add-mask::nel",
+  "\u2028::add-mask::ls",
+  "\u2029::add-mask::ps",
+  "mid\u2028::add-mask::mls",
+  "mid\u2029::add-mask::mps",
+  "mid\u0085::add-mask::mnel",
 ].join("\n");
 const HOSTILE_PATH = "a%b:c,d;e]f\ng.md";
 
@@ -267,6 +272,10 @@ function hostileFaults(source: string, vendor: Vendor): string[] {
   if (/^\s*::add-mask::x/m.test(r.stdout)) faults.push("intact: add-mask");
   if (/^\s*::error::x/m.test(r.stdout)) faults.push("intact: error");
   if (/^[\s\u0085]*::add-mask::nel/m.test(r.stdout)) faults.push("intact: a line behind a next-line character");
+  // a runner may read a next-line character as a line start, where JavaScript's `^` does not (E37.3)
+  if (r.stdout.includes("::add-mask::mnel")) faults.push("intact: add-mask behind a next-line character in mid-line");
+  // U+2028 and U+2029: leading ones are whitespace to `\s`, and in mid-line `^` under `m` matches after them (E37.3)
+  for (const tail of ["ls", "ps", "mls", "mps"]) if (r.stdout.includes(`::add-mask::${tail}`)) faults.push(`intact: add-mask behind a line or paragraph separator (${tail})`);
   const annotation = vendor === "azure" ? "##vso[task.logissue type=error;sourcepath=a%25b:c,d%3Be%5Df%0Ag.md]craftar: drift" : "::error file=a%25b%3Ac%2Cd;e]f%0Ag.md::craftar: drift";
   if (!r.stdout.split("\n").includes(annotation)) faults.push("path not escaped");
   return faults;
@@ -470,8 +479,10 @@ describe.each(VENDORS)("the token and hostile text under %s (spec 46 §10, 6 and
     ["redirects left on", '`GIT_CONFIG_VALUE_${n + 1}`]: "false"', '`GIT_CONFIG_VALUE_${n + 1}`]: "true"', tokenFaults],
     ["the Base64 not masked", "console.log(azure ? `${VSO}task.setsecret]${basic}` : `::add-mask::${basic}`);", "", tokenFaults],
     ["the status given the check's environment", 'craftar(["status", "--json", "--offline"], childEnv)', 'craftar(["status", "--json", "--offline"], checkEnv)', tokenFaults],
-    ["neuter as identity", 'const neuter = (t) => t.replace(/##(vso)?\\[/gi, (m) => m.slice(0, -1) + " [").replace(/^([\\s\\u0085]*)::/gm, "$1: :");', "const neuter = (t) => t;", hostileFaults],
-    ["neuter blind to a next-line character", "/^([\\s\\u0085]*)::/gm", "/^(\\s*)::/gm", hostileFaults],
+    ["neuter as identity", 'const neuter = (t) => t.replace(/##(vso)?\\[/gi, (m) => m.slice(0, -1) + " [").replace(/(^|\\u0085)([\\s\\u0085]*)::/gm, "$1$2: :");', "const neuter = (t) => t;", hostileFaults],
+    ["neuter blind to a next-line character", '/(^|\\u0085)([\\s\\u0085]*)::/gm, "$1$2: :"', '/^(\\s*)::/gm, "$1: :"', hostileFaults],
+    ["neuter blind to a next-line character in mid-line", "/(^|\\u0085)(", "/(^)(", hostileFaults],
+    ["neuter whose lines start after \\n only", "/(^|\\u0085)([\\s\\u0085]*)::/gm", "/((?<![^\\n])|\\u0085)([\\s\\u0085]*)::/g", hostileFaults],
     ["prop as identity", 'const prop = (s) => azure ? esc(s).replace(/;/g, "%3B").replace(/\\]/g, "%5D").replace(/\\[/g, "%5B") : esc(s).replace(/:/g, "%3A").replace(/,/g, "%2C");', "const prop = (s) => s;", hostileFaults],
   ];
   it.each(removedSafety)("catches %s", (_name, from, to, faults) => {
@@ -513,12 +524,41 @@ describe.skipIf(process.platform === "win32")("the steps as bash runs them (spec
     expect(r.stdout).toContain("a.md");
   });
 
+  /** The install step with a PATH of one directory: `mkdir` (linked to the real one) and an `npm` that leaves a marker. */
+  const runInstall = (vendor: Vendor, body: string, version: string): { r: ReturnType<typeof spawnSync>; npmRan: boolean } => {
+    const which = (name: string): string => {
+      const found = spawnSync("bash", ["-c", `command -v ${name}`], { encoding: "utf8" }).stdout.trim();
+      expect(path.isAbsolute(found), `${name} not found`).toBe(true);
+      return found;
+    };
+    const bash = which("bash");
+    const base = newBase();
+    const bin = path.join(base, "bin");
+    const temp = path.join(base, "temp");
+    mkdirSync(bin);
+    mkdirSync(temp);
+    symlinkSync(which("mkdir"), path.join(bin, "mkdir"));
+    const marker = path.join(base, "npm-ran");
+    writeFileSync(path.join(bin, "npm"), `#!${bash}\nprintf ran > ${JSON.stringify(marker)}\n`, { mode: 0o755 });
+    const vendorEnv = vendor === "azure" ? { TF_BUILD: "True", AGENT_TEMPDIRECTORY: temp } : { RUNNER_TEMP: temp };
+    const r = spawnSync(bash, ["-e", "-c", body], { cwd: base, encoding: "utf8", env: { ...cleanEnv(), ...vendorEnv, PATH: bin, CRAFTAR_CI_VERSION: version } });
+    return { r, npmRan: existsSync(marker) };
+  };
+
   it.each(VENDORS)("under %s a version that is not exact stops before npm", (vendor) => {
     for (const bad of ["latest", "^1.0.0", "1.0", "1.0.0-beta", "1.0.0; touch x", ""]) {
-      const r = spawnSync("bash", ["-e", "-c", bodyOf(steps(vendor)[0], vendor === "azure")], { encoding: "utf8", env: { ...cleanEnv(), PATH: "/nonexistent:/usr/bin:/bin", CRAFTAR_CI_VERSION: bad } });
+      const { r, npmRan } = runInstall(vendor, bodyOf(steps(vendor)[0], vendor === "azure"), bad);
       expect(r.status).toBe(1);
       expect(r.stdout).toContain("craftar: version must be exact, x.y.z");
+      expect(npmRan).toBe(false);
     }
+  });
+
+  it.each(VENDORS)("under %s the stub PATH catches a version check removed (E37.15)", (vendor) => {
+    const [check, ...rest] = bodyOf(steps(vendor)[0], vendor === "azure").split("\n");
+    expect(check).toContain("version must be exact");
+    expect(runInstall(vendor, rest.join("\n"), "latest").npmRan).toBe(true);
+    expect(runInstall(vendor, bodyOf(steps(vendor)[0], vendor === "azure"), "1.2.3").npmRan).toBe(true);
   });
 });
 
