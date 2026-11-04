@@ -216,14 +216,18 @@ describe("late failures (§4.6) — not run on Windows (chmod), reported as such
     execFileSync("git", ["-C", s.forge, "clean", "-fd", "--", "profiles/initech"], { env: gitEnv() });
     expect(git(s.forge, "status", "--porcelain")).toBe("");
   });
-  it.skipIf(WIN || process.getuid?.() === 0)("the profile write fails otherwise (a read-only profiles/): the late-failure lines, craftar.yaml not written", async () => {
+  it.skipIf(WIN || process.getuid?.() === 0)("a read-only profiles/ is refused on the scratch copy, before the profile write (E38.1, E10.6b)", async () => {
+    // Until E38.1 this failed late, after journalling profiles/initech, with the recover lines.
     const s = await setup();
     const profiles = path.join(s.forge, "profiles");
     await fs.chmod(profiles, 0o555);
     cleanups.push(() => fs.chmod(profiles, 0o755));
+    const before = await tree(s.forge);
     const r = s.run(["init", "--forge", s.forge, "--new-profile", "initech", "--workspace", s.ws]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain("recover with:");
+    expect(r.stderr).toMatch(/^error: init: profiles\/initech[^ ]* could not be written on the scratch copy the edit is proved on \((EACCES|EPERM)\) — it cannot be written in the Forge either; nothing written\n$/);
+    expect(r.stderr).not.toContain("recover with:");
+    expect(await tree(s.forge)).toEqual(before);
     expect(await exists(path.join(s.ws, "craftar.yaml"))).toBe(false);
   });
 });

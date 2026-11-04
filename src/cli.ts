@@ -84,7 +84,7 @@ import { checkParamWrites, metadataWrites, writeParamFile } from "./core/param-w
 import { checkInitFlags, checkLocalKeys, initLine, planInit, forgeSource, type InitInput } from "./core/init.js";
 import { profileName } from "./core/new-profile.js";
 import { newProfileGate } from "./core/new-profile-gate.js";
-import { writeNewProfile, reproveFromDisk, NewProfileRaceLost, NewProfileLateFailure } from "./core/new-profile-write.js";
+import { proveNewProfileLoads, writeNewProfile, reproveFromDisk, NewProfileRaceLost, NewProfileLateFailure } from "./core/new-profile-write.js";
 import { askInit, askClone, confirmInit, againLine, NOT_CLONED_REFUSED, type InitAnswers } from "./core/init-flow.js";
 import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type DestinationContext, type RepoState } from "./core/clone.js";
 import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
@@ -585,6 +585,12 @@ program
       // Step 1's notes are printed after the initLine line (spec 38), so keep them before reprove
       const step1Notes = init.notes;
       if (init.newProfile) {
+        // E38.1: the profile on a scratch copy of the Forge, which must load, before the write.
+        try {
+          await proveNewProfileLoads(forgeRoot, init);
+        } catch (e) {
+          fail(errorText(e));
+        }
         try {
           journal = await writeNewProfile(forgeRoot, init);
         } catch (e) {
