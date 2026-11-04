@@ -372,6 +372,9 @@ export interface Plan {
     unplanned: Array<{ agent: string; path: string }>;
     present: Array<{ agent: string; path: string }>;
     warning: string | null;
+    /** Planned entries Kiro does not load through resources: a manual rule's steering file, a command (tech-debt E27.8). */
+    manual: Array<{ agent: string; path: string }>;
+    manualWarning: string | null;
   } | null;
   /**
    * Files where `{{craftar.rules.index}}` was expanded, sorted by path (spec 44 §4.4). Empty below schema 7, and when no list was expanded.
@@ -910,7 +913,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
   // Kiro agent resources check (spec 41 §4.5–§4.6): null when the mode is off
   // Existence only (lstat): a hand-written entry's file is never read.
   const onDisk = (rel: string) => sourceOf(ws).exists(rel);
-  const kiroResources = await computeKiroResources(planned, kiroResourceRecords, onDisk, warnings, resolution.primary);
+  const kiroResources = await computeKiroResources(planned, kiroResourceRecords, onDisk, warnings, resolution.primary, resolution);
 
   // CLAUDE.md blocking check (spec 41 §4.7): only when the mode is on and claude-code is a target
   let claudeMd: Plan["claudeMd"] = null;
@@ -1134,11 +1137,21 @@ async function computeKiroResources(
   onDisk: (rel: string) => Promise<boolean>,
   warnings: string[],
   primary: boolean,
+  resolution: Resolution,
 ): Promise<Plan["kiroResources"]> {
   if (!primary) return null;
-  if (recorded.length === 0) return { unplanned: [], present: [], warning: null };
+  if (recorded.length === 0) return { unplanned: [], present: [], warning: null, manual: [], manualWarning: null };
 
   const plannedPaths = new Set(planned.map((f) => f.path));
+  // A planned path is manual by what wrote it, read from the resolution, never from its bytes: every kiro command is
+  // `inclusion: manual` steering, and so is a rule declared `inclusion: manual`.
+  const byRef = new Map<string, ResolvedIngredient["meta"]>(resolution.ingredients.map((i) => [i.ref, i.meta]));
+  const manualPaths = new Set<string>();
+  for (const f of planned) {
+    if (f.target !== "kiro" || !f.path.startsWith(".kiro/steering/")) continue;
+    const m = byRef.get(f.ingredient);
+    if (m?.type === "command" || (m?.type === "rule" && m.inclusion === "manual")) manualPaths.add(f.path);
+  }
 
   // Dedupe by agent+path, sort by agent then path
   const seen = new Set<string>();
@@ -1155,7 +1168,13 @@ async function computeKiroResources(
   const unplanned: Array<{ agent: string; path: string }> = [];
   const present: Array<{ agent: string; path: string }> = [];
 
+  const manual: Array<{ agent: string; path: string }> = [];
+
   for (const r of deduped) {
+    if (manualPaths.has(r.path)) {
+      manual.push(r);
+      continue;
+    }
     if (plannedPaths.has(r.path)) continue; // fine
     // Not planned: check if present on disk
     const exists = await onDisk(r.path);
@@ -1176,7 +1195,13 @@ async function computeKiroResources(
     warnings.push(warning);
   }
 
-  return { unplanned, present, warning };
+  let manualWarning: string | null = null;
+  if (manual.length > 0) {
+    manualWarning = `kiro: agent resources name manual steering files, which Kiro does not load through resources — ${manual.map((r) => `${r.agent} → ${r.path}`).join(", ")}`;
+    warnings.push(manualWarning);
+  }
+
+  return { unplanned, present, warning, manual, manualWarning };
 }
 
 /** The unplanned entries from kiroResources, or null when there are none (spec 41 §4.6). */

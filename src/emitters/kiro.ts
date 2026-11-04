@@ -147,7 +147,8 @@ export const kiro: Emitter<"kiro"> = {
           if (primary && m.resources) {
             for (const entry of m.resources) {
               if (!entry.startsWith("file://")) continue;
-              const raw = entry.slice("file://".length);
+              // A `\` is a separator as `climbsOut` reads it: `.kiro\steering\x.md` names `.kiro/steering/x.md` (tech-debt E27.5).
+              const raw = entry.slice("file://".length).replace(/\\/g, "/");
               // Skip globs
               if (/[*?[{]/.test(raw)) continue;
               // Compared as a path (`.kiro/steering/./x.md` is `.kiro/steering/x.md`); one that climbs out of the workspace
