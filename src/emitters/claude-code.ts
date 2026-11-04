@@ -2,7 +2,6 @@ import path from "node:path";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
 import { decodeForScan } from "../core/secrets.js";
-import { RULES_INDEX_TOKEN } from "../core/rules-index.js";
 import {
   authEnvNames,
   buildRuleLookup,
@@ -117,10 +116,6 @@ export const claudeCode: Emitter<"claude-code"> = {
         case "agent": {
           const path = `.claude/agents/${outName(m)}.md`;
           const { raw, description, body } = resolveDoc(path, ing.ref, m, await ctx.text(ing, m.file, "claude-code"));
-          // At the gate, report if the placeholder is in an agent body (spec 44 §4.5)
-          if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(body)) {
-            ctx.reportIndexLeft(path);
-          }
           const doc = serializeFrontmatter({ name: outName(m), description, tools: m.tools, model: m.model }, body, { raw });
           out.push(await textFile(ctx, path, doc, t, ing.ref));
           break;
@@ -128,10 +123,6 @@ export const claudeCode: Emitter<"claude-code"> = {
         case "command": {
           const path = `.claude/commands/${outName(m)}.md`;
           const { raw, description, body } = resolveDoc(path, ing.ref, m, await ctx.text(ing, m.file, "claude-code"));
-          // At the gate, report if the placeholder is in a command body (spec 44 §4.5)
-          if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(body)) {
-            ctx.reportIndexLeft(path);
-          }
           const doc = serializeFrontmatter(
             { description, "argument-hint": m.argumentHint, "allowed-tools": m.allowedTools },
             body,
@@ -146,24 +137,16 @@ export const claudeCode: Emitter<"claude-code"> = {
             const rawText = await ctx.text(ing, "SKILL.md", "claude-code");
             const text = resolve(rawText, ing.ref);
             checkReworded(path, [rawText, text]);
-            // At the gate, report if the placeholder is in a skill body (spec 44 §4.5)
-            if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(text)) {
-              ctx.reportIndexLeft(path);
-            }
             out.push(await textFile(ctx, path, text, t, ing.ref));
           } else {
             // Directory skill: resolve .md files, scan others
             for (const f of await listFiles(ing.dir)) {
               if (f === "ingredient.yaml") continue;
               const path = `.claude/skills/${outName(m)}/${f}`;
-              if (claudeResolves(m, f)) {
+              if (claudeResolves(m, f, ing.dir)) {
                 const rawText = await ctx.text(ing, f, "claude-code");
                 const text = resolve(rawText, ing.ref);
                 checkReworded(path, [rawText, text]);
-                // At the gate, report if the placeholder is in a skill body (spec 44 §4.5)
-                if (ctx.resolution.rulesIndex && RULES_INDEX_TOKEN.test(text)) {
-                  ctx.reportIndexLeft(path);
-                }
                 out.push(await textFile(ctx, path, text, t, ing.ref));
               } else if (TEXT_EXT.test(f)) {
                 // Other text files: not resolved, but scanned
@@ -249,9 +232,10 @@ export const claudeCode: Emitter<"claude-code"> = {
  * directory skill. Every other file is copied as written and scanned. An agent's and a command's metadata are resolved
  * too (`frontmatterRaw` when present, else `description`). The one answer, read by the emitter and by import (§4.10).
  */
-export function claudeResolves(meta: Ingredient, file: string): boolean {
-  // Compared as the emitters read them (`emittedFile`): `./rule.md` and `/rule.md` name the file listed as `rule.md`.
-  const eq = (a: string, b: string) => path.posix.join(".", a) === path.posix.join(".", b);
+export function claudeResolves(meta: Ingredient, file: string, dir: string | null): boolean {
+  // Compared as the emitters read them (`emittedFile`): against the ingredient's directory when it is known, so
+  // `../<dir>/rule.md` names `rule.md` too (tech-debt E27.1); without it `./rule.md` and `/rule.md` name `rule.md`.
+  const eq = (a: string, b: string) => (dir !== null ? path.join(dir, a) === path.join(dir, b) : path.posix.join(".", a) === path.posix.join(".", b));
   switch (meta.type) {
     case "rule":
     case "agent":

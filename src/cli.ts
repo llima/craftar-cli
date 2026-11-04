@@ -94,7 +94,7 @@ import { syncWorkspace, editRecipes, confirmWrites, confirmSettings, DISCARDED_O
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
 import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type UnifyPlan } from "./schema/index.js";
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
-import { recordedServices, pendingLine, upRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport as servicesStatusReport, type Recorded } from "./core/services.js";
+import { recordedServices, pendingLine, upRefusal, strayEnvRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport as servicesStatusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_FIX, dotnetVersion, feedMessage, globalJsonFault, globalJsonMessage, GLOBAL_JSON_FIX, GLOBAL_JSON_REFUSED, installReport, installTemplates, profileLabel, templateRows, unpinnedSources, type Declared, type InstallResult } from "./core/templates.js";
 import { capture, spawnInherited } from "./core/proc.js";
@@ -110,7 +110,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.60.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("0.61.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -3367,15 +3367,15 @@ async function envFileOrNull(root: string): Promise<string | null> {
   return (await exists(env)) ? env : null;
 }
 
-/** Runs `docker compose` with the terminal's own streams and resolves with its exit code. No shell; `docker` is found as git and dotnet are. */
+/** Runs `docker compose` in the workspace (its real path) with the terminal's own streams and resolves with its exit code. No shell; `docker` is found as git and dotnet are. */
 async function runCompose(argv: string[], real: string): Promise<number> {
-  const { code } = await spawnInherited({ file: "docker", args: argv, cwd: process.cwd(), env: { ...process.env, CRAFTAR_WORKSPACE: real }, stdin: "inherit" });
+  const { code } = await spawnInherited({ file: "docker", args: argv, cwd: real, env: { ...process.env, CRAFTAR_WORKSPACE: real }, stdin: "inherit" });
   return code ?? 1;
 }
 
 services
   .command("up")
-  .description("Start the services (docker compose up -d) — refused when a recorded file is missing or edited")
+  .description("Start the services (docker compose up -d) — refused when a recorded file is missing or edited, or when .craftar/.env exists with no .env at the workspace root")
   .argument("[service...]", "Compose service names to start (default: all)")
   .option("--wait", "wait until the services are running or healthy", false)
   .option("--workspace <dir>", "workspace root", ".")
@@ -3384,9 +3384,12 @@ services
       const { root, real, recorded } = await servicesContext(o.workspace);
       const refusal = upRefusal(recorded, names);
       if (refusal.length) fail(refusal.join("\n"));
+      const envFile = await envFileOrNull(root);
+      const stray = await strayEnvRefusal(root, envFile);
+      if (stray !== null) fail(stray);
       const fault = dockerFault(await dockerVersion(dockerRunner), true);
       if (fault !== null) fail(fault);
-      const argv = composeArgv("up", { project: projectName(real), stack: path.join(root, ".craftar", "compose.yaml"), envFile: await envFileOrNull(root), wait: o.wait, services: names });
+      const argv = composeArgv("up", { project: projectName(real), stack: path.join(root, ".craftar", "compose.yaml"), envFile, wait: o.wait, services: names });
       process.exitCode = await runCompose(argv, real);
     } catch (e) {
       fail(e instanceof Error ? e.message : String(e));
@@ -3431,7 +3434,7 @@ services
       let ps: ReturnType<typeof readPs> | null = null;
       let psFault = dockerFault(docker, false);
       if (psFault === null) {
-        const r = await dockerRunner("docker", composeArgv("ps", { project: projectName(real), stack: null, envFile: null }));
+        const r = await dockerRunner("docker", composeArgv("ps", { project: projectName(real), stack: null, envFile: null }), { cwd: real });
         if (r.code === 0) ps = readPs(r.stdout);
         else psFault = `docker compose ps failed — ${r.stderr.trim().split("\n")[0] || `exit ${r.code}`}`;
       }

@@ -158,7 +158,7 @@ export function renderedFingerprint(
   const files: Record<string, string | Buffer> = {};
   for (const [rel, text] of expandedTexts(base, sections, owner)) {
     let out = substitute(text, map, lists);
-    if (refs && claudeResolves(base.meta, rel)) out = refs(out, citing);
+    if (refs && claudeResolves(base.meta, rel, path.dirname(base.metaFile))) out = refs(out, citing);
     // Apply index expansion to rule and steering bases, after refs (spec 44 §4.8)
     if (index && (base.meta.type === "rule" || base.meta.type === "steering")) out = index(out);
     files[rel] = out;

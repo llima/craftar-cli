@@ -45,8 +45,6 @@ export interface EmitBase {
   reportKiroResource(agent: string, path: string): void;
   /** Reports a rules index expansion result (spec 44 §4.4). `expanded` is true when at least one placeholder line was expanded. */
   reportIndex(entry: { path: string; rules: number; undescribed: string[]; expanded?: boolean }): void;
-  /** Reports a path where the placeholder was left as written (other types or not alone on line, spec 44 §4.5). */
-  reportIndexLeft(path: string): void;
 }
 
 /** An emitter's context: the base, plus the ingredients the matrix says target T writes (spec 18 §3.1). */

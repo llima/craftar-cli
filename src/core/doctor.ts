@@ -300,6 +300,7 @@ async function workspaceChecks(
       if (p.agentsMd?.warning) owned.add(p.agentsMd.warning);
       // Also exclude the kiro resources warning — it is reported by kiro-resources
       if (p.kiroResources?.warning) owned.add(p.kiroResources.warning);
+      if (p.kiroResources?.manualWarning) owned.add(p.kiroResources.manualWarning);
       // agents-md-primary owns the plan's CLAUDE.md warning; plan() read the files once (Plan.claudeMd).
       const claudeMdBlocksResult = p.claudeMd;
       if (claudeMdBlocksResult !== null && claudeMdBlocksResult.blocking.length > 0) {
@@ -401,8 +402,18 @@ async function workspaceChecks(
           );
         }
 
-        // neither → one ok
-        if (p.kiroResources.unplanned.length === 0 && p.kiroResources.present.length === 0) {
+        // one warn per entry Kiro does not load through resources (tech-debt E27.8)
+        for (const { agent, path: resourcePath } of p.kiroResources.manual) {
+          w(
+            "kiro-resources",
+            "warn",
+            `agent ${agent} lists ${resourcePath}, a manual steering file Kiro does not load through resources`,
+            "in the Forge, make that rule always-on or fileMatch, or remove the entry from the agent's resources",
+          );
+        }
+
+        // none of them → one ok
+        if (p.kiroResources.unplanned.length === 0 && p.kiroResources.present.length === 0 && p.kiroResources.manual.length === 0) {
           w("kiro-resources", "ok", "every checked Kiro resource is written by the plan", null);
         }
       }

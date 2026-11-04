@@ -23,6 +23,7 @@ import { AGENTS_MD_BUDGET_KEY, agentsMd } from "../emitters/agents-md.js";
 import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
 import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
+import { decodeForScan } from "./secrets.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
 import { appliesTo, effectiveTargets } from "../emitters/shared.js";
 import { forgeFor, overriddenBase, readsLocalOverride, shownIngredientRef, shownLocalName } from "./profile-local.js";
@@ -371,6 +372,9 @@ export interface Plan {
     unplanned: Array<{ agent: string; path: string }>;
     present: Array<{ agent: string; path: string }>;
     warning: string | null;
+    /** Planned entries Kiro does not load through resources: a manual rule's steering file, a command (tech-debt E27.8). */
+    manual: Array<{ agent: string; path: string }>;
+    manualWarning: string | null;
   } | null;
   /**
    * Files where `{{craftar.rules.index}}` was expanded, sorted by path (spec 44 §4.4). Empty below schema 7, and when no list was expanded.
@@ -753,8 +757,6 @@ export async function plan(ws: Workspace): Promise<Plan> {
   const indexRecords: Array<{ path: string; rules: number; undescribed: string[]; misplaced?: number[]; expanded?: boolean }> = [];
   /** Ingredients whose body or metadata cites a list key (spec 55 §4.8). */
   const listCiting = new Set<string>();
-  /** Paths where the index placeholder was left as written (spec 44 §4.5). */
-  const indexLeftPaths = new Set<string>();
   /** Below-gate literals: `ref (file)` for each rendered text that holds `{{craftar.rules.index}}` alone on a line (spec 44 §4.2). */
   const belowGateLiterals = new Set<string>();
   const source = sourceOf(ws);
@@ -853,9 +855,6 @@ export async function plan(ws: Workspace): Promise<Plan> {
     reportIndex(entry: { path: string; rules: number; undescribed: string[]; expanded?: boolean }) {
       indexRecords.push(entry);
     },
-    reportIndexLeft(p: string) {
-      indexLeftPaths.add(p);
-    },
   };
   const files: PlannedFile[] = [];
   for (const t of resolution.targets) {
@@ -913,7 +912,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
   // Kiro agent resources check (spec 41 §4.5–§4.6): null when the mode is off
   // Existence only (lstat): a hand-written entry's file is never read.
   const onDisk = (rel: string) => sourceOf(ws).exists(rel);
-  const kiroResources = await computeKiroResources(planned, kiroResourceRecords, onDisk, warnings, resolution.primary);
+  const kiroResources = await computeKiroResources(planned, kiroResourceRecords, onDisk, warnings, resolution.primary, resolution);
 
   // CLAUDE.md blocking check (spec 41 §4.7): only when the mode is on and claude-code is a target
   let claudeMd: Plan["claudeMd"] = null;
@@ -1007,9 +1006,21 @@ export async function plan(ws: Workspace): Promise<Plan> {
       });
       warnings.push(misplacedPlaceholderWarning(sortedLocations));
     }
-    // Collect all paths where the placeholder was left (agent, command, skill body)
-    if (indexLeftPaths.size > 0) {
-      warnings.push(nonBodyPlaceholderWarning([...indexLeftPaths].sort()));
+    // Every planned file that keeps the placeholder as written outside a rule or steering body (spec 44 §9, tech-debt
+    // E32.4): an agent's, a command's or a skill's text, a description or raw frontmatter, a script, a hook, a service, a
+    // file copied as bytes. A rule or steering body was expanded, so a line holding it alone there is in its frontmatter.
+    // An MCP file is left out by design (spec 44 §7 item 16), and with it the example settings a hook's registration
+    // reaches (open, spec 43 §8). Binary content is not scanned. A CRLF line needs no fold: `$` under `m` matches before `\r`.
+    const leftPaths: string[] = [];
+    for (const f of planned) {
+      if (f.ingredient === "mcp/*") continue;
+      const text = decodeForScan(f.content);
+      if (text === null || !RULES_INDEX_TOKEN.test(text)) continue;
+      if (isRuleOrSteeringOrAgentsMd(f.path) && !RULES_INDEX_LINE.test(text)) continue;
+      leftPaths.push(f.path);
+    }
+    if (leftPaths.length > 0) {
+      warnings.push(nonBodyPlaceholderWarning(leftPaths.sort()));
     }
   }
 
@@ -1125,11 +1136,21 @@ async function computeKiroResources(
   onDisk: (rel: string) => Promise<boolean>,
   warnings: string[],
   primary: boolean,
+  resolution: Resolution,
 ): Promise<Plan["kiroResources"]> {
   if (!primary) return null;
-  if (recorded.length === 0) return { unplanned: [], present: [], warning: null };
+  if (recorded.length === 0) return { unplanned: [], present: [], warning: null, manual: [], manualWarning: null };
 
   const plannedPaths = new Set(planned.map((f) => f.path));
+  // A planned path is manual by what wrote it, read from the resolution, never from its bytes: every kiro command is
+  // `inclusion: manual` steering, and so is a rule declared `inclusion: manual`.
+  const byRef = new Map<string, ResolvedIngredient["meta"]>(resolution.ingredients.map((i) => [i.ref, i.meta]));
+  const manualPaths = new Set<string>();
+  for (const f of planned) {
+    if (f.target !== "kiro" || !f.path.startsWith(".kiro/steering/")) continue;
+    const m = byRef.get(f.ingredient);
+    if (m?.type === "command" || (m?.type === "rule" && m.inclusion === "manual")) manualPaths.add(f.path);
+  }
 
   // Dedupe by agent+path, sort by agent then path
   const seen = new Set<string>();
@@ -1146,7 +1167,13 @@ async function computeKiroResources(
   const unplanned: Array<{ agent: string; path: string }> = [];
   const present: Array<{ agent: string; path: string }> = [];
 
+  const manual: Array<{ agent: string; path: string }> = [];
+
   for (const r of deduped) {
+    if (manualPaths.has(r.path)) {
+      manual.push(r);
+      continue;
+    }
     if (plannedPaths.has(r.path)) continue; // fine
     // Not planned: check if present on disk
     const exists = await onDisk(r.path);
@@ -1167,7 +1194,13 @@ async function computeKiroResources(
     warnings.push(warning);
   }
 
-  return { unplanned, present, warning };
+  let manualWarning: string | null = null;
+  if (manual.length > 0) {
+    manualWarning = `kiro: agent resources name manual steering files, which Kiro does not load through resources — ${manual.map((r) => `${r.agent} → ${r.path}`).join(", ")}`;
+    warnings.push(manualWarning);
+  }
+
+  return { unplanned, present, warning, manual, manualWarning };
 }
 
 /** The unplanned entries from kiroResources, or null when there are none (spec 41 §4.6). */
