@@ -257,6 +257,7 @@ const HOSTILE = [
   "\u2028::add-mask::ls",
   "\u2029::add-mask::ps",
   "mid\u2028::add-mask::m",
+  "mid\u0085::add-mask::mnel",
 ].join("\n");
 const HOSTILE_PATH = "a%b:c,d;e]f\ng.md";
 
@@ -271,6 +272,8 @@ function hostileFaults(source: string, vendor: Vendor): string[] {
   if (/^\s*::error::x/m.test(r.stdout)) faults.push("intact: error");
   if (/^[\s\u0085]*::add-mask::nel/m.test(r.stdout)) faults.push("intact: a line behind a next-line character");
   // U+2028 and U+2029 are line terminators to a JavaScript regex, so `^` under `m` matches after them (measured, E37.3)
+  // a runner may read a next-line character as a line start, where JavaScript's `^` does not (E37.3)
+  if (r.stdout.includes("::add-mask::mnel")) faults.push("intact: add-mask behind a next-line character in mid-line");
   for (const tail of ["ls", "ps", "m"]) if (r.stdout.includes(`::add-mask::${tail}`)) faults.push(`intact: add-mask behind a line or paragraph separator (${tail})`);
   const annotation = vendor === "azure" ? "##vso[task.logissue type=error;sourcepath=a%25b:c,d%3Be%5Df%0Ag.md]craftar: drift" : "::error file=a%25b%3Ac%2Cd;e]f%0Ag.md::craftar: drift";
   if (!r.stdout.split("\n").includes(annotation)) faults.push("path not escaped");
@@ -475,9 +478,10 @@ describe.each(VENDORS)("the token and hostile text under %s (spec 46 §10, 6 and
     ["redirects left on", '`GIT_CONFIG_VALUE_${n + 1}`]: "false"', '`GIT_CONFIG_VALUE_${n + 1}`]: "true"', tokenFaults],
     ["the Base64 not masked", "console.log(azure ? `${VSO}task.setsecret]${basic}` : `::add-mask::${basic}`);", "", tokenFaults],
     ["the status given the check's environment", 'craftar(["status", "--json", "--offline"], childEnv)', 'craftar(["status", "--json", "--offline"], checkEnv)', tokenFaults],
-    ["neuter as identity", 'const neuter = (t) => t.replace(/##(vso)?\\[/gi, (m) => m.slice(0, -1) + " [").replace(/^([\\s\\u0085]*)::/gm, "$1: :");', "const neuter = (t) => t;", hostileFaults],
-    ["neuter blind to a next-line character", "/^([\\s\\u0085]*)::/gm", "/^(\\s*)::/gm", hostileFaults],
-    ["neuter whose lines start after \\n only", "/^([\\s\\u0085]*)::/gm", "/(?<![^\\n])([\\s\\u0085]*)::/g", hostileFaults],
+    ["neuter as identity", 'const neuter = (t) => t.replace(/##(vso)?\\[/gi, (m) => m.slice(0, -1) + " [").replace(/(^|\\u0085)([\\s\\u0085]*)::/gm, "$1$2: :");', "const neuter = (t) => t;", hostileFaults],
+    ["neuter blind to a next-line character", '/(^|\\u0085)([\\s\\u0085]*)::/gm, "$1$2: :"', '/^(\\s*)::/gm, "$1: :"', hostileFaults],
+    ["neuter blind to a next-line character in mid-line", "/(^|\\u0085)(", "/(^)(", hostileFaults],
+    ["neuter whose lines start after \\n only", "/(^|\\u0085)([\\s\\u0085]*)::/gm", "/((?<![^\\n])|\\u0085)([\\s\\u0085]*)::/g", hostileFaults],
     ["prop as identity", 'const prop = (s) => azure ? esc(s).replace(/;/g, "%3B").replace(/\\]/g, "%5D").replace(/\\[/g, "%5B") : esc(s).replace(/:/g, "%3A").replace(/,/g, "%2C");', "const prop = (s) => s;", hostileFaults],
   ];
   it.each(removedSafety)("catches %s", (_name, from, to, faults) => {
