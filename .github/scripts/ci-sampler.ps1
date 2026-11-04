@@ -105,8 +105,8 @@ function Write-Report {
     $pidFile = "$Out.pid"
     if (Test-Path $pidFile) {
         try {
-            $pid = Get-Content $pidFile
-            Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+            $samplerPid = [int](Get-Content $pidFile)
+            Stop-Process -Id $samplerPid -Force -ErrorAction SilentlyContinue
         } catch {}
     }
     if (Test-Path $Out) {
@@ -123,8 +123,10 @@ function Write-Report {
                 proc_queue = if ($cols[2]) { [double]$cols[2] } else { $null }
                 avail_mb = if ($cols[3]) { [double]$cols[3] } else { $null }
                 commit_pct = if ($cols[4]) { [double]$cols[4] } else { $null }
-                pages_per_s = if ($cols[5]) { [double]$cols[5] } else { $null }
+                pagefile_mb = if ($cols[5]) { [double]$cols[5] } else { $null }
+                pages_per_s = if ($cols[6]) { [double]$cols[6] } else { $null }
                 disk_queue = if ($cols[7]) { [double]$cols[7] } else { $null }
+                disk_busy_pct = if ($cols[8]) { [double]$cols[8] } else { $null }
                 node = if ($cols[9]) { [int]$cols[9] } else { $null }
                 git = if ($cols[10]) { [int]$cols[10] } else { $null }
             }
@@ -137,7 +139,9 @@ function Write-Report {
         $maxDiskQ = ($data | Where-Object { $null -ne $_.disk_queue } | Measure-Object -Property disk_queue -Maximum).Maximum
         $maxNode = ($data | Where-Object { $null -ne $_.node } | Measure-Object -Property node -Maximum).Maximum
         $maxGit = ($data | Where-Object { $null -ne $_.git } | Measure-Object -Property git -Maximum).Maximum
-        Write-Output "sampler: rows=$n max_cpu=$maxCpu max_queue=$maxQueue min_avail_mb=$minAvail max_commit_pct=$maxCommit max_pages_per_s=$maxPages max_disk_queue=$maxDiskQ max_node=$maxNode max_git=$maxGit"
+        $maxPagefile = ($data | Where-Object { $null -ne $_.pagefile_mb } | Measure-Object -Property pagefile_mb -Maximum).Maximum
+        $maxDiskBusy = ($data | Where-Object { $null -ne $_.disk_busy_pct } | Measure-Object -Property disk_busy_pct -Maximum).Maximum
+        Write-Output "sampler: rows=$n max_cpu=$maxCpu max_queue=$maxQueue min_avail_mb=$minAvail max_commit_pct=$maxCommit max_pages_per_s=$maxPages max_disk_queue=$maxDiskQ max_node=$maxNode max_git=$maxGit max_pagefile_mb=$maxPagefile max_disk_busy_pct=$maxDiskBusy"
     } else {
         Write-Output 'sampler: no samples'
     }

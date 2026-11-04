@@ -70,6 +70,24 @@ describe("vitest limits", () => {
 
 
 describe("Windows runner sampler", () => {
+  it("never assigns PowerShell's automatic $PID", () => {
+    const script = readFileSync(path.join(REPO, ".github/scripts/ci-sampler.ps1"), "utf8");
+    expect(script).not.toMatch(/\$pid\s*=/i);
+  });
+
+  it("reads each summary column at its header index", () => {
+    const script = readFileSync(path.join(REPO, ".github/scripts/ci-sampler.ps1"), "utf8");
+    const headerLine = script.split("\n").find((l) => l.includes("'time,cpu_pct"));
+    expect(headerLine).toBeDefined();
+    const header = headerLine!.match(/'([^']+)'/)?.[1].split(",") ?? [];
+    const cols = ["cpu_pct", "proc_queue", "avail_mb", "commit_pct", "pagefile_mb", "pages_per_s", "disk_queue", "disk_busy_pct", "node", "git"];
+    for (const name of cols) {
+      const idx = header.indexOf(name);
+      const pattern = new RegExp(`^\\s*${name} = if \\(\\$cols\\[${idx}\\]\\)`, "m");
+      expect(script).toMatch(pattern);
+    }
+  });
+
   it("starts the sampler right before the suite and reports right after it, on Windows only", () => {
     const steps = job.steps as { name?: string; shell?: string; if?: string; run?: string }[];
     const npmTestIdx = steps.findIndex((s) => s.run?.startsWith("npm test"));
