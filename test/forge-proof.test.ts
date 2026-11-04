@@ -130,9 +130,16 @@ describe("scratchWriteRefusal speaks of the Forge only for a mode refusal", () =
   it("says the Forge cannot be written for EACCES or EPERM, and the temporary directory for anything else", () => {
     const scratch = path.join(path.sep, "tmp", "craftar-x");
     const at = path.join(scratch, "recipes", "base.yaml");
-    const err = (code: string) => scratchWriteRefusal("unify", scratch, Object.assign(new Error("x"), { code, path: at })).message;
+    const err = (code: string) => scratchWriteRefusal("unify", scratch, Object.assign(new Error("x"), { code, path: at }), "edit", "linux").message;
     expect(err("EACCES")).toBe("unify: recipes/base.yaml could not be written on the scratch copy the edit is proved on (EACCES) — it cannot be written in the Forge either; nothing written");
     expect(err("EPERM")).toContain("it cannot be written in the Forge either");
+    // On win32 the copy carries no mode, so EACCES / EPERM there is the temporary directory's.
+    expect(scratchWriteRefusal("unify", scratch, Object.assign(new Error("x"), { code: "EPERM", path: at }), "edit", "win32").message).toBe(
+      "unify: the scratch copy in the temporary directory refused a write (EPERM) — nothing written; free or fix the temporary directory and run again",
+    );
+    // A guard's own error (no code) is passed on as it is.
+    const guard = new Error("unify: an edit outside the Forge reached the proof — nothing written");
+    expect(scratchWriteRefusal("unify", scratch, guard)).toBe(guard);
     for (const code of ["ENOSPC", "EROFS", "EBUSY"]) {
       expect(err(code)).toBe(`unify: the scratch copy in the temporary directory refused a write (${code}) — nothing written; free or fix the temporary directory and run again`);
     }

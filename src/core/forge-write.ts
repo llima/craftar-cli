@@ -15,6 +15,12 @@ export interface ForgeWriteSeams {
   pollMs?: number;
 }
 
+/** The temporary sibling `writeForgeFile` writes before its rename: one spelling, and the one pattern that reads it back. */
+const tempName = (base: string): string => `.${base}.craftar-${process.pid}-${randomBytes(4).toString("hex")}.tmp`;
+const TEMP_NAME = /^\.(.+)\.craftar-\d+-[0-9a-f]+\.tmp$/;
+/** The file a temporary sibling was written for, or the name itself when it is no such sibling. */
+export const tempTarget = (base: string): string => base.replace(TEMP_NAME, "$1");
+
 /**
  * Put one file of a Forge on disk (tech-debt L2a, E9.1 + E1.1): the content goes to a temporary sibling, created `wx`,
  * which is then renamed over the target, so the target is never left half-written and a hard link at the target is
@@ -45,7 +51,7 @@ export async function writeForgeFile(target: string, content: string | Buffer, o
   // A file that could not be written in place is not replaced either: the rename needs only the directory, and would
   // turn a read-only file into a written one. The error is `access`'s, naming the target, as `writeFile`'s was.
   if (present) await fs.access(abs, fsConstants.W_OK);
-  const tmp = path.join(dir, `.${path.basename(abs)}.craftar-${process.pid}-${randomBytes(4).toString("hex")}.tmp`);
+  const tmp = path.join(dir, tempName(path.basename(abs)));
   try {
     await fs.writeFile(tmp, content, { flag: "wx" });
     if (mode !== undefined && !windows) await fs.chmod(tmp, mode);

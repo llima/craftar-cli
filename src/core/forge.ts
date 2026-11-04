@@ -16,6 +16,7 @@ import { SchemaError, schemaIssues } from "./schema-fault.js";
 import { execProgram, streamProgram } from "./proc.js";
 import { findSecrets } from "./secrets.js";
 import { climbsOut } from "./text.js";
+import { tempTarget } from "./forge-write.js";
 import { CannotResolveError, shownByRealPath } from "./cache-label.js";
 import { containRoot, containSubRoot, readForgeText, type ContainRoot } from "./contain.js";
 import { listDeclarationNearMiss, rendersListParams } from "./list-params.js";
@@ -750,15 +751,24 @@ export async function copyForgeForProof(forgeDir: string, scratchDir: string, co
  * The refusal for a write the scratch copy refused: the copy carries the Forge's file and directory modes, so what
  * cannot be written there cannot be written in the Forge either. Names the path relative to the copy, never the copy.
  */
-export function scratchWriteRefusal(command: string, scratch: string, e: unknown, proved: "edit" | "move" = "edit"): Error {
+export function scratchWriteRefusal(
+  command: string,
+  scratch: string,
+  e: unknown,
+  proved: "edit" | "move" = "edit",
+  platform: NodeJS.Platform = process.platform,
+): Error {
+  // Not a write's refusal at all (a guard of the caller's): it is its own message.
+  if (typeof (e as NodeJS.ErrnoException).code !== "string") return e instanceof Error ? e : new Error(String(e));
   const raw = (e as NodeJS.ErrnoException).path;
   // writeForgeFile's temporary sibling is an implementation detail: name the file it was writing.
-  const at = raw ? path.join(path.dirname(raw), path.basename(raw).replace(/^\.(.+)\.craftar-\d+-[0-9a-f]+\.tmp$/, "$1")) : raw;
+  const at = raw ? path.join(path.dirname(raw), tempTarget(path.basename(raw))) : raw;
   const code = (e as NodeJS.ErrnoException).code ?? "the write failed";
   const shown = at ? path.relative(scratch, at).split(path.sep).join("/") : "a file";
   // Only a refusal the copied modes explain says anything of the Forge; a full or read-only temporary directory, or a
   // scanner holding a file there, is the temporary directory's.
-  if (!MODE_REFUSALS.has(code)) return new Error(`${command}: the scratch copy in the temporary directory refused a write (${code}) — nothing written; free or fix the temporary directory and run again`);
+  // On win32 the copy carries no mode (no chmod there), so EACCES / EPERM is a file held in the temporary directory.
+  if (platform === "win32" || !MODE_REFUSALS.has(code)) return new Error(`${command}: the scratch copy in the temporary directory refused a write (${code}) — nothing written; free or fix the temporary directory and run again`);
   return new Error(`${command}: ${shown} could not be written on the scratch copy the ${proved} is proved on (${code}) — it cannot be written in the Forge either; nothing written`);
 }
 /** The codes a write gets from a file's or a directory's mode — what the copy carries from the Forge. */
