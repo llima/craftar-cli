@@ -168,3 +168,15 @@ describe("import --prefer-kiro — the command", () => {
     expect(r.stdout).not.toContain("steering/workflow");
   });
 });
+
+describe("import --prefer-kiro — a rule named with a profile suffix (E13.5, a pin)", () => {
+  it("S1: style--globex is an ordinary rule name: preferred, created under its own name, no `as`", async () => {
+    const s = await setup({ ...WORKSPACE, ".claude/rules/style--globex.md": "# Style\n", ".kiro/steering/style--globex.md": mirror("style--globex", "# Style\n") });
+    const r = run(s, ["--prefer-kiro", "style--globex"]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(plain(s, r.stdout)).toContain("  prefer-kiro rule/style--globex — source .kiro/steering/style--globex.md");
+    const meta = await fs.readFile(path.join(s.forge, "ingredients/rules/style--globex/ingredient.yaml"), "utf8");
+    expect(meta).toContain("name: style--globex");
+    expect(meta).not.toMatch(/^as:/m);
+  });
+});
