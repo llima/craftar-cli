@@ -1826,6 +1826,7 @@ async function decideLocal(
       return { rewrite: local.dir };
     }
     if (d.kind === "reuse") {
+      if (d.rendered || d.renderedSections) report.rendered.push({ name: ref, keys: d.rendered ?? [], ...(d.renderedSections ? { sections: d.renderedSections } : {}) });
       if (d.inferred) report.inferred.push({ name: ref, values: d.inferred });
       for (const x of d.delta ?? []) report.params.push({ ...x, from: ref });
       if (d.sectioned) report.sectioned.push({ name: ref, sections: d.sectioned });
@@ -1850,6 +1851,7 @@ async function decideLocal(
     const dir = path.relative(forge.root, held.dir).split(path.sep).join("/");
     if (!equal) throw new Error(`import: ${source}: ${ref} differs from the local of ${anc}, which ${profile} extends (${dir}) — edit the parent's local in the Forge by hand, then re-run`);
     report.reused.push(ref);
+    if (d.kind === "reuse" && (d.rendered || d.renderedSections)) report.rendered.push({ name: ref, keys: d.rendered ?? [], ...(d.renderedSections ? { sections: d.renderedSections } : {}) });
     (report.localReused ??= []).push({ ref, dir });
     return ref;
   }

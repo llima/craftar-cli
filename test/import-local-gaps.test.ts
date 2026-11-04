@@ -6,7 +6,7 @@ import { exists } from "../src/core/forge.js";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 
-// E42.3, E42.4 (spec 51 §4.5, §5.3): import and a profile's locals at Forge schema 8.
+// E42.3, E42.4, E42.5 (spec 51 §4.5, §5.3): import and a profile's locals at Forge schema 8.
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -19,12 +19,12 @@ const localRule = (p: string, name: string, body: string, extra: Record<string, 
 });
 const localRecipe = (p: string, file: string, name: string, ingredients: string[]) => ({ [`profiles/${p}/recipes/${file}`]: YAML.stringify({ name, ingredients }) });
 
-async function setup(s: ForgeSpec, files: Record<string, string>) {
+async function setup(s: ForgeSpec, files: Record<string, string>, schema = 8) {
   const root = await tmpDir("craftar-import-local-gaps-");
   roots.push(root);
   const forge = path.join(root, "forge");
   await makeForge(forge, s);
-  await fs.writeFile(path.join(forge, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 8 }));
+  await fs.writeFile(path.join(forge, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema }));
   await writeFiles(forge, files);
   const ws = path.join(root, "ws");
   await makeWorkspace(ws, forge, { config: { profile: "acme" } });
@@ -81,5 +81,42 @@ describe("import and a profile's locals — the gaps of spec 51 Part B", () => {
     const r = importInto(s);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).not.toContain("though the workspace no longer holds its source");
+  });
+
+  for (const eol of ["\n", "\r\n"]) {
+    it(`L3 (E42.5): a reused local's rendered values reach the summary — ${eol === "\n" ? "LF" : "CRLF"}`, async () => {
+      const s = await setup(
+        {
+          ingredients: [rule("style", "# Style\n")],
+          recipes: [recipe("base", ["rule/style"])],
+          profiles: [profile("acme", ["base", "acme-own"], ["claude-code"], { params: { who: "Acme" } })],
+        },
+        { ...localRule("acme", "greet", "Hello {{who}}.\n", { params: { who: { description: "who is greeted" } } }), ...localRecipe("acme", "acme-own.yaml", "acme-own", ["rule/greet"]) },
+      );
+      const file = path.join(s.ws, ".claude/rules/greet.md");
+      expect(await fs.readFile(file, "utf8")).toBe("Hello Acme.\n");
+      await fs.writeFile(file, `Hello Acme.${eol}`);
+      const r = importInto(s);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toContain("local to profile acme: rule/greet (profiles/acme/ingredients/rules/greet) — reused there");
+      expect(r.stdout).toContain("rendered rule/greet — who");
+    });
+  }
+
+  it("L4 (E42.5): a local the parent profile holds, reused, reaches the summary's rendered line too", async () => {
+    const s = await setup(
+      {
+        ingredients: [rule("style", "# Style\n")],
+        recipes: [recipe("base", ["rule/style"])],
+        profiles: [profile("org", ["base", "org-own"], ["claude-code"], { abstract: true }), profile("acme", ["base", "org-own"], ["claude-code"], { extends: "org", params: { who: "Acme" } })],
+      },
+      { ...localRule("org", "greet", "Hello {{who}}.\n", { params: { who: { description: "who is greeted" } } }), ...localRecipe("org", "org-own.yaml", "org-own", ["rule/greet"]) },
+      13,
+    );
+    expect(await fs.readFile(path.join(s.ws, ".claude/rules/greet.md"), "utf8")).toBe("Hello Acme.\n");
+    const r = importInto(s);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("local to profile acme: rule/greet (profiles/org/ingredients/rules/greet) — reused there");
+    expect(r.stdout).toContain("rendered rule/greet — who");
   });
 });
