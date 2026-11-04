@@ -133,6 +133,38 @@ describe("import and a rule's description", () => {
     const r = importInto(s);
     expect(r.code, r.stderr).toBe(0);
     expect(counts(r.stdout)).toBe("  0 created, 1 reused, 0 variants, 0 rejected");
-    expect(await exists(path.join(s.forge, "recipes/base--acme.yaml"))).toBe(false);
+    expect(await exists(path.join(s.forge, "ingredients/rules/readme--acme"))).toBe(false);
+  });
+
+  const describedLocal = (p: string) => ({
+    [`profiles/${p}/ingredients/rules/readme/ingredient.yaml`]: YAML.stringify({ type: "rule", name: "readme", description: "How {{team}} reads" }),
+    [`profiles/${p}/ingredients/rules/readme/rule.md`]: "# Readme\n",
+    [`profiles/${p}/recipes/${p}-own.yaml`]: YAML.stringify({ name: `${p}-own`, ingredients: ["rule/readme"], params: { team: { default: "core" } } }),
+  });
+
+  it("D9: the literal comparison of the profile's own local leaves the description out too", async () => {
+    const s = await setup(
+      { ingredients: [rule("style", "# Style\n")], recipes: [recipe("base", ["rule/style"])], profiles: [profile("acme", ["base", "acme-own"])] },
+      9,
+      describedLocal("acme"),
+    );
+    const r = importInto(s);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("local to profile acme: rule/readme (profiles/acme/ingredients/rules/readme) — reused there");
+  });
+
+  it("D10: the literal comparison of a parent profile's local leaves the description out too", async () => {
+    const s = await setup(
+      {
+        ingredients: [rule("style", "# Style\n")],
+        recipes: [recipe("base", ["rule/style"])],
+        profiles: [profile("org", ["base", "org-own"], ["claude-code"], { abstract: true }), profile("acme", ["base", "org-own"], ["claude-code"], { extends: "org" })],
+      },
+      13,
+      describedLocal("org"),
+    );
+    const r = importInto(s);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("local to profile acme: rule/readme (profiles/org/ingredients/rules/readme) — reused there");
   });
 });
