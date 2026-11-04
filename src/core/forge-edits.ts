@@ -96,6 +96,11 @@ export function ingredientText(raw: string, label: string, meta: Ingredient, nam
   return text;
 }
 
+/** The mode a file moved or copied from `abs` takes (tech-debt L2a, E10.3): its own, read once the reader has vouched for it. */
+export async function sourceMode(abs: string): Promise<number> {
+  return (await fs.stat(abs)).mode & 0o7777;
+}
+
 /** One file a Forge edit writes; `created` when nothing is there today. */
 export interface ForgeWrite {
   abs: string;

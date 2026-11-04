@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { forgeReader, readForgeFile, readForgeText } from "./contain.js";
 import { ProfileWrittenSchema, RecipeWrittenSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { fingerprintDir } from "./fingerprint.js";
-import { ingredientText, occupied, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
+import { ingredientText, occupied, sourceMode, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
 import { assertNoDirLinkIn, assertNoLinkOnPath, copyForgeForProof, exists, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
 import { effectiveProfile } from "./integrations.js";
 import { familyOf } from "./profile-extends.js";
@@ -129,7 +129,8 @@ export async function planBasePromotion(forge: Forge, ref: string, who: string |
     for (const rel of await listFiles(from.dir)) {
       if (rel === "ingredient.yaml") continue;
       const abs = path.join(toDir, rel);
-      out.push({ abs, content: await readForgeFile(from.forgeRoot, path.join(from.dir, rel)), created: !(await exists(abs)) });
+      const src = path.join(from.dir, rel);
+      out.push({ abs, content: await readForgeFile(from.forgeRoot, src), created: !(await exists(abs)), mode: await sourceMode(src) });
     }
     const abs = path.join(toDir, "ingredient.yaml");
     return [...out.sort(byPath), { abs, content: yaml, created: !(await exists(abs)) }];

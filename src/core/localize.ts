@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { FORGE_SCHEMA_LOCAL_OVERRIDE, FORGE_SCHEMA_PROFILE_LOCAL, RecipeWrittenSchema, WorkspaceConfigSchema, type IngredientRef } from "../schema/index.js";
 import { readForgeFile, readForgeText } from "./contain.js";
 import { assertNoLinkIn, assertNoLinkOnPath, copyForgeForProof, listFiles, loadForge, parseYaml, typeFolder, type Forge, type LoadedIngredient } from "./forge.js";
-import { ingredientText, occupied, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
+import { ingredientText, occupied, sourceMode, recipeFiles, resolveAll, swapEntry, unreadable, writeEdits, type ForgeWrite } from "./forge-edits.js";
 import { impactOf, planAll, type ForgeWorkspace, type Planned } from "./impact.js";
 import { recipesOrWritten } from "./integrations.js";
 import { holdsIngredient, isLocalMessage, localOwners, readsLocalOverride, readsProfileLocal } from "./profile-local.js";
@@ -62,12 +62,13 @@ function knownProfile(forge: Forge, profile: string, command: MoveCommand): void
   if (!forge.profiles.has(profile)) throw new Error(`${command}: profile ${profile} does not exist in this Forge`);
 }
 
-/** The ingredient's files as writes under `toDir`, copied as bytes, with `ingredient.yaml` replaced by `meta` when given. */
+/** The ingredient's files as writes under `toDir`, copied as bytes with their mode (E10.3), with `ingredient.yaml` replaced by `meta` when given. */
 async function copyFiles(ing: LoadedIngredient, toDir: string, meta: string | null): Promise<ForgeWrite[]> {
   const out: ForgeWrite[] = [];
   for (const rel of await listFiles(ing.dir)) {
-    const content = rel === "ingredient.yaml" && meta !== null ? meta : await readForgeFile(ing.forgeRoot, path.join(ing.dir, rel));
-    out.push({ abs: path.join(toDir, rel), content, created: true });
+    const src = path.join(ing.dir, rel);
+    const content = rel === "ingredient.yaml" && meta !== null ? meta : await readForgeFile(ing.forgeRoot, src);
+    out.push({ abs: path.join(toDir, rel), content, created: true, mode: await sourceMode(src) });
   }
   return out;
 }
