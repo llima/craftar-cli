@@ -876,7 +876,7 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
   const walked = await walk(root, async (rels) => {
     const out = new Set(rels.filter((f) => skipDirs.some((d) => d !== "" && (fold(f) === fold(d) || fold(f).startsWith(`${fold(d)}/`)))));
     if (!inRepo) return out;
-    const answer = await ignoredPaths(root, rels.filter((r) => !out.has(r)));
+    const answer = await ignoredPaths(root, rels.filter((r) => !out.has(r)), { knownRepo: true });
     if (answer.unchecked) unchecked = true;
     for (const i of answer.ignored) out.add(i.path);
     return out;

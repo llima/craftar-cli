@@ -4029,7 +4029,7 @@ async function settingsApplyCommand(o: {
     }
 
     // Check if ignored (G1: use ignoredPaths which fails open)
-    const ignoredResult = await ignoredPaths(ws.root, [".claude/settings.json"]);
+    const ignoredResult = await ignoredPaths(ws.root, [".claude/settings.json"], { knownRepo: true });
     gitWarning = ignoreWarning(ignoredResult);
   }
 

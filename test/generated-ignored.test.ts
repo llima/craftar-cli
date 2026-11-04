@@ -167,8 +167,26 @@ describe("ignoredPaths", () => {
     const dir = await tmpDir();
     cleanups.push(() => removeWithRetry(dir));
     expect(await ignoredPaths(dir, ["x"])).toEqual({ ignored: [], unchecked: false });
-    // In a repository, so that git not being found is what answers.
-    expect(await ignoredPaths(await repo(), ["x"], { PATH: "" })).toEqual({ ignored: [], unchecked: false });
+    // In a repository, so that git not being found is what answers (gitIsRepo skipped, since it would not find git either).
+    const r = await repo();
+    const saved = { PATH: process.env.PATH, Path: process.env.Path };
+    process.env.PATH = "";
+    if (process.platform === "win32") process.env.Path = "";
+    try {
+      expect(await ignoredPaths(r, ["x"], { knownRepo: true })).toEqual({ ignored: [], unchecked: false });
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+  it("with knownRepo, asks git without asking first whether the directory is a repository (E36.3)", async () => {
+    // Off a repository check-ignore exits 128, so an unasked gitIsRepo shows as unchecked rather than as empty.
+    const dir = await tmpDir();
+    cleanups.push(() => removeWithRetry(dir));
+    expect(await ignoredPaths(dir, ["x"])).toEqual({ ignored: [], unchecked: false });
+    expect(await ignoredPaths(dir, ["x"], { knownRepo: true })).toEqual({ ignored: [], unchecked: true });
   });
   it.skipIf(process.platform === "win32")("keeps the paths before a symbolic link and says unchecked", async () => {
     const dir = await repo();

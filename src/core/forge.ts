@@ -506,9 +506,10 @@ export interface IgnoredPath {
  * write, this one only informs. `-v` lists a negated rule too and exits 0 for it, so a path is ignored when its pattern is
  * not empty and does not start with `!`; the exit code decides nothing. A tracked file is never listed.
  */
-export async function ignoredPaths(root: string, paths: string[], env?: NodeJS.ProcessEnv): Promise<{ ignored: IgnoredPath[]; unchecked: boolean }> {
-  // First: a directory that is no repository and a path beyond a symbolic link both exit 128.
-  if (!(await gitIsRepo(root))) return { ignored: [], unchecked: false };
+export async function ignoredPaths(root: string, paths: string[], opts: { knownRepo?: boolean } = {}): Promise<{ ignored: IgnoredPath[]; unchecked: boolean }> {
+  // First: a directory that is no repository and a path beyond a symbolic link both exit 128. A caller that has just
+  // asked `gitIsRepo` itself passes `knownRepo` (E36.3, E36.4) — `docs validate` asks once per walk, not per level.
+  if (!opts.knownRepo && !(await gitIsRepo(root))) return { ignored: [], unchecked: false };
   // Git refuses `/x` and answers for the spelling it is given: one query per normalized path, each named as the caller spells it.
   const spelled = new Map<string, string[]>();
   for (const p of paths) {
@@ -519,7 +520,6 @@ export async function ignoredPaths(root: string, paths: string[], env?: NodeJS.P
   try {
     run = await streamProgram("git", [...gitRead(root), "check-ignore", "--stdin", "-z", "-v", "-n"], {
       input: [...spelled.keys()].map((q) => `${q}\0`).join(""),
-      env,
     });
   } catch (e) {
     if ((e as { code?: unknown }).code === "ENOENT") return { ignored: [], unchecked: false };
@@ -535,7 +535,7 @@ export async function ignoredPaths(root: string, paths: string[], env?: NodeJS.P
   let commonDir: string | null = null;
   if (records.some((r) => path.isAbsolute(r.source) || /^[A-Za-z]:[\\/]/.test(r.source))) {
     try {
-      const { stdout } = await execProgram("git", [...gitRead(root), "rev-parse", "--path-format=absolute", "--git-common-dir"], env ? { env } : {});
+      const { stdout } = await execProgram("git", [...gitRead(root), "rev-parse", "--path-format=absolute", "--git-common-dir"]);
       commonDir = stdout.trim() || null;
     } catch {
       commonDir = null;

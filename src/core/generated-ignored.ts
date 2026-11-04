@@ -37,7 +37,7 @@ export async function generatedIgnored(ws: Workspace, p: Plan): Promise<Generate
   if (ws.origin.fromLocalFile) return { ...nothing, inRepo: true, silenced: true };
   const generated = [...p.files.map((f) => f.path), LOCK_FILE];
   const allowed = new Set(ws.config.mayBeIgnored ?? []);
-  const { ignored, unchecked } = await ignoredPaths(ws.root, generated.filter((f) => !allowed.has(f)));
+  const { ignored, unchecked } = await ignoredPaths(ws.root, generated.filter((f) => !allowed.has(f)), { knownRepo: true });
   return {
     lines: ignored.map((i) => ignoredLine(i.path, i.rule)),
     stale: (ws.config.mayBeIgnored ?? []).flatMap((f, i) => (generated.includes(f) ? [] : [shownEntry(f, i)])),
