@@ -192,12 +192,50 @@ describe("Windows runner sampler", () => {
 });
 
 // Values under 30 s are deliberate hang guards and are allowed; the floor is deliberate.
-// A named constant, an exponent literal, arithmetic (60 * 1000), vi.setConfig, and a call closed mid-line (}, 60_000); }); is not scanned.
+// A named constant, an exponent literal, arithmetic (60 * 1000), vi.setConfig, a call closed mid-line (}, 60_000); });,
+// and a regex literal containing a quote or // can confuse the comment stripper — none of these are scanned.
+
+/** Strip comments outside strings: one linear pass with states code / single / double / template / line / block. */
+function stripComments(text: string): string {
+  const out: string[] = [];
+  type State = "code" | "single" | "double" | "template" | "line" | "block";
+  let state: State = "code";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (state === "code") {
+      if (ch === "'" ) { out.push(ch); state = "single"; }
+      else if (ch === '"') { out.push(ch); state = "double"; }
+      else if (ch === "`") { out.push(ch); state = "template"; }
+      else if (ch === "/" && next === "/") { state = "line"; i++; }
+      else if (ch === "/" && next === "*") { state = "block"; i++; }
+      else { out.push(ch); }
+    } else if (state === "single") {
+      out.push(ch);
+      if (ch === "\\") { out.push(text[++i] ?? ""); }
+      else if (ch === "'") { state = "code"; }
+    } else if (state === "double") {
+      out.push(ch);
+      if (ch === "\\") { out.push(text[++i] ?? ""); }
+      else if (ch === '"') { state = "code"; }
+    } else if (state === "template") {
+      out.push(ch);
+      if (ch === "\\") { out.push(text[++i] ?? ""); }
+      else if (ch === "`") { state = "code"; }
+    } else if (state === "line") {
+      if (ch === "\n") { out.push(ch); state = "code"; }
+    } else if (state === "block") {
+      if (ch === "*" && next === "/") { out.push(" "); state = "code"; i++; }
+    }
+  }
+  return out.join("");
+}
+
 function shortLimits(text: string): number[] {
   const out: number[] = [];
 
-  // Strip comments once before scanning (preserve https:// by requiring // not preceded by :)
-  text = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/[^\n]*/g, "");
+  // Strip comments outside strings before scanning
+  text = stripComments(text);
 
   // Pattern 1: For each `timeout:` occurrence, extract the value up to `,` or `}` at paren depth 0.
   // For `process.platform === "win32" ? A : B` or `'win32'` ternaries, only read A (the win32 branch).
@@ -285,6 +323,12 @@ describe("per-test limits", () => {
       [`{ ${T}: 60_000`, [60000]],
       // Single quotes in platform ternary
       [`{ ${T}: process.platform === 'win32' ? 60_000 : 30_000 }`, [60000]],
+      // Strings containing comment-like patterns (must not be stripped)
+      ['it("a", () => rule({ paths: ["src/**/x", "docs/*.md"] }), 60_000);\n/** next helper */', [60000]],
+      ['it("a", () => load("file:///tmp/f"), 60_000);', [60000]],
+      ['it("a", () => norm("//x"), 60_000);', [60000]],
+      ["it(\"a\", () => s.split('/*'), 60_000);", [60000]],
+      ['it("a", () => `a//b${x}`, 60_000);', [60000]],
     ];
     for (const [input, expected] of cases) {
       expect(shortLimits(input), `input: ${JSON.stringify(input)}`).toEqual(expected);
