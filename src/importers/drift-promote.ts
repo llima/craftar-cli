@@ -68,6 +68,7 @@ import {
 import { decide, workspaceParams, workspaceSections, type RunContext } from "./decide.js";
 import { providedRefs } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
+import { RULE_MARKER_LINE, ruleMarker } from "../emitters/agents-md.js";
 import { readsTargetSections } from "../core/sections.js";
 import { profileSectionFile } from "../core/section-files.js";
 import { paramsFor, recipeOrder, sectionKey } from "../core/resolve.js";
@@ -319,7 +320,7 @@ async function provePromote(opts: {
     const agentsMd = p0.files.find((f) => f.ingredient === ("rule/*" as IngredientRef) || f.path === "AGENTS.md");
     if (agentsMd) {
       const p0AgentsContent = agentsMd.content.toString("utf8");
-      const markerLine = `<!-- rule: ${N} -->`;
+      const markerLine = ruleMarker(N);
       if (p0AgentsContent.includes(markerLine)) {
         // This rule is embedded in AGENTS.md — it's a dependent path with bound
         dependentPaths.add(agentsMd.path);
@@ -1518,10 +1519,10 @@ export function agentsBound(p0Text: string, p1Text: string, N: string): boolean 
   const p0 = toLf(p0Text);
   const p1 = toLf(p1Text);
   
-  const markerRe = /^<!-- rule: (.+) -->$/;
+  const markerRe = RULE_MARKER_LINE;
 
   // If p0 has no marker for N, p1 must be byte-equal
-  const markerLine = `<!-- rule: ${N} -->`;
+  const markerLine = ruleMarker(N);
   if (!p0.includes(markerLine)) {
     return p0 === p1;
   }
