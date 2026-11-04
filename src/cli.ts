@@ -249,7 +249,7 @@ program
     if (refusalBlock(unset)) process.exitCode = 1;
     if (overrideBlock(p)) process.exitCode = 1;
     if (escapeBlock(st)) process.exitCode = 1;
-    if (budgetRefusalBlock(p)) process.exitCode = 1;
+    if (checkRefusalBlock(p)) process.exitCode = 1;
   });
 
 /**
@@ -275,10 +275,10 @@ function escapeBlock(st: FileStatus[], opts: { thenSync?: boolean } = {}): boole
 }
 
 /**
- * The AGENTS.md budget refusal for a command that goes on to print or exit by itself: the block on stderr,
- * without exiting. Says whether there was one.
+ * The AGENTS.md budget refusal and the Kiro resources refusal for a command that goes on to print
+ * or exit by itself: the block on stderr, without exiting. Says whether there was one.
  */
-function budgetRefusalBlock(p: Plan): boolean {
+function checkRefusalBlock(p: Plan): boolean {
   const over = agentsMdOverBudget(p);
   if (over) errorLine(agentsMdRefusal(over));
   const kiroUnplanned = kiroResourcesUnplanned(p);
@@ -861,7 +861,7 @@ program
       // A refused sync is not "in sync", whatever the files say: the listing, then the block, and the exit is
       // exitCode's, so nothing queued is cut (spec 29 §4.1)
       // Both blocks are printed; either one, or a file out of sync, fails the check.
-      const refused = [refusalBlock(unset), overrideBlock(p), escapeBlock(st), budgetRefusalBlock(p)].some(Boolean);
+      const refused = [refusalBlock(unset), overrideBlock(p), escapeBlock(st), checkRefusalBlock(p)].some(Boolean);
       if (refused || bad.length) process.exitCode = 1;
       else console.log(pc.green("\nworkspace in sync"));
       return;
@@ -914,7 +914,7 @@ program
     if (overrideBlock(p) && o.exitCode && !only) process.exitCode = 1;
     if (escapeBlock(st) && o.exitCode && !only) process.exitCode = 1;
     // The AGENTS.md budget, as the refusal above: always printed, failing only --exit-code with no [path]
-    if (budgetRefusalBlock(p) && o.exitCode && !only) process.exitCode = 1;
+    if (checkRefusalBlock(p) && o.exitCode && !only) process.exitCode = 1;
   });
 
 const DIFF_PAINT = { paint: { same: pc.dim, del: pc.red, add: pc.green } };
@@ -959,7 +959,7 @@ async function checkGitSource(o: { workspace: string; check: boolean; committed?
     const bad = st.filter((s) => !["unchanged", "adopt"].includes(s.state));
     printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, true, forgeLine(ws, lock));
     if (bad.length) console.log(pc.red(`\n${bad.length} file(s) out of sync`));
-    const refused = [refusalBlock(unsetDeclared(p)), overrideBlock(p), budgetRefusalBlock(p)].some(Boolean);
+    const refused = [refusalBlock(unsetDeclared(p)), overrideBlock(p), checkRefusalBlock(p)].some(Boolean);
     if (refused || bad.length) process.exitCode = 1;
     else console.log(pc.green(`\n${named} in sync`));
   } finally {
