@@ -477,6 +477,18 @@ export function upRefusal(r: Recorded, names: string[]): string[] {
   return r.pending.map(pendingLine);
 }
 
+/**
+ * Why `services up` will not run on an unrecorded `.craftar/.env` (tech-debt E15.1, decision 17); null when it may.
+ * With no `.env` at the workspace root `up` passes no `--env-file`, and Compose reads `.env` in the directory of the first
+ * `-f` file — `.craftar/`, which the lock does not record there. Any kind of entry counts (`lstat`); its content is never read.
+ */
+export async function strayEnvRefusal(root: string): Promise<string | null> {
+  const present = (p: string) => fs.lstat(p).then(() => true, (e: NodeJS.ErrnoException) => (e.code === "ENOENT" ? false : Promise.reject(e)));
+  if (await present(path.join(root, ".env"))) return null;
+  if (!(await present(path.join(root, ".craftar", ".env")))) return null;
+  return ".craftar/.env exists and the workspace has no .env — Compose would read it, and craftar.lock does not record it; move it to .env at the workspace root, or remove it";
+}
+
 /** `docker compose` arguments, as an array for `execFile` / `spawn` — never a shell line. */
 export function composeArgv(
   kind: "up" | "ps",
@@ -536,7 +548,8 @@ export interface DockerInfo {
   belowFloor: boolean;
   reason: "no docker" | "no compose plugin" | "too old" | null;
 }
-export type DockerRunner = (file: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
+/** `opts.cwd` is the child's working directory — the workspace for a Compose call (tech-debt E15.2); absent, craftar's own. */
+export type DockerRunner = (file: string, args: string[], opts?: { cwd?: string }) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 /** Numeric, segment by segment: 2.9.0 is older than 2.20.0. */
 export function compareVersions(a: string, b: string): number {
@@ -583,9 +596,9 @@ export function dockerFault(d: DockerInfo, needFloor: boolean): string | null {
  * The program is found as git and dotnet are (`execProgram`): in the absolute entries of PATH, a
  * `node_modules/.bin` of the directory craftar runs in or above it aside — never by the platform's own lookup.
  */
-export const dockerRunner: DockerRunner = async (file, args) => {
+export const dockerRunner: DockerRunner = async (file, args, opts = {}) => {
   try {
-    const { stdout, stderr } = await execProgram(file, args, { maxBuffer: 16 * 1024 * 1024 });
+    const { stdout, stderr } = await execProgram(file, args, { maxBuffer: 16 * 1024 * 1024, ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}) });
     return { code: 0, stdout, stderr };
   } catch (e) {
     const error = e as { code?: unknown; stdout?: unknown; stderr?: unknown };
