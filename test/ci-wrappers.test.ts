@@ -523,12 +523,41 @@ describe.skipIf(process.platform === "win32")("the steps as bash runs them (spec
     expect(r.stdout).toContain("a.md");
   });
 
+  /** The install step with a PATH of one directory: `mkdir` (linked to the real one) and an `npm` that leaves a marker. */
+  const runInstall = (vendor: Vendor, body: string, version: string): { r: ReturnType<typeof spawnSync>; npmRan: boolean } => {
+    const which = (name: string): string => {
+      const found = spawnSync("bash", ["-c", `command -v ${name}`], { encoding: "utf8" }).stdout.trim();
+      expect(path.isAbsolute(found), `${name} not found`).toBe(true);
+      return found;
+    };
+    const bash = which("bash");
+    const base = newBase();
+    const bin = path.join(base, "bin");
+    const temp = path.join(base, "temp");
+    mkdirSync(bin);
+    mkdirSync(temp);
+    symlinkSync(which("mkdir"), path.join(bin, "mkdir"));
+    const marker = path.join(base, "npm-ran");
+    writeFileSync(path.join(bin, "npm"), `#!${bash}\nprintf ran > ${JSON.stringify(marker)}\n`, { mode: 0o755 });
+    const vendorEnv = vendor === "azure" ? { TF_BUILD: "True", AGENT_TEMPDIRECTORY: temp } : { RUNNER_TEMP: temp };
+    const r = spawnSync(bash, ["-e", "-c", body], { cwd: base, encoding: "utf8", env: { ...cleanEnv(), ...vendorEnv, PATH: bin, CRAFTAR_CI_VERSION: version } });
+    return { r, npmRan: existsSync(marker) };
+  };
+
   it.each(VENDORS)("under %s a version that is not exact stops before npm", (vendor) => {
     for (const bad of ["latest", "^1.0.0", "1.0", "1.0.0-beta", "1.0.0; touch x", ""]) {
-      const r = spawnSync("bash", ["-e", "-c", bodyOf(steps(vendor)[0], vendor === "azure")], { encoding: "utf8", env: { ...cleanEnv(), PATH: "/nonexistent:/usr/bin:/bin", CRAFTAR_CI_VERSION: bad } });
+      const { r, npmRan } = runInstall(vendor, bodyOf(steps(vendor)[0], vendor === "azure"), bad);
       expect(r.status).toBe(1);
       expect(r.stdout).toContain("craftar: version must be exact, x.y.z");
+      expect(npmRan).toBe(false);
     }
+  });
+
+  it.each(VENDORS)("under %s the stub PATH catches a version check removed (E37.15)", (vendor) => {
+    const [check, ...rest] = bodyOf(steps(vendor)[0], vendor === "azure").split("\n");
+    expect(check).toContain("version must be exact");
+    expect(runInstall(vendor, rest.join("\n"), "latest").npmRan).toBe(true);
+    expect(runInstall(vendor, bodyOf(steps(vendor)[0], vendor === "azure"), "1.2.3").npmRan).toBe(true);
   });
 });
 
