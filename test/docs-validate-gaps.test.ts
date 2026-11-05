@@ -432,6 +432,48 @@ describe("spec 58 §5.5 — cited paths in .claude/ (cited)", () => {
     await run(s.wsRoot);
     expect(Date.now() - t0).toBeLessThan(20_000);
   });
+
+  it("link text is not read — HTML <a> content, reference, collapsed and shortcut links", async () => {
+    // Correction 3: link text should not be read for cited paths
+    // This covers:
+    // - HTML <a> element content: <a href="x">docs/anchor-content.md</a>
+    // - Reference links: [docs/reftext.md][ref] with [ref]: url at paragraph start
+    // - Collapsed reference links: [docs/collapsed.md][] with definition at paragraph start
+    // - Shortcut reference links: [docs/shortcut.md] with definition at paragraph start
+    // All of these should NOT produce cited path findings
+    //
+    // In CommonMark, reference definitions must be at the START of a paragraph.
+    // So we structure each as: [definition]\n[link usage]\n
+    const body = [
+      '# Title',
+      '',
+      // HTML anchor content — should not be read
+      '<a href="other.md">docs/anchor-content.md</a>',
+      '',
+      // Reference link with definition at start — [text][ref]
+      '[myref]: other.md',
+      '[docs/reftext.md][myref]',
+      '',
+      // Collapsed reference link — [text][] with definition at start
+      '[docs/collapsed.md]: other.md',
+      '[docs/collapsed.md][]',
+      '',
+      // Shortcut reference link — [text] where text matches a ref at start
+      '[docs/shortcut.md]: other.md',
+      '[docs/shortcut.md]',
+      '',
+      // Prose path that SHOULD be read (control case)
+      'docs/prose-nope.md',
+      '',
+    ].join('\n');
+    const s = await ws({ '.claude/rules/a.md': body, 'docs/real.md': 'x\n' }, BLOCK);
+    const r = await run(s.wsRoot);
+    const cited = findings(r, 'cited').map(brief);
+    // Only docs/prose-nope.md should be found, none of the link texts
+    expect(cited).toEqual([
+      'error cited .claude/rules/a.md:14:1 cited path does not exist',
+    ]);
+  });
 });
 
 describe("spec 58 §6 — the cited id's place", () => {

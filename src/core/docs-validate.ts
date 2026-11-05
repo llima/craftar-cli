@@ -385,17 +385,43 @@ function scanParagraph(
   };
 
   const brackets: number[] = [];
+  // Collect reference definitions for shortcut/collapsed link detection
+  const refLabels = new Set<string>();
+  let refScanStart = 0;
+  for (const line of s.split("\n")) {
+    const m = /^ {0,3}\[([^\]\n]{1,999})\]:[ \t]*(<[^>\n]*>|\S+)(.*)$/.exec(line);
+    if (!m || m[1].startsWith("^") || /^[ xX]$/.test(m[1]) || !TITLE_OR_EMPTY(m[3])) break;
+    refLabels.add(m[1].toLowerCase());
+    refScanStart += line.length + 1;
+  }
+
   for (let i = 0; i < s.length; i++) {
     if (esc[i]) continue;
     if (s[i] === "[") brackets.push(i);
     else if (s[i] === "]" && brackets.length) {
       const opened = brackets.pop()!;
       if (s[i + 1] === "(" && !esc[i + 1]) {
+        // Inline link: [text](url)
         const found = inline(i + 1);
         if (found) {
           scan.links.push(found.link);
           linkRanges?.push([opened, found.end + 1]);
           i = found.end;
+        }
+      } else if (s[i + 1] === "[" && !esc[i + 1]) {
+        // Reference or collapsed link: [text][ref] or [text][]
+        let j = i + 2;
+        while (j < s.length && s[j] !== "]" && s[j] !== "\n" && !esc[j]) j++;
+        if (j < s.length && s[j] === "]") {
+          // [text][ref] or [text][] — exclude the entire range from [ to ]
+          linkRanges?.push([opened, j + 1]);
+          i = j;
+        }
+      } else {
+        // Potential shortcut link: [text] where text is a defined reference label
+        const label = s.slice(opened + 1, i).toLowerCase();
+        if (refLabels.has(label)) {
+          linkRanges?.push([opened, i + 1]);
         }
       }
     }
@@ -415,10 +441,20 @@ function scanParagraph(
   }
 
   // HTML: <a href>, <img src> and <a id> / <a name> with a quoted value; an unquoted one is left unseen (§6.3).
+  // For <a> elements, extend the range to include content up to </a>.
   for (const m of s.matchAll(/<(a|img)\b([^<>]*)>/gi)) {
-    linkRanges?.push([m.index!, m.index! + m[0].length]);
     const element = m[1].toLowerCase();
-    const attrsAt = m.index! + 1 + m[1].length;
+    const tagStart = m.index!;
+    let rangeEnd = tagStart + m[0].length;
+    // For <a> elements, find the closing </a> and extend the range
+    if (element === "a") {
+      const closeMatch = s.slice(tagStart).match(/<\/a>/i);
+      if (closeMatch && closeMatch.index !== undefined) {
+        rangeEnd = tagStart + closeMatch.index + closeMatch[0].length;
+      }
+    }
+    linkRanges?.push([tagStart, rangeEnd]);
+    const attrsAt = tagStart + 1 + m[1].length;
     for (const a of m[2].matchAll(/(?:^|\s)(href|src|id|name)[ \t\n]*=[ \t\n]*(?:"([^"]*)"|'([^']*)')/gi)) {
       const attr = a[1].toLowerCase();
       const value = a[2] ?? a[3];
