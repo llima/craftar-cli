@@ -473,10 +473,14 @@ function scanParagraph(
           i = j;
         }
       } else {
-        // Potential shortcut link: [text] where text is a defined reference label
-        const label = s.slice(opened + 1, i).toLowerCase();
-        if (refLabels.has(label)) {
-          linkRanges?.push([opened, i + 1]);
+        // Potential shortcut link: [text] where text is a defined reference label.
+        // Only slice when: linkRanges tracked, file has ref defs, and label would fit (≤999 chars).
+        const len = i - opened - 1;
+        if (linkRanges && refLabels.size > 0 && len <= 999) {
+          const label = s.slice(opened + 1, i).toLowerCase();
+          if (refLabels.has(label)) {
+            linkRanges.push([opened, i + 1]);
+          }
         }
       }
     }

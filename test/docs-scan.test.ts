@@ -491,3 +491,18 @@ describe("R2-B3 — blankCode matches origin/main exactly", () => {
     expect(result.length).toBe(input.length);
   });
 });
+
+describe("R2-B1 — shortcut link branch stays linear", () => {
+  it("handles 200K nested brackets in linear time", () => {
+    // 200K opening brackets followed by 200K closing brackets - should not be O(n²)
+    const input = "[".repeat(200_000) + "]".repeat(200_000);
+    const start = performance.now();
+    // scanMarkdown calls scanParagraph which has the bracket loop
+    const result = scanMarkdown(input);
+    const elapsed = performance.now() - start;
+    // Should complete in under 500ms even for 400K chars; quadratic would take many seconds
+    expect(elapsed).toBeLessThan(500);
+    // No links found (no valid markdown links in this input)
+    expect(result.links).toEqual([]);
+  });
+});
