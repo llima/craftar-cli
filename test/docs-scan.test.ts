@@ -467,3 +467,27 @@ describe("spec 47 §4.5 — a line that is only a closing tag", () => {
     expect(s.tags[0].name).toBe(expectedName);
   });
 });
+
+describe("R2-B3 — blankCode matches origin/main exactly", () => {
+  // Expected values computed from origin/main's blankCode (commit before f9d5ecf).
+  // The sequential pass order matters: <!-- then <code then <pre, each over the prior's output.
+  it.each([
+    ["a <!-- <code>x</code> --> b [l](y.md)", "a                         b [l](y.md)"],
+    ["<code> <pre> </code> [q](w.md)", "                     [q](w.md)"],
+    ["a <code><!-- x</code> --> [l](z.md)", "a                                  "],
+    ["<!-- --> <code>y</code>", "                       "],
+    ["<pre> <!-- </pre> --> x", "                       "],
+    ["<code>a<!-- b</code>-->c", "                        "],
+    ["<!-- <pre>x</pre> --> [l](a.md)", "                      [l](a.md)"],
+    ["<pre><code></pre></code>", "                        "],
+    ["a<CODE>X</CODE>b", "a              b"],
+    ["<!-- unclosed", "             "],
+    ["<code> unclosed", "               "],
+    ["<pre> <!-- <code>x</code> --> </pre>", "                                    "],
+    ["<code><pre></code></pre>", "                  </pre>"],
+  ])("blankCode(%j) === %j", (input, expected) => {
+    const result = blankCode(input);
+    expect(result).toBe(expected);
+    expect(result.length).toBe(input.length);
+  });
+});

@@ -314,27 +314,42 @@ class Slugger {
  * pointer into its runs, so a paragraph of unmatched runs is read once — linear time (§6.2).
  */
 export function blankCode(s: string): string {
-  const codeRanges = codeSpanRanges(s);
+  const ranges = codeSpanRanges(s);
   const blank = (from: number, to: number, out: string[]) => out.push(s.slice(from, to).replace(/[^\n]/g, " "));
   const parts: string[] = [];
   let at = 0;
-  for (const r of codeRanges) {
+  for (const r of ranges) {
     parts.push(s.slice(at, r.start));
     blank(r.start, r.end, parts);
     at = r.end;
   }
   parts.push(s.slice(at));
   let out = parts.join("");
-
-  // HTML comments, <code>, and <pre> elements: blank each entirely.
-  const htmlRanges = htmlElementRanges(out);
-  if (htmlRanges.length > 0) {
+  // Inline HTML comments and <code> elements, each by indexOf from where the last one ended: linear.
+  for (const [open, close] of [
+    ["<!--", "-->"],
+    ["<code", "</code>"],
+    ["<pre", "</pre>"],
+  ] as const) {
     const pieces: string[] = [];
     let from = 0;
-    for (const r of htmlRanges) {
-      pieces.push(out.slice(from, r.start));
-      blank(r.start, r.end, pieces);
-      from = r.end;
+    const element = open !== "<!--";
+    // ASCII letters only: a full toLowerCase can lengthen the text (İ is two characters in lower case) and shift positions.
+    const lower = element ? out.replace(/[A-Z]/g, (c) => c.toLowerCase()) : out;
+    let search = 0;
+    for (;;) {
+      const a = lower.indexOf(open, search);
+      if (a === -1) break;
+      // `<code` / `<pre` names the element only when a space, `>` or the end follows (`<codex>` is another element).
+      if (element && a + open.length < out.length && !/[\s>]/.test(out[a + open.length])) {
+        search = a + 1;
+        continue;
+      }
+      const b = lower.indexOf(close, a + open.length);
+      const end = b === -1 ? out.length : b + close.length;
+      pieces.push(out.slice(from, a));
+      blank(a, end, pieces);
+      from = search = end;
     }
     pieces.push(out.slice(from));
     out = pieces.join("");
