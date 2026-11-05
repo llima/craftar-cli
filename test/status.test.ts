@@ -165,7 +165,7 @@ describe("status — MCP servers written as the Forge holds them (spec 07)", () 
   it("update on both MCP files: written in schema order by 0.2.4 from a server the Forge stores type first (AC 18)", async () => {
     const s = await mcpScenario({ command: "npx", args: ["srv"], type: "stdio" }, undefined, ["claude-code", "kiro"]);
     await sync(s.wsRoot);
-    expect(await fs.readFile(path.join(s.wsRoot, KIRO_MCP), "utf8")).toBe(crlf(json({ command: "npx", args: ["srv"], type: "stdio" })));
+    expect(await fs.readFile(path.join(s.wsRoot, KIRO_MCP), "utf8")).toBe(json({ command: "npx", args: ["srv"], type: "stdio" }));
     await setServer(s.forgeRoot, { type: "stdio", command: "npx", args: ["srv"] });
     expect(await stateOf(s.wsRoot, MCP)).toBe("update");
     expect(await stateOf(s.wsRoot, KIRO_MCP)).toBe("update");

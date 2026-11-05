@@ -236,9 +236,10 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
     expect(observed.planned).toHaveProperty(".craftar/services/echo/compose.yaml");
     expect(observed.planned).toHaveProperty(".craftar/compose.yaml");
 
-    // 2. The kiro steering file has CRLF (kiro outputs CRLF)
+    // 2. The kiro steering file is LF for a new file (since kiro keeps the EOL of the file it replaces, LF when new)
     const styleKiroFile = observed.planned[".kiro/steering/style.md"];
-    expect(styleKiroFile).toContain("\r\n");
+    expect(styleKiroFile.length).toBeGreaterThan(0);
+    expect(styleKiroFile).not.toContain("\r");
 
     // 3. There is at least one section default — the "intro" section has the default "Default intro text."
     const styleClaudeFile = observed.planned[".claude/rules/style.md"];
