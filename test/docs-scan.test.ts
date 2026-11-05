@@ -606,3 +606,33 @@ describe("R4-S1 — links equal origin/main's around reference brackets", () => 
     expect(citedOf("[docs/x.md][]")).toEqual(["docs/x.md"]);
   });
 });
+
+
+describe("R5-S1 — cited masks a reference bracket exactly when the main loop saw its definition", () => {
+  it("label whitespace is normalised on both sides", () => {
+    expect(citedOf("[docs/g.md  x][]\n\n[docs/g.md  x]: q\n")).toEqual([]);
+    expect(citedOf("[docs/h.md   y]\n\n[docs/h.md y]: q\n")).toEqual([]);
+  });
+  it("a definition inside a blockquote counts", () => {
+    expect(citedOf("> [docs/e.md]: q\n\n[docs/e.md]\n")).toEqual([]);
+  });
+  it("a definition inside <pre> or a comment does not count", () => {
+    expect(citedOf("<pre>\n[docs/p.md]: q\n</pre>\n\n[docs/p.md]\n")).toEqual(["docs/p.md"]);
+    expect(citedOf("<!--\n[docs/c.md]: q\n-->\n\n[docs/c.md]\n")).toEqual(["docs/c.md"]);
+  });
+  it("cited agrees with links on every case: the last line's shortcut is masked iff links saw the definition", () => {
+    for (const input of [
+      "intro\n[docs/a.md]: q\n\n[docs/a.md]\n",
+      "- x\n\n      ~~~\n      [docs/l.md]: q\n      ~~~\n\n[docs/l.md]\n",
+      "> [docs/e.md]: q\n\n[docs/e.md]\n",
+      "<pre>\n[docs/p.md]: q\n</pre>\n\n[docs/p.md]\n",
+    ]) {
+      const defined = dests(input).includes("q");
+      const lastLine = input.trimEnd().split("\n").pop()!;
+      const lastLineNo = input.trimEnd().split("\n").length;
+      const hits = scanMarkdown(input, { citedRoots: ["docs"] }).cited.filter((c) => c.line === lastLineNo);
+      expect([input, hits.length]).toEqual([input, defined ? 0 : 1]);
+      expect(lastLine.startsWith("[docs/")).toBe(true);
+    }
+  });
+});
