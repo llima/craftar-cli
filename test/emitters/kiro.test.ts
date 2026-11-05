@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import path from "node:path";
 import { loadWorkspace, plan, type Plan } from "../../src/core/sync.js";
 import { hasBom } from "../../src/core/text.js";
 import { profile, recipe, rule, scenario, writeFiles, type IngredientSpec } from "../helpers/forge.js";
@@ -622,5 +623,308 @@ describe("kiro emitter — references inside link text (spec 20)", () => {
     const p = await planFor([rule("hub", "# hub\n\n1 [see .claude/rules/zz.md](.claude/rules/cc.md)\n"), rule("cc", "# cc\n", { targets: ["claude-code"] })], {}, ["claude-code", "kiro"]);
     expect(numbered(p)).toEqual(["1 [see .kiro/steering/zz.md](.claude/rules/cc.md)"]);
     expect(kw(p)).toEqual(["kiro: 1 reference(s) to names that are no rule or steering of this workspace — rewritten to .kiro/steering/ as before: .claude/rules/zz.md (in rule/hub)"]);
+  });
+});
+
+
+/**
+ * Spec 57: Kiro keeps the EOL of the file it replaces — LF when new, existing file's EOL when updating.
+ * Tests T1–T6 cover the new textFile(ctx, ..., { keepBom: false }) behaviour.
+ */
+describe("spec 57: kiro keeps the EOL of the file it replaces", () => {
+  const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+
+  // T1: empty workspace — new files are LF without BOM
+  describe("T1: empty workspace writes LF without BOM", () => {
+    it("steering file (.kiro/steering/a.md) is LF without BOM", async () => {
+      const p = await planFor([rule("a", "# A\n")]);
+      const f = file(p, ".kiro/steering/a.md")!;
+      const text = f.content.toString("utf8");
+      // LF only, no CRLF
+      expect(text).toBe("---\ninclusion: always\n---\n\n<!-- GENERATED from .claude/rules/a.md by craftar -- do not edit. -->\n\n# A\n");
+      expect(text).not.toContain("\r");
+      // No BOM
+      expect(hasBom(f.content)).toBe(false);
+      expect(f.content[0]).not.toBe(0xef);
+    });
+
+    it("agent JSON (.kiro/agents/x.json) is LF without BOM", async () => {
+      const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews." }, files: { "agent.md": "\n# Rev\n" } }]);
+      const f = file(p, ".kiro/agents/rev.json")!;
+      const text = f.content.toString("utf8");
+      expect(text).not.toContain("\r");
+      expect(hasBom(f.content)).toBe(false);
+    });
+
+    it("command mirror (.kiro/steering/commands/c.md) is LF without BOM", async () => {
+      const p = await planFor([{ meta: { type: "command", name: "c", description: "A command" }, files: { "command.md": "# Cmd\n" } }]);
+      const f = file(p, ".kiro/steering/commands/c.md")!;
+      const text = f.content.toString("utf8");
+      expect(text).not.toContain("\r");
+      expect(hasBom(f.content)).toBe(false);
+    });
+
+    it("file skill (.kiro/skills/s/SKILL.md) is LF without BOM", async () => {
+      const p = await planFor([{ meta: { type: "skill", name: "s", layout: "file" }, files: { "SKILL.md": "# Skill\n" } }]);
+      const f = file(p, ".kiro/skills/s/SKILL.md")!;
+      const text = f.content.toString("utf8");
+      expect(text).not.toContain("\r");
+      expect(hasBom(f.content)).toBe(false);
+    });
+
+    it("directory skill text file (.kiro/skills/d/notes.md) is LF without BOM", async () => {
+      const p = await planFor([{ meta: { type: "skill", name: "d" }, files: { "SKILL.md": "# Skill\n", "notes.md": "# Notes\n" } }]);
+      const f = file(p, ".kiro/skills/d/notes.md")!;
+      const text = f.content.toString("utf8");
+      expect(text).not.toContain("\r");
+      expect(hasBom(f.content)).toBe(false);
+    });
+
+    it("mcp.json (.kiro/settings/mcp.json) is LF without BOM", async () => {
+      const p = await planFor([{ meta: { type: "mcp", name: "srv", server: { command: "npx", args: ["srv"] } } }]);
+      const f = file(p, ".kiro/settings/mcp.json")!;
+      const text = f.content.toString("utf8");
+      expect(text).not.toContain("\r");
+      expect(hasBom(f.content)).toBe(false);
+    });
+  });
+
+  // T2: EOL detection — keeps the existing file's EOL
+  describe("T2: keeps existing file's EOL", () => {
+    it("CRLF file on disk → planned bytes are CRLF", async () => {
+      const s = await scenario(
+        { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+        { config: { profile: "acme" }, files: { ".kiro/steering/a.md": "---\r\ninclusion: always\r\n---\r\n\r\nold\r\n" } },
+      );
+      cleanups.push(s.cleanup);
+      const p = await plan(await loadWorkspace(s.wsRoot));
+      const f = file(p, ".kiro/steering/a.md")!;
+      const text = f.content.toString("utf8");
+      // Should be CRLF
+      expect(text).toContain("\r\n");
+      // No lone LF
+      expect(text).not.toMatch(/(?<!\r)\n/);
+    });
+
+    it("LF file on disk → planned bytes are LF", async () => {
+      const s = await scenario(
+        { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+        { config: { profile: "acme" }, files: { ".kiro/steering/a.md": "---\ninclusion: always\n---\n\nold\n" } },
+      );
+      cleanups.push(s.cleanup);
+      const p = await plan(await loadWorkspace(s.wsRoot));
+      const f = file(p, ".kiro/steering/a.md")!;
+      const text = f.content.toString("utf8");
+      // Should be LF only
+      expect(text).not.toContain("\r");
+    });
+
+    it("3 CRLF + 1 LF → CRLF (majority wins)", async () => {
+      const mixed = "a\r\nb\r\nc\r\nd\n"; // 3 CRLF, 1 LF
+      const s = await scenario(
+        { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+        { config: { profile: "acme" }, files: { ".kiro/steering/a.md": mixed } },
+      );
+      cleanups.push(s.cleanup);
+      const p = await plan(await loadWorkspace(s.wsRoot));
+      const f = file(p, ".kiro/steering/a.md")!;
+      const text = f.content.toString("utf8");
+      // CRLF majority → output is CRLF
+      expect(text).not.toMatch(/(?<!\r)\n/);
+    });
+
+    it("1 CRLF + 3 LF → LF (majority wins)", async () => {
+      const mixed = "a\r\nb\nc\nd\n"; // 1 CRLF, 3 LF
+      const s = await scenario(
+        { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+        { config: { profile: "acme" }, files: { ".kiro/steering/a.md": mixed } },
+      );
+      cleanups.push(s.cleanup);
+      const p = await plan(await loadWorkspace(s.wsRoot));
+      const f = file(p, ".kiro/steering/a.md")!;
+      const text = f.content.toString("utf8");
+      // LF majority → output is LF
+      expect(text).not.toContain("\r");
+    });
+
+    it("empty existing file → LF", async () => {
+      const s = await scenario(
+        { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+        { config: { profile: "acme" }, files: { ".kiro/steering/a.md": "" } },
+      );
+      cleanups.push(s.cleanup);
+      const p = await plan(await loadWorkspace(s.wsRoot));
+      const f = file(p, ".kiro/steering/a.md")!;
+      const text = f.content.toString("utf8");
+      // Empty file → default to LF
+      expect(text).not.toContain("\r");
+    });
+
+    it("CRLF agent JSON on disk → planned bytes are CRLF", async () => {
+      const s = await scenario(
+        { ingredients: [{ meta: { type: "agent", name: "rev", description: "Reviews." }, files: { "agent.md": "\n# Rev\n" } }], recipes: [recipe("base", ["agent/rev"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+        { config: { profile: "acme" }, files: { ".kiro/agents/rev.json": '{\r\n  "name": "old"\r\n}\r\n' } },
+      );
+      cleanups.push(s.cleanup);
+      const p = await plan(await loadWorkspace(s.wsRoot));
+      const f = file(p, ".kiro/agents/rev.json")!;
+      const text = f.content.toString("utf8");
+      expect(text).not.toMatch(/(?<!\r)\n/);
+    });
+
+    it("CRLF mcp.json on disk → planned bytes are CRLF", async () => {
+      const s = await scenario(
+        { ingredients: [{ meta: { type: "mcp", name: "srv", server: { command: "npx", args: ["srv"] } } }], recipes: [recipe("base", ["mcp/srv"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+        { config: { profile: "acme" }, files: { ".kiro/settings/mcp.json": '{\r\n  "old": true\r\n}\r\n' } },
+      );
+      cleanups.push(s.cleanup);
+      const p = await plan(await loadWorkspace(s.wsRoot));
+      const f = file(p, ".kiro/settings/mcp.json")!;
+      const text = f.content.toString("utf8");
+      expect(text).not.toMatch(/(?<!\r)\n/);
+    });
+  });
+
+  // T3: BOM is stripped from output even when existing file has BOM
+  describe("T3: BOM is stripped from output", () => {
+    it("steering file with BOM+CRLF → CRLF without BOM", async () => {
+      const withBom = Buffer.concat([UTF8_BOM, Buffer.from("---\r\ninclusion: always\r\n---\r\n\r\nold\r\n")]);
+      const s = await scenario(
+        { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+        { config: { profile: "acme" }, files: { ".kiro/steering/a.md": withBom } },
+      );
+      cleanups.push(s.cleanup);
+      const p = await plan(await loadWorkspace(s.wsRoot));
+      const f = file(p, ".kiro/steering/a.md")!;
+      // CRLF is kept
+      expect(f.content.toString("utf8")).not.toMatch(/(?<!\r)\n/);
+      // BOM is NOT in output
+      expect(hasBom(f.content)).toBe(false);
+      expect(f.content[0]).not.toBe(0xef);
+    });
+
+    it("agent JSON with BOM+CRLF → CRLF without BOM", async () => {
+      const withBom = Buffer.concat([UTF8_BOM, Buffer.from('{\r\n  "name": "old"\r\n}\r\n')]);
+      const s = await scenario(
+        { ingredients: [{ meta: { type: "agent", name: "rev", description: "Reviews." }, files: { "agent.md": "\n# Rev\n" } }], recipes: [recipe("base", ["agent/rev"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+        { config: { profile: "acme" }, files: { ".kiro/agents/rev.json": withBom } },
+      );
+      cleanups.push(s.cleanup);
+      const p = await plan(await loadWorkspace(s.wsRoot));
+      const f = file(p, ".kiro/agents/rev.json")!;
+      expect(f.content.toString("utf8")).not.toMatch(/(?<!\r)\n/);
+      expect(hasBom(f.content)).toBe(false);
+    });
+  });
+
+  // T4/T5: sync-level test — editing one rule only writes that rule, EOL preserved
+  describe("T4/T5: sync-level — EOL preserved across updates", () => {
+    it("CRLF workspace: editing one rule writes only that rule; all files stay CRLF", async () => {
+      const s = await scenario(
+        {
+          ingredients: [rule("a", "# A\n"), rule("b", "# B\n")],
+          recipes: [recipe("base", ["rule/a", "rule/b"])],
+          profiles: [profile("acme", ["base"], ["kiro"])],
+        },
+        { config: { profile: "acme" } },
+      );
+      cleanups.push(s.cleanup);
+
+      // First, write CRLF files to disk before the first sync (simulating .gitattributes Windows checkout)
+      const { promises: fsPromises } = await import("node:fs");
+      await fsPromises.mkdir(path.join(s.wsRoot, ".kiro/steering"), { recursive: true });
+      await fsPromises.writeFile(path.join(s.wsRoot, ".kiro/steering/a.md"), "---\r\ninclusion: always\r\n---\r\n\r\n<!-- GENERATED from .claude/rules/a.md by craftar -- do not edit. -->\r\n\r\n# A\r\n");
+      await fsPromises.writeFile(path.join(s.wsRoot, ".kiro/steering/b.md"), "---\r\ninclusion: always\r\n---\r\n\r\n<!-- GENERATED from .claude/rules/b.md by craftar -- do not edit. -->\r\n\r\n# B\r\n");
+
+      // Load, plan, get status before first sync to make the lock adopt them
+      const { apply, readLock, status } = await import("../../src/core/sync.js");
+      const ws1 = await loadWorkspace(s.wsRoot);
+      const p1 = await plan(ws1);
+      const st1 = await status(ws1, p1, null);
+      await apply(ws1, p1, st1);
+
+      // Read lock hashes for files before edit
+      const lock1 = await readLock(s.wsRoot);
+      const hashA1 = lock1?.files[".kiro/steering/a.md"]?.hash;
+      const hashB1 = lock1?.files[".kiro/steering/b.md"]?.hash;
+      const bytesB1 = await fsPromises.readFile(path.join(s.wsRoot, ".kiro/steering/b.md"));
+
+      // Now edit rule A in the Forge
+      await fsPromises.writeFile(path.join(s.forgeRoot, "ingredients/rules/a/rule.md"), "# A edited\n");
+
+      // Plan and apply again
+      const ws2 = await loadWorkspace(s.wsRoot);
+      const p2 = await plan(ws2);
+      const lock2 = await readLock(s.wsRoot);
+      const st2 = await status(ws2, p2, lock2);
+      await apply(ws2, p2, st2);
+
+      // Only rule A should be updated
+      const updatedPaths = st2.filter((e) => e.state === "update").map((e) => e.path);
+      expect(updatedPaths).toContain(".kiro/steering/a.md");
+      expect(updatedPaths).not.toContain(".kiro/steering/b.md");
+
+      // Rule A is still CRLF
+      const bytesA2 = await fsPromises.readFile(path.join(s.wsRoot, ".kiro/steering/a.md"));
+      expect(bytesA2.toString("utf8")).not.toMatch(/(?<!\r)\n/);
+      expect(bytesA2.toString("utf8")).toContain("# A edited");
+
+      // Rule B is byte-identical
+      const bytesB2 = await fsPromises.readFile(path.join(s.wsRoot, ".kiro/steering/b.md"));
+      expect(bytesB2.equals(bytesB1)).toBe(true);
+
+      // Lock hash for B is unchanged
+      const lock3 = await readLock(s.wsRoot);
+      expect(lock3?.files[".kiro/steering/b.md"]?.hash).toBe(hashB1);
+    });
+  });
+
+  // T6: import --prefer-kiro over LF vs CRLF steering gives the same rule text
+  describe("T6: import --prefer-kiro normalizes EOL", () => {
+    it("LF and CRLF steering files produce the same rule text", async () => {
+      const { importClaudeCode } = await import("../../src/importers/claude-code.js");
+      const { tmpDir, writeFiles: wf } = await import("../helpers/forge.js");
+      const { promises: fsPromises } = await import("node:fs");
+
+      const banner = "<!-- GENERATED from .claude/rules/workflow.md by craftar -- do not edit. -->";
+      const body = "# Workflow\n\nSee .kiro/steering/style.md.\n";
+      const steeringLF = `---\ninclusion: always\n---\n\n${banner}\n\n${body}`;
+      const steeringCRLF = steeringLF.replace(/\n/g, "\r\n");
+
+      // Setup LF workspace
+      const rootLF = await tmpDir("craftar-t6-lf-");
+      cleanups.push(() => fsPromises.rm(rootLF, { recursive: true, force: true }));
+      const wsLF = path.join(rootLF, "ws");
+      const forgeLF = path.join(rootLF, "forge");
+      await wf(wsLF, {
+        ".claude/rules/workflow.md": "# Workflow\n\nSee .claude/rules/style.md.\n",
+        ".claude/rules/style.md": "# Style\n",
+        ".kiro/steering/workflow.md": steeringLF,
+        ".kiro/steering/style.md": steeringLF.replace("workflow", "style").replace("# Workflow\n\nSee .kiro/steering/style.md.\n", "# Style\n"),
+      });
+      const rLF = await importClaudeCode({ workspaceRoot: wsLF, forgeRoot: forgeLF, profileName: "acme", preferKiro: ["workflow"] });
+
+      // Setup CRLF workspace
+      const rootCRLF = await tmpDir("craftar-t6-crlf-");
+      cleanups.push(() => fsPromises.rm(rootCRLF, { recursive: true, force: true }));
+      const wsCRLF = path.join(rootCRLF, "ws");
+      const forgeCRLF = path.join(rootCRLF, "forge");
+      await wf(wsCRLF, {
+        ".claude/rules/workflow.md": "# Workflow\n\nSee .claude/rules/style.md.\n",
+        ".claude/rules/style.md": "# Style\n",
+        ".kiro/steering/workflow.md": steeringCRLF,
+        ".kiro/steering/style.md": steeringCRLF.replace("workflow", "style").replace("# Workflow\r\n\r\nSee .kiro/steering/style.md.\r\n", "# Style\r\n"),
+      });
+      const rCRLF = await importClaudeCode({ workspaceRoot: wsCRLF, forgeRoot: forgeCRLF, profileName: "acme", preferKiro: ["workflow"] });
+
+      // Both should succeed
+      expect(rLF.rejected).toEqual([]);
+      expect(rCRLF.rejected).toEqual([]);
+
+      // The rule text should be identical
+      const ruleLF = await fsPromises.readFile(path.join(forgeLF, "ingredients/rules/workflow/rule.md"), "utf8");
+      const ruleCRLF = await fsPromises.readFile(path.join(forgeCRLF, "ingredients/rules/workflow/rule.md"), "utf8");
+      expect(ruleLF).toBe(ruleCRLF);
+    });
   });
 });
