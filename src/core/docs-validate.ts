@@ -607,9 +607,22 @@ export function scanMarkdown(input: string, opts: { citedRoots?: string[] } = {}
   }
 
   // R2-S5: Gather file's link reference definitions once, before processing paragraphs.
+  // Skip lines inside fenced code blocks (``` and ~~~ fences).
   const fileRefLabels = new Set<string>();
+  let defFence: { char: string; len: number } | null = null;
   for (let i = first; i < all.length; i++) {
     const line = all[i];
+    // Check fence open/close
+    if (defFence) {
+      const close = new RegExp(`^ {0,3}${defFence.char === "`" ? "`" : "~"}{${defFence.len},}[ \\t]*$`);
+      if (close.test(line)) defFence = null;
+      continue;
+    }
+    const fenceOpen = /^ {0,3}(`{3,}|~{3,})([^`]*)$/.exec(line);
+    if (fenceOpen && !(fenceOpen[1][0] === "`" && fenceOpen[2].includes("`"))) {
+      defFence = { char: fenceOpen[1][0], len: fenceOpen[1].length };
+      continue;
+    }
     const m = /^ {0,3}\[([^\]\n]{1,999})\]:[ \t]*(<[^>\n]*>|\S+)(.*)$/.exec(line);
     if (m && !m[1].startsWith("^") && !/^[ xX]$/.test(m[1]) && TITLE_OR_EMPTY(m[3])) {
       fileRefLabels.add(m[1].toLowerCase());
