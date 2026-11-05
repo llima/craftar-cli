@@ -1538,15 +1538,42 @@ function collectCitedPaths(
     masked = parts.join("");
   }
   // For <code>, the tags are not read but content is; for <!-- and <pre>, the whole range is not read.
-  for (const r of htmlElementRanges(masked)) {
-    if (r.contentStart !== undefined && r.contentEnd !== undefined) {
-      // <code>: cut the tags, keep content readable
-      cut(r.start, r.contentStart);
-      cut(r.contentEnd, r.end);
-    } else {
-      // <!-- or <pre>: cut the whole range
-      cut(r.start, r.end);
+  // Process in the same order blankCode does: comments, then <code>, then <pre>, each over the previous pass.
+  for (const [open, close, keepContent] of [
+    ["<!--", "-->", false],
+    ["<code", "</code>", true],
+    ["<pre", "</pre>", false],
+  ] as const) {
+    const isElement = open !== "<!--";
+    const lower = isElement ? masked.replace(/[A-Z]/g, (c) => c.toLowerCase()) : masked;
+    const blankParts: string[] = [];
+    let from = 0;
+    let search = 0;
+    for (;;) {
+      const a = lower.indexOf(open, search);
+      if (a === -1) break;
+      if (isElement && a + open.length < masked.length && !/[\s>]/.test(masked[a + open.length])) {
+        search = a + 1;
+        continue;
+      }
+      const b = lower.indexOf(close, a + open.length);
+      const end = b === -1 ? masked.length : b + close.length;
+      if (keepContent) {
+        // <code>: cut tags, keep content
+        const gt = lower.indexOf(">", a + open.length);
+        const contentStart = gt === -1 || gt >= (b === -1 ? n : b) ? (b === -1 ? n : b) : gt + 1;
+        const contentEnd = b === -1 ? n : b;
+        cut(a, contentStart);
+        cut(contentEnd, end);
+      } else {
+        cut(a, end);
+      }
+      // Blank this range in masked for the next pass
+      blankParts.push(masked.slice(from, a), " ".repeat(end - a));
+      from = search = end;
     }
+    blankParts.push(masked.slice(from));
+    masked = blankParts.join("");
   }
   // A link's text and destination, a reference definition and an <a> / <img> tag are not read.
   // Sort by start and use a watermark to cut nested ranges once each (linear).
