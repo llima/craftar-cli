@@ -474,8 +474,8 @@ function scanParagraph(
           const ref = s.slice(i + 2, j).toLowerCase();
           if (ref === "" || refLabels.has(ref)) {
             linkRanges?.push([opened, j + 1]);
+            i = j;
           }
-          i = j;
         }
       } else {
         // Potential shortcut link: [text] where text is a defined reference label.

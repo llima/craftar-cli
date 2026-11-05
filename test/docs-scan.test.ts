@@ -526,3 +526,54 @@ describe("R2-B2 — <a> close matching stays linear", () => {
     expect(result.links.map((l) => l.dest)).toEqual(["a.md", "b.md"]);
   });
 });
+
+const citedOf = (t: string) => scanMarkdown(t, { citedRoots: ["docs"] }).cited.map((x) => x.token);
+
+describe("R3-B1 — the cited mask stays linear over nested link ranges", () => {
+  const forms: Array<[string, (k: number) => string]> = [
+    ["[t][]", (k) => "[".repeat(k) + "a" + "][]".repeat(k)],
+    ["[t](u)", (k) => "[".repeat(k) + "a" + "](u)".repeat(k)],
+  ];
+  for (const [name, mk] of forms) {
+    it(`${name} nested 300K deep, cited on, one definition`, () => {
+      const input = mk(300_000) + "\n\n[x]: y\n";
+      const start = performance.now();
+      scanMarkdown(input, { citedRoots: ["docs"] });
+      expect(performance.now() - start).toBeLessThan(500);
+    });
+  }
+  it("the R2-B1 nested brackets with cited on and a definition", () => {
+    const input = "[".repeat(200_000) + "]".repeat(200_000) + "\n\n[x]: y\n";
+    const start = performance.now();
+    scanMarkdown(input, { citedRoots: ["docs"] });
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+});
+
+describe("R3-S1 — [t][r](x) keeps origin/main's inline link", () => {
+  it("the inline link after a reference bracket is still found", () => {
+    expect(dests("[t][r](missing.md)")).toEqual(["missing.md"]);
+    expect(dests("see [a][b](x.md) and [c](y.md)")).toEqual(["x.md", "y.md"]);
+  });
+});
+
+describe("R3-S2 — the cited mask follows blankCode's pass order", () => {
+  it("comment, then <code>, then <pre>, each over the previous pass's output", () => {
+    expect(citedOf("<!-- <pre> --> docs/a.md")).toEqual(["docs/a.md"]);
+    expect(citedOf("<code><pre></code> docs/c.md")).toEqual(["docs/c.md"]);
+    expect(citedOf("<pre> x <!-- </pre> --> docs/b.md </pre>")).toEqual([]);
+    expect(citedOf("<pre> <code></pre></code> docs/d.md </pre>")).toEqual([]);
+  });
+});
+
+describe("R3-S3 — trailing punctuation is taken off each run", () => {
+  it("a run ending in . inside a quoted word is read", () => {
+    expect(citedOf("\u201Cdocs/e.md.\u201D and docs/f.md.\u2019 end")).toEqual(["docs/e.md", "docs/f.md"]);
+  });
+});
+
+describe("R3-N — a definition inside a fence is not a definition", () => {
+  it("[z]: q in a fence does not make a prose [docs/z.md] a link", () => {
+    expect(citedOf("```\n[docs/z.md]: q\n```\n\n[docs/z.md]\n")).toEqual(["docs/z.md"]);
+  });
+});
