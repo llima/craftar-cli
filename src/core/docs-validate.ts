@@ -1377,69 +1377,69 @@ async function declaredChecks(
   if (block.related !== "off") {
     /** A file's `related:` entries resolved from its base directory; null when it has none to read. */
     const relatedOf = async (f: FileState, report: boolean): Promise<Map<string, number> | null> => {
-    if (!f.scan?.frontmatter) return null;
-    const fm = strictFrontmatter(f);
-    if (fm === null) return null;
-    if ("fault" in fm) {
-      if (report) yamlFinding(f, "related");
-      return null;
-    }
-    const data = fm.data;
-    if (data === null || typeof data !== "object" || Array.isArray(data) || !Object.hasOwn(data, "related")) return null;
-    const list = (data as Record<string, unknown>).related;
-    if (!Array.isArray(list) || list.some((x) => typeof x !== "string")) {
-      if (report) add({ id: "related", level: "error", path: f.rel, message: "related: is not a list of strings", fix: "write related: as a list of paths" });
-      return null;
-    }
-    const out = new Map<string, number>();
-    // Spec 58 §5.3: resolve from "." when relatedBase is "workspace", from dirname otherwise
-    const fromDir = block.relatedBase === "workspace" ? "." : path.posix.dirname(f.rel);
-    for (const [j, entry] of (list as string[]).entries()) {
-      const fail = (message: string, fix: string, level: DocsLevel = "error") => report && add({ id: "related", level, path: f.rel, message: `related[${j}]: ${message}`, fix });
-      const fault = entryFault(entry);
-      if (fault === "nul") {
-        fail("empty, or holds a NUL character", "remove the entry or name a file");
-        continue;
+      if (!f.scan?.frontmatter) return null;
+      const fm = strictFrontmatter(f);
+      if (fm === null) return null;
+      if ("fault" in fm) {
+        if (report) yamlFinding(f, "related");
+        return null;
       }
-      if (fault === "windows") {
-        fail("an absolute Windows path", block.relatedBase === "workspace" ? "use a path relative to the workspace root" : "use a path relative to the file");
-        continue;
+      const data = fm.data;
+      if (data === null || typeof data !== "object" || Array.isArray(data) || !Object.hasOwn(data, "related")) return null;
+      const list = (data as Record<string, unknown>).related;
+      if (!Array.isArray(list) || list.some((x) => typeof x !== "string")) {
+        if (report) add({ id: "related", level: "error", path: f.rel, message: "related: is not a list of strings", fix: "write related: as a list of paths" });
+        return null;
       }
-      if (fault === "scheme") {
-        fail("has a scheme: related: names files of the workspace", "name a file of the workspace");
-        continue;
+      const out = new Map<string, number>();
+      // Spec 58 §5.3: resolve from "." when relatedBase is "workspace", from dirname otherwise
+      const fromDir = block.relatedBase === "workspace" ? "." : path.posix.dirname(f.rel);
+      for (const [j, entry] of (list as string[]).entries()) {
+        const fail = (message: string, fix: string, level: DocsLevel = "error") => report && add({ id: "related", level, path: f.rel, message: `related[${j}]: ${message}`, fix });
+        const fault = entryFault(entry);
+        if (fault === "nul") {
+          fail("empty, or holds a NUL character", "remove the entry or name a file");
+          continue;
+        }
+        if (fault === "windows") {
+          fail("an absolute Windows path", block.relatedBase === "workspace" ? "use a path relative to the workspace root" : "use a path relative to the file");
+          continue;
+        }
+        if (fault === "scheme") {
+          fail("has a scheme: related: names files of the workspace", "name a file of the workspace");
+          continue;
+        }
+        if (fault === "backslash") {
+          fail("holds a backslash", "use / as the separator");
+          continue;
+        }
+        const r = await resolver.resolve(fromDir, entry);
+        if (r.kind !== "ok") {
+          const [level, message, fix] = RESOLVE_FINDING[r.kind];
+          fail(message.replace(/^target/, "the entry"), fix.replace(/^correct the link/, "correct the entry").replace(/^link to/, "name"), level);
+          continue;
+        }
+        if (!out.has(r.rel)) out.set(r.rel, j);
       }
-      if (fault === "backslash") {
-        fail("holds a backslash", "use / as the separator");
-        continue;
-      }
-      const r = await resolver.resolve(fromDir, entry);
-      if (r.kind !== "ok") {
-        const [level, message, fix] = RESOLVE_FINDING[r.kind];
-        fail(message.replace(/^target/, "the entry"), fix.replace(/^correct the link/, "correct the entry").replace(/^link to/, "name"), level);
-        continue;
-      }
-      if (!out.has(r.rel)) out.set(r.rel, j);
-    }
-    return out;
-  };
+      return out;
+    };
 
-  const cache = new Map<string, Map<string, number> | null>();
-  for (const f of state.values()) {
-    if (!f.rel.startsWith("docs/")) continue;
-    const mine = await relatedOf(f, true);
-    cache.set(f.rel, mine);
-    if (mine === null || block.related !== "symmetric") continue;
-    for (const [target, j] of mine) {
-      const t = state.get(target);
-      // Only a scanned Markdown file under docs/ can list anything back (§5.3).
-      if (!t?.scan || !target.startsWith("docs/") || target === f.rel) continue;
-      if (!cache.has(target)) cache.set(target, await relatedOf(t, false));
-      if (!cache.get(target)?.has(f.rel))
-        add({ id: "related", level: "error", path: f.rel, message: `related[${j}]: the target does not list this file back`, fix: "add this file to the target's related:" });
+    const cache = new Map<string, Map<string, number> | null>();
+    for (const f of state.values()) {
+      if (!f.rel.startsWith("docs/")) continue;
+      const mine = await relatedOf(f, true);
+      cache.set(f.rel, mine);
+      if (mine === null || block.related !== "symmetric") continue;
+      for (const [target, j] of mine) {
+        const t = state.get(target);
+        // Only a scanned Markdown file under docs/ can list anything back (§5.3).
+        if (!t?.scan || !target.startsWith("docs/") || target === f.rel) continue;
+        if (!cache.has(target)) cache.set(target, await relatedOf(t, false));
+        if (!cache.get(target)?.has(f.rel))
+          add({ id: "related", level: "error", path: f.rel, message: `related[${j}]: the target does not list this file back`, fix: "add this file to the target's related:" });
+      }
     }
   }
-  } // end if (block.related !== "off")
 
   // Spec 58 §5.5: cited paths check; its counts feed the ok line.
   return block.cited === null ? null : await citedPathsCheck(block.cited, state, resolver, inRepo, root, add);
@@ -1451,6 +1451,8 @@ const CITED_MAX_LENGTH = 4096;
 const CITED_PATH_CHAR = /[A-Za-z0-9._@+/-]/;
 /** What makes a whitespace-delimited word no candidate: a placeholder, a glob or a URL (spec 58 §5.5). */
 const CITED_PLACEHOLDER = /[<>*{}$]|…|\.\.\.|:\/\//;
+/** Spec 58 §5.5: the closed list of file suffixes a cited path may end with. */
+const CITED_SUFFIXES = [".md", ".yaml", ".yml", ".json", ".sh", ".ps1", ".ts", ".js", ".mjs", ".txt", ".toml"];
 
 /**
  * The cited-path candidates of one paragraph (spec 58 §5.5): prose, code-span content and inline `<code>` content are read;
@@ -1546,9 +1548,6 @@ function collectCitedPaths(
     }
   }
 }
-
-/** Spec 58 §5.5: the closed list of file suffixes a cited path may end with. */
-const CITED_SUFFIXES = [".md", ".yaml", ".yml", ".json", ".sh", ".ps1", ".ts", ".js", ".mjs", ".txt", ".toml"];
 
 /** Spec 58 §5.5: check cited paths in .claude/ files. */
 async function citedPathsCheck(
