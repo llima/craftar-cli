@@ -949,7 +949,8 @@ class Resolver {
     }
     return p;
   }
-  async resolve(fromDir: string, target: string): Promise<Resolved> {
+  async resolve(fromDir: string, target: string, opts?: { walkOnCaseMismatch?: boolean }): Promise<Resolved> {
+    const walkOnCase = opts?.walkOnCaseMismatch ?? false;
     const anchored = target.startsWith("/");
     const joined = path.posix.normalize(path.posix.join(anchored ? "." : fromDir || ".", target.replace(/^\/+/, "")));
     if (climbsOut(joined) || joined === ".." || joined.startsWith("../")) return { kind: "leaves" };
@@ -962,6 +963,8 @@ class Resolver {
       if (!entry) {
         const lower = segments[i].toLowerCase();
         if (!this.lower(list).has(lower)) return { kind: "missing" };
+        // R2-S4: Only walk on for cited/path-keys; links/related return { kind: "case" } immediately.
+        if (!walkOnCase) return { kind: "case" };
         // Case mismatch: walk the remaining segments along the case-insensitive match
         // to check if any of them (including this one) is a symbolic link
         const caseFoldedEntry = [...list.entries()].find(([name]) => name.toLowerCase() === lower);
@@ -1381,7 +1384,7 @@ async function declaredChecks(
       }
       // Resolve from base
       const fromDir = pathEntry.base === "workspace" ? "." : path.posix.dirname(f.rel);
-      const r = await resolver.resolve(fromDir, val);
+      const r = await resolver.resolve(fromDir, val, { walkOnCaseMismatch: true });
       if (r.kind === "ok") continue;
       if (r.kind === "link") {
         add({ id: "frontmatter", level: "warn", path: f.rel, message: `frontmatter key ${pathKey}: the path is reached through a symbolic link, not followed`, fix: "name the file itself, not through a link" });
@@ -1610,7 +1613,7 @@ async function citedPathsCheck(
   // Resolve all candidates
   const toCheck: Array<{ path: string; token: string; line: number; column: number; result: Resolved }> = [];
   for (const c of candidates) {
-    const r = await resolver.resolve(".", c.token);
+    const r = await resolver.resolve(".", c.token, { walkOnCaseMismatch: true });
     if (r.kind === "ok") continue; // exists, no finding
     if (r.kind === "link") {
       // Link is a warn, never sent to git
