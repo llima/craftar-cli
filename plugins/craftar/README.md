@@ -46,10 +46,10 @@ If you use asdf or volta, or mise with a project's file trusted, either have a `
 
 ## Before and after you trust a project
 
-Measured on 2026-11-05 on Linux, with Claude Code 2.1.318, `craftar` 0.64.0 and this plugin at 0.1.1 loaded with `--plugin-dir` from a checkout, one new project per check:
+Measured on 2026-11-05 on Linux, with Claude Code 2.1.318, `craftar` 0.64.0 and this plugin at 0.1.1 loaded with `--plugin-dir` from a `git archive` of `main`, one new project per check:
 
 - **Before.** While a project's trust dialog waited two minutes for an answer, Claude Code did not start the server; it started it within a second of the answer.
-- **After.** Once you trust a project, the `env` block of its `.claude/settings.json` reaches the server: a `NODE_OPTIONS` there made the server's `node` load the project's code, and a `PATH` there made Claude Code start the project's own `craftar` in place of yours. That is the same reach a trusted project's hooks already have, so trust a project only when you trust its files.
+- **After.** Once you trust a project, the `env` block of its `.claude/settings.json` reaches the server: a `NODE_OPTIONS` there made the server's `node` load the project's code, and a `PATH` there made Claude Code start the project's own `craftar` in place of yours. A trusted project's hooks can run its code too, so trust a project only when you trust its files.
 - **`claude mcp list`**, typed in a folder you never trusted, started the server, without the project's `env`.
 
 Not measured: whether Claude Code asks before the first tool call in its default permission mode (the session measured ran in auto mode), a plugin installed from the marketplace, macOS and native Windows.

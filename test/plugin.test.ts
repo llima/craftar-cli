@@ -93,7 +93,7 @@ describe("the Claude Code plugin (spec 45)", () => {
     for (const tool of ["asdf", "volta", "mise"]) expect(text).toContain(`**${tool}**`);
     expect(text).toContain("## Before and after you trust a project");
     expect(text).toContain("Claude Code did not start the server");
-    expect(text).toContain("the same reach a trusted project's hooks already have");
+    expect(text).toContain("A trusted project's hooks can run its code too");
     expect(text).toContain("`claude mcp list`");
     expect(text).not.toContain("not measured yet");
     expect(text).toContain("enable the plugin only in projects whose files you trust");
