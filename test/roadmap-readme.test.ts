@@ -28,7 +28,7 @@ describe("README — the roadmap with phases 1 and 2 closed", () => {
     expect(later).toEqual(["Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packaging of `craftar mcp`."]);
   });
 
-  it("the status line opens with the three phases done and gains the 0.49.0, 0.50.0, 0.53.0, 0.55.0 and 0.59.0 sentences", () => {
+  it("the status line opens with the three phases done and gains the 0.49.0, 0.50.0, 0.53.0, 0.55.0 and 0.59.0 sentences, and ends with spec 58's", () => {
     const status = lines[4];
     expect(status.startsWith("> Status: **phases 0, 1 and 2 done** — the foundations, the client profile and the environment. ")).toBe(true);
     expect(status).not.toContain("in progress");
@@ -37,7 +37,8 @@ describe("README — the roadmap with phases 1 and 2 closed", () => {
     expect(status).toContain("In a Forge that declares `schema: 11`, a profile's section value can be held in a file under its folder (`{ file: sections/….md }`), and `craftar forge sections extract` moves the long ones there; `craftar doctor`'s `skill-trigger` says when a skill's description does not say when to use it (see *Forge layout* and *Commands*).");
     expect(status).toContain("In a Forge that declares `schema: 12`, a profile's local may override a root base of the same ref for that profile alone — `craftar forge localize` turns the profile's own variant into one, and `craftar forge promote --variant` makes a variant several profiles share the base.");
     expect(status).toContain("In a Forge that declares `schema: 13`, a profile can extend an abstract one, so a client's profiles share one parent's values, recipes and locals (see *Forge layout*).");
-    // Spec 55 Part A: the status line's last sentence is the list params'.
-    expect(status.endsWith("In a Forge that declares `schema: 14`, a param can be a list, cited through a filter that writes a Python, PowerShell, shell, JSON or YAML literal, or the items joined (see *Forge layout*).")).toBe(true);
+    expect(status).toContain("In a Forge that declares `schema: 14`, a param can be a list, cited through a filter that writes a Python, PowerShell, shell, JSON or YAML literal, or the items joined (see *Forge layout*).");
+    // Spec 58: the status line's last sentence is docs validate's.
+    expect(status.endsWith("`craftar docs validate` also reads, from a profile's `docs:` block, a closed value list per frontmatter key, path keys, `relatedBase` and an opt-in check of the workspace paths cited in `.claude/` (see *Forge layout › Docs block*).")).toBe(true);
   });
 });

@@ -102,6 +102,8 @@ export interface Scan {
   tags: TagHit[];
   /** The frontmatter block's text and the line its first line has in the file; `null` when there is none. */
   frontmatter: { raw: string; firstLine: number } | null;
+  /** Spec 58 §5.5: cited path candidates found in .claude/ files. */
+  cited: Array<{ token: string; line: number; column: number }>;
 }
 
 interface SrcLine {
@@ -310,9 +312,18 @@ function nextWhere(s: string, test: (c: string) => boolean): Int32Array {
 
 const isWs = (c: string) => c === " " || c === "\t" || c === "\n";
 
+/** CommonMark label normalization: trim outer whitespace, collapse internal runs to one space, case-fold. */
+function normalizeLabel(s: string): string {
+  return s.trim().replace(/[\t\n ]+/g, " ").toLowerCase();
+}
+
 /**
  * Every link, anchor and tag of one paragraph. `s` is the paragraph with code blanked; `raw` is the same text unblanked,
  * and `col0` gives, per line, how many characters (a quote, list or heading marker) were cut before that line's text.
+ *
+ * When `definedLabels` is provided, this function adds normalized labels from any definitions found in this paragraph.
+ * When `pendingBrackets` is provided, reference bracket offsets are recorded for later resolution; the caller normalizes
+ * and resolves them after all paragraphs are scanned (so that files with no definitions allocate no label strings).
  */
 function scanParagraph(
   s: string,
@@ -320,6 +331,9 @@ function scanParagraph(
   col0: number[],
   at: (pos: number) => { line: number; column: number },
   scan: Scan,
+  linkRanges?: Array<[number, number]>,
+  definedLabels?: Set<string>,
+  pendingBrackets?: Array<{ from: number; to: number; labelFrom: number; labelTo: number }>,
 ): void {
   const esc = escapes(s);
 
@@ -382,16 +396,58 @@ function scanParagraph(
   };
 
   const brackets: number[] = [];
+  // Track the most recent unescaped bracket position to detect labels containing brackets (invalid per CommonMark).
+  let lastBracketAt = -1;
+
   for (let i = 0; i < s.length; i++) {
     if (esc[i]) continue;
-    if (s[i] === "[") brackets.push(i);
-    else if (s[i] === "]" && brackets.length) {
-      brackets.pop();
+    if (s[i] === "[") {
+      brackets.push(i);
+      lastBracketAt = i;
+    } else if (s[i] === "]") {
+      if (!brackets.length) {
+        // A ] that closes nothing still counts as a bracket for label validity.
+        lastBracketAt = i;
+        continue;
+      }
+      const opened = brackets.pop()!;
+      // A label holding an unescaped bracket is never a reference label (CommonMark), so it is never sliced or normalised.
+      const labelHasBracket = lastBracketAt > opened;
+      lastBracketAt = i;
       if (s[i + 1] === "(" && !esc[i + 1]) {
+        // Inline link: [text](url)
         const found = inline(i + 1);
         if (found) {
           scan.links.push(found.link);
+          linkRanges?.push([opened, found.end + 1]);
           i = found.end;
+        }
+      } else if (s[i + 1] === "[" && !esc[i + 1]) {
+        // Reference link [text][ref] or collapsed link [text][]: record for later resolution.
+        if (pendingBrackets) {
+          let j = i + 2;
+          let refHasBracket = false;
+          while (j < s.length && s[j] !== "]" && s[j] !== "\n" && !esc[j]) {
+            if (s[j] === "[") refHasBracket = true;
+            j++;
+          }
+          if (j < s.length && s[j] === "]") {
+            const refLen = j - (i + 2);
+            if (refLen === 0) {
+              // Collapsed [text][]: the label is the text, at most 999 characters and holding no bracket.
+              if (i - opened - 1 <= 999 && !labelHasBracket) {
+                pendingBrackets.push({ from: opened, to: j + 1, labelFrom: opened + 1, labelTo: i });
+              }
+            } else if (refLen <= 999 && !refHasBracket) {
+              // Full reference [text][ref]: the ref holds no bracket.
+              pendingBrackets.push({ from: opened, to: j + 1, labelFrom: i + 2, labelTo: j });
+            }
+          }
+        }
+      } else {
+        // Potential shortcut link: [text] where text is a defined reference label, at most 999 characters and holding no bracket.
+        if (pendingBrackets && i - opened - 1 <= 999 && !labelHasBracket) {
+          pendingBrackets.push({ from: opened, to: i + 1, labelFrom: opened + 1, labelTo: i });
         }
       }
     }
@@ -400,19 +456,47 @@ function scanParagraph(
   // Reference definitions: the paragraph's leading lines (one cannot interrupt a paragraph), each a destination and at most
   // a title; never a footnote or a task box.
   let lineStart = 0;
-  for (const line of s.split("\n")) {
+  const sLines = s.split("\n");
+  const defRawLines = raw.split("\n");
+  for (let li = 0; li < sLines.length; li++) {
+    const line = sLines[li];
     const m = /^ {0,3}\[([^\]\n]{1,999})\]:[ \t]*(<[^>\n]*>|\S+)(.*)$/.exec(line);
     if (!m || m[1].startsWith("^") || /^[ xX]$/.test(m[1]) || !TITLE_OR_EMPTY(m[3])) break;
     const angle = m[2].startsWith("<");
     const col = line.indexOf(m[2], line.indexOf("]:") + 2) + (angle ? 1 : 0);
     scan.links.push({ dest: angle ? m[2].slice(1, -1) : m[2], markdown: true, ...at(lineStart + col) });
+    linkRanges?.push([lineStart, lineStart + line.length]);
+    // Record the normalized label from the raw text (code spans included) so reference brackets can be resolved correctly.
+    const labelStart = line.indexOf("[") + 1;
+    const rawLabel = defRawLines[li].substr(labelStart, m[1].length);
+    definedLabels?.add(normalizeLabel(rawLabel));
     lineStart += line.length + 1;
   }
 
   // HTML: <a href>, <img src> and <a id> / <a name> with a quoted value; an unquoted one is left unseen (§6.3).
+  // For <a> elements, extend the range to include content up to </a>.
+  // Use a forward cursor for </a> search to stay linear (one indexOf per element, not per character).
+  const lower = s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+  let aCloseCursor = 0;
+  let aCloseExhausted = false; // Once indexOf returns -1, no more </a> exists
   for (const m of s.matchAll(/<(a|img)\b([^<>]*)>/gi)) {
     const element = m[1].toLowerCase();
-    const attrsAt = m.index! + 1 + m[1].length;
+    const tagStart = m.index!;
+    let rangeEnd = tagStart + m[0].length;
+    // For <a> elements, find the closing </a> and extend the range
+    if (element === "a" && !aCloseExhausted) {
+      // Move cursor forward if behind this tag
+      if (aCloseCursor < rangeEnd) aCloseCursor = rangeEnd;
+      const closeIdx = lower.indexOf("</a>", aCloseCursor);
+      if (closeIdx !== -1) {
+        rangeEnd = closeIdx + 4; // 4 = "</a>".length
+        aCloseCursor = rangeEnd;
+      } else {
+        aCloseExhausted = true; // No more </a> in the string
+      }
+    }
+    linkRanges?.push([tagStart, rangeEnd]);
+    const attrsAt = tagStart + 1 + m[1].length;
     for (const a of m[2].matchAll(/(?:^|\s)(href|src|id|name)[ \t\n]*=[ \t\n]*(?:"([^"]*)"|'([^']*)')/gi)) {
       const attr = a[1].toLowerCase();
       const value = a[2] ?? a[3];
@@ -476,10 +560,11 @@ function withoutIndent(line: string, n: number): string {
   return line.slice(i);
 }
 
-/** Scan one Markdown file's text (spec 47 §6.1–§6.3). */
-export function scanMarkdown(input: string): Scan {
+/** Scan one Markdown file's text (spec 47 §6.1–§6.3, spec 58 §5.5 cited). */
+export function scanMarkdown(input: string, opts: { citedRoots?: string[] } = {}): Scan {
   const text = toLf(stripBom(input));
-  const scan: Scan = { links: [], anchors: new Set(), tags: [], frontmatter: null };
+  const scan: Scan = { links: [], anchors: new Set(), tags: [], frontmatter: null, cited: [] };
+  const citedRoots = opts.citedRoots ?? [];
   const slugger = new Slugger(scan.anchors);
   const all = text.split("\n");
   let first = 0;
@@ -489,6 +574,17 @@ export function scanMarkdown(input: string): Scan {
     scan.frontmatter = { raw, firstLine: 2 };
     first = raw.split("\n").length + 2;
   }
+
+  // Defined labels are collected during paragraph processing (from the main loop's own definition detection).
+  // Pending reference brackets are recorded and resolved after all paragraphs are scanned; deferredCited holds each
+  // paragraph's raw text until the end of the file (memory proportional to the file).
+  const definedLabels = new Set<string>();
+  const deferredCited: Array<{
+    joined: string;
+    linkRanges: Array<[number, number]>;
+    pendingBrackets: Array<{ from: number; to: number; labelFrom: number; labelTo: number }>;
+    at: (pos: number) => { line: number; column: number };
+  }> = [];
 
   let paragraph: SrcLine[] = [];
   let fence: { char: string; len: number; strip: number; quoted: boolean } | null = null;
@@ -522,7 +618,12 @@ export function scanMarkdown(input: string): Scan {
     const blanked = blankCode(joined);
     // GitHub slugs a heading from its rendered text, so a code span's content counts there.
     if (heading) slugger.add(joined.replace(/\n/g, " "));
-    scanParagraph(blanked, joined, lines.map((l) => l.col0), at, scan);
+    // Inline links and definitions go to linkRanges immediately; reference brackets are deferred until all definitions known.
+    const linkRanges: Array<[number, number]> | undefined = citedRoots.length > 0 ? [] : undefined;
+    const pendingBrackets: Array<{ from: number; to: number; labelFrom: number; labelTo: number }> | undefined = citedRoots.length > 0 ? [] : undefined;
+    scanParagraph(blanked, joined, lines.map((l) => l.col0), at, scan, linkRanges, definedLabels, pendingBrackets);
+    // Defer cited processing until all paragraphs are scanned (so all definitions are known).
+    if (linkRanges && pendingBrackets) deferredCited.push({ joined, linkRanges, pendingBrackets, at });
   };
 
   for (let i = first; i < all.length; i++) {
@@ -652,6 +753,20 @@ export function scanMarkdown(input: string): Scan {
     afterBlank = false;
   }
   flush();
+
+  // Resolve pending reference brackets now that all definitions are known, then run cited collection.
+  for (const d of deferredCited) {
+    // Add ranges for reference brackets whose label is defined (normalize from raw text only when definitions exist).
+    if (definedLabels.size > 0) {
+      for (const b of d.pendingBrackets) {
+        const label = normalizeLabel(d.joined.slice(b.labelFrom, b.labelTo));
+        if (definedLabels.has(label)) d.linkRanges.push([b.from, b.to]);
+      }
+    }
+    // Spec 58 §5.5: cited path candidates, only when the caller asks (a .claude/ file under a declared cited block).
+    collectCitedPaths(d.joined, d.linkRanges, d.at, scan, citedRoots);
+  }
+
   return scan;
 }
 
@@ -835,7 +950,8 @@ class Resolver {
     }
     return p;
   }
-  async resolve(fromDir: string, target: string): Promise<Resolved> {
+  async resolve(fromDir: string, target: string, opts?: { walkOnCaseMismatch?: boolean }): Promise<Resolved> {
+    const walkOnCase = opts?.walkOnCaseMismatch ?? false;
     const anchored = target.startsWith("/");
     const joined = path.posix.normalize(path.posix.join(anchored ? "." : fromDir || ".", target.replace(/^\/+/, "")));
     if (climbsOut(joined) || joined === ".." || joined.startsWith("../")) return { kind: "leaves" };
@@ -847,7 +963,25 @@ class Resolver {
       const entry = list.get(segments[i]);
       if (!entry) {
         const lower = segments[i].toLowerCase();
-        return this.lower(list).has(lower) ? { kind: "case" } : { kind: "missing" };
+        if (!this.lower(list).has(lower)) return { kind: "missing" };
+        // R2-S4: Only walk on for cited/path-keys; links/related return { kind: "case" } immediately.
+        if (!walkOnCase) return { kind: "case" };
+        // Case mismatch: walk the remaining segments along the case-insensitive match
+        // to check if any of them (including this one) is a symbolic link
+        const caseFoldedEntry = [...list.entries()].find(([name]) => name.toLowerCase() === lower);
+        if (caseFoldedEntry && caseFoldedEntry[1].isSymbolicLink()) return { kind: "link" };
+        // Continue checking remaining segments
+        let caseFoldedAt = at ? `${at}/${caseFoldedEntry![0]}` : caseFoldedEntry![0];
+        for (let j = i + 1; j < segments.length; j++) {
+          const nextList = await this.listing(caseFoldedAt);
+          if (nextList === null) break; // can't continue, return case
+          const nextLower = segments[j].toLowerCase();
+          const nextEntry = [...nextList.entries()].find(([name]) => name.toLowerCase() === nextLower);
+          if (!nextEntry) break; // can't continue, return case
+          if (nextEntry[1].isSymbolicLink()) return { kind: "link" };
+          caseFoldedAt = `${caseFoldedAt}/${nextEntry[0]}`;
+        }
+        return { kind: "case" };
       }
       if (entry.isSymbolicLink()) return { kind: "link" };
       at = at ? `${at}/${segments[i]}` : segments[i];
@@ -1036,7 +1170,9 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
       add({ id: "encoding", level: "warn", path: rel, message: "not valid UTF-8: not scanned", fix: "save the file as UTF-8" });
       continue;
     }
-    f.scan = scanMarkdown(bytes.toString("utf8"));
+    // Spec 58 §5.5: pass citedRoots for .claude/ files when cited is declared
+    const citedRoots = rel.startsWith(".claude/") && block?.cited ? block.cited.roots : [];
+    f.scan = scanMarkdown(bytes.toString("utf8"), { citedRoots });
     scanned++;
   }
 
@@ -1077,7 +1213,7 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
   }
 
   // Declared (§5.3).
-  if (declared && block !== null) await declaredChecks(block, state, resolver, add);
+  const citedCount = declared && block !== null ? await declaredChecks(block, state, resolver, inRepo, root, add) : null;
 
   // `[path]` limits the findings about a file; a `path: null` one always counts (§4.1).
   const inLimit = (p: string | null) => p === null || limit === "" || p === limit || p.startsWith(`${limit}/`);
@@ -1097,13 +1233,20 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
   if (!has("links")) kept.push({ id: "links", level: "ok", path: null, line: null, column: null, message: `${linkCount} ${linkCount === 1 ? "link" : "links"} in ${filesWord(scanned)}`, fix: null });
   if (!has("leaked-tags")) kept.push({ id: "leaked-tags", level: "ok", path: null, line: null, column: null, message: filesWord(scanned), fix: null });
   if (declared && block !== null) {
+    // Spec 58: frontmatter is on when any category has a non-empty frontmatter list OR values OR paths
+    const frontmatterOn = block.categories.some((c) => c.frontmatter.length > 0 || Object.keys(c.values).length > 0 || Object.keys(c.paths).length > 0);
     const on: Array<[string, boolean]> = [
       ["categories", true],
-      ["frontmatter", block.categories.some((c) => c.frontmatter.length > 0)],
+      ["frontmatter", frontmatterOn],
       ["names", block.categories.some((c) => c.name === "dated")],
       ["related", block.related !== "off"],
     ];
     for (const [id, active] of on) if (active && !has(id)) kept.push({ id, level: "ok", path: null, line: null, column: null, message: "nothing to report", fix: null });
+    // Spec 58 §5.5: the cited ok line counts the candidates resolved and the files read.
+    if (citedCount !== null && !has("cited")) {
+      const k = citedCount.candidates;
+      kept.push({ id: "cited", level: "ok", path: null, line: null, column: null, message: `${k} cited ${k === 1 ? "path" : "paths"} in ${filesWord(citedCount.files)}`, fix: null });
+    }
   }
 
   // Sorted by the file's place in the walk, then line and column; lines with no path last, in their order (§4.6).
@@ -1125,16 +1268,18 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
 
 const filesWord = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
 
-/** The order of the lines with no path, after every finding on a file (§4.6). */
-const ID_ORDER = ["links", "leaked-tags", "encoding", "scope", "policy", "categories", "frontmatter", "names", "related"];
+/** The order of the lines with no path, after every finding on a file (§4.6). Spec 58: cited after related. */
+const ID_ORDER = ["links", "leaked-tags", "encoding", "scope", "policy", "categories", "frontmatter", "names", "related", "cited"];
 const cmp = (a: string | null, b: string | null) => ((a ?? "") < (b ?? "") ? -1 : (a ?? "") > (b ?? "") ? 1 : 0);
 
 async function declaredChecks(
   block: DocsBlock,
   state: Map<string, FileState>,
   resolver: Resolver,
+  inRepo: boolean,
+  root: string,
   add: (c: Omit<DocsCheck, "line" | "column" | "path"> & Partial<Pick<DocsCheck, "line" | "column" | "path">>) => void,
-): Promise<void> {
+): Promise<{ candidates: number; files: number } | null> {
   // A declared directory that is not there: by position, with no path (§5.3).
   // Resolved as a link is (§7): a symbolic link on the way stops it, so nothing outside the workspace is asked about.
   for (const [i, c] of block.categories.entries()) {
@@ -1155,13 +1300,23 @@ async function declaredChecks(
     return true;
   };
 
+  /** Spec 58 §5.4: shared fault checks for related entries and path keys. Returns fault type or null. */
+  const entryFault = (entry: string): "nul" | "windows" | "scheme" | "backslash" | null => {
+    if (entry === "" || entry.includes("\0")) return "nul";
+    if (WINDOWS_PATH.test(entry)) return "windows";
+    if (SCHEME.test(entry) || entry.startsWith("//")) return "scheme";
+    if (entry.includes("\\")) return "backslash";
+    return null;
+  };
+
   for (const f of state.values()) {
     if (!f.rel.startsWith("docs/")) continue;
     const sub = f.rel.slice("docs/".length);
     const base = path.posix.basename(f.rel);
     const category = covering(sub);
     if (category === null) {
-      if (block.uncovered === "error")
+      // Spec 58 §5.2: docs/README.md is never uncovered
+      if (block.uncovered === "error" && f.rel !== "docs/README.md")
         add({ id: "categories", level: "error", path: f.rel, message: "file is in no declared category", fix: "move it into a category, or declare its directory in the docs block" });
       continue;
     }
@@ -1170,79 +1325,381 @@ async function declaredChecks(
       const m = DATED.exec(base);
       if (!m || !realDate(m[1], m[2], m[3])) add({ id: "names", level: "error", path: f.rel, message: "file name does not fit dated (YYYY-MM-DD-<kebab-case>.md, a real date)", fix: "rename the file" });
     }
-    if (category.frontmatter.length === 0 || !f.scan) continue;
+    // Spec 58: read frontmatter if frontmatter list is non-empty OR values OR paths
+    const hasFrontmatterKeys = category.frontmatter.length > 0;
+    const hasValues = Object.keys(category.values).length > 0;
+    const hasPaths = Object.keys(category.paths).length > 0;
+    if (!hasFrontmatterKeys && !hasValues && !hasPaths) continue;
+    if (!f.scan) continue;
     const fm = strictFrontmatter(f);
     if (fm === null) {
-      add({ id: "frontmatter", level: "error", path: f.rel, message: "no frontmatter block", fix: `add a frontmatter block with ${category.frontmatter.join(", ")}` });
+      // No frontmatter block: only report if frontmatter keys are required
+      if (hasFrontmatterKeys) {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: "no frontmatter block", fix: `add a frontmatter block with ${category.frontmatter.join(", ")}` });
+      }
       continue;
     }
     if (yamlFinding(f, "frontmatter")) continue;
     const data = (fm as { data: unknown }).data;
     const record = data !== null && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, unknown>) : {};
-    for (const key of category.frontmatter)
-      if (!Object.hasOwn(record, key) || emptyValue(record[key])) add({ id: "frontmatter", level: "error", path: f.rel, message: `required frontmatter key ${key} is missing or empty`, fix: `give ${key} a value` });
+    for (const key of category.frontmatter) {
+      if (!Object.hasOwn(record, key) || emptyValue(record[key])) {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `required frontmatter key ${key} is missing or empty`, fix: `give ${key} a value` });
+      } else if (Object.hasOwn(category.values, key)) {
+        // Spec 58 §5.1: closed values
+        const val = record[key];
+        const declared = category.values[key];
+        if (typeof val !== "string") {
+          add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${key}: value is not a string`, fix: `give ${key} one of the declared values` });
+        } else if (!declared.includes(val)) {
+          add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${key}: value is not one of the declared values`, fix: `use one of: ${declared.join(", ")}` });
+        }
+      }
+    }
+    // Spec 58 §5.4: path keys
+    for (const [pathKey, pathEntry] of Object.entries(category.paths)) {
+      if (!Object.hasOwn(record, pathKey)) continue;
+      const val = record[pathKey];
+      if (emptyValue(val)) continue;
+      if (pathEntry.sentinel !== null && val === pathEntry.sentinel) continue;
+      if (typeof val !== "string") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: value is not a string`, fix: `write ${pathKey} as a path` });
+        continue;
+      }
+      const fault = entryFault(val);
+      if (fault === "nul") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: the path holds a NUL character`, fix: "remove it from the path" });
+        continue;
+      }
+      if (fault === "windows") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: the path is an absolute Windows path`, fix: pathEntry.base === "workspace" ? "use a path relative to the workspace root" : "use a path relative to the file" });
+        continue;
+      }
+      if (fault === "scheme") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: the path has a scheme`, fix: "name a file of the workspace" });
+        continue;
+      }
+      if (fault === "backslash") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: the path holds a backslash`, fix: "use / as the separator" });
+        continue;
+      }
+      // Resolve from base
+      const fromDir = pathEntry.base === "workspace" ? "." : path.posix.dirname(f.rel);
+      const r = await resolver.resolve(fromDir, val, { walkOnCaseMismatch: true });
+      if (r.kind === "ok") continue;
+      if (r.kind === "link") {
+        add({ id: "frontmatter", level: "warn", path: f.rel, message: `frontmatter key ${pathKey}: the path is reached through a symbolic link, not followed`, fix: "name the file itself, not through a link" });
+        continue;
+      }
+      if (r.kind === "leaves") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: the path leaves the workspace`, fix: "name a file inside the workspace" });
+        continue;
+      }
+      if (r.kind === "missing") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: the path does not exist`, fix: "correct the path or restore the file" });
+        continue;
+      }
+      if (r.kind === "case") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: the path's case differs from the file on disk`, fix: "match the file name's case exactly" });
+        continue;
+      }
+    }
   }
 
-  if (block.related === "off") return;
-  /** A file's `related:` entries resolved from its own directory; null when it has none to read. */
-  const relatedOf = async (f: FileState, report: boolean): Promise<Map<string, number> | null> => {
-    if (!f.scan?.frontmatter) return null;
-    const fm = strictFrontmatter(f);
-    if (fm === null) return null;
-    if ("fault" in fm) {
-      if (report) yamlFinding(f, "related");
-      return null;
-    }
-    const data = fm.data;
-    if (data === null || typeof data !== "object" || Array.isArray(data) || !Object.hasOwn(data, "related")) return null;
-    const list = (data as Record<string, unknown>).related;
-    if (!Array.isArray(list) || list.some((x) => typeof x !== "string")) {
-      if (report) add({ id: "related", level: "error", path: f.rel, message: "related: is not a list of strings", fix: "write related: as a list of paths" });
-      return null;
-    }
-    const out = new Map<string, number>();
-    for (const [j, entry] of (list as string[]).entries()) {
-      const fail = (message: string, fix: string, level: DocsLevel = "error") => report && add({ id: "related", level, path: f.rel, message: `related[${j}]: ${message}`, fix });
-      if (entry === "" || entry.includes("\0")) {
-        fail("empty, or holds a NUL character", "remove the entry or name a file");
-        continue;
+  if (block.related !== "off") {
+    /** A file's `related:` entries resolved from its base directory; null when it has none to read. */
+    const relatedOf = async (f: FileState, report: boolean): Promise<Map<string, number> | null> => {
+      if (!f.scan?.frontmatter) return null;
+      const fm = strictFrontmatter(f);
+      if (fm === null) return null;
+      if ("fault" in fm) {
+        if (report) yamlFinding(f, "related");
+        return null;
       }
-      if (WINDOWS_PATH.test(entry)) {
-        fail("an absolute Windows path", "use a path relative to the file");
-        continue;
+      const data = fm.data;
+      if (data === null || typeof data !== "object" || Array.isArray(data) || !Object.hasOwn(data, "related")) return null;
+      const list = (data as Record<string, unknown>).related;
+      if (!Array.isArray(list) || list.some((x) => typeof x !== "string")) {
+        if (report) add({ id: "related", level: "error", path: f.rel, message: "related: is not a list of strings", fix: "write related: as a list of paths" });
+        return null;
       }
-      if (SCHEME.test(entry) || entry.startsWith("//")) {
-        fail("has a scheme: related: names files of the workspace", "name a file of the workspace");
-        continue;
+      const out = new Map<string, number>();
+      // Spec 58 §5.3: resolve from "." when relatedBase is "workspace", from dirname otherwise
+      const fromDir = block.relatedBase === "workspace" ? "." : path.posix.dirname(f.rel);
+      for (const [j, entry] of (list as string[]).entries()) {
+        const fail = (message: string, fix: string, level: DocsLevel = "error") => report && add({ id: "related", level, path: f.rel, message: `related[${j}]: ${message}`, fix });
+        const fault = entryFault(entry);
+        if (fault === "nul") {
+          fail("empty, or holds a NUL character", "remove the entry or name a file");
+          continue;
+        }
+        if (fault === "windows") {
+          fail("an absolute Windows path", block.relatedBase === "workspace" ? "use a path relative to the workspace root" : "use a path relative to the file");
+          continue;
+        }
+        if (fault === "scheme") {
+          fail("has a scheme: related: names files of the workspace", "name a file of the workspace");
+          continue;
+        }
+        if (fault === "backslash") {
+          fail("holds a backslash", "use / as the separator");
+          continue;
+        }
+        const r = await resolver.resolve(fromDir, entry);
+        if (r.kind !== "ok") {
+          const [level, message, fix] = RESOLVE_FINDING[r.kind];
+          fail(message.replace(/^target/, "the entry"), fix.replace(/^correct the link/, "correct the entry").replace(/^link to/, "name"), level);
+          continue;
+        }
+        if (!out.has(r.rel)) out.set(r.rel, j);
       }
-      if (entry.includes("\\")) {
-        fail("holds a backslash", "use / as the separator");
-        continue;
-      }
-      const r = await resolver.resolve(path.posix.dirname(f.rel), entry);
-      if (r.kind !== "ok") {
-        const [level, message, fix] = RESOLVE_FINDING[r.kind];
-        fail(message.replace(/^target/, "the entry"), fix.replace(/^correct the link/, "correct the entry").replace(/^link to/, "name"), level);
-        continue;
-      }
-      if (!out.has(r.rel)) out.set(r.rel, j);
-    }
-    return out;
-  };
+      return out;
+    };
 
-  const cache = new Map<string, Map<string, number> | null>();
+    const cache = new Map<string, Map<string, number> | null>();
+    for (const f of state.values()) {
+      if (!f.rel.startsWith("docs/")) continue;
+      const mine = await relatedOf(f, true);
+      cache.set(f.rel, mine);
+      if (mine === null || block.related !== "symmetric") continue;
+      for (const [target, j] of mine) {
+        const t = state.get(target);
+        // Only a scanned Markdown file under docs/ can list anything back (§5.3).
+        if (!t?.scan || !target.startsWith("docs/") || target === f.rel) continue;
+        if (!cache.has(target)) cache.set(target, await relatedOf(t, false));
+        if (!cache.get(target)?.has(f.rel))
+          add({ id: "related", level: "error", path: f.rel, message: `related[${j}]: the target does not list this file back`, fix: "add this file to the target's related:" });
+      }
+    }
+  }
+
+  // Spec 58 §5.5: cited paths check; its counts feed the ok line.
+  return block.cited === null ? null : await citedPathsCheck(block.cited, state, resolver, inRepo, root, add);
+}
+
+/** The longest run read as a cited path: Linux's PATH_MAX, above what Windows and macOS allow. */
+const CITED_MAX_LENGTH = 4096;
+/** A character of a cited path's run (spec 58 §5.5). */
+const CITED_PATH_CHAR = /[A-Za-z0-9._@+/-]/;
+/** Non-asterisk placeholders to reject before emphasis stripping: angle brackets, curlies, $, ellipsis, URL schemes. */
+const CITED_EARLY_REJECT = /[<>{}$]|…|\.\.\.|:\/\//;
+/** A glob asterisk inside the stripped word (not at start/end, which would be emphasis). */
+const CITED_INTERIOR_GLOB = /(?!^)\*(?!$)/;
+/** Spec 58 §5.5: the closed list of file suffixes a cited path may end with. */
+const CITED_SUFFIXES = [".md", ".yaml", ".yml", ".json", ".sh", ".ps1", ".ts", ".js", ".mjs", ".txt", ".toml"];
+
+/**
+ * The cited-path candidates of one paragraph (spec 58 §5.5): prose, code-span content and inline `<code>` content are read;
+ * code-span backticks, `<code>` tags, `<pre>` elements, HTML comments, links, reference definitions and `<a>` / `<img>` tags
+ * are not. Each read stretch is its own segment, so a word never crosses into or out of a code span or a `<code>` element.
+ * One forward pass per stage: linear in the paragraph's length.
+ */
+function collectCitedPaths(
+  joined: string,
+  linkRanges: Array<[number, number]>,
+  at: (pos: number) => { line: number; column: number },
+  scan: Scan,
+  roots: string[],
+): void {
+  const n = joined.length;
+  // 1 = read. A character not read also ends a word, so a word never crosses into or out of a code span or <code>.
+  const read = new Uint8Array(n).fill(1);
+  const cut = (from: number, to: number) => read.fill(0, from, Math.min(to, n));
+  const spans = codeSpanRanges(joined);
+  // A code span's backtick runs are not read; its content is.
+  for (const r of spans) {
+    cut(r.start, r.contentStart);
+    cut(r.contentEnd, r.end);
+  }
+  // The HTML elements, found over the text with code spans blanked.
+  let masked = joined;
+  if (spans.length) {
+    const parts: string[] = [];
+    let p = 0;
+    for (const r of spans) {
+      parts.push(joined.slice(p, r.start), " ".repeat(r.end - r.start));
+      p = r.end;
+    }
+    parts.push(joined.slice(p));
+    masked = parts.join("");
+  }
+  // For <code>, the tags are not read but content is; for <!-- and <pre>, the whole range is not read.
+  // Process in the same order blankCode does: comments, then <code>, then <pre>, each over the previous pass.
+  for (const [open, close, keepContent] of [
+    ["<!--", "-->", false],
+    ["<code", "</code>", true],
+    ["<pre", "</pre>", false],
+  ] as const) {
+    const isElement = open !== "<!--";
+    const lower = isElement ? masked.replace(/[A-Z]/g, (c) => c.toLowerCase()) : masked;
+    const blankParts: string[] = [];
+    let from = 0;
+    let search = 0;
+    for (;;) {
+      const a = lower.indexOf(open, search);
+      if (a === -1) break;
+      if (isElement && a + open.length < masked.length && !/[\s>]/.test(masked[a + open.length])) {
+        search = a + 1;
+        continue;
+      }
+      const b = lower.indexOf(close, a + open.length);
+      const end = b === -1 ? masked.length : b + close.length;
+      if (keepContent) {
+        // <code>: cut tags, keep content
+        const gt = lower.indexOf(">", a + open.length);
+        const contentStart = gt === -1 || gt >= (b === -1 ? n : b) ? (b === -1 ? n : b) : gt + 1;
+        const contentEnd = b === -1 ? n : b;
+        cut(a, contentStart);
+        cut(contentEnd, end);
+      } else {
+        cut(a, end);
+      }
+      // Blank this range in masked for the next pass
+      blankParts.push(masked.slice(from, a), " ".repeat(end - a));
+      from = search = end;
+    }
+    blankParts.push(masked.slice(from));
+    masked = blankParts.join("");
+  }
+  // A link's text and destination, a reference definition and an <a> / <img> tag are not read.
+  // Sort by start and use a watermark to cut nested ranges once each (linear).
+  linkRanges.sort((a, b) => a[0] - b[0]);
+  let cutTo = 0;
+  for (const [from, to] of linkRanges) {
+    if (to > cutTo) {
+      cut(Math.max(from, cutTo), to);
+      cutTo = to;
+    }
+  }
+
+  const rootOf = (t: string) => roots.some((r) => t.startsWith(`${r}/`));
+  let i = 0;
+  while (i < n) {
+    if (!read[i] || isWs(joined[i])) {
+      i++;
+      continue;
+    }
+    // A word: a run of read characters that are not whitespace.
+    const ws = i;
+    while (i < n && read[i] && !isWs(joined[i])) i++;
+    const we = i;
+    // R2-S2: Check non-glob placeholders BEFORE stripping — <docs/x.md> is rejected early.
+    const word = joined.slice(ws, we);
+    if (word === "" || CITED_EARLY_REJECT.test(word)) continue;
+    // Strip trailing punctuation before emphasis so **docs/x.md**. works.
+    let s0 = ws;
+    let s1 = we;
+    while (s1 > s0 && ".,:;)".includes(joined[s1 - 1])) s1--;
+    while (s0 < s1 && joined[s0] === "*") s0++;
+    while (s1 > s0 && joined[s1 - 1] === "*") s1--;
+    const stripped = joined.slice(s0, s1);
+    // R2-S2: Interior glob asterisks (like docs/*.md) are rejected after stripping.
+    if (stripped === "" || CITED_INTERIOR_GLOB.test(stripped)) continue;
+    // Each maximal run of path characters in the word is read.
+    for (let r = 0; r < stripped.length; ) {
+      if (!CITED_PATH_CHAR.test(stripped[r])) {
+        r++;
+        continue;
+      }
+      const runStart = r;
+      while (r < stripped.length && CITED_PATH_CHAR.test(stripped[r])) r++;
+      // Longer than any path a file system holds (PATH_MAX): not a citation, and never handed to git.
+      if (r - runStart > CITED_MAX_LENGTH) continue;
+      let token = stripped.slice(runStart, r);
+      // Strip trailing punctuation from each run, so "docs/e.md." works.
+      while (token.length > 0 && ".,:;)".includes(token[token.length - 1])) token = token.slice(0, -1);
+      if (!rootOf(token)) {
+        let lead = 0;
+        while (lead < token.length && token[lead] === "_") lead++;
+        let trail = 0;
+        while (trail < token.length - lead && token[token.length - 1 - trail] === "_") trail++;
+        if (lead > 0 && lead === trail) token = token.slice(lead, token.length - trail);
+      }
+      if (!rootOf(token) || !CITED_SUFFIXES.some((x) => token.endsWith(x))) continue;
+      if (token.split("/").some((x) => x === "." || x === "..")) continue;
+      // The column of the candidate as written, its emphasis included.
+      const first = runStart === 0 ? ws : s0 + runStart;
+      scan.cited.push({ token, ...at(first) });
+    }
+  }
+}
+
+/** Spec 58 §5.5: check cited paths in .claude/ files. */
+async function citedPathsCheck(
+  cited: { roots: string[]; exempt: string[] },
+  state: Map<string, FileState>,
+  resolver: Resolver,
+  inRepo: boolean,
+  root: string,
+  add: (c: Omit<DocsCheck, "line" | "column" | "path"> & Partial<Pick<DocsCheck, "line" | "column" | "path">>) => void,
+): Promise<{ candidates: number; files: number }> {
+  // Collect all candidates from .claude/ files
+  const exemptSet = new Set(cited.exempt);
+  const candidates: Array<{ path: string; token: string; line: number; column: number }> = [];
+  let filesRead = 0;
+
   for (const f of state.values()) {
-    if (!f.rel.startsWith("docs/")) continue;
-    const mine = await relatedOf(f, true);
-    cache.set(f.rel, mine);
-    if (mine === null || block.related !== "symmetric") continue;
-    for (const [target, j] of mine) {
-      const t = state.get(target);
-      // Only a scanned Markdown file under docs/ can list anything back (§5.3).
-      if (!t?.scan || !target.startsWith("docs/") || target === f.rel) continue;
-      if (!cache.has(target)) cache.set(target, await relatedOf(t, false));
-      if (!cache.get(target)?.has(f.rel))
-        add({ id: "related", level: "error", path: f.rel, message: `related[${j}]: the target does not list this file back`, fix: "add this file to the target's related:" });
+    if (!f.rel.startsWith(".claude/") || !f.scan) continue;
+    filesRead++;
+    for (const c of f.scan.cited) {
+      // Skip exempt entries
+      if (exemptSet.has(c.token)) continue;
+      candidates.push({ path: f.rel, token: c.token, line: c.line, column: c.column });
     }
   }
+
+  // Resolve all candidates - dedupe tokens for efficiency, but keep all occurrences for reporting.
+  const resolveCache = new Map<string, Resolved>();
+  const toCheck: Array<{ path: string; token: string; line: number; column: number; result: Resolved }> = [];
+  for (const c of candidates) {
+    let r = resolveCache.get(c.token);
+    if (!r) {
+      r = await resolver.resolve(".", c.token, { walkOnCaseMismatch: true });
+      resolveCache.set(c.token, r);
+    }
+    if (r.kind === "ok") continue; // exists, no finding
+    if (r.kind === "link") {
+      // Link is a warn, never sent to git
+      add({ id: "cited", level: "warn", path: c.path, line: c.line, column: c.column, message: "cited path is reached through a symbolic link, not followed", fix: "cite the file itself, not through a link" });
+      continue;
+    }
+    // missing, case, leaves: pushed to toCheck for git ignore check
+    // Note: leaves cannot occur today since cited paths have no .. segment by construction,
+    // but if it could, it would be treated as missing (never pushed to git as a path outside the workspace).
+    toCheck.push({ ...c, result: r });
+  }
+
+  // Ask git which ones are ignored
+  // R2-S3: Filter leaves from git calls — paths outside the workspace should never be handed to git.
+  const forGit = toCheck.filter((c) => c.result.kind !== "leaves");
+  let gitCouldNotSay = false;
+  const ignoredSet = new Set<string>();
+  if (forGit.length > 0 && inRepo) {
+    const pathsToCheck = forGit.map((c) => c.token);
+    const answer = await ignoredPaths(root, pathsToCheck, { knownRepo: true });
+    if (answer.unchecked) {
+      gitCouldNotSay = true;
+    } else {
+      for (const i of answer.ignored) ignoredSet.add(i.path);
+    }
+  } else if (forGit.length > 0) {
+    gitCouldNotSay = true;
+  }
+
+  // Report findings
+  if (gitCouldNotSay && forGit.length > 0) {
+    // Git could not say: no missing/case errors, just one warn
+    add({ id: "cited", level: "warn", message: "git could not say which cited paths it ignores: missing cited paths not checked", fix: "run in a git repository with git on PATH" });
+  } else {
+    for (const c of toCheck) {
+      if (ignoredSet.has(c.token)) continue;
+      if (c.result.kind === "missing" || c.result.kind === "leaves") {
+        add({ id: "cited", level: "error", path: c.path, line: c.line, column: c.column, message: "cited path does not exist", fix: "correct the path, restore the file, or exempt it in the docs block" });
+      } else if (c.result.kind === "case") {
+        add({ id: "cited", level: "error", path: c.path, line: c.line, column: c.column, message: "cited path's case differs from the file on disk", fix: "match the file name's case exactly" });
+      }
+    }
+  }
+
+  return { candidates: candidates.length, files: filesRead };
 }

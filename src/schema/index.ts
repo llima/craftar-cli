@@ -567,22 +567,38 @@ export const TemplatesSchema = z.array(
 );
 
 /* ------------------------------------------------------------------ */
-/* Docs block (spec 47)                                                 */
+/* Docs block (spec 47, extended by spec 58)                            */
 /* ------------------------------------------------------------------ */
 
-/** Rule texts of spec 47 §5.4 — each refusal names its position and one of these, never a value from the block. */
+/** Rule texts of spec 47 §5.4 (spec 58 §4.2) — each refusal names its position and one of these, never a value from the block. */
 export const DOCS_RULES = {
-  block: "the docs block is a mapping with categories, uncovered and related",
-  unknownKey: "the docs block has no such key (it has categories, uncovered and related)",
+  block: "the docs block is a mapping with categories, uncovered, related, relatedBase and cited",
+  unknownKey: "the docs block has no such key (it has categories, uncovered, related, relatedBase and cited)",
   categories: "categories is a list of entries, each with a path",
   entry: "a category is a mapping with a path",
-  entryKey: "a category has no such key (it has path, frontmatter and name)",
+  entryKey: "a category has no such key (it has path, frontmatter, name and paths)",
   path: "a category path is a relative POSIX path under docs/: segments of letters, digits and . _ @ + -, no . or .. segment, no backslash, not absolute",
-  frontmatter: "frontmatter is a list of key names",
+  frontmatter: "frontmatter is a list of key names and one-key mappings to value lists",
   key: "a key name is letters, digits, _ and -, starting with a letter or _, at most 64 characters, and not a token",
   name: "name is any or dated",
   uncovered: "uncovered is ignore or error",
   related: "related is off, resolve or symmetric",
+  // Spec 58 §4.2 new rules
+  frontmatterEntry: "a frontmatter entry is a key name, or one key name mapped to a list of values",
+  valueList: "a value list is a non-empty list of values",
+  value: "a value is letters, digits, _ and -, starting with a letter or _, at most 64 characters, and not a token",
+  valueDuplicate: "a value appears once in its list, and a key with a value list appears once in frontmatter",
+  paths: "paths maps key names to {base, sentinel}",
+  pathsEntryKey: "an entry of paths has no such key (it has base and sentinel)",
+  base: "base is file or workspace",
+  pathsValueListConflict: "a key with a value list cannot be a path key",
+  relatedBase: "relatedBase is file or workspace",
+  cited: "cited is a mapping with roots and, optionally, exempt",
+  citedRoot: "a cited root is a relative POSIX path: segments of letters, digits and . _ @ + -, no . or .. segment, no backslash, not absolute",
+  citedRootDuplicate: "a cited root appears once in roots",
+  citedRootGit: "a cited root cannot be .git or start with .git/",
+  exempt: "exempt is a list of relative POSIX paths",
+  exemptEntry: "an exempt entry is a relative POSIX path: no . or .. segment, no backslash, not absolute",
 } as const;
 
 /** A key name the docs block may echo (spec 47 §5.4, §7): no `#`, no `:`, nothing a token of a known format matches. */
@@ -590,19 +606,35 @@ export function docsKeyShaped(key: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(key) && findSecrets(key).length === 0;
 }
 
+export interface DocsPathEntry {
+  base: "file" | "workspace";
+  sentinel: string | null;
+}
 export interface DocsCategory {
   path: string;
   frontmatter: string[];
   name: "any" | "dated";
+  /** Spec 58: values for keys declared with a value list — {status: [...]} */
+  values: Record<string, string[]>;
+  /** Spec 58: path keys — {spec: {base, sentinel}} */
+  paths: Record<string, DocsPathEntry>;
+}
+export interface DocsCited {
+  roots: string[];
+  exempt: string[];
 }
 export interface DocsBlock {
   categories: DocsCategory[];
   uncovered: "ignore" | "error";
   related: "off" | "resolve" | "symmetric";
+  /** Spec 58: where related: entries are resolved from */
+  relatedBase: "file" | "workspace";
+  /** Spec 58: cited paths check, null = off */
+  cited: DocsCited | null;
 }
 
-const DOCS_KEYS = ["categories", "uncovered", "related"];
-const CATEGORY_KEYS = ["path", "frontmatter", "name"];
+const DOCS_KEYS = ["categories", "uncovered", "related", "relatedBase", "cited"];
+const CATEGORY_KEYS = ["path", "frontmatter", "name", "paths"];
 const isMapping = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
 /** A category path (spec 47 §5.1): plain segments in ServicePath's class, nothing that leaves or anchors. */
@@ -611,14 +643,20 @@ function docsCategoryPath(v: unknown): v is string {
   return v.split("/").every((seg) => SEGMENT_OK.test(seg) && seg !== "." && seg !== "..");
 }
 
+/** An exempt entry (spec 58 §4.1): no . or .. segment, no backslash, not absolute. */
+function docsExemptEntry(v: unknown): v is string {
+  if (typeof v !== "string" || v === "" || v.includes("\\") || /^\/|^[A-Za-z]:[\\/]/.test(v)) return false;
+  return !v.split("/").some((seg) => seg === "." || seg === "..");
+}
+
 /**
- * The docs block of a profile (spec 47 §5): validated by hand so that every issue carries a fixed text of DOCS_RULES and
+ * The docs block of a profile (spec 47 §5, spec 58 §4): validated by hand so that every issue carries a fixed text of DOCS_RULES and
  * a position — an unknown key is named only when `docsKeyShaped`, else the mapping holding it is the position. Read by
  * `declaredDocs` alone.
  */
 export const DocsBlockSchema = z.unknown().transform((v, ctx): DocsBlock => {
   const issue = (path: Array<string | number>, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path, message });
-  const out: DocsBlock = { categories: [], uncovered: "ignore", related: "off" };
+  const out: DocsBlock = { categories: [], uncovered: "ignore", related: "off", relatedBase: "file", cited: null };
   if (!isMapping(v)) {
     issue([], DOCS_RULES.block);
     return out;
@@ -637,6 +675,65 @@ export const DocsBlockSchema = z.unknown().transform((v, ctx): DocsBlock => {
     if (v.related === "off" || v.related === "resolve" || v.related === "symmetric") out.related = v.related;
     else issue(["related"], DOCS_RULES.related);
   }
+  // Spec 58: relatedBase
+  if (v.relatedBase !== undefined) {
+    if (v.relatedBase === "file" || v.relatedBase === "workspace") out.relatedBase = v.relatedBase;
+    else issue(["relatedBase"], DOCS_RULES.relatedBase);
+  }
+  // Spec 58: cited
+  if (v.cited !== undefined && v.cited !== null) {
+    if (!isMapping(v.cited)) {
+      issue(["cited"], DOCS_RULES.cited);
+    } else {
+      const c = v.cited;
+      // __proto__ check first
+      if (Object.hasOwn(c, "__proto__")) issue(["cited", "__proto__"], NO_PROTO_KEY);
+      // Unknown keys inside cited (runs regardless of roots validity)
+      for (const key of Object.keys(c)) {
+        if (key === "__proto__") continue; // already checked
+        if (key !== "roots" && key !== "exempt") {
+          issue(docsKeyShaped(key) ? ["cited", key] : ["cited"], DOCS_RULES.cited);
+        }
+      }
+      // roots is required: if missing, issue at "cited"; if present but not a non-empty list, issue at "cited.roots"
+      if (c.roots === undefined) {
+        issue(["cited"], DOCS_RULES.cited);
+      } else if (!Array.isArray(c.roots) || c.roots.length === 0) {
+        issue(["cited", "roots"], DOCS_RULES.cited);
+      } else {
+        const roots: string[] = [];
+        const seenRoots = new Set<string>();
+        c.roots.forEach((r: unknown, i: number) => {
+          // A cited root has a category path's shape (spec 58 §4.1), and is not .git (case-insensitive).
+          if (!docsCategoryPath(r)) {
+            issue(["cited", "roots", i], DOCS_RULES.citedRoot);
+          } else if (r.toLowerCase() === ".git" || r.toLowerCase().startsWith(".git/")) {
+            issue(["cited", "roots", i], DOCS_RULES.citedRootGit);
+          } else if (seenRoots.has(r)) {
+            issue(["cited", "roots", i], DOCS_RULES.citedRootDuplicate);
+          } else {
+            seenRoots.add(r);
+            roots.push(r);
+          }
+        });
+        const exempt: string[] = [];
+        if (c.exempt !== undefined && c.exempt !== null) {
+          if (!Array.isArray(c.exempt)) {
+            issue(["cited", "exempt"], DOCS_RULES.exempt);
+          } else {
+            c.exempt.forEach((e: unknown, i: number) => {
+              if (!docsExemptEntry(e)) {
+                issue(["cited", "exempt", i], DOCS_RULES.exemptEntry);
+              } else {
+                exempt.push(e);
+              }
+            });
+          }
+        }
+        out.cited = { roots, exempt };
+      }
+    }
+  }
   if (v.categories !== undefined && v.categories !== null && !Array.isArray(v.categories)) issue(["categories"], DOCS_RULES.categories);
   // Unknown keys last, so that a misspelt key does not hide a value's refusal.
   if (!Array.isArray(v.categories)) {
@@ -650,16 +747,137 @@ export const DocsBlockSchema = z.unknown().transform((v, ctx): DocsBlock => {
       return;
     }
     unknownKeys(c, CATEGORY_KEYS, at, DOCS_RULES.entryKey);
-    const category: DocsCategory = { path: "", frontmatter: [], name: "any" };
+    const category: DocsCategory = { path: "", frontmatter: [], name: "any", values: Object.create(null) as Record<string, string[]>, paths: Object.create(null) as Record<string, DocsPathEntry> };
     if (docsCategoryPath(c.path)) category.path = c.path;
     else issue([...at, "path"], DOCS_RULES.path);
+    // Spec 58: track keys with value lists for duplicate detection
+    const keysWithValueList = new Set<string>();
     if (c.frontmatter !== undefined && c.frontmatter !== null) {
       if (!Array.isArray(c.frontmatter)) issue([...at, "frontmatter"], DOCS_RULES.frontmatter);
       else
         c.frontmatter.forEach((k: unknown, j: number) => {
-          if (typeof k === "string" && docsKeyShaped(k)) category.frontmatter.push(k);
-          else issue([...at, "frontmatter", j], DOCS_RULES.key);
+          if (typeof k === "string") {
+            // Plain key
+            if (docsKeyShaped(k)) {
+              // Check if this key was already declared with a value list
+              if (keysWithValueList.has(k)) {
+                issue([...at, "frontmatter", j], DOCS_RULES.valueDuplicate);
+              } else {
+                category.frontmatter.push(k);
+              }
+            } else {
+              issue([...at, "frontmatter", j], DOCS_RULES.key);
+            }
+          } else if (isMapping(k)) {
+            // Spec 58: mapping form {status: [draft, ...]}
+            const keys = Object.keys(k).filter((x) => x !== "__proto__");
+            // __proto__ check first
+            if (Object.hasOwn(k, "__proto__")) {
+              issue([...at, "frontmatter", j, "__proto__"], NO_PROTO_KEY);
+              return;
+            }
+            if (keys.length !== 1) {
+              issue([...at, "frontmatter", j], DOCS_RULES.frontmatterEntry);
+              return;
+            }
+            const keyName = keys[0];
+            if (!docsKeyShaped(keyName)) {
+              issue([...at, "frontmatter", j], DOCS_RULES.key);
+              return;
+            }
+            // Check if this key was already declared
+            if (keysWithValueList.has(keyName) || category.frontmatter.includes(keyName)) {
+              issue([...at, "frontmatter", j], DOCS_RULES.valueDuplicate);
+              return;
+            }
+            const valueList = k[keyName];
+            if (!Array.isArray(valueList) || valueList.length === 0) {
+              issue([...at, "frontmatter", j, keyName], DOCS_RULES.valueList);
+              return;
+            }
+            // Validate values
+            const seenValues = new Set<string>();
+            const validValues: string[] = [];
+            let hasError = false;
+            for (let vi = 0; vi < valueList.length; vi++) {
+              const val = valueList[vi];
+              if (typeof val !== "string" || !docsKeyShaped(val)) {
+                issue([...at, "frontmatter", j, keyName, vi], DOCS_RULES.value);
+                hasError = true;
+                break;
+              }
+              if (seenValues.has(val)) {
+                issue([...at, "frontmatter", j, keyName, vi], DOCS_RULES.valueDuplicate);
+                hasError = true;
+                break;
+              }
+              seenValues.add(val);
+              validValues.push(val);
+            }
+            if (!hasError) {
+              category.frontmatter.push(keyName);
+              category.values[keyName] = validValues;
+              keysWithValueList.add(keyName);
+            }
+          } else {
+            issue([...at, "frontmatter", j], DOCS_RULES.frontmatterEntry);
+          }
         });
+    }
+    // Spec 58: paths
+    if (c.paths !== undefined && c.paths !== null) {
+      if (!isMapping(c.paths)) {
+        issue([...at, "paths"], DOCS_RULES.paths);
+      } else {
+        // __proto__ check first
+        if (Object.hasOwn(c.paths, "__proto__")) {
+          issue([...at, "paths", "__proto__"], NO_PROTO_KEY);
+        }
+        for (const pathKey of Object.keys(c.paths)) {
+          if (pathKey === "__proto__") continue;
+          if (!docsKeyShaped(pathKey)) {
+            issue([...at, "paths"], DOCS_RULES.key);
+            continue;
+          }
+          // Check if this key has a value list — conflict
+          if (keysWithValueList.has(pathKey)) {
+            issue([...at, "paths", pathKey], DOCS_RULES.pathsValueListConflict);
+            continue;
+          }
+          const entry = c.paths[pathKey];
+          if (!isMapping(entry)) {
+            issue([...at, "paths", pathKey], DOCS_RULES.paths);
+            continue;
+          }
+          // __proto__ check inside the entry
+          if (Object.hasOwn(entry, "__proto__")) {
+            issue([...at, "paths", pathKey, "__proto__"], NO_PROTO_KEY);
+            continue;
+          }
+          // Check for unknown keys inside the entry — runs whatever base and sentinel say
+          for (const entryKey of Object.keys(entry)) {
+            if (entryKey === "__proto__") continue;
+            if (entryKey !== "base" && entryKey !== "sentinel") {
+              issue(docsKeyShaped(entryKey) ? [...at, "paths", pathKey, entryKey] : [...at, "paths", pathKey], DOCS_RULES.pathsEntryKey);
+            }
+          }
+          // Validate base
+          if (entry.base !== "file" && entry.base !== "workspace") {
+            issue([...at, "paths", pathKey, "base"], DOCS_RULES.base);
+            continue;
+          }
+          // Validate sentinel (optional)
+          let sentinel: string | null = null;
+          if (entry.sentinel !== undefined && entry.sentinel !== null) {
+            if (typeof entry.sentinel !== "string" || !docsKeyShaped(entry.sentinel)) {
+              issue([...at, "paths", pathKey, "sentinel"], DOCS_RULES.value);
+              continue;
+            }
+            sentinel = entry.sentinel;
+          }
+          category.paths[pathKey] = { base: entry.base, sentinel };
+        }
+      }
     }
     if (c.name !== undefined) {
       if (c.name === "any" || c.name === "dated") category.name = c.name;

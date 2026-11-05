@@ -467,3 +467,209 @@ describe("spec 47 §4.5 — a line that is only a closing tag", () => {
     expect(s.tags[0].name).toBe(expectedName);
   });
 });
+
+describe("R2-B3 — blankCode matches origin/main exactly", () => {
+  // Expected values computed from origin/main's blankCode (commit before f9d5ecf).
+  // The sequential pass order matters: <!-- then <code then <pre, each over the prior's output.
+  it.each([
+    ["a <!-- <code>x</code> --> b [l](y.md)", "a                         b [l](y.md)"],
+    ["<code> <pre> </code> [q](w.md)", "                     [q](w.md)"],
+    ["a <code><!-- x</code> --> [l](z.md)", "a                                  "],
+    ["<!-- --> <code>y</code>", "                       "],
+    ["<pre> <!-- </pre> --> x", "                       "],
+    ["<code>a<!-- b</code>-->c", "                        "],
+    ["<!-- <pre>x</pre> --> [l](a.md)", "                      [l](a.md)"],
+    ["<pre><code></pre></code>", "                        "],
+    ["a<CODE>X</CODE>b", "a              b"],
+    ["<!-- unclosed", "             "],
+    ["<code> unclosed", "               "],
+    ["<pre> <!-- <code>x</code> --> </pre>", "                                    "],
+    ["<code><pre></code></pre>", "                  </pre>"],
+  ])("blankCode(%j) === %j", (input, expected) => {
+    const result = blankCode(input);
+    expect(result).toBe(expected);
+    expect(result.length).toBe(input.length);
+  });
+});
+
+// Constants for timing tests with cited paths
+const CITED = { citedRoots: ["docs"] };
+const DEF = "\n\n[x]: y\n"; // A definition to trigger pendingBrackets resolution
+/** The small size of the nested-bracket growth tests (the larger run is 4x). */
+const NESTED = 50_000;
+
+/**
+ * Linearity by growth, not by wall clock: the best of five runs at n and at 4n, after a warm-up.
+ * Linear work grows about 4x, quadratic about 16x; a run under 1 ms counts as 1 ms, so a fast linear scan always passes.
+ */
+function growth(make: (n: number) => string, n: number, opts: { citedRoots?: string[] } = {}): number {
+  const best = (k: number) => {
+    const input = make(k);
+    let b = Infinity;
+    for (let r = 0; r < 5; r++) {
+      const t = performance.now();
+      scanMarkdown(input, opts);
+      b = Math.min(b, performance.now() - t);
+    }
+    return Math.max(b, 1);
+  };
+  best(n);
+  return best(4 * n) / best(n);
+}
+
+describe("R2-B1 — shortcut link branch stays linear", () => {
+  it("nested brackets grow linearly", () => {
+    // n opening brackets followed by n closing brackets - must not be O(n²)
+    const mk = (n: number) => "[".repeat(n) + "]".repeat(n);
+    const ratio = growth(mk, NESTED);
+    // Linear: ratio ≈ 4; quadratic: ratio ≈ 16. Threshold 8 catches regression.
+    expect(ratio).toBeLessThan(8);
+  });
+});
+
+describe("R2-B2 — <a> close matching stays linear", () => {
+  it("unclosed <a> tags grow linearly", () => {
+    // unclosed <a> tags - must not be O(n²)
+    const mk = (n: number) => "<a>".repeat(n);
+    const ratio = growth(mk, 20_000);
+    // Linear: ratio ≈ 4; quadratic: ratio ≈ 16. Threshold 8 catches regression.
+    expect(ratio).toBeLessThan(8);
+  });
+
+  it("correctly finds </a> after each <a href>", () => {
+    const input = '<a href="a.md">text</a> middle <a href="b.md">more</a>';
+    const result = scanMarkdown(input);
+    expect(result.links.map((l) => l.dest)).toEqual(["a.md", "b.md"]);
+  });
+});
+
+const citedOf = (t: string) => scanMarkdown(t, { citedRoots: ["docs"] }).cited.map((x) => x.token);
+
+describe("R3-B1 — the cited mask stays linear over nested link ranges", () => {
+  const forms: Array<[string, (k: number) => string]> = [
+    ["[t][]", (k) => "[".repeat(k) + "a" + "][]".repeat(k) + DEF],
+    ["[t](u)", (k) => "[".repeat(k) + "a" + "](u)".repeat(k) + DEF],
+  ];
+  for (const [name, mk] of forms) {
+    it(`${name} nested, cited on, with definitions: grows linearly`, () => {
+      const ratio = growth(mk, NESTED, CITED);
+      expect(ratio).toBeLessThan(8);
+    });
+  }
+  it("the R2-B1 nested brackets with cited on and a definition", () => {
+    const mk = (n: number) => "[".repeat(n) + "]".repeat(n) + DEF;
+    const ratio = growth(mk, NESTED, CITED);
+    expect(ratio).toBeLessThan(8);
+  });
+});
+
+describe("R3-S1 — [t][r](x) keeps origin/main's inline link", () => {
+  it("the inline link after a reference bracket is still found", () => {
+    expect(dests("[t][r](missing.md)")).toEqual(["missing.md"]);
+    expect(dests("see [a][b](x.md) and [c](y.md)")).toEqual(["x.md", "y.md"]);
+  });
+});
+
+describe("R3-S2 — the cited mask follows blankCode's pass order", () => {
+  it("comment, then <code>, then <pre>, each over the previous pass's output", () => {
+    expect(citedOf("<!-- <pre> --> docs/a.md")).toEqual(["docs/a.md"]);
+    expect(citedOf("<code><pre></code> docs/c.md")).toEqual(["docs/c.md"]);
+    expect(citedOf("<pre> x <!-- </pre> --> docs/b.md </pre>")).toEqual([]);
+    expect(citedOf("<pre> <code></pre></code> docs/d.md </pre>")).toEqual([]);
+  });
+});
+
+describe("R3-S3 — trailing punctuation is taken off each run", () => {
+  it("a run ending in . inside a quoted word is read", () => {
+    expect(citedOf("\u201Cdocs/e.md.\u201D and docs/f.md.\u2019 end")).toEqual(["docs/e.md", "docs/f.md"]);
+  });
+});
+
+describe("R3-N — a definition inside a fence is not a definition", () => {
+  it("[z]: q in a fence does not make a prose [docs/z.md] a link", () => {
+    expect(citedOf("```\n[docs/z.md]: q\n```\n\n[docs/z.md]\n")).toEqual(["docs/z.md"]);
+  });
+});
+
+
+describe("R4-B1 — the definition gather's fence test stays linear", () => {
+  for (const cited of [false, true]) {
+    it(`a line of ~ ending in a backtick grows linearly, cited ${cited ? "on" : "off"}`, () => {
+      // At HEAD both sizes run under 1 ms (ratio 1): the test guards against a quadratic regression, not the cost itself.
+      const mk = (n: number) => "~".repeat(n) + "`\n";
+      const opts = cited ? CITED : {};
+      const ratio = growth(mk, 16_000, opts);
+      expect(ratio).toBeLessThan(8);
+    });
+  }
+});
+
+describe("R4-S1 — links equal origin/main's around reference brackets", () => {
+  it.each([
+    ["[t][](x.md)", ["x.md"]],
+    ["[t][](x.md)\n\n[t]: y.md", ["x.md", "y.md"]],
+    ["[t][r](x.md)\n\n[r]: y.md", ["x.md", "y.md"]],
+    ["[][r](a.md)\n\n[r]: y.md", ["a.md", "y.md"]],
+    ["[r][](a.md)\n\n[r]: y.md", ["a.md", "y.md"]],
+    ["see [a][b](x.md) and [c](y.md)", ["x.md", "y.md"]],
+    ["[t][r](missing.md)", ["missing.md"]],
+  ])("%s", (input, expected) => {
+    expect(dests(input)).toEqual(expected);
+  });
+  it("[docs/x.md][] with no definition is prose for cited", () => {
+    expect(citedOf("[docs/x.md][]")).toEqual(["docs/x.md"]);
+  });
+});
+
+
+describe("R5-S1 — cited masks a reference bracket exactly when the main loop saw its definition", () => {
+  it("label whitespace is normalised on both sides", () => {
+    expect(citedOf("[docs/g.md  x][]\n\n[docs/g.md  x]: q\n")).toEqual([]);
+    expect(citedOf("[docs/h.md   y]\n\n[docs/h.md y]: q\n")).toEqual([]);
+  });
+  it("a definition inside a blockquote counts", () => {
+    expect(citedOf("> [docs/e.md]: q\n\n[docs/e.md]\n")).toEqual([]);
+  });
+  it("a definition inside <pre> or a comment does not count", () => {
+    expect(citedOf("<pre>\n[docs/p.md]: q\n</pre>\n\n[docs/p.md]\n")).toEqual(["docs/p.md"]);
+    expect(citedOf("<!--\n[docs/c.md]: q\n-->\n\n[docs/c.md]\n")).toEqual(["docs/c.md"]);
+  });
+  it("cited agrees with links on every case: the last line's shortcut is masked iff links saw the definition", () => {
+    for (const input of [
+      "intro\n[docs/a.md]: q\n\n[docs/a.md]\n",
+      "- x\n\n      ~~~\n      [docs/l.md]: q\n      ~~~\n\n[docs/l.md]\n",
+      "> [docs/e.md]: q\n\n[docs/e.md]\n",
+      "<pre>\n[docs/p.md]: q\n</pre>\n\n[docs/p.md]\n",
+    ]) {
+      const defined = dests(input).includes("q");
+      const lastLine = input.trimEnd().split("\n").pop()!;
+      const lastLineNo = input.trimEnd().split("\n").length;
+      const hits = scanMarkdown(input, { citedRoots: ["docs"] }).cited.filter((c) => c.line === lastLineNo);
+      expect([input, hits.length]).toEqual([input, defined ? 0 : 1]);
+      expect(lastLine.startsWith("[docs/")).toBe(true);
+    }
+  });
+});
+
+describe("R6-S1 — a reference label is read from the source, code spans included", () => {
+  it("a code-only label defined elsewhere does not mask a bracketed code span holding a path", () => {
+    expect(citedOf("[`docs/a.md`]\n\n[`zz`]: q\n")).toEqual(["docs/a.md"]);
+    expect(citedOf("[`docs/c.md`][]\n\n[`yy`]: q\n")).toEqual(["docs/c.md"]);
+    expect(citedOf("[x][`docs/d.md`]\n\n[`k`]: q\n")).toEqual(["docs/d.md"]);
+  });
+  it("a code-span label that is defined masks its bracket", () => {
+    expect(citedOf("see [`docs/b.md`] here\n\n[`docs/b.md`]: q\n")).toEqual([]);
+  });
+});
+
+describe("R7-CI — a bracket holding a bracket is never a reference label", () => {
+  it("a collapsed or shortcut bracket whose text holds a bracket is prose, even when that text is defined", () => {
+    // `[a[b]: q` is read as a definition (origin/main's rule, kept so links do not change), but `[a[b]` holds a bracket,
+    // so the shortcut is no reference and the path before it is read.
+    expect(citedOf("[docs/a.md][a[b]\n\n[a[b]: q\n")).toEqual(["docs/a.md"]);
+  });
+  it("a label holding an unescaped bracket is prose for cited", () => {
+    // Neither line is a reference: the bracket holds a bracket, and so does the would-be definition.
+    expect(citedOf("[docs/a.md [x]]\n\n[docs/a.md [x]]: q\n")).toEqual(["docs/a.md", "docs/a.md"]);
+  });
+});
