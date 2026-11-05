@@ -233,6 +233,13 @@ describe("spec 58 §4.2 — each refusal, by position, never by value", () => {
     expect(refusal({ cited: { roots: [], extra: 1 } })).toBe("docs block: cited.extra — cited is a mapping with roots and, optionally, exempt (and 1 more)");
   });
 
+  it("an unknown key in a paths entry is reported even when base or sentinel is invalid", () => {
+    // The unknown-key check runs whatever base and sentinel say.
+    // When base is invalid, both the unknown key and the base error are reported.
+    const at = (c: Record<string, unknown>) => ({ categories: [{ path: "a", ...c }] });
+    expect(refusal(at({ paths: { spec: { base: "root", glob: "x" } } }))).toBe("docs block: categories[0].paths.spec.glob — an entry of paths has no such key (it has base and sentinel) (and 1 more)");
+  });
+
   it("a __proto__ key is refused in each new mapping", () => {
     expect(refusal({ categories: [{ path: "a", frontmatter: [JSON.parse('{"__proto__": ["x"]}')] }] })).toBe("docs block: categories[0].frontmatter[0].__proto__ — a __proto__ key is not allowed");
     expect(refusal({ categories: [{ path: "a", paths: JSON.parse('{"__proto__": {"base": "file"}}') }] })).toBe("docs block: categories[0].paths.__proto__ — a __proto__ key is not allowed");

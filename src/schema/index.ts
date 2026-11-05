@@ -854,6 +854,13 @@ export const DocsBlockSchema = z.unknown().transform((v, ctx): DocsBlock => {
             issue([...at, "paths", pathKey, "__proto__"], NO_PROTO_KEY);
             continue;
           }
+          // Check for unknown keys inside the entry — runs whatever base and sentinel say
+          for (const entryKey of Object.keys(entry)) {
+            if (entryKey === "__proto__") continue;
+            if (entryKey !== "base" && entryKey !== "sentinel") {
+              issue(docsKeyShaped(entryKey) ? [...at, "paths", pathKey, entryKey] : [...at, "paths", pathKey], DOCS_RULES.pathsEntryKey);
+            }
+          }
           // Validate base
           if (entry.base !== "file" && entry.base !== "workspace") {
             issue([...at, "paths", pathKey, "base"], DOCS_RULES.base);
@@ -867,13 +874,6 @@ export const DocsBlockSchema = z.unknown().transform((v, ctx): DocsBlock => {
               continue;
             }
             sentinel = entry.sentinel;
-          }
-          // Check for unknown keys inside the entry
-          for (const entryKey of Object.keys(entry)) {
-            if (entryKey === "__proto__") continue;
-            if (entryKey !== "base" && entryKey !== "sentinel") {
-              issue(docsKeyShaped(entryKey) ? [...at, "paths", pathKey, entryKey] : [...at, "paths", pathKey], DOCS_RULES.pathsEntryKey);
-            }
           }
           category.paths[pathKey] = { base: entry.base, sentinel };
         }
