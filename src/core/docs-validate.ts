@@ -66,7 +66,7 @@ const TAG_RE = new RegExp(`</?(?:[A-Za-z]+:)?(${[...TAG_ELEMENT.keys()].join("|"
 
 // Entries with alone: matched only as a line that is nothing but the closing tag
 const ALONE_ENTRIES = LEAKED_TAGS.filter((t) => t.alone);
-// Build the pattern: </content> or </thinking> or </antml[:A-Za-z_.-]*>
+// The pattern: a closing tag of content, thinking, or an element the prefix entry starts.
 const alonePatternParts = ALONE_ENTRIES.map((t) => {
   const escaped = t.elements[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return t.prefix ? `${escaped}[:A-Za-z_.-]*` : escaped;
@@ -310,8 +310,17 @@ function nextWhere(s: string, test: (c: string) => boolean): Int32Array {
 
 const isWs = (c: string) => c === " " || c === "\t" || c === "\n";
 
-/** Every link, anchor and tag of one paragraph (code already blanked). */
-function scanParagraph(s: string, at: (pos: number) => { line: number; column: number }, scan: Scan): void {
+/**
+ * Every link, anchor and tag of one paragraph. `s` is the paragraph with code blanked; `raw` is the same text unblanked,
+ * and `col0` gives, per line, how many characters (a quote, list or heading marker) were cut before that line's text.
+ */
+function scanParagraph(
+  s: string,
+  raw: string,
+  col0: number[],
+  at: (pos: number) => { line: number; column: number },
+  scan: Scan,
+): void {
   const esc = escapes(s);
 
   // TAG_RE hits: collect positions for deduplication with ALONE_RE
@@ -321,11 +330,16 @@ function scanParagraph(s: string, at: (pos: number) => { line: number; column: n
     tagHitPositions.add(m.index!);
   }
 
-  // ALONE_RE: a line that is nothing but a closing content/thinking/antml tag outside code.
+  // ALONE_RE: a line that, as written in the file, is nothing but a closing content/thinking/antml tag. It is decided on
+  // the unblanked line (`raw`), and only when nothing — a code or comment range, or a quote/list/heading marker — touched
+  // it: the blanked line equals the unblanked one, and the line's col0 is 0.
+  const rawLines = raw.split("\n");
+  const blankedLines = s.split("\n");
   let aloneLineStart = 0;
-  for (const line of s.split("\n")) {
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
     const aloneMatch = ALONE_RE.exec(line);
-    if (aloneMatch) {
+    if (aloneMatch && col0[i] === 0 && blankedLines[i] === line) {
       // A line matching ALONE_RE that also has a TAG_RE hit holds it at the `<` of this closing tag (e.g. antml:invoke),
       // so testing that one position stays linear — TAG_RE already pushed it, so it is not counted twice.
       const ltPos = line.indexOf("</");
@@ -508,7 +522,7 @@ export function scanMarkdown(input: string): Scan {
     const blanked = blankCode(joined);
     // GitHub slugs a heading from its rendered text, so a code span's content counts there.
     if (heading) slugger.add(joined.replace(/\n/g, " "));
-    scanParagraph(blanked, at, scan);
+    scanParagraph(blanked, joined, lines.map((l) => l.col0), at, scan);
   };
 
   for (let i = first; i < all.length; i++) {

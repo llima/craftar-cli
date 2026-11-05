@@ -426,6 +426,34 @@ describe("request 10 — a line that is only a closing tag", () => {
   it("not flagged: content as indented code (4 spaces after blank)", () => {
     expect(scanMarkdown("text\n\n    " + closeOf("content") + "\n").tags).toEqual([]);
   });
+  it("not flagged: alone decided on the line as written — a code span then the tag", () => {
+    expect(scanMarkdown("`x` " + closeOf("content")).tags).toEqual([]);
+  });
+  it("not flagged: an HTML comment then the tag on one line", () => {
+    expect(scanMarkdown("<!-- c --> " + closeOf("thinking")).tags).toEqual([]);
+  });
+  it("not flagged: a <code> element then the tag on one line (no content hit)", () => {
+    const s = scanMarkdown(T("<", "code>y") + T("</", "code>") + " " + closeOf("content"));
+    expect(s.tags.filter((t) => t.name === "content")).toEqual([]);
+  });
+  it("not flagged: a list item whose content is the tag", () => {
+    expect(scanMarkdown("- " + closeOf("content")).tags).toEqual([]);
+  });
+  it("not flagged: a quote whose content is the tag", () => {
+    expect(scanMarkdown("> " + closeOf("thinking")).tags).toEqual([]);
+  });
+  it("not flagged: a heading whose text is the tag", () => {
+    expect(scanMarkdown("# " + closeOf("content")).tags).toEqual([]);
+  });
+  it("guard: a lazy line in a paragraph (col0 0) still gives one hit", () => {
+    expect(scanMarkdown("x\n" + closeOf("content")).tags).toEqual([{ name: "content", line: 2, column: 1 }]);
+  });
+  it("guard: two leading spaces (not indented code) still gives one hit", () => {
+    expect(scanMarkdown("text\n\n  " + closeOf("content")).tags).toEqual([{ name: "content", line: 3, column: 3 }]);
+  });
+  it("guard: the text line of a setext heading, written alone, mirrors the grep and gives one hit", () => {
+    expect(scanMarkdown(closeOf("content") + "\n---\n").tags).toEqual([{ name: "content", line: 1, column: 1 }]);
+  });
   it.each([
     [T("in", "voke"), T("in", "voke"), "already caught"],
     [T("para", "meter"), T("para", "meter"), "already caught"],
