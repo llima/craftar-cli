@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import path from "node:path";
 import { loadWorkspace, plan, type Plan } from "../../src/core/sync.js";
-import { hasBom } from "../../src/core/text.js";
+import { hasBom, hashNormalized, toCrlf } from "../../src/core/text.js";
 import { profile, recipe, rule, scenario, writeFiles, type IngredientSpec } from "../helpers/forge.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -635,64 +635,71 @@ describe("kiro emitter — references inside link text (spec 20)", () => {
 describe("spec 57: kiro keeps the EOL of the file it replaces", () => {
   const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
-  // T1: empty workspace — new files are LF without BOM
+  // The exact LF bytes each kiro file kind writes into a fresh workspace. T1 asserts these; T2 asserts their
+  // CRLF form (toCrlf) when the file on disk is CRLF. One source of truth so the two cannot drift apart.
+  const EXPECTED_LF = {
+    steering: "---\ninclusion: always\n---\n\n<!-- GENERATED from .claude/rules/a.md by craftar -- do not edit. -->\n\n# A\n",
+    agent:
+      '{\n  "name": "rev",\n  "description": "Reviews.",\n  "prompt": "# Rev",\n  "tools": [],\n  "allowedTools": [],\n  "resources": [\n    "file://.kiro/steering/**/*.md"\n  ],\n  "permissions": {\n    "rules": [\n      {\n        "capability": "fs_read",\n        "match": [\n          "./**"\n        ],\n        "effect": "allow"\n      }\n    ]\n  }\n}\n',
+    command: "---\ninclusion: manual\n---\n\n---\ndescription: A command\n---\n# Cmd\n",
+    fileSkill: "# Skill\n",
+    dirSkillNotes: "# Notes\n",
+    mcp: '{\n  "mcpServers": {\n    "srv": {\n      "command": "npx",\n      "args": [\n        "srv"\n      ]\n    }\n  }\n}\n',
+  } as const;
+
+  // Ingredients that produce each expected file, reused by T1 and T2 so both drive the same inputs.
+  const agentIngredient: IngredientSpec = { meta: { type: "agent", name: "rev", description: "Reviews." }, files: { "agent.md": "\n# Rev\n" } };
+  const mcpIngredient: IngredientSpec = { meta: { type: "mcp", name: "srv", server: { command: "npx", args: ["srv"] } } };
+
+  // T1: empty workspace — new files are LF without BOM, exact bytes
   describe("T1: empty workspace writes LF without BOM", () => {
-    it("steering file (.kiro/steering/a.md) is LF without BOM", async () => {
+    it("steering file (.kiro/steering/a.md) is the exact LF bytes without BOM", async () => {
       const p = await planFor([rule("a", "# A\n")]);
       const f = file(p, ".kiro/steering/a.md")!;
-      const text = f.content.toString("utf8");
-      // LF only, no CRLF
-      expect(text).toBe("---\ninclusion: always\n---\n\n<!-- GENERATED from .claude/rules/a.md by craftar -- do not edit. -->\n\n# A\n");
-      expect(text).not.toContain("\r");
-      // No BOM
+      expect(f.content.toString("utf8")).toBe(EXPECTED_LF.steering);
       expect(hasBom(f.content)).toBe(false);
       expect(f.content[0]).not.toBe(0xef);
     });
 
-    it("agent JSON (.kiro/agents/x.json) is LF without BOM", async () => {
-      const p = await planFor([{ meta: { type: "agent", name: "rev", description: "Reviews." }, files: { "agent.md": "\n# Rev\n" } }]);
+    it("agent JSON (.kiro/agents/rev.json) is the exact LF bytes without BOM", async () => {
+      const p = await planFor([agentIngredient]);
       const f = file(p, ".kiro/agents/rev.json")!;
-      const text = f.content.toString("utf8");
-      expect(text).not.toContain("\r");
+      expect(f.content.toString("utf8")).toBe(EXPECTED_LF.agent);
       expect(hasBom(f.content)).toBe(false);
     });
 
-    it("command mirror (.kiro/steering/commands/c.md) is LF without BOM", async () => {
+    it("command mirror (.kiro/steering/commands/c.md) is the exact LF bytes without BOM", async () => {
       const p = await planFor([{ meta: { type: "command", name: "c", description: "A command" }, files: { "command.md": "# Cmd\n" } }]);
       const f = file(p, ".kiro/steering/commands/c.md")!;
-      const text = f.content.toString("utf8");
-      expect(text).not.toContain("\r");
+      expect(f.content.toString("utf8")).toBe(EXPECTED_LF.command);
       expect(hasBom(f.content)).toBe(false);
     });
 
-    it("file skill (.kiro/skills/s/SKILL.md) is LF without BOM", async () => {
+    it("file skill (.kiro/skills/s/SKILL.md) is the exact LF bytes without BOM", async () => {
       const p = await planFor([{ meta: { type: "skill", name: "s", layout: "file" }, files: { "SKILL.md": "# Skill\n" } }]);
       const f = file(p, ".kiro/skills/s/SKILL.md")!;
-      const text = f.content.toString("utf8");
-      expect(text).not.toContain("\r");
+      expect(f.content.toString("utf8")).toBe(EXPECTED_LF.fileSkill);
       expect(hasBom(f.content)).toBe(false);
     });
 
-    it("directory skill text file (.kiro/skills/d/notes.md) is LF without BOM", async () => {
+    it("directory skill text file (.kiro/skills/d/notes.md) is the exact LF bytes without BOM", async () => {
       const p = await planFor([{ meta: { type: "skill", name: "d" }, files: { "SKILL.md": "# Skill\n", "notes.md": "# Notes\n" } }]);
       const f = file(p, ".kiro/skills/d/notes.md")!;
-      const text = f.content.toString("utf8");
-      expect(text).not.toContain("\r");
+      expect(f.content.toString("utf8")).toBe(EXPECTED_LF.dirSkillNotes);
       expect(hasBom(f.content)).toBe(false);
     });
 
-    it("mcp.json (.kiro/settings/mcp.json) is LF without BOM", async () => {
-      const p = await planFor([{ meta: { type: "mcp", name: "srv", server: { command: "npx", args: ["srv"] } } }]);
+    it("mcp.json (.kiro/settings/mcp.json) is the exact LF bytes without BOM", async () => {
+      const p = await planFor([mcpIngredient]);
       const f = file(p, ".kiro/settings/mcp.json")!;
-      const text = f.content.toString("utf8");
-      expect(text).not.toContain("\r");
+      expect(f.content.toString("utf8")).toBe(EXPECTED_LF.mcp);
       expect(hasBom(f.content)).toBe(false);
     });
   });
 
   // T2: EOL detection — keeps the existing file's EOL
   describe("T2: keeps existing file's EOL", () => {
-    it("CRLF file on disk → planned bytes are CRLF", async () => {
+    it("CRLF file on disk → the exact T1 LF bytes with every \\n turned into \\r\\n", async () => {
       const s = await scenario(
         { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"], ["kiro"])] },
         { config: { profile: "acme" }, files: { ".kiro/steering/a.md": "---\r\ninclusion: always\r\n---\r\n\r\nold\r\n" } },
@@ -700,14 +707,11 @@ describe("spec 57: kiro keeps the EOL of the file it replaces", () => {
       cleanups.push(s.cleanup);
       const p = await plan(await loadWorkspace(s.wsRoot));
       const f = file(p, ".kiro/steering/a.md")!;
-      const text = f.content.toString("utf8");
-      // Should be CRLF
-      expect(text).toContain("\r\n");
-      // No lone LF
-      expect(text).not.toMatch(/(?<!\r)\n/);
+      expect(f.content.toString("utf8")).toBe(toCrlf(EXPECTED_LF.steering));
+      expect(hasBom(f.content)).toBe(false);
     });
 
-    it("LF file on disk → planned bytes are LF", async () => {
+    it("LF file on disk → the exact T1 LF bytes", async () => {
       const s = await scenario(
         { ingredients: [rule("a", "# A\n")], recipes: [recipe("base", ["rule/a"])], profiles: [profile("acme", ["base"], ["kiro"])] },
         { config: { profile: "acme" }, files: { ".kiro/steering/a.md": "---\ninclusion: always\n---\n\nold\n" } },
@@ -715,9 +719,7 @@ describe("spec 57: kiro keeps the EOL of the file it replaces", () => {
       cleanups.push(s.cleanup);
       const p = await plan(await loadWorkspace(s.wsRoot));
       const f = file(p, ".kiro/steering/a.md")!;
-      const text = f.content.toString("utf8");
-      // Should be LF only
-      expect(text).not.toContain("\r");
+      expect(f.content.toString("utf8")).toBe(EXPECTED_LF.steering);
     });
 
     it("3 CRLF + 1 LF → CRLF (majority wins)", async () => {
@@ -761,28 +763,61 @@ describe("spec 57: kiro keeps the EOL of the file it replaces", () => {
       expect(text).not.toContain("\r");
     });
 
-    it("CRLF agent JSON on disk → planned bytes are CRLF", async () => {
+    it("CRLF agent JSON on disk → the exact T1 LF bytes with every \\n turned into \\r\\n", async () => {
       const s = await scenario(
-        { ingredients: [{ meta: { type: "agent", name: "rev", description: "Reviews." }, files: { "agent.md": "\n# Rev\n" } }], recipes: [recipe("base", ["agent/rev"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+        { ingredients: [agentIngredient], recipes: [recipe("base", ["agent/rev"])], profiles: [profile("acme", ["base"], ["kiro"])] },
         { config: { profile: "acme" }, files: { ".kiro/agents/rev.json": '{\r\n  "name": "old"\r\n}\r\n' } },
       );
       cleanups.push(s.cleanup);
       const p = await plan(await loadWorkspace(s.wsRoot));
       const f = file(p, ".kiro/agents/rev.json")!;
-      const text = f.content.toString("utf8");
-      expect(text).not.toMatch(/(?<!\r)\n/);
+      expect(f.content.toString("utf8")).toBe(toCrlf(EXPECTED_LF.agent));
+      expect(hasBom(f.content)).toBe(false);
     });
 
-    it("CRLF mcp.json on disk → planned bytes are CRLF", async () => {
+    it("LF agent JSON on disk → the exact T1 LF bytes", async () => {
       const s = await scenario(
-        { ingredients: [{ meta: { type: "mcp", name: "srv", server: { command: "npx", args: ["srv"] } } }], recipes: [recipe("base", ["mcp/srv"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+        { ingredients: [agentIngredient], recipes: [recipe("base", ["agent/rev"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+        { config: { profile: "acme" }, files: { ".kiro/agents/rev.json": '{\n  "name": "old"\n}\n' } },
+      );
+      cleanups.push(s.cleanup);
+      const p = await plan(await loadWorkspace(s.wsRoot));
+      const f = file(p, ".kiro/agents/rev.json")!;
+      expect(f.content.toString("utf8")).toBe(EXPECTED_LF.agent);
+    });
+
+    it("agent JSON 3 CRLF + 1 LF on disk → CRLF (majority wins), the exact T1 LF bytes as CRLF", async () => {
+      const s = await scenario(
+        { ingredients: [agentIngredient], recipes: [recipe("base", ["agent/rev"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+        { config: { profile: "acme" }, files: { ".kiro/agents/rev.json": '{\r\n  "a": 1,\r\n  "b": 2,\r\n  "c": 3\n}' } }, // 3 CRLF, 1 LF
+      );
+      cleanups.push(s.cleanup);
+      const p = await plan(await loadWorkspace(s.wsRoot));
+      const f = file(p, ".kiro/agents/rev.json")!;
+      expect(f.content.toString("utf8")).toBe(toCrlf(EXPECTED_LF.agent));
+    });
+
+    it("agent JSON 1 CRLF + 3 LF on disk → LF (majority wins), the exact T1 LF bytes", async () => {
+      const s = await scenario(
+        { ingredients: [agentIngredient], recipes: [recipe("base", ["agent/rev"])], profiles: [profile("acme", ["base"], ["kiro"])] },
+        { config: { profile: "acme" }, files: { ".kiro/agents/rev.json": '{\r\n  "a": 1,\n  "b": 2,\n  "c": 3\n}' } }, // 1 CRLF, 3 LF
+      );
+      cleanups.push(s.cleanup);
+      const p = await plan(await loadWorkspace(s.wsRoot));
+      const f = file(p, ".kiro/agents/rev.json")!;
+      expect(f.content.toString("utf8")).toBe(EXPECTED_LF.agent);
+    });
+
+    it("CRLF mcp.json on disk → the exact T1 LF bytes with every \\n turned into \\r\\n", async () => {
+      const s = await scenario(
+        { ingredients: [mcpIngredient], recipes: [recipe("base", ["mcp/srv"])], profiles: [profile("acme", ["base"], ["kiro"])] },
         { config: { profile: "acme" }, files: { ".kiro/settings/mcp.json": '{\r\n  "old": true\r\n}\r\n' } },
       );
       cleanups.push(s.cleanup);
       const p = await plan(await loadWorkspace(s.wsRoot));
       const f = file(p, ".kiro/settings/mcp.json")!;
-      const text = f.content.toString("utf8");
-      expect(text).not.toMatch(/(?<!\r)\n/);
+      expect(f.content.toString("utf8")).toBe(toCrlf(EXPECTED_LF.mcp));
+      expect(hasBom(f.content)).toBe(false);
     });
   });
 
@@ -844,11 +879,17 @@ describe("spec 57: kiro keeps the EOL of the file it replaces", () => {
       const st1 = await status(ws1, p1, null);
       await apply(ws1, p1, st1);
 
-      // Read lock hashes for files before edit
+      // Read lock hashes for files before edit (lock.files is an array of {path, hash, …})
       const lock1 = await readLock(s.wsRoot);
-      const hashA1 = lock1?.files[".kiro/steering/a.md"]?.hash;
-      const hashB1 = lock1?.files[".kiro/steering/b.md"]?.hash;
+      const lockHash = (lock: Awaited<ReturnType<typeof readLock>>, rel: string) => lock?.files.find((e) => e.path === rel)?.hash;
+      const hashB1 = lockHash(lock1, ".kiro/steering/b.md");
       const bytesB1 = await fsPromises.readFile(path.join(s.wsRoot, ".kiro/steering/b.md"));
+
+      // The lock hash is EOL/BOM-normalized, so an untouched file's hash equals hashNormalized of the plan's
+      // own (LF) bytes for it — the CRLF on disk and the LF plan hash to the same thing.
+      const plannedB1 = p1.files.find((f) => f.path === ".kiro/steering/b.md")!;
+      expect(hashB1).toBeDefined();
+      expect(hashB1).toBe(hashNormalized(plannedB1.content));
 
       // Now edit rule A in the Forge
       await fsPromises.writeFile(path.join(s.forgeRoot, "ingredients/rules/a/rule.md"), "# A edited\n");
@@ -876,7 +917,7 @@ describe("spec 57: kiro keeps the EOL of the file it replaces", () => {
 
       // Lock hash for B is unchanged
       const lock3 = await readLock(s.wsRoot);
-      expect(lock3?.files[".kiro/steering/b.md"]?.hash).toBe(hashB1);
+      expect(lockHash(lock3, ".kiro/steering/b.md")).toBe(hashB1);
     });
   });
 
