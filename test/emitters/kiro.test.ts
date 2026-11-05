@@ -888,7 +888,10 @@ describe("spec 57: kiro keeps the EOL of the file it replaces", () => {
       const { promises: fsPromises } = await import("node:fs");
 
       const banner = "<!-- GENERATED from .claude/rules/workflow.md by craftar -- do not edit. -->";
-      const body = "# Workflow\n\nSee .kiro/steering/style.md.\n";
+      // A line only the Kiro steering files hold — the .claude/rules/ source does NOT — so finding it in the
+      // Forge rule proves --prefer-kiro took the steering text, not the .claude/rules/workflow.md fallback.
+      const kiroOnly = "Kiro-only line for spec 57.";
+      const body = `# Workflow\n\n${kiroOnly}\n\nSee .kiro/steering/style.md.\n`;
       const steeringLF = `---\ninclusion: always\n---\n\n${banner}\n\n${body}`;
       const steeringCRLF = steeringLF.replace(/\n/g, "\r\n");
 
@@ -925,6 +928,9 @@ describe("spec 57: kiro keeps the EOL of the file it replaces", () => {
       // The rule text should be identical
       const ruleLF = await fsPromises.readFile(path.join(forgeLF, "ingredients/rules/workflow/rule.md"), "utf8");
       const ruleCRLF = await fsPromises.readFile(path.join(forgeCRLF, "ingredients/rules/workflow/rule.md"), "utf8");
+      // --prefer-kiro took the steering text: the Kiro-only line (absent from .claude/rules/workflow.md) is present in both.
+      expect(ruleLF).toContain(kiroOnly);
+      expect(ruleCRLF).toContain(kiroOnly);
       expect(ruleLF).toBe(ruleCRLF);
     });
   });
