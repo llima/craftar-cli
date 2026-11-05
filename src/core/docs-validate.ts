@@ -322,8 +322,8 @@ function normalizeLabel(s: string): string {
  * and `col0` gives, per line, how many characters (a quote, list or heading marker) were cut before that line's text.
  *
  * When `definedLabels` is provided, this function adds normalized labels from any definitions found in this paragraph.
- * When `pendingBrackets` is provided, reference bracket positions are recorded for later resolution (instead of deciding
- * immediately based on a pre-gathered set). The caller resolves them after all paragraphs are scanned.
+ * When `pendingBrackets` is provided, reference bracket offsets are recorded for later resolution; the caller normalizes
+ * and resolves them after all paragraphs are scanned (so that files with no definitions allocate no label strings).
  */
 function scanParagraph(
   s: string,
@@ -333,7 +333,7 @@ function scanParagraph(
   scan: Scan,
   linkRanges?: Array<[number, number]>,
   definedLabels?: Set<string>,
-  pendingBrackets?: Array<{ from: number; to: number; label: string }>,
+  pendingBrackets?: Array<{ from: number; to: number; labelFrom: number; labelTo: number }>,
 ): void {
   const esc = escapes(s);
 
@@ -421,13 +421,11 @@ function scanParagraph(
               // Collapsed [text][]: label is the text, must be ≤999 chars
               const len = i - opened - 1;
               if (len <= 999) {
-                const label = normalizeLabel(s.slice(opened + 1, i));
-                pendingBrackets.push({ from: opened, to: j + 1, label });
+                pendingBrackets.push({ from: opened, to: j + 1, labelFrom: opened + 1, labelTo: i });
               }
             } else if (ref.length <= 999) {
               // Full reference [text][ref]
-              const label = normalizeLabel(ref);
-              pendingBrackets.push({ from: opened, to: j + 1, label });
+              pendingBrackets.push({ from: opened, to: j + 1, labelFrom: i + 2, labelTo: j });
             }
           }
         }
@@ -436,8 +434,7 @@ function scanParagraph(
         // Record for later resolution when pendingBrackets tracked and label would fit (≤999 chars).
         const len = i - opened - 1;
         if (pendingBrackets && len <= 999) {
-          const label = normalizeLabel(s.slice(opened + 1, i));
-          pendingBrackets.push({ from: opened, to: i + 1, label });
+          pendingBrackets.push({ from: opened, to: i + 1, labelFrom: opened + 1, labelTo: i });
         }
       }
     }
@@ -446,15 +443,20 @@ function scanParagraph(
   // Reference definitions: the paragraph's leading lines (one cannot interrupt a paragraph), each a destination and at most
   // a title; never a footnote or a task box.
   let lineStart = 0;
-  for (const line of s.split("\n")) {
+  const sLines = s.split("\n");
+  const defRawLines = raw.split("\n");
+  for (let li = 0; li < sLines.length; li++) {
+    const line = sLines[li];
     const m = /^ {0,3}\[([^\]\n]{1,999})\]:[ \t]*(<[^>\n]*>|\S+)(.*)$/.exec(line);
     if (!m || m[1].startsWith("^") || /^[ xX]$/.test(m[1]) || !TITLE_OR_EMPTY(m[3])) break;
     const angle = m[2].startsWith("<");
     const col = line.indexOf(m[2], line.indexOf("]:") + 2) + (angle ? 1 : 0);
     scan.links.push({ dest: angle ? m[2].slice(1, -1) : m[2], markdown: true, ...at(lineStart + col) });
     linkRanges?.push([lineStart, lineStart + line.length]);
-    // Record the normalized label so reference brackets can be resolved after all paragraphs are scanned.
-    definedLabels?.add(normalizeLabel(m[1]));
+    // Record the normalized label from the raw text (code spans included) so reference brackets can be resolved correctly.
+    const labelStart = line.indexOf("[") + 1;
+    const rawLabel = defRawLines[li].substr(labelStart, m[1].length);
+    definedLabels?.add(normalizeLabel(rawLabel));
     lineStart += line.length + 1;
   }
 
@@ -561,12 +563,13 @@ export function scanMarkdown(input: string, opts: { citedRoots?: string[] } = {}
   }
 
   // Defined labels are collected during paragraph processing (from the main loop's own definition detection).
-  // Pending reference brackets are recorded and resolved after all paragraphs are scanned.
+  // Pending reference brackets are recorded and resolved after all paragraphs are scanned; deferredCited holds each
+  // paragraph's raw text until the end of the file (memory proportional to the file).
   const definedLabels = new Set<string>();
   const deferredCited: Array<{
     joined: string;
     linkRanges: Array<[number, number]>;
-    pendingBrackets: Array<{ from: number; to: number; label: string }>;
+    pendingBrackets: Array<{ from: number; to: number; labelFrom: number; labelTo: number }>;
     at: (pos: number) => { line: number; column: number };
   }> = [];
 
@@ -604,7 +607,7 @@ export function scanMarkdown(input: string, opts: { citedRoots?: string[] } = {}
     if (heading) slugger.add(joined.replace(/\n/g, " "));
     // Inline links and definitions go to linkRanges immediately; reference brackets are deferred until all definitions known.
     const linkRanges: Array<[number, number]> | undefined = citedRoots.length > 0 ? [] : undefined;
-    const pendingBrackets: Array<{ from: number; to: number; label: string }> | undefined = citedRoots.length > 0 ? [] : undefined;
+    const pendingBrackets: Array<{ from: number; to: number; labelFrom: number; labelTo: number }> | undefined = citedRoots.length > 0 ? [] : undefined;
     scanParagraph(blanked, joined, lines.map((l) => l.col0), at, scan, linkRanges, definedLabels, pendingBrackets);
     // Defer cited processing until all paragraphs are scanned (so all definitions are known).
     if (linkRanges && pendingBrackets) deferredCited.push({ joined, linkRanges, pendingBrackets, at });
@@ -740,9 +743,12 @@ export function scanMarkdown(input: string, opts: { citedRoots?: string[] } = {}
 
   // Resolve pending reference brackets now that all definitions are known, then run cited collection.
   for (const d of deferredCited) {
-    // Add ranges for reference brackets whose label is defined.
-    for (const b of d.pendingBrackets) {
-      if (definedLabels.has(b.label)) d.linkRanges.push([b.from, b.to]);
+    // Add ranges for reference brackets whose label is defined (normalize from raw text only when definitions exist).
+    if (definedLabels.size > 0) {
+      for (const b of d.pendingBrackets) {
+        const label = normalizeLabel(d.joined.slice(b.labelFrom, b.labelTo));
+        if (definedLabels.has(label)) d.linkRanges.push([b.from, b.to]);
+      }
     }
     // Spec 58 §5.5: cited path candidates, only when the caller asks (a .claude/ file under a declared cited block).
     collectCitedPaths(d.joined, d.linkRanges, d.at, scan, citedRoots);

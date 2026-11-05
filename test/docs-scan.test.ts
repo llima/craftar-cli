@@ -636,3 +636,14 @@ describe("R5-S1 — cited masks a reference bracket exactly when the main loop s
     }
   });
 });
+
+describe("R6-S1 — a reference label is read from the source, code spans included", () => {
+  it("a code-only label defined elsewhere does not mask a bracketed code span holding a path", () => {
+    expect(citedOf("[`docs/a.md`]\n\n[`zz`]: q\n")).toEqual(["docs/a.md"]);
+    expect(citedOf("[`docs/c.md`][]\n\n[`yy`]: q\n")).toEqual(["docs/c.md"]);
+    expect(citedOf("[x][`docs/d.md`]\n\n[`k`]: q\n")).toEqual(["docs/d.md"]);
+  });
+  it("a code-span label that is defined masks its bracket", () => {
+    expect(citedOf("see [`docs/b.md`] here\n\n[`docs/b.md`]: q\n")).toEqual([]);
+  });
+});
