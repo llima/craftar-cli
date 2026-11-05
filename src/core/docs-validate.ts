@@ -378,6 +378,7 @@ function scanParagraph(
   at: (pos: number) => { line: number; column: number },
   scan: Scan,
   linkRanges?: Array<[number, number]>,
+  fileRefLabels?: Set<string>,
 ): void {
   const esc = escapes(s);
 
@@ -440,14 +441,17 @@ function scanParagraph(
   };
 
   const brackets: number[] = [];
-  // Collect reference definitions for shortcut/collapsed link detection
-  const refLabels = new Set<string>();
-  let refScanStart = 0;
-  for (const line of s.split("\n")) {
-    const m = /^ {0,3}\[([^\]\n]{1,999})\]:[ \t]*(<[^>\n]*>|\S+)(.*)$/.exec(line);
-    if (!m || m[1].startsWith("^") || /^[ xX]$/.test(m[1]) || !TITLE_OR_EMPTY(m[3])) break;
-    refLabels.add(m[1].toLowerCase());
-    refScanStart += line.length + 1;
+  // R2-S5: Use file-level reference definitions when provided; otherwise gather from paragraph's leading lines.
+  // (Paragraph-level gathering kept for backward compatibility and for reference definition processing below.)
+  const refLabels = fileRefLabels ?? new Set<string>();
+  if (!fileRefLabels) {
+    let refScanStart = 0;
+    for (const line of s.split("\n")) {
+      const m = /^ {0,3}\[([^\]\n]{1,999})\]:[ \t]*(<[^>\n]*>|\S+)(.*)$/.exec(line);
+      if (!m || m[1].startsWith("^") || /^[ xX]$/.test(m[1]) || !TITLE_OR_EMPTY(m[3])) break;
+      refLabels.add(m[1].toLowerCase());
+      refScanStart += line.length + 1;
+    }
   }
 
   for (let i = 0; i < s.length; i++) {
@@ -601,6 +605,16 @@ export function scanMarkdown(input: string, opts: { citedRoots?: string[] } = {}
     first = raw.split("\n").length + 2;
   }
 
+  // R2-S5: Gather file's link reference definitions once, before processing paragraphs.
+  const fileRefLabels = new Set<string>();
+  for (let i = first; i < all.length; i++) {
+    const line = all[i];
+    const m = /^ {0,3}\[([^\]\n]{1,999})\]:[ \t]*(<[^>\n]*>|\S+)(.*)$/.exec(line);
+    if (m && !m[1].startsWith("^") && !/^[ xX]$/.test(m[1]) && TITLE_OR_EMPTY(m[3])) {
+      fileRefLabels.add(m[1].toLowerCase());
+    }
+  }
+
   let paragraph: SrcLine[] = [];
   let fence: { char: string; len: number; strip: number; quoted: boolean } | null = null;
   /** Where the current list item's content starts: a fence indented that far belongs to the item (CommonMark). */
@@ -634,7 +648,7 @@ export function scanMarkdown(input: string, opts: { citedRoots?: string[] } = {}
     // GitHub slugs a heading from its rendered text, so a code span's content counts there.
     if (heading) slugger.add(joined.replace(/\n/g, " "));
     const linkRanges: Array<[number, number]> | undefined = citedRoots.length > 0 ? [] : undefined;
-    scanParagraph(blanked, joined, lines.map((l) => l.col0), at, scan, linkRanges);
+    scanParagraph(blanked, joined, lines.map((l) => l.col0), at, scan, linkRanges, fileRefLabels);
     // Spec 58 §5.5: cited path candidates, only when the caller asks (a .claude/ file under a declared cited block).
     if (linkRanges) collectCitedPaths(joined, linkRanges, at, scan, citedRoots);
   };
