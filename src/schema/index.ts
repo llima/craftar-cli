@@ -596,6 +596,7 @@ export const DOCS_RULES = {
   cited: "cited is a mapping with roots and, optionally, exempt",
   citedRoot: "a cited root is a relative POSIX path: segments of letters, digits and . _ @ + -, no . or .. segment, no backslash, not absolute",
   citedRootDuplicate: "a cited root appears once in roots",
+  citedRootGit: "a cited root cannot be .git or start with .git/",
   exempt: "exempt is a list of relative POSIX paths",
   exemptEntry: "an exempt entry is a relative POSIX path: no . or .. segment, no backslash, not absolute",
 } as const;
@@ -696,9 +697,11 @@ export const DocsBlockSchema = z.unknown().transform((v, ctx): DocsBlock => {
         const roots: string[] = [];
         const seenRoots = new Set<string>();
         c.roots.forEach((r: unknown, i: number) => {
-          // A cited root has a category path's shape (spec 58 §4.1).
+          // A cited root has a category path's shape (spec 58 §4.1), and is not .git (case-insensitive).
           if (!docsCategoryPath(r)) {
             issue(["cited", "roots", i], DOCS_RULES.citedRoot);
+          } else if (r.toLowerCase() === ".git" || r.toLowerCase().startsWith(".git/")) {
+            issue(["cited", "roots", i], DOCS_RULES.citedRootGit);
           } else if (seenRoots.has(r)) {
             issue(["cited", "roots", i], DOCS_RULES.citedRootDuplicate);
           } else {
