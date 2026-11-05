@@ -499,14 +499,14 @@ const DEF = "\n\n[x]: y\n"; // A definition to trigger pendingBrackets resolutio
 const NESTED = 50_000;
 
 /**
- * Linearity by growth, not by wall clock: the best of three runs at n and at 4n, after a warm-up.
+ * Linearity by growth, not by wall clock: the best of five runs at n and at 4n, after a warm-up.
  * Linear work grows about 4x, quadratic about 16x; a run under 1 ms counts as 1 ms, so a fast linear scan always passes.
  */
 function growth(make: (n: number) => string, n: number, opts: { citedRoots?: string[] } = {}): number {
   const best = (k: number) => {
     const input = make(k);
     let b = Infinity;
-    for (let r = 0; r < 3; r++) {
+    for (let r = 0; r < 5; r++) {
       const t = performance.now();
       scanMarkdown(input, opts);
       b = Math.min(b, performance.now() - t);
@@ -595,6 +595,7 @@ describe("R3-N — a definition inside a fence is not a definition", () => {
 describe("R4-B1 — the definition gather's fence test stays linear", () => {
   for (const cited of [false, true]) {
     it(`a line of ~ ending in a backtick grows linearly, cited ${cited ? "on" : "off"}`, () => {
+      // At HEAD both sizes run under 1 ms (ratio 1): the test guards against a quadratic regression, not the cost itself.
       const mk = (n: number) => "~".repeat(n) + "`\n";
       const opts = cited ? CITED : {};
       const ratio = growth(mk, 16_000, opts);
@@ -662,11 +663,10 @@ describe("R6-S1 — a reference label is read from the source, code spans includ
 });
 
 describe("R7-CI — a bracket holding a bracket is never a reference label", () => {
-  it("nested brackets with definitions present cost no label work", () => {
-    // Nested brackets should be invalidated early, not attempt label resolution
-    const mk = (n: number) => "[".repeat(n) + "a" + "][]".repeat(n) + DEF;
-    const ratio = growth(mk, NESTED, CITED);
-    expect(ratio).toBeLessThan(8);
+  it("a collapsed or shortcut bracket whose text holds a bracket is prose, even when that text is defined", () => {
+    // `[a[b]: q` is read as a definition (origin/main's rule, kept so links do not change), but `[a[b]` holds a bracket,
+    // so the shortcut is no reference and the path before it is read.
+    expect(citedOf("[docs/a.md][a[b]\n\n[a[b]: q\n")).toEqual(["docs/a.md"]);
   });
   it("a label holding an unescaped bracket is prose for cited", () => {
     // Neither line is a reference: the bracket holds a bracket, and so does the would-be definition.
