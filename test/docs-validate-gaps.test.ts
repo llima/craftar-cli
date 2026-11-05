@@ -136,7 +136,7 @@ describe("spec 58 §5.3 — related: from the workspace root", () => {
       },
       { categories: cats, related: "symmetric", relatedBase: "workspace" },
     );
-    expect(findings(await run(s.wsRoot)).map(withFix)).toEqual([
+    expect(findings(await run(s.wsRoot), "related").map(withFix)).toEqual([
       "error related docs/specs/x.md related[0]: the entry leaves the workspace | name a file inside the workspace",
       "error related docs/specs/x.md related[1]: the entry does not exist | correct the entry or restore the file",
       "error related docs/specs/x.md related[2]: the entry does not exist | correct the entry or restore the file",
@@ -150,7 +150,12 @@ describe("spec 58 §5.3 — related: from the workspace root", () => {
       { "docs/specs/x.md": "---\nrelated: [/docs/specs/s.md, s.md, C:/x.md]\n---\n", "docs/specs/s.md": "x\n" },
       { categories: cats, related: "resolve" },
     );
-    expect(findings(await run(s.wsRoot)).map(withFix)).toEqual(["error related docs/specs/x.md related[2]: an absolute Windows path | use a path relative to the file"]);
+    expect(findings(await run(s.wsRoot), "related").map(withFix)).toEqual(["error related docs/specs/x.md related[2]: an absolute Windows path | use a path relative to the file"]);
+  });
+
+  it("a declared directory that is not there is still a categories error with related on", async () => {
+    const s = await ws({ "docs/specs/x.md": "---\nrelated: [docs/specs/x.md]\n---\n" }, { categories: [{ path: "specs" }, { path: "gone" }], related: "resolve", relatedBase: "workspace" });
+    expect(findings(await run(s.wsRoot)).map(brief)).toEqual(["error categories null categories[1]: no such directory under docs/"]);
   });
 });
 
@@ -293,6 +298,8 @@ describe("spec 58 §5.5 — cited paths in .claude/ (cited)", () => {
       `error cited .claude/rules/a.md:${L(23)}:${col("23", "docs/period.md")} ${MISSING}`,
       `error cited .claude/rules/a.md:${L(23)}:${col("23", "docs/x.md;")} ${MISSING}`,
     ]);
+    // A check with findings prints no ok line.
+    expect(r.checks.filter((c) => c.id === "cited" && c.level === "ok")).toEqual([]);
     // No cited path is printed, in any string of the report.
     const all = leaves(r).join("\n");
     for (const p of ["docs/nope.md", "docs/span.md", "docs/code.md", "docs/bold.md", "docs/Real.md", "local-stack/gone.yaml", "docs/lnk/z.md", ".claude/settings.craftar.example.json", "projects"]) expect(all).not.toContain(p);
@@ -325,6 +332,12 @@ describe("spec 58 §5.5 — cited paths in .claude/ (cited)", () => {
       "warn cited .claude/rules/a.md:1:27 cited path is reached through a symbolic link, not followed | cite the file itself, not through a link",
       "warn cited null git could not say which cited paths it ignores: missing cited paths not checked | run in a git repository with git on PATH",
     ]);
+  });
+
+  it("a run longer than PATH_MAX is no candidate and never reaches git", async () => {
+    const s = await ws({ ".claude/rules/a.md": "docs/" + "a".repeat(5000) + ".md and docs/nope.md\n" }, BLOCK);
+    const r = await run(s.wsRoot);
+    expect(findings(r, "cited").map(brief)).toEqual(["error cited .claude/rules/a.md:1:5014 cited path does not exist"]);
   });
 
   it("without cited, nothing is read and no cited line appears", async () => {
