@@ -501,15 +501,24 @@ function scanParagraph(
 
   // HTML: <a href>, <img src> and <a id> / <a name> with a quoted value; an unquoted one is left unseen (§6.3).
   // For <a> elements, extend the range to include content up to </a>.
+  // Use a forward cursor for </a> search to stay linear (one indexOf per element, not per character).
+  const lower = s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+  let aCloseCursor = 0;
+  let aCloseExhausted = false; // Once indexOf returns -1, no more </a> exists
   for (const m of s.matchAll(/<(a|img)\b([^<>]*)>/gi)) {
     const element = m[1].toLowerCase();
     const tagStart = m.index!;
     let rangeEnd = tagStart + m[0].length;
     // For <a> elements, find the closing </a> and extend the range
-    if (element === "a") {
-      const closeMatch = s.slice(tagStart).match(/<\/a>/i);
-      if (closeMatch && closeMatch.index !== undefined) {
-        rangeEnd = tagStart + closeMatch.index + closeMatch[0].length;
+    if (element === "a" && !aCloseExhausted) {
+      // Move cursor forward if behind this tag
+      if (aCloseCursor < rangeEnd) aCloseCursor = rangeEnd;
+      const closeIdx = lower.indexOf("</a>", aCloseCursor);
+      if (closeIdx !== -1) {
+        rangeEnd = closeIdx + 4; // 4 = "</a>".length
+        aCloseCursor = rangeEnd;
+      } else {
+        aCloseExhausted = true; // No more </a> in the string
       }
     }
     linkRanges?.push([tagStart, rangeEnd]);

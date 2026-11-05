@@ -506,3 +506,23 @@ describe("R2-B1 — shortcut link branch stays linear", () => {
     expect(result.links).toEqual([]);
   });
 });
+
+describe("R2-B2 — <a> close matching stays linear", () => {
+  it("handles 80K <a> tags in linear time", () => {
+    // 80K opening <a> tags - should not be O(n²)
+    const input = "<a>".repeat(80_000);
+    const start = performance.now();
+    const result = scanMarkdown(input);
+    const elapsed = performance.now() - start;
+    // Should complete in under 500ms; quadratic would take many seconds
+    expect(elapsed).toBeLessThan(500);
+    // No hrefs, so no links
+    expect(result.links).toEqual([]);
+  });
+
+  it("correctly finds </a> after each <a href>", () => {
+    const input = '<a href="a.md">text</a> middle <a href="b.md">more</a>';
+    const result = scanMarkdown(input);
+    expect(result.links.map((l) => l.dest)).toEqual(["a.md", "b.md"]);
+  });
+});
