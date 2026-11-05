@@ -4,6 +4,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { runCli } from "./helpers/cli.js";
 import { profile, recipe, scenario, writeFiles, type IngredientSpec } from "./helpers/forge.js";
+import { atLeastWin32 } from "./helpers/timeouts.js";
 
 /**
  * Spec 51 §10: pin what a Forge below `schema: 8` gets today, BEFORE any source change, so the local layer can
@@ -198,7 +199,7 @@ function withoutIgnored(value: unknown): unknown {
 }
 
 describe("profile-local=off baseline pin (spec 51 §10)", () => {
-  it("a Forge at schema 7 with a profiles/<p>/ingredients folder, a broken unused recipe and a skill shell file", { timeout: 120_000 }, async () => {
+  it("a Forge at schema 7 with a profiles/<p>/ingredients folder, a broken unused recipe and a skill shell file", { timeout: atLeastWin32(120_000) }, async () => {
     const observed = await observeAll(7);
     if (regen) {
       await fs.writeFile(PIN_FILE, JSON.stringify(observed, null, 2) + "\n");

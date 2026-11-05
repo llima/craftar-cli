@@ -6,6 +6,7 @@ import { listFiles } from "../src/core/forge.js";
 import { runCli } from "./helpers/cli.js";
 import { profile, recipe, rule, tmpDir, type ForgeSpec, type WorkspaceSpec } from "./helpers/forge.js";
 import { forgeAt, mcp } from "./helpers/integrations.js";
+import { atLeastWin32 } from "./helpers/timeouts.js";
 
 // Spec 34 §9 — the credential refusal on every surface a plan error reaches, without the value; and the
 // commands that read the Forge as written print at schema 4 what they print at 3.
@@ -95,7 +96,7 @@ describe("the credential refusal, on every surface", () => {
     expect(clean(text)).toBe(true);
   });
 
-  it("6. craftar workspaces and forge impact show error; 7. a planned file is shown, a refused value never is", { timeout: 60_000 }, async () => {
+  it("6. craftar workspaces and forge impact show error; 7. a planned file is shown, a refused value never is", { timeout: atLeastWin32(60_000) }, async () => {
     const s = await at(4, refusing("none"));
     expect(runCli(["sync", "--workspace", s.wsRoot], { env: s.env }).code).toBe(0);
     // 7: before the token is set, the planned file is what diff and the workspace hold — `Bearer public`.

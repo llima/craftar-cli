@@ -12,6 +12,7 @@ import { runCli } from "./helpers/cli.js";
 import { forgeAt } from "./helpers/integrations.js";
 import { profile, recipe, type ForgeSpec, type IngredientSpec } from "./helpers/forge.js";
 import type { Check } from "../src/core/doctor.js";
+import { atLeastWin32 } from "./helpers/timeouts.js";
 
 const PIN_FILE = path.resolve(__dirname, "pins/settings-apply-off.json");
 
@@ -201,7 +202,7 @@ async function walkDir(dir: string, base = ""): Promise<string[]> {
 }
 
 describe("settings-apply baseline pin (spec 52 task 1)", () => {
-  it("matches the pinned snapshot — plan, status, and doctor before settings apply", { timeout: 120_000 }, async () => {
+  it("matches the pinned snapshot — plan, status, and doctor before settings apply", { timeout: atLeastWin32(120_000) }, async () => {
     const s = await buildScenario();
     const observed = await buildObserved(s);
 
@@ -235,7 +236,7 @@ describe("settings-apply baseline pin (spec 52 task 1)", () => {
     expect(withoutMachine(observed.doctorChecks)).toEqual(withoutMachine(expected.doctorChecks));
   });
 
-  it("the pin is not vacuous: holds the example settings file with hooks and env", { timeout: 120_000 }, async () => {
+  it("the pin is not vacuous: holds the example settings file with hooks and env", { timeout: atLeastWin32(120_000) }, async () => {
     const s = await buildScenario();
     const observed = await buildObserved(s);
 

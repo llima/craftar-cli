@@ -8,6 +8,7 @@ import { importClaudeCode } from "../src/importers/claude-code.js";
 import { listFiles } from "../src/core/forge.js";
 import { runCli } from "./helpers/cli.js";
 import { addAgentsMd, addFlavorsMarkers, addGlobexRow } from "./helpers/golden-sections-edits.js";
+import { atLeastWin32 } from "./helpers/timeouts.js";
 
 /**
  * The sections golden round trip (spec 11 §10.5, AC 5): two workspaces that differ only in a
@@ -171,7 +172,7 @@ async function nothingMoved(t: RoundTrip): Promise<void> {
 }
 
 describe("golden: sections round trip (spec 11 §10.5)", () => {
-  it("steps 1–8: the variant becomes a section, the Forge equals the snapshot, and no workspace byte moves", { timeout: 120_000 }, async () => {
+  it("steps 1–8: the variant becomes a section, the Forge equals the snapshot, and no workspace byte moves", { timeout: atLeastWin32(120_000) }, async () => {
     const t = await roundTrip();
     await nothingMoved(t);
 
@@ -187,7 +188,7 @@ describe("golden: sections round trip (spec 11 §10.5)", () => {
     await nothingMoved(t);
   });
 
-  it("step 9, negative control: without globex's sections its review-posture files and AGENTS.md would change", { timeout: 120_000 }, async () => {
+  it("step 9, negative control: without globex's sections its review-posture files and AGENTS.md would change", { timeout: atLeastWin32(120_000) }, async () => {
     const t = await roundTrip();
     const prof = path.join(t.forge, "profiles/globex/profile.yaml");
     const parsed = YAML.parse(await fs.readFile(prof, "utf8"));
@@ -198,7 +199,7 @@ describe("golden: sections round trip (spec 11 §10.5)", () => {
     expect(st[".claude/rules/shared.md"]).toBe("unchanged");
   });
 
-  it("step 10: a changed table updates the profile's value, and only what renders it moves", { timeout: 120_000 }, async () => {
+  it("step 10: a changed table updates the profile's value, and only what renders it moves", { timeout: atLeastWin32(120_000) }, async () => {
     const t = await roundTrip();
     await edit(path.join(t.ws.globex, ".claude/rules/review-posture.md"), addGlobexRow);
     const r = importCli(t.forge, "globex", t.ws.globex);
