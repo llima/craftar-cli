@@ -744,7 +744,7 @@ export const DocsBlockSchema = z.unknown().transform((v, ctx): DocsBlock => {
       return;
     }
     unknownKeys(c, CATEGORY_KEYS, at, DOCS_RULES.entryKey);
-    const category: DocsCategory = { path: "", frontmatter: [], name: "any", values: {}, paths: {} };
+    const category: DocsCategory = { path: "", frontmatter: [], name: "any", values: Object.create(null) as Record<string, string[]>, paths: Object.create(null) as Record<string, DocsPathEntry> };
     if (docsCategoryPath(c.path)) category.path = c.path;
     else issue([...at, "path"], DOCS_RULES.path);
     // Spec 58: track keys with value lists for duplicate detection

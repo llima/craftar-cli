@@ -1221,7 +1221,7 @@ async function declaredChecks(
     for (const key of category.frontmatter) {
       if (!Object.hasOwn(record, key) || emptyValue(record[key])) {
         add({ id: "frontmatter", level: "error", path: f.rel, message: `required frontmatter key ${key} is missing or empty`, fix: `give ${key} a value` });
-      } else if (category.values[key]) {
+      } else if (Object.hasOwn(category.values, key)) {
         // Spec 58 §5.1: closed values
         const val = record[key];
         const declared = category.values[key];

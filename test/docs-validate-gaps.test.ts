@@ -94,6 +94,47 @@ describe("spec 58 §5.1 — closed values (frontmatter)", () => {
     const r = await run(s.wsRoot);
     expect(r.checks.map((c) => `${c.level} ${c.id}`)).toEqual(["ok links", "ok leaked-tags", "ok policy", "ok categories", "ok frontmatter"]);
   });
+
+  it("prototype-named keys do not crash — constructor and toString as frontmatter keys", async () => {
+    // Spec 58 correction 1: prototype-named keys must not crash validateDocs
+    // The crash happens when:
+    // 1. A frontmatter key named 'constructor' (or 'toString') is in the file's frontmatter
+    // 2. The category requires that key (in frontmatter list) but does NOT declare a value list for it
+    // Without Object.create(null), category.values["constructor"] returns Object.prototype.constructor
+    // which is truthy, causing the code to enter the "else if (category.values[key])" branch
+    // and call .includes() on a function, throwing "declared.includes is not a function"
+    const BLOCK = { categories: [{ path: "specs", frontmatter: ["constructor", "toString"] }] };
+    const s = await ws(
+      {
+        "docs/specs/both.md": "---\nconstructor: x\ntoString: a\n---\n",
+        "docs/specs/missing-keys.md": "---\ntitle: T\n---\n",
+      },
+      BLOCK,
+    );
+    const r = await run(s.wsRoot);
+    // Without the fix, this would crash with "declared.includes is not a function"
+    // With the fix, no error; the first file has both keys so no finding,
+    // the second file is missing both required keys
+    const fm = findings(r, "frontmatter").map(brief);
+    expect(fm).toEqual([
+      "error frontmatter docs/specs/missing-keys.md required frontmatter key constructor is missing or empty",
+      "error frontmatter docs/specs/missing-keys.md required frontmatter key toString is missing or empty",
+    ]);
+  });
+
+  it("prototype-named keys in paths do not crash — constructor as a path key", async () => {
+    // Spec 58 correction 1: a paths lookup with a key `constructor` must not crash
+    const s = await ws(
+      {
+        "docs/specs/valid.md": "---\nconstructor: docs/specs/target.md\n---\n",
+        "docs/specs/target.md": "x\n",
+      },
+      { categories: [{ path: "specs", paths: { constructor: { base: "workspace" } } }] },
+    );
+    const r = await run(s.wsRoot);
+    // No crash, no finding for constructor when path exists
+    expect(findings(r, "frontmatter")).toEqual([]);
+  });
 });
 
 describe("spec 58 §5.2 — the root index (categories)", () => {
