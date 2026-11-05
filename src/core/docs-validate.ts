@@ -1512,8 +1512,10 @@ function collectCitedPaths(
     const ws = i;
     while (i < n && read[i] && !isWs(joined[i])) i++;
     const we = i;
+    // Strip trailing punctuation before emphasis so **docs/x.md**. works.
     let s0 = ws;
     let s1 = we;
+    while (s1 > s0 && ".,:;)".includes(joined[s1 - 1])) s1--;
     while (s0 < s1 && joined[s0] === "*") s0++;
     while (s1 > s0 && joined[s1 - 1] === "*") s1--;
     const stripped = joined.slice(s0, s1);
@@ -1529,9 +1531,6 @@ function collectCitedPaths(
       // Longer than any path a file system holds (PATH_MAX): not a citation, and never handed to git.
       if (r - runStart > CITED_MAX_LENGTH) continue;
       let token = stripped.slice(runStart, r);
-      let end = token.length;
-      while (end > 0 && ".,:;)".includes(token[end - 1])) end--;
-      token = token.slice(0, end);
       if (!rootOf(token)) {
         let lead = 0;
         while (lead < token.length && token[lead] === "_") lead++;

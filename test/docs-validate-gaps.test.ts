@@ -474,6 +474,24 @@ describe("spec 58 §5.5 — cited paths in .claude/ (cited)", () => {
       'error cited .claude/rules/a.md:14:1 cited path does not exist',
     ]);
   });
+
+  it("trailing punctuation is stripped before emphasis — **docs/x.md**. works", async () => {
+    // Correction 6: trailing .,:;) should be stripped before * and _ emphasis
+    // Without this fix, **docs/bold.md**. would fail to match because the trailing .
+    // prevents the closing ** from being stripped
+    const body = [
+      '**docs/bold.md**.',
+      '*docs/italic.md*,',
+      '__docs/dunder.md__;',
+      '_docs/under.md_:',
+      'docs/plain.md)',
+      '',
+    ].join('\n');
+    const s = await ws({ '.claude/rules/a.md': body, 'docs/bold.md': 'x\n', 'docs/italic.md': 'x\n', 'docs/dunder.md': 'x\n', 'docs/under.md': 'x\n', 'docs/plain.md': 'x\n' }, BLOCK);
+    const r = await run(s.wsRoot);
+    // All paths exist, so no findings
+    expect(findings(r, 'cited')).toEqual([]);
+  });
 });
 
 describe("spec 58 §6 — the cited id's place", () => {
