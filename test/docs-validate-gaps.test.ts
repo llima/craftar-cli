@@ -200,6 +200,24 @@ describe("spec 58 §5.3 — related: from the workspace root", () => {
     const s = await ws({ "docs/specs/x.md": "---\nrelated: [docs/specs/x.md]\n---\n" }, { categories: [{ path: "specs" }, { path: "gone" }], related: "resolve", relatedBase: "workspace" });
     expect(findings(await run(s.wsRoot)).map(brief)).toEqual(["error categories null categories[1]: no such directory under docs/"]);
   });
+
+  it("R2-S4: links and related: keep 0.63's case error for a mis-cased path through a link", async () => {
+    const s = await ws(
+      {
+        "docs/specs/x.md": "---\nrelated: [docs/LNK/z.md]\n---\n[a](../LNK/z.md)\n",
+        "real/z.md": "x\n",
+      },
+      { categories: [{ path: "specs" }], related: "resolve", relatedBase: "workspace" },
+    );
+    await fs.symlink(path.join(s.wsRoot, "real"), path.join(s.wsRoot, "docs", "lnk"), "junction");
+    const r = await run(s.wsRoot);
+    const link = findings(r, "links");
+    const rel = findings(r, "related");
+    expect(link.map((c) => c.level)).toEqual(["error"]);
+    expect(link[0].message).toContain("case differs");
+    expect(rel.map((c) => c.level)).toEqual(["error"]);
+    expect(rel[0].message).toContain("case differs");
+  });
 });
 
 describe("spec 58 §5.4 — path keys (frontmatter)", () => {
@@ -578,6 +596,21 @@ exec "${realGit}" "$@"
     const r = await run(s.wsRoot);
     // *docs/* is a glob → no cited paths, no errors
     expect(findings(r, 'cited')).toEqual([]);
+  });
+
+  it("R2-S2: a word holding ... or … is no candidate; **x**. still is", async () => {
+    const s = await ws({ ".claude/rules/a.md": "see docs/x.md... then docs/y.md… and **docs/z.md**.\n" }, BLOCK);
+    expect(findings(await run(s.wsRoot), "cited").map(brief)).toEqual([
+      "error cited .claude/rules/a.md:1:38 cited path does not exist",
+    ]);
+  });
+
+  it("R2-S5: a shortcut link whose definition sits in a later paragraph is a link; [t][nodef] is prose", async () => {
+    const body = ["[docs/s1.md] and [docs/s2.md][nodef]", "", "Later paragraph.", "", "[docs/s1.md]: https://h/x", ""].join("\n");
+    const s = await ws({ ".claude/rules/a.md": body }, BLOCK);
+    expect(findings(await run(s.wsRoot), "cited").map(brief)).toEqual([
+      "error cited .claude/rules/a.md:1:19 cited path does not exist",
+    ]);
   });
 });
 

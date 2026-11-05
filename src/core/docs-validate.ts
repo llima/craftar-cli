@@ -470,8 +470,11 @@ function scanParagraph(
         let j = i + 2;
         while (j < s.length && s[j] !== "]" && s[j] !== "\n" && !esc[j]) j++;
         if (j < s.length && s[j] === "]") {
-          // [text][ref] or [text][] — exclude the entire range from [ to ]
-          linkRanges?.push([opened, j + 1]);
+          // Collapsed [text][] or full reference [text][ref] with a defined label.
+          const ref = s.slice(i + 2, j).toLowerCase();
+          if (ref === "" || refLabels.has(ref)) {
+            linkRanges?.push([opened, j + 1]);
+          }
           i = j;
         }
       } else {
