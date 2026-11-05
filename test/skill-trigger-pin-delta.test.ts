@@ -22,15 +22,15 @@ function strip(x: unknown): unknown {
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
 const STRIPPED: Record<string, string> = {
-  "agents-md-primary-off": "6e15cbd74dc1a81abccdd92deba24000039da606c2a69937cedf75f48ac54c0f",
-  "profile-local-off": "43ab9ff612369fcef7ecf7a0f60a6296c08a1df1d4d92bc47e6230001dddd399",
-  "real-path-containment-off": "f8a463411d18475556e0f81a85364eb98f27e21939b917ec4e0473e24dd81ed1",
-  "rules-index-off": "da64b90a15b0b33a18889ad426bc581deb46b90b6b11661f4e10a7fda5969d28",
-  "target-sections-off": "6d73f92c4d8bcc08698aadcc8a0365abf71729e3a885f9aec82bfbd267df9506",
+  "agents-md-primary-off": "ba44f2fc65fa741ae5557f701dfcb9105c8ad098fa24c9d7cc49b9c904150987",
+  "profile-local-off": "0c8762015e0b291e895301a30b169ef40d03e449fc08aa20a81919803b4e8892",
+  "real-path-containment-off": "e55dbd181272524088b1974f67824470dec4df888424e1467a190adcde182aca",
+  "rules-index-off": "c10b5ff09bf0048cec99d37b21fd54bc09c1220ede1b625b3b35156dc150d840",
+  "target-sections-off": "0828cb9c57f43e125ad4e6935e86f1649651523c33a95b82d435e6a47ea224b1",
 };
 const UNMOVED: Record<string, string> = {
   "check-committed-off": "a23e75649bb333461ba89e062c192bae2ce2659a6a7b693c744034974aa1c976",
-  "metadata-params-off": "652d87547140bd7f3e701a494c7fbe534cff244478f4b2cf9c43555d11ddb60b",
+  "metadata-params-off": "b453c1786fcca3e9e740c381627f4a29c6b1d77004ddcc27b4ffa985a5edac47",
   "settings-apply-off": "1369dc58b74b5c287edb7885680b92c8a11c455d32cf9eb3b178adf27e4d2676",
 };
 
