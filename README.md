@@ -761,7 +761,7 @@ Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packagi
 
 ### to the next release
 
-- **A Kiro file is now written with the line endings of the file it replaces, LF when new, never a BOM.** A workspace already in sync changes no byte and no file reads `update` (hashes are EOL-normalized). A `.kiro/` file craftar wrote CRLF keeps CRLF. To turn tracked ones to what git holds, `git ls-files -z -- .kiro | xargs -0 rm -f` then `git checkout -- .kiro` (with `core.autocrlf=input` they come back LF and `sync` keeps them so). kiro-cli 2.37.1 reads LF and CRLF alike (measured on Linux).
+- **A Kiro file is now written with the line endings of the file it replaces, LF when new, never a BOM.** A workspace already in sync changes no byte and no file reads `update` (hashes are EOL-normalized). A `.kiro/` file craftar wrote CRLF keeps CRLF. To turn tracked ones to what git holds, first make sure `.kiro/` is clean — commit or stash every uncommitted change, a hand-written steering file included, since the next step discards uncommitted edits to tracked `.kiro/` files — then `git ls-files -z -- .kiro | xargs -0 rm -f` and `git checkout -- .kiro` (with `core.autocrlf=input` they come back LF and `sync` keeps them so). kiro-cli 2.37.1 reads LF and CRLF alike (measured on Linux).
 
 ### to 0.62.0
 
