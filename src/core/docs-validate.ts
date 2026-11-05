@@ -1624,22 +1624,24 @@ async function citedPathsCheck(
   }
 
   // Ask git which ones are ignored
+  // R2-S3: Filter leaves from git calls — paths outside the workspace should never be handed to git.
+  const forGit = toCheck.filter((c) => c.result.kind !== "leaves");
   let gitCouldNotSay = false;
   const ignoredSet = new Set<string>();
-  if (toCheck.length > 0 && inRepo) {
-    const pathsToCheck = toCheck.map((c) => c.token);
+  if (forGit.length > 0 && inRepo) {
+    const pathsToCheck = forGit.map((c) => c.token);
     const answer = await ignoredPaths(root, pathsToCheck, { knownRepo: true });
     if (answer.unchecked) {
       gitCouldNotSay = true;
     } else {
       for (const i of answer.ignored) ignoredSet.add(i.path);
     }
-  } else if (toCheck.length > 0) {
+  } else if (forGit.length > 0) {
     gitCouldNotSay = true;
   }
 
   // Report findings
-  if (gitCouldNotSay && toCheck.length > 0) {
+  if (gitCouldNotSay && forGit.length > 0) {
     // Git could not say: no missing/case errors, just one warn
     add({ id: "cited", level: "warn", message: "git could not say which cited paths it ignores: missing cited paths not checked", fix: "run in a git repository with git on PATH" });
   } else {
