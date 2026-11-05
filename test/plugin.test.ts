@@ -87,11 +87,15 @@ describe("the Claude Code plugin (spec 45)", () => {
     expect(createHash("sha256").update(text).digest("hex")).toBe("9d8fec001bdb9329023f6ef04acff03bebf50488300f4ff9bf7632d483ec632e");
   });
 
-  it("4d. the plugin's README warns about a version manager's shim, with no placeholder left", async () => {
+  it("4d. the plugin's README warns about a version manager's shim and says what trust changes, with no placeholder left", async () => {
     const text = await read("plugins", "craftar", "README.md");
     expect(text).toContain("a project can choose what runs");
     for (const tool of ["asdf", "volta", "mise"]) expect(text).toContain(`**${tool}**`);
-    expect(text).toContain("trust dialog was not measured yet");
+    expect(text).toContain("## Before and after you trust a project");
+    expect(text).toContain("Claude Code did not start the server");
+    expect(text).toContain("the same reach a trusted project's hooks already have");
+    expect(text).toContain("`claude mcp list`");
+    expect(text).not.toContain("not measured yet");
     expect(text).toContain("enable the plugin only in projects whose files you trust");
     expect(text).not.toContain("{{");
   });

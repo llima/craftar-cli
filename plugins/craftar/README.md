@@ -40,14 +40,25 @@ The plugin starts the `craftar` found on `PATH`. When that is a version manager'
 
 Measured through their shims on Linux with asdf 0.20.2, volta 2.0.2 and mise 2026.10.25, with `craftar` installed by each; other tools, versions and modes (such as `mise activate`) were not, and neither was a `craftar` installed elsewhere that starts their `node` shim: assume it can. This happens outside `craftar`, which never gets a say, and the plugin cannot tell how `craftar` was installed.
 
-Whether Claude Code starts the server before you accept a project's trust dialog was not measured yet: until it is, assume that opening a project is enough for its files to choose what runs.
+Claude Code starts the server only after you accept a project's trust dialog (see *Before and after you trust a project*), so a shim reads a project's files from then on, and whenever you type `claude mcp list` there.
 
 If you use asdf or volta, or mise with a project's file trusted, either have a `craftar` and a `node` installed outside them come first on `PATH`, or enable the plugin only in projects whose files you trust.
+
+## Before and after you trust a project
+
+Measured on 2026-11-05 on Linux, with Claude Code 2.1.318, `craftar` 0.64.0 and this plugin at 0.1.1 loaded with `--plugin-dir` from a checkout, one new project per check:
+
+- **Before.** While a project's trust dialog waited two minutes for an answer, Claude Code did not start the server; it started it within a second of the answer.
+- **After.** Once you trust a project, the `env` block of its `.claude/settings.json` reaches the server: a `NODE_OPTIONS` there made the server's `node` load the project's code, and a `PATH` there made Claude Code start the project's own `craftar` in place of yours. That is the same reach a trusted project's hooks already have, so trust a project only when you trust its files.
+- **`claude mcp list`**, typed in a folder you never trusted, started the server, without the project's `env`.
+
+Not measured: whether Claude Code asks before the first tool call in its default permission mode (the session measured ran in auto mode), a plugin installed from the marketplace, macOS and native Windows.
 
 ## What to know before enabling it everywhere
 
 - The plugin starts the `craftar` found on `PATH` in every project it is enabled for.
 - A tool result can carry what the reading commands print, the Forge's profile names included, and it goes wherever Claude Code sends its context.
 - A tool, when you permit it, reads a directory that a repository's `craftar.yaml` names, including a repository you have just cloned.
+- Once you trust a project, its `.claude/settings.json` can choose what runs as the server: see *Before and after you trust a project*.
 
 If you treat any of that as sensitive, enable the plugin per project rather than for every project.
