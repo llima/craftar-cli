@@ -358,6 +358,18 @@ describe("request 10 — a code span's text enters the slug", () => {
   it("two backslashes then a real <b> tag: the < is not escaped, the tag is HTML", () => {
     expect(githubSlug("Path \\\\<b>x</b>")).toBe("path-x");
   });
+  it("a link whose text is a code span: the strip does not match across the span", () => {
+    expect(githubSlug("[`a`](b)")).toBe("a");
+  });
+  it("a link with a code span inside running text", () => {
+    expect(githubSlug("Use [`craftar sync`](https://x.y/z) now")).toBe("use-craftar-sync-now");
+  });
+  it("an HTML tag whose attribute holds a code span", () => {
+    expect(githubSlug('<a id="`x`">t</a>')).toBe("t");
+  });
+  it("plain words with no code span", () => {
+    expect(githubSlug("A x b")).toBe("a-x-b");
+  });
 });
 
 describe("request 10 — a line that is only a closing tag", () => {

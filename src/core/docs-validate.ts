@@ -187,46 +187,50 @@ export function codeSpanRanges(s: string): CodeSpanRange[] {
 /**
  * GitHub's heading slug (github-slugger's rule): lower case, characters other than letters, marks, numbers, `_`, space
  * and `-` dropped, spaces to `-`. A code span's content enters literally (newlines as spaces, CommonMark edge-space
- * stripping applied); link and HTML stripping is applied only outside code spans.
+ * stripping applied); the link and HTML strips run over the text with each code span masked by a token, so they never
+ * match across a span, and the spans are restored before the slug's own rule.
  */
 export function githubSlug(text: string): string {
-  const ranges = codeSpanRanges(text);
+  // Drop the two token delimiters first: the punctuation rule would drop them anyway, so the output does not change.
+  const input = text.replace(/[\uE000\uE001]/g, "");
+
+  // Mask each code span by a token U+E000 <index> U+E001, keeping its processed content aside.
+  const ranges = codeSpanRanges(input);
+  const contents: string[] = [];
   const parts: string[] = [];
   let at = 0;
-
-  /** Process an outside-code segment: drop a backslash-escaped <>[]() with its backslash, then strip links and HTML. */
-  const processOutside = (segment: string): string => {
-    const esc = escapes(segment);
-    let cleaned = "";
-    for (let i = 0; i < segment.length; i++) {
-      // A backslash-escaped <>[]() drops with its backslash (it renders as a literal the slug drops anyway).
-      if (esc[i + 1] && "<>[]()".includes(segment[i + 1])) {
-        i++;
-        continue;
-      }
-      cleaned += segment[i];
-    }
-    return cleaned
-      .replace(/\[([^[\]]*)\]\([^()]*\)/g, "$1")
-      .replace(/<[^<>]*>/g, "");
-  };
-
   for (const r of ranges) {
-    // Outside code: process the segment before this code span.
-    parts.push(processOutside(text.slice(at, r.start)));
-    // Code span content: literal, newlines as spaces, CommonMark edge-space stripping.
-    let content = text.slice(r.contentStart, r.contentEnd).replace(/\n/g, " ");
+    parts.push(input.slice(at, r.start));
+    let content = input.slice(r.contentStart, r.contentEnd).replace(/\n/g, " ");
     // CommonMark: if content both begins and ends with a space, and is not all spaces, strip one space from each end.
     if (content.length >= 2 && content[0] === " " && content[content.length - 1] === " " && content.trim() !== "") {
       content = content.slice(1, -1);
     }
-    parts.push(content);
+    parts.push(`\uE000${contents.length}\uE001`);
+    contents.push(content);
     at = r.end;
   }
-  // Remainder outside code spans
-  parts.push(processOutside(text.slice(at)));
+  parts.push(input.slice(at));
+  const masked = parts.join("");
 
-  const visible = parts.join("").trim().toLowerCase();
+  // Over the masked text: drop a backslash-escaped <>[]() with its backslash, then the link and HTML strips.
+  const esc = escapes(masked);
+  let cleaned = "";
+  for (let i = 0; i < masked.length; i++) {
+    if (esc[i + 1] && "<>[]()".includes(masked[i + 1])) {
+      i++;
+      continue;
+    }
+    cleaned += masked[i];
+  }
+  const stripped = cleaned
+    .replace(/\[([^[\]]*)\]\([^()]*\)/g, "$1")
+    .replace(/<[^<>]*>/g, "");
+
+  // Restore each span's content in place of its token.
+  const restored = stripped.replace(/\uE000(\d+)\uE001/g, (_m, n) => contents[Number(n)]);
+
+  const visible = restored.trim().toLowerCase();
   return visible.replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "").replace(/ /g, "-");
 }
 
