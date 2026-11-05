@@ -1620,6 +1620,8 @@ function collectCitedPaths(
       // Longer than any path a file system holds (PATH_MAX): not a citation, and never handed to git.
       if (r - runStart > CITED_MAX_LENGTH) continue;
       let token = stripped.slice(runStart, r);
+      // Strip trailing punctuation from each run, so "docs/e.md." works.
+      while (token.length > 0 && ".,:;)".includes(token[token.length - 1])) token = token.slice(0, -1);
       if (!rootOf(token)) {
         let lead = 0;
         while (lead < token.length && token[lead] === "_") lead++;
