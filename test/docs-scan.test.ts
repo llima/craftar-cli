@@ -339,6 +339,15 @@ describe("request 10 — a code span's text enters the slug", () => {
       { start: 8, end: 13, contentStart: 10, contentEnd: 11 },
     ]);
   });
+  it("an escaped _ is kept (GitHub keeps it)", () => {
+    expect(githubSlug("Use \\_private here")).toBe("use-_private-here");
+  });
+  it("an escaped - is kept (GitHub keeps it)", () => {
+    expect(githubSlug("A \\- B")).toBe("a---b");
+  });
+  it("two backslashes then a real <b> tag: the < is not escaped, the tag is HTML", () => {
+    expect(githubSlug("Path \\\\<b>x</b>")).toBe("path-x");
+  });
 });
 
 describe("request 10 — a line that is only a closing tag", () => {

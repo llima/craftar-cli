@@ -185,19 +185,14 @@ export function githubSlug(text: string): string {
   const parts: string[] = [];
   let at = 0;
 
-  /** Process an outside-code segment: drop backslash-escaped <>[](), then strip links and HTML. */
+  /** Process an outside-code segment: drop a backslash-escaped <>[]() with its backslash, then strip links and HTML. */
   const processOutside = (segment: string): string => {
     const esc = escapes(segment);
     let cleaned = "";
     for (let i = 0; i < segment.length; i++) {
-      // If next position is escaped and is one of <>[](), skip backslash and the escaped char (both drop).
+      // A backslash-escaped <>[]() drops with its backslash (it renders as a literal the slug drops anyway).
       if (esc[i + 1] && "<>[]()".includes(segment[i + 1])) {
-        i++; // skip both the backslash (current) and the escaped char (next)
-        continue;
-      }
-      // If current position is escaped (it would be by a prior backslash), skip it too.
-      // (This handles the case when escape check above didn't catch it.)
-      if (esc[i] && segment[i - 1] === "\\") {
+        i++;
         continue;
       }
       cleaned += segment[i];
