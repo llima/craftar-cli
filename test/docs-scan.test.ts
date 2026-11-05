@@ -315,12 +315,12 @@ describe("§6.2 — a pathological heading finishes in linear time (review round
   });
 });
 
-describe("request 10 — a code span's text enters the slug", () => {
-  it("Returns `Result<T>` gives returns-resultt", () => {
-    expect(githubSlug("2026-06-23 — Core no longer returns `Result<T>` (PR #15)")).toBe("2026-06-23--core-no-longer-returns-resultt-pr-15");
+describe("spec 47 §6.3 — a code span's text enters the slug", () => {
+  it("a heading with a `Result<T>` code span gives returns-resultt", () => {
+    expect(githubSlug("2026-01-02 — Acme API returns `Result<T>` (PR #7)")).toBe("2026-01-02--acme-api-returns-resultt-pr-7");
   });
-  it("Camada MCP (opcional) — `Acme.<Module>.Mcp` gives the module literal", () => {
-    expect(githubSlug("Camada MCP (opcional) — `Acme.<Module>.Mcp`")).toBe("camada-mcp-opcional--acmemodulemcp");
+  it("a code span holding `Acme.<Module>.Tools` enters the slug literally", () => {
+    expect(githubSlug("Optional layer — `Acme.<Module>.Tools`")).toBe("optional-layer--acmemoduletools");
   });
   it("Foo <b>bar</b> gives foo-bar — HTML outside code still dropped (guard, passes on HEAD)", () => {
     expect(githubSlug("Foo <b>bar</b>")).toBe("foo-bar");
@@ -372,7 +372,7 @@ describe("request 10 — a code span's text enters the slug", () => {
   });
 });
 
-describe("request 10 — a line that is only a closing tag", () => {
+describe("spec 47 §4.5 — a line that is only a closing tag", () => {
   const closeOf = (x: string) => T("</", x + ">");
 
   it("content alone gives one hit", () => {

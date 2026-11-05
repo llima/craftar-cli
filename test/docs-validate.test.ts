@@ -44,6 +44,7 @@ const run = (root: string, o: Partial<Parameters<typeof validateDocs>[0]> = {}):
   validateDocs({ root, version: "test", fetch: false, strict: false, limit: null, configured: true, typedWorkspace: null, home: process.env.CRAFTAR_HOME, ...o });
 const findings = (r: DocsReport, id?: string) => r.checks.filter((c) => c.level !== "ok" && (id === undefined || c.id === id));
 const brief = (c: DocsCheck) => `${c.level} ${c.id} ${c.path}${c.line === null ? "" : `:${c.line}:${c.column}`} ${c.message}`;
+const T = (a: string, b: string) => a + b; // tags assembled at runtime (§4.5)
 
 describe("§4.3 links — each row", () => {
   it("a tree with nothing wrong: no warn, no error, one ok per always-on check and policy", async () => {
@@ -538,7 +539,7 @@ describe("§11 item 13 — writes nothing", () => {
   });
 });
 
-describe("request 10 — a code span's text enters the slug (links)", () => {
+describe("spec 47 §6.3 — a code span's text enters the slug (links)", () => {
   it("a link to #returns-resultt finds the heading with code span", async () => {
     const s = await ws({ "docs/a.md": "# A\n\n## Returns `Result<T>`\n", "docs/b.md": "[x](a.md#returns-resultt)\n" });
     expect(findings(await run(s.wsRoot), "links")).toEqual([]);
@@ -555,10 +556,7 @@ describe("request 10 — a code span's text enters the slug (links)", () => {
   });
 });
 
-
-const T = (a: string, b: string) => a + b;
-
-describe("request 10 — a line that is only a closing tag (leaked-tags)", () => {
+describe("spec 47 §4.5 — a line that is only a closing tag (leaked-tags)", () => {
   const closeOf = (x: string) => T("</", x + ">");
 
   it("content alone gives one finding", async () => {
