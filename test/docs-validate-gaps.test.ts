@@ -6,6 +6,8 @@ import { validateDocs, type DocsCheck, type DocsReport } from "../src/core/docs-
 import { profile, recipe, rule, scenario } from "./helpers/forge.js";
 import { removeWithRetry } from "./helpers/fs.js";
 import { hermeticGit } from "./helpers/hermetic-git.js";
+import { runCli } from "./helpers/cli.js";
+import { tmpDir } from "./helpers/forge.js";
 
 // Spec 58 — closed values, the root index, related: from the root, path keys and cited paths, through validateDocs.
 
@@ -491,6 +493,77 @@ describe("spec 58 §5.5 — cited paths in .claude/ (cited)", () => {
     const r = await run(s.wsRoot);
     // All paths exist, so no findings
     expect(findings(r, 'cited')).toEqual([]);
+  });
+
+  // Should-fix 2: git is never asked about a cited path reached through a symbolic link.
+  // This test runs on Linux CI only (uses sh scripts and symlinks).
+  it.skipIf(process.platform === "win32")("git is never asked about a cited path reached through a link", async () => {
+    // Find the real git binary path before modifying PATH
+    const envPath = process.env.PATH ?? "";
+    const pathDirs = envPath.split(path.delimiter);
+    let realGit = "";
+    for (const d of pathDirs) {
+      const candidate = path.join(d, "git");
+      try {
+        await fs.access(candidate, fs.constants.X_OK);
+        realGit = candidate;
+        break;
+      } catch {}
+    }
+    expect(realGit).not.toBe("");
+
+    // Create temp directory for stub
+    const stubDir = await tmpDir();
+    cleanups.push(() => removeWithRetry(stubDir));
+    const logFile = path.join(stubDir, "git.log");
+
+    // Create a stub git script that logs argv and stdin (for check-ignore), then execs real git
+    const stubScript = `#!/bin/sh
+echo "$@" >> "${logFile}"
+if echo "$@" | grep -q "check-ignore"; then
+  # Also capture stdin for check-ignore calls
+  cat >> "${logFile}"
+fi
+exec "${realGit}" "$@"
+`;
+    const stubPath = path.join(stubDir, "git");
+    await fs.writeFile(stubPath, stubScript, { mode: 0o755 });
+
+    // Create workspace: docs/lnk -> real/, real/z.md exists
+    // Cited paths: docs/lnk/z.md and docs/LNK/z.md (both go through symlink)
+    const s = await ws(
+      {
+        ".claude/rules/a.md": "docs/lnk/z.md docs/LNK/z.md\n",
+        "docs/real/z.md": "x\n",
+      },
+      { cited: { roots: ["docs"] } },
+    );
+    // Create symlink docs/lnk -> real
+    await fs.symlink("real", path.join(s.wsRoot, "docs/lnk"));
+
+    // Run CLI with modified PATH (stub first)
+    const modifiedPath = `${stubDir}${path.delimiter}${envPath}`;
+    const r = runCli(["docs", "validate", "--json", "--workspace", s.wsRoot], {
+      env: { PATH: modifiedPath },
+    });
+
+    // Parse the result
+    const json = JSON.parse(r.stdout) as DocsReport;
+
+    // Assert: both link warnings appear (cited paths reached through link are warnings)
+    const citedWarns = json.checks.filter((c) => c.id === "cited" && c.level === "warn");
+    expect(citedWarns.length).toBe(2);
+    expect(citedWarns.some((c) => c.message.includes("through a symbolic link"))).toBe(true);
+
+    // Assert: the log file was written (proves stub was used)
+    const log = await fs.readFile(logFile, "utf8");
+    // At least one check-ignore call should exist (from the walk)
+    expect(log).toContain("check-ignore");
+
+    // Assert: neither docs/lnk/z.md nor docs/LNK/z.md appears in the log
+    // (git should never be asked about paths reached through links)
+    expect(log).not.toContain("docs/lnk/z.md");
+    expect(log).not.toContain("docs/LNK/z.md");
   });
 });
 
