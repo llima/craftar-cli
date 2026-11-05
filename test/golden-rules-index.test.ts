@@ -313,7 +313,7 @@ describe("rules-index groups and scope", () => {
     expect(content).toContain("On request:");
   });
 
-  it("3b: a profile with NO rules resolving → the index is exactly '- (no rules)' (CRLF for kiro)", async () => {
+  it("3b: a profile with NO rules resolving → the index is exactly '- (no rules)' (LF for a new kiro file)", async () => {
     // Spec 44 §4.4: when the index lists no rule at all, the whole index is the single line `- (no rules)`.
     // A steering index (kiro target) holding the placeholder in a workspace whose profile resolves NO rule.
     const ingredients: IngredientSpec[] = [
@@ -330,7 +330,7 @@ describe("rules-index groups and scope", () => {
 
     const kiroIndex = p.files.find((f) => f.path === ".kiro/steering/index.md")!;
     const content = kiroIndex.content.toString("utf8");
-    // The body should be exactly "- (no rules)" with CRLF
+    // The body should be exactly "- (no rules)" (LF for a new kiro file)
     expect(content).toContain("- (no rules)");
     // No group headings
     expect(content).not.toContain("Always on:");

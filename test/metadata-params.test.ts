@@ -20,7 +20,7 @@ const kept = <T extends Scenario>(s: T): T => (cleanups.push(s.cleanup), s);
 
 async function planOf(s: Scenario) {
   const p = await plan(await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME }));
-  // LF throughout: kiro writes CRLF, which these assertions do not test.
+  // Normalize EOL: a new kiro file is LF, but EOL is not what these assertions test.
   const files = new Map(p.files.map((f) => [f.path, f.content.toString("utf8").replace(/\r\n/g, "\n")]));
   return { p, files };
 }

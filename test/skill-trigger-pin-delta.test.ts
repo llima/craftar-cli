@@ -30,6 +30,7 @@ const STRIPPED: Record<string, string> = {
 };
 const UNMOVED: Record<string, string> = {
   "check-committed-off": "a23e75649bb333461ba89e062c192bae2ce2659a6a7b693c744034974aa1c976",
+  // metadata-params-off's hash moved for spec 57 (kiro writes LF on a new file); it still holds no skill.
   "metadata-params-off": "b453c1786fcca3e9e740c381627f4a29c6b1d77004ddcc27b4ffa985a5edac47",
   "settings-apply-off": "1369dc58b74b5c287edb7885680b92c8a11c455d32cf9eb3b178adf27e4d2676",
 };

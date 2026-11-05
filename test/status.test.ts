@@ -124,7 +124,6 @@ describe("status — MCP servers written as the Forge holds them (spec 07)", () 
   const MCP = ".mcp.json";
   const KIRO_MCP = ".kiro/settings/mcp.json";
   const json = (server: Record<string, unknown>) => JSON.stringify({ mcpServers: { r: server } }, null, 2) + "\n";
-  const crlf = (text: string) => text.replace(/\n/g, "\r\n");
   const mcpMeta = (server: Record<string, unknown>) => ({ type: "mcp", name: "r", server });
   async function mcpScenario(server: Record<string, unknown>, files?: Record<string, string>, targets = ["claude-code"]) {
     const s = await scenario(
