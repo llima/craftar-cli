@@ -577,3 +577,32 @@ describe("R3-N — a definition inside a fence is not a definition", () => {
     expect(citedOf("```\n[docs/z.md]: q\n```\n\n[docs/z.md]\n")).toEqual(["docs/z.md"]);
   });
 });
+
+
+describe("R4-B1 — the definition gather's fence test stays linear", () => {
+  for (const cited of [false, true]) {
+    it(`a 1 MiB line of ~ ending in a backtick, cited ${cited ? "on" : "off"}`, () => {
+      const input = "~".repeat(1 << 20) + "`\n";
+      const start = performance.now();
+      scanMarkdown(input, cited ? { citedRoots: ["docs"] } : {});
+      expect(performance.now() - start).toBeLessThan(500);
+    });
+  }
+});
+
+describe("R4-S1 — links equal origin/main's around reference brackets", () => {
+  it.each([
+    ["[t][](x.md)", ["x.md"]],
+    ["[t][](x.md)\n\n[t]: y.md", ["x.md", "y.md"]],
+    ["[t][r](x.md)\n\n[r]: y.md", ["x.md", "y.md"]],
+    ["[][r](a.md)\n\n[r]: y.md", ["a.md", "y.md"]],
+    ["[r][](a.md)\n\n[r]: y.md", ["a.md", "y.md"]],
+    ["see [a][b](x.md) and [c](y.md)", ["x.md", "y.md"]],
+    ["[t][r](missing.md)", ["missing.md"]],
+  ])("%s", (input, expected) => {
+    expect(dests(input)).toEqual(expected);
+  });
+  it("[docs/x.md][] with no definition is prose for cited", () => {
+    expect(citedOf("[docs/x.md][]")).toEqual(["docs/x.md"]);
+  });
+});

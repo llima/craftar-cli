@@ -458,15 +458,26 @@ function scanParagraph(
           i = found.end;
         }
       } else if (s[i + 1] === "[" && !esc[i + 1]) {
-        // Reference or collapsed link: [text][ref] or [text][]
-        let j = i + 2;
-        while (j < s.length && s[j] !== "]" && s[j] !== "\n" && !esc[j]) j++;
-        if (j < s.length && s[j] === "]") {
-          // Collapsed [text][] or full reference [text][ref] with a defined label.
-          const ref = s.slice(i + 2, j).toLowerCase();
-          if (ref === "" || refLabels.has(ref)) {
-            linkRanges?.push([opened, j + 1]);
-            i = j;
+        // Reference link [text][ref] or collapsed link [text][]: only mask for cited, never change links or scanner position.
+        // For cited: mask [text][ref] when ref is defined, or [text][] when text is a defined label.
+        if (linkRanges) {
+          let j = i + 2;
+          while (j < s.length && s[j] !== "]" && s[j] !== "\n" && !esc[j]) j++;
+          if (j < s.length && s[j] === "]") {
+            const ref = s.slice(i + 2, j).toLowerCase();
+            if (ref === "") {
+              // Collapsed [text][]: only a link when text is a defined label (length ≤999 and whitespace normalized)
+              const len = i - opened - 1;
+              if (len <= 999) {
+                const label = s.slice(opened + 1, i).toLowerCase().replace(/[\t\n ]+/g, " ");
+                if (refLabels.has(label)) {
+                  linkRanges.push([opened, j + 1]);
+                }
+              }
+            } else if (refLabels.has(ref)) {
+              // Full reference [text][ref] with a defined label
+              linkRanges.push([opened, j + 1]);
+            }
           }
         }
       } else {
@@ -610,7 +621,7 @@ export function scanMarkdown(input: string, opts: { citedRoots?: string[] } = {}
       if (close.test(line)) defFence = null;
       continue;
     }
-    const fenceOpen = /^ {0,3}(`{3,}|~{3,})([^`]*)$/.exec(line);
+    const fenceOpen = FENCE_OPEN.exec(line);
     if (fenceOpen && !(fenceOpen[1][0] === "`" && fenceOpen[2].includes("`"))) {
       defFence = { char: fenceOpen[1][0], len: fenceOpen[1].length };
       continue;
