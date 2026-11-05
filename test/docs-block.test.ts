@@ -225,6 +225,13 @@ describe("spec 58 §4.2 — each refusal, by position, never by value", () => {
     expect(declaredDocs({ docs: { cited: { roots: ["docs", "docs/specs"], exempt: ["a.md", "a.md"] } } })!.cited).toEqual({ roots: ["docs", "docs/specs"], exempt: ["a.md", "a.md"] });
   });
 
+  it("an exempt entry like a:b/x.md is accepted; C:/x.md is a Windows path and is refused", () => {
+    // a:b/x.md is not a Windows path (those need C:/ or C:\)
+    expect(declaredDocs({ docs: { cited: { roots: ["docs"], exempt: ["a:b/x.md"] } } })!.cited).toEqual({ roots: ["docs"], exempt: ["a:b/x.md"] });
+    // C:/x.md is a Windows path and is refused
+    expect(refusal({ cited: { roots: ["docs"], exempt: ["C:/x.md"] } })).toBe("docs block: cited.exempt[0] — an exempt entry is a relative POSIX path: no . or .. segment, no backslash, not absolute");
+  });
+
   it("unknown keys in cited are reported even when roots is missing or invalid", () => {
     // Correction 8: unknown-key check runs regardless of roots validity
     // When roots is missing, both the unknown key and the missing roots are reported

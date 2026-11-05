@@ -645,7 +645,7 @@ function docsCategoryPath(v: unknown): v is string {
 
 /** An exempt entry (spec 58 §4.1): no . or .. segment, no backslash, not absolute. */
 function docsExemptEntry(v: unknown): v is string {
-  if (typeof v !== "string" || v === "" || v.includes("\\") || /^\/|^[A-Za-z]:/.test(v)) return false;
+  if (typeof v !== "string" || v === "" || v.includes("\\") || /^\/|^[A-Za-z]:[\\/]/.test(v)) return false;
   return !v.split("/").some((seg) => seg === "." || seg === "..");
 }
 
