@@ -396,46 +396,64 @@ function scanParagraph(
   };
 
   const brackets: number[] = [];
+  // Track the most recent unescaped bracket position to detect labels containing brackets (invalid per CommonMark).
+  let lastBracketAt = -1;
 
   for (let i = 0; i < s.length; i++) {
     if (esc[i]) continue;
-    if (s[i] === "[") brackets.push(i);
-    else if (s[i] === "]" && brackets.length) {
-      const opened = brackets.pop()!;
-      if (s[i + 1] === "(" && !esc[i + 1]) {
-        // Inline link: [text](url)
-        const found = inline(i + 1);
-        if (found) {
-          scan.links.push(found.link);
-          linkRanges?.push([opened, found.end + 1]);
-          i = found.end;
-        }
-      } else if (s[i + 1] === "[" && !esc[i + 1]) {
-        // Reference link [text][ref] or collapsed link [text][]: record for later resolution.
-        if (pendingBrackets) {
-          let j = i + 2;
-          while (j < s.length && s[j] !== "]" && s[j] !== "\n" && !esc[j]) j++;
+    if (s[i] === "[") {
+      brackets.push(i);
+      lastBracketAt = i;
+    } else if (s[i] === "]") {
+      if (brackets.length) {
+        const opened = brackets.pop()!;
+        // A label holding an unescaped bracket is never a reference label (CommonMark).
+        const labelHasBracket = lastBracketAt > opened;
+        lastBracketAt = i;
+        if (s[i + 1] === "(" && !esc[i + 1]) {
+          // Inline link: [text](url)
+          const found = inline(i + 1);
+          if (found) {
+            scan.links.push(found.link);
+            linkRanges?.push([opened, found.end + 1]);
+            i = found.end;
+          }
+        } else if (s[i + 1] === "[" && !esc[i + 1]) {
+          // Reference link [text][ref] or collapsed link [text][]: record for later resolution.
+          if (pendingBrackets) {
+            let j = i + 2;
+            // Track if the ref part contains a bracket
+            let refHasBracket = false;
+          const refStart = i + 2;
+          while (j < s.length && s[j] !== "]" && s[j] !== "\n" && !esc[j]) {
+            if (s[j] === "[") refHasBracket = true;
+            j++;
+          }
           if (j < s.length && s[j] === "]") {
             const ref = s.slice(i + 2, j);
             if (ref === "") {
-              // Collapsed [text][]: label is the text, must be ≤999 chars
+              // Collapsed [text][]: label is the text, must be ≤999 chars and no brackets inside
               const len = i - opened - 1;
-              if (len <= 999) {
+              if (len <= 999 && !labelHasBracket) {
                 pendingBrackets.push({ from: opened, to: j + 1, labelFrom: opened + 1, labelTo: i });
               }
-            } else if (ref.length <= 999) {
-              // Full reference [text][ref]
+            } else if (ref.length <= 999 && !refHasBracket) {
+              // Full reference [text][ref] — ref must have no brackets inside
               pendingBrackets.push({ from: opened, to: j + 1, labelFrom: i + 2, labelTo: j });
             }
           }
         }
       } else {
         // Potential shortcut link: [text] where text is a defined reference label.
-        // Record for later resolution when pendingBrackets tracked and label would fit (≤999 chars).
+        // Record for later resolution when pendingBrackets tracked and label would fit (≤999 chars) and no brackets inside.
         const len = i - opened - 1;
-        if (pendingBrackets && len <= 999) {
+        if (pendingBrackets && len <= 999 && !labelHasBracket) {
           pendingBrackets.push({ from: opened, to: i + 1, labelFrom: opened + 1, labelTo: i });
         }
+      }
+      } else {
+        // A ] that closes nothing still counts as a bracket for label validity.
+        lastBracketAt = i;
       }
     }
   }
@@ -447,7 +465,8 @@ function scanParagraph(
   const defRawLines = raw.split("\n");
   for (let li = 0; li < sLines.length; li++) {
     const line = sLines[li];
-    const m = /^ {0,3}\[([^\]\n]{1,999})\]:[ \t]*(<[^>\n]*>|\S+)(.*)$/.exec(line);
+    // A label can contain backslash-escaped brackets: match non-], non-\, non-newline OR backslash + any char.
+    const m = /^ {0,3}\[((?:[^\]\\\n]|\\.){1,999})\]:[ \t]*(<[^>\n]*>|\S+)(.*)$/.exec(line);
     if (!m || m[1].startsWith("^") || /^[ xX]$/.test(m[1]) || !TITLE_OR_EMPTY(m[3])) break;
     const angle = m[2].startsWith("<");
     const col = line.indexOf(m[2], line.indexOf("]:") + 2) + (angle ? 1 : 0);

@@ -527,7 +527,7 @@ describe("R2-B2 — <a> close matching stays linear", () => {
   });
 });
 
-const citedOf = (t: string) => scanMarkdown(t, { citedRoots: ["docs"] }).cited.map((x) => x.token);
+const citedOf = (t: string) => [...new Set(scanMarkdown(t, { citedRoots: ["docs"] }).cited.map((x) => x.token))];
 
 describe("R3-B1 — the cited mask stays linear over nested link ranges", () => {
   const forms: Array<[string, (k: number) => string]> = [
@@ -645,5 +645,12 @@ describe("R6-S1 — a reference label is read from the source, code spans includ
   });
   it("a code-span label that is defined masks its bracket", () => {
     expect(citedOf("see [`docs/b.md`] here\n\n[`docs/b.md`]: q\n")).toEqual([]);
+  });
+});
+
+describe("R7-CI — a bracket holding a bracket is never a reference label", () => {
+  it("a label holding an unescaped bracket is prose for cited; an escaped one can be a label", () => {
+    expect(citedOf("[docs/a.md [x]]\n\n[docs/a.md [x]]: q\n")).toEqual(["docs/a.md"]);
+    expect(citedOf("[docs/e.md\\]x]\n\n[docs/e.md\\]x]: q\n")).toEqual([]);
   });
 });
