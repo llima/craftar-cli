@@ -857,7 +857,23 @@ class Resolver {
       const entry = list.get(segments[i]);
       if (!entry) {
         const lower = segments[i].toLowerCase();
-        return this.lower(list).has(lower) ? { kind: "case" } : { kind: "missing" };
+        if (!this.lower(list).has(lower)) return { kind: "missing" };
+        // Case mismatch: walk the remaining segments along the case-insensitive match
+        // to check if any of them (including this one) is a symbolic link
+        const caseFoldedEntry = [...list.entries()].find(([name]) => name.toLowerCase() === lower);
+        if (caseFoldedEntry && caseFoldedEntry[1].isSymbolicLink()) return { kind: "link" };
+        // Continue checking remaining segments
+        let caseFoldedAt = at ? `${at}/${caseFoldedEntry![0]}` : caseFoldedEntry![0];
+        for (let j = i + 1; j < segments.length; j++) {
+          const nextList = await this.listing(caseFoldedAt);
+          if (nextList === null) break; // can't continue, return case
+          const nextLower = segments[j].toLowerCase();
+          const nextEntry = [...nextList.entries()].find(([name]) => name.toLowerCase() === nextLower);
+          if (!nextEntry) break; // can't continue, return case
+          if (nextEntry[1].isSymbolicLink()) return { kind: "link" };
+          caseFoldedAt = `${caseFoldedAt}/${nextEntry[0]}`;
+        }
+        return { kind: "case" };
       }
       if (entry.isSymbolicLink()) return { kind: "link" };
       at = at ? `${at}/${segments[i]}` : segments[i];
@@ -1510,7 +1526,9 @@ async function citedPathsCheck(
       add({ id: "cited", level: "warn", path: c.path, line: c.line, column: c.column, message: "cited path is reached through a symbolic link, not followed", fix: "cite the file itself, not through a link" });
       continue;
     }
-    // missing, case, leaves (treat leaves as missing since no .. segment is allowed)
+    // missing, case, leaves: pushed to toCheck for git ignore check
+    // Note: leaves cannot occur today since cited paths have no .. segment by construction,
+    // but if it could, it would be treated as missing (never pushed to git as a path outside the workspace).
     toCheck.push({ ...c, result: r });
   }
 

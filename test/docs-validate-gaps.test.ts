@@ -375,6 +375,40 @@ describe("spec 58 §5.5 — cited paths in .claude/ (cited)", () => {
     ]);
   });
 
+  it("a case-mismatched path through a link gives link, not case — docs/LNK/z.md and docs/Lnk/z.md", async () => {
+    // Correction 2: on a case miss, if any segment from the mis-cased one onward is a symbolic link, return link
+    const s = await ws(
+      { ".claude/rules/a.md": "docs/LNK/z.md and docs/Lnk/z.md\n", "docs/other.md": "x\n", "real/z.md": "x\n" },
+      BLOCK,
+    );
+    await fs.symlink(path.join(s.wsRoot, "real"), path.join(s.wsRoot, "docs", "lnk"), "junction");
+    const r = await run(s.wsRoot);
+    const cited = findings(r, "cited").map(withFix);
+    // Both should be link warnings, NOT case errors
+    expect(cited).toEqual([
+      "warn cited .claude/rules/a.md:1:1 cited path is reached through a symbolic link, not followed | cite the file itself, not through a link",
+      "warn cited .claude/rules/a.md:1:19 cited path is reached through a symbolic link, not followed | cite the file itself, not through a link",
+    ]);
+  });
+
+  it("a path-key case-mismatched through a link gives link warn — spec: docs/LNK/z.md", async () => {
+    // Correction 2: path key resolution through a mis-cased link gives link, not case
+    const s = await ws(
+      {
+        "docs/plans/a.md": "---\nspec: docs/LNK/z.md\n---\n",
+        "real/z.md": "x\n",
+      },
+      { categories: [{ path: "plans", paths: { spec: { base: "workspace" } } }] },
+    );
+    await fs.symlink(path.join(s.wsRoot, "real"), path.join(s.wsRoot, "docs", "lnk"), "junction");
+    const r = await run(s.wsRoot);
+    const fm = findings(r, "frontmatter").map(withFix);
+    // Should be a link warning, not a case error
+    expect(fm).toEqual([
+      "warn frontmatter docs/plans/a.md frontmatter key spec: the path is reached through a symbolic link, not followed | name the file itself, not through a link",
+    ]);
+  });
+
   it("a run longer than PATH_MAX is no candidate and never reaches git", async () => {
     const s = await ws({ ".claude/rules/a.md": "docs/" + "a".repeat(5000) + ".md and docs/nope.md\n" }, BLOCK);
     const r = await run(s.wsRoot);
