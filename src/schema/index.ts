@@ -688,6 +688,13 @@ export const DocsBlockSchema = z.unknown().transform((v, ctx): DocsBlock => {
       const c = v.cited;
       // __proto__ check first
       if (Object.hasOwn(c, "__proto__")) issue(["cited", "__proto__"], NO_PROTO_KEY);
+      // Unknown keys inside cited (runs regardless of roots validity)
+      for (const key of Object.keys(c)) {
+        if (key === "__proto__") continue; // already checked
+        if (key !== "roots" && key !== "exempt") {
+          issue(docsKeyShaped(key) ? ["cited", key] : ["cited"], DOCS_RULES.cited);
+        }
+      }
       // roots is required: if missing, issue at "cited"; if present but not a non-empty list, issue at "cited.roots"
       if (c.roots === undefined) {
         issue(["cited"], DOCS_RULES.cited);
@@ -724,13 +731,6 @@ export const DocsBlockSchema = z.unknown().transform((v, ctx): DocsBlock => {
           }
         }
         out.cited = { roots, exempt };
-        // Unknown keys inside cited
-        for (const key of Object.keys(c)) {
-          if (key === "__proto__") continue; // already checked
-          if (key !== "roots" && key !== "exempt") {
-            issue(docsKeyShaped(key) ? ["cited", key] : ["cited"], DOCS_RULES.cited);
-          }
-        }
       }
     }
   }

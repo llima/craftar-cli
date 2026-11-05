@@ -225,6 +225,14 @@ describe("spec 58 §4.2 — each refusal, by position, never by value", () => {
     expect(declaredDocs({ docs: { cited: { roots: ["docs", "docs/specs"], exempt: ["a.md", "a.md"] } } })!.cited).toEqual({ roots: ["docs", "docs/specs"], exempt: ["a.md", "a.md"] });
   });
 
+  it("unknown keys in cited are reported even when roots is missing or invalid", () => {
+    // Correction 8: unknown-key check runs regardless of roots validity
+    // When roots is missing, both the unknown key and the missing roots are reported
+    expect(refusal({ cited: { extra: 1 } })).toBe("docs block: cited.extra — cited is a mapping with roots and, optionally, exempt (and 1 more)");
+    // When roots is empty [], both the unknown key and the empty roots are reported
+    expect(refusal({ cited: { roots: [], extra: 1 } })).toBe("docs block: cited.extra — cited is a mapping with roots and, optionally, exempt (and 1 more)");
+  });
+
   it("a __proto__ key is refused in each new mapping", () => {
     expect(refusal({ categories: [{ path: "a", frontmatter: [JSON.parse('{"__proto__": ["x"]}')] }] })).toBe("docs block: categories[0].frontmatter[0].__proto__ — a __proto__ key is not allowed");
     expect(refusal({ categories: [{ path: "a", paths: JSON.parse('{"__proto__": {"base": "file"}}') }] })).toBe("docs block: categories[0].paths.__proto__ — a __proto__ key is not allowed");
