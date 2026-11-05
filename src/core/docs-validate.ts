@@ -102,6 +102,8 @@ export interface Scan {
   tags: TagHit[];
   /** The frontmatter block's text and the line its first line has in the file; `null` when there is none. */
   frontmatter: { raw: string; firstLine: number } | null;
+  /** Spec 58 §5.5: cited path candidates found in .claude/ files. */
+  cited: Array<{ token: string; line: number; column: number }>;
 }
 
 interface SrcLine {
@@ -320,6 +322,7 @@ function scanParagraph(
   col0: number[],
   at: (pos: number) => { line: number; column: number },
   scan: Scan,
+  linkRanges?: Array<[number, number]>,
 ): void {
   const esc = escapes(s);
 
@@ -386,11 +389,12 @@ function scanParagraph(
     if (esc[i]) continue;
     if (s[i] === "[") brackets.push(i);
     else if (s[i] === "]" && brackets.length) {
-      brackets.pop();
+      const opened = brackets.pop()!;
       if (s[i + 1] === "(" && !esc[i + 1]) {
         const found = inline(i + 1);
         if (found) {
           scan.links.push(found.link);
+          linkRanges?.push([opened, found.end + 1]);
           i = found.end;
         }
       }
@@ -406,11 +410,13 @@ function scanParagraph(
     const angle = m[2].startsWith("<");
     const col = line.indexOf(m[2], line.indexOf("]:") + 2) + (angle ? 1 : 0);
     scan.links.push({ dest: angle ? m[2].slice(1, -1) : m[2], markdown: true, ...at(lineStart + col) });
+    linkRanges?.push([lineStart, lineStart + line.length]);
     lineStart += line.length + 1;
   }
 
   // HTML: <a href>, <img src> and <a id> / <a name> with a quoted value; an unquoted one is left unseen (§6.3).
   for (const m of s.matchAll(/<(a|img)\b([^<>]*)>/gi)) {
+    linkRanges?.push([m.index!, m.index! + m[0].length]);
     const element = m[1].toLowerCase();
     const attrsAt = m.index! + 1 + m[1].length;
     for (const a of m[2].matchAll(/(?:^|\s)(href|src|id|name)[ \t\n]*=[ \t\n]*(?:"([^"]*)"|'([^']*)')/gi)) {
@@ -476,10 +482,11 @@ function withoutIndent(line: string, n: number): string {
   return line.slice(i);
 }
 
-/** Scan one Markdown file's text (spec 47 §6.1–§6.3). */
-export function scanMarkdown(input: string): Scan {
+/** Scan one Markdown file's text (spec 47 §6.1–§6.3, spec 58 §5.5 cited). */
+export function scanMarkdown(input: string, opts: { citedRoots?: string[] } = {}): Scan {
   const text = toLf(stripBom(input));
-  const scan: Scan = { links: [], anchors: new Set(), tags: [], frontmatter: null };
+  const scan: Scan = { links: [], anchors: new Set(), tags: [], frontmatter: null, cited: [] };
+  const citedRoots = opts.citedRoots ?? [];
   const slugger = new Slugger(scan.anchors);
   const all = text.split("\n");
   let first = 0;
@@ -522,7 +529,10 @@ export function scanMarkdown(input: string): Scan {
     const blanked = blankCode(joined);
     // GitHub slugs a heading from its rendered text, so a code span's content counts there.
     if (heading) slugger.add(joined.replace(/\n/g, " "));
-    scanParagraph(blanked, joined, lines.map((l) => l.col0), at, scan);
+    const linkRanges: Array<[number, number]> | undefined = citedRoots.length > 0 ? [] : undefined;
+    scanParagraph(blanked, joined, lines.map((l) => l.col0), at, scan, linkRanges);
+    // Spec 58 §5.5: cited path candidates, only when the caller asks (a .claude/ file under a declared cited block).
+    if (linkRanges) collectCitedPaths(joined, linkRanges, at, scan, citedRoots);
   };
 
   for (let i = first; i < all.length; i++) {
@@ -1036,7 +1046,9 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
       add({ id: "encoding", level: "warn", path: rel, message: "not valid UTF-8: not scanned", fix: "save the file as UTF-8" });
       continue;
     }
-    f.scan = scanMarkdown(bytes.toString("utf8"));
+    // Spec 58 §5.5: pass citedRoots for .claude/ files when cited is declared
+    const citedRoots = rel.startsWith(".claude/") && block?.cited ? block.cited.roots : [];
+    f.scan = scanMarkdown(bytes.toString("utf8"), { citedRoots });
     scanned++;
   }
 
@@ -1077,7 +1089,7 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
   }
 
   // Declared (§5.3).
-  if (declared && block !== null) await declaredChecks(block, state, resolver, add);
+  const citedCount = declared && block !== null ? await declaredChecks(block, state, resolver, inRepo, root, add) : null;
 
   // `[path]` limits the findings about a file; a `path: null` one always counts (§4.1).
   const inLimit = (p: string | null) => p === null || limit === "" || p === limit || p.startsWith(`${limit}/`);
@@ -1097,13 +1109,20 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
   if (!has("links")) kept.push({ id: "links", level: "ok", path: null, line: null, column: null, message: `${linkCount} ${linkCount === 1 ? "link" : "links"} in ${filesWord(scanned)}`, fix: null });
   if (!has("leaked-tags")) kept.push({ id: "leaked-tags", level: "ok", path: null, line: null, column: null, message: filesWord(scanned), fix: null });
   if (declared && block !== null) {
+    // Spec 58: frontmatter is on when any category has a non-empty frontmatter list OR values OR paths
+    const frontmatterOn = block.categories.some((c) => c.frontmatter.length > 0 || Object.keys(c.values).length > 0 || Object.keys(c.paths).length > 0);
     const on: Array<[string, boolean]> = [
       ["categories", true],
-      ["frontmatter", block.categories.some((c) => c.frontmatter.length > 0)],
+      ["frontmatter", frontmatterOn],
       ["names", block.categories.some((c) => c.name === "dated")],
       ["related", block.related !== "off"],
     ];
     for (const [id, active] of on) if (active && !has(id)) kept.push({ id, level: "ok", path: null, line: null, column: null, message: "nothing to report", fix: null });
+    // Spec 58 §5.5: the cited ok line counts the candidates resolved and the files read.
+    if (citedCount !== null && !has("cited")) {
+      const k = citedCount.candidates;
+      kept.push({ id: "cited", level: "ok", path: null, line: null, column: null, message: `${k} cited ${k === 1 ? "path" : "paths"} in ${filesWord(citedCount.files)}`, fix: null });
+    }
   }
 
   // Sorted by the file's place in the walk, then line and column; lines with no path last, in their order (§4.6).
@@ -1125,16 +1144,18 @@ export async function validateDocs(opts: DocsOptions): Promise<DocsReport> {
 
 const filesWord = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
 
-/** The order of the lines with no path, after every finding on a file (§4.6). */
-const ID_ORDER = ["links", "leaked-tags", "encoding", "scope", "policy", "categories", "frontmatter", "names", "related"];
+/** The order of the lines with no path, after every finding on a file (§4.6). Spec 58: cited after related. */
+const ID_ORDER = ["links", "leaked-tags", "encoding", "scope", "policy", "categories", "frontmatter", "names", "related", "cited"];
 const cmp = (a: string | null, b: string | null) => ((a ?? "") < (b ?? "") ? -1 : (a ?? "") > (b ?? "") ? 1 : 0);
 
 async function declaredChecks(
   block: DocsBlock,
   state: Map<string, FileState>,
   resolver: Resolver,
+  inRepo: boolean,
+  root: string,
   add: (c: Omit<DocsCheck, "line" | "column" | "path"> & Partial<Pick<DocsCheck, "line" | "column" | "path">>) => void,
-): Promise<void> {
+): Promise<{ candidates: number; files: number } | null> {
   // A declared directory that is not there: by position, with no path (§5.3).
   // Resolved as a link is (§7): a symbolic link on the way stops it, so nothing outside the workspace is asked about.
   for (const [i, c] of block.categories.entries()) {
@@ -1155,13 +1176,23 @@ async function declaredChecks(
     return true;
   };
 
+  /** Spec 58 §5.4: shared fault checks for related entries and path keys. Returns fault type or null. */
+  const entryFault = (entry: string): "nul" | "windows" | "scheme" | "backslash" | null => {
+    if (entry === "" || entry.includes("\0")) return "nul";
+    if (WINDOWS_PATH.test(entry)) return "windows";
+    if (SCHEME.test(entry) || entry.startsWith("//")) return "scheme";
+    if (entry.includes("\\")) return "backslash";
+    return null;
+  };
+
   for (const f of state.values()) {
     if (!f.rel.startsWith("docs/")) continue;
     const sub = f.rel.slice("docs/".length);
     const base = path.posix.basename(f.rel);
     const category = covering(sub);
     if (category === null) {
-      if (block.uncovered === "error")
+      // Spec 58 §5.2: docs/README.md is never uncovered
+      if (block.uncovered === "error" && f.rel !== "docs/README.md")
         add({ id: "categories", level: "error", path: f.rel, message: "file is in no declared category", fix: "move it into a category, or declare its directory in the docs block" });
       continue;
     }
@@ -1170,22 +1201,90 @@ async function declaredChecks(
       const m = DATED.exec(base);
       if (!m || !realDate(m[1], m[2], m[3])) add({ id: "names", level: "error", path: f.rel, message: "file name does not fit dated (YYYY-MM-DD-<kebab-case>.md, a real date)", fix: "rename the file" });
     }
-    if (category.frontmatter.length === 0 || !f.scan) continue;
+    // Spec 58: read frontmatter if frontmatter list is non-empty OR values OR paths
+    const hasFrontmatterKeys = category.frontmatter.length > 0;
+    const hasValues = Object.keys(category.values).length > 0;
+    const hasPaths = Object.keys(category.paths).length > 0;
+    if (!hasFrontmatterKeys && !hasValues && !hasPaths) continue;
+    if (!f.scan) continue;
     const fm = strictFrontmatter(f);
     if (fm === null) {
-      add({ id: "frontmatter", level: "error", path: f.rel, message: "no frontmatter block", fix: `add a frontmatter block with ${category.frontmatter.join(", ")}` });
+      // No frontmatter block: only report if frontmatter keys are required
+      if (hasFrontmatterKeys) {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: "no frontmatter block", fix: `add a frontmatter block with ${category.frontmatter.join(", ")}` });
+      }
       continue;
     }
     if (yamlFinding(f, "frontmatter")) continue;
     const data = (fm as { data: unknown }).data;
     const record = data !== null && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, unknown>) : {};
-    for (const key of category.frontmatter)
-      if (!Object.hasOwn(record, key) || emptyValue(record[key])) add({ id: "frontmatter", level: "error", path: f.rel, message: `required frontmatter key ${key} is missing or empty`, fix: `give ${key} a value` });
+    for (const key of category.frontmatter) {
+      if (!Object.hasOwn(record, key) || emptyValue(record[key])) {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `required frontmatter key ${key} is missing or empty`, fix: `give ${key} a value` });
+      } else if (category.values[key]) {
+        // Spec 58 §5.1: closed values
+        const val = record[key];
+        const declared = category.values[key];
+        if (typeof val !== "string") {
+          add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${key}: value is not a string`, fix: `give ${key} one of the declared values` });
+        } else if (!declared.includes(val)) {
+          add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${key}: value is not one of the declared values`, fix: `use one of: ${declared.join(", ")}` });
+        }
+      }
+    }
+    // Spec 58 §5.4: path keys
+    for (const [pathKey, pathEntry] of Object.entries(category.paths)) {
+      if (!Object.hasOwn(record, pathKey)) continue;
+      const val = record[pathKey];
+      if (emptyValue(val)) continue;
+      if (pathEntry.sentinel !== null && val === pathEntry.sentinel) continue;
+      if (typeof val !== "string") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: value is not a string`, fix: `write ${pathKey} as a path` });
+        continue;
+      }
+      const fault = entryFault(val);
+      if (fault === "nul") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: the path holds a NUL character`, fix: "remove it from the path" });
+        continue;
+      }
+      if (fault === "windows") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: the path is an absolute Windows path`, fix: pathEntry.base === "workspace" ? "use a path relative to the workspace root" : "use a path relative to the file" });
+        continue;
+      }
+      if (fault === "scheme") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: the path has a scheme`, fix: "name a file of the workspace" });
+        continue;
+      }
+      if (fault === "backslash") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: the path holds a backslash`, fix: "use / as the separator" });
+        continue;
+      }
+      // Resolve from base
+      const fromDir = pathEntry.base === "workspace" ? "." : path.posix.dirname(f.rel);
+      const r = await resolver.resolve(fromDir, val);
+      if (r.kind === "ok") continue;
+      if (r.kind === "link") {
+        add({ id: "frontmatter", level: "warn", path: f.rel, message: `frontmatter key ${pathKey}: the path is reached through a symbolic link, not followed`, fix: "name the file itself, not through a link" });
+        continue;
+      }
+      if (r.kind === "leaves") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: the path leaves the workspace`, fix: "name a file inside the workspace" });
+        continue;
+      }
+      if (r.kind === "missing") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: the path does not exist`, fix: "correct the path or restore the file" });
+        continue;
+      }
+      if (r.kind === "case") {
+        add({ id: "frontmatter", level: "error", path: f.rel, message: `frontmatter key ${pathKey}: the path's case differs from the file on disk`, fix: "match the file name's case exactly" });
+        continue;
+      }
+    }
   }
 
-  if (block.related === "off") return;
-  /** A file's `related:` entries resolved from its own directory; null when it has none to read. */
-  const relatedOf = async (f: FileState, report: boolean): Promise<Map<string, number> | null> => {
+  if (block.related !== "off") {
+    /** A file's `related:` entries resolved from its base directory; null when it has none to read. */
+    const relatedOf = async (f: FileState, report: boolean): Promise<Map<string, number> | null> => {
     if (!f.scan?.frontmatter) return null;
     const fm = strictFrontmatter(f);
     if (fm === null) return null;
@@ -1201,25 +1300,28 @@ async function declaredChecks(
       return null;
     }
     const out = new Map<string, number>();
+    // Spec 58 §5.3: resolve from "." when relatedBase is "workspace", from dirname otherwise
+    const fromDir = block.relatedBase === "workspace" ? "." : path.posix.dirname(f.rel);
     for (const [j, entry] of (list as string[]).entries()) {
       const fail = (message: string, fix: string, level: DocsLevel = "error") => report && add({ id: "related", level, path: f.rel, message: `related[${j}]: ${message}`, fix });
-      if (entry === "" || entry.includes("\0")) {
+      const fault = entryFault(entry);
+      if (fault === "nul") {
         fail("empty, or holds a NUL character", "remove the entry or name a file");
         continue;
       }
-      if (WINDOWS_PATH.test(entry)) {
-        fail("an absolute Windows path", "use a path relative to the file");
+      if (fault === "windows") {
+        fail("an absolute Windows path", block.relatedBase === "workspace" ? "use a path relative to the workspace root" : "use a path relative to the file");
         continue;
       }
-      if (SCHEME.test(entry) || entry.startsWith("//")) {
+      if (fault === "scheme") {
         fail("has a scheme: related: names files of the workspace", "name a file of the workspace");
         continue;
       }
-      if (entry.includes("\\")) {
+      if (fault === "backslash") {
         fail("holds a backslash", "use / as the separator");
         continue;
       }
-      const r = await resolver.resolve(path.posix.dirname(f.rel), entry);
+      const r = await resolver.resolve(fromDir, entry);
       if (r.kind !== "ok") {
         const [level, message, fix] = RESOLVE_FINDING[r.kind];
         fail(message.replace(/^target/, "the entry"), fix.replace(/^correct the link/, "correct the entry").replace(/^link to/, "name"), level);
@@ -1245,4 +1347,202 @@ async function declaredChecks(
         add({ id: "related", level: "error", path: f.rel, message: `related[${j}]: the target does not list this file back`, fix: "add this file to the target's related:" });
     }
   }
+  } // end if (block.related !== "off")
+
+  // Spec 58 §5.5: cited paths check; its counts feed the ok line.
+  return block.cited === null ? null : await citedPathsCheck(block.cited, state, resolver, inRepo, root, add);
+}
+
+/** The longest run read as a cited path: Linux's PATH_MAX, above what Windows and macOS allow. */
+const CITED_MAX_LENGTH = 4096;
+/** A character of a cited path's run (spec 58 §5.5). */
+const CITED_PATH_CHAR = /[A-Za-z0-9._@+/-]/;
+/** What makes a whitespace-delimited word no candidate: a placeholder, a glob or a URL (spec 58 §5.5). */
+const CITED_PLACEHOLDER = /[<>*{}$]|…|\.\.\.|:\/\//;
+
+/**
+ * The cited-path candidates of one paragraph (spec 58 §5.5): prose, code-span content and inline `<code>` content are read;
+ * code-span backticks, `<code>` tags, `<pre>` elements, HTML comments, links, reference definitions and `<a>` / `<img>` tags
+ * are not. Each read stretch is its own segment, so a word never crosses into or out of a code span or a `<code>` element.
+ * One forward pass per stage: linear in the paragraph's length.
+ */
+function collectCitedPaths(
+  joined: string,
+  linkRanges: Array<[number, number]>,
+  at: (pos: number) => { line: number; column: number },
+  scan: Scan,
+  roots: string[],
+): void {
+  const n = joined.length;
+  // 1 = read. A character not read also ends a word, so a word never crosses into or out of a code span or <code>.
+  const read = new Uint8Array(n).fill(1);
+  const cut = (from: number, to: number) => read.fill(0, from, Math.min(to, n));
+  const spans = codeSpanRanges(joined);
+  // A code span's backtick runs are not read; its content is.
+  for (const r of spans) {
+    cut(r.start, r.contentStart);
+    cut(r.contentEnd, r.end);
+  }
+  // The HTML elements, found as blankCode finds them: over the text with code spans blanked, one indexOf pass each.
+  let masked = joined;
+  if (spans.length) {
+    const parts: string[] = [];
+    let p = 0;
+    for (const r of spans) {
+      parts.push(joined.slice(p, r.start), " ".repeat(r.end - r.start));
+      p = r.end;
+    }
+    parts.push(joined.slice(p));
+    masked = parts.join("");
+  }
+  // ASCII letters only, as blankCode does, so positions do not shift.
+  const lower = masked.replace(/[A-Z]/g, (c) => c.toLowerCase());
+  for (const [open, close] of [
+    ["<!--", "-->"],
+    ["<code", "</code>"],
+    ["<pre", "</pre>"],
+  ] as const) {
+    const element = open !== "<!--";
+    let search = 0;
+    for (;;) {
+      const a = lower.indexOf(open, search);
+      if (a === -1) break;
+      if (element && a + open.length < n && !/[\s>]/.test(masked[a + open.length])) {
+        search = a + 1;
+        continue;
+      }
+      const b = lower.indexOf(close, a + open.length);
+      const end = b === -1 ? n : b + close.length;
+      if (open === "<code") {
+        // The tags are not read; what lies between them is.
+        const contentEnd = b === -1 ? n : b;
+        const gt = lower.indexOf(">", a + open.length);
+        cut(a, gt === -1 || gt >= contentEnd ? contentEnd : gt + 1);
+        cut(contentEnd, end);
+      } else cut(a, end);
+      search = end;
+    }
+  }
+  // A link's text and destination, a reference definition and an <a> / <img> tag are not read.
+  for (const [from, to] of linkRanges) cut(from, to);
+
+  const rootOf = (t: string) => roots.some((r) => t.startsWith(`${r}/`));
+  let i = 0;
+  while (i < n) {
+    if (!read[i] || isWs(joined[i])) {
+      i++;
+      continue;
+    }
+    // A word: a run of read characters that are not whitespace.
+    const ws = i;
+    while (i < n && read[i] && !isWs(joined[i])) i++;
+    const we = i;
+    let s0 = ws;
+    let s1 = we;
+    while (s0 < s1 && joined[s0] === "*") s0++;
+    while (s1 > s0 && joined[s1 - 1] === "*") s1--;
+    const stripped = joined.slice(s0, s1);
+    if (stripped === "" || CITED_PLACEHOLDER.test(stripped)) continue;
+    // Each maximal run of path characters in the word is read.
+    for (let r = 0; r < stripped.length; ) {
+      if (!CITED_PATH_CHAR.test(stripped[r])) {
+        r++;
+        continue;
+      }
+      const runStart = r;
+      while (r < stripped.length && CITED_PATH_CHAR.test(stripped[r])) r++;
+      // Longer than any path a file system holds (PATH_MAX): not a citation, and never handed to git.
+      if (r - runStart > CITED_MAX_LENGTH) continue;
+      let token = stripped.slice(runStart, r);
+      let end = token.length;
+      while (end > 0 && ".,:;)".includes(token[end - 1])) end--;
+      token = token.slice(0, end);
+      if (!rootOf(token)) {
+        let lead = 0;
+        while (lead < token.length && token[lead] === "_") lead++;
+        let trail = 0;
+        while (trail < token.length - lead && token[token.length - 1 - trail] === "_") trail++;
+        if (lead > 0 && lead === trail) token = token.slice(lead, token.length - trail);
+      }
+      if (!rootOf(token) || !CITED_SUFFIXES.some((x) => token.endsWith(x))) continue;
+      if (token.split("/").some((x) => x === "." || x === "..")) continue;
+      // The column of the candidate as written, its emphasis included.
+      const first = runStart === 0 ? ws : s0 + runStart;
+      scan.cited.push({ token, ...at(first) });
+    }
+  }
+}
+
+/** Spec 58 §5.5: the closed list of file suffixes a cited path may end with. */
+const CITED_SUFFIXES = [".md", ".yaml", ".yml", ".json", ".sh", ".ps1", ".ts", ".js", ".mjs", ".txt", ".toml"];
+
+/** Spec 58 §5.5: check cited paths in .claude/ files. */
+async function citedPathsCheck(
+  cited: { roots: string[]; exempt: string[] },
+  state: Map<string, FileState>,
+  resolver: Resolver,
+  inRepo: boolean,
+  root: string,
+  add: (c: Omit<DocsCheck, "line" | "column" | "path"> & Partial<Pick<DocsCheck, "line" | "column" | "path">>) => void,
+): Promise<{ candidates: number; files: number }> {
+  // Collect all candidates from .claude/ files
+  const exemptSet = new Set(cited.exempt);
+  const candidates: Array<{ path: string; token: string; line: number; column: number }> = [];
+  let filesRead = 0;
+
+  for (const f of state.values()) {
+    if (!f.rel.startsWith(".claude/") || !f.scan) continue;
+    filesRead++;
+    for (const c of f.scan.cited) {
+      // Skip exempt entries
+      if (exemptSet.has(c.token)) continue;
+      candidates.push({ path: f.rel, token: c.token, line: c.line, column: c.column });
+    }
+  }
+
+  // Resolve all candidates
+  const toCheck: Array<{ path: string; token: string; line: number; column: number; result: Resolved }> = [];
+  for (const c of candidates) {
+    const r = await resolver.resolve(".", c.token);
+    if (r.kind === "ok") continue; // exists, no finding
+    if (r.kind === "link") {
+      // Link is a warn, never sent to git
+      add({ id: "cited", level: "warn", path: c.path, line: c.line, column: c.column, message: "cited path is reached through a symbolic link, not followed", fix: "cite the file itself, not through a link" });
+      continue;
+    }
+    // missing, case, leaves (treat leaves as missing since no .. segment is allowed)
+    toCheck.push({ ...c, result: r });
+  }
+
+  // Ask git which ones are ignored
+  let gitCouldNotSay = false;
+  const ignoredSet = new Set<string>();
+  if (toCheck.length > 0 && inRepo) {
+    const pathsToCheck = toCheck.map((c) => c.token);
+    const answer = await ignoredPaths(root, pathsToCheck, { knownRepo: true });
+    if (answer.unchecked) {
+      gitCouldNotSay = true;
+    } else {
+      for (const i of answer.ignored) ignoredSet.add(i.path);
+    }
+  } else if (toCheck.length > 0) {
+    gitCouldNotSay = true;
+  }
+
+  // Report findings
+  if (gitCouldNotSay && toCheck.length > 0) {
+    // Git could not say: no missing/case errors, just one warn
+    add({ id: "cited", level: "warn", message: "git could not say which cited paths it ignores: missing cited paths not checked", fix: "run in a git repository with git on PATH" });
+  } else {
+    for (const c of toCheck) {
+      if (ignoredSet.has(c.token)) continue;
+      if (c.result.kind === "missing" || c.result.kind === "leaves") {
+        add({ id: "cited", level: "error", path: c.path, line: c.line, column: c.column, message: "cited path does not exist", fix: "correct the path, restore the file, or exempt it in the docs block" });
+      } else if (c.result.kind === "case") {
+        add({ id: "cited", level: "error", path: c.path, line: c.line, column: c.column, message: "cited path's case differs from the file on disk", fix: "match the file name's case exactly" });
+      }
+    }
+  }
+
+  return { candidates: candidates.length, files: filesRead };
 }
