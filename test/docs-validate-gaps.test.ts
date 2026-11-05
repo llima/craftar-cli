@@ -480,7 +480,8 @@ describe("spec 58 §5.5 — cited paths in .claude/ (cited)", () => {
   it("trailing punctuation is stripped before emphasis — **docs/x.md**. works", async () => {
     // Correction 6: trailing .,:;) should be stripped before * and _ emphasis
     // Without this fix, **docs/bold.md**. would fail to match because the trailing .
-    // prevents the closing ** from being stripped
+    // prevents the closing ** from being stripped.
+    // R2-S1: we test that an absent file produces an error, proving the path was found.
     const body = [
       '**docs/bold.md**.',
       '*docs/italic.md*,',
@@ -489,10 +490,13 @@ describe("spec 58 §5.5 — cited paths in .claude/ (cited)", () => {
       'docs/plain.md)',
       '',
     ].join('\n');
-    const s = await ws({ '.claude/rules/a.md': body, 'docs/bold.md': 'x\n', 'docs/italic.md': 'x\n', 'docs/dunder.md': 'x\n', 'docs/under.md': 'x\n', 'docs/plain.md': 'x\n' }, BLOCK);
+    // Note: docs/bold.md is NOT created — it should produce a cited error
+    const s = await ws({ '.claude/rules/a.md': body, 'docs/italic.md': 'x\n', 'docs/dunder.md': 'x\n', 'docs/under.md': 'x\n', 'docs/plain.md': 'x\n' }, BLOCK);
     const r = await run(s.wsRoot);
-    // All paths exist, so no findings
-    expect(findings(r, 'cited')).toEqual([]);
+    // docs/bold.md is absent → one cited error; the rest exist → no other findings
+    expect(findings(r, 'cited').map(brief)).toEqual([
+      'error cited .claude/rules/a.md:1:1 cited path does not exist',
+    ]);
   });
 
   // Should-fix 2: git is never asked about a cited path reached through a symbolic link.
