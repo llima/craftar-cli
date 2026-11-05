@@ -40,7 +40,8 @@ describe("rendered server in MCP files", () => {
   it("case 1: schema 4: both MCP files hold the rendered server (criterion 1)", async () => {
     const { p } = await planned(4, EXAMPLE);
     expect(file(p, ".mcp.json")).toBe(RENDERED);
-    expect(file(p, ".kiro/settings/mcp.json")).toBe(RENDERED.replace(/\n/g, "\r\n"));
+    // kiro files are LF when new (spec 57)
+    expect(file(p, ".kiro/settings/mcp.json")).toBe(RENDERED);
     expect(p.warnings).toEqual([]);
     expect(p.missingParams).toEqual([]);
   });
@@ -49,7 +50,8 @@ describe("rendered server in MCP files", () => {
     for (const schema of [1, 2, 3]) {
       const { p } = await planned(schema, EXAMPLE);
       expect(file(p, ".mcp.json")).toBe(BRACES);
-      expect(file(p, ".kiro/settings/mcp.json")).toBe(BRACES.replace(/\n/g, "\r\n"));
+      // kiro files are LF when new (spec 57)
+      expect(file(p, ".kiro/settings/mcp.json")).toBe(BRACES);
       expect(p.warnings).toEqual([]);
     }
   });

@@ -216,9 +216,9 @@ describe("import --from claude-code — paths: frontmatter", () => {
     const backendBytes = await fs.readFile(path.join(t.ws("api"), ".claude/rules/backend.md"));
     expect(Buffer.from(ruleListCRLF).equals(backendBytes)).toBe(true);
 
-    // .kiro/steering/backend.md should start with CRLF frontmatter and not contain paths:
+    // .kiro/steering/backend.md should start with LF frontmatter (new file, spec 57) and not contain paths:
     const steeringContent = await fs.readFile(path.join(t.ws("api"), ".kiro/steering/backend.md"), "utf8");
-    expect(steeringContent.startsWith("---\r\ninclusion: fileMatch\r\nfileMatchPattern: ")).toBe(true);
+    expect(steeringContent.startsWith("---\ninclusion: fileMatch\nfileMatchPattern: ")).toBe(true);
     expect(steeringContent).not.toContain("paths:");
 
     // AGENTS.md should not contain the rule body but should contain the scoped rule reference

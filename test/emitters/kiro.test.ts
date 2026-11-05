@@ -24,10 +24,10 @@ async function planFor(ingredients: IngredientSpec[], profileExtra: Record<strin
 const file = (p: Plan, rel: string) => p.files.find((f) => f.path === rel);
 
 describe("kiro emitter", () => {
-  it("emits an always rule as CRLF steering with the default banner and no BOM", async () => {
+  it("emits an always rule as LF steering with the default banner and no BOM", async () => {
     const p = await planFor([rule("a", "# A\n")]);
     const f = file(p, ".kiro/steering/a.md")!;
-    expect(f.content.toString("utf8")).toBe("---\r\ninclusion: always\r\n---\r\n\r\n<!-- GENERATED from .claude/rules/a.md by craftar -- do not edit. -->\r\n\r\n# A\r\n");
+    expect(f.content.toString("utf8")).toBe("---\ninclusion: always\n---\n\n<!-- GENERATED from .claude/rules/a.md by craftar -- do not edit. -->\n\n# A\n");
     expect(hasBom(f.content)).toBe(false);
   });
 
@@ -38,7 +38,7 @@ describe("kiro emitter", () => {
 
   it("writes fileMatch frontmatter", async () => {
     const p = await planFor([rule("b", "# B\n", { inclusion: "fileMatch", fileMatchPattern: "projects/api/**" })]);
-    expect(file(p, ".kiro/steering/b.md")!.content.toString("utf8")).toMatch(/^---\r\ninclusion: fileMatch\r\nfileMatchPattern: "projects\/api\/\*\*"\r\n---\r\n\r\n/);
+    expect(file(p, ".kiro/steering/b.md")!.content.toString("utf8")).toMatch(/^---\ninclusion: fileMatch\nfileMatchPattern: "projects\/api\/\*\*"\n---\n\n/);
   });
 
   it("rewrites .claude/rules/ references to .kiro/steering/", async () => {
@@ -87,18 +87,18 @@ describe("kiro emitter", () => {
   it("writes an MCP server exactly as the Forge holds it, Claude-only keys included (spec 07)", async () => {
     const server = { type: "http", url: "https://mcp.acme.dev", headers: { "X-Team": "acme" }, timeout: 30 };
     const p = await planFor([{ meta: { type: "mcp", name: "r", server } }]);
-    expect(file(p, ".kiro/settings/mcp.json")!.content.toString("utf8")).toBe(JSON.stringify({ mcpServers: { r: server } }, null, 2).replace(/\n/g, "\r\n") + "\r\n");
+    expect(file(p, ".kiro/settings/mcp.json")!.content.toString("utf8")).toBe(JSON.stringify({ mcpServers: { r: server } }, null, 2) + "\n");
   });
 
   it("emits a server with only declared keys, in schema order, byte for byte as 0.2.4 did (AC 18)", async () => {
     const p = await planFor([{ meta: { type: "mcp", name: "pw", server: { command: "npx", args: ["pw"] } } }]);
-    expect(file(p, ".kiro/settings/mcp.json")!.content.toString("utf8")).toBe('{\r\n  "mcpServers": {\r\n    "pw": {\r\n      "command": "npx",\r\n      "args": [\r\n        "pw"\r\n      ]\r\n    }\r\n  }\r\n}\r\n');
+    expect(file(p, ".kiro/settings/mcp.json")!.content.toString("utf8")).toBe('{\n  "mcpServers": {\n    "pw": {\n      "command": "npx",\n      "args": [\n        "pw"\n      ]\n    }\n  }\n}\n');
   });
 
   it("emits an MCP variant under its original server name", async () => {
     const p = await planFor([{ meta: { type: "mcp", name: "srv--acme", as: "srv", server: { command: "npx", args: ["acme-server"] } } }]);
     const f = file(p, ".kiro/settings/mcp.json")!;
-    expect(f.content.toString("utf8")).toBe(JSON.stringify({ mcpServers: { srv: { command: "npx", args: ["acme-server"] } } }, null, 2).replace(/\n/g, "\r\n") + "\r\n");
+    expect(f.content.toString("utf8")).toBe(JSON.stringify({ mcpServers: { srv: { command: "npx", args: ["acme-server"] } } }, null, 2) + "\n");
   });
 
   it("warns when two MCP ingredients emit the same server name, instead of dropping one silently", async () => {
@@ -113,7 +113,7 @@ describe("kiro emitter", () => {
 
 describe("kiro emitter — sections (spec 11 §10.2, AC 2)", () => {
   const SEC = "# T\n<!-- craftar:section s -->\ndefault\n<!-- /craftar:section -->\nsee .claude/rules/r.md\n";
-  it("no output holds a marker: steering, rule steering, agent prompt, command, skill; all CRLF", async () => {
+  it("no output holds a marker: steering, rule steering, agent prompt, command, skill; all LF when new", async () => {
     const ingredients: IngredientSpec[] = [
       rule("r", SEC),
       { meta: { type: "steering", name: "st" }, files: { "steering.md": SEC } },
@@ -135,10 +135,11 @@ describe("kiro emitter — sections (spec 11 §10.2, AC 2)", () => {
       const f = file(p, rel)!;
       const t = f.content.toString("utf8");
       expect(t, rel).not.toContain("craftar:section");
-      expect(t, rel).not.toMatch(/(?<!\r)\n/);
+      // New files are LF (spec 57)
+      expect(t, rel).not.toContain("\r");
       expect(hasBom(f.content), rel).toBe(false);
     }
-    expect(file(p, ".kiro/steering/r.md")!.content.toString("utf8")).toContain("# T\r\nvalue\r\nsee .kiro/steering/r.md\r\n");
+    expect(file(p, ".kiro/steering/r.md")!.content.toString("utf8")).toContain("# T\nvalue\nsee .kiro/steering/r.md\n");
     expect(JSON.parse(file(p, ".kiro/agents/a.json")!.content.toString("utf8")).prompt).toBe("# T\nvalue\nsee .kiro/steering/r.md");
   });
 });
@@ -442,8 +443,8 @@ describe("kiro agent permissions", () => {
     // Check key order
     expect(Object.keys(json)).toEqual(["name", "description", "prompt", "tools", "allowedTools", "resources", "permissions"]);
 
-    // Check CRLF (no LF without CR)
-    expect(content).not.toMatch(/(?<!\r)\n/);
+    // New files are LF (spec 57 — no CR)
+    expect(content).not.toContain("\r");
 
     // Check no BOM
     expect(hasBom(f.content)).toBe(false);
@@ -451,9 +452,9 @@ describe("kiro agent permissions", () => {
     // Check no kiroUpgrade
     expect(content).not.toContain("kiroUpgrade");
 
-    // Build expected content from parsed values and compare
+    // Build expected content from parsed values and compare (LF for new files)
     const { name, description, prompt, tools, allowedTools, resources, permissions } = json;
-    const expected = (JSON.stringify({ name, description, prompt, tools, allowedTools, resources, permissions }, null, 2) + "\n").replace(/\n/g, "\r\n");
+    const expected = JSON.stringify({ name, description, prompt, tools, allowedTools, resources, permissions }, null, 2) + "\n";
     expect(content).toBe(expected);
   });
 

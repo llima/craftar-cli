@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { climbsOut, toCrlf } from "../core/text.js";
+import { climbsOut } from "../core/text.js";
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import { listFiles } from "../core/forge.js";
 import { decodeForScan } from "../core/secrets.js";
@@ -16,6 +16,7 @@ import {
   resolveRuleRefs,
   ruleFile,
   RULE_NAME_CHARS,
+  textFile,
   UNKNOWN_NAME_KIND,
   unresolvedRuleRefs,
   type RefReport,
@@ -34,7 +35,7 @@ export const KIRO_TEXT_EXT = /\.(md|txt|json|ya?ml)$/i;
  *   - `.claude/rules/` references are resolved: kiro-written rules → `.kiro/steering/`,
  *     claude-code-written rules → unchanged, agents-md-only rules → `AGENTS.md`,
  *     dead rules → `<x> (rule not in this workspace)`, unknown → `.kiro/steering/` with a warning (spec 17)
- *   - UTF-8 without BOM, CRLF (the exact shape Kiro already consumes)
+ *   - UTF-8 without BOM, the EOL of the file it replaces, LF when new (spec 57)
  * and additionally generates what the script never did: agents JSON, commands and skills.
  */
 export const kiro: Emitter<"kiro"> = {
@@ -113,7 +114,7 @@ export const kiro: Emitter<"kiro"> = {
               ? `---\ninclusion: fileMatch\nfileMatchPattern: ${JSON.stringify(Array.isArray(m.fileMatchPattern) ? m.fileMatchPattern.join(",") : m.fileMatchPattern ?? "**")}\n---\n\n`
               : `---\ninclusion: ${m.inclusion}\n---\n\n`;
           const head = banner.replace("{{source}}", `.claude/rules/${outName(m)}.md`) + "\n\n";
-          out.push(crlf(path, fm + head + body, ing.ref));
+          out.push(await textFile(ctx, path, fm + head + body, t, ing.ref, { keepBom: false }));
           break;
         }
         case "steering": {
@@ -128,7 +129,7 @@ export const kiro: Emitter<"kiro"> = {
               ctx.reportIndex({ path, rules: indexResult.listed, undescribed: indexResult.undescribed, expanded: indexResult.expanded });
             }
           }
-          out.push(crlf(path, body, ing.ref));
+          out.push(await textFile(ctx, path, body, t, ing.ref, { keepBom: false }));
           break;
         }
         case "agent": {
@@ -164,7 +165,7 @@ export const kiro: Emitter<"kiro"> = {
           const rules = permissionRules(outName(m), tools, ctx);
           const permissions = { rules };
           const json = JSON.stringify({ name: outName(m), description, prompt: body.replace(/^\n+/, "").replace(/\n+$/, ""), tools, allowedTools: tools, resources, permissions }, null, 2) + "\n";
-          out.push(crlf(path, json, ing.ref));
+          out.push(await textFile(ctx, path, json, t, ing.ref, { keepBom: false }));
           break;
         }
         case "command": {
@@ -182,7 +183,7 @@ export const kiro: Emitter<"kiro"> = {
             body,
             { raw: resolvedFm },
           );
-          out.push(crlf(path, `---\ninclusion: manual\n---\n\n` + doc, ing.ref));
+          out.push(await textFile(ctx, path, `---\ninclusion: manual\n---\n\n` + doc, t, ing.ref, { keepBom: false }));
           break;
         }
         case "skill": {
@@ -191,7 +192,7 @@ export const kiro: Emitter<"kiro"> = {
             const rawText = await ctx.text(ing, "SKILL.md", "kiro");
             const text = resolve(rawText, ing.ref);
             checkReworded(path, [rawText], ing.ref);
-            out.push(crlf(path, text, ing.ref));
+            out.push(await textFile(ctx, path, text, t, ing.ref, { keepBom: false }));
           } else {
             for (const f of await listFiles(ing.dir)) {
               if (f === "ingredient.yaml") continue;
@@ -200,7 +201,7 @@ export const kiro: Emitter<"kiro"> = {
                 const rawText = await ctx.text(ing, f, "kiro");
                 const text = resolve(rawText, ing.ref);
                 checkReworded(path, [rawText], ing.ref);
-                out.push(crlf(path, text, ing.ref));
+                out.push(await textFile(ctx, path, text, t, ing.ref, { keepBom: false }));
               } else {
                 // Binary file: scan but don't rewrite (spec 41 §4.4)
                 const content = await ctx.bytes(ing, f);
@@ -227,7 +228,7 @@ export const kiro: Emitter<"kiro"> = {
 
     const servers = mcpServers(ctx, t, MCP_FILE.kiro, mcp);
     if (Object.keys(servers).length) {
-      out.push(crlf(MCP_FILE.kiro, JSON.stringify({ mcpServers: servers }, null, 2) + "\n", "mcp/*"));
+      out.push(await textFile(ctx, MCP_FILE.kiro, JSON.stringify({ mcpServers: servers }, null, 2) + "\n", t, "mcp/*", { keepBom: false }));
     }
     return out;
   },
@@ -298,10 +299,6 @@ function emitKiroWarning(
 
 export function rewrite(text: string): string {
   return text.replace(/\.claude\/rules\//g, ".kiro/steering/");
-}
-
-function crlf(path: string, text: string, ingredient: string): PlannedFile {
-  return { path, content: Buffer.from(toCrlf(text), "utf8"), target: "kiro", ingredient };
 }
 
 const TOOL_MAP: Record<string, string | null> = {
