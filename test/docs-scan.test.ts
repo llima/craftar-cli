@@ -495,6 +495,8 @@ describe("R2-B3 — blankCode matches origin/main exactly", () => {
 // Constants for timing tests with cited paths
 const CITED = { citedRoots: ["docs"] };
 const DEF = "\n\n[x]: y\n"; // A definition to trigger pendingBrackets resolution
+/** The small size of the nested-bracket growth tests (the larger run is 4x). */
+const NESTED = 50_000;
 
 /**
  * Linearity by growth, not by wall clock: the best of three runs at n and at 4n, after a warm-up.
@@ -519,7 +521,7 @@ describe("R2-B1 — shortcut link branch stays linear", () => {
   it("nested brackets grow linearly", () => {
     // n opening brackets followed by n closing brackets - must not be O(n²)
     const mk = (n: number) => "[".repeat(n) + "]".repeat(n);
-    const ratio = growth(mk, 50_000);
+    const ratio = growth(mk, NESTED);
     // Linear: ratio ≈ 4; quadratic: ratio ≈ 16. Threshold 8 catches regression.
     expect(ratio).toBeLessThan(8);
   });
@@ -550,13 +552,13 @@ describe("R3-B1 — the cited mask stays linear over nested link ranges", () => 
   ];
   for (const [name, mk] of forms) {
     it(`${name} nested, cited on, with definitions: grows linearly`, () => {
-      const ratio = growth(mk, 50_000, CITED);
+      const ratio = growth(mk, NESTED, CITED);
       expect(ratio).toBeLessThan(8);
     });
   }
   it("the R2-B1 nested brackets with cited on and a definition", () => {
     const mk = (n: number) => "[".repeat(n) + "]".repeat(n) + DEF;
-    const ratio = growth(mk, 50_000, CITED);
+    const ratio = growth(mk, NESTED, CITED);
     expect(ratio).toBeLessThan(8);
   });
 });
@@ -663,7 +665,7 @@ describe("R7-CI — a bracket holding a bracket is never a reference label", () 
   it("nested brackets with definitions present cost no label work", () => {
     // Nested brackets should be invalidated early, not attempt label resolution
     const mk = (n: number) => "[".repeat(n) + "a" + "][]".repeat(n) + DEF;
-    const ratio = growth(mk, 50_000, CITED);
+    const ratio = growth(mk, NESTED, CITED);
     expect(ratio).toBeLessThan(8);
   });
   it("a label holding an unescaped bracket is prose for cited", () => {
