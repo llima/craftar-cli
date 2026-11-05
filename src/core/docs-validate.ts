@@ -445,12 +445,10 @@ function scanParagraph(
   // (Paragraph-level gathering kept for backward compatibility and for reference definition processing below.)
   const refLabels = fileRefLabels ?? new Set<string>();
   if (!fileRefLabels) {
-    let refScanStart = 0;
     for (const line of s.split("\n")) {
       const m = /^ {0,3}\[([^\]\n]{1,999})\]:[ \t]*(<[^>\n]*>|\S+)(.*)$/.exec(line);
       if (!m || m[1].startsWith("^") || /^[ xX]$/.test(m[1]) || !TITLE_OR_EMPTY(m[3])) break;
       refLabels.add(m[1].toLowerCase());
-      refScanStart += line.length + 1;
     }
   }
 
@@ -1624,10 +1622,15 @@ async function citedPathsCheck(
     }
   }
 
-  // Resolve all candidates
+  // Resolve all candidates - dedupe tokens for efficiency, but keep all occurrences for reporting.
+  const resolveCache = new Map<string, Resolved>();
   const toCheck: Array<{ path: string; token: string; line: number; column: number; result: Resolved }> = [];
   for (const c of candidates) {
-    const r = await resolver.resolve(".", c.token, { walkOnCaseMismatch: true });
+    let r = resolveCache.get(c.token);
+    if (!r) {
+      r = await resolver.resolve(".", c.token, { walkOnCaseMismatch: true });
+      resolveCache.set(c.token, r);
+    }
     if (r.kind === "ok") continue; // exists, no finding
     if (r.kind === "link") {
       // Link is a warn, never sent to git
