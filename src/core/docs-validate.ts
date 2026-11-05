@@ -441,16 +441,8 @@ function scanParagraph(
   };
 
   const brackets: number[] = [];
-  // R2-S5: Use file-level reference definitions when provided; otherwise gather from paragraph's leading lines.
-  // (Paragraph-level gathering kept for backward compatibility and for reference definition processing below.)
+  // R2-S5: File-level reference definitions are always provided now.
   const refLabels = fileRefLabels ?? new Set<string>();
-  if (!fileRefLabels) {
-    for (const line of s.split("\n")) {
-      const m = /^ {0,3}\[([^\]\n]{1,999})\]:[ \t]*(<[^>\n]*>|\S+)(.*)$/.exec(line);
-      if (!m || m[1].startsWith("^") || /^[ xX]$/.test(m[1]) || !TITLE_OR_EMPTY(m[3])) break;
-      refLabels.add(m[1].toLowerCase());
-    }
-  }
 
   for (let i = 0; i < s.length; i++) {
     if (esc[i]) continue;
