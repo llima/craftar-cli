@@ -124,7 +124,6 @@ describe("status — MCP servers written as the Forge holds them (spec 07)", () 
   const MCP = ".mcp.json";
   const KIRO_MCP = ".kiro/settings/mcp.json";
   const json = (server: Record<string, unknown>) => JSON.stringify({ mcpServers: { r: server } }, null, 2) + "\n";
-  const crlf = (text: string) => text.replace(/\n/g, "\r\n");
   const mcpMeta = (server: Record<string, unknown>) => ({ type: "mcp", name: "r", server });
   async function mcpScenario(server: Record<string, unknown>, files?: Record<string, string>, targets = ["claude-code"]) {
     const s = await scenario(
@@ -165,7 +164,7 @@ describe("status — MCP servers written as the Forge holds them (spec 07)", () 
   it("update on both MCP files: written in schema order by 0.2.4 from a server the Forge stores type first (AC 18)", async () => {
     const s = await mcpScenario({ command: "npx", args: ["srv"], type: "stdio" }, undefined, ["claude-code", "kiro"]);
     await sync(s.wsRoot);
-    expect(await fs.readFile(path.join(s.wsRoot, KIRO_MCP), "utf8")).toBe(crlf(json({ command: "npx", args: ["srv"], type: "stdio" })));
+    expect(await fs.readFile(path.join(s.wsRoot, KIRO_MCP), "utf8")).toBe(json({ command: "npx", args: ["srv"], type: "stdio" }));
     await setServer(s.forgeRoot, { type: "stdio", command: "npx", args: ["srv"] });
     expect(await stateOf(s.wsRoot, MCP)).toBe("update");
     expect(await stateOf(s.wsRoot, KIRO_MCP)).toBe("update");

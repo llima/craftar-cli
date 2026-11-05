@@ -90,11 +90,11 @@ import { profile, recipe, scenario, type IngredientSpec } from "./helpers/forge.
 const kept = <T extends { cleanup: () => Promise<unknown> }>(s: T): T => (cleanups.push(s.cleanup), s);
 
 describe("Finding 6: The misplaced placeholder line is the planned file's", () => {
-  it("rule readme body 'See {{craftar.rules.index}} here' — warning lists .kiro/steering/readme.md:<n> for CRLF planned line", async () => {
+  it("rule readme body 'See {{craftar.rules.index}} here' — warning lists .kiro/steering/readme.md:<n> for the planned line", async () => {
     // A rule `readme` whose body is `# Rules\n\nSee {{craftar.rules.index}} here\n`
     // targets claude-code + kiro + agents-md at schema 7
     // The warning should report .kiro/steering/readme.md:<n> where <n> is the 1-based line
-    // of "See {{" in the PLANNED kiro content (with banner + frontmatter).
+    // of "See {{" in the PLANNED kiro content (with banner + frontmatter; LF for a new file).
     const ingredients: IngredientSpec[] = [
       {
         meta: { type: "rule", name: "readme", description: "Index", targets: "*" },
@@ -115,7 +115,7 @@ describe("Finding 6: The misplaced placeholder line is the planned file's", () =
     expect(kiroFile).toBeDefined();
     const kiroContent = kiroFile!.content.toString("utf8");
 
-    // Find the line number (1-based) in the planned CRLF content that holds "See {{"
+    // Find the line number (1-based) in the planned content that holds "See {{" (LF for a new file)
     const kiroLines = kiroContent.replace(/\r\n/g, "\n").split("\n");
     const misplacedLineIndex = kiroLines.findIndex((line) => line.includes("See {{craftar.rules.index}}"));
     expect(misplacedLineIndex).toBeGreaterThanOrEqual(0);

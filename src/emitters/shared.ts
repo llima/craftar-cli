@@ -520,12 +520,23 @@ export function resolveRuleRefs(
 
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
-/** Text file that keeps the EOL and the BOM of the file it replaces (LF, no BOM when new). */
-export async function textFile(ctx: EmitBase, relPath: string, text: string, target: PlannedFile["target"], ingredient: string): Promise<PlannedFile> {
+/** Options for textFile. */
+export interface TextFileOpts {
+  /** When true (default), keeps the BOM of an existing file; when false, never writes a BOM. */
+  keepBom?: boolean;
+}
+
+/**
+ * Text file that keeps the EOL of the file it replaces (LF when new).
+ * By default also keeps the BOM of an existing file; pass `{ keepBom: false }` to strip it
+ * (used by the kiro emitter, which writes UTF-8 without BOM).
+ */
+export async function textFile(ctx: EmitBase, relPath: string, text: string, target: PlannedFile["target"], ingredient: string, opts: TextFileOpts = {}): Promise<PlannedFile> {
+  const { keepBom = true } = opts;
   const existing = await ctx.readExisting(relPath);
   const eol: Eol = existing ? detectEol(existing.toString("utf8")) : "lf";
   const body = Buffer.from(withEol(text, eol), "utf8");
-  const content = existing && hasBom(existing) ? Buffer.concat([UTF8_BOM, body]) : body;
+  const content = keepBom && existing && hasBom(existing) ? Buffer.concat([UTF8_BOM, body]) : body;
   return { path: relPath, content, target, ingredient };
 }
 

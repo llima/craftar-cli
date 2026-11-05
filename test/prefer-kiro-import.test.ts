@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 const BANNER = (name: string) => `<!-- GENERATED from .claude/rules/${name}.md by craftar -- do not edit. -->`;
-/** A steering mirror exactly as the kiro emitter writes it: frontmatter, banner, body, CRLF. */
+/** An existing CRLF steering mirror on disk (as an older craftar wrote it): frontmatter, banner, body, CRLF. */
 const mirror = (name: string, body: string) => `---\ninclusion: always\n---\n\n${BANNER(name)}\n\n${body}`.replace(/\n/g, "\r\n");
 const KEPT = "# Workflow\n\nSee .kiro/steering/style.md.\nA line kept by hand.\n";
 const TOKEN = "ghp_" + "x".repeat(36); // assembled at runtime on purpose

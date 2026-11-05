@@ -152,12 +152,12 @@ describe("list params in a body (spec 55 Part A)", () => {
     expect(await rendered(s)).toBe("globs:\nend\n");
   });
 
-  it("test 14: a CRLF body keeps CRLF on every line yaml-items writes", async () => {
+  it("test 14: a CRLF body in the Forge writes LF to a new kiro file (spec 57)", async () => {
     const s = kept(await acmeLists({ schema: GATE, declare: true, ...body("x\r\n  - {{ env | yaml-items }}\r\ny\r\n") }));
     // The body is read as LF before it renders, so the claude-code file (which keeps a new file LF) shows the lines yaml-items
-    // wrote; kiro then writes CRLF on every line as always (spec 55 §7 item 5).
+    // wrote; kiro writes LF for new files (spec 57).
     expect(await rendered(s)).toBe('x\n  - "A"\n  - "B"\ny\n');
-    expect(await rendered(s, ".kiro/steering/allow.md")).toContain('  - "A"\r\n  - "B"\r\ny');
+    expect(await rendered(s, ".kiro/steering/allow.md")).toContain('  - "A"\n  - "B"\ny');
   });
 
   it("test 15: one pass with yaml-items — an item holding {{tags}} or {{env}} is written as it is", async () => {

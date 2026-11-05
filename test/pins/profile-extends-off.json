@@ -5,10 +5,10 @@
       ".claude/rules/angular.md": "# Angular\nUse signals.\n",
       ".claude/rules/house.md": "# House rules\nTickets start with ACME.\nShort paragraphs.\n",
       ".claude/rules/style.md": "# Style\nKeep it short.\n",
-      ".kiro/steering/angular.md": "---\r\ninclusion: always\r\n---\r\n\r\n<!-- GENERATED from .claude/rules/angular.md by craftar -- do not edit. -->\r\n\r\n# Angular\r\nUse signals.\r\n",
-      ".kiro/steering/commands/open-pr.md": "---\r\ninclusion: manual\r\n---\r\n\r\n---\r\ndescription: Open a pull request\r\n---\r\n# Open a PR\r\nRun the checks by hand.\r\n",
-      ".kiro/steering/house.md": "---\r\ninclusion: always\r\n---\r\n\r\n<!-- GENERATED from .claude/rules/house.md by craftar -- do not edit. -->\r\n\r\n# House rules\r\nTickets start with ACME.\r\nShort paragraphs.\r\n",
-      ".kiro/steering/style.md": "---\r\ninclusion: always\r\n---\r\n\r\n<!-- GENERATED from .claude/rules/style.md by craftar -- do not edit. -->\r\n\r\n# Style\r\nKeep it short.\r\n"
+      ".kiro/steering/angular.md": "---\ninclusion: always\n---\n\n<!-- GENERATED from .claude/rules/angular.md by craftar -- do not edit. -->\n\n# Angular\nUse signals.\n",
+      ".kiro/steering/commands/open-pr.md": "---\ninclusion: manual\n---\n\n---\ndescription: Open a pull request\n---\n# Open a PR\nRun the checks by hand.\n",
+      ".kiro/steering/house.md": "---\ninclusion: always\n---\n\n<!-- GENERATED from .claude/rules/house.md by craftar -- do not edit. -->\n\n# House rules\nTickets start with ACME.\nShort paragraphs.\n",
+      ".kiro/steering/style.md": "---\ninclusion: always\n---\n\n<!-- GENERATED from .claude/rules/style.md by craftar -- do not edit. -->\n\n# Style\nKeep it short.\n"
     },
     "planWarnings": [],
     "freshStatus": {
