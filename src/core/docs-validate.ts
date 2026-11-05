@@ -1549,7 +1549,15 @@ function collectCitedPaths(
     }
   }
   // A link's text and destination, a reference definition and an <a> / <img> tag are not read.
-  for (const [from, to] of linkRanges) cut(from, to);
+  // Sort by start and use a watermark to cut nested ranges once each (linear).
+  linkRanges.sort((a, b) => a[0] - b[0]);
+  let cutTo = 0;
+  for (const [from, to] of linkRanges) {
+    if (to > cutTo) {
+      cut(Math.max(from, cutTo), to);
+      cutTo = to;
+    }
+  }
 
   const rootOf = (t: string) => roots.some((r) => t.startsWith(`${r}/`));
   let i = 0;
