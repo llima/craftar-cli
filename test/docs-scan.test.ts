@@ -288,6 +288,16 @@ describe("§11 item 4 — a pathological file finishes in linear time", () => {
     scanMarkdown("[](".repeat((1 << 20) / 3));
     expect(Date.now() - t0).toBeLessThan(10_000);
   });
+  it("300 000 lone closing tags in one paragraph", () => {
+    const N = 300_000;
+    const lines: string[] = [];
+    for (let i = 0; i < N; i++) lines.push(i % 2 === 0 ? T("</", T("in", "voke") + ">") : T("</", "content>"));
+    const text = lines.join("\n");
+    const t0 = Date.now();
+    const s = scanMarkdown(text);
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(s.tags.length).toBe(N);
+  });
 });
 
 describe("§6.2 — a pathological heading finishes in linear time (review round 1)", () => {

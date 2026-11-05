@@ -72,8 +72,15 @@ const alonePatternParts = ALONE_ENTRIES.map((t) => {
   return t.prefix ? `${escaped}[:A-Za-z_.-]*` : escaped;
 });
 const ALONE_RE = new RegExp(`^[ \\t]*</(${alonePatternParts.join("|")})>[ \\t]*$`);
-// Map from matched element (or prefix) to entry name, for alone entries
-const ALONE_ELEMENT = new Map(ALONE_ENTRIES.map((t) => [t.elements[0], t] as const));
+
+/** The entry name for a name ALONE_RE captured: an exact element, or a prefix element the name starts with. */
+function aloneName(captured: string): string | null {
+  for (const t of ALONE_ENTRIES) {
+    const element = t.elements[0];
+    if (t.prefix ? captured.startsWith(element) : captured === element) return t.name;
+  }
+  return null;
+}
 
 export interface ScannedLink {
   line: number;
@@ -143,6 +150,7 @@ export interface CodeSpanRange {
  */
 export function codeSpanRanges(s: string): CodeSpanRange[] {
   const esc = escapes(s);
+  // A backslash escapes only an opening backtick: inside a span it is literal, so a run keeps its full length as a closer.
   const runs: Array<{ start: number; len: number; escaped: boolean }> = [];
   for (let i = 0; i < s.length; ) {
     if (s[i] !== "`") {
@@ -160,6 +168,7 @@ export function codeSpanRanges(s: string): CodeSpanRange[] {
   const ranges: CodeSpanRange[] = [];
   for (let idx = 0; idx < runs.length; idx++) {
     const r = runs[idx];
+    // An escaped first backtick is literal; the rest of the run can still open.
     const len = r.escaped ? r.len - 1 : r.len;
     const start = r.escaped ? r.start + 1 : r.start;
     const list = byLen.get(len);
@@ -308,50 +317,17 @@ function scanParagraph(s: string, at: (pos: number) => { line: number; column: n
     tagHitPositions.add(m.index!);
   }
 
-  // ALONE_RE: check each line for a closing tag that is the line's only content
+  // ALONE_RE: a line that is nothing but a closing content/thinking/antml tag outside code.
   let aloneLineStart = 0;
   for (const line of s.split("\n")) {
     const aloneMatch = ALONE_RE.exec(line);
     if (aloneMatch) {
-      // Check if any TAG_RE hit lies on this line
-      const lineEnd = aloneLineStart + line.length;
-      let hasTagHitOnLine = false;
-      for (const pos of tagHitPositions) {
-        if (pos >= aloneLineStart && pos < lineEnd) {
-          hasTagHitOnLine = true;
-          break;
-        }
-      }
-      if (!hasTagHitOnLine) {
-        // Find the entry by matching the captured element
-        const matchedElement = aloneMatch[1];
-        let entryName: string | null = null;
-        for (const [prefix, entry] of ALONE_ELEMENT) {
-          if (entry.prefix) {
-            // Prefix match: element starts with the prefix
-            if (matchedElement === prefix || matchedElement.startsWith(prefix + ":") || /^[:A-Za-z_.-]/.test(matchedElement.slice(prefix.length))) {
-              // Check if it's a more specific TAG_RE element (like antml:invoke → invoke)
-              const afterPrefix = matchedElement.slice(prefix.length);
-              if (afterPrefix.startsWith(":")) {
-                const specificElement = afterPrefix.slice(1);
-                if (TAG_ELEMENT.has(specificElement)) {
-                  entryName = TAG_ELEMENT.get(specificElement)!;
-                  break;
-                }
-              }
-              entryName = entry.name;
-              break;
-            }
-          } else if (matchedElement === prefix) {
-            entryName = entry.name;
-            break;
-          }
-        }
-        if (entryName) {
-          // Column is where the '<' appears in the line
-          const ltPos = line.indexOf("</");
-          scan.tags.push({ name: entryName, ...at(aloneLineStart + ltPos) });
-        }
+      // A line matching ALONE_RE that also has a TAG_RE hit holds it at the `<` of this closing tag (e.g. antml:invoke),
+      // so testing that one position stays linear — TAG_RE already pushed it, so it is not counted twice.
+      const ltPos = line.indexOf("</");
+      if (!tagHitPositions.has(aloneLineStart + ltPos)) {
+        const name = aloneName(aloneMatch[1]);
+        if (name) scan.tags.push({ name, ...at(aloneLineStart + ltPos) });
       }
     }
     aloneLineStart += line.length + 1;
