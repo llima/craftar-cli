@@ -186,6 +186,61 @@ export function codeSpanRanges(s: string): CodeSpanRange[] {
   return ranges;
 }
 
+/** A range found by htmlElementRanges: the full element, and for <code> also the content boundaries. */
+interface HtmlElementRange {
+  start: number;
+  end: number;
+  /** For <code>: where inner content starts (after the >). Undefined for <!-- and <pre>. */
+  contentStart?: number;
+  /** For <code>: where inner content ends (before </code>). Undefined for <!-- and <pre>. */
+  contentEnd?: number;
+}
+
+/**
+ * Finds HTML comments, <code> and <pre> elements in a string (already with code spans masked).
+ * Returns ranges in order of appearance. For <code>, includes content boundaries so the caller can
+ * choose whether to blank the tags only (keeping content) or the whole range.
+ */
+export function htmlElementRanges(s: string): HtmlElementRange[] {
+  const ranges: HtmlElementRange[] = [];
+  // ASCII-only lowercase for element matching (İ → ii would shift positions).
+  const lower = s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+  const n = s.length;
+
+  for (const [open, close] of [
+    ["<!--", "-->"],
+    ["<code", "</code>"],
+    ["<pre", "</pre>"],
+  ] as const) {
+    const isElement = open !== "<!--";
+    let search = 0;
+    for (;;) {
+      const a = lower.indexOf(open, search);
+      if (a === -1) break;
+      // <code and <pre must be followed by whitespace or > to name the element.
+      if (isElement && a + open.length < n && !/[\s>]/.test(s[a + open.length])) {
+        search = a + 1;
+        continue;
+      }
+      const b = lower.indexOf(close, a + open.length);
+      const end = b === -1 ? n : b + close.length;
+      if (open === "<code") {
+        // For <code>, the content lies between > and </code>.
+        const gt = lower.indexOf(">", a + open.length);
+        const contentStart = gt === -1 || gt >= (b === -1 ? n : b) ? (b === -1 ? n : b) : gt + 1;
+        const contentEnd = b === -1 ? n : b;
+        ranges.push({ start: a, end, contentStart, contentEnd });
+      } else {
+        ranges.push({ start: a, end });
+      }
+      search = end;
+    }
+  }
+  // Sort by start position since we process each element type separately.
+  ranges.sort((x, y) => x.start - y.start);
+  return ranges;
+}
+
 /**
  * GitHub's heading slug (github-slugger's rule): lower case, characters other than letters, marks, numbers, `_`, space
  * and `-` dropped, spaces to `-`. A code span's content enters literally (newlines as spaces, CommonMark edge-space
@@ -259,42 +314,27 @@ class Slugger {
  * pointer into its runs, so a paragraph of unmatched runs is read once — linear time (§6.2).
  */
 export function blankCode(s: string): string {
-  const ranges = codeSpanRanges(s);
+  const codeRanges = codeSpanRanges(s);
   const blank = (from: number, to: number, out: string[]) => out.push(s.slice(from, to).replace(/[^\n]/g, " "));
   const parts: string[] = [];
   let at = 0;
-  for (const r of ranges) {
+  for (const r of codeRanges) {
     parts.push(s.slice(at, r.start));
     blank(r.start, r.end, parts);
     at = r.end;
   }
   parts.push(s.slice(at));
   let out = parts.join("");
-  // Inline HTML comments and <code> elements, each by indexOf from where the last one ended: linear.
-  for (const [open, close] of [
-    ["<!--", "-->"],
-    ["<code", "</code>"],
-    ["<pre", "</pre>"],
-  ] as const) {
+
+  // HTML comments, <code>, and <pre> elements: blank each entirely.
+  const htmlRanges = htmlElementRanges(out);
+  if (htmlRanges.length > 0) {
     const pieces: string[] = [];
     let from = 0;
-    const element = open !== "<!--";
-    // ASCII letters only: a full toLowerCase can lengthen the text (İ is two characters in lower case) and shift positions.
-    const lower = element ? out.replace(/[A-Z]/g, (c) => c.toLowerCase()) : out;
-    let search = 0;
-    for (;;) {
-      const a = lower.indexOf(open, search);
-      if (a === -1) break;
-      // `<code` / `<pre` names the element only when a space, `>` or the end follows (`<codex>` is another element).
-      if (element && a + open.length < out.length && !/[\s>]/.test(out[a + open.length])) {
-        search = a + 1;
-        continue;
-      }
-      const b = lower.indexOf(close, a + open.length);
-      const end = b === -1 ? out.length : b + close.length;
-      pieces.push(out.slice(from, a));
-      blank(a, end, pieces);
-      from = search = end;
+    for (const r of htmlRanges) {
+      pieces.push(out.slice(from, r.start));
+      blank(r.start, r.end, pieces);
+      from = r.end;
     }
     pieces.push(out.slice(from));
     out = pieces.join("");
@@ -1435,7 +1475,7 @@ function collectCitedPaths(
     cut(r.start, r.contentStart);
     cut(r.contentEnd, r.end);
   }
-  // The HTML elements, found as blankCode finds them: over the text with code spans blanked, one indexOf pass each.
+  // The HTML elements, found over the text with code spans blanked.
   let masked = joined;
   if (spans.length) {
     const parts: string[] = [];
@@ -1447,32 +1487,15 @@ function collectCitedPaths(
     parts.push(joined.slice(p));
     masked = parts.join("");
   }
-  // ASCII letters only, as blankCode does, so positions do not shift.
-  const lower = masked.replace(/[A-Z]/g, (c) => c.toLowerCase());
-  for (const [open, close] of [
-    ["<!--", "-->"],
-    ["<code", "</code>"],
-    ["<pre", "</pre>"],
-  ] as const) {
-    const element = open !== "<!--";
-    let search = 0;
-    for (;;) {
-      const a = lower.indexOf(open, search);
-      if (a === -1) break;
-      if (element && a + open.length < n && !/[\s>]/.test(masked[a + open.length])) {
-        search = a + 1;
-        continue;
-      }
-      const b = lower.indexOf(close, a + open.length);
-      const end = b === -1 ? n : b + close.length;
-      if (open === "<code") {
-        // The tags are not read; what lies between them is.
-        const contentEnd = b === -1 ? n : b;
-        const gt = lower.indexOf(">", a + open.length);
-        cut(a, gt === -1 || gt >= contentEnd ? contentEnd : gt + 1);
-        cut(contentEnd, end);
-      } else cut(a, end);
-      search = end;
+  // For <code>, the tags are not read but content is; for <!-- and <pre>, the whole range is not read.
+  for (const r of htmlElementRanges(masked)) {
+    if (r.contentStart !== undefined && r.contentEnd !== undefined) {
+      // <code>: cut the tags, keep content readable
+      cut(r.start, r.contentStart);
+      cut(r.contentEnd, r.end);
+    } else {
+      // <!-- or <pre>: cut the whole range
+      cut(r.start, r.end);
     }
   }
   // A link's text and destination, a reference definition and an <a> / <img> tag are not read.
