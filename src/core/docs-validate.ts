@@ -186,61 +186,6 @@ export function codeSpanRanges(s: string): CodeSpanRange[] {
   return ranges;
 }
 
-/** A range found by htmlElementRanges: the full element, and for <code> also the content boundaries. */
-interface HtmlElementRange {
-  start: number;
-  end: number;
-  /** For <code>: where inner content starts (after the >). Undefined for <!-- and <pre>. */
-  contentStart?: number;
-  /** For <code>: where inner content ends (before </code>). Undefined for <!-- and <pre>. */
-  contentEnd?: number;
-}
-
-/**
- * Finds HTML comments, <code> and <pre> elements in a string (already with code spans masked).
- * Returns ranges in order of appearance. For <code>, includes content boundaries so the caller can
- * choose whether to blank the tags only (keeping content) or the whole range.
- */
-export function htmlElementRanges(s: string): HtmlElementRange[] {
-  const ranges: HtmlElementRange[] = [];
-  // ASCII-only lowercase for element matching (İ → ii would shift positions).
-  const lower = s.replace(/[A-Z]/g, (c) => c.toLowerCase());
-  const n = s.length;
-
-  for (const [open, close] of [
-    ["<!--", "-->"],
-    ["<code", "</code>"],
-    ["<pre", "</pre>"],
-  ] as const) {
-    const isElement = open !== "<!--";
-    let search = 0;
-    for (;;) {
-      const a = lower.indexOf(open, search);
-      if (a === -1) break;
-      // <code and <pre must be followed by whitespace or > to name the element.
-      if (isElement && a + open.length < n && !/[\s>]/.test(s[a + open.length])) {
-        search = a + 1;
-        continue;
-      }
-      const b = lower.indexOf(close, a + open.length);
-      const end = b === -1 ? n : b + close.length;
-      if (open === "<code") {
-        // For <code>, the content lies between > and </code>.
-        const gt = lower.indexOf(">", a + open.length);
-        const contentStart = gt === -1 || gt >= (b === -1 ? n : b) ? (b === -1 ? n : b) : gt + 1;
-        const contentEnd = b === -1 ? n : b;
-        ranges.push({ start: a, end, contentStart, contentEnd });
-      } else {
-        ranges.push({ start: a, end });
-      }
-      search = end;
-    }
-  }
-  // Sort by start position since we process each element type separately.
-  ranges.sort((x, y) => x.start - y.start);
-  return ranges;
-}
-
 /**
  * GitHub's heading slug (github-slugger's rule): lower case, characters other than letters, marks, numbers, `_`, space
  * and `-` dropped, spaces to `-`. A code span's content enters literally (newlines as spaces, CommonMark edge-space
