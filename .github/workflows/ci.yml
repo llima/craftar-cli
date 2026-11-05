@@ -41,20 +41,10 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
-      # Records CPU, memory, pagefile, disk and process counts every 5 s so a timeout burst can be told apart.
-      # Temporary instrumentation (tech-debt 2026-10-12, Windows CI timeouts).
-      - name: Start the runner sampler (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./.github/scripts/ci-sampler.ps1 -Mode start
       - run: npm test -- --shard=$SHARD
         shell: bash
         env:
           SHARD: ${{ matrix.shard }}
-      - name: Runner samples (Windows)
-        if: always() && runner.os == 'Windows'
-        shell: pwsh
-        run: ./.github/scripts/ci-sampler.ps1 -Mode report
       - name: Oracle status
         if: always()
         shell: bash

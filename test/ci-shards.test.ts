@@ -55,6 +55,21 @@ describe("CI shards", () => {
   it("keeps the job limit at 35 minutes (E23.1)", () => {
     expect(job["timeout-minutes"]).toBe(35);
   });
+
+  it("adds no action and reads no secret", () => {
+    const steps = job.steps as { uses?: string }[];
+    const allowed = ["actions/checkout@v4", "actions/setup-node@v4"];
+    for (const step of steps) {
+      if (step.uses) expect(allowed).toContain(step.uses);
+    }
+    const raw = readFileSync(path.join(REPO, ".github/workflows/ci.yml"), "utf8");
+    expect(raw).not.toContain("secrets.");
+  });
+
+  it("never cancels or shortens the release gate", () => {
+    expect(ci.concurrency["cancel-in-progress"]).toBe("${{ github.ref != 'refs/heads/main' }}");
+    expect(job["timeout-minutes"]).toBe(35);
+  });
 });
 
 describe("vitest limits", () => {
@@ -85,114 +100,6 @@ describe("vitest limits", () => {
   });
 });
 
-
-describe("Windows runner sampler", () => {
-  /** Returns lines in Invoke-Sample that match `$row += (not '')` but lack `# col:`. */
-  function unlabelled(script: string): string[] {
-    const invokeSampleMatch = script.match(/function Invoke-Sample \{[\s\S]*?^\}/m);
-    if (!invokeSampleMatch) return [];
-    const body = invokeSampleMatch[0];
-    const lines: string[] = [];
-    for (const line of body.split("\n")) {
-      if (/\$row \+= (?!'')/.test(line) && !line.includes("# col:")) {
-        lines.push(line.trim());
-      }
-    }
-    return lines;
-  }
-
-  it("writes each column in the header's order", () => {
-    const script = readFileSync(path.join(REPO, ".github/scripts/ci-sampler.ps1"), "utf8");
-    const invokeSampleMatch = script.match(/function Invoke-Sample \{[\s\S]*?^\}/m);
-    expect(invokeSampleMatch).not.toBeNull();
-    const invokeSampleBody = invokeSampleMatch![0];
-    const colComments: string[] = [];
-    const regex = /\$row \+= (?!'')[^\n]*# col: (\w+)/g;
-    let match;
-    while ((match = regex.exec(invokeSampleBody)) !== null) {
-      colComments.push(match[1]);
-    }
-    const headerLine = script.split("\n").find((l) => l.includes("$header = 'time,"));
-    expect(headerLine).toBeDefined();
-    const header = headerLine!.match(/'([^']+)'/)?.[1].split(",") ?? [];
-    expect(colComments).toEqual(header);
-  });
-
-  it("labels every $row += line with # col:", () => {
-    const script = readFileSync(path.join(REPO, ".github/scripts/ci-sampler.ps1"), "utf8");
-    // Real script: every line should be labelled
-    expect(unlabelled(script)).toEqual([]);
-    // Mutated copy: removing one comment should show the offending line
-    const mutated = script.replace("# col: node", "");
-    expect(unlabelled(mutated)).toEqual(["try { $row += @(Get-Process -Name 'node' -ErrorAction SilentlyContinue).Count } catch { $row += '' }"]);
-  });
-
-  it("never assigns PowerShell's automatic $PID", () => {
-    const script = readFileSync(path.join(REPO, ".github/scripts/ci-sampler.ps1"), "utf8");
-    expect(script).not.toMatch(/\$pid\s*=/i);
-  });
-
-  it("reads each summary column at its header index", () => {
-    const script = readFileSync(path.join(REPO, ".github/scripts/ci-sampler.ps1"), "utf8");
-    const headerLine = script.split("\n").find((l) => l.includes("$header = 'time,"));
-    expect(headerLine).toBeDefined();
-    const header = headerLine!.match(/'([^']+)'/)?.[1].split(",") ?? [];
-    const cols = ["cpu_pct", "proc_queue", "avail_mb", "commit_pct", "pages_per_s", "pagefile_mb", "disk_queue", "disk_busy_pct", "node", "git"];
-    for (const name of cols) {
-      const idx = header.indexOf(name);
-      const pattern = new RegExp(`^\\s*${name} = if \\(\\$cols\\[${idx}\\]\\)`, "m");
-      expect(script).toMatch(pattern);
-    }
-  });
-
-  it("starts the sampler right before the suite and reports right after it, on Windows only", () => {
-    const steps = job.steps as { name?: string; shell?: string; if?: string; run?: string }[];
-    const npmTestIdx = steps.findIndex((s) => s.run?.startsWith("npm test"));
-    const startIdx = steps.findIndex((s) => s.name === "Start the runner sampler (Windows)");
-    const reportIdx = steps.findIndex((s) => s.name === "Runner samples (Windows)");
-
-    expect(startIdx).toBe(npmTestIdx - 1);
-    expect(reportIdx).toBe(npmTestIdx + 1);
-
-    const start = steps[startIdx];
-    const report = steps[reportIdx];
-
-    expect(start.shell).toBe("pwsh");
-    expect(start.if).toBe("runner.os == 'Windows'");
-    expect(start.run).toBe("./.github/scripts/ci-sampler.ps1 -Mode start");
-
-    expect(report.shell).toBe("pwsh");
-    expect(report.if).toBe("always() && runner.os == 'Windows'");
-    expect(report.run).toBe("./.github/scripts/ci-sampler.ps1 -Mode report");
-  });
-
-  it("adds no action and reads no secret", () => {
-    const steps = job.steps as { uses?: string }[];
-    const allowed = ["actions/checkout@v4", "actions/setup-node@v4"];
-    for (const step of steps) {
-      if (step.uses) expect(allowed).toContain(step.uses);
-    }
-    const raw = readFileSync(path.join(REPO, ".github/workflows/ci.yml"), "utf8");
-    expect(raw).not.toContain("secrets.");
-  });
-
-  it("the sampler script exists, is ASCII, and has the three modes", () => {
-    const script = readFileSync(path.join(REPO, ".github/scripts/ci-sampler.ps1"), "utf8");
-    expect(script).toMatch(/^[\x00-\x7f]*$/);
-    expect(script).toContain("'start'");
-    expect(script).toContain("'sample'");
-    expect(script).toContain("'report'");
-    expect(script).toContain("Start-Process");
-    expect(script).toContain("Stop-Process");
-    expect(script).toContain("time,cpu_pct,proc_queue,avail_mb,commit_pct,pages_per_s,pagefile_mb,disk_queue,disk_busy_pct,node,git,msmpeng_cpu_s");
-    expect(script).toContain("sampler: rows=");
-  });
-
-  it("never cancels or shortens the release gate", () => {
-    expect(ci.concurrency["cancel-in-progress"]).toBe("${{ github.ref != 'refs/heads/main' }}");
-    expect(job["timeout-minutes"]).toBe(35);
-  });
-});
 
 // Values under 30 s are deliberate hang guards and are allowed; the floor is deliberate.
 // A named constant, an exponent literal, arithmetic (60 * 1000), vi.setConfig, a call closed mid-line (}, 60_000); });,
